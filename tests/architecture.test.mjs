@@ -25,7 +25,8 @@ test("Forward Path Relation 3.0 is the only PAPER strategy authority and retired
   assert.match(core,/from "\.\/forward-family-experiment\.ts"/);
   assert.doesNotMatch(core,/forward-entry-guard/);
   const family=await read("lib/forward-family-experiment.ts");
-  assert.match(family,/FORWARD_FAMILY_EXPERIMENT_VERSION="forward-family-experiment-v2"/);
+  assert.match(family,/FORWARD_FAMILY_EXPERIMENT_VERSION="forward-family-experiment-v3"/);
+  assert.match(family,/recordFamilyOutcome/);assert.match(family,/meanRealizedNetRate/);assert.match(family,/meanCostRate/);
   assert.match(family,/edgeRatio<\.45/);assert.match(family,/livePathScore<\.55/);
   assert.match(core,/MAX_NEW_RESERVE_EXPERIMENTS_PER_5M=2/);assert.match(core,/reserveEntriesThisCycle/);
   assert.match(family,/relationFamilyId/);
@@ -45,8 +46,10 @@ test("Structural Interrupt is a bounded exception to sample authority, never a r
   assert.match(core,/from "\.\/forward-structural-interrupt\.ts"/);
   assert.match(core,/if\(!isShock&&!o\.relationRuleId\)/);
   assert.match(core,/structuralInterruptBlockReason/);
-  assert.match(core,/SHOCK_EVENT_RISK_RATE=\.015/);assert.match(core,/MAX_SHOCK_ENTRIES_PER_EVENT=3/);
-  assert.match(interrupt,/phase:"PRE_ALERT"\|"CONFIRMED"\|"COOLDOWN"/);
+  assert.match(core,/SHOCK_EVENT_RISK_RATE=\.015/);assert.match(core,/MAX_SHOCK_ENTRIES_PER_EVENT=2/);
+  assert.match(core,/同一市场冲击默认只参与最优标的/);
+  assert.match(interrupt,/phase:"PRE_ALERT"\|"WAIT_RETEST"\|"CONFIRMED"\|"COOLDOWN"/);
+  assert.match(interrupt,/track\.phase==="WAIT_RETEST"/);assert.match(interrupt,/track\.hadPullback&&track\.restartSeen/);
   assert.match(interrupt,/preCount>=4&&preBreadth>=\.25/);assert.match(interrupt,/confirmed\.length>=3&&breadth>=\.20/);
   assert.match(interrupt,/singleExtreme=.*\.0065/);
   assert.doesNotMatch(core,/m\.ok\|\|body>avgBody\*2\.6/);
@@ -110,6 +113,15 @@ test("fresh PAPER entries wake one LIVE pass without an artificial two-order sta
   assert.doesNotMatch(sync,/staged\.length>=2/);
   assert.match(parity,/LIVE_SOURCE_ENTRY_MAX_DELAY_MS = 30_000/);
   assert.match(parity,/minimumUplift/);assert.match(parity,/LIVE_MIN_CONTRACT_UPLIFT_MAX_RISK_RATE = \.0075/);
+});
+
+test("PAPER commit, paged learning state and LIVE wake share one persisted source generation",async()=>{
+  const [worker,store]=await Promise.all([read("worker/index-clean.ts"),read("lib/forward-store.ts")]);
+  const advance=worker.slice(worker.indexOf("private async advanceForwardNow"),worker.indexOf("private async refreshRegimeHourly"));
+  assert.match(advance,/storage\.transaction\(async transaction => \{ await transaction\.put\(prepared\.entries\); \}\)/);
+  assert.match(advance,/this\.forwardState = next\.state;[\s\S]*this\.launchLiveWork\(true\)/);
+  assert.match(store,/FORWARD_SAMPLE_MANIFEST_STORAGE/);assert.match(store,/sampleManifestSha256/);
+  assert.match(store,/changedSamplePages/);assert.match(store,/FORWARD_ACCOUNT_MAX_BYTES=1024\*1024/);
 });
 
 test("LIVE enable keeps owner intent ON while open-order audit retries safely",async()=>{

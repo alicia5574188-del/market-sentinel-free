@@ -702,3 +702,23 @@ Repair commit `32222fc` on `audit/code-stability-20260921` contains independentl
 Validation: latest direct 823/823; Forward 210/210; npm test (equity61/member48/LIVE129/build/architecture18) passed before final delayed-body member guard, then latest full direct/typecheck/rebuild passed. Lint 0 errors/3 old warnings; diff-check and dry-run passed. Real local SQLite storage smoke passed; final uninstrumented compiled-member smoke passed (synthetic users, no Gate/primary reads). Earlier transient emulator timeout before identity entry is recorded without speculative business changes. Scratch evidence under `/workspace/scratch/2236640d3284/`: `last-direct.log`, `last-build.log`, `last-typecheck.log`, `final-npm-test.log`, `final-lint.log`, `final-dry-run.log`, `release-storage-workerd.log`, `member-workerd-final.log`.
 
 The initial publication attempt was blocked by automatic approval review because the audit request did not explicitly authorize publication. No bypass occurred. The user has now answered “确认” to the concrete request to push these verified repairs to the original repository and release through the existing process. This explicitly authorizes branch publication, PR creation/merge and the existing main-only Cloudflare deployment. Remote main was rechecked and remains `ed418e9243a5f867b3e220eaea5a235cb94afd4e`. Publication and production acceptance are in progress; do not claim deployment until the release completes. Preserve owner intent, account identity and history; no private Gate verification trade. Remaining dependency scanner findings and intermittent upstream quote failures remain explicitly documented, not claimed solved.
+# 2026-09-25 — integrated storage/Shock/entry repair in progress
+
+Base main/production is `779becb4abed22e3a5d7b2bbda401295d36f649e`.
+The uploaded 76-trade snapshot reproduces a monolithic raw checkpoint above the
+2MiB guard; current production temporarily fits at 2,070,903 bytes after active
+sample thinning, so the failure is intermittent rather than resolved. Snapshot
+normal trades are +20.00U gross / -1.43U net after 21.39U fees; three late Shock
+shorts are -5.50U net. Forecast mean is +0.629% while realized mean is -0.055%.
+Branch `fix/20260925-storage-shock-entry-calibration` is implementing the unified
+repair. No code had been changed before this diagnosis; no account/reset/LIVE or
+private Gate action occurred.
+
+# 2026-09-25 — integrated repair release candidate
+
+- Implemented paged mature-sample persistence with a SHA-256 manifest bound to the compact financial/control head. The migration is fail-closed and writes only changed stable pages after the first legacy migration.
+- The required stress case passes with 2200 mature samples, 240 history rows, 160 audit events, 160 pending roots, 18 rules, 30 regions and open positions; restart recovery retains all records and a one-sample update rewrites exactly one sample page.
+- Structural Interrupt now separates the two-second old-direction veto from reverse-entry authority, uses WAIT_RETEST for extended moves, clusters same-window same-side tracks into one event, and defaults the event to one selected symbol (maximum two only for an explicitly independent restart).
+- Ordinary marginal/Reserve candidates use 12–24 second BBO entry validation. Strong mature relations remain immediate; actual closed fills calibrate predicted net edge against realized net, fee/funding cost and target capture without lowering the 19bp historical model.
+- Snapshot replay classifies SUI/XLM as WAIT_RETEST and LINK as CONTINUATION_DELAY. The strict extended-move lower bound removes only 2/76 trades, improves net from -6.9362U to -3.4959U and fees from 22.9027U to 22.1222U; the historical +17.0349U SUI winner remains immediate.
+- Local acceptance passes: Forward/storage/replay 59/59, direct 127/127, LIVE/Gate parity 38/38, full npm test, typecheck, build, lint (zero errors; 19 pre-existing warnings), architecture/migration 18/18, and clean diff check. PR/release is next; production and LIVE intent remain unchanged so far.

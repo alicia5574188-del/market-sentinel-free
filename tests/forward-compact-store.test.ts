@@ -1,99 +1,97 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { initialForward, type ForwardState } from "../lib/forward-relations.ts";
-import { FORWARD_STORAGE, FORWARD_COMPACT_BYTES, FORWARD_STORAGE_STATE_VERSION, prepareForwardWrite, readForwardStore } from "../lib/forward-store.ts";
-import { MAX_STATE_BYTES } from "../lib/storage-codec.ts";
+import { FORWARD_VERSION, initialForward, type ForwardState, type Trade } from "../lib/forward-relations.ts";
+import { FORWARD_PAGED_STATE_VERSION, FORWARD_SAMPLE_MANIFEST_STORAGE, FORWARD_SAMPLE_PAGE_PREFIX,
+  FORWARD_STORAGE, prepareForwardWrite, readForwardStore } from "../lib/forward-store.ts";
 
-const T=1_790_100_000_000,HEAD=`${FORWARD_STORAGE}head`;
+const T=1_795_000_000_000,HEAD=`${FORWARD_STORAGE}head`;
 class Memory {
-  data=new Map<string,unknown>();reads:string[]=[];
-  async get<V>(key:string){this.reads.push(key);return structuredClone(this.data.get(key)) as V|undefined;}
-  async put(entries:Record<string,unknown>){for(const[k,v]of Object.entries(entries))this.data.set(k,structuredClone(v));}
+  data=new Map<string,unknown>();writes:string[][]=[];
+  async get<V>(key:string){return structuredClone(this.data.get(key)) as V|undefined;}
+  async put(entries:Record<string,unknown>){this.writes.push(Object.keys(entries));for(const[k,v]of Object.entries(entries))this.data.set(k,structuredClone(v));}
 }
-function fixture(){const s=initialForward(T);s.storage.persistedAt=T;s.latestReason="无损保护、财务与规则记录 🛡️";return s;}
-function largeFixture(){
-  const s=fixture() as ForwardState&{futureOpaqueEvidence:string};
-  // Deterministic high-entropy future extension, not a real user record. It
-  // forces multi-chunk gzip without relying on repetitive compressible text.
-  let seed=72193;const words:string[]=[];
-  for(let i=0;i<60_000;i++){seed^=seed<<13;seed^=seed>>>17;seed^=seed<<5;words.push((seed>>>0).toString(16).padStart(8,"0"));}
-  s.futureOpaqueEvidence=words.join("");return s;
+const sampleAt=(i:number)=>i<1080?T-3*60*60_000+Math.floor(i/30)*5*60_000
+  :i<2160?T-12*60*60_000+Math.floor((i-1080)/30)*15*60_000:T-14*60*60_000+Math.floor((i-2160)/20)*60*60_000;
+const sample=(i:number)=>({symbol:`S${i%30}_USDT`,at:sampleAt(i),response:.004+(i%7)*.0001,up:.009,down:.003,
+  x:[.1,.2,.3,.4,.5,.6,.7,.8],env:{breadth:.55,dispersion:.2,expansion:.3},
+  cp:{5:.001,10:.002,15:.0025,20:.003,30:.0035,45:.0038,60:.004+(i%7)*.0001},
+  upAt:{5:.002,10:.003,15:.004,20:.005,30:.006,45:.008,60:.009},
+  downAt:{5:.001,10:.0012,15:.0014,20:.0016,30:.002,45:.0025,60:.003},relativeAt:{15:0,30:0,45:0,60:0},
+  pathEfficiency:.7,reversals:2});
+function trade(i:number,status:"OPEN"|"CLOSED"="CLOSED"):Trade {
+  const openedAt=T-10_000_000+i*10_000,closedAt=status==="CLOSED"?openedAt+60_000:null;
+  return{id:`trade-${i}`,symbol:`S${i%30}_USDT`,side:i%2?"SHORT":"LONG",openedAt,closedAt,status,entryPrice:100,exitPrice:status==="CLOSED"?100.1:null,
+    quantity:1,contracts:1000,quantoMultiplier:.001,notional:100,leverage:5,margin:20,plannedRisk:1,stopPrice:99,armPrice:101,
+    favorable:.002,adverse:.001,lastPrice:100.1,lastQuoteAt:closedAt??openedAt,entryFee:.07,exitFee:status==="CLOSED"?.07:0,
+    fundingAllowance:0,grossPnl:status==="CLOSED"?.1:null,netPnl:status==="CLOSED"?-.04:null,exitReason:status==="CLOSED"?"SAMPLE_MAX_HOLD":null,
+    relationFailureBars:0,lastRelationBar:openedAt,execution:"REAL_QUOTE_PAPER_MODEL",liveEligible:false,
+    rule:{id:`rule-${i%18}`,signature:"stress",parentId:null,version:1,createdAt:openedAt-1000,expiresAt:T+3600_000,status:"EXPERIMENTAL",
+      conditions:[],side:i%2?"SHORT":"LONG",horizon:30,stopRate:.01,armRate:.005,givebackRate:.002,exitMode:"REACTION_DECAY",
+      samples:120,trainGroups:8,checkGroups:4,estimatedNetRate:.004,priorResponse:null,recentResponse:.004,standardError:.001,
+      reason:"storage stress",mutation:"CREATE",grammar:"forward-path-relation-v3",liveEligible:false}};
 }
-test("sample-pack storage keeps a 2MB+ verbose learning state lossless without deleting evidence",async()=>{
-  const s=fixture(),at=T-60_000;
-  s.relationEngine.samples=Array.from({length:2200},(_,i)=>({
-    symbol:`PACK${String(i).padStart(4,"0")}_USDT`,at,response:.0123456789012345,up:.0187654321098765,down:.0065432109876543,
-    x:[.123456789012345,.234567890123456,.345678901234567,.456789012345678,.567890123456789,.678901234567891,.789012345678912,.890123456789123],
-    env:{breadth:.612345678901234,dispersion:.223456789012345,expansion:.334567890123456},
-    cp:{5:.001234567890123,10:.002345678901234,15:.003456789012345,20:.004567890123456,30:.006789012345678,45:.009012345678901,60:.0123456789012345},
-    upAt:{5:.002,10:.003,15:.004,20:.005,30:.008,45:.012,60:.0187654321098765},
-    downAt:{5:.001,10:.0015,15:.002,20:.0025,30:.003,45:.004,60:.0065432109876543},
-    relativeAt:{15:0,30:0,45:0,60:0},pathEfficiency:.712345678901234,reversals:2,
-  }));
-  const verboseBytes=new TextEncoder().encode(JSON.stringify(s)).length;
-  assert.ok(verboseBytes>MAX_STATE_BYTES,`verbose fixture should exceed 2MB, got ${verboseBytes}`);
-  const write=await prepareForwardWrite(null,s,T,{compact:true});
-  assert.ok(write.compression.rawBytes<MAX_STATE_BYTES,`packed raw state should fit, got ${write.compression.rawBytes}`);
-  assert.ok(write.compression.rawBytes<verboseBytes*.82,"sample packing should materially reduce raw JSON");
-  const head=write.entries[HEAD] as {version:string};assert.equal(head.version,FORWARD_STORAGE_STATE_VERSION);
+function stressFixture(){
+  const s=initialForward(T-25*60*60_000);s.storage={persistedAt:T-1,error:null};s.balance=993;s.resolved=240;s.wins=120;s.revision=500;
+  s.relationEngine.samples=Array.from({length:2200},(_,i)=>sample(i));
+  s.relationEngine.pending=Object.fromEntries(Array.from({length:160},(_,i)=>[`pending-${i}`,{symbol:`S${i%30}_USDT`,at:T-i*300_000,
+    price:100,x:[.1,.2,.3,.4,.5,.6,.7,.8],env:{breadth:.5,dispersion:.2,expansion:.3},dueAt:T-i*300_000+3600_000}]));
+  const exitPlan={version:"sample-exit-plan-v2" as const,bestHoldMinutes:30 as const,feedbackDeadlineMinutes:5,maxHoldMinutes:60,
+    normalAdverseRate:.004,targetRate:.008,protectionActivationRate:.003,retentionRate:.75,samples:120,groups:12,path:{}};
+  s.relationEngine.rules=Array.from({length:18},(_,i)=>({id:`rule-${i}`,signature:`r${i}`,scope:"BASE" as const,horizon:30 as const,
+    side:i%2?"SHORT" as const:"LONG" as const,conditions:[],longNet:.004,recentNet:.003,standardError:.001,samples:120,longGroups:8,
+    recentGroups:4,health:.75,status:"ACTIVE" as const,livePathScore:.7,environmentFit:.8,stopRate:.01,targetRate:.008,exitProfile:exitPlan,
+    updatedAt:T,lastQualifiedAt:T,symbols:[`S${i}_USDT`],reason:"stress"}));
+  s.history=Array.from({length:240},(_,i)=>trade(i));s.positions=[trade(300,"OPEN"),trade(301,"OPEN")];
+  s.events=Array.from({length:160},(_,i)=>({id:`a-${i}`,at:T-i,kind:i%2?"ENTRY" as const:"EXIT" as const,subject:`trade-${i}`,reason:"stress"}));
+  s.regions=Object.fromEntries(Array.from({length:30},(_,i)=>[`S${i}_USDT`,{id:`region-${i}`,symbol:`S${i}_USDT`,confirmedAt:T,
+    lower:99,upper:101,center:100,widthRate:.02,bars:12,quality:70,state:"IN_REGION" as const,lastSeenAt:T,
+    outerLower:97,outerUpper:103,outerCenter:100,outerWidthRate:.06,outerBars:30,outerQuality:72,atrRate:.005}]));
+  return s;
+}
+
+test("paged store preserves 2200 mature samples plus the full financial/control state across restart",async()=>{
+  const s=stressFixture(),write=await prepareForwardWrite(s,s,T,{compact:true});
+  assert.equal(write.compression.sampleCount,2200);assert.ok(write.compression.samplePages>1);
+  assert.ok(write.compression.rawBytes<1024*1024);assert.equal((write.entries[HEAD] as {version:string}).version,FORWARD_PAGED_STATE_VERSION);
   const db=new Memory();await db.put(write.entries);const restored=await readForwardStore(db,T+1);
-  assert.equal(restored.relationEngine.samples.length,2200);
-  assert.deepEqual(restored.relationEngine.samples[0],s.relationEngine.samples[0]);
-  assert.deepEqual(restored.relationEngine.samples.at(-1),s.relationEngine.samples.at(-1));
-  assert.equal(restored.balance,s.balance);assert.equal(restored.positions.length,s.positions.length);
+  assert.equal(restored.relationEngine.samples.length,2200);assert.equal(Object.keys(restored.relationEngine.pending).length,160);
+  assert.equal(restored.history.length,240);assert.equal(restored.events.length,160);assert.equal(restored.positions.length,2);
+  assert.equal(restored.relationEngine.rules.length,18);assert.equal(Object.keys(restored.regions).length,30);
+  assert.deepEqual(new Set(restored.relationEngine.samples.map(x=>`${x.symbol}:${x.at}`)),new Set(s.relationEngine.samples.map(x=>`${x.symbol}:${x.at}`)));
+  const continued=structuredClone(restored);continued.relationEngine.samples[2199]={...continued.relationEngine.samples[2199]!,response:.123,
+    cp:{...continued.relationEngine.samples[2199]!.cp,60:.123}};continued.balance-=1;continued.revision++;
+  const incremental=await prepareForwardWrite(restored,continued,T+2,{compact:true});
+  assert.equal(incremental.compression.changedSamplePages,1);
+  assert.equal(Object.keys(incremental.entries).filter(k=>k.startsWith(FORWARD_SAMPLE_PAGE_PREFIX)).length,1);
+  await db.put(incremental.entries);const again=await readForwardStore(db,T+3);
+  assert.equal(again.balance,continued.balance);assert.equal(again.relationEngine.samples.length,2200);
+  assert.equal(again.relationEngine.samples.at(-1)!.response,.123);
 });
 
-test("compact forward full commit preserves all bytes while reducing a small record by one key",async()=>{
-  const s=fixture(),old=await prepareForwardWrite(null,s,T),compact=await prepareForwardWrite(null,s,T,{compact:true});
-  assert.equal(compact.writes,old.writes-1);assert.equal(compact.compression.inlineHead,true);
-  assert.equal(compact.compression.chunks,0);assert.equal(compact.compression.storedBytes,old.compression.storedBytes);
-  const h=compact.entries[HEAD] as {inline:Uint8Array};assert.ok(h.inline instanceof Uint8Array);
-  assert.ok(h.inline.byteLength<=FORWARD_COMPACT_BYTES);
-  assert.equal(Object.keys(compact.entries).some(k=>k.includes("chunk:")),false);
-  assert.deepEqual(Object.entries(compact.entries).filter(([k])=>k.includes("archive:")),
-    Object.entries(old.entries).filter(([k])=>k.includes("archive:")));
-  const db=new Memory();await db.put(compact.entries);assert.deepEqual(await readForwardStore(db,T+1),s);
-  assert.equal(db.reads.some(k=>k.includes("chunk:")),false);
-});
-test("legacy 80 KiB chunk encoding remains default and readable before compact migration",async()=>{
-  const s=fixture(),old=await prepareForwardWrite(null,s,T),db=new Memory();await db.put(old.entries);
-  assert.ok(Object.keys(old.entries).some(k=>k.includes("chunk:")));
-  assert.equal((old.entries[HEAD] as {inline?:unknown}).inline,undefined);
-  assert.deepEqual(await readForwardStore(db,T+1),s);
-  const compact=await prepareForwardWrite(s,s,T+2,{compact:true});await db.put(compact.entries);
-  // The old chunk key is not deleted or read. A new compact head selects its
-  // own authenticated bytes even when obsolete legacy chunks remain present.
-  db.data.set(`${FORWARD_STORAGE}chunk:0`,new Uint8Array([0,1,2]));
-  assert.deepEqual(await readForwardStore(db,T+3),s);
-});
-test("compact reader can losslessly rewrite legacy format before rolling back the old reader",async()=>{
-  const s=fixture(),db=new Memory();await db.put((await prepareForwardWrite(null,s,T,{compact:true})).entries);
-  const recovered=await readForwardStore(db,T+1),legacy=await prepareForwardWrite(recovered,recovered,T+2);
-  await db.put(legacy.entries);assert.ok((db.data.get(HEAD) as {count:number}).count>=1);
-  assert.equal((db.data.get(HEAD) as {inline?:unknown}).inline,undefined);
-  assert.deepEqual(await readForwardStore(db,T+3),s);
-});
-test("compact multi-chunk layout uses <=112 KiB chunks, fewer records, and retains future fields",async()=>{
-  const s=largeFixture(),old=await prepareForwardWrite(null,s,T),compact=await prepareForwardWrite(null,s,T,{compact:true});
-  assert.equal(compact.compression.inlineHead,true);assert.ok(compact.compression.storedBytes>FORWARD_COMPACT_BYTES);
-  assert.ok(compact.compression.chunks<old.compression.chunks);assert.ok(compact.writes<old.writes);
-  for(const[k,v]of Object.entries(compact.entries))if(k.includes("chunk:"))assert.ok((v as Uint8Array).byteLength<=FORWARD_COMPACT_BYTES);
-  const db=new Memory();await db.put(compact.entries);assert.deepEqual(await readForwardStore(db,T+1),s);
-});
-test("compact inline tampering, truncation, oversize and encoding mismatch fail without reset",async()=>{
-  const s=fixture(),write=await prepareForwardWrite(null,s,T,{compact:true});
-  const original=write.entries[HEAD] as {inline:Uint8Array;count:number;length:number;rawLength:number};
-  const flipped=original.inline.slice();flipped[Math.floor(flipped.length/2)]^=1;
-  for(const head of [{...original,inline:flipped},{...original,inline:original.inline.slice(1)},
-    {...original,inline:new Uint8Array(FORWARD_COMPACT_BYTES+1)},
-    {...original,inline:undefined},{...original,count:1},{...original,rawLength:original.rawLength+1}]){
-    const db=new Memory();await db.put({...write.entries,[HEAD]:head});
-    await assert.rejects(()=>readForwardStore(db,T+1));
-    assert.deepEqual(db.data.get(HEAD),head);
+test("manifest/page corruption fails closed and leaves the saved account untouched",async()=>{
+  const s=stressFixture(),write=await prepareForwardWrite(s,s,T,{compact:true}),manifest=write.entries[FORWARD_SAMPLE_MANIFEST_STORAGE] as {pages:{key:string}[]};
+  for(const mutate of ["missing","tamper"] as const){
+    const db=new Memory();await db.put(write.entries);const key=manifest.pages[0]!.key;
+    if(mutate==="missing")db.data.delete(key);else{const bytes=db.data.get(key) as Uint8Array,changed=bytes.slice();changed[0]^=1;db.data.set(key,changed);}
+    const head=structuredClone(db.data.get(HEAD));await assert.rejects(()=>readForwardStore(db,T+1),/分页/);assert.deepEqual(db.data.get(HEAD),head);
   }
 });
-test("missing compact chunk fails; rollback from inline never masks an incomplete replacement",async()=>{
-  const s=largeFixture(),db=new Memory(),write=await prepareForwardWrite(null,s,T,{compact:true});
-  await db.put(write.entries);db.data.delete(`${FORWARD_STORAGE}chunk:0`);
-  await assert.rejects(()=>readForwardStore(db,T+1),/分片缺失/);
+
+test("future account extensions survive a paged rewrite without being mistaken for sample evidence",async()=>{
+  const s=stressFixture() as ForwardState&{futureControl:{token:string}};s.futureControl={token:"preserve-me"};
+  const db=new Memory();await db.put((await prepareForwardWrite(s,s,T,{compact:true})).entries);
+  const restored=await readForwardStore(db,T+1) as ForwardState&{futureControl:{token:string}};
+  assert.deepEqual(restored.futureControl,s.futureControl);assert.equal(restored.storage.layout,FORWARD_PAGED_STATE_VERSION);
+});
+
+test("a legacy monolithic account migrates to pages without losing samples, orders, pending roots or rules",async()=>{
+  const legacy=stressFixture(),raw=new TextEncoder().encode(JSON.stringify(legacy)),sha=[...new Uint8Array(await crypto.subtle.digest("SHA-256",raw))]
+    .map(v=>v.toString(16).padStart(2,"0")).join(""),db=new Memory();
+  await db.put({[HEAD]:{version:FORWARD_VERSION,count:1,length:raw.length,sha256:sha},[`${FORWARD_STORAGE}chunk:0`]:raw});
+  const recovered=await readForwardStore(db,T+1);assert.equal(recovered.relationEngine.samples.length,2200);
+  assert.equal(recovered.history.length,240);assert.equal(Object.keys(recovered.relationEngine.pending).length,160);
+  const migrated=await prepareForwardWrite(recovered,recovered,T+2,{compact:true});await db.put(migrated.entries);
+  assert.equal((db.data.get(HEAD) as {version:string}).version,FORWARD_PAGED_STATE_VERSION);
+  const restarted=await readForwardStore(db,T+3);assert.equal(restarted.relationEngine.samples.length,2200);
+  assert.equal(restarted.history.length,240);assert.equal(restarted.relationEngine.rules.length,18);
 });

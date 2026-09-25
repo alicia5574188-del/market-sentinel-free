@@ -25,7 +25,8 @@ function source(){
     stopRate:.008,targetRate:.012,directionStrength:82,pathEfficiency:80,momentumPersistence:80,positionScore:80,spaceScore:80,
     executionScore:90,grossRemainingSpaceRate:.012,netRemainingSpaceRate:.0101,pullbackRiskRate:.008,edgeRatio:1.26,
     expectedHoldMinutes:60,marketFit:80,regionId:null,regionQuality:null,reason:"已成熟Forward关系的LIVE同源测试事件",
-    relationRuleId:"fixture-rule",relationStatus:"ACTIVE",relationHorizon:30,relationHealth:.85,riskScale:.85,exitPlan:structuredClone(exitProfile)};
+    relationRuleId:"fixture-rule",relationStatus:"ACTIVE",relationHorizon:30,relationHealth:.85,riskScale:.85,exitPlan:structuredClone(exitProfile),
+    interruptEventId:"market-shock-SHORT-parity",interruptMarketWide:true,interruptBoundary:price*.99,interruptStrength:91};
   s.opportunities=[opportunity];s.lastCandleAt=now;
   s.relationEngine.rules=[{id:"fixture-rule",signature:"fixture-rule",scope:"BASE",horizon:30,side:"LONG",
     conditions:[{feature:0,op:"GE",threshold:0}],longNet:.01,recentNet:.008,standardError:.001,samples:40,longGroups:6,recentGroups:3,
@@ -43,6 +44,8 @@ test("LIVE sees the exact persisted PAPER trade rather than rebuilding a strateg
   assert.equal(rows.BTC_USDT.activeStopPrice,trade.stopPrice);
   assert.equal(rows.BTC_USDT.notional,trade.notional);
   assert.deepEqual(rows.BTC_USDT.forwardSource?.exitPlan,trade.exitPlan);
+  assert.equal(rows.BTC_USDT.forwardSource?.side,trade.side);assert.equal(rows.BTC_USDT.forwardSource?.stopPrice,trade.stopPrice);
+  assert.equal(rows.BTC_USDT.forwardSource?.entryContext?.interruptEventId,"market-shock-SHORT-parity");
 });
 
 test("owner enable fences old PAPER positions and admits only new events",()=>{

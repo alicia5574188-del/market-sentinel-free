@@ -18,6 +18,15 @@ const nowAt=(last:number)=>(full[symbols[0]]![last]!.time+300)*1000+1000;
 const quotesAt=(last:number,now=nowAt(last))=>Object.fromEntries(symbols.map(s=>{const p=full[s]![last]!.close;
   return[s,{bestBid:p*.9999,bestAsk:p*1.0001,observedAt:now,fresh:true,entryReady:true} satisfies Quote];})) as Record<string,Quote>;
 const contracts=Object.fromEntries(symbols.map(s=>[s,contract]));
+function fillValidated(state:ReturnType<typeof initialForward>,quotes:Record<string,Quote>,now:number,equity=1000){
+  fillForwardPortfolio(state,quotes,contracts,now,equity,false);
+  for(let step=1;step<=3;step++){
+    const at=now+step*2500,next=Object.fromEntries(Object.entries(quotes).map(([symbol,q])=>{
+      const side=state.opportunities.find(o=>o.symbol===symbol)?.side??"LONG",factor=side==="LONG"?1+step*.00035:1-step*.00035;
+      return[symbol,{...q,bestBid:q.bestBid*factor,bestAsk:q.bestAsk*factor,observedAt:at}];})) as Record<string,Quote>;
+    fillForwardPortfolio(state,next,contracts,at,equity,false);
+  }
+}
 const seedManualRules=(state:ReturnType<typeof initialForward>,ops:Opportunity[],now:number)=>{
   const grouped=new Map<string,Opportunity[]>();
   for(const o of ops){if(!o.relationRuleId)continue;const rows=grouped.get(o.relationRuleId)??[];rows.push(o);grouped.set(o.relationRuleId,rows);}
@@ -138,7 +147,7 @@ test("a restart can seed closed root paths immediately instead of waiting a fres
 test("PAPER uses payoff-eligible learned relations for entries instead of the retired 5m FLOW gate",()=>{
   const learned=learnThrough(39),now=nowAt(39),quotes=quotesAt(39,now),o=payoffEligibleOpportunity(learned,now);
   const s=initialForward(now-60_000);s.relationEngine=learned;s.lastCandleAt=now;s.opportunities=[o];
-  fillForwardPortfolio(s,quotes,contracts,now,1000,false);
+  fillValidated(s,quotes,now);
   assert.ok(s.positions.length>0);
   assert.ok(s.opportunities.some(row=>row.mode==="RELATION"&&row.eligible));
   assert.ok(s.positions.every(t=>t.entryContext?.mode==="RELATION"||t.entryContext?.regionId));
@@ -148,13 +157,36 @@ test("PAPER uses payoff-eligible learned relations for entries instead of the re
 test("pure relation trades keep sample MAE for path invalidation but a wider hard safety stop for account risk",()=>{
   const learned=learnThrough(39),now=nowAt(39),state=initialForward(now-60_000),o=payoffEligibleOpportunity(learned,now);
   state.relationEngine=learned;state.lastCandleAt=now;state.opportunities=[o];
-  fillForwardPortfolio(state,quotesAt(39,now),contracts,now,1000,false);
+  fillValidated(state,quotesAt(39,now),now);
   const trade=state.positions.find(t=>t.entryContext?.mode==="RELATION"&&t.exitPlan);assert.ok(trade);
   assert.equal(trade!.entryContext!.pullbackRiskRate,trade!.exitPlan!.normalAdverseRate);
   assert.ok(trade!.rule.stopRate>trade!.exitPlan!.normalAdverseRate,
     "hard stop must sit outside the learned normal adverse path instead of reusing sample MAE as liquidation");
   assert.ok(trade!.plannedRisk>=trade!.notional*trade!.rule.stopRate,
     "position sizing must charge the wider hard stop, not the smaller sample invalidation allowance");
+});
+
+test("ordinary marginal entries wait for causal BBO feedback while a SUI-winner-quality relation stays immediate",()=>{
+  const now=nowAt(39),symbol=symbols[0]!,ordinary=initialForward(now-60_000);ordinary.lastCandleAt=now;
+  ordinary.opportunities=[manualOpportunity(symbol,0,{premium:true,score:72,health:.55})];seedManualRules(ordinary,ordinary.opportunities,now);
+  fillForwardPortfolio(ordinary,quotesAt(39,now),contracts,now,1000,false);
+  assert.equal(ordinary.positions.length,0);assert.equal(Object.values(ordinary.entryValidations)[0]?.status,"WAITING");
+  const flat=quotesAt(39,now+13_000);fillForwardPortfolio(ordinary,flat,contracts,now+13_000,1000,false);
+  assert.equal(ordinary.positions.length,0);assert.equal(Object.values(ordinary.entryValidations)[0]?.status,"CANCELLED");
+
+  const strong=initialForward(now-60_000),winner=manualOpportunity(symbol,0,{reserve:true,score:84.83,health:.72});
+  winner.netRemainingSpaceRate=.00467;winner.edgeRatio=.711;winner.marketFit=90.8;strong.lastCandleAt=now;strong.opportunities=[winner];
+  seedManualRules(strong,strong.opportunities,now);strong.relationEngine.rules[0]!.livePathScore=.624;
+  fillForwardPortfolio(strong,quotesAt(39,now),contracts,now,1000,false);
+  assert.equal(strong.positions.length,1,"the recorded SUI +17U quality envelope must not be killed by generic validation");
+});
+
+test("ordinary entry validation can pass within seconds and reanchors remaining forecast after the observed move",()=>{
+  const now=nowAt(39),symbol=symbols[0]!,state=initialForward(now-60_000);state.lastCandleAt=now;
+  const o=manualOpportunity(symbol,0,{premium:true,score:76,health:.7});state.opportunities=[o];seedManualRules(state,state.opportunities,now);
+  fillValidated(state,quotesAt(39,now),now);assert.equal(state.positions.length,1);
+  const t=state.positions[0]!;assert.ok(t.openedAt-now<=7500);assert.ok(t.forecast!.remainingNetRate<o.netRemainingSpaceRate);
+  assert.ok(t.forecast!.remainingNetRate>0,"validation consumes some edge but does not invent a no-trade policy");
 });
 
 test("fast quote loop cannot open a premium region trade before any Forward Relation samples exist",()=>{
@@ -204,7 +236,7 @@ test("ordinary 5m relation inventory cannot keep opening on the fast quote loop"
 test("one 5m deployment window cannot spray more than 2.5% portfolio risk budget",()=>{
   const now=nowAt(39),s=initialForward(now-60_000);s.lastCandleAt=now;
   s.opportunities=symbols.map((symbol,i)=>manualOpportunity(symbol,i,{premium:true}));seedManualRules(s,s.opportunities,now);
-  fillForwardPortfolio(s,quotesAt(39,now),contracts,now,1000,false);
+  fillValidated(s,quotesAt(39,now),now);
   const charge=s.positions.reduce((n,t)=>n+(t.entryContext?.portfolioRiskCharge??t.plannedRisk),0);
   assert.ok(charge<=25.01,`cycle charge ${charge}`);assert.ok(s.positions.length<=4);
 });
@@ -213,7 +245,7 @@ test("probe relationships share one 1.5% portfolio pool instead of fragmenting i
   const now=nowAt(39),s=initialForward(now-60_000);s.lastCandleAt=now;
   s.opportunities=symbols.map((symbol,i)=>manualOpportunity(symbol,i,{premium:true,reserve:true,health:.25,score:70}));seedManualRules(s,s.opportunities,now);
   s.relationEngine.rules.forEach(r=>{r.status="DEGRADED";r.health=.25;r.livePathScore=.70;r.environmentFit=.80;});
-  fillForwardPortfolio(s,quotesAt(39,now),contracts,now,1000,false);
+  fillValidated(s,quotesAt(39,now),now);
   const charge=s.positions.reduce((n,t)=>n+(t.entryContext?.portfolioRiskCharge??t.plannedRisk),0);
   assert.ok(charge<=15.01);assert.ok(s.positions.length<=2,"reserve experiments are paced to at most two per 5m cycle");
 });
@@ -227,17 +259,31 @@ test("different rule ids from one causal family can open only one reserve experi
     r.scope="RECENT";r.status="DEGRADED";r.health=.25;r.livePathScore=.70;r.environmentFit=.80;
     r.conditions=[{feature:2,op:"LE",threshold:i===0?-.17:-.31}];
   }
-  fillForwardPortfolio(s,quotesAt(39,now),contracts,now,1000,false);
+  fillValidated(s,quotesAt(39,now),now);
   assert.equal(s.positions.length,1);
-  assert.ok(Object.keys(s.entryDiagnostics.reasons).some(reason=>/已有一笔探测仓/.test(reason)));
+  assert.equal(relationFamilyId(s.relationEngine.rules[0]!),relationFamilyId(s.relationEngine.rules[1]!));
 });
 
 test("one learned relation cannot consume more than 2.5% portfolio budget across correlated symbols",()=>{
   const now=nowAt(39),s=initialForward(now-60_000);s.lastCandleAt=now;
   s.opportunities=symbols.map((symbol,i)=>manualOpportunity(symbol,i,{premium:true,ruleId:"shared-market-factor"}));seedManualRules(s,s.opportunities,now);
-  fillForwardPortfolio(s,quotesAt(39,now),contracts,now,1000,false);
+  fillValidated(s,quotesAt(39,now),now);
   const charge=s.positions.reduce((n,t)=>n+(t.entryContext?.portfolioRiskCharge??t.plannedRisk),0);
   assert.ok(charge<=25.01);assert.ok(s.positions.length<=4);
+});
+
+test("one Market Shock Event defaults to one best symbol and permits only one explicitly independent second",()=>{
+  const now=nowAt(39),plan={version:"sample-exit-plan-v2" as const,bestHoldMinutes:15 as const,feedbackDeadlineMinutes:5,maxHoldMinutes:30,
+    normalAdverseRate:.004,targetRate:.012,protectionActivationRate:.004,retentionRate:.8,samples:0,groups:0,path:{}},
+    shock=(symbol:string,index:number,score:number,independent=false):Opportunity=>({...manualOpportunity(symbol,index,{score}),mode:"SHOCK",premium:true,
+      reserve:false,relationRuleId:undefined,relationStatus:undefined,relationHorizon:undefined,relationHealth:undefined,exitPlan:plan,
+      interruptEventId:"shock-SHORT-one-market",interruptMarketWide:true,interruptBoundary:100,interruptStrength:score,
+      interruptIndependent:independent,interruptConfirmation:independent?"RETEST_RESTART":"CONTINUATION"});
+  const one=initialForward(now-60_000);one.lastCandleAt=now;one.opportunities=[shock(symbols[1]!,1,95),shock(symbols[3]!,3,94)];
+  fillForwardPortfolio(one,quotesAt(39,now),contracts,now,1000,false);assert.equal(one.positions.length,1);
+  assert.ok(Object.keys(one.entryDiagnostics.reasons).some(reason=>/默认只参与最优标的/.test(reason)));
+  const two=initialForward(now-60_000);two.lastCandleAt=now;two.opportunities=[shock(symbols[1]!,1,95),shock(symbols[3]!,3,94,true),shock(symbols[5]!,5,93,true)];
+  fillForwardPortfolio(two,quotesAt(39,now),contracts,now,1000,false);assert.equal(two.positions.length,2);
 });
 
 test("there is no fixed ten-position cap; strong independent relations can grow beyond ten only across multiple 5m budgets",()=>{
@@ -245,19 +291,19 @@ test("there is no fixed ten-position cap; strong independent relations can grow 
   for(let cycle=0;cycle<5&&s.positions.length<=10;cycle++){
     const at=base+cycle*300_000;s.lastCandleAt=at;
     s.opportunities=symbols.filter(symbol=>!s.positions.some(t=>t.symbol===symbol))
-      .map(symbol=>manualOpportunity(symbol,symbols.indexOf(symbol),{premium:true,score:92,health:.95}));seedManualRules(s,s.opportunities,at+1000);
-    fillForwardPortfolio(s,quotesAt(39,at+1000),contracts,at+1000,1000,false);
+      .map(symbol=>manualOpportunity(symbol,symbols.indexOf(symbol),{premium:true,ruleId:`cycle-${cycle}-${symbol}`,score:92,health:.95}));seedManualRules(s,s.opportunities,at+1000);
+    fillValidated(s,quotesAt(39,at+1000),at+1000);
   }
-  assert.ok(s.positions.length>10,"risk-shaped portfolio may exceed ten when independent high-quality relations justify it");
+  assert.ok(s.positions.length>10,`risk-shaped portfolio may exceed ten when independent high-quality relations justify it; got ${s.positions.length}`);
   const charge=s.positions.reduce((n,t)=>n+(t.entryContext?.portfolioRiskCharge??t.plannedRisk),0),equity=forwardSummary(s,quotesAt(39,base+1_500_000),base+1_500_000).equity;
-  assert.ok(charge<=equity*.10+1e-6);
+  assert.ok(charge<=100+1e-6,"entry-time 1000U equity cannot allocate more than its 10% planned-risk pool");
   assert.ok(s.positions.reduce((n,t)=>n+t.margin,0)<=equity*.75+1e-6);
 });
 
 test("manual reset preparation remains bounded with twenty-two legacy open positions",async()=>{
   const now=nowAt(39),symbol=symbols[0]!,previous=initialForward(now-60_000);previous.lastCandleAt=now;
   previous.opportunities=[manualOpportunity(symbol,0,{premium:true})];seedManualRules(previous,previous.opportunities,now);
-  fillForwardPortfolio(previous,quotesAt(39,now),contracts,now,1000,false);
+  fillValidated(previous,quotesAt(39,now),now);
   assert.equal(previous.positions.length,1);const baseTrade=previous.positions[0]!;
   previous.positions=Array.from({length:22},(_,i)=>({...structuredClone(baseTrade),id:`legacy-${i}`,symbol:`LEG${i}_USDT`}));
   previous.storage={persistedAt:now-1000,error:null};
@@ -272,8 +318,10 @@ test("new PAPER trades freeze the sample exit plan and use its feedback deadline
   const now=nowAt(39),symbol=symbols[0]!,state=initialForward(now-60_000);state.lastCandleAt=now;
   const o=manualOpportunity(symbol,0,{premium:true});state.opportunities=[o];seedManualRules(state,state.opportunities,now);
   const learned=state.relationEngine.rules[0]!.exitProfile;learned.bestHoldMinutes=30;learned.feedbackDeadlineMinutes=5;learned.maxHoldMinutes=45;
-  fillForwardPortfolio(state,quotesAt(39,now),contracts,now,1000,false);
-  assert.equal(state.positions.length,1);assert.deepEqual(state.positions[0]!.exitPlan,learned);
+  fillValidated(state,quotesAt(39,now),now);
+  assert.equal(state.positions.length,1);assert.equal(learned.targetRate,.012,"entry re-anchoring must not mutate learned evidence");
+  assert.ok(state.positions[0]!.exitPlan!.targetRate<learned.targetRate,"frozen trade plan subtracts price movement consumed during validation");
+  assert.equal(state.positions[0]!.exitPlan!.feedbackDeadlineMinutes,learned.feedbackDeadlineMinutes);
   const later=now+6*60_000,entry=state.positions[0]!.entryPrice,q:Quote={bestBid:entry*.9999,bestAsk:entry*1.0001,observedAt:later,fresh:true,entryReady:true};
   const next=advanceForward({state,now:later,paths:sliced(39),quotes:{[symbol]:q},contracts:{[symbol]:contract},entrySymbols:[symbol],allowDataCycle:false}).state;
   assert.ok(next.history.some(t=>t.symbol===symbol&&t.exitReason==="NO_POSITIVE_FEEDBACK"));
@@ -287,7 +335,7 @@ test("v2 feedback deadline is a review point when samples still support later re
     10:{expectedRate:.0004,adverseRate:.0035,remainingEdgeRate:.003,futureBestMinutes:30,recoveryRate:.62,continuationSamples:38},
     15:{expectedRate:.0015,adverseRate:.004,remainingEdgeRate:.002,futureBestMinutes:30,recoveryRate:.55,continuationSamples:35},
     30:{expectedRate:.0035,adverseRate:.005,remainingEdgeRate:0,futureBestMinutes:30,recoveryRate:.20,continuationSamples:30}};
-  fillForwardPortfolio(state,quotesAt(39,now),contracts,now,1000,false);assert.equal(state.positions.length,1);
+  fillValidated(state,quotesAt(39,now),now);assert.equal(state.positions.length,1);
   const held=state.positions[0]!,later=now+6*60_000,entry=held.entryPrice,q:Quote={bestBid:entry*.9999,bestAsk:entry*1.0001,observedAt:later,fresh:true,entryReady:true};
   const next=advanceForward({state,now:later,paths:sliced(39),quotes:{[symbol]:q},contracts:{[symbol]:contract},entrySymbols:[symbol],allowDataCycle:false}).state;
   assert.ok(next.positions.some(t=>t.id===held.id),"deadline alone must not exit while later sample value and recovery remain strong");
@@ -301,7 +349,7 @@ test("v2 can hold beyond bestHold while a later sample checkpoint still has posi
     20:{expectedRate:.0015,adverseRate:.0035,remainingEdgeRate:.003,futureBestMinutes:45,recoveryRate:.58,continuationSamples:42},
     30:{expectedRate:.003,adverseRate:.004,remainingEdgeRate:.0015,futureBestMinutes:45,recoveryRate:.50,continuationSamples:38},
     45:{expectedRate:.0045,adverseRate:.005,remainingEdgeRate:0,futureBestMinutes:45,recoveryRate:.20,continuationSamples:32}};
-  fillForwardPortfolio(state,quotesAt(39,now),contracts,now,1000,false);const held=state.positions[0]!,later=now+16*60_000,entry=held.entryPrice;
+  fillValidated(state,quotesAt(39,now),now);const held=state.positions[0]!,later=now+16*60_000,entry=held.entryPrice;
   held.firstProfitAt=now+4*60_000;held.favorable=.002;
   const q:Quote={bestBid:entry*1.001,bestAsk:entry*1.0012,observedAt:later,fresh:true,entryReady:true};
   const next=advanceForward({state,now:later,paths:sliced(39),quotes:{[symbol]:q},contracts:{[symbol]:contract},entrySymbols:[symbol],allowDataCycle:false}).state;
@@ -315,7 +363,7 @@ test("v2 no-feedback exit requires weak recovery and exhausted future value",()=
   const plan=state.relationEngine.rules[0]!.exitProfile;plan.version="sample-exit-plan-v2";plan.bestHoldMinutes=15;plan.feedbackDeadlineMinutes=5;plan.maxHoldMinutes=30;
   plan.path={5:{expectedRate:.0005,adverseRate:.003,remainingEdgeRate:.00005,futureBestMinutes:10,recoveryRate:.18,continuationSamples:45},
     10:{expectedRate:.0006,adverseRate:.003,remainingEdgeRate:0,futureBestMinutes:10,recoveryRate:.15,continuationSamples:40}};
-  fillForwardPortfolio(state,quotesAt(39,now),contracts,now,1000,false);const held=state.positions[0]!,later=now+6*60_000,entry=held.entryPrice;
+  fillValidated(state,quotesAt(39,now),now);const held=state.positions[0]!,later=now+6*60_000,entry=held.entryPrice;
   const q:Quote={bestBid:entry*.9999,bestAsk:entry*1.0001,observedAt:later,fresh:true,entryReady:true};
   const next=advanceForward({state,now:later,paths:sliced(39),quotes:{[symbol]:q},contracts:{[symbol]:contract},entrySymbols:[symbol],allowDataCycle:false}).state;
   assert.ok(next.history.some(t=>t.id===held.id&&t.exitReason==="NO_POSITIVE_FEEDBACK"));
@@ -323,7 +371,7 @@ test("v2 no-feedback exit requires weak recovery and exhausted future value",()=
 
 test("v2 degraded relation waits while continuation remains, then exits and locks family after confirmed failure",()=>{
   const learned=learnThrough(39),now=nowAt(39),paths=sliced(39),s=initialForward(now-60_000),o=payoffEligibleOpportunity(learned,now);
-  s.relationEngine=learned;s.lastCandleAt=now;s.opportunities=[o];fillForwardPortfolio(s,quotesAt(39,now),contracts,now,1000,false);
+  s.relationEngine=learned;s.lastCandleAt=now;s.opportunities=[o];fillValidated(s,quotesAt(39,now),now);
   assert.ok(s.positions.length>0);
   const held=s.positions[0]!,ruleId=held.entryContext?.relationRuleId;assert.ok(ruleId&&held.exitPlan?.version==="sample-exit-plan-v2");
   const rule=s.relationEngine.rules.find(r=>r.id===ruleId);assert.ok(rule);rule!.status="DEGRADED";rule!.health=.2;rule!.livePathScore=.2;

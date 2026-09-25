@@ -1,0 +1,56 @@
+{
+  "source": {
+    "exportedAt": 1790345799563,
+    "completed": 76,
+    "wins": 38,
+    "losses": 38,
+    "balance": 993.0637851100516,
+    "grossPnl": 16.011588,
+    "fees": 22.90274199,
+    "fundingAllowance": 0.0450609,
+    "netPnl": -6.93621489,
+    "turnover": 32706.409452,
+    "matureSamples": 2099,
+    "storageError": "Adaptive 10状态超过预算；禁止截断账户"
+  },
+  "ordinary": {
+    "trades": 73,
+    "grossPnl": 20.001388,
+    "fees": 21.38998865,
+    "netPnl": -1.43356021,
+    "predictedPositive": 73,
+    "actualLosses": 35,
+    "averagePredictedNetRate": 0.00628865,
+    "averageActualNetRate": -0.00055115,
+    "averageTargetRate": 0.0161553,
+    "strongImmediate": 13,
+    "entryValidation": 60
+  },
+  "shock": {
+    "trades": 3,
+    "grossPnl": -3.9898,
+    "fees": 1.51275334,
+    "netPnl": -5.50265468,
+    "canonicalEvent": "market-shock-SHORT-29839085",
+    "decisions": {
+      "SUI_USDT": "WAIT_RETEST",
+      "XLM_USDT": "WAIT_RETEST",
+      "LINK_USDT": "CONTINUATION_DELAY"
+    },
+    "extendedMoveLowerBound": {
+      "completed": 74,
+      "tradeReductionRate": 0.02631579,
+      "grossPnl": 18.671388,
+      "fees": 22.12220685,
+      "netPnl": -3.49585991
+    }
+  },
+  "bestWinner": {
+    "id": "ft-mugtfwum-SUIUSDT-L-R",
+    "symbol": "SUI_USDT",
+    "netPnl": 17.0348637,
+    "strongImmediate": true,
+    "firstProfitDelayMs": 26199
+  },
+  "causalLimit": "The snapshot does not contain the complete resident 2-second BBO path. SUI/XLM can be classified at their recorded entry without future data; LINK is delayed rather than assumed removed. Ordinary pass/cancel outcomes require synthetic causal-path tests and are not backfilled from realized PnL."
+}

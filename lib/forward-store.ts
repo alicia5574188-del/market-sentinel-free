@@ -1,38 +1,77 @@
 import { FORWARD_VERSION, normalizeForward, type ForwardState } from "./forward-relations.ts";
+import type { RelationMeasurement } from "./forward-relation-v2.ts";
 import { gzip, gunzip, MAX_STATE_BYTES } from "./storage-codec.ts";
 import { buildForwardProtectionCheckpoint, restoreForwardProtectionCheckpoint } from "./forward-protection-checkpoint.ts";
 
 export const FORWARD_STORAGE = "forward-relations:v1:";
 export const FORWARD_PROTECTION_STORAGE = `${FORWARD_STORAGE}protection`;
 export const FORWARD_STORAGE_STATE_VERSION=`${FORWARD_VERSION}:sample-pack-v1`;
+export const FORWARD_PAGED_STATE_VERSION=`${FORWARD_VERSION}:paged-samples-v2`;
+export const FORWARD_SAMPLE_MANIFEST_STORAGE=`${FORWARD_STORAGE}sample-manifest`;
+export const FORWARD_SAMPLE_PAGE_PREFIX=`${FORWARD_STORAGE}sample-page:`;
 // Keep 16 KiB below the Durable Object single-value ceiling for typed-array
 // serialization and metadata. No base64 conversion or state-field omission.
 export const FORWARD_COMPACT_BYTES = 112*1024;
 type Head = { version: string; count: number; length: number; sha256: string; encoding?: "gzip"; rawLength?: number;
-  inline?: Uint8Array };
+  inline?: Uint8Array; sampleManifestSha256?:string };
+type SamplePageMeta={id:string;key:string;count:number;firstAt:number;lastAt:number;length:number;rawLength:number;
+  sha256:string;encoding:"gzip"|"utf8"};
+export type ForwardSampleManifest={version:typeof FORWARD_PAGED_STATE_VERSION;count:number;pages:SamplePageMeta[]};
 type Reader = { get<T>(key: string): Promise<T | undefined> };
 export type Store = Reader & { put(entries: Record<string, unknown>): Promise<void>; delete(keys: string[]): Promise<number> };
 const digest = async (bytes: Uint8Array) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes as BufferSource))].map(v=>v.toString(16).padStart(2,"0")).join("");
 
 const SAMPLE_CHECKPOINTS=[5,10,15,20,30,45,60] as const;
+const SAMPLE_PAGE_MS=60*60_000,SAMPLE_PAGE_ROWS=96,FORWARD_ACCOUNT_MAX_BYTES=1024*1024,FORWARD_SAMPLE_PAGE_MAX_BYTES=512*1024;
 const packed=(row:Record<number,string|number>|Record<string,string|number>|undefined,keys:readonly number[])=>
   keys.map(key=>{const value=Number(row?.[key as keyof typeof row]);return Number.isFinite(value)?value:null;});
-function compactForwardState(next:ForwardState){
-  const samples=next.relationEngine.samples.map(row=>[
+function packSample(row:RelationMeasurement){
+  return [
     "m1",row.symbol,row.at,row.response,row.up,row.down,row.x,
     [row.env.breadth,row.env.dispersion,row.env.expansion],
     packed(row.cp as Record<number,number>,SAMPLE_CHECKPOINTS),
     packed(row.upAt as Record<number,number>,SAMPLE_CHECKPOINTS),
     packed(row.downAt as Record<number,number>,SAMPLE_CHECKPOINTS),
     row.pathEfficiency,row.reversals,
-  ]);
-  return{...next,relationEngine:{...next.relationEngine,samples}};
+  ];
+}
+function compactForwardState(next:ForwardState,includeSamples=true){
+  const samples=includeSamples?next.relationEngine.samples.map(packSample):[];
+  return{...next,storage:{...next.storage,layout:includeSamples?next.storage.layout:FORWARD_PAGED_STATE_VERSION},
+    relationEngine:{...next.relationEngine,samples}};
+}
+const encodeJson=(value:unknown)=>new TextEncoder().encode(JSON.stringify(value));
+function sampleBuckets(samples:RelationMeasurement[]){
+  const out=new Map<string,RelationMeasurement[]>();
+  let priorHour="",shard=-1;
+  for(const sample of [...samples].sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol))){
+    const hour=String(Math.floor(sample.at/SAMPLE_PAGE_MS)*SAMPLE_PAGE_MS).padStart(16,"0");
+    if(hour!==priorHour){priorHour=hour;shard=0;}
+    let id=`${hour}:${String(shard).padStart(3,"0")}`,rows=out.get(id)??[];
+    if(rows.length>=SAMPLE_PAGE_ROWS){shard++;id=`${hour}:${String(shard).padStart(3,"0")}`;rows=[];}
+    rows.push(sample);out.set(id,rows);
+  }
+  return out;
+}
+async function encodeSamplePages(samples:RelationMeasurement[]){
+  const pages:{meta:SamplePageMeta;bytes:Uint8Array;rawText:string}[]=[];
+  for(const[id,rows]of sampleBuckets(samples)){
+    const raw=encodeJson({version:FORWARD_PAGED_STATE_VERSION,id,samples:rows.map(packSample)});
+    if(raw.length>FORWARD_SAMPLE_PAGE_MAX_BYTES)throw new Error(`Forward样本分页超过预算：${id}`);
+    const compressed=await gzip(raw),useGzip=compressed.length<raw.length,bytes=useGzip?compressed:raw;
+    if(bytes.length>FORWARD_COMPACT_BYTES)throw new Error(`Forward样本分页存储项超过预算：${id}`);
+    pages.push({meta:{id,key:`${FORWARD_SAMPLE_PAGE_PREFIX}${id}`,count:rows.length,firstAt:rows[0]!.at,lastAt:rows.at(-1)!.at,
+      length:bytes.length,rawLength:raw.length,sha256:await digest(bytes),encoding:useGzip?"gzip":"utf8"},bytes,
+      rawText:new TextDecoder().decode(raw)});
+  }
+  return pages;
 }
 
 export async function readForwardStore(storage: Reader, now: number) {
   const head=await storage.get<Head>(`${FORWARD_STORAGE}head`);
   if(!head)return normalizeForward(null,now);
-  if((head.version!==FORWARD_VERSION&&head.version!==FORWARD_STORAGE_STATE_VERSION)||!Number.isSafeInteger(head.count)||head.count<0||head.count>32
+  if((head.version!==FORWARD_VERSION&&head.version!==FORWARD_STORAGE_STATE_VERSION&&head.version!==FORWARD_PAGED_STATE_VERSION)
+    ||!Number.isSafeInteger(head.count)||head.count<0||head.count>32
     ||!Number.isSafeInteger(head.length)||head.length<1||head.length>MAX_STATE_BYTES
     ||(head.encoding!==undefined&&head.encoding!=="gzip")
     ||(head.inline!==undefined?!(head.inline instanceof Uint8Array)||head.inline.byteLength<1
@@ -44,9 +83,33 @@ export async function readForwardStore(storage: Reader, now: number) {
   const bytes=new Uint8Array(head.length);let offset=0;
   for(const chunk of chunks){if(!chunk||offset+chunk.byteLength>bytes.length)throw new Error("前向存储分片缺失");bytes.set(chunk,offset);offset+=chunk.byteLength;}
   if(offset!==bytes.length||await digest(bytes)!==head.sha256)throw new Error("前向存储校验失败，原账户不会被覆盖");
-  const raw=head.encoding==="gzip"?await gunzip(bytes):bytes;
+  const raw=head.encoding==="gzip"?await gunzip(bytes,head.version===FORWARD_PAGED_STATE_VERSION?FORWARD_ACCOUNT_MAX_BYTES:MAX_STATE_BYTES):bytes;
   if(head.encoding==="gzip"&&raw.length!==head.rawLength)throw new Error("前向解压长度校验失败");
-  const state=normalizeForward(JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(raw)) as ForwardState,now);
+  if(head.version===FORWARD_PAGED_STATE_VERSION&&raw.length>FORWARD_ACCOUNT_MAX_BYTES)throw new Error("前向账户主状态超过预算；拒绝截断账户");
+  const decoded=JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(raw)) as ForwardState;
+  if(head.version===FORWARD_PAGED_STATE_VERSION){
+    const manifest=await storage.get<ForwardSampleManifest>(FORWARD_SAMPLE_MANIFEST_STORAGE);
+    if(!manifest||manifest.version!==FORWARD_PAGED_STATE_VERSION||!Number.isSafeInteger(manifest.count)||manifest.count<0
+      ||!Array.isArray(manifest.pages)||manifest.pages.length>64
+      ||await digest(encodeJson(manifest))!==head.sampleManifestSha256)throw new Error("Forward样本manifest校验失败，原账户不会被覆盖");
+    const pageBytes=await Promise.all(manifest.pages.map(page=>storage.get<Uint8Array>(page.key))),samples:unknown[]=[];
+    let count=0,prior="";
+    for(let i=0;i<manifest.pages.length;i++){
+      const meta=manifest.pages[i]!,value=pageBytes[i];
+      if(!value||meta.key!==`${FORWARD_SAMPLE_PAGE_PREFIX}${meta.id}`||meta.id<=prior||value.length!==meta.length
+        ||value.length>FORWARD_COMPACT_BYTES||await digest(value)!==meta.sha256)throw new Error(`Forward样本分页校验失败：${meta.id}`);
+      prior=meta.id;const pageRaw=meta.encoding==="gzip"?await gunzip(value,FORWARD_SAMPLE_PAGE_MAX_BYTES):value;
+      if(pageRaw.length!==meta.rawLength)throw new Error(`Forward样本分页长度异常：${meta.id}`);
+      const page=JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(pageRaw)) as {version?:string;id?:string;samples?:unknown[]};
+      if(page.version!==FORWARD_PAGED_STATE_VERSION||page.id!==meta.id||!Array.isArray(page.samples)||page.samples.length!==meta.count)
+        throw new Error(`Forward样本分页内容异常：${meta.id}`);
+      samples.push(...page.samples);count+=page.samples.length;
+    }
+    if(count!==manifest.count)throw new Error("Forward样本manifest数量异常");
+    decoded.relationEngine={...decoded.relationEngine,samples:samples as RelationMeasurement[]};
+    decoded.storage={...decoded.storage,layout:FORWARD_PAGED_STATE_VERSION};
+  }
+  const state=normalizeForward(decoded,now);
   // An overlay belongs to exactly one durable full-account generation. Old
   // overlays need no delete/write on each full commit and cannot resurrect a
   // reset account, a closed position or a previous financial revision.
@@ -66,14 +129,23 @@ export function prepareForwardProtectionWrite(next:ForwardState){
 }
 
 export async function prepareForwardWrite(previous:ForwardState|null,next:ForwardState,now:number,options:{compact?:boolean}={}){
-  const raw=new TextEncoder().encode(JSON.stringify(compactForwardState(next)));
-  if(raw.length>MAX_STATE_BYTES)throw new Error("Adaptive 10状态超过预算；禁止截断账户");
+  const pages=await encodeSamplePages(next.relationEngine.samples),manifest:ForwardSampleManifest={version:FORWARD_PAGED_STATE_VERSION,
+    count:next.relationEngine.samples.length,pages:pages.map(page=>page.meta)},manifestSha256=await digest(encodeJson(manifest));
+  const raw=encodeJson(compactForwardState(next,false));
+  if(raw.length>FORWARD_ACCOUNT_MAX_BYTES)throw new Error("Forward账户主状态超过预算；禁止截断金融记录");
   const compressed=await gzip(raw),useGzip=compressed.length<raw.length,bytes=useGzip?compressed:raw;
   const entries:Record<string,unknown>={};let count=0;
   const inline=options.compact===true,chunkBytes=inline?FORWARD_COMPACT_BYTES:80*1024;
   for(let offset=inline?FORWARD_COMPACT_BYTES:0;offset<bytes.length;offset+=chunkBytes)
     entries[`${FORWARD_STORAGE}chunk:${count++}`]=bytes.slice(offset,offset+chunkBytes);
-  entries[`${FORWARD_STORAGE}head`]={version:FORWARD_STORAGE_STATE_VERSION,count,length:bytes.length,sha256:await digest(bytes),
+  const previousPages=previous?.storage.layout===FORWARD_PAGED_STATE_VERSION?await encodeSamplePages(previous.relationEngine.samples):[],
+    previousById=new Map(previousPages.map(page=>[page.meta.id,page]));
+  let changedSamplePages=0;
+  for(const page of pages){const prior=previousById.get(page.meta.id);if(!prior||prior.rawText!==page.rawText){entries[page.meta.key]=page.bytes;changedSamplePages++;}}
+  const priorManifest=previous?.storage.layout===FORWARD_PAGED_STATE_VERSION?{
+    version:FORWARD_PAGED_STATE_VERSION,count:previous.relationEngine.samples.length,pages:previousPages.map(page=>page.meta)} satisfies ForwardSampleManifest:null;
+  if(!priorManifest||JSON.stringify(priorManifest)!==JSON.stringify(manifest))entries[FORWARD_SAMPLE_MANIFEST_STORAGE]=manifest;
+  entries[`${FORWARD_STORAGE}head`]={version:FORWARD_PAGED_STATE_VERSION,count,length:bytes.length,sha256:await digest(bytes),sampleManifestSha256:manifestSha256,
     ...(useGzip?{encoding:"gzip" as const,rawLength:raw.length}:{}),...(inline?{inline:bytes.slice(0,FORWARD_COMPACT_BYTES)}:{})} satisfies Head;
 
   const priorRevision=previous?.revision??0,events=next.events.filter(e=>{
@@ -101,7 +173,8 @@ export async function prepareForwardWrite(previous:ForwardState|null,next:Forwar
     if(size>120*1024)throw new Error(`Adaptive 10存储项超过预算：${key}`);
   }
   return{entries,writes:Object.keys(entries).length,compression:{encoding:useGzip?"gzip":"utf8",rawBytes:raw.length,
-    storedBytes:bytes.length,chunks:count,...(options.compact?{inlineHead:inline,chunkBytes}:{})}};
+    storedBytes:bytes.length,chunks:count,sampleCount:manifest.count,samplePages:manifest.pages.length,changedSamplePages,
+    ...(options.compact?{inlineHead:inline,chunkBytes}:{})}};
 }
 
 

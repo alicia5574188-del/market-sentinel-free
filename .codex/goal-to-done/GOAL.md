@@ -569,3 +569,20 @@ Treat a system as one mutually exclusive market domain plus a portfolio of compl
 # 2026-09-21 — implementation-only stability and security audit
 
 Audit current main `ed418e9243a5f867b3e220eaea5a235cb94afd4e` across runtime, persistence, LIVE adapter, member isolation, UI and dependencies. Repair demonstrated implementation defects, with counterexample regressions and independent review. The current user explicitly forbids changing the trading strategy, its parameters or execution steps. Preserve decision thresholds, scan/poll cadence, order geometry, account records, owner/member LIVE intent and deployment path. Do not merge unrelated open research branches, reset accounts or run real-money tests. Use the established reviewed-main release only after the scoped repairs pass.
+# 2026-09-25 — lossless storage, causal Shock and calibrated entry release
+
+Preserve the current Forward Path Relation 3.0 account, learning, rules, open
+positions, history, owner/member control and Gate recovery contract. Replace
+the monolithic near-2MiB checkpoint with a small account/current-strategy head
+and checksummed time-bucketed causal-sample pages, including legacy migration,
+incremental page writes and restart recovery. Structural Interrupt may veto an
+old direction quickly, but may authorize a reverse trade only for a high-
+confidence outer-region event; already extended moves wait for a causal retest
+and restart. Correlated detections share one market-shock risk event. Ordinary
+low-margin/Reserve entries receive a bounded realtime BBO validation while
+strong mature relations retain immediate execution. Use realized PAPER results
+to expose and conservatively calibrate forecast error without reducing modeled
+cost. Deploy only if snapshot counterfactuals, 2200-sample/240-history/160-event
+storage stress, LIVE identity parity and the complete release gates improve on
+main without a large participation collapse. No reset, LIVE toggle, UI/member/
+auth change or real-money test.

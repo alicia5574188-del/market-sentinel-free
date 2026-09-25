@@ -9,9 +9,11 @@ export type InterruptRegion={
 };
 export type OuterRegion={lower:number;upper:number;center:number;widthRate:number;bars:number;quality:number};
 export type InterruptTrack={
-  symbol:string;side:InterruptSide;phase:"PRE_ALERT"|"CONFIRMED"|"COOLDOWN";boundary:number;startedAt:number;lastAt:number;
+  symbol:string;side:InterruptSide;phase:"PRE_ALERT"|"WAIT_RETEST"|"CONFIRMED"|"COOLDOWN";eventId:string;
+  boundary:number;startedAt:number;lastAt:number;
   lastQuoteAt:number;samples:number;outsideSamples:number;firstPrice:number;lastPrice:number;extremePrice:number;
   currentOutsideRate:number;maxExcursionRate:number;maxPullbackRate:number;hadPullback:boolean;restartSeen:boolean;
+  chaseLimitRate:number;retestRequired:boolean;restartQuality:number;confirmationKind:"CONTINUATION"|"RETEST_RESTART"|null;
   confirmedAt:number|null;cooldownUntil:number;
 };
 export type MarketInterruptEvent={
@@ -24,10 +26,12 @@ export type StructuralInterruptState={
 };
 export type StructuralInterruptCandidate={
   symbol:string;side:InterruptSide;eventId:string;marketWide:boolean;boundary:number;confirmedAt:number;
-  stopPrice:number;targetPrice:number;strength:number;outsideRate:number;atrRate:number;outerWidthRate:number;reason:string;
+  stopPrice:number;targetPrice:number;strength:number;outsideRate:number;remainingSpaceRate:number;atrRate:number;outerWidthRate:number;reason:string;
+  confirmationKind:"CONTINUATION"|"RETEST_RESTART";restartQuality:number;outerQuality:number;boundaryDistanceScore:number;
+  remainingSpaceScore:number;continuationScore:number;liquidityScore:number;marketSyncScore:number;independent:boolean;
 };
 
-const TRACK_TTL_MS=90_000,EVENT_TTL_MS=45_000,COOLDOWN_MS=60_000,QUOTE_MAX_AGE_MS=8_000;
+const TRACK_TTL_MS=90_000,EVENT_TTL_MS=45_000,EVENT_CLUSTER_MS=60_000,COOLDOWN_MS=60_000,QUOTE_MAX_AGE_MS=8_000;
 const clip=(v:number,a=0,b=1)=>Math.max(a,Math.min(b,v));
 const median=(values:number[])=>{const a=values.filter(Number.isFinite).sort((x,y)=>x-y);return a.length?(a.length%2?a[(a.length-1)/2]!:(a[a.length/2-1]!+a[a.length/2]!)/2):0;};
 const fresh=(q:InterruptQuote|undefined,now:number)=>!!q&&q.fresh&&q.bestBid>0&&q.bestAsk>=q.bestBid&&q.observedAt<=now&&now-q.observedAt<=QUOTE_MAX_AGE_MS;
@@ -79,8 +83,12 @@ export function normalizeStructuralInterruptState(value:unknown,now:number):Stru
   const raw=value as Partial<StructuralInterruptState>,tracks:Record<string,InterruptTrack>={};
   for(const [symbol,row] of Object.entries(raw.tracks??{})){
     if(!row||row.symbol!==symbol||!["LONG","SHORT"].includes(row.side)||!Number.isFinite(row.lastAt)||now-row.lastAt>TRACK_TTL_MS)continue;
-    tracks[symbol]={...row,phase:["PRE_ALERT","CONFIRMED","COOLDOWN"].includes(row.phase)?row.phase:"PRE_ALERT",
+    const phase=["PRE_ALERT","WAIT_RETEST","CONFIRMED","COOLDOWN"].includes(row.phase)?row.phase:"PRE_ALERT",
+      chaseLimitRate=Number.isFinite(row.chaseLimitRate)?row.chaseLimitRate:Math.max(.0045,Math.min(.008,row.maxExcursionRate||.0045));
+    tracks[symbol]={...row,phase,eventId:typeof row.eventId==="string"&&row.eventId?row.eventId:`shock-${row.side}-${Math.floor(row.startedAt/30_000)}`,
       samples:Math.max(1,Math.floor(row.samples||1)),outsideSamples:Math.max(1,Math.floor(row.outsideSamples||1)),
+      chaseLimitRate,retestRequired:row.retestRequired===true||phase==="WAIT_RETEST",restartQuality:clip(row.restartQuality||0,0,100),
+      confirmationKind:row.confirmationKind==="RETEST_RESTART"?"RETEST_RESTART":row.confirmationKind==="CONTINUATION"?"CONTINUATION":null,
       confirmedAt:Number.isFinite(row.confirmedAt??NaN)?row.confirmedAt:null,cooldownUntil:Number.isFinite(row.cooldownUntil)?row.cooldownUntil:0};
   }
   const event=raw.marketEvent&&Number.isFinite(raw.marketEvent.expiresAt)&&raw.marketEvent.expiresAt>now-10_000?raw.marketEvent:null;
@@ -89,10 +97,11 @@ export function normalizeStructuralInterruptState(value:unknown,now:number):Stru
     vetoBreadth:vetoSide&&Number.isFinite(raw.vetoBreadth)?raw.vetoBreadth!:0};
 }
 
-function startTrack(symbol:string,side:InterruptSide,boundary:number,price:number,rate:number,qAt:number,now:number):InterruptTrack{
-  return{symbol,side,phase:"PRE_ALERT",boundary,startedAt:now,lastAt:now,lastQuoteAt:qAt,samples:1,outsideSamples:1,
+function startTrack(symbol:string,side:InterruptSide,eventId:string,boundary:number,price:number,rate:number,atrRate:number,qAt:number,now:number):InterruptTrack{
+  const chaseLimitRate=Math.max(.0045,Math.min(.008,atrRate*.95)),retestRequired=rate>chaseLimitRate;
+  return{symbol,side,phase:retestRequired?"WAIT_RETEST":"PRE_ALERT",eventId,boundary,startedAt:now,lastAt:now,lastQuoteAt:qAt,samples:1,outsideSamples:1,
     firstPrice:price,lastPrice:price,extremePrice:price,currentOutsideRate:rate,maxExcursionRate:rate,maxPullbackRate:0,
-    hadPullback:false,restartSeen:false,confirmedAt:null,cooldownUntil:0};
+    hadPullback:false,restartSeen:false,chaseLimitRate,retestRequired,restartQuality:0,confirmationKind:null,confirmedAt:null,cooldownUntil:0};
 }
 
 function updateTrack(track:InterruptTrack,price:number,rate:number,atrRate:number,qAt:number,now:number){
@@ -106,9 +115,16 @@ function updateTrack(track:InterruptTrack,price:number,rate:number,atrRate:numbe
   track.extremePrice=nextExtreme;track.maxExcursionRate=nextMax;
   const elapsed=now-track.startedAt,minExcursion=Math.max(.0022,atrRate*.70),currentFloor=Math.max(.0008,atrRate*.18,minExcursion*.55),
     pullbackCeiling=Math.max(atrRate*.50,nextMax*.50),
-    sustained=elapsed>=4_000&&track.samples>=3&&track.outsideSamples>=3&&rate>=currentFloor&&track.maxPullbackRate<=pullbackCeiling,
-    impulse=nextMax>=Math.max(.0045,atrRate*1.15),steady=track.samples>=4&&nextMax>=minExcursion;
-  if(track.phase==="PRE_ALERT"&&sustained&&(impulse||track.restartSeen||steady)){track.phase="CONFIRMED";track.confirmedAt=now;}
+    sustained=elapsed>=4_000&&track.samples>=3&&track.outsideSamples>=3&&rate>=currentFloor&&track.maxPullbackRate<=pullbackCeiling;
+  if(track.phase==="PRE_ALERT"&&nextMax>track.chaseLimitRate){track.phase="WAIT_RETEST";track.retestRequired=true;}
+  if(track.phase==="PRE_ALERT"&&sustained&&nextMax<=track.chaseLimitRate&&rate<=track.chaseLimitRate){
+    track.phase="CONFIRMED";track.confirmedAt=now;track.confirmationKind="CONTINUATION";
+  }else if(track.phase==="WAIT_RETEST"&&elapsed>=6_000&&track.hadPullback&&track.restartSeen&&sustained){
+    const pullbackQuality=clip(track.maxPullbackRate/Math.max(.0008,Math.min(nextMax*.45,atrRate*.55))),
+      restartExtension=clip((nextMax-priorMax)/Math.max(.00025,atrRate*.12));
+    track.restartQuality=100*clip(.55*pullbackQuality+.45*restartExtension);
+    if(track.restartQuality>=62){track.phase="CONFIRMED";track.confirmedAt=now;track.confirmationKind="RETEST_RESTART";}
+  }
   return track;
 }
 
@@ -136,8 +152,11 @@ export function advanceStructuralInterrupt(input:{state:StructuralInterruptState
     }
     if(prior?.phase==="COOLDOWN"&&input.now<prior.cooldownUntil)continue;
     const boundary=side==="LONG"?region.outerUpper:region.outerLower;
-    if(!prior||prior.side!==side||Math.abs(prior.boundary/boundary-1)>.002||input.now-prior.lastAt>20_000)
-      state.tracks[symbol]=startTrack(symbol,side,boundary,price,rate,quote!.observedAt,input.now);
+    if(!prior||prior.side!==side||Math.abs(prior.boundary/boundary-1)>.002||input.now-prior.lastAt>20_000){
+      const cluster=Object.values(state.tracks).filter(track=>track.side===side&&input.now-track.startedAt<=EVENT_CLUSTER_MS)
+        .sort((a,b)=>a.startedAt-b.startedAt)[0],eventId=cluster?.eventId??`shock-${side}-${Math.floor(input.now/30_000)}`;
+      state.tracks[symbol]=startTrack(symbol,side,eventId,boundary,price,rate,atrRate,quote!.observedAt,input.now);
+    }
     else updateTrack(prior,price,rate,atrRate,quote!.observedAt,input.now);
   }
   for(const [symbol,track] of Object.entries(state.tracks)){
@@ -153,7 +172,8 @@ export function advanceStructuralInterrupt(input:{state:StructuralInterruptState
   const confirmedSide=longConfirmed.length>shortConfirmed.length?"LONG":shortConfirmed.length>longConfirmed.length?"SHORT":null,
     confirmed=confirmedSide==="LONG"?longConfirmed:confirmedSide==="SHORT"?shortConfirmed:[],breadth=confirmed.length/denom;
   if(confirmedSide&&confirmed.length>=3&&breadth>=.20){
-    const start=Math.min(...confirmed.map(track=>track.startedAt)),id=`shock-${confirmedSide}-${Math.floor(start/30_000)}`;
+    const start=Math.min(...confirmed.map(track=>track.startedAt)),id=confirmed.sort((a,b)=>a.startedAt-b.startedAt)[0]!.eventId;
+    for(const track of confirmed)track.eventId=id;
     state.marketEvent={id,side:confirmedSide,startedAt:start,confirmedAt:Math.min(...confirmed.map(track=>track.confirmedAt??input.now)),
       lastAt:input.now,expiresAt:input.now+EVENT_TTL_MS,breadth,confirmedSymbols:confirmed.map(track=>track.symbol)};
     state.vetoSide=confirmedSide;state.vetoUntil=input.now+EVENT_TTL_MS;state.vetoBreadth=Math.max(state.vetoBreadth,breadth);
@@ -177,22 +197,33 @@ export function structuralInterruptCandidates(input:{state:StructuralInterruptSt
         &&input.state.marketEvent.expiresAt>input.now,
       singleExtreme=track.maxExcursionRate>=Math.max(.0065,atrRate*1.35)&&(region.outerQuality??0)>=55;
     if(!marketWide&&!singleExtreme)continue;
-    const eventId=marketWide?input.state.marketEvent!.id:`shock-${track.symbol}-${track.side}-${Math.floor(track.startedAt/30_000)}`,
+    const eventId=track.eventId,
       stopOffset=Math.max(.0015,atrRate*.45,outerWidthRate*.08),
       stopPrice=track.side==="LONG"?track.boundary*(1-stopOffset):track.boundary*(1+stopOffset),
-      targetRate=Math.max(.006,Math.min(.03,Math.max(track.maxExcursionRate*1.5,atrRate*2.4,outerWidthRate*.45))),
-      targetPrice=price*(1+sideDir(track.side)*targetRate),
-      strength=clip(72+Math.min(16,track.maxExcursionRate/Math.max(atrRate,1e-9)*7)+(track.restartSeen?5:0)+(marketWide?7:0),0,100),
-      reason=`极端结构中断｜外层${region.outerBars}根区域${track.side==="LONG"?"上":"下"}破｜2秒路径${track.samples}次连续确认｜外离${(track.currentOutsideRate*100).toFixed(2)}%${marketWide?`｜市场同步${(input.state.marketEvent!.breadth*100).toFixed(0)}%`:"｜单币特大位移"}`;
+      totalSpace=Math.max(.006,Math.min(.03,Math.max(atrRate*2.4,outerWidthRate*.55))),
+      remainingSpaceRate=Math.max(0,totalSpace-track.currentOutsideRate),targetPrice=price*(1+sideDir(track.side)*remainingSpaceRate),
+      outerQuality=clip(region.outerQuality??0,0,100),spreadRate=(quote!.bestAsk-quote!.bestBid)/Math.max(price,1e-9),
+      liquidityScore=100*clip(1-spreadRate/.0025),boundaryDistanceScore=100*clip(1-Math.max(0,track.currentOutsideRate-.0015)/Math.max(.0045,totalSpace)),
+      remainingSpaceScore=100*clip(remainingSpaceRate/Math.max(.006,totalSpace)),continuationScore=track.confirmationKind==="RETEST_RESTART"
+        ?Math.max(62,track.restartQuality):100*clip((track.samples-2)/3),marketSyncScore=marketWide?100*clip((input.state.marketEvent?.breadth??0)/.45):45,
+      strength=clip(.20*outerQuality+.18*boundaryDistanceScore+.20*remainingSpaceScore+.18*continuationScore+.14*liquidityScore+.10*marketSyncScore,0,100),
+      independent=track.confirmationKind==="RETEST_RESTART"&&!marketWide&&track.restartQuality>=85&&outerQuality>=70&&liquidityScore>=80&&boundaryDistanceScore>=65,
+      reason=`极端结构中断｜外层${region.outerBars}根区域${track.side==="LONG"?"上":"下"}破｜${track.confirmationKind==="RETEST_RESTART"?"回抽后重新启动":"边界附近持续确认"}｜外离${(track.currentOutsideRate*100).toFixed(2)}%｜剩余${(remainingSpaceRate*100).toFixed(2)}%${marketWide?`｜市场同步${(input.state.marketEvent!.breadth*100).toFixed(0)}%`:"｜单币异常"}`;
+    if(remainingSpaceRate<=.0025)continue;
     if((track.side==="LONG"&&stopPrice>=price)||(track.side==="SHORT"&&stopPrice<=price))continue;
     out.push({symbol:track.symbol,side:track.side,eventId,marketWide,boundary:track.boundary,confirmedAt:track.confirmedAt,
-      stopPrice,targetPrice,strength,outsideRate:track.currentOutsideRate,atrRate,outerWidthRate,reason});
+      stopPrice,targetPrice,strength,outsideRate:track.currentOutsideRate,remainingSpaceRate,atrRate,outerWidthRate,reason,
+      confirmationKind:track.confirmationKind??"CONTINUATION",restartQuality:track.restartQuality,outerQuality,boundaryDistanceScore,
+      remainingSpaceScore,continuationScore,liquidityScore,marketSyncScore,independent});
   }
   return out.sort((a,b)=>b.strength-a.strength||b.outsideRate-a.outsideRate);
 }
 
 export function structuralInterruptBlockReason(state:StructuralInterruptState,symbol:string,side:InterruptSide,now:number){
   const local=state.tracks[symbol];
+  if(local&&(local.phase==="PRE_ALERT"||local.phase==="WAIT_RETEST")&&local.samples>=2&&now-local.startedAt>=2_000
+    &&now-local.lastAt<=12_000&&local.side!==side)
+    return`该币${local.side==="LONG"?"向上":"向下"}异常路径正在形成，旧方向立即停止新增`;
   if(local?.phase==="CONFIRMED"&&now-local.lastAt<=12_000&&local.side!==side)
     return`该币已确认${local.side==="LONG"?"向上":"向下"}极端结构突变，旧方向暂不新增`;
   if(state.marketEvent&&state.marketEvent.expiresAt>now&&state.marketEvent.side!==side)

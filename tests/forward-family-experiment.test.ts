@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  familyAdmissionBlock,initialFamilyExperimentState,isFamilyFailure,normalizeFamilyExperimentState,pruneFamilyExperimentBySymbols,
-  recordFamilyFailure,relationFamilyId,reserveExperimentValueBlock,
+  familyAdmissionBlock,familyCalibration,initialFamilyExperimentState,isFamilyFailure,normalizeFamilyExperimentState,pruneFamilyExperimentBySymbols,
+  recordFamilyFailure,recordFamilyOutcome,relationFamilyId,reserveExperimentValueBlock,
 } from "../lib/forward-family-experiment.ts";
 import type {RelationRule} from "../lib/forward-relation-v2.ts";
 const rule=(id:string,patch:Partial<RelationRule>={}):RelationRule=>({
@@ -128,4 +128,15 @@ test("legacy rule-id guards migrate into family guards instead of being discarde
   const family=relationFamilyId(a);
   assert.equal(state.guards[family]?.failures,2);
   assert.equal(state.guards[family]?.sourceRuleId,"legacy-rule");
+});
+
+test("actual fills calibrate predicted net edge without changing the historical cost assumption",()=>{
+  const state=initialFamilyExperimentState(),family=relationFamilyId(rule("calibration"));
+  for(let i=0;i<6;i++)recordFamilyOutcome({state,familyId:family,tradeId:`t-${i}`,predictedNetRate:.006,
+    realizedNetRate:-.001,costRate:.0014,targetCapture:.08,now:30_000+i});
+  const calibration=familyCalibration(state,family);
+  assert.equal(calibration.trades,6);assert.ok(Math.abs(calibration.meanCostRate-.0014)<1e-12);assert.ok(Math.abs(calibration.meanPredictedNetRate-.006)<1e-12);
+  assert.ok(Math.abs(calibration.meanRealizedNetRate+.001)<1e-12);assert.equal(calibration.requiresValidation,true);
+  assert.equal(recordFamilyOutcome({state,familyId:family,tradeId:"t-5",predictedNetRate:.5,realizedNetRate:.5,
+    costRate:0,targetCapture:1,now:40_000}),false,"one closed Trade identity may calibrate only once");
 });

@@ -38,14 +38,33 @@ test("an ordinary local displacement can confirm its path without gaining sample
     "a small single-symbol move must not become a structural bypass");
 });
 
-test("a true outer-boundary shock confirms from distinct 2s quotes without waiting for a 1m close",()=>{
+test("a fresh outer-boundary break confirms from distinct 2s quotes before extension becomes a chase",()=>{
   let state=initialStructuralInterruptState();const regions={A_USDT:region("A_USDT")};
-  for(const [dt,px] of [[0,98.85],[2000,98.55],[4000,98.25]] as const)
+  for(const [dt,px] of [[0,98.85],[2000,98.70],[4000,98.56],[6000,98.30]] as const)
     state=advanceStructuralInterrupt({state,regions,quotes:{A_USDT:q(px,T+dt)},now:T+dt});
   const track=state.tracks.A_USDT;assert.equal(track?.phase,"CONFIRMED");assert.ok((track?.confirmedAt??Infinity)-T<=4000);
-  const candidates=structuralInterruptCandidates({state,regions,quotes:{A_USDT:q(98.25,T+4000)},now:T+4000});
+  const candidates=structuralInterruptCandidates({state,regions,quotes:{A_USDT:q(98.30,T+6000)},now:T+6000});
   assert.equal(candidates.length,1);assert.equal(candidates[0]!.side,"SHORT");assert.equal(candidates[0]!.marketWide,false);
-  assert.match(candidates[0]!.reason,/2秒路径/);
+  assert.equal(candidates[0]!.confirmationKind,"CONTINUATION");
+});
+
+test("an already extended fast move cannot authorize a SHORT until a retest and causal restart",()=>{
+  let state=initialStructuralInterruptState();const regions={A_USDT:region("A_USDT")};
+  state=advanceStructuralInterrupt({state,regions,quotes:{A_USDT:q(97.60,T)},now:T});
+  assert.equal(state.tracks.A_USDT?.phase,"WAIT_RETEST");
+  state=advanceStructuralInterrupt({state,regions,quotes:{A_USDT:q(97.00,T+2000)},now:T+2000});
+  assert.equal(state.tracks.A_USDT?.phase,"WAIT_RETEST","speed alone is never reverse authorization");
+  assert.equal(structuralInterruptCandidates({state,regions,quotes:{A_USDT:q(97,T+2000)},now:T+2000}).length,0);
+  for(const [dt,px]of [[4000,97.55],[6000,97.45],[8000,96.90]] as const)
+    state=advanceStructuralInterrupt({state,regions,quotes:{A_USDT:q(px,T+dt)},now:T+dt});
+  assert.equal(state.tracks.A_USDT?.phase,"CONFIRMED");
+  assert.equal(state.tracks.A_USDT?.confirmationKind,"RETEST_RESTART");
+});
+
+test("same-window same-direction symbols share one Market Shock Event identity",()=>{
+  let state=initialStructuralInterruptState();const regions=Object.fromEntries(["A_USDT","B_USDT","C_USDT"].map(x=>[x,region(x)]));
+  state=advanceStructuralInterrupt({state,regions,quotes:{A_USDT:q(98.3,T),B_USDT:q(98.2,T),C_USDT:q(98.4,T)},now:T});
+  const ids=new Set(Object.values(state.tracks).map(track=>track.eventId));assert.equal(ids.size,1);
 });
 
 function sourceTrade(mode:"RELATION"|"BREAKOUT"="RELATION"):Trade{
@@ -67,6 +86,7 @@ function sourceTrade(mode:"RELATION"|"BREAKOUT"="RELATION"):Trade{
 test("only a confirmed same-symbol opposite shock may force the old position out",()=>{
   const s=initialForward(T-60_000);s.positions=[sourceTrade()];
   s.structuralInterrupt={version:"forward-structural-interrupt-v1",tracks:{A_USDT:{symbol:"A_USDT",side:"SHORT",phase:"CONFIRMED",boundary:99,
+    eventId:"shock-SHORT-test",chaseLimitRate:.0045,retestRequired:false,restartQuality:0,confirmationKind:"CONTINUATION",
     startedAt:T-6_000,lastAt:T,lastQuoteAt:T,samples:4,outsideSamples:4,firstPrice:98.9,lastPrice:98.5,extremePrice:98.4,
     currentOutsideRate:.005,maxExcursionRate:.006,maxPullbackRate:.0005,hadPullback:false,restartSeen:false,confirmedAt:T-2_000,cooldownUntil:0}},
     marketEvent:null,vetoSide:"SHORT",vetoUntil:T+15_000,vetoBreadth:.25} satisfies StructuralInterruptState;
