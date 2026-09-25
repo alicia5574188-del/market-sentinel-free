@@ -57,9 +57,9 @@ export function advanceForwardShock(input:{state:ForwardShockRuntime;now:number;
   for(const [symbol,region] of Object.entries(input.regions??{})){
     if(allowed&&!allowed.has(symbol))continue;
     const q=input.quotes[symbol];if(!fresh(q,input.now)||q!.entryReady!==true)continue;
-    marketCount++;
     const price=mid(q!),bounds=regionBounds(region);
     if(!bounds||bounds.quality<48||!(bounds.lower>0&&bounds.upper>bounds.lower&&bounds.widthRate>0))continue;
+    marketCount++;
     const bufferRate=Math.max(.0006,Math.min(.003,bounds.widthRate*.04));
     const shortProgress=(bounds.lower-price)/bounds.lower,longProgress=(price-bounds.upper)/bounds.upper;
     const side:ShockSide|null=shortProgress>bufferRate?"SHORT":longProgress>bufferRate?"LONG":null;
