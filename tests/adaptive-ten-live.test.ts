@@ -25,7 +25,10 @@ function source(){
   s.opportunities=[opportunity];s.lastCandleAt=now;
   s.relationEngine.rules=[{id:"fixture-rule",signature:"fixture-rule",scope:"BASE",horizon:60,side:"LONG",
     conditions:[{feature:0,op:"GE",threshold:0}],longNet:.01,recentNet:.008,standardError:.001,samples:40,longGroups:6,recentGroups:3,
-    health:.85,status:"ACTIVE",livePathScore:.80,environmentFit:.82,stopRate:.008,targetRate:.012,updatedAt:now,lastQualifiedAt:now-60_000,
+    health:.85,status:"ACTIVE",livePathScore:.80,environmentFit:.82,stopRate:.008,targetRate:.012,exitProfile:{version:"sample-exit-plan-v1" as const,bestHoldMinutes:60 as const,feedbackDeadlineMinutes:15,maxHoldMinutes:60,
+    normalAdverseRate:.008,targetRate:.012,protectionActivationRate:.004,retentionRate:.78,samples:40,groups:6,
+    path:{15:{expectedRate:.003,adverseRate:.004,remainingEdgeRate:.007},30:{expectedRate:.006,adverseRate:.005,remainingEdgeRate:.004},
+      45:{expectedRate:.009,adverseRate:.006,remainingEdgeRate:.002},60:{expectedRate:.011,adverseRate:.008,remainingEdgeRate:0}}},updatedAt:now,lastQualifiedAt:now-60_000,
     symbols:["BTC_USDT"],reason:"LIVE parity fixture"} satisfies RelationRule];
   fillForwardPortfolio(s,{BTC_USDT:q(price,now)},{BTC_USDT:contract},now,1000,false);
   assert.equal(s.positions.length,1);return{s,trade:s.positions[0]!,now,price};
@@ -38,6 +41,7 @@ test("LIVE sees the exact persisted PAPER trade rather than rebuilding a strateg
   assert.deepEqual(rows.BTC_USDT.forwardSource,trade);
   assert.equal(rows.BTC_USDT.activeStopPrice,trade.stopPrice);
   assert.equal(rows.BTC_USDT.notional,trade.notional);
+  assert.deepEqual(rows.BTC_USDT.forwardSource?.exitPlan,trade.exitPlan);
 });
 
 test("owner enable fences old PAPER positions and admits only new events",()=>{
@@ -62,12 +66,14 @@ test("proportional LIVE sizing preserves source leverage and does not enlarge a 
   assert.ok(result.intent.notional<=trade.notional*.1+trade.entryPrice*trade.quantoMultiplier);
   assert.equal(result.binding.receipt.sourceId,trade.id);
   assert.equal(result.binding.receipt.ratio,.1);
+  assert.equal(result.binding.receipt.sourceExitPlanVersion,"sample-exit-plan-v1");
+  assert.equal(result.binding.receipt.sourceMaxHoldMinutes,trade.exitPlan?.maxHoldMinutes);
 });
 
 test("stale events are never replayed into LIVE and adverse chase is bounded",()=>{
   const {trade}=source();
   assert.equal(mirrorSourceFresh(trade,trade.id,trade.openedAt+1000),true);
-  assert.equal(mirrorSourceFresh(trade,trade.id,trade.openedAt+trade.rule.horizon*60_000),false);
+  assert.equal(mirrorSourceFresh(trade,trade.id,trade.openedAt+(trade.exitPlan?.maxHoldMinutes??trade.rule.horizon)*60_000),false);
   const favorable=trade.side==="LONG"?trade.entryPrice*.999:trade.entryPrice*1.001;
   assert.equal(liveEntryDriftGuard(trade,favorable).adverse,0);
   const bad=trade.side==="LONG"?trade.entryPrice*1.02:trade.entryPrice*.98;
