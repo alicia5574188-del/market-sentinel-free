@@ -24,8 +24,9 @@ export type RelationMeasurement={symbol:string;at:number;response:number;up:numb
   downAt:Partial<Record<RelationCheckpoint,number>>;relativeAt:Partial<Record<RelationHorizon,number>>;
   pathEfficiency:number;reversals:number};
 export type RelationCondition={feature:number;op:"GE"|"LE";threshold:number};
-export type RelationExitPoint={expectedRate:number;adverseRate:number;remainingEdgeRate:number};
-export type RelationExitProfile={version:"sample-exit-plan-v1";bestHoldMinutes:RelationHorizon;feedbackDeadlineMinutes:number;
+export type RelationExitPoint={expectedRate:number;adverseRate:number;remainingEdgeRate:number;
+  futureBestMinutes?:RelationCheckpoint;recoveryRate?:number;continuationSamples?:number};
+export type RelationExitProfile={version:"sample-exit-plan-v1"|"sample-exit-plan-v2";bestHoldMinutes:RelationHorizon;feedbackDeadlineMinutes:number;
   maxHoldMinutes:number;normalAdverseRate:number;targetRate:number;protectionActivationRate:number;retentionRate:number;
   samples:number;groups:number;path:Partial<Record<RelationCheckpoint,RelationExitPoint>>};
 export type RelationRule={id:string;signature:string;scope:RelationScope;horizon:RelationHorizon;side:RelationSide;conditions:RelationCondition[];
@@ -171,15 +172,24 @@ function exitProfile(selected:RelationMeasurement[],side:RelationSide,best:Relat
   const first=base.map(r=>REACTION_CHECKPOINTS.find(m=>m<=best&&d*Number(r.cp[m]??-Infinity)>COST*.60)??best),
     adverse=base.map(r=>adverseAt(r,best,side)),favorable=base.map(r=>favorableAt(r,best,side)).filter(v=>v>0),
     retention=base.map(r=>{const f=favorableAt(r,best,side);return f>0?clip(Math.max(0,directional(r,best,side))/f,0,1):0;});
-  const path:RelationExitProfile["path"]={};for(const cp of REACTION_CHECKPOINTS){if(cp>best)continue;const present=base.filter(r=>Number.isFinite(Number(r.cp[cp]??NaN)));if(!present.length)continue;
-    const expected=median(present.map(r=>d*Number(r.cp[cp]!))),adv=quantile(present.map(r=>adverseAt(r,cp,side)).filter(Number.isFinite),.8),
-      remaining=median(present.map(r=>d*(cpValue(r,best)-Number(r.cp[cp]!))));
-    path[cp]={expectedRate:expected,adverseRate:Math.max(.0015,adv||quantile(adverse,.8)),remainingEdgeRate:remaining};}
-  const bestNet=mean(usable.map(r=>directional(r,best,side)))-COST;let maxHold:RelationHorizon=best;for(const h of RELATION_HORIZONS){if(h<=best)continue;
-    const later=usable.map(r=>directional(r,h,side)).filter(Number.isFinite),minimum=Math.max(8,Math.ceil(usable.length*.35));if(later.length<minimum)break;
+  const bestNet=mean(usable.map(r=>directional(r,best,side)))-COST;let maxHold:RelationHorizon=best;
+  for(const h of RELATION_HORIZONS){if(h<=best)continue;const later=usable.map(r=>directional(r,h,side)).filter(Number.isFinite),
+      minimum=Math.max(8,Math.ceil(usable.length*.35));if(later.length<minimum)break;
     if(mean(later)-COST>=Math.max(0,bestNet*.45))maxHold=h;else break;}
+  const path:RelationExitProfile["path"]={};
+  for(const cp of REACTION_CHECKPOINTS){if(cp>maxHold)continue;const present=base.filter(r=>Number.isFinite(Number(r.cp[cp]??NaN)));if(!present.length)continue;
+    const expected=median(present.map(r=>d*Number(r.cp[cp]!))),adv=quantile(present.map(r=>adverseAt(r,cp,side)).filter(Number.isFinite),.8),
+      future=REACTION_CHECKPOINTS.filter(m=>m>cp&&m<=maxHold),minimum=Math.max(8,Math.ceil(present.length*.30));
+    let futureBestMinutes:RelationCheckpoint=cp,bestFuture=expected,continuationSamples=present.length;
+    for(const m of future){const joined=present.filter(r=>Number.isFinite(Number(r.cp[m]??NaN)));if(joined.length<minimum)continue;
+      const futureRate=median(joined.map(r=>d*Number(r.cp[m]!)));if(futureRate>bestFuture){bestFuture=futureRate;futureBestMinutes=m;continuationSamples=joined.length;}}
+    const weak=present.filter(r=>d*Number(r.cp[cp]!)<=COST*.60),recoverable=weak.filter(r=>future.some(m=>Number.isFinite(Number(r.cp[m]??NaN))&&d*Number(r.cp[m]!)>=COST*.75)),
+      recoveryRate=weak.length>=8?recoverable.length/weak.length:.5;
+    path[cp]={expectedRate:expected,adverseRate:Math.max(.0015,adv||quantile(adverse,.8)),
+      remainingEdgeRate:Math.max(0,bestFuture-expected),futureBestMinutes,recoveryRate,continuationSamples};
+  }
   const target=Math.max(.003,quantile(favorable,.60),median(usable.map(r=>Math.max(0,directional(r,best,side))))+COST);
-  return{version:"sample-exit-plan-v1",bestHoldMinutes:best,feedbackDeadlineMinutes:clip(quantile(first,.80),5,Math.min(30,best)),
+  return{version:"sample-exit-plan-v2",bestHoldMinutes:best,feedbackDeadlineMinutes:clip(quantile(first,.80),5,Math.min(30,best)),
     maxHoldMinutes:Math.max(best,maxHold),normalAdverseRate:clip(quantile(adverse,.80)*1.10,.003,.03),targetRate:target,
     protectionActivationRate:clip(Math.max(COST*1.2,quantile(favorable,.35)*.65),COST*1.1,Math.max(COST*1.2,target*.75)),
     retentionRate:clip(quantile(retention,.35)+.10,.60,.90),samples:usable.length,groups:groupRows(usable,best,side).length,path};
@@ -262,7 +272,7 @@ function currentFrame(value:unknown):RelationFrame|null{
 function currentRule(value:unknown):value is RelationRule{
   const raw=objectRecord(value),exit=objectRecord(raw?.exitProfile);return !!raw&&typeof raw.id==="string"
     &&(raw.side==="LONG"||raw.side==="SHORT")&&RELATION_HORIZONS.includes(Number(raw.horizon) as RelationHorizon)
-    &&exit?.version==="sample-exit-plan-v1";
+    &&(exit?.version==="sample-exit-plan-v1"||exit?.version==="sample-exit-plan-v2");
 }
 export function normalizeRelationEngine(value:unknown,now:number):RelationEngineState{
   const raw=objectRecord(value);if(!raw)return initialRelationEngine(now);const out=initialRelationEngine(Number(raw.startedAt)>0?Number(raw.startedAt):now);
