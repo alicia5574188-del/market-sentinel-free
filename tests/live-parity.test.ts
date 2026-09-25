@@ -222,7 +222,7 @@ class FakeGate {
   requestCount=0;placed:LiveEntryIntent[]=[];leverages:number[]=[];stops:GateLiveOrder[]=[];amendedStops:Array<{id:string;price:number}>=[];
   orders=new Map<string,GateLiveOrder>();holdings:Record<string,GateLivePosition>={};
   closeTags:string[]=[];onLeverage:(()=>Promise<void>)|null=null;onCreate:(()=>Promise<void>)|null=null;
-  failSnapshot=false;readTimeout=false;partial=false;zero=false;ambiguous=false;omitExit=false;counter=1;
+  failSnapshot=false;readTimeout=false;partial=false;zero=false;ambiguous=false;omitExit=false;inspectFailures=0;counter=1;
   async snapshot(){this.requestCount++;if(this.readTimeout)throw new GateReadTimeoutError("/futures/usdt/accounts");
     if(this.failSnapshot)throw new Error("injected Gate outage");
     return structuredClone({account:this.account,positions:Object.values(this.holdings),orders:[],priceOrders:this.stops,checkedAt:Date.now()});}
@@ -234,7 +234,10 @@ class FakeGate {
     if(filled)this.holdings[String(i.body.contract)]={contract:String(i.body.contract),size:Math.sign(i.size)*filled,entry_price:100,leverage:i.leverage};
     return id;
   }
-  async inspectEntry(_kind:string,_symbol:string,tag:string,id:string|null){return structuredClone(this.orders.get(id??"")??[...this.orders.values()].find(o=>o.text===tag)??null);}
+  async inspectEntry(_kind:string,_symbol:string,tag:string,id:string|null){
+    if(this.inspectFailures>0){this.inspectFailures--;throw new GateReadTimeoutError(`/futures/usdt/orders/${id??tag}`);}
+    return structuredClone(this.orders.get(id??"")??[...this.orders.values()].find(o=>o.text===tag)??null);
+  }
   async createStop(i:LiveStopIntent){const id=String(this.counter++);this.stops.push({id_string:id,text:i.tag,contract:String((i.body.initial as Record<string,unknown>).contract),status:"open"});return id;}
   async amendStop(id:string,price:number){this.amendedStops.push({id,price});return;}
   async cancelOrder(_kind:string,id:string){this.stops=this.stops.filter(s=>s.id_string!==id);}
@@ -245,7 +248,7 @@ type Harness={runtime:{live:Record<string,unknown>;[key:string]:unknown};forward
   liveHistory:unknown[];forwardError:string|null;liveBindingError:string|null;
   syncLive(now:number,enable?:boolean,off?:boolean):Promise<void>;setLiveMode(v:boolean):Promise<{ok:boolean}>;
   saveCheckpoint(now:number,force?:boolean):Promise<void>;liveDesiredPortfolio(now:number):Record<string,unknown>};
-type LiveTest={requestedEnabled:boolean;changedAt:number|null;activation?:LiveSession;operational:boolean;lastError?:string|null;entries:Record<string,{planId:string;status:string;parity?:MirrorBinding["receipt"]}>;
+type LiveTest={requestedEnabled:boolean;changedAt:number|null;activation?:LiveSession;operational:boolean;lastError?:string|null;entries:Record<string,{planId:string;status:string;exchangeOrderId?:string|null;lastError?:string|null;parity?:MirrorBinding["receipt"]}>;
   positions:Record<string,{id:string;status:string;entryPrice:number;exitPrice?:number;parity?:MirrorBinding["receipt"];exitReason?:string;exchangeSize?:number}&Partial<ReturnType<typeof gatePositionValuation>>>;entrySkips:Record<string,{reason:string}>};
 function live(h:Harness){return h.runtime.live as unknown as LiveTest;}
 async function harness(store=new Memory(),gate=new FakeGate()) {
@@ -600,6 +603,17 @@ test("zero-fill IOC cannot produce a fictitious filled position",()=>clock(async
 test("ambiguous submission reserves identity and is not retried into a duplicate",()=>clock(async()=>{
   const {h,gate}=await harness();gate.ambiguous=true;await enableNew(h);await h.syncLive(T);await h.syncLive(T);
   assert.equal(gate.placed.length,1);assert.equal(live(h).entries.BTC_USDT.status,"ERROR");
+}));
+test("ACK order id is durable before fill inspection and recovers without replay",()=>clock(async()=>{
+  const {h,gate,store}=await harness();gate.inspectFailures=1;await enableNew(h);
+  const entry=live(h).entries.BTC_USDT;
+  assert.equal(gate.placed.length,1);assert.equal(entry.exchangeOrderId,"1");assert.equal(entry.status,"ERROR");
+  assert.match(entry.lastError??"",/已确认订单ID 1/);assert.equal(gate.stops.length,0);
+  const checkpoint=store.data.get("checkpoint") as {live?:{entries?:Record<string,{exchangeOrderId?:string|null}>}};
+  assert.equal(checkpoint.live?.entries?.BTC_USDT?.exchangeOrderId,"1","ACK identity must survive a restart boundary before read-side fill proof");
+  await h.syncLive(T);
+  assert.equal(gate.placed.length,1,"a known exchange order ID must never be submitted twice");
+  assert.equal(live(h).positions.BTC_USDT.status,"OPEN");assert.ok(gate.stops.length>0);
 }));
 test("missing exchange exit response is not replaced by source/midpoint price",()=>clock(async()=>{
   const {h,gate}=await harness();gate.omitExit=true;await enableNew(h);await h.syncLive(T);
