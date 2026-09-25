@@ -12,7 +12,7 @@ import type {RelationRule} from "./forward-relation-v2.ts";
 
 export const FORWARD_FAMILY_EXPERIMENT_VERSION="forward-family-experiment-v2";
 
-export type FamilyFailureReason="RELATION_DEGRADED"|"NO_POSITIVE_FEEDBACK"|"STRUCTURE_STOP";
+export type FamilyFailureReason="RELATION_DEGRADED"|"NO_POSITIVE_FEEDBACK"|"STRUCTURE_STOP"|"SAMPLE_PATH_DIVERGED";
 export type FamilyGuardRecord={
   familyId:string;sourceRuleId:string;blockedAt:number;blockedEvidenceAt:number;blockedHealth:number;blockedLivePathScore:number;
   reason:FamilyFailureReason;symbol:string;failures:number;
@@ -53,7 +53,7 @@ export function normalizeFamilyExperimentState(value:unknown,rules:RelationRule[
     if(v.guards&&typeof v.guards==="object")for(const [familyId,raw] of Object.entries(v.guards as Record<string,unknown>)){
       if(!raw||typeof raw!=="object")continue;const r=raw as Partial<FamilyGuardRecord>;
       const reason:FamilyFailureReason=r.reason==="NO_POSITIVE_FEEDBACK"?"NO_POSITIVE_FEEDBACK":
-        r.reason==="STRUCTURE_STOP"?"STRUCTURE_STOP":"RELATION_DEGRADED";
+        r.reason==="STRUCTURE_STOP"?"STRUCTURE_STOP":r.reason==="SAMPLE_PATH_DIVERGED"?"SAMPLE_PATH_DIVERGED":"RELATION_DEGRADED";
       mergeGuard(out,{familyId,sourceRuleId:typeof r.sourceRuleId==="string"?r.sourceRuleId:"",blockedAt:finite(r.blockedAt),
         blockedEvidenceAt:finite(r.blockedEvidenceAt),blockedHealth:finite(r.blockedHealth),blockedLivePathScore:finite(r.blockedLivePathScore),
         reason,symbol:typeof r.symbol==="string"?r.symbol:"",failures:Math.max(1,Math.floor(finite(r.failures,1)))});
@@ -145,7 +145,7 @@ export function recordFamilyFailure(input:{
 
 export function isFamilyFailure(reason:string,firstProfitAt?:number|null){
   if(reason==="RELATION_DEGRADED"||reason==="NO_POSITIVE_FEEDBACK")return true;
-  return reason==="STRUCTURE_STOP"&&!firstProfitAt;
+  return (reason==="STRUCTURE_STOP"||reason==="SAMPLE_PATH_DIVERGED")&&!firstProfitAt;
 }
 
 export function familyExperimentSummary(state:FamilyExperimentState){
