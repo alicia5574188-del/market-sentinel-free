@@ -231,6 +231,23 @@ test("a holding exits early when its own relation is degraded and it has no posi
   assert.equal(next.opportunities.some(o=>o.side==="SHORT"&&o.mode==="RELATION"),false,"degradation is defense, not a forced reversal");
 });
 
+test("an existing recent relation is revalidated on its own evidence before threshold-grid drift can degrade it",()=>{
+  const positive=Object.fromEntries(symbols.map((symbol,i)=>[symbol,makePath(i,90,999)])) as Record<string,Candle[]>,
+    slice=(last:number)=>Object.fromEntries(symbols.map(symbol=>[symbol,positive[symbol]!.slice(0,last+1)])) as Record<string,Candle[]>,
+    at=(last:number)=>(positive[symbols[0]]![last]!.time+300)*1000+1000;
+  let engine=initialRelationEngine(at(24)-1);for(let i=24;i<=50;i++)engine=advanceRelationEngine({state:engine,paths:slice(i),now:at(i)});
+  const template=engine.rules.find(r=>r.scope==="RECENT"&&r.side==="LONG");assert.ok(template);
+  const old={...structuredClone(template!),id:"legacy-grid-rule",signature:"old-grid-signature",
+    conditions:[{feature:0,op:"GE" as const,threshold:-8}],horizon:15 as const,scope:"RECENT" as const,side:"LONG" as const,
+    lastQualifiedAt:at(50)-60_000,status:"ACTIVE" as const,health:.70};
+  engine.rules=[old];
+  engine=advanceRelationEngine({state:engine,paths:slice(51),now:at(51)});
+  const retained=engine.rules.find(r=>r.conditions.length===1&&r.conditions[0]?.feature===0&&r.conditions[0]?.threshold===-8);
+  assert.ok(retained,"old threshold shape should be explicitly revalidated instead of disappearing from search-grid drift");
+  assert.notEqual(retained!.status,"DEGRADED","positive current evidence must not be degraded solely because quantile thresholds moved");
+  assert.doesNotMatch(retained!.reason,/未通过|旧关系未再/);
+});
+
 test("risk scaling never becomes a global trading pause merely because a relation is pressured",()=>{
   const learned=learnThrough(39),pressured=advanceRelationEngine({state:learned,paths:sliced(40),now:nowAt(40)});
   const candidates=relationCandidates(pressured).filter(c=>c.side==="LONG");
