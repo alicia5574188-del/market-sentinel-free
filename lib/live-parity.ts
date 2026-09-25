@@ -79,7 +79,7 @@ export function forwardMirrorSources(state: ForwardState, sourceEquity: number):
         rangeId:null,modeledCostRate:cost,spreadRate:0,bidDepthUsd:0,askDepthUsd:0,structureSource:"CANDLE_5M",
         grossRewardRate:0,structuralStopRate:t.rule.stopRate,netRewardRisk:0,costShare:0,
         empiricalExpectedReturnRate:0,empiricalProfitFactor:0,empiricalEvents:0,
-        profitArmIsNotExit:true,maxHoldMs:t.rule.horizon*60_000},
+        profitArmIsNotExit:true,maxHoldMs:sourceHoldMinutes(t)*60_000},
     };
   }
   return out;
