@@ -342,12 +342,18 @@ function regionOpportunities(s:ForwardState,symbol:string,rows:Candle[],minute:C
       executionScore:exec,grossRemainingSpaceRate:gross,netRemainingSpaceRate:net,pullbackRiskRate:pullback,edgeRatio:edge,
       expectedHoldMinutes:mode==="RANGE"?12:mode==="BREAKOUT"?18:22,marketFit:fit,regionId:region.id,regionQuality:region.quality,reason});
   };
-  const upBreak=last.close>region.upper*(1+buffer)&&body>avgBody*1.35&&closePos>.68;
-  const dnBreak=last.close<region.lower*(1-buffer)&&body>avgBody*1.35&&closePos<.32;
-  if(upBreak){const m=minuteConfirm(minute,"LONG",region.upper,now);if(m.ok||body>avgBody*2.6)
-    add("LONG","BREAKOUT",72+m.score*.10,region.lower*(1-buffer),price*(1+Math.max(region.widthRate*1.2,st.atr*2.2)),`成熟区上破｜5m实体${(body/avgBody).toFixed(1)}×｜1m确认${m.ok?"通过":"极强提前"}`);}
-  if(dnBreak){const m=minuteConfirm(minute,"SHORT",region.lower,now);if(m.ok||body>avgBody*2.6)
-    add("SHORT","BREAKOUT",72+m.score*.10,region.upper*(1+buffer),price*(1-Math.max(region.widthRate*1.2,st.atr*2.2)),`成熟区下破｜5m实体${(body/avgBody).toFixed(1)}×｜1m确认${m.ok?"通过":"极强提前"}`);}
+  const breakUpper=region.outerUpper??region.upper,breakLower=region.outerLower??region.lower,
+    outerWidth=region.outerWidthRate??region.widthRate,breakBuffer=Math.max(buffer,outerWidth*.015);
+  const upBreak=last.close>breakUpper*(1+breakBuffer)&&body>avgBody*1.35&&closePos>.68;
+  const dnBreak=last.close<breakLower*(1-breakBuffer)&&body>avgBody*1.35&&closePos<.32;
+  if(upBreak){const m=minuteConfirm(minute,"LONG",breakUpper,now);if(m.ok){
+    const stop=Math.min(price*.998,Math.max(region.upper,breakUpper*(1-breakBuffer*1.5)));
+    add("LONG","BREAKOUT",72+m.score*.10,stop,price*(1+Math.max(outerWidth*.60,st.atr*2.2)),
+      `外层成熟区上破｜5m实体${(body/avgBody).toFixed(1)}×｜1m确认通过`);}}
+  if(dnBreak){const m=minuteConfirm(minute,"SHORT",breakLower,now);if(m.ok){
+    const stop=Math.max(price*1.002,Math.min(region.lower,breakLower*(1+breakBuffer*1.5)));
+    add("SHORT","BREAKOUT",72+m.score*.10,stop,price*(1-Math.max(outerWidth*.60,st.atr*2.2)),
+      `外层成熟区下破｜5m实体${(body/avgBody).toFixed(1)}×｜1m确认通过`);}}
   const prevProbeUp=prev.high>region.upper*(1+buffer)&&prev.close<=region.upper,prevProbeDn=prev.low<region.lower*(1-buffer)&&prev.close>=region.lower;
   if(prevProbeUp&&last.close<region.center)add("SHORT","FAILED_BREAKOUT",70,Math.max(prev.high,region.upper)*(1+buffer),region.lower,
     "向上假突破重新被区域接受，反向做空",true);
@@ -363,6 +369,29 @@ function regionOpportunities(s:ForwardState,symbol:string,rows:Candle[],minute:C
     if(nearUpper&&last.close<last.open)add("SHORT","RANGE",57,region.upper*(1+buffer),region.center,"成熟区上沿重新出现卖方控制，做中心回归",false);
   }
   return out;
+}
+function shockExitPlan(signal:ForwardShockSignal):RelationExitProfile{
+  const adverse=clip(Math.max(.0015,signal.stopRate*.35),.0015,.007),target=Math.max(.006,signal.targetRate);
+  return{version:"sample-exit-plan-v2",bestHoldMinutes:15,feedbackDeadlineMinutes:3,maxHoldMinutes:20,
+    normalAdverseRate:adverse,targetRate:target,protectionActivationRate:Math.max(.0025,Math.min(.006,target*.35)),
+    retentionRate:.82,samples:0,groups:0,path:{
+      5:{expectedRate:target*.28,adverseRate:adverse,remainingEdgeRate:target*.72,futureBestMinutes:15,recoveryRate:.70,continuationSamples:0},
+      10:{expectedRate:target*.55,adverseRate:adverse,remainingEdgeRate:target*.45,futureBestMinutes:15,recoveryRate:.55,continuationSamples:0},
+      15:{expectedRate:target*.80,adverseRate:adverse,remainingEdgeRate:0,futureBestMinutes:15,recoveryRate:.30,continuationSamples:0}}};
+}
+function shockOpportunity(signal:ForwardShockSignal,q:Quote|undefined,region:Region|undefined,now:number):Opportunity{
+  const exec=executionScore(q,now),gross=Math.max(.006,signal.targetRate),net=Math.max(0,gross-ROUND_TRIP_COST),
+    pullback=Math.max(.003,signal.stopRate),edge=net/Math.max(pullback,1e-9),score=clip(signal.score*.94+exec*.06,0,100),
+    plan=shockExitPlan(signal);
+  return{id:signal.id,symbol:signal.symbol,side:signal.side,mode:"SHOCK",premium:true,reserve:false,score,
+    eligible:net>0&&edge>=.45,completedAt:signal.confirmedAt,expiresAt:signal.confirmedAt+45_000,price:signal.price,
+    stopPrice:signal.price*(1-dir(signal.side)*signal.stopRate),targetPrice:signal.price*(1+dir(signal.side)*gross),
+    stopRate:signal.stopRate,targetRate:gross,directionStrength:score,pathEfficiency:signal.outerQuality,
+    momentumPersistence:clip(70+Math.abs(signal.velocityRate)*2500,0,100),positionScore:92,spaceScore:100*clip(edge/2),
+    executionScore:exec,grossRemainingSpaceRate:gross,netRemainingSpaceRate:net,pullbackRiskRate:pullback,edgeRatio:edge,
+    expectedHoldMinutes:15,marketFit:100*clip(signal.marketBreadth*2),regionId:region?.id??null,regionQuality:signal.outerQuality,
+    reason:`${signal.reason}｜极端结构仅临时中断常态样本权，不创建普通结构策略`,structuralInterrupt:true,
+    shockEventId:signal.eventId,shockConfirmedAt:signal.confirmedAt,shockMarketBreadth:signal.marketBreadth,riskScale:1,exitPlan:plan};
 }
 function relationSupportMap(s:ForwardState,allowed?:ReadonlySet<string>){
   const bySymbol=new Map<string,RelationCandidate[]>();
