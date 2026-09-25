@@ -818,7 +818,7 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
     fitDiagnostics:s.fitDiagnostics,storage:s.storage,targetPositions:null,positionLimit:null,executionBboCapacity:FORWARD_EXECUTION_BBO_CAP,
     minuteConfirmationCapacity:FORWARD_MINUTE_CONFIRMATION_CAP,seatCount:s.positions.length,eligibleCount:eligible.length,
     reserveCount:reserve.length,premiumCount:eligible.filter(o=>o.premium).length,
-    boundaries:{scope:"PAPER_AUTHORITY",grammar:"常态由样本关系掌管方向；结构只负责执行位置。只有完整外层区域发生2秒级持续异常位移，或多市场同步突变时，Structural Interrupt才可临时否决旧方向并授权极端反转；普通结构永远不能绕过样本。",
+    boundaries:{scope:"PAPER_AUTHORITY",grammar:"5分钟根样本沿15/30/45/60分钟完整路径学习；常态由样本关系掌管方向，结构只负责执行位置。只有完整外层区域发生2秒级持续异常位移，或多市场同步突变时，Structural Interrupt才可临时否决旧方向并授权极端反转；普通结构永远不能绕过样本。",
       historyBackfill:true,sampleMeaning:"启动时只回填当前已完整收盘且可因果重建的最近根路径；随后根样本记录5/10/15/20/30/45/60分钟路径。统计按非重叠时间组验证，最佳持仓可在15/30/45/60分钟中学习。旧方向失效不会自动生成反向订单；极端结构中断是实时异常保护，不写入样本投票。",
       accounting:"模拟使用新鲜买卖价并计入手续费、滑点和资金费占位；每笔新Trade冻结自己的样本退出计划，同一持久化Trade事件供实盘与会员实盘执行。",
       risk:"不设持仓席位数量上限；总风险≤10%、同方向≤6.5%、同一关系族≤2.5%、探测池≤1.5%、保证金≤75%。结构止损仍是账户安全硬边界。",
