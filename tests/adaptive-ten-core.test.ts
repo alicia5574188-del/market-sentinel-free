@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {ADAPTIVE_ENGINE_VERSION,advanceForward,closeForwardForReset,fillForwardPortfolio,forwardSummary,initialForward,normalizeForward,relationHardPayoffBlock,resetForwardAccountPreservingLearning,
+import {ADAPTIVE_ENGINE_VERSION,advanceForward,closeForwardForReset,fillForwardPortfolio,forwardSummary,initialForward,normalizeForward,relationHardPayoffBlock,relationOpportunity,resetForwardAccountPreservingLearning,
   type Candle,type Contract,type Opportunity,type Quote} from "../lib/forward-relations.ts";
 import {FORWARD_STORAGE,prepareForwardReset} from "../lib/forward-store.ts";
 import {FORWARD_RELATION_V2_VERSION,advanceRelationEngine,initialRelationEngine,normalizeRelationEngine,pruneRelationLearningBySymbols,relationCandidates,type RelationRule} from "../lib/forward-relation-v2.ts";
@@ -50,6 +50,14 @@ function makePayoffEligible<T extends ReturnType<typeof initialRelationEngine>>(
   for(const rule of engine.rules){rule.exitProfile.targetRate=Math.max(rule.exitProfile.targetRate,.03);
     rule.exitProfile.retentionRate=Math.max(rule.exitProfile.retentionRate,.85);rule.exitProfile.winRate=Math.max(rule.exitProfile.winRate??0,.80);}
   return engine;
+}
+
+function payoffEligibleOpportunity(engine:ReturnType<typeof initialRelationEngine>,now:number){
+  makePayoffEligible(engine);const candidate=relationCandidates(engine).find(c=>c.status==="ACTIVE")??relationCandidates(engine)[0];
+  assert.ok(candidate);const rows=sliced(39)[candidate!.symbol]!,q=quotesAt(39,now)[candidate!.symbol]!,
+    opportunity=relationOpportunity(candidate!,rows,q,now);
+  assert.equal(opportunity.eligible,true,`expected payoff-eligible learned relation, got: ${opportunity.reason}`);
+  return opportunity;
 }
 
 test("Forward Path Relation 3.0 learns from root paths without double-counting checkpoints",()=>{
@@ -120,19 +128,20 @@ test("a restart can seed closed root paths immediately instead of waiting a fres
   assert.ok(e.samples.length>=24,"closed 5m history should seed root paths immediately; trading authority still requires independent validation");
 });
 
-test("PAPER uses learned relations for entries instead of the retired 5m FLOW gate",()=>{
-  const learned=makePayoffEligible(learnThrough(39)),now=nowAt(39),paths=sliced(39),quotes=quotesAt(39,now);
-  let s=initialForward(now-60_000);s.relationEngine=learned;
-  s=advanceForward({state:s,now,paths,quotes,contracts,entrySymbols:symbols}).state;
+test("PAPER uses payoff-eligible learned relations for entries instead of the retired 5m FLOW gate",()=>{
+  const learned=learnThrough(39),now=nowAt(39),quotes=quotesAt(39,now),o=payoffEligibleOpportunity(learned,now);
+  const s=initialForward(now-60_000);s.relationEngine=learned;s.lastCandleAt=now;s.opportunities=[o];
+  fillForwardPortfolio(s,quotes,contracts,now,1000,false);
   assert.ok(s.positions.length>0);
-  assert.ok(s.opportunities.some(o=>o.mode==="RELATION"&&o.eligible));
+  assert.ok(s.opportunities.some(row=>row.mode==="RELATION"&&row.eligible));
   assert.ok(s.positions.every(t=>t.entryContext?.mode==="RELATION"||t.entryContext?.regionId));
   assert.ok(s.positions.some(t=>t.entryContext?.relationRuleId));
 });
 
 test("pure relation trades keep sample MAE for path invalidation but a wider hard safety stop for account risk",()=>{
-  const learned=makePayoffEligible(learnThrough(39)),now=nowAt(39);let state=initialForward(now-60_000);state.relationEngine=learned;
-  state=advanceForward({state,now,paths:sliced(39),quotes:quotesAt(39,now),contracts,entrySymbols:symbols}).state;
+  const learned=learnThrough(39),now=nowAt(39),state=initialForward(now-60_000),o=payoffEligibleOpportunity(learned,now);
+  state.relationEngine=learned;state.lastCandleAt=now;state.opportunities=[o];
+  fillForwardPortfolio(state,quotesAt(39,now),contracts,now,1000,false);
   const trade=state.positions.find(t=>t.entryContext?.mode==="RELATION"&&t.exitPlan);assert.ok(trade);
   assert.equal(trade!.entryContext!.pullbackRiskRate,trade!.exitPlan!.normalAdverseRate);
   assert.ok(trade!.rule.stopRate>trade!.exitPlan!.normalAdverseRate,
@@ -306,9 +315,8 @@ test("v2 no-feedback exit requires weak recovery and exhausted future value",()=
 });
 
 test("v2 degraded relation waits while continuation remains, then exits and locks family after confirmed failure",()=>{
-  const learned=makePayoffEligible(learnThrough(39)),now=nowAt(39),paths=sliced(39);
-  let s=initialForward(now-60_000);s.relationEngine=learned;
-  s=advanceForward({state:s,now,paths,quotes:quotesAt(39,now),contracts,entrySymbols:symbols}).state;
+  const learned=learnThrough(39),now=nowAt(39),paths=sliced(39),s=initialForward(now-60_000),o=payoffEligibleOpportunity(learned,now);
+  s.relationEngine=learned;s.lastCandleAt=now;s.opportunities=[o];fillForwardPortfolio(s,quotesAt(39,now),contracts,now,1000,false);
   assert.ok(s.positions.length>0);
   const held=s.positions[0]!,ruleId=held.entryContext?.relationRuleId;assert.ok(ruleId&&held.exitPlan?.version==="sample-exit-plan-v2");
   const rule=s.relationEngine.rules.find(r=>r.id===ruleId);assert.ok(rule);rule!.status="DEGRADED";rule!.health=.2;rule!.livePathScore=.2;
