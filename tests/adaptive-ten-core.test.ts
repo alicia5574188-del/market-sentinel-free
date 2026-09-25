@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {ADAPTIVE_ENGINE_VERSION,advanceForward,closeForwardForReset,fillForwardPortfolio,forwardSummary,initialForward,normalizeForward,resetForwardAccountPreservingLearning,
   type Candle,type Contract,type Opportunity,type Quote} from "../lib/forward-relations.ts";
 import {FORWARD_STORAGE,prepareForwardReset} from "../lib/forward-store.ts";
-import {FORWARD_RELATION_V2_VERSION,advanceRelationEngine,initialRelationEngine,relationCandidates,type RelationRule} from "../lib/forward-relation-v2.ts";
+import {FORWARD_RELATION_V2_VERSION,advanceRelationEngine,initialRelationEngine,normalizeRelationEngine,relationCandidates,type RelationRule} from "../lib/forward-relation-v2.ts";
 import {recordFamilyFailure,relationFamilyId} from "../lib/forward-family-experiment.ts";
 
 const START=Date.parse("2026-09-24T00:00:00Z")/1000;
@@ -225,6 +225,22 @@ test("risk scaling never becomes a global trading pause merely because a relatio
   assert.ok(candidates.length>0,"degraded/pressured relations retain bounded probe participation");
   assert.ok(candidates.every(c=>c.health>=.15));
   assert.ok(candidates.some(c=>c.reserve));
+});
+
+test("real Forward Relation 2.0 horizon records migrate into v3 root samples",()=>{
+  const now=nowAt(39),at=now-30*60_000,x=[.4,.3,.2,.7,.1,.6,.2,.1],env={breadth:.6,dispersion:.3,expansion:.2};
+  const legacy={version:"forward-relation-v2",startedAt:now-3*60*60_000,updatedAt:now-1000,observations:99,measured:66,invalidated:2,
+    frames:{},pending:{},lastBars:{},rules:[],diagnostics:{},samples:[
+      {symbol:"BTC_USDT",at,horizon:15,response:.004,up:.006,down:.0015,x,env,cp:{5:.001,10:.002,15:.004}},
+      {symbol:"BTC_USDT",at,horizon:60,response:.011,up:.014,down:.002,x,env,cp:{5:.001,10:.002,15:.004,30:.008,60:.011}},
+      {symbol:"ETH_USDT",at,horizon:15,response:.003,up:.005,down:.001,x,env,cp:{5:.001,10:.002,15:.003}},
+      {symbol:"ETH_USDT",at,horizon:180,response:.02,up:.025,down:.005,x,env,cp:{5:.001,10:.002,15:.003,30:.006,60:.01,180:.02}},
+    ]};
+  const migrated=normalizeRelationEngine(legacy,now);
+  assert.equal(migrated.samples.length,2,"same-symbol 15m/60m legacy rows must merge into one root; 180m still contributes shared <=60m checkpoints");
+  assert.equal(migrated.samples.find(r=>r.symbol==="BTC_USDT")?.cp[60],.011);
+  assert.equal(migrated.samples.find(r=>r.symbol==="ETH_USDT")?.cp[60],.01);
+  assert.equal(migrated.measured,66,"historical measured counter must remain intact");
 });
 
 test("strategy migration preserves account identity, financial history and causal samples instead of cold-resetting learning",()=>{
