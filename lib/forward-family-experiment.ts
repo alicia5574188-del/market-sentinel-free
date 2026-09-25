@@ -24,9 +24,9 @@ export type FamilyExperimentState={
 
 const finite=(v:unknown,fallback=0)=>typeof v==="number"&&Number.isFinite(v)?v:fallback;
 
-export function relationFamilyId(rule:Pick<RelationRule,"horizon"|"side"|"scope"|"conditions">){
+export function relationFamilyId(rule:Pick<RelationRule,"side"|"conditions">){
   const shape=[...(rule.conditions??[])].map(c=>`${c.feature}${c.op}`).sort().join(",");
-  return `${rule.horizon}:${rule.side}:${rule.scope}:${shape||"BASE"}`;
+  return `${rule.side}:${shape||"BASE"}`;
 }
 
 export function initialFamilyExperimentState():FamilyExperimentState{
