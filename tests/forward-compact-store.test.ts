@@ -88,6 +88,7 @@ test("legacy pages recover only through exact decoded page invariants and migrat
   assert.equal(recovered.relationEngine.samples.length,2200);
   assert.equal(recovered.history.length,240);
   const migrated=await prepareForwardWrite(recovered,recovered,T+2,{compact:true});
+  assert.equal(migrated.compression.changedSamplePages,migrated.compression.samplePages);
   await db.put(migrated.entries);
   const stable=db.data.get(FORWARD_SAMPLE_MANIFEST_STORAGE) as {pages:{rawSha256?:string}[]};
   assert.ok(stable.pages.every(page=>/^[0-9a-f]{64}$/.test(page.rawSha256??"")));

@@ -179,7 +179,9 @@ export async function prepareForwardWrite(previous:ForwardState|null,next:Forwar
   const previousPages=previous?.storage.layout===FORWARD_PAGED_STATE_VERSION?await encodeSamplePages(previous.relationEngine.samples):[],
     previousById=new Map(previousPages.map(page=>[page.meta.id,page]));
   let changedSamplePages=0;
-  for(const page of pages){const prior=previousById.get(page.meta.id);if(!prior||prior.rawText!==page.rawText){entries[page.meta.key]=page.bytes;changedSamplePages++;}}
+  const migrateSampleIntegrity=previous?.storage.layout===FORWARD_PAGED_STATE_VERSION&&previous.storage.sampleIntegrity!=="raw-sha256";
+  for(const page of pages){const prior=previousById.get(page.meta.id);
+    if(migrateSampleIntegrity||!prior||prior.rawText!==page.rawText){entries[page.meta.key]=page.bytes;changedSamplePages++;}}
   const priorManifest=previous?.storage.layout===FORWARD_PAGED_STATE_VERSION?{
     version:FORWARD_PAGED_STATE_VERSION,count:previous.relationEngine.samples.length,pages:previousPages.map(page=>page.meta)} satisfies ForwardSampleManifest:null;
   if(!priorManifest||previous?.storage.sampleIntegrity!=="raw-sha256"||JSON.stringify(priorManifest)!==JSON.stringify(manifest))
