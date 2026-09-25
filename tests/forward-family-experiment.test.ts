@@ -39,6 +39,15 @@ test("reserve minimum value blocks the weak probe profile seen in the failed sna
   assert.equal(reserveExperimentValueBlock({reserve:false,netRate:.0001,edgeRatio:.01,livePathScore:.01,environmentFit:.01,roundTripCost:.0019}),null);
 });
 
+test("only strong ACTIVE recent evidence may use the lower probe edge floor",()=>{
+  assert.equal(reserveExperimentValueBlock({reserve:true,netRate:.0017,edgeRatio:.36,livePathScore:.84,environmentFit:.69,
+    roundTripCost:.0019,status:"ACTIVE",health:.64}),null);
+  assert.match(reserveExperimentValueBlock({reserve:true,netRate:.0017,edgeRatio:.36,livePathScore:.84,environmentFit:.69,
+    roundTripCost:.0019,status:"PRESSURED",health:.64})??"",/收益风险价值/);
+  assert.match(reserveExperimentValueBlock({reserve:true,netRate:.0017,edgeRatio:.36,livePathScore:.66,environmentFit:.69,
+    roundTripCost:.0019,status:"ACTIVE",health:.64})??"",/收益风险价值|路径/);
+});
+
 test("only one reserve experiment may be open inside a family",()=>{
   const state=initialFamilyExperimentState(),a=rule("a"),b=rule("b",{conditions:[{feature:2,op:"LE",threshold:-.31}]});
   const family=relationFamilyId(a);
