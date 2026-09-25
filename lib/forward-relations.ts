@@ -233,23 +233,6 @@ function detectRegion(symbol:string,rows:Candle[],now:number):Region|null{
   }
   return best;
 }
-function maxCounterMove(rows:Candle[],side:"LONG"|"SHORT"){
-  if(rows.length<2)return 0;let extreme=rows[0]!.close,worst=0;
-  for(const r of rows.slice(1)){if(side==="LONG"){extreme=Math.max(extreme,r.high);worst=Math.max(worst,(extreme-r.low)/extreme);}
-    else{extreme=Math.min(extreme,r.low);worst=Math.max(worst,(r.high-extreme)/extreme);}}
-  return worst;
-}
-function historicalLeg(rows:Candle[],side:"LONG"|"SHORT",atr:number){
-  const d=dir(side),samples:number[]=[];for(const n of[4,6,8,12])for(let i=n;i<rows.length-1;i++){
-    const m=d*(rows[i]!.close/rows[i-n]!.close-1);if(m>atr*.7)samples.push(m);
-  }
-  return Math.max(atr*2.2,samples.length>=8?quantile(samples,.65):atr*2.8);
-}
-function structuralSpace(rows:Candle[],side:"LONG"|"SHORT",price:number,atr:number){
-  const prior=rows.slice(0,-1),gap=Math.max(.0005,atr*.18);
-  if(side==="LONG"){const levels=prior.map(r=>r.high).filter(x=>x>price*(1+gap)).sort((a,b)=>a-b);return levels[0]?levels[0]/price-1:null;}
-  const levels=prior.map(r=>r.low).filter(x=>x<price*(1-gap)).sort((a,b)=>b-a);return levels[0]?1-levels[0]/price:null;
-}
 function executionScore(q:Quote|undefined,now:number){
   if(!q)return 58;if(!freshQuote(q,now))return 10;const mid=midpoint(q),spread=(q.bestAsk-q.bestBid)/mid;
   return 100*(1-.65*clip(spread/.0018));
@@ -388,7 +371,7 @@ function planCheckpoint(plan:RelationExitProfile,ageMin:number){
   const keys=Object.keys(plan.path).map(Number).filter(n=>Number.isFinite(n)&&n<=ageMin).sort((a,b)=>a-b);
   const minute=keys.at(-1);return minute==null?null:{minute,point:plan.path[minute as keyof typeof plan.path]!};
 }
-function advanceProfitFloor(s:ForwardState,t:Trade,relation:RelationEngineState["rules"][number]|undefined,now:number){
+function advanceProfitFloor(t:Trade,relation:RelationEngineState["rules"][number]|undefined){
   const plan=t.exitPlan;if(!plan)return legacyProtectionFloor(t);if(t.favorable<plan.protectionActivationRate)return 0;
   const tighten=relation?.status==="DEGRADED"?.10:relation?.status==="PRESSURED"?.05:relation?.status==="RECOVERING"?.02:0;
   return t.favorable*clip(plan.retentionRate+tighten,.55,.94);
@@ -400,7 +383,7 @@ function markAndManage(s:ForwardState,quotes:Record<string,Quote>,now:number){
     t.favorable=Math.max(t.favorable,favorable);t.adverse=Math.max(t.adverse,adverse);t.peakPnlRate=Math.max(t.peakPnlRate??0,favorable);
     if(!t.firstProfitAt&&favorable>=ROUND_TRIP_COST*.6)t.firstProfitAt=now;
     const relation=t.entryContext?.relationRuleId?relationById.get(t.entryContext.relationRuleId):undefined,
-      floor=advanceProfitFloor(s,t,relation,now);
+      floor=advanceProfitFloor(t,relation);
     if(floor>Math.max(t.profitFloorRate??0,ROUND_TRIP_COST*.8)){t.profitFloorRate=floor;const next=t.entryPrice*(1+d*floor);
       if(t.side==="LONG"&&next>t.stopPrice||t.side==="SHORT"&&next<t.stopPrice){t.stopPrice=next;
         event(s,now,"PROTECTION",t.id,"样本利润保护提升至约"+(floor*100).toFixed(2)+"%");}}
@@ -492,7 +475,6 @@ function openTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:nu
   // Analysis can come from Bybit/OKX/KuCoin. Only relative structure may cross
   // venues; all executable prices are re-anchored to the actual Gate quote.
   const stopRate=Number.isFinite(o.stopRate)?o.stopRate:Math.abs(o.price-o.stopPrice)/Math.max(o.price,1e-9);
-  const targetRate=Number.isFinite(o.targetRate)?o.targetRate:Math.abs(o.targetPrice/o.price-1);
   if(!(stopRate>=.002&&stopRate<=.03))return"结构止损宽度不合理";
   const totalHeadroom=equity*(TOTAL_RISK_RATE-.001)-existingRisk(s),sideHeadroom=equity*(SIDE_RISK_RATE-.0005)-existingRisk(s,side),
     familyHeadroom=equity*FAMILY_RISK_CAP_RATE-familyRisk(s,familyId),
