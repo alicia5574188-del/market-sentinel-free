@@ -2441,12 +2441,16 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     let recoveringEntryStop = Object.values(this.runtime.live.entries)
       .find((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status)
         && entry.stopSubmittingAt && !entry.stopOrderId) ?? null;
-    this.runtime.live.operational = !recoveringSubmission && !recoveringStop && !recoveringEntryStop;
-    this.runtime.live.lastError = recoveringSubmission
-      ? recoveringSubmission.lastError ?? `${recoveringSubmission.symbol} 的实盘提交正在与 Gate 核对`
-      : recoveringStop ? `${recoveringStop.symbol} 的结构止损正在按订单标签核对`
-        : recoveringEntryStop ? `${recoveringEntryStop.symbol} 的初始止损正在按订单标签核对` : null;
-    if(recoveringSubmission || recoveringStop || recoveringEntryStop) return;
+    // A submitted entry with uncertain visibility already owns one immutable
+    // order identity and keeps its full planned risk/margin reserved below. It
+    // must never be replayed, but it must not freeze unrelated PAPER sources for
+    // the whole Gate lookup window. Missing native protection is different and
+    // still blocks additions until the exposed position is protected.
+    this.runtime.live.operational = !recoveringStop && !recoveringEntryStop;
+    this.runtime.live.lastError = recoveringStop ? `${recoveringStop.symbol} 的结构止损正在按订单标签核对`
+      : recoveringEntryStop ? `${recoveringEntryStop.symbol} 的初始止损正在按订单标签核对`
+      : recoveringSubmission ? (recoveringSubmission.lastError ?? `${recoveringSubmission.symbol} 的唯一订单身份仍在 Gate 核对；该笔风险已冻结，其他独立新机会继续执行`) : null;
+    if(recoveringStop || recoveringEntryStop) return;
     let availableForNewEntries = available;
     let riskForNewEntries = this.liveOpenRisk();
     const directionRiskForNewEntries: Record<Side, number> = {
@@ -2571,9 +2575,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       try {
         if(!this.runtime.live.requestedEnabled||!sameLiveSession(activation,this.runtime.live.activation)){entry.status="CANCELLED";continue;}
         try {
-          await client.setLeverage(symbol, intent.leverage);
+          const leverageCheck=typeof client.ensureLeverage==="function"
+            ?await client.ensureLeverage(symbol,intent.leverage)
+            :(await client.setLeverage(symbol,intent.leverage),{verified:true,recovered:false,actual:intent.leverage});
+          if(leverageCheck.recovered)this.recordLiveAudit({observedAt:Date.now(),symbol,planId:plan.id,stage:"LEVERAGE",level:"INFO",
+            reason:`Gate 杠杆写入响应曾超时，但安全回读已确认 ${symbol}=${intent.leverage}×；继续本次同源入场，不重放杠杆写请求`});
         } catch (error) {
-          const reason = `Gate 未接受 ${symbol} 的 ${intent.leverage}× 杠杆，本计划已跳过：${safeError(error)}`;
+          const reason = `Gate 未确认 ${symbol} 的 ${intent.leverage}× 杠杆，本计划已跳过但不会锁住其他新机会：${safeError(error)}`;
           entry.status = "CANCELLED";
           entry.lastError = reason;
           this.runtime.live.entrySkips[symbol] = { planId: plan.id, symbol, code: "LEVERAGE_REJECTED", reason, observedAt: now };
