@@ -88,10 +88,21 @@ function recovered(record:FamilyGuardRecord,rules:RelationRule[]){
   });
 }
 
+export type ActiveRecentValue={
+  netRate:number;targetRate:number;normalAdverseRate:number;retentionRate:number;samples:number;groups:number;
+};
 export function reserveExperimentValueBlock(input:{
   reserve:boolean;netRate:number;edgeRatio:number;livePathScore:number;environmentFit:number;roundTripCost:number;
+  activeRecent?:ActiveRecentValue;
 }){
   if(!input.reserve)return null;
+  const recent=input.activeRecent;
+  if(recent){
+    const evidenceFloor=Math.max(.0012,input.roundTripCost*.65),
+      pathRatio=recent.targetRate/Math.max(recent.normalAdverseRate,1e-9);
+    if(recent.netRate>=evidenceFloor&&pathRatio>=1.5&&recent.retentionRate>=.70
+      &&recent.samples>=24&&recent.groups>=3&&input.livePathScore>=.70&&input.environmentFit>=.65)return null;
+  }
   const netFloor=Math.max(.0010,input.roundTripCost*.55);
   if(input.netRate<netFloor)return `探测净空间不足：${(input.netRate*100).toFixed(2)}%`;
   if(input.edgeRatio<.45)return `探测收益风险价值不足：${input.edgeRatio.toFixed(2)}`;
@@ -110,8 +121,12 @@ export function familyAdmissionBlock(input:{
   if(!input.reserve)return null;
   if(input.openFamilyIds.has(familyId))return `关系族${familyId}已有一笔探测仓`;
 
+  const activeRecent=input.rule.scope==="RECENT"&&input.rule.status==="ACTIVE"?{
+    netRate:input.rule.longNet,targetRate:input.rule.exitProfile.targetRate,
+    normalAdverseRate:input.rule.exitProfile.normalAdverseRate,retentionRate:input.rule.exitProfile.retentionRate,
+    samples:input.rule.exitProfile.samples,groups:input.rule.exitProfile.groups}:undefined;
   return reserveExperimentValueBlock({reserve:true,netRate:input.netRate,edgeRatio:input.edgeRatio,
-    livePathScore:input.rule.livePathScore,environmentFit:input.rule.environmentFit,roundTripCost:input.roundTripCost});
+    livePathScore:input.rule.livePathScore,environmentFit:input.rule.environmentFit,roundTripCost:input.roundTripCost,activeRecent});
 }
 
 export function recordFamilyFailure(input:{
