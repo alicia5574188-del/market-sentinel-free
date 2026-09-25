@@ -2461,7 +2461,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const trade = desiredPortfolio[symbol] ?? null;
       if (!skip || !trade || trade.id !== skip.planId || now >= trade.openedAt + 45 * 60_000) delete this.runtime.live.entrySkips[symbol];
     }
-    for (const trade of Object.values(desiredPortfolio)) {
+    const desiredTrades=Object.values(desiredPortfolio).sort((a,b)=>{
+      const sa=a.forwardSource,sb=b.forwardSource,shockA=sa?.entryContext?.mode==="SHOCK"?1:0,shockB=sb?.entryContext?.mode==="SHOCK"?1:0,
+        scoreA=sa?.entryContext?.entryScore??0,scoreB=sb?.entryContext?.entryScore??0;
+      return shockB-shockA||scoreB-scoreA||b.openedAt-a.openedAt;
+    });
+    for (const trade of desiredTrades) {
       const symbol = trade.symbol;
       if(!trade.forwardSource)continue; // Legacy sources only drain existing exposure.
       if(!orderAuditUsable){
@@ -2539,7 +2544,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       marginForNewEntries += intent.margin;
       notionalForNewEntries += intent.notional;
       staged.push({ symbol, plan, intent, binding,activation:structuredClone(this.runtime.live.activation??null) });
-      if(staged.length>=2)break; // Bound private requests per pass, not total holdings.
     }
     for (const { symbol, plan, intent, binding,activation } of staged) {
       if(!this.runtime.live.requestedEnabled||!this.mirrorQuoteReady(symbol)
