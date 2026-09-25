@@ -53,6 +53,17 @@ test("ACTIVE RECENT may use strong learned path value without loosening ordinary
     roundTripCost:.0019,activeRecent:{...activeRecent,samples:12}})??"",/收益风险价值/);
   assert.match(reserveExperimentValueBlock({reserve:true,netRate:.00170,edgeRatio:.36,livePathScore:.84,environmentFit:.69,
     roundTripCost:.0019})??"",/收益风险价值/,"without ACTIVE RECENT path evidence the old strict gate still applies");
+  const productionLike={netRate:.0021994079923473566,targetRate:.0228151585460169,normalAdverseRate:.010421500386697802,
+    retentionRate:.7724137931034482,samples:119,groups:3};
+  assert.equal(reserveExperimentValueBlock({reserve:true,netRate:productionLike.netRate,edgeRatio:.21104523444193526,
+    livePathScore:.65,environmentFit:.9756303099127478,roundTripCost:.0019,activeRecent:productionLike}),null,
+    "engine-neutral live-path score must not deterministically starve strong mature ACTIVE RECENT evidence");
+  assert.match(reserveExperimentValueBlock({reserve:true,netRate:productionLike.netRate,edgeRatio:.21104523444193526,
+    livePathScore:.65,environmentFit:.9756303099127478,roundTripCost:.0019})??"",/收益风险价值/,
+    "ordinary reserve probes keep the 0.45 value floor when ACTIVE RECENT path evidence is absent");
+  assert.match(reserveExperimentValueBlock({reserve:true,netRate:productionLike.netRate,edgeRatio:.21104523444193526,
+    livePathScore:.64,environmentFit:.9756303099127478,roundTripCost:.0019,activeRecent:productionLike})??"",/收益风险价值|路径/,
+    "a genuinely weak live path still cannot use the mature-path exception");
 });
 
 test("family admission grants the path-value route only while RECENT is ACTIVE",()=>{
