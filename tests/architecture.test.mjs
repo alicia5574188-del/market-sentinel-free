@@ -26,7 +26,9 @@ test("Forward Path Relation 3.0 is the only PAPER strategy authority and retired
   assert.doesNotMatch(core,/forward-entry-guard/);
   const family=await read("lib/forward-family-experiment.ts");
   assert.match(family,/FORWARD_FAMILY_EXPERIMENT_VERSION="forward-family-experiment-v2"/);
-  assert.match(family,/edgeRatio<\.45/);assert.match(family,/livePathScore<\.55/);
+  assert.match(family,/edgeFloor=strongActive\?\.30:\.45/);
+  assert.match(family,/livePathScore<\(strongActive\?\.70:\.55\)/);
+  assert.match(family,/environmentFit<\(strongActive\?\.65:\.60\)/);
   assert.match(core,/MAX_NEW_RESERVE_EXPERIMENTS_PER_5M=2/);assert.match(core,/reserveEntriesThisCycle/);
   assert.match(family,/relationFamilyId/);
   assert.match(family,/reserveExperimentValueBlock/);
