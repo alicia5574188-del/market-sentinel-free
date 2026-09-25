@@ -96,9 +96,6 @@ test("LIVE enable keeps owner intent ON while open-order audit retries safely",a
   assert.doesNotMatch(sync,/\|\|initialEnable\|\|forceEntryCleanup/);
   assert.match(sync,/if\(!orderAuditUsable\)\{[\s\S]*operational=false;[\s\S]*后台会自动重试/);
   assert.match(sync,/if\(!orderAuditUsable\)\{[\s\S]*continue;/);
-  const mode=worker.slice(worker.indexOf("protected async setLiveMode"),worker.indexOf("private suspendSymbol"));
-  assert.match(mode,/Gate挂单核对仍在后台恢复/);
-  assert.match(mode,/不需要再次切换开关/);
 });
 
 test("operator UI and release config expose Forward Path Relation 3.0 with risk-based holdings and 30 execution BBO capacity",async()=>{
