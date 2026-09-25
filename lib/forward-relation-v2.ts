@@ -208,6 +208,7 @@ export function normalizeRelationEngine(value:unknown,now:number):RelationEngine
   out.updatedAt=Number(raw.updatedAt)||0;out.observations=Math.max(0,Number(raw.observations)||0);out.measured=Math.max(0,Number(raw.measured)||0);
   out.invalidated=Math.max(0,Number(raw.invalidated)||0);out.lastBars=raw.lastBars&&typeof raw.lastBars==="object"?{...raw.lastBars}:{};
   out.samples=Array.isArray(raw.samples)?raw.samples.map(migrateMeasurement).filter((x):x is RelationMeasurement=>!!x):[];refreshRelative(out.samples);out.samples=thinSamples(out.samples,now);
+  if(raw.version===FORWARD_RELATION_V2_VERSION&&Array.isArray(raw.rules))out.rules=structuredClone(raw.rules).filter((r:any)=>r&&r.exitProfile?.version==="sample-exit-plan-v1");
   if(raw.version===FORWARD_RELATION_V2_VERSION&&raw.pending&&typeof raw.pending==="object"){for(const [key,p] of Object.entries(raw.pending as Record<string,any>)){
     if(p&&finite(Number(p.at))&&finite(Number(p.dueAt))&&Number(p.dueAt)-Number(p.at)===ROOT_HORIZON_MS)out.pending[key]={symbol:String(p.symbol),at:Number(p.at),price:Number(p.price),x:Array.isArray(p.x)?p.x.map(Number).slice(0,8):[],
       env:{breadth:Number(p.env?.breadth??.5),dispersion:Number(p.env?.dispersion??0),expansion:Number(p.env?.expansion??0)},dueAt:Number(p.dueAt)};}}
