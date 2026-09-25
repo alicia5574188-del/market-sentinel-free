@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  familyAdmissionBlock,initialFamilyExperimentState,isFamilyFailure,normalizeFamilyExperimentState,
+  familyAdmissionBlock,initialFamilyExperimentState,isFamilyFailure,normalizeFamilyExperimentState,pruneFamilyExperimentBySymbols,
   recordFamilyFailure,relationFamilyId,reserveExperimentValueBlock,
 } from "../lib/forward-family-experiment.ts";
 import type {RelationRule} from "../lib/forward-relation-v2.ts";
