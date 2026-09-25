@@ -5,6 +5,7 @@ import {ADAPTIVE_ENGINE_VERSION,advanceForward,closeForwardForReset,fillForwardP
 import {FORWARD_STORAGE,prepareForwardReset} from "../lib/forward-store.ts";
 import {FORWARD_RELATION_V2_VERSION,advanceRelationEngine,initialRelationEngine,normalizeRelationEngine,pruneRelationLearningBySymbols,relationCandidates,type RelationRule} from "../lib/forward-relation-v2.ts";
 import {recordFamilyFailure,relationFamilyId} from "../lib/forward-family-experiment.ts";
+import {advanceForwardShock,initialForwardShockRuntime,type ForwardShockSignal} from "../lib/forward-shock.ts";
 
 const START=Date.parse("2026-09-24T00:00:00Z")/1000;
 const symbols=Array.from({length:12},(_,i)=>`S${i}_USDT`);
@@ -418,4 +419,52 @@ test("summary exposes relation lifecycle and the no-forced-reversal boundary",()
   assert.equal(view.executionBboCapacity,30);assert.equal(view.minuteConfirmationCapacity,11);
   assert.match(view.boundaries.grammar,/15\/30\/45\/60/);assert.equal(view.boundaries.historyBackfill,true);assert.match(view.boundaries.sampleMeaning,/旧方向失效不会自动生成反向订单/);
   assert.equal(view.relationEngine.version,FORWARD_RELATION_V2_VERSION);
+});
+
+
+test("structural interrupt ignores inner-region noise and only confirms persistent outer-region shocks",()=>{
+  const now=Date.parse("2026-09-25T12:00:00Z");
+  const regions=Object.fromEntries(["A_USDT","B_USDT","C_USDT","D_USDT"].map(symbol=>[symbol,{
+    id:"r-"+symbol,symbol,confirmedAt:now-300_000,lower:99.6,upper:100.4,center:100,widthRate:.008,bars:8,quality:80,state:"IN_REGION" as const,lastSeenAt:now,
+    outerLower:99,outerUpper:101,outerCenter:100,outerWidthRate:.02,outerBars:24,outerQuality:72,
+  }]));
+  let shock=initialForwardShockRuntime();
+  const q=(price:number,at:number)=>Object.fromEntries(Object.keys(regions).map(symbol=>[symbol,{
+    bestBid:price-.01,bestAsk:price+.01,observedAt:at,fresh:true,entryReady:true,
+  }]));
+  let result=advanceForwardShock({state:shock,now,regions,quotes:q(98.65,now),entrySymbols:Object.keys(regions)});shock=result.state;
+  assert.equal(result.signals.length,0);assert.equal(result.vetoSide,null,"first probe alone must not trade or veto");
+  result=advanceForwardShock({state:shock,now:now+2000,regions,quotes:q(98.35,now+2000),entrySymbols:Object.keys(regions)});shock=result.state;
+  assert.equal(result.signals.length,0);
+  result=advanceForwardShock({state:shock,now:now+4000,regions,quotes:q(98.05,now+4000),entrySymbols:Object.keys(regions)});
+  assert.equal(result.vetoSide,"LONG","broad persistent down shock must immediately stop new long admissions");
+  assert.equal(result.signals.length,2,"one market shock may authorize only the two strongest symbols");
+  assert.ok(result.signals.every(x=>x.side==="SHORT"&&x.reason.includes("外层成熟区下破")));
+
+  const innerOnly=Object.fromEntries(Object.entries(regions).map(([symbol,r])=>[symbol,{
+    id:r.id,symbol:r.symbol,confirmedAt:r.confirmedAt,lower:r.lower,upper:r.upper,center:r.center,widthRate:r.widthRate,
+    bars:r.bars,quality:r.quality,state:r.state,lastSeenAt:r.lastSeenAt,
+  }]));
+  const noOuter=advanceForwardShock({state:initialForwardShockRuntime(),now:now+8000,regions:innerOnly,
+    quotes:q(97.5,now+8000),entrySymbols:Object.keys(innerOnly)});
+  assert.equal(noOuter.signals.length,0);assert.equal(noOuter.vetoSide,null,"inner region must never gain emergency authority");
+});
+
+test("confirmed shock can enter without a matured opposite sample but ordinary premium execution still cannot",()=>{
+  const symbol=symbols[0]!,now=nowAt(39),state=initialForward(now-60_000),price=full[symbol]![39]!.close;
+  state.lastCandleAt=now;state.regions[symbol]={id:"outer-fixture",symbol,confirmedAt:now-300_000,
+    lower:price*.99,upper:price*1.01,center:price,widthRate:.02,bars:10,quality:80,state:"IN_REGION",lastSeenAt:now,
+    outerLower:price*.98,outerUpper:price*1.02,outerCenter:price,outerWidthRate:.04,outerBars:24,outerQuality:75};
+  state.lastExitAt[symbol]=now-1000;state.lastSide[symbol]="LONG";
+  const signal:ForwardShockSignal={id:"shock-short-fixture",eventId:"shock-short-event",symbol,side:"SHORT",confirmedAt:now,price,
+    boundary:price*.98,outerLower:price*.98,outerUpper:price*1.02,outerCenter:price,outerWidthRate:.04,outerQuality:75,
+    progressRate:.008,velocityRate:.004,marketBreadth:.45,marketCount:12,score:94,stopRate:.008,targetRate:.018,
+    reason:"结构中断fixture"};
+  const next=advanceForward({state,now,paths:sliced(39),quotes:quotesAt(39,now),contracts,entrySymbols:[symbol],allowDataCycle:false,
+    shockSignals:[signal],shockVetoSide:"LONG"}).state;
+  assert.equal(next.positions.length,1);
+  assert.equal(next.positions[0]!.side,"SHORT");
+  assert.equal(next.positions[0]!.entryContext?.structuralInterrupt,true);
+  assert.equal(next.positions[0]!.entryContext?.shockEventId,"shock-short-event");
+  assert.equal(next.positions[0]!.rule.authority,"STRUCTURAL_INTERRUPT");
 });
