@@ -47,7 +47,7 @@ Every new PAPER trade freezes that exit profile as sample-exit-plan-v1.
 
 The holding manager compares the observed trade path to the frozen profile. It may close for no positive feedback, sample-path divergence, exhausted remaining edge, learned maximum hold, relation degradation, a qualified opposite opportunity, or the hard structure stop.
 
-The hard structure stop and account risk budgets remain safety boundaries and cannot be widened by learned samples.
+The sample MAE is an early path-invalidation expectation, not a liquidation price. Region-backed entries keep their explicit structural stop; pure relation entries derive a wider recent-5m structure/volatility safety stop. Position sizing charges that hard stop, while the sample plan may exit earlier when the observed path exceeds normal adverse behavior. Account risk budgets remain hard boundaries.
 
 Pre-v3 open positions keep their frozen legacy lifecycle until drained. The release does not reinterpret already mirrored positions.
 
