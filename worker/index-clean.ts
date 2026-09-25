@@ -2463,7 +2463,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       : recoveringSubmission ? (recoveringSubmission.lastError
         ?? `${recoveringSubmission.symbol} 的唯一订单身份仍在 Gate 核对；该笔风险已冻结，其他独立新机会继续执行`) : null;
     if(recoveringStop||recoveringEntryStop) return;
-    let availableForNewEntries = available;
+    const unresolvedEntryMargin=Object.values(this.runtime.live.entries).reduce((sum,entry)=>sum+(entry
+      &&(["SUBMITTING","OPEN","ERROR"].includes(entry.status)||this.liveEntryAwaitingReconcile(entry)) ? entry.margin : 0),0);
+    // A submit whose result is not visible yet may already have consumed Gate
+    // margin even when the current account snapshot has not caught up. Reserve
+    // that margin locally; once Gate exposes the position, it leaves this
+    // pending bucket and the exchange's available balance becomes authoritative.
+    let availableForNewEntries = Math.max(0,available-unresolvedEntryMargin);
     let riskForNewEntries = this.liveOpenRisk();
     const directionRiskForNewEntries: Record<Side, number> = {
       LONG: this.liveDirectionalRisk("LONG"),
