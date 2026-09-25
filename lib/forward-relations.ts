@@ -265,6 +265,13 @@ function relationHardStopRate(rows:Candle[],side:"LONG"|"SHORT",price:number,nor
   // preserving the existing 3% absolute safety ceiling.
   return clip(Math.max(normalAdverse*1.35,st.atr*2.2,structureRate),.004,.03);
 }
+export function relationHardPayoffBlock(input:{exitProfile:RelationExitProfile;hardStopRate:number;netRate:number;roundTripCost?:number}){
+  if(input.exitProfile.version!=="sample-exit-plan-v2")return null;
+  const cost=Math.max(0,input.roundTripCost??ROUND_TRIP_COST),winRate=clip(input.exitProfile.winRate??.70),
+    captured=Math.max(input.netRate,input.exitProfile.targetRate*input.exitProfile.retentionRate-cost),
+    coverage=captured/Math.max(input.hardStopRate+cost,1e-9),required=winRate>=.75?.35:winRate>=.65?.40:.50;
+  return coverage<required?`样本可留利润不足以覆盖结构止损：${coverage.toFixed(2)}× < ${required.toFixed(2)}×`:null;
+}
 function activeRecentValue(c:RelationCandidate){
   return c.scope==="RECENT"&&c.status==="ACTIVE"?{
     netRate:c.netRate,targetRate:c.exitProfile.targetRate,normalAdverseRate:c.exitProfile.normalAdverseRate,
@@ -276,10 +283,9 @@ function relationOpportunity(c:RelationCandidate,rows:Candle[],q:Quote|undefined
     edge=net/Math.max(normalAdverse,1e-9),score=clip(c.score*.90+exec*.10,0,100),
     reserveBlock=reserveExperimentValueBlock({reserve:c.reserve,netRate:net,edgeRatio:edge,livePathScore:c.livePathScore,
       environmentFit:c.environmentFit,roundTripCost:ROUND_TRIP_COST,activeRecent:activeRecentValue(c)}),
-    winRate=clip(c.exitProfile.winRate??.70),captured=Math.max(net,c.exitProfile.targetRate*c.exitProfile.retentionRate-ROUND_TRIP_COST),
-    hardCoverage=captured/Math.max(hardStop+ROUND_TRIP_COST,1e-9),requiredCoverage=winRate>=.75?.35:winRate>=.65?.40:.50,
-    payoffBlock=c.exitProfile.version==="sample-exit-plan-v2"&&hardCoverage<requiredCoverage
-      ?`样本可留利润不足以覆盖结构止损：${hardCoverage.toFixed(2)}× < ${requiredCoverage.toFixed(2)}×`:null;
+    captured=Math.max(net,c.exitProfile.targetRate*c.exitProfile.retentionRate-ROUND_TRIP_COST),
+    hardCoverage=captured/Math.max(hardStop+ROUND_TRIP_COST,1e-9),
+    payoffBlock=relationHardPayoffBlock({exitProfile:c.exitProfile,hardStopRate:hardStop,netRate:net});
   return{id:`relation-${c.ruleId}-${c.symbol}-${rows.at(-1)!.time}`,symbol:c.symbol,side:c.side,mode:"RELATION",premium:false,reserve:c.reserve,
     score,eligible:c.health>=.15&&net>0&&!reserveBlock&&!payoffBlock,completedAt:(rows.at(-1)!.time+300)*1000,expiresAt:now+12*60_000,price:framePrice,
     stopPrice:framePrice*(1-d*hardStop),targetPrice:framePrice*(1+d*Math.max(.003,gross)),stopRate:hardStop,targetRate:Math.max(.003,gross),
