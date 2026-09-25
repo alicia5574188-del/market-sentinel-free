@@ -80,7 +80,7 @@ function buildFrames(paths:Record<string,RelationCandle[]>,now:number){const fra
     const med=median(group.map(f=>f.x[1]??0));for(const f of group)f.x[7]=clip((f.x[1]??0)-med,-8,8);}const env=environment(frames);for(const f of frames)f.env=env;return frames;}
 function matches(x:number[],conditions:RelationCondition[]){return conditions.every(c=>finite(x[c.feature]??NaN)&&(c.op==="GE"?(x[c.feature]??0)>=c.threshold:(x[c.feature]??0)<=c.threshold));}
 function routeFor(rows:RelationCandle[],p:RelationPending){return rows.filter(r=>r.time*1000>=p.at&&r.time*1000<p.dueAt).sort((a,b)=>a.time-b.time);}
-function completeRoute(route:RelationCandle[]){return route.length===12&&route.every((r,i)=>i===0||r.time-route[i-1]!.time===300);}
+function contiguousRoute(route:RelationCandle[],p:RelationPending){return route.length>0&&route[0]!.time*1000===p.at&&route.every((r,i)=>i===0||r.time-route[i-1]!.time===300);}
 function measurement(route:RelationCandle[],p:RelationPending):RelationMeasurement{
   const cp:Partial<Record<RelationCheckpoint,number>>={},upAt:Partial<Record<RelationHorizon,number>>={},downAt:Partial<Record<RelationHorizon,number>>={};
   let path=0,reversals=0,priorSign=0;for(let i=0;i<route.length;i++){const row=route[i]!,ret=row.close/p.price-1;
@@ -215,13 +215,17 @@ export function normalizeRelationEngine(value:unknown,now:number):RelationEngine
 }
 export function advanceRelationEngine(input:{state?:RelationEngineState|null;paths:Record<string,RelationCandle[]>;now:number}){
   const state=normalizeRelationEngine(input.state,input.now),frames=buildFrames(input.paths,input.now),currentEnv=environment(frames);state.frames=Object.fromEntries(frames.map(f=>[f.symbol,f]));
-  let matured=0;for(const [key,p] of Object.entries(state.pending)){if(input.now<p.dueAt)continue;const rows=validPath(input.paths[p.symbol]??[],input.now),route=rows?routeFor(rows,p):[];
-    if(rows&&completeRoute(route)){state.samples.push(measurement(route,p));state.measured++;matured++;delete state.pending[key];}
-    else if(input.now-p.dueAt>15*60_000){state.invalidated++;delete state.pending[key];}}
+  let matured=0,updated=0;for(const [key,p] of Object.entries(state.pending)){if(input.now<p.at+15*60_000)continue;
+    const rows=validPath(input.paths[p.symbol]??[],input.now),route=rows?routeFor(rows,p):[],complete=rows&&contiguousRoute(route,p);
+    if(complete&&route.length>=3){const next=measurement(route,p),idx=state.samples.findIndex(r=>r.symbol===p.symbol&&r.at===p.at),
+        prior=idx>=0?state.samples[idx]:undefined,firstMature=!prior||!Number.isFinite(Number(prior.cp[15]??NaN));
+      if(idx>=0)state.samples[idx]=next;else state.samples.push(next);if(firstMature&&Number.isFinite(Number(next.cp[15]??NaN))){state.measured++;matured++;}else updated++;
+      if(route.length>=12)delete state.pending[key];
+    } else if(input.now-p.dueAt>15*60_000){state.invalidated++;delete state.pending[key];}}
   for(const f of frames){if(f.at<=(state.lastBars[f.symbol]??0))continue;state.lastBars[f.symbol]=f.at;const key=rootKey(f.symbol,f.at);
     if(!state.pending[key]){state.pending[key]={symbol:f.symbol,at:f.at,price:f.price,x:[...f.x],env:{...f.env},dueAt:f.at+ROOT_HORIZON_MS};state.observations++;}}
-  if(matured){refreshRelative(state.samples);state.samples=thinSamples(state.samples,input.now);}
-  if(matured||!state.rules.length)synthesize(state,input.paths,input.now,currentEnv);else state.rules=state.rules.map(r=>{const selected=state.samples.filter(x=>matches(x.x,r.conditions)&&Number.isFinite(cpValue(x,r.horizon))),
+  if(matured||updated){refreshRelative(state.samples);state.samples=thinSamples(state.samples,input.now);}
+  if(matured||updated||!state.rules.length)synthesize(state,input.paths,input.now,currentEnv);else state.rules=state.rules.map(r=>{const selected=state.samples.filter(x=>matches(x.x,r.conditions)&&Number.isFinite(cpValue(x,r.horizon))),
     live=livePathScore(state,input.paths,r.conditions,r.side,selected,input.now),fit=envFit(selected,currentEnv),weakened=live<r.livePathScore-.08||fit<r.environmentFit-.15||fit<.42;
     if(!weakened)return{...r,livePathScore:live,environmentFit:fit,updatedAt:input.now};const status:RelationStatus=live<.28||fit<.28?"DEGRADED":"PRESSURED",
       health=status==="DEGRADED"?Math.min(.30,r.health):Math.min(.60,r.health);return{...r,livePathScore:live,environmentFit:fit,status,health,updatedAt:input.now,
