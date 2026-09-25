@@ -98,6 +98,9 @@ export function sourceLifecycle(state: ForwardState | null, id: string) {
 export function mirrorSourceFresh(t: Trade | undefined, id: string, now: number) {
   return !!t && t.id===id && t.status==="OPEN" && now>=t.openedAt && now<t.openedAt+sourceHoldMinutes(t)*60_000;
 }
+export function mirrorSourceRealtimeFresh(t:Trade|undefined,id:string,now:number,activationAt?:number){
+  return mirrorSourceFresh(t,id,now)&&(!activationAt||now-t!.openedAt<=LIVE_SOURCE_ENTRY_MAX_DELAY_MS);
+}
 
 export function liveEntryDriftGuard(source:Trade,currentPrice:number) {
   const direction=source.side==="LONG"?1:-1;
@@ -139,7 +142,7 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
     throw new LiveEntrySizingError(code,t.symbol,`${t.symbol} ${message}；源单 ${t.id} 未完成复制，不冒充已成交`,sizing);
   };
   if (!mirrorSourceFresh(t,t.id,input.now))fail("ECONOMICS","源单已结束或期限已到，不补过期订单");
-  if(input.activationAt&&input.now-t.openedAt>LIVE_SOURCE_ENTRY_MAX_DELAY_MS)
+  if(!mirrorSourceRealtimeFresh(t,t.id,input.now,input.activationAt))
     fail("ECONOMICS",`源单已超过${Math.round(LIVE_SOURCE_ENTRY_MAX_DELAY_MS/1000)}秒实时复制窗口；不补迟到订单`);
   if (![input.sourceEquity,input.equity,input.entryPrice,input.quantoMultiplier,input.leverageMax].every(positive)
     || ![input.available,input.openRisk,input.sameDirectionRisk,input.openMargin,input.openNotional,input.maintenanceRate].every(v=>Number.isFinite(v)&&v>=0))
