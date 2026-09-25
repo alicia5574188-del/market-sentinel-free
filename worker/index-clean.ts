@@ -3330,7 +3330,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         liveExecution:{...this.liveExecution,inFlight:!!this.liveBackgroundWork,queued:this.liveSourcePending,
           timeoutStreak:this.liveReadTimeoutStreak,lastAccountAt:this.runtime.live.lastSyncAt,
           lastOrderAuditAt:(this.liveOrderSnapshotCache?.checkedAt??this.liveOrderAuditAt)||null,
-          readTransport:this.liveClient?.readTransport??null},
+          readTransport:this.liveClient?.readTransport??null,writeTransport:this.liveClient?.writeTransport??null},
         strategyArena: {
           version: canonical.version,
           playbookCount: canonical.playbookCount,

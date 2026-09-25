@@ -130,8 +130,8 @@ export class LiveEntrySizingError extends Error {
 
 /** The final local guard rejected an entry before any order request was sent. */
 export class GateEntryCancelledError extends Error {
-  constructor() {
-    super("实盘提交前所有者选择、源单或行情状态已变化，未发送入场请求");
+  constructor(message="实盘提交前所有者选择、源单或行情状态已变化，未发送入场请求") {
+    super(message);
     this.name = "GateEntryCancelledError";
   }
 }
@@ -244,13 +244,167 @@ function parseGateJson<T>(raw: string): T {
   return JSON.parse(idSafe) as T;
 }
 
+type GateTradeSocket={
+  readyState:number;
+  accept():void;
+  send(data:string):void;
+  close(code?:number,reason?:string):void;
+  addEventListener(type:string,listener:(event:{data?:unknown})=>void):void;
+};
+type GateTradeWaiter={
+  reqId:string;
+  acked:boolean;
+  resolve:(order:GateLiveOrder)=>void;
+  reject:(error:unknown)=>void;
+  timer:ReturnType<typeof setTimeout>;
+};
+
+const GATE_TRADE_WS="https://fx-ws.gateio.ws/v4/ws/usdt";
+const GATE_TRADE_WS_HANDSHAKE_MS=12_000;
+const GATE_TRADE_WS_RESULT_MS=6_000;
+
+async function gateWsApiSignature(secret:string,channel:string,requestParam:string,timestamp:number){
+  const payload=`api\n${channel}\n${requestParam}\n${timestamp}`;
+  const key=await crypto.subtle.importKey("raw",encoder.encode(secret),{name:"HMAC",hash:"SHA-512"},false,["sign"]);
+  return hex(await crypto.subtle.sign("HMAC",key,encoder.encode(payload)));
+}
+
+class GateWsUnavailableBeforeSendError extends GateEntryCancelledError{
+  constructor(message:string){super(message);this.name="GateWsUnavailableBeforeSendError";}
+}
+
 export class GateLiveClient {
   readonly credentials: GateCredentials;
   requestCount = 0;
   private readRoutePreference=new Map<string,boolean>();
   readonly readTransport={version:"gate-private-dual-route-v3",hedges:0,recovered:0,timeouts:0,lastTimeoutPath:null as string|null,
     preferredAlternatePaths:0,preferredMutationHost:"api.gateio.ws" as "api.gateio.ws"|"fx-api.gateio.ws"};
+  private tradeSocket:GateTradeSocket|null=null;
+  private tradeConnecting:Promise<void>|null=null;
+  private tradeLoggedIn=false;
+  private tradeLoginWaiter:{reqId:string;resolve:()=>void;reject:(error:unknown)=>void;timer:ReturnType<typeof setTimeout>}|null=null;
+  private tradeWaiters=new Map<string,GateTradeWaiter>();
+  private tradeCounter=0;
+  private tradeLastMessageAt=0;
+  readonly writeTransport={version:"gate-private-ws-trading-v1",connected:false,loggedIn:false,connections:0,
+    orderRequests:0,orderAcks:0,orderResults:0,timeouts:0,lastAt:null as number|null,lastError:null as string|null,
+    channel:"futures.order_place" as const};
   constructor(credentials: GateCredentials) { this.credentials = credentials; }
+
+  private failTradeSocket(reason:string){
+    const socket=this.tradeSocket;this.tradeSocket=null;this.tradeLoggedIn=false;
+    this.writeTransport.connected=false;this.writeTransport.loggedIn=false;this.writeTransport.lastError=reason;
+    const error=new Error(reason);
+    if(this.tradeLoginWaiter){
+      clearTimeout(this.tradeLoginWaiter.timer);this.tradeLoginWaiter.reject(error);this.tradeLoginWaiter=null;
+    }
+    for(const waiter of this.tradeWaiters.values()){clearTimeout(waiter.timer);waiter.reject(error);}
+    this.tradeWaiters.clear();
+    try{socket?.close(1000,"reset");}catch{/* already closed */}
+  }
+
+  private ingestTradeSocket(data:unknown){
+    if(typeof data!=="string"||data.length>256_000)return;
+    this.tradeLastMessageAt=Date.now();this.writeTransport.lastAt=this.tradeLastMessageAt;
+    let message:Record<string,unknown>;
+    try{message=parseGateJson<Record<string,unknown>>(data);}catch{return;}
+    const header=(message.header&&typeof message.header==="object"?message.header:{}) as Record<string,unknown>,
+      channel=String(header.channel??message.channel??""),requestId=String(message.request_id??""),
+      status=Number(header.status??0),ack=message.ack===true,
+      dataRow=(message.data&&typeof message.data==="object"?message.data:{}) as Record<string,unknown>,
+      errs=(dataRow.errs&&typeof dataRow.errs==="object"?dataRow.errs:null) as Record<string,unknown>|null;
+    const gateError=()=>{
+      const label=errs?.label?String(errs.label):"WS_ERROR",detail=errs?.message?String(errs.message):"Gate WebSocket请求失败";
+      return new Error(`Gate WS ${status||"?"} ${label}: ${detail}`);
+    };
+    if(channel==="futures.login"&&this.tradeLoginWaiter&&requestId===this.tradeLoginWaiter.reqId){
+      if(ack)return;
+      const waiter=this.tradeLoginWaiter;this.tradeLoginWaiter=null;clearTimeout(waiter.timer);
+      if(status>=400||errs){waiter.reject(gateError());this.failTradeSocket("Gate WebSocket 登录失败");return;}
+      this.tradeLoggedIn=true;this.writeTransport.loggedIn=true;this.writeTransport.lastError=null;waiter.resolve();return;
+    }
+    if(channel!=="futures.order_place")return;
+    const waiter=this.tradeWaiters.get(requestId);if(!waiter)return;
+    if(ack){waiter.acked=true;this.writeTransport.orderAcks++;return;}
+    this.tradeWaiters.delete(requestId);clearTimeout(waiter.timer);
+    if(status>=400||errs){const error=gateError();this.writeTransport.lastError=error.message;waiter.reject(error);return;}
+    const result=(dataRow.result&&typeof dataRow.result==="object"?dataRow.result:null) as GateLiveOrder|null,
+      id=result?(result.id_string??result.id):null;
+    if(id==null||!/^[0-9]+$/.test(String(id))){
+      const error=new Error("Gate WebSocket 已返回下单结果但缺少有效订单ID");this.writeTransport.lastError=error.message;waiter.reject(error);return;
+    }
+    this.writeTransport.orderResults++;this.writeTransport.lastError=null;waiter.resolve(result!);
+  }
+
+  private async ensureTradeSocket(){
+    if(this.credentials.environment!=="live")throw new GateWsUnavailableBeforeSendError("Gate WebSocket交易通道仅用于实盘环境，未发送订单");
+    const now=Date.now();
+    if(this.tradeSocket?.readyState===1&&this.tradeLoggedIn&&now-this.tradeLastMessageAt<=30_000)return;
+    if(this.tradeSocket)this.failTradeSocket("Gate WebSocket交易连接已过期，重新建立");
+    if(this.tradeConnecting){await this.tradeConnecting;return;}
+    const task=(async()=>{
+      const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),GATE_TRADE_WS_HANDSHAKE_MS);
+      try{
+        let response:Response;
+        try{response=await fetch(GATE_TRADE_WS,{headers:{Upgrade:"websocket","X-Gate-Size-Decimal":"1"},signal:controller.signal});}
+        catch(error){throw new GateWsUnavailableBeforeSendError(`Gate WebSocket交易握手失败，未发送订单：${error instanceof Error?error.message:"network error"}`);}
+        clearTimeout(timer);
+        const socket=(response as unknown as {webSocket?:GateTradeSocket}).webSocket;
+        if(response.status!==101||!socket){
+          await response.body?.cancel().catch(()=>undefined);
+          throw new GateWsUnavailableBeforeSendError(`Gate WebSocket交易握手返回 ${response.status}，未发送订单`);
+        }
+        this.tradeSocket=socket;this.tradeLoggedIn=false;this.tradeLastMessageAt=Date.now();
+        this.writeTransport.connected=true;this.writeTransport.loggedIn=false;this.writeTransport.connections++;
+        socket.addEventListener("message",event=>{if(this.tradeSocket===socket)this.ingestTradeSocket(event.data);});
+        socket.addEventListener("close",()=>{if(this.tradeSocket===socket)this.failTradeSocket("Gate WebSocket交易连接已关闭");});
+        socket.addEventListener("error",()=>{if(this.tradeSocket===socket)this.failTradeSocket("Gate WebSocket交易连接发生传输错误");});
+        socket.accept();
+        const ts=Math.floor(Date.now()/1000),reqId=`login-${Date.now()}-${++this.tradeCounter}`,
+          signature=await gateWsApiSignature(this.credentials.apiSecret,"futures.login","",ts);
+        const login=new Promise<void>((resolve,reject)=>{
+          const loginTimer=setTimeout(()=>{
+            if(this.tradeLoginWaiter?.reqId===reqId)this.tradeLoginWaiter=null;
+            reject(new GateWsUnavailableBeforeSendError("Gate WebSocket登录超时，未发送订单"));
+          },6_000);
+          this.tradeLoginWaiter={reqId,resolve,reject,timer:loginTimer};
+        });
+        socket.send(JSON.stringify({time:ts,channel:"futures.login",event:"api",payload:{
+          api_key:this.credentials.apiKey,signature,timestamp:String(ts),req_id:reqId,req_param:""
+        }}));
+        try{await login;}catch(error){this.failTradeSocket(error instanceof Error?error.message:"Gate WebSocket登录失败");throw error;}
+      }finally{clearTimeout(timer);}
+    })();
+    this.tradeConnecting=task;
+    try{await task;}finally{if(this.tradeConnecting===task)this.tradeConnecting=null;}
+  }
+
+  private async placeTradeOrder(body:Record<string,unknown>,beforeSend?:()=>boolean){
+    await this.ensureTradeSocket();
+    if(beforeSend&&!beforeSend())throw new GateEntryCancelledError();
+    const socket=this.tradeSocket;
+    if(!socket||socket.readyState!==1||!this.tradeLoggedIn)
+      throw new GateWsUnavailableBeforeSendError("Gate WebSocket交易连接未就绪，未发送订单");
+    const reqId=`ms-${Date.now()}-${++this.tradeCounter}`,ts=Math.floor(Date.now()/1000);
+    this.writeTransport.orderRequests++;this.writeTransport.lastAt=Date.now();this.writeTransport.lastError=null;
+    return await new Promise<GateLiveOrder>((resolve,reject)=>{
+      const timer=setTimeout(()=>{
+        const waiter=this.tradeWaiters.get(reqId);if(!waiter)return;
+        this.tradeWaiters.delete(reqId);this.writeTransport.timeouts++;
+        const reason=waiter.acked
+          ?`Gate WebSocket已ACK请求 ${reqId} 但订单结果暂不明确；只按订单身份核对，不重复提交`
+          :`Gate WebSocket下单请求 ${reqId} 未返回ACK；提交结果可能不明确，只按订单身份核对，不重复提交`;
+        this.writeTransport.lastError=reason;reject(new Error(reason));this.failTradeSocket(reason);
+      },GATE_TRADE_WS_RESULT_MS);
+      this.tradeWaiters.set(reqId,{reqId,acked:false,resolve,reject,timer});
+      try{socket.send(JSON.stringify({time:ts,channel:"futures.order_place",event:"api",payload:{req_id:reqId,req_param:body}}));}
+      catch(error){
+        this.tradeWaiters.delete(reqId);clearTimeout(timer);
+        const reason=`Gate WebSocket下单发送异常；提交结果可能不明确，只按订单身份核对，不重复提交：${error instanceof Error?error.message:"send failed"}`;
+        this.writeTransport.lastError=reason;reject(new Error(reason));this.failTradeSocket(reason);
+      }
+    });
+  }
 
   private async request<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, query = "", value?: unknown, beforeSend?: () => boolean,
     writeTimeoutMs=6_000) {
@@ -432,13 +586,11 @@ export class GateLiveClient {
   }
 
   async createEntry(intent: LiveEntryIntent, beforeSend?: () => boolean) {
+    if(intent.kind==="MARKET"&&this.credentials.environment==="live"){
+      const order=await this.placeTradeOrder(intent.body,beforeSend);
+      return responseId(JSON.stringify(order),order);
+    }
     const path = intent.kind === "PRICE_TRIGGER" ? "/futures/usdt/price_orders" : "/futures/usdt/orders";
-    // Gate documents ACK as the asynchronous create mode that returns only key
-    // order fields. For a market IOC the durable exchange order ID is more
-    // important than waiting on clearing data inside the single write request:
-    // once ACK returns, the worker persists that ID before any read-side fill
-    // inspection and all later recovery is GET-only. The mutation is still sent
-    // exactly once and is never replayed after a network-boundary ambiguity.
     const body = intent.kind==="MARKET" ? {...intent.body,action_mode:"ACK"} : intent.body;
     const response = await this.request<GateLiveOrder>("POST", path, "", body, beforeSend);
     return responseId(response.raw, response.data);
@@ -487,15 +639,18 @@ export class GateLiveClient {
   }
 
   async closePosition(symbol: string, tag: string) {
-    const response = await this.request<GateLiveOrder>("POST", "/futures/usdt/orders", "", {
-      contract: symbol,
-      size: 0,
-      price: "0",
-      tif: "ioc",
-      close: true,
-      reduce_only: true,
-      text: tag,
-    });
+    const body={contract:symbol,size:0,price:"0",tif:"ioc",close:true,reduce_only:true,text:tag};
+    if(this.credentials.environment==="live"){
+      try{
+        const order=await this.placeTradeOrder(body);
+        return responseId(JSON.stringify(order),order);
+      }catch(error){
+        // Emergency flattening may use the existing one-shot REST route only if
+        // the WebSocket failed before any order crossed the network boundary.
+        if(!(error instanceof GateWsUnavailableBeforeSendError))throw error;
+      }
+    }
+    const response = await this.request<GateLiveOrder>("POST", "/futures/usdt/orders", "", body);
     return responseId(response.raw, response.data);
   }
 }
