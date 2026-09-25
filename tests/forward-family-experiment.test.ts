@@ -22,8 +22,10 @@ test("threshold variants of one causal idea share the same relation family",()=>
 
 test("reserve minimum value blocks the weak probe profile seen in the failed snapshot",()=>{
   assert.match(reserveExperimentValueBlock({reserve:true,netRate:.00091,edgeRatio:.16,livePathScore:.55,environmentFit:.88,roundTripCost:.0019})??"",/不足/);
-  assert.match(reserveExperimentValueBlock({reserve:true,netRate:.0018,edgeRatio:.38,livePathScore:.22,environmentFit:.80,roundTripCost:.0019})??"",/路径/);
-  assert.equal(reserveExperimentValueBlock({reserve:true,netRate:.0018,edgeRatio:.38,livePathScore:.63,environmentFit:.80,roundTripCost:.0019}),null);
+  assert.match(reserveExperimentValueBlock({reserve:true,netRate:.0018,edgeRatio:.38,livePathScore:.22,environmentFit:.80,roundTripCost:.0019})??"",/收益风险价值|路径/);
+  assert.match(reserveExperimentValueBlock({reserve:true,netRate:.0018,edgeRatio:.38,livePathScore:.63,environmentFit:.80,roundTripCost:.0019})??"",/收益风险价值/);
+  assert.match(reserveExperimentValueBlock({reserve:true,netRate:.0018,edgeRatio:.50,livePathScore:.53,environmentFit:.80,roundTripCost:.0019})??"",/路径/);
+  assert.equal(reserveExperimentValueBlock({reserve:true,netRate:.0018,edgeRatio:.50,livePathScore:.63,environmentFit:.80,roundTripCost:.0019}),null);
   assert.equal(reserveExperimentValueBlock({reserve:false,netRate:.0001,edgeRatio:.01,livePathScore:.01,environmentFit:.01,roundTripCost:.0019}),null);
 });
 
