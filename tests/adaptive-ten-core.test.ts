@@ -115,12 +115,15 @@ test("ineligible execution markets are removed from active relation learning wit
   assert.ok(next.rules.length>0);assert.ok(next.rules.every(r=>r.symbols.every(symbol=>allowed.has(symbol))));
 });
 
-test("sample profit must cover the true hard stop instead of looking good only against normal MAE",()=>{
+test("sample payoff uses winner/loss distribution and adverse tail instead of treating every loss as a full hard stop",()=>{
   const low={version:"sample-exit-plan-v2" as const,bestHoldMinutes:30 as const,feedbackDeadlineMinutes:10,maxHoldMinutes:45,
-    normalAdverseRate:.004,targetRate:.004,protectionActivationRate:.0025,retentionRate:.70,winRate:.70,samples:60,groups:6,path:{}};
-  const strong={...low,targetRate:.018,retentionRate:.80,winRate:.72};
-  assert.match(relationHardPayoffBlock({exitProfile:low,hardStopRate:.012,netRate:.0012})??"",/不足以覆盖结构止损/);
-  assert.equal(relationHardPayoffBlock({exitProfile:strong,hardStopRate:.012,netRate:.004}),null);
+    normalAdverseRate:.004,targetRate:.006,protectionActivationRate:.0025,retentionRate:.70,winRate:.58,
+    medianWinNetRate:.0030,medianLossNetRate:.0050,adverseP80Rate:.006,adverseP95Rate:.009,samples:60,groups:6,path:{}};
+  const strong={...low,targetRate:.014,retentionRate:.80,winRate:.66,medianWinNetRate:.0065,medianLossNetRate:.0035,
+    adverseP80Rate:.0055,adverseP95Rate:.008};
+  assert.match(relationHardPayoffBlock({exitProfile:low,hardStopRate:.012,netRate:.0012})??"",/样本典型盈亏不足/);
+  assert.equal(relationHardPayoffBlock({exitProfile:strong,hardStopRate:.012,netRate:.0035}),null,
+    "a structurally wider disaster stop may coexist with positive typical payoff when sample losses exit earlier and the stop sits beyond the adverse tail");
 });
 
 test("a restart can seed closed root paths immediately instead of waiting a fresh hour",()=>{

@@ -267,10 +267,18 @@ function relationHardStopRate(rows:Candle[],side:"LONG"|"SHORT",price:number,nor
 }
 export function relationHardPayoffBlock(input:{exitProfile:RelationExitProfile;hardStopRate:number;netRate:number;roundTripCost?:number}){
   if(input.exitProfile.version!=="sample-exit-plan-v2")return null;
-  const cost=Math.max(0,input.roundTripCost??ROUND_TRIP_COST),winRate=clip(input.exitProfile.winRate??.70),
-    captured=Math.max(input.netRate,input.exitProfile.targetRate*input.exitProfile.retentionRate-cost),
-    coverage=captured/Math.max(input.hardStopRate+cost,1e-9),required=winRate>=.75?.35:winRate>=.65?.40:.50;
-  return coverage<required?`样本可留利润不足以覆盖结构止损：${coverage.toFixed(2)}× < ${required.toFixed(2)}×`:null;
+  const p=input.exitProfile,cost=Math.max(0,input.roundTripCost??ROUND_TRIP_COST),winRate=clip(p.winRate??0);
+  if(!(winRate>0&&Number.isFinite(p.medianWinNetRate)&&Number.isFinite(p.medianLossNetRate)
+    &&Number.isFinite(p.adverseP80Rate)&&Number.isFinite(p.adverseP95Rate)))return null;
+  const retainedTarget=Math.max(0,p.targetRate*p.retentionRate-cost),
+    typicalWin=Math.max(input.netRate,Math.min(retainedTarget,Math.max(0,p.medianWinNetRate??0))),
+    typicalLoss=Math.max(cost*.25,p.medianLossNetRate??0),payoff=typicalWin/Math.max(typicalLoss,1e-9),
+    breakeven=(1-winRate)/Math.max(winRate,1e-9),requiredPayoff=breakeven*1.10;
+  if(payoff<requiredPayoff)return `样本典型盈亏不足：${payoff.toFixed(2)}× < ${requiredPayoff.toFixed(2)}×（胜率${(winRate*100).toFixed(0)}%）`;
+  const hardCoverage=typicalWin/Math.max(input.hardStopRate+cost,1e-9),p80=Math.max(0,p.adverseP80Rate??0),p95=Math.max(p80,p.adverseP95Rate??0),
+    hardBeyond95=input.hardStopRate>=p95*1.05,hardBeyond80=input.hardStopRate>=p80*1.15,
+    tailFloor=(hardBeyond95 ? .20 : hardBeyond80 ? .30 : .40)+(winRate<.55 ? .10 : 0);
+  return hardCoverage<tailFloor?`结构止损尾部覆盖不足：${hardCoverage.toFixed(2)}× < ${tailFloor.toFixed(2)}×`:null;
 }
 function activeRecentValue(c:RelationCandidate){
   return c.scope==="RECENT"&&c.status==="ACTIVE"?{

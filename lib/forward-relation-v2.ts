@@ -28,6 +28,7 @@ export type RelationExitPoint={expectedRate:number;adverseRate:number;remainingE
   futureBestMinutes?:RelationCheckpoint;recoveryRate?:number;continuationSamples?:number};
 export type RelationExitProfile={version:"sample-exit-plan-v1"|"sample-exit-plan-v2";bestHoldMinutes:RelationHorizon;feedbackDeadlineMinutes:number;
   maxHoldMinutes:number;normalAdverseRate:number;targetRate:number;protectionActivationRate:number;retentionRate:number;winRate?:number;
+  medianWinNetRate?:number;medianLossNetRate?:number;adverseP80Rate?:number;adverseP95Rate?:number;
   samples:number;groups:number;path:Partial<Record<RelationCheckpoint,RelationExitPoint>>};
 export type RelationRule={id:string;signature:string;scope:RelationScope;horizon:RelationHorizon;side:RelationSide;conditions:RelationCondition[];
   longNet:number;recentNet:number;standardError:number;samples:number;longGroups:number;recentGroups:number;health:number;status:RelationStatus;
@@ -189,11 +190,15 @@ function exitProfile(selected:RelationMeasurement[],side:RelationSide,best:Relat
       remainingEdgeRate:Math.max(0,bestFuture-expected),futureBestMinutes,recoveryRate,continuationSamples};
   }
   const target=Math.max(.003,quantile(favorable,.60),median(usable.map(r=>Math.max(0,directional(r,best,side))))+COST),
-    winRate=usable.length?usable.filter(r=>directional(r,best,side)>COST).length/usable.length:0;
+    netOutcomes=usable.map(r=>directional(r,best,side)-COST),winsNet=netOutcomes.filter(v=>v>0),lossesNet=netOutcomes.filter(v=>v<=0).map(v=>Math.abs(v)),
+    riskAdverse=usable.map(r=>adverseAt(r,best,side)).filter(Number.isFinite),
+    winRate=usable.length?winsNet.length/usable.length:0,medianWinNetRate=median(winsNet),medianLossNetRate=median(lossesNet),
+    adverseP80Rate=quantile(riskAdverse,.80),adverseP95Rate=quantile(riskAdverse,.95);
   return{version:"sample-exit-plan-v2",bestHoldMinutes:best,feedbackDeadlineMinutes:clip(quantile(first,.80),5,Math.min(30,best)),
     maxHoldMinutes:Math.max(best,maxHold),normalAdverseRate:clip(quantile(adverse,.80)*1.10,.003,.03),targetRate:target,
     protectionActivationRate:clip(Math.max(COST*1.2,quantile(favorable,.35)*.65),COST*1.1,Math.max(COST*1.2,target*.75)),
-    retentionRate:clip(quantile(retention,.35)+.10,.60,.90),winRate,samples:usable.length,groups:groupRows(usable,best,side).length,path};
+    retentionRate:clip(quantile(retention,.35)+.10,.60,.90),winRate,medianWinNetRate,medianLossNetRate,adverseP80Rate,adverseP95Rate,
+    samples:usable.length,groups:groupRows(usable,best,side).length,path};
 }
 function ruleFrom(input:{state:RelationEngineState;paths:Record<string,RelationCandle[]>;conditions:RelationCondition[];scope:RelationScope;side:RelationSide;
   horizon:RelationHorizon;net:number;se:number;selected:RelationMeasurement[];groups:number;now:number;currentEnv:RelationEnvironment}){
