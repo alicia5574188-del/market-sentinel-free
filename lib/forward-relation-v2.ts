@@ -151,6 +151,21 @@ function recentCandidate(rows:RelationMeasurement[],conditions:RelationCondition
       se=standardError(v),net=mean(v)-COST-.65*se;if(aligned>=2&&finite(se)&&net>0)choices.push({h,side,net,se,selected:matched.filter(r=>Number.isFinite(cpValue(r,h))).slice(-180),groups:3});}
   return choices.sort((a,b)=>b.net-a.net)[0]??null;
 }
+function fixedCandidate(rows:RelationMeasurement[],rule:Pick<RelationRule,"conditions"|"horizon"|"side"|"scope">):CandidateEvaluation|null{
+  const matched=rows.filter(r=>matches(r.x,rule.conditions)&&Number.isFinite(cpValue(r,rule.horizon))).sort((a,b)=>a.at-b.at);
+  if(rule.scope==="RECENT"){
+    const g=groupRows(matched,rule.horizon,rule.side).slice(-3);if(g.length<3||g.some(x=>x.symbols.length<3))return null;
+    const v=g.map(x=>x.value),aligned=v.filter(x=>x>0).length,se=standardError(v),net=mean(v)-COST-.65*se;
+    return aligned>=2&&finite(se)&&net>0?{h:rule.horizon,side:rule.side,net,se,selected:matched.slice(-180),groups:3}:null;
+  }
+  if(matched.length<24)return null;const keys=[...new Set(matched.map(r=>Math.floor(r.at/(rule.horizon*60_000))))].sort((a,b)=>a-b);
+  if(keys.length<5)return null;const split=Math.max(3,Math.floor(keys.length*.6)),trainKeys=new Set(keys.slice(0,split)),checkKeys=new Set(keys.slice(split));
+  if(checkKeys.size<2)return null;const train=matched.filter(r=>trainKeys.has(Math.floor(r.at/(rule.horizon*60_000)))),
+    check=matched.filter(r=>checkKeys.has(Math.floor(r.at/(rule.horizon*60_000)))),a=groupRows(train,rule.horizon,rule.side),b=groupRows(check,rule.horizon,rule.side);
+  if(a.length<3||b.length<2)return null;const av=a.map(x=>x.value),bv=b.map(x=>x.value),se=Math.max(standardError(av),standardError(bv));
+  if(!finite(se))return null;const net=Math.min(mean(av),mean(bv))-COST-.5*se;
+  return net>0?{h:rule.horizon,side:rule.side,net,se,selected:[...train,...check],groups:a.length+b.length}:null;
+}
 function exitProfile(selected:RelationMeasurement[],side:RelationSide,best:RelationHorizon):RelationExitProfile{
   const d=sign(side),usable=selected.filter(r=>Number.isFinite(cpValue(r,best))),winners=usable.filter(r=>directional(r,best,side)>COST),base=winners.length>=8?winners:usable;
   const first=base.map(r=>REACTION_CHECKPOINTS.find(m=>m<=best&&d*Number(r.cp[m]??-Infinity)>COST*.60)??best),
@@ -206,8 +221,12 @@ function synthesize(state:RelationEngineState,paths:Record<string,RelationCandle
     if(!prior||r.health*r.longNet>prior.health*prior.longNet)best.set(key,r);}
   const next=[...best.values()].sort((a,b)=>b.health*b.longNet-a.health*a.longNet).slice(0,RULE_LIMIT);
   for(const old of state.rules){if(next.some(r=>r.signature===old.signature))continue;if(now-old.lastQualifiedAt>3*60*60_000)continue;
-    next.push({...old,status:"DEGRADED",health:Math.min(.25,old.health),updatedAt:now,reason:"旧关系未再通过新路径样本验证；仅保留低风险探测，不推导反向"});}
-  state.rules=next.sort((a,b)=>b.health*b.longNet-a.health*a.longNet).slice(0,RULE_LIMIT);
+    const fixed=fixedCandidate(rows,old);if(fixed){next.push(ruleFrom({state,paths,conditions:old.conditions,scope:old.scope,side:old.side,
+      horizon:old.horizon,net:fixed.net,se:fixed.se,selected:fixed.selected,groups:fixed.groups,now,currentEnv}));continue;}
+    next.push({...old,status:"DEGRADED",health:Math.min(.25,old.health),updatedAt:now,reason:"原条件经最新成熟样本复验未通过；仅保留低风险探测，不推导反向"});}
+  const final=new Map<string,RelationRule>();for(const r of next){const key=r.scope+":"+r.side+":"+r.conditions.map(c=>c.feature+c.op).sort().join("-"),
+    prior=final.get(key);if(!prior||r.health*r.longNet>prior.health*prior.longNet)final.set(key,r);}
+  state.rules=[...final.values()].sort((a,b)=>b.health*b.longNet-a.health*a.longNet).slice(0,RULE_LIMIT);
 }
 const objectRecord=(value:unknown):Record<string,unknown>|null=>value&&typeof value==="object"?value as Record<string,unknown>:null;
 const childNumber=(value:unknown,key:string|number)=>{const row=objectRecord(value);return Number(row?.[String(key)]);};
