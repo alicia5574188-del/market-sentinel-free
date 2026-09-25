@@ -701,7 +701,8 @@ function nextCandleAt(paths:Record<string,Candle[]>,now:number){
   let latest=0;for(const p of Object.values(paths)){const a=validPath(p,now);if(a)latest=Math.max(latest,(a.at(-1)!.time+300)*1000);}return latest;
 }
 export function advanceForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;minutePaths?:Record<string,Candle[]>;daily?:Record<string,Candle[]>;
-  quotes:Record<string,Quote>;contracts:Record<string,Contract>;entrySymbols?:Iterable<string>;learningSymbols?:Iterable<string>;allowDataCycle?:boolean;legacyDrainOnly?:boolean}){
+  quotes:Record<string,Quote>;contracts:Record<string,Contract>;entrySymbols?:Iterable<string>;learningSymbols?:Iterable<string>;allowDataCycle?:boolean;legacyDrainOnly?:boolean;
+  shockSignals?:ForwardShockSignal[];shockVetoSide?:"LONG"|"SHORT"|null}){
   const s=normalizeForward(structuredClone(input.state),input.now),before=JSON.stringify({p:s.positions.map(t=>[t.id,t.status,t.stopPrice]),h:s.history.length,b:s.balance,r:s.revision});
   const allowed=input.entrySymbols?new Set(input.entrySymbols):undefined;s.lastQuoteCycleAt=input.now;
   const candleAt=nextCandleAt(input.paths,input.now),dataDue=input.allowDataCycle!==false&&candleAt>s.lastCandleAt;
@@ -729,6 +730,17 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
     s.opportunities=bestOpportunityPerSymbol(combined,(a,b)=>Number(b.eligible)-Number(a.eligible)||Number(b.premium)-Number(a.premium)
       ||Number(!b.reserve)-Number(!a.reserve)||b.score-a.score);
   }
+  if(input.shockVetoSide){
+    s.opportunities=s.opportunities.map(o=>o.side===input.shockVetoSide&&!o.structuralInterrupt
+      ?{...o,eligible:false,reason:`${o.reason}｜极端结构预警已临时否决旧方向新增，等待冲击解除或重新确认`}:o);
+  }
+  const shockOps=(input.shockSignals??[]).map(signal=>shockOpportunity(signal,input.quotes[signal.symbol],s.regions[signal.symbol],input.now));
+  if(shockOps.length){
+    s.opportunities=bestOpportunityPerSymbol([...shockOps,...s.opportunities],(a,b)=>Number(b.eligible)-Number(a.eligible)
+      ||Number(b.structuralInterrupt)-Number(a.structuralInterrupt)||Number(!b.reserve)-Number(!a.reserve)
+      ||Number(b.premium)-Number(a.premium)||b.score-a.score);
+    s.selectedSymbols=[...new Set([...shockOps.map(o=>o.symbol),...s.selectedSymbols])].slice(0,30);
+  }
   const mark=equityMark(s,input.quotes,input.now);s.peakEquity=Math.max(s.peakEquity,mark.equity);s.maxDrawdown=Math.max(s.maxDrawdown,1-mark.equity/Math.max(s.peakEquity,1));
   updateDaily(s,input.now,mark.equity);rotateIfNeeded(s,input.quotes,input.contracts,input.now,mark.equity);
   const opened=fillForwardPortfolio(s,input.quotes,input.contracts,input.now,mark.equity,!dataDue);
@@ -736,6 +748,8 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
   const totalRisk=existingRisk(s),riskUse=mark.equity>0?100*totalRisk/mark.equity:0;
   s.latestReason=s.relationEngine.rules.length===0?d.warmup
     :`Forward Path Relation 3.0 当前${s.positions.length}笔持仓；${s.opportunities.filter(o=>o.eligible).length}个可参与候选；计划风险已用${riskUse.toFixed(1)}%。ACTIVE ${d.active} · 承压 ${d.pressured} · 降级 ${d.degraded}。`;
+  if(input.shockVetoSide)s.latestReason+=` 结构中断预警正在否决${input.shockVetoSide==="LONG"?"多头":"空头"}新增。`;
+  if(shockOps.length)s.latestReason+=` 已确认${shockOps.length}个极端结构事件。`;
   if(opened)s.latestReason+=` 本轮新开${opened}笔。`;
   const after=JSON.stringify({p:s.positions.map(t=>[t.id,t.status,t.stopPrice]),h:s.history.length,b:s.balance,r:s.revision});
   return{state:s,changed:before!==after||dataDue,protectionChanged:input.state.positions.some(t=>s.positions.find(n=>n.id===t.id)?.stopPrice!==t.stopPrice)};
