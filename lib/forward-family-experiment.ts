@@ -77,6 +77,14 @@ export function normalizeFamilyExperimentState(value:unknown,rules:RelationRule[
 
 function sameFamily(rule:RelationRule,familyId:string){return relationFamilyId(rule)===familyId;}
 
+export function pruneFamilyExperimentBySymbols(state:FamilyExperimentState,eligibleSymbols:Iterable<string>){
+  const allowed=new Set(eligibleSymbols);let removed=0;
+  for(const [familyId,record] of Object.entries(state.guards)){
+    if(record.symbol&& !allowed.has(record.symbol)){delete state.guards[familyId];removed++;}
+  }
+  return removed;
+}
+
 function recovered(record:FamilyGuardRecord,rules:RelationRule[]){
   const family=rules.filter(r=>sameFamily(r,record.familyId));
   return family.some(rule=>{
