@@ -67,6 +67,7 @@ import { advanceStrategyArena as advancePreviousStrategyArena,
 
 const LOOP_MS = 2_000;
 const LIVE_FAST_SNAPSHOT_MAX_AGE_MS = 5_000;
+const LIVE_RECONCILE_PENDING_MS = 2_000;
 const LIVE_RECONCILE_ACTIVE_MS = 5_000;
 const LIVE_RECONCILE_IDLE_MS = 10_000;
 const LIVE_ORDER_AUDIT_MAX_AGE_MS = 120_000;
@@ -2059,9 +2060,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           this.runtime.subrequestCount+=Math.max(0,(this.liveClient?.requestCount??requestsBefore)-requestsBefore);
         }
       }while(this.liveSourcePending&&this.liveNeedsSync());
+      const pending=Object.values(this.runtime.live.entries).some(e=>e
+        &&(["SUBMITTING","ERROR"].includes(e.status)||this.liveEntryAwaitingReconcile(e)));
       const active=Object.values(this.runtime.live.positions).some(p=>p?.status==="OPEN")
         ||Object.values(this.runtime.live.entries).some(e=>e&&!["FILLED","CANCELLED"].includes(e.status));
-      this.liveNextReconcileAt=Date.now()+(active?LIVE_RECONCILE_ACTIVE_MS:LIVE_RECONCILE_IDLE_MS);
+      this.liveNextReconcileAt=Date.now()+(pending?LIVE_RECONCILE_PENDING_MS:active?LIVE_RECONCILE_ACTIVE_MS:LIVE_RECONCILE_IDLE_MS);
     })();
     this.liveBackgroundWork=task;
     this.ctx.waitUntil(task.finally(()=>{if(this.liveBackgroundWork===task)this.liveBackgroundWork=null;}));
