@@ -7,25 +7,30 @@ import { build } from "esbuild";
 import { Miniflare } from "miniflare";
 
 const built=await build({stdin:{resolveDir:fileURLToPath(new URL("..",import.meta.url)),sourcefile:"compact-storage-smoke.ts",contents:`
-import { initialForward } from "./lib/forward-relations.ts";
-import { FORWARD_STORAGE, FORWARD_COMPACT_BYTES, prepareForwardWrite, readForwardStore } from "./lib/forward-store.ts";
+import { initialForward, normalizeForward } from "./lib/forward-relations.ts";
+import { FORWARD_STORAGE, FORWARD_COMPACT_BYTES, FORWARD_PAGED_STATE_VERSION, prepareForwardWrite, readForwardStore } from "./lib/forward-store.ts";
 const T=1790100000000;
-function equal(a,b){if(JSON.stringify(a)!==JSON.stringify(b))throw new Error("lossless state mismatch");}
+function durable(value,now){const expected=structuredClone(value);expected.storage.layout=FORWARD_PAGED_STATE_VERSION;
+  expected.storage.sampleIntegrity="raw-sha256";return normalizeForward(expected,now);}
+function firstDiff(a,b,path="$"){if(Object.is(a,b))return null;if(typeof a!=="object"||a===null||typeof b!=="object"||b===null)
+  return path+":"+JSON.stringify(a)+"!="+JSON.stringify(b);const keys=new Set([...Object.keys(a),...Object.keys(b)]);
+  for(const key of keys){const found=firstDiff(a[key],b[key],path+"."+key);if(found)return found;}return null;}
+function equal(a,b,label){const difference=firstDiff(a,b);if(difference)throw new Error("lossless state mismatch "+label+" "+difference);}
 export class CompactStorageCheck {
  constructor(ctx){this.ctx=ctx;}
  async fetch(){
   const storage=this.ctx.storage,s=initialForward(T);s.storage.persistedAt=T;
   s.latestReason="本地SQLite完整记录 🛡️";
   const old=await prepareForwardWrite(null,s,T),compact=await prepareForwardWrite(null,s,T,{compact:true});
-  await storage.transaction(async tx=>{await tx.put(old.entries);});equal(await readForwardStore(storage,T),s);
-  await storage.transaction(async tx=>{await tx.put(compact.entries);});equal(await readForwardStore(storage,T),s);
+  await storage.transaction(async tx=>{await tx.put(old.entries);});equal(await readForwardStore(storage,T),durable(s,T),"legacy-small");
+  await storage.transaction(async tx=>{await tx.put(compact.entries);});equal(await readForwardStore(storage,T),durable(s,T),"compact-small");
   const head=await storage.get(FORWARD_STORAGE+"head");
   if(!(head.inline instanceof Uint8Array))throw new Error("typed-array encoding not preserved");
   let seed=72193;const words=[];
   for(let i=0;i<60000;i++){seed^=seed<<13;seed^=seed>>>17;seed^=seed<<5;words.push((seed>>>0).toString(16).padStart(8,"0"));}
   s.futureOpaqueEvidence=words.join("");
   const largeOld=await prepareForwardWrite(null,s,T+1),largeCompact=await prepareForwardWrite(null,s,T+1,{compact:true});
-  await storage.transaction(async tx=>{await tx.put(largeCompact.entries);});equal(await readForwardStore(storage,T+1),s);
+  await storage.transaction(async tx=>{await tx.put(largeCompact.entries);});equal(await readForwardStore(storage,T+1),durable(s,T+1),"compact-large");
   const largeHead=await storage.get(FORWARD_STORAGE+"head");
   if(largeHead.inline.byteLength!==FORWARD_COMPACT_BYTES)throw new Error("inline first chunk is not bounded");
   const uncommitted=structuredClone(s);uncommitted.balance+=50;uncommitted.revision++;
@@ -33,7 +38,7 @@ export class CompactStorageCheck {
   let rolledBack=false;
   try{await storage.transaction(async tx=>{await tx.put(failedWrite.entries);throw new Error("synthetic rollback");});}
   catch(error){if(error.message!=="synthetic rollback")throw error;rolledBack=true;}
-  equal(await readForwardStore(storage,T+11),s);
+  equal(await readForwardStore(storage,T+11),durable(s,T+11),"rollback");
   for(const key of Object.keys(failedWrite.entries).filter(k=>k.includes("archive:")))
     if(await storage.get(key)!==undefined)throw new Error("uncommitted archive survived rollback");
   // Verify a full 112 KiB typed array plus object metadata using actual host
@@ -44,7 +49,7 @@ export class CompactStorageCheck {
   let oversizeRejected=false;try{await storage.put("synthetic-oversize",{inline:new Uint8Array(129*1024)});}catch{oversizeRejected=true;}
   const recovered=await readForwardStore(storage,T+2);
   await storage.transaction(async tx=>{await tx.put((await prepareForwardWrite(recovered,recovered,T+2)).entries);});
-  equal(await readForwardStore(storage,T+3),s);
+  equal(await readForwardStore(storage,T+3),durable(s,T+3),"legacy-rewrite");
   return Response.json({localOnly:true,sqliteKV:true,realMarketStream:false,networkRequests:0,typedArrayPreserved:true,
     inline112KiBAccepted:true,emulatorEnforcesProductionValueLimit:oversizeRejected,
     small:{legacyWrites:old.writes,compactWrites:compact.writes},

@@ -9,6 +9,7 @@ export const FORWARD_STORAGE_STATE_VERSION=`${FORWARD_VERSION}:sample-pack-v1`;
 export const FORWARD_PAGED_STATE_VERSION=`${FORWARD_VERSION}:paged-samples-v2`;
 export const FORWARD_SAMPLE_MANIFEST_STORAGE=`${FORWARD_STORAGE}sample-manifest`;
 export const FORWARD_SAMPLE_PAGE_PREFIX=`${FORWARD_STORAGE}sample-page:`;
+export const FORWARD_SAMPLE_RECOVERY_PREFIX=`${FORWARD_STORAGE}sample-recovery:`;
 // Keep 16 KiB below the Durable Object single-value ceiling for typed-array
 // serialization and metadata. No base64 conversion or state-field omission.
 export const FORWARD_COMPACT_BYTES = 112*1024;
@@ -17,6 +18,11 @@ type Head = { version: string; count: number; length: number; sha256: string; en
 type SamplePageMeta={id:string;key:string;count:number;firstAt:number;lastAt:number;length:number;rawLength:number;
   sha256:string;rawSha256?:string;encoding:"gzip"|"utf8"};
 export type ForwardSampleManifest={version:typeof FORWARD_PAGED_STATE_VERSION;count:number;pages:SamplePageMeta[]};
+type LegacySampleRecoveryMeta={version:"forward-sample-recovery-v1";sourceManifestSha256:string;sourceId:string;bytesKey:string;
+  actualCount:number;manifestCount:number;firstAt:number;lastAt:number;length:number;rawLength:number;sha256:string;rawSha256:string;
+  encoding:"gzip"|"utf8"};
+type LegacySampleRecovery={meta:LegacySampleRecoveryMeta;bytes:Uint8Array};
+type ForwardStateWithRecovery=ForwardState&{__legacySampleRecovery?:LegacySampleRecovery[]};
 type Reader = { get<T>(key: string): Promise<T | undefined> };
 export type Store = Reader & { put(entries: Record<string, unknown>): Promise<void>; delete(keys: string[]): Promise<number> };
 const digest = async (bytes: Uint8Array) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes as BufferSource))].map(v=>v.toString(16).padStart(2,"0")).join("");
@@ -36,8 +42,9 @@ function packSample(row:RelationMeasurement){
   ];
 }
 function compactForwardState(next:ForwardState,includeSamples=true){
+  const account={...next} as ForwardStateWithRecovery;delete account.__legacySampleRecovery;
   const samples=includeSamples?next.relationEngine.samples.map(packSample):[],paged=!includeSamples;
-  return{...next,storage:{...next.storage,layout:paged?FORWARD_PAGED_STATE_VERSION:next.storage.layout,
+  return{...account,storage:{...next.storage,layout:paged?FORWARD_PAGED_STATE_VERSION:next.storage.layout,
       ...(paged?{sampleIntegrity:"raw-sha256" as const}:{})},
     relationEngine:{...next.relationEngine,samples}};
 }
@@ -69,11 +76,12 @@ async function encodeSamplePages(samples:RelationMeasurement[]){
 }
 
 const SHA256=/^[0-9a-f]{64}$/,packedNumber=(value:unknown)=>value===null||Number.isFinite(value);
-function packedPageIssue(samples:unknown[],meta:SamplePageMeta){
+function packedPageIssue(samples:unknown[],meta:SamplePageMeta,allowLegacySuperset=false){
   const hourText=meta.id.split(":")[0]!,hour=Number(hourText);let priorAt=-1,priorSymbol="";
   if(!/^\d{16}:\d{3}$/.test(meta.id)||!Number.isSafeInteger(hour)||hour<0||hour%SAMPLE_PAGE_MS!==0)return "PAGE_ID";
   if(!samples.length||samples.length>SAMPLE_PAGE_ROWS)return "COUNT_INVALID";
-  if(samples.length!==meta.count)return `COUNT_${samples.length}_${meta.count}`;
+  const strictSuperset=allowLegacySuperset&&samples.length>meta.count;
+  if(samples.length!==meta.count&&!strictSuperset)return `COUNT_${samples.length}_${meta.count}`;
   for(const value of samples){
     if(!Array.isArray(value)||value.length<13||value[0]!=="m1"||typeof value[1]!=="string"||!value[1]
       ||!Number.isSafeInteger(value[2])||value[2]<hour||value[2]>=hour+SAMPLE_PAGE_MS)return "ROW_ID";
@@ -86,7 +94,10 @@ function packedPageIssue(samples:unknown[],meta:SamplePageMeta){
     if(at<priorAt||(at===priorAt&&symbol.localeCompare(priorSymbol)<0))return "ORDER";
     priorAt=at;priorSymbol=symbol;
   }
-  return (samples[0] as unknown[])[2]!==meta.firstAt||(samples.at(-1) as unknown[])[2]!==meta.lastAt?"BOUNDS":null;
+  const firstAt=(samples[0] as unknown[])[2] as number,lastAt=(samples.at(-1) as unknown[])[2] as number;
+  return strictSuperset
+    ?firstAt>meta.firstAt||lastAt<meta.lastAt?"BOUNDS":null
+    :firstAt!==meta.firstAt||lastAt!==meta.lastAt?"BOUNDS":null;
 }
 
 export async function readForwardStore(storage: Reader, now: number) {
@@ -115,7 +126,7 @@ export async function readForwardStore(storage: Reader, now: number) {
       ||!Array.isArray(manifest.pages)||manifest.pages.length>64
       ||await digest(encodeJson(manifest))!==head.sampleManifestSha256)throw new Error("Forward样本manifest校验失败，原账户不会被覆盖");
     const pageBytes=await Promise.all(manifest.pages.map(page=>storage.get<Uint8Array>(page.key))),samples:unknown[]=[];
-    let count=0,prior="",legacyRecovered=false;
+    const legacySampleRecovery:LegacySampleRecovery[]=[];let count=0,expectedCount=0,prior="",legacyRecovered=false;
     for(let i=0;i<manifest.pages.length;i++){
       const meta=manifest.pages[i]!,value=pageBytes[i];
       if(!value||meta.key!==`${FORWARD_SAMPLE_PAGE_PREFIX}${meta.id}`||meta.id<=prior||value.length>FORWARD_COMPACT_BYTES
@@ -139,14 +150,40 @@ export async function readForwardStore(storage: Reader, now: number) {
       if(page.version!==FORWARD_PAGED_STATE_VERSION)throw new Error(`Forward样本分页内容异常：${meta.id}:VERSION`);
       if(page.id!==meta.id)throw new Error(`Forward样本分页内容异常：${meta.id}:PAGE_ID`);
       if(!Array.isArray(page.samples))throw new Error(`Forward样本分页内容异常：${meta.id}:SAMPLES`);
-      const pageIssue=packedPageIssue(page.samples,meta);
+      const allowLegacySuperset=meta.rawSha256===undefined,pageIssue=packedPageIssue(page.samples,meta,allowLegacySuperset);
       if(pageIssue)throw new Error(`Forward样本分页内容异常：${meta.id}:${pageIssue}`);
+      if(page.samples.length>meta.count){
+        const firstAt=(page.samples[0] as unknown[])[2] as number,lastAt=(page.samples.at(-1) as unknown[])[2] as number,
+          bytesSha256=await digest(value),bytesKey=`${FORWARD_SAMPLE_RECOVERY_PREFIX}${meta.id}:${rawSha256}:bytes`;
+        legacySampleRecovery.push({meta:{version:"forward-sample-recovery-v1",sourceManifestSha256:head.sampleManifestSha256!,sourceId:meta.id,
+          bytesKey,actualCount:page.samples.length,manifestCount:meta.count,firstAt,lastAt,length:value.length,rawLength:pageRaw.length,
+          sha256:bytesSha256,rawSha256,encoding:meta.encoding},bytes:value.slice()});
+        legacyRecovered=true;
+      }
       samples.push(...page.samples);count+=page.samples.length;
+      expectedCount+=meta.count;
     }
-    if(count!==manifest.count)throw new Error("Forward样本manifest数量异常");
+    if(expectedCount!==manifest.count||count<manifest.count)throw new Error("Forward样本manifest数量异常");
     decoded.relationEngine={...decoded.relationEngine,samples:samples as RelationMeasurement[]};
     decoded.storage={...decoded.storage,layout:FORWARD_PAGED_STATE_VERSION,
       sampleIntegrity:legacyRecovered||manifest.pages.some(page=>page.rawSha256===undefined)?"legacy-recovered":"raw-sha256"};
+    const state=normalizeForward(decoded,now);
+    if(legacySampleRecovery.length){
+      // The authenticated legacy manifest describes the canonical, normalized
+      // page set. Accept an oversized retained page only when normalizing its
+      // complete decoded evidence reconstructs that exact authenticated set.
+      const canonical=await encodeSamplePages(state.relationEngine.samples);
+      const matches=canonical.length===manifest.pages.length&&canonical.every((page,index)=>{
+        const expected=manifest.pages[index]!;return page.meta.id===expected.id&&page.meta.key===expected.key
+          &&page.meta.count===expected.count&&page.meta.firstAt===expected.firstAt&&page.meta.lastAt===expected.lastAt
+          &&page.meta.length===expected.length&&page.meta.rawLength===expected.rawLength&&page.meta.sha256===expected.sha256
+          &&page.meta.encoding===expected.encoding;
+      });
+      if(!matches)throw new Error("Forward样本分页内容异常：LEGACY_SUPERSET_CANONICAL");
+      (state as ForwardStateWithRecovery).__legacySampleRecovery=legacySampleRecovery;
+    }
+    const restored=restoreForwardProtectionCheckpoint(state,await storage.get<unknown>(FORWARD_PROTECTION_STORAGE));
+    return restored;
   }
   const state=normalizeForward(decoded,now);
   // An overlay belongs to exactly one durable full-account generation. Old
@@ -168,12 +205,21 @@ export function prepareForwardProtectionWrite(next:ForwardState){
 }
 
 export async function prepareForwardWrite(previous:ForwardState|null,next:ForwardState,now:number,options:{compact?:boolean}={}){
+  const recoveryState=next as ForwardStateWithRecovery,
+    legacySampleRecovery=recoveryState.__legacySampleRecovery??(previous as ForwardStateWithRecovery|null)?.__legacySampleRecovery??[];
+  delete recoveryState.__legacySampleRecovery;
   const pages=await encodeSamplePages(next.relationEngine.samples),manifest:ForwardSampleManifest={version:FORWARD_PAGED_STATE_VERSION,
     count:next.relationEngine.samples.length,pages:pages.map(page=>page.meta)},manifestSha256=await digest(encodeJson(manifest));
   const raw=encodeJson(compactForwardState(next,false));
   if(raw.length>FORWARD_ACCOUNT_MAX_BYTES)throw new Error("Forward账户主状态超过预算；禁止截断金融记录");
   const compressed=await gzip(raw),useGzip=compressed.length<raw.length,bytes=useGzip?compressed:raw;
   const entries:Record<string,unknown>={};let count=0;
+  for(const recovery of legacySampleRecovery){
+    if(recovery.bytes.length!==recovery.meta.length||await digest(recovery.bytes)!==recovery.meta.sha256)
+      throw new Error(`Forward恢复归档校验失败：${recovery.meta.sourceId}`);
+    entries[recovery.meta.bytesKey]=recovery.bytes;
+    entries[`${FORWARD_SAMPLE_RECOVERY_PREFIX}${recovery.meta.sourceId}:${recovery.meta.rawSha256}:manifest`]=recovery.meta;
+  }
   const inline=options.compact===true,chunkBytes=inline?FORWARD_COMPACT_BYTES:80*1024;
   for(let offset=inline?FORWARD_COMPACT_BYTES:0;offset<bytes.length;offset+=chunkBytes)
     entries[`${FORWARD_STORAGE}chunk:${count++}`]=bytes.slice(offset,offset+chunkBytes);

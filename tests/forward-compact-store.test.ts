@@ -1,10 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { FORWARD_VERSION, initialForward, type ForwardState, type Trade } from "../lib/forward-relations.ts";
+import { FORWARD_VERSION, initialForward, normalizeForward, type ForwardState, type Trade } from "../lib/forward-relations.ts";
 import { FORWARD_PAGED_STATE_VERSION, FORWARD_SAMPLE_MANIFEST_STORAGE, FORWARD_SAMPLE_PAGE_PREFIX,
-  FORWARD_STORAGE, prepareForwardWrite, readForwardStore } from "../lib/forward-store.ts";
+  FORWARD_SAMPLE_RECOVERY_PREFIX, FORWARD_STORAGE, prepareForwardWrite, readForwardStore } from "../lib/forward-store.ts";
+import { gzip, gunzip } from "../lib/storage-codec.ts";
 
-const T=1_795_000_000_000,HEAD=`${FORWARD_STORAGE}head`;
+const T=1_795_000_000_000,HEAD=`${FORWARD_STORAGE}head`,SAMPLE_PAGE_ROWS_FOR_TEST=96;
 const digest=async(bytes:Uint8Array)=>[...new Uint8Array(await crypto.subtle.digest("SHA-256",bytes as BufferSource))]
   .map(v=>v.toString(16).padStart(2,"0")).join("");
 class Memory {
@@ -104,6 +105,57 @@ test("legacy count mismatches expose actual and expected rows without accepting 
   head.sampleManifestSha256=await digest(new TextEncoder().encode(JSON.stringify(manifest)));
   await db.put({...write.entries,[FORWARD_SAMPLE_MANIFEST_STORAGE]:manifest,[HEAD]:head});
   await assert.rejects(()=>readForwardStore(db,T+1),/COUNT_[0-9]+_[0-9]+/);
+});
+
+test("legacy retained strict supersets are canonically proven and atomically archived before migration",async()=>{
+  const s=stressFixture();s.relationEngine.samples=Array.from({length:23},(_,i)=>sample(i));
+  const write=await prepareForwardWrite(s,s,T,{compact:true}),db=new Memory();
+  const manifest=structuredClone(write.entries[FORWARD_SAMPLE_MANIFEST_STORAGE]) as {
+    pages:{id:string;key:string;count:number;firstAt:number;lastAt:number;length:number;rawLength:number;sha256:string;rawSha256?:string;encoding:"gzip"|"utf8"}[]
+  },target=manifest.pages[0]!;
+  assert.equal(manifest.pages.length,1);assert.equal(target.count,23);const original=write.entries[target.key] as Uint8Array,
+    raw=target.encoding==="gzip"?await gunzip(original,512*1024):original,
+    page=JSON.parse(new TextDecoder().decode(raw)) as {version:string;id:string;samples:unknown[][]};
+  page.samples.splice(page.samples.length-1,0,structuredClone(page.samples.at(-1)!));
+  const oversizedRaw=new TextEncoder().encode(JSON.stringify(page)),oversizedCompressed=await gzip(oversizedRaw),
+    oversized=target.encoding==="gzip"?oversizedCompressed:oversizedRaw;
+  for(const meta of manifest.pages)delete meta.rawSha256;
+  const head=structuredClone(write.entries[HEAD]) as {sampleManifestSha256:string};
+  head.sampleManifestSha256=await digest(new TextEncoder().encode(JSON.stringify(manifest)));
+  await db.put({...write.entries,[target.key]:oversized,[FORWARD_SAMPLE_MANIFEST_STORAGE]:manifest,[HEAD]:head});
+
+  const recovered=await readForwardStore(db,T+1);
+  assert.equal(recovered.relationEngine.samples.length,23);assert.equal(recovered.history.length,240);
+  const next=normalizeForward(structuredClone(recovered),T+2);next.storage={persistedAt:T+2,error:null};
+  const migrated=await prepareForwardWrite(recovered,next,T+2,{compact:true}),keys=Object.keys(migrated.entries),
+    recoveryBytesKey=keys.find(key=>key.startsWith(FORWARD_SAMPLE_RECOVERY_PREFIX)&&key.endsWith(":bytes"))!,
+    recoveryManifestKey=keys.find(key=>key.startsWith(FORWARD_SAMPLE_RECOVERY_PREFIX)&&key.endsWith(":manifest"))!;
+  assert.ok(recoveryBytesKey);assert.ok(recoveryManifestKey);assert.deepEqual(migrated.entries[recoveryBytesKey],oversized);
+  const recovery=migrated.entries[recoveryManifestKey] as {version:string;bytesKey:string;actualCount:number;manifestCount:number;sha256:string;rawSha256:string};
+  assert.equal(recovery.version,"forward-sample-recovery-v1");assert.equal(recovery.bytesKey,recoveryBytesKey);
+  assert.equal(recovery.actualCount,target.count+1);assert.equal(recovery.manifestCount,target.count);
+  assert.equal(recovery.sha256,await digest(oversized));assert.equal(recovery.rawSha256,await digest(oversizedRaw));
+  assert.equal(migrated.compression.changedSamplePages,migrated.compression.samplePages);
+  await db.put(migrated.entries);const restarted=await readForwardStore(db,T+3);
+  assert.equal(restarted.relationEngine.samples.length,23);assert.equal(restarted.storage.sampleIntegrity,"raw-sha256");
+  assert.deepEqual(db.data.get(recoveryBytesKey),oversized);assert.deepEqual(db.data.get(recoveryManifestKey),recovery);
+});
+
+test("legacy oversized pages still fail closed unless normalization recreates the authenticated manifest",async()=>{
+  const s=stressFixture(),write=await prepareForwardWrite(s,s,T,{compact:true}),db=new Memory();
+  const manifest=structuredClone(write.entries[FORWARD_SAMPLE_MANIFEST_STORAGE]) as {
+    pages:{key:string;count:number;rawSha256?:string;encoding:"gzip"|"utf8"}[]
+  },target=manifest.pages.findLast(page=>page.count<SAMPLE_PAGE_ROWS_FOR_TEST)!;
+  const original=write.entries[target.key] as Uint8Array,raw=target.encoding==="gzip"?await gunzip(original,512*1024):original,
+    page=JSON.parse(new TextDecoder().decode(raw)) as {samples:unknown[][]};
+  const extra=structuredClone(page.samples.at(-1)!);extra[6]=[9,9,9,9,9,9,9,9];page.samples.push(extra);
+  const changedRaw=new TextEncoder().encode(JSON.stringify(page)),changed=target.encoding==="gzip"?await gzip(changedRaw):changedRaw;
+  for(const meta of manifest.pages)delete meta.rawSha256;
+  const head=structuredClone(write.entries[HEAD]) as {sampleManifestSha256:string};
+  head.sampleManifestSha256=await digest(new TextEncoder().encode(JSON.stringify(manifest)));
+  await db.put({...write.entries,[target.key]:changed,[FORWARD_SAMPLE_MANIFEST_STORAGE]:manifest,[HEAD]:head});
+  await assert.rejects(()=>readForwardStore(db,T+1),/LEGACY_SUPERSET_CANONICAL/);
+  assert.equal([...db.data.keys()].filter(key=>key.startsWith(FORWARD_SAMPLE_RECOVERY_PREFIX)).length,0);
 });
 
 test("stable raw hashes accept harmless compression identity drift but reject decoded content mismatch",async()=>{
