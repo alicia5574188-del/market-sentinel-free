@@ -100,6 +100,21 @@ test("round down within one lot, never enlarge a tiny account to one oversized c
   const j=request();j.equity=99.9;const r=buildProportionalMirror(j);assert.ok(r.binding.receipt.roundingNotional>=0);
   assert.ok(r.binding.receipt.roundingNotional<.1+1e-9);
 });
+test("a small LIVE account may lift only to the exact Gate minimum when real stop risk remains bounded",()=>{
+  const t=trade("tiny-safe","ALT_USDT");t.entryPrice=10;t.lastPrice=10;t.stopPrice=9.99;t.armPrice=10.2;
+  t.quantity=20;t.contracts=20;t.quantoMultiplier=1;t.notional=200;t.leverage=2;t.margin=100;t.plannedRisk=.58;
+  t.openedAt=T-5_000;t.lastQuoteAt=T;
+  const r=buildProportionalMirror({...request(t),sourceEquity:1000,equity:10,available:10,entryPrice:10,quantoMultiplier:1,
+    leverageMax:20,maintenanceRate:.005,openRisk:0,sameDirectionRisk:0,openMargin:0,openNotional:0,mirrorRatio:.01,
+    sourceRiskAuthority:true,activationAt:T-10_000,sizeRules:{enableDecimal:false,orderSizeMin:"1",orderSizeMax:"1000"}});
+  assert.equal(r.intent.contracts,1);assert.equal(r.intent.notional,10);assert.equal(r.binding.receipt.minimumUplift,true);
+  assert.ok((r.binding.receipt.minimumUpliftRiskRate??1)<.0075);
+});
+test("LIVE never catches up a source after the realtime copy window even if the PAPER trade is still open",()=>{
+  const i=request();i.activationAt=T-120_000;
+  assert.throws(()=>buildProportionalMirror(i),/实时复制窗口/);
+});
+
 test("margin or leverage failure is explicit, not silent new leverage or smaller-risk re-selection",()=>{
   const i=request();i.leverageMax=1;assert.throws(()=>buildProportionalMirror(i),/杠杆/);
   const j=request();j.available=1;assert.throws(()=>buildProportionalMirror(j),/不静默缩单/);

@@ -14,7 +14,7 @@ const signed=(v:number|null|undefined,d=2)=>typeof v==="number"&&Number.isFinite
 const time=(v?:number|null)=>v?new Date(v).toLocaleString("zh-CN",{timeZone:"Asia/Vientiane",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}):"—";
 const duration=(start:number,end:number|null|undefined,now:number)=>{const m=Math.floor(Math.max(0,(end??now)-start)/60000);return m<1?"<1分钟":m>=60?`${Math.floor(m/60)}小时${m%60}分`:`${m}分钟`;};
 const modeName=(mode:string)=>({RELATION:"市场关系",BREAKOUT:"市场关系 · 突破执行",RETEST:"市场关系 · 回踩执行",FAILED_BREAKOUT:"市场关系 · 失败突破执行",RANGE:"市场关系 · 区域执行"}[mode]??mode);
-const exitName=(reason:string|null)=>reason?({STRUCTURE_STOP:"结构止损",PROFIT_GIVEBACK:"利润保护",MARKET_FLIP:"独立反向关系",RELATION_DEGRADED:"关系降级",NO_POSITIVE_FEEDBACK:"无正向反馈",SAMPLE_PATH_DIVERGED:"样本路径失配",SAMPLE_EDGE_EXHAUSTED:"样本优势耗尽",SAMPLE_MAX_HOLD:"样本最大持仓",TIME_DECAY:"持仓超时",OPPORTUNITY_REPLACED:"更优机会替换",ACCOUNT_RESET:"手动重置"}[reason]??reason):"—";
+const exitName=(reason:string|null)=>reason?({STRUCTURE_STOP:"结构止损",PROFIT_GIVEBACK:"利润保护",MARKET_FLIP:"独立反向关系",RELATION_DEGRADED:"关系降级",NO_POSITIVE_FEEDBACK:"无正向反馈",SAMPLE_PATH_DIVERGED:"样本路径失配",SAMPLE_EDGE_EXHAUSTED:"样本优势耗尽",SAMPLE_MAX_HOLD:"样本最大持仓",TIME_DECAY:"持仓超时",OPPORTUNITY_REPLACED:"更优机会替换",STRUCTURAL_INTERRUPT_REVERSAL:"极端结构反转",SHOCK_REENTRY:"突变重新回区",FAST_STRUCTURE_FAILURE:"强结构快速失效",ACCOUNT_RESET:"手动重置"}[reason]??reason):"—";
 
 export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,livePanel,liveSystemPanel,liveEnabled,liveOverview,accountPanel,memberName,cacheScope="owner"}:{
   data:View|null;healthy:boolean;statusLabel?:string;feedAt:number|null;error:string|null;livePanel:ReactNode;liveSystemPanel?:ReactNode;
