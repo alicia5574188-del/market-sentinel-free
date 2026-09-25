@@ -40,7 +40,7 @@ async function harness(){
     return actors.get(id).engine.fetch(new Request(input,init));}};}};
   async function rpc(path:string,body?:unknown){return directory.fetch(new Request("https://members"+path,body===undefined?{}:{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}));}
   let sequence=0;
-  async function issue(_label="test"){
+  async function issue(){
     const n=++sequence,overview=await(await rpc("/overview")).json<any>(),username=`member_${n}`,password=`test-password-${n}`;
     const r=await rpc("/register",{inviteCode:overview.invite.code,username,password,requestId:`idempotent-test-${n}`});
     assert.equal(r.status,200);const value=await r.json<any>();return {...value.member,username,password};
@@ -58,7 +58,7 @@ async function harness(){
   return {env,events,actors,dstore,directory,rpc,issue,internal,member,http,get source(){return source;},set source(v){source=v;}};
 }
 test("registered username/password remains valid after the next invite rotates",()=>clock(async()=>{
-  const h=await harness(),a=await h.issue("甲"),b=await h.issue("乙");assert.notEqual(a.id,b.id);
+  const h=await harness(),a=await h.issue(),b=await h.issue();assert.notEqual(a.id,b.id);
   for(let i=0;i<2;i++){const r=await h.rpc("/login",{username:a.username,password:a.password,bucket:"a".repeat(64)});assert.equal(r.status,200);assert.equal((await r.json<any>()).id,a.id);}
   const listing=await(await h.rpc("/overview")).json<any>();assert.equal(listing.members.length,2);assert.equal(listing.current,undefined);
   assert.ok(listing.members.every((m:any)=>m.username));assert.ok(listing.members.find((m:any)=>m.id===a.id).activatedAt);

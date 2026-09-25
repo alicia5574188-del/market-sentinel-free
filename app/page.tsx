@@ -53,7 +53,7 @@ export default function Home() {
         if(active&&requestEpoch===epoch.current){runtimeReadFailures.current=0;hasRuntimeSnapshot.current=true;setRuntime(value);setError(null);
           if(auth?.authenticated&&!value.live)sessionChanged({...auth,authenticated:false});}
         return true;
-      }catch(failure){
+      }catch{
         if(active&&requestEpoch===epoch.current&&!document.hidden){
           runtimeReadFailures.current+=1;
           if(!hasRuntimeSnapshot.current||runtimeReadFailures.current>=3)

@@ -11,16 +11,9 @@ const bybitSurface=(symbol="BTCUSDT",bid=99.9,ask=100.1)=>({retCode:0,result:{li
   symbol:i===0?symbol:`X${i}USDT`,lastPrice:String(i===0?(bid+ask)/2:10+i),bid1Price:String(i===0?bid:9+i),
   ask1Price:String(i===0?ask:9.2+i),turnover24h:"1000000",price24hPcnt:"0.01"
 }))}});
-const binanceSurface=(symbol="BTCUSDT",bid=99.9,ask=100.1,time=1_000_000)=>Array.from({length:20},(_,i)=>({
-  symbol:i===0?symbol:`Y${i}USDT`,bidPrice:String(i===0?bid:19+i),askPrice:String(i===0?ask:19.2+i),time
-}));
 const okxSurface=(instId="BTC-USDT-SWAP",bid=99.9,ask=100.1,time=1_000_000)=>({code:"0",data:Array.from({length:20},(_,i)=>({
   instId:i===0?instId:`Z${i}-USDT-SWAP`,last:String(i===0?(bid+ask)/2:30+i),bidPx:String(i===0?bid:29+i),
   askPx:String(i===0?ask:29.2+i),volCcy24h:"1000",open24h:"99",ts:String(time)
-}))});
-const bitgetSurface=(symbol="BTCUSDT",bid=99.9,ask=100.1,time=1_000_000)=>({code:"00000",data:Array.from({length:20},(_,i)=>({
-  symbol:i===0?symbol:`B${i}USDT`,lastPr:String(i===0?(bid+ask)/2:40+i),bidPr:String(i===0?bid:39+i),
-  askPr:String(i===0?ask:39.2+i),quoteVolume:"2000000",change24h:"0.02",ts:String(time)
 }))});
 const kucoinSurface=(symbol="XBTUSDTM",bid=99.9,ask=100.1)=>({code:"200000",data:Array.from({length:20},(_,i)=>({
   symbol:i===0?symbol:`K${i}USDTM`,price:String(i===0?(bid+ask)/2:50+i),bestBidPrice:String(i===0?bid:49+i),

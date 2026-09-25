@@ -176,7 +176,7 @@ function broadTurnPaths(now:number,move=-.008){
   }));
 }
 test("market-turn detector is fully dormant in ordinary synchronized noise",()=>{
-  const positions=Array.from({length:4},(_,i)=>({status:"OPEN",side:"LONG" as const,plannedRisk:10}));
+  const positions=Array.from({length:4},()=>({status:"OPEN",side:"LONG" as const,plannedRisk:10}));
   assert.equal(assessMarketTurn({paths:broadTurnPaths(T+BAR_MS,-.001),positions,equity:1000,now:T+BAR_MS}),null);
 });
 test("market-turn detector requires material directional concentration",()=>{

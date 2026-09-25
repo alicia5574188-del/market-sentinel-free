@@ -163,6 +163,7 @@ export function regionLaunchProfitFloor(
   expectedMoveRate=0,
   _signal?:MultiTurnProfitSignal|null,
 ):MultiTurnProfitFloor|null{
+  void _signal;
   if(![favorable,riskRate,modeledCost,expectedMoveRate].every(Number.isFinite)||riskRate<=0||favorable<=0)return null;
   const reachedR=favorable/riskRate;
   // RegionLaunch v4 protects by realized price progress, not by a forecast.
