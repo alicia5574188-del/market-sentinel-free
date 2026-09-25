@@ -128,7 +128,7 @@ function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade
       <div className="fr-four"><Metric label="应跟随" value={num(mirror?.eligibleSourceCount,0)}/><Metric label="已复制" value={num(mirror?.eligibleCopiedCount,0)}/><Metric label="待确认" value={num(mirror?.pendingCount,0)}/><Metric label="最低量阻塞" value={num(mirror?.minimumSizeBlockedCount,0)}/></div>
       {mirror?.error&&<p className="fr-error">{mirror.error}</p>}
       {mirror?.rows.filter(r=>r.status!=="COPIED"&&r.status!=="EXCLUDED_BEFORE_ENABLE").map(r=><p className="fr-diagnostic-row" key={r.sourceId}><b>{r.symbol.replace("_"," / ")}</b><span>{r.reason??r.status}</span></p>)}
-      <details className="fr-details"><summary>复制规则与边界</summary><p className="fr-note">当前模拟账户。按权益比例复制，沿用源单杠杆、保护和退出依据。实际成交以Gate回报为准。</p><p className="fr-note">跟随起点 {time(mirror?.enabledAt)}。开启前旧单不补开；之后的新模拟单按固定账户比例复制。交易所最低张数、真实可用保证金、价格越过止损或不利入场偏差过大时会明确阻止，不会伪装成已复制。</p></details>
+      <details className="fr-details"><summary>复制规则与边界</summary><p className="fr-note">当前模拟账户。PAPER与LIVE共享同一个已持久化入场事件，LIVE在该事件提交后立即进入同轮执行核对；只有Gate账户、盘口、杠杆与下单回报本身会产生真实执行延迟。</p><p className="fr-note">跟随起点 {time(mirror?.enabledAt)}。开启前旧单不补开；新模拟单超过实时复制窗口也不迟到追单。极小账户若比例数量不足Gate最低张，只有最低一张的真实止损风险仍处于专用小账户风险边界内才补到最低张，杠杆保持源单不变；否则明确跳过。</p></details>
     </section>
     <section className="fr-section"><div className="fr-section-head"><div><small>Gate成交</small><h2>实盘累计成交额</h2></div><span>已确认成交</span></div>
       <div className="fr-four"><Metric label="系统标记成交" value={`${num(live?.turnover?.systemTagged)} U`}/><Metric label="系统已扣费用" value={`${num(live?.turnover?.systemTaggedFees)} U`}/><Metric label="全账户成交" value={`${num(live?.turnover?.total)} U`}/><Metric label="核对成交明细" value={num(live?.turnover?.fillCount,0)}/></div>
@@ -137,7 +137,7 @@ function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade
     </section>
     <section className="fr-section"><div className="fr-section-head"><div><small>诊断</small><h2>最近执行记录</h2></div><span>最近10条</span></div>
       {audits.length?<div className="fr-journal">{audits.slice(0,10).map(e=><article key={e.id}><time>{time(e.observedAt)}</time><div><b>{e.symbol?.replace("_"," / ")??"实盘控制"} · {e.stage}</b><p>{e.reason}</p></div></article>)}</div>:<p className="fr-note">暂无执行异常或保护事件。</p>}
-      {Object.values(live?.entrySkips??{}).map(e=>e&&<div key={e.planId} className="fr-error"><b>{e.symbol} · 未成交</b><p>{e.reason}</p>{e.sizing&&<p>比例目标 {contractText(e.sizing.targetContracts)} 张 / {num(e.sizing.targetNotional,4)} U；交易所最低 {contractText(e.sizing.minimumContracts)} 张 / {num(e.sizing.minimumNotional,4)} U。</p>}</div>)}
+      {Object.values(live?.entrySkips??{}).map(e=>e&&<div key={e.planId} className="fr-error"><b>{e.symbol} · 未成交</b><p>{e.reason}</p>{e.sizing&&<p>比例目标 {contractText(e.sizing.targetContracts)} 张 / {num(e.sizing.targetNotional,4)} U；交易所最低 {contractText(e.sizing.minimumContracts)} 张 / {num(e.sizing.minimumNotional,4)} U；严格比例至少需实盘权益约 {num(e.sizing.requiredLiveEquity,2)} U。</p>}</div>)}
     </section>
     <section className="fr-section"><div className="fr-section-head"><div><small>API 管理</small><h2>Gate API</h2></div><button type="button" className="fr-text-button" onClick={onRefresh}>刷新状态 ↻</button></div>
       <div className="fr-setting"><div><h3>API状态</h3><p>{credential?.keyHint??"密钥内容不会回显"}</p></div><b>{credential?credential.configured?"已保存":"未配置":"读取中"}</b></div>
