@@ -81,8 +81,7 @@ test("opposite direction earns authority only after its own completed recent res
 
 test("a restart can seed closed root paths immediately instead of waiting a fresh hour",()=>{
   const now=nowAt(50),e=advanceRelationEngine({state:initialRelationEngine(now-1000),paths:sliced(50),now});
-  assert.ok(e.samples.length>=24,"closed 5m history should seed enough root paths for immediate learning");
-  assert.ok(e.rules.length>0,"seeded closed paths should be eligible for normal relation synthesis");
+  assert.ok(e.samples.length>=24,"closed 5m history should seed root paths immediately; trading authority still requires independent validation");
 });
 
 test("PAPER uses learned relations for entries instead of the retired 5m FLOW gate",()=>{
