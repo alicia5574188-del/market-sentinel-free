@@ -71,6 +71,17 @@ export type GateLiveOrderSnapshot = {
   checkedAt: number;
 };
 export type GateLiveSnapshot = GateLiveCoreSnapshot & GateLiveOrderSnapshot;
+export type GateMarketEntryRecovery = {
+  order: GateLiveOrder | null;
+  position: GateLivePosition | null;
+  fill: GateConfirmedFill | null;
+  exposure: boolean;
+  cancelled: boolean;
+  fillPrice: number | null;
+  checkedAt: number;
+  evidence: Array<"ORDER"|"POSITION"|"FILL">;
+  errors: string[];
+};
 
 /** Gate classic futures `total` is wallet balance, not marked equity.
  * Never compare it directly with a PAPER balance including open PnL. Unified
@@ -248,6 +259,7 @@ export class GateLiveClient {
   readonly credentials: GateCredentials;
   requestCount = 0;
   private readRoutePreference=new Map<string,boolean>();
+  private leverageVerified=new Map<string,{leverage:number;at:number}>();
   readonly readTransport={version:"gate-private-dual-route-v2",hedges:0,recovered:0,timeouts:0,lastTimeoutPath:null as string|null,
     preferredAlternatePaths:0};
   constructor(credentials: GateCredentials) { this.credentials = credentials; }
@@ -376,29 +388,64 @@ export class GateLiveClient {
   }
 
   /** Confirm the requested leverage without ever replaying an ambiguous write.
-   * Most contracts already retain 10x, so the GET precheck removes a mutation
-   * from the hot entry path altogether. If the single POST times out, safe
-   * readback decides whether Gate actually applied it. */
+   * A ten-minute verified cache keeps leverage out of the hot path after the
+   * first confirmation. On a cold symbol, a safe GET can avoid the mutation;
+   * if the single POST times out, readback proves whether Gate applied it. */
   async ensureLeverage(symbol:string,leverage:number){
+    const cached=this.leverageVerified.get(symbol);
+    if(cached&&cached.leverage===leverage&&Date.now()-cached.at<=10*60_000)
+      return{verified:true,recovered:false,already:true,cached:true,actual:leverage};
     try{
       const current=await this.position(symbol),actual=Number(current.leverage);
-      if(Number.isFinite(actual)&&Math.abs(actual-leverage)<1e-9)
-        return{verified:true,recovered:false,already:true,actual};
+      if(Number.isFinite(actual)&&Math.abs(actual-leverage)<1e-9){
+        this.leverageVerified.set(symbol,{leverage,at:Date.now()});
+        return{verified:true,recovered:false,already:true,cached:false,actual};
+      }
     }catch{/* Precheck is only an optimization; the authoritative write below still surfaces real rejections. */}
     try{
       await this.setLeverage(symbol,leverage);
-      return{verified:true,recovered:false,already:false,actual:leverage};
+      this.leverageVerified.set(symbol,{leverage,at:Date.now()});
+      return{verified:true,recovered:false,already:false,cached:false,actual:leverage};
     }catch(error){
       if(!(error instanceof Error)||!/Gate POST 请求超时：\/futures\/usdt\/positions\/.+\/leverage/.test(error.message))throw error;
       const read=async()=>{
         const row=await this.position(symbol),actual=Number(row.leverage);
-        return Number.isFinite(actual)&&Math.abs(actual-leverage)<1e-9?actual:null;
+        if(Number.isFinite(actual)&&Math.abs(actual-leverage)<1e-9){
+          this.leverageVerified.set(symbol,{leverage,at:Date.now()});return actual;
+        }
+        return null;
       };
-      const first=await read();if(first!=null)return{verified:true,recovered:true,already:false,actual:first};
-      await new Promise(resolve=>setTimeout(resolve,350));
-      const second=await read();if(second!=null)return{verified:true,recovered:true,already:false,actual:second};
+      const first=await read();if(first!=null)return{verified:true,recovered:true,already:false,cached:false,actual:first};
+      await new Promise(resolve=>setTimeout(resolve,250));
+      const second=await read();if(second!=null)return{verified:true,recovered:true,already:false,cached:false,actual:second};
       throw new Error(`Gate 杠杆写入响应超时且安全回读未确认 ${symbol} 已为 ${leverage}×；本源单跳过，但不会锁住其他实盘机会`);
     }
+  }
+
+  /** A market write timeout is ambiguous, not a reason to wait blindly for one
+   * endpoint. Read three independent Gate views in parallel: order identity,
+   * current position and confirmed fills. No order mutation is replayed. */
+  async recoverMarketEntry(symbol:string,side:"LONG"|"SHORT",tag:string,orderId:string|null,submittedAt:number):Promise<GateMarketEntryRecovery>{
+    const now=Date.now(),from=Math.max(0,Math.floor((submittedAt-10_000)/1000)),to=Math.max(from,Math.floor(now/1000));
+    const [orderResult,positionResult,fillsResult]=await Promise.allSettled([
+      this.inspectEntry("MARKET",symbol,tag,orderId),
+      this.position(symbol),
+      this.confirmedFills(from,to,0,100),
+    ]);
+    const errors:string[]=[];
+    if(orderResult.status==="rejected")errors.push(orderResult.reason instanceof Error?orderResult.reason.message:String(orderResult.reason));
+    if(positionResult.status==="rejected")errors.push(positionResult.reason instanceof Error?positionResult.reason.message:String(positionResult.reason));
+    if(fillsResult.status==="rejected")errors.push(fillsResult.reason instanceof Error?fillsResult.reason.message:String(fillsResult.reason));
+    const order=orderResult.status==="fulfilled"?orderResult.value:null;
+    const position=positionResult.status==="fulfilled"&&Number(positionResult.value.size??0)!==0
+      &&Math.sign(Number(positionResult.value.size))===(side==="LONG"?1:-1)?positionResult.value:null;
+    const fills=fillsResult.status==="fulfilled"?fillsResult.value:[],fill=fills.find(row=>
+      (row.text??"")===tag||(orderId!=null&&String(row.order_id??"")===orderId))??null;
+    const disposition=order?liveEntryDisposition(order,"MARKET"):null,
+      exposure=!!position||!!fill||disposition==="FILLED",cancelled=disposition==="CANCELLED"&&!position&&!fill,
+      price=Number(fill?.price??order?.fill_price??position?.entry_price),evidence:Array<"ORDER"|"POSITION"|"FILL">=[];
+    if(order)evidence.push("ORDER");if(position)evidence.push("POSITION");if(fill)evidence.push("FILL");
+    return{order,position,fill,exposure,cancelled,fillPrice:Number.isFinite(price)&&price>0?price:null,checkedAt:Date.now(),evidence,errors};
   }
 
   /** Read-only, fixed time-window pagination; individual fills, not orders. */
