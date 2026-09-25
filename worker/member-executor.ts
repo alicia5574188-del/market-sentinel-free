@@ -292,6 +292,12 @@ export function memberExecutionClass(Base:typeof MarketStream) {
       const url=new URL(request.url),path=url.pathname;
       try {
         if(this.bootError)return json({error:this.bootError},503);
+        if(path==="/source-wake"&&request.method==="POST") {
+          if(!this.env.OWNER_ACCESS_TOKEN||request.headers.get("x-member-wake-token")!==this.env.OWNER_ACCESS_TOKEN)
+            return json({error:"内部唤醒未授权"},403);
+          if(this.deleted||this.deleting||!this.identity||!this.liveNeedsSync())return json({ok:true,woken:false});
+          await this.tick();await this.arm();return json({ok:true,woken:true,at:Date.now()});
+        }
         const id=request.headers.get("x-verified-member"),createdAt=Number(request.headers.get("x-member-created-at"));
         const admin=request.headers.get("x-member-admin")==="owner";
         if(this.deleted) {
