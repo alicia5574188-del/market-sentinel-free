@@ -962,17 +962,22 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private forwardHealth() {
-    const s=this.forwardState,now=Date.now();
-    const eligible=s?.opportunities.filter(row=>row.eligible&&row.expiresAt>now)??[];
+    const s=this.forwardState,now=Date.now(),opportunities=s?.opportunities??[];
+    const eligible=opportunities.filter(row=>row.eligible&&row.expiresAt>now);
+    const blocked=opportunities.filter(row=>!row.eligible&&row.expiresAt>now).slice(0,8).map(row=>({
+      symbol:row.symbol,side:row.side,mode:row.mode,reserve:row.reserve===true,score:Math.round(row.score),
+      relationStatus:row.relationStatus??null,relationHealth:row.relationHealth??null,reason:row.reason,
+    }));
     return {version:FORWARD_VERSION,engineVersion:ADAPTIVE_ENGINE_VERSION,policyVersion:s?.policyVersion??null,
       strategyAuthorityVersion:s?.strategyAuthorityVersion??null,executionVersion:s?.executionVersion??null,
       regionVersion:s?.regionVersion??null,regionLaunchVersion:s?.regionLaunchVersion??null,liveEligible:false,
       startedAt:s?.startedAt??null,initialEquity:s?.initialEquity??null,balance:s?.balance??null,lastCycleAt:s?.lastCycleAt??null,
       resolved:s?.resolved??0,openCount:s?.positions.length??0,targetPositionCount:null,positionLimit:null,
       executionBboCapacity:FORWARD_EXECUTION_BBO_CAP,minuteConfirmationCapacity:FORWARD_MINUTE_CONFIRMATION_CAP,
-      participationCandidateCount:s?.opportunities.length??0,participationEligibleCount:eligible.length,
+      participationCandidateCount:opportunities.length,participationEligibleCount:eligible.length,
       premiumOpportunityCount:eligible.filter(row=>row.premium).length,regionCount:Object.keys(s?.regions??{}).length,
-      storage:{persistedAt:s?.storage.persistedAt??0,error:this.forwardError}};
+      relationDiagnostics:s?.relationEngine?.diagnostics??null,entryDiagnostics:s?.entryDiagnostics??null,
+      candidateDiagnostics:blocked,storage:{persistedAt:s?.storage.persistedAt??0,error:this.forwardError}};
   }
 
   protected liveMirrorView() {
