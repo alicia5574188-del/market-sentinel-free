@@ -69,7 +69,7 @@ export type EntryContext={
   remainingSpaceRate:number;pullbackRiskRate:number;edgeRatio:number;expectedHoldMinutes:number;marketFit:number;
   regionId:string|null;regionLower?:number;regionUpper?:number;regionCenter?:number;
   relationRuleId?:string;relationStatus?:RelationStatus;relationHorizon?:15|30|45|60;relationHealth?:number;portfolioRiskCharge?:number;
-  relationFamilyId?:string;relationEvidenceAt?:number;relationLivePathScore?:number;exitPlan?:RelationExitProfile;
+  relationFamilyId?:string;relationEvidenceAt?:number;relationLivePathScore?:number;
 };
 export type Trade={
   id:string;symbol:string;side:"LONG"|"SHORT";rule:Rule;openedAt:number;closedAt:number|null;status:"OPEN"|"CLOSED";
@@ -157,7 +157,6 @@ function normalizeTrade(raw:Trade,now:number):Trade{
   t.exitReason=t.exitReason??null;t.relationFailureBars=Math.max(0,Math.floor(safe(t.relationFailureBars)));t.lastRelationBar=safe(t.lastRelationBar,t.openedAt);
   t.execution="REAL_QUOTE_PAPER_MODEL";t.liveEligible=false;t.firstProfitAt=t.firstProfitAt??null;t.holdScore=safe(t.holdScore,50);
   t.profitFloorRate=Math.max(0,safe(t.profitFloorRate));t.exitPlan=t.exitPlan?.version==="sample-exit-plan-v1"?t.exitPlan:undefined;
-  if(t.entryContext&&t.exitPlan)t.entryContext.exitPlan=structuredClone(t.exitPlan);
   t.expectedHoldMinutes=Math.max(5,safe(t.exitPlan?.bestHoldMinutes,t.expectedHoldMinutes??t.entryContext?.expectedHoldMinutes??30));
   if(t.entryContext&&!(safe(t.entryContext.portfolioRiskCharge)>0)){
     const sizingEquity=safe(t.forecast?.sizingEquity),floor=sizingEquity*(t.entryContext.reserve===true?.003:.006);
@@ -530,7 +529,7 @@ function openTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:nu
       remainingSpaceRate:o.netRemainingSpaceRate,pullbackRiskRate:o.pullbackRiskRate,edgeRatio:o.edgeRatio,expectedHoldMinutes:exitPlan.bestHoldMinutes,
       marketFit:o.marketFit,regionId:o.regionId,relationRuleId:o.relationRuleId,relationStatus:o.relationStatus,relationHorizon:o.relationHorizon,
       relationHealth:o.relationHealth,portfolioRiskCharge:riskBudget,relationFamilyId:familyId,relationEvidenceAt:authorityRule.lastQualifiedAt,
-      relationLivePathScore:authorityRule.livePathScore,exitPlan:structuredClone(exitPlan),
+      relationLivePathScore:authorityRule.livePathScore,
       ...(region?{regionLower:region.lower*scale,regionUpper:region.upper*scale,regionCenter:region.center*scale}:{})},
     forecast:{remainingNetRate:o.netRemainingSpaceRate,quality:o.score/100,sizingEquity:equity}};
   s.positions.push(t);s.balance-=entryFee;s.fees+=entryFee;s.turnover+=notional;s.lastEntryAt[o.symbol]=now;s.lastSide[o.symbol]=side;
