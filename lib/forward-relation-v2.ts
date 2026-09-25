@@ -35,6 +35,7 @@ export type RelationRule={id:string;signature:string;scope:RelationScope;horizon
 export type RelationCandidate={symbol:string;ruleId:string;side:RelationSide;horizon:RelationHorizon;status:RelationStatus;health:number;
   score:number;netRate:number;grossRate:number;stopRate:number;environmentFit:number;livePathScore:number;reserve:boolean;
   exitProfile:RelationExitProfile;reason:string};
+type CandidateEvaluation={h:RelationHorizon;side:RelationSide;net:number;se:number;selected:RelationMeasurement[];groups:number};
 export type RelationEngineState={version:typeof FORWARD_RELATION_V2_VERSION;startedAt:number;updatedAt:number;observations:number;measured:number;invalidated:number;
   frames:Record<string,RelationFrame>;pending:Record<string,RelationPending>;samples:RelationMeasurement[];rules:RelationRule[];lastBars:Record<string,number>;
   diagnostics:{markets:number;matureSamples:number;effectiveGroups:number;rules:number;active:number;pressured:number;degraded:number;recovering:number;
@@ -134,7 +135,7 @@ function livePathScore(state:RelationEngineState,paths:Record<string,RelationCan
   return mean([...byAt.entries()].sort((a,b)=>a[0]-b[0]).slice(-3).map(([,v])=>mean(v)));
 }
 function baseCandidate(rows:RelationMeasurement[],conditions:RelationCondition[]){
-  const matched=rows.filter(r=>matches(r.x,conditions)).sort((a,b)=>a.at-b.at);if(matched.length<24)return null;const choices:any[]=[];
+  const matched=rows.filter(r=>matches(r.x,conditions)).sort((a,b)=>a.at-b.at);if(matched.length<24)return null;const choices:CandidateEvaluation[]=[];
   for(const h of RELATION_HORIZONS){const keys=[...new Set(matched.filter(r=>Number.isFinite(cpValue(r,h))).map(r=>Math.floor(r.at/(h*60_000))))].sort((a,b)=>a-b);
     if(keys.length<5)continue;const split=Math.max(3,Math.floor(keys.length*.6)),trainKeys=new Set(keys.slice(0,split)),checkKeys=new Set(keys.slice(split));
     if(checkKeys.size<2)continue;const train=matched.filter(r=>trainKeys.has(Math.floor(r.at/(h*60_000)))),check=matched.filter(r=>checkKeys.has(Math.floor(r.at/(h*60_000)))),
@@ -145,7 +146,7 @@ function baseCandidate(rows:RelationMeasurement[],conditions:RelationCondition[]
   return choices.sort((a,b)=>b.net-a.net)[0]??null;
 }
 function recentCandidate(rows:RelationMeasurement[],conditions:RelationCondition[]){
-  const matched=rows.filter(r=>matches(r.x,conditions)),choices:any[]=[];for(const h of RELATION_HORIZONS)for(const side of["LONG","SHORT"] as const){
+  const matched=rows.filter(r=>matches(r.x,conditions)),choices:CandidateEvaluation[]=[];for(const h of RELATION_HORIZONS)for(const side of["LONG","SHORT"] as const){
     const g=groupRows(matched,h,side).slice(-3);if(g.length<3||g.some(x=>x.symbols.length<3))continue;const v=g.map(x=>x.value),aligned=v.filter(x=>x>0).length,
       se=standardError(v),net=mean(v)-COST-.65*se;if(aligned>=2&&finite(se)&&net>0)choices.push({h,side,net,se,selected:matched.filter(r=>Number.isFinite(cpValue(r,h))).slice(-180),groups:3});}
   return choices.sort((a,b)=>b.net-a.net)[0]??null;
@@ -189,7 +190,7 @@ function ruleFrom(input:{state:RelationEngineState;paths:Record<string,RelationC
 }
 function synthesize(state:RelationEngineState,paths:Record<string,RelationCandle[]>,now:number,currentEnv:RelationEnvironment){
   const rows=state.samples.filter(r=>now-r.at<=24*60*60_000),made:RelationRule[]=[];if(rows.length<24){state.rules=[];return;}
-  const discovery=rows.slice(0,Math.max(1,Math.floor(rows.length*.6))),stumps:{conditions:RelationCondition[];base:any}[]=[];
+  const discovery=rows.slice(0,Math.max(1,Math.floor(rows.length*.6))),stumps:{conditions:RelationCondition[];base:CandidateEvaluation}[]=[];
   for(let f=0;f<RELATION_FEATURES.length;f++)for(const p of[1/3,2/3])for(const op of["GE","LE"] as const){const threshold=Math.round(quantile(discovery.map(r=>r.x[f]??0),p)*100)/100,
     conditions=[{feature:f,op,threshold}],base=baseCandidate(rows,conditions);if(base)stumps.push({conditions,base});}
   stumps.sort((a,b)=>b.base.net-a.base.net);const pool=[...stumps];for(let i=0;i<Math.min(4,stumps.length);i++)for(let j=i+1;j<Math.min(4,stumps.length);j++){
@@ -208,26 +209,37 @@ function synthesize(state:RelationEngineState,paths:Record<string,RelationCandle
     next.push({...old,status:"DEGRADED",health:Math.min(.25,old.health),updatedAt:now,reason:"旧关系未再通过新路径样本验证；仅保留低风险探测，不推导反向"});}
   state.rules=next.sort((a,b)=>b.health*b.longNet-a.health*a.longNet).slice(0,RULE_LIMIT);
 }
-function migrateMeasurement(raw:any):RelationMeasurement|null{
-  if(!raw||typeof raw!=="object"||typeof raw.symbol!=="string"||!finite(Number(raw.at))||!Array.isArray(raw.x))return null;
-  const cp:RelationMeasurement["cp"]={};for(const m of REACTION_CHECKPOINTS){const v=Number(raw.cp?.[m]);if(finite(v))cp[m]=v;}
+const objectRecord=(value:unknown):Record<string,unknown>|null=>value&&typeof value==="object"?value as Record<string,unknown>:null;
+const childNumber=(value:unknown,key:string|number)=>{const row=objectRecord(value);return Number(row?.[String(key)]);};
+function migrateMeasurement(value:unknown):RelationMeasurement|null{
+  const raw=objectRecord(value);if(!raw||typeof raw.symbol!=="string"||!finite(Number(raw.at))||!Array.isArray(raw.x))return null;
+  const cp:RelationMeasurement["cp"]={};for(const m of REACTION_CHECKPOINTS){const v=childNumber(raw.cp,m);if(finite(v))cp[m]=v;}
   const oldH=Number(raw.horizon),response=Number(raw.response);if(finite(response)&&RELATION_HORIZONS.includes(oldH as RelationHorizon))cp[oldH as RelationHorizon]=response;
   const upAt:RelationMeasurement["upAt"]={},downAt:RelationMeasurement["downAt"]={};if(REACTION_CHECKPOINTS.includes(oldH as RelationCheckpoint)){
     const u=Number(raw.up),d=Number(raw.down);if(finite(u))upAt[oldH as RelationCheckpoint]=Math.max(0,u);if(finite(d))downAt[oldH as RelationCheckpoint]=Math.max(0,d);}
-  for(const h of REACTION_CHECKPOINTS){const u=Number(raw.upAt?.[h]),d=Number(raw.downAt?.[h]);if(finite(u))upAt[h]=Math.max(0,u);if(finite(d))downAt[h]=Math.max(0,d);}
-  if(!Object.keys(cp).length)return null;return{symbol:raw.symbol,at:Number(raw.at),response:finite(Number(cp[60]))?Number(cp[60]):response||0,up:Number(upAt[60]??raw.up??0),
-    down:Number(downAt[60]??raw.down??0),x:raw.x.map(Number).slice(0,8),env:{breadth:Number(raw.env?.breadth??.5),dispersion:Number(raw.env?.dispersion??0),expansion:Number(raw.env?.expansion??0)},
+  for(const h of REACTION_CHECKPOINTS){const u=childNumber(raw.upAt,h),d=childNumber(raw.downAt,h);if(finite(u))upAt[h]=Math.max(0,u);if(finite(d))downAt[h]=Math.max(0,d);}
+  if(!Object.keys(cp).length)return null;const env=objectRecord(raw.env);return{symbol:raw.symbol,at:Number(raw.at),response:finite(Number(cp[60]))?Number(cp[60]):response||0,
+    up:Number(upAt[60]??raw.up??0),down:Number(downAt[60]??raw.down??0),x:raw.x.map(Number).slice(0,8),
+    env:{breadth:Number(env?.breadth??.5),dispersion:Number(env?.dispersion??0),expansion:Number(env?.expansion??0)},
     cp,upAt,downAt,relativeAt:{},pathEfficiency:Number(raw.pathEfficiency??0),reversals:Number(raw.reversals??0)};
 }
+function currentRule(value:unknown):value is RelationRule{
+  const raw=objectRecord(value),exit=objectRecord(raw?.exitProfile);return !!raw&&typeof raw.id==="string"
+    &&(raw.side==="LONG"||raw.side==="SHORT")&&RELATION_HORIZONS.includes(Number(raw.horizon) as RelationHorizon)
+    &&exit?.version==="sample-exit-plan-v1";
+}
 export function normalizeRelationEngine(value:unknown,now:number):RelationEngineState{
-  if(!value||typeof value!=="object")return initialRelationEngine(now);const raw=value as any,out=initialRelationEngine(Number(raw.startedAt)>0?Number(raw.startedAt):now);
+  const raw=objectRecord(value);if(!raw)return initialRelationEngine(now);const out=initialRelationEngine(Number(raw.startedAt)>0?Number(raw.startedAt):now);
   out.updatedAt=Number(raw.updatedAt)||0;out.observations=Math.max(0,Number(raw.observations)||0);out.measured=Math.max(0,Number(raw.measured)||0);
-  out.invalidated=Math.max(0,Number(raw.invalidated)||0);out.lastBars=raw.lastBars&&typeof raw.lastBars==="object"?{...raw.lastBars}:{};
-  out.samples=Array.isArray(raw.samples)?raw.samples.map(migrateMeasurement).filter((x:RelationMeasurement|null):x is RelationMeasurement=>!!x):[];refreshRelative(out.samples);out.samples=thinSamples(out.samples,now);
-  if(raw.version===FORWARD_RELATION_V2_VERSION&&Array.isArray(raw.rules))out.rules=structuredClone(raw.rules).filter((r:any)=>r&&r.exitProfile?.version==="sample-exit-plan-v1");
-  if(raw.version===FORWARD_RELATION_V2_VERSION&&raw.pending&&typeof raw.pending==="object"){for(const [key,p] of Object.entries(raw.pending as Record<string,any>)){
-    if(p&&finite(Number(p.at))&&finite(Number(p.dueAt))&&Number(p.dueAt)-Number(p.at)===ROOT_HORIZON_MS)out.pending[key]={symbol:String(p.symbol),at:Number(p.at),price:Number(p.price),x:Array.isArray(p.x)?p.x.map(Number).slice(0,8):[],
-      env:{breadth:Number(p.env?.breadth??.5),dispersion:Number(p.env?.dispersion??0),expansion:Number(p.env?.expansion??0)},dueAt:Number(p.dueAt)};}}
+  out.invalidated=Math.max(0,Number(raw.invalidated)||0);
+  const lastBars=objectRecord(raw.lastBars);out.lastBars=lastBars?Object.fromEntries(Object.entries(lastBars).map(([k,v])=>[k,Number(v)||0])):{};
+  out.samples=Array.isArray(raw.samples)?raw.samples.map(migrateMeasurement).filter((x:RelationMeasurement|null):x is RelationMeasurement=>!!x):[];
+  refreshRelative(out.samples);out.samples=thinSamples(out.samples,now);
+  if(raw.version===FORWARD_RELATION_V2_VERSION&&Array.isArray(raw.rules))out.rules=structuredClone(raw.rules).filter(currentRule);
+  const pending=objectRecord(raw.pending);if(raw.version===FORWARD_RELATION_V2_VERSION&&pending){for(const [key,value] of Object.entries(pending)){
+    const p=objectRecord(value);if(!p)continue;const at=Number(p.at),dueAt=Number(p.dueAt),env=objectRecord(p.env);
+    if(finite(at)&&finite(dueAt)&&dueAt-at===ROOT_HORIZON_MS)out.pending[key]={symbol:String(p.symbol),at,price:Number(p.price),
+      x:Array.isArray(p.x)?p.x.map(Number).slice(0,8):[],env:{breadth:Number(env?.breadth??.5),dispersion:Number(env?.dispersion??0),expansion:Number(env?.expansion??0)},dueAt};}}
   return out;
 }
 function seedClosedHistory(state:RelationEngineState,paths:Record<string,RelationCandle[]>,now:number){
