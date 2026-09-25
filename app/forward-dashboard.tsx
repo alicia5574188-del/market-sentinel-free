@@ -121,10 +121,10 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
         <div className="fr-font-options">{[70,80,90,100,110].map(value=><button key={value} className={fontScale===value?"selected":""} onClick={()=>{setFontScale(value);try{localStorage.setItem("sentinel-ui-font-scale-v1",String(value));}catch{}}}>{value}%</button>)}</div></section>
       <section className="fr-section"><div className="fr-section-head"><h2>当前系统边界</h2><span>forward-path-relation-v3</span></div>
         <Setting title="学习周期" value="15m / 60m / 180m" text="每个周期只使用已经真实成熟的市场反应形成关系；不根据固定指标直接预测未来方向。"/>
-        <Setting title="切换检测" value="5/10/15/30/60/180m" text="路径检查点只负责尽早发现旧关系正在失效；旧方向失效绝不自动等于反方向成立。"/>
+        <Setting title="路径检查" value="5/10/15/20/30/45/60m" text="检查点持续核对真实走势是否仍像成功样本；旧方向失效绝不自动等于反方向成立。"/>
         <Setting title="组合" value="无席位数量上限" text="持仓数量由10%组合计划风险、6.5%同向风险、75%保证金和单币一仓共同决定；ACTIVE关系正常竞争风险。"/>
-        <Setting title="市场变化" value="长期资格 + 近期交易权" text="长期样本保留有效关系，近期成熟样本和正在发生的真实路径决定它现在还能用多大风险。"/>
-        <Setting title="风险" value="10%组合 / 6.5%同向" text={data?.boundaries.risk??"读取中"}/>
+        <Setting title="市场变化" value="时间组 + 环境适配" text="样本按时间组和市场环境验证，近期真实路径决定旧关系是否继续有交易权，避免同一波行情重复投票。"/>
+        <Setting title="退出" value="每单冻结样本计划" text="正反馈期限、正常MAE、最佳/最大持仓、剩余优势和利润保留率在开仓时冻结；旧仓继续原生命周期。"/><Setting title="风险" value="10%组合 / 6.5%同向" text={data?.boundaries.risk??"读取中"}/>
         <Setting title="实盘" value="同一持久化事件" text="模拟事件提交成功后立即唤醒event-driven LIVE；过期事件不补开，Gate是成交与账户唯一真相。"/>
         <Setting title="账户连续性" value="原地升级" text="策略版本变化不自动重置模拟账户、不改startedAt、不清历史；只有所有者重置按钮可以重置。"/>
       </section></>}
