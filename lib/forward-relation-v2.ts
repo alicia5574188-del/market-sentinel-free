@@ -40,7 +40,7 @@ export type RelationEngineState={version:typeof FORWARD_RELATION_V2_VERSION;star
   diagnostics:{markets:number;matureSamples:number;effectiveGroups:number;rules:number;active:number;pressured:number;degraded:number;recovering:number;
     liveAnomalies:number;qualified15:number;qualified30:number;qualified45:number;qualified60:number;warmup:string}};
 
-const BAR_MS=300_000,DAY=86_400_000,ROOT_HORIZON_MS=60*60_000,RULE_LIMIT=18,COST=.0019;
+const BAR_MS=300_000,ROOT_HORIZON_MS=60*60_000,RULE_LIMIT=18,COST=.0019;
 const clip=(v:number,a=0,b=1)=>Math.max(a,Math.min(b,v));
 const mean=(v:number[])=>v.length?v.reduce((a,b)=>a+b,0)/v.length:0;
 const median=(v:number[])=>{const a=v.filter(Number.isFinite).sort((x,y)=>x-y);return a.length?(a.length%2?a[(a.length-1)/2]!:(a[a.length/2-1]!+a[a.length/2]!)/2):0;};
@@ -94,7 +94,7 @@ function measurement(route:RelationCandle[],p:RelationPending):RelationMeasureme
     const minute=(i+1)*5;if(REACTION_CHECKPOINTS.includes(minute as RelationCheckpoint)){const checkpoint=minute as RelationCheckpoint,prefix=route.slice(0,i+1);
       cp[checkpoint]=ret;upAt[checkpoint]=Math.max(0,...prefix.map(r=>r.high/p.price-1));
       downAt[checkpoint]=Math.max(0,...prefix.map(r=>1-r.low/p.price));}}
-  const response=Number(cp[60]??0),last=route.at(-1)!;return{symbol:p.symbol,at:p.at,response,up:Number(upAt[60]??0),down:Number(downAt[60]??0),
+  const response=Number(cp[60]??0);return{symbol:p.symbol,at:p.at,response,up:Number(upAt[60]??0),down:Number(downAt[60]??0),
     x:[...p.x],env:{...p.env},cp,upAt,downAt,relativeAt:{},pathEfficiency:Math.abs(response)/Math.max(path,1e-9),reversals};
 }
 function refreshRelative(rows:RelationMeasurement[]){
@@ -152,15 +152,16 @@ function recentCandidate(rows:RelationMeasurement[],conditions:RelationCondition
 }
 function exitProfile(selected:RelationMeasurement[],side:RelationSide,best:RelationHorizon):RelationExitProfile{
   const d=sign(side),usable=selected.filter(r=>Number.isFinite(cpValue(r,best))),winners=usable.filter(r=>directional(r,best,side)>COST),base=winners.length>=8?winners:usable;
-  const first=base.map(r=>REACTION_CHECKPOINTS.find(m=>m<=best&&d*Number(r.cp[m]??-Infinity)>COST*.35)??best),
+  const first=base.map(r=>REACTION_CHECKPOINTS.find(m=>m<=best&&d*Number(r.cp[m]??-Infinity)>COST*.60)??best),
     adverse=base.map(r=>adverseAt(r,best,side)),favorable=base.map(r=>favorableAt(r,best,side)).filter(v=>v>0),
     retention=base.map(r=>{const f=favorableAt(r,best,side);return f>0?clip(Math.max(0,directional(r,best,side))/f,0,1):0;});
   const path:RelationExitProfile["path"]={};for(const cp of REACTION_CHECKPOINTS){if(cp>best)continue;const present=base.filter(r=>Number.isFinite(Number(r.cp[cp]??NaN)));if(!present.length)continue;
     const expected=median(present.map(r=>d*Number(r.cp[cp]!))),adv=quantile(present.map(r=>adverseAt(r,cp,side)).filter(Number.isFinite),.8),
       remaining=median(present.map(r=>d*(cpValue(r,best)-Number(r.cp[cp]!))));
     path[cp]={expectedRate:expected,adverseRate:Math.max(.0015,adv||quantile(adverse,.8)),remainingEdgeRate:remaining};}
-  const bestNet=mean(usable.map(r=>directional(r,best,side)))-COST;let maxHold=60;for(const h of RELATION_HORIZONS){if(h<=best)continue;
-    const later=usable.map(r=>directional(r,h,side)).filter(Number.isFinite);if(later.length&&mean(later)-COST<Math.max(0,bestNet*.45)){maxHold=h;break;}}
+  const bestNet=mean(usable.map(r=>directional(r,best,side)))-COST;let maxHold:RelationHorizon=best;for(const h of RELATION_HORIZONS){if(h<=best)continue;
+    const later=usable.map(r=>directional(r,h,side)).filter(Number.isFinite),minimum=Math.max(8,Math.ceil(usable.length*.35));if(later.length<minimum)break;
+    if(mean(later)-COST>=Math.max(0,bestNet*.45))maxHold=h;else break;}
   const target=Math.max(.003,quantile(favorable,.60),median(usable.map(r=>Math.max(0,directional(r,best,side))))+COST);
   return{version:"sample-exit-plan-v1",bestHoldMinutes:best,feedbackDeadlineMinutes:clip(quantile(first,.80),5,Math.min(30,best)),
     maxHoldMinutes:Math.max(best,maxHold),normalAdverseRate:clip(quantile(adverse,.80)*1.10,.003,.03),targetRate:target,
@@ -187,7 +188,7 @@ function ruleFrom(input:{state:RelationEngineState;paths:Record<string,RelationC
     updatedAt:now,lastQualifiedAt:now,symbols,reason} satisfies RelationRule;
 }
 function synthesize(state:RelationEngineState,paths:Record<string,RelationCandle[]>,now:number,currentEnv:RelationEnvironment){
-  const rows=state.samples.filter(r=>now-r.at<=48*60*60_000),made:RelationRule[]=[];if(rows.length<24){state.rules=[];return;}
+  const rows=state.samples.filter(r=>now-r.at<=24*60*60_000),made:RelationRule[]=[];if(rows.length<24){state.rules=[];return;}
   const discovery=rows.slice(0,Math.max(1,Math.floor(rows.length*.6))),stumps:{conditions:RelationCondition[];base:any}[]=[];
   for(let f=0;f<RELATION_FEATURES.length;f++)for(const p of[1/3,2/3])for(const op of["GE","LE"] as const){const threshold=Math.round(quantile(discovery.map(r=>r.x[f]??0),p)*100)/100,
     conditions=[{feature:f,op,threshold}],base=baseCandidate(rows,conditions);if(base)stumps.push({conditions,base});}
