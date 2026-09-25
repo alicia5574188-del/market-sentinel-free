@@ -2650,19 +2650,61 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           };
           if(!submissionStillAllowed())throw new GateEntryCancelledError();
           entry.exchangeOrderId = await client.createEntry(intent,submissionStillAllowed);
-          entry.status = "OPEN";
-          const filled=await client.inspectEntry("MARKET",symbol,entry.tag,entry.exchangeOrderId);
-          const fillPrice=Number(filled?.fill_price);
+          entry.status="OPEN";entry.lastError=null;entry.missingSince=null;
+          // ACK gives us the exchange identity before clearing/fill details.
+          // Persist that identity immediately. A process restart or a slow GET
+          // can now recover by immutable order ID instead of falling back to the
+          // 65-second custom-tag ambiguity window.
+          await this.queueLiveBinding(entry);
+          await this.saveCheckpoint(Date.now(),true);
+          let filled:GateLiveOrder|null=null;
+          try {
+            filled=await client.inspectEntry("MARKET",symbol,entry.tag,entry.exchangeOrderId);
+          } catch(error) {
+            const reason=`Gate 已确认订单ID ${entry.exchangeOrderId}；成交状态核对暂时失败：${safeError(error)}`;
+            entry.status="ERROR";entry.missingSince=Date.now();entry.lastError=reason;recoveringSubmission=entry;
+            this.liveSourcePending=true;this.liveFastSourcePending=false;
+            this.recordLiveAudit({observedAt:Date.now(),symbol,planId:plan.id,stage:"ENTRY_SUBMIT",level:"RECOVERING",
+              reason:`${reason}；订单身份已持久化，只用读取继续核对，不重复提交`,error});
+            await this.queueLiveBinding(entry);
+            await this.saveCheckpoint(Date.now(),true);
+            continue;
+          }
+          if(!filled){
+            const reason=`Gate 已确认订单ID ${entry.exchangeOrderId}；订单/持仓尚未在读取端可见，继续按真实订单ID核对`;
+            entry.status="ERROR";entry.missingSince=Date.now();entry.lastError=reason;recoveringSubmission=entry;
+            this.liveSourcePending=true;this.liveFastSourcePending=false;
+            this.recordLiveAudit({observedAt:Date.now(),symbol,planId:plan.id,stage:"ENTRY_SUBMIT",level:"RECOVERING",reason});
+            await this.saveCheckpoint(Date.now(),true);
+            continue;
+          }
+          const disposition=liveEntryDisposition(filled,"MARKET"),fillPrice=Number(filled.fill_price);
           if(entry.parity&&Number.isFinite(fillPrice)&&fillPrice>0){
             const actualDrift=liveEntryDriftGuard(source,fillPrice);
             Object.assign(entry.parity,{exchangeEntryPrice:fillPrice,exchangeEntryAt:Date.now(),
               exchangeEntryDriftRate:actualDrift.adverse});
           }
-          if(filled&&liveEntryDisposition(filled,"MARKET")==="CANCELLED"){
+          if(disposition==="CANCELLED"){
             entry.status="CANCELLED";entry.submissionResolved=true;entry.lastError="Gate IOC零成交；未完成复制，不冒充成功";
             this.runtime.live.entrySkips[symbol]={planId:entry.planId,symbol,code:"ENTRY_REJECTED",reason:entry.lastError,observedAt:Date.now()};
+            await this.queueLiveBinding(entry);
             await this.saveCheckpoint(Date.now(),true);continue;
           }
+          if(disposition==="ERROR"){
+            entry.status="CANCELLED";entry.submissionResolved=true;
+            entry.lastError=`Gate 订单 ${entry.exchangeOrderId} 执行失败：${filled.finish_as??filled.status??"unknown"}`;
+            this.runtime.live.entrySkips[symbol]={planId:entry.planId,symbol,code:"ENTRY_REJECTED",reason:entry.lastError,observedAt:Date.now()};
+            this.recordLiveAudit({observedAt:Date.now(),symbol,planId:plan.id,stage:"ENTRY_SUBMIT",level:"SKIPPED",reason:entry.lastError});
+            await this.saveCheckpoint(Date.now(),true);continue;
+          }
+          if(disposition==="OPEN"){
+            entry.status="OPEN";entry.missingSince=Date.now();
+            entry.lastError=`Gate 已确认订单ID ${entry.exchangeOrderId}；IOC成交结果尚未完成，继续按ID核对`;
+            recoveringSubmission=entry;this.liveSourcePending=true;this.liveFastSourcePending=false;
+            await this.saveCheckpoint(Date.now(),true);continue;
+          }
+          entry.status="FILLED";entry.submissionResolved=true;entry.missingSince=null;entry.lastError=null;
+          await this.queueLiveBinding(entry);
           await this.saveCheckpoint(Date.now(),true);
           await this.createImmediateLiveStop(client, entry);
           if (!entry.stopOrderId) {
