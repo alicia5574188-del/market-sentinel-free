@@ -378,48 +378,71 @@ function closeTrade(s:ForwardState,t:Trade,price:number,now:number,reason:string
   s.resolved++;if(net>0)s.wins++;s.turnover+=t.notional;t.lastQuoteAt=now;t.lastPrice=price;s.lastExitAt[t.symbol]=now;
   s.history.unshift(t);s.history=s.history.slice(0,HISTORY_LIMIT);event(s,now,"EXIT",t.id,`${t.symbol} ${reason} ${net>=0?"+":""}${net.toFixed(2)}U`);
 }
-function protectionFloor(t:Trade){
+function legacyProtectionFloor(t:Trade){
   const stopRate=Math.abs(t.entryPrice-(t.entryContext?.side==="SHORT"?Math.max(t.stopPrice,t.entryPrice):Math.min(t.stopPrice,t.entryPrice)))/t.entryPrice;
   const original=Math.max(.003,t.entryContext?.pullbackRiskRate??stopRate),r=t.favorable/original;
-  const retention=r>=4?.75:r>=2?.80:r>=1?.72:r>=.5?.50:0;
-  return t.favorable*retention;
+  const retention=r>=4?.75:r>=2?.80:r>=1?.72:r>=.5?.50:0;return t.favorable*retention;
+}
+function planCheckpoint(plan:RelationExitProfile,ageMin:number){
+  const keys=Object.keys(plan.path).map(Number).filter(n=>Number.isFinite(n)&&n<=ageMin).sort((a,b)=>a-b);
+  const minute=keys.at(-1);return minute==null?null:{minute,point:plan.path[minute as keyof typeof plan.path]!};
+}
+function advanceProfitFloor(s:ForwardState,t:Trade,relation:RelationEngineState["rules"][number]|undefined,now:number){
+  const plan=t.exitPlan;if(!plan)return legacyProtectionFloor(t);if(t.favorable<plan.protectionActivationRate)return 0;
+  const tighten=relation?.status==="DEGRADED"?.10:relation?.status==="PRESSURED"?.05:relation?.status==="RECOVERING"?.02:0;
+  return t.favorable*clip(plan.retentionRate+tighten,.55,.94);
 }
 function markAndManage(s:ForwardState,quotes:Record<string,Quote>,now:number){
   const candidates=new Map(s.opportunities.map(o=>[o.symbol,o])),relationById=new Map(s.relationEngine.rules.map(r=>[r.id,r])),closed=new Set<string>();
   for(const t of s.positions){const q=quotes[t.symbol];if(!freshQuote(q,now))continue;const px=t.side==="LONG"?q!.bestBid:q!.bestAsk,d=dir(t.side);
-    t.lastPrice=px;t.lastQuoteAt=q!.observedAt;const favorable=Math.max(0,d*(px/t.entryPrice-1)),adverse=Math.max(0,-d*(px/t.entryPrice-1));
+    t.lastPrice=px;t.lastQuoteAt=q!.observedAt;const signed=d*(px/t.entryPrice-1),favorable=Math.max(0,signed),adverse=Math.max(0,-signed);
     t.favorable=Math.max(t.favorable,favorable);t.adverse=Math.max(t.adverse,adverse);t.peakPnlRate=Math.max(t.peakPnlRate??0,favorable);
     if(!t.firstProfitAt&&favorable>=ROUND_TRIP_COST*.6)t.firstProfitAt=now;
-    const relation=t.entryContext?.relationRuleId?relationById.get(t.entryContext.relationRuleId):undefined;
-    const relationFloor=relation&&relation.status!=="ACTIVE"&&t.favorable>ROUND_TRIP_COST
-      ?t.favorable*(relation.status==="DEGRADED"?.82:relation.status==="PRESSURED"?.70:.75):0;
-    const floor=Math.max(protectionFloor(t),relationFloor);if(floor>Math.max(t.profitFloorRate??0,ROUND_TRIP_COST*.8)){t.profitFloorRate=floor;
-      const next=t.entryPrice*(1+d*floor);if(t.side==="LONG"&&next>t.stopPrice||t.side==="SHORT"&&next<t.stopPrice){t.stopPrice=next;
-        event(s,now,"PROTECTION",t.id,`利润保护提升至约${(floor*100).toFixed(2)}%`);}}
-    const current=candidates.get(t.symbol),same=current&&current.side===t.side?current:null,opp=current&&current.side!==t.side?current:null;
-    const ageMin=(now-t.openedAt)/60_000,feedback=t.firstProfitAt?Math.min(20,10+Math.max(0,10-(t.firstProfitAt-t.openedAt)/60_000*2)):ageMin>6?-12:0;
-    const pnlSignal=favorable>adverse?8:-Math.min(18,adverse/Math.max(.002,t.entryContext?.pullbackRiskRate??.01)*8);
-    const relationPenalty=relation?.status==="DEGRADED"?20:relation?.status==="PRESSURED"?10:relation?.status==="RECOVERING"?4:0;
-    t.holdScore=clip((same?.score??42)*.65+feedback+pnlSignal-relationPenalty,0,100);
-    t.holdValue={action:t.holdScore<30?"EXIT_RISK":"HOLD",pullbackRiskRate:t.entryContext?.pullbackRiskRate??.01,bestHoldMinutes:t.expectedHoldMinutes??30,score:t.holdScore};
-    const stopped=t.side==="LONG"?px<=t.stopPrice:px>=t.stopPrice;
-    const marketFlip=!!opp&&!opp.reserve&&opp.eligible&&opp.score>=66&&opp.score>(same?.score??0)+8;
-    const expected=t.expectedHoldMinutes??30,timeFailure=ageMin>=Math.max(8,expected*.65)&&!t.firstProfitAt&&favorable<ROUND_TRIP_COST;
-    const hardTime=ageMin>=expected*2.5&&favorable<Math.max(.003,t.adverse*.5);
-    const relationFailure=relation?.status==="DEGRADED"&&ageMin>=Math.max(5,expected*.20)&&!t.firstProfitAt&&favorable<ROUND_TRIP_COST;
-    if(stopped||marketFlip||relationFailure||timeFailure||hardTime){
-      const reason=stopped?(t.profitFloorRate??0)>0?"PROFIT_GIVEBACK":"STRUCTURE_STOP":
-        marketFlip?"MARKET_FLIP":relationFailure?"RELATION_DEGRADED":timeFailure?"NO_POSITIVE_FEEDBACK":"TIME_DECAY";
-      closeTrade(s,t,px,now,reason);
-      if(isFamilyFailure(reason,t.firstProfitAt)){
+    const relation=t.entryContext?.relationRuleId?relationById.get(t.entryContext.relationRuleId):undefined,
+      floor=advanceProfitFloor(s,t,relation,now);
+    if(floor>Math.max(t.profitFloorRate??0,ROUND_TRIP_COST*.8)){t.profitFloorRate=floor;const next=t.entryPrice*(1+d*floor);
+      if(t.side==="LONG"&&next>t.stopPrice||t.side==="SHORT"&&next<t.stopPrice){t.stopPrice=next;
+        event(s,now,"PROTECTION",t.id,"样本利润保护提升至约"+(floor*100).toFixed(2)+"%");}}
+    const current=candidates.get(t.symbol),same=current&&current.side===t.side?current:null,opp=current&&current.side!==t.side?current:null,
+      ageMin=(now-t.openedAt)/60_000,stopped=t.side==="LONG"?px<=t.stopPrice:px>=t.stopPrice,
+      marketFlip=!!opp&&!opp.reserve&&opp.eligible&&opp.score>=66&&opp.score>(same?.score??0)+8;
+    let reason:string|null=null;
+    if(stopped)reason=(t.profitFloorRate??0)>0?"PROFIT_GIVEBACK":"STRUCTURE_STOP";
+    else if(marketFlip)reason="MARKET_FLIP";
+    else if(t.exitPlan){
+      const plan=t.exitPlan,checkpoint=planCheckpoint(plan,ageMin),point=checkpoint?.point,
+        allowance=Math.max(.0015,Math.min(plan.normalAdverseRate,point?.adverseRate??plan.normalAdverseRate)),
+        expected=point?.expectedRate??0,remaining=point?.remainingEdgeRate??Infinity,
+        outperforming=signed>expected+Math.max(ROUND_TRIP_COST,allowance*.40),
+        noFeedback=ageMin>=plan.feedbackDeadlineMinutes&&!t.firstProfitAt&&favorable<ROUND_TRIP_COST,
+        pathDiverged=ageMin>=5&&signed<-allowance,
+        relationFailure=relation?.status==="DEGRADED"&&ageMin>=5&&!t.firstProfitAt&&favorable<ROUND_TRIP_COST,
+        edgeExhausted=ageMin>=plan.bestHoldMinutes&&remaining<=ROUND_TRIP_COST*.15&&!outperforming,
+        maxHold=ageMin>=plan.maxHoldMinutes;
+      const pathScore=clip(50+50*(signed-expected*.35)/Math.max(ROUND_TRIP_COST*2,allowance),0,100),
+        relationScore=relation?relation.health*100:50;t.holdScore=clip(pathScore*.65+relationScore*.35,0,100);
+      t.holdValue={action:pathDiverged||relationFailure?"EXIT_RISK":edgeExhausted||maxHold?"EXIT_PROFIT":"HOLD",
+        pullbackRiskRate:allowance,bestHoldMinutes:plan.bestHoldMinutes,score:t.holdScore};
+      if(relationFailure)reason="RELATION_DEGRADED";else if(noFeedback||pathDiverged&&!t.firstProfitAt)reason="NO_POSITIVE_FEEDBACK";
+      else if(pathDiverged)reason="SAMPLE_PATH_DIVERGED";else if(edgeExhausted)reason="SAMPLE_EDGE_EXHAUSTED";else if(maxHold)reason="SAMPLE_MAX_HOLD";
+    } else {
+      // Drain pre-v3 positions under their frozen legacy lifecycle; no strategy
+      // migration may reinterpret an already mirrored PAPER/LIVE position.
+      const expected=t.expectedHoldMinutes??30,feedback=t.firstProfitAt?10:ageMin>6?-12:0,
+        relationPenalty=relation?.status==="DEGRADED"?20:relation?.status==="PRESSURED"?10:0;
+      t.holdScore=clip((same?.score??42)*.65+feedback-relationPenalty,0,100);
+      t.holdValue={action:t.holdScore<30?"EXIT_RISK":"HOLD",pullbackRiskRate:t.entryContext?.pullbackRiskRate??.01,bestHoldMinutes:expected,score:t.holdScore};
+      const relationFailure=relation?.status==="DEGRADED"&&ageMin>=Math.max(5,expected*.20)&&!t.firstProfitAt&&favorable<ROUND_TRIP_COST,
+        timeFailure=ageMin>=Math.max(8,expected*.65)&&!t.firstProfitAt&&favorable<ROUND_TRIP_COST,
+        hardTime=ageMin>=expected*2.5&&favorable<Math.max(.003,t.adverse*.5);
+      if(relationFailure)reason="RELATION_DEGRADED";else if(timeFailure)reason="NO_POSITIVE_FEEDBACK";else if(hardTime)reason="TIME_DECAY";
+    }
+    if(reason){closeTrade(s,t,px,now,reason);if(isFamilyFailure(reason,t.firstProfitAt)){
         const familyId=t.entryContext?.relationFamilyId??(relation?relationFamilyId(relation):"");
         if(familyId)recordFamilyFailure({state:s.familyExperiment,familyId,sourceRuleId:t.entryContext?.relationRuleId,
-          evidenceAt:t.entryContext?.relationEvidenceAt,health:t.entryContext?.relationHealth,
-          livePathScore:t.entryContext?.relationLivePathScore,now,reason:reason as "RELATION_DEGRADED"|"NO_POSITIVE_FEEDBACK"|"STRUCTURE_STOP",
-          symbol:t.symbol});
-      }
-      closed.add(t.id);
-    }
+          evidenceAt:t.entryContext?.relationEvidenceAt,health:t.entryContext?.relationHealth,livePathScore:t.entryContext?.relationLivePathScore,
+          now,reason:reason as "RELATION_DEGRADED"|"NO_POSITIVE_FEEDBACK"|"STRUCTURE_STOP",symbol:t.symbol});}
+      closed.add(t.id);}
   }
   if(closed.size)s.positions=s.positions.filter(t=>!closed.has(t.id));
 }
