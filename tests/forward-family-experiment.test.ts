@@ -101,9 +101,11 @@ test("a new recovered mature epoch releases a failed family but timestamp-only w
   assert.equal(state.guards[family],undefined);
 });
 
-test("structure stop is family failure only when the trade never achieved positive feedback",()=>{
+test("confirmed path or structure failure is family evidence only before positive feedback",()=>{
   assert.equal(isFamilyFailure("STRUCTURE_STOP",null),true);
   assert.equal(isFamilyFailure("STRUCTURE_STOP",1234),false);
+  assert.equal(isFamilyFailure("SAMPLE_PATH_DIVERGED",null),true);
+  assert.equal(isFamilyFailure("SAMPLE_PATH_DIVERGED",1234),false);
   assert.equal(isFamilyFailure("PROFIT_GIVEBACK",null),false);
   assert.equal(isFamilyFailure("RELATION_DEGRADED",null),true);
 });
