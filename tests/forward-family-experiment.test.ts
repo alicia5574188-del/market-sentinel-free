@@ -4,12 +4,7 @@ import {
   familyAdmissionBlock,initialFamilyExperimentState,isFamilyFailure,normalizeFamilyExperimentState,
   recordFamilyFailure,relationFamilyId,reserveExperimentValueBlock,
 } from "../lib/forward-family-experiment.ts";
-import type {RelationExitProfile,RelationRule} from "../lib/forward-relation-v2.ts";
-
-const exitProfile:RelationExitProfile={version:"sample-exit-plan-v1",bestHoldMinutes:30,feedbackDeadlineMinutes:10,maxHoldMinutes:60,
-  normalAdverseRate:.005,targetRate:.009,protectionActivationRate:.004,retentionRate:.78,samples:30,groups:6,
-  path:{5:{expectedRate:.001,adverseRate:.003,remainingEdgeRate:.006},15:{expectedRate:.003,adverseRate:.004,remainingEdgeRate:.004},
-    30:{expectedRate:.007,adverseRate:.005,remainingEdgeRate:0}}};
+import type {RelationRule} from "../lib/forward-relation-v2.ts";
 const rule=(id:string,patch:Partial<RelationRule>={}):RelationRule=>({
   id,signature:id,scope:"RECENT",horizon:15,side:"SHORT",conditions:[{feature:2,op:"LE",threshold:-.2}],
   longNet:.003,recentNet:.0035,standardError:.001,samples:30,longGroups:3,recentGroups:3,health:.25,status:"DEGRADED",
