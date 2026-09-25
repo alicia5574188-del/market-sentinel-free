@@ -4,8 +4,12 @@ import {
   familyAdmissionBlock,initialFamilyExperimentState,isFamilyFailure,normalizeFamilyExperimentState,
   recordFamilyFailure,relationFamilyId,reserveExperimentValueBlock,
 } from "../lib/forward-family-experiment.ts";
-import type {RelationRule} from "../lib/forward-relation-v2.ts";
+import type {RelationExitProfile,RelationRule} from "../lib/forward-relation-v2.ts";
 
+const exitProfile:RelationExitProfile={version:"sample-exit-plan-v1",bestHoldMinutes:30,feedbackDeadlineMinutes:10,maxHoldMinutes:60,
+  normalAdverseRate:.005,targetRate:.009,protectionActivationRate:.004,retentionRate:.78,samples:30,groups:6,
+  path:{5:{expectedRate:.001,adverseRate:.003,remainingEdgeRate:.006},15:{expectedRate:.003,adverseRate:.004,remainingEdgeRate:.004},
+    30:{expectedRate:.007,adverseRate:.005,remainingEdgeRate:0}}};
 const rule=(id:string,patch:Partial<RelationRule>={}):RelationRule=>({
   id,signature:id,scope:"RECENT",horizon:15,side:"SHORT",conditions:[{feature:2,op:"LE",threshold:-.2}],
   longNet:.003,recentNet:.0035,standardError:.001,samples:30,longGroups:3,recentGroups:3,health:.25,status:"DEGRADED",
@@ -24,6 +28,11 @@ test("threshold, horizon and scope variants of one causal idea share the same re
   assert.equal(relationFamilyId(a),relationFamilyId(horizonVariant));
   const c=rule("c",{conditions:[{feature:2,op:"GE",threshold:-.31}]});
   assert.notEqual(relationFamilyId(a),relationFamilyId(c));
+});
+
+test("horizon and scope variants cannot bypass one failed causal family",()=>{
+  const a=rule("a",{horizon:15,scope:"RECENT"}),b=rule("b",{horizon:60,scope:"BASE",conditions:[{feature:2,op:"LE",threshold:-.31}]});
+  assert.equal(relationFamilyId(a),relationFamilyId(b));
 });
 
 test("reserve minimum value blocks the weak probe profile seen in the failed snapshot",()=>{
