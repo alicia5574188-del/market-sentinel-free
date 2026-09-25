@@ -370,7 +370,7 @@ test("both private routes hanging remain bounded and public diagnostics omit the
 });
 
 
-test("live market entry uses RESULT mode so IOC execution does not wait for full clearing fields",async()=>{
+test("live market entry uses ACK mode so the mutation returns before matching/clearing latency",async()=>{
   const real=globalThis.fetch;const bodies:Record<string,unknown>[]=[];
   globalThis.fetch=async(input,init)=>{
     const request=new Request(input,init);bodies.push(JSON.parse(await request.text()) as Record<string,unknown>);
@@ -380,7 +380,37 @@ test("live market entry uses RESULT mode so IOC execution does not wait for full
     const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
     const id=await client.createEntry({kind:"MARKET",tag:"t-ms-e-test",size:1,contracts:1,notional:100,plannedRisk:2,leverage:10,margin:10,
       body:{contract:"BTC_USDT",size:"1",price:"0",tif:"ioc",text:"t-ms-e-test",reduce_only:false}});
-    assert.equal(id,"123456789012345678");assert.equal(bodies[0]?.action_mode,"RESULT");
+    assert.equal(id,"123456789012345678");assert.equal(bodies[0]?.action_mode,"ACK");
+  }finally{globalThis.fetch=real;}
+});
+
+test("ACKed market entry resolves from the contract position even while the order read is still propagating",async()=>{
+  const real=globalThis.fetch;
+  globalThis.fetch=async(input)=>{
+    const url=new URL(String(input));
+    if(url.pathname.endsWith("/orders/123"))return new Response('{"label":"ORDER_NOT_FOUND"}',{status:404});
+    if(url.pathname.endsWith("/positions/BTC_USDT"))return Response.json({contract:"BTC_USDT",size:"2",entry_price:"100.1",leverage:"10"});
+    throw new Error(`unexpected ${url.pathname}`);
+  };
+  try{
+    const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
+    const result=await client.resolveMarketEntry("BTC_USDT","LONG","t-ms-e-test","123");
+    assert.equal(result.state,"FILLED");assert.equal(Number(result.position?.size),2);
+  }finally{globalThis.fetch=real;}
+});
+
+test("definitive IOC no-fill resolves immediately without waiting sixty seconds",async()=>{
+  const real=globalThis.fetch;
+  globalThis.fetch=async(input)=>{
+    const url=new URL(String(input));
+    if(url.pathname.endsWith("/orders/123"))return Response.json({id_string:"123",text:"t-ms-e-test",status:"finished",finish_as:"ioc",size:"2",left:"2"});
+    if(url.pathname.endsWith("/positions/BTC_USDT"))return Response.json({contract:"BTC_USDT",size:"0",leverage:"10"});
+    throw new Error(`unexpected ${url.pathname}`);
+  };
+  try{
+    const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
+    const result=await client.resolveMarketEntry("BTC_USDT","LONG","t-ms-e-test","123");
+    assert.equal(result.state,"CANCELLED");
   }finally{globalThis.fetch=real;}
 });
 
@@ -461,5 +491,7 @@ test("already-correct leverage skips the mutation entirely",async()=>{
     const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
     const result=await client.ensureLeverage("SOL_USDT",10);
     assert.equal(result.verified,true);assert.equal(result.already,true);assert.equal(posts,0);assert.equal(reads,1);
+    const cached=await client.ensureLeverage("SOL_USDT",10);
+    assert.equal(cached.cached,true);assert.equal(posts,0);assert.equal(reads,1,"verified leverage cache removes the hot-path GET on later signals");
   }finally{globalThis.fetch=real;}
 });
