@@ -314,7 +314,7 @@ export function advanceRelationEngine(input:{state?:RelationEngineState|null;pat
 }
 export function relationCandidates(state:RelationEngineState){const rows:RelationCandidate[]=[];for(const frame of Object.values(state.frames))for(const rule of state.rules){
   if(!matches(frame.x,rule.conditions)||!rule.symbols.includes(frame.symbol))continue;const reserve=rule.scope==="RECENT"||rule.status!=="ACTIVE"||rule.health<.68,
-    net=Math.max(COST*.15,rule.longNet*clip(.45+.55*rule.health,.2,1)),gross=net+COST,edge=net/Math.max(rule.stopRate,COST),
+    net=Math.max(0,rule.longNet),gross=net+COST,edge=net/Math.max(rule.stopRate,COST),
     score=clip(32+36*rule.health+10*rule.environmentFit+10*rule.livePathScore+12*clip(edge/.8),0,100);if(rule.health<.15||!(rule.longNet>0))continue;
   rows.push({symbol:frame.symbol,ruleId:rule.id,side:rule.side,horizon:rule.horizon,status:rule.status,health:rule.health,score,netRate:net,grossRate:gross,
     stopRate:rule.stopRate,environmentFit:rule.environmentFit,livePathScore:rule.livePathScore,reserve,exitProfile:structuredClone(rule.exitProfile),
