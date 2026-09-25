@@ -95,6 +95,17 @@ test("legacy pages recover only through exact decoded page invariants and migrat
   assert.equal((await readForwardStore(db,T+3)).relationEngine.samples.length,2200);
 });
 
+test("legacy count mismatches expose actual and expected rows without accepting evidence loss",async()=>{
+  const s=stressFixture(),write=await prepareForwardWrite(s,s,T,{compact:true}),db=new Memory();
+  const manifest=structuredClone(write.entries[FORWARD_SAMPLE_MANIFEST_STORAGE]) as {count:number;pages:{count:number;rawSha256?:string}[]};
+  for(const page of manifest.pages)delete page.rawSha256;
+  manifest.pages[0]!.count++;manifest.count++;
+  const head=structuredClone(write.entries[HEAD]) as {sampleManifestSha256:string};
+  head.sampleManifestSha256=await digest(new TextEncoder().encode(JSON.stringify(manifest)));
+  await db.put({...write.entries,[FORWARD_SAMPLE_MANIFEST_STORAGE]:manifest,[HEAD]:head});
+  await assert.rejects(()=>readForwardStore(db,T+1),/COUNT_[0-9]+_[0-9]+/);
+});
+
 test("stable raw hashes accept harmless compression identity drift but reject decoded content mismatch",async()=>{
   const s=stressFixture(),write=await prepareForwardWrite(s,s,T,{compact:true});
   for(const mode of ["compressed-only","raw"] as const){

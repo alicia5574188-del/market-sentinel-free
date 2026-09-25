@@ -72,7 +72,8 @@ const SHA256=/^[0-9a-f]{64}$/,packedNumber=(value:unknown)=>value===null||Number
 function packedPageIssue(samples:unknown[],meta:SamplePageMeta){
   const hourText=meta.id.split(":")[0]!,hour=Number(hourText);let priorAt=-1,priorSymbol="";
   if(!/^\d{16}:\d{3}$/.test(meta.id)||!Number.isSafeInteger(hour)||hour<0||hour%SAMPLE_PAGE_MS!==0)return "PAGE_ID";
-  if(samples.length!==meta.count||!samples.length||samples.length>SAMPLE_PAGE_ROWS)return "COUNT";
+  if(!samples.length||samples.length>SAMPLE_PAGE_ROWS)return "COUNT_INVALID";
+  if(samples.length!==meta.count)return `COUNT_${samples.length}_${meta.count}`;
   for(const value of samples){
     if(!Array.isArray(value)||value.length<13||value[0]!=="m1"||typeof value[1]!=="string"||!value[1]
       ||!Number.isSafeInteger(value[2])||value[2]<hour||value[2]>=hour+SAMPLE_PAGE_MS)return "ROW_ID";
