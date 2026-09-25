@@ -265,12 +265,17 @@ function relationHardStopRate(rows:Candle[],side:"LONG"|"SHORT",price:number,nor
   // preserving the existing 3% absolute safety ceiling.
   return clip(Math.max(normalAdverse*1.35,st.atr*2.2,structureRate),.004,.03);
 }
+function activeRecentValue(c:RelationCandidate){
+  return c.scope==="RECENT"&&c.status==="ACTIVE"?{
+    evidenceNetRate:c.evidenceNetRate,targetRate:c.exitProfile.targetRate,normalAdverseRate:c.exitProfile.normalAdverseRate,
+    retentionRate:c.exitProfile.retentionRate,samples:c.exitProfile.samples,groups:c.exitProfile.groups}:undefined;
+}
 function relationOpportunity(c:RelationCandidate,rows:Candle[],q:Quote|undefined,now:number):Opportunity{
   const framePrice=rows.at(-1)!.close,d=dir(c.side),exec=executionScore(q,now),net=Math.max(.0002,c.netRate),gross=Math.max(net+ROUND_TRIP_COST,c.grossRate),
     normalAdverse=Math.max(.003,c.exitProfile.normalAdverseRate),hardStop=relationHardStopRate(rows,c.side,framePrice,normalAdverse),
     edge=net/Math.max(normalAdverse,1e-9),score=clip(c.score*.90+exec*.10,0,100),
     reserveBlock=reserveExperimentValueBlock({reserve:c.reserve,netRate:net,edgeRatio:edge,livePathScore:c.livePathScore,
-      environmentFit:c.environmentFit,roundTripCost:ROUND_TRIP_COST});
+      environmentFit:c.environmentFit,roundTripCost:ROUND_TRIP_COST,activeRecent:activeRecentValue(c)});
   return{id:`relation-${c.ruleId}-${c.symbol}-${rows.at(-1)!.time}`,symbol:c.symbol,side:c.side,mode:"RELATION",premium:false,reserve:c.reserve,
     score,eligible:c.health>=.15&&net>0&&!reserveBlock,completedAt:(rows.at(-1)!.time+300)*1000,expiresAt:now+12*60_000,price:framePrice,
     stopPrice:framePrice*(1-d*hardStop),targetPrice:framePrice*(1+d*Math.max(.003,gross)),stopRate:hardStop,targetRate:Math.max(.003,gross),
@@ -331,7 +336,8 @@ function relationBackedRegionOpportunities(s:ForwardState,symbol:string,rows:Can
     const relation=support.find(c=>c.side===o.side);
     if(!relation)continue;
     const reserveBlock=reserveExperimentValueBlock({reserve:relation.reserve,netRate:o.netRemainingSpaceRate,edgeRatio:o.edgeRatio,
-      livePathScore:relation.livePathScore,environmentFit:relation.environmentFit,roundTripCost:ROUND_TRIP_COST});
+      livePathScore:relation.livePathScore,environmentFit:relation.environmentFit,roundTripCost:ROUND_TRIP_COST,
+      activeRecent:activeRecentValue(relation)});
     out.push({...o,score:clip(o.score*.55+relation.score*.45,0,100),eligible:o.eligible&&relation.health>=.15&&!reserveBlock,
       reserve:relation.reserve,relationRuleId:relation.ruleId,relationStatus:relation.status,relationHorizon:relation.horizon,
       relationHealth:relation.health,riskScale:clip(relation.health,.25,1),expectedHoldMinutes:relation.exitProfile.bestHoldMinutes,
