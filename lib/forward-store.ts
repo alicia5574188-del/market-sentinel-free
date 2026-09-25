@@ -146,7 +146,8 @@ export async function readForwardStore(storage: Reader, now: number) {
         rawHashValid=meta.rawSha256===undefined||SHA256.test(meta.rawSha256),
         rawHashMatches=meta.rawSha256!==undefined&&rawHashValid&&rawSha256===meta.rawSha256,
         authenticatedCompressedRecovery=meta.rawSha256!==undefined&&rawHashValid&&!rawHashMatches&&rawLengthMatches&&compressedMatches,
-        rawPageDrift=meta.rawSha256!==undefined&&rawHashValid&&(!rawHashMatches||!rawLengthMatches);
+        rawPageDrift=meta.rawSha256!==undefined&&rawHashValid
+          &&(!rawHashMatches||!rawLengthMatches)&&!authenticatedCompressedRecovery;
       if(meta.rawSha256!==undefined){
         if(!rawHashValid)throw new Error(`Forward样本分页原始校验失败：${meta.id}:RAW_HASH_INVALID`);
         // A raw-hash manifest can still point at a canonical page that an older
