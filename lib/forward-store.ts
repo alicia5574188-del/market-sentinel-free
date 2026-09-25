@@ -68,24 +68,24 @@ async function encodeSamplePages(samples:RelationMeasurement[]){
   return pages;
 }
 
-const SHA256=/^[0-9a-f]{64}$/;
-function validPackedPage(samples:unknown[],meta:SamplePageMeta){
+const SHA256=/^[0-9a-f]{64}$/,packedNumber=(value:unknown)=>value===null||Number.isFinite(value);
+function packedPageIssue(samples:unknown[],meta:SamplePageMeta){
   const hourText=meta.id.split(":")[0]!,hour=Number(hourText);let priorAt=-1,priorSymbol="";
-  if(!/^\d{16}:\d{3}$/.test(meta.id)||!Number.isSafeInteger(hour)||hour<0||hour%SAMPLE_PAGE_MS!==0)return false;
+  if(!/^\d{16}:\d{3}$/.test(meta.id)||!Number.isSafeInteger(hour)||hour<0||hour%SAMPLE_PAGE_MS!==0)return "PAGE_ID";
+  if(samples.length!==meta.count||!samples.length||samples.length>SAMPLE_PAGE_ROWS)return "COUNT";
   for(const value of samples){
     if(!Array.isArray(value)||value.length<13||value[0]!=="m1"||typeof value[1]!=="string"||!value[1]
-      ||!Number.isSafeInteger(value[2])||value[2]<hour||value[2]>=hour+SAMPLE_PAGE_MS
-      ||![value[3],value[4],value[5],value[11],value[12]].every(Number.isFinite)
-      ||!Array.isArray(value[6])||value[6].length!==8||!value[6].every(Number.isFinite)
-      ||!Array.isArray(value[7])||value[7].length!==3||!value[7].every(Number.isFinite)
+      ||!Number.isSafeInteger(value[2])||value[2]<hour||value[2]>=hour+SAMPLE_PAGE_MS)return "ROW_ID";
+    if(![value[3],value[4],value[5],value[11],value[12]].every(packedNumber)
+      ||!Array.isArray(value[6])||value[6].length>8||!value[6].every(packedNumber)
+      ||!Array.isArray(value[7])||value[7].length!==3||!value[7].every(packedNumber)
       ||![value[8],value[9],value[10]].every(row=>Array.isArray(row)&&row.length===SAMPLE_CHECKPOINTS.length
-        &&row.every(item=>item===null||Number.isFinite(item))))return false;
+        &&row.every(packedNumber))||!(value[8] as unknown[]).some(Number.isFinite))return "ROW_VALUES";
     const at=value[2] as number,symbol=value[1];
-    if(at<priorAt||(at===priorAt&&symbol.localeCompare(priorSymbol)<0))return false;
+    if(at<priorAt||(at===priorAt&&symbol.localeCompare(priorSymbol)<0))return "ORDER";
     priorAt=at;priorSymbol=symbol;
   }
-  return samples.length===meta.count&&samples.length>0&&samples.length<=SAMPLE_PAGE_ROWS
-    &&(samples[0] as unknown[])[2]===meta.firstAt&&(samples.at(-1) as unknown[])[2]===meta.lastAt;
+  return (samples[0] as unknown[])[2]!==meta.firstAt||(samples.at(-1) as unknown[])[2]!==meta.lastAt?"BOUNDS":null;
 }
 
 export async function readForwardStore(storage: Reader, now: number) {
@@ -135,8 +135,11 @@ export async function readForwardStore(storage: Reader, now: number) {
       }else if(!compressedMatches||!rawLengthMatches)legacyRecovered=true;
       try{page=JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(pageRaw)) as typeof page;}
       catch{throw new Error(`Forward样本分页JSON失败：${meta.id}`);}
-      if(page.version!==FORWARD_PAGED_STATE_VERSION||page.id!==meta.id||!Array.isArray(page.samples)||!validPackedPage(page.samples,meta))
-        throw new Error(`Forward样本分页内容异常：${meta.id}`);
+      if(page.version!==FORWARD_PAGED_STATE_VERSION)throw new Error(`Forward样本分页内容异常：${meta.id}:VERSION`);
+      if(page.id!==meta.id)throw new Error(`Forward样本分页内容异常：${meta.id}:PAGE_ID`);
+      if(!Array.isArray(page.samples))throw new Error(`Forward样本分页内容异常：${meta.id}:SAMPLES`);
+      const pageIssue=packedPageIssue(page.samples,meta);
+      if(pageIssue)throw new Error(`Forward样本分页内容异常：${meta.id}:${pageIssue}`);
       samples.push(...page.samples);count+=page.samples.length;
     }
     if(count!==manifest.count)throw new Error("Forward样本manifest数量异常");

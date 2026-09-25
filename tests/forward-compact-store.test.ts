@@ -73,7 +73,8 @@ test("paged store preserves 2200 mature samples plus the full financial/control 
 });
 
 test("legacy pages recover only through exact decoded page invariants and migrate to stable raw hashes",async()=>{
-  const s=stressFixture(),write=await prepareForwardWrite(s,s,T,{compact:true}),db=new Memory();
+  const s=stressFixture();s.relationEngine.samples[0]!.x=[.1,.2];s.relationEngine.samples[0]!.pathEfficiency=Number.NaN;
+  const write=await prepareForwardWrite(s,s,T,{compact:true}),db=new Memory();
   const manifest=structuredClone(write.entries[FORWARD_SAMPLE_MANIFEST_STORAGE]) as {
     pages:{id:string;key:string;count:number;firstAt:number;lastAt:number;length:number;rawLength:number;sha256:string;rawSha256?:string;encoding:string}[]
   };
