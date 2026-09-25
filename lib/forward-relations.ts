@@ -277,7 +277,7 @@ export function relationHardPayoffBlock(input:{exitProfile:RelationExitProfile;h
   if(payoff<requiredPayoff)return `样本典型盈亏不足：${payoff.toFixed(2)}× < ${requiredPayoff.toFixed(2)}×（胜率${(winRate*100).toFixed(0)}%）`;
   const hardCoverage=typicalWin/Math.max(input.hardStopRate+cost,1e-9),p80=Math.max(0,p.adverseP80Rate??0),p95=Math.max(p80,p.adverseP95Rate??0),
     hardBeyond95=input.hardStopRate>=p95*1.05,hardBeyond80=input.hardStopRate>=p80*1.15,
-    tailFloor=(hardBeyond95?.20:hardBeyond80?.30:.40)+(winRate<.55?.10:0);
+    tailFloor=(hardBeyond95 ? .20 : hardBeyond80 ? .30 : .40)+(winRate<.55 ? .10 : 0);
   return hardCoverage<tailFloor?`结构止损尾部覆盖不足：${hardCoverage.toFixed(2)}× < ${tailFloor.toFixed(2)}×`:null;
 }
 function activeRecentValue(c:RelationCandidate){
