@@ -150,7 +150,8 @@ export async function readForwardStore(storage: Reader, now: number) {
       const allowLegacyDrift=meta.rawSha256===undefined,pageIssue=packedPageIssue(page.samples,meta,allowLegacyDrift);
       if(pageIssue)throw new Error(`Forward样本分页内容异常：${meta.id}:${pageIssue}`);
       const firstAt=(page.samples[0] as unknown[])[2] as number,lastAt=(page.samples.at(-1) as unknown[])[2] as number,
-        legacyPhysicalDrift=allowLegacyDrift&&(page.samples.length!==meta.count||firstAt!==meta.firstAt||lastAt!==meta.lastAt);
+        legacyPhysicalDrift=allowLegacyDrift&&(!compressedMatches||!rawLengthMatches||page.samples.length!==meta.count
+          ||firstAt!==meta.firstAt||lastAt!==meta.lastAt);
       if(legacyPhysicalDrift){
         const bytesSha256=await digest(value),bytesKey=`${FORWARD_SAMPLE_RECOVERY_PREFIX}${meta.id}:${rawSha256}:bytes`;
         legacySampleRecovery.push({meta:{version:"forward-sample-recovery-v1",sourceManifestSha256:head.sampleManifestSha256!,sourceId:meta.id,
@@ -168,17 +169,16 @@ export async function readForwardStore(storage: Reader, now: number) {
       sampleIntegrity:legacyRecovered||manifest.pages.some(page=>page.rawSha256===undefined)?"legacy-recovered":"raw-sha256"};
     const state=normalizeForward(decoded,now);
     if(legacySampleRecovery.length){
-      // The authenticated legacy manifest describes the canonical, normalized
-      // page set. Accept physical count/boundary drift only when normalizing
-      // every decoded row reconstructs that exact authenticated set.
+      // The legacy manifest authenticates the intended page topology, but the
+      // old writer could publish new canonical byte identities without writing
+      // those bytes. Preserve the retained source bytes, then require their
+      // normalized ids/counts/time bounds to reconstruct the manifest topology.
       const canonical=await encodeSamplePages(state.relationEngine.samples);
       const matches=canonical.length===manifest.pages.length&&canonical.every((page,index)=>{
         const expected=manifest.pages[index]!;return page.meta.id===expected.id&&page.meta.key===expected.key
-          &&page.meta.count===expected.count&&page.meta.firstAt===expected.firstAt&&page.meta.lastAt===expected.lastAt
-          &&page.meta.length===expected.length&&page.meta.rawLength===expected.rawLength&&page.meta.sha256===expected.sha256
-          &&page.meta.encoding===expected.encoding;
+          &&page.meta.count===expected.count&&page.meta.firstAt===expected.firstAt&&page.meta.lastAt===expected.lastAt;
       });
-      if(!matches)throw new Error("Forward样本分页内容异常：LEGACY_SUPERSET_CANONICAL");
+      if(!matches)throw new Error("Forward样本分页内容异常：LEGACY_TOPOLOGY");
       (state as ForwardStateWithRecovery).__legacySampleRecovery=legacySampleRecovery;
     }
     const restored=restoreForwardProtectionCheckpoint(state,await storage.get<unknown>(FORWARD_PROTECTION_STORAGE));

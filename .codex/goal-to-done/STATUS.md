@@ -29,6 +29,13 @@ drifted source shard is archived before migration. Focused Forward, typecheck,
 zero-warning lint and native storage smoke pass; reviewed follow-up release and
 continuous production saves remain pending.
 
+Exact canonical-byte reconstruction on deployed `e3e967c3` failed with
+`LEGACY_SUPERSET_CANONICAL`, proving the manifest-named canonical bytes were not
+retained. The final recovery boundary uses the strongest evidence still present:
+valid ordered hourly rows, no total shortage, exact normalized page ids/counts/
+time bounds, and immutable archival of every page whose byte identity differs.
+Raw-hash pages remain strict. This does not invent or delete a measurement.
+
 # 2026-09-25 — production restart exposed paged-sample integrity migration defect
 
 PR485/main `db8d2a7` passed exact-head CI and deployed, but production correctly
