@@ -74,8 +74,9 @@ jobs:
                 entryDiagnostics:.forward.entryDiagnostics,
                 relationDiagnostics:.relationResearch.diagnostics,
                 measurements:(.measurements|length),
-                rules:(.relationResearch.rules|map({id,scope,horizon,side,status,health,longNet,recentNet,livePathScore,environmentFit,reason})|.[0:18]),
-                opportunities:(.forward.opportunities|map({symbol,side,mode,score,eligible,reserve,premium,netRemainingSpaceRate,edgeRatio,relationStatus,relationHealth,reason})|.[0:24])
+                exportError:(.error // null),
+                rules:((.relationResearch.rules // [])|map({id,scope,horizon,side,status,health,longNet,recentNet,livePathScore,environmentFit,reason})|.[0:18]),
+                opportunities:((.forward.opportunities // [])|map({symbol,side,mode,score,eligible,reserve,premium,netRemainingSpaceRate,edgeRatio,relationStatus,relationHealth,reason})|.[0:24])
               }
             }' <<<"$export_body"
           else
