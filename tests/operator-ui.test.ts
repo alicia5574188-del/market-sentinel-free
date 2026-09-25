@@ -95,3 +95,9 @@ test("LIVE console suppresses transient read-only timeout banners but keeps real
   assert.match(live,/OperatorRequestError&&e\.status===0/);
   assert.match(live,/执行提示：\{live\.lastError\}/);
 });
+test("LIVE console does not call a failed copy path 'running'",()=>{
+  const live=readFileSync(new URL("../app/live-console.tsx",import.meta.url),"utf8");
+  assert.match(live,/ENTRY_REJECTED/);assert.match(live,/LEVERAGE_REJECTED/);
+  assert.match(live,/复制异常/);assert.match(live,/复制核对中/);
+  assert.match(live,/liveSwitchStatus/);
+});
