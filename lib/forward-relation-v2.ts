@@ -223,6 +223,23 @@ function migrateMeasurement(value:unknown):RelationMeasurement|null{
     env:{breadth:Number(env?.breadth??.5),dispersion:Number(env?.dispersion??0),expansion:Number(env?.expansion??0)},
     cp,upAt,downAt,relativeAt:{},pathEfficiency:Number(raw.pathEfficiency??0),reversals:Number(raw.reversals??0)};
 }
+function derivedDiagnostics(state:RelationEngineState){
+  const count=(status:RelationStatus)=>state.rules.filter(r=>r.status===status).length,
+    qualified=(h:RelationHorizon)=>state.rules.filter(r=>r.horizon===h).length,
+    effectiveGroups=new Set(state.samples.map(r=>Math.floor(r.at/(15*60_000)))).size;
+  let warmup="路径学习已运行";if(state.samples.length<24)warmup="冷启动：已成熟"+state.samples.length+"份根样本，继续积累完整路径";
+  else if(!state.rules.length)warmup="已有"+state.samples.length+"份路径样本，尚无扣成本后稳定关系";
+  return{markets:Object.keys(state.frames).length,matureSamples:state.samples.length,effectiveGroups,rules:state.rules.length,
+    active:count("ACTIVE"),pressured:count("PRESSURED"),degraded:count("DEGRADED"),recovering:count("RECOVERING"),
+    liveAnomalies:state.rules.filter(r=>r.livePathScore<.45).length,qualified15:qualified(15),qualified30:qualified(30),
+    qualified45:qualified(45),qualified60:qualified(60),warmup};
+}
+function currentFrame(value:unknown):RelationFrame|null{
+  const raw=objectRecord(value),env=objectRecord(raw?.env);if(!raw||typeof raw.symbol!=="string"||!finite(Number(raw.at))
+    ||!finite(Number(raw.price))||!Array.isArray(raw.x)||raw.x.length<8)return null;
+  return{symbol:raw.symbol,at:Number(raw.at),price:Number(raw.price),x:raw.x.map(Number).slice(0,8),
+    env:{breadth:Number(env?.breadth??.5),dispersion:Number(env?.dispersion??0),expansion:Number(env?.expansion??0)}};
+}
 function currentRule(value:unknown):value is RelationRule{
   const raw=objectRecord(value),exit=objectRecord(raw?.exitProfile);return !!raw&&typeof raw.id==="string"
     &&(raw.side==="LONG"||raw.side==="SHORT")&&RELATION_HORIZONS.includes(Number(raw.horizon) as RelationHorizon)
@@ -235,12 +252,15 @@ export function normalizeRelationEngine(value:unknown,now:number):RelationEngine
   const lastBars=objectRecord(raw.lastBars);out.lastBars=lastBars?Object.fromEntries(Object.entries(lastBars).map(([k,v])=>[k,Number(v)||0])):{};
   out.samples=Array.isArray(raw.samples)?raw.samples.map(migrateMeasurement).filter((x:RelationMeasurement|null):x is RelationMeasurement=>!!x):[];
   refreshRelative(out.samples);out.samples=thinSamples(out.samples,now);
-  if(raw.version===FORWARD_RELATION_V2_VERSION&&Array.isArray(raw.rules))out.rules=structuredClone(raw.rules).filter(currentRule);
+  if(raw.version===FORWARD_RELATION_V2_VERSION){
+    if(Array.isArray(raw.rules))out.rules=structuredClone(raw.rules).filter(currentRule);
+    const frames=objectRecord(raw.frames);if(frames)for(const [key,value] of Object.entries(frames)){const frame=currentFrame(value);if(frame)out.frames[key]=frame;}
+  }
   const pending=objectRecord(raw.pending);if(raw.version===FORWARD_RELATION_V2_VERSION&&pending){for(const [key,value] of Object.entries(pending)){
     const p=objectRecord(value);if(!p)continue;const at=Number(p.at),dueAt=Number(p.dueAt),env=objectRecord(p.env);
     if(finite(at)&&finite(dueAt)&&dueAt-at===ROOT_HORIZON_MS)out.pending[key]={symbol:String(p.symbol),at,price:Number(p.price),
       x:Array.isArray(p.x)?p.x.map(Number).slice(0,8):[],env:{breadth:Number(env?.breadth??.5),dispersion:Number(env?.dispersion??0),expansion:Number(env?.expansion??0)},dueAt};}}
-  return out;
+  out.diagnostics=derivedDiagnostics(out);return out;
 }
 function seedClosedHistory(state:RelationEngineState,paths:Record<string,RelationCandle[]>,now:number){
   if(state.samples.length>=24)return 0;const grouped=new Map<number,{frame:RelationFrame;rows:RelationCandle[]}[]>(),cut=now-12*60*60_000;
@@ -271,12 +291,7 @@ export function advanceRelationEngine(input:{state?:RelationEngineState|null;pat
     if(!weakened)return{...r,livePathScore:live,environmentFit:fit,updatedAt:input.now};const status:RelationStatus=live<.28||fit<.28?"DEGRADED":"PRESSURED",
       health=status==="DEGRADED"?Math.min(.30,r.health):Math.min(.60,r.health);return{...r,livePathScore:live,environmentFit:fit,status,health,updatedAt:input.now,
         reason:"进行中路径/市场环境偏离历史｜"+status+"｜路径"+Math.round(live*100)+"｜环境"+Math.round(fit*100)+"｜不自动反手"};});
-  state.updatedAt=input.now;const count=(s:RelationStatus)=>state.rules.filter(r=>r.status===s).length,qualified=(h:RelationHorizon)=>state.rules.filter(r=>r.horizon===h).length,
-    groups=new Set(state.samples.map(r=>Math.floor(r.at/(15*60_000)))).size;let warmup="路径学习已运行";if(state.samples.length<24)warmup="冷启动：已成熟"+state.samples.length+"份根样本，继续积累完整路径";
-  else if(!state.rules.length)warmup="已有"+state.samples.length+"份路径样本，尚无扣成本后稳定关系";
-  state.diagnostics={markets:frames.length,matureSamples:state.samples.length,effectiveGroups:groups,rules:state.rules.length,active:count("ACTIVE"),pressured:count("PRESSURED"),
-    degraded:count("DEGRADED"),recovering:count("RECOVERING"),liveAnomalies:state.rules.filter(r=>r.livePathScore<.45).length,qualified15:qualified(15),qualified30:qualified(30),
-    qualified45:qualified(45),qualified60:qualified(60),warmup};return state;
+  state.updatedAt=input.now;state.diagnostics=derivedDiagnostics(state);return state;
 }
 export function relationCandidates(state:RelationEngineState){const rows:RelationCandidate[]=[];for(const frame of Object.values(state.frames))for(const rule of state.rules){
   if(!matches(frame.x,rule.conditions)||!rule.symbols.includes(frame.symbol))continue;const reserve=rule.scope==="RECENT"||rule.status!=="ACTIVE"||rule.health<.68,
