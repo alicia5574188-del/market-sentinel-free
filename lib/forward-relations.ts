@@ -753,8 +753,9 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
   const totalRisk=existingRisk(s),riskUse=mark.equity>0?100*totalRisk/mark.equity:0;
   s.latestReason=s.relationEngine.rules.length===0?d.warmup
     :`Forward Path Relation 3.0 当前${s.positions.length}笔持仓；${s.opportunities.filter(o=>o.eligible).length}个可参与候选；计划风险已用${riskUse.toFixed(1)}%。ACTIVE ${d.active} · 承压 ${d.pressured} · 降级 ${d.degraded}。`;
-  if(s.structuralInterrupt.marketEvent?.expiresAt>input.now)
-    s.latestReason+=` 极端结构中断：${s.structuralInterrupt.marketEvent.side==="LONG"?"向上":"向下"}市场级突变，覆盖${(s.structuralInterrupt.marketEvent.breadth*100).toFixed(0)}%。`;
+  const interruptEvent=s.structuralInterrupt.marketEvent;
+  if(interruptEvent&&interruptEvent.expiresAt>input.now)
+    s.latestReason+=` 极端结构中断：${interruptEvent.side==="LONG"?"向上":"向下"}市场级突变，覆盖${(interruptEvent.breadth*100).toFixed(0)}%。`;
   else if(s.structuralInterrupt.vetoSide&&s.structuralInterrupt.vetoUntil>input.now)
     s.latestReason+=` 突变预警：${s.structuralInterrupt.vetoSide==="LONG"?"向上":"向下"}，旧方向暂不新增。`;
   if(opened)s.latestReason+=` 本轮新开${opened}笔。`;
