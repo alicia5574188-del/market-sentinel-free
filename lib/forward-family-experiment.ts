@@ -138,8 +138,12 @@ export function reserveExperimentValueBlock(input:{
   if(recent){
     const evidenceFloor=Math.max(.0012,input.roundTripCost*.65),
       pathRatio=recent.targetRate/Math.max(recent.normalAdverseRate,1e-9);
+    // The relation engine uses 0.65 as its explicit neutral value when no
+    // current pending path can score yet. Strong, mature ACTIVE RECENT evidence
+    // must be allowed into the bounded reserve lane at neutral; requiring >0.65
+    // deterministically starves it after restart/quiet pending windows.
     if(recent.netRate>=evidenceFloor&&pathRatio>=1.5&&recent.retentionRate>=.70
-      &&recent.samples>=24&&recent.groups>=3&&input.livePathScore>=.70&&input.environmentFit>=.65)return null;
+      &&recent.samples>=24&&recent.groups>=3&&input.livePathScore>=.65&&input.environmentFit>=.65)return null;
   }
   const netFloor=Math.max(.0010,input.roundTripCost*.55);
   if(input.netRate<netFloor)return `探测净空间不足：${(input.netRate*100).toFixed(2)}%`;
