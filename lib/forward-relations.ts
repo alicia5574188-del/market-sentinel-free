@@ -1,16 +1,16 @@
 import { familyAdmissionBlock, familyExperimentSummary, initialFamilyExperimentState, isFamilyFailure,
   normalizeFamilyExperimentState, recordFamilyFailure, relationFamilyId, reserveExperimentValueBlock,
   type FamilyExperimentState } from "./forward-family-experiment.ts";
-import { FORWARD_RELATION_V2_VERSION, advanceRelationEngine, initialRelationEngine, relationCandidates,
-  type RelationCandidate, type RelationEngineState, type RelationStatus } from "./forward-relation-v2.ts";
+import { FORWARD_RELATION_V2_VERSION, advanceRelationEngine, initialRelationEngine, normalizeRelationEngine, relationCandidates,
+  type RelationCandidate, type RelationEngineState, type RelationExitProfile, type RelationStatus } from "./forward-relation-v2.ts";
 
 /**
- * Forward Relation 2.0 — PAPER authority.
+ * Forward Path Relation 3.0 — PAPER authority.
  *
- * Mature 15/60/180-minute market responses create directional relations.
- * Six causal reaction checkpoints can reduce stale relation authority early,
- * while the opposite side must earn independent mature evidence.
- * Region/1m logic remains execution enhancement, not directional authority.
+ * One 5m root observation records its complete 5–60m response path. Mature
+ * path evidence chooses direction, expected hold, normal adverse excursion,
+ * feedback deadline and profit retention together. Region/1m logic remains
+ * execution enhancement, never a second directional authority.
  */
 export const FORWARD_VERSION="forward-relations-v1.0";
 export const ADAPTIVE_ENGINE_VERSION=FORWARD_RELATION_V2_VERSION;
@@ -58,9 +58,9 @@ export type Opportunity={
   pathEfficiency:number;momentumPersistence:number;positionScore:number;spaceScore:number;executionScore:number;
   grossRemainingSpaceRate:number;netRemainingSpaceRate:number;pullbackRiskRate:number;edgeRatio:number;
   expectedHoldMinutes:number;marketFit:number;regionId:string|null;regionQuality:number|null;reason:string;
-  relationRuleId?:string;relationStatus?:RelationStatus;relationHorizon?:15|60|180;relationHealth?:number;riskScale?:number;
+  relationRuleId?:string;relationStatus?:RelationStatus;relationHorizon?:15|30|45|60;relationHealth?:number;riskScale?:number;
+  exitPlan?:RelationExitProfile;
 };
-export type SampleMemory={count:number;emaNetRate:number;emaMfeRate:number;emaMaeRate:number;updatedAt:number};
 export type MarketPulse={at:number;up:number;down:number;neutral:number;bias:"UP"|"DOWN"|"MIXED";strength:number;expansion:number};
 
 export type EntryContext={
@@ -68,8 +68,8 @@ export type EntryContext={
   reason:string;entryScore:number;directionStrength:number;spaceScore:number;positionScore:number;executionScore:number;
   remainingSpaceRate:number;pullbackRiskRate:number;edgeRatio:number;expectedHoldMinutes:number;marketFit:number;
   regionId:string|null;regionLower?:number;regionUpper?:number;regionCenter?:number;
-  relationRuleId?:string;relationStatus?:RelationStatus;relationHorizon?:15|60|180;relationHealth?:number;portfolioRiskCharge?:number;
-  relationFamilyId?:string;relationEvidenceAt?:number;relationLivePathScore?:number;
+  relationRuleId?:string;relationStatus?:RelationStatus;relationHorizon?:15|30|45|60;relationHealth?:number;portfolioRiskCharge?:number;
+  relationFamilyId?:string;relationEvidenceAt?:number;relationLivePathScore?:number;exitPlan?:RelationExitProfile;
 };
 export type Trade={
   id:string;symbol:string;side:"LONG"|"SHORT";rule:Rule;openedAt:number;closedAt:number|null;status:"OPEN"|"CLOSED";
@@ -77,7 +77,7 @@ export type Trade={
   leverage:number;margin:number;plannedRisk:number;stopPrice:number;armPrice:number;favorable:number;adverse:number;
   lastPrice:number;lastQuoteAt:number;entryFee:number;exitFee:number;fundingAllowance:number;grossPnl:number|null;netPnl:number|null;
   exitReason:string|null;relationFailureBars:number;lastRelationBar:number;execution:"REAL_QUOTE_PAPER_MODEL";liveEligible:false;
-  entryContext?:EntryContext;forecast?:{remainingNetRate:number;quality:number;sizingEquity:number};
+  entryContext?:EntryContext;forecast?:{remainingNetRate:number;quality:number;sizingEquity:number};exitPlan?:RelationExitProfile;
   firstProfitAt?:number|null;holdScore?:number;profitFloorRate?:number;expectedHoldMinutes?:number;peakPnlRate?:number;
   exitControl?:{policy:string;armedAt:number|null;armedQuoteAt:number|null;maxObservationGapMs:number;maxQuoteAgeMs:number};
   profitProtection?:{version:string;reachedR:number;lockedR:number;floorRate:number;retentionRate:number;activationRate:number;
@@ -95,7 +95,7 @@ export type ForwardState={
   version:string;engineVersion:string;startedAt:number;revision:number;lastCycleAt:number;lastQuoteCycleAt:number;lastCandleAt:number;
   balance:number;initialEquity:number;peakEquity:number;maxDrawdown:number;resolved:number;wins:number;grossPnl:number;fees:number;
   fundingAllowance:number;turnover:number;positions:Trade[];history:Trade[];events:AuditEvent[];daily:Daily[];
-  selectedSymbols:string[];opportunities:Opportunity[];regions:Record<string,Region>;sampleMemory:Record<string,SampleMemory>;relationEngine:RelationEngineState;
+  selectedSymbols:string[];opportunities:Opportunity[];regions:Record<string,Region>;relationEngine:RelationEngineState;
   familyExperiment:FamilyExperimentState;
   marketPulse:MarketPulse;lastEntryAt:Record<string,number>;lastExitAt:Record<string,number>;lastSide:Record<string,"LONG"|"SHORT">;
   lastRotationAt:number;latestReason:string;entryDiagnostics:{at:number;matched:number;opened:number;reasons:Record<string,number>};
@@ -119,9 +119,9 @@ function blankPulse(now:number):MarketPulse{return{at:now,up:0,down:0,neutral:0,
 export function initialForward(now:number):ForwardState{
   const s:ForwardState={version:FORWARD_VERSION,engineVersion:ADAPTIVE_ENGINE_VERSION,startedAt:now,revision:0,lastCycleAt:0,lastQuoteCycleAt:0,lastCandleAt:0,
     balance:1000,initialEquity:1000,peakEquity:1000,maxDrawdown:0,resolved:0,wins:0,grossPnl:0,fees:0,fundingAllowance:0,turnover:0,
-    positions:[],history:[],events:[],daily:[],selectedSymbols:[],opportunities:[],regions:{},sampleMemory:{},relationEngine:initialRelationEngine(now),
+    positions:[],history:[],events:[],daily:[],selectedSymbols:[],opportunities:[],regions:{},relationEngine:initialRelationEngine(now),
     familyExperiment:initialFamilyExperimentState(),marketPulse:blankPulse(now),
-    lastEntryAt:{},lastExitAt:{},lastSide:{},lastRotationAt:0,latestReason:"Forward Relation 2.0 已启动：正在积累真实市场反应；成熟关系负责方向，5m/1m只优化执行。",
+    lastEntryAt:{},lastExitAt:{},lastSide:{},lastRotationAt:0,latestReason:"Forward Path Relation 3.0 已启动：根样本学习完整5–60分钟路径；方向与退出由同一证据生成。",
     entryDiagnostics:{at:now,matched:0,opened:0,reasons:{}},storage:{persistedAt:0,error:null},liveEligible:false,
     policyVersion:ADAPTIVE_ENGINE_VERSION,strategyAuthorityVersion:ADAPTIVE_ENGINE_VERSION,executionVersion:ADAPTIVE_ENGINE_VERSION,
     regionVersion:"adaptive-region-v1",regionLaunchVersion:"adaptive-region-v1",cutoverAt:now,
@@ -171,7 +171,7 @@ export function normalizeForward(v:ForwardState|null|undefined,now:number):Forwa
   const old=v as ForwardState&Record<string,unknown>;
   const upgrading=v.engineVersion!==ADAPTIVE_ENGINE_VERSION||v.strategyAuthorityVersion!==ADAPTIVE_ENGINE_VERSION
     ||v.executionVersion!==ADAPTIVE_ENGINE_VERSION;
-  const relationEngine=!upgrading&&v.relationEngine?.version===FORWARD_RELATION_V2_VERSION?v.relationEngine:initialRelationEngine(now);
+  const relationEngine=normalizeRelationEngine(v.relationEngine,now);
   const positions=v.positions.map(t=>normalizeTrade(t,now)),history=v.history.map(t=>normalizeTrade(t,now)).slice(0,HISTORY_LIMIT);
   for(const t of positions){
     if(!t.entryContext?.relationFamilyId&&t.entryContext?.relationRuleId){
@@ -179,7 +179,7 @@ export function normalizeForward(v:ForwardState|null|undefined,now:number):Forwa
       if(rule)t.entryContext.relationFamilyId=relationFamilyId(rule);
     }
   }
-  const familyExperiment=normalizeFamilyExperimentState((old as {familyExperiment?:unknown}).familyExperiment,relationEngine.rules,
+  const familyExperiment=upgrading?initialFamilyExperimentState():normalizeFamilyExperimentState((old as {familyExperiment?:unknown}).familyExperiment,relationEngine.rules,
     (old as {relationGuards?:unknown}).relationGuards);
   return{...base,
     startedAt:safe(v.startedAt,base.startedAt),revision:Math.max(0,Math.floor(safe(v.revision))),lastCycleAt:safe(v.lastCycleAt),lastQuoteCycleAt:safe(v.lastQuoteCycleAt),
@@ -190,8 +190,7 @@ export function normalizeForward(v:ForwardState|null|undefined,now:number):Forwa
     positions,history,
     events:Array.isArray(v.events)?v.events.slice(0,EVENT_LIMIT):base.events,daily:Array.isArray(v.daily)?v.daily:[],
     selectedSymbols:Array.isArray(v.selectedSymbols)?v.selectedSymbols:[],opportunities:upgrading?[]:(Array.isArray(v.opportunities)?v.opportunities:[]),
-    regions:v.regions&&typeof v.regions==="object"?v.regions:{},sampleMemory:v.sampleMemory&&typeof v.sampleMemory==="object"?v.sampleMemory:{},
-    relationEngine,familyExperiment,
+    regions:v.regions&&typeof v.regions==="object"?v.regions:{},relationEngine,familyExperiment,
     marketPulse:v.marketPulse?.bias? v.marketPulse:blankPulse(now),lastEntryAt:v.lastEntryAt??{},lastExitAt:v.lastExitAt??{},lastSide:v.lastSide??{},
     lastRotationAt:safe(v.lastRotationAt),latestReason:typeof v.latestReason==="string"?v.latestReason:base.latestReason,
     entryDiagnostics:v.entryDiagnostics??base.entryDiagnostics,storage:v.storage??base.storage,
