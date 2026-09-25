@@ -4,10 +4,10 @@ Recover the production Forward account whose authenticated legacy manifest says
 23 rows for page `0001790265600000:000` while the retained page contains 24
 well-formed rows, with companion legacy boundary drift in later shards. Do not
 ignore, delete or overwrite any original evidence. Accept only when normalizing
-the complete retained page set recreates the exact authenticated canonical
-manifest; atomically preserve every drifted original page and a content-addressed
+the complete retained page set recreates the authenticated page topology;
+atomically preserve every identity-drifted original page and a content-addressed
 recovery manifest before upgrading active pages to raw SHA-256. Total shortages,
-malformed rows and non-canonical legacy sets remain fail-closed. Keep
+malformed rows and topologically inconsistent legacy sets remain fail-closed. Keep
 the account, history, learning, strategy, LIVE=false intent and all Gate safety
 unchanged; deploy only after the full reviewed-main release gate and advancing
 production saves pass.
