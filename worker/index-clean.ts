@@ -44,7 +44,7 @@ import { ADAPTIVE_ENGINE_VERSION, FORWARD_EXECUTION_BBO_CAP, FORWARD_MINUTE_CONF
   resetForwardAccountPreservingLearning, BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
 import { FORWARD_EXECUTION_VOLUME_FLOOR_USD, forwardExecutionUniverseEligible, selectAnchorOpportunityUniverse } from "../lib/multi-turn-universe.ts";
 import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite, prepareForwardReset,
-  FORWARD_STORAGE, FORWARD_PROTECTION_STORAGE } from "../lib/forward-store.ts";
+  FORWARD_STORAGE, FORWARD_PROTECTION_STORAGE, FORWARD_PAGED_STATE_VERSION } from "../lib/forward-store.ts";
 import { nextProtectionWriteBudget, readProtectionWriteBudget, protectionWriteBudgetView,
   PRIMARY_PLANNED_DO_ROWS, TWO_MEMBER_PLANNED_DO_ROWS, type ProtectionWriteBudget } from "../lib/forward-write-budget.ts";
 import { EquityReader } from "../lib/equity-reader.ts";
@@ -1000,7 +1000,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       relationPendingCount:Object.keys(s?.relationEngine?.pending??{}).length,
       relationFrameCount:Object.keys(s?.relationEngine?.frames??{}).length,
       relationDiagnostics:s?.relationEngine?.diagnostics??null,entryDiagnostics:s?.entryDiagnostics??null,
-      ruleDiagnostics,candidateDiagnostics:blocked,storage:{persistedAt:s?.storage.persistedAt??0,error:this.forwardError}};
+      entryValidation:{waiting:Object.values(s?.entryValidations??{}).filter(row=>row.status==="WAITING"&&row.expiresAt>now).length,
+        cancelled:Object.values(s?.entryValidations??{}).filter(row=>row.status==="CANCELLED"&&row.expiresAt>now).length},
+      familyCalibrationCount:Object.keys(s?.familyExperiment?.calibrations??{}).length,
+      ruleDiagnostics,candidateDiagnostics:blocked,storage:{persistedAt:s?.storage.persistedAt??0,
+        layout:s?.storage.layout??null,error:this.forwardError}};
   }
 
   protected liveMirrorView() {
@@ -1074,6 +1078,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         if(!reservation)throw new Error("前向写入预算不足；保留原账户，不提交未持久化订单");
         try {await this.ctx.storage.transaction(async transaction => { await transaction.put(prepared.entries); });reservation.finish(true);}
         finally {reservation.finish(false);}
+        next.state.storage.layout=FORWARD_PAGED_STATE_VERSION;
         this.forwardCompression=prepared.compression;
         for(const t of closures)this.mirrorClosures.set(t.id,structuredClone(t));
       } else if (next.protectionChanged) {
@@ -1726,6 +1731,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         reservation.finish(true);
       }finally{reservation.finish(false);}
 
+      prepared.state.storage.layout=FORWARD_PAGED_STATE_VERSION;
       this.forwardCompression=prepared.compression;this.forwardState=prepared.state;this.forwardError=null;
       this.forwardProtectionBudget=readProtectionWriteBudget(saved?.writeBudget);this.mirrorClosures.clear();
       return{ok:true,equity:1000,forward:forwardSummary(this.forwardState,this.regimeQuotes(now),now)};

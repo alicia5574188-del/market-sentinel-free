@@ -10,7 +10,7 @@
  */
 import type {RelationRule} from "./forward-relation-v2.ts";
 
-export const FORWARD_FAMILY_EXPERIMENT_VERSION="forward-family-experiment-v2";
+export const FORWARD_FAMILY_EXPERIMENT_VERSION="forward-family-experiment-v3";
 
 export type FamilyFailureReason="RELATION_DEGRADED"|"NO_POSITIVE_FEEDBACK"|"STRUCTURE_STOP"|"SAMPLE_PATH_DIVERGED";
 export type FamilyGuardRecord={
@@ -20,7 +20,11 @@ export type FamilyGuardRecord={
 export type FamilyExperimentState={
   version:typeof FORWARD_FAMILY_EXPERIMENT_VERSION;
   guards:Record<string,FamilyGuardRecord>;
+  calibrations:Record<string,FamilyCalibrationRecord>;
+  calibratedTradeIds:string[];
 };
+export type FamilyCalibrationRecord={familyId:string;trades:number;wins:number;meanPredictedNetRate:number;meanRealizedNetRate:number;
+  meanCostRate:number;meanTargetCapture:number;updatedAt:number};
 
 const finite=(v:unknown,fallback=0)=>typeof v==="number"&&Number.isFinite(v)?v:fallback;
 
@@ -30,7 +34,7 @@ export function relationFamilyId(rule:Pick<RelationRule,"side"|"conditions">){
 }
 
 export function initialFamilyExperimentState():FamilyExperimentState{
-  return{version:FORWARD_FAMILY_EXPERIMENT_VERSION,guards:{}};
+  return{version:FORWARD_FAMILY_EXPERIMENT_VERSION,guards:{},calibrations:{},calibratedTradeIds:[]};
 }
 
 function mergeGuard(target:FamilyExperimentState,record:FamilyGuardRecord){
@@ -49,7 +53,7 @@ function mergeGuard(target:FamilyExperimentState,record:FamilyGuardRecord){
 export function normalizeFamilyExperimentState(value:unknown,rules:RelationRule[],legacyRuleGuards?:unknown){
   const out=initialFamilyExperimentState();
   if(value&&typeof value==="object"){
-    const v=value as {guards?:unknown};
+    const v=value as {guards?:unknown;calibrations?:unknown;calibratedTradeIds?:unknown};
     if(v.guards&&typeof v.guards==="object")for(const [familyId,raw] of Object.entries(v.guards as Record<string,unknown>)){
       if(!raw||typeof raw!=="object")continue;const r=raw as Partial<FamilyGuardRecord>;
       const reason:FamilyFailureReason=r.reason==="NO_POSITIVE_FEEDBACK"?"NO_POSITIVE_FEEDBACK":
@@ -58,6 +62,13 @@ export function normalizeFamilyExperimentState(value:unknown,rules:RelationRule[
         blockedEvidenceAt:finite(r.blockedEvidenceAt),blockedHealth:finite(r.blockedHealth),blockedLivePathScore:finite(r.blockedLivePathScore),
         reason,symbol:typeof r.symbol==="string"?r.symbol:"",failures:Math.max(1,Math.floor(finite(r.failures,1)))});
     }
+    if(v.calibrations&&typeof v.calibrations==="object")for(const [familyId,raw]of Object.entries(v.calibrations as Record<string,unknown>)){
+      if(!raw||typeof raw!=="object")continue;const r=raw as Partial<FamilyCalibrationRecord>,trades=Math.max(0,Math.floor(finite(r.trades)));
+      if(!trades)continue;out.calibrations[familyId]={familyId,trades,wins:Math.max(0,Math.min(trades,Math.floor(finite(r.wins)))),
+        meanPredictedNetRate:finite(r.meanPredictedNetRate),meanRealizedNetRate:finite(r.meanRealizedNetRate),
+        meanCostRate:Math.max(0,finite(r.meanCostRate)),meanTargetCapture:Math.max(0,finite(r.meanTargetCapture)),updatedAt:finite(r.updatedAt)};
+    }
+    if(Array.isArray(v.calibratedTradeIds))out.calibratedTradeIds=v.calibratedTradeIds.filter(x=>typeof x==="string").slice(-240);
   }
   // One-time migration from the failed rule-id guard experiment. This preserves
   // real failure evidence while replacing its too-narrow identity model.
@@ -73,6 +84,25 @@ export function normalizeFamilyExperimentState(value:unknown,rules:RelationRule[
     }
   }
   return out;
+}
+
+export function recordFamilyOutcome(input:{state:FamilyExperimentState;familyId:string;tradeId:string;predictedNetRate:number;
+  realizedNetRate:number;costRate:number;targetCapture:number;now:number}){
+  if(!input.familyId||input.state.calibratedTradeIds.includes(input.tradeId))return false;
+  const prior=input.state.calibrations[input.familyId],trades=(prior?.trades??0)+1,weight=1/trades;
+  input.state.calibrations[input.familyId]={familyId:input.familyId,trades,wins:(prior?.wins??0)+(input.realizedNetRate>0?1:0),
+    meanPredictedNetRate:(prior?.meanPredictedNetRate??0)*(1-weight)+input.predictedNetRate*weight,
+    meanRealizedNetRate:(prior?.meanRealizedNetRate??0)*(1-weight)+input.realizedNetRate*weight,
+    meanCostRate:(prior?.meanCostRate??0)*(1-weight)+input.costRate*weight,
+    meanTargetCapture:(prior?.meanTargetCapture??0)*(1-weight)+input.targetCapture*weight,updatedAt:input.now};
+  input.state.calibratedTradeIds=[...input.state.calibratedTradeIds,input.tradeId].slice(-240);return true;
+}
+
+export function familyCalibration(state:FamilyExperimentState,familyId:string|undefined){
+  const row=familyId?state.calibrations[familyId]:undefined,bias=row?Math.max(0,row.meanPredictedNetRate-row.meanRealizedNetRate):0;
+  return{trades:row?.trades??0,wins:row?.wins??0,biasRate:bias,meanPredictedNetRate:row?.meanPredictedNetRate??0,
+    meanRealizedNetRate:row?.meanRealizedNetRate??0,meanCostRate:row?.meanCostRate??0,meanTargetCapture:row?.meanTargetCapture??0,
+    requiresValidation:!!row&&row.trades>=6&&(row.meanRealizedNetRate<=0||bias>=Math.max(.0015,row.meanCostRate))};
 }
 
 function sameFamily(rule:RelationRule,familyId:string){return relationFamilyId(rule)===familyId;}
@@ -158,5 +188,7 @@ export function isFamilyFailure(reason:string,firstProfitAt?:number|null){
 
 export function familyExperimentSummary(state:FamilyExperimentState){
   const records=Object.values(state.guards).sort((a,b)=>b.blockedAt-a.blockedAt);
-  return{version:state.version,blockedFamilies:records.length,records:records.slice(0,12)};
+  const calibrations=Object.values(state.calibrations).sort((a,b)=>b.trades-a.trades||b.updatedAt-a.updatedAt);
+  return{version:state.version,blockedFamilies:records.length,records:records.slice(0,12),calibrationCount:calibrations.length,
+    calibrations:calibrations.slice(0,12)};
 }

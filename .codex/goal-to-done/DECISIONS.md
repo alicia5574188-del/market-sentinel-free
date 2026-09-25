@@ -742,3 +742,30 @@ The inspected first forward window justifies correcting pooled-outlier transfer,
 # 2026-09-21 — scoped code audit decisions
 
 Repair only reproduced implementation faults under the user's explicit no-strategy/no-step-change instruction. Restore original semantics across concurrency, restarts, delayed data and account changes. The delayed calibration repair uses the existing dueAt/two-candle horizon; all thresholds and formulas stay frozen. Independent review approved the exact syncLive/syncLiveOnce, Gate adapter and protection-checkpoint baseline advances after semantic counterexamples; other primary method baselines remain unchanged. React/RSC receives only the compatible 19.2.8 security patch, with residual dependency reachability recorded separately. Production quote timeouts remain a measured limitation, not a reason to relax freshness or claim full stability. No private exchange testing or owner-intent changes.
+# Lossless storage and entry authority decision — 2026-09-25
+
+- The 2MiB error is a schema-boundary defect, not permission to trim evidence or
+  raise one limit. Keep financial/current strategy state in a bounded account
+  record and store mature causal samples in stable checksummed time pages. A
+  manifest binds version, page ids, counts, lengths and hashes; one transaction
+  publishes changed pages, manifest and account generation.
+- Preserve the existing cost floor. Realized PAPER forecast error becomes a
+  small family calibration record used to choose immediate versus short BBO
+  validation and risk scale; it does not rewrite historical samples or make
+  displayed expectancy look better.
+- Structural pre-alert and reverse authorization are separate. Extended outer-
+  region moves cannot confirm from speed alone; they wait for the first bounded
+  retest and a new directional restart. All same-side detections within one
+  shock window share a risk identity. Default participation is one; a second
+  requires explicit independent-restart quality and the same event cap.
+- LIVE consumes only the exact Trade that the PAPER/account transaction already
+  committed. The existing Gate timeout recovery, dedupe, minimum-lot uplift,
+  risk freeze and owner activation fence remain unchanged.
+
+## 2026-09-25 integrated repair decisions
+
+- Keep Forward Path Relation as the only ordinary direction authority; Structural Interrupt may veto immediately but may reverse only after its own exceptional confirmation.
+- Treat 19bp as a fixed historical modeled round trip. Actual fill calibration can demand entry validation but cannot reduce that assumption or erase poor outcomes.
+- Store mature causal evidence separately from the financial/control head in stable hour/row shards. Never truncate samples, pending roots, history, events, rules or positions to make a write fit.
+- Do not claim unknown counterfactual fills from the snapshot. SUI/XLM are causally blocked at the recorded entries; LINK is delayed and remains unknown without the missing resident two-second path.
+- Preserve the existing atomic PAPER commit and immediate serialized LIVE wake rather than modifying Gate timeout recovery, replay protection, minimum-lot uplift or risk freeze.
