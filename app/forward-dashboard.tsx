@@ -13,8 +13,8 @@ const fmt=(v:number|null|undefined,d=2)=>typeof v==="number"&&Number.isFinite(v)
 const signed=(v:number|null|undefined,d=2)=>typeof v==="number"&&Number.isFinite(v)?`${v>=0?"+":""}${fmt(v,d)}`:"—";
 const time=(v?:number|null)=>v?new Date(v).toLocaleString("zh-CN",{timeZone:"Asia/Vientiane",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}):"—";
 const duration=(start:number,end:number|null|undefined,now:number)=>{const m=Math.floor(Math.max(0,(end??now)-start)/60000);return m<1?"<1分钟":m>=60?`${Math.floor(m/60)}小时${m%60}分`:`${m}分钟`;};
-const modeName=(mode:string)=>({RELATION:"市场关系",BREAKOUT:"市场关系 · 突破执行",RETEST:"市场关系 · 回踩执行",FAILED_BREAKOUT:"市场关系 · 失败突破执行",RANGE:"市场关系 · 区域执行"}[mode]??mode);
-const exitName=(reason:string|null)=>reason?({STRUCTURE_STOP:"结构止损",PROFIT_GIVEBACK:"利润保护",MARKET_FLIP:"独立反向关系",RELATION_DEGRADED:"关系降级",NO_POSITIVE_FEEDBACK:"无正向反馈",SAMPLE_PATH_DIVERGED:"样本路径失配",SAMPLE_EDGE_EXHAUSTED:"样本优势耗尽",SAMPLE_MAX_HOLD:"样本最大持仓",TIME_DECAY:"持仓超时",OPPORTUNITY_REPLACED:"更优机会替换",ACCOUNT_RESET:"手动重置"}[reason]??reason):"—";
+const modeName=(mode:string)=>({RELATION:"市场关系",BREAKOUT:"市场关系 · 突破执行",RETEST:"市场关系 · 回踩执行",FAILED_BREAKOUT:"市场关系 · 失败突破执行",RANGE:"市场关系 · 区域执行",SHOCK:"结构中断 · 极端行情"}[mode]??mode);
+const exitName=(reason:string|null)=>reason?({STRUCTURE_STOP:"结构止损",PROFIT_GIVEBACK:"利润保护",MARKET_FLIP:"独立反向关系",STRUCTURAL_INTERRUPT_FAILED:"极端结构快速失败",RELATION_DEGRADED:"关系降级",NO_POSITIVE_FEEDBACK:"无正向反馈",SAMPLE_PATH_DIVERGED:"样本路径失配",SAMPLE_EDGE_EXHAUSTED:"样本优势耗尽",SAMPLE_MAX_HOLD:"样本最大持仓",TIME_DECAY:"持仓超时",OPPORTUNITY_REPLACED:"更优机会替换",ACCOUNT_RESET:"手动重置"}[reason]??reason):"—";
 
 export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,livePanel,liveSystemPanel,liveEnabled,liveOverview,accountPanel,memberName,cacheScope="owner"}:{
   data:View|null;healthy:boolean;statusLabel?:string;feedAt:number|null;error:string|null;livePanel:ReactNode;liveSystemPanel?:ReactNode;
@@ -76,14 +76,14 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
     </>}
 
     {tab==="execution"&&<>
-      <PageTitle eyebrow="FORWARD PATH RELATION 3.0" title="执行" text="系统每5分钟记录根样本，15分钟起逐步成熟并补全至60分钟；方向、最佳持仓与退出计划来自同一条真实路径，反方向仍必须靠自己的成熟样本获得资格。"/>
+      <PageTitle eyebrow="FORWARD PATH RELATION 3.0" title="执行" text="常态交易仍由成熟样本掌权；只有真正离开外层区域、并被2秒实时路径确认的极端突变，结构中断器才可临时否决旧方向并参与反转。"/>
       <section className="fr-section fr-exec-flow-section"><div className="fr-section-head"><div><small>当前执行层</small><h2>Forward Path Relation 3.0 闭环</h2></div><span>{time(data?.updatedAt)}</span></div>
         <div className="fr-exec-flow">
           <ExecStep index="01" title="真实条件采样" status={(relation?.markets??0)>0?"运行中":"等待5m"} text={`30市场持续记录条件；当前 ${fmt(relation?.matureSamples,0)} 份反应已经成熟，不用历史结果伪造冷启动成交。`}/>
           <ExecStep index="02" title="15 / 30 / 45 / 60 分钟最佳持仓" status={(relation?.rules??0)>0?"已生成":"积累中"} text={`当前关系 ${fmt(relation?.rules,0)} 条：15m ${fmt(relation?.qualified15,0)} · 30m ${fmt(relation?.qualified30,0)} · 45m ${fmt(relation?.qualified45,0)} · 60m ${fmt(relation?.qualified60,0)}。`}/>
           <ExecStep index="03" title="同根路径检查" status={(relation?.liveAnomalies??0)>0?"发现偏离":"持续核对"} text="5/10/15/20/30/45/60分钟属于同一根样本，只比较真实路径是否仍像历史有效路径，不重复计票、不负责预测反向。"/>
           <ExecStep index="04" title="关系生命周期" status={(relation?.degraded??0)>0?"正在迁移风险":"正常"} text={`ACTIVE ${fmt(relation?.active,0)} · 承压 ${fmt(relation?.pressured,0)} · 降级 ${fmt(relation?.degraded,0)} · 恢复中 ${fmt(relation?.recovering,0)}。`}/>
-          <ExecStep index="05" title="独立反向确认" status="只认成熟样本" text="旧多头关系失效只降低多头权重；空头必须由自己的已成熟真实反应证明扣成本后有效，禁止失效即反手。"/>
+          <ExecStep index="05" title="反向与突变" status="样本主线 · 极端中断" text="普通反向仍必须由自己的成熟样本获得资格；仅外层区域真实破位且2秒实时路径持续确认的极端事件，可临时中断旧方向，最多选少量最强标的，随后快速验证。"/>
           <ExecStep index="06" title="风险驱动持仓" status={riskUse>=.09?"接近风险上限":"持续竞争"} text={`当前 ${positions.length} 笔持仓，组合预算已用 ${fmt(riskUse*100,1)}%；主仓/探测仓分预算，同一关系≤2.5%，每个5m周期新增≤2.5%，风险越高新仓门槛越高。`}/>
           <ExecStep index="07" title="样本退出计划" status={positions.length?"持续核对":"等待持仓"} text="每笔新单冻结正反馈期限、正常MAE、最佳持仓、剩余优势与利润保留率；结构止损仍是硬边界。"/>
         </div></section>
