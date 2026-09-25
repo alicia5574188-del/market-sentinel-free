@@ -346,6 +346,9 @@ function relationBackedRegionOpportunities(s:ForwardState,symbol:string,rows:Can
   }
   return out;
 }
+function bestOpportunityPerSymbol(rows:Opportunity[],compare:(a:Opportunity,b:Opportunity)=>number){
+  const out:Opportunity[]=[],seen=new Set<string>();for(const row of [...rows].sort(compare)){if(seen.has(row.symbol))continue;seen.add(row.symbol);out.push(row);}return out;
+}
 function buildOpportunities(s:ForwardState,paths:Record<string,Candle[]>,minutePaths:Record<string,Candle[]>|undefined,quotes:Record<string,Quote>,now:number,allowed?:ReadonlySet<string>){
   const pulse=marketPulse(paths,now),all:Opportunity[]=[],regions:Record<string,Region>={},bySymbol=relationSupportMap(s,allowed);
   for(const[symbol,path]of Object.entries(paths)){if(allowed&&!allowed.has(symbol))continue;const rows=validPath(path,now);if(!rows)continue;
@@ -355,9 +358,8 @@ function buildOpportunities(s:ForwardState,paths:Record<string,Candle[]>,minuteP
       all.push(...relationBackedRegionOpportunities(s,symbol,rows,minutePaths?.[symbol],quotes[symbol],now,pulse,region,support));
     }
   }
-  const best=[...new Map(all.sort((a,b)=>Number(b.eligible)-Number(a.eligible)||Number(!b.reserve)-Number(!a.reserve)
-    ||Number(b.premium)-Number(a.premium)||b.score-a.score).map(x=>[x.symbol,x] as const)).values()]
-    .sort((a,b)=>Number(b.eligible)-Number(a.eligible)||Number(!b.reserve)-Number(!a.reserve)||Number(b.premium)-Number(a.premium)||b.score-a.score);
+  const best=bestOpportunityPerSymbol(all,(a,b)=>Number(b.eligible)-Number(a.eligible)||Number(!b.reserve)-Number(!a.reserve)
+    ||Number(b.premium)-Number(a.premium)||b.score-a.score);
   return{pulse,regions,opportunities:best};
 }
 function equityMark(s:ForwardState,quotes:Record<string,Quote>,now:number){
@@ -603,8 +605,8 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
       const support=bySymbol.get(symbol)??[];
       premium.push(...relationBackedRegionOpportunities(s,symbol,rows,input.minutePaths?.[symbol],input.quotes[symbol],input.now,pulse,region,support).filter(o=>o.premium));}
     const base=s.opportunities.filter(o=>!o.premium&&o.expiresAt>input.now),combined=[...premium,...base];
-    s.opportunities=[...new Map(combined.sort((a,b)=>Number(b.eligible)-Number(a.eligible)||Number(b.premium)-Number(a.premium)
-      ||Number(!b.reserve)-Number(!a.reserve)||b.score-a.score).map(o=>[o.symbol,o] as const)).values()];
+    s.opportunities=bestOpportunityPerSymbol(combined,(a,b)=>Number(b.eligible)-Number(a.eligible)||Number(b.premium)-Number(a.premium)
+      ||Number(!b.reserve)-Number(!a.reserve)||b.score-a.score);
   }
   const mark=equityMark(s,input.quotes,input.now);s.peakEquity=Math.max(s.peakEquity,mark.equity);s.maxDrawdown=Math.max(s.maxDrawdown,1-mark.equity/Math.max(s.peakEquity,1));
   updateDaily(s,input.now,mark.equity);rotateIfNeeded(s,input.quotes,input.contracts,input.now,mark.equity);
