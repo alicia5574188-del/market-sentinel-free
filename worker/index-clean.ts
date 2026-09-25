@@ -2554,166 +2554,164 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       notionalForNewEntries += intent.notional;
       staged.push({ symbol, plan, intent, binding,activation:structuredClone(this.runtime.live.activation??null) });
     }
-    for (const { symbol, plan, intent, binding,activation } of staged) {
+    const prepared:Array<{symbol:string;plan:PaperPlan;intent:ReturnType<typeof buildLiveEntryIntent>;binding:MirrorBinding;
+      activation:LiveSession|null;entry:LiveEntry}>=[];
+    for(const {symbol,plan,intent,binding,activation} of staged){
+      if(!binding||!this.runtime.live.requestedEnabled||!this.mirrorQuoteReady(symbol)
+        ||!sameLiveSession(activation,this.runtime.live.activation)
+        ||!sourceAfterEnable(binding.sourceAtCopy,this.runtime.live.activation,this.forwardState!.startedAt)
+        ||!mirrorSourceFresh(this.currentMirrorSource(plan.id).trade??undefined,plan.id,Date.now()))continue;
+      const entry:LiveEntry={
+        planId:plan.id,symbol,side:plan.side,scenario:plan.marketState,kind:intent.kind,status:"SUBMITTING",
+        tag:intent.tag,exchangeOrderId:null,createdAt:now,expiresAt:plan.expiresAt,trigger:plan.entryTrigger,
+        invalidation:plan.invalidation,target:plan.target,targetIdentity:plan.targetIdentity,targetScore:plan.score,
+        routeId:plan.routeId,routeKind:plan.routeKind,targetTimeframe:plan.targetTimeframe,
+        rangeBoundary:plan.rangeBoundary,rangeBuffer:plan.rangeBuffer,sweepExtreme:plan.sweepExtreme,
+        reclaimSource:plan.reclaimSource,reclaimStrength:plan.reclaimStrength,size:intent.size,contracts:intent.contracts,
+        notional:intent.notional,plannedRisk:intent.plannedRisk,leverage:intent.leverage,margin:intent.margin,
+        stopOrderId:null,stopTag:null,stopPrice:null,stopSubmittingAt:null,protectionExitRequestedAt:null,
+        missingSince:null,lastError:null,parity:structuredClone(binding.receipt),mirrorSourceId:plan.id,
+      };
+      this.runtime.live.entries[symbol]=entry;
+      this.liveJournal.set(`${LIVE_PARITY_PREFIX}binding:${plan.id}`,binding);
+      prepared.push({symbol,plan,intent,binding,activation,entry});
+    }
+    // Every order identity and its full source binding is durable before any
+    // private mutation. This one commit replaces per-symbol checkpoint waits so
+    // near-simultaneous PAPER signals enter the same LIVE execution wave.
+    if(prepared.length)await this.saveCheckpoint(Date.now(),true);
+
+    const leverageRows=await Promise.all(prepared.map(async row=>{
+      try{
+        if(!this.runtime.live.requestedEnabled||!sameLiveSession(row.activation,this.runtime.live.activation)){
+          row.entry.status="CANCELLED";return{...row,ready:false};
+        }
+        const check=await client.ensureLeverage(row.symbol,row.intent.leverage);
+        if(check.recovered)this.recordLiveAudit({observedAt:Date.now(),symbol:row.symbol,planId:row.plan.id,stage:"LEVERAGE",level:"INFO",
+          reason:`Gate 杠杆写入响应超时，但安全回读已确认 ${row.symbol} 为 ${row.intent.leverage}×；继续本次新源单，不重放杠杆写入`});
+        return{...row,ready:true};
+      }catch(error){
+        const reason=`Gate 未确认 ${row.symbol} 的 ${row.intent.leverage}× 杠杆，本计划跳过且不影响其他同步信号：${safeError(error)}`;
+        row.entry.status="CANCELLED";row.entry.lastError=reason;
+        this.runtime.live.entrySkips[row.symbol]={planId:row.plan.id,symbol:row.symbol,code:"LEVERAGE_REJECTED",reason,observedAt:Date.now()};
+        this.recordLiveAudit({observedAt:Date.now(),symbol:row.symbol,planId:row.plan.id,stage:"LEVERAGE",level:"SKIPPED",reason,error});
+        return{...row,ready:false};
+      }
+    }));
+
+    const submitRows:Array<(typeof leverageRows)[number]&{source:MirrorBinding["sourceAtCopy"];submittedAt:number}>=[];
+    for(const row of leverageRows){
+      if(!row.ready)continue;
+      const {symbol,plan,binding,activation,entry}=row;
       if(!this.runtime.live.requestedEnabled||!this.mirrorQuoteReady(symbol)
         ||!sameLiveSession(activation,this.runtime.live.activation)
-        ||!sourceAfterEnable(binding!.sourceAtCopy,this.runtime.live.activation,this.forwardState!.startedAt)
-        ||!mirrorSourceFresh(this.currentMirrorSource(plan.id).trade??undefined,plan.id,Date.now()))continue;
-      const entry: LiveEntry = {
-        planId: plan.id, symbol, side: plan.side, scenario: plan.marketState, kind: intent.kind, status: "SUBMITTING",
-        tag: intent.tag, exchangeOrderId: null, createdAt: now, expiresAt: plan.expiresAt, trigger: plan.entryTrigger,
-        invalidation: plan.invalidation, target: plan.target, targetIdentity: plan.targetIdentity, targetScore: plan.score,
-        routeId: plan.routeId, routeKind: plan.routeKind, targetTimeframe: plan.targetTimeframe,
-        rangeBoundary: plan.rangeBoundary, rangeBuffer: plan.rangeBuffer, sweepExtreme: plan.sweepExtreme,
-        reclaimSource: plan.reclaimSource, reclaimStrength: plan.reclaimStrength,
-        size: intent.size, contracts: intent.contracts,
-        notional: intent.notional, plannedRisk: intent.plannedRisk, leverage: intent.leverage, margin: intent.margin,
-        stopOrderId: null, stopTag: null, stopPrice: null, stopSubmittingAt: null, protectionExitRequestedAt: null,
-        missingSince: null, lastError: null,
-        ...(binding?{parity:structuredClone(binding.receipt),mirrorSourceId:plan.id}:{}),
+        ||!sourceAfterEnable(binding.sourceAtCopy,this.runtime.live.activation,this.forwardState!.startedAt)
+        ||!mirrorSourceFresh(this.currentMirrorSource(plan.id).trade??undefined,plan.id,Date.now())){
+        entry.status="CANCELLED";entry.lastError="杠杆核对期间所有者选择、源单或实时盘口已变化，未发送入场请求";
+        continue;
+      }
+      const q=this.runtime.evidence[symbol],price=entry.side==="LONG"?q?.bestAsk:q?.bestBid;
+      if(!price||(entry.side==="LONG"?price<=entry.invalidation:price>=entry.invalidation)){
+        entry.status="CANCELLED";entry.lastError="杠杆核对期间价格已越过源单止损，未追补旧成交";
+        this.runtime.live.entrySkips[symbol]={planId:entry.planId,symbol,code:"ECONOMICS",reason:entry.lastError,observedAt:Date.now()};
+        continue;
+      }
+      const source=binding.sourceAtCopy,drift=liveEntryDriftGuard(source,price);
+      if(drift.adverse>drift.allowed+1e-9){
+        entry.status="CANCELLED";entry.lastError=`提交前盘口相对模拟入场不利偏差${(drift.adverse*100).toFixed(3)}%，超过动态上限${(drift.allowed*100).toFixed(3)}%，不追价`;
+        this.runtime.live.entrySkips[symbol]={planId:entry.planId,symbol,code:"ECONOMICS",reason:entry.lastError,observedAt:Date.now()};
+        continue;
+      }
+      const submittedAt=Date.now();
+      Object.assign(entry.parity!,{submitQuoteAt:q?.observedAt,submitQuotePrice:price,submittedAt,
+        submitDelayMs:Math.max(0,submittedAt-source.openedAt),allowedAdverseEntryDriftRate:drift.allowed,
+        adverseEntryDriftRate:drift.adverse});
+      entry.marketSubmittedAt=submittedAt;
+      submitRows.push({...row,source,submittedAt});
+    }
+    // Persist every unique market-order identity before the first order crosses
+    // the network boundary. A crash can therefore reconcile every leg without
+    // replaying one of them.
+    if(prepared.length)await this.saveCheckpoint(Date.now(),true);
+
+    await Promise.all(submitRows.map(async row=>{
+      const {symbol,plan,intent,binding,activation,entry,source,submittedAt}=row;
+      const submissionStillAllowed=()=>{
+        if(!this.runtime.live.requestedEnabled||!this.mirrorQuoteReady(symbol)
+          ||!sameLiveSession(activation,this.runtime.live.activation)
+          ||!sourceAfterEnable(binding.sourceAtCopy,this.runtime.live.activation,this.forwardState?.startedAt??0)
+          ||!mirrorSourceFresh(this.currentMirrorSource(plan.id).trade??undefined,plan.id,Date.now()))return false;
+        const latest=this.runtime.evidence[symbol],latestPrice=entry.side==="LONG"?latest?.bestAsk:latest?.bestBid;
+        if(!latestPrice||(entry.side==="LONG"?latestPrice<=entry.invalidation:latestPrice>=entry.invalidation))return false;
+        const latestDrift=liveEntryDriftGuard(source,latestPrice);
+        return latestDrift.adverse<=latestDrift.allowed+1e-9;
       };
-      this.runtime.live.entries[symbol] = entry;
-      if(binding)this.liveJournal.set(`${LIVE_PARITY_PREFIX}binding:${plan.id}`,binding);
-      await this.saveCheckpoint(now, true);
-      try {
-        if(!this.runtime.live.requestedEnabled||!sameLiveSession(activation,this.runtime.live.activation)){entry.status="CANCELLED";continue;}
-        try {
-          const leverageCheck=await client.ensureLeverage(symbol,intent.leverage);
-          if(leverageCheck.recovered)this.recordLiveAudit({observedAt:Date.now(),symbol,planId:plan.id,stage:"LEVERAGE",level:"INFO",
-            reason:`Gate 杠杆写入响应超时，但安全回读已确认 ${symbol} 为 ${intent.leverage}×；继续本次新源单，不重放杠杆写入`});
-        } catch (error) {
-          const reason = `Gate 未接受 ${symbol} 的 ${intent.leverage}× 杠杆，本计划已跳过：${safeError(error)}`;
-          entry.status = "CANCELLED";
-          entry.lastError = reason;
-          this.runtime.live.entrySkips[symbol] = { planId: plan.id, symbol, code: "LEVERAGE_REJECTED", reason, observedAt: now };
-          this.recordLiveAudit({ observedAt: now, symbol, planId: plan.id, stage: "LEVERAGE", level: "SKIPPED", reason, error });
-          continue;
+      try{
+        if(!submissionStillAllowed())throw new GateEntryCancelledError();
+        entry.exchangeOrderId=await client.createEntry(intent,submissionStillAllowed);
+        entry.status="OPEN";
+        let filled:GateLiveOrder|null=null,recoveredFillPrice:number|null=null;
+        try{filled=await client.inspectEntry("MARKET",symbol,entry.tag,entry.exchangeOrderId);}
+        catch(readError){
+          if(!isGateReadTimeoutError(readError))throw readError;
+          const recovery=await client.recoverMarketEntry(symbol,entry.side,entry.tag,entry.exchangeOrderId,submittedAt);
+          filled=recovery.order;recoveredFillPrice=recovery.fillPrice;
+          if(recovery.order&&!entry.exchangeOrderId)entry.exchangeOrderId=liveOrderId(recovery.order);
+          this.recordLiveAudit({observedAt:Date.now(),symbol,planId:entry.planId,stage:"ENTRY_SUBMIT",level:"INFO",
+            reason:`Gate 已接受唯一订单身份；成交详情首次读取超时，已通过 ${recovery.evidence.join("+")||"后续核对"} 补充核对，不重放入场`,error:readError});
         }
-        try {
-          // Owner OFF or source CLOSE during leverage/network await takes
-          // precedence over the stale staged entry.
-          if(!this.runtime.live.requestedEnabled||!this.mirrorQuoteReady(symbol)
-            ||!sameLiveSession(activation,this.runtime.live.activation)
-            ||!sourceAfterEnable(binding!.sourceAtCopy,this.runtime.live.activation,this.forwardState!.startedAt)
-            ||!mirrorSourceFresh(this.currentMirrorSource(plan.id).trade??undefined,plan.id,Date.now())){
-            entry.status="CANCELLED";await this.saveCheckpoint(Date.now(),true);continue;
-          }
-          const q=this.runtime.evidence[symbol],price=entry.side==="LONG"?q?.bestAsk:q?.bestBid;
-          if(!price||(entry.side==="LONG"?price<=entry.invalidation:price>=entry.invalidation)){
-            entry.status="CANCELLED";entry.lastError="等待杠杆确认期间价格已越过源单止损，未追补旧成交";
-            this.runtime.live.entrySkips[symbol]={planId:entry.planId,symbol,code:"ECONOMICS",reason:entry.lastError,observedAt:Date.now()};
-            await this.saveCheckpoint(Date.now(),true);continue;
-          }
-          const source=binding!.sourceAtCopy,drift=liveEntryDriftGuard(source,price);
-          if(drift.adverse>drift.allowed+1e-9){
-            entry.status="CANCELLED";
-            entry.lastError=`提交前盘口相对模拟入场不利偏差${(drift.adverse*100).toFixed(3)}%，超过动态上限${(drift.allowed*100).toFixed(3)}%，不追价`;
-            this.runtime.live.entrySkips[symbol]={planId:entry.planId,symbol,code:"ECONOMICS",reason:entry.lastError,observedAt:Date.now()};
-            await this.saveCheckpoint(Date.now(),true);continue;
-          }
-          const submittedAt=Date.now();
-          if(entry.parity)Object.assign(entry.parity,{submitQuoteAt:q?.observedAt,submitQuotePrice:price,submittedAt,
-            submitDelayMs:Math.max(0,submittedAt-source.openedAt),allowedAdverseEntryDriftRate:drift.allowed,
-            adverseEntryDriftRate:drift.adverse});
-          entry.marketSubmittedAt=submittedAt;
-          await this.saveCheckpoint(submittedAt,true);
-          const submissionStillAllowed=()=>{
-            if(!this.runtime.live.requestedEnabled||!this.mirrorQuoteReady(symbol)
-              ||!sameLiveSession(activation,this.runtime.live.activation)
-              ||!sourceAfterEnable(binding!.sourceAtCopy,this.runtime.live.activation,this.forwardState?.startedAt??0)
-              ||!mirrorSourceFresh(this.currentMirrorSource(plan.id).trade??undefined,plan.id,Date.now()))return false;
-            const latest=this.runtime.evidence[symbol],latestPrice=entry.side==="LONG"?latest?.bestAsk:latest?.bestBid;
-            if(!latestPrice||(entry.side==="LONG"?latestPrice<=entry.invalidation:latestPrice>=entry.invalidation))return false;
-            const latestDrift=liveEntryDriftGuard(source,latestPrice);
-            return latestDrift.adverse<=latestDrift.allowed+1e-9;
-          };
-          if(!submissionStillAllowed())throw new GateEntryCancelledError();
-          entry.exchangeOrderId = await client.createEntry(intent,submissionStillAllowed);
-          entry.status = "OPEN";
-          let filled:GateLiveOrder|null=null,recoveredFillPrice:number|null=null;
-          try{filled=await client.inspectEntry("MARKET",symbol,entry.tag,entry.exchangeOrderId);}
-          catch(readError){
-            if(!isGateReadTimeoutError(readError))throw readError;
-            const recovery=await client.recoverMarketEntry(symbol,entry.side,entry.tag,entry.exchangeOrderId,submittedAt);
-            filled=recovery.order;recoveredFillPrice=recovery.fillPrice;
-            if(recovery.order&&!entry.exchangeOrderId)entry.exchangeOrderId=liveOrderId(recovery.order);
-            this.recordLiveAudit({observedAt:Date.now(),symbol,planId:entry.planId,stage:"ENTRY_SUBMIT",level:"INFO",
-              reason:`Gate 已接受唯一订单身份；成交详情首次读取超时，已通过 ${recovery.evidence.join("+")||"后续核对"} 补充核对，不重放入场`,error:readError});
-          }
-          const fillPrice=Number(filled?.fill_price??recoveredFillPrice);
-          if(entry.parity&&Number.isFinite(fillPrice)&&fillPrice>0){
-            const actualDrift=liveEntryDriftGuard(source,fillPrice);
-            Object.assign(entry.parity,{exchangeEntryPrice:fillPrice,exchangeEntryAt:Date.now(),
+        const fillPrice=Number(filled?.fill_price??recoveredFillPrice);
+        if(Number.isFinite(fillPrice)&&fillPrice>0){
+          const actualDrift=liveEntryDriftGuard(source,fillPrice);
+          Object.assign(entry.parity!,{exchangeEntryPrice:fillPrice,exchangeEntryAt:Date.now(),exchangeEntryDriftRate:actualDrift.adverse});
+        }
+        if(filled&&liveEntryDisposition(filled,"MARKET")==="CANCELLED"){
+          entry.status="CANCELLED";entry.submissionResolved=true;entry.lastError="Gate IOC零成交；未完成复制，不冒充成功";
+          this.runtime.live.entrySkips[symbol]={planId:entry.planId,symbol,code:"ENTRY_REJECTED",reason:entry.lastError,observedAt:Date.now()};
+          return;
+        }
+        await this.createImmediateLiveStop(client,entry);
+        if(entry.stopOrderId)await this.queueLiveBinding(entry);
+      }catch(error){
+        if(error instanceof GateEntryCancelledError){
+          entry.status="CANCELLED";entry.submissionResolved=true;entry.lastError=error.message;
+          delete entry.marketSubmittedAt;delete entry.parity!.submittedAt;delete entry.parity!.submitDelayMs;
+          await this.queueLiveBinding(entry);return;
+        }
+        const reason=`Gate 实盘入场提交失败：${safeError(error)}`;entry.lastError=reason;
+        if(definitiveGateRejection(error)){
+          entry.status="CANCELLED";entry.submissionResolved=true;
+          this.runtime.live.entrySkips[symbol]={planId:plan.id,symbol,code:"ENTRY_REJECTED",reason,observedAt:Date.now()};
+          this.recordLiveAudit({observedAt:Date.now(),symbol,planId:plan.id,stage:"ENTRY_SUBMIT",level:"SKIPPED",reason,error});return;
+        }
+        const recovery=await client.recoverMarketEntry(symbol,entry.side,entry.tag,entry.exchangeOrderId,entry.marketSubmittedAt??Date.now());
+        if(recovery.order&&!entry.exchangeOrderId)entry.exchangeOrderId=liveOrderId(recovery.order);
+        if(recovery.cancelled){
+          entry.status="CANCELLED";entry.submissionResolved=true;entry.missingSince=null;
+          entry.lastError="Gate 已通过唯一订单身份确认 IOC 零成交；未重放同一模拟源单";
+          this.runtime.live.entrySkips[symbol]={planId:plan.id,symbol,code:"ENTRY_REJECTED",reason:entry.lastError,observedAt:Date.now()};
+          this.recordLiveAudit({observedAt:Date.now(),symbol,planId:plan.id,stage:"ENTRY_SUBMIT",level:"INFO",
+            reason:`${entry.lastError}（响应超时后通过 ${recovery.evidence.join("+")||"订单"} 核对）`,error});return;
+        }
+        if(recovery.exposure||recovery.order){
+          entry.status="OPEN";entry.submissionResolved=recovery.exposure;entry.missingSince=null;entry.lastError=null;
+          if(recovery.fillPrice!=null){
+            const actualDrift=liveEntryDriftGuard(source,recovery.fillPrice);
+            Object.assign(entry.parity!,{exchangeEntryPrice:recovery.fillPrice,exchangeEntryAt:recovery.checkedAt,
               exchangeEntryDriftRate:actualDrift.adverse});
           }
-          if(filled&&liveEntryDisposition(filled,"MARKET")==="CANCELLED"){
-            entry.status="CANCELLED";entry.submissionResolved=true;entry.lastError="Gate IOC零成交；未完成复制，不冒充成功";
-            this.runtime.live.entrySkips[symbol]={planId:entry.planId,symbol,code:"ENTRY_REJECTED",reason:entry.lastError,observedAt:Date.now()};
-            await this.saveCheckpoint(Date.now(),true);continue;
-          }
-          await this.saveCheckpoint(Date.now(),true);
-          await this.createImmediateLiveStop(client, entry);
-          if (!entry.stopOrderId) {
-            if (entry.protectionExitRequestedAt) recoveringSubmission = entry;
-            else recoveringEntryStop = entry;
-            break;
-          }
-          await this.queueLiveBinding(entry);
-          await this.saveCheckpoint(Date.now(),true);
-        } catch (error) {
-          if(error instanceof GateEntryCancelledError){
-            entry.status="CANCELLED";entry.submissionResolved=true;entry.lastError=error.message;
-            delete entry.marketSubmittedAt;
-            if(entry.parity){delete entry.parity.submittedAt;delete entry.parity.submitDelayMs;}
-            await this.queueLiveBinding(entry);
-            await this.saveCheckpoint(Date.now(),true);
-            continue;
-          }
-          const reason = `Gate 实盘入场提交失败：${safeError(error)}`;
-          entry.lastError = reason;
-          if (definitiveGateRejection(error)) {
-            entry.status = "CANCELLED";entry.submissionResolved=true;
-            this.runtime.live.entrySkips[symbol] = { planId: plan.id, symbol, code: "ENTRY_REJECTED", reason, observedAt: now };
-            this.recordLiveAudit({ observedAt: now, symbol, planId: plan.id, stage: "ENTRY_SUBMIT", level: "SKIPPED", reason, error });
-          } else {
-            const recovery=await client.recoverMarketEntry(symbol,entry.side,entry.tag,entry.exchangeOrderId,entry.marketSubmittedAt??Date.now());
-            if(recovery.order&&!entry.exchangeOrderId)entry.exchangeOrderId=liveOrderId(recovery.order);
-            if(recovery.cancelled){
-              entry.status="CANCELLED";entry.submissionResolved=true;entry.missingSince=null;
-              entry.lastError="Gate 已通过唯一订单身份确认 IOC 零成交；未重放同一模拟源单";
-              this.runtime.live.entrySkips[symbol]={planId:plan.id,symbol,code:"ENTRY_REJECTED",reason:entry.lastError,observedAt:Date.now()};
-              this.recordLiveAudit({observedAt:Date.now(),symbol,planId:plan.id,stage:"ENTRY_SUBMIT",level:"INFO",
-                reason:`${entry.lastError}（响应超时后通过 ${recovery.evidence.join("+")||"订单"} 核对）`,error});
-            }else if(recovery.exposure||recovery.order){
-              entry.status="OPEN";entry.submissionResolved=recovery.exposure;entry.missingSince=null;entry.lastError=null;
-              const recoveredPrice=recovery.fillPrice;
-              if(entry.parity&&recoveredPrice!=null){
-                const actualDrift=liveEntryDriftGuard(source,recoveredPrice);
-                Object.assign(entry.parity,{exchangeEntryPrice:recoveredPrice,exchangeEntryAt:recovery.checkedAt,
-                  exchangeEntryDriftRate:actualDrift.adverse});
-              }
-              this.recordLiveAudit({observedAt:Date.now(),symbol,planId:plan.id,stage:"ENTRY_SUBMIT",level:"INFO",
-                reason:`Gate 写响应虽超时，但已通过 ${recovery.evidence.join("+")||"唯一订单身份"} 找到本次提交；不重放订单，立即继续原生止损`,error});
-              await this.createImmediateLiveStop(client,entry);
-              if(entry.stopOrderId)await this.queueLiveBinding(entry);
-              else if(entry.protectionExitRequestedAt)recoveringSubmission=entry;else recoveringEntryStop=entry;
-            }else{
-              entry.status = "ERROR";
-              entry.missingSince = Date.now();
-              recoveringSubmission = entry;
-              this.recordLiveAudit({ observedAt: Date.now(), symbol, planId: plan.id, stage: "ENTRY_SUBMIT", level: "RECOVERING",
-                reason: `${reason}；订单/持仓/成交三路暂未证明结果，保留唯一身份和全部风险额度继续核对，其他独立机会不被锁住`, error });
-            }
-          }
+          this.recordLiveAudit({observedAt:Date.now(),symbol,planId:plan.id,stage:"ENTRY_SUBMIT",level:"INFO",
+            reason:`Gate 写响应虽超时，但已通过 ${recovery.evidence.join("+")||"唯一订单身份"} 找到本次提交；不重放订单，立即继续原生止损`,error});
+          await this.createImmediateLiveStop(client,entry);
+          if(entry.stopOrderId)await this.queueLiveBinding(entry);
+          return;
         }
-      } catch (error) {
-        entry.status = "ERROR";
-        entry.lastError = safeError(error);
-        throw error;
+        entry.status="ERROR";entry.missingSince=Date.now();
+        this.recordLiveAudit({observedAt:Date.now(),symbol,planId:plan.id,stage:"ENTRY_SUBMIT",level:"RECOVERING",
+          reason:`${reason}；订单/持仓/成交三路暂未证明结果，保留唯一身份和全部风险额度继续核对，其他独立机会不被锁住`,error});
       }
-      // An unresolved submission already consumes reserved account risk. Keep
-      // processing other staged symbols; never replay this symbol's unique tag.
-    }
+    }));
+    if(prepared.length)await this.saveCheckpoint(Date.now(),true);
     recoveringSubmission = Object.values(this.runtime.live.entries)
       .find((entry)=>entry&&(["SUBMITTING","ERROR"].includes(entry.status)||this.liveEntryAwaitingReconcile(entry)))??null;
     recoveringEntryStop = Object.values(this.runtime.live.entries)
