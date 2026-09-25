@@ -39,6 +39,33 @@ test("reserve minimum value blocks the weak probe profile seen in the failed sna
   assert.equal(reserveExperimentValueBlock({reserve:false,netRate:.0001,edgeRatio:.01,livePathScore:.01,environmentFit:.01,roundTripCost:.0019}),null);
 });
 
+test("ACTIVE RECENT can use strong learned path economics without loosening ordinary reserve probes",()=>{
+  const activeRecent={evidenceNetRate:.00170,targetRate:.00812,normalAdverseRate:.00473,retentionRate:.835,samples:139,groups:3};
+  assert.equal(reserveExperimentValueBlock({reserve:true,netRate:.00136,edgeRatio:.29,livePathScore:.84,environmentFit:.69,
+    roundTripCost:.0019,activeRecent}),null);
+  assert.match(reserveExperimentValueBlock({reserve:true,netRate:.00136,edgeRatio:.29,livePathScore:.84,environmentFit:.69,
+    roundTripCost:.0019,activeRecent:{...activeRecent,retentionRate:.60}})??"",/收益风险价值/);
+  assert.match(reserveExperimentValueBlock({reserve:true,netRate:.00136,edgeRatio:.29,livePathScore:.60,environmentFit:.69,
+    roundTripCost:.0019,activeRecent})??"",/收益风险价值|路径/);
+  assert.match(reserveExperimentValueBlock({reserve:true,netRate:.00136,edgeRatio:.29,livePathScore:.84,environmentFit:.55,
+    roundTripCost:.0019,activeRecent})??"",/收益风险价值|环境/);
+  assert.match(reserveExperimentValueBlock({reserve:true,netRate:.00136,edgeRatio:.29,livePathScore:.84,environmentFit:.69,
+    roundTripCost:.0019,activeRecent:{...activeRecent,samples:12}})??"",/收益风险价值/);
+  assert.match(reserveExperimentValueBlock({reserve:true,netRate:.00136,edgeRatio:.29,livePathScore:.84,environmentFit:.69,
+    roundTripCost:.0019})??"",/收益风险价值/,"same economics remain blocked without ACTIVE RECENT evidence");
+});
+
+test("family admission grants the sample-path exception only while the RECENT rule is ACTIVE",()=>{
+  const active=rule("active",{scope:"RECENT",status:"ACTIVE",health:.64,longNet:.00170,livePathScore:.84,environmentFit:.69,
+    exitProfile:{...rule("seed").exitProfile,bestHoldMinutes:15,targetRate:.00812,normalAdverseRate:.00473,
+      retentionRate:.835,samples:139,groups:3}});
+  assert.equal(familyAdmissionBlock({state:initialFamilyExperimentState(),rule:active,allRules:[active],reserve:true,
+    openFamilyIds:new Set(),netRate:.00136,edgeRatio:.29,roundTripCost:.0019}),null);
+  const pressured={...active,id:"pressured",status:"PRESSURED" as const};
+  assert.match(familyAdmissionBlock({state:initialFamilyExperimentState(),rule:pressured,allRules:[pressured],reserve:true,
+    openFamilyIds:new Set(),netRate:.00136,edgeRatio:.29,roundTripCost:.0019})??"",/收益风险价值/);
+});
+
 test("only one reserve experiment may be open inside a family",()=>{
   const state=initialFamilyExperimentState(),a=rule("a"),b=rule("b",{conditions:[{feature:2,op:"LE",threshold:-.31}]});
   const family=relationFamilyId(a);
