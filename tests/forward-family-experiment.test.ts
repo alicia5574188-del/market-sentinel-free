@@ -110,6 +110,15 @@ test("confirmed path or structure failure is family evidence only before positiv
   assert.equal(isFamilyFailure("RELATION_DEGRADED",null),true);
 });
 
+test("family failure memory from an execution-ineligible symbol is removed with its bad market evidence",()=>{
+  const state=initialFamilyExperimentState(),a=rule("a"),family=relationFamilyId(a);
+  recordFamilyFailure({state,familyId:family,sourceRuleId:a.id,evidenceAt:a.lastQualifiedAt,health:a.health,livePathScore:a.livePathScore,
+    now:10_000,reason:"NO_POSITIVE_FEEDBACK",symbol:"BARD_USDT"});
+  assert.ok(state.guards[family]);
+  assert.equal(pruneFamilyExperimentBySymbols(state,new Set(["BTC_USDT","ETH_USDT"])),1);
+  assert.equal(state.guards[family],undefined);
+});
+
 test("legacy rule-id guards migrate into family guards instead of being discarded",()=>{
   const a=rule("legacy-rule",{conditions:[{feature:1,op:"GE",threshold:-.38}]});
   const state=normalizeFamilyExperimentState(undefined,[a],{"legacy-rule":{
