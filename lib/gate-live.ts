@@ -248,8 +248,8 @@ export class GateLiveClient {
   readonly credentials: GateCredentials;
   requestCount = 0;
   private readRoutePreference=new Map<string,boolean>();
-  readonly readTransport={version:"gate-private-dual-route-v2",hedges:0,recovered:0,timeouts:0,lastTimeoutPath:null as string|null,
-    preferredAlternatePaths:0};
+  readonly readTransport={version:"gate-private-dual-route-v3",hedges:0,recovered:0,timeouts:0,lastTimeoutPath:null as string|null,
+    preferredAlternatePaths:0,preferredMutationHost:"api.gateio.ws" as "api.gateio.ws"|"fx-api.gateio.ws"};
   constructor(credentials: GateCredentials) { this.credentials = credentials; }
 
   private async request<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, query = "", value?: unknown, beforeSend?: () => boolean,
@@ -300,16 +300,26 @@ export class GateLiveClient {
           if(this.credentials.environment==="live"){
             this.readRoutePreference.set(routeKey,alternate);
             this.readTransport.preferredAlternatePaths=[...this.readRoutePreference.values()].filter(Boolean).length;
+            this.readTransport.preferredMutationHost=this.readTransport.preferredAlternatePaths>0
+              ?"fx-api.gateio.ws":"api.gateio.ws";
           }
         });
         if(result.alternate)this.readTransport.recovered++;
         return {data:result.data,raw:result.raw};
       }
-      // Mutations remain single-submit, including a timeout reading the body.
+      // Mutations remain single-submit and are never hedged/replayed. But do
+      // not pin real-money writes to a route that the immediately preceding
+      // private GETs already found unhealthy. Gate documents fx-api.gateio.ws as
+      // an official futures-live alternate, so one mutation may choose that host
+      // BEFORE the network boundary when any currently learned private path
+      // prefers it. The signature is identical because Gate signs path/query/body,
+      // not the hostname. Testnet never leaves its testnet host.
+      const mutationAlternate=this.credentials.environment==="live"&&this.readTransport.preferredAlternatePaths>0;
+      this.readTransport.preferredMutationHost=mutationAlternate?"fx-api.gateio.ws":"api.gateio.ws";
       // Read-verifiable account settings may use a shorter local wait and then
       // prove the resulting exchange state with a safe GET; entry/exit orders
       // keep the normal one-shot timeout and are never replayed.
-      return await send(false,AbortSignal.timeout(writeTimeoutMs));
+      return await send(mutationAlternate,AbortSignal.timeout(writeTimeoutMs));
     }catch(error){
       if(gateRequestTimedOut(error)){
         if(method==="GET"){
