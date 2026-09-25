@@ -140,6 +140,17 @@ test("fast quote normalization preserves current v3 frames and evidence diagnost
   assert.equal(state.relationEngine.diagnostics.rules,ruleCount);
 });
 
+test("fast quote dedup keeps the best same-symbol candidate instead of the last weaker one",()=>{
+  const now=nowAt(39),symbol=symbols[0]!,state=initialForward(now-60_000);state.lastCandleAt=now;
+  const good=manualOpportunity(symbol,0,{premium:false,score:92,health:.9}),bad={...manualOpportunity(symbol,0,{premium:false,reserve:true,score:55,health:.25}),
+    id:"weaker-same-symbol",eligible:false,reason:"weaker duplicate"};
+  state.opportunities=[good,bad];
+  const next=advanceForward({state,now:now+1000,paths:sliced(39),quotes:quotesAt(39,now+1000),contracts,entrySymbols:symbols,allowDataCycle:false}).state;
+  assert.equal(next.opportunities.filter(o=>o.symbol===symbol).length,1);
+  assert.equal(next.opportunities.find(o=>o.symbol===symbol)?.id,good.id,"sorted best candidate must survive symbol dedup");
+  assert.equal(next.opportunities.find(o=>o.symbol===symbol)?.eligible,true);
+});
+
 test("ordinary 5m relation inventory cannot keep opening on the fast quote loop",()=>{
   const now=nowAt(39),paths=sliced(39),symbol=symbols[0]!,s=initialForward(now-60_000);
   s.lastCandleAt=now;s.opportunities=[manualOpportunity(symbol,0,{premium:false})];
