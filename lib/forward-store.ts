@@ -22,7 +22,10 @@ type LegacySampleRecoveryMeta={version:"forward-sample-recovery-v1";sourceManife
   actualCount:number;manifestCount:number;firstAt:number;lastAt:number;length:number;rawLength:number;sha256:string;rawSha256:string;
   encoding:"gzip"|"utf8"};
 type LegacySampleRecovery={meta:LegacySampleRecoveryMeta;bytes:Uint8Array};
-type ForwardStateWithRecovery=ForwardState&{__legacySampleRecovery?:LegacySampleRecovery[]};
+type ForwardStateWithRecovery=ForwardState&{
+  __legacySampleRecovery?:LegacySampleRecovery[];
+  __persistedSampleManifest?:ForwardSampleManifest;
+};
 type Reader = { get<T>(key: string): Promise<T | undefined> };
 export type Store = Reader & { put(entries: Record<string, unknown>): Promise<void>; delete(keys: string[]): Promise<number> };
 const digest = async (bytes: Uint8Array) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes as BufferSource))].map(v=>v.toString(16).padStart(2,"0")).join("");
@@ -42,7 +45,8 @@ function packSample(row:RelationMeasurement){
   ];
 }
 function compactForwardState(next:ForwardState,includeSamples=true){
-  const account={...next} as ForwardStateWithRecovery;delete account.__legacySampleRecovery;
+  const account={...next} as ForwardStateWithRecovery;
+  delete account.__legacySampleRecovery;delete account.__persistedSampleManifest;
   const samples=includeSamples?next.relationEngine.samples.map(packSample):[],paged=!includeSamples;
   return{...account,storage:{...next.storage,layout:paged?FORWARD_PAGED_STATE_VERSION:next.storage.layout,
       ...(paged?{sampleIntegrity:"raw-sha256" as const}:{})},
@@ -124,7 +128,7 @@ export async function readForwardStore(storage: Reader, now: number) {
       ||await digest(encodeJson(manifest))!==head.sampleManifestSha256)throw new Error("Forward样本manifest校验失败，原账户不会被覆盖");
     const pageBytes=await Promise.all(manifest.pages.map(page=>storage.get<Uint8Array>(page.key))),samples:unknown[]=[];
     const legacySampleRecovery:LegacySampleRecovery[]=[];let count=0,expectedCount=0,prior="",legacyRecovered=false,
-      legacyStructuralDrift=false;
+      legacyStructuralDrift=false,rawPhysicalDrift=false;
     for(let i=0;i<manifest.pages.length;i++){
       const meta=manifest.pages[i]!,value=pageBytes[i];
       if(!value||meta.key!==`${FORWARD_SAMPLE_PAGE_PREFIX}${meta.id}`||meta.id<=prior||value.length>FORWARD_COMPACT_BYTES
@@ -141,28 +145,30 @@ export async function readForwardStore(storage: Reader, now: number) {
       const rawLengthMatches=pageRaw.length===meta.rawLength,rawSha256=await digest(pageRaw),
         rawHashValid=meta.rawSha256===undefined||SHA256.test(meta.rawSha256),
         rawHashMatches=meta.rawSha256!==undefined&&rawHashValid&&rawSha256===meta.rawSha256,
-        authenticatedCompressedRecovery=meta.rawSha256!==undefined&&rawHashValid&&!rawHashMatches&&rawLengthMatches&&compressedMatches;
+        authenticatedCompressedRecovery=meta.rawSha256!==undefined&&rawHashValid&&!rawHashMatches&&rawLengthMatches&&compressedMatches,
+        rawPageDrift=meta.rawSha256!==undefined&&rawHashValid
+          &&(!rawHashMatches||!rawLengthMatches)&&!authenticatedCompressedRecovery;
       if(meta.rawSha256!==undefined){
-        // A manifest is authenticated by the head and still contains the exact
-        // stored-byte SHA-256. If that compressed identity matches byte-for-byte
-        // while only the newer rawSha256 metadata disagrees, preserve/archive
-        // those authenticated bytes and rebuild the raw hash on the next atomic
-        // write. If neither identity matches, this remains real evidence loss
-        // and must stay fail-closed.
-        if(!rawLengthMatches||!rawHashValid||(!rawHashMatches&&!authenticatedCompressedRecovery))
-          throw new Error(`Forward样本分页原始校验失败：${meta.id}:COMPRESSED_${compressedMatches?"MATCH":"MISMATCH"}:LENGTH_${rawLengthMatches?"MATCH":"MISMATCH"}`);
-        if(authenticatedCompressedRecovery)legacyRecovered=true;
+        if(!rawHashValid)throw new Error(`Forward样本分页原始校验失败：${meta.id}:RAW_HASH_INVALID`);
+        // A raw-hash manifest can still point at a canonical page that an older
+        // incremental writer failed to rewrite after time-based thinning. Do not
+        // trust those retained bytes yet; parse them only as recovery evidence
+        // and later require persisted-time normalization to reproduce the exact
+        // authenticated raw page hashes. This keeps actual corruption fail-closed.
+        if(rawPageDrift){legacyRecovered=true;rawPhysicalDrift=true;}
+        else if(authenticatedCompressedRecovery)legacyRecovered=true;
       }else if(!compressedMatches||!rawLengthMatches)legacyRecovered=true;
       try{page=JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(pageRaw)) as typeof page;}
       catch{throw new Error(`Forward样本分页JSON失败：${meta.id}`);}
       if(page.version!==FORWARD_PAGED_STATE_VERSION)throw new Error(`Forward样本分页内容异常：${meta.id}:VERSION`);
       if(page.id!==meta.id)throw new Error(`Forward样本分页内容异常：${meta.id}:PAGE_ID`);
       if(!Array.isArray(page.samples))throw new Error(`Forward样本分页内容异常：${meta.id}:SAMPLES`);
-      const allowLegacyDrift=meta.rawSha256===undefined,pageIssue=packedPageIssue(page.samples,meta,allowLegacyDrift);
+      const allowPhysicalDrift=meta.rawSha256===undefined||rawPageDrift,pageIssue=packedPageIssue(page.samples,meta,allowPhysicalDrift);
       if(pageIssue)throw new Error(`Forward样本分页内容异常：${meta.id}:${pageIssue}`);
       const firstAt=(page.samples[0] as unknown[])[2] as number,lastAt=(page.samples.at(-1) as unknown[])[2] as number,
-        structuralDrift=allowLegacyDrift&&(page.samples.length!==meta.count||firstAt!==meta.firstAt||lastAt!==meta.lastAt),
-        legacyPhysicalDrift=authenticatedCompressedRecovery||(allowLegacyDrift&&(!compressedMatches||!rawLengthMatches||structuralDrift));
+        structuralDrift=allowPhysicalDrift&&(page.samples.length!==meta.count||firstAt!==meta.firstAt||lastAt!==meta.lastAt),
+        legacyPhysicalDrift=rawPageDrift||authenticatedCompressedRecovery
+          ||(meta.rawSha256===undefined&&(!compressedMatches||!rawLengthMatches||structuralDrift));
       if(legacyPhysicalDrift){
         const bytesSha256=await digest(value),bytesKey=`${FORWARD_SAMPLE_RECOVERY_PREFIX}${meta.id}:${rawSha256}:bytes`;
         legacySampleRecovery.push({meta:{version:"forward-sample-recovery-v1",sourceManifestSha256:head.sampleManifestSha256!,sourceId:meta.id,
@@ -180,22 +186,30 @@ export async function readForwardStore(storage: Reader, now: number) {
     decoded.storage={...decoded.storage,layout:FORWARD_PAGED_STATE_VERSION,
       sampleIntegrity:legacyRecovered||manifest.pages.some(page=>page.rawSha256===undefined)?"legacy-recovered":"raw-sha256"};
     const canonicalAt=Math.max(Number(decoded.storage.persistedAt)||0,Number(decoded.relationEngine.updatedAt)||0,decoded.startedAt),
-      canonicalDecoded=legacyStructuralDrift?structuredClone(decoded):null;
+      canonicalNeeded=legacyStructuralDrift||rawPhysicalDrift,canonicalDecoded=canonicalNeeded?structuredClone(decoded):null;
     const state=normalizeForward(decoded,now);
-    if(legacyStructuralDrift){
-      // Recreate the manifest at its persisted evidence time. Using startup
-      // time here would legitimately age out >24h samples before verification
-      // and falsely report topology drift after a long restart.
+    if(canonicalNeeded){
+      // Recreate intended page identity at the original persisted evidence time.
+      // Legacy manifests require their full historical byte identity; modern
+      // raw-hash manifests use the stable uncompressed JSON hash as authority.
       const canonicalState=normalizeForward(canonicalDecoded!,canonicalAt),canonical=await encodeSamplePages(canonicalState.relationEngine.samples);
       const matches=canonical.length===manifest.pages.length&&canonical.every((page,index)=>{
-        const expected=manifest.pages[index]!;return page.meta.id===expected.id&&page.meta.key===expected.key
-          &&page.meta.count===expected.count&&page.meta.firstAt===expected.firstAt&&page.meta.lastAt===expected.lastAt
-          &&page.meta.length===expected.length&&page.meta.rawLength===expected.rawLength&&page.meta.sha256===expected.sha256
-          &&page.meta.encoding===expected.encoding;
+        const expected=manifest.pages[index]!;
+        const topology=page.meta.id===expected.id&&page.meta.key===expected.key&&page.meta.count===expected.count
+          &&page.meta.firstAt===expected.firstAt&&page.meta.lastAt===expected.lastAt;
+        if(!topology)return false;
+        return rawPhysicalDrift
+          ?SHA256.test(expected.rawSha256??"")&&page.meta.rawLength===expected.rawLength&&page.meta.rawSha256===expected.rawSha256
+          :page.meta.length===expected.length&&page.meta.rawLength===expected.rawLength&&page.meta.sha256===expected.sha256
+            &&page.meta.encoding===expected.encoding;
       });
-      if(!matches)throw new Error("Forward样本分页内容异常：LEGACY_CANONICAL_AT_PERSISTED_TIME");
+      if(!matches)throw new Error(rawPhysicalDrift
+        ?"Forward样本分页内容异常：RAW_CANONICAL_AT_PERSISTED_TIME"
+        :"Forward样本分页内容异常：LEGACY_CANONICAL_AT_PERSISTED_TIME");
     }
-    if(legacySampleRecovery.length)(state as ForwardStateWithRecovery).__legacySampleRecovery=legacySampleRecovery;
+    const internal=state as ForwardStateWithRecovery;
+    if(legacySampleRecovery.length)internal.__legacySampleRecovery=legacySampleRecovery;
+    internal.__persistedSampleManifest=structuredClone(manifest);
     const restored=restoreForwardProtectionCheckpoint(state,await storage.get<unknown>(FORWARD_PROTECTION_STORAGE));
     return restored;
   }
@@ -219,9 +233,10 @@ export function prepareForwardProtectionWrite(next:ForwardState){
 }
 
 export async function prepareForwardWrite(previous:ForwardState|null,next:ForwardState,now:number,options:{compact?:boolean}={}){
-  const recoveryState=next as ForwardStateWithRecovery,
-    legacySampleRecovery=recoveryState.__legacySampleRecovery??(previous as ForwardStateWithRecovery|null)?.__legacySampleRecovery??[];
-  delete recoveryState.__legacySampleRecovery;
+  const recoveryState=next as ForwardStateWithRecovery,previousInternal=previous as ForwardStateWithRecovery|null,
+    legacySampleRecovery=recoveryState.__legacySampleRecovery??previousInternal?.__legacySampleRecovery??[],
+    persistedSampleManifest=recoveryState.__persistedSampleManifest??previousInternal?.__persistedSampleManifest??null;
+  delete recoveryState.__legacySampleRecovery;delete recoveryState.__persistedSampleManifest;
   const pages=await encodeSamplePages(next.relationEngine.samples),manifest:ForwardSampleManifest={version:FORWARD_PAGED_STATE_VERSION,
     count:next.relationEngine.samples.length,pages:pages.map(page=>page.meta)},manifestSha256=await digest(encodeJson(manifest));
   const raw=encodeJson(compactForwardState(next,false));
@@ -237,14 +252,19 @@ export async function prepareForwardWrite(previous:ForwardState|null,next:Forwar
   const inline=options.compact===true,chunkBytes=inline?FORWARD_COMPACT_BYTES:80*1024;
   for(let offset=inline?FORWARD_COMPACT_BYTES:0;offset<bytes.length;offset+=chunkBytes)
     entries[`${FORWARD_STORAGE}chunk:${count++}`]=bytes.slice(offset,offset+chunkBytes);
-  const previousPages=previous?.storage.layout===FORWARD_PAGED_STATE_VERSION?await encodeSamplePages(previous.relationEngine.samples):[],
-    previousById=new Map(previousPages.map(page=>[page.meta.id,page]));
+  const fallbackPreviousPages=!persistedSampleManifest&&previous?.storage.layout===FORWARD_PAGED_STATE_VERSION
+      ?await encodeSamplePages(previous.relationEngine.samples):[],
+    priorManifest=persistedSampleManifest??(previous?.storage.layout===FORWARD_PAGED_STATE_VERSION?{
+      version:FORWARD_PAGED_STATE_VERSION,count:previous.relationEngine.samples.length,
+      pages:fallbackPreviousPages.map(page=>page.meta)} satisfies ForwardSampleManifest:null),
+    persistedById=new Map((priorManifest?.pages??[]).map(page=>[page.id,page]));
   let changedSamplePages=0;
   const migrateSampleIntegrity=previous?.storage.layout===FORWARD_PAGED_STATE_VERSION&&previous.storage.sampleIntegrity!=="raw-sha256";
-  for(const page of pages){const prior=previousById.get(page.meta.id);
-    if(migrateSampleIntegrity||!prior||prior.rawText!==page.rawText){entries[page.meta.key]=page.bytes;changedSamplePages++;}}
-  const priorManifest=previous?.storage.layout===FORWARD_PAGED_STATE_VERSION?{
-    version:FORWARD_PAGED_STATE_VERSION,count:previous.relationEngine.samples.length,pages:previousPages.map(page=>page.meta)} satisfies ForwardSampleManifest:null;
+  for(const page of pages){const prior=persistedById.get(page.meta.id),
+      samePersisted=!!prior&&SHA256.test(prior.rawSha256??"")&&prior.rawSha256===page.meta.rawSha256
+        &&prior.rawLength===page.meta.rawLength&&prior.count===page.meta.count
+        &&prior.firstAt===page.meta.firstAt&&prior.lastAt===page.meta.lastAt;
+    if(migrateSampleIntegrity||!samePersisted){entries[page.meta.key]=page.bytes;changedSamplePages++;}}
   if(!priorManifest||previous?.storage.sampleIntegrity!=="raw-sha256"||JSON.stringify(priorManifest)!==JSON.stringify(manifest))
     entries[FORWARD_SAMPLE_MANIFEST_STORAGE]=manifest;
   entries[`${FORWARD_STORAGE}head`]={version:FORWARD_PAGED_STATE_VERSION,count,length:bytes.length,sha256:await digest(bytes),sampleManifestSha256:manifestSha256,
@@ -274,6 +294,7 @@ export async function prepareForwardWrite(previous:ForwardState|null,next:Forwar
       :new TextEncoder().encode(JSON.stringify(value)).length;
     if(size>120*1024)throw new Error(`Adaptive 10存储项超过预算：${key}`);
   }
+  recoveryState.__persistedSampleManifest=structuredClone(manifest);
   return{entries,writes:Object.keys(entries).length,compression:{encoding:useGzip?"gzip":"utf8",rawBytes:raw.length,
     storedBytes:bytes.length,chunks:count,sampleCount:manifest.count,samplePages:manifest.pages.length,changedSamplePages,
     ...(options.compact?{inlineHead:inline,chunkBytes}:{})}};

@@ -181,6 +181,47 @@ test("authenticated stored bytes recover a wrong raw-hash metadata field without
   assert.equal(restarted.storage.sampleIntegrity,"raw-sha256");
 });
 
+test("raw-hash pages recover only when retained supersets reproduce the exact persisted-time canonical page",async()=>{
+  const s=stressFixture();s.relationEngine.samples=Array.from({length:23},(_,i)=>sample(i));
+  const write=await prepareForwardWrite(s,s,T,{compact:true}),db=new Memory();
+  const manifest=structuredClone(write.entries[FORWARD_SAMPLE_MANIFEST_STORAGE]) as {
+    pages:{id:string;key:string;count:number;firstAt:number;lastAt:number;length:number;rawLength:number;
+      sha256:string;rawSha256:string;encoding:"gzip"|"utf8"}[]
+  },target=manifest.pages[0]!,original=write.entries[target.key] as Uint8Array,
+    raw=target.encoding==="gzip"?await gunzip(original,512*1024):original,
+    page=JSON.parse(new TextDecoder().decode(raw)) as {version:string;id:string;samples:unknown[][]};
+  page.samples.splice(page.samples.length-1,0,structuredClone(page.samples.at(-1)!));
+  const retainedRaw=new TextEncoder().encode(JSON.stringify(page)),
+    retained=target.encoding==="gzip"?await gzip(retainedRaw):retainedRaw;
+  await db.put({...write.entries,[target.key]:retained});
+
+  const restartAt=T+25*60*60_000,recovered=await readForwardStore(db,restartAt);
+  assert.equal(recovered.relationEngine.samples.length,0);
+  assert.equal(recovered.storage.sampleIntegrity,"legacy-recovered");
+  const next=normalizeForward(structuredClone(recovered),restartAt+1);next.storage={persistedAt:restartAt+1,error:null};
+  const migrated=await prepareForwardWrite(recovered,next,restartAt+1,{compact:true}),keys=Object.keys(migrated.entries),
+    recoveryBytesKey=keys.find(key=>key.startsWith(FORWARD_SAMPLE_RECOVERY_PREFIX)&&key.endsWith(":bytes"))!;
+  assert.ok(recoveryBytesKey);assert.deepEqual(migrated.entries[recoveryBytesKey],retained);
+  await db.put(migrated.entries);
+  assert.equal((await readForwardStore(db,restartAt+2)).storage.sampleIntegrity,"raw-sha256");
+});
+
+test("incremental writer compares against the persisted manifest after time-based sample thinning",async()=>{
+  const s=stressFixture(),first=await prepareForwardWrite(s,s,T,{compact:true}),db=new Memory();
+  await db.put(first.entries);
+  const later=T+31*60_000,restored=await readForwardStore(db,later);
+  assert.ok(restored.relationEngine.samples.length<2200,"wall-clock thinning must change the normalized in-memory sample set");
+  const next=structuredClone(restored);next.balance-=.5;next.revision++;next.storage={...next.storage,persistedAt:later+1,error:null};
+  const incremental=await prepareForwardWrite(restored,next,later+1,{compact:true});
+  assert.ok(incremental.compression.changedSamplePages>0,
+    "pages changed by normalization must be compared with persisted identities, not the already-thinned previous object");
+  await db.put(incremental.entries);
+  const restarted=await readForwardStore(db,later+2);
+  assert.equal(restarted.balance,next.balance);
+  assert.equal(restarted.storage.sampleIntegrity,"raw-sha256");
+  assert.equal(restarted.relationEngine.samples.length,next.relationEngine.samples.length);
+});
+
 test("stable raw hashes accept harmless compression identity drift but reject decoded content mismatch",async()=>{
   const s=stressFixture(),write=await prepareForwardWrite(s,s,T,{compact:true});
   for(const mode of ["compressed-only","raw"] as const){
