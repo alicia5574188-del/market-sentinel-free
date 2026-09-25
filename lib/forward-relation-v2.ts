@@ -291,6 +291,20 @@ export function normalizeRelationEngine(value:unknown,now:number):RelationEngine
       x:Array.isArray(p.x)?p.x.map(Number).slice(0,8):[],env:{breadth:Number(env?.breadth??.5),dispersion:Number(env?.dispersion??0),expansion:Number(env?.expansion??0)},dueAt};}}
   out.diagnostics=derivedDiagnostics(out);return out;
 }
+export function pruneRelationLearningBySymbols(state:RelationEngineState,eligibleSymbols:Iterable<string>){
+  const allowed=new Set(eligibleSymbols),beforeSamples=state.samples.length,beforePending=Object.keys(state.pending).length,
+    beforeFrames=Object.keys(state.frames).length,beforeBars=Object.keys(state.lastBars).length;
+  state.samples=state.samples.filter(row=>allowed.has(row.symbol));
+  for(const [key,row] of Object.entries(state.pending))if(!allowed.has(row.symbol))delete state.pending[key];
+  for(const [symbol] of Object.entries(state.frames))if(!allowed.has(symbol))delete state.frames[symbol];
+  for(const symbol of Object.keys(state.lastBars))if(!allowed.has(symbol))delete state.lastBars[symbol];
+  const removedSamples=beforeSamples-state.samples.length,removedPending=beforePending-Object.keys(state.pending).length,
+    removedFrames=beforeFrames-Object.keys(state.frames).length,removedBars=beforeBars-Object.keys(state.lastBars).length;
+  if(removedSamples||removedPending||removedFrames||removedBars){
+    state.rules=[];refreshRelative(state.samples);state.diagnostics=derivedDiagnostics(state);
+  }
+  return{removedSamples,removedPending,removedFrames,removedBars};
+}
 function seedClosedHistory(state:RelationEngineState,paths:Record<string,RelationCandle[]>,now:number){
   if(state.samples.length>=24)return 0;const grouped=new Map<number,{frame:RelationFrame;rows:RelationCandle[]}[]>(),cut=now-12*60*60_000;
   for(const [symbol,input] of Object.entries(paths)){const rows=input.filter(valid).sort((a,b)=>a.time-b.time).slice(-180);
@@ -303,10 +317,13 @@ function seedClosedHistory(state:RelationEngineState,paths:Record<string,Relatio
         route=routeFor(item.rows,p);if(route.length!==12||!contiguousRoute(route,p))continue;state.samples.push(measurement(route,p));existing.add(key);state.measured++;added++;}}
   if(added){refreshRelative(state.samples);state.samples=thinSamples(state.samples,now);}return added;
 }
-export function advanceRelationEngine(input:{state?:RelationEngineState|null;paths:Record<string,RelationCandle[]>;now:number}){
-  const state=normalizeRelationEngine(input.state,input.now),seeded=seedClosedHistory(state,input.paths,input.now),frames=buildFrames(input.paths,input.now),currentEnv=environment(frames);state.frames=Object.fromEntries(frames.map(f=>[f.symbol,f]));
+export function advanceRelationEngine(input:{state?:RelationEngineState|null;paths:Record<string,RelationCandle[]>;now:number;eligibleSymbols?:Iterable<string>}){
+  const state=normalizeRelationEngine(input.state,input.now),allowed=input.eligibleSymbols?new Set(input.eligibleSymbols):null,
+    pruned=allowed?pruneRelationLearningBySymbols(state,allowed):{removedSamples:0,removedPending:0,removedFrames:0,removedBars:0},
+    learningPaths=allowed?Object.fromEntries(Object.entries(input.paths).filter(([symbol])=>allowed.has(symbol))):input.paths,
+    seeded=seedClosedHistory(state,learningPaths,input.now),frames=buildFrames(learningPaths,input.now),currentEnv=environment(frames);state.frames=Object.fromEntries(frames.map(f=>[f.symbol,f]));
   let matured=0,updated=0;for(const [key,p] of Object.entries(state.pending)){if(input.now<p.at+15*60_000)continue;
-    const rows=validPath(input.paths[p.symbol]??[],input.now),route=rows?routeFor(rows,p):[],complete=rows&&contiguousRoute(route,p);
+    const rows=validPath(learningPaths[p.symbol]??[],input.now),route=rows?routeFor(rows,p):[],complete=rows&&contiguousRoute(route,p);
     if(complete&&route.length>=3){const next=measurement(route,p),idx=state.samples.findIndex(r=>r.symbol===p.symbol&&r.at===p.at),
         prior=idx>=0?state.samples[idx]:undefined,firstMature=!prior||!Number.isFinite(Number(prior.cp[15]??NaN));
       if(idx>=0)state.samples[idx]=next;else state.samples.push(next);if(firstMature&&Number.isFinite(Number(next.cp[15]??NaN))){state.measured++;matured++;}else updated++;
@@ -315,8 +332,8 @@ export function advanceRelationEngine(input:{state?:RelationEngineState|null;pat
   for(const f of frames){if(f.at<=(state.lastBars[f.symbol]??0))continue;state.lastBars[f.symbol]=f.at;const key=rootKey(f.symbol,f.at);
     if(!state.pending[key]){state.pending[key]={symbol:f.symbol,at:f.at,price:f.price,x:[...f.x],env:{...f.env},dueAt:f.at+ROOT_HORIZON_MS};state.observations++;}}
   if(matured||updated){refreshRelative(state.samples);state.samples=thinSamples(state.samples,input.now);}
-  if(matured||updated||seeded||!state.rules.length)synthesize(state,input.paths,input.now,currentEnv);else state.rules=state.rules.map(r=>{const selected=state.samples.filter(x=>matches(x.x,r.conditions)&&Number.isFinite(cpValue(x,r.horizon))),
-    live=livePathScore(state,input.paths,r.conditions,r.side,selected,input.now),fit=envFit(selected,currentEnv),weakened=live<r.livePathScore-.08||fit<r.environmentFit-.15||fit<.42;
+  if(matured||updated||seeded||pruned.removedSamples||pruned.removedPending||!state.rules.length)synthesize(state,learningPaths,input.now,currentEnv);else state.rules=state.rules.map(r=>{const selected=state.samples.filter(x=>matches(x.x,r.conditions)&&Number.isFinite(cpValue(x,r.horizon))),
+    live=livePathScore(state,learningPaths,r.conditions,r.side,selected,input.now),fit=envFit(selected,currentEnv),weakened=live<r.livePathScore-.08||fit<r.environmentFit-.15||fit<.42;
     if(!weakened)return{...r,livePathScore:live,environmentFit:fit,updatedAt:input.now};const status:RelationStatus=live<.28||fit<.28?"DEGRADED":"PRESSURED",
       health=status==="DEGRADED"?Math.min(.30,r.health):Math.min(.60,r.health);return{...r,livePathScore:live,environmentFit:fit,status,health,updatedAt:input.now,
         reason:"进行中路径/市场环境偏离历史｜"+status+"｜路径"+Math.round(live*100)+"｜环境"+Math.round(fit*100)+"｜不自动反手"};});
