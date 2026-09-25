@@ -2120,7 +2120,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const splitPrivateReads=typeof client.snapshotCore==="function"&&typeof client.snapshotOrders==="function";
     if(cached){
       snapshot=cached;this.liveSyncUsedCached=true;
-    }else if(!splitPrivateReads||initialEnable||forceEntryCleanup||needsProtectionOrderLane){
+    }else if(!splitPrivateReads||forceEntryCleanup||needsProtectionOrderLane){
       // Test doubles and legacy/member executors may still expose only the
       // reviewed full-snapshot contract. Keep that compatibility path exact;
       // production GateLiveClient uses the split lanes below.
@@ -2415,6 +2415,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.runtime.live.operational = false;
       this.runtime.live.lastError = null;
       this.runtime.live.entrySkips = {};
+      return;
+    }
+    if(!orderAuditUsable){
+      this.runtime.live.operational=false;
+      this.runtime.live.lastError="Gate挂单核对暂未完成；实盘开关已保持开启，后台会自动重试，核对成功后自动恢复新增复制";
       return;
     }
     if (unknownOrders.length) throw new Error("Gate 存在未纳管挂单；已停止新开仓");
