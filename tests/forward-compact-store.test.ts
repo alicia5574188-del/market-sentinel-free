@@ -158,6 +158,29 @@ test("legacy evidence drift still fails closed unless persisted-time normalizati
   assert.equal([...db.data.keys()].filter(key=>key.startsWith(FORWARD_SAMPLE_RECOVERY_PREFIX)).length,0);
 });
 
+test("authenticated stored bytes recover a wrong raw-hash metadata field without accepting page corruption",async()=>{
+  const s=stressFixture(),write=await prepareForwardWrite(s,s,T,{compact:true}),db=new Memory(),
+    manifest=structuredClone(write.entries[FORWARD_SAMPLE_MANIFEST_STORAGE]) as {
+      pages:{id:string;key:string;rawSha256:string;sha256:string;length:number}[]
+    },target=manifest.pages[0]!,original=write.entries[target.key] as Uint8Array;
+  target.rawSha256="f".repeat(64);
+  const head=structuredClone(write.entries[HEAD]) as {sampleManifestSha256:string};
+  head.sampleManifestSha256=await digest(new TextEncoder().encode(JSON.stringify(manifest)));
+  await db.put({...write.entries,[FORWARD_SAMPLE_MANIFEST_STORAGE]:manifest,[HEAD]:head});
+
+  const recovered=await readForwardStore(db,T+1);
+  assert.equal(recovered.relationEngine.samples.length,2200);
+  assert.equal(recovered.storage.sampleIntegrity,"legacy-recovered");
+  const migrated=await prepareForwardWrite(recovered,recovered,T+2,{compact:true}),keys=Object.keys(migrated.entries),
+    recoveryBytesKey=keys.find(key=>key.startsWith(FORWARD_SAMPLE_RECOVERY_PREFIX)&&key.endsWith(":bytes"))!;
+  assert.ok(recoveryBytesKey);assert.deepEqual(migrated.entries[recoveryBytesKey],original);
+  assert.equal(migrated.compression.changedSamplePages,migrated.compression.samplePages);
+  await db.put(migrated.entries);
+  const restarted=await readForwardStore(db,T+3);
+  assert.equal(restarted.relationEngine.samples.length,2200);
+  assert.equal(restarted.storage.sampleIntegrity,"raw-sha256");
+});
+
 test("stable raw hashes accept harmless compression identity drift but reject decoded content mismatch",async()=>{
   const s=stressFixture(),write=await prepareForwardWrite(s,s,T,{compact:true});
   for(const mode of ["compressed-only","raw"] as const){
