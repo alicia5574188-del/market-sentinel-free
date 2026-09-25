@@ -976,6 +976,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       executionBboCapacity:FORWARD_EXECUTION_BBO_CAP,minuteConfirmationCapacity:FORWARD_MINUTE_CONFIRMATION_CAP,
       participationCandidateCount:opportunities.length,participationEligibleCount:eligible.length,
       premiumOpportunityCount:eligible.filter(row=>row.premium).length,regionCount:Object.keys(s?.regions??{}).length,
+      relationSampleCount:s?.relationEngine?.samples.length??0,relationRuleCount:s?.relationEngine?.rules.length??0,
+      relationPendingCount:Object.keys(s?.relationEngine?.pending??{}).length,
+      relationFrameCount:Object.keys(s?.relationEngine?.frames??{}).length,
       relationDiagnostics:s?.relationEngine?.diagnostics??null,entryDiagnostics:s?.entryDiagnostics??null,
       candidateDiagnostics:blocked,storage:{persistedAt:s?.storage.persistedAt??0,error:this.forwardError}};
   }
