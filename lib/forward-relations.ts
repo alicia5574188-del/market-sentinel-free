@@ -547,6 +547,7 @@ function markAndManage(s:ForwardState,quotes:Record<string,Quote>,now:number){
   if(closed.size)s.positions=s.positions.filter(t=>!closed.has(t.id));
 }
 function candidateRiskRate(o:Opportunity){
+  if(o.structuralInterrupt)return .006;
   if(o.reserve)return .003;
   const base=o.mode==="RANGE"?.006:o.premium?.009:.008;
   return clip(base*clip(o.riskScale??1,.75,1),.006,.009);
@@ -580,20 +581,26 @@ function qualityBlockReason(s:ForwardState,o:Opportunity,equity:number){
   return null;
 }
 function openTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:number,equity:number){
-  const side=o.side,d=dir(side),price=side==="LONG"?q.bestAsk:q.bestBid;
-  if(!o.relationRuleId)return"缺少Forward关系授权";
-  const authorityRule=s.relationEngine.rules.find(r=>r.id===o.relationRuleId);if(!authorityRule)return"Forward关系证据已更新，等待下一轮";
-  const familyId=relationFamilyId(authorityRule),familyBlock=familyAdmissionBlock({state:s.familyExperiment,rule:authorityRule,
-    allRules:s.relationEngine.rules,reserve:o.reserve===true,openFamilyIds:openReserveFamilyIds(s),netRate:o.netRemainingSpaceRate,
-    edgeRatio:o.edgeRatio,roundTripCost:ROUND_TRIP_COST});
-  if(familyBlock)return familyBlock;
-  const qualityBlock=qualityBlockReason(s,o,equity);if(qualityBlock)return qualityBlock;
-  // Analysis can come from Bybit/OKX/KuCoin. Only relative structure may cross
-  // venues; all executable prices are re-anchored to the actual Gate quote.
+  const side=o.side,d=dir(side),price=side==="LONG"?q.bestAsk:q.bestBid,structural=o.structuralInterrupt===true;
+  if(!structural&&!o.relationRuleId)return"缺少Forward关系授权";
+  const authorityRule=o.relationRuleId?s.relationEngine.rules.find(r=>r.id===o.relationRuleId):undefined;
+  if(!structural&&!authorityRule)return"Forward关系证据已更新，等待下一轮";
+  const familyId=structural?`SHOCK:${o.shockEventId??o.id}`:relationFamilyId(authorityRule!);
+  if(!structural){
+    const familyBlock=familyAdmissionBlock({state:s.familyExperiment,rule:authorityRule!,allRules:s.relationEngine.rules,
+      reserve:o.reserve===true,openFamilyIds:openReserveFamilyIds(s),netRate:o.netRemainingSpaceRate,
+      edgeRatio:o.edgeRatio,roundTripCost:ROUND_TRIP_COST});
+    if(familyBlock)return familyBlock;
+    const qualityBlock=qualityBlockReason(s,o,equity);if(qualityBlock)return qualityBlock;
+  }
+  // Analysis may come from external venues, but every executable fill is
+  // re-anchored to the current Gate BBO. Structural interrupts do not bypass
+  // any account, same-side, cycle, margin or exchange-quantity risk boundary.
   const stopRate=Number.isFinite(o.stopRate)?o.stopRate:Math.abs(o.price-o.stopPrice)/Math.max(o.price,1e-9);
   if(!(stopRate>=.002&&stopRate<=.03))return"结构止损宽度不合理";
   const totalHeadroom=equity*(TOTAL_RISK_RATE-.001)-existingRisk(s),sideHeadroom=equity*(SIDE_RISK_RATE-.0005)-existingRisk(s,side),
-    familyHeadroom=equity*FAMILY_RISK_CAP_RATE-familyRisk(s,familyId),
+    familyRate=structural?.0125:FAMILY_RISK_CAP_RATE,
+    familyHeadroom=equity*familyRate-familyRisk(s,familyId),
     probeHeadroom=o.reserve?equity*PROBE_RISK_POOL_RATE-probeRisk(s):Infinity,
     cycleHeadroom=equity*FIVE_MINUTE_NEW_RISK_RATE-cycleRiskAdded(s,s.lastCandleAt);
   const headroom=Math.min(totalHeadroom,sideHeadroom,familyHeadroom,probeHeadroom,cycleHeadroom);
@@ -607,29 +614,39 @@ function openTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:nu
   const contracts=Math.floor(targetNotional/(price*mult));if(contracts<minContracts)return"低于最小模拟合约数量";
   const quantity=contracts*mult,notional=quantity*price,margin=notional/leverage,totalMargin=s.positions.reduce((n,t)=>n+t.margin,0);
   if(totalMargin+margin>equity*TOTAL_MARGIN_RATE)return"组合保证金已满";
+  const exitPlan=o.exitPlan??authorityRule?.exitProfile;if(!exitPlan)return"缺少冻结退出计划";
   const plannedRisk=notional*(stopRate+ROUND_TRIP_COST),entryFee=notional*PAPER_COST.feeRate,
-    exitPlan=structuredClone(o.exitPlan??authorityRule.exitProfile);
-  const stopPrice=price*(1-d*stopRate),target=price*(1+d*Math.max(.003,exitPlan.targetRate)),
-    horizon=Math.max(5,Math.round(exitPlan.bestHoldMinutes)),id=`ft-${now.toString(36)}-${o.symbol.replace(/[^A-Z0-9]/g,"")}-${side[0]}-${o.mode[0]}`;
-  const rule:Rule={id:o.relationRuleId??`adaptive-${o.mode.toLowerCase()}`,signature:o.relationRuleId??o.mode,parentId:null,version:1,createdAt:now,
-    expiresAt:now+exitPlan.maxHoldMinutes*60_000,status:"EXPERIMENTAL",conditions:[],side,horizon,stopRate,
-    armRate:exitPlan.protectionActivationRate,givebackRate:Math.max(.001,exitPlan.targetRate*(1-exitPlan.retentionRate)),
+    frozenPlan=structuredClone(exitPlan);
+  const stopPrice=price*(1-d*stopRate),target=price*(1+d*Math.max(.003,frozenPlan.targetRate)),
+    horizon=Math.max(5,Math.round(frozenPlan.bestHoldMinutes)),id=`ft-${now.toString(36)}-${o.symbol.replace(/[^A-Z0-9]/g,"")}-${side[0]}-${o.mode[0]}`;
+  const ruleId=structural?`shock-${o.shockEventId??now.toString(36)}`:o.relationRuleId!;
+  const rule:Rule={id:ruleId,signature:ruleId,parentId:null,version:1,createdAt:now,
+    expiresAt:now+frozenPlan.maxHoldMinutes*60_000,status:"EXPERIMENTAL",conditions:[],side,horizon,stopRate,
+    armRate:frozenPlan.protectionActivationRate,givebackRate:Math.max(.001,frozenPlan.targetRate*(1-frozenPlan.retentionRate)),
     exitMode:"REACTION_DECAY",samples:0,trainGroups:0,checkGroups:0,estimatedNetRate:o.netRemainingSpaceRate,priorResponse:null,
-    recentResponse:0,standardError:0,reason:o.reason,mutation:"CREATE",grammar:ADAPTIVE_ENGINE_VERSION,liveEligible:false,authority:"FORWARD_RELATION",turnTimeframe:"5m"};
-  const region=o.regionId?s.regions[o.symbol]:null;
-  const scale=o.price>0?price/o.price:1;
+    recentResponse:0,standardError:0,reason:o.reason,mutation:"CREATE",grammar:ADAPTIVE_ENGINE_VERSION,liveEligible:false,
+    authority:structural?"STRUCTURAL_INTERRUPT":"FORWARD_RELATION",turnTimeframe:"5m"};
+  const region=o.regionId?s.regions[o.symbol]:null,scale=o.price>0?price/o.price:1,
+    regionLower=region?(structural?(region.outerLower??region.lower):region.lower)*scale:undefined,
+    regionUpper=region?(structural?(region.outerUpper??region.upper):region.upper)*scale:undefined,
+    regionCenter=region?(structural?(region.outerCenter??region.center):region.center)*scale:undefined;
+  const context:EntryContext={version:"adaptive-ten-entry-v1",capturedAt:now,timeframe:"5m",side,mode:o.mode,reserve:o.reserve===true,
+    reason:o.reason,entryScore:o.score,directionStrength:o.directionStrength,spaceScore:o.spaceScore,positionScore:o.positionScore,
+    executionScore:o.executionScore,remainingSpaceRate:o.netRemainingSpaceRate,pullbackRiskRate:o.pullbackRiskRate,
+    edgeRatio:o.edgeRatio,expectedHoldMinutes:frozenPlan.bestHoldMinutes,marketFit:o.marketFit,regionId:o.regionId,
+    portfolioRiskCharge:riskBudget,relationFamilyId:familyId,
+    ...(o.relationRuleId?{relationRuleId:o.relationRuleId,relationStatus:o.relationStatus,relationHorizon:o.relationHorizon,
+      relationHealth:o.relationHealth,relationEvidenceAt:authorityRule?.lastQualifiedAt,relationLivePathScore:authorityRule?.livePathScore}:{}),
+    ...(structural?{structuralInterrupt:true,shockEventId:o.shockEventId,shockConfirmedAt:o.shockConfirmedAt,
+      shockMarketBreadth:o.shockMarketBreadth}:{}),
+    ...(region?{regionLower,regionUpper,regionCenter}:{})};
   const t:Trade={id,symbol:o.symbol,side,rule,openedAt:now,closedAt:null,status:"OPEN",entryPrice:price,exitPrice:null,quantity,contracts,
     quantoMultiplier:mult,notional,leverage,margin,plannedRisk,stopPrice,armPrice:target,favorable:0,adverse:0,lastPrice:price,
     lastQuoteAt:q.observedAt,entryFee,exitFee:0,fundingAllowance:0,grossPnl:null,netPnl:null,exitReason:null,relationFailureBars:0,lastRelationBar:now,
-    execution:"REAL_QUOTE_PAPER_MODEL",liveEligible:false,firstProfitAt:null,holdScore:o.score,profitFloorRate:0,expectedHoldMinutes:exitPlan.bestHoldMinutes,
-    exitPlan,peakPnlRate:0,exitControl:{policy:ADAPTIVE_ENGINE_VERSION,armedAt:null,armedQuoteAt:null,maxObservationGapMs:30_000,maxQuoteAgeMs:10_000},entryContext:{version:"adaptive-ten-entry-v1",capturedAt:now,timeframe:"5m",side,mode:o.mode,reserve:o.reserve===true,reason:o.reason,entryScore:o.score,
-      directionStrength:o.directionStrength,spaceScore:o.spaceScore,positionScore:o.positionScore,executionScore:o.executionScore,
-      remainingSpaceRate:o.netRemainingSpaceRate,pullbackRiskRate:o.pullbackRiskRate,edgeRatio:o.edgeRatio,expectedHoldMinutes:exitPlan.bestHoldMinutes,
-      marketFit:o.marketFit,regionId:o.regionId,relationRuleId:o.relationRuleId,relationStatus:o.relationStatus,relationHorizon:o.relationHorizon,
-      relationHealth:o.relationHealth,portfolioRiskCharge:riskBudget,relationFamilyId:familyId,relationEvidenceAt:authorityRule.lastQualifiedAt,
-      relationLivePathScore:authorityRule.livePathScore,
-      ...(region?{regionLower:region.lower*scale,regionUpper:region.upper*scale,regionCenter:region.center*scale}:{})},
-    forecast:{remainingNetRate:o.netRemainingSpaceRate,quality:o.score/100,sizingEquity:equity}};
+    execution:"REAL_QUOTE_PAPER_MODEL",liveEligible:false,firstProfitAt:null,holdScore:o.score,profitFloorRate:0,
+    expectedHoldMinutes:frozenPlan.bestHoldMinutes,exitPlan:frozenPlan,peakPnlRate:0,
+    exitControl:{policy:ADAPTIVE_ENGINE_VERSION,armedAt:null,armedQuoteAt:null,maxObservationGapMs:30_000,maxQuoteAgeMs:10_000},
+    entryContext:context,forecast:{remainingNetRate:o.netRemainingSpaceRate,quality:o.score/100,sizingEquity:equity}};
   s.positions.push(t);s.balance-=entryFee;s.fees+=entryFee;s.turnover+=notional;s.lastEntryAt[o.symbol]=now;s.lastSide[o.symbol]=side;
   event(s,now,"ENTRY",id,`${o.symbol} ${side} ${o.mode} 评分${o.score.toFixed(0)}`,{notional,plannedRisk});
   return null;
