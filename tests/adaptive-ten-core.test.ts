@@ -238,12 +238,12 @@ test("an existing recent relation is revalidated on its own evidence before thre
   let engine=initialRelationEngine(at(24)-1);for(let i=24;i<=50;i++)engine=advanceRelationEngine({state:engine,paths:slice(i),now:at(i)});
   const template=engine.rules.find(r=>r.scope==="RECENT"&&r.side==="LONG");assert.ok(template);
   const old={...structuredClone(template!),id:"legacy-grid-rule",signature:"old-grid-signature",
-    conditions:[{feature:0,op:"GE" as const,threshold:-8}],horizon:15 as const,scope:"RECENT" as const,side:"LONG" as const,
-    lastQualifiedAt:at(50)-60_000,status:"ACTIVE" as const,health:.70};
+    conditions:[{feature:0,op:"GE" as const,threshold:-8},{feature:1,op:"GE" as const,threshold:-8}],
+    horizon:15 as const,scope:"RECENT" as const,side:"LONG" as const,lastQualifiedAt:at(50)-60_000,status:"ACTIVE" as const,health:.70};
   engine.rules=[old];
   engine=advanceRelationEngine({state:engine,paths:slice(51),now:at(51)});
-  const retained=engine.rules.find(r=>r.conditions.length===1&&r.conditions[0]?.feature===0&&r.conditions[0]?.threshold===-8);
-  assert.ok(retained,"old threshold shape should be explicitly revalidated instead of disappearing from search-grid drift");
+  const retained=engine.rules.find(r=>r.scope==="RECENT"&&r.conditions.length===2&&r.conditions.every(c=>c.threshold===-8));
+  assert.ok(retained,"an old condition family outside the current RECENT search grid should be explicitly revalidated");
   assert.notEqual(retained!.status,"DEGRADED","positive current evidence must not be degraded solely because quantile thresholds moved");
   assert.doesNotMatch(retained!.reason,/未通过|旧关系未再/);
 });
