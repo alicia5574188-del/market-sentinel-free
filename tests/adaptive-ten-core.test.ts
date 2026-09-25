@@ -236,19 +236,67 @@ test("new PAPER trades freeze the sample exit plan and use its feedback deadline
   assert.ok(next.history.some(t=>t.symbol===symbol&&t.exitReason==="NO_POSITIVE_FEEDBACK"));
 });
 
-test("a holding exits early when its own relation is degraded and it has no positive feedback",()=>{
+test("v2 feedback deadline is a review point when samples still support later recovery",()=>{
+  const now=nowAt(39),symbol=symbols[0]!,state=initialForward(now-60_000);state.lastCandleAt=now;
+  const o=manualOpportunity(symbol,0,{premium:true});state.opportunities=[o];seedManualRules(state,state.opportunities,now);
+  const plan=state.relationEngine.rules[0]!.exitProfile;plan.version="sample-exit-plan-v2";plan.bestHoldMinutes=15;plan.feedbackDeadlineMinutes=5;plan.maxHoldMinutes=30;
+  plan.path={5:{expectedRate:-.0003,adverseRate:.003,remainingEdgeRate:.004,futureBestMinutes:30,recoveryRate:.70,continuationSamples:40},
+    10:{expectedRate:.0004,adverseRate:.0035,remainingEdgeRate:.003,futureBestMinutes:30,recoveryRate:.62,continuationSamples:38},
+    15:{expectedRate:.0015,adverseRate:.004,remainingEdgeRate:.002,futureBestMinutes:30,recoveryRate:.55,continuationSamples:35},
+    30:{expectedRate:.0035,adverseRate:.005,remainingEdgeRate:0,futureBestMinutes:30,recoveryRate:.20,continuationSamples:30}};
+  fillForwardPortfolio(state,quotesAt(39,now),contracts,now,1000,false);assert.equal(state.positions.length,1);
+  const held=state.positions[0]!,later=now+6*60_000,entry=held.entryPrice,q:Quote={bestBid:entry*.9999,bestAsk:entry*1.0001,observedAt:later,fresh:true,entryReady:true};
+  const next=advanceForward({state,now:later,paths:sliced(39),quotes:{[symbol]:q},contracts:{[symbol]:contract},entrySymbols:[symbol],allowDataCycle:false}).state;
+  assert.ok(next.positions.some(t=>t.id===held.id),"deadline alone must not exit while later sample value and recovery remain strong");
+});
+
+test("v2 can hold beyond bestHold while a later sample checkpoint still has positive continuation value",()=>{
+  const now=nowAt(39),symbol=symbols[0]!,state=initialForward(now-60_000);state.lastCandleAt=now;
+  const o=manualOpportunity(symbol,0,{premium:true});state.opportunities=[o];seedManualRules(state,state.opportunities,now);
+  const plan=state.relationEngine.rules[0]!.exitProfile;plan.version="sample-exit-plan-v2";plan.bestHoldMinutes=15;plan.feedbackDeadlineMinutes=10;plan.maxHoldMinutes=45;
+  plan.path={15:{expectedRate:.001,adverseRate:.003,remainingEdgeRate:.0035,futureBestMinutes:45,recoveryRate:.60,continuationSamples:45},
+    20:{expectedRate:.0015,adverseRate:.0035,remainingEdgeRate:.003,futureBestMinutes:45,recoveryRate:.58,continuationSamples:42},
+    30:{expectedRate:.003,adverseRate:.004,remainingEdgeRate:.0015,futureBestMinutes:45,recoveryRate:.50,continuationSamples:38},
+    45:{expectedRate:.0045,adverseRate:.005,remainingEdgeRate:0,futureBestMinutes:45,recoveryRate:.20,continuationSamples:32}};
+  fillForwardPortfolio(state,quotesAt(39,now),contracts,now,1000,false);const held=state.positions[0]!,later=now+16*60_000,entry=held.entryPrice;
+  held.firstProfitAt=now+4*60_000;held.favorable=.002;
+  const q:Quote={bestBid:entry*1.001,bestAsk:entry*1.0012,observedAt:later,fresh:true,entryReady:true};
+  const next=advanceForward({state,now:later,paths:sliced(39),quotes:{[symbol]:q},contracts:{[symbol]:contract},entrySymbols:[symbol],allowDataCycle:false}).state;
+  assert.ok(next.positions.some(t=>t.id===held.id),"bestHold is not a forced exit when future sample value remains positive");
+  assert.equal(next.positions.find(t=>t.id===held.id)?.holdValue?.bestHoldMinutes,45);
+});
+
+test("v2 no-feedback exit requires weak recovery and exhausted future value",()=>{
+  const now=nowAt(39),symbol=symbols[0]!,state=initialForward(now-60_000);state.lastCandleAt=now;
+  const o=manualOpportunity(symbol,0,{premium:true});state.opportunities=[o];seedManualRules(state,state.opportunities,now);
+  const plan=state.relationEngine.rules[0]!.exitProfile;plan.version="sample-exit-plan-v2";plan.bestHoldMinutes=15;plan.feedbackDeadlineMinutes=5;plan.maxHoldMinutes=30;
+  plan.path={5:{expectedRate:.0005,adverseRate:.003,remainingEdgeRate:.00005,futureBestMinutes:10,recoveryRate:.18,continuationSamples:45},
+    10:{expectedRate:.0006,adverseRate:.003,remainingEdgeRate:0,futureBestMinutes:10,recoveryRate:.15,continuationSamples:40}};
+  fillForwardPortfolio(state,quotesAt(39,now),contracts,now,1000,false);const held=state.positions[0]!,later=now+6*60_000,entry=held.entryPrice;
+  const q:Quote={bestBid:entry*.9999,bestAsk:entry*1.0001,observedAt:later,fresh:true,entryReady:true};
+  const next=advanceForward({state,now:later,paths:sliced(39),quotes:{[symbol]:q},contracts:{[symbol]:contract},entrySymbols:[symbol],allowDataCycle:false}).state;
+  assert.ok(next.history.some(t=>t.id===held.id&&t.exitReason==="NO_POSITIVE_FEEDBACK"));
+});
+
+test("v2 degraded relation waits while continuation remains, then exits and locks family after confirmed failure",()=>{
   const learned=learnThrough(39),now=nowAt(39),paths=sliced(39);
   let s=initialForward(now-60_000);s.relationEngine=learned;
   s=advanceForward({state:s,now,paths,quotes:quotesAt(39,now),contracts,entrySymbols:symbols}).state;
   assert.ok(s.positions.length>0);
-  const held=s.positions[0]!,ruleId=held.entryContext?.relationRuleId;assert.ok(ruleId);
-  const rule=s.relationEngine.rules.find(r=>r.id===ruleId);assert.ok(rule);
-  rule!.status="DEGRADED";rule!.health=.2;rule!.livePathScore=.2;
-  held.openedAt=now-6*60_000;held.firstProfitAt=null;held.favorable=0;
-  const later=now+1000,next=advanceForward({state:s,now:later,paths,quotes:quotesAt(39,later),contracts,entrySymbols:symbols,allowDataCycle:false}).state;
-  assert.ok(next.history.some(t=>t.id===held.id&&t.exitReason==="RELATION_DEGRADED"));
-  assert.ok(Object.keys(next.familyExperiment.guards).length>0,"no-feedback degraded exit must lock the relation family");
-  assert.equal(next.opportunities.some(o=>o.side==="SHORT"&&o.mode==="RELATION"),false,"degradation is defense, not a forced reversal");
+  const held=s.positions[0]!,ruleId=held.entryContext?.relationRuleId;assert.ok(ruleId&&held.exitPlan?.version==="sample-exit-plan-v2");
+  const rule=s.relationEngine.rules.find(r=>r.id===ruleId);assert.ok(rule);rule!.status="DEGRADED";rule!.health=.2;rule!.livePathScore=.2;
+  held.openedAt=now-6*60_000;held.firstProfitAt=null;held.favorable=0;held.exitPlan!.feedbackDeadlineMinutes=5;
+  held.exitPlan!.path={5:{expectedRate:-.0002,adverseRate:.003,remainingEdgeRate:.003,futureBestMinutes:15,recoveryRate:.65,continuationSamples:40},
+    15:{expectedRate:.0028,adverseRate:.004,remainingEdgeRate:0,futureBestMinutes:15,recoveryRate:.20,continuationSamples:35}};
+  const reviewAt=now+1000,reviewed=advanceForward({state:s,now:reviewAt,paths,quotes:quotesAt(39,reviewAt),contracts,entrySymbols:symbols,allowDataCycle:false}).state;
+  assert.ok(reviewed.positions.some(t=>t.id===held.id),"degraded status alone must not force an early exit while samples still support recovery");
+  const still=reviewed.positions.find(t=>t.id===held.id)!;still.exitPlan!.path={5:{expectedRate:.0004,adverseRate:.003,remainingEdgeRate:0,
+    futureBestMinutes:5,recoveryRate:.10,continuationSamples:40}};
+  const weakRule=reviewed.relationEngine.rules.find(r=>r.id===ruleId)!;weakRule.status="DEGRADED";weakRule.health=.2;weakRule.livePathScore=.2;
+  const failAt=reviewAt+1000,failed=advanceForward({state:reviewed,now:failAt,paths,quotes:quotesAt(39,failAt),contracts,entrySymbols:symbols,allowDataCycle:false}).state;
+  assert.ok(failed.history.some(t=>t.id===held.id&&t.exitReason==="RELATION_DEGRADED"));
+  assert.ok(Object.keys(failed.familyExperiment.guards).length>0,"confirmed degraded no-feedback exit must lock the relation family");
+  assert.equal(failed.opportunities.some(o=>o.side==="SHORT"&&o.mode==="RELATION"),false,"degradation is defense, not a forced reversal");
 });
 
 test("an existing recent relation is revalidated on its own evidence before threshold-grid drift can degrade it",()=>{
