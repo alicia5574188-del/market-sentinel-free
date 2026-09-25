@@ -439,7 +439,7 @@ function markAndManage(s:ForwardState,quotes:Record<string,Quote>,now:number){
         hardTime=ageMin>=expected*2.5&&favorable<Math.max(.003,t.adverse*.5);
       if(relationFailure)reason="RELATION_DEGRADED";else if(timeFailure)reason="NO_POSITIVE_FEEDBACK";else if(hardTime)reason="TIME_DECAY";
     }
-    if(reason){closeTrade(s,t,px,now,reason);if(isFamilyFailure(reason,t.firstProfitAt)){
+    if(reason){closeTrade(s,t,px,now,reason);if(t.exitPlan&&isFamilyFailure(reason,t.firstProfitAt)){
         const familyId=t.entryContext?.relationFamilyId??(relation?relationFamilyId(relation):"");
         if(familyId)recordFamilyFailure({state:s.familyExperiment,familyId,sourceRuleId:t.entryContext?.relationRuleId,
           evidenceAt:t.entryContext?.relationEvidenceAt,health:t.entryContext?.relationHealth,livePathScore:t.entryContext?.relationLivePathScore,
