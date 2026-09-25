@@ -19,6 +19,16 @@ mature samples + 240 history + 160 events + 160 pending + 18 rules + 30 regions
 + 2 positions, plus the exact 24/23 restart/migration case. Reviewed PR/main
 deployment and two advancing production saves remain pending.
 
+PR490 merged as `8297b00d` and deployed exact main, but its production health
+gate exposed a second legacy symptom at page `0001790337600000:000:BOUNDS`.
+Production remains fail-closed and LIVE=false. The follow-up validates the
+complete decoded legacy page set as one unit, allowing only physical rows moved
+between authenticated hourly shards when total evidence is not short and exact
+canonical normalization recreates every manifest page. Every count/boundary-
+drifted source shard is archived before migration. Focused Forward, typecheck,
+zero-warning lint and native storage smoke pass; reviewed follow-up release and
+continuous production saves remain pending.
+
 # 2026-09-25 — production restart exposed paged-sample integrity migration defect
 
 PR485/main `db8d2a7` passed exact-head CI and deployed, but production correctly

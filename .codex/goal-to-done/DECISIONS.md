@@ -3,11 +3,13 @@
 - Production diagnostics proved the retained legacy page has 24 valid rows
   while its authenticated canonical manifest describes 23. This is extra
   evidence, not evidence loss; the 24-row source page must be retained.
-- A legacy oversized page is accepted only if every row passes the bounded
-  packed-page checks and the existing normalization rules reconstruct the exact
-  authenticated page set, including page ids, counts, bounds, encoded lengths,
-  encodings and compressed SHA-256 values. A smaller page, a new raw-hash page
-  mismatch or a superset with different canonical content remains fail-closed.
+- Legacy physical count/boundary drift is accepted only if every row passes the
+  bounded packed-page checks, the total retained row count is not short, and the
+  existing normalization rules reconstruct the exact authenticated page set,
+  including page ids, counts, bounds, encoded lengths, encodings and compressed
+  SHA-256 values. New raw-hash mismatch or different canonical content remains
+  fail-closed. Per-page shortages are allowed only as redistribution to another
+  page in the same authenticated whole; total evidence shortage is rejected.
 - Before active pages are upgraded, the exact original bytes and a versioned,
   content-addressed manifest containing actual/expected counts and raw/stored
   hashes join the same atomic financial commit. The recovery archive is never
