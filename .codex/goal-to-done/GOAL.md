@@ -1,3 +1,16 @@
+# 2026-09-26 — lossless legacy sample-superset recovery
+
+Recover the production Forward account whose authenticated legacy manifest says
+23 rows for page `0001790265600000:000` while the retained page contains 24
+well-formed rows. Do not ignore, delete or overwrite the extra evidence. Accept
+only when normalizing the complete retained page recreates the exact
+authenticated canonical manifest; atomically preserve the original page and a
+content-addressed recovery manifest before upgrading active pages to raw SHA-256.
+Shortages, malformed rows and non-canonical supersets remain fail-closed. Keep
+the account, history, learning, strategy, LIVE=false intent and all Gate safety
+unchanged; deploy only after the full reviewed-main release gate and advancing
+production saves pass.
+
 # 2026-09-23 — LIVE edge and broad-shock continuity
 
 Complete the owner-authorized repair described in

@@ -1,3 +1,24 @@
+# 2026-09-26 — production 24/23 legacy page recovery candidate
+
+Production main `4c1aa94` is intentionally fail-closed with
+`0001790265600000:000:COUNT_24_23`; LIVE requested/operational remains false and
+the account has not been reset or overwritten. The retained page contains one
+more row than its authenticated canonical manifest, so shortage recovery is not
+appropriate.
+
+Branch `fix/20260926-forward-legacy-superset-recovery` now permits only a legacy
+strict superset that, after the existing merge/thinning rules, recreates the
+exact authenticated canonical page set. Its original bytes plus a versioned
+actual/expected-count and dual-hash manifest are added to the same atomic commit
+before every active legacy page receives stable raw hashes. Shortages and
+non-canonical oversized pages remain rejected. Local gates pass: 133 direct, 65
+Forward, 61 equity, 49 member, 129 LIVE/Gate parity and 18 architecture/migration
+tests; build, typecheck, zero-warning lint, native Gate-stream/storage workerd
+smokes, diff check and Wrangler dry-run pass. Storage coverage includes 2200
+mature samples + 240 history + 160 events + 160 pending + 18 rules + 30 regions
++ 2 positions, plus the exact 24/23 restart/migration case. Reviewed PR/main
+deployment and two advancing production saves remain pending.
+
 # 2026-09-25 — production restart exposed paged-sample integrity migration defect
 
 PR485/main `db8d2a7` passed exact-head CI and deployed, but production correctly
