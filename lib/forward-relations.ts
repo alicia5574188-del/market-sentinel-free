@@ -268,7 +268,7 @@ function relationHardStopRate(rows:Candle[],side:"LONG"|"SHORT",price:number,nor
 function relationOpportunity(c:RelationCandidate,rows:Candle[],q:Quote|undefined,now:number):Opportunity{
   const framePrice=rows.at(-1)!.close,d=dir(c.side),exec=executionScore(q,now),net=Math.max(.0002,c.netRate),gross=Math.max(net+ROUND_TRIP_COST,c.grossRate),
     normalAdverse=Math.max(.003,c.exitProfile.normalAdverseRate),hardStop=relationHardStopRate(rows,c.side,framePrice,normalAdverse),
-    edge=net/Math.max(hardStop,1e-9),score=clip(c.score*.90+exec*.10,0,100),
+    edge=net/Math.max(normalAdverse,1e-9),score=clip(c.score*.90+exec*.10,0,100),
     reserveBlock=reserveExperimentValueBlock({reserve:c.reserve,netRate:net,edgeRatio:edge,livePathScore:c.livePathScore,
       environmentFit:c.environmentFit,roundTripCost:ROUND_TRIP_COST});
   return{id:`relation-${c.ruleId}-${c.symbol}-${rows.at(-1)!.time}`,symbol:c.symbol,side:c.side,mode:"RELATION",premium:false,reserve:c.reserve,
