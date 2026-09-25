@@ -137,7 +137,7 @@ function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade
     </section>
     <section className="fr-section"><div className="fr-section-head"><div><small>诊断</small><h2>最近执行记录</h2></div><span>最近10条</span></div>
       {audits.length?<div className="fr-journal">{audits.slice(0,10).map(e=><article key={e.id}><time>{time(e.observedAt)}</time><div><b>{e.symbol?.replace("_"," / ")??"实盘控制"} · {e.stage}</b><p>{e.reason}</p></div></article>)}</div>:<p className="fr-note">暂无执行异常或保护事件。</p>}
-      {Object.values(live?.entrySkips??{}).map(e=>e&&<div key={e.planId} className="fr-error"><b>{e.symbol} · 未成交</b><p>{e.reason}</p>{e.sizing&&<p>比例目标 {contractText(e.sizing.targetContracts)} 张 / {num(e.sizing.targetNotional,4)} U；交易所最低 {contractText(e.sizing.minimumContracts)} 张 / {num(e.sizing.minimumNotional,4)} U。</p>}</div>)}
+      {Object.values(live?.entrySkips??{}).map(e=>e&&<div key={e.planId} className="fr-error"><b>{e.symbol} · 未成交</b><p>{e.reason}</p>{e.sizing&&<p>比例目标 {contractText(e.sizing.targetContracts)} 张 / {num(e.sizing.targetNotional,4)} U；交易所最低 {contractText(e.sizing.minimumContracts)} 张 / {num(e.sizing.minimumNotional,4)} U；严格比例复制至少需要约 {num(e.sizing.requiredLiveEquity,2)} U 实盘权益。</p>}</div>)}
     </section>
     <section className="fr-section"><div className="fr-section-head"><div><small>API 管理</small><h2>Gate API</h2></div><button type="button" className="fr-text-button" onClick={onRefresh}>刷新状态 ↻</button></div>
       <div className="fr-setting"><div><h3>API状态</h3><p>{credential?.keyHint??"密钥内容不会回显"}</p></div><b>{credential?credential.configured?"已保存":"未配置":"读取中"}</b></div>
