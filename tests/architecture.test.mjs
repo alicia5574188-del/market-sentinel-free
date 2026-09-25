@@ -90,6 +90,17 @@ test("LIVE, member, auth and credential infrastructure remain isolated from stra
   for(const source of[live,auth,vault])assert.doesNotMatch(source,/forward-relation-v2/);
 });
 
+test("LIVE enable keeps owner intent ON while open-order audit retries safely",async()=>{
+  const worker=await read("worker/index-clean.ts");
+  const sync=worker.slice(worker.indexOf("protected async syncLive"),worker.indexOf("private suspendSymbol"));
+  assert.doesNotMatch(sync,/\|\|initialEnable\|\|forceEntryCleanup/);
+  assert.match(sync,/if\(!orderAuditUsable\)\{[\s\S]*operational=false;[\s\S]*后台会自动重试/);
+  assert.match(sync,/if\(!orderAuditUsable\)\{[\s\S]*continue;/);
+  const mode=worker.slice(worker.indexOf("protected async setLiveMode"),worker.indexOf("private suspendSymbol"));
+  assert.match(mode,/Gate挂单核对仍在后台恢复/);
+  assert.match(mode,/不需要再次切换开关/);
+});
+
 test("operator UI and release config expose Forward Path Relation 3.0 with risk-based holdings and 30 execution BBO capacity",async()=>{
   const [dashboard,worker,workflow,wrangler]=await Promise.all([
     read("app/forward-dashboard.tsx"),read("worker/index-clean.ts"),read(".github/workflows/sentinel-v2-ci.yml"),read("wrangler.jsonc"),
