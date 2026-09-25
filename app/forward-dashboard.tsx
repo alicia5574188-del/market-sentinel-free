@@ -80,12 +80,12 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       <section className="fr-section fr-exec-flow-section"><div className="fr-section-head"><div><small>当前执行层</small><h2>Forward Path Relation 3.0 闭环</h2></div><span>{time(data?.updatedAt)}</span></div>
         <div className="fr-exec-flow">
           <ExecStep index="01" title="真实条件采样" status={(relation?.markets??0)>0?"运行中":"等待5m"} text={`30市场持续记录条件；当前 ${fmt(relation?.matureSamples,0)} 份反应已经成熟，不用历史结果伪造冷启动成交。`}/>
-          <ExecStep index="02" title="15 / 60 / 180 分钟关系" status={(relation?.rules??0)>0?"已生成":"积累中"} text={`当前关系 ${fmt(relation?.rules,0)} 条：15m ${fmt(relation?.qualified15,0)} · 60m ${fmt(relation?.qualified60,0)} · 180m ${fmt(relation?.qualified180,0)}。`}/>
-          <ExecStep index="03" title="六级路径检查" status={(relation?.liveAnomalies??0)>0?"发现偏离":"持续核对"} text="5/10/15/30/60/180分钟只比较正在发生的真实反应是否仍像历史赚钱路径，用于快速降权，不负责预测反向。"/>
+          <ExecStep index="02" title="15 / 30 / 45 / 60 分钟最佳持仓" status={(relation?.rules??0)>0?"已生成":"积累中"} text={`当前关系 ${fmt(relation?.rules,0)} 条：15m ${fmt(relation?.qualified15,0)} · 30m ${fmt(relation?.qualified30,0)} · 45m ${fmt(relation?.qualified45,0)} · 60m ${fmt(relation?.qualified60,0)}。`}/>
+          <ExecStep index="03" title="同根路径检查" status={(relation?.liveAnomalies??0)>0?"发现偏离":"持续核对"} text="5/10/15/20/30/45/60分钟属于同一根样本，只比较真实路径是否仍像历史有效路径，不重复计票、不负责预测反向。"/>
           <ExecStep index="04" title="关系生命周期" status={(relation?.degraded??0)>0?"正在迁移风险":"正常"} text={`ACTIVE ${fmt(relation?.active,0)} · 承压 ${fmt(relation?.pressured,0)} · 降级 ${fmt(relation?.degraded,0)} · 恢复中 ${fmt(relation?.recovering,0)}。`}/>
           <ExecStep index="05" title="独立反向确认" status="只认成熟样本" text="旧多头关系失效只降低多头权重；空头必须由自己的已成熟真实反应证明扣成本后有效，禁止失效即反手。"/>
           <ExecStep index="06" title="风险驱动持仓" status={riskUse>=.09?"接近风险上限":"持续竞争"} text={`当前 ${positions.length} 笔持仓，组合预算已用 ${fmt(riskUse*100,1)}%；主仓/探测仓分预算，同一关系≤2.5%，每个5m周期新增≤2.5%，风险越高新仓门槛越高。`}/>
-          <ExecStep index="07" title="执行与利润保护" status={positions.length?"持续保护":"等待持仓"} text="成熟区域与1m只优化执行位置；关系恶化优先退出没有正向反馈的弱仓，已有利润先收紧MFE保护。"/>
+          <ExecStep index="07" title="样本退出计划" status={positions.length?"持续核对":"等待持仓"} text="每笔新单冻结正反馈期限、正常MAE、最佳持仓、剩余优势与利润保留率；结构止损仍是硬边界。"/>
         </div></section>
       <section className="fr-stats">
         <Stat label="关系状态" value={relation?`${relation.active} / ${relation.rules}`:"—"} note={relation?`ACTIVE / 总关系 · 承压 ${relation.pressured} · 降级 ${relation.degraded}`:"等待样本"}/>
