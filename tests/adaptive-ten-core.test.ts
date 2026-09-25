@@ -278,19 +278,25 @@ test("v2 no-feedback exit requires weak recovery and exhausted future value",()=
   assert.ok(next.history.some(t=>t.id===held.id&&t.exitReason==="NO_POSITIVE_FEEDBACK"));
 });
 
-test("a holding exits early when its own relation is degraded and it has no positive feedback",()=>{
+test("v2 degraded relation waits while continuation remains, then exits and locks family after confirmed failure",()=>{
   const learned=learnThrough(39),now=nowAt(39),paths=sliced(39);
   let s=initialForward(now-60_000);s.relationEngine=learned;
   s=advanceForward({state:s,now,paths,quotes:quotesAt(39,now),contracts,entrySymbols:symbols}).state;
   assert.ok(s.positions.length>0);
-  const held=s.positions[0]!,ruleId=held.entryContext?.relationRuleId;assert.ok(ruleId);
-  const rule=s.relationEngine.rules.find(r=>r.id===ruleId);assert.ok(rule);
-  rule!.status="DEGRADED";rule!.health=.2;rule!.livePathScore=.2;
-  held.openedAt=now-6*60_000;held.firstProfitAt=null;held.favorable=0;
-  const later=now+1000,next=advanceForward({state:s,now:later,paths,quotes:quotesAt(39,later),contracts,entrySymbols:symbols,allowDataCycle:false}).state;
-  assert.ok(next.history.some(t=>t.id===held.id&&t.exitReason==="RELATION_DEGRADED"));
-  assert.ok(Object.keys(next.familyExperiment.guards).length>0,"no-feedback degraded exit must lock the relation family");
-  assert.equal(next.opportunities.some(o=>o.side==="SHORT"&&o.mode==="RELATION"),false,"degradation is defense, not a forced reversal");
+  const held=s.positions[0]!,ruleId=held.entryContext?.relationRuleId;assert.ok(ruleId&&held.exitPlan?.version==="sample-exit-plan-v2");
+  const rule=s.relationEngine.rules.find(r=>r.id===ruleId);assert.ok(rule);rule!.status="DEGRADED";rule!.health=.2;rule!.livePathScore=.2;
+  held.openedAt=now-6*60_000;held.firstProfitAt=null;held.favorable=0;held.exitPlan!.feedbackDeadlineMinutes=5;
+  held.exitPlan!.path={5:{expectedRate:-.0002,adverseRate:.003,remainingEdgeRate:.003,futureBestMinutes:15,recoveryRate:.65,continuationSamples:40},
+    15:{expectedRate:.0028,adverseRate:.004,remainingEdgeRate:0,futureBestMinutes:15,recoveryRate:.20,continuationSamples:35}};
+  const reviewAt=now+1000,reviewed=advanceForward({state:s,now:reviewAt,paths,quotes:quotesAt(39,reviewAt),contracts,entrySymbols:symbols,allowDataCycle:false}).state;
+  assert.ok(reviewed.positions.some(t=>t.id===held.id),"degraded status alone must not force an early exit while samples still support recovery");
+  const still=reviewed.positions.find(t=>t.id===held.id)!;still.exitPlan!.path={5:{expectedRate:.0004,adverseRate:.003,remainingEdgeRate:0,
+    futureBestMinutes:5,recoveryRate:.10,continuationSamples:40}};
+  const weakRule=reviewed.relationEngine.rules.find(r=>r.id===ruleId)!;weakRule.status="DEGRADED";weakRule.health=.2;weakRule.livePathScore=.2;
+  const failAt=reviewAt+1000,failed=advanceForward({state:reviewed,now:failAt,paths,quotes:quotesAt(39,failAt),contracts,entrySymbols:symbols,allowDataCycle:false}).state;
+  assert.ok(failed.history.some(t=>t.id===held.id&&t.exitReason==="RELATION_DEGRADED"));
+  assert.ok(Object.keys(failed.familyExperiment.guards).length>0,"confirmed degraded no-feedback exit must lock the relation family");
+  assert.equal(failed.opportunities.some(o=>o.side==="SHORT"&&o.mode==="RELATION"),false,"degradation is defense, not a forced reversal");
 });
 
 test("an existing recent relation is revalidated on its own evidence before threshold-grid drift can degrade it",()=>{
