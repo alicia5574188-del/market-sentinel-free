@@ -292,6 +292,19 @@ test("enabling A neither opens an old source nor changes B or the master",()=>cl
   const aa=await h.member(a.id),bb=await h.member(b.id);assert.equal((await h.internal(a.id,"/live-mode",{enabled:true})).status,200);
   assert.equal(aa.gate.placed.length,0);assert.equal(bb.gate.requestCount,0);assert.equal(bb.engine.runtime.live.requestedEnabled,false);assert.deepEqual(h.source,before);
 }));
+test("committed PAPER source can wake an active member immediately without waiting the 10s alarm",()=>clock(async()=>{
+  const h=await harness(),a=await h.issue(),aa=await h.member(a.id);assert.equal((await h.internal(a.id,"/live-mode",{enabled:true})).status,200);
+  now+=1000;h.source.positions=[{...trade("ft-event-wake"),openedAt:now-100}];const readsBefore=h.events.primaryReads;
+  const seats=await h.directory.fetch(new Request("https://members/active-seats",{headers:{"x-member-wake-token":ROOT}}));
+  assert.equal(seats.status,200);assert.deepEqual((await seats.json<any>()).ids,[a.id]);
+  const wake=await h.env.MEMBER_EXECUTION.getByName(`member:${a.id}`).fetch("https://member-execution/source-wake",{
+    method:"POST",headers:{"x-member-wake-token":ROOT},
+  });
+  assert.equal(wake.status,200);assert.equal((await wake.json<any>()).woken,true);
+  assert.ok(h.events.primaryReads>readsBefore,"event wake must bypass the 2.5s shared-source cache");
+  assert.equal(aa.gate.placed.length,1,"event wake must submit the new source without waiting for the 10s alarm");
+}));
+
 test("new shared source ID is executed independently at each user's own equity and original leverage",()=>clock(async()=>{
   const h=await harness(),a=await h.issue(),b=await h.issue(),aa=await h.member(a.id),bb=await h.member(b.id);
   bb.gate.account={...bb.gate.account,total:50,available:50};

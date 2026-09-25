@@ -42,9 +42,9 @@ export class MemberDirectory extends DurableObject<CloudflareEnv> {
     }
     return {code:await decryptMemberText(record.sealed,root,`member-invite:v1:${record.hash}`),createdAt:record.createdAt};
   }
-  private async feed(viewOnly=false) {
+  private async feed(viewOnly=false,forceFresh=false) {
     const now=Date.now();
-    if(this.feedCache&&now-this.feedCache.at<(viewOnly?10000:2500))return this.feedCache;
+    if(!forceFresh&&this.feedCache&&now-this.feedCache.at<(viewOnly?10000:2500))return this.feedCache;
     if(this.feedWork)return this.feedWork;
     if(now-this.feedAttempt<2000)throw new Error("共享行情读取等待重试");
     this.feedAttempt=now;
@@ -62,6 +62,11 @@ export class MemberDirectory extends DurableObject<CloudflareEnv> {
     if(!root||root.length<16)return json({error:"登录密钥服务未配置"},503);
     try {
       if(p==="/health")return json({version:MEMBERS_VERSION,configured:true,memberLimit:MEMBER_LIMIT,activeLimit:MEMBER_ACTIVE_LIMIT});
+      if(p==="/active-seats"&&request.method==="GET") {
+        if(request.headers.get("x-member-wake-token")!==root)return json({error:"内部唤醒未授权"},403);
+        const seats=await this.ctx.storage.get<string[]>("execution-seats")??[];
+        return json({version:MEMBERS_VERSION,ids:seats.filter(validMemberId).slice(0,MEMBER_ACTIVE_LIMIT)});
+      }
       if(p==="/overview") {
         const rows=await this.ctx.storage.list<MemberRecord>({prefix:"member:",limit:MEMBER_LIMIT}),invite=await this.currentInvite(root);
         return json({version:MEMBERS_VERSION,authVersion:MEMBER_AUTH_VERSION,members:[...rows.values()].map(publicRecord).sort((a,b)=>b.createdAt-a.createdAt),
@@ -194,7 +199,7 @@ export class MemberDirectory extends DurableObject<CloudflareEnv> {
       const id=url.searchParams.get("id");if(!validMemberId(id))return json({error:"账户无效"},400);
       const m=await this.readMember(id);if(!m)return json({error:"账户不存在"},401);
       if(p==="/identity")return m.revokedAt?json({error:"账户已删除或正在删除"},401):json({id:m.id,version:m.keyVersion,label:m.label,createdAt:m.createdAt});
-      if(p==="/feed")return json(await this.feed(url.searchParams.get("view")==="1"));
+      if(p==="/feed")return json(await this.feed(url.searchParams.get("view")==="1",url.searchParams.get("fresh")==="1"));
       if(p==="/source-close"&&request.method==="POST") {
         // Every lookup is bounded and only uses already-closed primary records.
         // Members can never submit a replacement source or change a close.

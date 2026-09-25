@@ -83,6 +83,14 @@ test("LIVE, member, auth and credential infrastructure remain isolated from stra
   for(const source of[live,auth,vault])assert.doesNotMatch(source,/forward-relation-v2/);
 });
 
+test("committed PAPER lifecycle actively wakes member LIVE while keeping the 10s alarm fallback",async()=>{
+  const [worker,directory,member]=await Promise.all([read("worker/index-clean.ts"),read("worker/member-directory.ts"),read("worker/member-executor.ts")]);
+  assert.match(worker,/launchMemberLiveWake/);assert.match(worker,/lifecycleChanged\|\|next\.protectionChanged/);
+  assert.match(directory,/\/active-seats/);assert.match(directory,/x-member-wake-token/);
+  assert.match(member,/\/source-wake/);assert.match(member,/await this\.tick\(true\)/);assert.match(member,/\/feed\?fresh=1/);assert.match(member,/x-member-wake-token/);
+  assert.match(member,/const cadence=this\.liveNeedsSync\(\)\?10000:60000/);
+});
+
 test("operator UI and release config expose Forward Path Relation 3.0 with risk-based holdings and 30 execution BBO capacity",async()=>{
   const [dashboard,worker,workflow,wrangler]=await Promise.all([
     read("app/forward-dashboard.tsx"),read("worker/index-clean.ts"),read(".github/workflows/sentinel-v2-ci.yml"),read("wrangler.jsonc"),
