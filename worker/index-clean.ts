@@ -969,8 +969,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       netRate:row.netRemainingSpaceRate,edgeRatio:row.edgeRatio,relationStatus:row.relationStatus??null,
       relationHealth:row.relationHealth??null,reason:row.reason,
     }));
+    const frames=Object.values(s?.relationEngine?.frames??{});
     const ruleDiagnostics=(s?.relationEngine?.rules??[]).slice(0,12).map(row=>({
       id:row.id,scope:row.scope,horizon:row.horizon,side:row.side,status:row.status,health:row.health,
+      currentMatches:frames.filter(frame=>row.symbols.includes(frame.symbol)&&row.conditions.every(c=>
+        Number.isFinite(frame.x[c.feature])&&(c.op==="GE"?frame.x[c.feature]!>=c.threshold:frame.x[c.feature]!<=c.threshold))).length,
       longNet:row.longNet,recentNet:row.recentNet,standardError:row.standardError,samples:row.samples,
       longGroups:row.longGroups,recentGroups:row.recentGroups,livePathScore:row.livePathScore,
       environmentFit:row.environmentFit,lastQualifiedAt:row.lastQualifiedAt,
