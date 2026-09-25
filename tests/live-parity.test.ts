@@ -764,9 +764,13 @@ test("real Worker keeps requested-but-unconfirmed closes and pending entries in 
   const before=r.liveOpenRisk();p.exitRequestedAt=T;
   assert.equal(r.liveOpenRisk(),before);assert.equal(r.liveDirectionalRisk("LONG"),before);
   const entries=h.runtime.live.entries as Record<string,unknown>;
-  entries.ETH_USDT={planId:"pending",symbol:"ETH_USDT",side:"SHORT",status:"OPEN",plannedRisk:2};
+  entries.ETH_USDT={planId:"pending",symbol:"ETH_USDT",side:"SHORT",status:"OPEN",plannedRisk:2,margin:1};
   assert.equal(r.liveOpenRisk(),before+2);assert.equal(r.liveDirectionalRisk("SHORT"),2);
   p.status="CLOSED";assert.equal(r.liveOpenRisk(),2);
+  entries.ETH_USDT={planId:"pending-cancelled",symbol:"ETH_USDT",side:"SHORT",status:"CANCELLED",plannedRisk:2,margin:1,
+    parity:{sourceId:"pending-cancelled"},marketSubmittedAt:T,submissionResolved:false};
+  assert.equal(r.liveOpenRisk(),2,"cancelled-but-unresolved one-shot identity must keep its risk reserved");
+  assert.equal(r.liveDirectionalRisk("SHORT"),2);
 }));
 test("an unknown prior submission reserves its risk but does not block an unrelated new source",()=>clock(async()=>{
   const {h,gate}=await harness();gate.ambiguous=true;await enableNew(h);
