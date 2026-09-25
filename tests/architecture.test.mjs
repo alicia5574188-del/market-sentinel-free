@@ -87,7 +87,7 @@ test("committed PAPER lifecycle actively wakes member LIVE while keeping the 10s
   const [worker,directory,member]=await Promise.all([read("worker/index-clean.ts"),read("worker/member-directory.ts"),read("worker/member-executor.ts")]);
   assert.match(worker,/launchMemberLiveWake/);assert.match(worker,/lifecycleChanged\|\|next\.protectionChanged/);
   assert.match(directory,/\/active-seats/);assert.match(directory,/x-member-wake-token/);
-  assert.match(member,/\/source-wake/);assert.match(member,/await this\.tick\(\)/);assert.match(member,/x-member-wake-token/);
+  assert.match(member,/\/source-wake/);assert.match(member,/await this\.tick\(true\)/);assert.match(member,/\/feed\?fresh=1/);assert.match(member,/x-member-wake-token/);
   assert.match(member,/const cadence=this\.liveNeedsSync\(\)\?10000:60000/);
 });
 
