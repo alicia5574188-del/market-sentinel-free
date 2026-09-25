@@ -966,7 +966,17 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const eligible=opportunities.filter(row=>row.eligible&&row.expiresAt>now);
     const blocked=opportunities.filter(row=>!row.eligible&&row.expiresAt>now).slice(0,8).map(row=>({
       symbol:row.symbol,side:row.side,mode:row.mode,reserve:row.reserve===true,score:Math.round(row.score),
-      relationStatus:row.relationStatus??null,relationHealth:row.relationHealth??null,reason:row.reason,
+      netRate:row.netRemainingSpaceRate,edgeRatio:row.edgeRatio,relationStatus:row.relationStatus??null,
+      relationHealth:row.relationHealth??null,reason:row.reason,
+    }));
+    const ruleDiagnostics=(s?.relationEngine?.rules??[]).slice(0,12).map(row=>({
+      id:row.id,scope:row.scope,horizon:row.horizon,side:row.side,status:row.status,health:row.health,
+      longNet:row.longNet,recentNet:row.recentNet,standardError:row.standardError,samples:row.samples,
+      longGroups:row.longGroups,recentGroups:row.recentGroups,livePathScore:row.livePathScore,
+      environmentFit:row.environmentFit,lastQualifiedAt:row.lastQualifiedAt,
+      bestHoldMinutes:row.exitProfile.bestHoldMinutes,feedbackDeadlineMinutes:row.exitProfile.feedbackDeadlineMinutes,
+      maxHoldMinutes:row.exitProfile.maxHoldMinutes,normalAdverseRate:row.exitProfile.normalAdverseRate,
+      targetRate:row.exitProfile.targetRate,retentionRate:row.exitProfile.retentionRate,reason:row.reason,
     }));
     return {version:FORWARD_VERSION,engineVersion:ADAPTIVE_ENGINE_VERSION,policyVersion:s?.policyVersion??null,
       strategyAuthorityVersion:s?.strategyAuthorityVersion??null,executionVersion:s?.executionVersion??null,
@@ -980,7 +990,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       relationPendingCount:Object.keys(s?.relationEngine?.pending??{}).length,
       relationFrameCount:Object.keys(s?.relationEngine?.frames??{}).length,
       relationDiagnostics:s?.relationEngine?.diagnostics??null,entryDiagnostics:s?.entryDiagnostics??null,
-      candidateDiagnostics:blocked,storage:{persistedAt:s?.storage.persistedAt??0,error:this.forwardError}};
+      ruleDiagnostics,candidateDiagnostics:blocked,storage:{persistedAt:s?.storage.persistedAt??0,error:this.forwardError}};
   }
 
   protected liveMirrorView() {
