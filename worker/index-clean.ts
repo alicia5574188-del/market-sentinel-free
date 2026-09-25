@@ -1845,8 +1845,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           ?((q.bestBid??0)+(q.bestAsk??0))/2:NaN;
       return sum+mirrorPositionRisk(position,mark);
     }, 0);
-    const pendingRisk = Object.values(this.runtime.live.entries).reduce((sum, entry) => sum + (entry && ["SUBMITTING", "OPEN", "ERROR"].includes(entry.status)
-      ? entry.plannedRisk : 0), 0);
+    const pendingRisk = Object.values(this.runtime.live.entries).reduce((sum, entry) => sum + (entry
+      &&(["SUBMITTING","OPEN","ERROR"].includes(entry.status)||this.liveEntryAwaitingReconcile(entry)) ? entry.plannedRisk : 0), 0);
     return positionRisk + pendingRisk;
   }
 
@@ -1862,8 +1862,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           ?((q.bestBid??0)+(q.bestAsk??0))/2:NaN;
       return sum+mirrorPositionRisk(position,mark);
     }, 0);
-    const pendingRisk = Object.values(this.runtime.live.entries).reduce((sum, entry) => sum + (entry && entry.side === side
-      && ["SUBMITTING", "OPEN", "ERROR"].includes(entry.status) ? entry.plannedRisk : 0), 0);
+    const pendingRisk = Object.values(this.runtime.live.entries).reduce((sum, entry) => sum + (entry && entry.side===side
+      &&(["SUBMITTING","OPEN","ERROR"].includes(entry.status)||this.liveEntryAwaitingReconcile(entry)) ? entry.plannedRisk : 0), 0);
     return positionRisk + pendingRisk;
   }
 
@@ -2459,10 +2459,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     };
     let marginForNewEntries = [
       ...Object.values(this.runtime.live.positions).filter((position) => position?.status === "OPEN"),
-      ...Object.values(this.runtime.live.entries).filter((entry) => entry && ["SUBMITTING", "OPEN", "ERROR"].includes(entry.status)),
+      ...Object.values(this.runtime.live.entries).filter((entry) => entry
+        &&(["SUBMITTING","OPEN","ERROR"].includes(entry.status)||this.liveEntryAwaitingReconcile(entry))),
     ].reduce((sum, item) => sum + (item?.margin ?? 0), 0);
     let notionalForNewEntries=[...Object.values(this.runtime.live.positions).filter(p=>p?.status==="OPEN"),
-      ...Object.values(this.runtime.live.entries).filter(e=>e&&["SUBMITTING","OPEN","ERROR"].includes(e.status))]
+      ...Object.values(this.runtime.live.entries).filter(e=>e
+        &&(["SUBMITTING","OPEN","ERROR"].includes(e.status)||this.liveEntryAwaitingReconcile(e)))]
       .reduce((n,p)=>n+(p?.notional??0),0);
     const paperMark=forwardEquity(this.forwardState!,this.regimeQuotes(Date.now()),Date.now());
     let mirrorRatio=this.runtime.live.activation?.scaleRatio??null;
