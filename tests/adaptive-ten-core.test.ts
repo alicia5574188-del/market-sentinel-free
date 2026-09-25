@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {ADAPTIVE_ENGINE_VERSION,advanceForward,closeForwardForReset,fillForwardPortfolio,forwardSummary,initialForward,normalizeForward,resetForwardAccountPreservingLearning,
+import {ADAPTIVE_ENGINE_VERSION,advanceForward,closeForwardForReset,fillForwardPortfolio,forwardSummary,initialForward,normalizeForward,relationHardPayoffBlock,resetForwardAccountPreservingLearning,
   type Candle,type Contract,type Opportunity,type Quote} from "../lib/forward-relations.ts";
 import {FORWARD_STORAGE,prepareForwardReset} from "../lib/forward-store.ts";
-import {FORWARD_RELATION_V2_VERSION,advanceRelationEngine,initialRelationEngine,normalizeRelationEngine,relationCandidates,type RelationRule} from "../lib/forward-relation-v2.ts";
+import {FORWARD_RELATION_V2_VERSION,advanceRelationEngine,initialRelationEngine,normalizeRelationEngine,pruneRelationLearningBySymbols,relationCandidates,type RelationRule} from "../lib/forward-relation-v2.ts";
 import {recordFamilyFailure,relationFamilyId} from "../lib/forward-family-experiment.ts";
 
 const START=Date.parse("2026-09-24T00:00:00Z")/1000;
@@ -86,6 +86,27 @@ test("candidate economics keep learned post-cost edge separate from relation hea
   const c=relationCandidates(e)[0];assert.ok(c);
   assert.equal(c!.netRate,.0024,"health controls authority and risk but must not discount the same sample edge twice");
   assert.ok(c!.netRate/c!.stopRate>.40);
+});
+
+test("ineligible execution markets are removed from active relation learning without resetting valid evidence",()=>{
+  const e=learnThrough(39),allowed=new Set(symbols.slice(0,6)),before=e.samples.length;
+  assert.ok(before>0&&e.samples.some(r=>!allowed.has(r.symbol)));
+  const removed=pruneRelationLearningBySymbols(e,allowed);
+  assert.ok(removed.removedSamples>0);assert.ok(e.samples.length<before);
+  assert.ok(e.samples.every(r=>allowed.has(r.symbol)));
+  assert.ok(Object.values(e.pending).every(r=>allowed.has(r.symbol)));
+  assert.ok(Object.values(e.frames).every(r=>allowed.has(r.symbol)));
+  assert.equal(e.rules.length,0,"contaminated aggregate rules must be rebuilt from the cleaned sample pool");
+  const next=advanceRelationEngine({state:e,paths:sliced(40),now:nowAt(40),eligibleSymbols:allowed});
+  assert.ok(next.rules.length>0);assert.ok(next.rules.every(r=>r.symbols.every(symbol=>allowed.has(symbol))));
+});
+
+test("sample profit must cover the true hard stop instead of looking good only against normal MAE",()=>{
+  const low={version:"sample-exit-plan-v2" as const,bestHoldMinutes:30 as const,feedbackDeadlineMinutes:10,maxHoldMinutes:45,
+    normalAdverseRate:.004,targetRate:.004,protectionActivationRate:.0025,retentionRate:.70,winRate:.70,samples:60,groups:6,path:{}};
+  const strong={...low,targetRate:.018,retentionRate:.80,winRate:.72};
+  assert.match(relationHardPayoffBlock({exitProfile:low,hardStopRate:.012,netRate:.0012})??"",/不足以覆盖结构止损/);
+  assert.equal(relationHardPayoffBlock({exitProfile:strong,hardStopRate:.012,netRate:.004}),null);
 });
 
 test("a restart can seed closed root paths immediately instead of waiting a fresh hour",()=>{
