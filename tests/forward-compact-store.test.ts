@@ -141,6 +141,32 @@ test("legacy retained strict supersets are canonically proven and atomically arc
   assert.deepEqual(db.data.get(recoveryBytesKey),oversized);assert.deepEqual(db.data.get(recoveryManifestKey),recovery);
 });
 
+test("stable raw-hash page supersets recover only through exact persisted-time canonical reconstruction",async()=>{
+  const s=stressFixture();s.relationEngine.samples=Array.from({length:23},(_,i)=>sample(i));
+  const write=await prepareForwardWrite(s,s,T,{compact:true}),db=new Memory(),
+    manifest=structuredClone(write.entries[FORWARD_SAMPLE_MANIFEST_STORAGE]) as {
+      pages:{id:string;key:string;count:number;firstAt:number;lastAt:number;length:number;rawLength:number;sha256:string;rawSha256:string;encoding:"gzip"|"utf8"}[]
+    },target=manifest.pages[0]!,original=write.entries[target.key] as Uint8Array,
+    raw=target.encoding==="gzip"?await gunzip(original,512*1024):original,
+    page=JSON.parse(new TextDecoder().decode(raw)) as {version:string;id:string;samples:unknown[][]};
+  page.samples.splice(page.samples.length-1,0,structuredClone(page.samples.at(-1)!));
+  const retainedRaw=new TextEncoder().encode(JSON.stringify(page)),retainedCompressed=await gzip(retainedRaw),
+    retained=target.encoding==="gzip"?retainedCompressed:retainedRaw;
+  const head=structuredClone(write.entries[HEAD]) as {sampleManifestSha256:string};
+  head.sampleManifestSha256=await digest(new TextEncoder().encode(JSON.stringify(manifest)));
+  await db.put({...write.entries,[target.key]:retained,[FORWARD_SAMPLE_MANIFEST_STORAGE]:manifest,[HEAD]:head});
+
+  const recovered=await readForwardStore(db,T+1);
+  assert.equal(recovered.relationEngine.samples.length,23);
+  assert.equal(recovered.storage.sampleIntegrity,"legacy-recovered");
+  const migrated=await prepareForwardWrite(recovered,recovered,T+2,{compact:true}),keys=Object.keys(migrated.entries),
+    recoveryBytesKey=keys.find(key=>key.startsWith(FORWARD_SAMPLE_RECOVERY_PREFIX)&&key.endsWith(":bytes"))!;
+  assert.ok(recoveryBytesKey);assert.deepEqual(migrated.entries[recoveryBytesKey],retained);
+  await db.put(migrated.entries);
+  const restarted=await readForwardStore(db,T+3);
+  assert.equal(restarted.relationEngine.samples.length,23);assert.equal(restarted.storage.sampleIntegrity,"raw-sha256");
+});
+
 test("legacy evidence drift still fails closed unless persisted-time normalization recreates the authenticated bytes",async()=>{
   const s=stressFixture(),write=await prepareForwardWrite(s,s,T,{compact:true}),db=new Memory();
   const manifest=structuredClone(write.entries[FORWARD_SAMPLE_MANIFEST_STORAGE]) as {
