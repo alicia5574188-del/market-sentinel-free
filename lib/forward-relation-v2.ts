@@ -247,6 +247,19 @@ function synthesize(state:RelationEngineState,paths:Record<string,RelationCandle
 const objectRecord=(value:unknown):Record<string,unknown>|null=>value&&typeof value==="object"?value as Record<string,unknown>:null;
 const childNumber=(value:unknown,key:string|number)=>{const row=objectRecord(value);return Number(row?.[String(key)]);};
 function migrateMeasurement(value:unknown):RelationMeasurement|null{
+  if(Array.isArray(value)&&value[0]==="m1"){
+    const symbol=value[1],at=Number(value[2]),x=value[6],env=value[7],packedCp=value[8],packedUp=value[9],packedDown=value[10];
+    if(typeof symbol!=="string"||!finite(at)||!Array.isArray(x)||!Array.isArray(env))return null;
+    const numberAt=(row:unknown,index:number)=>{if(!Array.isArray(row)||row[index]==null)return NaN;return Number(row[index]);},
+      cp:RelationMeasurement["cp"]={},upAt:RelationMeasurement["upAt"]={},downAt:RelationMeasurement["downAt"]={};
+    REACTION_CHECKPOINTS.forEach((h,i)=>{const c=numberAt(packedCp,i),u=numberAt(packedUp,i),d=numberAt(packedDown,i);
+      if(finite(c))cp[h]=c;if(finite(u))upAt[h]=Math.max(0,u);if(finite(d))downAt[h]=Math.max(0,d);});
+    if(!Object.keys(cp).length)return null;const response=Number(value[3]),up=Number(value[4]),down=Number(value[5]);
+    return{symbol,at,response:finite(Number(cp[60]))?Number(cp[60]):finite(response)?response:0,
+      up:finite(up)?Math.max(0,up):Number(upAt[60]??0),down:finite(down)?Math.max(0,down):Number(downAt[60]??0),
+      x:x.map(Number).slice(0,8),env:{breadth:Number(env[0]??.5),dispersion:Number(env[1]??0),expansion:Number(env[2]??0)},
+      cp,upAt,downAt,relativeAt:{},pathEfficiency:Number(value[11]??0),reversals:Number(value[12]??0)};
+  }
   const raw=objectRecord(value);if(!raw||typeof raw.symbol!=="string"||!finite(Number(raw.at))||!Array.isArray(raw.x))return null;
   const cp:RelationMeasurement["cp"]={};for(const m of REACTION_CHECKPOINTS){const v=childNumber(raw.cp,m);if(finite(v))cp[m]=v;}
   const oldH=Number(raw.horizon),response=Number(raw.response);if(finite(response)&&RELATION_HORIZONS.includes(oldH as RelationHorizon))cp[oldH as RelationHorizon]=response;
