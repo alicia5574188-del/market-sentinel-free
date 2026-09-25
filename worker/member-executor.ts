@@ -27,6 +27,7 @@ export function memberExecutionClass(Base:typeof MarketStream) {
     private feed:MemberFeed|null=null;
     private sourceWork:Promise<void>|null=null;
     private memberTick:Promise<void>|null=null;
+    private forceFreshSource=false;
     private usageAt=0;
     private bootError:string|null=null;
     private deleted=false;
@@ -136,11 +137,11 @@ export function memberExecutionClass(Base:typeof MarketStream) {
         body===undefined?undefined:{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
       const value=await res.json<Record<string,unknown>>();if(!res.ok)throw new Error(String(value.error??"会员服务等待恢复"));return value;
     }
-    private async refreshSource(viewOnly=false) {
+    private async refreshSource(viewOnly=false,forceFresh=false) {
       if(this.sourceWork)return this.sourceWork;
       this.sourceWork=(async()=>{
         try {
-          const f=await this.directory(viewOnly?"/feed?view=1":"/feed") as unknown as MemberFeed;
+          const f=await this.directory(viewOnly?"/feed?view=1":forceFresh?"/feed?fresh=1":"/feed") as unknown as MemberFeed;
           if(f.version!==MEMBERS_VERSION||!f.state||Date.now()-f.at>(viewOnly?10000:8000))throw new Error("共享源快照过期");
           if(this.feed&&f.at<this.feed.at)return;
           this.feed=f;this.forwardState=f.state;this.runtime.evidence=f.evidence as typeof this.runtime.evidence;
@@ -186,22 +187,26 @@ export function memberExecutionClass(Base:typeof MarketStream) {
         if(!this.bootError&&!this.liveNeedsSync()&&!this.liveSettlementNeedsRefresh()) {await this.ctx.storage.deleteAlarm();if(this.identity)await this.directory("/seat",{enabled:false}).catch(()=>undefined);}
       }
     }
-    private async tick() {
+    private async tick(forceFresh=false) {
+      if(forceFresh)this.forceFreshSource=true;
       if(this.memberTick)return this.memberTick;
       this.memberTick=(async()=>{
-        if(this.bootError||!this.identity||this.deleted||this.deleting)return;
-        this.resetDailyCounters(Date.now());
-        await this.refreshSource().catch(()=>undefined);
-        try {if(this.liveNeedsSync())await this.syncLive(Date.now());}
-        catch(e){this.runtime.live.operational=false;this.runtime.live.lastError=errorText(e);}
-        this.launchLiveSettlementBackground();
-        await this.saveCheckpoint(Date.now(),false).catch(e=>{this.runtime.live.lastError=errorText(e);this.runtime.live.operational=false;});
-        this.launchTurnoverWork(Date.now());
-        if(Date.now()-this.usageAt>=60000) {
-          this.usageAt=Date.now();const t=turnoverView(this.turnoverState,this.turnoverError,Date.now());
-          this.ctx.waitUntil(this.directory("/usage",{notional:t.systemTagged,fills:t.fillCount,through:t.checkedThrough,
-            reportedAt:this.usageAt,partial:t.catchingUp,error:!!t.error}).catch(()=>undefined));
-        }
+        do{
+          const fresh=this.forceFreshSource;this.forceFreshSource=false;
+          if(this.bootError||!this.identity||this.deleted||this.deleting)return;
+          this.resetDailyCounters(Date.now());
+          await this.refreshSource(false,fresh).catch(()=>undefined);
+          try {if(this.liveNeedsSync())await this.syncLive(Date.now());}
+          catch(e){this.runtime.live.operational=false;this.runtime.live.lastError=errorText(e);}
+          this.launchLiveSettlementBackground();
+          await this.saveCheckpoint(Date.now(),false).catch(e=>{this.runtime.live.lastError=errorText(e);this.runtime.live.operational=false;});
+          this.launchTurnoverWork(Date.now());
+          if(Date.now()-this.usageAt>=60000) {
+            this.usageAt=Date.now();const t=turnoverView(this.turnoverState,this.turnoverError,Date.now());
+            this.ctx.waitUntil(this.directory("/usage",{notional:t.systemTagged,fills:t.fillCount,through:t.checkedThrough,
+              reportedAt:this.usageAt,partial:t.catchingUp,error:!!t.error}).catch(()=>undefined));
+          }
+        }while(this.forceFreshSource);
       })();
       try{await this.memberTick;}finally{this.memberTick=null;}
     }
@@ -296,7 +301,7 @@ export function memberExecutionClass(Base:typeof MarketStream) {
           if(!this.env.OWNER_ACCESS_TOKEN||request.headers.get("x-member-wake-token")!==this.env.OWNER_ACCESS_TOKEN)
             return json({error:"内部唤醒未授权"},403);
           if(this.deleted||this.deleting||!this.identity||!this.liveNeedsSync())return json({ok:true,woken:false});
-          await this.tick();await this.arm();return json({ok:true,woken:true,at:Date.now()});
+          await this.tick(true);await this.arm();return json({ok:true,woken:true,at:Date.now()});
         }
         const id=request.headers.get("x-verified-member"),createdAt=Number(request.headers.get("x-member-created-at"));
         const admin=request.headers.get("x-member-admin")==="owner";
