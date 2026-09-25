@@ -42,7 +42,7 @@ import type { PreviousMarketRegimeCandidate } from "../lib/previous-market-regim
 import { ADAPTIVE_ENGINE_VERSION, FORWARD_EXECUTION_BBO_CAP, FORWARD_MINUTE_CONFIRMATION_CAP, advanceForward, closeForwardForReset,
   forwardSummary, forwardEquity, freshQuote, forwardUrgentMinuteSymbols, forwardUrgentQuoteSymbols, forwardWatchSymbols,
   resetForwardAccountPreservingLearning, BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
-import { selectAnchorOpportunityUniverse } from "../lib/multi-turn-universe.ts";
+import { FORWARD_EXECUTION_VOLUME_FLOOR_USD, forwardExecutionUniverseEligible, selectAnchorOpportunityUniverse } from "../lib/multi-turn-universe.ts";
 import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite, prepareForwardReset,
   FORWARD_STORAGE, FORWARD_PROTECTION_STORAGE } from "../lib/forward-store.ts";
 import { nextProtectionWriteBudget, readProtectionWriteBudget, protectionWriteBudgetView,
@@ -508,6 +508,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private contractCatalog = new Map<string, Awaited<ReturnType<typeof fetchActiveContracts>>[number]>();
   private gateRadarCache: Awaited<ReturnType<typeof fetchGateRadarTickers>> = [];
   private gateRadarAt=0;
+  private forwardLearningUniverse:string[]=[];
   private authorityReady = true;
   private authorityView = { positions: {} as RuntimeState["positions"], equity: CANONICAL_PAPER_REFERENCE_EQUITY, equityVersion: 0 };
   protected liveClient: GateLiveClient | null = null;
@@ -908,11 +909,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       });
     const eligibleRows=this.marketHub.radarRows(known,now);
     if(!eligibleRows.length)throw new Error("no Gate-tradable Forward Relation markets");
-    const locked=[...(this.forwardState?.positions.map(p=>p.symbol)??[]),
-      ...(this.forwardState?forwardWatchSymbols(this.forwardState,now,this.runtime.liquidUniverse):[])];
+    const executionEligible=eligibleRows.filter(forwardExecutionUniverseEligible);
+    if(this.contractCatalog.size&&executionEligible.length)this.forwardLearningUniverse=executionEligible.map(row=>row.symbol);
+    const locked=this.forwardState?.positions.map(p=>p.symbol)??[];
     const universeRows=selectAnchorOpportunityUniverse({rows:eligibleRows,limit:SCAN_UNIVERSE_SIZE,
       lockedSymbols:locked,currentSymbols:this.runtime.liquidUniverse,coreSymbols:DEFAULT_SYMBOLS,
-      rotationSeed:Math.floor(now/BAR_MS),explorationSlots:4,liquiditySlots:8});
+      rotationSeed:Math.floor(now/BAR_MS),explorationSlots:2,liquiditySlots:0});
     if(!universeRows.length)throw new Error("no liquid Forward Relation markets");
     this.runtime.liquidUniverse=universeRows.map(row=>row.symbol);
     this.runtime.radar=successfulRadarRuntime(this.runtime.radar,now,universeRows.length,[]);
@@ -987,6 +989,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       startedAt:s?.startedAt??null,initialEquity:s?.initialEquity??null,balance:s?.balance??null,lastCycleAt:s?.lastCycleAt??null,
       resolved:s?.resolved??0,openCount:s?.positions.length??0,targetPositionCount:null,positionLimit:null,
       executionBboCapacity:FORWARD_EXECUTION_BBO_CAP,minuteConfirmationCapacity:FORWARD_MINUTE_CONFIRMATION_CAP,
+      executionVolumeFloorUsd:FORWARD_EXECUTION_VOLUME_FLOOR_USD,learningEligibleMarkets:this.forwardLearningUniverse.length,
       participationCandidateCount:opportunities.length,participationEligibleCount:eligible.length,
       premiumOpportunityCount:eligible.filter(row=>row.premium).length,regionCount:Object.keys(s?.regions??{}).length,
       relationSampleCount:s?.relationEngine?.samples.length??0,relationRuleCount:s?.relationEngine?.rules.length??0,
@@ -1049,7 +1052,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const previous = state;
       const next = advanceForward({ state: previous, now, paths: this.strategyCandles,minutePaths:this.forwardMinutePaths(),
         quotes: this.forwardQuotes(now), contracts: this.regimeContracts(),
-        entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue });
+        entrySymbols: this.runtime.liquidUniverse,learningSymbols:this.forwardLearningUniverse.length?this.forwardLearningUniverse:undefined,
+        allowDataCycle:dataCycleDue });
       if (next.changed || !previous.storage.persistedAt) {
         next.state.storage = { persistedAt: now, error: null };
         const prepared = await prepareForwardWrite(previous.storage.persistedAt ? previous : null, next.state, now, {compact:true});
