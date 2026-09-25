@@ -54,7 +54,7 @@ import {isTransientLiveReadErrorText,liveReadTimeoutDecision} from "../lib/live-
 import { LIVE_TURNOVER_PREFIX, LIVE_TURNOVER_VERSION, initialTurnover, validateTurnover, nextFillWindow,
   prepareTurnoverPage, turnoverView, type TurnoverState, type GateConfirmedFill } from "../lib/live-turnover.ts";
 import { LIVE_PARITY_VERSION, LIVE_PARITY_PREFIX, buildProportionalMirror, forwardMirrorSources, mirrorPositionRisk,
-  sourceLifecycle, mirrorSourceFresh, mirrorCoverage, liveEntryDriftGuard,
+  sourceLifecycle, mirrorSourceFresh, mirrorSourceRealtimeFresh, mirrorCoverage, liveEntryDriftGuard,
   type MirrorSourceTrade, type MirrorReceipt, type MirrorBinding } from "../lib/live-parity.ts";
 declare const __FORWARD_BUILD_SHA__: string;
 const FORWARD_BUILD_SHA = typeof __FORWARD_BUILD_SHA__ === "string" ? __FORWARD_BUILD_SHA__ : "local-verification";
@@ -999,6 +999,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       relationSampleCount:s?.relationEngine?.samples.length??0,relationRuleCount:s?.relationEngine?.rules.length??0,
       relationPendingCount:Object.keys(s?.relationEngine?.pending??{}).length,
       relationFrameCount:Object.keys(s?.relationEngine?.frames??{}).length,
+      structuralInterrupt:s?{version:s.structuralInterrupt.version,marketEvent:s.structuralInterrupt.marketEvent,
+        vetoSide:s.structuralInterrupt.vetoSide,vetoUntil:s.structuralInterrupt.vetoUntil,
+        quoteMarkets:Object.keys(s.structuralInterrupt.quotePaths??{}).length,
+        preAlerts:Object.values(s.structuralInterrupt.tracks??{}).filter(row=>row.phase==="PRE_ALERT").length,
+        confirmed:Object.values(s.structuralInterrupt.tracks??{}).filter(row=>row.phase==="CONFIRMED").length}:null,
       relationDiagnostics:s?.relationEngine?.diagnostics??null,entryDiagnostics:s?.entryDiagnostics??null,
       ruleDiagnostics,candidateDiagnostics:blocked,storage:{persistedAt:s?.storage.persistedAt??0,error:this.forwardError}};
   }
@@ -2549,7 +2554,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(!this.runtime.live.requestedEnabled||!this.mirrorQuoteReady(symbol)
         ||!sameLiveSession(activation,this.runtime.live.activation)
         ||!sourceAfterEnable(binding!.sourceAtCopy,this.runtime.live.activation,this.forwardState!.startedAt)
-        ||!mirrorSourceFresh(this.currentMirrorSource(plan.id).trade??undefined,plan.id,Date.now()))continue;
+        ||!mirrorSourceRealtimeFresh(this.currentMirrorSource(plan.id).trade??undefined,plan.id,Date.now(),activation?.enabledAt))continue;
       const entry: LiveEntry = {
         planId: plan.id, symbol, side: plan.side, scenario: plan.marketState, kind: intent.kind, status: "SUBMITTING",
         tag: intent.tag, exchangeOrderId: null, createdAt: now, expiresAt: plan.expiresAt, trigger: plan.entryTrigger,
@@ -2584,7 +2589,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           if(!this.runtime.live.requestedEnabled||!this.mirrorQuoteReady(symbol)
             ||!sameLiveSession(activation,this.runtime.live.activation)
             ||!sourceAfterEnable(binding!.sourceAtCopy,this.runtime.live.activation,this.forwardState!.startedAt)
-            ||!mirrorSourceFresh(this.currentMirrorSource(plan.id).trade??undefined,plan.id,Date.now())){
+            ||!mirrorSourceRealtimeFresh(this.currentMirrorSource(plan.id).trade??undefined,plan.id,Date.now(),activation?.enabledAt)){
             entry.status="CANCELLED";await this.saveCheckpoint(Date.now(),true);continue;
           }
           const q=this.runtime.evidence[symbol],price=entry.side==="LONG"?q?.bestAsk:q?.bestBid;
@@ -2610,7 +2615,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             if(!this.runtime.live.requestedEnabled||!this.mirrorQuoteReady(symbol)
               ||!sameLiveSession(activation,this.runtime.live.activation)
               ||!sourceAfterEnable(binding!.sourceAtCopy,this.runtime.live.activation,this.forwardState?.startedAt??0)
-              ||!mirrorSourceFresh(this.currentMirrorSource(plan.id).trade??undefined,plan.id,Date.now()))return false;
+              ||!mirrorSourceRealtimeFresh(this.currentMirrorSource(plan.id).trade??undefined,plan.id,Date.now(),activation?.enabledAt))return false;
             const latest=this.runtime.evidence[symbol],latestPrice=entry.side==="LONG"?latest?.bestAsk:latest?.bestBid;
             if(!latestPrice||(entry.side==="LONG"?latestPrice<=entry.invalidation:latestPrice>=entry.invalidation))return false;
             const latestDrift=liveEntryDriftGuard(source,latestPrice);
