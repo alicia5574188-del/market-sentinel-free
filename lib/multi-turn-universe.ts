@@ -1,6 +1,6 @@
 export type MultiTurnUniverseTicker={
   symbol:string;last:number;high24h:number;low24h:number;change24hRate:number;
-  volume24hUsd:number;fundingRate:number;openInterest:number;
+  volume24hUsd:number;executionVolume24hUsd?:number;fundingRate:number;openInterest:number;
 };
 export type MultiTurnUniverseClass="MARKET_AMPLIFIER"|"INDEPENDENT_VOLATILITY";
 export type RankedMultiTurnUniverse=MultiTurnUniverseTicker&{
@@ -15,6 +15,14 @@ const median=(values:number[])=>{
 };
 const clip=(v:number,a=0,b=1)=>Math.max(a,Math.min(b,v));
 const sgn=(v:number)=>v>0?1:v<0?-1:0;
+
+export const FORWARD_EXECUTION_VOLUME_FLOOR_USD=1_000_000;
+export const forwardExecutionVolume24hUsd=(row:Pick<MultiTurnUniverseTicker,"volume24hUsd"|"executionVolume24hUsd">)=>
+  Math.max(0,Number(row.executionVolume24hUsd??row.volume24hUsd));
+export function forwardExecutionUniverseEligible(row:MultiTurnUniverseTicker){
+  return row.symbol.endsWith("_USDT")&&row.last>0&&row.high24h>=row.low24h&&row.low24h>0
+    &&forwardExecutionVolume24hUsd(row)>=FORWARD_EXECUTION_VOLUME_FLOOR_USD;
+}
 
 /**
  * The first-stage Multi-Turn universe is chosen by observed movement, not turnover rank.
@@ -87,19 +95,21 @@ export function selectAnchorOpportunityUniverse(input:{
 }):AnchorOpportunityUniverseRow[]{
   const limit=Math.max(1,Math.floor(input.limit??30));
   const valid=input.rows.filter(r=>r.symbol.endsWith("_USDT")&&r.last>0&&r.high24h>=r.low24h&&r.low24h>0
-    &&r.volume24hUsd>0&&[r.change24hRate,r.volume24hUsd,r.fundingRate,r.openInterest].every(Number.isFinite));
+    &&[r.change24hRate,r.volume24hUsd,r.executionVolume24hUsd??r.volume24hUsd,r.fundingRate,r.openInterest].every(Number.isFinite));
   if(!valid.length)return[];
-  const liquidityFloorUsd=100_000;
-  const liquid=valid.filter(r=>r.volume24hUsd>=liquidityFloorUsd);
+  const liquidityFloorUsd=FORWARD_EXECUTION_VOLUME_FLOOR_USD;
+  const liquid=valid.filter(forwardExecutionUniverseEligible);
   if(!liquid.length)return[];
   const bySymbol=new Map(liquid.map(r=>[r.symbol,r]));
   const current=new Set(input.currentSymbols??[]);
   const scored=liquid.map(row=>{
     const range24hRate=Math.max(0,(row.high24h-row.low24h)/Math.max(row.last,1e-12));
-    const travel=clip(range24hRate/.08);
-    const netMove=clip(Math.abs(row.change24hRate)/.05);
-    const activityScore=.72*travel+.28*netMove+(current.has(row.symbol)?.025:0);
-    return{row,range24hRate,activityScore};
+    const travel=clip(range24hRate/.08),netMove=clip(Math.abs(row.change24hRate)/.05),
+      executionVolume=forwardExecutionVolume24hUsd(row),
+      liquidityScore=clip((Math.log10(Math.max(executionVolume,1))-6)/3),
+      movement=.70*travel+.30*netMove;
+    const activityScore=movement*(.72+.28*liquidityScore)+.04*liquidityScore+(current.has(row.symbol)?.02:0);
+    return{row,range24hRate,activityScore,executionVolume};
   });
   const selected:AnchorOpportunityUniverseRow[]=[];
   const used=new Set<string>();
@@ -118,7 +128,7 @@ export function selectAnchorOpportunityUniverse(input:{
 
   const liquiditySlots=Math.min(Math.max(0,Math.floor(input.liquiditySlots??0)),Math.max(0,limit-selected.length));
   const liquidLeaders=[...scored].filter(x=>!used.has(x.row.symbol))
-    .sort((a,b)=>b.row.volume24hUsd-a.row.volume24hUsd||b.activityScore-a.activityScore||a.row.symbol.localeCompare(b.row.symbol));
+    .sort((a,b)=>b.executionVolume-a.executionVolume||b.activityScore-a.activityScore||a.row.symbol.localeCompare(b.row.symbol));
   for(const x of liquidLeaders.slice(0,liquiditySlots))push(x.row.symbol,"LIQUIDITY");
 
   const explorationSlots=Math.min(Math.max(0,Math.floor(input.explorationSlots??6)),Math.max(0,limit-selected.length));

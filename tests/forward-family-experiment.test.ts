@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  familyAdmissionBlock,initialFamilyExperimentState,isFamilyFailure,normalizeFamilyExperimentState,
+  familyAdmissionBlock,initialFamilyExperimentState,isFamilyFailure,normalizeFamilyExperimentState,pruneFamilyExperimentBySymbols,
   recordFamilyFailure,relationFamilyId,reserveExperimentValueBlock,
 } from "../lib/forward-family-experiment.ts";
 import type {RelationRule} from "../lib/forward-relation-v2.ts";
@@ -108,6 +108,15 @@ test("confirmed path or structure failure is family evidence only before positiv
   assert.equal(isFamilyFailure("SAMPLE_PATH_DIVERGED",1234),false);
   assert.equal(isFamilyFailure("PROFIT_GIVEBACK",null),false);
   assert.equal(isFamilyFailure("RELATION_DEGRADED",null),true);
+});
+
+test("family failure memory from an execution-ineligible symbol is removed with its bad market evidence",()=>{
+  const state=initialFamilyExperimentState(),a=rule("a"),family=relationFamilyId(a);
+  recordFamilyFailure({state,familyId:family,sourceRuleId:a.id,evidenceAt:a.lastQualifiedAt,health:a.health,livePathScore:a.livePathScore,
+    now:10_000,reason:"NO_POSITIVE_FEEDBACK",symbol:"BARD_USDT"});
+  assert.ok(state.guards[family]);
+  assert.equal(pruneFamilyExperimentBySymbols(state,new Set(["BTC_USDT","ETH_USDT"])),1);
+  assert.equal(state.guards[family],undefined);
 });
 
 test("legacy rule-id guards migrate into family guards instead of being discarded",()=>{

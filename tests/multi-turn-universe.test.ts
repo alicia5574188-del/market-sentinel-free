@@ -35,12 +35,23 @@ test("quiet contracts can be omitted even if liquid",()=>{
 });
 
 
-test("dynamic anchor pool keeps confirmed anchor symbols and does not rank by turnover",async()=>{
+test("thin Gate markets never enter the Forward 30 even when reported volatility is extreme",async()=>{
   const {selectAnchorOpportunityUniverse}=await import("../lib/multi-turn-universe.ts");
   const rows=[
-    row("LOCKED_USDT",.01,.035,200_000),
+    {...row("BARD_USDT",.25,.35,100_000_000),executionVolume24hUsd:50_000},
+    ...Array.from({length:40},(_,i)=>row(`GOOD${String(i).padStart(2,"0")}_USDT`,.02+(i%4)*.005,.04+(i%8)*.005,2_000_000+i*100_000)),
+  ];
+  const selected=selectAnchorOpportunityUniverse({rows,limit:30,rotationSeed:0,explorationSlots:2});
+  assert.equal(selected.some(x=>x.symbol==="BARD_USDT"),false);
+  assert.equal(selected.length,30);
+});
+
+test("dynamic anchor pool keeps locked liquid symbols while movement still outranks quiet volume",async()=>{
+  const {selectAnchorOpportunityUniverse}=await import("../lib/multi-turn-universe.ts");
+  const rows=[
+    row("LOCKED_USDT",.01,.035,2_000_000),
     row("QUIET_WHALE_USDT",.001,.008,8_000_000_000),
-    ...Array.from({length:40},(_,i)=>row(`MOVE${String(i).padStart(2,"0")}_USDT`,.01+(i%5)*.006,.035+(i%9)*.006,300_000+i*10_000)),
+    ...Array.from({length:40},(_,i)=>row(`MOVE${String(i).padStart(2,"0")}_USDT`,.01+(i%5)*.006,.035+(i%9)*.006,2_000_000+i*50_000)),
   ];
   const selected=selectAnchorOpportunityUniverse({rows,limit:30,lockedSymbols:["LOCKED_USDT"],rotationSeed:0});
   assert.equal(selected.length,30);
@@ -51,7 +62,7 @@ test("dynamic anchor pool keeps confirmed anchor symbols and does not rank by tu
 
 test("dynamic anchor pool rotates exploration slots across the wider liquid universe",async()=>{
   const {selectAnchorOpportunityUniverse}=await import("../lib/multi-turn-universe.ts");
-  const rows=Array.from({length:70},(_,i)=>row(`C${String(i).padStart(2,"0")}_USDT`,.01+(i%4)*.004,.03+(i%10)*.004,500_000+i*1_000));
+  const rows=Array.from({length:70},(_,i)=>row(`C${String(i).padStart(2,"0")}_USDT`,.01+(i%4)*.004,.03+(i%10)*.004,2_000_000+i*25_000));
   const a=selectAnchorOpportunityUniverse({rows,limit:30,rotationSeed:0,explorationSlots:6});
   const b=selectAnchorOpportunityUniverse({rows,limit:30,rotationSeed:1,explorationSlots:6});
   const ae=new Set(a.filter(x=>x.selectionSource==="EXPLORATION").map(x=>x.symbol));
@@ -60,16 +71,16 @@ test("dynamic anchor pool rotates exploration slots across the wider liquid univ
   assert.ok([...ae].some(x=>!be.has(x)));
 });
 
-test("turnover is only a liquidity floor in the new selector",async()=>{
+test("Gate liquidity is a hard floor and still improves ranking among equally active markets",async()=>{
   const {selectAnchorOpportunityUniverse}=await import("../lib/multi-turn-universe.ts");
   const rows=[
-    row("A_USDT",.04,.08,300_000),
+    row("A_USDT",.04,.08,1_200_000),
     row("B_USDT",.04,.08,3_000_000_000),
-    ...Array.from({length:35},(_,i)=>row(`F${i}_USDT`,.02,.04,400_000+i*1_000)),
+    ...Array.from({length:35},(_,i)=>row(`F${i}_USDT`,.02,.04,2_000_000+i*20_000)),
   ];
   const selected=selectAnchorOpportunityUniverse({rows,limit:30,rotationSeed:0});
   const a=selected.find(x=>x.symbol==="A_USDT"),b=selected.find(x=>x.symbol==="B_USDT");
-  assert.ok(a&&b);assert.equal(a!.activityScore,b!.activityScore);
+  assert.ok(a&&b);assert.ok(b!.activityScore>a!.activityScore);
 });
 
 test("hybrid anchor pool reserves market cores and a bounded liquid sleeve without using either for direction",async()=>{
@@ -77,7 +88,7 @@ test("hybrid anchor pool reserves market cores and a bounded liquid sleeve witho
   const rows=[
     row("BTC_USDT",-.025,.035,9_000_000_000),row("ETH_USDT",-.035,.05,7_000_000_000),
     row("SOL_USDT",-.05,.07,5_000_000_000),row("LIQUID_USDT",.001,.012,8_000_000_000),
-    ...Array.from({length:45},(_,i)=>row(`HOT${String(i).padStart(2,"0")}_USDT`,.08,.16,200_000+i*1_000)),
+    ...Array.from({length:45},(_,i)=>row(`HOT${String(i).padStart(2,"0")}_USDT`,.08,.16,2_000_000+i*25_000)),
   ];
   const selected=selectAnchorOpportunityUniverse({rows,limit:30,coreSymbols:["BTC_USDT","ETH_USDT","SOL_USDT"],
     liquiditySlots:1,explorationSlots:4,rotationSeed:0});

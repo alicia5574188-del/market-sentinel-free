@@ -38,6 +38,19 @@ test("exact Gate-to-external symbol mapping never invents aliases",()=>{
   assert.equal(kucoinSymbol("BTC_USDC"),null);
 });
 
+test("Forward radar keeps Gate execution volume and Gate 24h range separate from external analysis liquidity",async()=>{
+  await withFetch(url=>{
+    if(url.includes("api.bybit.com"))return Response.json(bybitSurface("BTCUSDT",99.9,100.1));
+    throw new DOMException("timeout","TimeoutError");
+  },async()=>{
+    const hub=new MarketDataHub();await hub.refresh(1_000_000);
+    const rows=hub.radarRows([{symbol:"BTC_USDT",last:100,volume24hUsd:50_000,high24h:120,low24h:80,change24hRate:.05,fundingRate:0,openInterest:10}],1_000_001);
+    assert.equal(rows[0]?.volume24hUsd,1_000_000,"external volume may describe analysis liquidity");
+    assert.equal(rows[0]?.executionVolume24hUsd,50_000,"Gate volume alone decides execution eligibility");
+    assert.equal(rows[0]?.high24h,120);assert.equal(rows[0]?.low24h,80);assert.equal(rows[0]?.change24hRate,.05);
+  });
+});
+
 test("one healthy venue keeps the market hub alive when the other fails",async()=>{
   await withFetch(url=>{
     if(url.includes("api.bybit.com"))return Response.json(bybitSurface());
