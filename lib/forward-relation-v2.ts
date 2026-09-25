@@ -121,9 +121,11 @@ function livePathScore(state:RelationEngineState,paths:Record<string,RelationCan
   return mean([...byAt.entries()].sort((a,b)=>a[0]-b[0]).slice(-3).map(([,v])=>mean(v)));
 }
 function baseCandidate(rows:RelationMeasurement[],conditions:RelationCondition[]){
-  const matched=rows.filter(r=>matches(r.x,conditions)).sort((a,b)=>a.at-b.at);if(matched.length<24)return null;
-  const boundary=matched[Math.floor(matched.length*.6)]?.at??0,train=matched.filter(r=>r.at<=boundary),check=matched.filter(r=>r.at>boundary),choices:any[]=[];
-  for(const h of RELATION_HORIZONS){const trainRaw=train.map(r=>cpValue(r,h)).filter(Number.isFinite),side:RelationSide=mean(trainRaw)>=0?"LONG":"SHORT",
+  const matched=rows.filter(r=>matches(r.x,conditions)).sort((a,b)=>a.at-b.at);if(matched.length<24)return null;const choices:any[]=[];
+  for(const h of RELATION_HORIZONS){const keys=[...new Set(matched.filter(r=>Number.isFinite(cpValue(r,h))).map(r=>Math.floor(r.at/(h*60_000))))].sort((a,b)=>a-b);
+    if(keys.length<5)continue;const split=Math.max(3,Math.floor(keys.length*.6)),trainKeys=new Set(keys.slice(0,split)),checkKeys=new Set(keys.slice(split));
+    if(checkKeys.size<2)continue;const train=matched.filter(r=>trainKeys.has(Math.floor(r.at/(h*60_000)))),check=matched.filter(r=>checkKeys.has(Math.floor(r.at/(h*60_000)))),
+      trainRaw=train.map(r=>cpValue(r,h)).filter(Number.isFinite),side:RelationSide=mean(trainRaw)>=0?"LONG":"SHORT",
       a=groupRows(train,h,side),b=groupRows(check,h,side);if(a.length<3||b.length<2)continue;const av=a.map(x=>x.value),bv=b.map(x=>x.value),
       se=Math.max(standardError(av),standardError(bv));if(!finite(se))continue;const net=Math.min(mean(av),mean(bv))-COST-.5*se;
     if(net>0)choices.push({h,side,net,se,selected:[...train,...check].filter(r=>Number.isFinite(cpValue(r,h))),groups:a.length+b.length});}
