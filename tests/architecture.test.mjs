@@ -4,7 +4,7 @@ import {readFile} from "node:fs/promises";
 
 const read=(path)=>readFile(new URL(`../${path}`,import.meta.url),"utf8");
 
-test("Forward Relation 2.0 is the only PAPER strategy authority and retired strategy stacks stay disconnected",async()=>{
+test("Forward Path Relation 3.0 is the only PAPER strategy authority and retired strategy stacks stay disconnected",async()=>{
   const core=await read("lib/forward-relations.ts");
   assert.match(core,/ADAPTIVE_ENGINE_VERSION=FORWARD_RELATION_V2_VERSION/);
   assert.match(core,/from "\.\/forward-relation-v2\.ts"/);
@@ -25,7 +25,7 @@ test("Forward Relation 2.0 is the only PAPER strategy authority and retired stra
   assert.match(core,/from "\.\/forward-family-experiment\.ts"/);
   assert.doesNotMatch(core,/forward-entry-guard/);
   const family=await read("lib/forward-family-experiment.ts");
-  assert.match(family,/FORWARD_FAMILY_EXPERIMENT_VERSION="forward-family-experiment-v1"/);
+  assert.match(family,/FORWARD_FAMILY_EXPERIMENT_VERSION="forward-family-experiment-v2"/);
   assert.match(family,/edgeRatio<\.45/);assert.match(family,/livePathScore<\.55/);
   assert.match(core,/MAX_NEW_RESERVE_EXPERIMENTS_PER_5M=2/);assert.match(core,/reserveEntriesThisCycle/);
   assert.match(family,/relationFamilyId/);
@@ -83,12 +83,12 @@ test("LIVE, member, auth and credential infrastructure remain isolated from stra
   for(const source of[live,auth,vault])assert.doesNotMatch(source,/forward-relation-v2/);
 });
 
-test("operator UI and release config expose Forward Relation 2.0 with risk-based holdings and 30 execution BBO capacity",async()=>{
+test("operator UI and release config expose Forward Path Relation 3.0 with risk-based holdings and 30 execution BBO capacity",async()=>{
   const [dashboard,worker,workflow,wrangler]=await Promise.all([
     read("app/forward-dashboard.tsx"),read("worker/index-clean.ts"),read(".github/workflows/sentinel-v2-ci.yml"),read("wrangler.jsonc"),
   ]);
-  assert.match(dashboard,/哨兵 · Forward Relation 2\.0/);assert.match(dashboard,/反向独立确认/);
+  assert.match(dashboard,/哨兵 · Forward Path Relation 3\.0/);assert.match(dashboard,/反向独立确认/);
   assert.match(worker,/SCAN_UNIVERSE_SIZE = 30/);assert.match(worker,/FORWARD_EXECUTION_BBO_CAP/);
-  assert.match(workflow,/forward-relation-v2/);
+  assert.match(workflow,/forward-path-relation-v3/);
   assert.match(wrangler,/MarketStream/);assert.match(wrangler,/MemberExecutor/);assert.match(wrangler,/MemberDirectory/);
 });

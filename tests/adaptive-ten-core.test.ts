@@ -26,7 +26,10 @@ const seedManualRules=(state:ReturnType<typeof initialForward>,ops:Opportunity[]
     return{id,signature:id,scope:o.reserve?"RECENT":"BASE",horizon:o.relationHorizon??60,side:o.side,
       conditions:[{feature,op,threshold:0}],longNet:.01,recentNet:.008,standardError:.001,samples:40,longGroups:6,recentGroups:3,
       health,status:o.relationStatus??"ACTIVE",livePathScore:.78,environmentFit:.82,stopRate:o.stopRate,targetRate:o.targetRate,
-      updatedAt:now,lastQualifiedAt:now-60_000,symbols:rows.map(x=>x.symbol),reason:"manual relation fixture"} satisfies RelationRule;});
+      exitProfile:{version:"sample-exit-plan-v1" as const,bestHoldMinutes:60 as const,feedbackDeadlineMinutes:15,maxHoldMinutes:60,
+      normalAdverseRate:.008,targetRate:.012,protectionActivationRate:.004,retentionRate:.78,samples:40,groups:6,
+      path:{15:{expectedRate:.003,adverseRate:.004,remainingEdgeRate:.007},30:{expectedRate:.006,adverseRate:.005,remainingEdgeRate:.004},
+        45:{expectedRate:.009,adverseRate:.006,remainingEdgeRate:.002},60:{expectedRate:.011,adverseRate:.008,remainingEdgeRate:0}}},updatedAt:now,lastQualifiedAt:now-60_000,symbols:rows.map(x=>x.symbol),reason:"manual relation fixture"} satisfies RelationRule;});
 };
 
 const manualOpportunity=(symbol:string,index:number,options:{reserve?:boolean;premium?:boolean;ruleId?:string;score?:number;health?:number}={}):Opportunity=>{
@@ -43,7 +46,7 @@ const manualOpportunity=(symbol:string,index:number,options:{reserve?:boolean;pr
 function learnThrough(last:number){let e=initialRelationEngine(nowAt(24)-1);for(let i=24;i<=last;i++)
   e=advanceRelationEngine({state:e,paths:sliced(i),now:nowAt(i)});return e;}
 
-test("Forward Relation 2.0 learns only from matured market responses and produces causal long relations",()=>{
+test("Forward Path Relation 3.0 learns from root paths without double-counting checkpoints",()=>{
   const e=learnThrough(39);
   assert.equal(e.version,FORWARD_RELATION_V2_VERSION);
   assert.ok(e.measured>=48,"five 15m groups across the market should have matured");
@@ -73,7 +76,12 @@ test("opposite direction earns authority only after its own completed recent res
   assert.ok(shorts.length>0,"three completed negative 15m groups should be able to create an independent short relation");
   assert.ok(shorts.some(r=>r.scope==="RECENT"),"fast migration must still be based on matured recent samples");
   const rapid=relationCandidates(e).filter(c=>c.side==="SHORT");
-  assert.ok(rapid.length>0&&rapid.every(c=>c.reserve),"recent reversal evidence may probe freed risk but cannot immediately take full rotation authority");
+  assert.ok(rapid.length>0&&rapid.some(c=>c.reserve),"recent reversal evidence must create at least one bounded probe; independently validated BASE evidence may coexist");
+});
+
+test("a restart can seed closed root paths immediately instead of waiting a fresh hour",()=>{
+  const now=nowAt(50),e=advanceRelationEngine({state:initialRelationEngine(now-1000),paths:sliced(50),now});
+  assert.ok(e.samples.length>=24,"closed 5m history should seed root paths immediately; trading authority still requires independent validation");
 });
 
 test("PAPER uses learned relations for entries instead of the retired 5m FLOW gate",()=>{
@@ -174,6 +182,17 @@ test("manual reset preparation remains bounded with twenty-two legacy open posit
   assert.equal(prepared.state.positions.length,0);assert.equal(prepared.state.balance,1000);
 });
 
+test("new PAPER trades freeze the sample exit plan and use its feedback deadline",()=>{
+  const now=nowAt(39),symbol=symbols[0]!,state=initialForward(now-60_000);state.lastCandleAt=now;
+  const o=manualOpportunity(symbol,0,{premium:true});state.opportunities=[o];seedManualRules(state,state.opportunities,now);
+  const learned=state.relationEngine.rules[0]!.exitProfile;learned.bestHoldMinutes=30;learned.feedbackDeadlineMinutes=5;learned.maxHoldMinutes=45;
+  fillForwardPortfolio(state,quotesAt(39,now),contracts,now,1000,false);
+  assert.equal(state.positions.length,1);assert.deepEqual(state.positions[0]!.exitPlan,learned);
+  const later=now+6*60_000,entry=state.positions[0]!.entryPrice,q:Quote={bestBid:entry*.9999,bestAsk:entry*1.0001,observedAt:later,fresh:true,entryReady:true};
+  const next=advanceForward({state,now:later,paths:sliced(39),quotes:{[symbol]:q},contracts:{[symbol]:contract},entrySymbols:[symbol],allowDataCycle:false}).state;
+  assert.ok(next.history.some(t=>t.symbol===symbol&&t.exitReason==="NO_POSITIVE_FEEDBACK"));
+});
+
 test("a holding exits early when its own relation is degraded and it has no positive feedback",()=>{
   const learned=learnThrough(39),now=nowAt(39),paths=sliced(39);
   let s=initialForward(now-60_000);s.relationEngine=learned;
@@ -197,20 +216,20 @@ test("risk scaling never becomes a global trading pause merely because a relatio
   assert.ok(candidates.some(c=>c.reserve));
 });
 
-test("strategy migration preserves account identity and financial history while starting a fresh causal relation learner",()=>{
-  const s=initialForward(1000);s.startedAt=123;s.balance=876.54;s.initialEquity=1000;s.resolved=7;s.turnover=4321;
+test("strategy migration preserves account identity, financial history and causal samples instead of cold-resetting learning",()=>{
+  const learned=learnThrough(39),s=initialForward(1000);s.startedAt=123;s.balance=876.54;s.initialEquity=1000;s.resolved=7;s.turnover=4321;
+  s.relationEngine=structuredClone(learned);(s.relationEngine as unknown as {version:string}).version="forward-relation-v2";
   s.engineVersion="legacy";s.strategyAuthorityVersion="legacy";s.executionVersion="legacy";s.storage={persistedAt:999,error:null};
   const n=normalizeForward(s,5000);
   assert.equal(n.startedAt,123);assert.equal(n.balance,876.54);assert.equal(n.resolved,7);assert.equal(n.turnover,4321);
   assert.equal(n.storage.persistedAt,999);assert.equal(n.engineVersion,ADAPTIVE_ENGINE_VERSION);
   assert.equal(n.strategyAuthorityVersion,FORWARD_RELATION_V2_VERSION);assert.equal(n.executionVersion,FORWARD_RELATION_V2_VERSION);
-  assert.equal(n.relationEngine.startedAt,5000);assert.equal(n.relationEngine.measured,0);
+  assert.ok(n.relationEngine.samples.length>0);assert.ok(n.relationEngine.measured>=learned.measured);
 });
 
 
 test("manual PAPER reset preserves causal learning while resetting the financial account",()=>{
   const learned=learnThrough(39),now=nowAt(39),s=initialForward(now-60_000);s.relationEngine=learned;
-  s.sampleMemory["RELATION:MIXED:LONG"]={count:4,emaNetRate:.003,emaMfeRate:.008,emaMaeRate:.002,updatedAt:now};
   const guardRule=learned.rules[0]!,familyId=relationFamilyId(guardRule);
   recordFamilyFailure({state:s.familyExperiment,familyId,sourceRuleId:guardRule.id,evidenceAt:guardRule.lastQualifiedAt,
     health:guardRule.health,livePathScore:guardRule.livePathScore,now,reason:"NO_POSITIVE_FEEDBACK",symbol:"S0_USDT"});
@@ -221,7 +240,6 @@ test("manual PAPER reset preserves causal learning while resetting the financial
   assert.equal(n.relationEngine.samples.length,learned.samples.length);assert.equal(n.relationEngine.rules.length,learned.rules.length);
   assert.equal(n.relationEngine.observations,learned.observations);assert.equal(n.relationEngine.measured,learned.measured);
   assert.deepEqual(n.relationEngine.rules,learned.rules);assert.deepEqual(n.relationEngine.pending,learned.pending);
-  assert.deepEqual(n.sampleMemory,s.sampleMemory);
   assert.deepEqual(n.familyExperiment,s.familyExperiment);
   assert.match(n.latestReason,/保留/);
 });
@@ -230,6 +248,6 @@ test("summary exposes relation lifecycle and the no-forced-reversal boundary",()
   const s=initialForward(1000),view=forwardSummary(s,{},2000);
   assert.equal(view.engineVersion,FORWARD_RELATION_V2_VERSION);assert.equal(view.targetPositions,null);assert.equal(view.positionLimit,null);
   assert.equal(view.executionBboCapacity,30);assert.equal(view.minuteConfirmationCapacity,11);
-  assert.match(view.boundaries.grammar,/15\/60\/180/);assert.match(view.boundaries.sampleMeaning,/旧方向失效不会自动生成反向订单/);
+  assert.match(view.boundaries.grammar,/15\/30\/45\/60/);assert.equal(view.boundaries.historyBackfill,true);assert.match(view.boundaries.sampleMeaning,/旧方向失效不会自动生成反向订单/);
   assert.equal(view.relationEngine.version,FORWARD_RELATION_V2_VERSION);
 });
