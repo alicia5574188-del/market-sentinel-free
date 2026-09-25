@@ -79,6 +79,12 @@ test("opposite direction earns authority only after its own completed recent res
   assert.ok(rapid.length>0&&rapid.some(c=>c.reserve),"recent reversal evidence must create at least one bounded probe; independently validated BASE evidence may coexist");
 });
 
+test("a restart can seed closed root paths immediately instead of waiting a fresh hour",()=>{
+  const now=nowAt(50),e=advanceRelationEngine({state:initialRelationEngine(now-1000),paths:sliced(50),now});
+  assert.ok(e.samples.length>=24,"closed 5m history should seed enough root paths for immediate learning");
+  assert.ok(e.rules.length>0,"seeded closed paths should be eligible for normal relation synthesis");
+});
+
 test("PAPER uses learned relations for entries instead of the retired 5m FLOW gate",()=>{
   const learned=learnThrough(39),now=nowAt(39),paths=sliced(39),quotes=quotesAt(39,now);
   let s=initialForward(now-60_000);s.relationEngine=learned;
@@ -177,6 +183,17 @@ test("manual reset preparation remains bounded with twenty-two legacy open posit
   assert.equal(prepared.state.positions.length,0);assert.equal(prepared.state.balance,1000);
 });
 
+test("new PAPER trades freeze the sample exit plan and use its feedback deadline",()=>{
+  const now=nowAt(39),symbol=symbols[0]!,state=initialForward(now-60_000);state.lastCandleAt=now;
+  const o=manualOpportunity(symbol,0,{premium:true});state.opportunities=[o];seedManualRules(state,state.opportunities,now);
+  const learned=state.relationEngine.rules[0]!.exitProfile;learned.bestHoldMinutes=30;learned.feedbackDeadlineMinutes=5;learned.maxHoldMinutes=45;
+  fillForwardPortfolio(state,quotesAt(39,now),contracts,now,1000,false);
+  assert.equal(state.positions.length,1);assert.deepEqual(state.positions[0]!.exitPlan,learned);
+  const later=now+6*60_000,entry=state.positions[0]!.entryPrice,q:Quote={bestBid:entry*.9999,bestAsk:entry*1.0001,observedAt:later,fresh:true,entryReady:true};
+  const next=advanceForward({state,now:later,paths:sliced(39),quotes:{[symbol]:q},contracts:{[symbol]:contract},entrySymbols:[symbol],allowDataCycle:false}).state;
+  assert.ok(next.history.some(t=>t.symbol===symbol&&t.exitReason==="NO_POSITIVE_FEEDBACK"));
+});
+
 test("a holding exits early when its own relation is degraded and it has no positive feedback",()=>{
   const learned=learnThrough(39),now=nowAt(39),paths=sliced(39);
   let s=initialForward(now-60_000);s.relationEngine=learned;
@@ -232,6 +249,6 @@ test("summary exposes relation lifecycle and the no-forced-reversal boundary",()
   const s=initialForward(1000),view=forwardSummary(s,{},2000);
   assert.equal(view.engineVersion,FORWARD_RELATION_V2_VERSION);assert.equal(view.targetPositions,null);assert.equal(view.positionLimit,null);
   assert.equal(view.executionBboCapacity,30);assert.equal(view.minuteConfirmationCapacity,11);
-  assert.match(view.boundaries.grammar,/15分钟起.*60分钟/);assert.match(view.boundaries.sampleMeaning,/旧方向失效不会自动生成反向订单/);
+  assert.match(view.boundaries.grammar,/15\/30\/45\/60/);assert.equal(view.boundaries.historyBackfill,true);assert.match(view.boundaries.sampleMeaning,/旧方向失效不会自动生成反向订单/);
   assert.equal(view.relationEngine.version,FORWARD_RELATION_V2_VERSION);
 });
