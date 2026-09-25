@@ -14,6 +14,9 @@ export const LIVE_PARITY_VERSION = "current-paper-live-parity-v1";
 export const LIVE_PARITY_SOURCE = "CURRENT_FORWARD_ACCOUNT";
 export const LIVE_PARITY_PREFIX = "live-parity:v1:";
 export const LIVE_ENTRY_DRIFT_POLICY = "source-entry-drift-v1";
+export const LIVE_SOURCE_ENTRY_MAX_DELAY_MS = 30_000;
+export const LIVE_MIN_CONTRACT_UPLIFT_MAX_RISK_RATE = .0075;
+const LIVE_MIN_CONTRACT_UPLIFT_RISK_MULTIPLE=4,LIVE_MIN_CONTRACT_UPLIFT_RISK_FLOOR_RATE=.004;
 export type MirrorSourceTrade = ArenaTrade & { forwardSource?: Trade };
 export type MirrorReceipt = {
   version: typeof LIVE_PARITY_VERSION; sourceId: string; sourceRuleId: string;
@@ -29,7 +32,7 @@ export type MirrorReceipt = {
   actualExitOrderId?: string | null; actualExitPriceVerified?: boolean;
   discrepancy?: string | null;
   quantityText?: string; minimumContracts?: number; quantityQuantum?: string;
-  supportsDecimalContracts?: boolean; activationAt?: number;
+  supportsDecimalContracts?: boolean; minimumUplift?: boolean; minimumUpliftRiskRate?: number; activationAt?: number;
   entryDriftPolicy?: typeof LIVE_ENTRY_DRIFT_POLICY;
   sourceQuoteAt?: number; copyQuoteAt?: number; copyQuotePrice?: number; copyDelayMs?: number;
   allowedAdverseEntryDriftRate?: number; adverseEntryDriftRate?: number;
@@ -136,6 +139,8 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
     throw new LiveEntrySizingError(code,t.symbol,`${t.symbol} ${message}；源单 ${t.id} 未完成复制，不冒充已成交`,sizing);
   };
   if (!mirrorSourceFresh(t,t.id,input.now))fail("ECONOMICS","源单已结束或期限已到，不补过期订单");
+  if(input.activationAt&&input.now-t.openedAt>LIVE_SOURCE_ENTRY_MAX_DELAY_MS)
+    fail("ECONOMICS",`源单已超过${Math.round(LIVE_SOURCE_ENTRY_MAX_DELAY_MS/1000)}秒实时复制窗口；不补迟到订单`);
   if (![input.sourceEquity,input.equity,input.entryPrice,input.quantoMultiplier,input.leverageMax].every(positive)
     || ![input.available,input.openRisk,input.sameDirectionRisk,input.openMargin,input.openNotional,input.maintenanceRate].every(v=>Number.isFinite(v)&&v>=0))
     fail("ECONOMICS","实时账户/合约规格不完整");
@@ -148,19 +153,25 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
     `当前实盘盘口相对模拟入场出现不利偏差${(drift.adverse*100).toFixed(3)}%，超过动态上限${(drift.allowed*100).toFixed(3)}%，不追价`);
   const ratio=input.mirrorRatio&&positive(input.mirrorRatio)?input.mirrorRatio:input.equity/input.sourceEquity;
   const mirrorEquity=input.sourceEquity*ratio,targetNotional=t.notional*ratio,targetMargin=t.margin*ratio;
-  const one=input.entryPrice*input.quantoMultiplier,requestedContracts=targetNotional/one;
+  const one=input.entryPrice*input.quantoMultiplier,requestedContracts=targetNotional/one,
+    cost=2*(PAPER_COST.feeRate+PAPER_COST.slippageRate)+PAPER_COST.fundingAllowancePerDay*sourceHoldMinutes(t)/1440,
+    sourceScaledRisk=t.plannedRisk*ratio,stopAndCost=Math.abs(input.entryPrice-t.stopPrice)/input.entryPrice+cost;
   let sized: ReturnType<typeof quantizeMirrorNotional>;
   try { sized=quantizeMirrorNotional(targetNotional,input.entryPrice,input.quantoMultiplier,input.sizeRules??{}); }
   catch(error){return fail("CONTRACT_SPEC",error instanceof Error?error.message:"数量规格无效");}
-  const contracts=sized.quantity;
-  if (!(contracts>0))fail("MIN_CONTRACT","按比例低于该合约真实最小数量；不放大资金或伪造复制",{
-    targetContracts:requestedContracts,minimumContracts:sized.minimum,quantityQuantum:sized.quantum,
-    supportsDecimals:sized.supportsDecimals,targetNotional,minimumNotional:sized.minimumNotional,
-    minimumMargin:sized.minimumNotional/t.leverage,requiredLiveEquity:input.sourceEquity*sized.minimumNotional/t.notional});
-  const notional=contracts*one,leverage=t.leverage,margin=notional/leverage;
-  const cost=2*(PAPER_COST.feeRate+PAPER_COST.slippageRate)+PAPER_COST.fundingAllowancePerDay*sourceHoldMinutes(t)/1440;
-  const plannedRisk=notional*(Math.abs(input.entryPrice-t.stopPrice)/input.entryPrice+cost);
-  const sourceScaledRisk=t.plannedRisk*ratio;
+  let contracts=sized.quantity,quantityText=sized.quantityText,minimumUplift=false,minimumUpliftRiskRate=0;
+  if (!(contracts>0)){
+    const diagnostic={targetContracts:requestedContracts,minimumContracts:sized.minimum,quantityQuantum:sized.quantum,
+      supportsDecimals:sized.supportsDecimals,targetNotional,minimumNotional:sized.minimumNotional,
+      minimumMargin:sized.minimumNotional/t.leverage,requiredLiveEquity:input.sourceEquity*sized.minimumNotional/t.notional};
+    const minimumRisk=sized.minimumNotional*stopAndCost,
+      riskCeiling=Math.min(input.equity*LIVE_MIN_CONTRACT_UPLIFT_MAX_RISK_RATE,
+        Math.max(sourceScaledRisk*LIVE_MIN_CONTRACT_UPLIFT_RISK_MULTIPLE,input.equity*LIVE_MIN_CONTRACT_UPLIFT_RISK_FLOOR_RATE));
+    if(diagnostic.minimumMargin>input.available+1e-8||minimumRisk>riskCeiling+1e-8)
+      fail("MIN_CONTRACT",`按比例低于真实最小数量；最低一张需要${diagnostic.minimumNotional.toFixed(4)}U名义价值、计划风险${(minimumRisk/input.equity*100).toFixed(2)}%，超出小账户最小张风险边界`,diagnostic);
+    contracts=sized.minimum;quantityText=sized.quantum;minimumUplift=true;minimumUpliftRiskRate=minimumRisk/input.equity;
+  }
+  const notional=contracts*one,leverage=t.leverage,margin=notional/leverage,plannedRisk=notional*stopAndCost;
   // Gate is the execution authority for actual fees and available margin. Do not
   // double-reserve PAPER's model fee and turn a valid source order into a skip.
   if (margin>input.available+1e-8)fail("MARGIN","可用保证金不足，保留比例，不静默缩单");
@@ -175,7 +186,7 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
   if(!input.sourceRiskAuthority){
     if (input.openMargin+margin>mirrorEquity*.75+1e-8)fail("MARGIN","累计保证金超出模拟同口径75%预算");
     if (input.openNotional+notional>mirrorEquity*4+1e-8)fail("RISK_CAP","按实际成交价计算已超过原账户风险预算");
-  } else if (plannedRisk>sourceScaledRisk*1.25+mirrorEquity*.001) {
+  } else if (!minimumUplift&&plannedRisk>sourceScaledRisk*1.25+mirrorEquity*.001) {
     fail("ECONOMICS","实盘成交价偏离使单笔风险明显高于模拟比例，等待下一笔新源单而不追价");
   }
   if (1/leverage <= Math.abs(input.entryPrice-t.stopPrice)/input.entryPrice+input.maintenanceRate+cost)
@@ -189,13 +200,13 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
     sourceNotional:t.notional,sourceMargin:t.margin,sourceLeverage:t.leverage,
     copiedAt:input.now,sourceEquity:input.sourceEquity,liveEquity:input.equity,ratio,targetNotional,targetMargin,
     requestedContracts,roundedContracts:contracts,roundingNotional:Math.max(0,targetNotional-notional),discrepancy:null,
-    quantityText:sized.quantityText,minimumContracts:sized.minimum,quantityQuantum:sized.quantum,
-    supportsDecimalContracts:sized.supportsDecimals,activationAt:input.activationAt,
+    quantityText,minimumContracts:sized.minimum,quantityQuantum:sized.quantum,
+    supportsDecimalContracts:sized.supportsDecimals,minimumUplift,minimumUpliftRiskRate,activationAt:input.activationAt,
     entryDriftPolicy:LIVE_ENTRY_DRIFT_POLICY,sourceQuoteAt:t.lastQuoteAt,copyQuoteAt:input.quoteObservedAt,
     copyQuotePrice:input.entryPrice,copyDelayMs:Math.max(0,input.now-t.openedAt),
     allowedAdverseEntryDriftRate:drift.allowed,adverseEntryDriftRate:drift.adverse};
   return {intent:{kind:"MARKET",tag,size,contracts,notional,plannedRisk,leverage,margin,
-    body:{contract:t.symbol,size:`${direction<0?"-":""}${sized.quantityText}`,price:"0",tif:"ioc",text:tag,reduce_only:false}},
+    body:{contract:t.symbol,size:`${direction<0?"-":""}${quantityText}`,price:"0",tif:"ioc",text:tag,reduce_only:false}},
     binding:{version:LIVE_PARITY_VERSION,sourceAtCopy:structuredClone(t),receipt}};
 }
 
