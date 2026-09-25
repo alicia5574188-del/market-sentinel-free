@@ -795,8 +795,8 @@ export function forwardWatchSymbols(s:ForwardState,now:number,entrySymbols?:Iter
 export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:number){
   const mark=equityMark(s,quotes,now),eligible=s.opportunities.filter(o=>o.eligible&&o.expiresAt>now),reserve=eligible.filter(o=>o.reserve),d=s.relationEngine.diagnostics;
   return{version:s.version,engineVersion:ADAPTIVE_ENGINE_VERSION,grammar:ADAPTIVE_ENGINE_VERSION,mode:"REAL_FEED_PAPER",liveEligible:false,
-    strategyAuthorityVersion:ADAPTIVE_ENGINE_VERSION,executionVersion:ADAPTIVE_ENGINE_VERSION,regionVersion:"adaptive-region-v1",
-    regionLaunchVersion:"adaptive-region-v1",policyVersion:ADAPTIVE_ENGINE_VERSION,exitPolicyVersion:ADAPTIVE_ENGINE_VERSION,
+    strategyAuthorityVersion:ADAPTIVE_ENGINE_VERSION,executionVersion:ADAPTIVE_ENGINE_VERSION,regionVersion:"hierarchical-region-v2",
+    regionLaunchVersion:"hierarchical-region-v2",policyVersion:ADAPTIVE_ENGINE_VERSION,exitPolicyVersion:ADAPTIVE_ENGINE_VERSION,
     policyUpgrade:null,exitPolicyUpgrade:null,startedAt:s.startedAt,cutoverAt:s.cutoverAt,updatedAt:s.lastQuoteCycleAt,
     lastCycleAt:s.lastCycleAt,revision:s.revision,initialEquity:s.initialEquity,balance:s.balance,...mark,targetEquity:s.initialEquity*2,
     netPnl:mark.equity-s.initialEquity,maxDrawdown:s.maxDrawdown,resolved:s.resolved,wins:s.wins,grossPnl:s.grossPnl,fees:s.fees,
@@ -813,10 +813,10 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
     minuteConfirmationCapacity:FORWARD_MINUTE_CONFIRMATION_CAP,seatCount:s.positions.length,eligibleCount:eligible.length,
     reserveCount:reserve.length,premiumCount:eligible.filter(o=>o.premium).length,
     boundaries:{scope:"PAPER_AUTHORITY",grammar:"每5分钟根样本→15/30/45/60分钟同一路径逐步成熟→同一证据同时生成方向与退出计划；5/10/15/20/30/45/60检查点不作为独立样本重复计票。",
-      historyBackfill:true,sampleMeaning:"启动时只回填当前已完整收盘且可因果重建的最近根路径；随后根样本记录5/10/15/20/30/45/60分钟路径。统计按非重叠时间组验证，最佳持仓可在15/30/45/60分钟中学习。旧方向失效不会自动生成反向订单。",
+      historyBackfill:true,sampleMeaning:"启动时只回填当前已完整收盘且可因果重建的最近根路径；随后根样本记录5/10/15/20/30/45/60分钟路径。统计按非重叠时间组验证，最佳持仓可在15/30/45/60分钟中学习。普通反方向仍必须独立成熟；只有外层区域真实破位且2秒实时路径持续确认的极端结构中断可临时越过样本方向授权。",
       accounting:"模拟使用新鲜买卖价并计入手续费、滑点和资金费占位；每笔新Trade冻结自己的样本退出计划，同一持久化Trade事件供实盘与会员实盘执行。",
-      risk:"不设持仓席位数量上限；总风险≤10%、同方向≤6.5%、同一关系族≤2.5%、探测池≤1.5%、保证金≤75%。结构止损仍是账户安全硬边界。",
-      validation:"关系状态为ACTIVE/PRESSURED/DEGRADED/RECOVERING；时间长度不再拆成不同family，同族失败后等待新成熟证据；反方向必须独立获得资格。",
-      liquidation:"新单由样本决定正反馈期限、正常MAE、最佳持仓、剩余优势和利润保留率；结构止损是硬边界。升级前旧仓继续原生命周期排空。"},
+      risk:"不设持仓席位数量上限；总风险≤10%、同方向≤6.5%、同一关系族≤2.5%、探测池≤1.5%、保证金≤75%。单次极端结构事件额外受1.25%事件风险池约束且最多授权2个标的；结构止损仍是账户安全硬边界。",
+      validation:"关系状态为ACTIVE/PRESSURED/DEGRADED/RECOVERING；常态交易只认成熟关系。结构中断必须来自外层区域、连续实时位移和市场广度/单币特大异常之一，普通内层突破没有独立交易权。",
+      liquidation:"常态新单由样本决定正反馈期限、正常MAE、最佳持仓、剩余优势和利润保留率；结构中断单使用冻结的短周期退出计划，并在外层边界重新接受或快速无正向反馈时提前退出。升级前旧仓继续原生命周期排空。"},
     cost:PAPER_COST,nextCycleAt:s.lastCandleAt+BAR_MS};
 }
