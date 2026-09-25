@@ -32,8 +32,8 @@ export type RelationRule={id:string;signature:string;scope:RelationScope;horizon
   longNet:number;recentNet:number;standardError:number;samples:number;longGroups:number;recentGroups:number;health:number;status:RelationStatus;
   livePathScore:number;environmentFit:number;stopRate:number;targetRate:number;exitProfile:RelationExitProfile;
   updatedAt:number;lastQualifiedAt:number;symbols:string[];reason:string};
-export type RelationCandidate={symbol:string;ruleId:string;side:RelationSide;horizon:RelationHorizon;status:RelationStatus;health:number;
-  score:number;netRate:number;grossRate:number;stopRate:number;environmentFit:number;livePathScore:number;reserve:boolean;
+export type RelationCandidate={symbol:string;ruleId:string;side:RelationSide;horizon:RelationHorizon;scope:RelationScope;status:RelationStatus;health:number;
+  score:number;netRate:number;evidenceNetRate:number;grossRate:number;stopRate:number;environmentFit:number;livePathScore:number;reserve:boolean;
   exitProfile:RelationExitProfile;reason:string};
 type CandidateEvaluation={h:RelationHorizon;side:RelationSide;net:number;se:number;selected:RelationMeasurement[];groups:number};
 export type RelationEngineState={version:typeof FORWARD_RELATION_V2_VERSION;startedAt:number;updatedAt:number;observations:number;measured:number;invalidated:number;
@@ -316,8 +316,9 @@ export function relationCandidates(state:RelationEngineState){const rows:Relatio
   if(!matches(frame.x,rule.conditions)||!rule.symbols.includes(frame.symbol))continue;const reserve=rule.scope==="RECENT"||rule.status!=="ACTIVE"||rule.health<.68,
     net=Math.max(COST*.15,rule.longNet*clip(.45+.55*rule.health,.2,1)),gross=net+COST,edge=net/Math.max(rule.stopRate,COST),
     score=clip(32+36*rule.health+10*rule.environmentFit+10*rule.livePathScore+12*clip(edge/.8),0,100);if(rule.health<.15||!(rule.longNet>0))continue;
-  rows.push({symbol:frame.symbol,ruleId:rule.id,side:rule.side,horizon:rule.horizon,status:rule.status,health:rule.health,score,netRate:net,grossRate:gross,
-    stopRate:rule.stopRate,environmentFit:rule.environmentFit,livePathScore:rule.livePathScore,reserve,exitProfile:structuredClone(rule.exitProfile),
+  rows.push({symbol:frame.symbol,ruleId:rule.id,side:rule.side,horizon:rule.horizon,scope:rule.scope,status:rule.status,health:rule.health,
+    score,netRate:net,evidenceNetRate:rule.longNet,grossRate:gross,stopRate:rule.stopRate,environmentFit:rule.environmentFit,
+    livePathScore:rule.livePathScore,reserve,exitProfile:structuredClone(rule.exitProfile),
     reason:rule.reason+"｜当前条件再次匹配；"+(reserve?"降权参与":"正常参与")});}
   return rows.sort((a,b)=>Number(b.status==="ACTIVE")-Number(a.status==="ACTIVE")||b.score-a.score||b.netRate-a.netRate);
 }
