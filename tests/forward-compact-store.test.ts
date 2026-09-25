@@ -233,7 +233,8 @@ test("stable raw hashes accept harmless compression identity drift but reject de
     head.sampleManifestSha256=await digest(new TextEncoder().encode(JSON.stringify(manifest)));
     await db.put({...write.entries,[FORWARD_SAMPLE_MANIFEST_STORAGE]:manifest,[HEAD]:head});
     if(mode==="compressed-only")assert.equal((await readForwardStore(db,T+1)).relationEngine.samples.length,2200);
-    else await assert.rejects(()=>readForwardStore(db,T+1),/分页/);
+    else await assert.rejects(()=>readForwardStore(db,T+1),error=>error instanceof Error
+      &&/RAW_CANONICAL_AT_PERSISTED_TIME/.test(error.message)&&/EXP_/.test(error.message)&&/GOT_/.test(error.message));
   }
 });
 
