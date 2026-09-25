@@ -58,6 +58,17 @@ test("Forward Path Relation 3.0 learns from root paths without double-counting c
   assert.ok(relationCandidates(e).length>0);
 });
 
+test("a still-positive relation is not auto-degraded only because quantile resynthesis changed its exact signature",()=>{
+  let e=learnThrough(35),source=e.rules.find(r=>r.side==="LONG");assert.ok(source);
+  const stale={...structuredClone(source!),id:"carryover-fixture",signature:"carryover-stale-signature",status:"DEGRADED" as const,health:.25,
+    lastQualifiedAt:nowAt(35)-5*60_000,reason:"fixture"};
+  e.rules=[stale];
+  const after=advanceRelationEngine({state:e,paths:sliced(36),now:nowAt(36)}),carried=after.rules.find(r=>r.id==="carryover-fixture");
+  assert.ok(carried,"recent causal relation should remain reviewable during threshold drift");
+  assert.notEqual(carried!.status,"DEGRADED","absence from the new quantile shortlist alone is not failure evidence");
+  assert.ok(carried!.health>=.40);
+});
+
 test("ongoing 5m response path can degrade an old relation before its 15m final label matures",()=>{
   const before=learnThrough(39);
   assert.ok(before.rules.some(r=>r.side==="LONG"&&r.status==="ACTIVE"));
@@ -77,6 +88,16 @@ test("opposite direction earns authority only after its own completed recent res
   assert.ok(shorts.some(r=>r.scope==="RECENT"),"fast migration must still be based on matured recent samples");
   const rapid=relationCandidates(e).filter(c=>c.side==="SHORT");
   assert.ok(rapid.length>0&&rapid.some(c=>c.reserve),"recent reversal evidence must create at least one bounded probe; independently validated BASE evidence may coexist");
+});
+
+test("reserve economics use the learned net edge without applying health a second time",()=>{
+  const e=learnThrough(39),rule=e.rules.find(r=>r.side==="LONG"),frame=Object.values(e.frames).find(f=>rule?.symbols.includes(f.symbol));
+  assert.ok(rule&&frame);e.rules=[{...rule!,scope:"RECENT",status:"PRESSURED",health:.40,longNet:.0024,stopRate:.0055,
+    livePathScore:.70,environmentFit:.80,symbols:[frame!.symbol]}];
+  e.frames={[frame!.symbol]:frame!};
+  const c=relationCandidates(e)[0];assert.ok(c);
+  assert.equal(c!.netRate,.0024,"health controls authority/risk, not the underlying cost-positive sample edge");
+  assert.ok(c!.netRate/c!.stopRate>.40);
 });
 
 test("a restart can seed closed root paths immediately instead of waiting a fresh hour",()=>{
