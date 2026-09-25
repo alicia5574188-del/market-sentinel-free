@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {fillForwardPortfolio,forwardEquity,initialForward,type Candle,type Contract,type Opportunity,type Quote} from "../lib/forward-relations.ts";
 import {buildProportionalMirror,forwardMirrorSources,liveEntryDriftGuard,mirrorSourceFresh} from "../lib/live-parity.ts";
 import {sourceAfterEnable,startLiveSession} from "../lib/live-session.ts";
-import type {RelationRule} from "../lib/forward-relation-v2.ts";
+import type {RelationExitProfile,RelationRule} from "../lib/forward-relation-v2.ts";
 
 const START=Date.parse("2026-09-24T00:00:00Z")/1000;
 const makePath=(step=.0016,bars=60):Candle[]=>{const out:Candle[]=[];let p=100;
@@ -12,6 +12,10 @@ const makePath=(step=.0016,bars=60):Candle[]=>{const out:Candle[]=[];let p=100;
 const q=(p:number,now:number):Quote=>({bestBid:p*.9999,bestAsk:p*1.0001,observedAt:now,fresh:true,entryReady:true});
 const contract:Contract={quantoMultiplier:.001,leverageMax:20,maintenanceRate:.005,minContracts:1,
   enableDecimal:false,orderSizeMin:"1",orderSizeMax:"1000000"};
+const exitProfile:RelationExitProfile={version:"sample-exit-plan-v1",bestHoldMinutes:30,feedbackDeadlineMinutes:10,maxHoldMinutes:60,
+  normalAdverseRate:.008,targetRate:.012,protectionActivationRate:.004,retentionRate:.80,samples:40,groups:6,
+  path:{5:{expectedRate:.001,adverseRate:.004,remainingEdgeRate:.008},15:{expectedRate:.004,adverseRate:.006,remainingEdgeRate:.005},
+    30:{expectedRate:.009,adverseRate:.008,remainingEdgeRate:0}}};
 
 function source(){
   const path=makePath(),now=(path.at(-1)!.time+300)*1000+1000,price=path.at(-1)!.close;
@@ -21,9 +25,9 @@ function source(){
     stopRate:.008,targetRate:.012,directionStrength:82,pathEfficiency:80,momentumPersistence:80,positionScore:80,spaceScore:80,
     executionScore:90,grossRemainingSpaceRate:.012,netRemainingSpaceRate:.0101,pullbackRiskRate:.008,edgeRatio:1.26,
     expectedHoldMinutes:60,marketFit:80,regionId:null,regionQuality:null,reason:"已成熟Forward关系的LIVE同源测试事件",
-    relationRuleId:"fixture-rule",relationStatus:"ACTIVE",relationHorizon:60,relationHealth:.85,riskScale:.85};
+    relationRuleId:"fixture-rule",relationStatus:"ACTIVE",relationHorizon:30,relationHealth:.85,riskScale:.85,exitPlan:structuredClone(exitProfile)};
   s.opportunities=[opportunity];s.lastCandleAt=now;
-  s.relationEngine.rules=[{id:"fixture-rule",signature:"fixture-rule",scope:"BASE",horizon:60,side:"LONG",
+  s.relationEngine.rules=[{id:"fixture-rule",signature:"fixture-rule",scope:"BASE",horizon:30,side:"LONG",
     conditions:[{feature:0,op:"GE",threshold:0}],longNet:.01,recentNet:.008,standardError:.001,samples:40,longGroups:6,recentGroups:3,
     health:.85,status:"ACTIVE",livePathScore:.80,environmentFit:.82,stopRate:.008,targetRate:.012,exitProfile:{version:"sample-exit-plan-v1" as const,bestHoldMinutes:60 as const,feedbackDeadlineMinutes:15,maxHoldMinutes:60,
     normalAdverseRate:.008,targetRate:.012,protectionActivationRate:.004,retentionRate:.78,samples:40,groups:6,
@@ -66,6 +70,9 @@ test("proportional LIVE sizing preserves source leverage and does not enlarge a 
   assert.ok(result.intent.notional<=trade.notional*.1+trade.entryPrice*trade.quantoMultiplier);
   assert.equal(result.binding.receipt.sourceId,trade.id);
   assert.equal(result.binding.receipt.ratio,.1);
+  assert.equal(result.binding.receipt.sourceExitPlanVersion,"sample-exit-plan-v1");
+  assert.equal(result.binding.receipt.sourceBestHoldMinutes,30);
+  assert.equal(result.binding.receipt.sourceMaxHoldMinutes,60);
   assert.equal(result.binding.receipt.sourceExitPlanVersion,"sample-exit-plan-v1");
   assert.equal(result.binding.receipt.sourceMaxHoldMinutes,trade.exitPlan?.maxHoldMinutes);
 });
