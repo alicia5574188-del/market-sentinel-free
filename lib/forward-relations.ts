@@ -222,19 +222,37 @@ function pathStats(rows:Candle[]){
   const ret=(n:number)=>last.close/rows[Math.max(0,rows.length-1-n)]!.close-1;
   return{last,atr,body,ret3:ret(3),ret6:ret(6),ret12:ret(12)};
 }
+function outerRegion(rows:Candle[],atr:number){
+  let best:{lower:number;upper:number;center:number;widthRate:number;bars:number;quality:number}|null=null,bestRank=-Infinity;
+  for(const bars of[18,24,36]){
+    const w=rows.slice(-(bars+1),-1);if(w.length!==bars)continue;
+    const lower=Math.min(...w.map(r=>r.low)),upper=Math.max(...w.map(r=>r.high)),center=(upper+lower)/2,widthRate=(upper-lower)/center,
+      maxWidth=Math.max(.008,Math.min(.06,atr*7.5));if(widthRate>maxWidth)continue;
+    let crossings=0,prev=0,touches=0;
+    for(const r of w){const side=r.close>center?1:r.close<center?-1:0;if(side&&prev&&side!==prev)crossings++;if(side)prev=side;
+      if(r.low<=center&&r.high>=center)touches++;}
+    if(crossings<2&&touches<Math.ceil(bars*.25))continue;
+    const compact=1-clip(widthRate/maxWidth),quality=100*clip(.35*compact+.35*Math.min(1,crossings/5)+.20*Math.min(1,touches/(bars*.45))+.10*bars/36),
+      rank=quality+bars*.35;
+    if(rank>bestRank){best={lower,upper,center,widthRate,bars,quality};bestRank=rank;}
+  }
+  return best;
+}
 function detectRegion(symbol:string,rows:Candle[],now:number):Region|null{
-  const {atr}=pathStats(rows);let best:Region|null=null;
+  const {atr}=pathStats(rows),outer=outerRegion(rows,atr);let best:Region|null=null;
   for(const bars of[6,8,10,12]){
     const w=rows.slice(-(bars+1),-1);if(w.length!==bars)continue;
     const lower=Math.min(...w.map(r=>r.low)),upper=Math.max(...w.map(r=>r.high)),center=(upper+lower)/2,widthRate=(upper-lower)/center;
     const maxWidth=Math.max(.004,Math.min(.028,atr*3.4));if(widthRate>maxWidth)continue;
     let crossings=0,prev=0,touches=0;
-    for(const r of w){const s=r.close>center?1:r.close<center?-1:0;if(s&&prev&&s!==prev)crossings++;if(s)prev=s;
+    for(const r of w){const side=r.close>center?1:r.close<center?-1:0;if(side&&prev&&side!==prev)crossings++;if(side)prev=side;
       if(r.low<=center&&r.high>=center)touches++;}
     if(crossings<2&&touches<Math.ceil(bars*.45))continue;
     const compact=1-clip(widthRate/maxWidth),quality=100*clip(.45*compact+.35*Math.min(1,crossings/4)+.20*Math.min(1,touches/bars));
     const price=rows.at(-1)!.close,state:RegionState=price>upper?"ABOVE":price<lower?"BELOW":"IN_REGION";
-    const r:Region={id:`rg-${symbol}-${w[0]!.time}`,symbol,confirmedAt:(w.at(-1)!.time+300)*1000,lower,upper,center,widthRate,bars,quality,state,lastSeenAt:now};
+    const r:Region={id:`rg-${symbol}-${w[0]!.time}`,symbol,confirmedAt:(w.at(-1)!.time+300)*1000,lower,upper,center,widthRate,bars,quality,state,lastSeenAt:now,
+      ...(outer?{outerLower:outer.lower,outerUpper:outer.upper,outerCenter:outer.center,outerWidthRate:outer.widthRate,
+        outerBars:outer.bars,outerQuality:outer.quality}:{})};
     if(!best||r.quality>best.quality)best=r;
   }
   return best;
