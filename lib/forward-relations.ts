@@ -432,7 +432,6 @@ function markAndManage(s:ForwardState,quotes:Record<string,Quote>,now:number){
       }else{
         const recovery=clip(point?.recoveryRate??.5),futureBest=point?.futureBestMinutes??plan.bestHoldMinutes,
           continuationFloor=Math.max(ROUND_TRIP_COST*.15,allowance*.12),
-          continuationStrong=remaining>continuationFloor||recovery>=.45,
           continuationWeak=remaining<=continuationFloor&&recovery<.35,
           feedbackReview=ageMin>=plan.feedbackDeadlineMinutes&&!t.firstProfitAt&&favorable<ROUND_TRIP_COST,
           pathDiverged=ageMin>=5&&signed<-allowance,
@@ -453,7 +452,6 @@ function markAndManage(s:ForwardState,quotes:Record<string,Quote>,now:number){
         else if(noFeedbackConfirmed)reason="NO_POSITIVE_FEEDBACK";
         else if(edgeExhausted)reason="SAMPLE_EDGE_EXHAUSTED";
         else if(maxHold)reason="SAMPLE_MAX_HOLD";
-        void continuationStrong;
       }
     } else {
       // Drain pre-v3 positions under their frozen legacy lifecycle; no strategy
