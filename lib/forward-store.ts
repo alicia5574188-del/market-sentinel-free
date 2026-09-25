@@ -80,6 +80,17 @@ async function encodeSamplePages(samples:RelationMeasurement[]){
 }
 
 const SHA256=/^[0-9a-f]{64}$/,packedNumber=(value:unknown)=>value===null||Number.isFinite(value);
+function retainedEvidenceIssue(samples:unknown[],manifestCount:number){
+  const roots=new Map<string,string>();
+  for(const value of samples){
+    if(!Array.isArray(value)||typeof value[1]!=="string"||!Number.isSafeInteger(value[2]))return "ROOT_INVALID";
+    const key=`${value[1]}:${value[2]}`,fingerprint=JSON.stringify(value),prior=roots.get(key);
+    if(prior!==undefined&&prior!==fingerprint)return `ROOT_CONFLICT_${key}`;
+    if(prior===undefined)roots.set(key,fingerprint);
+  }
+  return roots.size<manifestCount?`UNIQUE_COUNT_${roots.size}_${manifestCount}`:null;
+}
+
 function packedPageIssue(samples:unknown[],meta:SamplePageMeta,allowLegacyDrift=false){
   const hourText=meta.id.split(":")[0]!,hour=Number(hourText);let priorAt=-1,priorSymbol="";
   if(!/^\d{16}:\d{3}$/.test(meta.id)||!Number.isSafeInteger(hour)||hour<0||hour%SAMPLE_PAGE_MS!==0)return "PAGE_ID";
@@ -203,9 +214,23 @@ export async function readForwardStore(storage: Reader, now: number) {
           :page.meta.length===expected.length&&page.meta.rawLength===expected.rawLength&&page.meta.sha256===expected.sha256
             &&page.meta.encoding===expected.encoding;
       });
-      if(!matches)throw new Error(rawPhysicalDrift
-        ?"Forward样本分页内容异常：RAW_CANONICAL_AT_PERSISTED_TIME"
-        :"Forward样本分页内容异常：LEGACY_CANONICAL_AT_PERSISTED_TIME");
+      if(!matches){
+        if(rawPhysicalDrift&&legacyStructuralDrift){
+          // A previously shipped writer could publish the newer manifest while
+          // retaining an older, still well-formed page after wall-clock thinning.
+          // When the exact canonical target cannot be reconstructed, preserve
+          // the retained measurements rather than inventing manifest-only rows.
+          // This fallback is intentionally limited to structural stale-page
+          // drift: every packed row already passed schema/hour/order checks,
+          // total rows are not short, and unique causal roots cannot be fewer
+          // than the authenticated manifest count. Same-shape hash corruption
+          // still fails closed.
+          const issue=retainedEvidenceIssue(samples,manifest.count);
+          if(issue)throw new Error(`Forward样本分页内容异常：RAW_RETAINED_EVIDENCE_${issue}`);
+        }else throw new Error(rawPhysicalDrift
+          ?"Forward样本分页内容异常：RAW_CANONICAL_AT_PERSISTED_TIME_NO_STRUCTURAL_DRIFT"
+          :"Forward样本分页内容异常：LEGACY_CANONICAL_AT_PERSISTED_TIME");
+      }
     }
     const internal=state as ForwardStateWithRecovery;
     if(legacySampleRecovery.length)internal.__legacySampleRecovery=legacySampleRecovery;
