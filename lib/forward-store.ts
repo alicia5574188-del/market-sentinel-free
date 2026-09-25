@@ -138,10 +138,20 @@ export async function readForwardStore(storage: Reader, now: number) {
       let pageRaw:Uint8Array,page:{version?:string;id?:string;samples?:unknown[]};
       try{pageRaw=meta.encoding==="gzip"?await gunzip(value,FORWARD_SAMPLE_PAGE_MAX_BYTES):value;}
       catch{throw new Error(`Forward样本分页解压失败：${meta.id}`);}
-      const rawLengthMatches=pageRaw.length===meta.rawLength,rawSha256=await digest(pageRaw);
+      const rawLengthMatches=pageRaw.length===meta.rawLength,rawSha256=await digest(pageRaw),
+        rawHashValid=meta.rawSha256===undefined||SHA256.test(meta.rawSha256),
+        rawHashMatches=meta.rawSha256!==undefined&&rawHashValid&&rawSha256===meta.rawSha256,
+        authenticatedCompressedRecovery=meta.rawSha256!==undefined&&rawHashValid&&!rawHashMatches&&rawLengthMatches&&compressedMatches;
       if(meta.rawSha256!==undefined){
-        if(!rawLengthMatches||!SHA256.test(meta.rawSha256)||rawSha256!==meta.rawSha256)
-          throw new Error(`Forward样本分页原始校验失败：${meta.id}`);
+        // A manifest is authenticated by the head and still contains the exact
+        // stored-byte SHA-256. If that compressed identity matches byte-for-byte
+        // while only the newer rawSha256 metadata disagrees, preserve/archive
+        // those authenticated bytes and rebuild the raw hash on the next atomic
+        // write. If neither identity matches, this remains real evidence loss
+        // and must stay fail-closed.
+        if(!rawLengthMatches||!rawHashValid||(!rawHashMatches&&!authenticatedCompressedRecovery))
+          throw new Error(`Forward样本分页原始校验失败：${meta.id}:COMPRESSED_${compressedMatches?"MATCH":"MISMATCH"}:LENGTH_${rawLengthMatches?"MATCH":"MISMATCH"}`);
+        if(authenticatedCompressedRecovery)legacyRecovered=true;
       }else if(!compressedMatches||!rawLengthMatches)legacyRecovered=true;
       try{page=JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(pageRaw)) as typeof page;}
       catch{throw new Error(`Forward样本分页JSON失败：${meta.id}`);}
@@ -152,7 +162,7 @@ export async function readForwardStore(storage: Reader, now: number) {
       if(pageIssue)throw new Error(`Forward样本分页内容异常：${meta.id}:${pageIssue}`);
       const firstAt=(page.samples[0] as unknown[])[2] as number,lastAt=(page.samples.at(-1) as unknown[])[2] as number,
         structuralDrift=allowLegacyDrift&&(page.samples.length!==meta.count||firstAt!==meta.firstAt||lastAt!==meta.lastAt),
-        legacyPhysicalDrift=allowLegacyDrift&&(!compressedMatches||!rawLengthMatches||structuralDrift);
+        legacyPhysicalDrift=authenticatedCompressedRecovery||(allowLegacyDrift&&(!compressedMatches||!rawLengthMatches||structuralDrift));
       if(legacyPhysicalDrift){
         const bytesSha256=await digest(value),bytesKey=`${FORWARD_SAMPLE_RECOVERY_PREFIX}${meta.id}:${rawSha256}:bytes`;
         legacySampleRecovery.push({meta:{version:"forward-sample-recovery-v1",sourceManifestSha256:head.sampleManifestSha256!,sourceId:meta.id,
