@@ -36,9 +36,8 @@ function fresh(q:ForwardShockQuote|undefined,now:number){
   return !!q&&q.fresh&&q.bestBid>0&&q.bestAsk>=q.bestBid&&q.observedAt<=now&&now-q.observedAt<=4_500;
 }
 function regionBounds(region:ForwardShockRegion){
-  const lower=region.outerLower??region.lower,upper=region.outerUpper??region.upper,center=region.outerCenter??((lower+upper)/2);
-  const widthRate=region.outerWidthRate??((upper-lower)/Math.max(center,1e-9));
-  return{lower,upper,center,widthRate,quality:region.outerQuality??region.quality};
+  if(!(region.outerLower&&region.outerUpper&&region.outerUpper>region.outerLower&&region.outerCenter&&region.outerWidthRate&&region.outerQuality!=null))return null;
+  return{lower:region.outerLower,upper:region.outerUpper,center:region.outerCenter,widthRate:region.outerWidthRate,quality:region.outerQuality};
 }
 function referencePoint(points:ShockPoint[],at:number){
   let found:ShockPoint|undefined;for(const p of points){if(p.at<=at)found=p;else break;}return found??points[0];
@@ -60,7 +59,7 @@ export function advanceForwardShock(input:{state:ForwardShockRuntime;now:number;
     const q=input.quotes[symbol];if(!fresh(q,input.now)||q!.entryReady!==true)continue;
     marketCount++;
     const price=mid(q!),bounds=regionBounds(region);
-    if(!(bounds.lower>0&&bounds.upper>bounds.lower&&bounds.widthRate>0))continue;
+    if(!bounds||bounds.quality<48||!(bounds.lower>0&&bounds.upper>bounds.lower&&bounds.widthRate>0))continue;
     const bufferRate=Math.max(.0006,Math.min(.003,bounds.widthRate*.04));
     const shortProgress=(bounds.lower-price)/bounds.lower,longProgress=(price-bounds.upper)/bounds.upper;
     const side:ShockSide|null=shortProgress>bufferRate?"SHORT":longProgress>bufferRate?"LONG":null;
@@ -100,7 +99,8 @@ export function advanceForwardShock(input:{state:ForwardShockRuntime;now:number;
   const dominant:ShockSide|null=shortRows.length>longRows.length?"SHORT":longRows.length>shortRows.length?"LONG":
     shortRows.reduce((n,x)=>n+x.score,0)>longRows.reduce((n,x)=>n+x.score,0)?"SHORT":
       longRows.length?"LONG":shortRows.length?"SHORT":null;
-  const dominantRows=dominant?recent(dominant):[],broad=dominantRows.length>=3;
+  const dominantRows=dominant?recent(dominant):[],broadRequired=Math.max(3,Math.ceil(marketCount*.22)),
+    broad=dominantRows.length>=broadRequired;
   const extreme=dominantRows.some(r=>r.singleExtreme);
   const vetoSide=dominant&&(broad||extreme)?(dominant==="LONG"?"SHORT":"LONG"):null;
   const candidates=dominantRows.filter(r=>r.ready&&(broad||r.singleExtreme)).sort((a,b)=>b.score-a.score);
