@@ -79,6 +79,15 @@ test("opposite direction earns authority only after its own completed recent res
   assert.ok(rapid.length>0&&rapid.some(c=>c.reserve),"recent reversal evidence must create at least one bounded probe; independently validated BASE evidence may coexist");
 });
 
+test("candidate economics keep learned post-cost edge separate from relation health",()=>{
+  const e=learnThrough(39),rule=e.rules.find(r=>r.side==="LONG"),frame=Object.values(e.frames).find(f=>rule?.symbols.includes(f.symbol));
+  assert.ok(rule&&frame);e.rules=[{...rule!,scope:"RECENT",status:"PRESSURED",health:.40,longNet:.0024,stopRate:.0055,
+    livePathScore:.70,environmentFit:.80,symbols:[frame!.symbol]}];e.frames={[frame!.symbol]:frame!};
+  const c=relationCandidates(e)[0];assert.ok(c);
+  assert.equal(c!.netRate,.0024,"health controls authority and risk but must not discount the same sample edge twice");
+  assert.ok(c!.edgeRatio>.40);
+});
+
 test("a restart can seed closed root paths immediately instead of waiting a fresh hour",()=>{
   const now=nowAt(50),e=advanceRelationEngine({state:initialRelationEngine(now-1000),paths:sliced(50),now});
   assert.ok(e.samples.length>=24,"closed 5m history should seed root paths immediately; trading authority still requires independent validation");
