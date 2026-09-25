@@ -94,6 +94,17 @@ test("PAPER uses learned relations for entries instead of the retired 5m FLOW ga
   assert.ok(s.positions.some(t=>t.entryContext?.relationRuleId));
 });
 
+test("pure relation trades keep sample MAE for path invalidation but a wider hard safety stop for account risk",()=>{
+  const learned=learnThrough(39),now=nowAt(39);let state=initialForward(now-60_000);state.relationEngine=learned;
+  state=advanceForward({state,now,paths:sliced(39),quotes:quotesAt(39,now),contracts,entrySymbols:symbols}).state;
+  const trade=state.positions.find(t=>t.entryContext?.mode==="RELATION"&&t.exitPlan);assert.ok(trade);
+  assert.equal(trade!.entryContext!.pullbackRiskRate,trade!.exitPlan!.normalAdverseRate);
+  assert.ok(trade!.rule.stopRate>trade!.exitPlan!.normalAdverseRate,
+    "hard stop must sit outside the learned normal adverse path instead of reusing sample MAE as liquidation");
+  assert.ok(trade!.plannedRisk>=trade!.notional*trade!.rule.stopRate,
+    "position sizing must charge the wider hard stop, not the smaller sample invalidation allowance");
+});
+
 test("fast quote loop cannot open a premium region trade before any Forward Relation samples exist",()=>{
   const symbol="S0_USDT",rows:Array<Candle>=[],base=START;
   for(let i=0;i<24;i++){const open=100+(i%2?.01:-.01),close=100+(i%2?-.01:.01);
