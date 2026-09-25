@@ -38,7 +38,7 @@ test("quiet contracts can be omitted even if liquid",()=>{
 test("thin Gate markets never enter the Forward 30 even when reported volatility is extreme",async()=>{
   const {selectAnchorOpportunityUniverse}=await import("../lib/multi-turn-universe.ts");
   const rows=[
-    row("BARD_USDT",.25,.35,50_000),
+    {...row("BARD_USDT",.25,.35,100_000_000),executionVolume24hUsd:50_000},
     ...Array.from({length:40},(_,i)=>row(`GOOD${String(i).padStart(2,"0")}_USDT`,.02+(i%4)*.005,.04+(i%8)*.005,2_000_000+i*100_000)),
   ];
   const selected=selectAnchorOpportunityUniverse({rows,limit:30,rotationSeed:0,explorationSlots:2});
@@ -46,7 +46,7 @@ test("thin Gate markets never enter the Forward 30 even when reported volatility
   assert.equal(selected.length,30);
 });
 
-test("dynamic anchor pool keeps confirmed anchor symbols and does not rank by turnover",async()=>{
+test("dynamic anchor pool keeps locked liquid symbols while movement still outranks quiet volume",async()=>{
   const {selectAnchorOpportunityUniverse}=await import("../lib/multi-turn-universe.ts");
   const rows=[
     row("LOCKED_USDT",.01,.035,2_000_000),
