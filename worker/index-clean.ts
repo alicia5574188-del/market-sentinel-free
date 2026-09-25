@@ -1072,8 +1072,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // Publish only committed lifecycle events. A source born in the candle
       // lane must not wait for the next alarm; a source closed while Gate is
       // awaiting I/O must wake the serialized reconciler as well.
-      if(previous.positions.length!==next.state.positions.length
-        ||previous.positions.some(p=>!next.state.positions.some(n=>n.id===p.id)))this.launchLiveWork(true);
+      const lifecycleChanged=previous.positions.length!==next.state.positions.length
+        ||previous.positions.some(p=>!next.state.positions.some(n=>n.id===p.id));
+      if(lifecycleChanged||next.protectionChanged){this.launchLiveWork(true);this.launchMemberLiveWake();}
     } catch (error) { this.forwardError = safeError(error); }
     finally { this.forwardBusy = false; }
   }
@@ -1992,6 +1993,21 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     });
     if (remaining.length) throw new Error(`Gate 仍有 ${remaining.length} 张系统挂单未撤销，实盘保持关闭`);
     return current;
+  }
+
+  private launchMemberLiveWake() {
+    if(!this.env.MEMBERS||!this.env.MEMBER_EXECUTION||!this.env.OWNER_ACCESS_TOKEN)return;
+    const token=this.env.OWNER_ACCESS_TOKEN,directory=this.env.MEMBERS.getByName("directory");
+    this.ctx.waitUntil((async()=>{
+      try{
+        const response=await directory.fetch("https://members/active-seats",{headers:{"x-member-wake-token":token}});
+        if(!response.ok)return;
+        const body=await response.json<{ids?:string[]}>(),ids=Array.isArray(body.ids)?body.ids:[];
+        await Promise.allSettled(ids.map(id=>this.env.MEMBER_EXECUTION!.getByName(`member:${id}`).fetch("https://member-execution/source-wake",{
+          method:"POST",headers:{"x-member-wake-token":token},
+        })));
+      }catch{/* 10s member alarms remain the fallback; primary PAPER never blocks on wake delivery. */}
+    })());
   }
 
   private launchLiveWork(sourceChanged=false) {
