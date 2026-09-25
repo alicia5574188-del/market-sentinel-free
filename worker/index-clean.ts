@@ -2435,13 +2435,19 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     let recoveringEntryStop = Object.values(this.runtime.live.entries)
       .find((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status)
         && entry.stopSubmittingAt && !entry.stopOrderId) ?? null;
-    this.runtime.live.operational = !recoveringSubmission && !recoveringStop && !recoveringEntryStop;
-    this.runtime.live.lastError = recoveringSubmission
-      ? recoveringSubmission.lastError ?? `${recoveringSubmission.symbol} 的实盘提交正在与 Gate 核对`
-      : recoveringStop ? `${recoveringStop.symbol} 的结构止损正在按订单标签核对`
-        : recoveringEntryStop ? `${recoveringEntryStop.symbol} 的初始止损正在按订单标签核对` : null;
-    if(recoveringSubmission || recoveringStop || recoveringEntryStop) return;
-    let availableForNewEntries = available;
+    // An ambiguous market submission reserves its full margin/risk and unique
+    // order identity, but it must not freeze unrelated fresh PAPER signals.
+    // Uncertain native protection is different: no new exposure is admitted
+    // while an existing fill may be unprotected.
+    this.runtime.live.operational = !recoveringStop && !recoveringEntryStop;
+    this.runtime.live.lastError = recoveringStop ? `${recoveringStop.symbol} 的结构止损正在按订单标签核对`
+      : recoveringEntryStop ? `${recoveringEntryStop.symbol} 的初始止损正在按订单标签核对`
+        : recoveringSubmission ? recoveringSubmission.lastError ?? `${recoveringSubmission.symbol} 的实盘提交正在与 Gate 核对；其他独立新机会仍可继续执行` : null;
+    if(recoveringStop || recoveringEntryStop) return;
+    const unresolvedReservedMargin=Object.values(this.runtime.live.entries).reduce((sum,entry)=>sum+(entry
+      &&["SUBMITTING","OPEN","ERROR"].includes(entry.status)
+      &&this.runtime.live.positions[entry.symbol]?.id!==entry.planId ? entry.margin : 0),0);
+    let availableForNewEntries = Math.max(0,available-unresolvedReservedMargin);
     let riskForNewEntries = this.liveOpenRisk();
     const directionRiskForNewEntries: Record<Side, number> = {
       LONG: this.liveDirectionalRisk("LONG"),
@@ -2569,7 +2575,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       try {
         if(!this.runtime.live.requestedEnabled||!sameLiveSession(activation,this.runtime.live.activation)){entry.status="CANCELLED";continue;}
         try {
-          await client.setLeverage(symbol, intent.leverage);
+          const leverageCheck=await client.ensureLeverage(symbol,intent.leverage);
+          if(leverageCheck.recovered)this.recordLiveAudit({observedAt:Date.now(),symbol,planId:plan.id,stage:"LEVERAGE",level:"INFO",
+            reason:`Gate 杠杆写入响应超时，但安全回读已确认 ${symbol} 为 ${intent.leverage}×；继续本次新源单，不重放杠杆写入`});
         } catch (error) {
           const reason = `Gate 未接受 ${symbol} 的 ${intent.leverage}× 杠杆，本计划已跳过：${safeError(error)}`;
           entry.status = "CANCELLED";
@@ -2668,13 +2676,19 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         entry.lastError = safeError(error);
         throw error;
       }
-      if(entry.status==="ERROR")break; // Do not compound an unconfirmed exposure.
+      // An unresolved submission already consumes reserved account risk. Keep
+      // processing other staged symbols; never replay this symbol's unique tag.
     }
-    if (recoveringSubmission || recoveringEntryStop) {
+    recoveringSubmission = Object.values(this.runtime.live.entries)
+      .find((entry)=>entry&&(["SUBMITTING","ERROR"].includes(entry.status)||this.liveEntryAwaitingReconcile(entry)))??null;
+    recoveringEntryStop = Object.values(this.runtime.live.entries)
+      .find((entry)=>entry&&!["FILLED","CANCELLED"].includes(entry.status)&&entry.stopSubmittingAt&&!entry.stopOrderId)??null;
+    if (recoveringEntryStop) {
       this.runtime.live.operational = false;
-      this.runtime.live.lastError = recoveringSubmission
-        ? recoveringSubmission.lastError ?? `${recoveringSubmission.symbol} 的实盘提交正在与 Gate 核对`
-        : `${recoveringEntryStop!.symbol} 的初始止损正在按订单标签核对`;
+      this.runtime.live.lastError = `${recoveringEntryStop.symbol} 的初始止损正在按订单标签核对`;
+    } else if(recoveringSubmission) {
+      this.runtime.live.operational = true;
+      this.runtime.live.lastError = recoveringSubmission.lastError ?? `${recoveringSubmission.symbol} 的实盘提交正在核对；其他独立新机会仍可继续执行`;
     }
     // A cached source-trigger pass is provisional by construction; the caller
     // schedules the immediate full Gate reconciliation. Network-backed passes
