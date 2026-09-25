@@ -253,6 +253,67 @@ test("Gate LIVE never retries a timed-out write because the exchange may already
   }finally{globalThis.fetch=real;}
 });
 
+test("timed-out leverage write is recovered by safe position read and then cached without replay",async()=>{
+  const real=globalThis.fetch;let posts=0,reads=0;
+  globalThis.fetch=async(input,init)=>{
+    const request=new Request(input,init),url=new URL(request.url);
+    if(request.method==="POST"&&url.pathname.endsWith("/positions/BTC_USDT/leverage")){
+      posts++;const error=new Error("The operation was aborted due to timeout");error.name="TimeoutError";throw error;
+    }
+    if(request.method==="GET"&&url.pathname.endsWith("/positions/BTC_USDT")){
+      reads++;return Response.json({contract:"BTC_USDT",size:"0",leverage:"10"});
+    }
+    throw new Error(`unexpected ${request.method} ${url.pathname}`);
+  };
+  try{
+    const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
+    const recovered=await client.ensureLeverage("BTC_USDT",10);
+    assert.equal(recovered.recovered,true);assert.equal(recovered.actual,10);
+    assert.equal(posts,1);assert.equal(reads,1,"timeout recovery must read, never replay the write");
+    const cached=await client.ensureLeverage("BTC_USDT",10);
+    assert.equal(cached.cached,true);assert.equal(posts,1);assert.equal(reads,1);
+  }finally{globalThis.fetch=real;}
+});
+
+test("ambiguous market submission can be proven immediately by current position without replaying the order",async()=>{
+  const real=globalThis.fetch,tag="t-ms-e-recover",submitted=Date.now()-1000;
+  globalThis.fetch=async(input,init)=>{
+    const request=new Request(input,init),url=new URL(request.url);
+    if(url.pathname.endsWith("/orders/"+tag))
+      return Response.json({label:"ORDER_NOT_FOUND"},{status:404});
+    if(url.pathname.endsWith("/positions/BTC_USDT"))
+      return Response.json({contract:"BTC_USDT",size:"2",entry_price:"100.25",leverage:"10"});
+    if(url.pathname.endsWith("/my_trades_timerange"))return Response.json([]);
+    throw new Error(`unexpected ${request.method} ${url.pathname}`);
+  };
+  try{
+    const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
+    const recovery=await client.recoverMarketEntry("BTC_USDT","LONG",tag,null,submitted);
+    assert.equal(recovery.exposure,true);assert.equal(recovery.cancelled,false);
+    assert.equal(recovery.fillPrice,100.25);assert.deepEqual(recovery.evidence,["POSITION"]);
+  }finally{globalThis.fetch=real;}
+});
+
+test("ambiguous market submission can be proven by its unique confirmed fill even before position read catches up",async()=>{
+  const real=globalThis.fetch,tag="t-ms-e-fill",submitted=Date.now()-1000;
+  globalThis.fetch=async(input,init)=>{
+    const request=new Request(input,init),url=new URL(request.url);
+    if(url.pathname.endsWith("/orders/"+tag))
+      return Response.json({label:"ORDER_NOT_FOUND"},{status:404});
+    if(url.pathname.endsWith("/positions/BTC_USDT"))
+      return Response.json({contract:"BTC_USDT",size:"0",entry_price:"0",leverage:"10"});
+    if(url.pathname.endsWith("/my_trades_timerange"))
+      return Response.json([{trade_id:"44",order_id:"55",text:tag,contract:"BTC_USDT",size:"1",price:"100.4",create_time:Math.floor(Date.now()/1000),fee:"0.01"}]);
+    throw new Error(`unexpected ${request.method} ${url.pathname}`);
+  };
+  try{
+    const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
+    const recovery=await client.recoverMarketEntry("BTC_USDT","LONG",tag,null,submitted);
+    assert.equal(recovery.exposure,true);assert.equal(recovery.fillPrice,100.4);
+    assert.deepEqual(recovery.evidence,["FILL"]);
+  }finally{globalThis.fetch=real;}
+});
+
 test("a fully timed-out Gate read surfaces a typed Chinese read-timeout instead of the platform English exception",async()=>{
   const real=globalThis.fetch;
   globalThis.fetch=async()=>{const error=new Error("The operation was aborted due to timeout");error.name="TimeoutError";throw error;};
