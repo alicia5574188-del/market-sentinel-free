@@ -4,6 +4,7 @@ import { buildForwardProtectionCheckpoint, restoreForwardProtectionCheckpoint } 
 
 export const FORWARD_STORAGE = "forward-relations:v1:";
 export const FORWARD_PROTECTION_STORAGE = `${FORWARD_STORAGE}protection`;
+export const FORWARD_STORAGE_STATE_VERSION=`${FORWARD_VERSION}:sample-pack-v1`;
 // Keep 16 KiB below the Durable Object single-value ceiling for typed-array
 // serialization and metadata. No base64 conversion or state-field omission.
 export const FORWARD_COMPACT_BYTES = 112*1024;
@@ -13,10 +14,25 @@ type Reader = { get<T>(key: string): Promise<T | undefined> };
 export type Store = Reader & { put(entries: Record<string, unknown>): Promise<void>; delete(keys: string[]): Promise<number> };
 const digest = async (bytes: Uint8Array) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes as BufferSource))].map(v=>v.toString(16).padStart(2,"0")).join("");
 
+const SAMPLE_CHECKPOINTS=[5,10,15,20,30,45,60] as const;
+const packed=(row:Record<number,string|number>|Record<string,string|number>|undefined,keys:readonly number[])=>
+  keys.map(key=>{const value=Number(row?.[key as keyof typeof row]);return Number.isFinite(value)?value:null;});
+function compactForwardState(next:ForwardState){
+  const samples=next.relationEngine.samples.map(row=>[
+    "m1",row.symbol,row.at,row.response,row.up,row.down,row.x,
+    [row.env.breadth,row.env.dispersion,row.env.expansion],
+    packed(row.cp as Record<number,number>,SAMPLE_CHECKPOINTS),
+    packed(row.upAt as Record<number,number>,SAMPLE_CHECKPOINTS),
+    packed(row.downAt as Record<number,number>,SAMPLE_CHECKPOINTS),
+    row.pathEfficiency,row.reversals,
+  ]);
+  return{...next,relationEngine:{...next.relationEngine,samples}};
+}
+
 export async function readForwardStore(storage: Reader, now: number) {
   const head=await storage.get<Head>(`${FORWARD_STORAGE}head`);
   if(!head)return normalizeForward(null,now);
-  if(head.version!==FORWARD_VERSION||!Number.isSafeInteger(head.count)||head.count<0||head.count>32
+  if((head.version!==FORWARD_VERSION&&head.version!==FORWARD_STORAGE_STATE_VERSION)||!Number.isSafeInteger(head.count)||head.count<0||head.count>32
     ||!Number.isSafeInteger(head.length)||head.length<1||head.length>MAX_STATE_BYTES
     ||(head.encoding!==undefined&&head.encoding!=="gzip")
     ||(head.inline!==undefined?!(head.inline instanceof Uint8Array)||head.inline.byteLength<1
@@ -50,14 +66,14 @@ export function prepareForwardProtectionWrite(next:ForwardState){
 }
 
 export async function prepareForwardWrite(previous:ForwardState|null,next:ForwardState,now:number,options:{compact?:boolean}={}){
-  const raw=new TextEncoder().encode(JSON.stringify(next));
+  const raw=new TextEncoder().encode(JSON.stringify(compactForwardState(next)));
   if(raw.length>MAX_STATE_BYTES)throw new Error("Adaptive 10状态超过预算；禁止截断账户");
   const compressed=await gzip(raw),useGzip=compressed.length<raw.length,bytes=useGzip?compressed:raw;
   const entries:Record<string,unknown>={};let count=0;
   const inline=options.compact===true,chunkBytes=inline?FORWARD_COMPACT_BYTES:80*1024;
   for(let offset=inline?FORWARD_COMPACT_BYTES:0;offset<bytes.length;offset+=chunkBytes)
     entries[`${FORWARD_STORAGE}chunk:${count++}`]=bytes.slice(offset,offset+chunkBytes);
-  entries[`${FORWARD_STORAGE}head`]={version:FORWARD_VERSION,count,length:bytes.length,sha256:await digest(bytes),
+  entries[`${FORWARD_STORAGE}head`]={version:FORWARD_STORAGE_STATE_VERSION,count,length:bytes.length,sha256:await digest(bytes),
     ...(useGzip?{encoding:"gzip" as const,rawLength:raw.length}:{}),...(inline?{inline:bytes.slice(0,FORWARD_COMPACT_BYTES)}:{})} satisfies Head;
 
   const priorRevision=previous?.revision??0,events=next.events.filter(e=>{

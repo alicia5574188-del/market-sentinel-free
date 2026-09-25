@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { initialForward, type ForwardState } from "../lib/forward-relations.ts";
-import { FORWARD_STORAGE, FORWARD_COMPACT_BYTES, prepareForwardWrite, readForwardStore } from "../lib/forward-store.ts";
+import { FORWARD_STORAGE, FORWARD_COMPACT_BYTES, FORWARD_STORAGE_STATE_VERSION, prepareForwardWrite, readForwardStore } from "../lib/forward-store.ts";
+import { MAX_STATE_BYTES } from "../lib/storage-codec.ts";
 
 const T=1_790_100_000_000,HEAD=`${FORWARD_STORAGE}head`;
 class Memory {
@@ -18,6 +19,30 @@ function largeFixture(){
   for(let i=0;i<60_000;i++){seed^=seed<<13;seed^=seed>>>17;seed^=seed<<5;words.push((seed>>>0).toString(16).padStart(8,"0"));}
   s.futureOpaqueEvidence=words.join("");return s;
 }
+test("sample-pack storage keeps a 2MB+ verbose learning state lossless without deleting evidence",async()=>{
+  const s=fixture(),at=T-60_000;
+  s.relationEngine.samples=Array.from({length:2200},(_,i)=>({
+    symbol:`PACK${String(i).padStart(4,"0")}_USDT`,at,response:.0123456789012345,up:.0187654321098765,down:.0065432109876543,
+    x:[.123456789012345,.234567890123456,.345678901234567,.456789012345678,.567890123456789,.678901234567891,.789012345678912,.890123456789123],
+    env:{breadth:.612345678901234,dispersion:.223456789012345,expansion:.334567890123456},
+    cp:{5:.001234567890123,10:.002345678901234,15:.003456789012345,20:.004567890123456,30:.006789012345678,45:.009012345678901,60:.0123456789012345},
+    upAt:{5:.002,10:.003,15:.004,20:.005,30:.008,45:.012,60:.0187654321098765},
+    downAt:{5:.001,10:.0015,15:.002,20:.0025,30:.003,45:.004,60:.0065432109876543},
+    relativeAt:{15:0,30:0,45:0,60:0},pathEfficiency:.712345678901234,reversals:2,
+  }));
+  const verboseBytes=new TextEncoder().encode(JSON.stringify(s)).length;
+  assert.ok(verboseBytes>MAX_STATE_BYTES,`verbose fixture should exceed 2MB, got ${verboseBytes}`);
+  const write=await prepareForwardWrite(null,s,T,{compact:true});
+  assert.ok(write.compression.rawBytes<MAX_STATE_BYTES,`packed raw state should fit, got ${write.compression.rawBytes}`);
+  assert.ok(write.compression.rawBytes<verboseBytes*.82,"sample packing should materially reduce raw JSON");
+  const head=write.entries[HEAD] as {version:string};assert.equal(head.version,FORWARD_STORAGE_STATE_VERSION);
+  const db=new Memory();await db.put(write.entries);const restored=await readForwardStore(db,T+1);
+  assert.equal(restored.relationEngine.samples.length,2200);
+  assert.deepEqual(restored.relationEngine.samples[0],s.relationEngine.samples[0]);
+  assert.deepEqual(restored.relationEngine.samples.at(-1),s.relationEngine.samples.at(-1));
+  assert.equal(restored.balance,s.balance);assert.equal(restored.positions.length,s.positions.length);
+});
+
 test("compact forward full commit preserves all bytes while reducing a small record by one key",async()=>{
   const s=fixture(),old=await prepareForwardWrite(null,s,T),compact=await prepareForwardWrite(null,s,T,{compact:true});
   assert.equal(compact.writes,old.writes-1);assert.equal(compact.compression.inlineHead,true);
