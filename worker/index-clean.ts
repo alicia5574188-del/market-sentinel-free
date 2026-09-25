@@ -2742,6 +2742,21 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.runtime.live.lastError = recoveringSubmission
         ? recoveringSubmission.lastError ?? `${recoveringSubmission.symbol} 的实盘提交正在与 Gate 核对`
         : `${recoveringEntryStop!.symbol} 的初始止损正在按订单标签核对`;
+    } else if(!recoveringStop) {
+      // More than two PAPER fills can be committed in one strategy pass. The
+      // private mutation lane remains bounded to two entries per reconciliation,
+      // but do not wait for the next 5s timer: immediately drain the remaining
+      // already-persisted source events through another fresh Gate check.
+      const hasMore=Object.values(desiredPortfolio).some(trade=>{
+        if(!trade.forwardSource||!sourceAfterEnable(trade.forwardSource,this.runtime.live.activation,this.forwardState!.startedAt)
+          ||!mirrorSourceFresh(trade.forwardSource,trade.id,Date.now())||!this.mirrorQuoteReady(trade.symbol))return false;
+        if(this.runtime.live.positions[trade.symbol]?.status==="OPEN")return false;
+        const entry=this.runtime.live.entries[trade.symbol],skip=this.runtime.live.entrySkips[trade.symbol];
+        if(entry?.planId===trade.id&&(entry.status!=="CANCELLED"||this.liveEntryAwaitingReconcile(entry)))return false;
+        if(skip?.planId===trade.id&&Date.now()-skip.observedAt<60_000)return false;
+        return true;
+      });
+      if(hasMore)this.liveSourcePending=true;
     }
     // A cached source-trigger pass is provisional by construction; the caller
     // schedules the immediate full Gate reconciliation. Network-backed passes
