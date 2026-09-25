@@ -112,7 +112,8 @@ export type ForwardState={
   entryValidations:Record<string,EntryValidation>;
   marketPulse:MarketPulse;lastEntryAt:Record<string,number>;lastExitAt:Record<string,number>;lastSide:Record<string,"LONG"|"SHORT">;
   lastRotationAt:number;latestReason:string;entryDiagnostics:{at:number;matched:number;opened:number;reasons:Record<string,number>};
-  storage:{persistedAt:number;error:string|null;layout?:string};liveEligible:false;policyVersion:string;strategyAuthorityVersion:string;
+  storage:{persistedAt:number;error:string|null;layout?:string;sampleIntegrity?:"raw-sha256"|"legacy-recovered"};liveEligible:false;
+  policyVersion:string;strategyAuthorityVersion:string;
   executionVersion:string;regionVersion:string;regionLaunchVersion:string;cutoverAt:number;
   // Compatibility-only aliases consumed by older UI/readers; no old module has authority.
   observations:number;measured:number;invalidated:number;frames:Record<string,never>;pending:Record<string,never>;

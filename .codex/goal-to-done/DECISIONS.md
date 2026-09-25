@@ -1,3 +1,16 @@
+# Paged sample identity recovery — 2026-09-25
+
+- Page integrity authority is the SHA-256 of the exact uncompressed canonical
+  JSON. Compressed byte hash/length remain diagnostics, not the sole identity,
+  because a valid retained page must survive compression implementation drift.
+- A legacy manifest without raw hashes may recover a compressed-identity
+  mismatch only after bounded decompression plus exact version, page id, packed
+  row schema, chronological order, hour membership, count and first/last time
+  validation. Any failure remains fail-closed and cannot overwrite the account.
+- Recovery never deletes, truncates or recreates samples/financial records. The
+  next ordinary full strategy commit writes the upgraded manifest atomically;
+  no separate repair write, LIVE mutation or trading bypass is authorized.
+
 # 2026-09-23 — LIVE edge and broad-shock continuity decisions
 
 - Keep the existing account, storage version, strategy version, open positions,
