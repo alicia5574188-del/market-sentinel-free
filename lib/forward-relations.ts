@@ -1,5 +1,5 @@
 import { familyAdmissionBlock, familyExperimentSummary, initialFamilyExperimentState, isFamilyFailure,
-  normalizeFamilyExperimentState, recordFamilyFailure, relationFamilyId, reserveExperimentValueBlock,
+  normalizeFamilyExperimentState, pruneFamilyExperimentBySymbols, recordFamilyFailure, relationFamilyId, reserveExperimentValueBlock,
   type FamilyExperimentState } from "./forward-family-experiment.ts";
 import { FORWARD_RELATION_V2_VERSION, advanceRelationEngine, initialRelationEngine, normalizeRelationEngine, relationCandidates,
   type RelationCandidate, type RelationEngineState, type RelationExitProfile, type RelationStatus } from "./forward-relation-v2.ts";
@@ -275,14 +275,18 @@ function relationOpportunity(c:RelationCandidate,rows:Candle[],q:Quote|undefined
     normalAdverse=Math.max(.003,c.exitProfile.normalAdverseRate),hardStop=relationHardStopRate(rows,c.side,framePrice,normalAdverse),
     edge=net/Math.max(normalAdverse,1e-9),score=clip(c.score*.90+exec*.10,0,100),
     reserveBlock=reserveExperimentValueBlock({reserve:c.reserve,netRate:net,edgeRatio:edge,livePathScore:c.livePathScore,
-      environmentFit:c.environmentFit,roundTripCost:ROUND_TRIP_COST,activeRecent:activeRecentValue(c)});
+      environmentFit:c.environmentFit,roundTripCost:ROUND_TRIP_COST,activeRecent:activeRecentValue(c)}),
+    winRate=clip(c.exitProfile.winRate??.70),captured=Math.max(net,c.exitProfile.targetRate*c.exitProfile.retentionRate-ROUND_TRIP_COST),
+    hardCoverage=captured/Math.max(hardStop+ROUND_TRIP_COST,1e-9),requiredCoverage=winRate>=.75?.35:winRate>=.65?.40:.50,
+    payoffBlock=c.exitProfile.version==="sample-exit-plan-v2"&&hardCoverage<requiredCoverage
+      ?`样本可留利润不足以覆盖结构止损：${hardCoverage.toFixed(2)}× < ${requiredCoverage.toFixed(2)}×`:null;
   return{id:`relation-${c.ruleId}-${c.symbol}-${rows.at(-1)!.time}`,symbol:c.symbol,side:c.side,mode:"RELATION",premium:false,reserve:c.reserve,
-    score,eligible:c.health>=.15&&net>0&&!reserveBlock,completedAt:(rows.at(-1)!.time+300)*1000,expiresAt:now+12*60_000,price:framePrice,
+    score,eligible:c.health>=.15&&net>0&&!reserveBlock&&!payoffBlock,completedAt:(rows.at(-1)!.time+300)*1000,expiresAt:now+12*60_000,price:framePrice,
     stopPrice:framePrice*(1-d*hardStop),targetPrice:framePrice*(1+d*Math.max(.003,gross)),stopRate:hardStop,targetRate:Math.max(.003,gross),
     directionStrength:c.health*100,pathEfficiency:c.livePathScore*100,momentumPersistence:c.environmentFit*100,positionScore:75,
-    spaceScore:100*clip(edge/1.5),executionScore:exec,grossRemainingSpaceRate:gross,netRemainingSpaceRate:net,pullbackRiskRate:normalAdverse,
+    spaceScore:100*clip(Math.min(edge,hardCoverage)/1.5),executionScore:exec,grossRemainingSpaceRate:gross,netRemainingSpaceRate:net,pullbackRiskRate:normalAdverse,
     edgeRatio:edge,expectedHoldMinutes:c.exitProfile.bestHoldMinutes,marketFit:c.environmentFit*100,regionId:null,regionQuality:null,
-    reason:reserveBlock?`${c.reason}｜${reserveBlock}`:c.reason,relationRuleId:c.ruleId,relationStatus:c.status,
+    reason:[c.reason,reserveBlock,payoffBlock].filter(Boolean).join("｜"),relationRuleId:c.ruleId,relationStatus:c.status,
     relationHorizon:c.horizon,relationHealth:c.health,riskScale:clip(c.health,.25,1),exitPlan:structuredClone(c.exitProfile)};
 }
 function regionOpportunities(s:ForwardState,symbol:string,rows:Candle[],minute:Candle[]|undefined,q:Quote|undefined,now:number,pulse:MarketPulse,region:Region){
@@ -607,12 +611,13 @@ function nextCandleAt(paths:Record<string,Candle[]>,now:number){
   let latest=0;for(const p of Object.values(paths)){const a=validPath(p,now);if(a)latest=Math.max(latest,(a.at(-1)!.time+300)*1000);}return latest;
 }
 export function advanceForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;minutePaths?:Record<string,Candle[]>;daily?:Record<string,Candle[]>;
-  quotes:Record<string,Quote>;contracts:Record<string,Contract>;entrySymbols?:Iterable<string>;allowDataCycle?:boolean;legacyDrainOnly?:boolean}){
+  quotes:Record<string,Quote>;contracts:Record<string,Contract>;entrySymbols?:Iterable<string>;learningSymbols?:Iterable<string>;allowDataCycle?:boolean;legacyDrainOnly?:boolean}){
   const s=normalizeForward(structuredClone(input.state),input.now),before=JSON.stringify({p:s.positions.map(t=>[t.id,t.status,t.stopPrice]),h:s.history.length,b:s.balance,r:s.revision});
   const allowed=input.entrySymbols?new Set(input.entrySymbols):undefined;s.lastQuoteCycleAt=input.now;
   const candleAt=nextCandleAt(input.paths,input.now),dataDue=input.allowDataCycle!==false&&candleAt>s.lastCandleAt;
   if(dataDue){
-    s.relationEngine=advanceRelationEngine({state:s.relationEngine,paths:input.paths,now:input.now});
+    if(input.learningSymbols)pruneFamilyExperimentBySymbols(s.familyExperiment,input.learningSymbols);
+    s.relationEngine=advanceRelationEngine({state:s.relationEngine,paths:input.paths,now:input.now,eligibleSymbols:input.learningSymbols});
     s.observations=s.relationEngine.observations;s.measured=s.relationEngine.measured;s.invalidated=s.relationEngine.invalidated;
   }
   markAndManage(s,input.quotes,input.now);
