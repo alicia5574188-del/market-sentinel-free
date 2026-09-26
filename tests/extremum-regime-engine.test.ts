@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {buildExtremumRegime,extremumExitDecision,EXTREMUM_REGIME_VERSION,type ExtremumSymbolState} from "../lib/extremum-regime-engine.ts";
 import type {Candle,Quote} from "../lib/forward-relations.ts";
+import {selectAnchorOpportunityUniverse} from "../lib/multi-turn-universe.ts";
 
 const START=Date.parse("2026-09-26T00:00:00Z")/1000;
 function trend(direction:"UP"|"DOWN",lastImpulse=0){
@@ -109,4 +110,21 @@ test("SWING uses the confirmed opposite extremum as an exit event",()=>{
     stopRate:.009,stopped:false,profitFloorRate:0,expectedHoldMinutes:30,maxHoldMinutes:60,
     state:state({regime:"SWING",topPressure:78,upSurvival:48,stage:"READY",candidateSide:"SHORT"})});
   assert.equal(decision.reason,"OPPOSITE_EXTREMUM");assert.equal(decision.swingOpposite,true);
+});
+
+
+test("30-market selector balances Gate liquidity, usable movement and multi-source data quality while preserving core anchors",()=>{
+  const row=(symbol:string,volume:number,range:number,move:number,sources:number,disagreement:number)=>({symbol,last:100,high24h:100*(1+range/2),low24h:100*(1-range/2),change24hRate:move,
+    volume24hUsd:volume,executionVolume24hUsd:volume,fundingRate:0,openInterest:1,sourceCount:sources,sourceDisagreementRate:disagreement});
+  const rows=[
+    row("BTC_USDT",80_000_000,.018,.006,4,.0003),
+    row("STATIC_USDT",900_000_000,.012,.001,4,.0002),
+    row("MOVE_USDT",45_000_000,.080,.045,4,.0004),
+    row("NOISY_USDT",60_000_000,.090,.050,1,.020),
+  ];
+  const picked=selectAnchorOpportunityUniverse({rows,limit:3,coreSymbols:["BTC_USDT"],explorationSlots:0,liquiditySlots:0});
+  assert.equal(picked[0]?.symbol,"BTC_USDT");
+  assert.ok(picked.some(x=>x.symbol==="MOVE_USDT"),JSON.stringify(picked));
+  assert.ok((picked.find(x=>x.symbol==="MOVE_USDT")?.activityScore??0)>(picked.find(x=>x.symbol==="STATIC_USDT")?.activityScore??-1));
+  assert.ok((picked.find(x=>x.symbol==="MOVE_USDT")?.dataQualityScore??0)>(picked.find(x=>x.symbol==="NOISY_USDT")?.dataQualityScore??1));
 });
