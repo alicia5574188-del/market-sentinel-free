@@ -246,10 +246,13 @@ export async function fetchLiquidations(symbol: string) {
   return await gatePublic<GateLiquidation[]>(`/futures/usdt/liq_orders?contract=${encodeURIComponent(symbol)}&limit=20`);
 }
 
-export type GateContractStat = { time?: number; open_interest?: string | number };
-export async function fetchContractStats(symbol: string) {
-  const rows = await gatePublic<GateContractStat[]>(`/futures/usdt/contract_stats?contract=${encodeURIComponent(symbol)}&limit=1`);
-  return rows.at(-1) ?? null;
+export type GateContractStat = { time?: number; open_interest?: string | number; open_interest_usd?: string | number;
+  long_liq_usd?: string | number;short_liq_usd?: string | number;lsr_taker?: string | number;lsr_account?: string | number;
+  top_lsr_account?: string | number;top_lsr_size?: string | number;mark_price?: string | number };
+export async function fetchContractStats(symbol:string,interval:"5m"|"1h"|"4h"|"1d"="5m"){
+  const rows=await gatePublic<GateContractStat[]>(
+    `/futures/usdt/contract_stats?contract=${encodeURIComponent(symbol)}&interval=${interval}&limit=1`);
+  return rows.at(-1)??null;
 }
 
 export type GateCandle = { time: number; volume: number; close: number; high: number; low: number; open: number };
