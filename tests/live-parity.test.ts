@@ -709,7 +709,7 @@ test("new arbitrary rule metadata survives the adapter and immutable source bind
 test("the permanent contract and parity suite cannot be omitted by the default release workflow",()=>{
   const pkg=JSON.parse(readFileSync(new URL("../package.json",import.meta.url),"utf8"));
   const ci=readFileSync(new URL("../.github/workflows/sentinel-v2-ci.yml",import.meta.url),"utf8");
-  assert.equal((ci.match(/\.runtime\.forward\.strategyAuthorityVersion == "forward-path-relation-v3"/g)??[]).length,2);
+  assert.equal((ci.match(/\.runtime\.forward\.strategyAuthorityVersion == "extremum-regime-v1"/g)??[]).length,2);
   assert.equal((ci.match(/\.runtime\.forward\.storage\.error == null/g)??[]).length,2);
   assert.ok(pkg.scripts.test.includes("test:live-parity"));
   assert.ok(pkg.scripts["test:live-parity"].includes("live-parity.test.ts")||pkg.scripts["test:direct"].includes("tests/*.test.ts"));
