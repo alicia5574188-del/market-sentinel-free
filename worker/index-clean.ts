@@ -943,27 +943,19 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private forwardHealth() {
-    const s=this.forwardState,now=Date.now(),opportunities=s?.opportunities??[];
-    const eligible=opportunities.filter(row=>row.eligible&&row.expiresAt>now);
-    const blocked=opportunities.filter(row=>!row.eligible&&row.expiresAt>now).slice(0,8).map(row=>({
-      symbol:row.symbol,side:row.side,mode:row.mode,reserve:row.reserve===true,score:Math.round(row.score),
-      netRate:row.netRemainingSpaceRate,edgeRatio:row.edgeRatio,relationStatus:row.relationStatus??null,
-      relationHealth:row.relationHealth??null,reason:row.reason,
-    }));
-    const frames=Object.values(s?.relationEngine?.frames??{});
-    const ruleDiagnostics=(s?.relationEngine?.rules??[]).slice(0,12).map(row=>({
-      id:row.id,scope:row.scope,horizon:row.horizon,side:row.side,status:row.status,health:row.health,
-      currentMatches:frames.filter(frame=>row.symbols.includes(frame.symbol)&&row.conditions.every(c=>
-        Number.isFinite(frame.x[c.feature])&&(c.op==="GE"?frame.x[c.feature]!>=c.threshold:frame.x[c.feature]!<=c.threshold))).length,
-      longNet:row.longNet,recentNet:row.recentNet,standardError:row.standardError,samples:row.samples,
-      longGroups:row.longGroups,recentGroups:row.recentGroups,livePathScore:row.livePathScore,
-      environmentFit:row.environmentFit,lastQualifiedAt:row.lastQualifiedAt,
-      bestHoldMinutes:row.exitProfile.bestHoldMinutes,feedbackDeadlineMinutes:row.exitProfile.feedbackDeadlineMinutes,
-      maxHoldMinutes:row.exitProfile.maxHoldMinutes,normalAdverseRate:row.exitProfile.normalAdverseRate,
-      targetRate:row.exitProfile.targetRate,retentionRate:row.exitProfile.retentionRate,winRate:row.exitProfile.winRate??null,
-      medianWinNetRate:row.exitProfile.medianWinNetRate??null,medianLossNetRate:row.exitProfile.medianLossNetRate??null,
-      adverseP80Rate:row.exitProfile.adverseP80Rate??null,adverseP95Rate:row.exitProfile.adverseP95Rate??null,reason:row.reason,
-    }));
+    const s=this.forwardState,now=Date.now(),opportunities=s?.opportunities??[],
+      eligible=opportunities.filter(row=>row.eligible&&row.expiresAt>now),
+      states=Object.values(s?.extremumRegime?.symbols??{}),
+      counts={trendUp:states.filter(row=>row.regime==="TREND_UP").length,trendDown:states.filter(row=>row.regime==="TREND_DOWN").length,
+        swing:states.filter(row=>row.regime==="SWING").length,weakening:states.filter(row=>row.regime==="WEAKENING").length,
+        transition:states.filter(row=>row.regime==="TRANSITION").length,ready:states.filter(row=>row.stage==="READY").length,
+        impulse:states.filter(row=>row.stage==="IMPULSE").length},
+      blocked=opportunities.filter(row=>!row.eligible&&row.expiresAt>now).slice(0,8).map(row=>({
+        symbol:row.symbol,side:row.side,mode:row.mode,score:Math.round(row.score),regime:row.regime??null,
+        stage:row.confirmationStage??null,topPressure:row.topPressure??null,bottomPressure:row.bottomPressure??null,
+        upSurvival:row.upSurvival??null,downSurvival:row.downSurvival??null,sourceCount:row.sourceCount??null,
+        disagreementRate:row.disagreementRate??null,reason:row.reason,
+      }));
     return {version:FORWARD_VERSION,engineVersion:ADAPTIVE_ENGINE_VERSION,policyVersion:s?.policyVersion??null,
       strategyAuthorityVersion:s?.strategyAuthorityVersion??null,executionVersion:s?.executionVersion??null,
       regionVersion:s?.regionVersion??null,regionLaunchVersion:s?.regionLaunchVersion??null,liveEligible:false,
@@ -972,16 +964,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       executionBboCapacity:FORWARD_EXECUTION_BBO_CAP,minuteConfirmationCapacity:FORWARD_MINUTE_CONFIRMATION_CAP,
       executionVolumeFloorUsd:FORWARD_EXECUTION_VOLUME_FLOOR_USD,learningEligibleMarkets:this.forwardLearningUniverse.length,
       participationCandidateCount:opportunities.length,participationEligibleCount:eligible.length,
-      premiumOpportunityCount:eligible.filter(row=>row.premium).length,regionCount:Object.keys(s?.regions??{}).length,
-      relationSampleCount:s?.relationEngine?.samples.length??0,relationRuleCount:s?.relationEngine?.rules.length??0,
-      relationPendingCount:Object.keys(s?.relationEngine?.pending??{}).length,
-      relationFrameCount:Object.keys(s?.relationEngine?.frames??{}).length,
-      relationDiagnostics:s?.relationEngine?.diagnostics??null,entryDiagnostics:s?.entryDiagnostics??null,
-      entryValidation:{waiting:Object.values(s?.entryValidations??{}).filter(row=>row.status==="WAITING"&&row.expiresAt>now).length,
-        cancelled:Object.values(s?.entryValidations??{}).filter(row=>row.status==="CANCELLED"&&row.expiresAt>now).length},
-      familyCalibrationCount:Object.keys(s?.familyExperiment?.calibrations??{}).length,
-      ruleDiagnostics,candidateDiagnostics:blocked,storage:{persistedAt:s?.storage.persistedAt??0,
-        layout:s?.storage.layout??null,error:this.forwardError}};
+      premiumOpportunityCount:eligible.filter(row=>row.premium).length,extremumTracked:states.length,extremumCounts:counts,
+      legacyResearchSampleCount:s?.relationEngine?.samples.length??0,entryDiagnostics:s?.entryDiagnostics??null,
+      candidateDiagnostics:blocked,storage:{persistedAt:s?.storage.persistedAt??0,layout:s?.storage.layout??null,error:this.forwardError}};
   }
 
   protected liveMirrorView() {
