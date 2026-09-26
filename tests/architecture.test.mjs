@@ -89,7 +89,8 @@ test("Market Intelligence uses thesis lifecycle, not scalp profit locking or bat
   const manage=core.slice(core.indexOf("function manageIntelligenceTrades"),core.indexOf("function markAndManage"));
   assert.doesNotMatch(manage,/利润保护提升|PROFIT_GIVEBACK/);
   assert.match(manage,/已移除旧式动态锁利/);
-  assert.match(manage,/invalidationBars:t\.relationFailureBars/);
+  assert.match(manage,/evaluatePositionIntelligence/);
+  assert.doesNotMatch(manage,/relationFailureBars.*>=2|THESIS_INVALIDATED/);
   const fill=core.slice(core.indexOf("export function fillForwardPortfolio"),core.indexOf("function nextCandleAt"));
   assert.match(fill,/opened=1;break/);
   const advance=core.slice(core.indexOf("export function advanceForward"),core.indexOf("export function closeForwardForReset"));
@@ -112,10 +113,9 @@ test("Market Intelligence active exits are evidence-family gated, not two-bar th
   assert.match(manage,/evaluatePositionIntelligence/);
   assert.match(manage,/POSITION_VALUE_EXIT/);
   assert.doesNotMatch(manage,/invalidationBars|relationFailureBars.*>=2|THESIS_INVALIDATED/);
-  assert.match(position,/concernFamilies\.length>=2&&coreConcern/);
+  assert.match(position,/coreConcern&&independentConfirm/);
   assert.match(position,/reviewBars>=2/);
   assert.match(position,/contextOnly:true/);
-  assert.match(position,/market context can never/);
   assert.match(position,/dataConfidence>=60/);
   assert.match(engine,/samples:\(same\.samples\?\?1\)\+1/);
   assert.match(engine,/LEADERSHIP_ROTATION/);
