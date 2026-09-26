@@ -400,7 +400,7 @@ function manageExtremumTrades(s:ForwardState,quotes:Record<string,Quote>,now:num
 }
 
 function markAndManage(s:ForwardState,quotes:Record<string,Quote>,now:number){
-  const candidates=new Map(s.opportunities.filter(o=>!isExtremumOpportunity(o)).map(o=>[o.symbol,o])),relationById=new Map(s.relationEngine.rules.map(r=>[r.id,r])),closed=new Set<string>();
+  const candidates=new Map(s.opportunities.filter(o=>!isExtremumOpportunity(o)&&!isPredictiveOpportunity(o)).map(o=>[o.symbol,o])),relationById=new Map(s.relationEngine.rules.map(r=>[r.id,r])),closed=new Set<string>();
   for(const t of s.positions){if(t.entryContext?.strategyVersion===EXTREMUM_REGIME_VERSION||t.entryContext?.strategyVersion===PREDICTIVE_PATH_VERSION)continue;const q=quotes[t.symbol];if(!freshQuote(q,now))continue;const px=t.side==="LONG"?q!.bestBid:q!.bestAsk,d=dir(t.side);
     t.lastPrice=px;t.lastQuoteAt=q!.observedAt;const signed=d*(px/t.entryPrice-1),favorable=Math.max(0,signed),adverse=Math.max(0,-signed);
     t.favorable=Math.max(t.favorable,favorable);t.adverse=Math.max(t.adverse,adverse);t.peakPnlRate=Math.max(t.peakPnlRate??0,favorable);
@@ -642,16 +642,16 @@ function openExtremumTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contrac
 }
 
 function rankedEligible(s:ForwardState,now:number){
-  return s.opportunities.filter(o=>isExtremumOpportunity(o)&&o.eligible&&o.expiresAt>now&&!s.positions.some(t=>t.symbol===o.symbol)).sort(opportunityCompare);
+  return s.opportunities.filter(o=>isPredictiveOpportunity(o)&&o.eligible&&o.expiresAt>now&&!s.positions.some(t=>t.symbol===o.symbol)).sort(opportunityCompare);
 }
 function rotateIfNeeded(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<string,Contract>,now:number,equity:number){
   const candidate=rankedEligible(s,now).find(o=>!o.reserve);if(!candidate)return false;
-  if(candidate.mode!=="SHOCK"&&now-s.lastRotationAt<ROTATION_COOLDOWN_MS)return false;
+  if(now-s.lastRotationAt<ROTATION_COOLDOWN_MS)return false;
   const totalRisk=existingRisk(s),totalMargin=s.positions.reduce((n,t)=>n+t.margin,0),sideRisk=existingRisk(s,candidate.side);
   const totalFull=equity>0&&totalRisk>=equity*(TOTAL_RISK_RATE-.006),sideFull=equity>0&&sideRisk>=equity*(SIDE_RISK_RATE-.004),
     marginFull=equity>0&&totalMargin>=equity*(TOTAL_MARGIN_RATE-.05);
   if(!totalFull&&!sideFull&&!marginFull)return false;
-  const current=s.positions.filter(t=>t.entryContext?.strategyVersion===EXTREMUM_REGIME_VERSION),
+  const current=s.positions.filter(t=>t.entryContext?.strategyVersion===PREDICTIVE_PATH_VERSION),
     pool=sideFull?current.filter(t=>t.side===candidate.side):current;
   const weak=[...pool].sort((a,b)=>(a.holdScore??50)-(b.holdScore??50))[0];if(!weak)return false;
   const weakScore=weak.holdScore??50;if(candidate.score<weakScore+ROTATION_GAP)return false;
@@ -660,9 +660,9 @@ function rotateIfNeeded(s:ForwardState,quotes:Record<string,Quote>,contracts:Rec
   const probe=structuredClone(s),probeWeak=probe.positions.find(t=>t.id===weak.id);if(!probeWeak)return false;
   closeTrade(probe,probeWeak,probeWeak.side==="LONG"?qOld!.bestBid:qOld!.bestAsk,now,"OPPORTUNITY_REPLACED");
   probe.positions=probe.positions.filter(t=>t.id!==probeWeak.id);
-  if(openExtremumTrade(probe,candidate,qNew!,meta,now,equity))return false;
+  if(openPredictiveTrade(probe,candidate,qNew!,meta,now,equity))return false;
   closeTrade(s,weak,weak.side==="LONG"?qOld!.bestBid:qOld!.bestAsk,now,"OPPORTUNITY_REPLACED");s.positions=s.positions.filter(t=>t.id!==weak.id);
-  const err=openExtremumTrade(s,candidate,qNew!,meta,now,equity);if(err)throw new Error(`换仓预检通过但正式开仓失败：${err}`);
+  const err=openPredictiveTrade(s,candidate,qNew!,meta,now,equity);if(err)throw new Error(`换仓预检通过但正式开仓失败：${err}`);
   s.lastRotationAt=now;event(s,now,"ROTATION",candidate.symbol,`${weak.symbol} → ${candidate.symbol}，优势差${(candidate.score-weakScore).toFixed(0)}分`);
   return true;
 }
@@ -677,7 +677,7 @@ export function fillForwardPortfolio(s:ForwardState,quotes:Record<string,Quote>,
     const q=quotes[o.symbol],meta=contracts[o.symbol];if(!freshQuote(q,now)||q!.entryReady!==true){reject("等待实时盘口");continue;}
     if(!meta){reject("等待合约规格");continue;}
     const last=s.lastExitAt[o.symbol]??0;if(now-last<90_000){reject("同币短时防抖");continue;}
-    const error=openExtremumTrade(s,o,q!,meta,now,equity);if(error){reject(error);continue;}opened++;
+    const error=openPredictiveTrade(s,o,q!,meta,now,equity);if(error){reject(error);continue;}opened++;
   }
   s.entryDiagnostics.opened=opened;return opened;
 }
