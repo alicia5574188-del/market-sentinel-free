@@ -1,8 +1,8 @@
 import { writeFile } from "node:fs/promises";
 
-const SOURCES=["GATE","BYBIT","OKX","KUCOIN","BITGET"];
+const SOURCES=["GATE","BYBIT","OKX","KUCOIN","BITGET","BINANCE"];
 const SYMBOLS=(process.env.SYMBOLS??"BTC,ETH,SOL,XRP,DOGE,ADA,LINK,BCH").split(",").map(x=>x.trim().toUpperCase()).filter(Boolean);
-const LIMIT=Number(process.env.LIMIT??120);
+const LIMIT=Number(process.env.LIMIT??300);
 const collectedAt=Date.now();
 
 async function getJson(url){
@@ -41,6 +41,12 @@ async function gate(base,interval,limit){
   if(!Array.isArray(body))throw new Error("Gate payload");
   return normalize(body.map(r=>({time:Number(r.t),open:Number(r.o),high:Number(r.h),low:Number(r.l),close:Number(r.c),volume:Number(r.v)})),seconds,limit);
 }
+async function binance(base,interval,limit){
+  const seconds=interval==="1m"?60:300;
+  const body=await getJson(`https://fapi.binance.com/fapi/v1/klines?symbol=${base}USDT&interval=${interval}&limit=${limit}`);
+  if(!Array.isArray(body))throw new Error("Binance payload");
+  return normalize(body.map(r=>({time:Number(r[0])/1000,open:Number(r[1]),high:Number(r[2]),low:Number(r[3]),close:Number(r[4]),volume:Number(r[5])})),seconds,limit);
+}
 async function bitget(base,interval,limit){
   const seconds=interval==="1m"?60:300;
   const body=await getJson(`https://api.bitget.com/api/v2/mix/market/candles?symbol=${base}USDT&productType=USDT-FUTURES&granularity=${interval}&limit=${limit}`);
@@ -52,6 +58,7 @@ async function fetchSource(source,base,interval,limit){
   if(source==="BYBIT")return bybit(base,interval,limit);
   if(source==="OKX")return okx(base,interval,limit);
   if(source==="KUCOIN")return kucoin(base,interval,limit);
+  if(source==="BINANCE")return binance(base,interval,limit);
   return bitget(base,interval,limit);
 }
 
@@ -74,6 +81,6 @@ for(const base of SYMBOLS){
     coverage[base][interval]={sources:src,sourceCount:src.length,rows:Object.fromEntries(src.map(s=>[s,candles[base][interval][s].length]))};
   }
 }
-const dataset={version:"extremum-regime-dataset-v1.2",collectedAt,generatedAt:Date.now(),symbols:SYMBOLS,sources:SOURCES,limit:LIMIT,coverage,errors,candles};
+const dataset={version:"extremum-regime-dataset-v1.3",collectedAt,generatedAt:Date.now(),symbols:SYMBOLS,sources:SOURCES,limit:LIMIT,coverage,errors,candles};
 await writeFile("extremum-regime-dataset.json",JSON.stringify(dataset));
 console.log(JSON.stringify({version:dataset.version,collectedAt,symbols:SYMBOLS.length,errors:errors.length,coverage},null,2));
