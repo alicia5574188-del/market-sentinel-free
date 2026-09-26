@@ -567,7 +567,7 @@ function manageExtremumTrades(s:ForwardState,quotes:Record<string,Quote>,now:num
 }
 
 function markAndManage(s:ForwardState,quotes:Record<string,Quote>,now:number){
-  const candidates=new Map(s.opportunities.map(o=>[o.symbol,o])),relationById=new Map(s.relationEngine.rules.map(r=>[r.id,r])),closed=new Set<string>();
+  const candidates=new Map(s.opportunities.filter(o=>!isExtremumOpportunity(o)).map(o=>[o.symbol,o])),relationById=new Map(s.relationEngine.rules.map(r=>[r.id,r])),closed=new Set<string>();
   for(const t of s.positions){if(t.entryContext?.strategyVersion===EXTREMUM_REGIME_VERSION)continue;const q=quotes[t.symbol];if(!freshQuote(q,now))continue;const px=t.side==="LONG"?q!.bestBid:q!.bestAsk,d=dir(t.side);
     t.lastPrice=px;t.lastQuoteAt=q!.observedAt;const signed=d*(px/t.entryPrice-1),favorable=Math.max(0,signed),adverse=Math.max(0,-signed);
     t.favorable=Math.max(t.favorable,favorable);t.adverse=Math.max(t.adverse,adverse);t.peakPnlRate=Math.max(t.peakPnlRate??0,favorable);
@@ -912,54 +912,38 @@ function nextCandleAt(paths:Record<string,Candle[]>,now:number){
 }
 export function advanceForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;minutePaths?:Record<string,Candle[]>;daily?:Record<string,Candle[]>;
   quotes:Record<string,Quote>;contracts:Record<string,Contract>;entrySymbols?:Iterable<string>;learningSymbols?:Iterable<string>;allowDataCycle?:boolean;legacyDrainOnly?:boolean}){
-  const s=normalizeForward(structuredClone(input.state),input.now),validationLifecycle=(state:ForwardState)=>Object.values(state.entryValidations)
-    .map(v=>[v.id,v.status,v.reason]).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))),
-    before=JSON.stringify({p:s.positions.map(t=>[t.id,t.status,t.stopPrice]),h:s.history.length,b:s.balance,r:s.revision,v:validationLifecycle(s)});
-  for(const[id,row]of Object.entries(s.entryValidations))if(row.expiresAt<input.now-60_000)delete s.entryValidations[id];
-  const allowed=input.entrySymbols?new Set(input.entrySymbols):undefined;s.lastQuoteCycleAt=input.now;
-  const candleAt=nextCandleAt(input.paths,input.now),dataDue=input.allowDataCycle!==false&&candleAt>s.lastCandleAt;
-  if(dataDue){
-    if(input.learningSymbols)pruneFamilyExperimentBySymbols(s.familyExperiment,input.learningSymbols);
-    s.relationEngine=advanceRelationEngine({state:s.relationEngine,paths:input.paths,now:input.now,eligibleSymbols:input.learningSymbols});
-    s.observations=s.relationEngine.observations;s.measured=s.relationEngine.measured;s.invalidated=s.relationEngine.invalidated;
-  }
-  s.structuralInterrupt=advanceStructuralInterrupt({state:s.structuralInterrupt,regions:s.regions,quotes:input.quotes,now:input.now});
-  let interrupts=interruptOpportunities(s,input.quotes,input.now,allowed);
-  if(interrupts.length)s.opportunities=bestOpportunityPerSymbol([...interrupts,...s.opportunities.filter(o=>o.mode!=="SHOCK"&&o.expiresAt>input.now)],opportunityCompare);
+  const s=normalizeForward(structuredClone(input.state),input.now),
+    before=JSON.stringify({p:s.positions.map(t=>[t.id,t.status,t.stopPrice,t.profitFloorRate]),h:s.history.length,b:s.balance,r:s.revision});
+  s.entryValidations={};s.lastQuoteCycleAt=input.now;
+  const allowed=input.entrySymbols?new Set(input.entrySymbols):undefined,
+    candleAt=nextCandleAt(input.paths,input.now),
+    dataDue=input.allowDataCycle!==false&&candleAt>s.lastCandleAt,
+    built=buildExtremumRegime({paths:input.paths,minutePaths:input.minutePaths,quotes:input.quotes,
+      previous:s.extremumRegime,now:input.now,allowed});
+  s.extremumRegime=built.state;s.marketPulse=built.pulse;s.opportunities=built.opportunities;
+  if(dataDue){s.lastCandleAt=candleAt;s.lastCycleAt=input.now;}
+  s.selectedSymbols=Object.values(s.extremumRegime.symbols).sort((a,b)=>b.watchScore-a.watchScore).slice(0,30).map(row=>row.symbol);
+
+  manageExtremumTrades(s,input.quotes,input.now);
+  // Positions opened before cutover keep their frozen lifecycle and cannot gain
+  // new-entry authority from the retired relation/region/interrupt stack.
   markAndManage(s,input.quotes,input.now);
-  if(dataDue){
-    const built=buildOpportunities(s,input.paths,input.minutePaths,input.quotes,input.now,allowed);s.marketPulse=built.pulse;s.regions=built.regions;
-    s.structuralInterrupt=advanceStructuralInterrupt({state:s.structuralInterrupt,regions:s.regions,quotes:input.quotes,now:input.now});
-    interrupts=interruptOpportunities(s,input.quotes,input.now,allowed);
-    s.opportunities=bestOpportunityPerSymbol([...interrupts,...built.opportunities],opportunityCompare);s.lastCandleAt=candleAt;s.lastCycleAt=input.now;
-    s.selectedSymbols=[...new Set([...Object.keys(s.relationEngine.frames),...Object.keys(built.regions),...built.opportunities.map(o=>o.symbol)])].slice(0,30);
-    s.entryDiagnostics={at:input.now,matched:built.opportunities.filter(o=>o.eligible).length,opened:0,reasons:{}};
-    s.fitDiagnostics={tested:s.relationEngine.rules.length,qualified:s.entryDiagnostics.matched,trainGroups:s.relationEngine.diagnostics.matureSamples,
-      checkGroups:s.relationEngine.diagnostics.liveAnomalies,latestAt:input.now,rapidQualified:s.relationEngine.rules.filter(r=>r.scope==="RECENT").length,
-      activeLong:s.relationEngine.rules.filter(r=>r.side==="LONG"&&r.status!=="DEGRADED").length,
-      activeShort:s.relationEngine.rules.filter(r=>r.side==="SHORT"&&r.status!=="DEGRADED").length};
-  }else{
-    const pulse=s.marketPulse.at?s.marketPulse:marketPulse(input.paths,input.now),premium:Opportunity[]=[],bySymbol=relationSupportMap(s,allowed);
-    for(const [symbol,region] of Object.entries(s.regions)){if(allowed&&!allowed.has(symbol))continue;const rows=validPath(input.paths[symbol]??[],input.now);if(!rows)continue;
-      const support=bySymbol.get(symbol)??[];
-      premium.push(...relationBackedRegionOpportunities(s,symbol,rows,input.minutePaths?.[symbol],input.quotes[symbol],input.now,pulse,region,support).filter(o=>o.premium));}
-    const base=s.opportunities.filter(o=>o.mode!=="SHOCK"&&!o.premium&&o.expiresAt>input.now),combined=[...interrupts,...premium,...base];
-    s.opportunities=bestOpportunityPerSymbol(combined,opportunityCompare);
-  }
-  const mark=equityMark(s,input.quotes,input.now);s.peakEquity=Math.max(s.peakEquity,mark.equity);s.maxDrawdown=Math.max(s.maxDrawdown,1-mark.equity/Math.max(s.peakEquity,1));
-  updateDaily(s,input.now,mark.equity);rotateIfNeeded(s,input.quotes,input.contracts,input.now,mark.equity);
-  const opened=fillForwardPortfolio(s,input.quotes,input.contracts,input.now,mark.equity,!dataDue);
-  const d=s.relationEngine.diagnostics;
-  const totalRisk=existingRisk(s),riskUse=mark.equity>0?100*totalRisk/mark.equity:0;
-  s.latestReason=s.relationEngine.rules.length===0?d.warmup
-    :`Forward Path Relation 3.0 当前${s.positions.length}笔持仓；${s.opportunities.filter(o=>o.eligible).length}个可参与候选；计划风险已用${riskUse.toFixed(1)}%。ACTIVE ${d.active} · 承压 ${d.pressured} · 降级 ${d.degraded}。`;
-  const interruptEvent=s.structuralInterrupt.marketEvent;
-  if(interruptEvent&&interruptEvent.expiresAt>input.now)
-    s.latestReason+=` 极端结构中断：${interruptEvent.side==="LONG"?"向上":"向下"}市场级突变，覆盖${(interruptEvent.breadth*100).toFixed(0)}%。`;
-  else if(s.structuralInterrupt.vetoSide&&s.structuralInterrupt.vetoUntil>input.now)
-    s.latestReason+=` 突变预警：${s.structuralInterrupt.vetoSide==="LONG"?"向上":"向下"}，旧方向暂不新增。`;
+
+  const mark=equityMark(s,input.quotes,input.now);s.peakEquity=Math.max(s.peakEquity,mark.equity);
+  s.maxDrawdown=Math.max(s.maxDrawdown,1-mark.equity/Math.max(s.peakEquity,1));updateDaily(s,input.now,mark.equity);
+  rotateIfNeeded(s,input.quotes,input.contracts,input.now,mark.equity);
+  const opened=fillForwardPortfolio(s,input.quotes,input.contracts,input.now,mark.equity,false);
+
+  const states=Object.values(s.extremumRegime.symbols),trendUp=states.filter(x=>x.regime==="TREND_UP").length,
+    trendDown=states.filter(x=>x.regime==="TREND_DOWN").length,swing=states.filter(x=>x.regime==="SWING").length,
+    transition=states.filter(x=>x.regime==="TRANSITION"||x.regime==="WEAKENING").length,
+    totalRisk=existingRisk(s),riskUse=mark.equity>0?100*totalRisk/mark.equity:0;
+  s.fitDiagnostics={tested:states.length,qualified:s.opportunities.filter(o=>o.eligible).length,trainGroups:0,checkGroups:0,
+    latestAt:input.now,rapidQualified:s.opportunities.filter(o=>o.confirmationStage==="READY").length,activeLong:trendUp,activeShort:trendDown};
+  s.latestReason=`峰谷状态系统：趋势多 ${trendUp} · 趋势空 ${trendDown} · 震荡 ${swing} · 弱化/切换 ${transition}；`
+    +`当前${s.positions.length}笔持仓，${s.opportunities.filter(o=>o.eligible).length}个可参与机会，计划风险已用${riskUse.toFixed(1)}%。`;
   if(opened)s.latestReason+=` 本轮新开${opened}笔。`;
-  const after=JSON.stringify({p:s.positions.map(t=>[t.id,t.status,t.stopPrice]),h:s.history.length,b:s.balance,r:s.revision,v:validationLifecycle(s)});
+  const after=JSON.stringify({p:s.positions.map(t=>[t.id,t.status,t.stopPrice,t.profitFloorRate]),h:s.history.length,b:s.balance,r:s.revision});
   return{state:s,changed:before!==after||dataDue,protectionChanged:input.state.positions.some(t=>s.positions.find(n=>n.id===t.id)?.stopPrice!==t.stopPrice)};
 }
 export function closeForwardForReset(state:ForwardState,quotes:Record<string,Quote>,now:number){
