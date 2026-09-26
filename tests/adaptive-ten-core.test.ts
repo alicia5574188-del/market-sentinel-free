@@ -461,7 +461,8 @@ test("strategy migration preserves account identity and retained research eviden
   assert.equal(n.storage.persistedAt,999);assert.equal(n.engineVersion,ADAPTIVE_ENGINE_VERSION);
   assert.equal(n.strategyAuthorityVersion,ADAPTIVE_ENGINE_VERSION);assert.equal(n.executionVersion,ADAPTIVE_ENGINE_VERSION);
   assert.ok(n.relationEngine.samples.length>0,"old samples remain retained research evidence instead of being deleted");
-  assert.equal(n.extremumRegime.version,ADAPTIVE_ENGINE_VERSION);
+  assert.equal(n.predictivePath.version,ADAPTIVE_ENGINE_VERSION);
+  assert.notEqual(n.extremumRegime.version,ADAPTIVE_ENGINE_VERSION,"retired Extremum state stays identifiable and cannot become the new authority");
 });
 test("manual PAPER reset preserves causal learning while resetting the financial account",()=>{
   const learned=learnThrough(39),now=nowAt(39),s=initialForward(now-60_000);s.relationEngine=learned;
@@ -479,11 +480,12 @@ test("manual PAPER reset preserves causal learning while resetting the financial
   assert.match(n.latestReason,/保留/);
 });
 
-test("summary exposes the extremum regime lifecycle and separates profit-taking from reversal",()=>{
+test("summary exposes causal predictive authority and separates hold from reversal",()=>{
   const s=initialForward(1000),view=forwardSummary(s,{},2000);
   assert.equal(view.engineVersion,ADAPTIVE_ENGINE_VERSION);assert.equal(view.targetPositions,null);assert.equal(view.positionLimit,null);
-  assert.equal(view.executionBboCapacity,30);assert.equal(view.minuteConfirmationCapacity,11);
-  assert.equal(view.extremumRegime.version,ADAPTIVE_ENGINE_VERSION);
-  assert.match(view.boundaries.grammar,/峰谷状态机/);assert.equal(view.boundaries.historyBackfill,false);
-  assert.match(view.boundaries.validation,/只有趋势死亡/);assert.equal(view.relationEngine.retired,true);
+  assert.equal(view.executionBboCapacity,30);assert.equal(view.minuteConfirmationCapacity,0);
+  assert.equal(view.predictivePath.version,ADAPTIVE_ENGINE_VERSION);assert.equal(view.extremumRegime.retired,true);
+  assert.match(view.predictivePath.source,/无离线训练模型/);assert.match(view.boundaries.grammar,/Predictive Path/);
+  assert.equal(view.boundaries.historyBackfill,false);assert.match(view.boundaries.validation,/任一层失败/);
+  assert.equal(view.relationEngine.retired,true);
 });
