@@ -51,3 +51,29 @@ test("trade lifecycle exits only when its own thesis degrades or risk boundary i
     profitFloorRate:0,expectedHoldMinutes:180,maxHoldMinutes:360,state:broken});
   assert.equal(exit.reason,"THESIS_INVALIDATED");
 });
+
+
+test("L0 macro never substitutes intraday momentum when daily coverage is not ready",()=>{
+  const paths={BTC_USDT:candles(100,.0020),ETH_USDT:candles(100,.0018),SOL_USDT:candles(100,.0022)};
+  const quotes=Object.fromEntries(Object.entries(paths).map(([s,v])=>[s,q(v.at(-1)!.close,.0003)]));
+  const r=buildMarketIntelligence({paths,quotes,previous:initialMarketIntelligenceState(T-300_000),now:T});
+  assert.equal(r.state.narrative.macro.score,0);
+  assert.equal(r.state.narrative.macro.phase,"UNCERTAIN");
+  assert.equal(r.state.coverage?.macroReady,false);
+  assert.match(r.state.narrative.macro.detail,/日线市场覆盖/);
+});
+
+test("L0 macro begins updating only after genuine daily coverage is available",()=>{
+  const paths={BTC_USDT:candles(100,.0003),ETH_USDT:candles(100,.0002),SOL_USDT:candles(100,.00025)};
+  const daily=Object.fromEntries(Object.keys(paths).map((symbol,index)=>{
+    const rows=[] as Array<{time:number;open:number;high:number;low:number;close:number;volume:number}>;let px=100+index;
+    for(let i=0;i<40;i++){const open=px,close=px*1.01;rows.push({time:(T-(40-i)*86_400_000)/1000,open,close,high:close*1.002,low:open*.998,volume:5000+i});px=close;}
+    return[symbol,rows];
+  }));
+  const quotes=Object.fromEntries(Object.entries(paths).map(([s,v])=>[s,q(v.at(-1)!.close,.0001)]));
+  const r=buildMarketIntelligence({paths,daily,quotes,previous:initialMarketIntelligenceState(T-86_400_000),now:T});
+  assert.equal(r.state.coverage?.macroReady,true);
+  assert.equal(r.state.coverage?.dailyMarkets,3);
+  assert.ok(r.state.narrative.macro.score>0);
+  assert.doesNotMatch(r.state.narrative.macro.detail,/沿用上一份/);
+});
