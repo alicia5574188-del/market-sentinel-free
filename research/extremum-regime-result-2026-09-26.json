@@ -1,0 +1,98 @@
+{
+  "version": "extremum-regime-lab-v1",
+  "date": "2026-09-26",
+  "scope": "research-only",
+  "data": {
+    "symbols": [
+      "BTC",
+      "ETH",
+      "SOL",
+      "XRP",
+      "DOGE",
+      "ADA",
+      "LINK",
+      "BCH"
+    ],
+    "successfulSources": [
+      "GATE",
+      "OKX",
+      "BITGET"
+    ],
+    "unavailableSources": {
+      "BYBIT": "HTTP 403",
+      "BINANCE": "HTTP 451",
+      "KUCOIN": "HTTP 400"
+    },
+    "fiveMinuteBarsPerSymbolSource": 299,
+    "oneMinuteBarsPerSymbolSource": 299,
+    "modeledRoundTripFriction": 0.0019
+  },
+  "fiveMinuteCandidates": {
+    "count": 552,
+    "actionableRate": 0.2644927536
+  },
+  "holdout": {
+    "structureOnly": {
+      "trades": 17,
+      "winRate": 0.6470588235,
+      "simpleNet": 0.0026683704,
+      "profitFactor": 1.0843796506,
+      "maxSequentialDrawdown": 0.0150106971,
+      "rocAuc": 0.6390218878
+    },
+    "crossExchange": {
+      "trades": 12,
+      "winRate": 0.75,
+      "simpleNet": 0.0168254204,
+      "profitFactor": 2.2682792071,
+      "maxSequentialDrawdown": 0.0045330947,
+      "rocAuc": 0.6427838577
+    },
+    "crossExchangeTrendGuard": {
+      "trades": 11,
+      "winRate": 0.8181818182,
+      "simpleNet": 0.0212471218,
+      "profitFactor": 3.4022606321,
+      "maxSequentialDrawdown": 0.0045330947
+    },
+    "top2PerTimestamp": {
+      "trades": 6,
+      "winRate": 0.6666666667,
+      "simpleNet": 0.0058376972,
+      "profitFactor": 1.6600268141,
+      "maxSequentialDrawdown": 0.0088250918
+    },
+    "top3PerTimestamp": {
+      "trades": 7,
+      "winRate": 0.7142857143,
+      "simpleNet": 0.0107253243,
+      "profitFactor": 2.2126359839,
+      "maxSequentialDrawdown": 0.0088250918
+    }
+  },
+  "trendBuckets": {
+    "definition": "abs 12-bar move >= 2.5 rolling median ranges and path efficiency >= 0.30",
+    "aligned": {
+      "candidates": 5,
+      "actionableRate": 0.6
+    },
+    "countertrend": {
+      "candidates": 121,
+      "actionableRate": 0.173553719
+    },
+    "swingTransition": {
+      "candidates": 426,
+      "actionableRate": 0.2863849765
+    }
+  },
+  "oneMinute": {
+    "standaloneAuthority": "rejected for now",
+    "role": "micro-confirmation/timing only",
+    "spotChecks": [
+      "LINK losing 5m short lacked qualifying pre-entry 1m top confirmation",
+      "SOL 5m late short loss ~-0.45% vs 1m 00:28 confirmation -> 00:29 entry -> ~+0.16% net at 0.35% target",
+      "later LINK short also received earlier 1m top confirmation and reached the micro target"
+    ]
+  },
+  "decision": "continue shadow research; do not merge as production replacement"
+}
