@@ -112,11 +112,15 @@ test("LIVE uses the restored full Gate snapshot and no split order-audit admissi
   assert.match(sync,/entry\.exchangeOrderId = await client\.createEntry\(intent,submissionStillAllowed\)/);
 });
 
-test("Stage 2 changes strategy and LIVE contracts without prematurely changing the operator UI",async()=>{
-  const [dashboard,worker,workflow,wrangler]=await Promise.all([
-    read("app/forward-dashboard.tsx"),read("worker/index-clean.ts"),read(".github/workflows/sentinel-v2-ci.yml"),read("wrangler.jsonc"),
+test("Stage 3 exposes Extremum Regime V1 without removing operator or execution infrastructure",async()=>{
+  const [dashboard,execution,worker,workflow,wrangler]=await Promise.all([
+    read("app/forward-dashboard.tsx"),read("app/extremum-execution.tsx"),read("worker/index-clean.ts"),
+    read(".github/workflows/sentinel-v2-ci.yml"),read("wrangler.jsonc"),
   ]);
-  assert.match(dashboard,/Forward Path Relation 3\.0/);assert.doesNotMatch(dashboard,/ExtremumExecution/);
+  assert.match(dashboard,/哨兵 · 峰谷状态系统/);assert.match(dashboard,/ExtremumExecution/);assert.match(dashboard,/extremum-regime-v1/);
+  assert.match(execution,/TOP|顶部压力/);assert.match(execution,/趋势生命/);assert.match(execution,/RECLAIM|confirmationStage|阶段/);
+  assert.match(execution,/当前交易机会/);assert.match(execution,/持仓正在等待什么/);
+  for(const tab of["overview","execution","paper","live","journal","settings"])assert.match(dashboard,new RegExp(`"${tab}"`));
   assert.match(worker,/SCAN_UNIVERSE_SIZE = 30/);assert.match(worker,/FORWARD_EXECUTION_BBO_CAP/);
   assert.match(workflow,/extremum-regime-v1/);
   assert.match(wrangler,/MarketStream/);assert.match(wrangler,/MemberExecutor/);assert.match(wrangler,/MemberDirectory/);
