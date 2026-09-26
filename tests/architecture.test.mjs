@@ -115,11 +115,14 @@ test("fresh PAPER entries wake one LIVE pass without an artificial two-order sta
   assert.match(parity,/minimumUplift/);assert.match(parity,/LIVE_MIN_CONTRACT_UPLIFT_MAX_RISK_RATE = \.0075/);
 });
 
-test("PAPER commit, paged learning state and LIVE wake share one persisted source generation",async()=>{
+test("PAPER commit and restored serialized LIVE pass share one persisted source generation",async()=>{
   const [worker,store]=await Promise.all([read("worker/index-clean.ts"),read("lib/forward-store.ts")]);
   const advance=worker.slice(worker.indexOf("private async advanceForwardNow"),worker.indexOf("private async refreshRegimeHourly"));
   assert.match(advance,/storage\.transaction\(async transaction => \{ await transaction\.put\(prepared\.entries\); \}\)/);
-  assert.match(advance,/this\.forwardState = next\.state;[\s\S]*this\.launchLiveWork\(true\)/);
+  assert.doesNotMatch(worker,/launchLiveWork\(|liveBackgroundWork|liveSourcePending|liveFastSourcePending/);
+  const alarm=worker.slice(worker.indexOf("  async alarm(info?"),worker.indexOf("  async fetch(request:",worker.indexOf("  async alarm(info?")));
+  assert.ok(alarm.indexOf("await this.advanceForwardNow(Date.now(),false)")>=0);
+  assert.ok(alarm.indexOf("await this.syncLive(liveStarted)")>alarm.indexOf("await this.advanceForwardNow(Date.now(),false)"));
   assert.match(store,/FORWARD_SAMPLE_MANIFEST_STORAGE/);assert.match(store,/sampleManifestSha256/);
   assert.match(store,/changedSamplePages/);assert.match(store,/FORWARD_ACCOUNT_MAX_BYTES=1024\*1024/);
 });
