@@ -145,7 +145,7 @@ test("PAPER balance reset clears the wallet ledger but preserves the live Market
   assert.equal(reset.lastEntryAt.ETH_USDT,prior.lastEntryAt.ETH_USDT);
   assert.equal(reset.lastExitAt.ETH_USDT,prior.lastExitAt.ETH_USDT);
   assert.equal(reset.lastSide.ETH_USDT,"LONG");
-  assert.match(reset.latestReason,/市场叙事、证据、相关组和异常生命周期保持连续/);
+  assert.match(reset.latestReason,/保留 Market Intelligence 市场叙事、证据、相关组和异常生命周期/);
 });
 
 test("PAPER balance reset cannot turn the already-processed 5m bar into a fresh entry cycle",()=>{
