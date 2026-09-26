@@ -234,8 +234,10 @@ export function normalizeForward(v:ForwardState|null|undefined,now:number):Forwa
     events:Array.isArray(v.events)?v.events.slice(0,EVENT_LIMIT):base.events,daily:Array.isArray(v.daily)?v.daily:[],
     selectedSymbols:Array.isArray(v.selectedSymbols)?v.selectedSymbols:[],opportunities:upgrading?[]:(Array.isArray(v.opportunities)?v.opportunities:[]),
     regions:v.regions&&typeof v.regions==="object"?v.regions:{},relationEngine,
-    extremumRegime:!upgrading&&(old as {extremumRegime?:ExtremumRegimeState}).extremumRegime?.version===EXTREMUM_REGIME_VERSION
+    extremumRegime:(old as {extremumRegime?:ExtremumRegimeState}).extremumRegime?.version===EXTREMUM_REGIME_VERSION
       ?structuredClone((old as {extremumRegime:ExtremumRegimeState}).extremumRegime):base.extremumRegime,
+    predictivePath:!upgrading&&(old as {predictivePath?:PredictiveEngineState}).predictivePath?.version===PREDICTIVE_PATH_VERSION
+      ?structuredClone((old as {predictivePath:PredictiveEngineState}).predictivePath):base.predictivePath,
     familyExperiment,
     structuralInterrupt:normalizeStructuralInterruptState((old as {structuralInterrupt?:unknown}).structuralInterrupt,now),
     entryValidations:normalizeEntryValidations((old as {entryValidations?:unknown}).entryValidations,now),
@@ -243,7 +245,7 @@ export function normalizeForward(v:ForwardState|null|undefined,now:number):Forwa
     lastRotationAt:safe(v.lastRotationAt),latestReason:typeof v.latestReason==="string"?v.latestReason:base.latestReason,
     entryDiagnostics:v.entryDiagnostics??base.entryDiagnostics,storage:v.storage??base.storage,
     engineVersion:ADAPTIVE_ENGINE_VERSION,policyVersion:ADAPTIVE_ENGINE_VERSION,strategyAuthorityVersion:ADAPTIVE_ENGINE_VERSION,
-    executionVersion:ADAPTIVE_ENGINE_VERSION,regionVersion:"adaptive-region-v1",regionLaunchVersion:"adaptive-region-v1",
+    executionVersion:ADAPTIVE_ENGINE_VERSION,regionVersion:PREDICTIVE_PATH_VERSION,regionLaunchVersion:PREDICTIVE_PATH_VERSION,
     cutoverAt:upgrading?now:safe(v.cutoverAt,now),observations:safe(v.observations),measured:safe(v.measured),invalidated:safe(v.invalidated),
     frames:{},pending:{},samples:[],rules:[],lastBars:{},lastEntryBars:{},fitDiagnostics:v.fitDiagnostics??base.fitDiagnostics,
     ...(old.storage?{storage:v.storage}:{}),
