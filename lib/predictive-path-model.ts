@@ -131,15 +131,16 @@ export function forecastCausalPath(feature:PredictiveFeatureVector,quote?:Predic
     chaseUp=Math.max(0,fastRet3-normalAtr*.90),chaseDown=Math.max(0,-fastRet3-normalAtr*.90),
     longRegret=Math.max(0,(Math.max(0,overextension)*.62+Math.max(0,-shortPressure)*.16)*normalAtr+chaseUp*.95),
     shortRegret=Math.max(0,(Math.max(0,-overextension)*.62+Math.max(0,shortPressure)*.16)*normalAtr+chaseDown*.95),
-    longNet=h60.mean-PREDICTIVE_PATH_POLICY.estimatedRoundTripCost,shortNet=-h60.mean-PREDICTIVE_PATH_POLICY.estimatedRoundTripCost,
+    longPath=Math.max(h60.mean,h120.mean),shortPath=Math.max(-h60.mean,-h120.mean),
+    longNet=longPath-PREDICTIVE_PATH_POLICY.estimatedRoundTripCost,shortNet=shortPath-PREDICTIVE_PATH_POLICY.estimatedRoundTripCost,
     rawSide=spine?.side??null,sideSign=rawSide==="LONG"?1:rawSide==="SHORT"?-1:0,
-    selected=rawSide==="LONG"?{p:spine!.confidence,touch:longTouch,regret:longRegret,net:longNet,mfe:longMfe,mae:longMae}
-      :rawSide==="SHORT"?{p:spine!.confidence,touch:shortTouch,regret:shortRegret,net:shortNet,mfe:shortMfe,mae:shortMae}:null,
+    selected=rawSide==="LONG"?{p:spine!.confidence,touch:longTouch,regret:longRegret,net:longNet,path:longPath,mfe:longMfe,mae:longMae}
+      :rawSide==="SHORT"?{p:spine!.confidence,touch:shortTouch,regret:shortRegret,net:shortNet,path:shortPath,mfe:shortMfe,mae:shortMae}:null,
     sourceCount=quote?.sourceCount??e.sourceCount,disagreementRate=quote?.disagreementRate??e.sourceDisagreement,
     agreement=quote?.directionalAgreement??e.sourceAgreement,breadth=quote?.sourceBreadth??e.sourceBreadth,
     signedRet1=sideSign*fastRet1,signedRet3=sideSign*fastRet3,signedRet6=sideSign*fastRet6,
     signedValueGap=sideSign*fairValueGap,signedCloseLocation=sideSign*closeLocation,signedBreadth=sideSign*breadth,
-    pathSpace=selected?sideSign*h60.mean:0,
+    pathSpace=selected?selected.path:0,
     minimumGrossPath=Math.max(.0062,PREDICTIVE_PATH_POLICY.estimatedRoundTripCost*3.0,normalAtr*.82),
     regretMax=clamp(normalAtr*.34,.0012,.0048),
     valueReady=!!selected&&signedValueGap<=normalAtr*.52&&signedValueGap>=-normalAtr*1.20,
@@ -163,7 +164,7 @@ export function forecastCausalPath(feature:PredictiveFeatureVector,quote?:Predic
     confidence=spine?.confidence??.35,
     waitReason=enterNow?null:!spine?"长期方向证据未形成一致脊柱"
       :!directionReady?"长期方向持续性不足":!independentReady?"独立证据与主方向不一致"
-      :!multiReady?"多市场没有同步接受该方向":!edgeReady?"未来60分钟成本后空间不足"
+      :!multiReady?"多市场没有同步接受该方向":!edgeReady?"未来60/120分钟成本后空间不足"
       :!valueReady?"方向成立但价格没有回到合理价值区域":!timingReady?"方向成立但当前5分钟位置不适合入场":!touchReady?"目标先于风险的路径优势不足"
       :!regretReady?"当前位置过度延伸，等待更优入场":"等待确认",
     spinePersistence=spine?.continuity??0;
