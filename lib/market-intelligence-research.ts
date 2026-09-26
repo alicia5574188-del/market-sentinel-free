@@ -19,7 +19,7 @@ export type PostExitResearch={
   completed:boolean;
 };
 export type RejectedOpportunityResearch={
-  id:string;thesisId:string;symbol:string;side:"LONG"|"SHORT";mode:string;observedAt:number;entryPrice:number;
+  id:string;thesisId:string;symbol:string;side:"LONG"|"SHORT";mode:string;observedAt:number;startedAt:number;entryPrice:number;
   stopRate:number;score:number;eligibleAtObservation:boolean;stage:string|null;dataConfidence:number|null;sourceCount:number|null;
   marketNarrativeId:string|null;marketMajor:string|null;marketShort:string|null;transitionStage:string|null;
   reason:string;executionBlockers:Record<string,number>;lastObservedAt:number;maxFavorableRate:number;maxAdverseRate:number;
@@ -51,7 +51,7 @@ function normalizePost(row:PostExitResearch):PostExitResearch|null{
 function normalizeRejected(row:RejectedOpportunityResearch):RejectedOpportunityResearch|null{
   if(!row||typeof row.id!=="string"||typeof row.thesisId!=="string"||typeof row.symbol!=="string"
     ||(row.side!=="LONG"&&row.side!=="SHORT")||!finite(row.observedAt)||!finite(row.entryPrice)||row.entryPrice<=0)return null;
-  return{...row,executionBlockers:row.executionBlockers??{},checkpoints:(row.checkpoints??[]).map(normalizePoint).filter((x):x is ResearchCheckpoint=>!!x),
+  return{...row,startedAt:finite(row.startedAt)?row.startedAt:row.observedAt,executionBlockers:row.executionBlockers??{},checkpoints:(row.checkpoints??[]).map(normalizePoint).filter((x):x is ResearchCheckpoint=>!!x),
     maxFavorableRate:Math.max(0,Number(row.maxFavorableRate)||0),maxAdverseRate:Math.max(0,Number(row.maxAdverseRate)||0),completed:Boolean(row.completed)};
 }
 export async function readCounterfactualResearch(storage:Reader,now=Date.now()):Promise<CounterfactualResearchState>{
@@ -118,7 +118,7 @@ function rejectedFromOpportunity(o:Opportunity,q:Quote|undefined,s:ForwardState,
   if(s.positions.some(t=>t.entryContext?.thesisId===o.thesisId)||s.history.some(t=>t.entryContext?.thesisId===o.thesisId))return null;
   const mid=quotePrice(q),entryPrice=mid??o.price;if(!(entryPrice>0))return null;
   const n=s.extremumRegime.narrative;
-  return{id:`reject:${o.thesisId}`,thesisId:o.thesisId,symbol:o.symbol,side:o.side,mode:o.mode,observedAt:now,entryPrice,
+  return{id:`reject:${o.thesisId}`,thesisId:o.thesisId,symbol:o.symbol,side:o.side,mode:o.mode,observedAt:now,startedAt:now,entryPrice,
     stopRate:o.stopRate,score:o.score,eligibleAtObservation:o.eligible,stage:o.confirmationStage??null,dataConfidence:o.dataConfidence??null,
     sourceCount:o.sourceCount??null,marketNarrativeId:n.id??null,marketMajor:n.major.bias??null,marketShort:n.short.bias??null,
     transitionStage:n.transition.stage??null,reason:`${rejectionClass(o)} | ${o.reason}`,executionBlockers:{...s.entryDiagnostics.reasons},
