@@ -12,7 +12,7 @@ async function get(path){
   for(const base of BASES){
     try{
       const response=await fetch(base+path,{headers:{Accept:"application/json"},signal:AbortSignal.timeout(8_000)});
-      if(!response.ok){await response.body?.cancel().catch(()=>undefined);throw new Error("Gate "+response.status);}
+      if(!response.ok){const detail=(await response.text().catch(()=>"")).slice(0,240);throw new Error("Gate "+response.status+" "+detail);}
       return await response.json();
     }catch(error){last=error;}
   }
@@ -21,7 +21,8 @@ async function get(path){
 async function stats(symbol){
   const out=[];let cursor=from,guard=0;
   while(cursor<to&&guard++<32){
-    const rows=await get("/futures/usdt/contract_stats?contract="+encodeURIComponent(symbol)+"&from="+Math.floor(cursor)+"&interval=4h&limit=100");
+    let rows;try{rows=await get("/futures/usdt/contract_stats?contract="+encodeURIComponent(symbol)+"&from="+Math.floor(cursor)+"&interval=4h&limit=100");}
+    catch(error){throw new Error("contract_stats: "+String(error?.message??error));}
     const clean=(Array.isArray(rows)?rows:[]).filter(x=>Number(x.time)>0).sort((a,b)=>Number(a.time)-Number(b.time));
     if(!clean.length)break;
     for(const x of clean)if(Number(x.time)>=from&&Number(x.time)<to)out.push({
@@ -37,7 +38,8 @@ async function funding(symbol){
   const out=[];let cursor=from;
   while(cursor<to){
     const end=Math.min(to,cursor+150*86_400);
-    const rows=await get("/futures/usdt/funding_rate?contract="+encodeURIComponent(symbol)+"&from="+Math.floor(cursor)+"&to="+Math.floor(end)+"&limit=1000");
+    let rows;try{rows=await get("/futures/usdt/funding_rate?contract="+encodeURIComponent(symbol)+"&from="+Math.floor(cursor)+"&to="+Math.floor(end)+"&limit=1000");}
+    catch(error){throw new Error("funding_rate: "+String(error?.message??error));}
     for(const x of Array.isArray(rows)?rows:[])if(Number(x.t)>=from&&Number(x.t)<to)out.push({time:Number(x.t),rate:Number(x.r??0)});
     cursor=end;await pause(60);
   }
@@ -47,7 +49,8 @@ async function premium(symbol){
   const out=[];let cursor=from;
   while(cursor<to){
     const end=Math.min(to,cursor+30*86_400);
-    const rows=await get("/futures/usdt/premium_index?contract="+encodeURIComponent(symbol)+"&from="+Math.floor(cursor)+"&to="+Math.floor(end)+"&interval=1h");
+    let rows;try{rows=await get("/futures/usdt/premium_index?contract="+encodeURIComponent(symbol)+"&from="+Math.floor(cursor)+"&to="+Math.floor(end)+"&interval=1h");}
+    catch(error){throw new Error("premium_index: "+String(error?.message??error));}
     for(const x of Array.isArray(rows)?rows:[])if(Number(x.t)>=from&&Number(x.t)<to)out.push({time:Number(x.t),close:Number(x.c??0)});
     cursor=end;await pause(60);
   }
