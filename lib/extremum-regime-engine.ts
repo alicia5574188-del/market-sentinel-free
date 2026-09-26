@@ -204,6 +204,39 @@ function opportunitiesFor(state:ExtremumSymbolState,p:Candle[],minute:Candle[]|u
   return out;
 }
 
+export type ExtremumExitReason="STRUCTURE_STOP"|"PROFIT_GIVEBACK"|"ENTRY_FEEDBACK_FAILED"|"OPPOSITE_EXTREMUM"|"TREND_DEATH"
+  |"EXTREMUM_PROFIT_EXIT"|"NO_PROGRESS"|"MAX_HOLD"|null;
+export function extremumExitDecision(input:{side:"LONG"|"SHORT";mode:string;ageMin:number;signedRate:number;peakFavorableRate:number;
+  firstProfit:boolean;stopRate:number;stopped:boolean;profitFloorRate:number;expectedHoldMinutes:number;maxHoldMinutes:number;
+  state?:ExtremumSymbolState|null}){
+  const survival=input.side==="LONG"?(input.state?.upSurvival??50):(input.state?.downSurvival??50),
+    opposite=input.side==="LONG"?(input.state?.topPressure??0):(input.state?.bottomPressure??0),
+    oppositeReady=!!input.state&&input.state.stage==="READY"&&input.state.candidateSide===(input.side==="LONG"?"SHORT":"LONG"),
+    trendEntry=input.mode==="TREND_PULLBACK"||input.mode==="IMPULSE",
+    trendDeath=trendEntry&&!!input.state&&input.state.regime==="TRANSITION"&&survival<=42&&opposite>=66
+      &&(input.state.stage==="STRUCTURE_BREAK"||input.state.stage==="RECLAIM_TEST"||input.state.stage==="READY"),
+    swingOpposite=input.mode==="SWING"&&oppositeReady&&opposite>=70,
+    weakening=!!input.state&&(input.state.regime==="WEAKENING"||input.state.regime==="TRANSITION"),
+    activation=Math.max(.0019*1.35,Math.min(.007,Math.max(.0032,input.stopRate*.52))),
+    retention=trendEntry&&survival>=82&&!weakening?.76:weakening?.88:.82,
+    floorCandidate=input.peakFavorableRate>=activation?input.peakFavorableRate*retention:0,
+    feedbackAdverse=Math.max(.0019*.75,Math.min(.0022,input.stopRate*.24)),
+    noFastFeedback=input.ageMin>=3&&!input.firstProfit&&input.peakFavorableRate<.0019*.45,
+    feedbackFailed=noFastFeedback&&(input.signedRate<=-feedbackAdverse||opposite>=72&&survival<=48),
+    noProgress=input.ageMin>=Math.max(8,input.expectedHoldMinutes*.55)&&!input.firstProfit&&Math.abs(input.signedRate)<.0019*.65,
+    maxHold=input.ageMin>=Math.max(15,input.maxHoldMinutes);
+  let reason:ExtremumExitReason=null;
+  if(input.stopped)reason=input.profitFloorRate>0?"PROFIT_GIVEBACK":"STRUCTURE_STOP";
+  else if(feedbackFailed)reason="ENTRY_FEEDBACK_FAILED";
+  else if(swingOpposite)reason="OPPOSITE_EXTREMUM";
+  else if(trendDeath)reason="TREND_DEATH";
+  else if(weakening&&opposite>=78&&input.peakFavorableRate>=.0019)reason="EXTREMUM_PROFIT_EXIT";
+  else if(noProgress)reason="NO_PROGRESS";
+  else if(maxHold)reason="MAX_HOLD";
+  const holdScore=100*clamp(.55*(survival/100)+.25*(1-opposite/100)+.20*clamp(.5+input.signedRate/Math.max(input.stopRate,.001)*.25));
+  return{reason,survival,opposite,activation,retention,floorCandidate,feedbackFailed,trendDeath,swingOpposite,weakening,holdScore};
+}
+
 export function buildExtremumRegime(input:{paths:Record<string,Candle[]>;minutePaths?:Record<string,Candle[]>;quotes:Record<string,Quote>;
   previous?:ExtremumRegimeState|null;now:number;allowed?:ReadonlySet<string>}){
   const states:Record<string,ExtremumSymbolState>={},opportunities:Opportunity[]=[];
