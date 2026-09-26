@@ -8,6 +8,7 @@ on:
       - "lib/predictive-path-features.ts"
       - "lib/predictive-path-model.ts"
       - "scripts/train-predictive-path.mjs"
+      - "scripts/fetch-gate-predictive-ancillary.mjs"
       - "tests/predictive-path-production.test.ts"
       - ".github/workflows/predictive-path-train.yml"
 
@@ -39,9 +40,15 @@ jobs:
           RESEARCH_MIN_CONTRACTS: "12"
           RESEARCH_CONCURRENCY: "8"
         run: node scripts/fetch-gate-history.mjs
+      - name: Download Gate derivatives backbone
+        env:
+          PREDICTIVE_DATASET: /tmp/gate-predictive-12m.json
+          PREDICTIVE_ANCILLARY: /tmp/gate-predictive-ancillary.json
+        run: node scripts/fetch-gate-predictive-ancillary.mjs
       - name: Train predictive path artifact
         env:
           PREDICTIVE_DATASET: /tmp/gate-predictive-12m.json
+          PREDICTIVE_ANCILLARY: /tmp/gate-predictive-ancillary.json
           PREDICTIVE_ARTIFACT: lib/predictive-path-artifact-v1.json
           PREDICTIVE_STRIDE: "3"
           PREDICTIVE_MAX_SAMPLES: "260000"
