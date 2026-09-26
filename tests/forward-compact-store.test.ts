@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { FORWARD_VERSION, initialForward, normalizeForward, type ForwardState, type Trade } from "../lib/forward-relations.ts";
 import { FORWARD_PAGED_STATE_VERSION, FORWARD_SAMPLE_MANIFEST_STORAGE, FORWARD_SAMPLE_PAGE_PREFIX,
   FORWARD_SAMPLE_RECOVERY_PREFIX, FORWARD_STORAGE, FORWARD_HOT_HISTORY_FULL, FORWARD_HOT_HISTORY_TOTAL,
-  FORWARD_ACCOUNT_TARGET_BYTES, prepareForwardWrite, readForwardStore } from "../lib/forward-store.ts";
+  FORWARD_HOT_EVENT_LIMIT, FORWARD_ACCOUNT_TARGET_BYTES, prepareForwardWrite, readForwardStore } from "../lib/forward-store.ts";
 import { gzip, gunzip } from "../lib/storage-codec.ts";
 
 const T=1_795_000_000_000,HEAD=`${FORWARD_STORAGE}head`,SAMPLE_PAGE_ROWS_FOR_TEST=96;
@@ -81,7 +81,7 @@ test("paged store preserves 2200 mature samples plus the full financial/control 
   assert.ok(manifest.pages.every(page=>/^[0-9a-f]{64}$/.test(page.rawSha256??"")));
   const db=new Memory();await db.put(write.entries);const restored=await readForwardStore(db,T+1);
   assert.equal(restored.relationEngine.samples.length,2200);assert.equal(Object.keys(restored.relationEngine.pending).length,160);
-  assert.equal(restored.history.length,FORWARD_HOT_HISTORY_TOTAL);assert.equal(restored.events.length,160);assert.equal(restored.positions.length,2);
+  assert.equal(restored.history.length,FORWARD_HOT_HISTORY_TOTAL);assert.equal(restored.events.length,FORWARD_HOT_EVENT_LIMIT);assert.equal(restored.positions.length,2);
   assert.equal(restored.relationEngine.rules.length,18);assert.equal(Object.keys(restored.regions).length,30);
   assert.deepEqual(new Set(restored.relationEngine.samples.map(x=>`${x.symbol}:${x.at}`)),new Set(s.relationEngine.samples.map(x=>`${x.symbol}:${x.at}`)));
   const continued=structuredClone(restored);continued.relationEngine.samples[2199]={...continued.relationEngine.samples[2199]!,response:.123,
@@ -306,11 +306,12 @@ test("a legacy monolithic account migrates to pages without losing samples, orde
   const legacy=stressFixture(),raw=new TextEncoder().encode(JSON.stringify(legacy)),sha=await digest(raw),db=new Memory();
   await db.put({[HEAD]:{version:FORWARD_VERSION,count:1,length:raw.length,sha256:sha},[`${FORWARD_STORAGE}chunk:0`]:raw});
   const recovered=await readForwardStore(db,T+1);assert.equal(recovered.relationEngine.samples.length,2200);
-  assert.equal(recovered.history.length,FORWARD_HOT_HISTORY_TOTAL);assert.equal(Object.keys(recovered.relationEngine.pending).length,160);
+  assert.equal(recovered.history.length,240,"legacy monolithic read is lossless before the first hot/cold rewrite");
+  assert.equal(Object.keys(recovered.relationEngine.pending).length,160);
   const migrated=await prepareForwardWrite(recovered,recovered,T+2,{compact:true});await db.put(migrated.entries);
   assert.equal((db.data.get(HEAD) as {version:string}).version,FORWARD_PAGED_STATE_VERSION);
   const restarted=await readForwardStore(db,T+3);assert.equal(restarted.relationEngine.samples.length,2200);
-  assert.equal(restarted.history.length,240);assert.equal(restarted.relationEngine.rules.length,18);
+  assert.equal(restarted.history.length,FORWARD_HOT_HISTORY_TOTAL);assert.equal(restarted.relationEngine.rules.length,18);
 });
 
 
