@@ -21,7 +21,7 @@ async function get(path){
 async function stats(symbol){
   const out=[];let cursor=from,guard=0;
   while(cursor<to&&guard++<32){
-    const rows=await get("/futures/usdt/contract_stats?contract="+encodeURIComponent(symbol)+"&from="+Math.floor(cursor)+"&interval=1h&limit=1000");
+    const rows=await get("/futures/usdt/contract_stats?contract="+encodeURIComponent(symbol)+"&from="+Math.floor(cursor)+"&interval=4h&limit=100");
     const clean=(Array.isArray(rows)?rows:[]).filter(x=>Number(x.time)>0).sort((a,b)=>Number(a.time)-Number(b.time));
     if(!clean.length)break;
     for(const x of clean)if(Number(x.time)>=from&&Number(x.time)<to)out.push({
@@ -29,7 +29,7 @@ async function stats(symbol){
       longLiqUsd:Number(x.long_liq_usd_new??x.long_liq_usd??0),shortLiqUsd:Number(x.short_liq_usd_new??x.short_liq_usd??0),
       lsrTaker:Number(x.lsr_taker??0),lsrAccount:Number(x.lsr_account??0),topLsrSize:Number(x.top_lsr_size??0)
     });
-    const next=Number(clean.at(-1).time)+3600;if(next<=cursor)break;cursor=next;await pause(80);
+    const next=Number(clean.at(-1).time)+14_400;if(next<=cursor)break;cursor=next;await pause(80);
   }
   return [...new Map(out.map(x=>[x.time,x])).values()].sort((a,b)=>a.time-b.time);
 }
