@@ -368,8 +368,14 @@ export class GateLiveClient {
           },6_000);
           this.tradeLoginWaiter={reqId,resolve,reject,timer:loginTimer};
         });
+        const customHeader={"X-Gate-Channel-Id":"market-sentinel-free"};
         socket.send(JSON.stringify({time:ts,channel:"futures.login",event:"api",payload:{
-          req_id:reqId,req_header:{"X-Gate-Channel-Id":"market-sentinel-free"},
+          req_id:reqId,
+          // Gate's current English docs call this login field "headers" while
+          // current clients/other docs still send "req_header". Send both
+          // spellings with identical non-sensitive metadata during login only;
+          // order API requests keep their documented req_header contract.
+          headers:customHeader,req_header:customHeader,
           api_key:this.credentials.apiKey,req_param:"",timestamp:String(ts),signature
         }}));
         try{await login;}catch(error){this.failTradeSocket(error instanceof Error?error.message:"Gate WebSocket登录失败");throw error;}
