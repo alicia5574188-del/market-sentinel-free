@@ -108,7 +108,53 @@ const longMfe60=fitLinear(train,s=>s.longMfe),longMae60=fitLinear(train,s=>s.lon
 metrics.longTouchBrier=brier(longTargetBeforeRisk60,test,s=>s.longTouch);metrics.shortTouchBrier=brier(shortTargetBeforeRisk60,test,s=>s.shortTouch);
 metrics.longMfeMae=mae(longMfe60,test,s=>s.longMfe);metrics.longMaeMae=mae(longMae60,test,s=>s.longMae);
 metrics.longRegretMae=mae(longEntryRegret10,test,s=>s.longRegret);metrics.shortRegretMae=mae(shortEntryRegret10,test,s=>s.shortRegret);
+
+function lin(head,s){const x=zx(s);return head.bias+head.weights.reduce((q,v,i)=>q+v*x[i],0);}
+function pathView(s){
+  const p30=calibrated(direction["30"],s),p60=calibrated(direction["60"],s),p120=calibrated(direction["120"],s),
+    r60=lin(expectedReturn["60"],s),lm=Math.max(0,lin(longMfe60,s)),la=Math.max(0,lin(longMae60,s)),
+    sm=Math.max(0,lin(shortMfe60,s)),sa=Math.max(0,lin(shortMae60,s)),
+    tl=calibrated(longTargetBeforeRisk60,s),ts=calibrated(shortTargetBeforeRisk60,s),
+    rl=Math.max(0,lin(longEntryRegret10,s)),rs=Math.max(0,lin(shortEntryRegret10,s)),
+    dl=.45*p60+.35*p120+.20*p30,ds=1-dl,
+    lev=.5*(r60-COST)+.3*(lm-la-COST)+.2*(tl-.5)*.01-rl*.35,
+    sev=.5*(-r60-COST)+.3*(sm-sa-COST)+.2*(ts-.5)*.01-rs*.35;
+  return{dl,ds,tl,ts,rl,rs,lev,sev};
+}
+function policyStats(rows,policy){
+  let trades=0,wins=0,grossWin=0,grossLoss=0,sum=0,long=0,short=0;
+  for(const s of rows){const v=pathView(s);let side=0;
+    if(v.lev>=policy.minNetEv&&v.dl>=policy.directionMin&&v.tl>=policy.touchMin&&v.rl<=policy.regretMax)side=1;
+    else if(v.sev>=policy.minNetEv&&v.ds>=policy.directionMin&&v.ts>=policy.touchMin&&v.rs<=policy.regretMax)side=-1;
+    if(!side)continue;
+    const net=side*Number(s.ret["60"])-COST;trades++;sum+=net;if(side>0)long++;else short++;
+    if(net>0){wins++;grossWin+=net;}else grossLoss-=net;
+  }
+  const avg=trades?sum/trades:0,winRate=trades?wins/trades:0,pf=grossLoss>0?grossWin/grossLoss:(grossWin>0?99:0),
+    coverage=rows.length?trades/rows.length:0;
+  return{trades,avgNet60:avg,winRate,profitFactor:pf,coverage,long,short};
+}
+const candidates=[];
+for(const directionMin of [.51,.52,.53,.54,.55,.56])
+  for(const touchMin of [.34,.38,.42,.46,.50,.54])
+    for(const regretMax of [.0015,.0025,.0035,.005,.007])
+      for(const minNetEv of [0,.00025,.0005,.001]){
+        const policy={directionMin,touchMin,regretMax,minNetEv,minSources:2,maxDisagreement:.015},stats=policyStats(validation,policy);
+        if(stats.trades<Math.max(250,Math.floor(validation.length*.008))||stats.avgNet60<=0||stats.profitFactor<=1)continue;
+        const score=stats.avgNet60*Math.sqrt(stats.trades)*Math.min(1.5,stats.profitFactor);
+        candidates.push({policy,stats,score});
+      }
+candidates.sort((a,b)=>b.score-a.score||b.stats.trades-a.stats.trades);
+const selected=candidates[0];if(!selected)throw new Error("No positive validation entry policy");
+const policy=selected.policy,testPolicy=policyStats(test,policy);
+Object.assign(metrics,{
+  policyValidationTrades:selected.stats.trades,policyValidationAvgNet60:selected.stats.avgNet60,
+  policyValidationWinRate:selected.stats.winRate,policyValidationProfitFactor:selected.stats.profitFactor,
+  policyTestTrades:testPolicy.trades,policyTestAvgNet60:testPolicy.avgNet60,policyTestWinRate:testPolicy.winRate,
+  policyTestProfitFactor:testPolicy.profitFactor,policyTestCoverage:testPolicy.coverage,
+  policyTestLong:testPolicy.long,policyTestShort:testPolicy.short,
+});
 const artifact={version:"predictive-path-v1",trainedAt:Date.now(),source:String(raw.source??"gate-5m")+"+gate-stats-funding-premium",featureNames,mean,scale,costRate:COST,horizons:[15,30,60,120],
-  direction,expectedReturn,longMfe60,longMae60,shortMfe60,shortMae60,longTargetBeforeRisk60,shortTargetBeforeRisk60,longEntryRegret10,shortEntryRegret10,metrics};
+  direction,expectedReturn,longMfe60,longMae60,shortMfe60,shortMae60,longTargetBeforeRisk60,shortTargetBeforeRisk60,longEntryRegret10,shortEntryRegret10,policy,metrics};
 writeFileSync(OUTPUT,JSON.stringify(artifact)+"\n");
-console.log(JSON.stringify({output:OUTPUT,source:artifact.source,features:width,metrics},null,2));
+console.log(JSON.stringify({output:OUTPUT,source:artifact.source,features:width,policy,metrics},null,2));
