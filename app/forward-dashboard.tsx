@@ -96,7 +96,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       {accountPanel}{liveSystemPanel}
       <section ref={fontControl} className="fr-section fr-font-control"><div className="fr-section-head"><div><small>界面显示</small><h2>界面字号</h2></div><b>{fontScale}%</b></div>
         <div className="fr-font-options">{[70,80,90,100,110].map(value=><button key={value} className={fontScale===value?"selected":""} onClick={()=>{setFontScale(value);try{localStorage.setItem("sentinel-ui-font-scale-v1",String(value));}catch{}}}>{value}%</button>)}</div></section>
-      <section className="fr-section"><div className="fr-section-head"><h2>当前系统边界</h2><span>forward-path-relation-v3</span></div>
+      <section className="fr-section"><div className="fr-section-head"><h2>当前系统边界</h2><span>extremum-regime-v1</span></div>
         <Setting title="学习周期" value="15m / 30m / 45m / 60m" text="同一个5分钟根样本沿四个持仓时间逐步成熟；系统比较哪段路径最有价值，不把四个时间当四份独立证据。"/>
         <Setting title="路径检查" value="5/10/15/20/30/45/60m" text="检查点持续核对真实走势是否仍像成功样本；旧方向失效绝不自动等于反方向成立。"/>
         <Setting title="组合" value="无席位数量上限" text="持仓数量由10%组合计划风险、6.5%同向风险、75%保证金和单币一仓共同决定；ACTIVE关系正常竞争风险。"/>
