@@ -7,6 +7,9 @@ on:
 permissions:
   contents: read
 
+env:
+  WORKER_BASE_URL: https://market-sentinel-free.alicia5574188.workers.dev
+
 jobs:
   regression:
     runs-on: ubuntu-latest
@@ -66,3 +69,24 @@ jobs:
           grep -q 'livePanel' app/forward-dashboard.tsx
           grep -q 'accountPanel' app/forward-dashboard.tsx
           grep -q 'EquityCurve' app/forward-dashboard.tsx
+
+      - name: Read-only production continuity observation
+        run: |
+          set -euo pipefail
+          body="$(curl -sS --max-time 15 "$WORKER_BASE_URL/__health")"
+          jq -e '
+            .ok == true and
+            .runtime.authorityReady == true and
+            .runtime.stale == false and
+            .runtime.lastError == null and
+            .runtime.forward.strategyAuthorityVersion == "extremum-regime-v1" and
+            .runtime.forward.storage.error == null and
+            .runtime.forward.extremumTracked > 0 and
+            .runtime.radar.scanned == 30 and
+            .runtime.realtimeReadiness.capacity == 30 and
+            .runtime.multiSourceMarket.healthySources >= 3 and
+            (.runtime.liveMode.requestedEnabled|type) == "boolean"
+          ' <<<"$body" >/dev/null
+          jq -c '{ok,buildSha:.runtime.buildSha,state:.runtime.state,
+            forward:.runtime.forward,realtimeReadiness:.runtime.realtimeReadiness,
+            multiSourceMarket:.runtime.multiSourceMarket,liveMode:.runtime.liveMode,scanned:.runtime.radar.scanned}' <<<"$body"
