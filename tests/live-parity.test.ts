@@ -309,20 +309,15 @@ test("a committed source arriving during the account read is copied in that same
   await h.syncLive(T);assert.equal(gate.placed.length,1);
 }));
 
-test("source events coalesce into an immediate serialized follow-up; alarm joins do not create a retry loop",()=>clock(async()=>{
-  const {h}=await harness();live(h).requestedEnabled=true;
-  const s=h as Harness&{launchLiveWork(changed?:boolean):void;liveBackgroundWork:Promise<void>|null;syncLiveOnce():Promise<void>};
-  let calls=0,active=0,maximum=0;const release:Array<()=>void>=[];
-  s.syncLiveOnce=async()=>{calls++;active++;maximum=Math.max(maximum,active);
-    await new Promise<void>(resolve=>release.push(resolve));active--;};
-  s.launchLiveWork(true);
-  for(let i=0;i<10;i++)s.launchLiveWork();
-  s.launchLiveWork(true);s.launchLiveWork(true);
-  assert.equal(calls,1);release.shift()!();await new Promise<void>(resolve=>setImmediate(resolve));
-  assert.equal(calls,2);assert.equal(maximum,1);
-  const done=s.liveBackgroundWork;release.shift()!();await done;
-  assert.equal(calls,2);assert.equal(live(h).requestedEnabled,true);
-}));
+test("LIVE scheduling has one serialized execution path after the durable PAPER pass",()=>{
+  const file=readFileSync(new URL("../worker/index-clean.ts",import.meta.url),"utf8");
+  assert.doesNotMatch(file,/launchLiveWork\(|liveBackgroundWork|liveSourcePending|liveFastSourcePending/,
+    "later event-driven LIVE executor must not return beside the restored stable path");
+  const alarm=file.slice(file.indexOf("  async alarm(info?"),file.indexOf("  async fetch(request:",file.indexOf("  async alarm(info?")));
+  const paper=alarm.indexOf("await this.advanceForwardNow(Date.now(),false)");
+  const live=alarm.indexOf("await this.syncLive(liveStarted)");
+  assert.ok(paper>=0&&live>paper,"the primary alarm must persist PAPER first and then await exactly one LIVE reconciliation");
+});
 test("accepted live fill stores submit quote, delay and verified exchange entry drift",()=>clock(async()=>{
   const {h}=await harness();await enableNew(h);await h.syncLive(T);
   const p=live(h).positions.BTC_USDT.parity!;
