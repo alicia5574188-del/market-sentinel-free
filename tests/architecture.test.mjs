@@ -100,7 +100,8 @@ test("Market Intelligence uses thesis lifecycle, not scalp profit locking or bat
   assert.match(engine,/signalBars>=2/);
   assert.match(engine,/stableBias/);
   const boundaries=core.slice(core.indexOf("boundaries:{scope"));
-  assert.match(boundaries,/Market Intelligence 不使用动态锁利/);
+  assert.match(boundaries,/Position Intelligence/);
+  assert.match(boundaries,/单一细节、单一市场转向或连续两根5m都没有独立平仓权/);
 });
 
 
@@ -117,7 +118,7 @@ test("Market Intelligence active exits are evidence-family gated, not two-bar th
   assert.match(position,/reviewBars>=2/);
   assert.match(position,/contextOnly:true/);
   assert.match(position,/dataConfidence>=60/);
-  assert.match(engine,/samples:\(same\.samples\?\?1\)\+1/);
+  assert.match(engine,/same\.samples=\(same\.samples\?\?1\)\+1/);
   assert.match(engine,/LEADERSHIP_ROTATION/);
   assert.match(engine,/FLOW_ABSORBED_OR_STALLED/);
   assert.doesNotMatch(execution,/偏多细节|偏空细节/);
