@@ -1,4 +1,4 @@
-name: Extremum Regime Stage 3 Release Candidate
+name: Extremum Regime Stage 4 Regression
 
 on:
   push:
@@ -8,9 +8,9 @@ permissions:
   contents: read
 
 jobs:
-  verify:
+  regression:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
@@ -20,16 +20,24 @@ jobs:
           node-version: 22.16.0
           cache: npm
       - run: npm ci
-      - name: Full strategy and product tests
+
+      - name: Type and strategy regression
         run: |
           set -euo pipefail
           npm run typecheck
           npm run test:direct
+          npm run test:forward
+
+      - name: LIVE, account and access regression
+        run: |
+          set -euo pipefail
           npm run test:live-parity
           npm run test:members
+          npm run test:members:workerd
           npm run test:equity
           npm run test:feed:workerd
-      - name: Build and architecture gates
+
+      - name: Build, lint and migration gates
         run: |
           set -euo pipefail
           npm run build
@@ -37,6 +45,22 @@ jobs:
           node --test tests/architecture.test.mjs tests/migration.test.mjs
           git diff --check
           npx wrangler deploy --dry-run --config dist/server/wrangler.json
-      - name: Proven Gate execution modules remain untouched
+
+      - name: Preserve execution, auth and member infrastructure
         run: |
-          git diff --exit-code origin/main -- lib/gate-live.ts lib/live-session.ts lib/gate-quantity.ts LIVE_MIRROR_CONTRACT.md
+          set -euo pipefail
+          git diff --exit-code origin/main --             lib/gate-live.ts             lib/live-session.ts             lib/gate-quantity.ts             lib/credential-vault.ts             lib/owner-auth.ts             worker/member-executor.ts             LIVE_MIRROR_CONTRACT.md
+
+      - name: Preserve all non-strategy dashboard capabilities
+        run: |
+          set -euo pipefail
+          grep -q '"overview"' app/forward-dashboard.tsx
+          grep -q '"execution"' app/forward-dashboard.tsx
+          grep -q '"paper"' app/forward-dashboard.tsx
+          grep -q '"live"' app/forward-dashboard.tsx
+          grep -q '"journal"' app/forward-dashboard.tsx
+          grep -q '"settings"' app/forward-dashboard.tsx
+          grep -q '/api/forward/export' app/forward-dashboard.tsx
+          grep -q 'livePanel' app/forward-dashboard.tsx
+          grep -q 'accountPanel' app/forward-dashboard.tsx
+          grep -q 'EquityCurve' app/forward-dashboard.tsx
