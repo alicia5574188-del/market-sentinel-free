@@ -13,6 +13,8 @@ export type PredictiveCandidate={
 
 function quoteFresh(q:PredictiveQuote|undefined,now:number){return !!q&&q.fresh&&q.bestBid>0&&q.bestAsk>=q.bestBid&&q.observedAt<=now&&now-q.observedAt<=10_000;}
 function sideProbability(f:PredictivePathForecast,side:PredictiveSide){
+  if(f.rawSide===side)return f.directionProbability;
+  if(f.rawSide&&f.rawSide!==side)return 1-f.directionProbability;
   const up=.18*f.upProbability.m30+.47*f.upProbability.m60+.35*f.upProbability.m120;return side==="LONG"?up:1-up;
 }
 function updateMemory(previous:PredictiveDirectionMemory|undefined,forecast:PredictivePathForecast,lastBarTime:number,now:number):PredictiveDirectionMemory{
