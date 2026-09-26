@@ -44,9 +44,9 @@ async function bybitHistory(symbol,from,to){
 async function kucoinHistory(symbol,from,to){
   const out=[];let cursor=from,guard=0;
   while(cursor<to&&guard++<240){
-    const end=Math.min(to,cursor+499*300);
+    const end=Math.min(to,cursor+199*300);
     const body=await json("https://api-futures.kucoin.com/api/v1/kline/query?symbol="+encodeURIComponent(kucoinSymbol(symbol))
-      +"&granularity=300&from="+Math.floor(cursor*1000)+"&to="+Math.floor(end*1000));
+      +"&granularity=5&from="+Math.floor(cursor*1000)+"&to="+Math.floor(end*1000));
     if(body.code!=="200000"||!Array.isArray(body.data))throw new Error(symbol+" KuCoin payload");
     const rows=body.data.map(r=>({time:Number(r[0])/1000,open:Number(r[1]),high:Number(r[2]),low:Number(r[3]),close:Number(r[4])}))
       .filter(r=>r.time>=from&&r.time<to&&r.open>0&&r.close>0).sort((a,b)=>a.time-b.time);
