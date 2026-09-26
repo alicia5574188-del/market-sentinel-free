@@ -4,7 +4,7 @@ import { register } from "node:module";
 import { LIVE_PARITY_PREFIX, LIVE_PARITY_VERSION, forwardMirrorSources, buildProportionalMirror,
   mirrorCoverage, sourceLifecycle, liveEntryDriftGuard, mirrorPositionRisk, type MirrorBinding } from "../lib/live-parity.ts";
 import { advanceForward, initialForward, type Trade, type ForwardState } from "../lib/forward-relations.ts";
-import {EXTREMUM_REGIME_VERSION} from "../lib/extremum-regime-engine.ts";
+const LEGACY_EXTREMUM_REGIME_VERSION="extremum-regime-v1"; // fixture only: verifies already-persisted old sources can still drain safely
 import {newExitControl} from "../lib/forward-protection.ts";
 import { gateMarkedEquity, gatePositionValuation, liveEntryDisposition, liveExitTag, type GateLiveAccount, type GateLiveOrder, type GateLivePosition, type LiveEntryIntent, type LiveStopIntent, LiveEntrySizingError, GateEntryCancelledError, GateLiveClient, GateReadTimeoutError } from "../lib/gate-live.ts";
 import { quantizeMirrorNotional } from "../lib/gate-quantity.ts";
@@ -30,14 +30,14 @@ function trade(id="ft-fixture-1",symbol="BTC_USDT",side:"LONG"|"SHORT"="LONG"):T
 function extremumTrade(id="ft-extremum-1",symbol="BTC_USDT",side:"LONG"|"SHORT"="LONG"):Trade{
   const t=trade(id,symbol,side),long=side==="LONG";
   t.rule={...t.rule,id:`extremum-trend_pullback-${symbol}`,signature:`EXTREMUM_REGIME:TREND_${long?"UP":"DOWN"}:TREND_PULLBACK`,
-    grammar:EXTREMUM_REGIME_VERSION,reason:"峰谷状态系统LIVE契约测试"};
+    grammar:LEGACY_EXTREMUM_REGIME_VERSION,reason:"峰谷状态系统LIVE契约测试"};
   t.exitPlan={version:"sample-exit-plan-v2",bestHoldMinutes:30,feedbackDeadlineMinutes:5,maxHoldMinutes:60,
     normalAdverseRate:.006,targetRate:.012,protectionActivationRate:.004,retentionRate:.8,samples:0,groups:0,path:{}};
   t.expectedHoldMinutes=30;t.forecast={remainingNetRate:.009,quality:.88,sizingEquity:1000};
   t.entryContext={version:"adaptive-ten-entry-v1",capturedAt:t.openedAt,timeframe:"5m",side,mode:"TREND_PULLBACK",reserve:false,
     reason:"趋势回调结束再启动",entryScore:88,directionStrength:84,spaceScore:80,positionScore:78,executionScore:90,
     remainingSpaceRate:.009,pullbackRiskRate:.01,edgeRatio:.9,expectedHoldMinutes:30,marketFit:86,regionId:null,
-    portfolioRiskCharge:t.plannedRisk,strategyVersion:EXTREMUM_REGIME_VERSION,regime:long?"TREND_UP":"TREND_DOWN",
+    portfolioRiskCharge:t.plannedRisk,strategyVersion:LEGACY_EXTREMUM_REGIME_VERSION,regime:long?"TREND_UP":"TREND_DOWN",
     topPressure:long?25:58,bottomPressure:long?58:25,upSurvival:long?84:16,downSurvival:long?16:84,
     confirmationStage:"READY",sourceCount:4,disagreementRate:.0002,postEntryState:"PENDING"};
   return t;
@@ -739,7 +739,7 @@ test("new arbitrary rule metadata survives the adapter and immutable source bind
 test("the permanent contract and parity suite cannot be omitted by the default release workflow",()=>{
   const pkg=JSON.parse(readFileSync(new URL("../package.json",import.meta.url),"utf8"));
   const ci=readFileSync(new URL("../.github/workflows/sentinel-v2-ci.yml",import.meta.url),"utf8");
-  assert.equal((ci.match(/\.runtime\.forward\.strategyAuthorityVersion == "extremum-regime-v1"/g)??[]).length,2);
+  assert.equal((ci.match(/\.runtime\.forward\.strategyAuthorityVersion == "market-intelligence-v1"/g)??[]).length,2);
   assert.equal((ci.match(/\.runtime\.forward\.storage\.error == null/g)??[]).length,2);
   assert.ok(pkg.scripts.test.includes("test:live-parity"));
   assert.ok(pkg.scripts["test:live-parity"].includes("live-parity.test.ts")||pkg.scripts["test:direct"].includes("tests/*.test.ts"));

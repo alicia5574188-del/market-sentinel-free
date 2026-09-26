@@ -84,9 +84,9 @@ export class MarketDataHub{
     else if(bitget.status==="rejected")this.fail("BITGET",now,bitget.reason);
     if(binance.status==="fulfilled"&&binance.value){this.binance=binance.value;this.ok("BINANCE",now,binance.value.size);}
     else if(binance.status==="rejected")this.fail("BINANCE",now,binance.reason);
-    if(bybit.status==="rejected"&&okx.status==="rejected"&&kucoin.status==="rejected"
-      &&(bitget.status==="rejected"||bitget.value===null)&&(binance.status==="rejected"||binance.value===null))
-      throw new Error("Bybit/OKX/KuCoin/Bitget/Binance public market data unavailable");
+    // Never let one refresh failure stop the strategy loop. Cached rows remain
+    // available until their freshness fence expires; freshQuote then prevents
+    // execution from stale data. Health exposes the degraded sources separately.
   }
   private ok(source:MarketSource,now:number,rows:number){this.health[source]={lastSuccessAt:now,lastFailureAt:this.health[source].lastFailureAt,
     failures:0,lastError:null,rows,nextRetryAt:0};}
@@ -210,22 +210,27 @@ export class MarketDataHub{
 
   async candles(symbol:string,interval:"1m"|"5m",limit=120):Promise<{source:MarketSource;rows:HubCandle[]}|null>{
     const external=externalSymbol(symbol),okxInst=okxSymbol(symbol),kucoinInst=kucoinSymbol(symbol);if(!external||!okxInst||!kucoinInst)return null;
-    // One source affinity per symbol keeps 1m confirmation and 5m structure on
-    // the same venue. If that venue fails, the whole symbol moves together.
-    const preferred=this.candleSource.get(symbol)?.source;
-    const all:MarketSource[]=["BYBIT","OKX","KUCOIN","BITGET","BINANCE"];
-    const order:MarketSource[]=preferred?[preferred,...all.filter(source=>source!==preferred)]:all;
-    for(const source of order){
-      if((source==="BINANCE"||source==="BITGET")&&Date.now()<this.health[source].nextRetryAt)continue;
-      try{const rows=source==="BYBIT"?await this.bybitCandles(external,interval,limit)
+    const preferred=this.candleSource.get(symbol)?.source,now=Date.now();
+    const fetchOne=async(source:MarketSource)=>{
+      if((source==="BINANCE"||source==="BITGET")&&now<this.health[source].nextRetryAt)throw new Error(source+" backoff");
+      const rows=source==="BYBIT"?await this.bybitCandles(external,interval,limit)
         :source==="OKX"?await this.okxCandles(okxInst,interval,limit)
         :source==="KUCOIN"?await this.kucoinCandles(kucoinInst,interval,limit)
         :source==="BITGET"?await this.bitgetCandles(external,interval,limit)
         :await this.binanceCandles(external,interval,limit);
-        if(rows.length>=Math.min(6,limit)){this.candleSource.set(symbol,{source,at:Date.now()});return{source,rows};}}
-      catch{/* try independent source */}
-    }
-    return null;
+      if(rows.length<Math.min(6,limit))throw new Error(source+" incomplete candles");
+      return{source,rows};
+    };
+    // Hedge the three normal public feeds in parallel. A slow/blocked venue can
+    // no longer add its timeout to every other venue's timeout.
+    const primary:MarketSource[]=["BYBIT","OKX","KUCOIN"];
+    if(preferred&&primary.includes(preferred))primary.splice(primary.indexOf(preferred),1),primary.unshift(preferred);
+    try{const hit=await Promise.any(primary.map(fetchOne));this.candleSource.set(symbol,{source:hit.source,at:Date.now()});return hit;}
+    catch{/* bounded fallbacks below */}
+    const fallback:MarketSource[]=["BITGET","BINANCE"];
+    if(preferred&&fallback.includes(preferred))fallback.splice(fallback.indexOf(preferred),1),fallback.unshift(preferred);
+    try{const hit=await Promise.any(fallback.map(fetchOne));this.candleSource.set(symbol,{source:hit.source,at:Date.now()});return hit;}
+    catch{return null;}
   }
   private async bybitCandles(symbol:string,interval:"1m"|"5m",limit:number){
     type Res={retCode?:number;result?:{list?:string[][]}};

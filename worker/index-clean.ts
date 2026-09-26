@@ -944,14 +944,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const s=this.forwardState,now=Date.now(),opportunities=s?.opportunities??[],
       eligible=opportunities.filter(row=>row.eligible&&row.expiresAt>now),
       states=Object.values(s?.extremumRegime?.symbols??{}),
-      counts={trendUp:states.filter(row=>row.regime==="TREND_UP").length,trendDown:states.filter(row=>row.regime==="TREND_DOWN").length,
-        swing:states.filter(row=>row.regime==="SWING").length,weakening:states.filter(row=>row.regime==="WEAKENING").length,
-        transition:states.filter(row=>row.regime==="TRANSITION").length,ready:states.filter(row=>row.stage==="READY").length,
-        impulse:states.filter(row=>row.stage==="IMPULSE").length},
+      counts={bullish:states.filter(row=>row.longScore>=62).length,bearish:states.filter(row=>row.shortScore>=62).length,
+        divergent:states.filter(row=>row.regime==="DIVERGENT").length,transition:states.filter(row=>row.regime==="TRANSITION").length,
+        ready:states.filter(row=>row.stage==="READY").length},
       blocked=opportunities.filter(row=>!row.eligible&&row.expiresAt>now).slice(0,8).map(row=>({
         symbol:row.symbol,side:row.side,mode:row.mode,score:Math.round(row.score),regime:row.regime??null,
-        stage:row.confirmationStage??null,topPressure:row.topPressure??null,bottomPressure:row.bottomPressure??null,
-        upSurvival:row.upSurvival??null,downSurvival:row.downSurvival??null,sourceCount:row.sourceCount??null,
+        stage:row.confirmationStage??null,clusterId:row.clusterId??null,residual:row.residual??null,
+        relativeStrength:row.relativeStrength??null,dataConfidence:row.dataConfidence??null,sourceCount:row.sourceCount??null,
         disagreementRate:row.disagreementRate??null,reason:row.reason,
       }));
     return {version:FORWARD_VERSION,engineVersion:ADAPTIVE_ENGINE_VERSION,policyVersion:s?.policyVersion??null,
@@ -962,7 +961,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       executionBboCapacity:FORWARD_EXECUTION_BBO_CAP,minuteConfirmationCapacity:FORWARD_MINUTE_CONFIRMATION_CAP,
       executionVolumeFloorUsd:FORWARD_EXECUTION_VOLUME_FLOOR_USD,learningEligibleMarkets:executionEligibleCount(this.contractCatalog),
       participationCandidateCount:opportunities.length,participationEligibleCount:eligible.length,
-      premiumOpportunityCount:eligible.filter(row=>row.premium).length,extremumTracked:states.length,extremumCounts:counts,
+      premiumOpportunityCount:eligible.filter(row=>row.premium).length,
+      marketIntelligenceTracked:states.length,marketIntelligenceCounts:counts,marketNarrative:s?.extremumRegime?.narrative??null,
+      correlationClusters:s?.extremumRegime?.clusters?.length??0,evidenceCount:s?.extremumRegime?.evidence?.length??0,
       legacyResearchSampleCount:s?.relationEngine?.samples.length??0,entryDiagnostics:s?.entryDiagnostics??null,
       candidateDiagnostics:blocked,storage:{persistedAt:s?.storage.persistedAt??0,layout:s?.storage.layout??null,error:this.forwardError}};
   }
@@ -1019,7 +1020,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.forwardLastAttemptAt=now;
       const previous = state;
       const next = advanceForward({ state: previous, now, paths: this.strategyCandles,minutePaths:this.forwardMinutePaths(),
-        quotes: this.forwardQuotes(now), contracts: this.regimeContracts(),
+        daily:this.turnDailyCandles,quotes: this.forwardQuotes(now), contracts: this.regimeContracts(),
         entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue });
       if (next.changed || !previous.storage.persistedAt) {
         next.state.storage = { persistedAt: now, error: null };
@@ -3102,9 +3103,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             failure:this.runtime.feedFailures[symbol]??null}))},
         measurements: state?.relationEngine?.samples ?? [],
         retainedLegacyResearch:{version:"forward-path-relation-v3",rules:state?.relationEngine?.rules??[],diagnostics:state?.relationEngine?.diagnostics??null},
-        extremumResearch:{version:ADAPTIVE_ENGINE_VERSION,state:state?.extremumRegime??null,
-          purpose:"记录TOP/BOTTOM压力、趋势生命、确认阶段、多源一致性以及持仓期间的即时反馈与退出闭环"},
-        research:{version:"extremum-regime-v1-trade-review",purpose:"逐单复盘峰谷/趋势入场、MFE/MAE、即时反馈、利润保护、趋势死亡与退出结果",trades:researchTrades},
+        marketIntelligenceResearch:{version:ADAPTIVE_ENGINE_VERSION,state:state?.extremumRegime??null,
+          purpose:"记录超大周期、大方向、短期变化、证据池、相关组、相对残差、跨交易所共识以及每笔独立交易假设"},
+        research:{version:"market-intelligence-v1-trade-review",purpose:"逐单复盘入场时市场叙事、相关组、相对优势、MFE/MAE、假设失效和利润保护",trades:researchTrades},
         archiveEndpoint: "/api/forward/archive", completeness: "当前快照与滚动样本；完整不可变记录按archive接口分页读取" });
     }
     if (path === "/forward-equity" && request.method === "GET") {
