@@ -115,7 +115,7 @@ export function buildMarketIntelligence(input:{paths:Record<string,CandleLike[]>
   for(const [symbol,rows] of Object.entries(input.paths)){if(input.allowed&&!input.allowed.has(symbol))continue;const v=valid(rows,input.now,300);if(v.length>=30)paths[symbol]=v;}
   const retSeries:Record<string,number[]>={};for(const [s,r] of Object.entries(paths))retSeries[s]=returns(r,36);
   const factor=marketFactor(retSeries,36),factor6=factor.slice(-6).reduce((p,v)=>p+v,0),factor12=factor.slice(-12).reduce((p,v)=>p+v,0),
-    factor36=factor.reduce((p,v)=>p+v,0),volFactor=Math.max(.00035,stdev(factor));
+    volFactor=Math.max(.00035,stdev(factor));
   const breadth3=breadthFor(paths,3),breadth12=breadthFor(paths,12),breadthSlope=clip((breadth3-breadth12)/1.2,-1,1);
 
   const dailyPaths:Record<string,CandleLike[]>={};for(const [s,rows] of Object.entries(input.daily??{})){const v=valid(rows,input.now,86400);if(v.length>=18)dailyPaths[s]=v;}
