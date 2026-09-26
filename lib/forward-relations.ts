@@ -956,17 +956,15 @@ export function resetForwardAccountPreservingLearning(previous:ForwardState,now:
   next.relationEngine=structuredClone(prior.relationEngine);
   next.familyExperiment=structuredClone(prior.familyExperiment);
   next.observations=next.relationEngine.observations;next.measured=next.relationEngine.measured;next.invalidated=next.relationEngine.invalidated;
-  next.latestReason=next.relationEngine.rules.length
-    ?`模拟账户已重置为1000U；保留${next.relationEngine.samples.length}份成熟市场反应和${next.relationEngine.rules.length}条关系，继续学习与交易。`
-    :`模拟账户已重置为1000U；已保留关系学习进度，继续积累真实市场反应。`;
+  next.latestReason="模拟账户已重置为1000U；峰谷状态策略重新从当前真实市场结构开始判断，历史账户与研究证据未被删除。";
   return next;
 }
 export function forwardUrgentQuoteSymbols(s:ForwardState,now:number,entrySymbols?:Iterable<string>){
   const allowed=entrySymbols?new Set(entrySymbols):null,keep=(x:string)=>!allowed||allowed.has(x);
   const premium=s.opportunities.filter(o=>o.premium&&o.eligible&&o.expiresAt>now&&keep(o.symbol)).sort((a,b)=>b.score-a.score);
   const normal=s.opportunities.filter(o=>!o.premium&&o.eligible&&o.expiresAt>now&&keep(o.symbol)).sort((a,b)=>b.score-a.score);
-  const regions=Object.values(s.regions).filter(r=>keep(r.symbol)).sort((a,b)=>b.quality-a.quality);
-  return[...new Set([...s.positions.map(t=>t.symbol),...premium.map(o=>o.symbol),...normal.map(o=>o.symbol),...regions.map(r=>r.symbol)])];
+  const watched=Object.values(s.extremumRegime.symbols).filter(r=>keep(r.symbol)&&r.watchScore>=58).sort((a,b)=>b.watchScore-a.watchScore);
+  return[...new Set([...s.positions.map(t=>t.symbol),...premium.map(o=>o.symbol),...normal.map(o=>o.symbol),...watched.map(r=>r.symbol)])];
 }
 export function forwardUrgentMinuteSymbols(s:ForwardState,entrySymbols?:Iterable<string>){
   const allowed=entrySymbols?new Set(entrySymbols):undefined;
@@ -976,36 +974,36 @@ export function forwardWatchSymbols(s:ForwardState,now:number,entrySymbols?:Iter
   return forwardUrgentQuoteSymbols(s,now,entrySymbols).slice(0,FORWARD_EXECUTION_BBO_CAP);
 }
 export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:number){
-  const mark=equityMark(s,quotes,now),eligible=s.opportunities.filter(o=>o.eligible&&o.expiresAt>now),reserve=eligible.filter(o=>o.reserve),d=s.relationEngine.diagnostics;
+  const mark=equityMark(s,quotes,now),eligible=s.opportunities.filter(o=>o.eligible&&o.expiresAt>now),reserve=eligible.filter(o=>o.reserve),
+    rows=Object.values(s.extremumRegime.symbols).sort((a,b)=>b.watchScore-a.watchScore),
+    counts={trendUp:rows.filter(r=>r.regime==="TREND_UP").length,trendDown:rows.filter(r=>r.regime==="TREND_DOWN").length,
+      swing:rows.filter(r=>r.regime==="SWING").length,weakening:rows.filter(r=>r.regime==="WEAKENING").length,
+      transition:rows.filter(r=>r.regime==="TRANSITION").length,ready:rows.filter(r=>r.stage==="READY").length,
+      impulse:rows.filter(r=>r.stage==="IMPULSE").length};
   return{version:s.version,engineVersion:ADAPTIVE_ENGINE_VERSION,grammar:ADAPTIVE_ENGINE_VERSION,mode:"REAL_FEED_PAPER",liveEligible:false,
-    strategyAuthorityVersion:ADAPTIVE_ENGINE_VERSION,executionVersion:ADAPTIVE_ENGINE_VERSION,regionVersion:"adaptive-region-v1",
-    regionLaunchVersion:"adaptive-region-v1",policyVersion:ADAPTIVE_ENGINE_VERSION,exitPolicyVersion:ADAPTIVE_ENGINE_VERSION,
+    strategyAuthorityVersion:ADAPTIVE_ENGINE_VERSION,executionVersion:ADAPTIVE_ENGINE_VERSION,regionVersion:EXTREMUM_REGIME_VERSION,
+    regionLaunchVersion:EXTREMUM_REGIME_VERSION,policyVersion:ADAPTIVE_ENGINE_VERSION,exitPolicyVersion:ADAPTIVE_ENGINE_VERSION,
     policyUpgrade:null,exitPolicyUpgrade:null,startedAt:s.startedAt,cutoverAt:s.cutoverAt,updatedAt:s.lastQuoteCycleAt,
     lastCycleAt:s.lastCycleAt,revision:s.revision,initialEquity:s.initialEquity,balance:s.balance,...mark,targetEquity:s.initialEquity*2,
     netPnl:mark.equity-s.initialEquity,maxDrawdown:s.maxDrawdown,resolved:s.resolved,wins:s.wins,grossPnl:s.grossPnl,fees:s.fees,
     fundingAllowance:s.fundingAllowance,turnover:s.turnover,positions:s.positions,history:s.history,events:s.events,daily:s.daily,
-    opportunities:s.opportunities,entryOpportunities:s.opportunities,regions:Object.values(s.regions),marketPulse:s.marketPulse,
-    structuralInterrupt:{version:STRUCTURAL_INTERRUPT_VERSION,marketEvent:s.structuralInterrupt.marketEvent,vetoSide:s.structuralInterrupt.vetoSide,
-      vetoUntil:s.structuralInterrupt.vetoUntil,preAlerts:Object.values(s.structuralInterrupt.tracks).filter(t=>t.phase==="PRE_ALERT").length,
-      confirmed:Object.values(s.structuralInterrupt.tracks).filter(t=>t.phase==="CONFIRMED").length},
-    relationEngine:{version:s.relationEngine.version,updatedAt:s.relationEngine.updatedAt,diagnostics:d,
-      rules:s.relationEngine.rules.map(r=>({id:r.id,horizon:r.horizon,side:r.side,status:r.status,health:r.health,longNet:r.longNet,
-        recentNet:r.recentNet,livePathScore:r.livePathScore,environmentFit:r.environmentFit,scope:r.scope,
-        bestHoldMinutes:r.exitProfile.bestHoldMinutes,feedbackDeadlineMinutes:r.exitProfile.feedbackDeadlineMinutes,
-        maxHoldMinutes:r.exitProfile.maxHoldMinutes,retentionRate:r.exitProfile.retentionRate,reason:r.reason}))},
-    familyExperiment:{...familyExperimentSummary(s.familyExperiment),maxNewReservePer5m:MAX_NEW_RESERVE_EXPERIMENTS_PER_5M},
-    entryValidation:{waiting:Object.values(s.entryValidations).filter(v=>v.status==="WAITING"&&v.expiresAt>now).length,
-      cancelled:Object.values(s.entryValidations).filter(v=>v.status==="CANCELLED"&&v.expiresAt>now).length,
-      records:Object.values(s.entryValidations).filter(v=>v.expiresAt>now).slice(0,30)},
+    opportunities:s.opportunities,entryOpportunities:s.opportunities,regions:[],marketPulse:s.marketPulse,
+    extremumRegime:{version:s.extremumRegime.version,updatedAt:s.extremumRegime.updatedAt,counts,symbols:rows.slice(0,30)},
+    structuralInterrupt:{version:STRUCTURAL_INTERRUPT_VERSION,retired:true,marketEvent:null,vetoSide:null,vetoUntil:0,preAlerts:0,confirmed:0},
+    relationEngine:{version:s.relationEngine.version,retired:true,updatedAt:s.relationEngine.updatedAt,diagnostics:s.relationEngine.diagnostics,rules:[]},
+    familyExperiment:{retired:true,...familyExperimentSummary(s.familyExperiment),maxNewReservePer5m:0},
+    entryValidation:{waiting:0,cancelled:0,records:[]},
     marketCount:s.selectedSymbols.length,markets:s.selectedSymbols,latestReason:s.latestReason,entryDiagnostics:s.entryDiagnostics,
     fitDiagnostics:s.fitDiagnostics,storage:s.storage,targetPositions:null,positionLimit:null,executionBboCapacity:FORWARD_EXECUTION_BBO_CAP,
     minuteConfirmationCapacity:FORWARD_MINUTE_CONFIRMATION_CAP,seatCount:s.positions.length,eligibleCount:eligible.length,
     reserveCount:reserve.length,premiumCount:eligible.filter(o=>o.premium).length,
-    boundaries:{scope:"PAPER_AUTHORITY",grammar:"5分钟根样本沿15/30/45/60分钟完整路径学习；常态由样本关系掌管方向，结构只负责执行位置。只有完整外层区域发生2秒级持续异常位移，或多市场同步突变时，Structural Interrupt才可临时否决旧方向并授权极端反转；普通结构永远不能绕过样本。",
-      historyBackfill:true,sampleMeaning:"启动时只回填当前已完整收盘且可因果重建的最近根路径；随后根样本记录5/10/15/20/30/45/60分钟路径。统计按非重叠时间组验证，最佳持仓可在15/30/45/60分钟中学习。旧方向失效不会自动生成反向订单；极端结构中断是实时异常保护，不写入样本投票。",
-      accounting:"模拟使用新鲜买卖价并计入手续费、滑点和资金费占位；每笔新Trade冻结自己的样本退出计划，同一持久化Trade事件供实盘与会员实盘执行。",
-      risk:"不设持仓席位数量上限；总风险≤10%、同方向≤6.5%、同一关系族≤2.5%、探测池≤1.5%、保证金≤75%。结构止损仍是账户安全硬边界。",
-      validation:"关系状态为ACTIVE/PRESSURED/DEGRADED/RECOVERING；时间长度不再拆成不同family，同族失败后等待新成熟证据；反方向必须独立获得资格。",
-      liquidation:"新单由样本决定正反馈期限、正常MAE、最佳持仓、剩余优势和利润保留率；结构止损是硬边界。升级前旧仓继续原生命周期排空。"},
+    boundaries:{scope:"PAPER_AUTHORITY",
+      grammar:"单一峰谷状态机：5分钟决定结构与趋势生命，1分钟确认峰谷/回调结束，实时盘口负责实际执行与入场后正反馈。",
+      historyBackfill:false,
+      sampleMeaning:"旧Forward关系样本只作为保留研究证据，不再拥有新开仓权；新系统只根据当前真实5m/1m/多源状态做因果决策。",
+      accounting:"模拟仍使用新鲜买卖价并计入手续费、滑点和资金费占位；每笔新Trade冻结完整入场、止损、仓位和退出上下文。",
+      risk:"不设固定持仓席位；总结构风险≤10%、同方向≤6.5%、组合保证金≤75%，单币一仓。风险边界不因策略重做放宽。",
+      validation:"TOP/BOTTOM压力和UP/DOWN趋势生命独立计算；趋势里的反向极值先负责保护利润，只有趋势死亡并完成结构破坏与夺回失败才允许反向。",
+      liquidation:"硬止损→入场后即时验证→动态利润保护→相反极值/趋势死亡→无进展/最大持仓。平仓与反手是两个独立事件。"},
     cost:PAPER_COST,nextCycleAt:s.lastCandleAt+BAR_MS};
 }
