@@ -7,7 +7,8 @@ on:
       - "lib/predictive-path-types.ts"
       - "lib/predictive-path-features.ts"
       - "lib/predictive-path-model.ts"
-      - "scripts/train-predictive-path.mjs"
+      - "scripts/build-predictive-training-set.mjs"
+      - "scripts/train-predictive-path-lightgbm.py"
       - "scripts/fetch-gate-predictive-ancillary.mjs"
       - "tests/predictive-path-production.test.ts"
       - ".github/workflows/predictive-path-train.yml"
@@ -31,7 +32,12 @@ jobs:
         with:
           node-version: 22.16.0
           cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - run: npm ci
+      - name: Install offline trainer
+        run: python -m pip install --disable-pip-version-check lightgbm scikit-learn
       - name: Production predictive core checks
         run: |
           set -euo pipefail
@@ -49,17 +55,23 @@ jobs:
           PREDICTIVE_DATASET: /tmp/gate-predictive-12m.json
           PREDICTIVE_ANCILLARY: /tmp/gate-predictive-ancillary.json
         run: node scripts/fetch-gate-predictive-ancillary.mjs
-      - name: Train predictive path artifact
+      - name: Build causal training matrix
         env:
           PREDICTIVE_DATASET: /tmp/gate-predictive-12m.json
           PREDICTIVE_ANCILLARY: /tmp/gate-predictive-ancillary.json
-          PREDICTIVE_ARTIFACT: lib/predictive-path-artifact-v1.json
+          PREDICTIVE_TRAINING_SET: /tmp/predictive-training.jsonl
+          PREDICTIVE_TRAINING_META: /tmp/predictive-training-meta.json
           PREDICTIVE_STRIDE: "3"
-          PREDICTIVE_MAX_SAMPLES: "260000"
-        run: node --experimental-strip-types scripts/train-predictive-path.mjs
+        run: node --experimental-strip-types scripts/build-predictive-training-set.mjs
+      - name: Train nonlinear predictive path artifact
+        env:
+          PREDICTIVE_TRAINING_SET: /tmp/predictive-training.jsonl
+          PREDICTIVE_TRAINING_META: /tmp/predictive-training-meta.json
+          PREDICTIVE_ARTIFACT: lib/predictive-path-artifact-v1.json
+        run: python scripts/train-predictive-path-lightgbm.py
       - name: Validate trained artifact
         run: |
-          node -e 'const a=require("./lib/predictive-path-artifact-v1.json"); if(a.version!=="predictive-path-v1"||!a.featureNames?.length||a.metrics?.testSamples<1000) process.exit(1); console.log(a.metrics)'
+          node -e 'const a=require("./lib/predictive-path-artifact-v1.json"); if(a.version!=="predictive-path-v1"||!a.featureNames?.length||a.metrics?.testSamples<1000||a.metrics?.policyTestAvgNet60<=0||a.metrics?.policyTestProfitFactor<=1.03) process.exit(1); console.log({policy:a.policy,metrics:a.metrics})'
           git diff --check
       - name: Commit trained artifact to feature branch
         run: |
