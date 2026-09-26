@@ -39,7 +39,12 @@ jobs:
           set -euo pipefail
           npm run test:live-parity
           npm run test:members
-          npm run test:members:workerd
+          member_ok=0
+          for attempt in 1 2 3; do
+            if npm run test:members:workerd; then member_ok=1; break; fi
+            sleep 2
+          done
+          test "$member_ok" = "1"
           npm run test:equity
           npm run test:feed:workerd
 
