@@ -3,7 +3,7 @@ import { writeFile } from "node:fs/promises";
 const SOURCES=["GATE","BYBIT","OKX","KUCOIN","BITGET","BINANCE"];
 const SYMBOLS=(process.env.SYMBOLS??"BROCCOLI,PUMP,BTW,NIL,ONE,ONDO,BTC,ETH,SOL,NEAR,SAGA,AKE,ENA,XLM,XPL,ZEC,VIRTUAL,FET,ADA,FIL,LSK,BR,LIT,XRP,XAI")
   .split(",").map(x=>x.trim().toUpperCase()).filter(Boolean);
-const LIMITS={"5m":Number(process.env.LIMIT_5M??1000),"1m":Number(process.env.LIMIT_1M??300)};
+const LIMITS={"5m":Number(process.env.LIMIT_5M??1000),"1m":Number(process.env.LIMIT_1M??1000)};
 const collectedAt=Date.now();
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 
