@@ -1,4 +1,4 @@
-name: Extremum Regime V1 Release
+name: Market Intelligence V1 Release
 
 on:
   pull_request:
@@ -73,7 +73,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
-      group: adaptive-ten-production
+      group: market-intelligence-production
       cancel-in-progress: false
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -100,7 +100,7 @@ jobs:
           ' wrangler.jsonc >/dev/null
       - name: Deploy exact main
         run: npx wrangler deploy --config dist/server/wrangler.json
-      - name: Verify Extremum Regime V1 production health
+      - name: Verify Market Intelligence V1 production health
         run: |
           set -euo pipefail
           for i in $(seq 1 18); do
@@ -111,8 +111,8 @@ jobs:
               .runtime.stale == false and
               .runtime.lastError == null and
               .runtime.forward.version == "forward-relations-v1.0" and
-              .runtime.forward.strategyAuthorityVersion == "extremum-regime-v1" and
-              .runtime.forward.executionVersion == "extremum-regime-v1" and
+              .runtime.forward.strategyAuthorityVersion == "market-intelligence-v1" and
+              .runtime.forward.executionVersion == "market-intelligence-v1" and
               .runtime.forward.positionLimit == null and
               .runtime.forward.executionBboCapacity == 30 and
               .runtime.forward.minuteConfirmationCapacity == 11 and
@@ -144,7 +144,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
-      group: adaptive-ten-production
+      group: market-intelligence-production
       cancel-in-progress: false
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -178,7 +178,7 @@ jobs:
             if jq -e --arg sha "$head" '
               .runtime.buildSha == $sha and
               .runtime.authorityReady == true and .runtime.stale == false and .runtime.lastError == null and
-              .runtime.forward.strategyAuthorityVersion == "extremum-regime-v1" and
+              .runtime.forward.strategyAuthorityVersion == "market-intelligence-v1" and
               .runtime.forward.positionLimit == null and .runtime.forward.executionBboCapacity == 30 and .runtime.forward.minuteConfirmationCapacity == 11 and .runtime.forward.storage.error == null and
               .runtime.forward.lastCycleAt > 0 and .runtime.realtimeReadiness.capacity == 30 and
               .runtime.realtimeReadiness.protectedMarketsReady == true and .runtime.multiSourceMarket.healthySources >= 3 and
