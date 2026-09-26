@@ -41,7 +41,8 @@ const dayKey=(now:number)=>new Date(now+7*3600_000).toISOString().slice(0,10);
 const safe=(v:number|null|undefined,fallback=0)=>typeof v==="number"&&Number.isFinite(v)?v:fallback;
 
 export type Candle={time:number;open:number;high:number;low:number;close:number;volume:number};
-export type Quote={bestBid:number;bestAsk:number;observedAt:number;fresh:boolean;entryReady?:boolean;sourceCount?:number;disagreementRate?:number};
+export type Quote={bestBid:number;bestAsk:number;observedAt:number;fresh:boolean;entryReady?:boolean;sourceCount?:number;disagreementRate?:number;
+  sourceBreadth?:number;directionalAgreement?:number;medianShortMove?:number};
 export type Contract={quantoMultiplier:number;leverageMax:number;maintenanceRate:number;minContracts?:number;
   enableDecimal?:boolean;orderSizeMin?:string|number;orderSizeMax?:string|number;marketOrderSizeMax?:string|number};
 
