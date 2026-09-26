@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {buildMarketIntelligence,initialMarketIntelligenceState,intelligenceExitDecision,MARKET_INTELLIGENCE_VERSION} from "../lib/market-intelligence-engine.ts";
+import {buildMarketIntelligence,initialMarketIntelligenceState,MARKET_INTELLIGENCE_VERSION} from "../lib/market-intelligence-engine.ts";
+import {evaluatePositionIntelligence} from "../lib/position-intelligence-engine.ts";
 import {advanceForward,initialForward,resetForwardAccountPreservingLearning} from "../lib/forward-relations.ts";
 
 const T=2_000_000_000_000;
@@ -44,22 +45,61 @@ test("market narrative is stateful and does not mechanically flip on one weaker 
   assert.ok(second.state.history.length>=1);
 });
 
-test("trade lifecycle exits only when its own thesis degrades or risk boundary is hit",()=>{
-  const healthy={symbol:"ETH_USDT",watchScore:80,regime:"DIVERGENT" as const,stage:"READY" as const,clusterId:"corr:BTC_USDT",
-    correlation:.9,beta:1.1,volatility:.004,dataConfidence:90,actualMove:.01,expectedMove:.004,residual:.006,residualZ:1.2,
-    residualPersistence:.9,relativeStrength:.7,longScore:82,shortScore:28,pathLong:.75,pathShort:.25,roomLong:.02,roomShort:.01,
-    sourceCount:4,venueAgreement:.9,venuePressure:.4,reasons:[],signalSide:"LONG" as const,signalSince:T-600_000,signalBars:3,signalLastBar:T-300_000};
-  const hold=intelligenceExitDecision({side:"LONG",ageMin:90,signedRate:.012,peakFavorableRate:.018,firstProfit:true,stopRate:.009,stopped:false,
-    expectedHoldMinutes:180,maxHoldMinutes:450,invalidationBars:0,state:healthy});
-  assert.equal(hold.reason,null);assert.equal(hold.floorCandidate,0,"Market Intelligence must never trail/lock profit");
-  const broken={...healthy,longScore:35,shortScore:72,residualZ:-.8,signalSide:"SHORT" as const};
-  const firstWarning=intelligenceExitDecision({side:"LONG",ageMin:30,signedRate:-.003,peakFavorableRate:.002,firstProfit:false,stopRate:.009,stopped:false,
-    expectedHoldMinutes:180,maxHoldMinutes:450,invalidationBars:1,state:broken});
-  assert.equal(firstWarning.reason,null,"one contradictory completed bar is observation, not an exit");
-  const exit=intelligenceExitDecision({side:"LONG",ageMin:35,signedRate:-.003,peakFavorableRate:.002,firstProfit:false,stopRate:.009,stopped:false,
-    expectedHoldMinutes:180,maxHoldMinutes:450,invalidationBars:2,state:broken});
-  assert.equal(exit.reason,"THESIS_INVALIDATED");
+test("Position Intelligence does not let one detail or a market flip kill an independent strong trade",()=>{
+  const strong={symbol:"ETH_USDT",watchScore:84,regime:"DIVERGENT" as const,stage:"READY" as const,clusterId:"corr:ETH_USDT",
+    correlation:.7,beta:1.1,volatility:.003,dataConfidence:92,actualMove:.008,expectedMove:.002,residual:.006,residualZ:1.1,
+    residualPersistence:1,relativeStrength:.72,longScore:84,shortScore:22,pathLong:.72,pathShort:.28,roomLong:.018,roomShort:.008,
+    sourceCount:3,venueAgreement:.9,venuePressure:.35,reasons:[],signalSide:"LONG" as const,signalSince:T-900_000,signalBars:4,signalLastBar:T-300_000};
+  const bearishMarket={...initialMarketIntelligenceState(T).narrative,
+    major:{...initialMarketIntelligenceState(T).narrative.major,bias:"BEARISH" as const,score:-.5},
+    short:{...initialMarketIntelligenceState(T).narrative.short,bias:"BEARISH" as const,score:-.45},
+    transition:{...initialMarketIntelligenceState(T).narrative.transition,direction:"BEARISH" as const,pressure:60}};
+  const p=evaluatePositionIntelligence({now:T,side:"LONG",signedRate:.012,peakFavorableRate:.014,ageMin:55,firstProfit:true,
+    expectedHoldMinutes:220,stopRate:.009,entryScore:86,entryResidual:.0055,entryRelativeStrength:.70,entryRemainingSpaceRate:.025,
+    state:strong,narrative:bearishMarket,quote:{sourceCount:3,directionalAgreement:.9,sourceBreadth:.6,medianShortMove:.0003,
+      bookImbalance:.20,disagreementRate:.0002},minutePath:candles(100,.00035).slice(-10),marketStateAgeMs:30_000});
+  assert.equal(p.decision,"HOLD");
+  assert.ok(p.assessments.find(x=>x.family==="MARKET")?.stance==="CONCERN");
+  assert.ok(!p.concernFamilies.includes("MARKET"),"market context can never count as a self-exit family");
 });
+
+test("Position Intelligence requires independent concerns and two completed 5m reviews before active exit",()=>{
+  const broken={symbol:"ETH_USDT",watchScore:35,regime:"TRANSITION" as const,stage:"OBSERVE" as const,clusterId:"corr:ETH_USDT",
+    correlation:.7,beta:1.1,volatility:.004,dataConfidence:90,actualMove:-.009,expectedMove:.001,residual:-.008,residualZ:-1.1,
+    residualPersistence:1,relativeStrength:.30,longScore:28,shortScore:78,pathLong:.25,pathShort:.75,roomLong:.003,roomShort:.018,
+    sourceCount:3,venueAgreement:1,venuePressure:-.65,reasons:[],signalSide:"SHORT" as const,signalSince:T-300_000,signalBars:2,signalLastBar:T-300_000};
+  const minute=candles(100,-.0007).slice(-10);
+  const first=evaluatePositionIntelligence({now:T,side:"LONG",signedRate:.004,peakFavorableRate:.018,ageMin:80,firstProfit:true,
+    expectedHoldMinutes:220,stopRate:.009,entryScore:88,entryResidual:.007,entryRelativeStrength:.75,entryRemainingSpaceRate:.022,
+    state:broken,narrative:initialMarketIntelligenceState(T).narrative,quote:{sourceCount:3,directionalAgreement:1,sourceBreadth:-1,
+      medianShortMove:-.001,bookImbalance:-.35,disagreementRate:.0002},minutePath:minute,marketStateAgeMs:20_000});
+  assert.equal(first.decision,"REVIEW");
+  assert.ok(first.concernFamilies.length>=2);
+  const secondState={...broken,signalLastBar:T};
+  const second=evaluatePositionIntelligence({now:T+300_000,side:"LONG",signedRate:.002,peakFavorableRate:.018,ageMin:85,firstProfit:true,
+    expectedHoldMinutes:220,stopRate:.009,entryScore:88,entryResidual:.007,entryRelativeStrength:.75,entryRemainingSpaceRate:.022,
+    state:secondState,narrative:initialMarketIntelligenceState(T).narrative,quote:{sourceCount:3,directionalAgreement:1,sourceBreadth:-1,
+      medianShortMove:-.001,bookImbalance:-.35,disagreementRate:.0002},minutePath:minute,marketStateAgeMs:20_000,previous:first});
+  assert.equal(second.reviewBars,2);
+  assert.equal(second.decision,"EXIT");
+});
+
+test("stale market intelligence can review but cannot trigger an active intelligent exit",()=>{
+  const broken={symbol:"ETH_USDT",watchScore:30,regime:"TRANSITION" as const,stage:"OBSERVE" as const,clusterId:"corr:ETH_USDT",
+    correlation:.7,beta:1,volatility:.004,dataConfidence:95,actualMove:-.01,expectedMove:0,residual:-.009,residualZ:-1.2,
+    residualPersistence:1,relativeStrength:.25,longScore:25,shortScore:80,pathLong:.2,pathShort:.8,roomLong:.002,roomShort:.02,
+    sourceCount:3,venueAgreement:1,venuePressure:-.7,reasons:[],signalSide:"SHORT" as const,signalSince:T-600_000,signalBars:3,signalLastBar:T};
+  const prior=evaluatePositionIntelligence({now:T,side:"LONG",signedRate:.002,peakFavorableRate:.02,ageMin:90,firstProfit:true,
+    expectedHoldMinutes:220,stopRate:.01,entryScore:90,entryResidual:.008,entryRelativeStrength:.8,entryRemainingSpaceRate:.025,
+    state:broken,quote:{sourceCount:3,bookImbalance:-.4,disagreementRate:.0001},minutePath:candles(100,-.0008).slice(-10),marketStateAgeMs:20_000});
+  const next=evaluatePositionIntelligence({now:T+300_000,side:"LONG",signedRate:.001,peakFavorableRate:.02,ageMin:95,firstProfit:true,
+    expectedHoldMinutes:220,stopRate:.01,entryScore:90,entryResidual:.008,entryRelativeStrength:.8,entryRemainingSpaceRate:.025,
+    state:{...broken,signalLastBar:T+300_000},quote:{sourceCount:3,bookImbalance:-.4,disagreementRate:.0001},
+    minutePath:candles(100,-.0008).slice(-10),marketStateAgeMs:20*60_000,previous:prior});
+  assert.notEqual(next.decision,"EXIT");
+  assert.equal(next.dataConfidence,0);
+});
+
 
 test("L0 macro stays unconfirmed until real daily coverage exists",()=>{
   const paths={BTC_USDT:candles(100,.0012),ETH_USDT:candles(100,.0011),SOL_USDT:candles(100,.0013)};
@@ -171,4 +211,16 @@ test("PAPER balance reset cannot turn the already-processed 5m bar into a fresh 
   const next=advanceForward({state:reset,now,paths,quotes,contracts,entrySymbols:Object.keys(paths)}).state;
   assert.equal(next.positions.length,0,"reset must not make the same completed 5m step executable again");
   assert.equal(next.entryDiagnostics.opened,0);
+});
+
+
+test("Market evidence is eventized: repeated observations merge into one evolving episode",()=>{
+  const paths={BTC_USDT:candles(100,.0011),ETH_USDT:candles(100,.0012),SOL_USDT:candles(100,.0010)};
+  const quotes=Object.fromEntries(Object.entries(paths).map(([s,v])=>[s,q(v.at(-1)!.close,.0004)]));
+  const first=buildMarketIntelligence({paths,quotes,previous:initialMarketIntelligenceState(T-600_000),now:T});
+  const second=buildMarketIntelligence({paths,quotes,previous:first.state,now:T+30_000});
+  const byKey=(rows:typeof second.state.evidence)=>rows.filter(x=>x.type==="BREADTH_EXPANSION"||x.type==="BREADTH_CONTRACTION");
+  const episodes=byKey(second.state.evidence);
+  assert.ok(episodes.length<=1,"same breadth condition must be one episode, not repeated bullish/bearish votes");
+  if(episodes[0]){assert.ok((episodes[0].samples??1)>=1);assert.ok((episodes[0].firstAt??episodes[0].at)<=(episodes[0].lastAt??episodes[0].at));}
 });
