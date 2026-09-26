@@ -1,4 +1,4 @@
-import type {LinearHead,PredictiveFeatureVector,PredictivePathArtifact,PredictivePathForecast,RegressionHead} from "./predictive-path-types.ts";
+import type {LinearHead,PredictiveFeatureVector,PredictiveHead,PredictivePathArtifact,PredictivePathForecast,PredictiveTreeNode} from "./predictive-path-types.ts";
 import {PREDICTIVE_PATH_VERSION} from "./predictive-path-types.ts";
 
 const sigmoid=(x:number)=>x>=0?1/(1+Math.exp(-x)):Math.exp(x)/(1+Math.exp(x));
@@ -6,22 +6,35 @@ const clamp=(v:number,a:number,b:number)=>Math.max(a,Math.min(b,v));
 function normalized(feature:PredictiveFeatureVector,artifact:PredictivePathArtifact){
   if(feature.names.length!==artifact.featureNames.length||feature.names.some((x,i)=>x!==artifact.featureNames[i]))
     throw new Error("predictive feature schema mismatch");
-  return feature.values.map((v,i)=>(v-artifact.mean[i]!)/Math.max(artifact.scale[i]!,1e-9));
+  const mean=artifact.mean??Array(feature.values.length).fill(0),scale=artifact.scale??Array(feature.values.length).fill(1);
+  return feature.values.map((v,i)=>(v-(mean[i]??0))/Math.max(scale[i]??1,1e-9));
 }
-function raw(head:{bias:number;weights:number[]},x:number[]){if(head.weights.length!==x.length)throw new Error("predictive head width mismatch");
-  return head.bias+head.weights.reduce((s,w,i)=>s+w*x[i]!,0);}
-function prob(head:LinearHead,x:number[]){const z=raw(head,x),p=sigmoid(z);return head.calibration?sigmoid(head.calibration.a*z+head.calibration.b):p;}
-function reg(head:RegressionHead,x:number[]){return raw(head,x);}
+function treeValue(node:PredictiveTreeNode,x:number[]):number{
+  if(typeof node.v==="number")return node.v;
+  const f=node.f;if(typeof f!=="number"||!node.l||!node.r)throw new Error("invalid predictive tree node");
+  const value=x[f],goLeft=Number.isFinite(value)?value<=Number(node.t??0):node.d!==false;
+  return treeValue(goLeft?node.l:node.r,x);
+}
+function raw(head:PredictiveHead,feature:PredictiveFeatureVector,artifact:PredictivePathArtifact){
+  if(head.kind==="lgbm")return head.baseScore+head.trees.reduce((s,t)=>s+treeValue(t,feature.values),0);
+  const x=normalized(feature,artifact);if(head.weights.length!==x.length)throw new Error("predictive head width mismatch");
+  return head.bias+head.weights.reduce((s,w,i)=>s+w*x[i]!,0);
+}
+function prob(head:PredictiveHead,feature:PredictiveFeatureVector,artifact:PredictivePathArtifact){
+  const z=raw(head,feature,artifact);return head.calibration?sigmoid(head.calibration.a*z+head.calibration.b):sigmoid(z);
+}
+function reg(head:PredictiveHead,feature:PredictiveFeatureVector,artifact:PredictivePathArtifact){return raw(head,feature,artifact);}
 
 export function forecastPredictivePath(feature:PredictiveFeatureVector,artifact:PredictivePathArtifact):PredictivePathForecast{
   if(artifact.version!==PREDICTIVE_PATH_VERSION)throw new Error("predictive artifact version mismatch");
-  const x=normalized(feature,artifact),p15=prob(artifact.direction["15"],x),p30=prob(artifact.direction["30"],x),
-    p60=prob(artifact.direction["60"],x),p120=prob(artifact.direction["120"],x),
-    r15=reg(artifact.expectedReturn["15"],x),r30=reg(artifact.expectedReturn["30"],x),r60=reg(artifact.expectedReturn["60"],x),r120=reg(artifact.expectedReturn["120"],x),
-    lm=Math.max(0,reg(artifact.longMfe60,x)),la=Math.max(0,reg(artifact.longMae60,x)),
-    sm=Math.max(0,reg(artifact.shortMfe60,x)),sa=Math.max(0,reg(artifact.shortMae60,x)),
-    touchLong=prob(artifact.longTargetBeforeRisk60,x),touchShort=prob(artifact.shortTargetBeforeRisk60,x),
-    regretLong=Math.max(0,reg(artifact.longEntryRegret10,x)),regretShort=Math.max(0,reg(artifact.shortEntryRegret10,x)),
+  const p15=prob(artifact.direction["15"],feature,artifact),p30=prob(artifact.direction["30"],feature,artifact),
+    p60=prob(artifact.direction["60"],feature,artifact),p120=prob(artifact.direction["120"],feature,artifact),
+    r15=reg(artifact.expectedReturn["15"],feature,artifact),r30=reg(artifact.expectedReturn["30"],feature,artifact),
+    r60=reg(artifact.expectedReturn["60"],feature,artifact),r120=reg(artifact.expectedReturn["120"],feature,artifact),
+    lm=Math.max(0,reg(artifact.longMfe60,feature,artifact)),la=Math.max(0,reg(artifact.longMae60,feature,artifact)),
+    sm=Math.max(0,reg(artifact.shortMfe60,feature,artifact)),sa=Math.max(0,reg(artifact.shortMae60,feature,artifact)),
+    touchLong=prob(artifact.longTargetBeforeRisk60,feature,artifact),touchShort=prob(artifact.shortTargetBeforeRisk60,feature,artifact),
+    regretLong=Math.max(0,reg(artifact.longEntryRegret10,feature,artifact)),regretShort=Math.max(0,reg(artifact.shortEntryRegret10,feature,artifact)),
     qIndex=feature.names.indexOf("source_count"),aIndex=feature.names.indexOf("source_agreement"),
     bIndex=feature.names.indexOf("source_breadth"),dIndex=feature.names.indexOf("source_disagreement"),
     sourceCount=qIndex>=0?Math.round(feature.values[qIndex]!*5):0,
