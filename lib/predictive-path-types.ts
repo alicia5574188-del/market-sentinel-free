@@ -1,0 +1,44 @@
+export const PREDICTIVE_PATH_VERSION="predictive-path-v1";
+
+export type PredictiveBar={time:number;open:number;high:number;low:number;close:number;volume:number};
+export type PredictiveQuote={bestBid:number;bestAsk:number;observedAt:number;fresh:boolean;entryReady?:boolean;
+  sourceCount?:number;disagreementRate?:number;sourceBreadth?:number;directionalAgreement?:number;medianShortMove?:number};
+export type PredictiveAncillary={fundingRate?:number;openInterest?:number;openInterestChangeRate?:number;
+  liquidationLongNotionalRate?:number;liquidationShortNotionalRate?:number;liquidationImbalance?:number;
+  btcReturn15m?:number;btcReturn60m?:number;ethReturn15m?:number;ethReturn60m?:number;marketBreadth?:number};
+export type PredictiveFeatureVector={version:typeof PREDICTIVE_PATH_VERSION;symbol:string;decisionAt:number;names:string[];values:number[];
+  groups:Record<string,number[]>};
+export type LinearHead={bias:number;weights:number[];calibration?:{a:number;b:number}};
+export type RegressionHead={bias:number;weights:number[]};
+export type PredictivePathArtifact={
+  version:typeof PREDICTIVE_PATH_VERSION;
+  trainedAt:number;
+  source:string;
+  featureNames:string[];
+  mean:number[];
+  scale:number[];
+  costRate:number;
+  horizons:[15,30,60,120];
+  direction:Record<"15"|"30"|"60"|"120",LinearHead>;
+  expectedReturn:Record<"15"|"30"|"60"|"120",RegressionHead>;
+  longMfe60:RegressionHead;
+  longMae60:RegressionHead;
+  shortMfe60:RegressionHead;
+  shortMae60:RegressionHead;
+  targetBeforeRisk60:LinearHead;
+  longEntryRegret10:RegressionHead;
+  shortEntryRegret10:RegressionHead;
+  metrics:Record<string,number>;
+};
+export type PredictivePathForecast={
+  version:typeof PREDICTIVE_PATH_VERSION;symbol:string;at:number;
+  upProbability:{m15:number;m30:number;m60:number;m120:number};
+  expectedReturn:{m15:number;m30:number;m60:number;m120:number};
+  long:{mfe60:number;mae60:number;targetBeforeRisk60:number;entryRegret10:number;netEv60:number};
+  short:{mfe60:number;mae60:number;targetBeforeRisk60:number;entryRegret10:number;netEv60:number};
+  crossVenue:{sourceCount:number;agreement:number;breadth:number;disagreementRate:number};
+  preferredSide:"LONG"|"SHORT"|null;
+  enterNow:boolean;
+  waitReason:string|null;
+  confidence:number;
+};
