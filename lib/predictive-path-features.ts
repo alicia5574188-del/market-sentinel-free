@@ -23,6 +23,19 @@ function cmf(rows:PredictiveBar[],period=20){const r=tail(rows,period);let num=0
   num+=(((x.close-x.low)-(x.high-x.close))/range)*x.volume;den+=x.volume;}return den?num/den:0;}
 function obvSlope(rows:PredictiveBar[],period=20){const r=tail(rows,period+1);if(r.length<2)return 0;let obv=0;const a=[0];
   for(let i=1;i<r.length;i++){obv+=Math.sign(r[i]!.close-r[i-1]!.close)*r[i]!.volume;a.push(obv);}const denom=Math.max(mean(r.map(x=>x.volume)),EPS);return slope(a)/denom;}
+function dmiAdx(rows:PredictiveBar[],period=14){const r=tail(rows,period+1);if(r.length<3)return{plus:0,minus:0,adx:0};let tr=0,plus=0,minus=0;
+  const dx:number[]=[];for(let i=1;i<r.length;i++){const a=r[i-1]!,b=r[i]!,t=Math.max(b.high-b.low,Math.abs(b.high-a.close),Math.abs(b.low-a.close)),
+    up=b.high-a.high,down=a.low-b.low,p=up>down&&up>0?up:0,m=down>up&&down>0?down:0;tr+=t;plus+=p;minus+=m;
+    const pdi=tr>EPS?plus/tr:0,mdi=tr>EPS?minus/tr:0;dx.push((pdi+mdi)>EPS?Math.abs(pdi-mdi)/(pdi+mdi):0);}
+  const pdi=tr>EPS?plus/tr:0,mdi=tr>EPS?minus/tr:0;return{plus:pdi,minus:mdi,adx:mean(tail(dx,period))};}
+function autocorr(v:number[],lag=1){if(v.length<=lag+2)return 0;const a=v.slice(lag),b=v.slice(0,-lag),ma=mean(a),mb=mean(b),
+  num=a.reduce((s,x,i)=>s+(x-ma)*(b[i]!-mb),0),da=Math.sqrt(a.reduce((s,x)=>s+(x-ma)**2,0)),db=Math.sqrt(b.reduce((s,x)=>s+(x-mb)**2,0));
+  return da*db>EPS?num/(da*db):0;}
+function signEntropy(v:number[]){if(!v.length)return 0;const p=v.filter(x=>x>0).length/v.length,n=v.filter(x=>x<0).length/v.length,z=Math.max(0,1-p-n);
+  return-[p,n,z].filter(x=>x>0).reduce((s,x)=>s+x*Math.log(x),0)/Math.log(3);}
+function weightedPrice(rows:PredictiveBar[]){let num=0,den=0;for(const x of rows){const tp=(x.high+x.low+x.close)/3,w=Math.max(0,x.volume);num+=tp*w;den+=w;}return den>EPS?num/den:(rows.at(-1)?.close??0);}
+function varianceRatio(returns:number[],k=3){if(returns.length<k*4)return 1;const one=std(returns)**2;if(one<EPS)return 1;const agg:number[]=[];
+  for(let i=k-1;i<returns.length;i++)agg.push(returns.slice(i-k+1,i+1).reduce((a,b)=>a+b,0));return (std(agg)**2)/(k*one);}
 function add(names:string[],values:number[],groups:Record<string,number[]>,group:string,name:string,value:number){
   names.push(name);values.push(clamp(value));(groups[group]??=[]).push(names.length-1);
 }
@@ -54,6 +67,27 @@ export function buildPredictiveFeatures(input:{symbol:string;decisionAt:number;b
   add(names,values,groups,"technical","williams_r",(hi20-price)/Math.max(hi20-lo20,EPS)-.5);
   const r14=tail(rows,14),hi14=Math.max(...r14.map(x=>x.high)),lo14=Math.min(...r14.map(x=>x.low));
   add(names,values,groups,"technical","stoch14",(price-lo14)/Math.max(hi14-lo14,EPS)-.5);
+  const dmi=dmiAdx(rows,14);add(names,values,groups,"technical","dmi_plus",dmi.plus);add(names,values,groups,"technical","dmi_minus",dmi.minus);
+  add(names,values,groups,"technical","adx14",dmi.adx);add(names,values,groups,"technical","dmi_spread",dmi.plus-dmi.minus);
+  add(names,values,groups,"technical","boll_width",ma20>EPS?4*sd20/ma20:0);
+  add(names,values,groups,"technical","keltner_pos",(price-ema(closes,20))/Math.max(2*atr(rows,20),EPS));
+  const tenkanRows=tail(rows,9),kijunRows=tail(rows,26),spanBRows=tail(rows,52),
+    tenkan=(Math.max(...tenkanRows.map(x=>x.high))+Math.min(...tenkanRows.map(x=>x.low)))/2,
+    kijun=(Math.max(...kijunRows.map(x=>x.high))+Math.min(...kijunRows.map(x=>x.low)))/2,
+    spanA=(tenkan+kijun)/2,spanB=(Math.max(...spanBRows.map(x=>x.high))+Math.min(...spanBRows.map(x=>x.low)))/2;
+  add(names,values,groups,"technical","ichimoku_tenkan_gap",price/Math.max(tenkan,EPS)-1);
+  add(names,values,groups,"technical","ichimoku_kijun_gap",price/Math.max(kijun,EPS)-1);
+  add(names,values,groups,"technical","ichimoku_cloud_gap",price/Math.max((spanA+spanB)/2,EPS)-1);
+  const vwap20=weightedPrice(r20),vwap48=weightedPrice(tail(rows,48));
+  add(names,values,groups,"technical","vwap20_gap",price/Math.max(vwap20,EPS)-1);add(names,values,groups,"technical","vwap48_gap",price/Math.max(vwap48,EPS)-1);
+  const vpStd=std(r20.map(x=>(x.high+x.low+x.close)/3));add(names,values,groups,"technical","volume_profile_z",vpStd>EPS?(price-vwap20)/vpStd:0);
+  const rangeMid=(hi20+lo20)/2,superUpper=rangeMid+3*atr(rows,10),superLower=rangeMid-3*atr(rows,10);
+  add(names,values,groups,"technical","supertrend_position",price>superUpper?1:price<superLower?-1:(price-rangeMid)/Math.max(superUpper-superLower,EPS)*2);
+  const rets=tail(closes,49).slice(1).map((x,i)=>x/tail(closes,49)[i]!-1);
+  add(names,values,groups,"state","autocorr1",autocorr(rets,1));add(names,values,groups,"state","autocorr3",autocorr(rets,3));
+  add(names,values,groups,"state","sign_entropy",signEntropy(rets));add(names,values,groups,"state","variance_ratio3",varianceRatio(rets,3)-1);
+  add(names,values,groups,"state","atr_ratio",atr28>EPS?atr14/atr28-1:0);
+  add(names,values,groups,"state","range_expansion",(last.high-last.low)/Math.max(atr(rows,28),EPS)-1);
   add(names,values,groups,"flow","mfi14",(mfi(rows,14)-50)/50);add(names,values,groups,"flow","cmf20",cmf(rows,20));
   add(names,values,groups,"flow","obv_slope20",obvSlope(rows,20));
   const v20=tail(volumes,20),vm=mean(v20),vs=std(v20);add(names,values,groups,"flow","volume_z20",vs>EPS?(volumes.at(-1)!-vm)/vs:0);
@@ -72,6 +106,9 @@ export function buildPredictiveFeatures(input:{symbol:string;decisionAt:number;b
   add(names,values,groups,"derivatives","taker_lsr_log",a.takerLongShortLog??0);
   add(names,values,groups,"derivatives","account_lsr_log",a.accountLongShortLog??0);
   add(names,values,groups,"derivatives","top_lsr_log",a.topLongShortLog??0);
+  add(names,values,groups,"interaction","ret12_x_oi",ret(12)*(a.openInterestChangeRate??0));
+  add(names,values,groups,"interaction","ret12_x_funding",ret(12)*(a.fundingRate??0)*100);
+  add(names,values,groups,"interaction","ret12_x_basis",ret(12)*(a.basisRate??0));
   add(names,values,groups,"liquidation","liq_imbalance",a.liquidationImbalance??0);
   add(names,values,groups,"liquidation","liq_long_rate",a.liquidationLongNotionalRate??0);
   add(names,values,groups,"liquidation","liq_short_rate",a.liquidationShortNotionalRate??0);
