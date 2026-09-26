@@ -6,6 +6,7 @@ import {recordWindows,archivePage} from "../lib/record-view.ts";
 import {ArchivePagination} from "./record-controls.tsx";
 import EquityCurve from "./equity-curve.tsx";
 import {EquityHistoryCache} from "../lib/equity-cache.ts";
+import ExtremumExecution from "./extremum-execution.tsx";
 
 type View=ReturnType<typeof forwardSummary>;
 type Tab="overview"|"execution"|"paper"|"live"|"journal"|"settings";
@@ -13,8 +14,8 @@ const fmt=(v:number|null|undefined,d=2)=>typeof v==="number"&&Number.isFinite(v)
 const signed=(v:number|null|undefined,d=2)=>typeof v==="number"&&Number.isFinite(v)?`${v>=0?"+":""}${fmt(v,d)}`:"—";
 const time=(v?:number|null)=>v?new Date(v).toLocaleString("zh-CN",{timeZone:"Asia/Vientiane",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}):"—";
 const duration=(start:number,end:number|null|undefined,now:number)=>{const m=Math.floor(Math.max(0,(end??now)-start)/60000);return m<1?"<1分钟":m>=60?`${Math.floor(m/60)}小时${m%60}分`:`${m}分钟`;};
-const modeName=(mode:string)=>({RELATION:"市场关系",BREAKOUT:"市场关系 · 突破执行",RETEST:"市场关系 · 回踩执行",FAILED_BREAKOUT:"市场关系 · 失败突破执行",RANGE:"市场关系 · 区域执行"}[mode]??mode);
-const exitName=(reason:string|null)=>reason?({STRUCTURE_STOP:"结构止损",PROFIT_GIVEBACK:"利润保护",MARKET_FLIP:"独立反向关系",RELATION_DEGRADED:"关系降级",NO_POSITIVE_FEEDBACK:"无正向反馈",SAMPLE_PATH_DIVERGED:"样本路径失配",SAMPLE_EDGE_EXHAUSTED:"样本优势耗尽",SAMPLE_MAX_HOLD:"样本最大持仓",TIME_DECAY:"持仓超时",OPPORTUNITY_REPLACED:"更优机会替换",STRUCTURAL_INTERRUPT_REVERSAL:"极端结构反转",SHOCK_REENTRY:"突变重新回区",FAST_STRUCTURE_FAILURE:"强结构快速失效",ACCOUNT_RESET:"手动重置"}[reason]??reason):"—";
+const modeName=(mode:string)=>({SWING:"峰谷反转",TREND_PULLBACK:"趋势回调进攻",IMPULSE:"单边推进追击",RELATION:"旧关系兼容",BREAKOUT:"旧突破兼容",RETEST:"旧回踩兼容",FAILED_BREAKOUT:"旧失败突破兼容",RANGE:"旧区域兼容",SHOCK:"旧突变兼容"}[mode]??mode);
+const exitName=(reason:string|null)=>reason?({STRUCTURE_STOP:"结构止损",PROFIT_GIVEBACK:"利润保护",ENTRY_FEEDBACK_FAILED:"入场后未获得正反馈",OPPOSITE_EXTREMUM:"相反峰谷确认",TREND_DEATH:"趋势死亡",EXTREMUM_PROFIT_EXIT:"极值利润退出",NO_PROGRESS:"长时间无进展",MAX_HOLD:"最大持仓时间",MARKET_FLIP:"旧独立反向关系",RELATION_DEGRADED:"旧关系降级",NO_POSITIVE_FEEDBACK:"旧无正向反馈",SAMPLE_PATH_DIVERGED:"旧样本路径失配",SAMPLE_EDGE_EXHAUSTED:"旧样本优势耗尽",SAMPLE_MAX_HOLD:"旧样本最大持仓",TIME_DECAY:"旧持仓超时",OPPORTUNITY_REPLACED:"更优机会替换",STRUCTURAL_INTERRUPT_REVERSAL:"旧极端结构反转",SHOCK_REENTRY:"旧突变重新回区",FAST_STRUCTURE_FAILURE:"旧强结构快速失效",ACCOUNT_RESET:"手动重置"}[reason]??reason):"—";
 
 export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,livePanel,liveSystemPanel,liveEnabled,liveOverview,accountPanel,memberName,cacheScope="owner"}:{
   data:View|null;healthy:boolean;statusLabel?:string;feedAt:number|null;error:string|null;livePanel:ReactNode;liveSystemPanel?:ReactNode;
@@ -34,7 +35,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   const fontVars:Record<string,string>={};for(let px=10;px<=64;px++)fontVars[`--fr-fs${px}`]=`${(px*fontScale/100).toFixed(2)}px`;
   const exportSnapshot=async()=>{if(exporting)return;setExporting(true);setExportStatus(null);try{
     const r=await fetch("/api/forward/export",{cache:"no-store",credentials:"same-origin"});if(!r.ok)throw new Error();
-    const blob=await r.blob(),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`forward-path-relation-v3-snapshot-${new Date().toISOString().slice(0,10)}.json`;
+    const blob=await r.blob(),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`extremum-regime-v1-snapshot-${new Date().toISOString().slice(0,10)}.json`;
     document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);setExportStatus("已开始下载。");
   }catch{setExportStatus("导出失败，请重试。");}finally{setExporting(false);}};
 
@@ -46,15 +47,15 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   const paperMargin=positions.reduce((n,t)=>n+t.margin,0),plannedRisk=positions.reduce((n,t)=>n+Math.max(t.plannedRisk,t.entryContext?.portfolioRiskCharge??((t.forecast?.sizingEquity??0)*(t.entryContext?.reserve===true?.003:.006))),0),riskUse=data?.equity?plannedRisk/data.equity:0,elapsed=data&&now?Math.max(0,(now-data.startedAt)/3600000):null;
   const systemStatus=statusLabel==="后台运行中"?"正常":statusLabel?.startsWith("后台运行中 · ")?statusLabel.slice(8):statusLabel??(healthy?"正常":"行情恢复中");
   const nav:[Tab,string,string][]=[["overview","◉","总览"],["execution","⌘","执行"],["paper","⇄","模拟"],["live","◈","实盘"],["journal","≋","记录"],["settings","⊙","系统"]];
-  return <main className="fr-app" style={fontVars as CSSProperties} data-ui-version="forward-path-relation-v3">
-    <header className="fr-header"><div className="fr-brand"><span className="fr-emblem">↗</span><div><b>哨兵 · Forward Path Relation 3.0</b><small>CAUSAL RESPONSE · LIFECYCLE · RISK MIGRATION</small></div></div><span className={`fr-status ${healthy?"is-on":""}`}><i/>{healthy?"真实行情在线":"连接中"}</span></header>
+  return <main className="fr-app" style={fontVars as CSSProperties} data-ui-version="extremum-regime-v1">
+    <header className="fr-header"><div className="fr-brand"><span className="fr-emblem">↗</span><div><b>哨兵 · 峰谷状态系统</b><small>EXTREMUM · TREND SURVIVAL · LIVE PARITY</small></div></div><span className={`fr-status ${healthy?"is-on":""}`}><i/>{healthy?"真实行情在线":"连接中"}</span></header>
     <div className="fr-subhead"><span>Gate USDT 永续 · 30市场扫描 · 无席位数量上限 · 30执行BBO</span><span>实盘{liveEnabled?"已请求开启":"关闭"} · 所有者控制</span></div>
     {memberName&&<p className="fr-note">{memberName} · 共用同一策略事件源，实盘账户与API完全独立。</p>}
 
     {tab==="overview"&&<>
-      <section className="fr-hero"><div className="fr-hero-copy"><span className="fr-kicker">FORWARD PATH RELATION 3.0</span><h1>{systemStatus==="正常"?"系统正在正常运行":`系统状态：${systemStatus}`}</h1>
+      <section className="fr-hero"><div className="fr-hero-copy"><span className="fr-kicker">EXTREMUM REGIME V1</span><h1>{systemStatus==="正常"?"系统正在正常运行":`系统状态：${systemStatus}`}</h1>
         <p>{data?.latestReason??"正在读取交易核心。"}</p>
-        <div className="fr-hero-tags"><span>连续运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>5–60m完整路径</span><span>同根样本多检查点</span><span>风险决定持仓数量</span><span>旧关系快速降权</span><span>反向独立确认</span></div></div>
+        <div className="fr-hero-tags"><span>连续运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>5m判断状态</span><span>1m确认峰谷</span><span>多源一致性</span><span>入场后即时验证</span><span>退出与反手分离</span></div></div>
         <div className="fr-equity"><small>模拟账户权益 · USDT</small><strong>{fmt(data?.equity)}</strong><div className={(data?.netPnl??0)>=0?"fr-positive":"fr-negative"}>{signed(data?.netPnl)} <span>U · {signed(data?data.netPnl/data.initialEquity*100:null)}%</span></div>
           <footer><span>起点 {fmt(data?.initialEquity,0)}</span><span>最大回撤 {fmt(data?data.maxDrawdown*100:null)}%</span></footer></div></section>
       <section className="fr-stats">
