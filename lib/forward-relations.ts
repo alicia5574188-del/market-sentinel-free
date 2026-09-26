@@ -5,7 +5,7 @@ import { familyExperimentSummary, initialFamilyExperimentState, isFamilyFailure,
 import { initialRelationEngine, normalizeRelationEngine,
   type RelationCandidate, type RelationEngineState, type RelationExitProfile, type RelationStatus } from "./forward-relation-v2.ts";
 import { STRUCTURAL_INTERRUPT_VERSION, initialStructuralInterruptState, normalizeStructuralInterruptState,
-  structuralInterruptBlockReason, type StructuralInterruptState } from "./forward-structural-interrupt.ts";
+  type StructuralInterruptState } from "./forward-structural-interrupt.ts";
 import { EXTREMUM_REGIME_VERSION, buildExtremumRegime, extremumExitDecision, urgentMinuteSymbols as extremumUrgentMinuteSymbols,
   type ExtremumRegimeState, type ExtremumSymbolState } from "./extremum-regime-engine.ts";
 
