@@ -5,6 +5,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import brier_score_loss, accuracy_score, mean_absolute_error
 
 INPUT=os.environ.get("PREDICTIVE_TRAINING_SET","/tmp/predictive-training.jsonl")
+META=os.environ.get("PREDICTIVE_TRAINING_META","/tmp/predictive-training-meta.json")
 OUTPUT=os.environ.get("PREDICTIVE_ARTIFACT","lib/predictive-path-artifact-v1.json")
 COST=0.0019
 rows=[]
@@ -12,11 +13,11 @@ with open(INPUT,"r",encoding="utf-8") as f:
     for line in f:
         if line.strip(): rows.append(json.loads(line))
 if len(rows)<20000: raise RuntimeError(f"insufficient rows {len(rows)}")
+with open(META,"r",encoding="utf-8") as f: meta=json.load(f)
+names=list(meta.get("featureNames") or [])
+if not names: raise RuntimeError("missing predictive feature schema")
 rows.sort(key=lambda r:r["at"])
-names=None
 for r in rows:
-    if names is None:
-        names=[f"f{i}" for i in range(len(r["x"]))]
     if len(r["x"])!=len(names): raise RuntimeError("feature width drift")
 n=len(rows); t1=rows[int(n*.70)]["at"]; t2=rows[int(n*.85)]["at"]; embargo=120*60*1000
 train=[r for r in rows if r["at"]<t1-embargo]
@@ -170,7 +171,7 @@ metrics["shortRegretMae"]=float(mean_absolute_error([r["shortRegret"] for r in t
 
 artifact={"version":"predictive-path-v1","trainedAt":int(time.time()*1000),
           "source":"gate-official-5m+gate-stats-funding-premium+lightgbm",
-          "featureNames":[f"f{i}" for i in range(feature_count)],"costRate":COST,"horizons":[15,30,60,120],
+          "featureNames":names,"costRate":COST,"horizons":[15,30,60,120],
           "direction":direction_heads,"expectedReturn":return_heads,
           "longMfe60":export_head(mfe),"longMae60":export_head(mae),"shortMfe60":export_head(mae),"shortMae60":export_head(mfe),
           "longTargetBeforeRisk60":export_head(touch_l,touch_l_cal),"shortTargetBeforeRisk60":export_head(touch_s,touch_s_cal),
