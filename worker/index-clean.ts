@@ -517,16 +517,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private turnoverPersisted: {accountKey:string;at:number} | null = null;
   protected nonAlarmPendingWrites = 0;
   protected liveSyncWork: Promise<void> | null = null;
-  private liveBackgroundWork: Promise<void> | null = null;
-  private liveSourcePending=false;
-  private liveFastSourcePending=false;
-  private livePreferCachedNext=false;
   private liveSnapshotCache:GateLiveSnapshot|null=null;
   private liveOrderSnapshotCache:GateLiveOrderSnapshot|null=null;
   private liveOrderAuditAt=0;
-  private liveNextReconcileAt=0;
-  private liveSyncUsedCached=false;
-  private liveExecution={version:"event-driven-live-v2",cycles:0,sourceWakeups:0,
+  private liveExecution={version:"stable-loop-live-v1",cycles:0,sourceWakeups:0,
     startedAt:null as number|null,finishedAt:null as number|null,lastDurationMs:null as number|null};
   private liveReadTimeoutStreak=0;
   protected liveJournal = new Map<string, unknown>();
@@ -1094,8 +1088,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // Publish only committed lifecycle events. A source born in the candle
       // lane must not wait for the next alarm; a source closed while Gate is
       // awaiting I/O must wake the serialized reconciler as well.
-      if(previous.positions.length!==next.state.positions.length
-        ||previous.positions.some(p=>!next.state.positions.some(n=>n.id===p.id)))this.launchLiveWork(true);
+      // LIVE is reconciled synchronously by the primary alarm immediately after
+      // this durable PAPER commit, matching the proven 2026-09-20 execution path.
     } catch (error) { this.forwardError = safeError(error); }
     finally { this.forwardBusy = false; }
   }
@@ -2017,49 +2011,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return current;
   }
 
-  private launchLiveWork(sourceChanged=false) {
-    if(!this.liveNeedsSync())return;
-    const requestedAt=Date.now();
-    if(sourceChanged){
-      this.liveSourcePending=true;this.liveFastSourcePending=true;this.liveExecution.sourceWakeups++;
-    }else if(requestedAt<this.liveNextReconcileAt)return;
-    if(this.liveBackgroundWork)return;
-    const task=(async()=>{
-      do{
-        const preferCached=this.liveFastSourcePending;
-        this.liveFastSourcePending=false;this.liveSourcePending=false;this.liveSyncUsedCached=false;
-        const started=Date.now(),requestsBefore=this.liveClient?.requestCount??0;
-        this.liveExecution.startedAt=started;this.liveExecution.cycles++;
-        try{
-          this.livePreferCachedNext=preferCached;
-          await this.syncLive(started);
-          // If a committed PAPER source was handled from a very recent verified
-          // Gate snapshot, immediately follow with one network reconciliation.
-          // This removes the pre-submit private-read delay without pretending the
-          // cache is exchange confirmation.
-          if(preferCached&&this.liveSyncUsedCached)this.liveSourcePending=true;
-        }
-        catch(error){
-          const message=safeError(error),blocked=liveFailureRequiresOff(error);
-          const shouldRecord=this.runtime.live.lastError!==message||this.runtime.live.operational;
-          this.runtime.live.operational=false;this.runtime.live.lastError=message;
-          if(shouldRecord)this.recordLiveAudit({observedAt:Date.now(),symbol:null,planId:null,
-            stage:"LIVE_CONTROL",level:"RECOVERING",reason:blocked
-              ?`账户纳管冲突，执行暂停但不改写所有者开关：${message}`
-              :`实盘核对暂时失败，所有者开关选择保持不变：${message}`,error});
-        }finally{
-          this.liveExecution.finishedAt=Date.now();
-          this.liveExecution.lastDurationMs=Date.now()-started;
-          this.runtime.subrequestCount+=Math.max(0,(this.liveClient?.requestCount??requestsBefore)-requestsBefore);
-        }
-      }while(this.liveSourcePending&&this.liveNeedsSync());
-      const active=Object.values(this.runtime.live.positions).some(p=>p?.status==="OPEN")
-        ||Object.values(this.runtime.live.entries).some(e=>e&&!["FILLED","CANCELLED"].includes(e.status));
-      this.liveNextReconcileAt=Date.now()+(active?LIVE_RECONCILE_ACTIVE_MS:LIVE_RECONCILE_IDLE_MS);
-    })();
-    this.liveBackgroundWork=task;
-    this.ctx.waitUntil(task.finally(()=>{if(this.liveBackgroundWork===task)this.liveBackgroundWork=null;}));
-  }
+
 
   protected async syncLive(now:number,initialEnable=false,forceEntryCleanup=false) {
     while(this.liveSyncWork){
@@ -2095,7 +2047,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private async syncLiveOnce(now: number, initialEnable = false, forceEntryCleanup = false) {
-    this.livePreferCachedNext=false;this.liveSyncUsedCached=false;
     // Restore the 2026-09-20 primary LIVE path: one complete Gate snapshot is
     // the execution authority for account, positions, orders and protection.
     this.reconcileCanonicalMirror(now);
@@ -3009,7 +2960,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(radarDue){
         // Gate bulk discovery is optional and explicitly yields to private LIVE
         // work. Bybit/OKX/KuCoin remain the normal scan surface.
-        if(!this.liveBackgroundWork&&!this.liveSyncWork){
+        if(!this.liveSyncWork){
           try{this.gateRadarCache=await fetchGateRadarTickers();this.gateRadarAt=Date.now();subrequests++;}
           catch{/* stale Gate-only discovery must never block external analysis */}
         }
@@ -3218,7 +3169,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         symbols: this.runtime.symbols,
         realtimeReadiness: this.realtimeReadiness(),
         liveMode: { requestedEnabled: this.runtime.live.requestedEnabled, operational: this.runtime.live.operational },
-        liveExecution:{...this.liveExecution,inFlight:!!this.liveBackgroundWork,queued:this.liveSourcePending,
+        liveExecution:{...this.liveExecution,inFlight:!!this.liveSyncWork,queued:false,
           timeoutStreak:this.liveReadTimeoutStreak,lastAccountAt:this.runtime.live.lastSyncAt,
           lastOrderAuditAt:(this.liveOrderSnapshotCache?.checkedAt??this.liveOrderAuditAt)||null,
           readTransport:this.liveClient?.readTransport??null,writeTransport:this.liveClient?.writeTransport??null},
