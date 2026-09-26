@@ -2449,6 +2449,17 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if(sourceError)throw new Error(`当前模拟复制源尚待恢复：${sourceError}`);
     if(accountError)throw new Error(accountError);
     if(this.forwardError)throw new Error(`模拟状态尚未成功保存：${this.forwardError}；不复制未持久化决定`);
+    if(typeof client.prepareTradingChannel==="function"){
+      try{await client.prepareTradingChannel();}
+      catch(error){
+        const message=`Gate WebSocket交易登录未就绪；已确认本轮没有发送实盘订单：${safeError(error)}`;
+        const changed=this.runtime.live.lastError!==message||this.runtime.live.operational;
+        this.runtime.live.operational=false;this.runtime.live.lastError=message;
+        if(changed)this.recordLiveAudit({observedAt:Date.now(),symbol:null,planId:null,stage:"LIVE_CONTROL",level:"RECOVERING",
+          reason:message,error});
+        return;
+      }
+    }
 
     let recoveringSubmission = Object.values(this.runtime.live.entries)
       .find((entry) => entry && (["SUBMITTING", "ERROR"].includes(entry.status) || this.liveEntryAwaitingReconcile(entry))) ?? null;
