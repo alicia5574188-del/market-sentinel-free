@@ -168,7 +168,8 @@ function runWindow(window,label){
   const commonTimes=(gateRows.get(symbols[0])??[]).map(x=>x.time).filter(t=>t>=window.from&&t<window.to);
   let state={version:PREDICTIVE_PATH_VERSION,updatedAt:window.from*1000,symbols:{},directionMemory:{}},positions=new Map(),trades=[],
     eligibleSignals=0,waitSignals=0,directionChecks=0,directionCorrect=0,entryDirectionChecks=0,entryDirectionCorrect=0,
-    eligibleFutureNetSum=0,eligibleFutureNetCount=0,signalDiagnostics=[];
+    eligibleFutureNetSum=0,eligibleFutureNetCount=0,signalDiagnostics=[],waitReasons={},rawSides={LONG:0,SHORT:0,NONE:0},
+    stableSides={LONG:0,SHORT:0,NONE:0},funnel={forecast:0,raw:0,stable:0,sameSide:0,enterNow:0,candidate:0};
   for(const time of commonTimes){
     const paths={},quotes={},anc={};
     for(const symbol of symbols){
@@ -178,8 +179,15 @@ function runWindow(window,label){
       anc[symbol]=ancillary(symbol,time);
     }
     const now=(time+STEP)*1000,built=buildPredictivePathEngine({paths,quotes,ancillary:anc,previous:state,now,allowed:new Set(symbols)});
-    state=built.state;eligibleSignals+=built.candidates.filter(x=>x.eligible).length;
+    state=built.state;eligibleSignals+=built.candidates.filter(x=>x.eligible).length;funnel.candidate+=built.candidates.length;
     waitSignals+=Object.values(state.symbols).filter(x=>!x.enterNow&&x.rawSide).length;
+    for(const forecast of Object.values(state.symbols)){
+      funnel.forecast++;rawSides[forecast.rawSide??"NONE"]++;stableSides[forecast.stableSide??"NONE"]++;
+      if(forecast.rawSide)funnel.raw++;if(forecast.stableSide)funnel.stable++;
+      if(forecast.rawSide&&forecast.rawSide===forecast.stableSide)funnel.sameSide++;
+      if(forecast.enterNow)funnel.enterNow++;
+      if(!forecast.enterNow){const reason=forecast.waitReason??"NONE";waitReasons[reason]=(waitReasons[reason]??0)+1;}
+    }
     for(const [symbol,forecast] of Object.entries(state.symbols)){
       const rows=gateRows.get(symbol),idx=gateIndex.get(symbol)?.get(time);if(idx==null||idx+12>=rows.length)continue;
       const future=rows[idx+12].close/rows[idx].close-1;
@@ -254,7 +262,8 @@ function runWindow(window,label){
     profile("BIG_PATH_ALIGN",x=>x.expectedReturn>=.008&&x.mfe>=.010&&x.directionProbability>=.65&&x.price>=.2&&x.technical>=.2),
   ].filter(x=>x.count>0).sort((a,b)=>b.avgNet60-a.avgNet60||b.count-a.count);
 
-  return{label,from:window.from,to:window.to,signals:{eligible:eligibleSignals,wait:waitSignals},closedTrades:closed.length,wins:wins.length,
+  return{label,from:window.from,to:window.to,signals:{eligible:eligibleSignals,wait:waitSignals},funnel,waitReasons,rawSides,stableSides,
+    closedTrades:closed.length,wins:wins.length,
     winRate:closed.length?wins.length/closed.length:0,netRateSum:net,avgNetRate:closed.length?net/closed.length:0,
     profitFactor:grossLoss>0?grossWin/grossLoss:(grossWin>0?99:0),medianHoldMinutes:median(holds),p25HoldMinutes:percentile(holds,.25),
     fastExitRate:closed.length?fast/closed.length:0,catastrophicStopRate:closed.length?stop/closed.length:0,
