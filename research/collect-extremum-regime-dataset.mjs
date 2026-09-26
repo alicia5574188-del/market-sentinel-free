@@ -40,7 +40,7 @@ async function okx(base,interval,limit){
     const oldest=page[0].time*1000;
     if(after===oldest)break;
     after=oldest;
-    if(page.length<n&&rows.length<limit)break;
+    if(body.data.length<n&&rows.length<limit)break;
     await sleep(60);
   }
   rows=normalize(rows,seconds,limit);
