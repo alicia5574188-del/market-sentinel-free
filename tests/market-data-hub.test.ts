@@ -7,17 +7,19 @@ function withFetch(handler:(url:string)=>Promise<Response>|Response,run:()=>Prom
   globalThis.fetch=(input)=>handler(String(input));
   return run().finally(()=>{globalThis.fetch=priorFetch;});
 }
-const bybitSurface=(symbol="BTCUSDT",bid=99.9,ask=100.1)=>({retCode:0,result:{list:Array.from({length:20},(_,i)=>({
+const bybitSurface=(symbol="BTCUSDT",bid=99.9,ask=100.1,bidSize=12,askSize=12)=>({retCode:0,result:{list:Array.from({length:20},(_,i)=>({
   symbol:i===0?symbol:`X${i}USDT`,lastPrice:String(i===0?(bid+ask)/2:10+i),bid1Price:String(i===0?bid:9+i),
-  ask1Price:String(i===0?ask:9.2+i),turnover24h:"1000000",price24hPcnt:"0.01"
+  ask1Price:String(i===0?ask:9.2+i),bid1Size:String(i===0?bidSize:10),ask1Size:String(i===0?askSize:10),
+  turnover24h:"1000000",price24hPcnt:"0.01"
 }))}});
-const okxSurface=(instId="BTC-USDT-SWAP",bid=99.9,ask=100.1,time=1_000_000)=>({code:"0",data:Array.from({length:20},(_,i)=>({
+const okxSurface=(instId="BTC-USDT-SWAP",bid=99.9,ask=100.1,time=1_000_000,bidSize=10,askSize=10)=>({code:"0",data:Array.from({length:20},(_,i)=>({
   instId:i===0?instId:`Z${i}-USDT-SWAP`,last:String(i===0?(bid+ask)/2:30+i),bidPx:String(i===0?bid:29+i),
-  askPx:String(i===0?ask:29.2+i),volCcy24h:"1000",open24h:"99",ts:String(time)
+  askPx:String(i===0?ask:29.2+i),bidSz:String(i===0?bidSize:10),askSz:String(i===0?askSize:10),
+  volCcy24h:"1000",open24h:"99",ts:String(time)
 }))});
-const kucoinSurface=(symbol="XBTUSDTM",bid=99.9,ask=100.1)=>({code:"200000",data:Array.from({length:20},(_,i)=>({
+const kucoinSurface=(symbol="XBTUSDTM",bid=99.9,ask=100.1,bidSize=8,askSize=8)=>({code:"200000",data:Array.from({length:20},(_,i)=>({
   symbol:i===0?symbol:`K${i}USDTM`,price:String(i===0?(bid+ask)/2:50+i),bestBidPrice:String(i===0?bid:49+i),
-  bestAskPrice:String(i===0?ask:49.2+i),ts:0
+  bestAskPrice:String(i===0?ask:49.2+i),bestBidSize:String(i===0?bidSize:10),bestAskSize:String(i===0?askSize:10),ts:0
 }))});
 
 test("exact Gate-to-external symbol mapping never invents aliases",()=>{
@@ -141,5 +143,33 @@ test("Bitget and Binance 403 enter WAF backoff without delaying three healthy pr
     const status=hub.status(1_001_001);assert.equal(status.healthySources,3);
     assert.equal(status.sources.find(row=>row.source==="BITGET")?.failures,1);
     assert.equal(status.sources.find(row=>row.source==="BINANCE")?.failures,1);
+  });
+});
+
+
+test("existing bulk BBO feeds expose cross-venue liquidity imbalance and migration without extra symbol requests",async()=>{
+  let phase=0;
+  await withFetch(url=>{
+    if(url.includes("api.bybit.com"))return Response.json(phase===0
+      ?bybitSurface("ETHUSDT",99.9,100.1,10,20):bybitSurface("ETHUSDT",100.1,100.3,20,10));
+    if(url.includes("okx.com"))return Response.json(phase===0
+      ?okxSurface("ETH-USDT-SWAP",99.95,100.15,phase?1_005_000:1_000_000,8,16)
+      :okxSurface("ETH-USDT-SWAP",100.15,100.35,1_005_000,16,8));
+    if(url.includes("api-futures.kucoin.com"))return Response.json(phase===0
+      ?kucoinSurface("ETHUSDTM",100.0,100.2,6,12):kucoinSurface("ETHUSDTM",100.2,100.4,12,6));
+    return new Response("WAF",{status:403});
+  },async()=>{
+    const hub=new MarketDataHub();
+    await hub.refresh(1_000_000);
+    const first=hub.quote("ETH_USDT",1_000_001);assert.ok(first);
+    assert.equal(first.liquiditySourceCount,3);
+    assert.ok(first.bookImbalance<-.25,"three venues begin ask-heavy");
+    phase=1;await hub.refresh(1_005_000);
+    const second=hub.quote("ETH_USDT",1_005_001);assert.ok(second);
+    assert.equal(second.liquiditySourceCount,3);
+    assert.ok(second.bookImbalance>.25,"three venues rotate bid-heavy");
+    assert.ok(second.bidLiquidityChange>.5,"bid liquidity expanded versus the prior 4s anchor");
+    assert.ok(second.askLiquidityChange<-.4,"ask liquidity withdrew versus the prior 4s anchor");
+    assert.ok(second.spreadRate>0);
   });
 });

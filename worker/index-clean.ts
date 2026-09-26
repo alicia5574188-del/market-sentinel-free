@@ -2721,12 +2721,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const external=this.marketHub.quote(symbol,now),mid=(row.bestBid+row.bestAsk)/2,
         meta=this.runtime.contractMeta[symbol],book=meta?this.gateStream.book(symbol,this.runtime.tickSize[symbol]??1e-8,meta.quantoMultiplier,now):null,
         bidDepth=book?.bids.slice(0,5).reduce((n,x)=>n+x.size,0)??0,askDepth=book?.asks.slice(0,5).reduce((n,x)=>n+x.size,0)??0,
-        bookImbalance=bidDepth+askDepth>0?(bidDepth-askDepth)/(bidDepth+askDepth):0;
+        gateImbalance=bidDepth+askDepth>0?(bidDepth-askDepth)/(bidDepth+askDepth):0,
+        bookImbalance=(external?.liquiditySourceCount??0)>=2?external!.bookImbalance:gateImbalance;
       return[[symbol,{bestBid:row.bestBid,bestAsk:row.bestAsk,observedAt:row.observedAt,fresh:true,
         entryReady:this.symbolEntryReady(symbol,now),sourceCount:external?.sourceCount??0,
         disagreementRate:external?.disagreementRate??0,sourceBreadth:external?.sourceBreadth??0,
         directionalAgreement:external?.directionalAgreement??.5,medianShortMove:external?.medianShortMove??0,
-        spreadRate:mid>0?(row.bestAsk-row.bestBid)/mid:0,bookImbalance}]];
+        spreadRate:external?.spreadRate??(mid>0?(row.bestAsk-row.bestBid)/mid:0),bookImbalance,
+        bidLiquidityChange:external?.bidLiquidityChange??0,askLiquidityChange:external?.askLiquidityChange??0,
+        liquiditySourceCount:external?.liquiditySourceCount??0}]];
     }));
   }
 

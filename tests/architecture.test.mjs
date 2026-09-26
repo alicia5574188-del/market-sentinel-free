@@ -125,3 +125,19 @@ test("Market Intelligence active exits are evidence-family gated, not two-bar th
   assert.match(execution,/复核已持续/);
   assert.match(execution,/剩余空间/);
 });
+
+
+test("existing multi-source BBO refresh exposes liquidity migration without extra per-symbol REST fanout",async()=>{
+  const [hub,worker,engine,position,execution]=await Promise.all([
+    read("lib/market-data-hub.ts"),read("worker/index-clean.ts"),read("lib/market-intelligence-engine.ts"),
+    read("lib/position-intelligence-engine.ts"),read("app/market-intelligence-execution.tsx")
+  ]);
+  for(const token of["bid1Size","bidSz","bestBidSize","bidQty","bookImbalance","bidLiquidityChange","askLiquidityChange"])
+    assert.match(hub,new RegExp(token));
+  assert.match(worker,/external\?\.liquiditySourceCount/);
+  assert.match(worker,/bidLiquidityChange:external\?\.bidLiquidityChange/);
+  assert.match(engine,/BID_LIQUIDITY_WITHDRAWAL/);
+  assert.match(engine,/ASK_LIQUIDITY_WITHDRAWAL/);
+  assert.match(position,/alignedLiquidity/);
+  assert.match(execution,/跨所流动性/);
+});

@@ -7,11 +7,12 @@
  */
 export type MarketSource="BYBIT"|"OKX"|"KUCOIN"|"BITGET"|"BINANCE";
 export type HubQuote={source:MarketSource;symbol:string;observedAt:number;last:number;bid:number;ask:number;
-  volume24hUsd:number;change24hRate:number};
+  bidSize:number;askSize:number;volume24hUsd:number;change24hRate:number};
 export type HubCandle={time:number;open:number;high:number;low:number;close:number;volume:number};
 export type ConsensusQuote={symbol:string;observedAt:number;mid:number;bid:number;ask:number;sources:MarketSource[];
   sourceCount:number;disagreementRate:number;volume24hUsd:number;change24hRate:number;
-  sourceBreadth:number;directionalAgreement:number;medianShortMove:number};
+  sourceBreadth:number;directionalAgreement:number;medianShortMove:number;
+  bookImbalance:number;bidLiquidityChange:number;askLiquidityChange:number;spreadRate:number;liquiditySourceCount:number};
 type SourceHealth={lastSuccessAt:number;lastFailureAt:number;failures:number;lastError:string|null;rows:number;nextRetryAt:number};
 
 const BYBIT="https://api.bybit.com";
@@ -23,6 +24,8 @@ const BULK_TIMEOUT_MS=1_200;
 const CANDLE_TIMEOUT_MS=1_500;
 const QUOTE_FRESH_MS=12_000;
 const finite=(v:number)=>Number.isFinite(v);
+const clip=(v:number,a=-1,b=1)=>Math.max(a,Math.min(b,v));
+const median=(xs:number[])=>{const a=xs.filter(Number.isFinite).sort((x,y)=>x-y);if(!a.length)return 0;const m=Math.floor(a.length/2);return a.length%2?a[m]!:(a[m-1]!+a[m]!)/2;};
 const canonical=(external:string)=>external.endsWith("USDT")?external.slice(0,-4)+"_USDT":null;
 const canonicalOkx=(external:string)=>external.endsWith("-USDT-SWAP")?external.slice(0,-10)+"_USDT":null;
 export const externalSymbol=(gate:string)=>gate.endsWith("_USDT")?gate.slice(0,-5)+"USDT":null;
@@ -62,7 +65,7 @@ export class MarketDataHub{
   private lastAttemptAt=0;
   private inFlight:Promise<void>|null=null;
   private candleSource=new Map<string,{source:MarketSource;at:number}>();
-  private quoteHistory=new Map<string,Map<MarketSource,{at:number;mid:number}[]>>();
+  private quoteHistory=new Map<string,Map<MarketSource,{at:number;mid:number;bidSize:number;askSize:number;imbalance:number;spread:number}[]>>();
 
   launchRefresh(now:number){
     if(this.inFlight)return this.inFlight;
@@ -96,7 +99,7 @@ export class MarketDataHub{
     this.health[source]={...prior,lastFailureAt:now,failures,lastError:message,nextRetryAt:backoffMs?now+backoffMs:0};}
 
   private async fetchBybit(now:number){
-    type Row={symbol?:string;lastPrice?:string;bid1Price?:string;ask1Price?:string;turnover24h?:string;price24hPcnt?:string};
+    type Row={symbol?:string;lastPrice?:string;bid1Price?:string;ask1Price?:string;bid1Size?:string;ask1Size?:string;turnover24h?:string;price24hPcnt?:string};
     type Res={retCode?:number;result?:{list?:Row[]}};
     const body=await json<Res>(`${BYBIT}/v5/market/tickers?category=linear`,BULK_TIMEOUT_MS);
     if(body.retCode!==0||!Array.isArray(body.result?.list))throw new Error("Bybit ticker payload");
@@ -104,13 +107,13 @@ export class MarketDataHub{
     for(const row of body.result!.list!){const symbol=canonical(row.symbol??"");if(!symbol)continue;
       const last=Number(row.lastPrice),bid=Number(row.bid1Price),ask=Number(row.ask1Price);
       if(!(last>0&&bid>0&&ask>bid))continue;
-      out.set(symbol,{source:"BYBIT",symbol,observedAt:now,last,bid,ask,volume24hUsd:Math.max(0,Number(row.turnover24h??0)),
-        change24hRate:Number(row.price24hPcnt??0)});
+      out.set(symbol,{source:"BYBIT",symbol,observedAt:now,last,bid,ask,bidSize:Math.max(0,Number(row.bid1Size??0)),askSize:Math.max(0,Number(row.ask1Size??0)),
+        volume24hUsd:Math.max(0,Number(row.turnover24h??0)),change24hRate:Number(row.price24hPcnt??0)});
     }
     if(out.size<20)throw new Error(`Bybit incomplete ticker surface: ${out.size}`);return out;
   }
   private async fetchOkx(now:number){
-    type Row={instId?:string;last?:string;bidPx?:string;askPx?:string;volCcy24h?:string;open24h?:string;ts?:string};
+    type Row={instId?:string;last?:string;bidPx?:string;askPx?:string;bidSz?:string;askSz?:string;volCcy24h?:string;open24h?:string;ts?:string};
     type Res={code?:string;data?:Row[]};
     const body=await json<Res>(`${OKX}/api/v5/market/tickers?instType=SWAP`,BULK_TIMEOUT_MS);
     if(body.code!=="0"||!Array.isArray(body.data))throw new Error("OKX ticker payload");
@@ -120,14 +123,14 @@ export class MarketDataHub{
       if(!(last>0&&bid>0&&ask>bid))continue;
       const exchangeAt=Number(row.ts),observedAt=exchangeAt>0&&exchangeAt<=now+2_000?Math.min(exchangeAt,now):now;
       const volumeBase=Math.max(0,Number(row.volCcy24h??0));
-      out.set(symbol,{source:"OKX",symbol,observedAt,last,bid,ask,volume24hUsd:volumeBase*last,
-        change24hRate:open>0?last/open-1:0});
+      out.set(symbol,{source:"OKX",symbol,observedAt,last,bid,ask,bidSize:Math.max(0,Number(row.bidSz??0)),askSize:Math.max(0,Number(row.askSz??0)),
+        volume24hUsd:volumeBase*last,change24hRate:open>0?last/open-1:0});
     }
     if(out.size<20)throw new Error(`OKX incomplete ticker surface: ${out.size}`);return out;
   }
 
   private async fetchKucoin(now:number){
-    type Row={symbol?:string;price?:string;bestBidPrice?:string;bestAskPrice?:string;ts?:number|string};
+    type Row={symbol?:string;price?:string;bestBidPrice?:string;bestAskPrice?:string;bestBidSize?:string;bestAskSize?:string;ts?:number|string};
     type Res={code?:string;data?:Row[]};
     const body=await json<Res>(`${KUCOIN}/api/v1/allTickers`,BULK_TIMEOUT_MS);
     if(body.code!=="200000"||!Array.isArray(body.data))throw new Error("KuCoin ticker payload");
@@ -136,13 +139,14 @@ export class MarketDataHub{
       const last=Number(row.price),bid=Number(row.bestBidPrice),ask=Number(row.bestAskPrice),rawTs=Number(row.ts);
       if(!(last>0&&bid>0&&ask>bid))continue;
       const exchangeMs=rawTs>1e15?rawTs/1e6:rawTs,observedAt=exchangeMs>0&&exchangeMs<=now+2_000?Math.min(exchangeMs,now):now;
-      out.set(symbol,{source:"KUCOIN",symbol,observedAt,last,bid,ask,volume24hUsd:0,change24hRate:0});
+      out.set(symbol,{source:"KUCOIN",symbol,observedAt,last,bid,ask,bidSize:Math.max(0,Number(row.bestBidSize??0)),askSize:Math.max(0,Number(row.bestAskSize??0)),
+        volume24hUsd:0,change24hRate:0});
     }
     if(out.size<20)throw new Error(`KuCoin incomplete ticker surface: ${out.size}`);return out;
   }
 
   private async fetchBitget(now:number){
-    type Row={symbol?:string;lastPr?:string;bidPr?:string;askPr?:string;quoteVolume?:string;change24h?:string;ts?:string};
+    type Row={symbol?:string;lastPr?:string;bidPr?:string;askPr?:string;bidSz?:string;askSz?:string;quoteVolume?:string;change24h?:string;ts?:string};
     type Res={code?:string;data?:Row[]};
     const body=await json<Res>(`${BITGET}/api/v2/mix/market/tickers?productType=USDT-FUTURES`,BULK_TIMEOUT_MS);
     if(body.code!=="00000"||!Array.isArray(body.data))throw new Error("Bitget ticker payload");
@@ -151,8 +155,8 @@ export class MarketDataHub{
       const last=Number(row.lastPr),bid=Number(row.bidPr),ask=Number(row.askPr),exchangeAt=Number(row.ts);
       if(!(last>0&&bid>0&&ask>bid))continue;
       const observedAt=exchangeAt>0&&exchangeAt<=now+2_000?Math.min(exchangeAt,now):now;
-      out.set(symbol,{source:"BITGET",symbol,observedAt,last,bid,ask,volume24hUsd:Math.max(0,Number(row.quoteVolume??0)),
-        change24hRate:Number(row.change24h??0)});
+      out.set(symbol,{source:"BITGET",symbol,observedAt,last,bid,ask,bidSize:Math.max(0,Number(row.bidSz??0)),askSize:Math.max(0,Number(row.askSz??0)),
+        volume24hUsd:Math.max(0,Number(row.quoteVolume??0)),change24hRate:Number(row.change24h??0)});
     }
     if(out.size<20)throw new Error(`Bitget incomplete ticker surface: ${out.size}`);return out;
   }
@@ -165,7 +169,8 @@ export class MarketDataHub{
     for(const row of body){const symbol=canonical(row.symbol??"");if(!symbol)continue;const bid=Number(row.bidPrice),ask=Number(row.askPrice);
       if(!(bid>0&&ask>bid))continue;
       const exchangeAt=Number(row.time),observedAt=exchangeAt>0&&exchangeAt<=now+2_000?Math.min(exchangeAt,now):now;
-      out.set(symbol,{source:"BINANCE",symbol,observedAt,last:(bid+ask)/2,bid,ask,volume24hUsd:0,change24hRate:0});}
+      out.set(symbol,{source:"BINANCE",symbol,observedAt,last:(bid+ask)/2,bid,ask,bidSize:Math.max(0,Number(row.bidQty??0)),askSize:Math.max(0,Number(row.askQty??0)),
+        volume24hUsd:0,change24hRate:0});}
     if(out.size<20)throw new Error(`Binance incomplete ticker surface: ${out.size}`);return out;
   }
 
@@ -173,27 +178,35 @@ export class MarketDataHub{
     const rows=[this.bybit.get(symbol),this.okx.get(symbol),this.kucoin.get(symbol),this.bitget.get(symbol),this.binance.get(symbol)]
       .filter((q):q is HubQuote=>!!q&&validQuote(q,now));
     if(!rows.length)return null;
-    const mids=rows.map(q=>(q.bid+q.ask)/2).sort((a,b)=>a-b);
-    const mid=mids.length%2?mids[Math.floor(mids.length/2)]!:(mids[mids.length/2-1]!+mids[mids.length/2]!)/2;
-    const bid=Math.min(...rows.map(q=>q.bid)),ask=Math.max(...rows.map(q=>q.ask));
-    const disagreement=rows.length>1?(Math.max(...mids)-Math.min(...mids))/Math.max(mid,1e-12):0;
+    const mids=rows.map(q=>(q.bid+q.ask)/2).sort((a,b)=>a-b),mid=median(mids),
+      bid=Math.min(...rows.map(q=>q.bid)),ask=Math.max(...rows.map(q=>q.ask)),
+      disagreement=rows.length>1?(Math.max(...mids)-Math.min(...mids))/Math.max(mid,1e-12):0;
     let history=this.quoteHistory.get(symbol);if(!history){history=new Map();this.quoteHistory.set(symbol,history);}
-    const moves:number[]=[];
+    const moves:number[]=[],imbalances:number[]=[],spreads:number[]=[],bidChanges:number[]=[],askChanges:number[]=[];
     for(const q of rows){
-      const qMid=(q.bid+q.ask)/2,series=history.get(q.source)??[],last=series.at(-1);
-      if(!last||last.at!==q.observedAt){series.push({at:q.observedAt,mid:qMid});while(series.length>8)series.shift();history.set(q.source,series);}
-      const anchor=[...series].reverse().find(x=>q.observedAt-x.at>=4_000)??series[0];
-      if(anchor&&anchor.mid>0&&q.observedAt>anchor.at)moves.push(qMid/anchor.mid-1);
+      const qMid=(q.bid+q.ask)/2,total=q.bidSize+q.askSize,imbalance=total>0?(q.bidSize-q.askSize)/total:0,
+        spread=qMid>0?(q.ask-q.bid)/qMid:0,series=history.get(q.source)??[],last=series.at(-1),
+        anchor=[...series].reverse().find(x=>q.observedAt-x.at>=4_000)??series[0];
+      if(anchor&&anchor.mid>0&&q.observedAt>anchor.at){
+        moves.push(qMid/anchor.mid-1);
+        if(q.bidSize>0&&anchor.bidSize>0)bidChanges.push(clip(q.bidSize/anchor.bidSize-1));
+        if(q.askSize>0&&anchor.askSize>0)askChanges.push(clip(q.askSize/anchor.askSize-1));
+      }
+      if(total>0)imbalances.push(imbalance);spreads.push(spread);
+      if(!last||last.at!==q.observedAt){
+        series.push({at:q.observedAt,mid:qMid,bidSize:q.bidSize,askSize:q.askSize,imbalance,spread});
+        while(series.length>8)series.shift();history.set(q.source,series);
+      }
     }
-    const up=moves.filter(v=>v>0.00002).length,down=moves.filter(v=>v<-0.00002).length,
-      active=up+down,sourceBreadth=active?(up-down)/active:0,
-      directionalAgreement=active?Math.max(up,down)/active:.5,
-      ordered=moves.filter(Number.isFinite).sort((a,b)=>a-b),
-      medianShortMove=ordered.length?(ordered.length%2?ordered[(ordered.length-1)/2]!:(ordered[ordered.length/2-1]!+ordered[ordered.length/2]!)/2):0;
+    const up=moves.filter(v=>v>0.00002).length,down=moves.filter(v=>v<-0.00002).length,active=up+down,
+      sourceBreadth=active?(up-down)/active:0,directionalAgreement=active?Math.max(up,down)/active:.5,
+      medianShortMove=median(moves),bookImbalance=median(imbalances),bidLiquidityChange=median(bidChanges),
+      askLiquidityChange=median(askChanges),spreadRate=median(spreads);
     const directional=rows.find(q=>q.source==="BYBIT")??rows.find(q=>q.source==="OKX")??rows.find(q=>q.source==="KUCOIN")??rows.find(q=>q.source==="BITGET");
     return{symbol,observedAt:Math.max(...rows.map(q=>q.observedAt)),mid,bid,ask,sources:rows.map(q=>q.source),sourceCount:rows.length,
-      disagreementRate:disagreement,volume24hUsd:Math.max(...rows.map(q=>q.volume24hUsd)),
-      change24hRate:directional?.change24hRate??0,sourceBreadth,directionalAgreement,medianShortMove};
+      disagreementRate:disagreement,volume24hUsd:Math.max(...rows.map(q=>q.volume24hUsd)),change24hRate:directional?.change24hRate??0,
+      sourceBreadth,directionalAgreement,medianShortMove,bookImbalance,bidLiquidityChange,askLiquidityChange,spreadRate,
+      liquiditySourceCount:imbalances.length};
   }
   coverage(symbol:string,now=Date.now()){const q=this.quote(symbol,now);return q?{sourceCount:q.sourceCount,sources:q.sources,disagreementRate:q.disagreementRate}
     :{sourceCount:0,sources:[] as MarketSource[],disagreementRate:0};}

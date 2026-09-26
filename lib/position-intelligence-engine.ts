@@ -45,6 +45,9 @@ type QuoteDetail={
   medianShortMove?:number;
   spreadRate?:number;
   bookImbalance?:number;
+  bidLiquidityChange?:number;
+  askLiquidityChange?:number;
+  liquiditySourceCount?:number;
 };
 
 const clip=(v:number,a=0,b=1)=>Math.max(a,Math.min(b,v));
@@ -82,6 +85,8 @@ export function evaluatePositionIntelligence(input:{
     microVol=Math.max(.00035,stdev(minute.slice(-8))),microEfficiency=microProgress/(microVol*Math.sqrt(Math.max(1,Math.min(5,minute.length)))+1e-9),
     alignedPressure=state?d*state.venuePressure:0,
     alignedBook=d*(q?.bookImbalance??0),
+    alignedLiquidity=d*((q?.bidLiquidityChange??0)-(q?.askLiquidityChange??0))*.5,
+    liquiditySources=q?.liquiditySourceCount??0,
     sourceCount=Math.max(state?.sourceCount??0,q?.sourceCount??0),disagreement=q?.disagreementRate??0,
     same=sideScore(state,input.side),opposite=oppositeScore(state,input.side),
     signalAligned=state?.signalSide===input.side,
@@ -108,15 +113,31 @@ export function evaluatePositionIntelligence(input:{
   else assessments.push(family("PATH","NEUTRAL",.2,`短线路径混合，当前不足以证明继续或退出更优。`));
 
   const supportivePressure=alignedPressure>.25,opposingPressure=alignedPressure<-.25,
-    supportiveBook=alignedBook>.12,opposingBook=alignedBook<-.12;
-  if((supportivePressure&&microEfficiency>.05)||(opposingPressure&&microEfficiency>=0&&alignedBook>=-.1))
-    assessments.push(family("FLOW","SUPPORT",clip(.35+Math.abs(alignedPressure)*.35+Math.max(0,alignedBook)*.15),
-      opposingPressure?"逆向跨所压力存在，但价格没有被有效推动，当前仓位方向仍有承接。":"跨所短时压力与价格推进一致，当前方向仍有真实响应。"));
-  else if((supportivePressure&&microEfficiency<-.12)||(opposingPressure&&microEfficiency<-.18&&opposingBook))
-    assessments.push(family("FLOW","CONCERN",clip(.45+Math.abs(alignedPressure)*.35+Math.max(0,-alignedBook)*.15),
-      supportivePressure?"看似有利的跨所压力已经难以推动价格，出现被吸收/推进失效迹象。":"跨所压力与盘口方向同时反向，价格也开始有效响应。"));
+    supportiveBook=alignedBook>.12,opposingBook=alignedBook<-.12,
+    supportiveLiquidity=alignedLiquidity>.10,opposingLiquidity=alignedLiquidity<-.10,
+    enoughLiquidity=liquiditySources>=2;
+  if((supportivePressure&&microEfficiency>.05)
+    ||(enoughLiquidity&&(supportiveBook||supportiveLiquidity)&&microEfficiency>=-.05)
+    ||(opposingPressure&&microEfficiency>=0&&alignedBook>=-.1&&alignedLiquidity>=-.08))
+    assessments.push(family("FLOW","SUPPORT",clip(.35+Math.abs(alignedPressure)*.25+Math.max(0,alignedBook)*.18+Math.max(0,alignedLiquidity)*.22),
+      opposingPressure
+        ?"逆向跨所压力没有推动价格，同时盘口/流动性没有同步恶化，当前方向仍有吸收与承接。"
+        :enoughLiquidity&&supportiveLiquidity
+          ?`跨所盘口流动性向持仓方向改善（${liquiditySources}路），且价格没有出现明显逆向效率。`
+          :"跨所短时压力与价格推进一致，当前方向仍有真实响应。"));
+  else if((supportivePressure&&(supportiveBook||supportiveLiquidity)&&microEfficiency<-.12)
+    ||(opposingPressure&&(opposingBook||opposingLiquidity)&&microEfficiency<-.18)
+    ||(enoughLiquidity&&opposingLiquidity&&microEfficiency<-.10))
+    assessments.push(family("FLOW","CONCERN",clip(.45+Math.abs(alignedPressure)*.25+Math.max(0,-alignedBook)*.18+Math.max(0,-alignedLiquidity)*.22),
+      supportivePressure
+        ?"看似有利的跨所压力与盘口支持都存在，但价格推进反而转弱，出现吸收/推动效率下降。"
+        :enoughLiquidity&&opposingLiquidity
+          ?`跨所盘口流动性连续向持仓反方向迁移（${liquiditySources}路），同时价格开始响应。`
+          :"跨所压力与盘口方向同时反向，价格也开始有效响应。"));
   else assessments.push(family("FLOW","NEUTRAL",.18,
-    sourceCount>=2?`跨所压力尚未形成一致的价格结果（${sourceCount}路，分歧 ${(disagreement*100).toFixed(2)}%）。`:"跨所实时细节覆盖不足，不允许它触发退出。"));
+    sourceCount>=2
+      ?`跨所流动性与价格结果尚未收敛（报价${sourceCount}路，盘口尺寸${liquiditySources}路，分歧 ${(disagreement*100).toFixed(2)}%）。`
+      :"跨所实时细节覆盖不足，不允许它触发退出。"));
 
   if(signalAligned&&same>=62)
     assessments.push(family("STRUCTURE","SUPPORT",clip(.35+(same-62)/55),`当前结构仍偏向原持仓方向，方向适配 ${same.toFixed(0)}。`));
@@ -146,7 +167,8 @@ export function evaluatePositionIntelligence(input:{
     holdValueScore=clip(50+18*(continuationRatio-1)+12*familyNet+.28*advantageChange,0,100),
     exitValueScore=100-holdValueScore,
     stateFreshness=input.marketStateAgeMs==null?1:input.marketStateAgeMs<=8*60_000?1:input.marketStateAgeMs<=15*60_000?.55:0,
-    dataConfidence=clip((((state?.dataConfidence??45)*.75+Math.min(4,sourceCount)*6.25)-Math.min(.02,disagreement)*600)*stateFreshness,0,100),
+    dataConfidence=clip((((state?.dataConfidence??45)*.70+Math.min(4,sourceCount)*6.25+Math.min(3,liquiditySources)*3.5)
+      -Math.min(.02,disagreement)*600)*stateFreshness,0,100),
     coreConcern=concern.some(x=>x.family==="RELATIVE"||x.family==="STRUCTURE"),
     independentConfirm=concern.some(x=>x.family==="PATH"||x.family==="FLOW"),
     enoughIndependentConcern=coreConcern&&independentConfirm,
