@@ -35,6 +35,9 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
     <section className="fr-section">
       <div className="fr-section-head"><div><small>CURRENT NARRATIVE</small><h2>系统现在如何理解市场</h2></div><span>{clock(mi?.updatedAt)}</span></div>
       <div className="fr-insight"><span className="fr-dot"/><p>{n?.summary??"正在建立市场基线。"}</p></div>
+      <p className="fr-note"><b>数据覆盖：</b>5m 全市场 {mi?.coverage?.intradayMarkets??symbols.length}/{mi?.coverage?.targetIntradayMarkets??30}
+        · 日线 {mi?.coverage?.dailyMarkets??0}/{mi?.coverage?.targetDailyMarkets??"—"}
+        · L0 {mi?.coverage?.macroReady?"真实日线已建立":"日线暖机中，沿用上一份超大周期判断"}</p>
       <div className="fr-three">
         <div><small>超大周期解释</small><b>{n?.macro.detail??"—"}</b></div>
         <div><small>大方向解释</small><b>{n?.major.detail??"—"}</b></div>
