@@ -75,7 +75,9 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
         <OpportunityGrid rows={opportunities.slice(0,6)}/></section>
     </>}
 
-    {tab==="execution"&&<ExtremumExecution data={data} now={now}/>}\n\n    {tab==="paper"&&<>
+    {tab==="execution"&&<ExtremumExecution data={data} now={now} liveEnabled={liveEnabled} liveOverview={liveOverview}/>}
+
+    {tab==="paper"&&<>
       <PageTitle eyebrow="REAL-FEED PAPER" title="模拟账户" text="模拟和实盘读取同一个持久化交易事件；模拟成交计入手续费、滑点和资金费占位，实盘仍以Gate真实成交为准。"/>
       <nav className="fr-live-tabs fr-paper-tabs">{([["account","账户"],["positions","持仓"],["history","记录"],["archive","归档"]] as const).map(([id,label])=><button key={id} className={paperTab===id?"selected":""} onClick={()=>setPaperTab(id)}>{label}</button>)}</nav>
       {paperTab==="account"&&<><section className="fr-stats fr-paper-summary"><Stat label="模拟权益" value={`${fmt(data?.equity)} U`} note={`起始 ${fmt(data?.initialEquity)} U`}/><Stat label="保证金占用" value={`${fmt(paperMargin)} U`} note={`${positions.length} 笔持仓 · 无席位数量上限`}/><Stat label="浮动盈亏" value={`${signed(data?.floating)} U`} note="按当前可执行价估值"/><Stat label="累计成交额" value={`${fmt(data?.turnover)} U`} note={`已完成 ${fmt(data?.resolved,0)} 笔`}/></section>
