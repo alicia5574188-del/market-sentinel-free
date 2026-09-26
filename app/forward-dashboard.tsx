@@ -129,10 +129,12 @@ function TradeList({trades,now,empty,compact=false}:{trades:Trade[];now:number;e
 function TradeCard({trade:t,now}:{trade:Trade;now:number}){
   const open=t.status==="OPEN",d=t.side==="LONG"?1:-1,px=open?t.lastPrice:t.exitPrice??t.lastPrice;
   const pnl=open?d*t.quantity*(px-t.entryPrice)-t.entryFee-t.quantity*px*.0007:t.netPnl??0,rate=t.notional>0?pnl/t.notional:0,ctx=t.entryContext;
-  return <details className="fr-position-row"><summary><span className="fr-position-primary"><b>{t.symbol.replace("_"," / ")}</b><small>{t.side==="LONG"?"多单":"空单"} · {ctx?(ctx.reserve?"低风险 · ":"")+modeName(ctx.mode):"兼容持仓"}{ctx?.relationHorizon?` · ${ctx.relationHorizon}m关系`:""} · {fmt(t.leverage,0)}×</small>
+  return <details className="fr-position-row"><summary><span className="fr-position-primary"><b>{t.symbol.replace("_"," / ")}</b><small>{t.side==="LONG"?"多单":"空单"} · {ctx?(ctx.reserve?"低风险 · ":"")+modeName(ctx.mode):"兼容持仓"}{ctx?.strategyVersion==="extremum-regime-v1"?` · ${ctx.regime??"—"}`:ctx?.relationHorizon?` · ${ctx.relationHorizon}m旧关系`:""} · {fmt(t.leverage,0)}×</small>
     <b className={pnl>=0?"fr-positive":"fr-negative"}>{signed(pnl)} U</b><small>{signed(rate*100,3)}% · {duration(t.openedAt,t.closedAt,now)}</small></span>
     <span className="fr-position-entry"><b>{open?`持仓评分 ${fmt(t.holdScore,0)}`:exitName(t.exitReason)}</b><small>MFE {fmt(t.favorable*100,2)}% · MAE {fmt(t.adverse*100,2)}% · 锁利 {fmt((t.profitFloorRate??0)*100,2)}%</small>
-      <small>{ctx?`入场评分 ${fmt(ctx.entryScore,0)} · 关系 ${ctx.relationStatus??"—"} ${fmt((ctx.relationHealth??0)*100,0)} · 净空间 ${fmt(ctx.remainingSpaceRate*100,2)}% · 首次浮赢 ${t.firstProfitAt?time(t.firstProfitAt):"尚未"}`:"历史兼容持仓"}</small></span></summary>
+      <small>{ctx?(ctx.strategyVersion==="extremum-regime-v1"
+        ?`入场评分 ${fmt(ctx.entryScore,0)} · 趋势生命 ${fmt(t.side==="LONG"?ctx.upSurvival:ctx.downSurvival,0)} · 反向极值 ${fmt(t.side==="LONG"?ctx.topPressure:ctx.bottomPressure,0)} · 验证 ${ctx.postEntryState??"PENDING"}`
+        :`入场评分 ${fmt(ctx.entryScore,0)} · 旧关系 ${ctx.relationStatus??"—"} ${fmt((ctx.relationHealth??0)*100,0)} · 首次浮赢 ${t.firstProfitAt?time(t.firstProfitAt):"尚未"}`):"历史兼容持仓"}</small></span></summary>
     <article className="fr-trade fr-trade-unified"><dl><div><dt>入场价</dt><dd>{fmt(t.entryPrice,6)}</dd></div><div><dt>{open?"当前价":"出场价"}</dt><dd>{fmt(px,6)}</dd></div><div><dt>当前防守</dt><dd>{fmt(t.stopPrice,6)}</dd></div>
       <div><dt>名义金额</dt><dd>{fmt(t.notional)} U</dd></div><div><dt>保证金 / 杠杆</dt><dd>{fmt(t.margin)} U / {fmt(t.leverage,0)}×</dd></div><div><dt>计划风险</dt><dd>{fmt(t.plannedRisk)} U</dd></div>
       <div><dt>进场时间</dt><dd>{time(t.openedAt)}</dd></div><div><dt>持仓时长</dt><dd>{duration(t.openedAt,t.closedAt,now)}</dd></div><div><dt>预计持有</dt><dd>{fmt(t.expectedHoldMinutes,0)} 分钟</dd></div></dl>
