@@ -122,6 +122,10 @@ jobs:
               .runtime.realtimeReadiness.capacity == 30 and
               .runtime.realtimeReadiness.protectedMarketsReady == true and
               .runtime.multiSourceMarket.healthySources >= 3 and
+              .runtime.forward.marketIntelligenceTracked >= 20 and
+              .runtime.forward.marketIntelligenceCoverage.intradayMarkets >= 20 and
+              .runtime.forward.marketIntelligenceCoverage.dailyMarkets >= 3 and
+              .runtime.forward.marketIntelligenceCoverage.multiVenueMarkets >= 3 and
               ((.runtime.forward.participationEligibleCount == 0) or (.runtime.realtimeReadiness.actionableMarkets >= 1)) and
               .runtime.radar.scanned > 0 and .runtime.radar.scanned <= 30 and
               .runtime.limits.scanUniverse == 30 and
@@ -182,6 +186,10 @@ jobs:
               .runtime.forward.positionLimit == null and .runtime.forward.executionBboCapacity == 30 and .runtime.forward.minuteConfirmationCapacity == 11 and .runtime.forward.storage.error == null and
               .runtime.forward.lastCycleAt > 0 and .runtime.realtimeReadiness.capacity == 30 and
               .runtime.realtimeReadiness.protectedMarketsReady == true and .runtime.multiSourceMarket.healthySources >= 3 and
+              .runtime.forward.marketIntelligenceTracked >= 20 and
+              .runtime.forward.marketIntelligenceCoverage.intradayMarkets >= 20 and
+              .runtime.forward.marketIntelligenceCoverage.dailyMarkets >= 3 and
+              .runtime.forward.marketIntelligenceCoverage.multiVenueMarkets >= 3 and
               ((.runtime.forward.participationEligibleCount == 0) or (.runtime.realtimeReadiness.actionableMarkets >= 1)) and
               .runtime.radar.scanned > 0 and .runtime.radar.scanned <= 30
             ' <<<"$body" >/dev/null 2>&1; then
