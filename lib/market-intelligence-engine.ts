@@ -110,8 +110,8 @@ function addEvidence(rows:MarketEvidence[],row:MarketEvidence){
     same=rows.find(x=>(x.family??evidenceFamily(x.type))===family&&x.type===row.type&&[...x.symbols].sort().join(",")===keySymbols
       &&row.at-(x.lastAt??x.at)<15*60_000);
   if(!same){rows.unshift(row);return;}
-  const prior=same.severity,delta=row.severity-prior;
-  same.at=row.at;same.lastAt=row.at;same.firstAt??=same.at;same.samples=(same.samples??1)+1;
+  const prior=same.severity,delta=row.severity-prior,firstAt=same.firstAt??same.at;
+  same.at=row.at;same.lastAt=row.at;same.firstAt=firstAt;same.samples=(same.samples??1)+1;
   same.trend=delta>.08?"STRENGTHENING":delta<-.08?"WEAKENING":"STABLE";
   same.severity=clip(prior*.72+row.severity*.28);same.summary=row.summary;same.sourceCount=Math.max(same.sourceCount,row.sourceCount);
   same.expiresAt=row.expiresAt;same.family=family;
