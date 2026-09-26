@@ -1094,8 +1094,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // Publish only committed lifecycle events. A source born in the candle
       // lane must not wait for the next alarm; a source closed while Gate is
       // awaiting I/O must wake the serialized reconciler as well.
-      if(previous.positions.length!==next.state.positions.length
-        ||previous.positions.some(p=>!next.state.positions.some(n=>n.id===p.id)))this.launchLiveWork(true);
+      
     } catch (error) { this.forwardError = safeError(error); }
     finally { this.forwardBusy = false; }
   }
@@ -2062,41 +2061,16 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   protected async syncLive(now:number,initialEnable=false,forceEntryCleanup=false) {
-    while(this.liveSyncWork){
+    if(this.liveSyncWork){
       if(!initialEnable&&!forceEntryCleanup)return this.liveSyncWork;
       await this.liveSyncWork.catch(()=>undefined);
     }
     const work=this.syncLiveOnce(Date.now(),initialEnable,forceEntryCleanup);
     this.liveSyncWork=work;
-    try {
-      await work;
-      this.liveReadTimeoutStreak=0;
-    } catch(error) {
-      // A read-only Gate timeout is retryable because no exchange mutation
-      // crossed the network boundary. A first owner-enable timeout occurs only
-      // after its intent/fence were saved, so it remains pending and fail-closed;
-      // forced OFF cleanup stays strict and receives the error immediately.
-      if(!forceEntryCleanup&&isGateReadTimeoutError(error)){
-        const decision=liveReadTimeoutDecision(this.liveReadTimeoutStreak);
-        this.liveReadTimeoutStreak=decision.streak;
-        if(!decision.escalated){
-          if(initialEnable){
-            this.runtime.live.operational=false;this.runtime.live.lastError=safeError(error);
-            this.recordLiveAudit({observedAt:Date.now(),symbol:null,planId:null,stage:"LIVE_CONTROL",level:"RECOVERING",
-              reason:"所有者开启意图与起点已保存；首次Gate只读核对超时，保持零新增并由后台继续核对",error});
-          }else if(isTransientLiveReadErrorText(this.runtime.live.lastError))this.runtime.live.lastError=null;
-          return;
-        }
-        throw new Error(decision.message!);
-      }
-      this.liveReadTimeoutStreak=0;
-      throw error;
-    } finally { if(this.liveSyncWork===work)this.liveSyncWork=null; }
+    try { await work; } finally { if(this.liveSyncWork===work)this.liveSyncWork=null; }
   }
 
   private async syncLiveOnce(now: number, initialEnable = false, forceEntryCleanup = false) {
-    const preferCached=this.livePreferCachedNext&&!initialEnable&&!forceEntryCleanup;
-    this.livePreferCachedNext=false;
     // Owner actions and optional hourly evaluation can arrive between two book
     // loops. Reconcile first so LIVE can never observe an unregistered source leg.
     this.reconcileCanonicalMirror(now);
@@ -2104,62 +2078,17 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const activeEntries = Object.values(this.runtime.live.entries).some((entry) => entry &&
       (!["FILLED", "CANCELLED"].includes(entry.status) || this.liveEntryAwaitingReconcile(entry)));
     if (!this.runtime.live.requestedEnabled && !activePositions && !activeEntries && !initialEnable && !forceEntryCleanup) return;
+    let sourceError=this.liveBindingError??this.forwardError;
+    let desiredPortfolio:Record<string,MirrorSourceTrade>={};
+    try { desiredPortfolio=this.liveDesiredPortfolio(now); }
+    catch(error){sourceError=safeError(error);}
     // A missing source blocks additions, not the owner's OFF cleanup or native
     // protection of an already-mapped position.
     const client = await this.gateLive();
-    const unresolvedEntry=Object.values(this.runtime.live.entries).some(entry=>entry
-      &&(!["FILLED","CANCELLED"].includes(entry.status)||this.liveEntryAwaitingReconcile(entry)));
-    const needsProtectionOrderLane=activePositions||Object.values(this.runtime.live.entries).some(entry=>entry
-      &&entry.stopSubmittingAt&& !entry.stopOrderId && !["FILLED","CANCELLED"].includes(entry.status));
-    const cached=preferCached&&this.runtime.live.operational&&!unresolvedEntry&&this.liveSnapshotCache
-      &&now-this.liveSnapshotCache.checkedAt<=LIVE_FAST_SNAPSHOT_MAX_AGE_MS
-      ?structuredClone(this.liveSnapshotCache):null;
-    let snapshot:GateLiveSnapshot;
-    let orderAuditUsable=true;
-    const splitPrivateReads=typeof client.snapshotCore==="function"&&typeof client.snapshotOrders==="function";
-    if(cached){
-      snapshot=cached;this.liveSyncUsedCached=true;
-    }else if(!splitPrivateReads||forceEntryCleanup||needsProtectionOrderLane){
-      // Test doubles and legacy/member executors may still expose only the
-      // reviewed full-snapshot contract. Keep that compatibility path exact;
-      // production GateLiveClient uses the split lanes below.
-      snapshot=await client.snapshot();this.liveSyncUsedCached=false;
-      this.liveOrderSnapshotCache={orders:structuredClone(snapshot.orders),priceOrders:structuredClone(snapshot.priceOrders),checkedAt:snapshot.checkedAt};
-      this.liveOrderAuditAt=snapshot.checkedAt;
-      this.liveSnapshotCache=structuredClone(snapshot);
-    }else{
-      // Routine short-horizon LIVE reconciliation only needs fresh account and
-      // position truth. Open-order list latency is a separate audit lane: one
-      // slow optional endpoint must never make fresh account/positions appear
-      // offline or create an escalating "account timeout" loop.
-      const core=await client.snapshotCore();this.liveSyncUsedCached=false;
-      if(!this.liveOrderAuditAt&&this.runtime.live.lastSyncAt)this.liveOrderAuditAt=this.runtime.live.lastSyncAt;
-      let orders=this.liveOrderSnapshotCache;
-      if(!orders||now-orders.checkedAt>LIVE_ORDER_AUDIT_MAX_AGE_MS){
-        try{
-          orders=await client.snapshotOrders();
-          this.liveOrderSnapshotCache=structuredClone(orders);this.liveOrderAuditAt=orders.checkedAt;
-        }catch(error){
-          if(!isGateReadTimeoutError(error))throw error;
-          orderAuditUsable=false;
-        }
-      }
-      const inheritedAuditAt=orders?.checkedAt??this.liveOrderAuditAt;
-      orderAuditUsable=inheritedAuditAt>0&&now-inheritedAuditAt<=LIVE_ORDER_AUDIT_ADMISSION_MAX_AGE_MS;
-      snapshot={account:core.account,positions:core.positions,orders:orders?.orders??[],priceOrders:orders?.priceOrders??[],checkedAt:core.checkedAt};
-      this.liveSnapshotCache=structuredClone(snapshot);
-    }
-    // The committed PAPER account can advance while private reads are in flight.
-    // Select sources after the read, never from a pre-await portfolio snapshot.
-    now=Date.now();this.reconcileCanonicalMirror(now);
-    let sourceError=this.liveBindingError??this.forwardError;
-    let desiredPortfolio:Record<string,MirrorSourceTrade>={};
-    try{desiredPortfolio=this.liveDesiredPortfolio(now);}
-    catch(error){sourceError=safeError(error);}
+    let snapshot = await client.snapshot();
     this.turnoverAccountUser=snapshot.account.user==null?null:String(snapshot.account.user);
     const knownTags = new Set([
-      ...Object.values(this.runtime.live.entries).flatMap((entry) => entry
-        &&(!["FILLED","CANCELLED"].includes(entry.status)||this.liveEntryAwaitingReconcile(entry))
+      ...Object.values(this.runtime.live.entries).flatMap((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status)
         ? [entry.tag, entry.stopTag ?? this.liveEntryStopIntent(entry).tag] : []),
       ...Object.values(this.runtime.live.positions).flatMap((position) => position?.status === "OPEN" && position.stopTag ? [position.stopTag] : []),
     ]);
@@ -2167,8 +2096,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       .flatMap((entry) => entry?.exchangeOrderId ? [entry.exchangeOrderId] : []));
     snapshot = forceEntryCleanup
       ? await this.cancelAndConfirmSystemEntries(client, snapshot, trackedEntryIds)
-      : orderAuditUsable?await this.cancelAndConfirmSystemEntries(client, snapshot, trackedEntryIds, knownTags):snapshot;
-    if(!cached||snapshot.checkedAt!==cached.checkedAt)this.liveSnapshotCache=structuredClone(snapshot);
+      : await this.cancelAndConfirmSystemEntries(client, snapshot, trackedEntryIds, knownTags);
     if (forceEntryCleanup) {
       for (const entry of Object.values(this.runtime.live.entries)) {
         if (!entry || ["FILLED", "CANCELLED"].includes(entry.status)) continue;
@@ -2188,47 +2116,26 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
     this.runtime.live.equity = accountError?null:equity;
     this.runtime.live.available = available;
-    this.runtime.live.lastSyncAt = snapshot.checkedAt;
+    this.runtime.live.lastSyncAt = now;
 
-    const exchangeOrders = orderAuditUsable?[...snapshot.orders, ...snapshot.priceOrders]:[];
-    const unknownOrders = orderAuditUsable?exchangeOrders.filter((order) => !knownTags.has(liveOrderTag(order) ?? "")):[];
+    const exchangeOrders = [...snapshot.orders, ...snapshot.priceOrders];
+    const unknownOrders = exchangeOrders.filter((order) => !knownTags.has(liveOrderTag(order) ?? ""));
     const actualPositions = snapshot.positions.filter((position) => Number(position.size ?? 0) !== 0);
     const unmanagedPositions = actualPositions.filter((actual) => {
       const symbol = actual.contract ?? "";
       const side: Side = Number(actual.size ?? 0) > 0 ? "LONG" : "SHORT";
       const position = this.runtime.live.positions[symbol];
       const entry = this.runtime.live.entries[symbol];
-      const entryCanOwnExposure=entry?.side===side&&(!entry.parity||entry.marketSubmittedAt!=null)
-        &&(["SUBMITTING","OPEN","FILLED","ERROR"].includes(entry.status)
-          ||(entry.status==="CANCELLED"&&(now-entry.createdAt<60_000||this.liveEntryAwaitingReconcile(entry))));
-      return !(position?.status==="OPEN"&&position.side===side)&&!entryCanOwnExposure;
+      return !(position?.status === "OPEN" && position.side === side)
+        && !(entry?.side === side && (["SUBMITTING", "OPEN", "FILLED", "ERROR"].includes(entry.status)
+          || (entry.status === "CANCELLED" && (now - entry.createdAt < 60_000 || this.liveEntryAwaitingReconcile(entry)))));
     });
     if (initialEnable && (unknownOrders.length || unmanagedPositions.length)) {
       throw new Error("Gate 已有未纳管仓位或挂单；执行暂停，所有者的开启选择保留");
     }
 
     for (const [symbol, entry] of Object.entries(this.runtime.live.entries)) {
-      if (!entry || (entry.status==="FILLED"&&!this.liveEntryAwaitingReconcile(entry))
-        || (entry.status==="CANCELLED"&&!this.liveEntryAwaitingReconcile(entry))) continue;
-      const actualForEntry=actualPositions.find(p=>p.contract===symbol&&Number(p.size??0)!==0
-        &&Math.sign(Number(p.size))===(entry.side==="LONG"?1:-1));
-      if(entry.parity&&entry.marketSubmittedAt!=null&&actualForEntry){
-        entry.status="FILLED";entry.submissionResolved=true;entry.missingSince=null;entry.lastError=null;
-        const px=Number(actualForEntry.entry_price);
-        if(entry.parity&&Number.isFinite(px)&&px>0){
-          const source=this.currentMirrorSource(entry.planId).trade;
-          if(source){const drift=liveEntryDriftGuard(source,px);Object.assign(entry.parity,{
-            exchangeEntryPrice:px,exchangeEntryAt:snapshot.checkedAt,exchangeEntryDriftRate:drift.adverse});}
-        }
-        continue;
-      }
-      if(entry.parity&&entry.marketSubmittedAt==null&&["SUBMITTING","ERROR"].includes(entry.status)
-        &&now-entry.createdAt>=6_000){
-        entry.status="CANCELLED";entry.submissionResolved=true;entry.missingSince=null;
-        entry.lastError="实盘执行在订单提交网络边界之前中断；已确认没有提交订单，可由同一持久化模拟源重新进入本轮执行";
-        this.recordLiveAudit({observedAt:now,symbol,planId:entry.planId,stage:"ENTRY_SUBMIT",level:"INFO",reason:entry.lastError});
-        continue;
-      }
+      if (!entry || entry.status === "FILLED" || (entry.status === "CANCELLED" && !this.liveEntryAwaitingReconcile(entry))) continue;
       const openOrder = exchangeOrders.find((order) => liveOrderTag(order) === entry.tag);
       if (openOrder) {
         entry.status = "OPEN";
@@ -2249,26 +2156,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             this.recordLiveAudit({ observedAt: now, symbol, planId: entry.planId, stage: "ENTRY_SUBMIT",
               level: "SKIPPED", reason });
           } else entry.lastError = null;
-        } else if (entry.marketSubmittedAt!=null && gateUnknownSubmissionCanResolve(entry.marketSubmittedAt,now)) {
-          // Gate documents that a custom text ID for a zero-fill cancelled
-          // futures order may disappear after 60s, while any fully/partially
-          // filled order remains queryable by that text indefinitely. Reaching
-          // this branch means the fresh account snapshot has no position and a
-          // direct text lookup also returned not-found beyond that window.
-          entry.status = "CANCELLED";
-          entry.submissionResolved = true;
-          const reason = `Gate 在60秒订单身份核对窗口后仍无订单、持仓或成交 ${entry.tag}；确认本次未形成实盘暴露，原源单不重放，其他新机会恢复执行`;
-          entry.lastError = reason;
-          this.runtime.live.entrySkips[symbol] = { planId: entry.planId, symbol, code: "ENTRY_REJECTED", reason, observedAt: now };
-          this.recordLiveAudit({ observedAt: now, symbol, planId: entry.planId, stage: "ENTRY_SUBMIT",
-            level: "INFO", reason });
         } else if (now - entry.missingSince >= 6_000) {
-          const reason = `Gate 暂未返回订单 ${entry.tag}；保留唯一订单身份继续核对至60秒，不自动重复提交`;
-          entry.status = "ERROR";
-          if(entry.lastError!==reason)this.recordLiveAudit({ observedAt: now, symbol, planId: entry.planId, stage: "ENTRY_SUBMIT",
-            level: "RECOVERING", reason });
+          entry.status = "CANCELLED";
+          const reason = `Gate 在提交后6秒内未返回订单 ${entry.tag}，本计划不自动重放，避免重复开仓`;
           entry.lastError = reason;
           this.runtime.live.entrySkips[symbol] = { planId: entry.planId, symbol, code: "SUBMISSION_UNCONFIRMED", reason, observedAt: now };
+          this.recordLiveAudit({ observedAt: now, symbol, planId: entry.planId, stage: "ENTRY_SUBMIT",
+            level: "SKIPPED", reason });
         }
       }
       const selectedTrade = desiredPortfolio[symbol] ?? null;
@@ -2287,9 +2181,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if (!position || position.status !== "OPEN") {
         const entry = this.runtime.live.entries[symbol];
         const selectedTrade = desiredPortfolio[symbol] ?? null;
-        if (!entry || entry.side!==side || (entry.parity&&entry.marketSubmittedAt==null)
-          || (!["SUBMITTING","OPEN","FILLED","ERROR"].includes(entry.status)
-            && !(entry.status==="CANCELLED"&&now-entry.createdAt<60_000))) throw new Error(`发现未纳管实盘仓位 ${symbol}`);
+        if (!entry || entry.side !== side || (!["SUBMITTING", "OPEN", "FILLED", "ERROR"].includes(entry.status)
+          && !(entry.status === "CANCELLED" && now - entry.createdAt < 60_000))) throw new Error(`发现未纳管实盘仓位 ${symbol}`);
         // A completed source can be replaced before an in-flight market order
         // returns. Reconcile the reserved OLD parent first, then close it; never
         // relabel that fill as the replacement or abandon its protection.
@@ -2439,48 +2332,26 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.runtime.live.entrySkips = {};
       return;
     }
-    if(!orderAuditUsable){
-      this.runtime.live.operational=false;
-      this.runtime.live.lastError="Gate挂单核对暂未完成；实盘开关已保持开启，后台会自动重试，核对成功后自动恢复新增复制";
-      return;
-    }
     if (unknownOrders.length) throw new Error("Gate 存在未纳管挂单；已停止新开仓");
     if(unmanagedPositions.length)throw new Error("Gate 存在未纳管仓位；停止新增复制，保留已纳管保护");
     if(sourceError)throw new Error(`当前模拟复制源尚待恢复：${sourceError}`);
     if(accountError)throw new Error(accountError);
     if(this.forwardError)throw new Error(`模拟状态尚未成功保存：${this.forwardError}；不复制未持久化决定`);
-    if(typeof client.prepareTradingChannel==="function"){
-      try{await client.prepareTradingChannel();}
-      catch(error){
-        const message=`Gate WebSocket交易登录未就绪；已确认本轮没有发送实盘订单：${safeError(error)}`;
-        const changed=this.runtime.live.lastError!==message||this.runtime.live.operational;
-        this.runtime.live.operational=false;this.runtime.live.lastError=message;
-        if(changed)this.recordLiveAudit({observedAt:Date.now(),symbol:null,planId:null,stage:"LIVE_CONTROL",level:"RECOVERING",
-          reason:message,error});
-        return;
-      }
-    }
 
     let recoveringSubmission = Object.values(this.runtime.live.entries)
       .find((entry) => entry && (["SUBMITTING", "ERROR"].includes(entry.status) || this.liveEntryAwaitingReconcile(entry))) ?? null;
     const recoveringStop = Object.values(this.runtime.live.positions)
       .find((position) => position?.status === "OPEN" && position.stopSubmittingAt && !position.stopOrderId) ?? null;
     let recoveringEntryStop = Object.values(this.runtime.live.entries)
-      .find((entry) => entry && !["FILLED","CANCELLED"].includes(entry.status)
-        &&((entry.stopSubmittingAt&&!entry.stopOrderId)||entry.protectionExitRequestedAt)) ?? null;
-    this.runtime.live.operational = !recoveringStop&&!recoveringEntryStop;
-    this.runtime.live.lastError = recoveringStop ? `${recoveringStop.symbol} 的结构止损正在按订单标签核对`
-      : recoveringEntryStop ? `${recoveringEntryStop.symbol} 的初始保护/强制退出正在 Gate 核对`
-      : recoveringSubmission ? (recoveringSubmission.lastError
-        ?? `${recoveringSubmission.symbol} 的唯一订单身份仍在 Gate 核对；该笔风险已冻结，其他独立新机会继续执行`) : null;
-    if(recoveringStop||recoveringEntryStop) return;
-    const unresolvedEntryMargin=Object.values(this.runtime.live.entries).reduce((sum,entry)=>sum+(entry
-      &&(["SUBMITTING","OPEN","ERROR"].includes(entry.status)||this.liveEntryAwaitingReconcile(entry)) ? entry.margin : 0),0);
-    // A submit whose result is not visible yet may already have consumed Gate
-    // margin even when the current account snapshot has not caught up. Reserve
-    // that margin locally; once Gate exposes the position, it leaves this
-    // pending bucket and the exchange's available balance becomes authoritative.
-    let availableForNewEntries = Math.max(0,available-unresolvedEntryMargin);
+      .find((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status)
+        && entry.stopSubmittingAt && !entry.stopOrderId) ?? null;
+    this.runtime.live.operational = !recoveringSubmission && !recoveringStop && !recoveringEntryStop;
+    this.runtime.live.lastError = recoveringSubmission
+      ? recoveringSubmission.lastError ?? `${recoveringSubmission.symbol} 的实盘提交正在与 Gate 核对`
+      : recoveringStop ? `${recoveringStop.symbol} 的结构止损正在按订单标签核对`
+        : recoveringEntryStop ? `${recoveringEntryStop.symbol} 的初始止损正在按订单标签核对` : null;
+    if(recoveringSubmission || recoveringStop || recoveringEntryStop) return;
+    let availableForNewEntries = available;
     let riskForNewEntries = this.liveOpenRisk();
     const directionRiskForNewEntries: Record<Side, number> = {
       LONG: this.liveDirectionalRisk("LONG"),
@@ -2488,12 +2359,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     };
     let marginForNewEntries = [
       ...Object.values(this.runtime.live.positions).filter((position) => position?.status === "OPEN"),
-      ...Object.values(this.runtime.live.entries).filter((entry) => entry
-        &&(["SUBMITTING","OPEN","ERROR"].includes(entry.status)||this.liveEntryAwaitingReconcile(entry))),
+      ...Object.values(this.runtime.live.entries).filter((entry) => entry && ["SUBMITTING", "OPEN", "ERROR"].includes(entry.status)),
     ].reduce((sum, item) => sum + (item?.margin ?? 0), 0);
     let notionalForNewEntries=[...Object.values(this.runtime.live.positions).filter(p=>p?.status==="OPEN"),
-      ...Object.values(this.runtime.live.entries).filter(e=>e
-        &&(["SUBMITTING","OPEN","ERROR"].includes(e.status)||this.liveEntryAwaitingReconcile(e)))]
+      ...Object.values(this.runtime.live.entries).filter(e=>e&&["SUBMITTING","OPEN","ERROR"].includes(e.status))]
       .reduce((n,p)=>n+(p?.notional??0),0);
     const paperMark=forwardEquity(this.forwardState!,this.regimeQuotes(Date.now()),Date.now());
     let mirrorRatio=this.runtime.live.activation?.scaleRatio??null;
@@ -2502,36 +2371,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const trade = desiredPortfolio[symbol] ?? null;
       if (!skip || !trade || trade.id !== skip.planId || now >= trade.openedAt + 45 * 60_000) delete this.runtime.live.entrySkips[symbol];
     }
-    const desiredTrades=Object.values(desiredPortfolio).sort((a,b)=>{
-      const sa=a.forwardSource,sb=b.forwardSource,shockA=sa?.entryContext?.mode==="SHOCK"?1:0,shockB=sb?.entryContext?.mode==="SHOCK"?1:0,
-        scoreA=sa?.entryContext?.entryScore??0,scoreB=sb?.entryContext?.entryScore??0;
-      return shockB-shockA||scoreB-scoreA||b.openedAt-a.openedAt;
-    });
-    for (const trade of desiredTrades) {
+    for (const trade of Object.values(desiredPortfolio)) {
       const symbol = trade.symbol;
       if(!trade.forwardSource)continue; // Legacy sources only drain existing exposure.
-      if(!orderAuditUsable){
-        this.runtime.live.entrySkips[symbol]={planId:trade.id,symbol,code:"ECONOMICS",
-          reason:"Gate账户与持仓核对正常，但挂单审计通道暂未恢复；只暂停新增复制，已有原生保护和持仓管理不受影响",observedAt:now};
-        continue;
-      }
       const plan = { ...arenaTradePlan(trade), expiresAt:trade.openedAt+trade.forwardSource.rule.horizon*60_000 };
-      const prior = this.runtime.live.entries[symbol];
-      // Identity fencing comes before quote/admission diagnostics. Once a market
-      // request crossed the network boundary, this exact PAPER parent can never
-      // be submitted again. If the post-60s reconciliation proved no exposure,
-      // preserve that final result instead of overwriting it with a stale-quote
-      // ECONOMICS message on the next pass.
-      if(prior?.planId===plan.id&&prior.marketSubmittedAt!=null){
-        if(this.liveEntryAwaitingReconcile(prior)){
-          this.runtime.live.entrySkips[symbol]={planId:plan.id,symbol,code:"SUBMISSION_UNCONFIRMED",
-            reason:prior.lastError??"此前源单的提交尚待交易所确认，保留原身份和保护，不覆盖为新源单",observedAt:now};
-        }else if(prior.status==="CANCELLED"&&prior.submissionResolved){
-          this.runtime.live.entrySkips[symbol]={planId:plan.id,symbol,code:"ENTRY_REJECTED",
-            reason:prior.lastError??"该源单已确认未形成实盘暴露；不重放同一源单",observedAt:now};
-        }
-        continue;
-      }
       const justTriggeredEntry = sourceAfterEnable(trade.forwardSource,this.runtime.live.activation,this.forwardState!.startedAt);
       if (!justTriggeredEntry
         || this.runtime.live.positions[symbol]?.status === "OPEN" || !this.mirrorQuoteReady(symbol)) {
@@ -2545,20 +2388,29 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const retainedSkip = this.runtime.live.entrySkips[symbol];
       if (retainedSkip?.planId === plan.id && ["LEVERAGE_REJECTED","ENTRY_REJECTED","SUBMISSION_UNCONFIRMED"].includes(retainedSkip.code)
         && now-retainedSkip.observedAt<60_000) continue;
+      const prior = this.runtime.live.entries[symbol];
       if(this.liveEntryAwaitingReconcile(prior)) {
         this.runtime.live.entrySkips[symbol]={planId:plan.id,symbol,code:"SUBMISSION_UNCONFIRMED",
           reason:"此前源单的提交尚待交易所确认，保留原身份和保护，不覆盖为新源单",observedAt:now};
         continue;
       }
-      // A non-market or pre-submit prior can still be cancelled/replaced below.
-      if (prior && prior.planId === plan.id && prior.status !== "CANCELLED") continue;
+      // Once a market request may have crossed the network boundary, absence
+      // from a later snapshot is NOT permission to submit the parent again.
+      if (prior && prior.planId === plan.id && (prior.status !== "CANCELLED"||prior.marketSubmittedAt!=null)) {
+        if(prior.status==="CANCELLED"||prior.status==="ERROR")
+          this.runtime.live.entrySkips[symbol]={planId:plan.id,symbol,code:"SUBMISSION_UNCONFIRMED",
+            reason:prior.lastError??"该源单已提交过，等待成交核对，不自动重放",observedAt:now};
+        continue;
+      }
       if (prior && !["FILLED", "CANCELLED"].includes(prior.status)) await this.cancelLiveEntry(client, prior);
       let intent: ReturnType<typeof buildLiveEntryIntent>;
       let binding:MirrorBinding|undefined;
       try {
         if(paperMark.stalePositions)throw new LiveEntrySizingError("ECONOMICS",symbol,"模拟账户当前估值不完整，不能确定复制比例");
-        const scaled=await this.ensureLiveSessionScale(paperMark.equity,equity,Date.now());
-        mirrorRatio=scaled?.scaleRatio??equity/paperMark.equity;
+        if(!mirrorRatio){
+          const scaled=await this.ensureLiveSessionScale(paperMark.equity,equity,Date.now());
+          mirrorRatio=scaled?.scaleRatio??equity/paperMark.equity;
+        }
         const expectedLiveEquity=paperMark.equity*mirrorRatio;
         const liveEquityDrift=expectedLiveEquity>0?equity/expectedLiveEquity:0;
         if(liveEquityDrift<.85)throw new LiveEntrySizingError("ECONOMICS",symbol,
@@ -2585,6 +2437,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       marginForNewEntries += intent.margin;
       notionalForNewEntries += intent.notional;
       staged.push({ symbol, plan, intent, binding,activation:structuredClone(this.runtime.live.activation??null) });
+      if(staged.length>=2)break; // Bound private requests per pass, not total holdings.
     }
     for (const { symbol, plan, intent, binding,activation } of staged) {
       if(!this.runtime.live.requestedEnabled||!this.mirrorQuoteReady(symbol)
@@ -2610,14 +2463,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       try {
         if(!this.runtime.live.requestedEnabled||!sameLiveSession(activation,this.runtime.live.activation)){entry.status="CANCELLED";continue;}
         try {
-          const leverageCheck=typeof client.ensureLeverage==="function"
-            ?await client.ensureLeverage(symbol,intent.leverage)
-            :(await client.setLeverage(symbol,intent.leverage),{verified:true,recovered:false,already:false,actual:intent.leverage});
-          if(leverageCheck.recovered)this.recordLiveAudit({observedAt:Date.now(),symbol,planId:plan.id,stage:"LEVERAGE",level:"INFO",
-            reason:`Gate 杠杆写入响应曾超时，但安全回读已确认 ${symbol}=${intent.leverage}×；继续本次同源入场，不重放杠杆写请求`});
+          await client.setLeverage(symbol, intent.leverage);
         } catch (error) {
-          const reason = `Gate 未确认 ${symbol} 的 ${intent.leverage}× 杠杆，本计划已跳过但不会锁住其他新机会：${safeError(error)}`;
-          entry.status = "CANCELLED";entry.submissionResolved=true;entry.lastError = reason;
+          const reason = `Gate 未接受 ${symbol} 的 ${intent.leverage}× 杠杆，本计划已跳过：${safeError(error)}`;
+          entry.status = "CANCELLED";
+          entry.lastError = reason;
           this.runtime.live.entrySkips[symbol] = { planId: plan.id, symbol, code: "LEVERAGE_REJECTED", reason, observedAt: now };
           this.recordLiveAudit({ observedAt: now, symbol, planId: plan.id, stage: "LEVERAGE", level: "SKIPPED", reason, error });
           continue;
@@ -2650,73 +2500,20 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             adverseEntryDriftRate:drift.adverse});
           entry.marketSubmittedAt=submittedAt;
           await this.saveCheckpoint(submittedAt,true);
-          const submissionStillAllowed=()=>{
-            if(!this.runtime.live.requestedEnabled||!this.mirrorQuoteReady(symbol)
-              ||!sameLiveSession(activation,this.runtime.live.activation)
-              ||!sourceAfterEnable(binding!.sourceAtCopy,this.runtime.live.activation,this.forwardState?.startedAt??0)
-              ||!mirrorSourceFresh(this.currentMirrorSource(plan.id).trade??undefined,plan.id,Date.now()))return false;
-            const latest=this.runtime.evidence[symbol],latestPrice=entry.side==="LONG"?latest?.bestAsk:latest?.bestBid;
-            if(!latestPrice||(entry.side==="LONG"?latestPrice<=entry.invalidation:latestPrice>=entry.invalidation))return false;
-            const latestDrift=liveEntryDriftGuard(source,latestPrice);
-            return latestDrift.adverse<=latestDrift.allowed+1e-9;
-          };
-          if(!submissionStillAllowed())throw new GateEntryCancelledError();
-          entry.exchangeOrderId = await client.createEntry(intent,submissionStillAllowed);
-          entry.status="OPEN";entry.lastError=null;entry.missingSince=null;
-          // ACK gives us the exchange identity before clearing/fill details.
-          // Persist that identity immediately. A process restart or a slow GET
-          // can now recover by immutable order ID instead of falling back to the
-          // 65-second custom-tag ambiguity window.
-          await this.queueLiveBinding(entry);
-          await this.saveCheckpoint(Date.now(),true);
-          let filled:GateLiveOrder|null=null;
-          try {
-            filled=await client.inspectEntry("MARKET",symbol,entry.tag,entry.exchangeOrderId);
-          } catch(error) {
-            const reason=`Gate 已确认订单ID ${entry.exchangeOrderId}；成交状态核对暂时失败：${safeError(error)}`;
-            entry.status="ERROR";entry.missingSince=Date.now();entry.lastError=reason;recoveringSubmission=entry;
-            this.liveSourcePending=true;this.liveFastSourcePending=false;
-            this.recordLiveAudit({observedAt:Date.now(),symbol,planId:plan.id,stage:"ENTRY_SUBMIT",level:"RECOVERING",
-              reason:`${reason}；订单身份已持久化，只用读取继续核对，不重复提交`,error});
-            await this.queueLiveBinding(entry);
-            await this.saveCheckpoint(Date.now(),true);
-            continue;
-          }
-          if(!filled){
-            const reason=`Gate 已确认订单ID ${entry.exchangeOrderId}；订单/持仓尚未在读取端可见，继续按真实订单ID核对`;
-            entry.status="ERROR";entry.missingSince=Date.now();entry.lastError=reason;recoveringSubmission=entry;
-            this.liveSourcePending=true;this.liveFastSourcePending=false;
-            this.recordLiveAudit({observedAt:Date.now(),symbol,planId:plan.id,stage:"ENTRY_SUBMIT",level:"RECOVERING",reason});
-            await this.saveCheckpoint(Date.now(),true);
-            continue;
-          }
-          const disposition=liveEntryDisposition(filled,"MARKET"),fillPrice=Number(filled.fill_price);
+          entry.exchangeOrderId = await client.createEntry(intent);
+          entry.status = "OPEN";
+          const filled=await client.inspectEntry("MARKET",symbol,entry.tag,entry.exchangeOrderId);
+          const fillPrice=Number(filled?.fill_price);
           if(entry.parity&&Number.isFinite(fillPrice)&&fillPrice>0){
             const actualDrift=liveEntryDriftGuard(source,fillPrice);
             Object.assign(entry.parity,{exchangeEntryPrice:fillPrice,exchangeEntryAt:Date.now(),
               exchangeEntryDriftRate:actualDrift.adverse});
           }
-          if(disposition==="CANCELLED"){
+          if(filled&&liveEntryDisposition(filled,"MARKET")==="CANCELLED"){
             entry.status="CANCELLED";entry.submissionResolved=true;entry.lastError="Gate IOC零成交；未完成复制，不冒充成功";
             this.runtime.live.entrySkips[symbol]={planId:entry.planId,symbol,code:"ENTRY_REJECTED",reason:entry.lastError,observedAt:Date.now()};
-            await this.queueLiveBinding(entry);
             await this.saveCheckpoint(Date.now(),true);continue;
           }
-          if(disposition==="ERROR"){
-            entry.status="CANCELLED";entry.submissionResolved=true;
-            entry.lastError=`Gate 订单 ${entry.exchangeOrderId} 执行失败：${filled.finish_as??filled.status??"unknown"}`;
-            this.runtime.live.entrySkips[symbol]={planId:entry.planId,symbol,code:"ENTRY_REJECTED",reason:entry.lastError,observedAt:Date.now()};
-            this.recordLiveAudit({observedAt:Date.now(),symbol,planId:plan.id,stage:"ENTRY_SUBMIT",level:"SKIPPED",reason:entry.lastError});
-            await this.saveCheckpoint(Date.now(),true);continue;
-          }
-          if(disposition==="OPEN"){
-            entry.status="OPEN";entry.missingSince=Date.now();
-            entry.lastError=`Gate 已确认订单ID ${entry.exchangeOrderId}；IOC成交结果尚未完成，继续按ID核对`;
-            recoveringSubmission=entry;this.liveSourcePending=true;this.liveFastSourcePending=false;
-            await this.saveCheckpoint(Date.now(),true);continue;
-          }
-          entry.status="FILLED";entry.submissionResolved=true;entry.missingSince=null;entry.lastError=null;
-          await this.queueLiveBinding(entry);
           await this.saveCheckpoint(Date.now(),true);
           await this.createImmediateLiveStop(client, entry);
           if (!entry.stopOrderId) {
@@ -2727,14 +2524,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           await this.queueLiveBinding(entry);
           await this.saveCheckpoint(Date.now(),true);
         } catch (error) {
-          if(error instanceof GateEntryCancelledError){
-            entry.status="CANCELLED";entry.submissionResolved=true;entry.lastError=error.message;
-            delete entry.marketSubmittedAt;
-            if(entry.parity){delete entry.parity.submittedAt;delete entry.parity.submitDelayMs;}
-            await this.queueLiveBinding(entry);
-            await this.saveCheckpoint(Date.now(),true);
-            continue;
-          }
           const reason = `Gate 实盘入场提交失败：${safeError(error)}`;
           entry.lastError = reason;
           if (definitiveGateRejection(error)) {
@@ -2742,10 +2531,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             this.runtime.live.entrySkips[symbol] = { planId: plan.id, symbol, code: "ENTRY_REJECTED", reason, observedAt: now };
             this.recordLiveAudit({ observedAt: now, symbol, planId: plan.id, stage: "ENTRY_SUBMIT", level: "SKIPPED", reason, error });
           } else {
-            entry.status = "ERROR";entry.missingSince = now;recoveringSubmission = entry;
-            this.liveSourcePending=true;this.liveFastSourcePending=false;
+            entry.status = "ERROR";
+            entry.missingSince = now;
+            recoveringSubmission = entry;
             this.recordLiveAudit({ observedAt: now, symbol, planId: plan.id, stage: "ENTRY_SUBMIT", level: "RECOVERING",
-              reason: `${reason}；唯一订单身份与风险额度已冻结，立即用新账户/订单快照核对，不自动重复提交，其他已通过风险检查的新源单继续执行`, error });
+              reason: `${reason}；结果不明确，保留风险额度并按订单标签核对，不自动重复提交`, error });
           }
         }
       } catch (error) {
@@ -2753,21 +2543,301 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         entry.lastError = safeError(error);
         throw error;
       }
-      if(entry.status==="ERROR"&&(entry.stopSubmittingAt||entry.protectionExitRequestedAt))break;
+      if(entry.status==="ERROR")break; // Do not compound an unconfirmed exposure.
     }
-    if (recoveringEntryStop) {
+    if (recoveringSubmission || recoveringEntryStop) {
       this.runtime.live.operational = false;
-      this.runtime.live.lastError = `${recoveringEntryStop.symbol} 的初始保护/强制退出正在按订单标签核对`;
-    } else if(recoveringSubmission){
-      this.runtime.live.operational=true;
-      this.runtime.live.lastError=recoveringSubmission.lastError
-        ?? `${recoveringSubmission.symbol} 的唯一订单身份仍在 Gate 核对；该笔风险已冻结，其他独立新机会继续执行`;
+      this.runtime.live.lastError = recoveringSubmission
+        ? recoveringSubmission.lastError ?? `${recoveringSubmission.symbol} 的实盘提交正在与 Gate 核对`
+        : `${recoveringEntryStop!.symbol} 的初始止损正在按订单标签核对`;
     }
-    // A cached source-trigger pass is provisional by construction; the caller
-    // schedules the immediate full Gate reconciliation. Network-backed passes
-    // become the next fast-event cache.
-    if(!cached)this.liveSnapshotCache=structuredClone(snapshot);
   }
+
+  protected async setLiveMode(enabled: boolean) {
+    const wasEnabled=this.runtime.live.requestedEnabled;
+    const changedAt=Date.now();
+    if(enabled&&!wasEnabled)this.runtime.live.activation=startLiveSession(changedAt,this.forwardState);
+    this.runtime.live.requestedEnabled = enabled;
+    if (!enabled) this.runtime.live.operational = false;
+    if(wasEnabled!==enabled||this.runtime.live.changedAt==null)this.runtime.live.changedAt = changedAt;
+    this.runtime.live.lastError = null;
+    try {
+      await this.ctx.storage.put(`${LIVE_PARITY_PREFIX}owner-intent`,{enabled,changedAt:this.runtime.live.changedAt,activation:this.runtime.live.activation??null});
+      await this.saveCheckpoint(Date.now(),true);
+      await this.syncLive(Date.now(), enabled, !enabled);
+      this.recordLiveAudit({ observedAt: Date.now(), symbol: null, planId: null, stage: "LIVE_CONTROL", level: "INFO",
+        reason: enabled ? "所有者已开启，仅复制本次开启后新产生的模拟单；开启前已有单不补开，重复开启不重置起点" : "所有者已关闭实盘复制并请求撤销系统入场挂单" });
+      await this.saveCheckpoint(Date.now(), true);
+      return { ok: true, live: this.runtime.live };
+    } catch (error) {
+      this.runtime.live.operational = false;
+      this.runtime.live.lastError = safeError(error);
+      this.recordLiveAudit({ observedAt: Date.now(), symbol: null, planId: null, stage: "LIVE_CONTROL",
+        level: "RECOVERING",
+        reason: `实盘选择保持${this.runtime.live.requestedEnabled ? "开启" : "关闭"}，执行已暂停等待核对：${this.runtime.live.lastError}`, error });
+      await this.saveCheckpoint(Date.now(), true).catch(() => undefined);
+      return { ok: false, error: this.runtime.live.lastError, live: this.runtime.live };
+    }
+  }
+
+  private suspendSymbol(symbol: string, now: number, error: string, retryAt: number, increment = true) {
+    const evidence = this.runtime.evidence[symbol];
+    const prior = this.runtime.feedFailures[symbol] ?? { count: 0, retryAt: 0 };
+    const count = increment ? Math.min(5, prior.count + 1) : prior.count;
+    const suspendedSince = prior.suspendedSince ?? now;
+    const lastFreshAt = prior.lastFreshAt ?? evidence?.observedAt ?? now;
+    const hardFailure = count >= FEED_HARD_FAILURE_COUNT || now - lastFreshAt >= FEED_HARD_FAILURE_MS;
+    this.runtime.feedFailures[symbol] = {
+      ...prior,
+      count,
+      retryAt,
+      suspendedSince,
+      lastFreshAt,
+      recoveryFreshCount: 0,
+      totalFailures: (prior.totalFailures ?? 0) + (increment ? 1 : 0),
+      lastFailureAt: increment ? now : prior.lastFailureAt ?? now,
+      lastError: error,
+    };
+    this.runtime.decisions[symbol] = null;
+    if (evidence) {
+      evidence.fresh = false;
+      evidence.entryReady = false;
+      evidence.recoveryFreshCount = 0;
+      evidence.suspensionReason = hardFailure ? "关键行情持续中断，计划已撤销" : "关键行情短暂延迟，计划冻结且禁止成交";
+    }
+    const plan = this.runtime.plans[symbol];
+    if (hardFailure) this.runtime.routes[symbol] = [];
+    if (!hardFailure || plan?.state !== "PREPARED") return false;
+    this.runtime.plans[symbol] = { ...plan, state: "CANCELLED", cancelReason: "FEED_HARD_FAILURE_CANCEL", cancelledAt: now };
+    return true;
+  }
+
+  private acceptFreshSymbol(symbol: string, now: number, observedAt: number, progressed: boolean) {
+    const prior = this.runtime.feedFailures[symbol] ?? { count: 0, retryAt: 0 };
+    const wasSuspended = prior.suspendedSince != null;
+    const recoveryFreshCount = wasSuspended && progressed
+      ? Math.min(FEED_RECOVERY_CONFIRMATIONS, (prior.recoveryFreshCount ?? 0) + 1)
+      : wasSuspended ? prior.recoveryFreshCount ?? 0 : FEED_RECOVERY_CONFIRMATIONS;
+    const recovered = wasSuspended && recoveryFreshCount >= FEED_RECOVERY_CONFIRMATIONS;
+    const entryReady = !wasSuspended || recovered;
+    this.runtime.feedFailures[symbol] = {
+      ...prior,
+      count: 0,
+      retryAt: 0,
+      suspendedSince: entryReady ? null : prior.suspendedSince,
+      lastFreshAt: now,
+      recoveryFreshCount,
+      recoveries: (prior.recoveries ?? 0) + (recovered ? 1 : 0),
+      lastError: entryReady ? null : "等待第二次新鲜盘口确认",
+      maxObservedLagMs: Math.max(prior.maxObservedLagMs ?? 0, Math.max(0, now - observedAt)),
+    };
+    return { entryReady, recoveryFreshCount, recovered };
+  }
+
+  private symbolEntryReady(symbol: string) {
+    const evidence = this.runtime.evidence[symbol];
+    return Boolean(evidence?.fresh && evidence.ancillaryFresh && evidence.entryReady !== false);
+  }
+
+  private realtimeReadiness() {
+    const protectedSymbols = new Set([
+      ...Object.values(this.runtime.positions).flatMap((position) => position?.status === "OPEN" ? [position.symbol] : []),
+      ...Object.values(this.runtime.plans).flatMap((plan) => plan?.state === "PREPARED" ? [plan.symbol] : []),
+      ...Object.values(this.runtime.live.positions).flatMap((position) => position?.status === "OPEN" ? [position.symbol] : []),
+      ...Object.values(this.runtime.live.entries).flatMap((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status) ? [entry.symbol] : []),
+      ...Object.values(this.runtime.strategyArena.portfolioOpen).map((position) => position.symbol),
+      ...Object.values(this.runtime.previousStrategyArena.portfolioOpen).map((position) => position.symbol),
+      ...REGIME_SYSTEMS.flatMap((id) => Object.values(this.runtime.regimePortfolio.accounts[id].open).map((position) => position.symbol)),
+      ...(this.forwardState?.positions.map((position) => position.symbol) ?? []),
+    ]);
+    const actionableMarkets = this.runtime.symbols.filter((symbol) => (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS
+      && this.runtime.contractMeta[symbol] != null && this.symbolEntryReady(symbol)).length;
+    const protectedMarketsReady = [...protectedSymbols].every((symbol) => this.runtime.symbols.includes(symbol)
+      && (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS && this.runtime.contractMeta[symbol] != null
+      && this.symbolEntryReady(symbol));
+    return { capacity: PORTFOLIO_REALTIME_CAPACITY, actionableMarkets,
+      warmingMarkets: Math.max(0, this.runtime.symbols.length - actionableMarkets),
+      protectedMarkets: protectedSymbols.size, protectedMarketsReady };
+  }
+
+  private cycleBookSymbols(now: number, symbols: string[]) {
+    const protectedSymbols = new Set([
+      ...Object.values(this.runtime.positions).flatMap((position) => position?.status === "OPEN" ? [position.symbol] : []),
+      ...Object.values(this.runtime.plans).flatMap((plan) => plan?.state === "PREPARED" ? [plan.symbol] : []),
+      ...Object.values(this.runtime.live.positions).flatMap((position) => position?.status === "OPEN" ? [position.symbol] : []),
+      ...Object.values(this.runtime.live.entries).flatMap((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status) ? [entry.symbol] : []),
+      ...Object.values(this.runtime.strategyArena.portfolioOpen).map((position) => position.symbol),
+      ...Object.values(this.runtime.previousStrategyArena.portfolioOpen).map((position) => position.symbol),
+      ...REGIME_SYSTEMS.flatMap((id) => Object.values(this.runtime.regimePortfolio.accounts[id].open).map((position) => position.symbol)),
+      ...(this.forwardState?.positions.map((position) => position.symbol) ?? []),
+      ...Object.values(this.runtime.stableCandidates).filter((candidate) => approvedRouteScore(candidate) >= 0)
+        .map((candidate) => candidate.symbol),
+      ...Object.values(this.runtime.previousStableCandidates).filter((candidate) => previousApprovedRouteScore(candidate) >= 0)
+        .map((candidate) => candidate.symbol),
+    ]);
+    const slot = Math.floor(now / LOOP_MS) % BACKGROUND_BOOK_INTERVALS;
+    const bucket = (symbol: string) => [...symbol].reduce((sum, char) => sum + char.charCodeAt(0), 0) % BACKGROUND_BOOK_INTERVALS;
+    return symbols.filter((symbol) => protectedSymbols.has(symbol) || (this.sessionWarmup[symbol] ?? 0) < WARMUP_SNAPSHOTS
+      || bucket(symbol) === slot);
+  }
+
+  private async processBooks(now: number, cycleSymbols = [...this.runtime.symbols]) {
+    const authorityBefore = this.captureAuthority();
+    const dueSymbols = cycleSymbols.filter((symbol) => (this.runtime.feedFailures[symbol]?.retryAt ?? 0) <= now);
+    this.runtime.feedQuality.attempts += dueSymbols.length;
+    const rows = await Promise.allSettled(dueSymbols.map(async (symbol) => ({
+      symbol, snapshot: await fetchFuturesBook(symbol, this.runtime.tickSize[symbol] ?? 0.0001, this.runtime.contractMeta[symbol]?.quantoMultiplier ?? 1),
+    })));
+    let successes = 0;
+    let criticalChanged = false;
+    let stopCheckpointDue = false;
+    const closedThisCycle = new Set<string>();
+    const analyzedRows: Array<{ symbol: string; snapshot: Awaited<ReturnType<typeof fetchFuturesBook>>; validation: ReturnType<typeof usableSnapshot>; analyzed: ReturnType<typeof analyzeSnapshot> }> = [];
+    for (let index = 0; index < rows.length; index += 1) {
+      const result = rows[index];
+      const attemptedSymbol = dueSymbols[index];
+      if (result.status !== "fulfilled") {
+        const prior = this.runtime.feedFailures[attemptedSymbol]?.count ?? 0;
+        const count = Math.min(5, prior + 1);
+        const backoff = [2_000, 4_000, 8_000, 16_000, 30_000][count - 1];
+        const gateRetry = result.reason instanceof GatePublicError ? result.reason.retryAt : null;
+        const error = safeError(result.reason);
+        this.runtime.feedQuality.failures += 1; this.runtime.feedQuality.lastFailureAt = now;
+        this.runtime.feedQuality.lastFailureSymbol = attemptedSymbol; this.runtime.feedQuality.lastError = error;
+        criticalChanged = this.suspendSymbol(attemptedSymbol, now, error, Math.max(now + backoff, gateRetry ?? 0)) || criticalChanged;
+        continue;
+      }
+      const { symbol, snapshot } = result.value;
+      let memory = this.memory[symbol] ??= emptySymbolMemory();
+      // Network time belongs to freshness validation too. An exchange update
+      // received near the request timeout may legitimately be later than the
+      // alarm's start timestamp.
+      const validation = usableSnapshot(snapshot, Math.max(now, Date.now()), memory.lastSequence, memory.lastBookObservedAt);
+      if (!validation.fresh) {
+        criticalChanged = this.suspendSymbol(symbol, now, "Gate 订单簿时间戳失鲜", now + LOOP_MS) || criticalChanged;
+        continue;
+      }
+      if (validation.sequenceReset) {
+        const replacement = emptySymbolMemory();
+        replacement.quantoMultiplier = memory.quantoMultiplier;
+        replacement.maintenanceRate = memory.maintenanceRate;
+        replacement.flow.funding = memory.flow.funding;
+        this.memory[symbol] = memory = replacement;
+        this.sessionWarmup[symbol] = 0;
+      }
+      const progressed = validation.advanced || validation.sequenceReset;
+      if (validation.sequenceFault || validation.sequenceReset) {
+        this.runtime.sequenceRebuilds += 1;
+        const plan = this.runtime.plans[symbol];
+        if (plan?.state === "PREPARED") {
+          this.runtime.plans[symbol] = { ...plan, state: "CANCELLED", cancelReason: "SEQUENCE_REBUILD_CANCEL", cancelledAt: now };
+          criticalChanged = true;
+        }
+        this.runtime.decisions[symbol] = null;
+        this.runtime.routes[symbol] = [];
+        if (validation.sequenceFault) {
+          if (this.runtime.evidence[symbol]) {
+            this.runtime.evidence[symbol].fresh = false;
+            this.runtime.evidence[symbol].entryReady = false;
+            this.runtime.evidence[symbol].suspensionReason = "订单簿序列异常，原计划已撤销";
+          }
+          continue;
+        }
+      }
+      const recovery = this.acceptFreshSymbol(symbol, now, snapshot.observedAt, progressed);
+      if (recovery.recovered) this.runtime.feedQuality.recoveries += 1;
+      if (validation.fresh && !validation.sequenceFault && progressed) {
+        successes += 1;
+      }
+      if (validation.fresh && validation.unchanged) successes += 1;
+      if (validation.fresh && !validation.sequenceFault && progressed) {
+        applyFlow(memory, snapshot);
+        this.sessionWarmup[symbol] = (this.sessionWarmup[symbol] ?? 0) + 1;
+      }
+      if (validation.unchanged) {
+        if (this.runtime.evidence[symbol]) {
+          const coreFresh = this.criticalEvidenceFresh(symbol, now);
+          this.runtime.evidence[symbol].fresh = true;
+          this.runtime.evidence[symbol].ancillaryFresh = coreFresh;
+          this.runtime.evidence[symbol].optionalFresh = optionalEvidenceIsFresh(memory, now);
+          this.runtime.evidence[symbol].entryReady = recovery.entryReady && coreFresh;
+          this.runtime.evidence[symbol].recoveryFreshCount = recovery.recoveryFreshCount;
+          this.runtime.evidence[symbol].suspensionReason = recovery.entryReady ? null : "已恢复第一份盘口，等待第二份新盘口确认";
+        }
+        continue;
+      }
+      const analysisStart = performance.now();
+      const analyzed = validation.fresh && !validation.sequenceFault && progressed
+        ? analyzeSnapshot(memory, snapshot)
+        : { midpoint: memory.lastMid, zones: [] as LiquidityZone[], bands: [], absorption: 0, decision: null,
+          routes: [] as LiquidityRoute[], range15m: memory.range15m, confirmationBySide: { LONG: 0, SHORT: 0 },
+          fakeoutBySide: { LONG: 1, SHORT: 1 } };
+      this.runtime.analysisMs.push(performance.now() - analysisStart);
+      if (this.runtime.analysisMs.length > 240) this.runtime.analysisMs.shift();
+      const priorPlan = this.runtime.plans[symbol] ?? null;
+      const priorPosition = this.runtime.positions[symbol] ?? null;
+      const ancillaryFresh = this.criticalEvidenceFresh(symbol, now);
+      const optionalFresh = optionalEvidenceIsFresh(memory, now);
+      const contractReady = this.runtime.contractMeta[symbol] != null;
+      const entryReady = recovery.entryReady && ancillaryFresh;
+      const decision: Decision | null = null;
+      const bestBid = snapshot.bids[0]?.price ?? analyzed.midpoint;
+      const bestAsk = snapshot.asks[0]?.price ?? analyzed.midpoint;
+      // Position protection needs only a fresh executable book. It must continue
+      // even while ancillary entry evidence is warming or temporarily stale.
+      this.runtime.regimePortfolio = advanceRegimePortfolio({ state: this.runtime.regimePortfolio,
+        quotes: { [symbol]: { midpoint: analyzed.midpoint, bestBid, bestAsk, observedAt: snapshot.observedAt, fresh: true,
+          completedMinuteAt: this.strategyCandles[symbol]?.at(-1)
+            ? (this.strategyCandles[symbol].at(-1)!.time + 300) * 1_000 : undefined } }, now });
+      if (this.authorityReady && contractReady && entryReady && (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS) {
+        const spreadRate = bestAsk >= bestBid ? (bestAsk - bestBid) / Math.max(analyzed.midpoint, 1e-9) : 0;
+        this.observeArena(symbol, analyzed.midpoint, analyzed, now, spreadRate, bestBid, bestAsk,
+          snapshot.bids.slice(0, 5).reduce((total, level) => total + level.size, 0),
+          snapshot.asks.slice(0, 5).reduce((total, level) => total + level.size, 0));
+      }
+      const openRisk = openStressRisk(this.runtime);
+      const planSide = priorPlan?.state === "PREPARED" ? priorPlan.side : undefined;
+      const reconciled = reconcilePaper({ now, midpoint: analyzed.midpoint, fresh: validation.fresh, sequenceFault: validation.sequenceFault,
+        decision, plan: priorPlan, position: priorPosition, zones: analyzed.zones, absorption: analyzed.absorption,
+        confirmationMinute: memory.timeframeUpdatedAt.m1, confirmationPrice: memory.lastCompletedMinuteClose,
+        confirmationCandle: memory.lastCompletedMinuteCandle,
+        equity: markToMarketEquity(this.runtime), openRisk, sameDirectionRisk: directionalStressRisk(this.runtime, planSide), allowOpen: false,
+        protectOnly: (this.sessionWarmup[symbol] ?? 0) < WARMUP_SNAPSHOTS,
+        activeRoutes: analyzed.routes, breakoutConfirmation: priorPlan ? analyzed.confirmationBySide[priorPlan.side] : undefined,
+        breakoutFakeoutRisk: priorPlan ? analyzed.fakeoutBySide[priorPlan.side] : undefined,
+        maintenanceRate: this.runtime.contractMeta[symbol]?.maintenanceRate, leverageMax: this.runtime.contractMeta[symbol]?.leverageMax });
+      this.runtime.decisions[symbol] = decision;
+      this.runtime.entryAssessments[symbol] = null;
+      this.runtime.routes[symbol] = [];
+      this.runtime.plans[symbol] = reconciled.plan;
+      const closedNow = priorPosition?.status === "OPEN" && reconciled.position?.status === "CLOSED";
+      if (closedNow) closedThisCycle.add(symbol);
+      const stopTightened = priorPosition?.status === "OPEN" && reconciled.position?.status === "OPEN" && priorPosition.currentStop !== reconciled.position.currentStop;
+      if (stopTightened && this.runtime.lastStopCheckpointAt != null && now - this.runtime.lastStopCheckpointAt < 60_000) {
+        reconciled.position = { ...reconciled.position!, currentStop: priorPosition.currentStop };
+      } else if (stopTightened) {
+        stopCheckpointDue = true;
+      }
+      this.runtime.positions[symbol] = reconciled.position;
+      this.runtime.evidence[symbol] = {
+        midpoint: analyzed.midpoint, bestBid: snapshot.bids[0]?.price ?? analyzed.midpoint,
+        bestAsk: snapshot.asks[0]?.price ?? analyzed.midpoint,
+        observedAt: snapshot.observedAt, warmup: Math.min(WARMUP_SNAPSHOTS, this.sessionWarmup[symbol] ?? 0),
+        fresh: true, ancillaryFresh, optionalFresh, entryReady,
+        recoveryFreshCount: recovery.recoveryFreshCount,
+        suspensionReason: !ancillaryFresh ? "关键周期结构正在刷新，禁止成交" : recovery.entryReady ? null : "已恢复第一份盘口，等待第二份新盘口确认",
+        topLong: analyzed.zones.filter((zone) => zone.side === "LONG").sort((a, b) => b.score - a.score)[0] ?? null,
+        topShort: analyzed.zones.filter((zone) => zone.side === "SHORT").sort((a, b) => b.score - a.score)[0] ?? null,
+        absorption: analyzed.absorption, range15m: analyzed.range15m,
+      };
+      if (validation.fresh && !validation.sequenceFault && progressed) {
+        memory.lastSequence = snapshot.sequence || memory.lastSequence;
+        memory.lastBookObservedAt = snapshot.observedAt;
+      }
+      this.queueTransition(reconciled.position, priorPosition);
+      if (priorPosition?.status !== reconciled.position?.status || (priorPosition?.status === "OPEN" && reconciled.position?.status === "OPEN" && priorPosition.currentStop !== reconciled.position.currentStop)) criticalChanged = true;
+      analyzedRows.push({ symbol, snapshot, validation, analyzed });
+    }
 
   protected async setLiveMode(enabled: boolean) {
     const wasEnabled=this.runtime.live.requestedEnabled;
@@ -3192,8 +3262,25 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // Forward/PAPER is financial authority, not optional analysis. Keep its
       // exits and 5-minute account archive on the same critical protection clock.
       await this.advanceForwardNow(Date.now(),false);
-      // Private network latency must not hold the 2s executable-book/PAPER clock.
-      this.launchLiveWork();
+      const liveNeedsSync = this.liveNeedsSync();
+      if (liveNeedsSync) {
+        const liveRequestsBefore = this.liveClient?.requestCount ?? 0;
+        try {
+          await this.syncLive(Date.now());
+        } catch (error) {
+          const message = safeError(error);
+          const blocked=liveFailureRequiresOff(error);
+          const shouldRecord = this.runtime.live.lastError !== message || this.runtime.live.operational;
+          this.runtime.live.operational = false;
+          this.runtime.live.lastError = message;
+          if (shouldRecord) this.recordLiveAudit({ observedAt: Date.now(), symbol: null, planId: null,
+            stage: "LIVE_CONTROL", level: "RECOVERING",
+            reason: blocked ? `账户纳管冲突，执行暂停但不改写所有者开关：${message}`
+              : `实盘核对暂时失败，所有者开关选择保持不变：${message}`, error });
+        } finally {
+          subrequests += Math.max(0, (this.liveClient?.requestCount ?? liveRequestsBefore) - liveRequestsBefore);
+        }
+      }
       this.launchOptionalWork(now, universeDue);
       this.launchTurnoverWork(Date.now());
     } catch (error) {
