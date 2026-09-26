@@ -223,13 +223,18 @@ test("the restored full snapshot does not hide or retry a private read timeout",
   const real=globalThis.fetch;let requests=0;
   globalThis.fetch=async(input)=>{
     requests++;const path=new URL(String(input)).pathname;
-    if(path.endsWith("/accounts")){const error=new Error("The operation was aborted due to timeout");error.name="TimeoutError";throw error;}
+    if(path.endsWith("/accounts")){
+      // Promise.all starts all four historical snapshot reads. Hold the failing
+      // account response until the siblings have crossed the fetch boundary so
+      // this test cannot leak pending reads into the next test.
+      while(requests<4)await new Promise<void>(resolve=>setImmediate(resolve));
+      const error=new Error("The operation was aborted due to timeout");error.name="TimeoutError";throw error;
+    }
     return Response.json([]);
   };
   try{
     const client=new GateLiveClient({apiKey:"abcdefgh12345678",apiSecret:"secret-value-12345678",environment:"live"});
     await assert.rejects(client.snapshot(),/timeout/i);
-    await new Promise<void>(resolve=>setImmediate(resolve)); // drain the other three already-started reads before restoring global fetch
     assert.equal(requests,4,"one full snapshot issues its four reads once; no hedge or retry is created");
     assert.equal(client.readTransport.hedges,0);assert.equal(client.readTransport.recovered,0);
   }finally{globalThis.fetch=real;}
