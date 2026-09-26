@@ -148,12 +148,6 @@ export function isGateReadTimeoutError(error:unknown):error is GateReadTimeoutEr
   return error instanceof GateReadTimeoutError
     ||(error instanceof Error&&(error.name==="GateReadTimeoutError"||(error as Error&{code?:string}).code==="GATE_READ_TIMEOUT"));
 }
-function gateRequestTimedOut(error:unknown):boolean{
-  if(error instanceof AggregateError)return error.errors.length>0&&error.errors.every(gateRequestTimedOut);
-  return error instanceof Error&&(error.name==="TimeoutError"||error.name==="AbortError"
-    ||/aborted due to timeout|timed out|timeout/i.test(error.message));
-}
-
 function hex(buffer: ArrayBuffer) {
   return Array.from(new Uint8Array(buffer), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
@@ -179,54 +173,6 @@ function safeGateError(raw: string, status: number) {
   }
 }
 
-class GateHttpError extends Error {
-  readonly status:number;
-  constructor(raw:string,status:number){super(safeGateError(raw,status));this.status=status;}
-}
-
-// Both hosts are Gate's documented futures production endpoints. Never send
-// account credentials to another exchange, a redirect, or a mainnet fallback
-// for a testnet account. A race includes the body and JSON, not just headers.
-async function completeGateRead<T>(
-  read:(alternate:boolean,signal:AbortSignal)=>Promise<T>,
-  preferredAlternate:boolean,
-  onHedge:()=>void,
-  onWinner:(alternate:boolean)=>void,
-):Promise<T>{
-  const controllers=[new AbortController(),new AbortController()];
-  const routes=preferredAlternate?[true,false]:[false,true];
-  let hedge:ReturnType<typeof setTimeout>|undefined,deadline:ReturnType<typeof setTimeout>|undefined;
-  let settled=false,secondary=false;
-  const errors:unknown[]=[];
-  try{return await new Promise<T>((resolve,reject)=>{
-    const fail=(error:unknown)=>{if(!settled){settled=true;reject(error);}};
-    const start=(index:number)=>{
-      const alternate=routes[index]!;
-      void read(alternate,controllers[index].signal).then(value=>{
-        if(!settled){settled=true;onWinner(alternate);resolve(value);}
-      },error=>{
-        if(settled)return;
-        // Authentication, permission, rate limits and absence are definitive;
-        // a second route must not conceal them or multiply a rate-limit burst.
-        if(error instanceof GateHttpError&&error.status>=400&&error.status<500){fail(error);return;}
-        errors.push(error);
-        if(index===0&&!secondary)startSecondary();
-        if(errors.length===2)fail(new AggregateError(errors));
-      });
-    };
-    const startSecondary=()=>{
-      if(settled||secondary)return;
-      secondary=true;onHedge();start(1);
-    };
-    deadline=setTimeout(()=>fail(new DOMException("Gate read deadline exceeded","TimeoutError")),6_000);
-    hedge=setTimeout(startSecondary,350);
-    start(0);
-  });}finally{
-    clearTimeout(hedge);clearTimeout(deadline);
-    for(const controller of controllers)controller.abort();
-  }
-}
-
 function responseId(raw: string, parsed: GateLiveOrder) {
   if (typeof parsed.id_string === "string" && /^\d+$/.test(parsed.id_string)) return parsed.id_string;
   const match = raw.match(/"id"\s*:\s*(?:"(\d+)"|(\d+))/);
@@ -242,35 +188,6 @@ function responseId(raw: string, parsed: GateLiveOrder) {
 function parseGateJson<T>(raw: string): T {
   const idSafe = raw.replace(/("(?:id|order_id|trade_id)"\s*:\s*)(-?\d{16,})(?=\s*[,}\]])/g, '$1"$2"');
   return JSON.parse(idSafe) as T;
-}
-
-type GateTradeSocket={
-  readyState:number;
-  accept():void;
-  send(data:string):void;
-  close(code?:number,reason?:string):void;
-  addEventListener(type:string,listener:(event:{data?:unknown})=>void):void;
-};
-type GateTradeWaiter={
-  reqId:string;
-  acked:boolean;
-  resolve:(order:GateLiveOrder)=>void;
-  reject:(error:unknown)=>void;
-  timer:ReturnType<typeof setTimeout>;
-};
-
-const GATE_TRADE_WS="https://fx-ws.gateio.ws/v4/ws/usdt";
-const GATE_TRADE_WS_HANDSHAKE_MS=12_000;
-const GATE_TRADE_WS_RESULT_MS=6_000;
-
-async function gateWsApiSignature(secret:string,channel:string,requestParam:string,timestamp:number){
-  const payload=`api\n${channel}\n${requestParam}\n${timestamp}`;
-  const key=await crypto.subtle.importKey("raw",encoder.encode(secret),{name:"HMAC",hash:"SHA-512"},false,["sign"]);
-  return hex(await crypto.subtle.sign("HMAC",key,encoder.encode(payload)));
-}
-
-class GateWsUnavailableBeforeSendError extends GateEntryCancelledError{
-  constructor(message:string){super(message);this.name="GateWsUnavailableBeforeSendError";}
 }
 
 export class GateLiveClient {
