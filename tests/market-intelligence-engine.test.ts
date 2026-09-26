@@ -112,7 +112,7 @@ test("same market anomaly keeps one thesis id across completed bars and matures 
 test("major market direction uses hysteresis instead of flipping neutral on small counter-moves",()=>{
   const up={BTC_USDT:candles(100,.0015),ETH_USDT:candles(100,.0014),SOL_USDT:candles(100,.0016)};
   const qUp=Object.fromEntries(Object.entries(up).map(([s,v])=>[s,q(v.at(-1)!.close,.00025)]));
-  let state=initialMarketIntelligenceState(T-1_800_000),now=T-1_500_000;
+  let state=initialMarketIntelligenceState(T-1_800_000);const now=T-1_500_000;
   for(let i=0;i<4;i++){const r=buildMarketIntelligence({paths:up,quotes:qUp,previous:state,now:now+i*300_000});state=r.state;}
   assert.equal(state.narrative.major.bias,"BULLISH");
   const mild={BTC_USDT:candles(100,-.00008),ETH_USDT:candles(100,-.00006),SOL_USDT:candles(100,-.00009)};
