@@ -65,14 +65,14 @@ export function forwardMirrorSources(state: ForwardState, sourceEquity: number):
     validateMirrorSource(t);
     if (out[t.symbol]) throw new Error(`${t.symbol} 出现多条逻辑持仓；禁止静默净额合并，须先升级逐腿执行适配器`);
     const cost = 2*(PAPER_COST.feeRate+PAPER_COST.slippageRate)+PAPER_COST.fundingAllowancePerDay*sourceHoldMinutes(t)/1440,
-      mode=t.entryContext?.mode,swing=mode==="SWING",impulse=mode==="IMPULSE",
+      mode=t.entryContext?.mode,swing=mode==="SWING",impulse=mode==="IMPULSE",predictive=mode==="PREDICTIVE",
       family=swing?"REVERSAL" as const:"TREND" as const,
       channel=swing?"RANGE" as const:"TREND" as const,
       regime=swing?"RANGE" as const:impulse?"EXPANSION" as const:"TREND" as const,
       survival=t.side==="LONG"?t.entryContext?.upSurvival:t.entryContext?.downSurvival;
     out[t.symbol] = {
       id:t.id, strategyId:t.rule.id,
-      strategyName:t.entryContext?.strategyVersion?`峰谷状态 · ${mode??"TRADE"}`:`兼容策略 ${t.rule.id} v${t.rule.version}`,
+      strategyName:predictive?"因果预测路径":t.entryContext?.strategyVersion?`峰谷状态 · ${mode??"TRADE"}`:`兼容策略 ${t.rule.id} v${t.rule.version}`,
       family, lane:"PORTFOLIO", eventId:t.id, symbol:t.symbol, side:t.side,
       status:t.status, openedAt:t.openedAt, closedAt:null, entryPrice:t.entryPrice,
       stopPrice:t.stopPrice, activeStopPrice:t.stopPrice, targetPrice:t.armPrice,
@@ -82,12 +82,12 @@ export function forwardMirrorSources(state: ForwardState, sourceEquity: number):
       admissionTier:null, plannedRisk:t.plannedRisk, contracts:t.contracts,
       quantoMultiplier:t.quantoMultiplier, leverage:t.leverage, margin:t.margin,
       accountEquityAtOpen:sourceEquity, forwardSource:structuredClone(t),
-      context:{channel,regime,anomalyKind:null,entryStyle:mode==="TREND_PULLBACK"?"RETEST":"CONFIRM",exitProfile:"STRUCTURE",
+      context:{channel,regime,anomalyKind:null,entryStyle:mode==="TREND_PULLBACK"?"RETEST":"CONFIRM",exitProfile:predictive?"PREDICTIVE_PATH":"STRUCTURE",
         candidateScore:t.entryContext?.entryScore??0,trendRate:(survival??0)/100,trendEfficiency:(t.entryContext?.directionStrength??0)/100,
         volatilityRatio:0,rangePosition:0,openInterestChangeRate:0,volume24hUsd:0,fundingRate:0,alignedFlow:0,
         confirmation:t.entryContext?.confirmationStage==="READY"||t.entryContext?.confirmationStage==="IMPULSE"?1:0,
         fakeoutRisk:Math.min(1,Math.max(0,(t.entryContext?.disagreementRate??0)/.015)),rangeId:null,modeledCostRate:cost,
-        spreadRate:0,bidDepthUsd:0,askDepthUsd:0,structureSource:impulse?"IMPULSE":"CANDLE_5M",
+        spreadRate:0,bidDepthUsd:0,askDepthUsd:0,structureSource:predictive?"CAUSAL_PATH":impulse?"IMPULSE":"CANDLE_5M",
         grossRewardRate:Math.max(0,t.forecast?.remainingNetRate??0),structuralStopRate:t.rule.stopRate,
         netRewardRisk:(t.forecast?.remainingNetRate??0)/Math.max(t.rule.stopRate,1e-9),costShare:0,
         empiricalExpectedReturnRate:0,empiricalProfitFactor:0,empiricalEvents:0,
