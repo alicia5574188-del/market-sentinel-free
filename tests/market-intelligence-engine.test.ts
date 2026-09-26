@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {buildMarketIntelligence,initialMarketIntelligenceState,intelligenceExitDecision,MARKET_INTELLIGENCE_VERSION} from "../lib/market-intelligence-engine.ts";
-import {advanceForward,initialForward} from "../lib/forward-relations.ts";
+import {advanceForward,initialForward,resetForwardAccountPreservingLearning} from "../lib/forward-relations.ts";
 
 const T=2_000_000_000_000;
 function candles(start:number,step:number,vol=.002){
@@ -119,4 +119,56 @@ test("major market direction uses hysteresis instead of flipping neutral on smal
   const qMild=Object.fromEntries(Object.entries(mild).map(([s,v])=>[s,q(v.at(-1)!.close,-.00005)]));
   const next=buildMarketIntelligence({paths:mild,quotes:qMild,previous:state,now:T+600_000});
   assert.equal(next.state.narrative.major.bias,"BULLISH","minor counter-move should update details without rewriting the major narrative");
+});
+
+
+test("PAPER balance reset clears the wallet ledger but preserves the live Market Intelligence brain",()=>{
+  const paths={BTC_USDT:candles(100,.0010),ETH_USDT:candles(100,.0015),SOL_USDT:candles(100,.0009)};
+  const quotes=Object.fromEntries(Object.entries(paths).map(([s,v])=>[s,q(v.at(-1)!.close,.00025)]));
+  const built=buildMarketIntelligence({paths,quotes,previous:initialMarketIntelligenceState(T-600_000),now:T});
+  const prior=initialForward(T-900_000);
+  prior.balance=742;prior.initialEquity=1000;prior.turnover=12345;prior.fees=9;prior.resolved=12;prior.wins=7;
+  prior.extremumRegime=built.state;prior.marketPulse=built.pulse;prior.selectedSymbols=Object.keys(built.state.symbols);
+  prior.opportunities=built.opportunities;prior.lastCandleAt=T;prior.lastCycleAt=T-1000;prior.lastQuoteCycleAt=T-500;
+  prior.lastEntryAt.ETH_USDT=T-120_000;prior.lastSide.ETH_USDT="LONG";prior.lastExitAt.ETH_USDT=T-60_000;
+  prior.fitDiagnostics={tested:30,qualified:4,trainGroups:3,checkGroups:6,latestAt:T,rapidQualified:2,activeLong:8,activeShort:5};
+
+  const reset=resetForwardAccountPreservingLearning(prior,T+10_000);
+  assert.equal(reset.balance,1000);assert.equal(reset.initialEquity,1000);
+  assert.equal(reset.turnover,0);assert.equal(reset.fees,0);assert.equal(reset.resolved,0);assert.equal(reset.wins,0);
+  assert.equal(reset.positions.length,0);assert.equal(reset.history.length,0);assert.equal(reset.opportunities.length,0);
+  assert.deepEqual(reset.extremumRegime,prior.extremumRegime);
+  assert.deepEqual(reset.marketPulse,prior.marketPulse);
+  assert.deepEqual(reset.selectedSymbols,prior.selectedSymbols);
+  assert.equal(reset.lastCandleAt,prior.lastCandleAt);assert.equal(reset.lastCycleAt,prior.lastCycleAt);
+  assert.deepEqual(reset.fitDiagnostics,prior.fitDiagnostics);
+  assert.equal(reset.lastEntryAt.ETH_USDT,prior.lastEntryAt.ETH_USDT);
+  assert.equal(reset.lastExitAt.ETH_USDT,prior.lastExitAt.ETH_USDT);
+  assert.equal(reset.lastSide.ETH_USDT,"LONG");
+  assert.match(reset.latestReason,/保留 Market Intelligence 市场叙事、证据、相关组和异常生命周期/);
+});
+
+test("PAPER balance reset cannot turn the already-processed 5m bar into a fresh entry cycle",()=>{
+  const firstPaths={BTC_USDT:candles(100,.0010),ETH_USDT:candles(100,.0018),SOL_USDT:candles(100,.0009)};
+  for(let i=56;i<firstPaths.ETH_USDT.length;i++){const k=1+(i-55)*.0008;for(const key of["open","high","low","close"] as const)firstPaths.ETH_USDT[i]![key]*=k;}
+  const firstQuotes=Object.fromEntries(Object.entries(firstPaths).map(([s,v])=>[s,q(v.at(-1)!.close,.0003)]));
+  const first=buildMarketIntelligence({paths:firstPaths,quotes:firstQuotes,previous:initialMarketIntelligenceState(T-600_000),now:T});
+
+  const paths=Object.fromEntries(Object.entries(firstPaths).map(([s,rows])=>[s,rows.map(r=>({...r,time:r.time+300}))]));
+  const now=T+300_000;
+  const quotes=Object.fromEntries(Object.entries(paths).map(([s,v])=>[s,{...q(v.at(-1)!.close,.0003),observedAt:now}]));
+  const second=buildMarketIntelligence({paths,quotes,previous:first.state,now});
+  assert.ok(second.opportunities.some(o=>o.eligible),"fixture must contain a mature executable opportunity");
+
+  const prior=initialForward(T-600_000);
+  prior.extremumRegime=second.state;prior.marketPulse=second.pulse;prior.opportunities=second.opportunities;
+  prior.selectedSymbols=Object.keys(second.state.symbols);
+  prior.lastCandleAt=Math.max(...Object.values(paths).map(rows=>(rows.at(-1)!.time+300)*1000));
+  prior.lastCycleAt=now;prior.lastQuoteCycleAt=now;
+
+  const reset=resetForwardAccountPreservingLearning(prior,now+1000);
+  const contracts=Object.fromEntries(Object.keys(paths).map(s=>[s,{quantoMultiplier:1,leverageMax:10,maintenanceRate:.005,minContracts:1}]));
+  const next=advanceForward({state:reset,now,paths,quotes,contracts,entrySymbols:Object.keys(paths)}).state;
+  assert.equal(next.positions.length,0,"reset must not make the same completed 5m step executable again");
+  assert.equal(next.entryDiagnostics.opened,0);
 });
