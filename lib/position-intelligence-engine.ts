@@ -68,7 +68,7 @@ export function evaluatePositionIntelligence(input:{
   now:number;side:"LONG"|"SHORT";signedRate:number;peakFavorableRate:number;ageMin:number;firstProfit:boolean;
   expectedHoldMinutes:number;stopRate:number;entryScore:number;entryResidual:number;entryRelativeStrength:number;
   entryRemainingSpaceRate:number;state?:MarketSymbolState;narrative?:MarketNarrative;quote?:QuoteDetail;minutePath?:CandleLike[];
-  previous?:PositionIntelligenceState;costRate?:number;
+  previous?:PositionIntelligenceState;costRate?:number;marketStateAgeMs?:number;
 }):PositionIntelligenceState{
   const d=input.side==="LONG"?1:-1,state=input.state,q=input.quote,cost=Math.max(.0005,input.costRate??.0019),
     alignedResidual=state?d*state.residual:0,alignedZ=state?d*state.residualZ:0,
@@ -145,7 +145,8 @@ export function evaluatePositionIntelligence(input:{
     entryAdvantage=clip(input.entryScore,0,100),advantageChange=currentAdvantage-entryAdvantage,
     holdValueScore=clip(50+18*(continuationRatio-1)+12*familyNet+.28*advantageChange,0,100),
     exitValueScore=100-holdValueScore,
-    dataConfidence=clip(((state?.dataConfidence??45)*.75+Math.min(4,sourceCount)*6.25)-Math.min(.02,disagreement)*600,0,100),
+    stateFreshness=input.marketStateAgeMs==null?1:input.marketStateAgeMs<=8*60_000?1:input.marketStateAgeMs<=15*60_000?.55:0,
+    dataConfidence=clip((((state?.dataConfidence??45)*.75+Math.min(4,sourceCount)*6.25)-Math.min(.02,disagreement)*600)*stateFreshness,0,100),
     coreConcern=concern.some(x=>x.family==="RELATIVE"||x.family==="STRUCTURE"),
     enoughIndependentConcern=concernFamilies.length>=2&&coreConcern,
     valueWeak=continuationRatio<.95||holdValueScore<38,
