@@ -9,7 +9,8 @@ export const MARKET_INTELLIGENCE_VERSION="market-intelligence-v1";
 
 export type CandleLike={time:number;open:number;high:number;low:number;close:number;volume:number};
 export type QuoteLike={bestBid:number;bestAsk:number;observedAt:number;fresh:boolean;entryReady?:boolean;
-  sourceCount?:number;disagreementRate?:number;sourceBreadth?:number;directionalAgreement?:number;medianShortMove?:number};
+  sourceCount?:number;disagreementRate?:number;sourceBreadth?:number;directionalAgreement?:number;medianShortMove?:number;
+  spreadRate?:number;bookImbalance?:number;bidLiquidityChange?:number;askLiquidityChange?:number;liquiditySourceCount?:number};
 export type MarketBias="BULLISH"|"BEARISH"|"NEUTRAL";
 export type MacroPhase="BULL_EXPANSION"|"BEAR_CONTRACTION"|"RECOVERY_UNCONFIRMED"|"DISTRIBUTION_RISK"|"BASE_BUILDING"|"UNCERTAIN";
 export type ShortPhase="ADVANCING"|"PULLBACK_BUILDING"|"DECLINING"|"REBOUND_BUILDING"|"DIVERGING"|"BALANCED";
@@ -33,7 +34,8 @@ export type MarketSymbolState={symbol:string;watchScore:number;regime:MarketRegi
   signalSide:"LONG"|"SHORT";signalSince:number;signalBars:number;signalLastBar:number};
 export type MarketCluster={id:string;leader:string;members:string[];averageCorrelation:number};
 export type MarketInternals={breadth3:number;breadth12:number;breadthSlope:number;dispersion:number;synchrony:number;
-  venuePressure:number;residualBalance:number;leaderPersistence:number};
+  venuePressure:number;residualBalance:number;leaderPersistence:number;bookImbalance?:number;
+  bidLiquidityChange?:number;askLiquidityChange?:number;spreadRate?:number};
 export type MarketIntelligenceState={version:string;startedAt:number;updatedAt:number;narrative:MarketNarrative;
   evidence:MarketEvidence[];history:Array<{at:number;macro:MarketBias;major:MarketBias;short:MarketBias;summary:string}>;
   symbols:Record<string,MarketSymbolState>;clusters:MarketCluster[];
@@ -127,7 +129,8 @@ export function initialMarketIntelligenceState(now:number):MarketIntelligenceSta
     summary:"市场智能正在建立全市场基线。",plan:"先观察全市场关系，不因单一币或单一交易所变化下结论。",details:[],expectedShortMinutes:[30,120]};
   return{version:MARKET_INTELLIGENCE_VERSION,startedAt:now,updatedAt:now,narrative,evidence:[],history:[],symbols:{},clusters:[],
     coverage:{intradayMarkets:0,dailyMarkets:0,quoteMarkets:0,multiVenueMarkets:0},
-    internals:{breadth3:0,breadth12:0,breadthSlope:0,dispersion:0,synchrony:0,venuePressure:0,residualBalance:0,leaderPersistence:1}};}
+    internals:{breadth3:0,breadth12:0,breadthSlope:0,dispersion:0,synchrony:0,venuePressure:0,residualBalance:0,leaderPersistence:1,
+      bookImbalance:0,bidLiquidityChange:0,askLiquidityChange:0,spreadRate:0}};}
 
 export function buildMarketIntelligence(input:{paths:Record<string,CandleLike[]>;minutePaths?:Record<string,CandleLike[]>;
   daily?:Record<string,CandleLike[]>;quotes:Record<string,QuoteLike>;previous?:MarketIntelligenceState;now:number;allowed?:Set<string>}){
@@ -163,9 +166,16 @@ export function buildMarketIntelligence(input:{paths:Record<string,CandleLike[]>
 
   const dispersion=clip(stdev(residualZs)/1.35,0,1.5),synchrony=median(Object.values(provisional).map(x=>Math.max(0,x.correlation))),
     venuePressureMarket=median(Object.values(provisional).filter(x=>x.sourceCount>=2).map(x=>x.venuePressure)),
+    detailedQuotes=Object.values(input.quotes).filter(q=>(q.liquiditySourceCount??0)>=2),
+    bookImbalanceMarket=median(detailedQuotes.map(q=>q.bookImbalance??0)),
+    bidLiquidityMarket=median(detailedQuotes.map(q=>q.bidLiquidityChange??0)),
+    askLiquidityMarket=median(detailedQuotes.map(q=>q.askLiquidityChange??0)),
+    spreadMarket=median(Object.values(input.quotes).map(q=>q.spreadRate??0)),
+    liquidityDirectional=clip((bidLiquidityMarket-askLiquidityMarket)*.5,-1,1),
     strongPositive=residualZs.filter(x=>x>.45).length,strongNegative=residualZs.filter(x=>x<-.45).length,
     residualBalance=residualZs.length?(strongPositive-strongNegative)/residualZs.length:0,
-    previousInternals=previous.internals??{breadth3:0,breadth12:0,breadthSlope:0,dispersion:0,synchrony:0,venuePressure:0,residualBalance:0,leaderPersistence:1},
+    previousInternals=previous.internals??{breadth3:0,breadth12:0,breadthSlope:0,dispersion:0,synchrony:0,venuePressure:0,residualBalance:0,leaderPersistence:1,
+      bookImbalance:0,bidLiquidityChange:0,askLiquidityChange:0,spreadRate:0},
     majorRaw=clip(factor12/(volFactor*Math.sqrt(12)+1e-9)/2.8*.55+breadth12*.30+venuePressureMarket*.15,-1,1),
     shortRaw=clip(factor6/(volFactor*Math.sqrt(6)+1e-9)/2.5*.42+breadth3*.25+breadthSlope*.18+venuePressureMarket*.15,-1,1);
 
@@ -179,15 +189,18 @@ export function buildMarketIntelligence(input:{paths:Record<string,CandleLike[]>
     syncDelta=synchrony-previousInternals.synchrony,dispersionDelta=dispersion-previousInternals.dispersion,
     marketProgress=factor6/(volFactor*Math.sqrt(6)+1e-9),
     flowResponse=venuePressureMarket===0?0:clip(marketProgress/(Math.abs(venuePressureMarket)+.15),-1,1),
-    rawTransition=clip((short.score-major.score)*.34+breadthDelta*.22+residualDelta*.20+venuePressureMarket*.10
-      -Math.sign(major.score||1)*Math.max(0,dispersionDelta)*.08+syncDelta*.06,-1,1),
+    rawTransition=clip((short.score-major.score)*.30+breadthDelta*.20+residualDelta*.18+venuePressureMarket*.09
+      +bookImbalanceMarket*.07+liquidityDirectional*.08
+      -Math.sign(major.score||1)*Math.max(0,dispersionDelta)*.06+syncDelta*.05,-1,1),
     priorTransition=(prevN.transition as MarketNarrative["transition"]&{score?:number}).score??0,
     transitionScore=clip(priorTransition*.72+rawTransition*.28,-1,1),
     transitionDirection=stableBias(transitionScore,prevN.transition.direction,.18,.06,.38),
     transitionPressure=Math.abs(transitionScore)*100,
     transitionStage:NonNullable<MarketNarrative["transition"]["stage"]>=transitionDirection==="NEUTRAL"||transitionPressure<18?"STABLE"
       :transitionPressure<34?"EARLY":transitionPressure<55?"BUILDING":"CONFIRMED",
-    tailScore=clip(18+Math.max(0,-macro.score)*30+Math.max(0,-major.score)*18+dispersion*18+Math.max(0,-venuePressureMarket)*12+(synchrony>.72&&short.score<-.2?15:0),0,100),
+    twoSidedWithdrawal=bidLiquidityMarket<-.18&&askLiquidityMarket<-.18,
+    tailScore=clip(18+Math.max(0,-macro.score)*30+Math.max(0,-major.score)*18+dispersion*18+Math.max(0,-venuePressureMarket)*12
+      +(synchrony>.72&&short.score<-.2?15:0)+(twoSidedWithdrawal?8:0),0,100),
     tailLevel=tailScore>=68?"HIGH":tailScore>=38?"MEDIUM":"LOW";
 
   const states:Record<string,MarketSymbolState>={};
@@ -234,6 +247,18 @@ export function buildMarketIntelligence(input:{paths:Record<string,CandleLike[]>
       aligned&&progressEnough?"跨所短时压力正在得到价格响应，推动仍有效。":"跨所短时压力与价格推进不匹配，出现吸收/推动效率下降迹象。",
       [],Math.round(median(Object.values(states).map(x=>x.sourceCount)))));
   }
+  if(detailedQuotes.length>=3&&Math.abs(bookImbalanceMarket)>.18)addEvidence(evidenceRows,mkEvidence("book-skew-"+input.now,input.now,
+    "CROSS_VENUE_BOOK_SKEW",bookImbalanceMarket>0?"BULLISH":"BEARISH",clip(Math.abs(bookImbalanceMarket)*1.6),
+    `多个交易所最优盘口尺寸出现${bookImbalanceMarket>0?"买方":"卖方"}倾斜，跨所中位失衡 ${(bookImbalanceMarket*100).toFixed(0)}%。`,[],detailedQuotes.length));
+  if(detailedQuotes.length>=3&&bidLiquidityMarket<-.18&&askLiquidityMarket>=-.08)addEvidence(evidenceRows,mkEvidence("bid-withdraw-"+input.now,input.now,
+    "BID_LIQUIDITY_WITHDRAWAL","BEARISH",clip(Math.abs(bidLiquidityMarket)),
+    `多个交易所买一流动性相对数秒前同步减少，中位变化 ${(bidLiquidityMarket*100).toFixed(0)}%。`,[],detailedQuotes.length));
+  if(detailedQuotes.length>=3&&askLiquidityMarket<-.18&&bidLiquidityMarket>=-.08)addEvidence(evidenceRows,mkEvidence("ask-withdraw-"+input.now,input.now,
+    "ASK_LIQUIDITY_WITHDRAWAL","BULLISH",clip(Math.abs(askLiquidityMarket)),
+    `多个交易所卖一流动性相对数秒前同步减少，中位变化 ${(askLiquidityMarket*100).toFixed(0)}%。`,[],detailedQuotes.length));
+  if(detailedQuotes.length>=3&&twoSidedWithdrawal)addEvidence(evidenceRows,mkEvidence("both-withdraw-"+input.now,input.now,
+    "TWO_SIDED_LIQUIDITY_WITHDRAWAL","MIXED",clip((Math.abs(bidLiquidityMarket)+Math.abs(askLiquidityMarket))*.5),
+    "多个交易所双边最优盘口同时变薄，短时冲击传播和滑点风险上升。",[],detailedQuotes.length));
 
   for(const row of [...Object.values(states)].sort((a,b)=>Math.abs(b.residualZ)*b.residualPersistence-Math.abs(a.residualZ)*a.residualPersistence).slice(0,5)){
     if(Math.abs(row.residualZ)<.75||row.residualPersistence<.55)continue;const d:EvidenceDirection=row.residualZ>0?"BULLISH":"BEARISH";
@@ -254,6 +279,9 @@ export function buildMarketIntelligence(input:{paths:Record<string,CandleLike[]>
       leaderPersistence<.5?"领导结构轮换":"",
       Math.abs(syncDelta)>.12?`相关性${syncDelta>0?"上升":"下降"}`:"",
       Math.abs(venuePressureMarket)>.22?(Math.abs(flowResponse)<.25?"跨所压力被吸收":"跨所压力有价格响应"):"",
+      detailedQuotes.length>=3&&Math.abs(bookImbalanceMarket)>.18?`跨所盘口${bookImbalanceMarket>0?"偏买":"偏卖"}`:"",
+      detailedQuotes.length>=3&&Math.abs(liquidityDirectional)>.15?`跨所流动性${liquidityDirectional>0?"向买方改善":"向卖方改善"}`:"",
+      twoSidedWithdrawal?"双边流动性变薄":"",
     ].filter(Boolean),
     transitionDetail=transitionDirection==="NEUTRAL"?"市场内部变化仍处于观察阶段，尚未形成足够一致的状态迁移。"
       :`市场正在向${biasZh(transitionDirection)}状态迁移，阶段 ${transitionStage}；当前驱动：${transitionDrivers.join("、")||"内部结构持续变化"}。`,
@@ -309,7 +337,8 @@ export function buildMarketIntelligence(input:{paths:Record<string,CandleLike[]>
   const coverage={intradayMarkets:Object.keys(paths).length,dailyMarkets:Object.keys(dailyPaths).length,
     quoteMarkets:Object.values(states).filter(x=>x.sourceCount>=1).length,multiVenueMarkets:Object.values(states).filter(x=>x.sourceCount>=2).length};
   const internals:MarketInternals={breadth3,breadth12,breadthSlope,dispersion,synchrony,venuePressure:venuePressureMarket,
-    residualBalance,leaderPersistence};
+    residualBalance,leaderPersistence,bookImbalance:bookImbalanceMarket,bidLiquidityChange:bidLiquidityMarket,
+    askLiquidityChange:askLiquidityMarket,spreadRate:spreadMarket};
   const state:MarketIntelligenceState={version:MARKET_INTELLIGENCE_VERSION,startedAt:previous.startedAt||input.now,updatedAt:input.now,narrative,
     evidence:evidenceRows.slice(0,40),history:history.slice(0,96),symbols:states,clusters,coverage,internals};
   const up=Object.values(states).filter(x=>x.longScore>=62).length,down=Object.values(states).filter(x=>x.shortScore>=62).length,neutral=Math.max(0,Object.keys(states).length-up-down);
