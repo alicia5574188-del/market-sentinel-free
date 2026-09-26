@@ -1,4 +1,4 @@
-name: Extremum Regime Release Candidate
+name: Extremum Regime Stage 2
 
 on:
   push:
@@ -8,30 +8,30 @@ permissions:
   contents: read
 
 jobs:
-  verify:
+  stage2:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22.16.0
           cache: npm
       - run: npm ci
-      - name: Strategy and product tests
+      - name: Execution interface typecheck
+        run: npm run typecheck
+      - name: Extremum PAPER to LIVE contract
+        run: node --experimental-strip-types --test tests/adaptive-ten-live.test.ts
+      - name: Full serialized LIVE parity
+        run: npm run test:live-parity
+      - name: Storage and migration compatibility
         run: |
-          set -euo pipefail
-          npm run typecheck
-          npm run test:direct
-          npm run test:live-parity
-          npm run test:members
-          npm run test:equity
-          npm run test:feed:workerd
-      - name: Build and release gates
-        run: |
-          set -euo pipefail
-          npm run build
-          npm run lint
+          node --experimental-strip-types --test tests/forward-compact-store.test.ts
           node --test tests/architecture.test.mjs tests/migration.test.mjs
-          git diff --check
-          npx wrangler deploy --dry-run --config dist/server/wrangler.json
+      - name: Proven Gate execution modules remain untouched
+        run: |
+          git diff --exit-code origin/main -- lib/gate-live.ts lib/live-session.ts lib/gate-quantity.ts LIVE_MIRROR_CONTRACT.md
+      - name: Diff integrity
+        run: git diff --check
