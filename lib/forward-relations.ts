@@ -741,54 +741,67 @@ export function resetForwardAccountPreservingLearning(previous:ForwardState,now:
   next.relationEngine=structuredClone(prior.relationEngine);
   next.familyExperiment=structuredClone(prior.familyExperiment);
   next.observations=next.relationEngine.observations;next.measured=next.relationEngine.measured;next.invalidated=next.relationEngine.invalidated;
-  next.latestReason="模拟账户已重置为1000U；峰谷状态策略重新从当前真实市场结构开始判断，并保留历史账户记录与研究证据。";
+  next.latestReason="模拟账户已重置为1000U；Predictive Path V1 从当前真实市场重新生成未来路径预测；历史账户记录与旧研究证据继续保留。";
   return next;
 }
 export function forwardUrgentQuoteSymbols(s:ForwardState,now:number,entrySymbols?:Iterable<string>){
-  const allowed=entrySymbols?new Set(entrySymbols):null,keep=(x:string)=>!allowed||allowed.has(x);
-  const premium=s.opportunities.filter(o=>o.premium&&o.eligible&&o.expiresAt>now&&keep(o.symbol)).sort((a,b)=>b.score-a.score);
-  const normal=s.opportunities.filter(o=>!o.premium&&o.eligible&&o.expiresAt>now&&keep(o.symbol)).sort((a,b)=>b.score-a.score);
-  const watched=Object.values(s.extremumRegime.symbols).filter(r=>keep(r.symbol)&&r.watchScore>=58).sort((a,b)=>b.watchScore-a.watchScore);
-  return[...new Set([...s.positions.map(t=>t.symbol),...premium.map(o=>o.symbol),...normal.map(o=>o.symbol),...watched.map(r=>r.symbol)])];
+  const allowed=entrySymbols?new Set(entrySymbols):null,keep=(x:string)=>!allowed||allowed.has(x),
+    premium=s.opportunities.filter(o=>o.premium&&o.eligible&&o.expiresAt>now&&keep(o.symbol)).sort((a,b)=>b.score-a.score),
+    normal=s.opportunities.filter(o=>!o.premium&&o.eligible&&o.expiresAt>now&&keep(o.symbol)).sort((a,b)=>b.score-a.score),
+    watched=Object.values(s.predictivePath.symbols).filter(r=>keep(r.symbol)).sort((a,b)=>{
+      const av=Math.max(a.long.netEv60,a.short.netEv60)+Math.abs(a.upProbability.m60-.5)*.02+a.confidence*.005,
+        bv=Math.max(b.long.netEv60,b.short.netEv60)+Math.abs(b.upProbability.m60-.5)*.02+b.confidence*.005;
+      return bv-av;
+    });
+  return[...new Set([...s.positions.map(t=>t.symbol),...premium.map(o=>o.symbol),...normal.map(o=>o.symbol),...watched.map(r=>r.symbol)])]
+    .slice(0,FORWARD_EXECUTION_BBO_CAP);
 }
-export function forwardUrgentMinuteSymbols(s:ForwardState,entrySymbols?:Iterable<string>){
-  const allowed=entrySymbols?new Set(entrySymbols):undefined;
-  return extremumUrgentMinuteSymbols(s.extremumRegime,allowed).slice(0,FORWARD_MINUTE_CONFIRMATION_CAP);
+export function forwardUrgentMinuteSymbols(_s:ForwardState,_entrySymbols?:Iterable<string>){
+  // Predictive Path V1 does not depend on a 1m confirmation lane. Existing
+  // legacy positions are managed from their frozen lifecycle plus executable BBO.
+  return[] as string[];
 }
 export function forwardWatchSymbols(s:ForwardState,now:number,entrySymbols?:Iterable<string>){
   return forwardUrgentQuoteSymbols(s,now,entrySymbols).slice(0,FORWARD_EXECUTION_BBO_CAP);
 }
 export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:number){
   const mark=equityMark(s,quotes,now),eligible=s.opportunities.filter(o=>o.eligible&&o.expiresAt>now),reserve=eligible.filter(o=>o.reserve),
-    rows=Object.values(s.extremumRegime.symbols).sort((a,b)=>b.watchScore-a.watchScore),
-    counts={trendUp:rows.filter(r=>r.regime==="TREND_UP").length,trendDown:rows.filter(r=>r.regime==="TREND_DOWN").length,
-      swing:rows.filter(r=>r.regime==="SWING").length,weakening:rows.filter(r=>r.regime==="WEAKENING").length,
-      transition:rows.filter(r=>r.regime==="TRANSITION").length,ready:rows.filter(r=>r.stage==="READY").length,
-      impulse:rows.filter(r=>r.stage==="IMPULSE").length};
+    forecasts=Object.values(s.predictivePath.symbols).sort((a,b)=>{
+      const av=Math.max(a.long.netEv60,a.short.netEv60)+a.confidence*.005,bv=Math.max(b.long.netEv60,b.short.netEv60)+b.confidence*.005;return bv-av;
+    }),
+    counts={long:forecasts.filter(r=>r.preferredSide==="LONG").length,short:forecasts.filter(r=>r.preferredSide==="SHORT").length,
+      wait:forecasts.filter(r=>!r.enterNow).length,enter:forecasts.filter(r=>r.enterNow).length},
+    legacyRows=Object.values(s.extremumRegime.symbols),
+    legacyCounts={trendUp:legacyRows.filter(r=>r.regime==="TREND_UP").length,trendDown:legacyRows.filter(r=>r.regime==="TREND_DOWN").length,
+      swing:legacyRows.filter(r=>r.regime==="SWING").length,weakening:legacyRows.filter(r=>r.regime==="WEAKENING").length,
+      transition:legacyRows.filter(r=>r.regime==="TRANSITION").length,ready:legacyRows.filter(r=>r.stage==="READY").length,
+      impulse:legacyRows.filter(r=>r.stage==="IMPULSE").length};
   return{version:s.version,engineVersion:ADAPTIVE_ENGINE_VERSION,grammar:ADAPTIVE_ENGINE_VERSION,mode:"REAL_FEED_PAPER",liveEligible:false,
-    strategyAuthorityVersion:ADAPTIVE_ENGINE_VERSION,executionVersion:ADAPTIVE_ENGINE_VERSION,regionVersion:EXTREMUM_REGIME_VERSION,
-    regionLaunchVersion:EXTREMUM_REGIME_VERSION,policyVersion:ADAPTIVE_ENGINE_VERSION,exitPolicyVersion:ADAPTIVE_ENGINE_VERSION,
+    strategyAuthorityVersion:ADAPTIVE_ENGINE_VERSION,executionVersion:ADAPTIVE_ENGINE_VERSION,regionVersion:PREDICTIVE_PATH_VERSION,
+    regionLaunchVersion:PREDICTIVE_PATH_VERSION,policyVersion:ADAPTIVE_ENGINE_VERSION,exitPolicyVersion:ADAPTIVE_ENGINE_VERSION,
     policyUpgrade:null,exitPolicyUpgrade:null,startedAt:s.startedAt,cutoverAt:s.cutoverAt,updatedAt:s.lastQuoteCycleAt,
     lastCycleAt:s.lastCycleAt,revision:s.revision,initialEquity:s.initialEquity,balance:s.balance,...mark,targetEquity:s.initialEquity*2,
     netPnl:mark.equity-s.initialEquity,maxDrawdown:s.maxDrawdown,resolved:s.resolved,wins:s.wins,grossPnl:s.grossPnl,fees:s.fees,
     fundingAllowance:s.fundingAllowance,turnover:s.turnover,positions:s.positions,history:s.history,events:s.events,daily:s.daily,
     opportunities:s.opportunities,entryOpportunities:s.opportunities,regions:[],marketPulse:s.marketPulse,
-    extremumRegime:{version:s.extremumRegime.version,updatedAt:s.extremumRegime.updatedAt,counts,symbols:rows.slice(0,30)},
+    predictivePath:{version:s.predictivePath.version,updatedAt:s.predictivePath.updatedAt,counts,policy:PREDICTIVE_ARTIFACT.policy,
+      artifact:{trainedAt:PREDICTIVE_ARTIFACT.trainedAt,source:PREDICTIVE_ARTIFACT.source,metrics:PREDICTIVE_ARTIFACT.metrics},symbols:forecasts.slice(0,30)},
+    extremumRegime:{version:s.extremumRegime.version,retired:true,updatedAt:s.extremumRegime.updatedAt,counts:legacyCounts,symbols:legacyRows.slice(0,30)},
     structuralInterrupt:{version:STRUCTURAL_INTERRUPT_VERSION,retired:true,marketEvent:null,vetoSide:null,vetoUntil:0,preAlerts:0,confirmed:0},
     relationEngine:{version:s.relationEngine.version,retired:true,updatedAt:s.relationEngine.updatedAt,diagnostics:s.relationEngine.diagnostics,rules:[]},
     familyExperiment:{retired:true,...familyExperimentSummary(s.familyExperiment),maxNewReservePer5m:0},
     entryValidation:{waiting:0,cancelled:0,records:[]},
     marketCount:s.selectedSymbols.length,markets:s.selectedSymbols,latestReason:s.latestReason,entryDiagnostics:s.entryDiagnostics,
     fitDiagnostics:s.fitDiagnostics,storage:s.storage,targetPositions:null,positionLimit:null,executionBboCapacity:FORWARD_EXECUTION_BBO_CAP,
-    minuteConfirmationCapacity:FORWARD_MINUTE_CONFIRMATION_CAP,seatCount:s.positions.length,eligibleCount:eligible.length,
+    minuteConfirmationCapacity:0,seatCount:s.positions.length,eligibleCount:eligible.length,
     reserveCount:reserve.length,premiumCount:eligible.filter(o=>o.premium).length,
     boundaries:{scope:"PAPER_AUTHORITY",
-      grammar:"单一峰谷状态机：5分钟决定结构与趋势生命，1分钟确认峰谷/回调结束，实时盘口负责实际执行与入场后正反馈。",
+      grammar:"Predictive Path V1：同时预测15/30/60/120分钟方向、收益、MFE/MAE、目标先于风险概率与10分钟入场后悔；多源市场数据是实时证据，不使用旧峰谷/区域/关系规则产生新单。",
       historyBackfill:false,
-      sampleMeaning:"旧Forward关系样本只作为保留研究证据，不再拥有新开仓权；新系统只根据当前真实5m/1m/多源状态做因果决策。",
-      accounting:"模拟仍使用新鲜买卖价并计入手续费、滑点和资金费占位；每笔新Trade冻结完整入场、止损、仓位和退出上下文。",
-      risk:"不设固定持仓席位；总结构风险≤10%、同方向≤6.5%、组合保证金≤75%，单币一仓。风险边界不因策略重做放宽。",
-      validation:"TOP/BOTTOM压力和UP/DOWN趋势生命独立计算；趋势里的反向极值先负责保护利润，只有趋势死亡并完成结构破坏与夺回失败才允许反向。",
-      liquidation:"硬止损→入场后即时验证→动态利润保护→相反极值/趋势死亡→无进展/最大持仓。平仓与反手是两个独立事件。"},
+      sampleMeaning:"旧Forward/Extremum样本仅保留为历史记录，不参与新订单。模型参数来自因果历史数据与时间顺序训练；LIVE只消费已经持久化的标准PAPER Trade。",
+      accounting:"模拟使用新鲜Gate买卖价执行并计入手续费、滑点和资金费占位；预测值不能替代真实成交价。",
+      risk:"不设固定持仓席位；有足够正EV机会时按预测置信度分配组合风险，总风险≤10%、同方向≤6.5%、组合保证金≤75%、单币一仓。",
+      validation:"入场必须同时满足成本后正EV、方向概率、目标先于风险、入场后悔、多源覆盖与分歧上限；任一层失败都只能WAIT，不能由其它高分补回。",
+      liquidation:"预测仓只保留灾难止损；正常退出由当前剩余预测优势消失或明确反向预测触发，不使用固定小利润止盈或统一80%回撤保护。"},
     cost:PAPER_COST,nextCycleAt:s.lastCandleAt+BAR_MS};
 }
