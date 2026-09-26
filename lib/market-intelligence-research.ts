@@ -125,20 +125,24 @@ function trimForStorage<T extends {completed:boolean;lastObservedAt:number}>(ite
 }
 export function advanceCounterfactualResearch(input:{state:CounterfactualResearchState;forward:ForwardState;now:number;
   paths:Record<string,Candle[]>;quotes:Record<string,Quote>;observeCandidates:boolean}){
-  const next:CounterfactualResearchState=structuredClone(input.state),beforePost=JSON.stringify(next.postExit),beforeRejected=JSON.stringify(next.rejected);
+  const next:CounterfactualResearchState=structuredClone(input.state);let postChanged=false,rejectedChanged=false;
   const postIds=new Set(next.postExit.map(x=>x.tradeId));
-  for(const t of input.forward.history){if(postIds.has(t.id))continue;const row=postFromTrade(t);if(row){next.postExit.unshift(row);postIds.add(t.id);}}
+  for(const t of input.forward.history){
+    if(postIds.has(t.id))continue;const row=postFromTrade(t);
+    if(row){next.postExit.unshift(row);postIds.add(t.id);postChanged=true;}
+  }
   if(input.observeCandidates){
     const ids=new Set(next.rejected.map(x=>x.thesisId));
     for(const o of input.forward.opportunities){
       if(ids.has(o.thesisId??""))continue;const row=rejectedFromOpportunity(o,input.quotes[o.symbol],input.forward,input.now);
-      if(row){next.rejected.unshift(row);ids.add(row.thesisId);}
+      if(row){next.rejected.unshift(row);ids.add(row.thesisId);rejectedChanged=true;}
     }
   }
-  for(const row of next.postExit.filter(x=>!x.completed))updateCheckpoints(row,row.exitPrice,Infinity,input.now,input.paths[row.symbol],input.quotes[row.symbol]);
-  for(const row of next.rejected.filter(x=>!x.completed))updateCheckpoints(row,row.entryPrice,row.stopRate,input.now,input.paths[row.symbol],input.quotes[row.symbol]);
+  for(const row of next.postExit.filter(x=>!x.completed))
+    if(updateCheckpoints(row,row.exitPrice,Infinity,input.now,input.paths[row.symbol],input.quotes[row.symbol]))postChanged=true;
+  for(const row of next.rejected.filter(x=>!x.completed))
+    if(updateCheckpoints(row,row.entryPrice,row.stopRate,input.now,input.paths[row.symbol],input.quotes[row.symbol]))rejectedChanged=true;
   next.postExit=trimForStorage(next.postExit);next.rejected=trimForStorage(next.rejected);next.updatedAt=input.now;
-  const postChanged=beforePost!==JSON.stringify(next.postExit),rejectedChanged=beforeRejected!==JSON.stringify(next.rejected);
   return{state:next,postChanged,rejectedChanged,changed:postChanged||rejectedChanged};
 }
 export function counterfactualResearchWrites(state:CounterfactualResearchState,postChanged=true,rejectedChanged=true){
