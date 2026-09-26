@@ -31,6 +31,7 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
       <article><small>短期优势</small><strong>{bias(n?.short.bias)}</strong><p>{phase(n?.short.phase)} · 预计 {n?.expectedShortMinutes?.[0]??"—"}–{n?.expectedShortMinutes?.[1]??"—"} 分钟</p></article>
       <article><small>尾部风险</small><strong>{n?.tailRisk.level==="HIGH"?"高":n?.tailRisk.level==="MEDIUM"?"中":"低"}</strong><p>风险强度 {fmt(n?.tailRisk.score,0)} / 100</p></article>
     </section>
+    <p className="fr-note">数据覆盖：5m市场 {mi?.coverage?.intradayMarkets??0} · 日线市场 {mi?.coverage?.dailyMarkets??0} · 有实时跨所报价 {mi?.coverage?.quoteMarkets??0} · 多交易所共同确认 {mi?.coverage?.multiVenueMarkets??0}。超大周期至少需要3个真实日线市场才会开始形成牛熊判断。</p>
 
     <section className="fr-section">
       <div className="fr-section-head"><div><small>CURRENT NARRATIVE</small><h2>系统现在如何理解市场</h2></div><span>{clock(mi?.updatedAt)}</span></div>
