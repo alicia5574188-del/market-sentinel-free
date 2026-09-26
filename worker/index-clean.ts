@@ -879,6 +879,62 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
   }
 
+  private recordPredictiveOpenInterest(now:number){
+    for(const row of this.gateRadarCache){
+      const value=Number(row.openInterest??0);if(!(value>0))continue;
+      const history=this.predictiveOiHistory.get(row.symbol)??[],last=history.at(-1);
+      if(!last||last.at!==now)history.push({at:now,value});
+      while(history.length>360||history[0]!.at<now-5*60*60_000)history.shift();
+      this.predictiveOiHistory.set(row.symbol,history);
+    }
+  }
+
+  private async refreshPredictiveStats(now:number){
+    if(this.liveSyncWork||now-this.predictiveStatsLastAttemptAt<15_000)return 0;
+    this.predictiveStatsLastAttemptAt=now;
+    const symbols=[...new Set([...(this.forwardState?.positions.map(p=>p.symbol)??[]),...this.runtime.liquidUniverse])]
+      .filter(symbol=>adaptiveSymbolAllowed(symbol))
+      .sort((a,b)=>(this.predictiveStats.get(a)?.at??0)-(this.predictiveStats.get(b)?.at??0))
+      .filter(symbol=>now-(this.predictiveStats.get(symbol)?.at??0)>=15*60_000)
+      .slice(0,2);
+    const results=await Promise.allSettled(symbols.map(async symbol=>({symbol,row:await fetchContractStats(symbol,"4h")})));
+    results.forEach(result=>{if(result.status==="fulfilled"&&result.value.row)this.predictiveStats.set(result.value.symbol,{at:now,row:result.value.row});});
+    return symbols.length;
+  }
+
+  private predictiveReturn(symbol:string,bars:number){
+    const rows=this.strategyCandles[symbol]??[];if(rows.length<=bars)return 0;
+    const last=rows.at(-1)!,prior=rows.at(-1-bars)!;return prior.close>0?last.close/prior.close-1:0;
+  }
+
+  private predictiveAncillary(now:number):Record<string,PredictiveAncillary>{
+    const radar=new Map(this.gateRadarCache.map(row=>[row.symbol,row])),out:Record<string,PredictiveAncillary>={};
+    const breadthRows=this.runtime.liquidUniverse.map(symbol=>this.predictiveReturn(symbol,3)).filter(Number.isFinite),
+      marketBreadth=breadthRows.length?breadthRows.reduce((n,v)=>n+Math.sign(v),0)/breadthRows.length:0,
+      btc15=this.predictiveReturn("BTC_USDT",3),btc60=this.predictiveReturn("BTC_USDT",12),
+      eth15=this.predictiveReturn("ETH_USDT",3),eth60=this.predictiveReturn("ETH_USDT",12);
+    for(const symbol of this.runtime.liquidUniverse){
+      const tick=radar.get(symbol)??this.contractCatalog.get(symbol),stats=this.predictiveStats.get(symbol)?.row,
+        oi=Number(tick?.openInterest??stats?.open_interest_usd??stats?.open_interest??0),
+        history=this.predictiveOiHistory.get(symbol)??[],
+        anchor=[...history].reverse().find(x=>x.at<=now-4*60*60_000)??history[0],
+        current=history.at(-1),oiChange=anchor&&current&&anchor.value>0?current.value/anchor.value-1:0,
+        mark=Number(tick?.markPrice??stats?.mark_price??0),index=Number(tick?.indexPrice??0),
+        basisRate=mark>0&&index>0?mark/index-1:0,
+        openInterestUsd=Number(stats?.open_interest_usd??0),
+        longLiq=Number(stats?.long_liq_usd??0),shortLiq=Number(stats?.short_liq_usd??0),liqSum=longLiq+shortLiq;
+      out[symbol]={fundingRate:Number(tick?.fundingRate??0),basisRate,openInterest:oi,openInterestChangeRate:oiChange,
+        liquidationLongNotionalRate:openInterestUsd>0?longLiq/openInterestUsd:0,
+        liquidationShortNotionalRate:openInterestUsd>0?shortLiq/openInterestUsd:0,
+        liquidationImbalance:liqSum>0?(shortLiq-longLiq)/liqSum:0,
+        takerLongShortLog:Number(stats?.lsr_taker)>0?Math.log(Number(stats!.lsr_taker)):0,
+        accountLongShortLog:Number(stats?.lsr_account)>0?Math.log(Number(stats!.lsr_account)):0,
+        topLongShortLog:Number(stats?.top_lsr_size)>0?Math.log(Number(stats!.top_lsr_size)):0,
+        btcReturn15m:btc15,btcReturn60m:btc60,ethReturn15m:eth15,ethReturn60m:eth60,marketBreadth};
+    }
+    return out;
+  }
+
   private refreshRadar(now:number) {
     const cached=this.gateRadarAt>0&&now-this.gateRadarAt<=2*RADAR_MS?new Map(this.gateRadarCache.map(row=>[row.symbol,row])):null;
     const known=this.contractCatalog.size
