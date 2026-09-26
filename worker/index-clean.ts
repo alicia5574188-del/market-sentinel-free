@@ -936,6 +936,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private refreshRadar(now:number) {
+    this.recordPredictiveOpenInterest(now);
     const cached=this.gateRadarAt>0&&now-this.gateRadarAt<=2*RADAR_MS?new Map(this.gateRadarCache.map(row=>[row.symbol,row])):null;
     const known=this.contractCatalog.size
       ?[...this.contractCatalog.values()].filter(row=>adaptiveSymbolAllowed(row.symbol)).map(row=>{
@@ -946,13 +947,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         const q=this.marketHub.quote(symbol,now);return q?[{symbol,last:q.mid,volume24hUsd:q.volume24hUsd,fundingRate:0}]:[];
       });
     const eligibleRows=this.marketHub.radarRows(known,now);
-    if(!eligibleRows.length)throw new Error("no Gate-tradable extremum-regime markets");
+    if(!eligibleRows.length)throw new Error("no Gate-tradable predictive-path markets");
     const executionEligible=eligibleRows.filter(forwardExecutionUniverseEligible);
     const locked=this.forwardState?.positions.map(p=>p.symbol)??[];
     const universeRows=selectAnchorOpportunityUniverse({rows:eligibleRows,limit:SCAN_UNIVERSE_SIZE,
       lockedSymbols:locked,currentSymbols:this.runtime.liquidUniverse,coreSymbols:DEFAULT_SYMBOLS,
       rotationSeed:Math.floor(now/BAR_MS),explorationSlots:2,liquiditySlots:0});
-    if(!universeRows.length)throw new Error("no liquid extremum-regime markets");
+    if(!universeRows.length)throw new Error("no liquid predictive-path markets");
     this.runtime.liquidUniverse=universeRows.map(row=>row.symbol);
     this.runtime.radar=successfulRadarRuntime(this.runtime.radar,now,universeRows.length,[]);
     this.runtime.lastRadarAt=now;
@@ -1079,7 +1080,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.forwardLastAttemptAt=now;
       const previous = state;
       const next = advanceForward({ state: previous, now, paths: this.strategyCandles,minutePaths:this.forwardMinutePaths(),
-        quotes: this.forwardQuotes(now), contracts: this.regimeContracts(),
+        quotes: this.forwardQuotes(now), contracts: this.regimeContracts(),ancillary:this.predictiveAncillary(now),
         entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue });
       if (next.changed || !previous.storage.persistedAt) {
         next.state.storage = { persistedAt: now, error: null };
@@ -3006,6 +3007,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         catch(error){this.runtime.radar=failedRadarRuntime(this.runtime.radar,Date.now(),error);}
       }
       subrequests+=await this.refreshAdaptiveCandles(Date.now());
+      subrequests+=await this.refreshPredictiveStats(Date.now());
       subrequests+=await this.refreshForwardUrgentMinutes(Date.now());
       await this.advanceForwardNow(Date.now(),true);
       this.runtime.subrequestCount+=subrequests;
