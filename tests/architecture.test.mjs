@@ -4,56 +4,33 @@ import {readFile} from "node:fs/promises";
 
 const read=(path)=>readFile(new URL(`../${path}`,import.meta.url),"utf8");
 
-test("Forward Path Relation 3.0 is the only PAPER strategy authority and retired strategy stacks stay disconnected",async()=>{
-  const core=await read("lib/forward-relations.ts");
-  assert.match(core,/ADAPTIVE_ENGINE_VERSION=FORWARD_RELATION_V2_VERSION/);
-  assert.match(core,/from "\.\/forward-relation-v2\.ts"/);
-  assert.doesNotMatch(core,/ADAPTIVE_TARGET_POSITIONS|ADAPTIVE_REALTIME_POSITION_CAP/);
-  assert.match(core,/FORWARD_EXECUTION_BBO_CAP=30/);
-  assert.match(core,/FORWARD_MINUTE_CONFIRMATION_CAP=11/);
-  for(const retired of["multi-turn","anchor-flow","region-launch","region-lifecycle","strategy-arena","regime-portfolio","all-regime-engine"])
-    assert.doesNotMatch(core,new RegExp(`from .*\\b${retired.replace(/[.*+?^$()|[\\]{}]/g,"\\$&")}`));
-  for(const mode of["RELATION","BREAKOUT","RETEST","FAILED_BREAKOUT","RANGE","SHOCK"])assert.match(core,new RegExp(`"${mode}"`));
-  assert.match(core,/ROTATION_GAP=10/);
-  assert.match(core,/TOTAL_RISK_RATE=\.10/);
-  assert.match(core,/SIDE_RISK_RATE=\.065/);
-  assert.match(core,/PROBE_RISK_POOL_RATE=\.015/);
-  assert.match(core,/FAMILY_RISK_CAP_RATE=\.025/);
-  assert.match(core,/FIVE_MINUTE_NEW_RISK_RATE=\.025/);
-  assert.match(core,/portfolioRiskCharge/);
-  assert.match(core,/premiumOnly/);
-  assert.match(core,/from "\.\/forward-family-experiment\.ts"/);
-  assert.doesNotMatch(core,/forward-entry-guard/);
-  const family=await read("lib/forward-family-experiment.ts");
-  assert.match(family,/FORWARD_FAMILY_EXPERIMENT_VERSION="forward-family-experiment-v3"/);
-  assert.match(family,/recordFamilyOutcome/);assert.match(family,/meanRealizedNetRate/);assert.match(family,/meanCostRate/);
-  assert.match(family,/edgeRatio<\.45/);assert.match(family,/livePathScore<\.55/);
-  assert.match(core,/MAX_NEW_RESERVE_EXPERIMENTS_PER_5M=2/);assert.match(core,/reserveEntriesThisCycle/);
-  assert.match(family,/relationFamilyId/);
-  assert.match(family,/reserveExperimentValueBlock/);
-  assert.match(family,/STRUCTURE_STOP/);
-  assert.doesNotMatch(family,/stopPrice|targetPrice|profitFloor|GateLiveClient/);
+test("Extremum Regime V1 is the only PAPER new-entry authority and legacy stacks stay compatibility-only",async()=>{
+  const core=await read("lib/forward-relations.ts"),engine=await read("lib/extremum-regime-engine.ts");
+  assert.match(core,/ADAPTIVE_ENGINE_VERSION=EXTREMUM_REGIME_VERSION/);
+  assert.match(core,/from "\.\/extremum-regime-engine\.ts"/);
+  assert.match(core,/buildExtremumRegime/);assert.match(core,/openExtremumTrade/);assert.match(core,/isExtremumOpportunity/);
+  for(const mode of["SWING","TREND_PULLBACK","IMPULSE"])assert.match(core,new RegExp(`"${mode}"`));
+  assert.match(core,/FORWARD_EXECUTION_BBO_CAP=30/);assert.match(core,/FORWARD_MINUTE_CONFIRMATION_CAP=11/);
+  assert.match(core,/TOTAL_RISK_RATE=\.10/);assert.match(core,/SIDE_RISK_RATE=\.065/);assert.match(core,/TOTAL_MARGIN_RATE=\.75/);
+  assert.match(engine,/TREND_UP/);assert.match(engine,/TREND_DOWN/);assert.match(engine,/WEAKENING/);assert.match(engine,/TRANSITION/);
+  assert.match(engine,/topPressure/);assert.match(engine,/bottomPressure/);assert.match(engine,/upSurvival/);assert.match(engine,/downSurvival/);
+  assert.match(engine,/momentumOverride/);assert.match(engine,/RECLAIM_TEST/);assert.match(engine,/READY/);
+  const advance=core.slice(core.indexOf("export function advanceForward"),core.indexOf("export function closeForwardForReset"));
+  assert.match(advance,/s\.opportunities=built\.opportunities/);
+  assert.doesNotMatch(advance,/advanceRelationEngine\(|interruptOpportunities\(|buildOpportunities\(/);
   const minute=core.slice(core.indexOf("export function forwardUrgentMinuteSymbols"),core.indexOf("export function forwardWatchSymbols"));
-  assert.doesNotMatch(minute,/s\.positions/);
-  assert.match(minute,/o\.premium&&o\.eligible/);
-  const rotation=core.slice(core.indexOf("function rotateIfNeeded"),core.indexOf("export function fillForwardPortfolio"));
-  assert.match(rotation,/sideFull/);assert.match(rotation,/existingRisk\(s,candidate\.side\)/);
-  assert.match(rotation,/structuredClone\(s\)/);
+  assert.match(minute,/extremumUrgentMinuteSymbols/);assert.doesNotMatch(minute,/s\.positions/);
 });
 
-test("Structural Interrupt is a bounded exception to sample authority, never a restored structure-first stack",async()=>{
-  const [core,interrupt]=await Promise.all([read("lib/forward-relations.ts"),read("lib/forward-structural-interrupt.ts")]);
-  assert.match(core,/from "\.\/forward-structural-interrupt\.ts"/);
-  assert.match(core,/if\(!isShock&&!o\.relationRuleId\)/);
-  assert.match(core,/structuralInterruptBlockReason/);
-  assert.match(core,/SHOCK_EVENT_RISK_RATE=\.015/);assert.match(core,/MAX_SHOCK_ENTRIES_PER_EVENT=2/);
-  assert.match(core,/同一市场冲击默认只参与最优标的/);
-  assert.match(interrupt,/phase:"PRE_ALERT"\|"WAIT_RETEST"\|"CONFIRMED"\|"COOLDOWN"/);
-  assert.match(interrupt,/track\.phase==="WAIT_RETEST"/);assert.match(interrupt,/track\.hadPullback&&track\.restartSeen/);
-  assert.match(interrupt,/preCount>=4&&preBreadth>=\.25/);assert.match(interrupt,/confirmed\.length>=3&&breadth>=\.20/);
-  assert.match(interrupt,/singleExtreme=.*\.0065/);
-  assert.doesNotMatch(core,/m\.ok\|\|body>avgBody\*2\.6/);
-  assert.match(core,/1m确认通过/);
+test("retired relation family and Structural Interrupt stacks cannot manufacture new entries after cutover",async()=>{
+  const core=await read("lib/forward-relations.ts");
+  const advance=core.slice(core.indexOf("export function advanceForward"),core.indexOf("export function closeForwardForReset"));
+  assert.doesNotMatch(advance,/relationCandidates\(|structuralInterruptCandidates\(|familyAdmissionBlock\(/);
+  assert.match(core,/entryContext\?\.strategyVersion===EXTREMUM_REGIME_VERSION/);
+  const summary=core.slice(core.indexOf("export function forwardSummary"));
+  assert.match(summary,/relationEngine:\{version:s\.relationEngine\.version,retired:true/);
+  assert.match(summary,/structuralInterrupt:\{version:STRUCTURAL_INTERRUPT_VERSION,retired:true/);
+  assert.match(summary,/平仓与反手是两个独立事件/);
 });
 
 test("runtime alarm uses the slim market path and no strategy cutover can reset PAPER",async()=>{
@@ -91,7 +68,7 @@ test("entry readiness needs only fresh executable Gate data and contract metadat
 
 test("health exposes bounded Forward diagnostics without adding strategy authority",async()=>{
   const worker=await read("worker/index-clean.ts"),health=worker.slice(worker.indexOf("private forwardHealth()"),worker.indexOf("protected liveMirrorView()"));
-  assert.match(health,/relationDiagnostics/);assert.match(health,/entryDiagnostics/);assert.match(health,/candidateDiagnostics/);
+  assert.match(health,/extremumCounts/);assert.match(health,/entryDiagnostics/);assert.match(health,/candidateDiagnostics/);
   assert.match(health,/slice\(0,8\)/);
   assert.doesNotMatch(health,/openTrade\(|fillForwardPortfolio\(|GateLiveClient/);
 });
@@ -135,12 +112,12 @@ test("LIVE uses the restored full Gate snapshot and no split order-audit admissi
   assert.match(sync,/entry\.exchangeOrderId = await client\.createEntry\(intent,submissionStillAllowed\)/);
 });
 
-test("operator UI and release config expose Forward Path Relation 3.0 with risk-based holdings and 30 execution BBO capacity",async()=>{
+test("operator UI and release config expose Extremum Regime V1 with unchanged execution capacity and infrastructure",async()=>{
   const [dashboard,worker,workflow,wrangler]=await Promise.all([
     read("app/forward-dashboard.tsx"),read("worker/index-clean.ts"),read(".github/workflows/sentinel-v2-ci.yml"),read("wrangler.jsonc"),
   ]);
-  assert.match(dashboard,/哨兵 · Forward Path Relation 3\.0/);assert.match(dashboard,/反向独立确认/);
+  assert.match(dashboard,/哨兵 · 峰谷状态系统/);assert.match(dashboard,/ExtremumExecution/);
   assert.match(worker,/SCAN_UNIVERSE_SIZE = 30/);assert.match(worker,/FORWARD_EXECUTION_BBO_CAP/);
-  assert.match(workflow,/forward-path-relation-v3/);
+  assert.match(workflow,/extremum-regime-v1/);
   assert.match(wrangler,/MarketStream/);assert.match(wrangler,/MemberExecutor/);assert.match(wrangler,/MemberDirectory/);
 });
