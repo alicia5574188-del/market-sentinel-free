@@ -46,7 +46,7 @@ export interface FirstTouchSpec{
   maxMinutes:number;
 }
 
-export type FirstTouchOutcome="TARGET"|"RISK"|"AMBIGUOUS"|"NONE";
+export type FirstTouchOutcome="TARGET"|"RISK"|"AMBIGUOUS"|"NONE"|"CENSORED";
 
 export interface FirstTouchLabel{
   specId:string;
@@ -63,6 +63,23 @@ export interface EntryRegretLabel{
   shortBestPrice:number;
 }
 
+export interface ReversalHazardSpec{
+  id:string;
+  activationRate:number;
+  reversalRate:number;
+  maxMinutes:number;
+}
+
+export type ReversalHazardOutcome="REVERSED"|"SURVIVED"|"NOT_ACTIVATED"|"CENSORED";
+
+export interface ReversalHazardLabel{
+  specId:string;
+  side:PredictiveSide;
+  outcome:ReversalHazardOutcome;
+  activatedAt:number|null;
+  reversedAt:number|null;
+}
+
 export interface PredictiveLabels{
   symbol:string;
   decisionAt:number;
@@ -71,6 +88,7 @@ export interface PredictiveLabels{
   horizons:HorizonLabel[];
   firstTouch:FirstTouchLabel[];
   entryRegret:EntryRegretLabel[];
+  reversalHazard:ReversalHazardLabel[];
 }
 
 export interface PredictiveDatasetRow{
