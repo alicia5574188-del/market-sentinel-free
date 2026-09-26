@@ -6,8 +6,11 @@ import { initialRelationEngine, normalizeRelationEngine,
   type RelationCandidate, type RelationEngineState, type RelationExitProfile, type RelationStatus } from "./forward-relation-v2.ts";
 import { STRUCTURAL_INTERRUPT_VERSION, initialStructuralInterruptState, normalizeStructuralInterruptState,
   type StructuralInterruptState } from "./forward-structural-interrupt.ts";
-import { EXTREMUM_REGIME_VERSION, buildExtremumRegime, extremumExitDecision, urgentMinuteSymbols as extremumUrgentMinuteSymbols,
+import { EXTREMUM_REGIME_VERSION, extremumExitDecision,
   type ExtremumRegimeState, type ExtremumSymbolState } from "./extremum-regime-engine.ts";
+import artifactData from "./predictive-path-artifact-v1.json" with { type: "json" };
+import { PREDICTIVE_PATH_VERSION, type PredictiveAncillary, type PredictivePathArtifact, type PredictivePathForecast } from "./predictive-path-types.ts";
+import { buildPredictivePathEngine, predictiveExitDecision, type PredictiveCandidate, type PredictiveEngineState } from "./predictive-path-engine.ts";
 
 /**
  * Forward Path Relation 3.0 — PAPER authority.
@@ -18,7 +21,8 @@ import { EXTREMUM_REGIME_VERSION, buildExtremumRegime, extremumExitDecision, urg
  * execution enhancement, never a second directional authority.
  */
 export const FORWARD_VERSION="forward-relations-v1.0";
-export const ADAPTIVE_ENGINE_VERSION=EXTREMUM_REGIME_VERSION;
+export const ADAPTIVE_ENGINE_VERSION=PREDICTIVE_PATH_VERSION;
+const PREDICTIVE_ARTIFACT=artifactData as unknown as PredictivePathArtifact;
 export const FORWARD_EXECUTION_BBO_CAP=30;
 export const FORWARD_MINUTE_CONFIRMATION_CAP=11;
 export const BAR_MS=300_000;
@@ -49,7 +53,7 @@ export type Rule={id:string;signature:string;parentId:string|null;version:number
   estimatedNetRate:number;priorResponse:number|null;recentResponse:number;standardError:number;reason:string;
   mutation:"CREATE"|"REVISE"|"RECALL";grammar:string;liveEligible:false;authority?:"ADAPTIVE_TEN"|"FORWARD_RELATION"|"STRUCTURAL_INTERRUPT";turnTimeframe?:"5m"};
 
-export type OpportunityMode="RELATION"|"BREAKOUT"|"RETEST"|"FAILED_BREAKOUT"|"RANGE"|"SHOCK"|"SWING"|"TREND_PULLBACK"|"IMPULSE";
+export type OpportunityMode="RELATION"|"BREAKOUT"|"RETEST"|"FAILED_BREAKOUT"|"RANGE"|"SHOCK"|"SWING"|"TREND_PULLBACK"|"IMPULSE"|"PREDICTIVE";
 export type RegionState="IN_REGION"|"ABOVE"|"BELOW";
 export type Region={
   id:string;symbol:string;confirmedAt:number;lower:number;upper:number;center:number;widthRate:number;bars:number;
@@ -68,6 +72,7 @@ export type Opportunity={
   exitPlan?:RelationExitProfile;
   strategyVersion?:string;regime?:ExtremumSymbolState["regime"];topPressure?:number;bottomPressure?:number;upSurvival?:number;downSurvival?:number;
   confirmationStage?:ExtremumSymbolState["stage"];sourceCount?:number;disagreementRate?:number;
+  predictiveForecast?:PredictivePathForecast;
 };
 export type MarketPulse={at:number;up:number;down:number;neutral:number;bias:"UP"|"DOWN"|"MIXED";strength:number;expansion:number};
 
@@ -81,6 +86,8 @@ export type EntryContext={
   interruptEventId?:string;interruptMarketWide?:boolean;interruptBoundary?:number;interruptStrength?:number;
   strategyVersion?:string;regime?:ExtremumSymbolState["regime"];topPressure?:number;bottomPressure?:number;upSurvival?:number;downSurvival?:number;
   confirmationStage?:ExtremumSymbolState["stage"];sourceCount?:number;disagreementRate?:number;postEntryState?:"PENDING"|"CONFIRMED"|"FAILED";
+  prediction?:{directionProbability:number;expectedReturnRate:number;predictedMfeRate:number;predictedMaeRate:number;
+    targetBeforeRisk:number;entryRegretRate:number;confidence:number};
 };
 export type Trade={
   id:string;symbol:string;side:"LONG"|"SHORT";rule:Rule;openedAt:number;closedAt:number|null;status:"OPEN"|"CLOSED";
@@ -111,6 +118,7 @@ export type ForwardState={
   balance:number;initialEquity:number;peakEquity:number;maxDrawdown:number;resolved:number;wins:number;grossPnl:number;fees:number;
   fundingAllowance:number;turnover:number;positions:Trade[];history:Trade[];events:AuditEvent[];daily:Daily[];
   selectedSymbols:string[];opportunities:Opportunity[];regions:Record<string,Region>;relationEngine:RelationEngineState;extremumRegime:ExtremumRegimeState;
+  predictivePath:PredictiveEngineState;
   familyExperiment:FamilyExperimentState;structuralInterrupt:StructuralInterruptState;
   entryValidations:Record<string,EntryValidation>;
   marketPulse:MarketPulse;lastEntryAt:Record<string,number>;lastExitAt:Record<string,number>;lastSide:Record<string,"LONG"|"SHORT">;
@@ -138,8 +146,9 @@ export function initialForward(now:number):ForwardState{
     balance:1000,initialEquity:1000,peakEquity:1000,maxDrawdown:0,resolved:0,wins:0,grossPnl:0,fees:0,fundingAllowance:0,turnover:0,
     positions:[],history:[],events:[],daily:[],selectedSymbols:[],opportunities:[],regions:{},relationEngine:initialRelationEngine(now),
     extremumRegime:{version:EXTREMUM_REGIME_VERSION,updatedAt:now,symbols:{}},
+    predictivePath:{version:PREDICTIVE_PATH_VERSION,updatedAt:now,symbols:{}},
     familyExperiment:initialFamilyExperimentState(),structuralInterrupt:initialStructuralInterruptState(),entryValidations:{},marketPulse:blankPulse(now),
-    lastEntryAt:{},lastExitAt:{},lastSide:{},lastRotationAt:0,latestReason:"Forward Path Relation 3.0 已启动：根样本学习完整5–60分钟路径；方向与退出由同一证据生成。",
+    lastEntryAt:{},lastExitAt:{},lastSide:{},lastRotationAt:0,latestReason:"Predictive Path V1 已启动：预测未来15/30/60/120分钟路径、MFE/MAE和入场后悔，旧策略只保留已有仓位退出。",
     entryDiagnostics:{at:now,matched:0,opened:0,reasons:{}},storage:{persistedAt:0,error:null},liveEligible:false,
     policyVersion:ADAPTIVE_ENGINE_VERSION,strategyAuthorityVersion:ADAPTIVE_ENGINE_VERSION,executionVersion:ADAPTIVE_ENGINE_VERSION,
     regionVersion:"adaptive-region-v1",regionLaunchVersion:"adaptive-region-v1",cutoverAt:now,
