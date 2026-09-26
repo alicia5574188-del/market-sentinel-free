@@ -73,7 +73,7 @@ function hotProjection(next:ForwardState,includeSamples=true){
           evidence:next.extremumRegime.evidence.slice(0,evidenceLimit)},
         storage:{...next.storage,layout:paged?FORWARD_PAGED_STATE_VERSION:next.storage.layout,
           ...(paged?{sampleIntegrity:"raw-sha256" as const}:{})},
-        relationEngine:{...next.relationEngine,samples}} as ForwardStateWithRecovery;
+        relationEngine:{...next.relationEngine,samples}} as unknown as ForwardStateWithRecovery;
     delete account.__legacySampleRecovery;delete account.__persistedSampleManifest;return account;
   };
   let account=build(),raw=encodeJson(account);
@@ -361,7 +361,7 @@ export async function prepareForwardWrite(previous:ForwardState|null,next:Forwar
   recoveryState.__persistedSampleManifest=structuredClone(manifest);
   return{entries,writes:Object.keys(entries).length,compression:{encoding:useGzip?"gzip":"utf8",rawBytes:raw.length,
     storedBytes:bytes.length,chunks:count,sampleCount:manifest.count,samplePages:manifest.pages.length,changedSamplePages,
-    accountBudgetBytes:FORWARD_ACCOUNT_MAX_BYTES,targetBytes:FORWARD_ACCOUNT_TARGET_BYTES,
+    accountBudgetBytes:FORWARD_ACCOUNT_MAX_BYTES,
     utilization:raw.length/FORWARD_ACCOUNT_MAX_BYTES,...hot.meta,
     ...(options.compact?{inlineHead:inline,chunkBytes}:{})}};
 }
