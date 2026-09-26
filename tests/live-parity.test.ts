@@ -4,6 +4,7 @@ import { register } from "node:module";
 import { LIVE_PARITY_PREFIX, LIVE_PARITY_VERSION, forwardMirrorSources, buildProportionalMirror,
   mirrorCoverage, sourceLifecycle, liveEntryDriftGuard, mirrorPositionRisk, type MirrorBinding } from "../lib/live-parity.ts";
 import { advanceForward, initialForward, type Trade, type ForwardState } from "../lib/forward-relations.ts";
+import {EXTREMUM_REGIME_VERSION} from "../lib/extremum-regime-engine.ts";
 import {newExitControl} from "../lib/forward-protection.ts";
 import { gateMarkedEquity, gatePositionValuation, liveEntryDisposition, liveExitTag, type GateLiveAccount, type GateLiveOrder, type GateLivePosition, type LiveEntryIntent, type LiveStopIntent, LiveEntrySizingError, GateEntryCancelledError, GateLiveClient, GateReadTimeoutError } from "../lib/gate-live.ts";
 import { quantizeMirrorNotional } from "../lib/gate-quantity.ts";
@@ -25,6 +26,21 @@ function trade(id="ft-fixture-1",symbol="BTC_USDT",side:"LONG"|"SHORT"="LONG"):T
       armRate:.005,givebackRate:.002,exitMode:"REACTION_DECAY",samples:20,trainGroups:3,checkGroups:2,
       estimatedNetRate:.002,priorResponse:.005,recentResponse:.004,standardError:.001,
       reason:"Synthetic functional source, never a trading result",mutation:"CREATE",grammar:"fixture",liveEligible:false}};
+}
+function extremumTrade(id="ft-extremum-1",symbol="BTC_USDT",side:"LONG"|"SHORT"="LONG"):Trade{
+  const t=trade(id,symbol,side),long=side==="LONG";
+  t.rule={...t.rule,id:`extremum-trend_pullback-${symbol}`,signature:`EXTREMUM_REGIME:TREND_${long?"UP":"DOWN"}:TREND_PULLBACK`,
+    grammar:EXTREMUM_REGIME_VERSION,reason:"峰谷状态系统LIVE契约测试"};
+  t.exitPlan={version:"sample-exit-plan-v2",bestHoldMinutes:30,feedbackDeadlineMinutes:5,maxHoldMinutes:60,
+    normalAdverseRate:.006,targetRate:.012,protectionActivationRate:.004,retentionRate:.8,samples:0,groups:0,path:{}};
+  t.expectedHoldMinutes=30;t.forecast={remainingNetRate:.009,quality:.88,sizingEquity:1000};
+  t.entryContext={version:"adaptive-ten-entry-v1",capturedAt:t.openedAt,timeframe:"5m",side,mode:"TREND_PULLBACK",reserve:false,
+    reason:"趋势回调结束再启动",entryScore:88,directionStrength:84,spaceScore:80,positionScore:78,executionScore:90,
+    remainingSpaceRate:.009,pullbackRiskRate:.01,edgeRatio:.9,expectedHoldMinutes:30,marketFit:86,regionId:null,
+    portfolioRiskCharge:t.plannedRisk,strategyVersion:EXTREMUM_REGIME_VERSION,regime:long?"TREND_UP":"TREND_DOWN",
+    topPressure:long?25:58,bottomPressure:long?58:25,upSurvival:long?84:16,downSurvival:long?16:84,
+    confirmationStage:"READY",sourceCount:4,disagreementRate:.0002,postEntryState:"PENDING"};
+  return t;
 }
 function request(t=trade()):Parameters<typeof buildProportionalMirror>[0]{return {source:t,sourceEquity:1000,equity:100,available:100,entryPrice:100,
   quantoMultiplier:.001,leverageMax:20,maintenanceRate:.005,openRisk:0,sameDirectionRisk:0,openMargin:0,
@@ -276,6 +292,20 @@ async function enableNew(h:Harness) {
   if(result.ok)await h.syncLive(T);
   return result;
 }
+
+test("real Worker mirrors an extremum source once, protects it, and follows the exact source close",()=>clock(async()=>{
+  const {h,gate}=await harness();h.forwardState.positions=[extremumTrade()];
+  await enableNew(h);await h.syncLive(T);
+  assert.equal(gate.placed.length,1);assert.ok(gate.stops.length>0);
+  const p=live(h).positions.BTC_USDT;assert.equal(p.id,"ft-extremum-1");
+  assert.equal(p.parity?.sourceRuleId,"extremum-trend_pullback-BTC_USDT");
+  assert.equal(p.parity?.sourceExitPlanVersion,"sample-exit-plan-v2");
+  const source=h.forwardState.positions[0]!;source.status="CLOSED";source.closedAt=T;source.exitReason="TREND_DEATH";source.exitPrice=99.8;
+  h.forwardState.history=[source];h.forwardState.positions=[];
+  await h.syncLive(T);await h.syncLive(T);
+  assert.equal(gate.closeTags.length,1);assert.equal(live(h).positions.BTC_USDT.status,"CLOSED");
+  assert.equal(live(h).positions.BTC_USDT.exitReason,"TREND_DEATH");
+}));
 
 test("persisted new PAPER source reaches LIVE in the same critical pass",()=>clock(async()=>{
   const {h}=await harness();h.forwardState.positions=[];
