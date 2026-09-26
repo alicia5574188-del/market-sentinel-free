@@ -124,12 +124,12 @@ test("PAPER commit, paged learning state and LIVE wake share one persisted sourc
   assert.match(store,/changedSamplePages/);assert.match(store,/FORWARD_ACCOUNT_MAX_BYTES=1024\*1024/);
 });
 
-test("LIVE enable keeps owner intent ON while open-order audit retries safely",async()=>{
+test("LIVE uses the restored full Gate snapshot and no split order-audit admission layer",async()=>{
   const worker=await read("worker/index-clean.ts");
   const sync=worker.slice(worker.indexOf("protected async syncLive"),worker.indexOf("private suspendSymbol"));
-  assert.doesNotMatch(sync,/\|\|initialEnable\|\|forceEntryCleanup/);
-  assert.match(sync,/if\(!orderAuditUsable\)\{[\s\S]*operational=false;[\s\S]*后台会自动重试/);
-  assert.match(sync,/if\(!orderAuditUsable\)\{[\s\S]*continue;/);
+  assert.match(sync,/let snapshot=await client\.snapshot\(\)/);
+  assert.doesNotMatch(sync,/orderAuditUsable|snapshotCore\(\)|snapshotOrders\(\)/);
+  assert.match(sync,/entry\.exchangeOrderId = await client\.createEntry\(intent,submissionStillAllowed\)/);
 });
 
 test("operator UI and release config expose Forward Path Relation 3.0 with risk-based holdings and 30 execution BBO capacity",async()=>{
