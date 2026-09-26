@@ -13,7 +13,7 @@ const call=async(path,cookie='',body)=>{
  let last;
  for(let attempt=0;attempt<2;attempt++){
   try{
-   const response=await fetch(base+path,{method:body===undefined?'GET':'POST',headers:{Cookie:cookie,Origin:base,'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(8000)});
+   const response=await fetch(base+path,{method:body===undefined?'GET':'POST',headers:{Cookie:cookie,Origin:base,'Content-Type':'application/json',Connection:'close'},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(8000)});
    // Drain every local HTTP body, including status-only denial assertions, so
    // the smoke test cannot exhaust its own keep-alive connection pool.
    return new Response(await response.arrayBuffer(),{status:response.status,statusText:response.statusText,headers:response.headers});
