@@ -168,7 +168,7 @@ function runWindow(window,label){
   const commonTimes=(gateRows.get(symbols[0])??[]).map(x=>x.time).filter(t=>t>=window.from&&t<window.to);
   let state={version:PREDICTIVE_PATH_VERSION,updatedAt:window.from*1000,symbols:{},directionMemory:{}},positions=new Map(),trades=[],
     eligibleSignals=0,waitSignals=0,directionChecks=0,directionCorrect=0,entryDirectionChecks=0,entryDirectionCorrect=0,
-    eligibleFutureNetSum=0,eligibleFutureNetCount=0;
+    eligibleFutureNetSum=0,eligibleFutureNetCount=0,signalDiagnostics=[];
   for(const time of commonTimes){
     const paths={},quotes={},anc={};
     for(const symbol of symbols){
@@ -186,9 +186,19 @@ function runWindow(window,label){
       if(forecast.stableSide){directionChecks++;
         if((forecast.stableSide==="LONG"&&future>0)||(forecast.stableSide==="SHORT"&&future<0))directionCorrect++;}
       if(forecast.enterNow&&forecast.stableSide&&forecast.rawSide===forecast.stableSide){
-        entryDirectionChecks++;const d=forecast.stableSide==="LONG"?1:-1,net=d*future-ROUND_TRIP_COST;
+        entryDirectionChecks++;const d=forecast.stableSide==="LONG"?1:-1,net=d*future-ROUND_TRIP_COST,
+          sideData=forecast.stableSide==="LONG"?forecast.long:forecast.short,
+          signed=v=>d*v;
         eligibleFutureNetSum+=net;eligibleFutureNetCount++;
         if(d*future>0)entryDirectionCorrect++;
+        signalDiagnostics.push({symbol,side:forecast.stableSide,net60:net,correct:d*future>0,confidence:forecast.confidence,
+          entryQuality:forecast.entryQuality,directionProbability:forecast.directionProbability,
+          expectedReturn:d*forecast.expectedReturn.m60,mfe:sideData.mfe60,mae:sideData.mae60,touch:sideData.targetBeforeRisk60,
+          netEv:sideData.netEv60,persistence:forecast.evidence.persistence,price:signed(forecast.evidence.price),
+          technical:signed(forecast.evidence.technical),derivatives:signed(forecast.evidence.derivatives),
+          liquidation:signed(forecast.evidence.liquidation),multiVenue:signed(forecast.evidence.multiVenue),
+          context:signed(forecast.evidence.context),agreement:forecast.crossVenue.agreement,
+          disagreement:forecast.crossVenue.disagreementRate});
       }
     }
     for(const [symbol,pos] of [...positions]){
@@ -223,6 +233,27 @@ function runWindow(window,label){
     mfeBeat=closed.filter(t=>t.mfe>t.mae).length,immediateBad=closed.filter(t=>t.mae15>t.mfe15).length,
     winnerMedian=median(wins.map(t=>t.net)),avgWin=wins.length?wins.reduce((n,t)=>n+t.net,0)/wins.length:0,
     avgLoss=losses.length?-losses.reduce((n,t)=>n+t.net,0)/losses.length:0,net=closed.reduce((n,t)=>n+t.net,0);
+  const profile=(name,predicate)=>{
+    const rows=signalDiagnostics.filter(predicate),nets=rows.map(x=>x.net60),wins=rows.filter(x=>x.correct).length;
+    return{name,count:rows.length,accuracy:rows.length?wins/rows.length:0,avgNet60:rows.length?nets.reduce((a,b)=>a+b,0)/rows.length:0,
+      medianNet60:median(nets),positiveNetRate:rows.length?rows.filter(x=>x.net60>0).length/rows.length:0};
+  };
+  const profiles=[
+    profile("BASE",()=>true),
+    ...[.62,.65,.68,.70,.72].map(v=>profile("DIR_"+v,x=>x.directionProbability>=v)),
+    ...[.65,.70,.75,.80].map(v=>profile("CONF_"+v,x=>x.confidence>=v)),
+    ...[.65,.70,.75,.80].map(v=>profile("ENTRYQ_"+v,x=>x.entryQuality>=v)),
+    ...[.006,.008,.010,.012].map(v=>profile("EXP_"+v,x=>x.expectedReturn>=v)),
+    ...[.008,.010,.012,.015].map(v=>profile("MFE_"+v,x=>x.mfe>=v)),
+    ...[.001,.002,.004,.006].map(v=>profile("NETEV_"+v,x=>x.netEv>=v)),
+    ...[1.5,2.5,4].map(v=>profile("MFE_MAE_"+v,x=>x.mfe/Math.max(x.mae,.0005)>=v)),
+    ...[.55,.65,.75].map(v=>profile("PERSIST_"+v,x=>x.persistence>=v)),
+    profile("PRICE_TECH_ALIGN",x=>x.price>=.2&&x.technical>=.2),
+    profile("INDEPENDENT_ALIGN",x=>x.price>=.2&&x.technical>=.2&&x.multiVenue>=.1&&x.derivatives>=-.15),
+    profile("FULL_ALIGN",x=>x.price>=.25&&x.technical>=.25&&x.multiVenue>=.2&&x.derivatives>=0&&x.context>=-.1),
+    profile("BIG_PATH_ALIGN",x=>x.expectedReturn>=.008&&x.mfe>=.010&&x.directionProbability>=.65&&x.price>=.2&&x.technical>=.2),
+  ].filter(x=>x.count>0).sort((a,b)=>b.avgNet60-a.avgNet60||b.count-a.count);
+
   return{label,from:window.from,to:window.to,signals:{eligible:eligibleSignals,wait:waitSignals},closedTrades:closed.length,wins:wins.length,
     winRate:closed.length?wins.length/closed.length:0,netRateSum:net,avgNetRate:closed.length?net/closed.length:0,
     profitFactor:grossLoss>0?grossWin/grossLoss:(grossWin>0?99:0),medianHoldMinutes:median(holds),p25HoldMinutes:percentile(holds,.25),
@@ -232,6 +263,7 @@ function runWindow(window,label){
     directionChecks,directionAccuracy:directionChecks?directionCorrect/directionChecks:0,
     entryDirectionChecks,entryDirectionAccuracy:entryDirectionChecks?entryDirectionCorrect/entryDirectionChecks:0,
     eligibleFutureAvgNet60:eligibleFutureNetCount?eligibleFutureNetSum/eligibleFutureNetCount:0,
+    diagnosticProfiles:profiles.slice(0,24),
     exitReasons:Object.fromEntries([...new Set(closed.map(t=>t.reason))].map(r=>[r,closed.filter(t=>t.reason===r).length])),
     symbols:Object.fromEntries(symbols.map(s=>[s,{trades:closed.filter(t=>t.symbol===s).length,net:closed.filter(t=>t.symbol===s).reduce((n,t)=>n+t.net,0)}])),
     sample:closed.slice(-20)};
