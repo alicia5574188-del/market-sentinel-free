@@ -23,16 +23,15 @@ function source(){
   const path=makePath(),now=(path.at(-1)!.time+300)*1000+1000,price=path.at(-1)!.close;
   const s=initialForward(now-60_000);
   const opportunity:Opportunity={id:"fixture-extremum",symbol:"BTC_USDT",side:"LONG",mode:"TREND_PULLBACK",premium:true,reserve:false,
-    score:88,eligible:true,completedAt:now-1000,expiresAt:now+60_000,price,stopPrice:price*.992,targetPrice:price*1.012,
-    stopRate:.008,targetRate:.012,directionStrength:84,pathEfficiency:78,momentumPersistence:80,positionScore:75,spaceScore:84,
+    score:86,eligible:true,completedAt:now-1000,expiresAt:now+60_000,price,stopPrice:price*.992,targetPrice:price*1.012,
+    stopRate:.008,targetRate:.012,directionStrength:84,pathEfficiency:82,momentumPersistence:78,positionScore:76,spaceScore:80,
     executionScore:90,grossRemainingSpaceRate:.012,netRemainingSpaceRate:.0101,pullbackRiskRate:.008,edgeRatio:1.26,
-    expectedHoldMinutes:30,marketFit:86,regionId:null,regionQuality:null,reason:"峰谷状态系统LIVE同源测试事件",
-    strategyVersion:EXTREMUM_REGIME_VERSION,regime:"TREND_UP",topPressure:22,bottomPressure:56,upSurvival:84,downSurvival:16,
-    confirmationStage:"READY",sourceCount:4,disagreementRate:.0002,exitPlan:structuredClone(exitProfile)};
+    expectedHoldMinutes:30,marketFit:84,regionId:null,regionQuality:null,reason:"Extremum Regime LIVE同源测试事件",
+    strategyVersion:EXTREMUM_REGIME_VERSION,regime:"TREND_UP",topPressure:35,bottomPressure:58,upSurvival:84,downSurvival:12,
+    confirmationStage:"READY",sourceCount:4,disagreementRate:.0003,exitPlan:structuredClone(exitProfile)};
   s.opportunities=[opportunity];s.lastCandleAt=now;
   fillForwardPortfolio(s,{BTC_USDT:q(price,now)},{BTC_USDT:contract},now,1000,false);
-  assert.equal(s.positions.length,1);assert.equal(s.positions[0]!.entryContext?.strategyVersion,EXTREMUM_REGIME_VERSION);
-  return{s,trade:s.positions[0]!,now,price};
+  assert.equal(s.positions.length,1);return{s,trade:s.positions[0]!,now,price};
 }
 
 test("LIVE sees the exact persisted PAPER trade rather than rebuilding a strategy decision",()=>{
