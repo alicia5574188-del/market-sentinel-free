@@ -48,8 +48,11 @@ function candidateFromForecast(symbol:string,forecast:PredictivePathForecast,q:P
     catastrophicStopRate=clamp(Math.max(PREDICTIVE_PATH_POLICY.catastrophicStopMin,data.mae60*1.8+.0012),
       PREDICTIVE_PATH_POLICY.catastrophicStopMin,PREDICTIVE_PATH_POLICY.catastrophicStopMax),
     expectedHoldMinutes=bestHorizon(forecast,side),
-    expectedReturnRate=side==="LONG"?forecast.expectedReturn.m60:-forecast.expectedReturn.m60,
-    rankingValue=(Math.max(0,data.netEv60)/Math.max(catastrophicStopRate,.001))*forecast.confidence*forecast.entryQuality,
+    horizonReturn=expectedHoldMinutes===15?forecast.expectedReturn.m15:expectedHoldMinutes===30?forecast.expectedReturn.m30
+      :expectedHoldMinutes===60?forecast.expectedReturn.m60:forecast.expectedReturn.m120,
+    expectedReturnRate=(side==="LONG"?1:-1)*horizonReturn,
+    rankingValue=(Math.max(0,expectedReturnRate-PREDICTIVE_PATH_POLICY.estimatedRoundTripCost)/Math.max(catastrophicStopRate,.001))
+      *forecast.confidence*forecast.entryQuality,
     eligible=forecast.enterNow&&quoteFresh(q,now)&&price>0,
     direction=sideProbability(forecast,side),
     reason="因果路径｜"+side+"｜60/120m方向"+(direction*100).toFixed(0)+"%｜目标先于风险"+(data.targetBeforeRisk60*100).toFixed(0)
@@ -91,7 +94,9 @@ export function predictiveExitDecision(input:{side:PredictiveSide;forecast:Predi
   if(!input.forecast)return{reason:null,remainingEdge:0,directionProbability:.5,oppositeProbability:.5,hold:true};
   const sideData=input.side==="LONG"?input.forecast.long:input.forecast.short,
     directionProbability=sideProbability(input.forecast,input.side),oppositeProbability=1-directionProbability,
-    remainingEdge=sideData.netEv60;
+    d=input.side==="LONG"?1:-1,
+    remainingEdge=Math.max(d*input.forecast.expectedReturn.m60,d*input.forecast.expectedReturn.m120)
+      -PREDICTIVE_PATH_POLICY.estimatedRoundTripCost;
   if(input.memory?.side&&input.memory.side!==input.side&&oppositeProbability>=PREDICTIVE_PATH_POLICY.directionFlip)
     return{reason:"PREDICTIVE_REVERSAL",remainingEdge,directionProbability,oppositeProbability,hold:false};
   if(input.ageMinutes>=20&&(input.memory?.weakBars??0)>=4&&remainingEdge<=0
