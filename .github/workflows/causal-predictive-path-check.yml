@@ -1,0 +1,43 @@
+name: Causal Predictive Path Pre-Release
+
+on:
+  push:
+    branches: [feature/predictive-path-v1-20260926]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: causal-predictive-path-pre-release
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    if: github.head_ref == 'feature/predictive-path-v1-20260926' || github.ref == 'refs/heads/feature/predictive-path-v1-20260926'
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+          cache: npm
+      - run: npm ci
+      - name: No trained-model production dependency
+        run: |
+          set -euo pipefail
+          ! grep -R -Ei 'lightgbm|catboost|transformer|predictive-path-artifact|train-predictive-path' lib/predictive-path-*.ts lib/forward-relations.ts worker/index-clean.ts
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Causal scenario matrix
+        run: node --experimental-strip-types --test tests/predictive-path-production.test.ts
+      - name: Forward compatibility
+        run: npm run test:forward
+      - name: LIVE source contract
+        run: npm run test:live-parity
+      - name: Diff integrity
+        run: git diff --check origin/main...HEAD
