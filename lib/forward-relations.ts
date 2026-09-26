@@ -8,8 +8,8 @@ import { STRUCTURAL_INTERRUPT_VERSION, initialStructuralInterruptState, normaliz
   type StructuralInterruptState } from "./forward-structural-interrupt.ts";
 import { EXTREMUM_REGIME_VERSION, extremumExitDecision,
   type ExtremumRegimeState, type ExtremumSymbolState } from "./extremum-regime-engine.ts";
-import { PREDICTIVE_PATH_POLICY, PREDICTIVE_PATH_VERSION, type PredictiveAncillary, type PredictivePathForecast } from "./predictive-path-types.ts";
-import { buildPredictivePathEngine, predictiveExitDecision, type PredictiveCandidate, type PredictiveEngineState } from "./predictive-path-engine.ts";
+import { PREDICTIVE_PATH_POLICY, PREDICTIVE_PATH_VERSION, type PredictiveAncillary, type PredictiveEngineState, type PredictivePathForecast } from "./predictive-path-types.ts";
+import { buildPredictivePathEngine, predictiveExitDecision, type PredictiveCandidate } from "./predictive-path-engine.ts";
 
 /**
  * Forward Path Relation 3.0 — PAPER authority.
@@ -719,8 +719,8 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
   const opened=input.legacyDrainOnly?0:fillForwardPortfolio(s,input.quotes,input.contracts,input.now,mark.equity,false);
 
   const eligible=s.opportunities.filter(o=>o.eligible&&o.expiresAt>input.now),
-    longForecasts=forecasts.filter(f=>f.preferredSide==="LONG").length,
-    shortForecasts=forecasts.filter(f=>f.preferredSide==="SHORT").length,
+    longForecasts=forecasts.filter(f=>f.stableSide==="LONG").length,
+    shortForecasts=forecasts.filter(f=>f.stableSide==="SHORT").length,
     totalRisk=existingRisk(s),riskUse=mark.equity>0?100*totalRisk/mark.equity:0;
   s.fitDiagnostics={tested:forecasts.length,qualified:eligible.length,trainGroups:0,checkGroups:0,
     latestAt:input.now,rapidQualified:eligible.length,activeLong:longForecasts,activeShort:shortForecasts};
@@ -767,7 +767,7 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
     forecasts=Object.values(s.predictivePath.symbols).sort((a,b)=>{
       const av=Math.max(a.long.netEv60,a.short.netEv60)+a.confidence*.005,bv=Math.max(b.long.netEv60,b.short.netEv60)+b.confidence*.005;return bv-av;
     }),
-    counts={long:forecasts.filter(r=>r.preferredSide==="LONG").length,short:forecasts.filter(r=>r.preferredSide==="SHORT").length,
+    counts={long:forecasts.filter(r=>r.stableSide==="LONG").length,short:forecasts.filter(r=>r.stableSide==="SHORT").length,
       wait:forecasts.filter(r=>!r.enterNow).length,enter:forecasts.filter(r=>r.enterNow).length},
     legacyRows=Object.values(s.extremumRegime.symbols),
     legacyCounts={trendUp:legacyRows.filter(r=>r.regime==="TREND_UP").length,trendDown:legacyRows.filter(r=>r.regime==="TREND_DOWN").length,
