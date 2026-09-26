@@ -208,7 +208,7 @@ export class MarketDataHub{
         sourceCount:q?.sourceCount??0,sourceDisagreementRate:q?.disagreementRate??0};});
   }
 
-  async candles(symbol:string,interval:"1m"|"5m",limit=120):Promise<{source:MarketSource;rows:HubCandle[]}|null>{
+  async candles(symbol:string,interval:"1m"|"5m"|"1d",limit=120):Promise<{source:MarketSource;rows:HubCandle[]}|null>{
     const external=externalSymbol(symbol),okxInst=okxSymbol(symbol),kucoinInst=kucoinSymbol(symbol);if(!external||!okxInst||!kucoinInst)return null;
     const preferred=this.candleSource.get(symbol)?.source,now=Date.now();
     const fetchOne=async(source:MarketSource)=>{
@@ -232,29 +232,29 @@ export class MarketDataHub{
     try{const hit=await Promise.any(fallback.map(fetchOne));this.candleSource.set(symbol,{source:hit.source,at:Date.now()});return hit;}
     catch{return null;}
   }
-  private async bybitCandles(symbol:string,interval:"1m"|"5m",limit:number){
+  private async bybitCandles(symbol:string,interval:"1m"|"5m"|"1d",limit:number){
     type Res={retCode?:number;result?:{list?:string[][]}};
-    const i=interval==="1m"?"1":"5",n=Math.max(2,Math.min(1000,Math.floor(limit)));
+    const i=interval==="1m"?"1":interval==="5m"?"5":"D",n=Math.max(2,Math.min(1000,Math.floor(limit)));
     const body=await json<Res>(`${BYBIT}/v5/market/kline?category=linear&symbol=${encodeURIComponent(symbol)}&interval=${i}&limit=${n}`,CANDLE_TIMEOUT_MS);
     if(body.retCode!==0||!Array.isArray(body.result?.list))throw new Error("Bybit kline payload");
-    const seconds=interval==="1m"?60:300,completed=Math.floor(Date.now()/1000/seconds)*seconds;
+    const seconds=interval==="1m"?60:interval==="5m"?300:86400,completed=Math.floor(Date.now()/1000/seconds)*seconds;
     return continuous(body.result!.list!.map(r=>({time:Number(r[0])/1000,open:Number(r[1]),high:Number(r[2]),low:Number(r[3]),
       close:Number(r[4]),volume:Number(r[5])})).filter(r=>r.time+seconds<=completed),seconds).slice(-n);
   }
-  private async okxCandles(instId:string,interval:"1m"|"5m",limit:number){
+  private async okxCandles(instId:string,interval:"1m"|"5m"|"1d",limit:number){
     type Res={code?:string;data?:string[][]};
-    const n=Math.max(2,Math.min(300,Math.floor(limit))),bar=interval;
+    const n=Math.max(2,Math.min(300,Math.floor(limit))),bar=interval==="1d"?"1Dutc":interval;
     const body=await json<Res>(`${OKX}/api/v5/market/candles?instId=${encodeURIComponent(instId)}&bar=${bar}&limit=${n}`,CANDLE_TIMEOUT_MS);
     if(body.code!=="0"||!Array.isArray(body.data))throw new Error("OKX kline payload");
-    const seconds=interval==="1m"?60:300,completed=Math.floor(Date.now()/1000/seconds)*seconds;
+    const seconds=interval==="1m"?60:interval==="5m"?300:86400,completed=Math.floor(Date.now()/1000/seconds)*seconds;
     return continuous(body.data.map(r=>({time:Number(r[0])/1000,open:Number(r[1]),high:Number(r[2]),low:Number(r[3]),
       close:Number(r[4]),volume:Number(r[5])}))
       .filter((r,i)=>body.data![i]?.[8]==="1"&&r.time+seconds<=completed),seconds).slice(-n);
   }
 
-  private async kucoinCandles(symbol:string,interval:"1m"|"5m",limit:number){
+  private async kucoinCandles(symbol:string,interval:"1m"|"5m"|"1d",limit:number){
     type Res={code?:string;data?:Array<[number|string,number|string,number|string,number|string,number|string,number|string,...unknown[]]>};
-    const n=Math.max(6,Math.min(120,Math.floor(limit))),seconds=interval==="1m"?60:300,now=Date.now(),
+    const n=Math.max(6,Math.min(120,Math.floor(limit))),seconds=interval==="1m"?60:interval==="5m"?300:86400,now=Date.now(),
       from=now-(n+6)*seconds*1000;
     const body=await json<Res>(`${KUCOIN}/api/v1/kline/query?symbol=${encodeURIComponent(symbol)}&granularity=${seconds}&from=${from}&to=${now}`,CANDLE_TIMEOUT_MS);
     if(body.code!=="200000"||!Array.isArray(body.data))throw new Error("KuCoin kline payload");
@@ -263,22 +263,22 @@ export class MarketDataHub{
       close:Number(r[4]),volume:Number(r[5])})).filter(r=>r.time+seconds<=completed),seconds).slice(-n);
   }
 
-  private async bitgetCandles(symbol:string,interval:"1m"|"5m",limit:number){
+  private async bitgetCandles(symbol:string,interval:"1m"|"5m"|"1d",limit:number){
     type Res={code?:string;data?:string[][]};
-    const n=Math.max(2,Math.min(1000,Math.floor(limit))),granularity=interval;
+    const n=Math.max(2,Math.min(1000,Math.floor(limit))),granularity=interval==="1d"?"1D":interval;
     const body=await json<Res>(`${BITGET}/api/v2/mix/market/candles?symbol=${encodeURIComponent(symbol)}&productType=USDT-FUTURES&granularity=${granularity}&limit=${n}`,CANDLE_TIMEOUT_MS);
     if(body.code!=="00000"||!Array.isArray(body.data))throw new Error("Bitget kline payload");
-    const seconds=interval==="1m"?60:300,completed=Math.floor(Date.now()/1000/seconds)*seconds;
+    const seconds=interval==="1m"?60:interval==="5m"?300:86400,completed=Math.floor(Date.now()/1000/seconds)*seconds;
     return continuous(body.data.map(r=>({time:Number(r[0])/1000,open:Number(r[1]),high:Number(r[2]),low:Number(r[3]),
       close:Number(r[4]),volume:Number(r[5])})).filter(r=>r.time+seconds<=completed),seconds).slice(-n);
   }
 
-  private async binanceCandles(symbol:string,interval:"1m"|"5m",limit:number){
+  private async binanceCandles(symbol:string,interval:"1m"|"5m"|"1d",limit:number){
     const n=Math.max(2,Math.min(1000,Math.floor(limit)));
     const body=await json<Array<[number,string,string,string,string,string,number,...unknown[]]>>(
-      `${BINANCE}/fapi/v1/klines?symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=${n}`,CANDLE_TIMEOUT_MS);
+      `${BINANCE}/fapi/v1/klines?symbol=${encodeURIComponent(symbol)}&interval=${interval==="1d"?"1d":interval}&limit=${n}`,CANDLE_TIMEOUT_MS);
     if(!Array.isArray(body))throw new Error("Binance kline payload");
-    const seconds=interval==="1m"?60:300,completed=Math.floor(Date.now()/1000/seconds)*seconds;
+    const seconds=interval==="1m"?60:interval==="5m"?300:86400,completed=Math.floor(Date.now()/1000/seconds)*seconds;
     return continuous(body.map(r=>({time:Number(r[0])/1000,open:Number(r[1]),high:Number(r[2]),low:Number(r[3]),
       close:Number(r[4]),volume:Number(r[5])})).filter(r=>r.time+seconds<=completed),seconds).slice(-n);
   }

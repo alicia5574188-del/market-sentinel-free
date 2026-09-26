@@ -33,8 +33,14 @@ test("multi-source analysis is non-blocking while Gate stays execution-only",asy
   for(const venue of["BYBIT","OKX","KUCOIN","BITGET","BINANCE"])assert.match(hub,new RegExp(venue));
   assert.match(hub,/Promise\.any\(primary\.map\(fetchOne\)\)/);
   assert.match(hub,/Cached rows remain/);
+  assert.match(hub,/interval:"1m"\|"5m"\|"1d"/);
   assert.match(worker,/Gate public websocket is execution-only/);assert.match(worker,/private marketHub = new MarketDataHub/);
   assert.match(worker,/daily:this\.turnDailyCandles/);
+  const optional=worker.slice(worker.indexOf("private launchOptionalWork"),worker.indexOf("async alarm("));
+  assert.match(optional,/refreshTurnDaily\(Date\.now\(\)\)/);
+  const daily=worker.slice(worker.indexOf("private async refreshTurnDaily"),worker.indexOf("private async maybeWriteStrategyRuntimeLog"));
+  assert.match(daily,/marketHub\.candles\(selected,"1d",120\)/);
+  assert.match(daily,/external 1d temporarily unavailable/);
 });
 
 test("market narrative is exposed in bounded health diagnostics",async()=>{
