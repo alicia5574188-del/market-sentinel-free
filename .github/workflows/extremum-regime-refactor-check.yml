@@ -28,6 +28,9 @@ jobs:
           npm run test:direct
           npm run test:forward
 
+      - name: Build before workerd integration tests
+        run: npm run build
+
       - name: LIVE, account and access regression
         run: |
           set -euo pipefail
@@ -37,10 +40,9 @@ jobs:
           npm run test:equity
           npm run test:feed:workerd
 
-      - name: Build, lint and migration gates
+      - name: Lint, architecture, migration and Cloudflare dry-run
         run: |
           set -euo pipefail
-          npm run build
           npm run lint
           node --test tests/architecture.test.mjs tests/migration.test.mjs
           git diff --check
