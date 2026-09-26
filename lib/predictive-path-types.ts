@@ -9,6 +9,7 @@ export const PREDICTIVE_PATH_POLICY={
   minTouch:.56,
   minSources:2,
   maxDisagreement:.012,
+  estimatedRoundTripCost:.0019,
   minimumNetEdge:.00035,
   catastrophicStopMin:.005,
   catastrophicStopMax:.03,
