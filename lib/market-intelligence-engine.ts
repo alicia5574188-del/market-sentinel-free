@@ -227,8 +227,10 @@ export function buildMarketIntelligence(input:{paths:Record<string,CandleLike[]>
   const state:MarketIntelligenceState={version:MARKET_INTELLIGENCE_VERSION,startedAt:previous.startedAt||input.now,updatedAt:input.now,narrative,
     evidence:evidenceRows.slice(0,40),history:history.slice(0,96),symbols:states,clusters};
   const up=Object.values(states).filter(x=>x.longScore>=62).length,down=Object.values(states).filter(x=>x.shortScore>=62).length,neutral=Math.max(0,Object.keys(states).length-up-down);
-  return{state,opportunities,pulse:{at:input.now,up,down,neutral,bias:shortLayer.bias==="BULLISH"?"UP":shortLayer.bias==="BEARISH"?"DOWN":"MIXED",
-    strength:Math.abs(shortLayer.score)*100,expansion:Math.min(100,dispersion*100)}};}
+  const pulse={at:input.now,up,down,neutral,
+    bias:(shortLayer.bias==="BULLISH"?"UP":shortLayer.bias==="BEARISH"?"DOWN":"MIXED") as "UP"|"DOWN"|"MIXED",
+    strength:Math.abs(shortLayer.score)*100,expansion:Math.min(100,dispersion*100)};
+  return{state,opportunities,pulse};}
 
 export function urgentMinuteSymbols(state:MarketIntelligenceState,allowed?:Set<string>){
   return Object.values(state.symbols).filter(x=>(!allowed||allowed.has(x.symbol))&&(x.stage==="READY"||x.watchScore>=68)).sort((a,b)=>b.watchScore-a.watchScore).map(x=>x.symbol);}
