@@ -95,13 +95,13 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       {accountPanel}{liveSystemPanel}
       <section ref={fontControl} className="fr-section fr-font-control"><div className="fr-section-head"><div><small>界面显示</small><h2>界面字号</h2></div><b>{fontScale}%</b></div>
         <div className="fr-font-options">{[70,80,90,100,110].map(value=><button key={value} className={fontScale===value?"selected":""} onClick={()=>{setFontScale(value);try{localStorage.setItem("sentinel-ui-font-scale-v1",String(value));}catch{}}}>{value}%</button>)}</div></section>
-      <section className="fr-section"><div className="fr-section-head"><h2>当前系统边界</h2><span>forward-path-relation-v3</span></div>
-        <Setting title="学习周期" value="15m / 30m / 45m / 60m" text="同一个5分钟根样本沿四个持仓时间逐步成熟；系统比较哪段路径最有价值，不把四个时间当四份独立证据。"/>
-        <Setting title="路径检查" value="5/10/15/20/30/45/60m" text="检查点持续核对真实走势是否仍像成功样本；旧方向失效绝不自动等于反方向成立。"/>
-        <Setting title="组合" value="无席位数量上限" text="持仓数量由10%组合计划风险、6.5%同向风险、75%保证金和单币一仓共同决定；ACTIVE关系正常竞争风险。"/>
-        <Setting title="市场变化" value="时间组 + 环境适配" text="样本按时间组和市场环境验证，近期真实路径决定旧关系是否继续有交易权，避免同一波行情重复投票。"/>
-        <Setting title="退出" value="每单冻结样本计划" text="正反馈期限、正常MAE、最佳/最大持仓、剩余优势和利润保留率在开仓时冻结；旧仓继续原生命周期。"/><Setting title="风险" value="10%组合 / 6.5%同向" text={data?.boundaries.risk??"读取中"}/>
-        <Setting title="实盘" value="同一持久化事件" text="模拟事件提交成功后立即唤醒event-driven LIVE；过期事件不补开，Gate是成交与账户唯一真相。"/>
+      <section className="fr-section"><div className="fr-section-head"><h2>当前系统边界</h2><span>extremum-regime-v1</span></div>
+        <Setting title="核心周期" value="5m结构 / 1m确认 / BBO执行" text="5分钟判断趋势和峰谷背景，1分钟确认结构破坏、回调结束与夺回失败，实时盘口只负责实际执行和入场后反馈。"/>
+        <Setting title="状态" value="TREND / SWING / WEAKENING / TRANSITION" text="TOP/BOTTOM压力与UP/DOWN趋势生命独立计算；极值压力高本身不等于反手。"/>
+        <Setting title="组合" value="无席位数量上限" text="持仓数量仍由10%组合计划风险、6.5%同向风险、75%保证金和单币一仓共同决定。"/>
+        <Setting title="单边行情" value="主动进攻" text="上涨只做回调谷和强势延续，下跌只做反弹峰和强势延续；反向极值先用于利润保护。"/>
+        <Setting title="退出" value="即时反馈 + 极值 + 趋势死亡" text="硬止损、入场后正反馈、动态利润保护、相反极值、趋势死亡和无进展构成统一生命周期；旧仓继续原生命周期。"/><Setting title="风险" value="10%组合 / 6.5%同向" text={data?.boundaries.risk??"读取中"}/>
+        <Setting title="实盘" value="同一持久化事件" text="新策略只生成标准PAPER源单；现有串行PAPER→LIVE适配器继续按源ID复制，过期事件不补开，Gate仍是成交与账户唯一真相。"/>
         <Setting title="账户连续性" value="原地升级" text="策略版本变化不自动重置模拟账户、不改startedAt、不清历史；只有所有者重置按钮可以重置。"/>
       </section></>}
 
@@ -113,7 +113,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
 }
 
 function OpportunityGrid({rows,details=false}:{rows:NonNullable<View["opportunities"]>;details?:boolean}){
-  if(!rows.length)return <Empty title="当前没有成熟可参与关系" text="系统继续扫描30个市场并积累真实反应；已有持仓保护不会停止。"/>;
+  if(!rows.length)return <Empty title="当前没有完成确认的机会" text="系统继续扫描30个市场；已有持仓保护不会停止。"/>;
   return <div className="fr-scoreboard">{rows.map((o,index)=><details className={`fr-score-row ${o.eligible?"is-eligible":""}`} key={o.id} open={false}>
     <summary><span className="fr-score-rank">#{index+1}</span><span className="fr-score-value">{fmt(o.score,0)}</span><span className="fr-score-symbol"><b>{o.symbol.replace("_"," / ")}</b><small>{o.side==="LONG"?"做多":"做空"} · {modeName(o.mode)}</small></span>
       <span><small>方向</small><b>{fmt(o.directionStrength,0)}</b></span><span><small>净空间</small><b>{fmt(o.netRemainingSpaceRate*100,2)}%</b></span><span><small>空间/回调</small><b>{fmt(o.edgeRatio,2)}×</b></span><em>{o.eligible?(o.premium?"高级":o.reserve?"补位":"主机会"):"观察"}</em></summary>
@@ -128,16 +128,15 @@ function TradeList({trades,now,empty,compact=false}:{trades:Trade[];now:number;e
 function TradeCard({trade:t,now}:{trade:Trade;now:number}){
   const open=t.status==="OPEN",d=t.side==="LONG"?1:-1,px=open?t.lastPrice:t.exitPrice??t.lastPrice;
   const pnl=open?d*t.quantity*(px-t.entryPrice)-t.entryFee-t.quantity*px*.0007:t.netPnl??0,rate=t.notional>0?pnl/t.notional:0,ctx=t.entryContext;
-  return <details className="fr-position-row"><summary><span className="fr-position-primary"><b>{t.symbol.replace("_"," / ")}</b><small>{t.side==="LONG"?"多单":"空单"} · {ctx?(ctx.reserve?"低风险 · ":"")+modeName(ctx.mode):"兼容持仓"}{ctx?.relationHorizon?` · ${ctx.relationHorizon}m关系`:""} · {fmt(t.leverage,0)}×</small>
+  return <details className="fr-position-row"><summary><span className="fr-position-primary"><b>{t.symbol.replace("_"," / ")}</b><small>{t.side==="LONG"?"多单":"空单"} · {ctx?(ctx.reserve?"低风险 · ":"")+modeName(ctx.mode):"兼容持仓"}{ctx?.strategyVersion==="extremum-regime-v1"?` · ${ctx.regime??"—"}`:ctx?.relationHorizon?` · ${ctx.relationHorizon}m旧关系`:""} · {fmt(t.leverage,0)}×</small>
     <b className={pnl>=0?"fr-positive":"fr-negative"}>{signed(pnl)} U</b><small>{signed(rate*100,3)}% · {duration(t.openedAt,t.closedAt,now)}</small></span>
     <span className="fr-position-entry"><b>{open?`持仓评分 ${fmt(t.holdScore,0)}`:exitName(t.exitReason)}</b><small>MFE {fmt(t.favorable*100,2)}% · MAE {fmt(t.adverse*100,2)}% · 锁利 {fmt((t.profitFloorRate??0)*100,2)}%</small>
-      <small>{ctx?`入场评分 ${fmt(ctx.entryScore,0)} · 关系 ${ctx.relationStatus??"—"} ${fmt((ctx.relationHealth??0)*100,0)} · 净空间 ${fmt(ctx.remainingSpaceRate*100,2)}% · 首次浮赢 ${t.firstProfitAt?time(t.firstProfitAt):"尚未"}`:"历史兼容持仓"}</small></span></summary>
+      <small>{ctx?(ctx.strategyVersion==="extremum-regime-v1"?`入场评分 ${fmt(ctx.entryScore,0)} · 趋势生命 ${fmt(t.side==="LONG"?ctx.upSurvival:ctx.downSurvival,0)} · 反向极值 ${fmt(t.side==="LONG"?ctx.topPressure:ctx.bottomPressure,0)} · 验证 ${ctx.postEntryState??"PENDING"}`:`入场评分 ${fmt(ctx.entryScore,0)} · 旧关系 ${ctx.relationStatus??"—"} ${fmt((ctx.relationHealth??0)*100,0)} · 首次浮赢 ${t.firstProfitAt?time(t.firstProfitAt):"尚未"}`):"历史兼容持仓"}</small></span></summary>
     <article className="fr-trade fr-trade-unified"><dl><div><dt>入场价</dt><dd>{fmt(t.entryPrice,6)}</dd></div><div><dt>{open?"当前价":"出场价"}</dt><dd>{fmt(px,6)}</dd></div><div><dt>当前防守</dt><dd>{fmt(t.stopPrice,6)}</dd></div>
       <div><dt>名义金额</dt><dd>{fmt(t.notional)} U</dd></div><div><dt>保证金 / 杠杆</dt><dd>{fmt(t.margin)} U / {fmt(t.leverage,0)}×</dd></div><div><dt>计划风险</dt><dd>{fmt(t.plannedRisk)} U</dd></div>
       <div><dt>进场时间</dt><dd>{time(t.openedAt)}</dd></div><div><dt>持仓时长</dt><dd>{duration(t.openedAt,t.closedAt,now)}</dd></div><div><dt>预计持有</dt><dd>{fmt(t.expectedHoldMinutes,0)} 分钟</dd></div></dl>
       {ctx&&<p className="fr-trade-reason">入场依据：{ctx.reason}</p>}{t.exitReason&&<p className="fr-trade-reason">退出依据：{exitName(t.exitReason)}</p>}</article></details>;
 }
-function ExecStep({index,title,status,text}:{index:string;title:string;status:string;text:string}){return <article className="fr-exec-step"><span>{index}</span><div><header><b>{title}</b><em>{status}</em></header><p>{text}</p></div></article>;}
 function Metric({label,value}:{label:string;value:string}){return <span><small>{label}</small><b>{value}</b></span>;}
 function Stat({label,value,note}:{label:string;value:string;note:string}){return <article><small>{label}</small><strong>{value}</strong><p>{note}</p></article>;}
 function Empty({title,text}:{title:string;text:string}){return <div className="fr-empty"><span>◎</span><h3>{title}</h3><p>{text}</p></div>;}
