@@ -8,7 +8,7 @@ export type ExtremumSide="LONG"|"SHORT"|null;
 export type ExtremumSymbolState={
   symbol:string;updatedAt:number;regime:ExtremumRegime;priorRegime:ExtremumRegime|null;trendBias:"UP"|"DOWN"|null;
   topPressure:number;bottomPressure:number;upSurvival:number;downSurvival:number;
-  pathEfficiency:number;atrRate:number;normalizedMove:number;pullbackRate:number;recoveryScore:number;followThrough:number;
+  pathEfficiency:number;atrRate:number;normalizedMove:number;pullbackRate:number;microPullbackRate:number;recoveryScore:number;followThrough:number;
   stage:ExtremumStage;candidateSide:ExtremumSide;candidateExtreme:number|null;breakLevel:number|null;
   sourceCount:number;disagreementRate:number;sourceQuality:number;momentumOverride:boolean;watchScore:number;
   reason:string;nextAction:string;
@@ -38,7 +38,8 @@ const sourceQuality=(q:Quote|undefined)=>{
 function minuteSignals(input:Candle[]|undefined,now:number,atrRate:number){
   const m=rows(input,60,now,12);
   if(m.length<5)return{ready:false,restartUp:false,restartDown:false,breakDown:false,breakUp:false,reclaimTop:false,reclaimBottom:false,
-    topExtreme:null as number|null,bottomExtreme:null as number|null,breakLow:null as number|null,breakHigh:null as number|null,recoveryUp:0,recoveryDown:0};
+    topExtreme:null as number|null,bottomExtreme:null as number|null,breakLow:null as number|null,breakHigh:null as number|null,
+    recoveryUp:0,recoveryDown:0,pullbackUpRate:0,pullbackDownRate:0};
   const last=m.at(-1)!,prev=m.at(-2)!,prior=m.slice(-5,-2),topExtreme=Math.max(...m.slice(-8).map(r=>r.high)),
     bottomExtreme=Math.min(...m.slice(-8).map(r=>r.low)),breakLow=Math.min(...prior.map(r=>r.low)),breakHigh=Math.max(...prior.map(r=>r.high));
   const breakDown=last.close<breakLow&&last.close<last.open,breakUp=last.close>breakHigh&&last.close>last.open;
@@ -48,9 +49,15 @@ function minuteSignals(input:Candle[]|undefined,now:number,atrRate:number){
   const reclaimTop=(prev.high<topExtreme*(1-Math.max(.00015,atrRate*.08))&&restartDown)||topGap>Math.max(.0001,atrRate*.04)&&restartDown;
   const reclaimBottom=(prev.low>bottomExtreme*(1+Math.max(.00015,atrRate*.08))&&restartUp)||bottomGap>Math.max(.0001,atrRate*.04)&&restartUp;
   const recent=m.slice(-4),up=recent.slice(1).filter((r,i)=>r.close>recent[i]!.close).length/3,
-    down=recent.slice(1).filter((r,i)=>r.close<recent[i]!.close).length/3;
+    down=recent.slice(1).filter((r,i)=>r.close<recent[i]!.close).length/3,
+    anchor=m.slice(-8,-3),micro=m.slice(-3),
+    anchorHigh=anchor.length?Math.max(...anchor.map(r=>r.high)):topExtreme,
+    anchorLow=anchor.length?Math.min(...anchor.map(r=>r.low)):bottomExtreme,
+    microLow=Math.min(...micro.map(r=>r.low)),microHigh=Math.max(...micro.map(r=>r.high)),
+    pullbackUpRate=Math.max(0,(anchorHigh-microLow)/Math.max(anchorHigh,1e-12)),
+    pullbackDownRate=Math.max(0,(microHigh-anchorLow)/Math.max(anchorLow,1e-12));
   return{ready:true,restartUp,restartDown,breakDown,breakUp,reclaimTop,reclaimBottom,topExtreme,bottomExtreme,breakLow,breakHigh,
-    recoveryUp:up,recoveryDown:down};
+    recoveryUp:up,recoveryDown:down,pullbackUpRate,pullbackDownRate};
 }
 
 function deriveState(symbol:string,input:Candle[],minute:Candle[]|undefined,q:Quote|undefined,prior:ExtremumSymbolState|undefined,now:number):ExtremumSymbolState|null{
@@ -130,7 +137,9 @@ function deriveState(symbol:string,input:Candle[],minute:Candle[]|undefined,q:Qu
     else if(prior?.stage==="STRUCTURE_BREAK"&&prior.candidateSide===candidateSide)stage="RECLAIM_TEST";
   }
   const watchScore=Math.max(top,bottom,up,down);
-  const pullbackRate=ret6>=0?pullbackUp:pullbackDown,recoveryScore=ret6>=0?ms.recoveryUp:ms.recoveryDown,followThrough=ret6>=0?followUp:followDown;
+  const pullbackRate=ret6>=0?pullbackUp:pullbackDown,
+    microPullbackRate=(regime==="TREND_DOWN"||trendBias==="DOWN")?ms.pullbackDownRate:ms.pullbackUpRate,
+    recoveryScore=ret6>=0?ms.recoveryUp:ms.recoveryDown,followThrough=ret6>=0?followUp:followDown;
   const reason=`${regime}｜上存活${up.toFixed(0)} 下存活${down.toFixed(0)}｜顶压${top.toFixed(0)} 底压${bottom.toFixed(0)}｜效率${pct(efficiency)}%｜${q?.sourceCount??0}源`;
   let nextAction="等待下一次结构事件";
   if(regime==="TREND_UP")nextAction="等待浅回调结束后继续做多；顶部只用于保护利润";
@@ -141,7 +150,7 @@ function deriveState(symbol:string,input:Candle[],minute:Candle[]|undefined,q:Qu
   const trendBias:ExtremumSymbolState["trendBias"]=regime==="TREND_UP"?"UP":regime==="TREND_DOWN"?"DOWN"
     :(regime==="WEAKENING"||regime==="TRANSITION")?priorBias:null;
   return{symbol,updatedAt:now,regime,priorRegime:old,trendBias,topPressure:top,bottomPressure:bottom,upSurvival:up,downSurvival:down,
-    pathEfficiency:efficiency,atrRate,normalizedMove:moveNorm,pullbackRate,recoveryScore,followThrough,stage,candidateSide,candidateExtreme,breakLevel,
+    pathEfficiency:efficiency,atrRate,normalizedMove:moveNorm,pullbackRate,microPullbackRate,recoveryScore,followThrough,stage,candidateSide,candidateExtreme,breakLevel,
     sourceCount:q?.sourceCount??0,disagreementRate:q?.disagreementRate??0,sourceQuality:sq,momentumOverride,watchScore,reason,nextAction};
 }
 
@@ -182,16 +191,17 @@ function opportunitiesFor(state:ExtremumSymbolState,p:Candle[],minute:Candle[]|u
     const o=makeOpportunity(state,p,minute,q,now,side,"SWING",56+pressure*.34,
       `${side==="LONG"?"底部":"顶部"}确认｜结构破坏后夺回失败｜${state.reason}`);if(o)out.push(o);
   }
-  const controlledPullback=state.pullbackRate>=.06&&state.pullbackRate<=.58;
+  const microPullbackNorm=state.microPullbackRate/Math.max(state.atrRate,1e-9),
+    controlledPullback=microPullbackNorm>=.25&&microPullbackNorm<=2.2;
   if(state.regime==="TREND_UP"&&state.upSurvival>=68&&controlledPullback&&restartUp){
-    const pullbackQuality=100*clamp(1-Math.abs(state.pullbackRate-.24)/.42);
+    const pullbackQuality=100*clamp(1-Math.abs(microPullbackNorm-.85)/1.35);
     const o=makeOpportunity(state,p,minute,q,now,"LONG","TREND_PULLBACK",54+state.upSurvival*.30+pullbackQuality*.10,
-      `上涨趋势浅回调结束再启动｜回调占前段推进${pct(state.pullbackRate)}%｜${state.reason}`);if(o)out.push(o);
+      `上涨趋势浅回调结束再启动｜1m回调${(microPullbackNorm).toFixed(1)}×5m常态振幅｜${state.reason}`);if(o)out.push(o);
   }
   if(state.regime==="TREND_DOWN"&&state.downSurvival>=68&&controlledPullback&&restartDown){
-    const pullbackQuality=100*clamp(1-Math.abs(state.pullbackRate-.24)/.42);
+    const pullbackQuality=100*clamp(1-Math.abs(microPullbackNorm-.85)/1.35);
     const o=makeOpportunity(state,p,minute,q,now,"SHORT","TREND_PULLBACK",54+state.downSurvival*.30+pullbackQuality*.10,
-      `下跌趋势浅反弹结束再启动｜反弹占前段推进${pct(state.pullbackRate)}%｜${state.reason}`);if(o)out.push(o);
+      `下跌趋势浅反弹结束再启动｜1m反弹${(microPullbackNorm).toFixed(1)}×5m常态振幅｜${state.reason}`);if(o)out.push(o);
   }
   if(state.momentumOverride&&state.stage==="IMPULSE"){
     const side: "LONG"|"SHORT"=state.upSurvival>=state.downSurvival?"LONG":"SHORT",
