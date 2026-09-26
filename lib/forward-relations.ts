@@ -227,7 +227,10 @@ export function normalizeForward(v:ForwardState|null|undefined,now:number):Forwa
     positions,history,
     events:Array.isArray(v.events)?v.events.slice(0,EVENT_LIMIT):base.events,daily:Array.isArray(v.daily)?v.daily:[],
     selectedSymbols:Array.isArray(v.selectedSymbols)?v.selectedSymbols:[],opportunities:upgrading?[]:(Array.isArray(v.opportunities)?v.opportunities:[]),
-    regions:v.regions&&typeof v.regions==="object"?v.regions:{},relationEngine,familyExperiment,
+    regions:v.regions&&typeof v.regions==="object"?v.regions:{},relationEngine,
+    extremumRegime:!upgrading&&(old as {extremumRegime?:ExtremumRegimeState}).extremumRegime?.version===EXTREMUM_REGIME_VERSION
+      ?structuredClone((old as {extremumRegime:ExtremumRegimeState}).extremumRegime):base.extremumRegime,
+    familyExperiment,
     structuralInterrupt:normalizeStructuralInterruptState((old as {structuralInterrupt?:unknown}).structuralInterrupt,now),
     entryValidations:normalizeEntryValidations((old as {entryValidations?:unknown}).entryValidations,now),
     marketPulse:v.marketPulse?.bias? v.marketPulse:blankPulse(now),lastEntryAt:v.lastEntryAt??{},lastExitAt:v.lastExitAt??{},lastSide:v.lastSide??{},
