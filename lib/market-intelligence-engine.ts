@@ -26,7 +26,8 @@ export type MarketNarrative={id:string;updatedAt:number;macro:NarrativeLayer&{ph
 export type MarketSymbolState={symbol:string;watchScore:number;regime:MarketRegime;stage:"OBSERVE"|"READY";
   clusterId:string;correlation:number;beta:number;volatility:number;dataConfidence:number;actualMove:number;expectedMove:number;
   residual:number;residualZ:number;residualPersistence:number;relativeStrength:number;longScore:number;shortScore:number;
-  pathLong:number;pathShort:number;roomLong:number;roomShort:number;sourceCount:number;venueAgreement:number;venuePressure:number;reasons:string[]};
+  pathLong:number;pathShort:number;roomLong:number;roomShort:number;sourceCount:number;venueAgreement:number;venuePressure:number;reasons:string[];
+  signalSide:"LONG"|"SHORT";signalSince:number;signalBars:number;signalLastBar:number};
 export type MarketCluster={id:string;leader:string;members:string[];averageCorrelation:number};
 export type MarketIntelligenceState={version:string;startedAt:number;updatedAt:number;narrative:MarketNarrative;
   evidence:MarketEvidence[];history:Array<{at:number;macro:MarketBias;major:MarketBias;short:MarketBias;summary:string}>;
@@ -40,7 +41,7 @@ export type IntelligenceOpportunity={
   executionScore:number;grossRemainingSpaceRate:number;netRemainingSpaceRate:number;pullbackRiskRate:number;edgeRatio:number;
   expectedHoldMinutes:number;marketFit:number;regionId:null;regionQuality:null;reason:string;strategyVersion:string;regime:MarketRegime;
   confirmationStage:"OBSERVE"|"READY";sourceCount:number;disagreementRate:number;clusterId:string;thesisId:string;thesisSummary:string;
-  invalidationSummary:string;residual:number;relativeStrength:number;dataConfidence:number;
+  invalidationSummary:string;residual:number;relativeStrength:number;dataConfidence:number;thesisSince:number;thesisBars:number;
 };
 
 const clip=(v:number,a=0,b=1)=>Math.max(a,Math.min(b,v));
@@ -55,6 +56,11 @@ const beta=(a:number[],b:number[])=>{const n=Math.min(a.length,b.length);if(n<6)
 const ret=(rows:CandleLike[],bars:number)=>rows.length>bars&&rows.at(-1)!.close>0?rows.at(-1)!.close/rows[rows.length-1-bars]!.close-1:0;
 const returns=(rows:CandleLike[],count=36)=>{const tail=rows.slice(-(count+1)),out:number[]=[];for(let i=1;i<tail.length;i++)if(tail[i-1]!.close>0)out.push(tail[i]!.close/tail[i-1]!.close-1);return out;};
 const marketBias=(score:number,threshold=.22):MarketBias=>score>threshold?"BULLISH":score<-threshold?"BEARISH":"NEUTRAL";
+function stableBias(score:number,previous:MarketBias|undefined,enter:number,release:number,flip:number):MarketBias{
+  if(!previous||previous==="NEUTRAL")return score>enter?"BULLISH":score<-enter?"BEARISH":"NEUTRAL";
+  if(previous==="BULLISH"){if(score<=-flip)return"BEARISH";if(score<=-release)return"NEUTRAL";return"BULLISH";}
+  if(score>=flip)return"BULLISH";if(score>=release)return"NEUTRAL";return"BEARISH";
+}
 const biasZh=(b:MarketBias)=>b==="BULLISH"?"偏多":b==="BEARISH"?"偏空":"中性";
 const fmtPct=(v:number)=>`${v>=0?"+":""}${(v*100).toFixed(2)}%`;
 
@@ -73,8 +79,11 @@ function breadthFor(paths:Record<string,CandleLike[]>,bars:number){const moves=O
 function smoothed(previous:number|undefined,raw:number,alpha:number){return Number.isFinite(previous)?previous!*(1-alpha)+raw*alpha:raw;}
 function layerAge(previous:NarrativeLayer|undefined,nextBias:MarketBias,now:number,previousAt:number){
   return previous&&previous.bias===nextBias?Math.max(0,(previous.ageMs??0)+(now-previousAt)):0;}
-function layer(label:string,rawScore:number,previous:NarrativeLayer|undefined,now:number,previousAt:number,alpha:number,detail:string):NarrativeLayer{
-  const score=clip(smoothed(previous?.score,rawScore,alpha),-1,1),b=marketBias(score);
+function layer(label:string,rawScore:number,previous:NarrativeLayer|undefined,now:number,previousAt:number,alpha:number,detail:string,
+  stability:"MACRO"|"MAJOR"|"SHORT"):NarrativeLayer{
+  const score=clip(smoothed(previous?.score,rawScore,alpha),-1,1),
+    params=stability==="MACRO"?{enter:.34,release:.16,flip:.52}:stability==="MAJOR"?{enter:.28,release:.12,flip:.42}:{enter:.24,release:.07,flip:.36},
+    b=stableBias(score,previous?.bias,params.enter,params.release,params.flip);
   return{bias:b,score,confidence:clip(Math.abs(score)*.72+.18,.18,.96),ageMs:layerAge(previous,b,now,previousAt),label,detail};}
 function macroPhase(score:number,breadth:number,dispersion:number):MacroPhase{
   if(score>.36&&breadth>.12)return"BULL_EXPANSION";if(score<-.36&&breadth<-.12)return"BEAR_CONTRACTION";
@@ -137,9 +146,9 @@ export function buildMarketIntelligence(input:{paths:Record<string,CandleLike[]>
     majorRaw=clip(factor12/(volFactor*Math.sqrt(12)+1e-9)/2.8*.55+breadth12*.30+venuePressureMarket*.15,-1,1),
     shortRaw=clip(factor6/(volFactor*Math.sqrt(6)+1e-9)/2.5*.42+breadth3*.25+breadthSlope*.18+venuePressureMarket*.15,-1,1);
 
-  const prevN=previous.narrative,macroBase=layer("超大周期",macroRaw,prevN.macro,input.now,previous.updatedAt,.08,"慢速周期判断"),
-    major=layer("大方向",majorRaw,prevN.major,input.now,previous.updatedAt,.22,"数小时共同方向"),
-    short=layer("短期优势",shortRaw,prevN.short,input.now,previous.updatedAt,.42,"市场内部短期变化"),
+  const prevN=previous.narrative,macroBase=layer("超大周期",macroRaw,prevN.macro,input.now,previous.updatedAt,.04,"慢速周期判断","MACRO"),
+    major=layer("大方向",majorRaw,prevN.major,input.now,previous.updatedAt,.10,"数小时共同方向","MAJOR"),
+    short=layer("短期优势",shortRaw,prevN.short,input.now,previous.updatedAt,.30,"市场内部短期变化","SHORT"),
     phase:MacroPhase=macroReady?macroPhase(macroBase.score,macroBreadth,dispersion):"UNCERTAIN",sphase=shortPhase(major.score,short.score,dispersion),
     macro={...macroBase,phase},shortLayer={...short,phase:sphase};
 
@@ -152,8 +161,15 @@ export function buildMarketIntelligence(input:{paths:Record<string,CandleLike[]>
   for(const [symbol,p] of Object.entries(provisional)){
     const market=p.venuePressure*.08+(short.score*.55+major.score*.30+macro.score*.15)*.92,
       longScore=clip(50+18*p.residualZ+13*p.residualPersistence*(p.residual>=0?1:-1)+12*market+5*(p.pathLong-.5)*2,0,100),
-      shortScore=clip(50-18*p.residualZ-13*p.residualPersistence*(p.residual>=0?1:-1)-12*market+5*(p.pathShort-.5)*2,0,100);
-    states[symbol]={...p,clusterId:"",watchScore:Math.max(longScore,shortScore),regime:"BALANCED",stage:"OBSERVE",longScore,shortScore,reasons:[]};}
+      shortScore=clip(50-18*p.residualZ-13*p.residualPersistence*(p.residual>=0?1:-1)-12*market+5*(p.pathShort-.5)*2,0,100),
+      signalSide:"LONG"|"SHORT"=longScore>=shortScore?"LONG":"SHORT",
+      signalLastBar=(paths[symbol]?.at(-1)?.time??Math.floor(input.now/1000))*1000+300_000,
+      prior=previous.symbols[symbol],sameEpisode=prior?.signalSide===signalSide,
+      sameCompletedBar=sameEpisode&&prior?.signalLastBar===signalLastBar,
+      signalBars=sameEpisode?Math.max(1,(prior?.signalBars??1)+(sameCompletedBar?0:1)):1,
+      signalSince=sameEpisode?(prior?.signalSince??signalLastBar):signalLastBar;
+    states[symbol]={...p,clusterId:"",watchScore:Math.max(longScore,shortScore),regime:"BALANCED",stage:"OBSERVE",longScore,shortScore,reasons:[],
+      signalSide,signalSince,signalBars,signalLastBar};}
 
   const ordered=Object.values(states).sort((a,b)=>b.dataConfidence-a.dataConfidence||a.symbol.localeCompare(b.symbol)),clusters:MarketCluster[]=[];
   for(const row of ordered){let chosen:MarketCluster|undefined,bestCorr=.72;for(const c of clusters){const r=corr(retSeries[row.symbol]??[],retSeries[c.leader]??[]);
@@ -209,10 +225,13 @@ export function buildMarketIntelligence(input:{paths:Record<string,CandleLike[]>
       q=input.quotes[row.symbol],price=q&&q.bestBid>0&&q.bestAsk>=q.bestBid?(q.bestBid+q.bestAsk)/2:paths[row.symbol]!.at(-1)!.close,
       exec=clip(55+10*Math.min(4,row.sourceCount)+20*row.venueAgreement-20*Math.min(.01,q?.disagreementRate??0)/.01,0,100),
       quality=score*.62+Math.min(100,edge*35)*.18+row.dataConfidence*.12+exec*.08,
-      eligible=quality>=70&&edge>=1.18&&row.dataConfidence>=55&&row.sourceCount>=2;
+      rawEligible=quality>=72&&edge>=1.30&&row.dataConfidence>=65&&row.sourceCount>=2&&row.residualPersistence>=.66&&Math.abs(row.residualZ)>=.25,
+      exceptional=quality>=88&&edge>=1.60&&row.residualPersistence>=.99&&Math.abs(row.residualZ)>=1.10&&row.sourceCount>=3,
+      mature=row.signalBars>=2,
+      eligible=rawEligible&&(mature||exceptional);
     row.watchScore=quality;row.regime=Math.abs(row.residualZ)>=.8&&row.residualPersistence>=.55?"DIVERGENT":Math.abs(shortLayer.score)>.28?"MARKET_TREND":dispersion>.6?"TRANSITION":"BALANCED";row.stage=eligible?"READY":"OBSERVE";
-    const thesisId=`${MARKET_INTELLIGENCE_VERSION}:${row.symbol}:${bestSide}:${Math.floor(input.now/300000)}`,
-      thesisSummary=`${row.symbol.replace("_USDT","")} ${bestSide==="LONG"?"做多":"做空"}：相对市场残差 ${fmtPct(row.residual)}，持续性 ${(row.residualPersistence*100).toFixed(0)}%，相关组 ${row.clusterId.replace("corr:","")}。`,
+    const thesisId=`${MARKET_INTELLIGENCE_VERSION}:${row.symbol}:${bestSide}:${row.signalSince}`,
+      thesisSummary=`${row.symbol.replace("_USDT","")} ${bestSide==="LONG"?"做多":"做空"}：相对市场残差 ${fmtPct(row.residual)}，持续性 ${(row.residualPersistence*100).toFixed(0)}%，同方向已连续 ${row.signalBars} 根完成5m观察，相关组 ${row.clusterId.replace("corr:","")}。`,
       invalidationSummary=bestSide==="LONG"?"若相对强势消失并持续弱于相关组，或结构止损被击穿，则原多头假设失效。":"若相对弱势消失并持续强于相关组，或结构止损被击穿，则原空头假设失效。";
     opportunities.push({id:thesisId,symbol:row.symbol,side:bestSide,mode,premium:quality>=82,score:quality,eligible,completedAt:input.now,
       expiresAt:input.now+20*60_000,price,stopPrice:price*(1-side*stopRate),targetPrice:price*(1+side*gross),stopRate,targetRate:gross,
@@ -221,12 +240,14 @@ export function buildMarketIntelligence(input:{paths:Record<string,CandleLike[]>
       edgeRatio:edge,expectedHoldMinutes:hold,marketFit:marketFit*100,regionId:null,regionQuality:null,reason:`${thesisSummary} ${narrative.plan}`,
       strategyVersion:MARKET_INTELLIGENCE_VERSION,regime:row.regime,confirmationStage:row.stage,sourceCount:row.sourceCount,
       disagreementRate:q?.disagreementRate??0,clusterId:row.clusterId,thesisId,thesisSummary,invalidationSummary,residual:row.residual,
-      relativeStrength:row.relativeStrength,dataConfidence:row.dataConfidence});}
+      relativeStrength:row.relativeStrength,dataConfidence:row.dataConfidence,thesisSince:row.signalSince,thesisBars:row.signalBars});}
   const groupBest=new Map<string,IntelligenceOpportunity>();for(const o of opportunities.filter(x=>x.eligible)){const key=`${o.clusterId}:${o.side}`,old=groupBest.get(key);if(!old||o.score>old.score)groupBest.set(key,o);}
   for(const o of opportunities){if(!o.eligible)continue;const best=groupBest.get(`${o.clusterId}:${o.side}`);if(best&&best.id!==o.id){o.eligible=false;o.reason+=` 同一高相关组已有更优表达 ${best.symbol.replace("_USDT","")}，本币保持观察。`;}}
   opportunities.sort((a,b)=>Number(b.eligible)-Number(a.eligible)||b.score-a.score);
 
-  const history=[...previous.history];if(!history.length||input.now-history[0]!.at>=5*60_000||history[0]!.summary!==summary)history.unshift({at:input.now,macro:macro.bias,major:major.bias,short:shortLayer.bias,summary});
+  const history=[...previous.history],lastHistory=history[0],
+    labelsChanged=!lastHistory||lastHistory.macro!==macro.bias||lastHistory.major!==major.bias||lastHistory.short!==shortLayer.bias;
+  if(!lastHistory||input.now-lastHistory.at>=5*60_000||labelsChanged)history.unshift({at:input.now,macro:macro.bias,major:major.bias,short:shortLayer.bias,summary});
   const coverage={intradayMarkets:Object.keys(paths).length,dailyMarkets:Object.keys(dailyPaths).length,
     quoteMarkets:Object.values(states).filter(x=>x.sourceCount>=1).length,multiVenueMarkets:Object.values(states).filter(x=>x.sourceCount>=2).length};
   const state:MarketIntelligenceState={version:MARKET_INTELLIGENCE_VERSION,startedAt:previous.startedAt||input.now,updatedAt:input.now,narrative,
@@ -241,14 +262,12 @@ export function urgentMinuteSymbols(state:MarketIntelligenceState,allowed?:Set<s
   return Object.values(state.symbols).filter(x=>(!allowed||allowed.has(x.symbol))&&(x.stage==="READY"||x.watchScore>=68)).sort((a,b)=>b.watchScore-a.watchScore).map(x=>x.symbol);}
 
 export function intelligenceExitDecision(input:{side:"LONG"|"SHORT";ageMin:number;signedRate:number;peakFavorableRate:number;firstProfit:boolean;
-  stopRate:number;stopped:boolean;profitFloorRate:number;expectedHoldMinutes:number;maxHoldMinutes:number;state?:MarketSymbolState}){
+  stopRate:number;stopped:boolean;expectedHoldMinutes:number;maxHoldMinutes:number;invalidationBars:number;state?:MarketSymbolState}){
   const side=input.side==="LONG"?1:-1,state=input.state,same=state?(input.side==="LONG"?state.longScore:state.shortScore):50,
-    opposite=state?(input.side==="LONG"?state.shortScore:state.longScore):50,relative=state?side*state.residualZ:0,peak=Math.max(0,input.peakFavorableRate),
-    r=peak/Math.max(input.stopRate,.001);let retention=r>=3?.80:r>=2?.72:r>=1?.60:r>=.6?.38:0;if(same<55)retention=Math.min(.86,retention+.08);
-  const floorCandidate=Math.max(input.profitFloorRate,peak*retention);let reason:string|null=null;
-  if(input.stopped)reason=input.profitFloorRate>0?"PROFIT_GIVEBACK":"STRUCTURE_STOP";
-  else if(input.ageMin>=8&&same<42&&opposite>=64&&relative<-.25)reason="THESIS_INVALIDATED";
-  else if(input.ageMin>=Math.min(45,input.expectedHoldMinutes*.45)&&!input.firstProfit&&input.signedRate<-.15*input.stopRate&&same<54)reason="NO_POSITIVE_FEEDBACK";
+    relative=state?side*state.residualZ:0;let reason:string|null=null;
+  if(input.stopped)reason="STRUCTURE_STOP";
+  else if(input.invalidationBars>=2)reason="THESIS_INVALIDATED";
+  else if(input.ageMin>=input.expectedHoldMinutes*.65&&!input.firstProfit&&input.signedRate<-.15*input.stopRate&&same<48)reason="NO_POSITIVE_FEEDBACK";
   else if(input.ageMin>=input.expectedHoldMinutes&&same<50&&Math.abs(relative)<.18)reason="RELATIVE_EDGE_GONE";
   else if(input.ageMin>=input.maxHoldMinutes)reason="MAX_HOLD";
-  return{reason,floorCandidate,holdScore:clip(same*.72+(50+relative*14)*.28,0,100)};}
+  return{reason,floorCandidate:0,holdScore:clip(same*.72+(50+relative*14)*.28,0,100)};}
