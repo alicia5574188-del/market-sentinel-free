@@ -75,15 +75,11 @@ export type AnchorOpportunityUniverseRow=MultiTurnUniverseTicker&{
 };
 
 /**
- * Cheap outer selector for the winding-anchor engine.
- * It does NOT predict direction and does NOT revive the retired volatility strategy.
- * Turnover is only an executability floor. Actual anchor/entry qualification still
- * happens later from 5m/15m/30m/1h candles.
- *
- * Slots:
- * - confirmed current anchor opportunities stay in the scan set while still liquid;
- * - most remaining slots go to markets with enough observable price travel;
- * - a small rotating exploration sleeve samples the rest of the liquid Gate universe.
+ * Outer selector for the extremum-regime engine.
+ * It never predicts side. The 30-market set balances executable Gate liquidity (40%),
+ * usable movement (35%) and independent public-data quality (25%). Existing positions
+ * and BTC/ETH/SOL continuity anchors remain resident; a small exploration sleeve prevents
+ * the same names from permanently monopolising observation.
  */
 export function selectAnchorOpportunityUniverse(input:{
   rows:MultiTurnUniverseTicker[];
