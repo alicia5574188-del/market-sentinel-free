@@ -1,5 +1,5 @@
 import type {
-  DirectionClass,EntryRegretLabel,FirstTouchLabel,FirstTouchSpec,GatePathBar,HorizonLabel,PredictiveLabels,PredictiveSide
+  DirectionClass,EntryRegretLabel,FirstTouchLabel,FirstTouchSpec,GatePathBar,HorizonLabel,PredictiveLabels,PredictiveSide,ReversalHazardLabel,ReversalHazardSpec
 } from "./types.ts";
 
 const EPS=1e-12;
@@ -31,9 +31,9 @@ function pathTo(bars:GatePathBar[],endAt:number){
   return bars.filter(b=>b.closeTime<=endAt);
 }
 
-function horizonLabel(entryPrice:number,decisionAt:number,bars:GatePathBar[],minutes:number,deadband:number):HorizonLabel|null{
+function horizonLabel(entryPrice:number,decisionAt:number,bars:GatePathBar[],minutes:number,deadband:number,coverageToleranceMs:number):HorizonLabel|null{
   const endAt=decisionAt+minutes*60_000,path=pathTo(bars,endAt);
-  const terminal=path.at(-1);if(!terminal)return null;
+  const terminal=path.at(-1);if(!terminal||terminal.closeTime<endAt-coverageToleranceMs)return null;
   const maxHigh=Math.max(...path.map(b=>b.high)),minLow=Math.min(...path.map(b=>b.low)),
     futureReturnRate=terminal.close/entryPrice-1,
     longMfeRate=Math.max(0,maxHigh/entryPrice-1),longMaeRate=Math.max(0,1-minLow/entryPrice),
@@ -42,7 +42,7 @@ function horizonLabel(entryPrice:number,decisionAt:number,bars:GatePathBar[],min
     longMfeRate,longMaeRate,shortMfeRate,shortMaeRate,terminalPrice:terminal.close};
 }
 
-function firstTouch(side:PredictiveSide,entryPrice:number,decisionAt:number,bars:GatePathBar[],spec:FirstTouchSpec):FirstTouchLabel{
+function firstTouch(side:PredictiveSide,entryPrice:number,decisionAt:number,bars:GatePathBar[],spec:FirstTouchSpec,coverageToleranceMs:number):FirstTouchLabel{
   const endAt=decisionAt+spec.maxMinutes*60_000,target=side==="LONG"?entryPrice*(1+spec.rewardRate):entryPrice*(1-spec.rewardRate),
     risk=side==="LONG"?entryPrice*(1-spec.riskRate):entryPrice*(1+spec.riskRate);
   for(const bar of bars){
@@ -53,7 +53,27 @@ function firstTouch(side:PredictiveSide,entryPrice:number,decisionAt:number,bars
     if(targetHit)return{specId:spec.id,side,outcome:"TARGET",touchedAt:bar.closeTime};
     if(riskHit)return{specId:spec.id,side,outcome:"RISK",touchedAt:bar.closeTime};
   }
+  const last=pathTo(bars,endAt).at(-1);
+  if(!last||last.closeTime<endAt-coverageToleranceMs)return{specId:spec.id,side,outcome:"CENSORED",touchedAt:null};
   return{specId:spec.id,side,outcome:"NONE",touchedAt:null};
+}
+
+function reversalHazard(side:PredictiveSide,entryPrice:number,decisionAt:number,bars:GatePathBar[],spec:ReversalHazardSpec,coverageToleranceMs:number):ReversalHazardLabel{
+  const endAt=decisionAt+spec.maxMinutes*60_000,path=pathTo(bars,endAt),last=path.at(-1);
+  if(!last||last.closeTime<endAt-coverageToleranceMs)return{specId:spec.id,side,outcome:"CENSORED",activatedAt:null,reversedAt:null};
+  let activatedAt:number|null=null,peak=entryPrice,trough=entryPrice;
+  for(const bar of path){
+    if(side==="LONG"){
+      peak=Math.max(peak,bar.high);
+      if(activatedAt==null&&peak>=entryPrice*(1+spec.activationRate))activatedAt=bar.closeTime;
+      if(activatedAt!=null&&bar.low<=peak*(1-spec.reversalRate))return{specId:spec.id,side,outcome:"REVERSED",activatedAt,reversedAt:bar.closeTime};
+    }else{
+      trough=Math.min(trough,bar.low);
+      if(activatedAt==null&&trough<=entryPrice*(1-spec.activationRate))activatedAt=bar.closeTime;
+      if(activatedAt!=null&&bar.high>=trough*(1+spec.reversalRate))return{specId:spec.id,side,outcome:"REVERSED",activatedAt,reversedAt:bar.closeTime};
+    }
+  }
+  return{specId:spec.id,side,outcome:activatedAt==null?"NOT_ACTIVATED":"SURVIVED",activatedAt,reversedAt:null};
 }
 
 function entryRegret(entryPrice:number,decisionAt:number,bars:GatePathBar[],waitMinutes:number):EntryRegretLabel|null{
@@ -72,7 +92,9 @@ export function buildPredictiveLabels(input:{
   horizonsMinutes?:number[];
   firstTouchSpecs?:FirstTouchSpec[];
   entryRegretWaitMinutes?:number[];
+  reversalHazardSpecs?:ReversalHazardSpec[];
   directionDeadbandRate?:number;
+  coverageToleranceMs?:number;
 }):PredictiveLabels{
   assertFinitePositive("entryPrice",input.entryPrice);
   if(!Number.isFinite(input.decisionAt)||input.decisionAt<=0)throw new Error("decisionAt must be finite and > 0");
@@ -84,13 +106,20 @@ export function buildPredictiveLabels(input:{
       {id:"r200-risk100-120m",rewardRate:.02,riskRate:.01,maxMinutes:120},
     ],
     waits=[...(input.entryRegretWaitMinutes??[5,10])].sort((a,b)=>a-b),
-    deadband=Math.max(0,input.directionDeadbandRate??0),
+    reversalSpecs=input.reversalHazardSpecs??[
+      {id:"activate50-reverse35-30m",activationRate:.005,reversalRate:.0035,maxMinutes:30},
+      {id:"activate100-reverse50-60m",activationRate:.01,reversalRate:.005,maxMinutes:60},
+      {id:"activate150-reverse70-120m",activationRate:.015,reversalRate:.007,maxMinutes:120},
+    ],
+    deadband=Math.max(0,input.directionDeadbandRate??0),coverageToleranceMs=Math.max(0,input.coverageToleranceMs??60_000),
     bars=causalFutureBars(input.symbol,input.decisionAt,input.futureGateBars);
-  const horizonLabels=horizons.map(m=>horizonLabel(input.entryPrice,input.decisionAt,bars,m,deadband)).filter((x):x is HorizonLabel=>!!x);
-  const touches=specs.flatMap(spec=>(["LONG","SHORT"] as const).map(side=>firstTouch(side,input.entryPrice,input.decisionAt,bars,spec)));
+  const horizonLabels=horizons.map(m=>horizonLabel(input.entryPrice,input.decisionAt,bars,m,deadband,coverageToleranceMs)).filter((x):x is HorizonLabel=>!!x);
+  const touches=specs.flatMap(spec=>(["LONG","SHORT"] as const).map(side=>firstTouch(side,input.entryPrice,input.decisionAt,bars,spec,coverageToleranceMs)));
   const regrets=waits.map(m=>entryRegret(input.entryPrice,input.decisionAt,bars,m)).filter((x):x is EntryRegretLabel=>!!x);
-  const maxLabelEndAt=Math.max(input.decisionAt,...horizonLabels.map(x=>x.labelEndAt),
-    ...specs.map(x=>input.decisionAt+x.maxMinutes*60_000),...waits.map(x=>input.decisionAt+x*60_000));
+  const reversalHazards=reversalSpecs.flatMap(spec=>(["LONG","SHORT"] as const).map(side=>reversalHazard(side,input.entryPrice,input.decisionAt,bars,spec,coverageToleranceMs)));
+  const maxLabelEndAt=Math.max(input.decisionAt,...horizons.map(x=>input.decisionAt+x*60_000),
+    ...specs.map(x=>input.decisionAt+x.maxMinutes*60_000),...waits.map(x=>input.decisionAt+x*60_000),
+    ...reversalSpecs.map(x=>input.decisionAt+x.maxMinutes*60_000));
   return{symbol:input.symbol,decisionAt:input.decisionAt,entryPrice:input.entryPrice,maxLabelEndAt,
-    horizons:horizonLabels,firstTouch:touches,entryRegret:regrets};
+    horizons:horizonLabels,firstTouch:touches,entryRegret:regrets,reversalHazard:reversalHazards};
 }
