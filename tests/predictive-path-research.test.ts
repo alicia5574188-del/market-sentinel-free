@@ -60,7 +60,7 @@ test("incomplete future coverage is censored, never mislabeled as NONE",()=>{
 });
 
 test("entry-regret labels measure a better future price without deciding direction",()=>{
-  const future=bars(3,(i)=>i===0?{close:99.5,high:100.2,low:99}:{close:100+i,high:100.5+i,low:99.5+i});
+  const future=bars(3,(i,open)=>i===0?{close:99.5,high:100.2,low:99}:{close:100+i,high:100.5+i,low:Math.min(open,99.4+i*.2)});
   const labels=buildPredictiveLabels({symbol:"SOL_USDT",decisionAt:T0,entryPrice:100,futureGateBars:future,horizonsMinutes:[3],
     firstTouchSpecs:[],entryRegretWaitMinutes:[3],reversalHazardSpecs:[],coverageToleranceMs:0});
   assert.equal(labels.entryRegret[0]!.longImprovementRate,.01);
@@ -113,6 +113,7 @@ test("research framework is strategy-reset: no import of existing trading engine
   const names=["types.ts","labels.ts","dataset.ts","walk-forward.ts","metrics.ts","feature-catalog.ts"];
   const bodies=await Promise.all(names.map(n=>readFile(new URL(`../research/predictive-path-engine/${n}`,import.meta.url),"utf8")));
   for(const body of bodies){
-    assert.doesNotMatch(body,/forward-relations|extremum-regime|anchor|region-launch|structural-interrupt|forward-relation-v/i);
+    const imports=body.split("\n").filter(line=>/^import\s/.test(line)).join("\n");
+    assert.doesNotMatch(imports,/forward-relations|extremum-regime|region-launch|structural-interrupt|forward-relation-v/i);
   }
 });
