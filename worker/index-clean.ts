@@ -1153,8 +1153,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if(!selected)return 0;
     try{
       const prior=this.turnDailyCandles[selected]??[];
-      const incoming=await fetchStructureCandles(selected,"1d",prior.length>=TURN_DAILY_REQUIRED_CANDLES?4:120);
-      const rows=mergeTurnDailyPath(prior,incoming);this.turnDailyCandles[selected]=rows;
+      const external=await this.marketHub.candles(selected,"1d",120);
+      let rows:Awaited<ReturnType<typeof fetchStructureCandles>>;
+      if(external)rows=mergeTurnDailyPath(prior,external.rows);
+      else if(this.marketHub.supports(selected))throw new Error(`${selected} external 1d temporarily unavailable`);
+      else rows=mergeTurnDailyPath(prior,await fetchStructureCandles(selected,"1d",prior.length>=TURN_DAILY_REQUIRED_CANDLES?4:120));
+      this.turnDailyCandles[selected]=rows;
       if(rows.length<TURN_DAILY_REQUIRED_CANDLES)throw new Error(`日线历史不足：${rows.length}/${TURN_DAILY_REQUIRED_CANDLES}`);
       const reservation=this.reserveNonAlarmWrites(1,64);
       if(reservation){
@@ -2947,6 +2951,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         catch(error){this.runtime.radar=failedRadarRuntime(this.runtime.radar,Date.now(),error);}
       }
       subrequests+=await this.refreshAdaptiveCandles(Date.now());
+      // L0 macro cycle needs real daily history. Warm one market per optional
+      // pass from independent public venues so Gate outages cannot blind or
+      // stall the ultra-long-horizon narrative.
+      subrequests+=await this.refreshTurnDaily(Date.now());
       subrequests+=await this.refreshForwardUrgentMinutes(Date.now());
       await this.advanceForwardNow(Date.now(),true);
       this.runtime.subrequestCount+=subrequests;
