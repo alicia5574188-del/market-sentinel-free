@@ -412,9 +412,12 @@ test("live market entry uses authenticated Gate futures WebSocket and receives t
     assert.equal(id,"123456789012345678");assert.equal(fetches.length,1);assert.ok(socket.accepted);
     const [login,order]=socket.sent;
     assert.equal(login?.channel,"futures.login");assert.equal(order?.channel,"futures.order_place");
-    const loginPayload=login?.payload as Record<string,unknown>,loginHeader=loginPayload.req_header as Record<string,unknown>;
+    const loginPayload=login?.payload as Record<string,unknown>,
+      loginHeader=loginPayload.req_header as Record<string,unknown>,
+      loginHeaders=loginPayload.headers as Record<string,unknown>;
     assert.equal(loginPayload.api_key,"fixture-key");assert.match(String(loginPayload.signature),/^[0-9a-f]{128}$/);
     assert.equal(loginHeader["X-Gate-Channel-Id"],"market-sentinel-free");
+    assert.deepEqual(loginHeaders,loginHeader);
     const orderPayload=order?.payload as Record<string,unknown>,orderHeader=orderPayload.req_header as Record<string,unknown>;
     assert.equal(orderHeader["X-Gate-Channel-Id"],"market-sentinel-free");
     assert.ok(Number(orderHeader["x-gate-exptime"])>Date.now());
