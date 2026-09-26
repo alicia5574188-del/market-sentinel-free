@@ -24,6 +24,7 @@ test("inference returns WAIT rather than inventing a trade when the model has no
     version:"predictive-path-v1",trainedAt:1,source:"fixture",featureNames:feature.names,mean:Array(feature.names.length).fill(0),scale:Array(feature.names.length).fill(1),
     costRate:.0019,horizons:[15,30,60,120],direction:{"15":{...zero},"30":{...zero},"60":{...zero},"120":{...zero}},
     expectedReturn:{"15":{...zero},"30":{...zero},"60":{...zero},"120":{...zero}},longMfe60:{...zero},longMae60:{...zero},shortMfe60:{...zero},shortMae60:{...zero},
-    longTargetBeforeRisk60:{...zero},shortTargetBeforeRisk60:{...zero},longEntryRegret10:{...zero},shortEntryRegret10:{...zero},metrics:{}};
+    longTargetBeforeRisk60:{...zero},shortTargetBeforeRisk60:{...zero},longEntryRegret10:{...zero},shortEntryRegret10:{...zero},
+    policy:{directionMin:.58,touchMin:.55,regretMax:.004,minNetEv:0,minSources:2,maxDisagreement:.015},metrics:{}};
   const forecast=forecastPredictivePath(feature,artifact);assert.equal(forecast.preferredSide,null);assert.equal(forecast.enterNow,false);assert.ok(forecast.waitReason);
 });
