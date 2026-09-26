@@ -25,7 +25,8 @@ export type PredictivePathArtifact={
   longMae60:RegressionHead;
   shortMfe60:RegressionHead;
   shortMae60:RegressionHead;
-  targetBeforeRisk60:LinearHead;
+  longTargetBeforeRisk60:LinearHead;
+  shortTargetBeforeRisk60:LinearHead;
   longEntryRegret10:RegressionHead;
   shortEntryRegret10:RegressionHead;
   metrics:Record<string,number>;
