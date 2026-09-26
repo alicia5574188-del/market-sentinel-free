@@ -46,15 +46,15 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   const paperMargin=positions.reduce((n,t)=>n+t.margin,0),plannedRisk=positions.reduce((n,t)=>n+Math.max(t.plannedRisk,t.entryContext?.portfolioRiskCharge??((t.forecast?.sizingEquity??0)*(t.entryContext?.reserve===true?.003:.006))),0),riskUse=data?.equity?plannedRisk/data.equity:0,elapsed=data&&now?Math.max(0,(now-data.startedAt)/3600000):null;
   const systemStatus=statusLabel==="后台运行中"?"正常":statusLabel?.startsWith("后台运行中 · ")?statusLabel.slice(8):statusLabel??(healthy?"正常":"行情恢复中");
   const nav:[Tab,string,string][]=[["overview","◉","总览"],["execution","⌘","执行"],["paper","⇄","模拟"],["live","◈","实盘"],["journal","≋","记录"],["settings","⊙","系统"]];
-  return <main className="fr-app" style={fontVars as CSSProperties} data-ui-version="forward-path-relation-v3">
-    <header className="fr-header"><div className="fr-brand"><span className="fr-emblem">↗</span><div><b>哨兵 · Forward Path Relation 3.0</b><small>CAUSAL RESPONSE · LIFECYCLE · RISK MIGRATION</small></div></div><span className={`fr-status ${healthy?"is-on":""}`}><i/>{healthy?"真实行情在线":"连接中"}</span></header>
+  return <main className="fr-app" style={fontVars as CSSProperties} data-ui-version="extremum-regime-v1">
+    <header className="fr-header"><div className="fr-brand"><span className="fr-emblem">↗</span><div><b>哨兵 · 峰谷状态系统</b><small>EXTREMUM · TREND SURVIVAL · LIVE PARITY</small></div></div><span className={`fr-status ${healthy?"is-on":""}`}><i/>{healthy?"真实行情在线":"连接中"}</span></header>
     <div className="fr-subhead"><span>Gate USDT 永续 · 30市场扫描 · 无席位数量上限 · 30执行BBO</span><span>实盘{liveEnabled?"已请求开启":"关闭"} · 所有者控制</span></div>
     {memberName&&<p className="fr-note">{memberName} · 共用同一策略事件源，实盘账户与API完全独立。</p>}
 
     {tab==="overview"&&<>
-      <section className="fr-hero"><div className="fr-hero-copy"><span className="fr-kicker">FORWARD PATH RELATION 3.0</span><h1>{systemStatus==="正常"?"系统正在正常运行":`系统状态：${systemStatus}`}</h1>
+      <section className="fr-hero"><div className="fr-hero-copy"><span className="fr-kicker">EXTREMUM REGIME V1</span><h1>{systemStatus==="正常"?"系统正在正常运行":`系统状态：${systemStatus}`}</h1>
         <p>{data?.latestReason??"正在读取交易核心。"}</p>
-        <div className="fr-hero-tags"><span>连续运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>5–60m完整路径</span><span>同根样本多检查点</span><span>风险决定持仓数量</span><span>旧关系快速降权</span><span>反向独立确认</span></div></div>
+        <div className="fr-hero-tags"><span>连续运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>5m判断状态</span><span>1m确认峰谷</span><span>多源一致性</span><span>入场后即时验证</span><span>退出与反手分离</span></div></div>
         <div className="fr-equity"><small>模拟账户权益 · USDT</small><strong>{fmt(data?.equity)}</strong><div className={(data?.netPnl??0)>=0?"fr-positive":"fr-negative"}>{signed(data?.netPnl)} <span>U · {signed(data?data.netPnl/data.initialEquity*100:null)}%</span></div>
           <footer><span>起点 {fmt(data?.initialEquity,0)}</span><span>最大回撤 {fmt(data?data.maxDrawdown*100:null)}%</span></footer></div></section>
       <section className="fr-stats">
