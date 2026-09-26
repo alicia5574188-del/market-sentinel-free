@@ -28,16 +28,18 @@ async function json(url,timeout=9000){
 const extSymbol=s=>s.endsWith("_USDT")?s.slice(0,-5)+"USDT":s;
 const kucoinSymbol=s=>{let b=s.slice(0,-5);if(b==="BTC")b="XBT";return b+"USDTM";};
 
-async function bybitHistory(symbol,from,to){
-  const out=[];let end=to*1000,guard=0;
-  while(end>from*1000&&guard++<80){
-    const body=await json("https://api.bybit.com/v5/market/kline?category=linear&symbol="+encodeURIComponent(extSymbol(symbol))
-      +"&interval=5&end="+Math.floor(end)+"&limit=1000");
-    if(body.retCode!==0||!Array.isArray(body.result?.list))throw new Error(symbol+" Bybit payload");
-    const rows=body.result.list.map(r=>({time:Number(r[0])/1000,open:Number(r[1]),high:Number(r[2]),low:Number(r[3]),close:Number(r[4])}))
+async function okxHistory(symbol,from,to){
+  const out=[];let after=to*1000,guard=0,inst=symbol.slice(0,-5)+"-USDT-SWAP";
+  while(after>from*1000&&guard++<600){
+    const body=await json("https://www.okx.com/api/v5/market/history-candles?instId="+encodeURIComponent(inst)
+      +"&bar=5m&after="+Math.floor(after)+"&limit=100");
+    if(body.code!=="0"||!Array.isArray(body.data))throw new Error(symbol+" OKX payload");
+    const rows=body.data.map(r=>({time:Number(r[0])/1000,open:Number(r[1]),high:Number(r[2]),low:Number(r[3]),close:Number(r[4])}))
       .filter(r=>r.time>=from&&r.time<to&&r.open>0&&r.close>0).sort((a,b)=>a.time-b.time);
     for(const r of rows)out.push(r);
-    if(!rows.length)break;const oldest=rows[0].time;if(oldest*1000>=end)break;end=oldest*1000-1;await sleep(25);
+    if(!body.data.length)break;
+    const oldest=Math.min(...body.data.map(r=>Number(r[0])/1000).filter(Number.isFinite));
+    if(!(oldest>0)||oldest*1000>=after)break;after=oldest*1000-1;await sleep(22);
   }
   return [...new Map(out.map(r=>[r.time,r])).values()].sort((a,b)=>a.time-b.time);
 }
@@ -102,13 +104,13 @@ function percentile(values,p){const a=values.filter(Number.isFinite).sort((x,y)=
 const external={},derivatives={};let cursor=0;
 async function loadWorker(){
   while(cursor<symbols.length){const symbol=symbols[cursor++];
-    const [bybit,kucoin,stats,funding,premium]=await Promise.all([
-      bybitHistory(symbol,design.from,holdout.to),kucoinHistory(symbol,design.from,holdout.to),
+    const [okx,kucoin,stats,funding,premium]=await Promise.all([
+      okxHistory(symbol,design.from,holdout.to),kucoinHistory(symbol,design.from,holdout.to),
       gateStats(symbol,design.from,holdout.to),gateFunding(symbol,design.from,holdout.to),gatePremium(symbol,design.from,holdout.to)
     ]);
-    external[symbol]={bybit:new Map(bybit.map(x=>[x.time,x])),kucoin:new Map(kucoin.map(x=>[x.time,x]))};
+    external[symbol]={okx:new Map(okx.map(x=>[x.time,x])),kucoin:new Map(kucoin.map(x=>[x.time,x]))};
     derivatives[symbol]={stats,funding,premium};
-    console.log(symbol+" external="+bybit.length+"/"+kucoin.length+" stats="+stats.length+" funding="+funding.length+" premium="+premium.length);
+    console.log(symbol+" external="+okx.length+"/"+kucoin.length+" stats="+stats.length+" funding="+funding.length+" premium="+premium.length);
   }
 }
 await Promise.all(Array.from({length:Math.min(3,symbols.length)},loadWorker));
@@ -117,10 +119,10 @@ function gateReturn(symbol,time,bars){
   const rows=gateRows.get(symbol),idx=gateIndex.get(symbol)?.get(time);return rows&&idx!=null&&idx>=bars?rows[idx].close/rows[idx-bars].close-1:0;
 }
 function multiQuote(symbol,time,gateClose,decisionAt){
-  const ex=external[symbol],b=ex?.bybit.get(time),k=ex?.kucoin.get(time),venues=[b,k].filter(Boolean);
+  const ex=external[symbol],o=ex?.okx.get(time),k=ex?.kucoin.get(time),venues=[o,k].filter(Boolean);
   if(venues.length<2)return null;
   const closes=venues.map(x=>x.close),returns=venues.map((x,i)=>{
-    const map=i===0?ex.bybit:ex.kucoin,prev=map.get(time-STEP);return prev?.close>0?x.close/prev.close-1:0;
+    const map=i===0?ex.okx:ex.kucoin,prev=map.get(time-STEP);return prev?.close>0?x.close/prev.close-1:0;
   });
   const mid=median(closes),disagreement=(Math.max(...closes)-Math.min(...closes))/Math.max(mid,1e-12),
     up=returns.filter(x=>x>0.00002).length,down=returns.filter(x=>x<-0.00002).length,active=up+down,
