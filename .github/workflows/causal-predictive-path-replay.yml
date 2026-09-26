@@ -1,0 +1,57 @@
+name: Causal Predictive Path Historical Gate
+
+on:
+  push:
+    branches: [feature/predictive-path-v1-20260926]
+    paths:
+      - "scripts/replay-causal-predictive-path.mjs"
+      - "lib/predictive-path-types.ts"
+      - "lib/predictive-path-features.ts"
+      - "lib/predictive-path-model.ts"
+      - "lib/predictive-path-engine.ts"
+      - ".github/workflows/causal-predictive-path-replay.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: causal-predictive-path-replay
+  cancel-in-progress: true
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 28
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Download official Gate July-August 5m path
+        env:
+          RESEARCH_DATASET: /tmp/causal-replay-gate.json
+          RESEARCH_INTERVAL: 5m
+          RESEARCH_MONTHS: "202607,202608"
+          RESEARCH_SYMBOLS: "BTC_USDT,ETH_USDT,SOL_USDT,XRP_USDT,DOGE_USDT"
+          RESEARCH_MIN_CONTRACTS: "5"
+          RESEARCH_CONCURRENCY: "8"
+        run: node scripts/fetch-gate-history.mjs
+      - name: Causal replay design then untouched holdout
+        env:
+          CAUSAL_REPLAY_DATASET: /tmp/causal-replay-gate.json
+          CAUSAL_REPLAY_OUTPUT: /tmp/causal-replay-report.json
+          CAUSAL_DESIGN_MONTH: "202607"
+          CAUSAL_HOLDOUT_MONTH: "202608"
+        run: node --experimental-strip-types scripts/replay-causal-predictive-path.mjs
+      - name: Print release evidence
+        if: always()
+        run: |
+          if [ -f /tmp/causal-replay-report.json ]; then cat /tmp/causal-replay-report.json; fi
+      - name: Diff integrity
+        run: git diff --check origin/main...HEAD
