@@ -15,6 +15,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: predictive-path-v1-train
+  cancel-in-progress: true
+
 jobs:
   train:
     runs-on: ubuntu-latest
