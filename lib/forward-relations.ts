@@ -258,48 +258,9 @@ function pathStats(rows:Candle[]){
   const ret=(n:number)=>last.close/rows[Math.max(0,rows.length-1-n)]!.close-1;
   return{last,atr,body,ret3:ret(3),ret6:ret(6),ret12:ret(12)};
 }
-function detectRegion(symbol:string,rows:Candle[],now:number):Region|null{
-  const {atr}=pathStats(rows);let best:Region|null=null;
-  for(const bars of[6,8,10,12]){
-    const w=rows.slice(-(bars+1),-1);if(w.length!==bars)continue;
-    const lower=Math.min(...w.map(r=>r.low)),upper=Math.max(...w.map(r=>r.high)),center=(upper+lower)/2,widthRate=(upper-lower)/center;
-    const maxWidth=Math.max(.004,Math.min(.028,atr*3.4));if(widthRate>maxWidth)continue;
-    let crossings=0,prev=0,touches=0;
-    for(const r of w){const side=r.close>center?1:r.close<center?-1:0;if(side&&prev&&side!==prev)crossings++;if(side)prev=side;
-      if(r.low<=center&&r.high>=center)touches++;}
-    if(crossings<2&&touches<Math.ceil(bars*.45))continue;
-    const compact=1-clip(widthRate/maxWidth),quality=100*clip(.45*compact+.35*Math.min(1,crossings/4)+.20*Math.min(1,touches/bars));
-    const price=rows.at(-1)!.close,state:RegionState=price>upper?"ABOVE":price<lower?"BELOW":"IN_REGION";
-    const candidate:Region={id:`rg-${symbol}-${w[0]!.time}`,symbol,confirmedAt:(w.at(-1)!.time+300)*1000,lower,upper,center,widthRate,bars,quality,state,lastSeenAt:now,atrRate:atr};
-    if(!best||candidate.quality>best.quality)best=candidate;
-  }
-  if(!best)return null;
-  const outer=detectOuterRegion(rows,best,atr);
-  return outer?{...best,outerLower:outer.lower,outerUpper:outer.upper,outerCenter:outer.center,outerWidthRate:outer.widthRate,
-    outerBars:outer.bars,outerQuality:outer.quality}:best;
-}
 function executionScore(q:Quote|undefined,now:number){
   if(!q)return 58;if(!freshQuote(q,now))return 10;const mid=midpoint(q),spread=(q.bestAsk-q.bestBid)/mid;
   return 100*(1-.65*clip(spread/.0018));
-}
-function marketPulse(paths:Record<string,Candle[]>,now:number):MarketPulse{
-  const rows=Object.values(paths).flatMap(p=>{const v=validPath(p,now);if(!v)return[];const s=pathStats(v),move=.6*s.ret3+.4*s.ret6;
-    return[{move,expansion:clip(s.atr/Math.max(.0005,median(v.slice(-40,-20).map(r=>(r.high-r.low)/r.close)))-1,0,2)}];});
-  const up=rows.filter(r=>r.move>.001).length,down=rows.filter(r=>r.move<-.001).length,neutral=Math.max(0,rows.length-up-down);
-  const signed=rows.length?(up-down)/rows.length:0;
-  return{at:now,up,down,neutral,bias:signed>.20?"UP":signed<-.20?"DOWN":"MIXED",strength:Math.abs(signed),expansion:rows.length?median(rows.map(r=>r.expansion)):0};
-}
-function minuteConfirm(minute:Candle[]|undefined,side:"LONG"|"SHORT",level:number,now:number){
-  if(!minute?.length)return{ok:false,score:0,kind:"NONE" as const};
-  const a=minute.filter(r=>r.time*1000+60_000<=now).slice(-8);if(a.length<3)return{ok:false,score:0,kind:"NONE" as const};
-  const d=dir(side),ranges=a.map(r=>(r.high-r.low)/r.close),avg=Math.max(.0002,median(ranges));
-  const last=a.at(-1)!,prev=a.at(-2)!,lastMove=d*(last.close/prev.close-1),outside=d*(last.close/level-1)>0;
-  const strong=d*(prev.close/prev.open-1)>avg*1.6&&d*(prev.close/level-1)>0;
-  const continuation=strong&&outside&&lastMove>-avg*.35;
-  const priorExtreme=side==="LONG"?Math.min(...a.slice(-4,-1).map(r=>r.low)):Math.max(...a.slice(-4,-1).map(r=>r.high));
-  const restart=outside&&lastMove>avg*.35&&(side==="LONG"?last.close>Math.max(prev.high,priorExtreme):last.close<Math.min(prev.low,priorExtreme));
-  const twoBars=outside&&d*(last.close/last.open-1)>avg*.7&&d*(prev.close/prev.open-1)>avg*.7;
-  const ok=continuation||restart||twoBars;return{ok,score:ok?90:40,kind:restart?"RESTART" as const:twoBars?"TWO_BAR" as const:"CONTINUE" as const};
 }
 function relationHardStopRate(rows:Candle[],side:"LONG"|"SHORT",price:number,normalAdverse:number){
   const st=pathStats(rows),window=rows.slice(-9,-1),buffer=Math.max(st.atr*.18,.00045);
@@ -357,123 +318,9 @@ export function relationOpportunity(c:RelationCandidate,rows:Candle[],q:Quote|un
     reason:[c.reason,reserveBlock,payoffBlock].filter(Boolean).join("｜"),relationRuleId:c.ruleId,relationStatus:c.status,
     relationHorizon:c.horizon,relationHealth:c.health,riskScale:clip(c.health,.25,1),exitPlan:consumeExitPlan(c.exitProfile,consumed)};
 }
-function regionOpportunities(s:ForwardState,symbol:string,rows:Candle[],minute:Candle[]|undefined,q:Quote|undefined,now:number,pulse:MarketPulse,region:Region){
-  const out:Opportunity[]=[],st=pathStats(rows),last=st.last,prev=rows.at(-2)!,price=last.close,exec=executionScore(q,now);
-  const avgBody=Math.max(st.body,.0002),body=Math.abs(last.close/last.open-1),closePos=(last.close-last.low)/Math.max(last.high-last.low,1e-9);
-  const buffer=Math.max(st.atr*.12,.00045),add=(side:"LONG"|"SHORT",mode:OpportunityMode,baseScore:number,stop:number,target:number,reason:string,premium=true)=>{
-    const d=dir(side),gross=Math.max(0,d*(target/price-1)),net=Math.max(0,gross-ROUND_TRIP_COST),pullback=Math.max(.0035,Math.abs(price-stop)/price);
-    const edge=net/Math.max(pullback,1e-9),fit=pulse.bias==="MIXED"?60:pulse.bias===(side==="LONG"?"UP":"DOWN")?85:40;
-    const score=clip(baseScore+.08*exec+.06*fit,0,100);
-    const stopRate=Math.abs(price-stop)/price,targetRate=Math.abs(target/price-1);
-    out.push({id:`${mode.toLowerCase()}-${symbol}-${last.time}`,symbol,side,mode,premium,score,
-      eligible:score>=58&&net>0&&edge>=.5,completedAt:(last.time+300)*1000,expiresAt:now+(premium?6:10)*60_000,price,stopPrice:stop,targetPrice:target,stopRate,targetRate,
-      directionStrength:Math.min(100,baseScore+5),pathEfficiency:region.quality,momentumPersistence:baseScore,positionScore:80,spaceScore:100*clip(edge/2),
-      executionScore:exec,grossRemainingSpaceRate:gross,netRemainingSpaceRate:net,pullbackRiskRate:pullback,edgeRatio:edge,
-      expectedHoldMinutes:mode==="RANGE"?12:mode==="BREAKOUT"?18:22,marketFit:fit,regionId:region.id,regionQuality:region.quality,reason});
-  };
-  const upperBreakLevel=region.outerUpper??region.upper,lowerBreakLevel=region.outerLower??region.lower,
-    structureWidthRate=region.outerWidthRate??region.widthRate,structureWidth=upperBreakLevel-lowerBreakLevel;
-  const upBreak=last.close>upperBreakLevel*(1+buffer)&&body>avgBody*1.35&&closePos>.68;
-  const dnBreak=last.close<lowerBreakLevel*(1-buffer)&&body>avgBody*1.35&&closePos<.32;
-  if(upBreak){const m=minuteConfirm(minute,"LONG",upperBreakLevel,now);if(m.ok){
-    const stop=Math.max(region.center,upperBreakLevel-Math.max(structureWidth*.18,price*st.atr*.45));
-    add("LONG","BREAKOUT",72+m.score*.10,stop,price*(1+Math.max(structureWidthRate*.8,st.atr*2.2)),
-      `${region.outerUpper?"完整外层区":"成熟区"}上破｜5m实体${(body/avgBody).toFixed(1)}×｜1m确认通过`);}}
-  if(dnBreak){const m=minuteConfirm(minute,"SHORT",lowerBreakLevel,now);if(m.ok){
-    const stop=Math.min(region.center,lowerBreakLevel+Math.max(structureWidth*.18,price*st.atr*.45));
-    add("SHORT","BREAKOUT",72+m.score*.10,stop,price*(1-Math.max(structureWidthRate*.8,st.atr*2.2)),
-      `${region.outerLower?"完整外层区":"成熟区"}下破｜5m实体${(body/avgBody).toFixed(1)}×｜1m确认通过`);}}
-  const prevProbeUp=prev.high>region.upper*(1+buffer)&&prev.close<=region.upper,prevProbeDn=prev.low<region.lower*(1-buffer)&&prev.close>=region.lower;
-  if(prevProbeUp&&last.close<region.center)add("SHORT","FAILED_BREAKOUT",70,Math.max(prev.high,region.upper)*(1+buffer),region.lower,
-    "向上假突破重新被区域接受，反向做空",true);
-  if(prevProbeDn&&last.close>region.center)add("LONG","FAILED_BREAKOUT",70,Math.min(prev.low,region.lower)*(1-buffer),region.upper,
-    "向下假突破重新被区域接受，反向做多",true);
-  const nearUpper=Math.abs(price/region.upper-1)<=Math.max(st.atr*.45,.001),nearLower=Math.abs(price/region.lower-1)<=Math.max(st.atr*.45,.001);
-  if(region.state==="ABOVE"&&nearUpper){const m=minuteConfirm(minute,"LONG",region.upper,now);if(m.ok)
-    add("LONG","RETEST",74,region.center,price*(1+Math.max(region.widthRate,st.atr*2)),"离区后回踩上沿结束，1m重新启动",true);}
-  if(region.state==="BELOW"&&nearLower){const m=minuteConfirm(minute,"SHORT",region.lower,now);if(m.ok)
-    add("SHORT","RETEST",74,region.center,price*(1-Math.max(region.widthRate,st.atr*2)),"离区后回踩下沿结束，1m重新启动",true);}
-  if(region.state==="IN_REGION"&&region.quality>=50){
-    if(nearLower&&last.close>last.open)add("LONG","RANGE",57,region.lower*(1-buffer),region.center,"成熟区下沿重新出现买方控制，做中心回归",false);
-    if(nearUpper&&last.close<last.open)add("SHORT","RANGE",57,region.upper*(1+buffer),region.center,"成熟区上沿重新出现卖方控制，做中心回归",false);
-  }
-  return out;
-}
-function relationSupportMap(s:ForwardState,allowed?:ReadonlySet<string>){
-  const bySymbol=new Map<string,RelationCandidate[]>();
-  for(const c of relationCandidates(s.relationEngine)){
-    if(allowed&&!allowed.has(c.symbol))continue;
-    const rows=bySymbol.get(c.symbol)??[];rows.push(c);bySymbol.set(c.symbol,rows);
-  }
-  return bySymbol;
-}
-function relationBackedRegionOpportunities(s:ForwardState,symbol:string,rows:Candle[],minute:Candle[]|undefined,q:Quote|undefined,now:number,
-  pulse:MarketPulse,region:Region,support:RelationCandidate[]){
-  const out:Opportunity[]=[];
-  for(const o of regionOpportunities(s,symbol,rows,minute,q,now,pulse,region)){
-    const relation=support.find(c=>c.side===o.side);
-    if(!relation)continue;
-    const reserveBlock=reserveExperimentValueBlock({reserve:relation.reserve,netRate:o.netRemainingSpaceRate,edgeRatio:o.edgeRatio,
-      livePathScore:relation.livePathScore,environmentFit:relation.environmentFit,roundTripCost:ROUND_TRIP_COST,
-      activeRecent:activeRecentValue(relation)});
-    out.push({...o,score:clip(o.score*.55+relation.score*.45,0,100),eligible:o.eligible&&relation.health>=.15&&!reserveBlock,
-      reserve:relation.reserve,relationRuleId:relation.ruleId,relationStatus:relation.status,relationHorizon:relation.horizon,
-      relationHealth:relation.health,riskScale:clip(relation.health,.25,1),expectedHoldMinutes:relation.exitProfile.bestHoldMinutes,
-      exitPlan:structuredClone(relation.exitProfile),
-      reason:`${relation.reason}${reserveBlock?`｜${reserveBlock}`:""}｜执行结构：${o.reason}`});
-  }
-  return out;
-}
-function structuralExitPlan(candidate:StructuralInterruptCandidate,stopRate:number,targetRate:number):RelationExitProfile{
-  const normalAdverse=Math.max(.002,Math.min(stopRate*.45,candidate.atrRate*.65+ROUND_TRIP_COST*.25)),
-    target=Math.max(ROUND_TRIP_COST*1.4,targetRate),activation=Math.max(ROUND_TRIP_COST*1.15,Math.min(.008,target*.35));
-  const point=(expectedRate:number,adverseRate:number,remainingEdgeRate:number,futureBestMinutes:15|30,recoveryRate:number)=>({
-    expectedRate,adverseRate,remainingEdgeRate,futureBestMinutes,recoveryRate,continuationSamples:0});
-  return{version:"sample-exit-plan-v2",bestHoldMinutes:15,feedbackDeadlineMinutes:5,maxHoldMinutes:30,normalAdverseRate:normalAdverse,
-    targetRate:target,protectionActivationRate:activation,retentionRate:.82,samples:0,groups:0,path:{
-      5:point(target*.22,normalAdverse*.75,target*.68,15,1),10:point(target*.48,normalAdverse*.85,target*.42,15,.75),
-      15:point(target*.70,normalAdverse,target*.20,15,.5),20:point(target*.78,normalAdverse,target*.10,30,.35),
-      30:point(target*.88,normalAdverse,0,30,0)}};
-}
-function interruptOpportunities(s:ForwardState,quotes:Record<string,Quote>,now:number,allowed?:ReadonlySet<string>){
-  const out:Opportunity[]=[];
-  for(const candidate of structuralInterruptCandidates({state:s.structuralInterrupt,regions:s.regions,quotes,now})){
-    if(allowed&&!allowed.has(candidate.symbol))continue;
-    const q=quotes[candidate.symbol];if(!freshQuote(q,now))continue;const price=midpoint(q!),exec=executionScore(q,now),d=dir(candidate.side),
-      stopRate=Math.abs(price-candidate.stopPrice)/price,targetRate=Math.max(0,d*(candidate.targetPrice/price-1)),
-      gross=targetRate,net=Math.max(0,gross-ROUND_TRIP_COST),pullback=Math.max(.002,stopRate),
-      edge=net/Math.max(pullback,1e-9),score=clip(candidate.strength*.88+exec*.12,0,100),
-      plan=structuralExitPlan(candidate,stopRate,targetRate),region=s.regions[candidate.symbol];
-    out.push({id:`shock-${candidate.eventId}-${candidate.symbol}`,symbol:candidate.symbol,side:candidate.side,mode:"SHOCK",premium:true,reserve:false,
-      score,eligible:score>=78&&stopRate>=.002&&stopRate<=.03&&net>ROUND_TRIP_COST*.25&&edge>=.55,
-      completedAt:candidate.confirmedAt,expiresAt:now+20_000,price,stopPrice:candidate.stopPrice,targetPrice:candidate.targetPrice,stopRate,targetRate,
-      directionStrength:candidate.strength,pathEfficiency:region?.outerQuality??region?.quality??0,momentumPersistence:candidate.strength,
-      positionScore:95,spaceScore:100*clip(edge/2),executionScore:exec,grossRemainingSpaceRate:gross,netRemainingSpaceRate:net,
-      pullbackRiskRate:pullback,edgeRatio:edge,expectedHoldMinutes:15,marketFit:candidate.marketWide?95:82,regionId:region?.id??null,
-      regionQuality:region?.outerQuality??region?.quality??null,reason:candidate.reason,interruptEventId:candidate.eventId,
-      interruptMarketWide:candidate.marketWide,interruptBoundary:candidate.boundary,interruptStrength:candidate.strength,
-      interruptIndependent:candidate.independent,interruptConfirmation:candidate.confirmationKind,exitPlan:plan});
-  }
-  return out;
-}
 function opportunityCompare(a:Opportunity,b:Opportunity){
   return Number(b.eligible)-Number(a.eligible)||Number(b.mode==="SHOCK")-Number(a.mode==="SHOCK")
     ||Number(!b.reserve)-Number(!a.reserve)||Number(b.premium)-Number(a.premium)||b.score-a.score;
-}
-function bestOpportunityPerSymbol(rows:Opportunity[],compare:(a:Opportunity,b:Opportunity)=>number){
-  const out:Opportunity[]=[],seen=new Set<string>();for(const row of [...rows].sort(compare)){if(seen.has(row.symbol))continue;seen.add(row.symbol);out.push(row);}return out;
-}
-function buildOpportunities(s:ForwardState,paths:Record<string,Candle[]>,minutePaths:Record<string,Candle[]>|undefined,quotes:Record<string,Quote>,now:number,allowed?:ReadonlySet<string>){
-  const pulse=marketPulse(paths,now),all:Opportunity[]=[],regions:Record<string,Region>={},bySymbol=relationSupportMap(s,allowed);
-  for(const[symbol,path]of Object.entries(paths)){if(allowed&&!allowed.has(symbol))continue;const rows=validPath(path,now);if(!rows)continue;
-    const support=bySymbol.get(symbol)??[];
-    for(const c of support)all.push(relationOpportunity(c,rows,quotes[symbol],now));
-    const region=detectRegion(symbol,rows,now);if(region){regions[symbol]=region;
-      all.push(...relationBackedRegionOpportunities(s,symbol,rows,minutePaths?.[symbol],quotes[symbol],now,pulse,region,support));
-    }
-  }
-  const best=bestOpportunityPerSymbol(all,opportunityCompare);
-  return{pulse,regions,opportunities:best};
 }
 function equityMark(s:ForwardState,quotes:Record<string,Quote>,now:number){
   let floating=0,stale=0;for(const t of s.positions){const q=quotes[t.symbol],px=freshQuote(q,now)?midpoint(q):t.lastPrice;if(!freshQuote(q,now))stale++;
