@@ -89,7 +89,8 @@ test("Market Intelligence uses thesis lifecycle, not scalp profit locking or bat
   const manage=core.slice(core.indexOf("function manageIntelligenceTrades"),core.indexOf("function markAndManage"));
   assert.doesNotMatch(manage,/利润保护提升|PROFIT_GIVEBACK/);
   assert.match(manage,/已移除旧式动态锁利/);
-  assert.match(manage,/invalidationBars:t\.relationFailureBars/);
+  assert.match(manage,/evaluatePositionIntelligence/);
+  assert.doesNotMatch(manage,/relationFailureBars.*>=2|THESIS_INVALIDATED/);
   const fill=core.slice(core.indexOf("export function fillForwardPortfolio"),core.indexOf("function nextCandleAt"));
   assert.match(fill,/opened=1;break/);
   const advance=core.slice(core.indexOf("export function advanceForward"),core.indexOf("export function closeForwardForReset"));
@@ -99,5 +100,28 @@ test("Market Intelligence uses thesis lifecycle, not scalp profit locking or bat
   assert.match(engine,/signalBars>=2/);
   assert.match(engine,/stableBias/);
   const boundaries=core.slice(core.indexOf("boundaries:{scope"));
-  assert.match(boundaries,/Market Intelligence 不使用动态锁利/);
+  assert.match(boundaries,/Position Intelligence/);
+  assert.match(boundaries,/单一细节、单一市场转向或连续两根5m都没有独立平仓权/);
+});
+
+
+test("Market Intelligence active exits are evidence-family gated, not two-bar thesis invalidation",async()=>{
+  const [core,position,engine,execution]=await Promise.all([
+    read("lib/forward-relations.ts"),read("lib/position-intelligence-engine.ts"),
+    read("lib/market-intelligence-engine.ts"),read("app/market-intelligence-execution.tsx")
+  ]);
+  const manage=core.slice(core.indexOf("function manageIntelligenceTrades"),core.indexOf("function markAndManage"));
+  assert.match(manage,/evaluatePositionIntelligence/);
+  assert.match(manage,/POSITION_VALUE_EXIT/);
+  assert.doesNotMatch(manage,/invalidationBars|relationFailureBars.*>=2|THESIS_INVALIDATED/);
+  assert.match(position,/coreConcern&&independentConfirm/);
+  assert.match(position,/reviewBars>=2/);
+  assert.match(position,/contextOnly:true/);
+  assert.match(position,/dataConfidence>=60/);
+  assert.match(engine,/same\.samples=\(same\.samples\?\?1\)\+1/);
+  assert.match(engine,/LEADERSHIP_ROTATION/);
+  assert.match(engine,/FLOW_ABSORBED_OR_STALLED/);
+  assert.doesNotMatch(execution,/偏多细节|偏空细节/);
+  assert.match(execution,/复核已持续/);
+  assert.match(execution,/剩余空间/);
 });

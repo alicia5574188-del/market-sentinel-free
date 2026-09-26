@@ -6,9 +6,11 @@ import { initialRelationEngine, normalizeRelationEngine,
   type RelationCandidate, type RelationEngineState, type RelationExitProfile, type RelationStatus } from "./forward-relation-v2.ts";
 import { STRUCTURAL_INTERRUPT_VERSION, initialStructuralInterruptState, normalizeStructuralInterruptState,
   type StructuralInterruptState } from "./forward-structural-interrupt.ts";
-import { MARKET_INTELLIGENCE_VERSION, buildMarketIntelligence, intelligenceExitDecision,
+import { MARKET_INTELLIGENCE_VERSION, buildMarketIntelligence,
   urgentMinuteSymbols as intelligenceUrgentMinuteSymbols, initialMarketIntelligenceState,
   type MarketIntelligenceState, type MarketSymbolState } from "./market-intelligence-engine.ts";
+import { evaluatePositionIntelligence, POSITION_INTELLIGENCE_VERSION,
+  type PositionIntelligenceState } from "./position-intelligence-engine.ts";
 
 /**
  * Forward Path Relation 3.0 — PAPER authority.
@@ -39,7 +41,7 @@ const safe=(v:number|null|undefined,fallback=0)=>typeof v==="number"&&Number.isF
 
 export type Candle={time:number;open:number;high:number;low:number;close:number;volume:number};
 export type Quote={bestBid:number;bestAsk:number;observedAt:number;fresh:boolean;entryReady?:boolean;sourceCount?:number;disagreementRate?:number;
-  sourceBreadth?:number;directionalAgreement?:number;medianShortMove?:number};
+  sourceBreadth?:number;directionalAgreement?:number;medianShortMove?:number;spreadRate?:number;bookImbalance?:number};
 export type Contract={quantoMultiplier:number;leverageMax:number;maintenanceRate:number;minContracts?:number;
   enableDecimal?:boolean;orderSizeMin?:string|number;orderSizeMax?:string|number;marketOrderSizeMax?:string|number};
 
@@ -100,7 +102,8 @@ export type Trade={
     checkpointBand:number;mode:"STRONG_TREND"|"HEALTHY_TREND"|"NORMAL"|"WEAKENING";peakR:number;updatedAt:number};
   profitProtectionMigration?:{version:string;state:"CURRENT"|"GUARDED"|"DEFERRED";updatedAt:number;baselineFavorable:number};
   exitAudit?:{trigger:string;at:number;detail?:string};
-  holdValue?:{action:"HOLD"|"EXIT_PROFIT"|"EXIT_RISK";pullbackRiskRate:number;bestHoldMinutes:number;score:number};
+  holdValue?:{action:"HOLD"|"REVIEW"|"EXIT_PROFIT"|"EXIT_RISK";pullbackRiskRate:number;bestHoldMinutes:number;score:number};
+  positionIntelligence?:PositionIntelligenceState;
   turn?:{version:string;timeframe:"5m";signalAt:number;entryTurnProbability:number;entryContinuation:number;entryDirectionConfidence:number};
 };
 
@@ -359,7 +362,7 @@ function advanceProfitFloor(t:Trade,relation:RelationEngineState["rules"][number
   const tighten=relation?.status==="DEGRADED"?.10:relation?.status==="PRESSURED"?.05:relation?.status==="RECOVERING"?.02:0;
   return t.favorable*clip(plan.retentionRate+tighten,.55,.94);
 }
-function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now:number){
+function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now:number,minutePaths?:Record<string,Candle[]>){
   const closed=new Set<string>();
   for(const t of s.positions){
     if(t.entryContext?.strategyVersion!==MARKET_INTELLIGENCE_VERSION)continue;
@@ -368,26 +371,28 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
       signed=d*(px/t.entryPrice-1),favorable=Math.max(0,signed),adverse=Math.max(0,-signed),ageMin=(now-t.openedAt)/60_000,
       originalStopRate=Math.max(.004,t.entryContext?.pullbackRiskRate??Math.abs(t.entryPrice-t.stopPrice)/t.entryPrice),
       structuralStop=t.entryPrice*(1-d*originalStopRate);
-    // Market Intelligence positions are thesis positions, not trailing-stop scalps.
-    // Remove any profit floor left by the first V1 implementation and restore
-    // the original structural risk boundary once.
     if((t.profitFloorRate??0)>0){t.profitFloorRate=0;t.stopPrice=structuralStop;
       event(s,now,"DATA",t.id,"已移除旧式动态锁利；恢复独立交易假设的结构止损");}
     t.lastPrice=px;t.lastQuoteAt=q!.observedAt;t.favorable=Math.max(t.favorable,favorable);t.adverse=Math.max(t.adverse,adverse);t.peakPnlRate=Math.max(t.peakPnlRate??0,favorable);
     if(!t.firstProfitAt&&favorable>=ROUND_TRIP_COST*.65){t.firstProfitAt=now;if(t.entryContext)t.entryContext.postEntryState="CONFIRMED";}
-    const stateBar=state?.signalLastBar??0,oppositeScore=state?(t.side==="LONG"?state.shortScore:state.longScore):50,
-      relative=state?(t.side==="LONG"?1:-1)*state.residualZ:0,
-      contradicted=!!state&&state.signalSide!==t.side&&oppositeScore>=64&&relative<-.25;
-    if(stateBar>t.lastRelationBar){t.relationFailureBars=contradicted?(t.relationFailureBars??0)+1:0;t.lastRelationBar=stateBar;}
     const stopped=t.side==="LONG"?px<=t.stopPrice:px>=t.stopPrice,
-      decision=intelligenceExitDecision({side:t.side,ageMin,signedRate:signed,peakFavorableRate:t.favorable,firstProfit:!!t.firstProfitAt,
-        stopRate:originalStopRate,stopped,expectedHoldMinutes:t.expectedHoldMinutes??180,
-        maxHoldMinutes:Math.min(960,Math.max(300,(t.expectedHoldMinutes??180)*2.5)),invalidationBars:t.relationFailureBars??0,state});
-    const riskExit=decision.reason==="STRUCTURE_STOP"||decision.reason==="THESIS_INVALIDATED"||decision.reason==="NO_POSITIVE_FEEDBACK";
-    t.holdScore=decision.holdScore;t.holdValue={action:decision.reason?(riskExit?"EXIT_RISK":"EXIT_PROFIT"):"HOLD",
-      pullbackRiskRate:originalStopRate,bestHoldMinutes:t.expectedHoldMinutes??180,score:t.holdScore};
-    if(decision.reason){if(t.entryContext&&(decision.reason==="NO_POSITIVE_FEEDBACK"||decision.reason==="THESIS_INVALIDATED"))t.entryContext.postEntryState="FAILED";
-      closeTrade(s,t,px,now,decision.reason);closed.add(t.id);}
+      position=evaluatePositionIntelligence({
+        now,side:t.side,signedRate:signed,peakFavorableRate:t.favorable,ageMin,firstProfit:!!t.firstProfitAt,
+        expectedHoldMinutes:t.expectedHoldMinutes??180,stopRate:originalStopRate,entryScore:t.entryContext?.entryScore??50,
+        entryResidual:t.entryContext?.entryResidual??0,entryRelativeStrength:t.entryContext?.entryRelativeStrength??.5,
+        entryRemainingSpaceRate:t.entryContext?.remainingSpaceRate??t.forecast?.remainingNetRate??0,state,
+        narrative:s.extremumRegime.narrative,quote:q,minutePath:minutePaths?.[t.symbol],previous:t.positionIntelligence,
+        costRate:ROUND_TRIP_COST,marketStateAgeMs:Math.max(0,now-s.extremumRegime.updatedAt),
+      });
+    t.positionIntelligence=position;t.holdScore=position.holdValueScore;
+    t.holdValue={action:position.decision==="HOLD"?"HOLD":position.decision==="REVIEW"?"REVIEW":
+      (signed>ROUND_TRIP_COST?"EXIT_PROFIT":"EXIT_RISK"),pullbackRiskRate:position.expectedPullbackRate,
+      bestHoldMinutes:t.expectedHoldMinutes??180,score:position.holdValueScore};
+    if(stopped){closeTrade(s,t,px,now,"STRUCTURE_STOP");closed.add(t.id);continue;}
+    if(position.decision==="EXIT"){
+      if(t.entryContext)t.entryContext.postEntryState=signed>0?"CONFIRMED":"FAILED";
+      closeTrade(s,t,px,now,"POSITION_VALUE_EXIT");closed.add(t.id);continue;
+    }
   }
   if(closed.size)s.positions=s.positions.filter(t=>!closed.has(t.id));
 }
@@ -594,7 +599,7 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
     s.entryDiagnostics={at:input.now,matched:0,opened:0,reasons:{[`等待全市场路径恢复 ${readyPaths}/${requiredPaths}`]:1}};
   }
 
-  manageIntelligenceTrades(s,input.quotes,input.now);
+  manageIntelligenceTrades(s,input.quotes,input.now,input.minutePaths);
   // Positions opened before cutover keep their frozen lifecycle and cannot gain
   // new-entry authority from the retired relation/region/interrupt stack.
   markAndManage(s,input.quotes,input.now);
@@ -671,7 +676,7 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
     counts={bullish:rows.filter(r=>r.longScore>=62).length,bearish:rows.filter(r=>r.shortScore>=62).length,
       divergent:rows.filter(r=>r.regime==="DIVERGENT").length,transition:rows.filter(r=>r.regime==="TRANSITION").length,
       ready:rows.filter(r=>r.stage==="READY").length};
-  return{version:s.version,engineVersion:ADAPTIVE_ENGINE_VERSION,grammar:ADAPTIVE_ENGINE_VERSION,mode:"REAL_FEED_PAPER",liveEligible:false,
+  return{version:s.version,engineVersion:ADAPTIVE_ENGINE_VERSION,grammar:ADAPTIVE_ENGINE_VERSION,positionIntelligenceVersion:POSITION_INTELLIGENCE_VERSION,mode:"REAL_FEED_PAPER",liveEligible:false,
     strategyAuthorityVersion:ADAPTIVE_ENGINE_VERSION,executionVersion:ADAPTIVE_ENGINE_VERSION,regionVersion:MARKET_INTELLIGENCE_VERSION,
     regionLaunchVersion:MARKET_INTELLIGENCE_VERSION,policyVersion:ADAPTIVE_ENGINE_VERSION,exitPolicyVersion:ADAPTIVE_ENGINE_VERSION,
     policyUpgrade:null,exitPolicyUpgrade:null,startedAt:s.startedAt,cutoverAt:s.cutoverAt,updatedAt:s.lastQuoteCycleAt,
@@ -696,6 +701,6 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
       accounting:"模拟仍使用新鲜买卖价并计入手续费、滑点和资金费占位；每笔新Trade冻结独立交易假设、相关组、失效条件与持仓计划。",
       risk:"总结构风险≤10%、同方向≤6.5%、组合保证金≤75%；同一高相关组正常只允许一个同方向主仓，反方向独立假设可并存。",
       validation:"任何细节都会进入证据池，但市场叙事使用慢速记忆和持续证据更新，单一噪声不能让大方向来回翻转。",
-      liquidation:"固定结构止损→连续两根完成5m确认的交易假设失效→预期持有期后的相对优势消失→最大持仓。Market Intelligence 不使用动态锁利，新机会也不会自动挤掉仍成立的旧仓。"},
+      liquidation:"固定结构止损是最后保险；主动退出由 Position Intelligence 判断继续等待价值。单一细节、单一市场转向或连续两根5m都没有独立平仓权，至少两个独立仓位证据家族持续恶化且剩余空间/正常回撤不再值得时，才通过防误杀闸门主动退出。"},
     cost:PAPER_COST,nextCycleAt:s.lastCandleAt+BAR_MS};
 }

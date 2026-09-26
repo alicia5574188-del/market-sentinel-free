@@ -13,6 +13,9 @@ const phase=(v?:string)=>({
 }[v??""]??v??"—");
 const age=(ms?:number)=>typeof ms!=="number"?"—":ms<3600000?String(Math.max(0,Math.round(ms/60000)))+" 分钟":(ms/3600000).toFixed(1)+" 小时";
 const side=(v:string)=>v==="LONG"?"做多":"做空";
+const family=(v?:string)=>({BREADTH:"市场广度",LEADERSHIP:"领导结构",RELATIVE:"相对强弱",FLOW:"跨所/盘口响应",CORRELATION:"相关性"}[v??""]??v??"市场细节");
+const trend=(v?:string)=>v==="STRENGTHENING"?"增强":v==="WEAKENING"?"减弱":"稳定";
+const decision=(v?:string)=>v==="EXIT"?"退出":v==="REVIEW"?"复核":"继续持有";
 const clock=(v?:number)=>v?new Date(v).toLocaleTimeString("zh-CN",{timeZone:"Asia/Vientiane",hour12:false}):"—";
 
 export default function MarketIntelligenceExecution({data,now:_,liveEnabled,liveOverview}:{
@@ -23,7 +26,7 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
     positions=data?.positions??[];
   return <div className="fr-execution-page">
     <section className="fr-page-title"><small>MARKET INTELLIGENCE V1</small><h1>实时市场理解与决策</h1>
-      <p>系统持续分析整个市场的共同运动、分化、相关组、相对残差和跨交易所共识。细节实时更新，但只有持续证据才会改变市场叙事。</p></section>
+      <p>系统持续分析整个市场的共同运动、分化、相关组、相对残差和跨交易所共识。细节只记录事实和事件演化，不直接投票多空；市场转向和每笔持仓是否继续等待分别独立判断。</p></section>
 
     <section className="fr-stats">
       <article><small>超大周期</small><strong>{bias(n?.macro.bias)}</strong><p>{phase(n?.macro.phase)} · 已维持 {age(n?.macro.ageMs)}</p></article>
@@ -41,15 +44,17 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
         <div><small>大方向解释</small><b>{n?.major.detail??"—"}</b></div>
         <div><small>短期解释</small><b>{n?.short.detail??"—"}</b></div>
       </div>
-      <p className="fr-note"><b>市场变化猜测：</b>{n?.transition.detail??"—"} · 压力 {fmt(n?.transition.pressure,0)}/100</p>
+      <p className="fr-note"><b>市场变化预测：</b>{n?.transition.detail??"—"} · 阶段 {n?.transition.stage??"STABLE"} · 压力 {fmt(n?.transition.pressure,0)}/100</p>
+      {!!n?.transition.drivers?.length&&<p className="fr-note"><b>当前迁移驱动：</b>{n.transition.drivers.join(" · ")}</p>}
       <p className="fr-note"><b>风险背景：</b>{n?.tailRisk.detail??"—"}</p>
       <p className="fr-trade-reason"><b>当前计划：</b>{n?.plan??"继续观察。"}</p>
     </section>
 
     <section className="fr-section">
       <div className="fr-section-head"><div><small>LIVE EVIDENCE</small><h2>系统刚刚发现的细节</h2></div><span>{evidence.length} 条有效证据</span></div>
-      {evidence.length?<div className="fr-journal">{evidence.slice(0,12).map(e=><article key={e.id}><time>{clock(e.at)}</time>
-        <div><b>{e.direction==="BULLISH"?"偏多细节":e.direction==="BEARISH"?"偏空细节":"分化细节"} · {fmt(e.severity*100,0)}</b><p>{e.summary}</p></div></article>)}</div>
+      {evidence.length?<div className="fr-journal">{evidence.slice(0,12).map(e=><article key={e.id}><time>{clock(e.lastAt??e.at)}</time>
+        <div><b>{family(e.family)} · {trend(e.trend)} · 强度 {fmt(e.severity*100,0)}</b>
+          <p>{e.summary}</p><p>同一事件已观察 {e.samples??1} 次 · 开始 {clock(e.firstAt??e.at)}</p></div></article>)}</div>
         :<p className="fr-note">当前没有足够持续的新细节改变市场理解。</p>}
     </section>
 
@@ -79,8 +84,16 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
 
     <section className="fr-section">
       <div className="fr-section-head"><div><small>OPEN THESES</small><h2>持仓自己的理由</h2></div><span>{positions.length} 笔</span></div>
-      {positions.length?<div className="fr-journal">{positions.map(t=><article key={t.id}><time>{side(t.side)}</time><div><b>{t.symbol.replace("_"," / ")} · 持仓评分 {fmt(t.holdScore,0)}</b>
-        <p>{t.entryContext?.thesisSummary??t.entryContext?.reason??"历史兼容持仓"}</p><p>失效条件：{t.entryContext?.invalidationSummary??"沿用冻结的历史退出规则。"}</p></div></article>)}</div>
+      {positions.length?<div className="fr-journal">{positions.map(t=>{const p=t.positionIntelligence;return <article key={t.id}><time>{side(t.side)}</time><div>
+        <b>{t.symbol.replace("_"," / ")} · {decision(p?.decision)} · 持有价值 {fmt(p?.holdValueScore??t.holdScore,0)}</b>
+        <p>{t.entryContext?.thesisSummary??t.entryContext?.reason??"历史兼容持仓"}</p>
+        {p?<><p><b>继续等待：</b>剩余空间 {fmt(p.remainingSpaceRate*100,2)}% · 正常回撤 {fmt(p.expectedPullbackRate*100,2)}% · 比值 {fmt(p.continuationRatio,2)}×</p>
+          <p><b>优势变化：</b>{fmt(p.entryAdvantage,0)} → {fmt(p.currentAdvantage,0)}（{p.advantageChange>=0?"+":""}{fmt(p.advantageChange,0)}） · 数据可信 {fmt(p.dataConfidence,0)}</p>
+          <p><b>独立证据：</b>支持 {p.supportFamilies?.join(" / ")||"无"} · 担忧 {p.concernFamilies?.join(" / ")||"无"} · 复核已持续 {p.reviewBars??0} 根完成5m</p>
+          <p>{p.summary}</p>
+          {!!p.concerns?.length&&<p><b>当前担忧：</b>{p.concerns.join("；")}</p>}</>
+          :<p>Position Intelligence 正在建立这笔仓位自己的连续观察基线。</p>}
+      </div></article>})}</div>
         :<p className="fr-note">当前没有持仓。系统仍会持续更新市场叙事和异类候选。</p>}
     </section>
 
