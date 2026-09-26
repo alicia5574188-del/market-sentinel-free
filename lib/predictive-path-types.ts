@@ -30,6 +30,7 @@ export type PredictivePathArtifact={
   shortTargetBeforeRisk60:LinearHead;
   longEntryRegret10:RegressionHead;
   shortEntryRegret10:RegressionHead;
+  policy:{directionMin:number;touchMin:number;regretMax:number;minNetEv:number;minSources:number;maxDisagreement:number};
   metrics:Record<string,number>;
 };
 export type PredictivePathForecast={
