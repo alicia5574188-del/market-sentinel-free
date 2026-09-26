@@ -30,7 +30,8 @@ export type MarketSymbolState={symbol:string;watchScore:number;regime:MarketRegi
 export type MarketCluster={id:string;leader:string;members:string[];averageCorrelation:number};
 export type MarketIntelligenceState={version:string;startedAt:number;updatedAt:number;narrative:MarketNarrative;
   evidence:MarketEvidence[];history:Array<{at:number;macro:MarketBias;major:MarketBias;short:MarketBias;summary:string}>;
-  symbols:Record<string,MarketSymbolState>;clusters:MarketCluster[]};
+  symbols:Record<string,MarketSymbolState>;clusters:MarketCluster[];
+  coverage?:{intradayMarkets:number;targetIntradayMarkets:number;dailyMarkets:number;targetDailyMarkets:number;macroReady:boolean}};
 
 export type IntelligenceOpportunity={
   id:string;symbol:string;side:"LONG"|"SHORT";mode:"RELATIVE"|"REVERSAL"|"CONTINUATION";premium:boolean;reserve?:boolean;
@@ -96,7 +97,8 @@ export function initialMarketIntelligenceState(now:number):MarketIntelligenceSta
     transition:{direction:"NEUTRAL",pressure:0,confidence:.2,detail:"尚未形成明确的状态转移压力。"},
     tailRisk:{level:"LOW",score:15,detail:"暂无足够证据显示系统性尾部风险正在抬升。"},
     summary:"市场智能正在建立全市场基线。",plan:"先观察全市场关系，不因单一币或单一交易所变化下结论。",details:[],expectedShortMinutes:[30,120]};
-  return{version:MARKET_INTELLIGENCE_VERSION,startedAt:now,updatedAt:now,narrative,evidence:[],history:[],symbols:{},clusters:[]};}
+  return{version:MARKET_INTELLIGENCE_VERSION,startedAt:now,updatedAt:now,narrative,evidence:[],history:[],symbols:{},clusters:[],
+    coverage:{intradayMarkets:0,targetIntradayMarkets:0,dailyMarkets:0,targetDailyMarkets:0,macroReady:false}};}
 
 export function buildMarketIntelligence(input:{paths:Record<string,CandleLike[]>;minutePaths?:Record<string,CandleLike[]>;
   daily?:Record<string,CandleLike[]>;quotes:Record<string,QuoteLike>;previous?:MarketIntelligenceState;now:number;allowed?:Set<string>}){
@@ -107,11 +109,12 @@ export function buildMarketIntelligence(input:{paths:Record<string,CandleLike[]>
     factor36=factor.reduce((p,v)=>p+v,0),volFactor=Math.max(.00035,stdev(factor));
   const breadth3=breadthFor(paths,3),breadth12=breadthFor(paths,12),breadthSlope=clip((breadth3-breadth12)/1.2,-1,1);
 
-  const dailyPaths:Record<string,CandleLike[]>={};for(const [s,rows] of Object.entries(input.daily??{})){const v=valid(rows,input.now,86400);if(v.length>=18)dailyPaths[s]=v;}
-  const macroMoves=Object.values(dailyPaths).map(r=>{const n=Math.min(30,r.length-1),r7=ret(r,Math.min(7,r.length-1)),r30=ret(r,n),vol=Math.max(.005,stdev(returns(r,n)));return{r7,r30,vol,n};});
-  const macroRaw=macroMoves.length>=3?clip(median(macroMoves.map(x=>.45*x.r7/(x.vol*Math.sqrt(7))+.55*x.r30/(x.vol*Math.sqrt(x.n))))/3,-1,1)
-    :clip(factor36/(volFactor*Math.sqrt(Math.max(1,factor.length))*3),-1,1);
-  const macroBreadth=macroMoves.length?2*(macroMoves.filter(x=>x.r30>0).length/macroMoves.length)-1:breadth12;
+  const dailyPaths:Record<string,CandleLike[]>={};for(const [s,rows] of Object.entries(input.daily??{})){if(input.allowed&&!input.allowed.has(s))continue;const v=valid(rows,input.now,86400);if(v.length>=18)dailyPaths[s]=v;}
+  const macroMoves=Object.values(dailyPaths).map(r=>{const n=Math.min(30,r.length-1),r7=ret(r,Math.min(7,r.length-1)),r30=ret(r,n),vol=Math.max(.005,stdev(returns(r,n)));return{r7,r30,vol,n};}),
+    targetMarkets=Math.max(1,input.allowed?.size??Object.keys(paths).length),targetDaily=Math.min(targetMarkets,Math.max(5,Math.ceil(targetMarkets*.35))),
+    macroReady=macroMoves.length>=targetDaily,
+    macroRaw=macroReady?clip(median(macroMoves.map(x=>.45*x.r7/(x.vol*Math.sqrt(7))+.55*x.r30/(x.vol*Math.sqrt(x.n))))/3,-1,1):previous.narrative.macro.score,
+    macroBreadth=macroReady?2*(macroMoves.filter(x=>x.r30>0).length/macroMoves.length)-1:0;
 
   type Provisional=Omit<MarketSymbolState,"clusterId"|"watchScore"|"regime"|"stage"|"longScore"|"shortScore"|"reasons">;
   const provisional:Record<string,Provisional>={},residualZs:number[]=[];
@@ -135,10 +138,13 @@ export function buildMarketIntelligence(input:{paths:Record<string,CandleLike[]>
     majorRaw=clip(factor12/(volFactor*Math.sqrt(12)+1e-9)/2.8*.55+breadth12*.30+venuePressureMarket*.15,-1,1),
     shortRaw=clip(factor6/(volFactor*Math.sqrt(6)+1e-9)/2.5*.42+breadth3*.25+breadthSlope*.18+venuePressureMarket*.15,-1,1);
 
-  const prevN=previous.narrative,macroBase=layer("超大周期",macroRaw,prevN.macro,input.now,previous.updatedAt,.08,"慢速周期判断"),
+  const prevN=previous.narrative,
+    macroBase=macroReady?layer("超大周期",macroRaw,prevN.macro,input.now,previous.updatedAt,.08,"真实日线周期判断")
+      :{...prevN.macro,detail:`日线市场覆盖 ${macroMoves.length}/${targetDaily}，超大周期沿用上一份已确认判断，不用分钟/小时数据冒充周月周期。`},
     major=layer("大方向",majorRaw,prevN.major,input.now,previous.updatedAt,.22,"数小时共同方向"),
     short=layer("短期优势",shortRaw,prevN.short,input.now,previous.updatedAt,.42,"市场内部短期变化"),
-    phase=macroPhase(macroBase.score,macroBreadth,dispersion),sphase=shortPhase(major.score,short.score,dispersion),
+    phase=macroReady?macroPhase(macroBase.score,macroBreadth,dispersion):prevN.macro.phase,
+    sphase=shortPhase(major.score,short.score,dispersion),
     macro={...macroBase,phase},shortLayer={...short,phase:sphase};
 
   const transitionRaw=clip((short.score-major.score)*.62+breadthSlope*.23+venuePressureMarket*.15,-1,1),
@@ -172,7 +178,7 @@ export function buildMarketIntelligence(input:{paths:Record<string,CandleLike[]>
     addEvidence(evidenceRows,mkEvidence("res-"+row.symbol+"-"+input.now,input.now,row.residualZ>0?"PERSISTENT_POSITIVE_RESIDUAL":"PERSISTENT_NEGATIVE_RESIDUAL",d,
       clip(Math.abs(row.residualZ)/2),`${row.symbol.replace("_USDT","")} 持续${row.residualZ>0?"强于":"弱于"}其相关市场理论路径，偏离约 ${fmtPct(row.residual)}。`,[row.symbol],row.sourceCount));}
 
-  macro.detail=phase==="BULL_EXPANSION"?"长期市场结构更接近扩张阶段，但仍持续检查高相关风险和二次探底证据。"
+  if(macroReady)macro.detail=phase==="BULL_EXPANSION"?"长期市场结构更接近扩张阶段，但仍持续检查高相关风险和二次探底证据。"
     :phase==="BEAR_CONTRACTION"?"长期市场结构仍偏收缩，任何上涨都需要区分真正修复与熊市反弹。"
     :phase==="RECOVERY_UNCONFIRMED"?"长期修复正在形成，但底部尚不能视为完全确认，仍保留二次探底假设。"
     :phase==="BASE_BUILDING"?"市场更像在低位修复/筑底，尚没有足够广度确认完整牛市。"
@@ -225,7 +231,8 @@ export function buildMarketIntelligence(input:{paths:Record<string,CandleLike[]>
 
   const history=[...previous.history];if(!history.length||input.now-history[0]!.at>=5*60_000||history[0]!.summary!==summary)history.unshift({at:input.now,macro:macro.bias,major:major.bias,short:shortLayer.bias,summary});
   const state:MarketIntelligenceState={version:MARKET_INTELLIGENCE_VERSION,startedAt:previous.startedAt||input.now,updatedAt:input.now,narrative,
-    evidence:evidenceRows.slice(0,40),history:history.slice(0,96),symbols:states,clusters};
+    evidence:evidenceRows.slice(0,40),history:history.slice(0,96),symbols:states,clusters,
+    coverage:{intradayMarkets:Object.keys(paths).length,targetIntradayMarkets:targetMarkets,dailyMarkets:macroMoves.length,targetDailyMarkets:targetDaily,macroReady}};
   const up=Object.values(states).filter(x=>x.longScore>=62).length,down=Object.values(states).filter(x=>x.shortScore>=62).length,neutral=Math.max(0,Object.keys(states).length-up-down);
   const pulse={at:input.now,up,down,neutral,
     bias:(shortLayer.bias==="BULLISH"?"UP":shortLayer.bias==="BEARISH"?"DOWN":"MIXED") as "UP"|"DOWN"|"MIXED",
