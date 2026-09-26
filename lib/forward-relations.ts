@@ -528,7 +528,7 @@ function manageExtremumTrades(s:ForwardState,quotes:Record<string,Quote>,now:num
       oppositeReady=!!state&&state.stage==="READY"&&state.candidateSide===(t.side==="LONG"?"SHORT":"LONG"),
       trendEntry=t.entryContext?.mode==="TREND_PULLBACK"||t.entryContext?.mode==="IMPULSE",
       trendDeath=trendEntry&&!!state&&state.regime==="TRANSITION"&&survival<=42&&opposite>=66
-        &&(["STRUCTURE_BREAK","RECLAIM_TEST","READY"] as const).includes(state.stage),
+        &&(state.stage==="STRUCTURE_BREAK"||state.stage==="RECLAIM_TEST"||state.stage==="READY"),
       swingOpposite=t.entryContext?.mode==="SWING"&&oppositeReady&&opposite>=70,
       weakening=!!state&&(state.regime==="WEAKENING"||state.regime==="TRANSITION");
     const activation=Math.max(ROUND_TRIP_COST*1.35,Math.min(.007,Math.max(.0032,stopRate*.52)));
