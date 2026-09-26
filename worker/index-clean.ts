@@ -14,7 +14,7 @@ import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem
 import { buildBankruptcyReport, diagnoseClosedPosition, paperCycleSummary, recordCycleTrade, startPaperCycle,
   PAPER_INITIAL_EQUITY, type BankruptcyReport, type PaperCycle } from "../lib/paper-cycle.ts";
 import { runtimeReady, type RuntimeHealthShape } from "../lib/runtime-health.ts";
-import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, gateMarkedEquity, gatePositionValuation, gateUnknownSubmissionCanResolve, isGateReadTimeoutError, LiveEntrySizingError, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveOrder, type GateLiveOrderSnapshot, type GateLiveSnapshot, type LiveEntrySizingCode } from "../lib/gate-live.ts";
+import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, gateMarkedEquity, gatePositionValuation, isGateReadTimeoutError, LiveEntrySizingError, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveOrder, type GateLiveOrderSnapshot, type GateLiveSnapshot, type LiveEntrySizingCode } from "../lib/gate-live.ts";
 import { LIVE_SESSION_VERSION, establishLiveScale, reconcileLiveScale, startLiveSession, sourceAfterEnable, sameLiveSession, type LiveSession } from "../lib/live-session.ts";
 import type { GateSizeRules, SizeDiagnostic } from "../lib/gate-quantity.ts";
 import { encryptGateCredentials, gateKeyHint, normalizeGateCredentials, type GateCredentials } from "../lib/credential-vault.ts";
@@ -2095,62 +2095,19 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private async syncLiveOnce(now: number, initialEnable = false, forceEntryCleanup = false) {
-    const preferCached=this.livePreferCachedNext&&!initialEnable&&!forceEntryCleanup;
-    this.livePreferCachedNext=false;
-    // Owner actions and optional hourly evaluation can arrive between two book
-    // loops. Reconcile first so LIVE can never observe an unregistered source leg.
+    this.livePreferCachedNext=false;this.liveSyncUsedCached=false;
+    // Restore the 2026-09-20 primary LIVE path: one complete Gate snapshot is
+    // the execution authority for account, positions, orders and protection.
     this.reconcileCanonicalMirror(now);
     const activePositions = Object.values(this.runtime.live.positions).some((position) => position?.status === "OPEN");
     const activeEntries = Object.values(this.runtime.live.entries).some((entry) => entry &&
       (!["FILLED", "CANCELLED"].includes(entry.status) || this.liveEntryAwaitingReconcile(entry)));
     if (!this.runtime.live.requestedEnabled && !activePositions && !activeEntries && !initialEnable && !forceEntryCleanup) return;
-    // A missing source blocks additions, not the owner's OFF cleanup or native
-    // protection of an already-mapped position.
     const client = await this.gateLive();
-    const unresolvedEntry=Object.values(this.runtime.live.entries).some(entry=>entry
-      &&(!["FILLED","CANCELLED"].includes(entry.status)||this.liveEntryAwaitingReconcile(entry)));
-    const needsProtectionOrderLane=activePositions||Object.values(this.runtime.live.entries).some(entry=>entry
-      &&entry.stopSubmittingAt&& !entry.stopOrderId && !["FILLED","CANCELLED"].includes(entry.status));
-    const cached=preferCached&&this.runtime.live.operational&&!unresolvedEntry&&this.liveSnapshotCache
-      &&now-this.liveSnapshotCache.checkedAt<=LIVE_FAST_SNAPSHOT_MAX_AGE_MS
-      ?structuredClone(this.liveSnapshotCache):null;
-    let snapshot:GateLiveSnapshot;
-    let orderAuditUsable=true;
-    const splitPrivateReads=typeof client.snapshotCore==="function"&&typeof client.snapshotOrders==="function";
-    if(cached){
-      snapshot=cached;this.liveSyncUsedCached=true;
-    }else if(!splitPrivateReads||forceEntryCleanup||needsProtectionOrderLane){
-      // Test doubles and legacy/member executors may still expose only the
-      // reviewed full-snapshot contract. Keep that compatibility path exact;
-      // production GateLiveClient uses the split lanes below.
-      snapshot=await client.snapshot();this.liveSyncUsedCached=false;
-      this.liveOrderSnapshotCache={orders:structuredClone(snapshot.orders),priceOrders:structuredClone(snapshot.priceOrders),checkedAt:snapshot.checkedAt};
-      this.liveOrderAuditAt=snapshot.checkedAt;
-      this.liveSnapshotCache=structuredClone(snapshot);
-    }else{
-      // Routine short-horizon LIVE reconciliation only needs fresh account and
-      // position truth. Open-order list latency is a separate audit lane: one
-      // slow optional endpoint must never make fresh account/positions appear
-      // offline or create an escalating "account timeout" loop.
-      const core=await client.snapshotCore();this.liveSyncUsedCached=false;
-      if(!this.liveOrderAuditAt&&this.runtime.live.lastSyncAt)this.liveOrderAuditAt=this.runtime.live.lastSyncAt;
-      let orders=this.liveOrderSnapshotCache;
-      if(!orders||now-orders.checkedAt>LIVE_ORDER_AUDIT_MAX_AGE_MS){
-        try{
-          orders=await client.snapshotOrders();
-          this.liveOrderSnapshotCache=structuredClone(orders);this.liveOrderAuditAt=orders.checkedAt;
-        }catch(error){
-          if(!isGateReadTimeoutError(error))throw error;
-          orderAuditUsable=false;
-        }
-      }
-      const inheritedAuditAt=orders?.checkedAt??this.liveOrderAuditAt;
-      orderAuditUsable=inheritedAuditAt>0&&now-inheritedAuditAt<=LIVE_ORDER_AUDIT_ADMISSION_MAX_AGE_MS;
-      snapshot={account:core.account,positions:core.positions,orders:orders?.orders??[],priceOrders:orders?.priceOrders??[],checkedAt:core.checkedAt};
-      this.liveSnapshotCache=structuredClone(snapshot);
-    }
-    // The committed PAPER account can advance while private reads are in flight.
-    // Select sources after the read, never from a pre-await portfolio snapshot.
+    let snapshot=await client.snapshot();
+    this.liveOrderSnapshotCache={orders:structuredClone(snapshot.orders),priceOrders:structuredClone(snapshot.priceOrders),checkedAt:snapshot.checkedAt};
+    this.liveOrderAuditAt=snapshot.checkedAt;
+    this.liveSnapshotCache=structuredClone(snapshot);
     now=Date.now();this.reconcileCanonicalMirror(now);
     let sourceError=this.liveBindingError??this.forwardError;
     let desiredPortfolio:Record<string,MirrorSourceTrade>={};
@@ -2167,8 +2124,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       .flatMap((entry) => entry?.exchangeOrderId ? [entry.exchangeOrderId] : []));
     snapshot = forceEntryCleanup
       ? await this.cancelAndConfirmSystemEntries(client, snapshot, trackedEntryIds)
-      : orderAuditUsable?await this.cancelAndConfirmSystemEntries(client, snapshot, trackedEntryIds, knownTags):snapshot;
-    if(!cached||snapshot.checkedAt!==cached.checkedAt)this.liveSnapshotCache=structuredClone(snapshot);
+      : await this.cancelAndConfirmSystemEntries(client, snapshot, trackedEntryIds, knownTags);
+    this.liveSnapshotCache=structuredClone(snapshot);
     if (forceEntryCleanup) {
       for (const entry of Object.values(this.runtime.live.entries)) {
         if (!entry || ["FILLED", "CANCELLED"].includes(entry.status)) continue;
@@ -2190,8 +2147,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.live.available = available;
     this.runtime.live.lastSyncAt = snapshot.checkedAt;
 
-    const exchangeOrders = orderAuditUsable?[...snapshot.orders, ...snapshot.priceOrders]:[];
-    const unknownOrders = orderAuditUsable?exchangeOrders.filter((order) => !knownTags.has(liveOrderTag(order) ?? "")):[];
+    const exchangeOrders = [...snapshot.orders, ...snapshot.priceOrders];
+    const unknownOrders = exchangeOrders.filter((order) => !knownTags.has(liveOrderTag(order) ?? ""));
     const actualPositions = snapshot.positions.filter((position) => Number(position.size ?? 0) !== 0);
     const unmanagedPositions = actualPositions.filter((actual) => {
       const symbol = actual.contract ?? "";
@@ -2249,26 +2206,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             this.recordLiveAudit({ observedAt: now, symbol, planId: entry.planId, stage: "ENTRY_SUBMIT",
               level: "SKIPPED", reason });
           } else entry.lastError = null;
-        } else if (entry.marketSubmittedAt!=null && gateUnknownSubmissionCanResolve(entry.marketSubmittedAt,now)) {
-          // Gate documents that a custom text ID for a zero-fill cancelled
-          // futures order may disappear after 60s, while any fully/partially
-          // filled order remains queryable by that text indefinitely. Reaching
-          // this branch means the fresh account snapshot has no position and a
-          // direct text lookup also returned not-found beyond that window.
-          entry.status = "CANCELLED";
-          entry.submissionResolved = true;
-          const reason = `Gate 在60秒订单身份核对窗口后仍无订单、持仓或成交 ${entry.tag}；确认本次未形成实盘暴露，原源单不重放，其他新机会恢复执行`;
-          entry.lastError = reason;
-          this.runtime.live.entrySkips[symbol] = { planId: entry.planId, symbol, code: "ENTRY_REJECTED", reason, observedAt: now };
-          this.recordLiveAudit({ observedAt: now, symbol, planId: entry.planId, stage: "ENTRY_SUBMIT",
-            level: "INFO", reason });
         } else if (now - entry.missingSince >= 6_000) {
-          const reason = `Gate 暂未返回订单 ${entry.tag}；保留唯一订单身份继续核对至60秒，不自动重复提交`;
-          entry.status = "ERROR";
-          if(entry.lastError!==reason)this.recordLiveAudit({ observedAt: now, symbol, planId: entry.planId, stage: "ENTRY_SUBMIT",
-            level: "RECOVERING", reason });
+          entry.status = "CANCELLED";
+          const reason = `Gate 在提交后6秒内未返回订单 ${entry.tag}，本计划不自动重放，避免重复开仓`;
           entry.lastError = reason;
           this.runtime.live.entrySkips[symbol] = { planId: entry.planId, symbol, code: "SUBMISSION_UNCONFIRMED", reason, observedAt: now };
+          this.recordLiveAudit({ observedAt: now, symbol, planId: entry.planId, stage: "ENTRY_SUBMIT",
+            level: "SKIPPED", reason });
         }
       }
       const selectedTrade = desiredPortfolio[symbol] ?? null;
@@ -2439,27 +2383,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.runtime.live.entrySkips = {};
       return;
     }
-    if(!orderAuditUsable){
-      this.runtime.live.operational=false;
-      this.runtime.live.lastError="Gate挂单核对暂未完成；实盘开关已保持开启，后台会自动重试，核对成功后自动恢复新增复制";
-      return;
-    }
     if (unknownOrders.length) throw new Error("Gate 存在未纳管挂单；已停止新开仓");
     if(unmanagedPositions.length)throw new Error("Gate 存在未纳管仓位；停止新增复制，保留已纳管保护");
     if(sourceError)throw new Error(`当前模拟复制源尚待恢复：${sourceError}`);
     if(accountError)throw new Error(accountError);
     if(this.forwardError)throw new Error(`模拟状态尚未成功保存：${this.forwardError}；不复制未持久化决定`);
-    if(typeof client.prepareTradingChannel==="function"){
-      try{await client.prepareTradingChannel();}
-      catch(error){
-        const message=`Gate WebSocket交易登录未就绪；已确认本轮没有发送实盘订单：${safeError(error)}`;
-        const changed=this.runtime.live.lastError!==message||this.runtime.live.operational;
-        this.runtime.live.operational=false;this.runtime.live.lastError=message;
-        if(changed)this.recordLiveAudit({observedAt:Date.now(),symbol:null,planId:null,stage:"LIVE_CONTROL",level:"RECOVERING",
-          reason:message,error});
-        return;
-      }
-    }
 
     let recoveringSubmission = Object.values(this.runtime.live.entries)
       .find((entry) => entry && (["SUBMITTING", "ERROR"].includes(entry.status) || this.liveEntryAwaitingReconcile(entry))) ?? null;
@@ -2610,11 +2538,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       try {
         if(!this.runtime.live.requestedEnabled||!sameLiveSession(activation,this.runtime.live.activation)){entry.status="CANCELLED";continue;}
         try {
-          const leverageCheck=typeof client.ensureLeverage==="function"
-            ?await client.ensureLeverage(symbol,intent.leverage)
-            :(await client.setLeverage(symbol,intent.leverage),{verified:true,recovered:false,already:false,actual:intent.leverage});
-          if(leverageCheck.recovered)this.recordLiveAudit({observedAt:Date.now(),symbol,planId:plan.id,stage:"LEVERAGE",level:"INFO",
-            reason:`Gate 杠杆写入响应曾超时，但安全回读已确认 ${symbol}=${intent.leverage}×；继续本次同源入场，不重放杠杆写请求`});
+          await client.setLeverage(symbol,intent.leverage);
         } catch (error) {
           const reason = `Gate 未确认 ${symbol} 的 ${intent.leverage}× 杠杆，本计划已跳过但不会锁住其他新机会：${safeError(error)}`;
           entry.status = "CANCELLED";entry.submissionResolved=true;entry.lastError = reason;
@@ -2661,62 +2585,20 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             return latestDrift.adverse<=latestDrift.allowed+1e-9;
           };
           if(!submissionStillAllowed())throw new GateEntryCancelledError();
-          entry.exchangeOrderId = await client.createEntry(intent,submissionStillAllowed);
-          entry.status="OPEN";entry.lastError=null;entry.missingSince=null;
-          // ACK gives us the exchange identity before clearing/fill details.
-          // Persist that identity immediately. A process restart or a slow GET
-          // can now recover by immutable order ID instead of falling back to the
-          // 65-second custom-tag ambiguity window.
-          await this.queueLiveBinding(entry);
-          await this.saveCheckpoint(Date.now(),true);
-          let filled:GateLiveOrder|null=null;
-          try {
-            filled=await client.inspectEntry("MARKET",symbol,entry.tag,entry.exchangeOrderId);
-          } catch(error) {
-            const reason=`Gate 已确认订单ID ${entry.exchangeOrderId}；成交状态核对暂时失败：${safeError(error)}`;
-            entry.status="ERROR";entry.missingSince=Date.now();entry.lastError=reason;recoveringSubmission=entry;
-            this.liveSourcePending=true;this.liveFastSourcePending=false;
-            this.recordLiveAudit({observedAt:Date.now(),symbol,planId:plan.id,stage:"ENTRY_SUBMIT",level:"RECOVERING",
-              reason:`${reason}；订单身份已持久化，只用读取继续核对，不重复提交`,error});
-            await this.queueLiveBinding(entry);
-            await this.saveCheckpoint(Date.now(),true);
-            continue;
-          }
-          if(!filled){
-            const reason=`Gate 已确认订单ID ${entry.exchangeOrderId}；订单/持仓尚未在读取端可见，继续按真实订单ID核对`;
-            entry.status="ERROR";entry.missingSince=Date.now();entry.lastError=reason;recoveringSubmission=entry;
-            this.liveSourcePending=true;this.liveFastSourcePending=false;
-            this.recordLiveAudit({observedAt:Date.now(),symbol,planId:plan.id,stage:"ENTRY_SUBMIT",level:"RECOVERING",reason});
-            await this.saveCheckpoint(Date.now(),true);
-            continue;
-          }
-          const disposition=liveEntryDisposition(filled,"MARKET"),fillPrice=Number(filled.fill_price);
+          entry.exchangeOrderId = await client.createEntry(intent);
+          entry.status = "OPEN";
+          const filled=await client.inspectEntry("MARKET",symbol,entry.tag,entry.exchangeOrderId);
+          const fillPrice=Number(filled?.fill_price);
           if(entry.parity&&Number.isFinite(fillPrice)&&fillPrice>0){
             const actualDrift=liveEntryDriftGuard(source,fillPrice);
             Object.assign(entry.parity,{exchangeEntryPrice:fillPrice,exchangeEntryAt:Date.now(),
               exchangeEntryDriftRate:actualDrift.adverse});
           }
-          if(disposition==="CANCELLED"){
+          if(filled&&liveEntryDisposition(filled,"MARKET")==="CANCELLED"){
             entry.status="CANCELLED";entry.submissionResolved=true;entry.lastError="Gate IOC零成交；未完成复制，不冒充成功";
             this.runtime.live.entrySkips[symbol]={planId:entry.planId,symbol,code:"ENTRY_REJECTED",reason:entry.lastError,observedAt:Date.now()};
-            await this.queueLiveBinding(entry);
             await this.saveCheckpoint(Date.now(),true);continue;
           }
-          if(disposition==="ERROR"){
-            entry.status="CANCELLED";entry.submissionResolved=true;
-            entry.lastError=`Gate 订单 ${entry.exchangeOrderId} 执行失败：${filled.finish_as??filled.status??"unknown"}`;
-            this.runtime.live.entrySkips[symbol]={planId:entry.planId,symbol,code:"ENTRY_REJECTED",reason:entry.lastError,observedAt:Date.now()};
-            this.recordLiveAudit({observedAt:Date.now(),symbol,planId:plan.id,stage:"ENTRY_SUBMIT",level:"SKIPPED",reason:entry.lastError});
-            await this.saveCheckpoint(Date.now(),true);continue;
-          }
-          if(disposition==="OPEN"){
-            entry.status="OPEN";entry.missingSince=Date.now();
-            entry.lastError=`Gate 已确认订单ID ${entry.exchangeOrderId}；IOC成交结果尚未完成，继续按ID核对`;
-            recoveringSubmission=entry;this.liveSourcePending=true;this.liveFastSourcePending=false;
-            await this.saveCheckpoint(Date.now(),true);continue;
-          }
-          entry.status="FILLED";entry.submissionResolved=true;entry.missingSince=null;entry.lastError=null;
-          await this.queueLiveBinding(entry);
           await this.saveCheckpoint(Date.now(),true);
           await this.createImmediateLiveStop(client, entry);
           if (!entry.stopOrderId) {
@@ -2766,7 +2648,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     // A cached source-trigger pass is provisional by construction; the caller
     // schedules the immediate full Gate reconciliation. Network-backed passes
     // become the next fast-event cache.
-    if(!cached)this.liveSnapshotCache=structuredClone(snapshot);
+    this.liveSnapshotCache=structuredClone(snapshot);
   }
 
   protected async setLiveMode(enabled: boolean) {
