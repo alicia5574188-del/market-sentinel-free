@@ -160,3 +160,20 @@ test("counterfactual research is isolated from trading authority and exported fo
   assert.match(research,/EXECUTABLE_NOT_SELECTED/);
   assert.match(research,/marketAt/);
 });
+
+
+test("Forward long-run storage is hot/cold bounded and keeps thesis dedupe outside hot history",async()=>{
+  const [store,forward]=await Promise.all([read("lib/forward-store.ts"),read("lib/forward-relations.ts")]);
+  assert.match(store,/FORWARD_ACCOUNT_TARGET_BYTES\s*=\s*640\*1024/);
+  assert.match(store,/FORWARD_HOT_HISTORY_FULL\s*=\s*32/);
+  assert.match(store,/FORWARD_HOT_HISTORY_TOTAL\s*=\s*96/);
+  assert.match(store,/function hotProjection/);
+  assert.match(store,/compactClosedTrade/);
+  assert.match(store,/sourceHistory:next\.history\.length/);
+  assert.match(store,/full close record|immutable archive|archive:/i);
+  assert.match(forward,/consumedTheses:Record<string,number>/);
+  assert.match(forward,/CONSUMED_THESIS_LIMIT=512/);
+  assert.match(forward,/rememberConsumedThesis\(s,o\.thesisId,now\)/);
+  assert.match(forward,/o\.thesisId&&s\.consumedTheses\[o\.thesisId\]/);
+  assert.match(forward,/next\.consumedTheses=\{\.\.\.prior\.consumedTheses\}/);
+});

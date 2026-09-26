@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { FORWARD_VERSION, initialForward, normalizeForward, type ForwardState, type Trade } from "../lib/forward-relations.ts";
 import { FORWARD_PAGED_STATE_VERSION, FORWARD_SAMPLE_MANIFEST_STORAGE, FORWARD_SAMPLE_PAGE_PREFIX,
-  FORWARD_SAMPLE_RECOVERY_PREFIX, FORWARD_STORAGE, prepareForwardWrite, readForwardStore } from "../lib/forward-store.ts";
+  FORWARD_SAMPLE_RECOVERY_PREFIX, FORWARD_STORAGE, FORWARD_HOT_HISTORY_FULL, FORWARD_HOT_HISTORY_TOTAL,
+  FORWARD_HOT_EVENT_LIMIT, FORWARD_ACCOUNT_TARGET_BYTES, prepareForwardWrite, readForwardStore } from "../lib/forward-store.ts";
 import { gzip, gunzip } from "../lib/storage-codec.ts";
 
 const T=1_795_000_000_000,HEAD=`${FORWARD_STORAGE}head`,SAMPLE_PAGE_ROWS_FOR_TEST=96;
@@ -33,6 +34,26 @@ function trade(i:number,status:"OPEN"|"CLOSED"="CLOSED"):Trade {
       samples:120,trainGroups:8,checkGroups:4,estimatedNetRate:.004,priorResponse:null,recentResponse:.004,standardError:.001,
       reason:"storage stress",mutation:"CREATE",grammar:"forward-path-relation-v3",liveEligible:false}};
 }
+
+function richTrade(i:number,status:"OPEN"|"CLOSED"="CLOSED"):Trade{
+  const t=trade(i,status),longText="持仓优势变化与跨所流动性细节".repeat(35);
+  t.entryContext={version:"adaptive-ten-entry-v1",capturedAt:t.openedAt,timeframe:"5m",side:t.side,mode:"RELATIVE",reserve:false,
+    reason:longText,entryScore:88,directionStrength:86,spaceScore:82,positionScore:84,executionScore:91,remainingSpaceRate:.025,
+    pullbackRiskRate:.009,edgeRatio:2.7,expectedHoldMinutes:240,marketFit:76,regionId:null,portfolioRiskCharge:5,
+    strategyVersion:"market-intelligence-v1",regime:"DIVERGENT",confirmationStage:"READY",sourceCount:3,disagreementRate:.0002,
+    postEntryState:"CONFIRMED",clusterId:`corr:S${i%30}_USDT`,thesisId:`market-intelligence-v1:S${i%30}_USDT:${t.side}:${T-i*300_000}`,
+    marketNarrativeId:"mi-storage-stress",thesisSummary:longText,invalidationSummary:longText,entryResidual:.012,
+    entryRelativeStrength:.72,thesisSince:T-i*300_000,thesisBars:4};
+  t.positionIntelligence={version:"position-intelligence-v1",updatedAt:t.closedAt??T,decision:"REVIEW",phase:"DECAYING",
+    reviewSince:T-600_000,reviewBars:2,lastCompletedBar:T-300_000,entryAdvantage:88,currentAdvantage:67,advantageChange:-21,
+    remainingSpaceRate:.012,expectedPullbackRate:.009,continuationRatio:1.33,holdValueScore:49,exitValueScore:51,dataConfidence:91,
+    counterfactualNewEntry:false,supportFamilies:["RELATIVE","FLOW"],concernFamilies:["PATH","STRUCTURE"],
+    assessments:Array.from({length:5},(_,j)=>({family:["RELATIVE","PATH","FLOW","STRUCTURE","MARKET"][j] as "RELATIVE"|"PATH"|"FLOW"|"STRUCTURE"|"MARKET",
+      stance:j<2?"SUPPORT" as const:"CONCERN" as const,severity:.6,summary:longText,contextOnly:j===4})),
+    reasons:[longText,longText],concerns:[longText,longText],summary:longText};
+  return t;
+}
+
 function stressFixture(){
   const s=initialForward(T-25*60*60_000);s.storage={persistedAt:T-1,error:null};s.balance=993;s.resolved=240;s.wins=120;s.revision=500;
   s.relationEngine.samples=Array.from({length:2200},(_,i)=>sample(i));
@@ -60,7 +81,7 @@ test("paged store preserves 2200 mature samples plus the full financial/control 
   assert.ok(manifest.pages.every(page=>/^[0-9a-f]{64}$/.test(page.rawSha256??"")));
   const db=new Memory();await db.put(write.entries);const restored=await readForwardStore(db,T+1);
   assert.equal(restored.relationEngine.samples.length,2200);assert.equal(Object.keys(restored.relationEngine.pending).length,160);
-  assert.equal(restored.history.length,240);assert.equal(restored.events.length,160);assert.equal(restored.positions.length,2);
+  assert.equal(restored.history.length,FORWARD_HOT_HISTORY_TOTAL);assert.equal(restored.events.length,FORWARD_HOT_EVENT_LIMIT);assert.equal(restored.positions.length,2);
   assert.equal(restored.relationEngine.rules.length,18);assert.equal(Object.keys(restored.regions).length,30);
   assert.deepEqual(new Set(restored.relationEngine.samples.map(x=>`${x.symbol}:${x.at}`)),new Set(s.relationEngine.samples.map(x=>`${x.symbol}:${x.at}`)));
   const continued=structuredClone(restored);continued.relationEngine.samples[2199]={...continued.relationEngine.samples[2199]!,response:.123,
@@ -87,7 +108,7 @@ test("legacy pages recover only through exact decoded page invariants and migrat
 
   const recovered=await readForwardStore(db,T+1);
   assert.equal(recovered.relationEngine.samples.length,2200);
-  assert.equal(recovered.history.length,240);
+  assert.equal(recovered.history.length,FORWARD_HOT_HISTORY_TOTAL);
   const migrated=await prepareForwardWrite(recovered,recovered,T+2,{compact:true});
   assert.equal(migrated.compression.changedSamplePages,migrated.compression.samplePages);
   await db.put(migrated.entries);
@@ -125,7 +146,7 @@ test("legacy retained strict supersets are canonically proven and atomically arc
   await db.put({...write.entries,[target.key]:oversized,[FORWARD_SAMPLE_MANIFEST_STORAGE]:manifest,[HEAD]:head});
 
   const restartAt=T+25*60*60_000,recovered=await readForwardStore(db,restartAt);
-  assert.equal(recovered.relationEngine.samples.length,0);assert.equal(recovered.history.length,240);
+  assert.equal(recovered.relationEngine.samples.length,0);assert.equal(recovered.history.length,FORWARD_HOT_HISTORY_TOTAL);
   const next=normalizeForward(structuredClone(recovered),restartAt+1);next.storage={persistedAt:restartAt+1,error:null};
   const migrated=await prepareForwardWrite(recovered,next,restartAt+1,{compact:true}),keys=Object.keys(migrated.entries),
     recoveryBytesKey=keys.find(key=>key.startsWith(FORWARD_SAMPLE_RECOVERY_PREFIX)&&key.endsWith(":bytes"))!,
@@ -285,9 +306,47 @@ test("a legacy monolithic account migrates to pages without losing samples, orde
   const legacy=stressFixture(),raw=new TextEncoder().encode(JSON.stringify(legacy)),sha=await digest(raw),db=new Memory();
   await db.put({[HEAD]:{version:FORWARD_VERSION,count:1,length:raw.length,sha256:sha},[`${FORWARD_STORAGE}chunk:0`]:raw});
   const recovered=await readForwardStore(db,T+1);assert.equal(recovered.relationEngine.samples.length,2200);
-  assert.equal(recovered.history.length,240);assert.equal(Object.keys(recovered.relationEngine.pending).length,160);
+  assert.equal(recovered.history.length,240,"legacy monolithic read is lossless before the first hot/cold rewrite");
+  assert.equal(Object.keys(recovered.relationEngine.pending).length,160);
   const migrated=await prepareForwardWrite(recovered,recovered,T+2,{compact:true});await db.put(migrated.entries);
   assert.equal((db.data.get(HEAD) as {version:string}).version,FORWARD_PAGED_STATE_VERSION);
   const restarted=await readForwardStore(db,T+3);assert.equal(restarted.relationEngine.samples.length,2200);
-  assert.equal(restarted.history.length,240);assert.equal(restarted.relationEngine.rules.length,18);
+  assert.equal(restarted.history.length,FORWARD_HOT_HISTORY_TOTAL);assert.equal(restarted.relationEngine.rules.length,18);
+});
+
+
+test("long-run hot/cold storage keeps rich closed-trade growth permanently below the account target",async()=>{
+  const s=stressFixture();s.history=Array.from({length:240},(_,i)=>richTrade(i));s.events=Array.from({length:160},(_,i)=>({
+    id:`a${s.startedAt}-${i+1}`,at:T-i,kind:i%2?"ENTRY" as const:"EXIT" as const,subject:`trade-${i}`,reason:"stress".repeat(30)
+  }));
+  const unboundedBytes=new TextEncoder().encode(JSON.stringify({...s,relationEngine:{...s.relationEngine,samples:[]}})).length;
+  assert.ok(unboundedBytes>1024*1024,"fixture must reproduce the production class of >1MB hot-state failure");
+  const write=await prepareForwardWrite(s,s,T,{compact:true});
+  assert.ok(write.compression.rawBytes<=FORWARD_ACCOUNT_TARGET_BYTES,
+    `hot account must stay under target, got ${write.compression.rawBytes}`);
+  assert.equal(write.compression.sourceHistory,240);
+  assert.ok(write.compression.hotHistory<=FORWARD_HOT_HISTORY_TOTAL);
+  assert.ok(write.compression.fullHistory<=FORWARD_HOT_HISTORY_FULL);
+  const db=new Memory();await db.put(write.entries);const restored=await readForwardStore(db,T+1);
+  assert.equal(restored.history.length,write.compression.hotHistory);
+  assert.ok(restored.history.slice(0,write.compression.fullHistory).every(t=>!!t.positionIntelligence));
+  assert.ok(restored.history.slice(write.compression.fullHistory).every(t=>!t.positionIntelligence),
+    "older hot rows are summaries; full originals remain in immutable archive packets");
+  assert.equal(restored.balance,s.balance);assert.equal(restored.resolved,s.resolved);assert.equal(restored.positions.length,s.positions.length);
+});
+
+test("a newly closed rich trade is archived in full even when the persisted hot account stores a compact history window",async()=>{
+  const previous=stressFixture();previous.history=Array.from({length:240},(_,i)=>richTrade(i));
+  previous.revision=600;previous.events=[];previous.storage={persistedAt:T-1,error:null};
+  const next=structuredClone(previous),closed=richTrade(999);
+  closed.closedAt=T;closed.positionIntelligence!.summary="FULL_ARCHIVE_SENTINEL:"+closed.positionIntelligence!.summary;
+  next.history.unshift(closed);next.history=next.history.slice(0,240);next.revision=601;
+  next.events.unshift({id:`a${next.startedAt}-601`,at:T,kind:"EXIT",subject:closed.id,reason:"POSITION_VALUE_EXIT"});
+  const write=await prepareForwardWrite(previous,next,T,{compact:true});
+  const archive=Object.entries(write.entries).find(([key])=>key.startsWith(`${FORWARD_STORAGE}archive:`))?.[1] as {trades:Trade[]};
+  assert.ok(archive?.trades.some(t=>t.id===closed.id&&t.positionIntelligence?.summary.startsWith("FULL_ARCHIVE_SENTINEL:")),
+    "full close record must be cold-archived before any hot-state compaction");
+  const db=new Memory();await db.put(write.entries);const restored=await readForwardStore(db,T+1);
+  assert.ok(restored.history.length<=FORWARD_HOT_HISTORY_TOTAL);
+  assert.ok(restored.history.some(t=>t.id===closed.id),"new close remains in the recent hot window");
 });

@@ -1,4 +1,4 @@
-import { FORWARD_VERSION, normalizeForward, type ForwardState } from "./forward-relations.ts";
+import { FORWARD_VERSION, normalizeForward, type ForwardState, type Trade } from "./forward-relations.ts";
 import type { RelationMeasurement } from "./forward-relation-v2.ts";
 import { gzip, gunzip, MAX_STATE_BYTES } from "./storage-codec.ts";
 import { buildForwardProtectionCheckpoint, restoreForwardProtectionCheckpoint } from "./forward-protection-checkpoint.ts";
@@ -13,6 +13,10 @@ export const FORWARD_SAMPLE_RECOVERY_PREFIX=`${FORWARD_STORAGE}sample-recovery:`
 // Keep 16 KiB below the Durable Object single-value ceiling for typed-array
 // serialization and metadata. No base64 conversion or state-field omission.
 export const FORWARD_COMPACT_BYTES = 112*1024;
+export const FORWARD_ACCOUNT_TARGET_BYTES = 640*1024;
+export const FORWARD_HOT_HISTORY_FULL = 32;
+export const FORWARD_HOT_HISTORY_TOTAL = 96;
+export const FORWARD_HOT_EVENT_LIMIT = 96;
 type Head = { version: string; count: number; length: number; sha256: string; encoding?: "gzip"; rawLength?: number;
   inline?: Uint8Array; sampleManifestSha256?:string };
 type SamplePageMeta={id:string;key:string;count:number;firstAt:number;lastAt:number;length:number;rawLength:number;
@@ -44,13 +48,47 @@ function packSample(row:RelationMeasurement){
     row.pathEfficiency,row.reversals,
   ];
 }
-function compactForwardState(next:ForwardState,includeSamples=true){
-  const account={...next} as ForwardStateWithRecovery;
-  delete account.__legacySampleRecovery;delete account.__persistedSampleManifest;
+const shortText=(value:string|undefined,max=320)=>typeof value==="string"&&value.length>max?value.slice(0,max):value;
+function compactClosedTrade(t:Trade,keepIntelligence:boolean){
+  const row=structuredClone(t);
+  row.rule={...row.rule,conditions:[],reason:shortText(row.rule.reason,240)??""};
+  if(row.entryContext)row.entryContext={...row.entryContext,reason:shortText(row.entryContext.reason,320)??"",
+    thesisSummary:shortText(row.entryContext.thesisSummary,260),invalidationSummary:shortText(row.entryContext.invalidationSummary,260)};
+  if(!keepIntelligence){
+    delete row.positionIntelligence;delete row.profitProtection;delete row.profitProtectionMigration;delete row.exitPlan;delete row.turn;
+  }
+  return row;
+}
+function hotProjection(next:ForwardState,includeSamples=true){
+  let full=Math.min(FORWARD_HOT_HISTORY_FULL,next.history.length),
+    total=Math.min(FORWARD_HOT_HISTORY_TOTAL,next.history.length),
+    eventLimit=Math.min(FORWARD_HOT_EVENT_LIMIT,next.events.length),
+    narrativeLimit=Math.min(72,next.extremumRegime.history.length),
+    evidenceLimit=Math.min(32,next.extremumRegime.evidence.length);
   const samples=includeSamples?next.relationEngine.samples.map(packSample):[],paged=!includeSamples;
-  return{...account,storage:{...next.storage,layout:paged?FORWARD_PAGED_STATE_VERSION:next.storage.layout,
-      ...(paged?{sampleIntegrity:"raw-sha256" as const}:{})},
-    relationEngine:{...next.relationEngine,samples}};
+  const build=()=>{
+    const history=next.history.slice(0,total).map((t,i)=>compactClosedTrade(t,i<full)),
+      account={...next,history,events:next.events.slice(0,eventLimit),
+        extremumRegime:{...next.extremumRegime,history:next.extremumRegime.history.slice(0,narrativeLimit),
+          evidence:next.extremumRegime.evidence.slice(0,evidenceLimit)},
+        storage:{...next.storage,layout:paged?FORWARD_PAGED_STATE_VERSION:next.storage.layout,
+          ...(paged?{sampleIntegrity:"raw-sha256" as const}:{})},
+        relationEngine:{...next.relationEngine,samples}} as unknown as ForwardStateWithRecovery;
+    delete account.__legacySampleRecovery;delete account.__persistedSampleManifest;return account;
+  };
+  let account=build(),raw=encodeJson(account);
+  while(raw.length>FORWARD_ACCOUNT_TARGET_BYTES){
+    if(full>8)full=Math.max(8,full-8);
+    else if(total>32)total=Math.max(32,total-16);
+    else if(eventLimit>48)eventLimit=Math.max(48,eventLimit-16);
+    else if(narrativeLimit>36)narrativeLimit=Math.max(36,narrativeLimit-12);
+    else if(evidenceLimit>16)evidenceLimit=Math.max(16,evidenceLimit-8);
+    else break;
+    account=build();raw=encodeJson(account);
+  }
+  return{account,raw,meta:{sourceHistory:next.history.length,hotHistory:total,fullHistory:full,summaryHistory:Math.max(0,total-full),
+    sourceEvents:next.events.length,hotEvents:eventLimit,narrativeHistory:narrativeLimit,evidence:evidenceLimit,
+    targetBytes:FORWARD_ACCOUNT_TARGET_BYTES}};
 }
 const encodeJson=(value:unknown)=>new TextEncoder().encode(JSON.stringify(value));
 function sampleBuckets(samples:RelationMeasurement[]){
@@ -264,8 +302,9 @@ export async function prepareForwardWrite(previous:ForwardState|null,next:Forwar
   delete recoveryState.__legacySampleRecovery;delete recoveryState.__persistedSampleManifest;
   const pages=await encodeSamplePages(next.relationEngine.samples),manifest:ForwardSampleManifest={version:FORWARD_PAGED_STATE_VERSION,
     count:next.relationEngine.samples.length,pages:pages.map(page=>page.meta)},manifestSha256=await digest(encodeJson(manifest));
-  const raw=encodeJson(compactForwardState(next,false));
-  if(raw.length>FORWARD_ACCOUNT_MAX_BYTES)throw new Error("Forward账户主状态超过预算；禁止截断金融记录");
+  const hot=hotProjection(next,false),raw=hot.raw;
+  if(raw.length>FORWARD_ACCOUNT_MAX_BYTES)
+    throw new Error("Forward活跃金融状态本身超过硬上限；历史已自动冷分层，拒绝截断当前持仓或资金状态");
   const compressed=await gzip(raw),useGzip=compressed.length<raw.length,bytes=useGzip?compressed:raw;
   const entries:Record<string,unknown>={};let count=0;
   for(const recovery of legacySampleRecovery){
@@ -322,6 +361,8 @@ export async function prepareForwardWrite(previous:ForwardState|null,next:Forwar
   recoveryState.__persistedSampleManifest=structuredClone(manifest);
   return{entries,writes:Object.keys(entries).length,compression:{encoding:useGzip?"gzip":"utf8",rawBytes:raw.length,
     storedBytes:bytes.length,chunks:count,sampleCount:manifest.count,samplePages:manifest.pages.length,changedSamplePages,
+    accountBudgetBytes:FORWARD_ACCOUNT_MAX_BYTES,
+    utilization:raw.length/FORWARD_ACCOUNT_MAX_BYTES,...hot.meta,
     ...(options.compact?{inlineHead:inline,chunkBytes}:{})}};
 }
 

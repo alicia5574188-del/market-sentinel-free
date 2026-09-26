@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {buildMarketIntelligence,initialMarketIntelligenceState,MARKET_INTELLIGENCE_VERSION} from "../lib/market-intelligence-engine.ts";
 import {evaluatePositionIntelligence} from "../lib/position-intelligence-engine.ts";
-import {advanceForward,initialForward,resetForwardAccountPreservingLearning} from "../lib/forward-relations.ts";
+import {advanceForward,fillForwardPortfolio,initialForward,resetForwardAccountPreservingLearning} from "../lib/forward-relations.ts";
 
 const T=2_000_000_000_000;
 function candles(start:number,step:number,vol=.002){
@@ -171,6 +171,7 @@ test("PAPER balance reset clears the wallet ledger but preserves the live Market
   prior.extremumRegime=built.state;prior.marketPulse=built.pulse;prior.selectedSymbols=Object.keys(built.state.symbols);
   prior.opportunities=built.opportunities;prior.lastCandleAt=T;prior.lastCycleAt=T-1000;prior.lastQuoteCycleAt=T-500;
   prior.lastEntryAt.ETH_USDT=T-120_000;prior.lastSide.ETH_USDT="LONG";prior.lastExitAt.ETH_USDT=T-60_000;
+  prior.consumedTheses["old-thesis"]=T-120_000;
   prior.fitDiagnostics={tested:30,qualified:4,trainGroups:3,checkGroups:6,latestAt:T,rapidQualified:2,activeLong:8,activeShort:5};
 
   const reset=resetForwardAccountPreservingLearning(prior,T+10_000);
@@ -185,6 +186,7 @@ test("PAPER balance reset clears the wallet ledger but preserves the live Market
   assert.equal(reset.lastEntryAt.ETH_USDT,prior.lastEntryAt.ETH_USDT);
   assert.equal(reset.lastExitAt.ETH_USDT,prior.lastExitAt.ETH_USDT);
   assert.equal(reset.lastSide.ETH_USDT,"LONG");
+  assert.equal(reset.consumedTheses["old-thesis"],T-120_000);
   assert.match(reset.latestReason,/保留 Market Intelligence 市场叙事、证据、相关组和异常生命周期/);
 });
 
@@ -223,4 +225,23 @@ test("Market evidence is eventized: repeated observations merge into one evolvin
   const episodes=byKey(second.state.evidence);
   assert.ok(episodes.length<=1,"same breadth condition must be one episode, not repeated bullish/bearish votes");
   if(episodes[0]){assert.ok((episodes[0].samples??1)>=1);assert.ok((episodes[0].firstAt??episodes[0].at)<=(episodes[0].lastAt??episodes[0].at));}
+});
+
+
+test("cold-archived history cannot make an already-consumed thesis executable again",()=>{
+  const paths={BTC_USDT:candles(100,.0010),ETH_USDT:candles(100,.0018),SOL_USDT:candles(100,.0009)};
+  for(let i=56;i<paths.ETH_USDT.length;i++){const k=1+(i-55)*.0008;for(const key of["open","high","low","close"] as const)paths.ETH_USDT[i]![key]*=k;}
+  const quotes=Object.fromEntries(Object.entries(paths).map(([s,v])=>[s,q(v.at(-1)!.close,.0003)]));
+  const first=buildMarketIntelligence({paths,quotes,previous:initialMarketIntelligenceState(T-600_000),now:T});
+  const shifted=Object.fromEntries(Object.entries(paths).map(([s,rows])=>[s,rows.map(r=>({...r,time:r.time+300}))]));
+  const now=T+300_000,shiftQuotes=Object.fromEntries(Object.entries(shifted).map(([s,v])=>[s,{...q(v.at(-1)!.close,.0003),observedAt:now}]));
+  const second=buildMarketIntelligence({paths:shifted,quotes:shiftQuotes,previous:first.state,now});
+  const opportunity=second.opportunities.find(o=>o.eligible&&o.thesisId);
+  assert.ok(opportunity?.thesisId,"fixture must produce an executable persistent thesis");
+  const s=initialForward(T-600_000);s.extremumRegime=second.state;s.opportunities=[opportunity!];
+  s.consumedTheses[opportunity!.thesisId!]=now-60_000;
+  const contracts={[opportunity!.symbol]:{quantoMultiplier:.001,leverageMax:10,maintenanceRate:.005,minContracts:1}};
+  const opened=fillForwardPortfolio(s,{[opportunity!.symbol]:shiftQuotes[opportunity!.symbol]!},contracts,now,1000,false);
+  assert.equal(opened,0);
+  assert.equal(s.positions.length,0,"thesis dedupe must survive even after the full closed trade leaves hot history");
 });

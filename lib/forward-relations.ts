@@ -32,7 +32,7 @@ const ROUND_TRIP_COST=2*(PAPER_COST.feeRate+PAPER_COST.slippageRate);
 const TOTAL_RISK_RATE=.10,SIDE_RISK_RATE=.065,TOTAL_MARGIN_RATE=.75;
 const FIVE_MINUTE_NEW_RISK_RATE=.025;
 const ROTATION_GAP=10,ROTATION_COOLDOWN_MS=2*60_000;
-const HISTORY_LIMIT=240,EVENT_LIMIT=160;
+const HISTORY_LIMIT=240,EVENT_LIMIT=160,CONSUMED_THESIS_LIMIT=512,CONSUMED_THESIS_TTL_MS=7*24*60*60_000;
 const clip=(v:number,a=0,b=1)=>Math.max(a,Math.min(b,v));
 const median=(v:number[])=>{const a=v.filter(Number.isFinite).sort((x,y)=>x-y);return a.length?(a.length%2?a[(a.length-1)/2]:(a[a.length/2-1]+a[a.length/2])/2):0;};
 const dir=(side:"LONG"|"SHORT")=>side==="LONG"?1:-1;
@@ -123,6 +123,7 @@ export type ForwardState={
   familyExperiment:FamilyExperimentState;structuralInterrupt:StructuralInterruptState;
   entryValidations:Record<string,EntryValidation>;
   marketPulse:MarketPulse;lastEntryAt:Record<string,number>;lastExitAt:Record<string,number>;lastSide:Record<string,"LONG"|"SHORT">;
+  consumedTheses:Record<string,number>;
   lastRotationAt:number;latestReason:string;entryDiagnostics:{at:number;matched:number;opened:number;reasons:Record<string,number>};
   storage:{persistedAt:number;error:string|null;layout?:string;sampleIntegrity?:"raw-sha256"|"legacy-recovered"};liveEligible:false;
   policyVersion:string;strategyAuthorityVersion:string;
@@ -148,7 +149,7 @@ export function initialForward(now:number):ForwardState{
     positions:[],history:[],events:[],daily:[],selectedSymbols:[],opportunities:[],regions:{},relationEngine:initialRelationEngine(now),
     extremumRegime:initialMarketIntelligenceState(now),
     familyExperiment:initialFamilyExperimentState(),structuralInterrupt:initialStructuralInterruptState(),entryValidations:{},marketPulse:blankPulse(now),
-    lastEntryAt:{},lastExitAt:{},lastSide:{},lastRotationAt:0,latestReason:"Market Intelligence V1 已启动：从整个市场关系、分化与跨交易所共识中持续寻找异类机会。",
+    lastEntryAt:{},lastExitAt:{},lastSide:{},consumedTheses:{},lastRotationAt:0,latestReason:"Market Intelligence V1 已启动：从整个市场关系、分化与跨交易所共识中持续寻找异类机会。",
     entryDiagnostics:{at:now,matched:0,opened:0,reasons:{}},storage:{persistedAt:0,error:null},liveEligible:false,
     policyVersion:ADAPTIVE_ENGINE_VERSION,strategyAuthorityVersion:ADAPTIVE_ENGINE_VERSION,executionVersion:ADAPTIVE_ENGINE_VERSION,
     regionVersion:"adaptive-region-v1",regionLaunchVersion:"adaptive-region-v1",cutoverAt:now,
@@ -192,6 +193,25 @@ function normalizeTrade(raw:Trade,now:number):Trade{
   }
   t.peakPnlRate=Math.max(0,safe(t.peakPnlRate,t.favorable));return t;
 }
+function normalizeConsumedTheses(value:unknown,history:Trade[],positions:Trade[],now:number){
+  const rows=new Map<string,number>();
+  if(value&&typeof value==="object"){
+    for(const[id,raw]of Object.entries(value as Record<string,unknown>)){
+      const at=Number(raw);if(id&&Number.isFinite(at)&&at>0&&at>=now-CONSUMED_THESIS_TTL_MS)rows.set(id,at);
+    }
+  }
+  for(const t of [...positions,...history]){
+    const id=t.entryContext?.thesisId,at=t.openedAt;if(id&&at>=now-CONSUMED_THESIS_TTL_MS)rows.set(id,Math.max(at,rows.get(id)??0));
+  }
+  return Object.fromEntries([...rows.entries()].sort((a,b)=>b[1]-a[1]).slice(0,CONSUMED_THESIS_LIMIT));
+}
+function rememberConsumedThesis(s:ForwardState,id:string|undefined,at:number){
+  if(!id)return;s.consumedTheses[id]=at;
+  const rows=Object.entries(s.consumedTheses).filter(([,v])=>Number.isFinite(v)&&v>=at-CONSUMED_THESIS_TTL_MS)
+    .sort((a,b)=>b[1]-a[1]).slice(0,CONSUMED_THESIS_LIMIT);
+  s.consumedTheses=Object.fromEntries(rows);
+}
+
 function normalizeEntryValidations(value:unknown,now:number){
   const out:Record<string,EntryValidation>={};if(!value||typeof value!=="object")return out;
   for(const [id,raw]of Object.entries(value as Record<string,unknown>)){
@@ -240,6 +260,7 @@ export function normalizeForward(v:ForwardState|null|undefined,now:number):Forwa
     structuralInterrupt:normalizeStructuralInterruptState((old as {structuralInterrupt?:unknown}).structuralInterrupt,now),
     entryValidations:normalizeEntryValidations((old as {entryValidations?:unknown}).entryValidations,now),
     marketPulse:v.marketPulse?.bias? v.marketPulse:blankPulse(now),lastEntryAt:v.lastEntryAt??{},lastExitAt:v.lastExitAt??{},lastSide:v.lastSide??{},
+    consumedTheses:normalizeConsumedTheses((old as {consumedTheses?:unknown}).consumedTheses,history,positions,now),
     lastRotationAt:safe(v.lastRotationAt),latestReason:typeof v.latestReason==="string"?v.latestReason:base.latestReason,
     entryDiagnostics:v.entryDiagnostics??base.entryDiagnostics,storage:v.storage??base.storage,
     engineVersion:ADAPTIVE_ENGINE_VERSION,policyVersion:ADAPTIVE_ENGINE_VERSION,strategyAuthorityVersion:ADAPTIVE_ENGINE_VERSION,
@@ -538,6 +559,7 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
         thesisSince:o.thesisSince,thesisBars:o.thesisBars},
       forecast:{remainingNetRate:remainingNet,quality:o.score/100,sizingEquity:equity}};
   s.positions.push(t);s.balance-=entryFee;s.fees+=entryFee;s.turnover+=notional;s.lastEntryAt[o.symbol]=now;s.lastSide[o.symbol]=side;
+  rememberConsumedThesis(s,o.thesisId,now);
   event(s,now,"ENTRY",id,`${o.symbol} ${side} ${o.mode} 评分${o.score.toFixed(0)}`,{notional,plannedRisk});
   return null;
 }
@@ -545,7 +567,7 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
 function rankedEligible(s:ForwardState,now:number){
   return s.opportunities.filter(o=>isIntelligenceOpportunity(o)&&o.eligible&&o.expiresAt>now
     &&!s.positions.some(t=>t.symbol===o.symbol)
-    &&!s.history.some(t=>t.entryContext?.thesisId===o.thesisId)
+    &&!(o.thesisId&&s.consumedTheses[o.thesisId])
     // A PAPER balance reset starts a fresh ledger, not a fresh market episode.
     // lastEntryAt/lastSide survive reset so an already-traded same-side thesis
     // cannot be respawned merely because the account history was archived.
@@ -651,6 +673,7 @@ export function resetForwardAccountPreservingLearning(previous:ForwardState,now:
   next.lastEntryAt={...prior.lastEntryAt};
   next.lastExitAt={...prior.lastExitAt};
   next.lastSide={...prior.lastSide};
+  next.consumedTheses={...prior.consumedTheses};
   next.relationEngine=structuredClone(prior.relationEngine);
   next.familyExperiment=structuredClone(prior.familyExperiment);
   next.observations=next.relationEngine.observations;next.measured=next.relationEngine.measured;next.invalidated=next.relationEngine.invalidated;
