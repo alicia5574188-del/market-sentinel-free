@@ -6,7 +6,7 @@ import {recordWindows,archivePage} from "../lib/record-view.ts";
 import {ArchivePagination} from "./record-controls.tsx";
 import EquityCurve from "./equity-curve.tsx";
 import {EquityHistoryCache} from "../lib/equity-cache.ts";
-import ExtremumExecution from "./extremum-execution.tsx";
+import MarketIntelligenceExecution from "./market-intelligence-execution.tsx";
 
 type View=ReturnType<typeof forwardSummary>;
 type Tab="overview"|"execution"|"paper"|"live"|"journal"|"settings";
@@ -14,8 +14,8 @@ const fmt=(v:number|null|undefined,d=2)=>typeof v==="number"&&Number.isFinite(v)
 const signed=(v:number|null|undefined,d=2)=>typeof v==="number"&&Number.isFinite(v)?`${v>=0?"+":""}${fmt(v,d)}`:"—";
 const time=(v?:number|null)=>v?new Date(v).toLocaleString("zh-CN",{timeZone:"Asia/Vientiane",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}):"—";
 const duration=(start:number,end:number|null|undefined,now:number)=>{const m=Math.floor(Math.max(0,(end??now)-start)/60000);return m<1?"<1分钟":m>=60?`${Math.floor(m/60)}小时${m%60}分`:`${m}分钟`;};
-const modeName=(mode:string)=>({SWING:"峰谷反转",TREND_PULLBACK:"趋势回调进攻",IMPULSE:"单边推进追击",RELATION:"旧关系兼容",BREAKOUT:"旧突破兼容",RETEST:"旧回踩兼容",FAILED_BREAKOUT:"旧失败突破兼容",RANGE:"旧区域兼容",SHOCK:"旧突变兼容"}[mode]??mode);
-const exitName=(reason:string|null)=>reason?({STRUCTURE_STOP:"结构止损",PROFIT_GIVEBACK:"利润保护",ENTRY_FEEDBACK_FAILED:"入场后未获得正反馈",OPPOSITE_EXTREMUM:"相反峰谷确认",TREND_DEATH:"趋势死亡",EXTREMUM_PROFIT_EXIT:"极值利润退出",NO_PROGRESS:"长时间无进展",MAX_HOLD:"最大持仓时间",MARKET_FLIP:"旧独立反向关系",RELATION_DEGRADED:"旧关系降级",NO_POSITIVE_FEEDBACK:"旧无正向反馈",SAMPLE_PATH_DIVERGED:"旧样本路径失配",SAMPLE_EDGE_EXHAUSTED:"旧样本优势耗尽",SAMPLE_MAX_HOLD:"旧样本最大持仓",TIME_DECAY:"旧持仓超时",OPPORTUNITY_REPLACED:"更优机会替换",STRUCTURAL_INTERRUPT_REVERSAL:"旧极端结构反转",SHOCK_REENTRY:"旧突变重新回区",FAST_STRUCTURE_FAILURE:"旧强结构快速失效",ACCOUNT_RESET:"手动重置"}[reason]??reason):"—";
+const modeName=(mode:string)=>({RELATIVE:"相对异类",REVERSAL:"结构转变",CONTINUATION:"市场延续",SWING:"旧峰谷兼容",TREND_PULLBACK:"旧回调兼容",IMPULSE:"旧推进兼容",RELATION:"旧关系兼容",BREAKOUT:"旧突破兼容",RETEST:"旧回踩兼容",FAILED_BREAKOUT:"旧失败突破兼容",RANGE:"旧区域兼容",SHOCK:"旧突变兼容"}[mode]??mode);
+const exitName=(reason:string|null)=>reason?({STRUCTURE_STOP:"结构止损",PROFIT_GIVEBACK:"利润保护",THESIS_INVALIDATED:"交易假设失效",RELATIVE_EDGE_GONE:"相对优势消失",NO_POSITIVE_FEEDBACK:"长时间未获得正向反馈",MAX_HOLD:"最大持仓时间",ENTRY_FEEDBACK_FAILED:"旧入场反馈失败",OPPOSITE_EXTREMUM:"旧相反峰谷",TREND_DEATH:"旧趋势死亡",EXTREMUM_PROFIT_EXIT:"旧极值退出",NO_PROGRESS:"旧无进展",MARKET_FLIP:"旧市场翻转",RELATION_DEGRADED:"旧关系降级",SAMPLE_PATH_DIVERGED:"旧样本路径失配",SAMPLE_EDGE_EXHAUSTED:"旧样本优势耗尽",SAMPLE_MAX_HOLD:"旧样本最大持仓",TIME_DECAY:"旧持仓超时",OPPORTUNITY_REPLACED:"更优机会替换",STRUCTURAL_INTERRUPT_REVERSAL:"旧极端结构反转",SHOCK_REENTRY:"旧突变重新回区",FAST_STRUCTURE_FAILURE:"旧强结构快速失效",ACCOUNT_RESET:"手动重置"}[reason]??reason):"—";
 
 export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,livePanel,liveSystemPanel,liveEnabled,liveOverview,accountPanel,memberName,cacheScope="owner"}:{
   data:View|null;healthy:boolean;statusLabel?:string;feedAt:number|null;error:string|null;livePanel:ReactNode;liveSystemPanel?:ReactNode;
@@ -35,7 +35,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   const fontVars:Record<string,string>={};for(let px=10;px<=64;px++)fontVars[`--fr-fs${px}`]=`${(px*fontScale/100).toFixed(2)}px`;
   const exportSnapshot=async()=>{if(exporting)return;setExporting(true);setExportStatus(null);try{
     const r=await fetch("/api/forward/export",{cache:"no-store",credentials:"same-origin"});if(!r.ok)throw new Error();
-    const blob=await r.blob(),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`extremum-regime-v1-snapshot-${new Date().toISOString().slice(0,10)}.json`;
+    const blob=await r.blob(),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`market-intelligence-v1-snapshot-${new Date().toISOString().slice(0,10)}.json`;
     document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);setExportStatus("已开始下载。");
   }catch{setExportStatus("导出失败，请重试。");}finally{setExporting(false);}};
 
@@ -46,15 +46,15 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   const paperMargin=positions.reduce((n,t)=>n+t.margin,0),plannedRisk=positions.reduce((n,t)=>n+Math.max(t.plannedRisk,t.entryContext?.portfolioRiskCharge??((t.forecast?.sizingEquity??0)*(t.entryContext?.reserve===true?.003:.006))),0),riskUse=data?.equity?plannedRisk/data.equity:0,elapsed=data&&now?Math.max(0,(now-data.startedAt)/3600000):null;
   const systemStatus=statusLabel==="后台运行中"?"正常":statusLabel?.startsWith("后台运行中 · ")?statusLabel.slice(8):statusLabel??(healthy?"正常":"行情恢复中");
   const nav:[Tab,string,string][]=[["overview","◉","总览"],["execution","⌘","执行"],["paper","⇄","模拟"],["live","◈","实盘"],["journal","≋","记录"],["settings","⊙","系统"]];
-  return <main className="fr-app" style={fontVars as CSSProperties} data-ui-version="extremum-regime-v1">
-    <header className="fr-header"><div className="fr-brand"><span className="fr-emblem">↗</span><div><b>哨兵 · 峰谷状态系统</b><small>EXTREMUM · TREND SURVIVAL · LIVE PARITY</small></div></div><span className={`fr-status ${healthy?"is-on":""}`}><i/>{healthy?"真实行情在线":"连接中"}</span></header>
+  return <main className="fr-app" style={fontVars as CSSProperties} data-ui-version="market-intelligence-v1">
+    <header className="fr-header"><div className="fr-brand"><span className="fr-emblem">↗</span><div><b>哨兵 · 市场智能系统</b><small>MARKET STATE · RELATIVE EDGE · LIVE PARITY</small></div></div><span className={`fr-status ${healthy?"is-on":""}`}><i/>{healthy?"真实行情在线":"连接中"}</span></header>
     <div className="fr-subhead"><span>Gate USDT 永续 · 30市场扫描 · 无席位数量上限 · 30执行BBO</span><span>实盘{liveEnabled?"已请求开启":"关闭"} · 所有者控制</span></div>
     {memberName&&<p className="fr-note">{memberName} · 共用同一策略事件源，实盘账户与API完全独立。</p>}
 
     {tab==="overview"&&<>
-      <section className="fr-hero"><div className="fr-hero-copy"><span className="fr-kicker">EXTREMUM REGIME V1</span><h1>{systemStatus==="正常"?"系统正在正常运行":`系统状态：${systemStatus}`}</h1>
+      <section className="fr-hero"><div className="fr-hero-copy"><span className="fr-kicker">MARKET INTELLIGENCE V1</span><h1>{systemStatus==="正常"?"系统正在正常运行":`系统状态：${systemStatus}`}</h1>
         <p>{data?.latestReason??"正在读取交易核心。"}</p>
-        <div className="fr-hero-tags"><span>连续运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>5m判断状态</span><span>1m确认峰谷</span><span>多源一致性</span><span>入场后即时验证</span><span>退出与反手分离</span></div></div>
+        <div className="fr-hero-tags"><span>连续运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>四层周期</span><span>全市场关系</span><span>多源一致性</span><span>异类交易</span><span>独立交易假设</span></div></div>
         <div className="fr-equity"><small>模拟账户权益 · USDT</small><strong>{fmt(data?.equity)}</strong><div className={(data?.netPnl??0)>=0?"fr-positive":"fr-negative"}>{signed(data?.netPnl)} <span>U · {signed(data?data.netPnl/data.initialEquity*100:null)}%</span></div>
           <footer><span>起点 {fmt(data?.initialEquity,0)}</span><span>最大回撤 {fmt(data?data.maxDrawdown*100:null)}%</span></footer></div></section>
       <section className="fr-stats">
@@ -75,7 +75,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
         <OpportunityGrid rows={opportunities.slice(0,6)}/></section>
     </>}
 
-    {tab==="execution"&&<ExtremumExecution data={data} now={now} liveEnabled={liveEnabled} liveOverview={liveOverview}/>}
+    {tab==="execution"&&<MarketIntelligenceExecution data={data} now={now} liveEnabled={liveEnabled} liveOverview={liveOverview}/>} 
 
     {tab==="paper"&&<>
       <PageTitle eyebrow="REAL-FEED PAPER" title="模拟账户" text="模拟和实盘读取同一个持久化交易事件；模拟成交计入手续费、滑点和资金费占位，实盘仍以Gate真实成交为准。"/>
@@ -93,18 +93,20 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       <section className="fr-section"><div className="fr-section-head"><h2>运行记录</h2><span>{data?.events.length??0} 条</span></div>
         {(data?.events.length??0)>0?<div className="fr-journal">{data!.events.slice(0,80).map(e=><article key={e.id}><time>{time(e.at)}</time><div><b>{e.kind}</b><p>{e.reason}</p></div></article>)}</div>:<Empty title="暂无运行记录" text="成交、退出、换仓和保护更新会显示在这里。"/>}</section></>}
 
-    {tab==="settings"&&<><PageTitle eyebrow="SYSTEM & ACCESS" title="系统" text="交易规则已经收敛为单一核心；这里保留账户权限、实盘API和显示设置。"/>
+    {tab==="settings"&&<><PageTitle eyebrow="SYSTEM & ACCESS" title="系统" text="Market Intelligence 是唯一新单策略权威；账户、实盘API和显示设置保持独立。"/>
       {accountPanel}{liveSystemPanel}
       <section ref={fontControl} className="fr-section fr-font-control"><div className="fr-section-head"><div><small>界面显示</small><h2>界面字号</h2></div><b>{fontScale}%</b></div>
         <div className="fr-font-options">{[70,80,90,100,110].map(value=><button key={value} className={fontScale===value?"selected":""} onClick={()=>{setFontScale(value);try{localStorage.setItem("sentinel-ui-font-scale-v1",String(value));}catch{}}}>{value}%</button>)}</div></section>
-      <section className="fr-section"><div className="fr-section-head"><h2>当前系统边界</h2><span>extremum-regime-v1</span></div>
-        <Setting title="核心周期" value="5m结构 / 1m确认 / BBO执行" text="5分钟判断趋势和峰谷背景，1分钟确认结构破坏、回调结束与夺回失败，实时盘口只负责实际执行和入场后反馈。"/>
-        <Setting title="状态" value="TREND / SWING / WEAKENING / TRANSITION" text="TOP/BOTTOM压力与UP/DOWN趋势生命独立计算；极值压力高本身不等于反手。"/>
-        <Setting title="组合" value="无席位数量上限" text="持仓数量仍由10%组合计划风险、6.5%同向风险、75%保证金和单币一仓共同决定。"/>
-        <Setting title="单边行情" value="主动进攻" text="上涨只做回调谷和强势延续，下跌只做反弹峰和强势延续；反向极值先用于利润保护。"/>
-        <Setting title="退出" value="即时反馈 + 极值 + 趋势死亡" text="硬止损、入场后正反馈、动态利润保护、相反极值、趋势死亡和无进展构成统一生命周期；旧仓继续原生命周期。"/><Setting title="风险" value="10%组合 / 6.5%同向" text={data?.boundaries.risk??"读取中"}/>
-        <Setting title="实盘" value="同一持久化事件" text="新策略只生成标准PAPER源单；现有串行PAPER→LIVE适配器继续按源ID复制，过期事件不补开，Gate仍是成交与账户唯一真相。"/>
-        <Setting title="账户连续性" value="原地升级" text="策略版本变化不自动重置模拟账户、不改startedAt、不清历史；只有所有者重置按钮可以重置。"/>
+      <section className="fr-section"><div className="fr-section-head"><h2>当前系统边界</h2><span>market-intelligence-v1</span></div>
+        <Setting title="观察视角" value="全市场优先" text="系统先理解整个市场的共同方向、广度、分化和相关组，再寻找偏离正常关系的资产；不再先挑某个币后机械判断。"/>
+        <Setting title="周期结构" value="L0 → L1 → L2 → L3" text="超大周期负责牛熊与尾部风险，大方向负责数小时至数日背景，短期层持续感受内部变化，交易层选择最好的币种×方向×位置表达。"/>
+        <Setting title="相关风险" value="动态分组" text="高度相关资产互相竞争，同组正常只保留一个同方向主仓；不同方向、不同独立理由可以并存。"/>
+        <Setting title="市场记忆" value="证据累积" text="所有有意义的细微变化都会进入证据池，但单个噪声不会让大方向来回翻转；页面解释和后台决策使用同一份市场叙事。"/>
+        <Setting title="数据" value="多交易所非阻塞" text="Bybit、OKX、KuCoin、Bitget、Binance共同参与分析；单一路数据失败只降低置信度，不允许阻塞市场分析。Gate保留执行与关键校验职责。"/>
+        <Setting title="退出" value="独立交易假设" text="每笔仓位保存自己的相关组、相对优势、失效条件和预计持有时间。新市场观点不会自动平旧仓，只有该笔假设自身失效才退出。"/>
+        <Setting title="风险" value="10%组合 / 6.5%同向" text={data?.boundaries.risk??"读取中"}/>
+        <Setting title="实盘" value="沿用稳定串行复制" text="Market Intelligence 只生成标准PAPER源单；现有PAPER→LIVE→Gate串行复制、比例仓位、源ID和实时复制窗口保持不变。"/>
+        <Setting title="账户连续性" value="策略换代不重置" text="升级不自动清空模拟账户和历史；旧仓按冻结生命周期退出，新仓只由Market Intelligence产生。"/>
       </section></>}
 
     {liveMounted&&<div className="fr-live-panel-host" hidden={tab!=="live"}>{livePanel}</div>}
@@ -130,10 +132,10 @@ function TradeList({trades,now,empty,compact=false}:{trades:Trade[];now:number;e
 function TradeCard({trade:t,now}:{trade:Trade;now:number}){
   const open=t.status==="OPEN",d=t.side==="LONG"?1:-1,px=open?t.lastPrice:t.exitPrice??t.lastPrice;
   const pnl=open?d*t.quantity*(px-t.entryPrice)-t.entryFee-t.quantity*px*.0007:t.netPnl??0,rate=t.notional>0?pnl/t.notional:0,ctx=t.entryContext;
-  return <details className="fr-position-row"><summary><span className="fr-position-primary"><b>{t.symbol.replace("_"," / ")}</b><small>{t.side==="LONG"?"多单":"空单"} · {ctx?(ctx.reserve?"低风险 · ":"")+modeName(ctx.mode):"兼容持仓"}{ctx?.strategyVersion==="extremum-regime-v1"?` · ${ctx.regime??"—"}`:ctx?.relationHorizon?` · ${ctx.relationHorizon}m旧关系`:""} · {fmt(t.leverage,0)}×</small>
+  return <details className="fr-position-row"><summary><span className="fr-position-primary"><b>{t.symbol.replace("_"," / ")}</b><small>{t.side==="LONG"?"多单":"空单"} · {ctx?(ctx.reserve?"低风险 · ":"")+modeName(ctx.mode):"兼容持仓"}{ctx?.strategyVersion==="market-intelligence-v1"?` · ${ctx.regime??"—"}`:ctx?.relationHorizon?` · ${ctx.relationHorizon}m旧关系`:""} · {fmt(t.leverage,0)}×</small>
     <b className={pnl>=0?"fr-positive":"fr-negative"}>{signed(pnl)} U</b><small>{signed(rate*100,3)}% · {duration(t.openedAt,t.closedAt,now)}</small></span>
     <span className="fr-position-entry"><b>{open?`持仓评分 ${fmt(t.holdScore,0)}`:exitName(t.exitReason)}</b><small>MFE {fmt(t.favorable*100,2)}% · MAE {fmt(t.adverse*100,2)}% · 锁利 {fmt((t.profitFloorRate??0)*100,2)}%</small>
-      <small>{ctx?(ctx.strategyVersion==="extremum-regime-v1"?`入场评分 ${fmt(ctx.entryScore,0)} · 趋势生命 ${fmt(t.side==="LONG"?ctx.upSurvival:ctx.downSurvival,0)} · 反向极值 ${fmt(t.side==="LONG"?ctx.topPressure:ctx.bottomPressure,0)} · 验证 ${ctx.postEntryState??"PENDING"}`:`入场评分 ${fmt(ctx.entryScore,0)} · 旧关系 ${ctx.relationStatus??"—"} ${fmt((ctx.relationHealth??0)*100,0)} · 首次浮赢 ${t.firstProfitAt?time(t.firstProfitAt):"尚未"}`):"历史兼容持仓"}</small></span></summary>
+      <small>{ctx?(ctx.strategyVersion==="market-intelligence-v1"?`入场评分 ${fmt(ctx.entryScore,0)} · 相关组 ${ctx.clusterId?.replace("corr:","")??"—"} · 假设 ${ctx.postEntryState??"PENDING"}`:`入场评分 ${fmt(ctx.entryScore,0)} · 旧关系 ${ctx.relationStatus??"—"} ${fmt((ctx.relationHealth??0)*100,0)} · 首次浮赢 ${t.firstProfitAt?time(t.firstProfitAt):"尚未"}`):"历史兼容持仓"}</small></span></summary>
     <article className="fr-trade fr-trade-unified"><dl><div><dt>入场价</dt><dd>{fmt(t.entryPrice,6)}</dd></div><div><dt>{open?"当前价":"出场价"}</dt><dd>{fmt(px,6)}</dd></div><div><dt>当前防守</dt><dd>{fmt(t.stopPrice,6)}</dd></div>
       <div><dt>名义金额</dt><dd>{fmt(t.notional)} U</dd></div><div><dt>保证金 / 杠杆</dt><dd>{fmt(t.margin)} U / {fmt(t.leverage,0)}×</dd></div><div><dt>计划风险</dt><dd>{fmt(t.plannedRisk)} U</dd></div>
       <div><dt>进场时间</dt><dd>{time(t.openedAt)}</dd></div><div><dt>持仓时长</dt><dd>{duration(t.openedAt,t.closedAt,now)}</dd></div><div><dt>预计持有</dt><dd>{fmt(t.expectedHoldMinutes,0)} 分钟</dd></div></dl>
