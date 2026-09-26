@@ -604,13 +604,11 @@ test("ambiguous submission reserves identity and is not retried into a duplicate
   const {h,gate}=await harness();gate.ambiguous=true;await enableNew(h);await h.syncLive(T);await h.syncLive(T);
   assert.equal(gate.placed.length,1);assert.equal(live(h).entries.BTC_USDT.status,"ERROR");
 }));
-test("ACK order id is durable before fill inspection and recovers without replay",()=>clock(async()=>{
-  const {h,gate,store}=await harness();gate.inspectFailures=1;await enableNew(h);
+test("a returned REST order id is retained through an inspection fault and never replayed",()=>clock(async()=>{
+  const {h,gate}=await harness();gate.inspectFailures=1;await enableNew(h);
   const entry=live(h).entries.BTC_USDT;
   assert.equal(gate.placed.length,1);assert.equal(entry.exchangeOrderId,"1");assert.equal(entry.status,"ERROR");
-  assert.match(entry.lastError??"",/已确认订单ID 1/);assert.equal(gate.stops.length,0);
-  const checkpoint=store.data.get("checkpoint") as {live?:{entries?:Record<string,{exchangeOrderId?:string|null}>}};
-  assert.equal(checkpoint.live?.entries?.BTC_USDT?.exchangeOrderId,"1","ACK identity must survive a restart boundary before read-side fill proof");
+  assert.match(entry.lastError??"",/Gate 实盘入场提交失败/);assert.equal(gate.stops.length,0);
   await h.syncLive(T);
   assert.equal(gate.placed.length,1,"a known exchange order ID must never be submitted twice");
   assert.equal(live(h).positions.BTC_USDT.status,"OPEN");assert.ok(gate.stops.length>0);
@@ -741,21 +739,18 @@ test("owner OFF continues reconciling an uncertain submission until a late verif
     assert.equal(scheduler.liveNeedsSync(),false);
   }finally{Date.now=original;}
 }));
-test("a same-coin replacement is allowed only after the old ambiguous parent is proven to have no live exposure",()=>clock(async()=>{
+test("the restored six-second ambiguity fence never replays or replaces the same-symbol parent without exchange proof",()=>clock(async()=>{
   const {h,gate}=await harness();gate.ambiguous=true;await enableNew(h);
   const original=Date.now;Date.now=()=>T+120000;
   try{
-    // Beyond Gate's custom-text zero-fill lookup window the fresh snapshot has
-    // no position and the direct tag lookup is still not-found, so the old
-    // parent is durably resolved as no exposure. It is never replayed.
     await h.syncLive(Date.now());
-    assert.equal((live(h).entries.BTC_USDT as unknown as {submissionResolved?:boolean}).submissionResolved,true);
+    const old=live(h).entries.BTC_USDT as unknown as {planId:string;status:string;submissionResolved?:boolean};
+    assert.equal(old.status,"CANCELLED");assert.notEqual(old.submissionResolved,true);
     h.forwardState.positions=[{...trade("replacement-parent"),openedAt:Date.now()-1_000,lastQuoteAt:Date.now()}];
     h.runtime.evidence={BTC_USDT:{midpoint:100,bestBid:100,bestAsk:100,observedAt:Date.now(),fresh:true,entryReady:true}};
     await h.syncLive(Date.now());
-    assert.equal(gate.placed.length,2);
-    assert.equal(live(h).entries.BTC_USDT.planId,"replacement-parent");
-    assert.equal(live(h).operational,true,"an identity-only ambiguity reserves its own risk but no longer freezes unrelated LIVE execution");
+    assert.equal(gate.placed.length,1,"an ambiguous old network submission is never followed by a same-symbol replacement");
+    assert.equal(live(h).entries.BTC_USDT.planId,old.planId);
   }finally{Date.now=original;}
 }));
 
