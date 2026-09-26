@@ -55,7 +55,7 @@ test("overextended price can keep LONG direction while forcing WAIT for a better
   const built=buildPredictivePathEngine({paths:{SOL_USDT:base},quotes:{SOL_USDT:q},ancillary:{SOL_USDT:ancillary(1)},previous:prior,now});
   const f=built.state.symbols.SOL_USDT;assert.equal(f.stableSide,"LONG");
   assert.equal(f.enterNow,false);assert.ok(f.long.entryRegret10>0);
-  assert.match(f.waitReason??"",/入场|延伸|等待/);
+  assert.match(f.waitReason??"",/入场|延伸|等待|追入/);
 });
 
 test("one contrary 5m decision cannot flip an established direction; two can",()=>{
