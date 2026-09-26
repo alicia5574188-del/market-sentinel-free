@@ -539,7 +539,11 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
 function rankedEligible(s:ForwardState,now:number){
   return s.opportunities.filter(o=>isIntelligenceOpportunity(o)&&o.eligible&&o.expiresAt>now
     &&!s.positions.some(t=>t.symbol===o.symbol)
-    &&!s.history.some(t=>t.entryContext?.thesisId===o.thesisId)).sort(opportunityCompare);
+    &&!s.history.some(t=>t.entryContext?.thesisId===o.thesisId)
+    // A PAPER balance reset starts a fresh ledger, not a fresh market episode.
+    // lastEntryAt/lastSide survive reset so an already-traded same-side thesis
+    // cannot be respawned merely because the account history was archived.
+    &&!(s.lastSide[o.symbol]===o.side&&(s.lastEntryAt[o.symbol]??0)>=(o.thesisSince??Infinity))).sort(opportunityCompare);
 }
 
 export function fillForwardPortfolio(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<string,Contract>,now:number,equity:number,premiumOnly:boolean){
@@ -620,10 +624,31 @@ export function closeForwardForReset(state:ForwardState,quotes:Record<string,Quo
 }
 export function resetForwardAccountPreservingLearning(previous:ForwardState,now:number){
   const prior=normalizeForward(structuredClone(previous),now),next=initialForward(now);
+  // Reset the PAPER wallet/ledger only. Market Intelligence is an independent
+  // continuously-running observer and must not lose its narrative, evidence,
+  // correlation map or per-symbol signal episode when the user resets funds.
+  next.extremumRegime=structuredClone(prior.extremumRegime);
+  next.marketPulse=structuredClone(prior.marketPulse);
+  next.selectedSymbols=[...prior.selectedSymbols];
+  next.lastCandleAt=prior.lastCandleAt;
+  next.lastCycleAt=prior.lastCycleAt;
+  next.lastQuoteCycleAt=prior.lastQuoteCycleAt;
+  next.fitDiagnostics=structuredClone(prior.fitDiagnostics);
+  // Do not carry executable candidates across an account reset. The next
+  // completed whole-market 5m step must rebuild opportunities. Keeping the
+  // candle cursor prevents the same already-processed 5m step from reopening.
+  next.opportunities=[];
+  next.entryValidations={};
+  // Preserve episode-consumption memory without preserving the old account
+  // trade ledger itself. This prevents reset from making an already-traded
+  // anomaly look like a brand-new thesis.
+  next.lastEntryAt={...prior.lastEntryAt};
+  next.lastExitAt={...prior.lastExitAt};
+  next.lastSide={...prior.lastSide};
   next.relationEngine=structuredClone(prior.relationEngine);
   next.familyExperiment=structuredClone(prior.familyExperiment);
   next.observations=next.relationEngine.observations;next.measured=next.relationEngine.measured;next.invalidated=next.relationEngine.invalidated;
-  next.latestReason="模拟账户已重置为1000U；Market Intelligence 从当前全市场关系重新建立叙事，并保留研究证据、账户历史与现有实盘复制契约。";
+  next.latestReason="模拟账户资金已重置为1000U；Market Intelligence 市场叙事、证据、相关组和异常生命周期保持连续，当前5m不会因重置重复开仓。";
   return next;
 }
 export function forwardUrgentQuoteSymbols(s:ForwardState,now:number,entrySymbols?:Iterable<string>){
