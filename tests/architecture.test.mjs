@@ -112,11 +112,11 @@ test("LIVE uses the restored full Gate snapshot and no split order-audit admissi
   assert.match(sync,/entry\.exchangeOrderId = await client\.createEntry\(intent,submissionStillAllowed\)/);
 });
 
-test("operator UI and release config expose Extremum Regime V1 with unchanged execution capacity and infrastructure",async()=>{
+test("Stage 2 changes strategy and LIVE contracts without prematurely changing the operator UI",async()=>{
   const [dashboard,worker,workflow,wrangler]=await Promise.all([
     read("app/forward-dashboard.tsx"),read("worker/index-clean.ts"),read(".github/workflows/sentinel-v2-ci.yml"),read("wrangler.jsonc"),
   ]);
-  assert.match(dashboard,/哨兵 · 峰谷状态系统/);assert.match(dashboard,/ExtremumExecution/);
+  assert.match(dashboard,/Forward Path Relation 3\.0/);assert.doesNotMatch(dashboard,/ExtremumExecution/);
   assert.match(worker,/SCAN_UNIVERSE_SIZE = 30/);assert.match(worker,/FORWARD_EXECUTION_BBO_CAP/);
   assert.match(workflow,/extremum-regime-v1/);
   assert.match(wrangler,/MarketStream/);assert.match(wrangler,/MemberExecutor/);assert.match(wrangler,/MemberDirectory/);
