@@ -494,6 +494,98 @@ const riskCharge=(t:Trade)=>Math.max(t.plannedRisk,t.entryContext?.portfolioRisk
 function existingRisk(s:ForwardState,side?:"LONG"|"SHORT"){return s.positions.filter(t=>!side||t.side===side).reduce((n,t)=>n+riskCharge(t),0);}
 function cycleRiskAdded(s:ForwardState,since:number){return[...s.positions,...s.history].filter(t=>t.openedAt>=since).reduce((n,t)=>n+riskCharge(t),0);}
 function isExtremumOpportunity(o:Opportunity){return o.strategyVersion===EXTREMUM_REGIME_VERSION;}
+function isPredictiveOpportunity(o:Opportunity){return o.strategyVersion===PREDICTIVE_PATH_VERSION&&o.mode==="PREDICTIVE";}
+
+function predictiveOpportunity(c:PredictiveCandidate):Opportunity{
+  const f=c.forecast,d=dir(c.side),sourceCount=f.crossVenue.sourceCount,disagreementRate=f.crossVenue.disagreementRate,
+    net=Math.max(0,c.expectedReturnRate-PREDICTIVE_ARTIFACT.costRate),score=clip(c.confidence*100,0,100),
+    stopRate=c.catastrophicStopRate,targetRate=Math.max(.004,c.predictedMfeRate),
+    price=c.price;
+  return{id:c.id,symbol:c.symbol,side:c.side,mode:"PREDICTIVE",premium:c.confidence>=.70,reserve:false,score,eligible:c.eligible,
+    completedAt:c.at,expiresAt:c.expiresAt,price,stopPrice:price*(1-d*stopRate),targetPrice:price*(1+d*targetRate),stopRate,targetRate,
+    directionStrength:(c.side==="LONG"?f.upProbability.m60:1-f.upProbability.m60)*100,pathEfficiency:0,
+    momentumPersistence:(c.side==="LONG"?f.upProbability.m120:1-f.upProbability.m120)*100,
+    positionScore:clip(100*(1-c.entryRegretRate/.01),0,100),spaceScore:clip(100*net/Math.max(stopRate,.001),0,100),
+    executionScore:clip((.55+.45*f.crossVenue.agreement)*100,0,100),grossRemainingSpaceRate:Math.max(0,c.expectedReturnRate),
+    netRemainingSpaceRate:net,pullbackRiskRate:stopRate,edgeRatio:net/Math.max(stopRate,1e-9),expectedHoldMinutes:c.expectedHoldMinutes,
+    marketFit:c.confidence*100,regionId:null,regionQuality:null,reason:c.reason,strategyVersion:PREDICTIVE_PATH_VERSION,
+    sourceCount,disagreementRate,predictiveForecast:f};
+}
+
+function managePredictiveTrades(s:ForwardState,quotes:Record<string,Quote>,now:number){
+  const closed=new Set<string>();
+  for(const t of s.positions){
+    if(t.entryContext?.strategyVersion!==PREDICTIVE_PATH_VERSION)continue;
+    const q=quotes[t.symbol];if(!freshQuote(q,now))continue;
+    const px=t.side==="LONG"?q!.bestBid:q!.bestAsk,d=dir(t.side),signed=d*(px/t.entryPrice-1),
+      favorable=Math.max(0,signed),adverse=Math.max(0,-signed),ageMinutes=(now-t.openedAt)/60_000,
+      stopped=t.side==="LONG"?px<=t.stopPrice:px>=t.stopPrice,
+      forecast=s.predictivePath.symbols[t.symbol],
+      decision=predictiveExitDecision({side:t.side,forecast,stopped,ageMinutes});
+    t.lastPrice=px;t.lastQuoteAt=q!.observedAt;t.favorable=Math.max(t.favorable,favorable);t.adverse=Math.max(t.adverse,adverse);
+    t.peakPnlRate=Math.max(t.peakPnlRate??0,favorable);
+    const score=clip(decision.directionProbability*70+clip(decision.remainingEdge/.01,0,1)*30,0,100);
+    t.holdScore=score;t.holdValue={action:decision.reason?(signed>=0?"EXIT_PROFIT":"EXIT_RISK"):"HOLD",
+      pullbackRiskRate:t.entryContext?.pullbackRiskRate??Math.abs(t.entryPrice-t.stopPrice)/t.entryPrice,
+      bestHoldMinutes:t.expectedHoldMinutes??60,score};
+    if(decision.reason){closeTrade(s,t,px,now,decision.reason);closed.add(t.id);}
+  }
+  if(closed.size)s.positions=s.positions.filter(t=>!closed.has(t.id));
+}
+
+function openPredictiveTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:number,equity:number){
+  if(!isPredictiveOpportunity(o)||!o.predictiveForecast)return"预测路径身份缺失";
+  const side=o.side,d=dir(side),price=side==="LONG"?q.bestAsk:q.bestBid,stopRate=o.stopRate;
+  if(!(stopRate>=.004&&stopRate<=.03))return"灾难止损宽度异常";
+  const totalHeadroom=equity*(TOTAL_RISK_RATE-.001)-existingRisk(s),
+    sideHeadroom=equity*(SIDE_RISK_RATE-.0005)-existingRisk(s,side),
+    headroom=Math.max(0,Math.min(totalHeadroom,sideHeadroom));
+  const confidence=clip(o.predictiveForecast.confidence,.5,.9),
+    riskRate=clip(.009+(confidence-.60)*.025,.0075,.015),
+    wantedRisk=equity*riskRate,riskBudget=Math.min(wantedRisk,headroom);
+  if(riskBudget<equity*.0035)return"剩余风险预算不足以形成有效仓位";
+  const consumed=Math.max(0,d*(price/Math.max(o.price,1e-9)-1)),
+    remainingNet=o.netRemainingSpaceRate-consumed;
+  if(remainingNet<=0)return"实时价格已消耗预测净优势";
+  const rawNotional=riskBudget/(stopRate+ROUND_TRIP_COST),
+    targetNotional=Math.min(rawNotional,equity*1.20),
+    leverage=Math.max(1,Math.min(10,Math.floor(contract.leverageMax||10))),
+    mult=Math.max(contract.quantoMultiplier,1e-12),
+    minContracts=Math.max(1,Math.ceil(contract.minContracts??(Number(contract.orderSizeMin??1)||1))),
+    contracts=Math.floor(targetNotional/(price*mult));
+  if(contracts<minContracts)return"低于最小模拟合约数量";
+  const quantity=contracts*mult,notional=quantity*price,margin=notional/leverage,totalMargin=s.positions.reduce((n,t)=>n+t.margin,0);
+  if(totalMargin+margin>equity*TOTAL_MARGIN_RATE)return"组合保证金已满";
+  const plannedRisk=notional*(stopRate+ROUND_TRIP_COST),entryFee=notional*PAPER_COST.feeRate,
+    stopPrice=price*(1-d*stopRate),armRate=Math.max(.004,Math.min(.03,o.targetRate)),armPrice=price*(1+d*armRate),
+    horizon=Math.max(15,Math.round(o.expectedHoldMinutes)),
+    id=`pp-${now.toString(36)}-${o.symbol.replace(/[^A-Z0-9]/g,"")}-${side[0]}`,
+    ruleId=`predictive-path-${o.symbol}`,
+    directionProbability=(side==="LONG"?o.predictiveForecast.upProbability.m60:1-o.predictiveForecast.upProbability.m60),
+    p=o.predictiveForecast,
+    rule:Rule={id:ruleId,signature:`PREDICTIVE_PATH:${side}`,parentId:null,version:1,createdAt:now,
+      expiresAt:now+Math.max(120,o.expectedHoldMinutes*3)*60_000,status:"EXPERIMENTAL",conditions:[],side,horizon,stopRate,
+      armRate,givebackRate:0,exitMode:"REACTION_DECAY",samples:0,trainGroups:0,checkGroups:0,estimatedNetRate:remainingNet,
+      priorResponse:null,recentResponse:0,standardError:0,reason:o.reason,mutation:"CREATE",grammar:PREDICTIVE_PATH_VERSION,
+      liveEligible:false,authority:"ADAPTIVE_TEN",turnTimeframe:"5m"},
+    t:Trade={id,symbol:o.symbol,side,rule,openedAt:now,closedAt:null,status:"OPEN",entryPrice:price,exitPrice:null,quantity,contracts,
+      quantoMultiplier:mult,notional,leverage,margin,plannedRisk,stopPrice,armPrice,favorable:0,adverse:0,lastPrice:price,
+      lastQuoteAt:q.observedAt,entryFee,exitFee:0,fundingAllowance:0,grossPnl:null,netPnl:null,exitReason:null,relationFailureBars:0,lastRelationBar:now,
+      execution:"REAL_QUOTE_PAPER_MODEL",liveEligible:false,firstProfitAt:null,holdScore:o.score,profitFloorRate:0,expectedHoldMinutes:o.expectedHoldMinutes,
+      peakPnlRate:0,exitControl:{policy:PREDICTIVE_PATH_VERSION,armedAt:null,armedQuoteAt:null,maxObservationGapMs:30_000,maxQuoteAgeMs:10_000},
+      entryContext:{version:"adaptive-ten-entry-v1",capturedAt:now,timeframe:"5m",side,mode:"PREDICTIVE",reserve:false,reason:o.reason,
+        entryScore:o.score,directionStrength:o.directionStrength,spaceScore:o.spaceScore,positionScore:o.positionScore,executionScore:o.executionScore,
+        remainingSpaceRate:remainingNet,pullbackRiskRate:stopRate,edgeRatio:remainingNet/Math.max(stopRate,1e-9),
+        expectedHoldMinutes:o.expectedHoldMinutes,marketFit:o.marketFit,regionId:null,portfolioRiskCharge:riskBudget,
+        strategyVersion:PREDICTIVE_PATH_VERSION,sourceCount:o.sourceCount,disagreementRate:o.disagreementRate,postEntryState:"CONFIRMED",
+        prediction:{directionProbability,expectedReturnRate:o.grossRemainingSpaceRate,predictedMfeRate:side==="LONG"?p.long.mfe60:p.short.mfe60,
+          predictedMaeRate:side==="LONG"?p.long.mae60:p.short.mae60,targetBeforeRisk:side==="LONG"?p.long.targetBeforeRisk60:p.short.targetBeforeRisk60,
+          entryRegretRate:side==="LONG"?p.long.entryRegret10:p.short.entryRegret10,confidence:p.confidence}},
+      forecast:{remainingNetRate:remainingNet,quality:p.confidence,sizingEquity:equity}};
+  s.positions.push(t);s.balance-=entryFee;s.fees+=entryFee;s.turnover+=notional;s.lastEntryAt[o.symbol]=now;s.lastSide[o.symbol]=side;
+  event(s,now,"ENTRY",id,`${o.symbol} ${side} PREDICTIVE｜方向${(directionProbability*100).toFixed(0)}%｜预测净优势${(remainingNet*100).toFixed(2)}%`,{notional,plannedRisk});
+  return null;
+}
 
 function openExtremumTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:number,equity:number){
   if(!isExtremumOpportunity(o))return"新策略身份缺失";
