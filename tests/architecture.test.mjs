@@ -82,3 +82,22 @@ test("execution page exposes the same narrative used by strategy decisions",asyn
   assert.match(execution,/数据覆盖/);assert.match(execution,/超大周期至少需要3个真实日线市场/);
   assert.match(wrangler,/MarketStream/);assert.match(wrangler,/MemberExecutor/);assert.match(wrangler,/MemberDirectory/);
 });
+
+
+test("Market Intelligence uses thesis lifecycle, not scalp profit locking or batch spraying",async()=>{
+  const core=await read("lib/forward-relations.ts"),engine=await read("lib/market-intelligence-engine.ts");
+  const manage=core.slice(core.indexOf("function manageIntelligenceTrades"),core.indexOf("function markAndManage"));
+  assert.doesNotMatch(manage,/利润保护提升|PROFIT_GIVEBACK/);
+  assert.match(manage,/已移除旧式动态锁利/);
+  assert.match(manage,/invalidationBars:t\.relationFailureBars/);
+  const fill=core.slice(core.indexOf("export function fillForwardPortfolio"),core.indexOf("function nextCandleAt"));
+  assert.match(fill,/opened=1;break/);
+  const advance=core.slice(core.indexOf("export function advanceForward"),core.indexOf("export function closeForwardForReset"));
+  assert.match(advance,/marketReady&&dataDue\?fillForwardPortfolio/);
+  assert.doesNotMatch(advance,/rotateIfNeeded\(/);
+  assert.match(engine,/thesisId=.*row\.signalSince/);
+  assert.match(engine,/signalBars>=2/);
+  assert.match(engine,/stableBias/);
+  const boundaries=core.slice(core.indexOf("boundaries:{scope"));
+  assert.match(boundaries,/Market Intelligence 不使用动态锁利/);
+});
