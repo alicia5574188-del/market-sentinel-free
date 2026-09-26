@@ -2580,7 +2580,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             return latestDrift.adverse<=latestDrift.allowed+1e-9;
           };
           if(!submissionStillAllowed())throw new GateEntryCancelledError();
-          entry.exchangeOrderId = await client.createEntry(intent);
+          // Keep the current final local safety fence, but use the proven
+          // 2026-09-20 REST transport after it passes. This guard runs after
+          // signing and immediately before the one network submission.
+          entry.exchangeOrderId = await client.createEntry(intent,submissionStillAllowed);
           entry.status = "OPEN";
           const filled=await client.inspectEntry("MARKET",symbol,entry.tag,entry.exchangeOrderId);
           const fillPrice=Number(filled?.fill_price);
