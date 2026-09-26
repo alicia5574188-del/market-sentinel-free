@@ -4,8 +4,10 @@ const BASES=["https://api.gateio.ws/api/v4","https://fx-api.gateio.ws/api/v4"];
 const INPUT=process.env.PREDICTIVE_DATASET??"/tmp/gate-predictive-12m.json";
 const OUTPUT=process.env.PREDICTIVE_ANCILLARY??"/tmp/gate-predictive-ancillary.json";
 const raw=JSON.parse(readFileSync(INPUT,"utf8"));
-const symbols=raw.symbols??raw.datasets?.map(x=>x.symbol)??[],from=Number(raw.from),to=Number(raw.now);
-if(!symbols.length||!(from>0&&to>from))throw new Error("predictive ancillary input invalid");
+const symbols=raw.symbols??raw.datasets?.map(x=>x.symbol)??[],rawFrom=Number(raw.from),to=Number(raw.now),
+  gateRetentionFloor=Math.floor(Date.now()/1000)-175*86_400,
+  from=Math.max(rawFrom,to-150*86_400,gateRetentionFloor);
+if(!symbols.length||!(rawFrom>0&&to>from))throw new Error("predictive ancillary input invalid");
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 async function get(path){
   let last;
@@ -69,5 +71,5 @@ async function worker(){
 await Promise.all(Array.from({length:Math.min(4,symbols.length)},worker));
 const good=symbols.filter(s=>datasets[s]?.stats?.length>100&&datasets[s]?.funding?.length>20&&datasets[s]?.premium?.length>100);
 if(good.length<Math.min(8,symbols.length))throw new Error("insufficient ancillary history: "+good.length+"/"+symbols.length);
-writeFileSync(OUTPUT,JSON.stringify({version:"predictive-gate-ancillary-v1",source:"gate-public-futures-stats-funding-premium",from,to,symbols,good,datasets})+"\n");
+writeFileSync(OUTPUT,JSON.stringify({version:"predictive-gate-ancillary-v1",source:"gate-public-futures-stats-funding-premium",rawFrom,from,to,symbols,good,datasets})+"\n");
 console.log(JSON.stringify({output:OUTPUT,good:good.length,total:symbols.length},null,2));
