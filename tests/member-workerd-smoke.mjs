@@ -4,18 +4,22 @@
 import {spawn} from 'node:child_process';
 import {mkdtemp,rm}from'node:fs/promises';import{tmpdir}from'node:os';import{join}from'node:path';import assert from'node:assert/strict';
 const root='synthetic-local-member-smoke-secret-not-production',dir=await mkdtemp(join(tmpdir(),'member-local-'));
-const port=18787,base=`http://127.0.0.1:${port}`;
+const port=18000+(process.pid%10000),base=`http://127.0.0.1:${port}`;
 // The archived local workerd binary supports May 2026. This override is ONLY
 // for the disposable emulator; production keeps its original compatibility date.
 const process_=spawn('./node_modules/.bin/wrangler',['dev','--local','--compatibility-date','2026-05-22','--config','dist/server/wrangler.json','--ip','127.0.0.1','--port',String(port),'--inspector-port','0','--persist-to',dir,'--var',`OWNER_ACCESS_TOKEN:${root}`],{env:{...process.env,CI:'true',WRANGLER_SEND_METRICS:'false'},stdio:['ignore','pipe','pipe']});
 let logs='';process_.stdout.on('data',b=>logs+=b);process_.stderr.on('data',b=>logs+=b);
 const call=async(path,cookie='',body)=>{
- try{
-  const response=await fetch(base+path,{method:body===undefined?'GET':'POST',headers:{Cookie:cookie,Origin:base,'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(5000)});
-  // Drain every local HTTP body, including status-only denial assertions, so
-  // the smoke test cannot exhaust its own keep-alive connection pool.
-  return new Response(await response.arrayBuffer(),{status:response.status,statusText:response.statusText,headers:response.headers});
- }catch(error){throw new Error(`Local member smoke request failed: ${path}`,{cause:error});}
+ let last;
+ for(let attempt=0;attempt<2;attempt++){
+  try{
+   const response=await fetch(base+path,{method:body===undefined?'GET':'POST',headers:{Cookie:cookie,Origin:base,'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(8000)});
+   // Drain every local HTTP body, including status-only denial assertions, so
+   // the smoke test cannot exhaust its own keep-alive connection pool.
+   return new Response(await response.arrayBuffer(),{status:response.status,statusText:response.statusText,headers:response.headers});
+  }catch(error){last=error;if(attempt===0)await new Promise(r=>setTimeout(r,150));}
+ }
+ throw new Error(`Local member smoke request failed: ${path}`,{cause:last});
 };
 try{
  let ready=false;for(let i=0;i<40;i++){if(process_.exitCode!==null)throw Error('Local Worker exited');try{const r=await call('/api/auth/session');if(r.ok){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,250));}assert.ok(ready,'Local Worker ready');
