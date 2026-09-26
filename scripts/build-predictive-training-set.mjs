@@ -1,10 +1,11 @@
-import {createWriteStream,readFileSync} from "node:fs";
+import {createWriteStream,readFileSync,writeFileSync} from "node:fs";
 import {once} from "node:events";
 import {buildPredictiveFeatures} from "../lib/predictive-path-features.ts";
 
 const INPUT=process.env.PREDICTIVE_DATASET??"/tmp/gate-predictive-12m.json";
 const ANCILLARY=process.env.PREDICTIVE_ANCILLARY??"/tmp/gate-predictive-ancillary.json";
 const OUTPUT=process.env.PREDICTIVE_TRAINING_SET??"/tmp/predictive-training.jsonl";
+const META=process.env.PREDICTIVE_TRAINING_META??"/tmp/predictive-training-meta.json";
 const STRIDE=Math.max(1,Number(process.env.PREDICTIVE_STRIDE??3));
 const raw=JSON.parse(readFileSync(INPUT,"utf8")),ancillaryRaw=JSON.parse(readFileSync(ANCILLARY,"utf8"));
 if(raw.interval!=="5m")throw new Error("Predictive training set requires Gate 5m data");
@@ -60,4 +61,5 @@ for(const dataset of datasets){
 }
 out.end();await once(out,"finish");
 if(count<20_000||!featureNames)throw new Error("insufficient predictive training rows "+count);
-console.log(JSON.stringify({output:OUTPUT,rows:count,features:featureNames.length,featureNames},null,2));
+writeFileSync(META,JSON.stringify({version:"predictive-training-meta-v1",featureNames,rows:count,source:String(raw.source??"gate-5m")})+"\n");
+console.log(JSON.stringify({output:OUTPUT,meta:META,rows:count,features:featureNames.length,featureNames},null,2));
