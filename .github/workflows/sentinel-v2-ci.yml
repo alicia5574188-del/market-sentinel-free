@@ -62,7 +62,7 @@ jobs:
             jq -c '{ok,version,mode,runtime:{state:.runtime.state,stale:.runtime.stale,lastError:.runtime.lastError,
               lastSuccessAt:.runtime.lastSuccessAt,forward:.runtime.forward,realtimeReadiness:.runtime.realtimeReadiness,
               marketDataTransport:.runtime.marketDataTransport,feedQuality:.runtime.feedQuality,symbols:.runtime.symbols,
-              radar:.runtime.radar,liveMode:.runtime.liveMode,limits:.runtime.limits}}' <<<"$body"
+              radar:.runtime.radar,liveMode:.runtime.liveMode,liveExecution:.runtime.liveExecution,limits:.runtime.limits}}' <<<"$body"
           else
             echo '{"runtimeSnapshot":"unavailable"}'
           fi
