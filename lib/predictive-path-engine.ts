@@ -29,10 +29,12 @@ function updateMemory(previous:PredictiveDirectionMemory|undefined,forecast:Pred
   if(raw&&raw!==current){
     const oppositeProbability=sideProbability(forecast,raw),oppositeBars=oppositeProbability>=PREDICTIVE_PATH_POLICY.directionFlip?prior.oppositeBars+1:0;
     if(oppositeBars>=PREDICTIVE_PATH_POLICY.flipBars)return{side:raw,since:now,lastBarTime,oppositeBars:0,weakBars:0};
-    return{...prior,lastBarTime,oppositeBars,weakBars:currentProbability<PREDICTIVE_PATH_POLICY.directionKeep?prior.weakBars+1:0};
+    return{...prior,lastBarTime,oppositeBars,weakBars:prior.weakBars+1};
   }
-  const weakBars=currentProbability<PREDICTIVE_PATH_POLICY.directionKeep?prior.weakBars+1:0;
-  return{...prior,lastBarTime,oppositeBars:0,weakBars};
+  // A missing slow-direction spine is evidence decay, not proof that the old
+  // direction is still healthy. Count completed 5m neutral decisions so exits
+  // can react only after sustained loss of edge rather than on one noisy bar.
+  return{...prior,lastBarTime,oppositeBars:0,weakBars:prior.weakBars+1};
 }
 function bestHorizon(f:PredictivePathForecast,side:PredictiveSide):15|30|60|120{
   const d=side==="LONG"?1:-1,candidates=[
@@ -92,8 +94,8 @@ export function predictiveExitDecision(input:{side:PredictiveSide;forecast:Predi
     remainingEdge=sideData.netEv60;
   if(input.memory?.side&&input.memory.side!==input.side&&oppositeProbability>=PREDICTIVE_PATH_POLICY.directionFlip)
     return{reason:"PREDICTIVE_REVERSAL",remainingEdge,directionProbability,oppositeProbability,hold:false};
-  if(input.ageMinutes>=15&&(input.memory?.weakBars??0)>=2&&remainingEdge<=0
-    &&directionProbability<PREDICTIVE_PATH_POLICY.edgeExitProbability)
+  if(input.ageMinutes>=20&&(input.memory?.weakBars??0)>=4&&remainingEdge<=0
+    &&directionProbability<=Math.max(.50,PREDICTIVE_PATH_POLICY.edgeExitProbability))
     return{reason:"PREDICTIVE_EDGE_GONE",remainingEdge,directionProbability,oppositeProbability,hold:false};
   return{reason:null,remainingEdge,directionProbability,oppositeProbability,hold:true};
 }
