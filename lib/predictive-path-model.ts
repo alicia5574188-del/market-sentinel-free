@@ -101,30 +101,36 @@ export function forecastCausalPath(feature:PredictiveFeatureVector,quote?:Predic
   const g=accessor(feature),e=evidence(feature),spine=causalDirectionSpine(g,e),
     sigma5=Math.max(e.rv/Math.sqrt(24),g("atr14")*.42,.00045),
     persistence=spine?.continuity??clamp(e.persistence*.55,0,.5),
-    mu5=spine?clamp(spine.slowPerBar*(.48+.62*persistence),-sigma5*1.25,sigma5*1.25):0,
+    trendPerBar=spine?clamp(spine.slowPerBar*(.52+.58*persistence),-sigma5*1.15,sigma5*1.15):0,
+    fairValueGap=robustMedian([g("ema21_gap"),g("vwap20_gap"),g("vwap48_gap"),g("ichimoku_kijun_gap")]),
     projected=(bars:number)=>{
-      const horizonDamp=bars<=3?.76:bars<=6?.84:bars<=12?.92:.86,
-        mean=mu5*bars*horizonDamp,sigma=sigma5*Math.sqrt(bars)*e.uncertainty,
+      const horizonDamp=bars<=3?.72:bars<=6?.82:bars<=12?.90:.84,
+        reversionWeight=bars<=3?.18:bars<=6?.30:bars<=12?.46:.58,
+        trendMean=trendPerBar*bars*horizonDamp,
+        valueCorrection=clamp(-fairValueGap*reversionWeight,-sigma5*Math.sqrt(bars)*.85,sigma5*Math.sqrt(bars)*.85),
+        mean=trendMean+valueCorrection,sigma=sigma5*Math.sqrt(bars)*e.uncertainty,
         statistical=impliedUpProbability(mean,sigma),
         confidence=spine?.confidence??.5,
-        p=spine?.side==="LONG"?Math.max(statistical,.5+Math.max(0,confidence-.5)*.72)
-          :spine?.side==="SHORT"?Math.min(statistical,.5-Math.max(0,confidence-.5)*.72):.5;
+        p=spine?.side==="LONG"?Math.max(statistical,.5+Math.max(0,confidence-.5)*.68)
+          :spine?.side==="SHORT"?Math.min(statistical,.5-Math.max(0,confidence-.5)*.68):.5;
       return{mean,sigma,p:clamp(p,.05,.95)};
     },
     h15=projected(3),h30=projected(6),h60=projected(12),h120=projected(24),
-    longMfe=Math.max(0,h60.mean+h60.sigma*.82),longMae=Math.max(0,-h60.mean+h60.sigma*.72),
-    shortMfe=Math.max(0,-h60.mean+h60.sigma*.82),shortMae=Math.max(0,h60.mean+h60.sigma*.72),
+    excursionFloor=h60.sigma*.34,
+    longMfe=Math.max(excursionFloor,h60.mean+h60.sigma*.82),longMae=Math.max(excursionFloor,-h60.mean+h60.sigma*.72),
+    shortMfe=Math.max(excursionFloor,-h60.mean+h60.sigma*.82),shortMae=Math.max(excursionFloor,h60.mean+h60.sigma*.72),
     atr=Math.max(g("atr14"),.001),atrSlow=Math.max(g("atr28"),.001),normalAtr=Math.max(.001,Math.min(atr,atrSlow*1.12)),
-    targetBarrier=clamp(Math.max(.008,normalAtr*1.15),.008,.02),riskBarrier=clamp(Math.max(.0045,normalAtr*.65),.0045,.012),
-    longTouch=firstTouchProbability(mu5,sigma5,targetBarrier,riskBarrier,12),
-    shortTouch=firstTouchProbability(-mu5,sigma5,targetBarrier,riskBarrier,12),
+    targetBarrier=clamp(Math.max(.008,normalAtr*1.15),.008,.02),riskBarrier=clamp(Math.max(.0045,normalAtr*.72),.0045,.013),
+    pathDrift5=h60.mean/12,
+    longTouch=firstTouchProbability(pathDrift5,sigma5,targetBarrier,riskBarrier,12),
+    shortTouch=firstTouchProbability(-pathDrift5,sigma5,targetBarrier,riskBarrier,12),
     overextension=clamp(.30*tanh(g("boll_z"))+.22*tanh(g("vwap20_gap")/Math.max(normalAtr*.75,1e-5))
       +.18*tanh(g("ema21_gap")/Math.max(normalAtr,.0001))+.16*tanh(g("donchian_pos")*2)+.14*tanh(g("rsi14")),-1,1),
-    fastRet1=g("ret_1"),fastRet3=g("ret_3"),fastRet6=g("ret_6"),
+    fastRet1=g("ret_1"),fastRet3=g("ret_3"),fastRet6=g("ret_6"),closeLocation=g("close_location"),
     shortPressure=tanh(fastRet1/Math.max(normalAtr*.45,1e-5)),
-    chaseUp=Math.max(0,fastRet3-normalAtr*1.15),chaseDown=Math.max(0,-fastRet3-normalAtr*1.15),
-    longRegret=Math.max(0,(Math.max(0,overextension)*.58+Math.max(0,-shortPressure)*.18)*normalAtr+chaseUp*.85),
-    shortRegret=Math.max(0,(Math.max(0,-overextension)*.58+Math.max(0,shortPressure)*.18)*normalAtr+chaseDown*.85),
+    chaseUp=Math.max(0,fastRet3-normalAtr*.90),chaseDown=Math.max(0,-fastRet3-normalAtr*.90),
+    longRegret=Math.max(0,(Math.max(0,overextension)*.62+Math.max(0,-shortPressure)*.16)*normalAtr+chaseUp*.95),
+    shortRegret=Math.max(0,(Math.max(0,-overextension)*.62+Math.max(0,shortPressure)*.16)*normalAtr+chaseDown*.95),
     longNet=h60.mean-PREDICTIVE_PATH_POLICY.estimatedRoundTripCost,shortNet=-h60.mean-PREDICTIVE_PATH_POLICY.estimatedRoundTripCost,
     rawSide=spine?.side??null,sideSign=rawSide==="LONG"?1:rawSide==="SHORT"?-1:0,
     selected=rawSide==="LONG"?{p:spine!.confidence,touch:longTouch,regret:longRegret,net:longNet,mfe:longMfe,mae:longMae}
@@ -132,21 +138,22 @@ export function forecastCausalPath(feature:PredictiveFeatureVector,quote?:Predic
     sourceCount=quote?.sourceCount??e.sourceCount,disagreementRate=quote?.disagreementRate??e.sourceDisagreement,
     agreement=quote?.directionalAgreement??e.sourceAgreement,breadth=quote?.sourceBreadth??e.sourceBreadth,
     signedRet1=sideSign*fastRet1,signedRet3=sideSign*fastRet3,signedRet6=sideSign*fastRet6,
-    signedEma8=sideSign*g("ema8_gap"),signedBreadth=sideSign*breadth,
+    signedValueGap=sideSign*fairValueGap,signedCloseLocation=sideSign*closeLocation,signedBreadth=sideSign*breadth,
     pathSpace=selected?sideSign*h60.mean:0,
-    minimumGrossPath=Math.max(.0065,PREDICTIVE_PATH_POLICY.estimatedRoundTripCost*3.2,normalAtr*.90),
-    regretMax=clamp(normalAtr*.30,.0010,.0042),
-    timingReady=!!selected&&signedRet1>=-normalAtr*.12&&signedRet1<=normalAtr*.72
-      &&signedRet3<=normalAtr*1.15&&signedRet6<=normalAtr*1.90&&signedEma8<=normalAtr*.90,
-    independentReady=!!spine&&spine.technicalSupport>=.08&&spine.multiSupport>=-.04&&spine.derivativeSupport>=-.40
-      &&spine.contextSupport>=-.48,
+    minimumGrossPath=Math.max(.0062,PREDICTIVE_PATH_POLICY.estimatedRoundTripCost*3.0,normalAtr*.82),
+    regretMax=clamp(normalAtr*.34,.0012,.0048),
+    valueReady=!!selected&&signedValueGap<=normalAtr*.52&&signedValueGap>=-normalAtr*1.20,
+    timingReady=!!selected&&valueReady&&signedRet1>=-normalAtr*.18&&signedRet1<=normalAtr*.52
+      &&signedRet3>=-normalAtr*.75&&signedRet3<=normalAtr*.92&&signedRet6<=normalAtr*1.55&&signedCloseLocation>=-.12,
+    independentReady=!!spine&&spine.technicalSupport>=.05&&spine.multiSupport>=-.02&&spine.derivativeSupport>=-.42
+      &&spine.contextSupport>=-.42,
     multiReady=sourceCount>=PREDICTIVE_PATH_POLICY.minSources&&disagreementRate<=PREDICTIVE_PATH_POLICY.maxDisagreement
       &&signedBreadth>=0&&agreement>=.50,
-    directionReady=!!spine&&spine.confidence>=PREDICTIVE_PATH_POLICY.directionAcquire&&spine.continuity>=.26,
+    directionReady=!!spine&&spine.confidence>=PREDICTIVE_PATH_POLICY.directionAcquire&&spine.continuity>=.25,
     touchReady=!!selected&&selected.touch>=PREDICTIVE_PATH_POLICY.minTouch,
     regretReady=!!selected&&selected.regret<=regretMax,
     edgeReady=!!selected&&selected.net>=PREDICTIVE_PATH_POLICY.minimumNetEdge&&pathSpace>=minimumGrossPath
-      &&selected.mfe>=Math.max(.008,selected.mae*1.45),
+      &&selected.mfe>=Math.max(.008,selected.mae*1.30),
     enterNow=!!rawSide&&directionReady&&independentReady&&multiReady&&timingReady&&touchReady&&regretReady&&edgeReady,
     entryQuality=selected?Math.min(
       clamp((selected.p-.5)/.28,0,1),clamp(selected.touch-.50,.0,.24)/.24,
@@ -157,7 +164,7 @@ export function forecastCausalPath(feature:PredictiveFeatureVector,quote?:Predic
     waitReason=enterNow?null:!spine?"长期方向证据未形成一致脊柱"
       :!directionReady?"长期方向持续性不足":!independentReady?"独立证据与主方向不一致"
       :!multiReady?"多市场没有同步接受该方向":!edgeReady?"未来60分钟成本后空间不足"
-      :!timingReady?"方向成立但当前5分钟位置不适合追入":!touchReady?"目标先于风险的路径优势不足"
+      :!valueReady?"方向成立但价格没有回到合理价值区域":!timingReady?"方向成立但当前5分钟位置不适合入场":!touchReady?"目标先于风险的路径优势不足"
       :!regretReady?"当前位置过度延伸，等待更优入场":"等待确认",
     spinePersistence=spine?.continuity??0;
   return{version:PREDICTIVE_PATH_VERSION,symbol:feature.symbol,at:feature.decisionAt,lastBarTime:0,
