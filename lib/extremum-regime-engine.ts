@@ -109,7 +109,9 @@ function deriveState(symbol:string,input:Candle[],minute:Candle[]|undefined,q:Qu
   let regime:ExtremumRegime="SWING";
   const old=prior?.regime??null,priorBias=prior?.trendBias??(old==="TREND_UP"?"UP":old==="TREND_DOWN"?"DOWN":null),
     upRaw=up>=66&&up>down+16&&efficiency>=.43,downRaw=down>=66&&down>up+16&&efficiency>=.43,
-    topBreak=topCandidate&&(ms.breakDown||ms.reclaimTop),bottomBreak=bottomCandidate&&(ms.breakUp||ms.reclaimBottom);
+    topBreak=topCandidate&&(ms.breakDown||ms.reclaimTop),bottomBreak=bottomCandidate&&(ms.breakUp||ms.reclaimBottom),
+    priorTopBreak=priorBias==="UP"&&prior?.candidateSide==="SHORT"&&["STRUCTURE_BREAK","RECLAIM_TEST","READY"].includes(prior.stage),
+    priorBottomBreak=priorBias==="DOWN"&&prior?.candidateSide==="LONG"&&["STRUCTURE_BREAK","RECLAIM_TEST","READY"].includes(prior.stage);
   if(old==="TREND_UP"||(old==="WEAKENING"&&priorBias==="UP")){
     if(up>=70&&top<68)regime="TREND_UP";
     else if(up<48&&top>=58)regime="TRANSITION";
@@ -119,8 +121,8 @@ function deriveState(symbol:string,input:Candle[],minute:Candle[]|undefined,q:Qu
     else if(down<48&&bottom>=58)regime="TRANSITION";
     else regime="WEAKENING";
   }else if(old==="TRANSITION"){
-    if(priorBias==="UP"&&downRaw&&topBreak)regime="TREND_DOWN";
-    else if(priorBias==="DOWN"&&upRaw&&bottomBreak)regime="TREND_UP";
+    if(priorBias==="UP"&&downRaw&&(topBreak||priorTopBreak))regime="TREND_DOWN";
+    else if(priorBias==="DOWN"&&upRaw&&(bottomBreak||priorBottomBreak))regime="TREND_UP";
     else if(efficiency<.32&&top<58&&bottom<58)regime="SWING";
     else regime="TRANSITION";
   }else if(upRaw)regime="TREND_UP";
@@ -173,7 +175,7 @@ function makeOpportunity(state:ExtremumSymbolState,p:Candle[],minute:Candle[]|un
   return{id:`ext-${mode.toLowerCase()}-${state.symbol}-${last.time}`,symbol:state.symbol,side,mode,premium:true,reserve:false,score,
     eligible:fresh&&sourceOk&&score>=64&&net>0&&edge>=.45,completedAt:(last.time+300)*1000,expiresAt:now+4*60_000,price,stopPrice,targetPrice,
     stopRate,targetRate,directionStrength:side==="LONG"?state.upSurvival:state.downSurvival,pathEfficiency:state.pathEfficiency*100,
-    momentumPersistence:state.followThrough*100,positionScore:side==="LONG"?100-state.bottomPressure:100-state.topPressure,
+    momentumPersistence:state.followThrough*100,positionScore:side==="LONG"?state.bottomPressure:state.topPressure,
     spaceScore:100*Math.min(1,edge/1.5),executionScore:fresh?100:10,grossRemainingSpaceRate:targetRate,netRemainingSpaceRate:net,
     pullbackRiskRate:stopRate,edgeRatio:edge,expectedHoldMinutes:hold,marketFit:Math.max(state.upSurvival,state.downSurvival),
     regionId:null,regionQuality:null,reason,strategyVersion:EXTREMUM_REGIME_VERSION,regime:state.regime,topPressure:state.topPressure,
