@@ -82,17 +82,23 @@ function deriveState(symbol:string,input:Candle[],minute:Candle[]|undefined,q:Qu
     followUp=clamp(.55*(closePos)+.45*(transitions.slice(-2).filter(v=>v>0).length/2)),
     followDown=clamp(.55*(1-closePos)+.45*(transitions.slice(-2).filter(v=>v<0).length/2)),
     dirUp=ret6>0?1:ret6===0?.5:0,dirDown=ret6<0?1:ret6===0?.5:0;
-  const up=100*clamp(.32*efficiency*dirUp+.24*upStructure+.16*(1-clamp(pullbackUp))+.14*followUp+.08*ms.recoveryUp+.06*sq),
-    down=100*clamp(.32*efficiency*dirDown+.24*downStructure+.16*(1-clamp(pullbackDown))+.14*followDown+.08*ms.recoveryDown+.06*sq);
+  const sourceBreadthNow=clamp(q?.sourceBreadth??0,-1,1),sourceAgreementNow=clamp(q?.directionalAgreement??.5),
+    sourceUpNow=clamp(.5+.5*sourceBreadthNow)*sourceAgreementNow,sourceDownNow=clamp(.5-.5*sourceBreadthNow)*sourceAgreementNow,
+    up=100*clamp(.29*efficiency*dirUp+.22*upStructure+.15*(1-clamp(pullbackUp))+.13*followUp+.07*ms.recoveryUp+.05*sq+.09*sourceUpNow),
+    down=100*clamp(.29*efficiency*dirDown+.22*downStructure+.15*(1-clamp(pullbackDown))+.13*followDown+.07*ms.recoveryDown+.05*sq+.09*sourceDownNow);
   const failedHigh=last.high>high12&&last.close<=high12||last.high>=prev.high&&closePos<.42,
     failedLow=last.low<low12&&last.close>=low12||last.low<=prev.low&&closePos>.58,
     effortFailure=volumeRatio>=1.15&&bodyAtr<.65,
+    sourceBreadth=clamp(q?.sourceBreadth??0,-1,1),sourceAgreement=clamp(q?.directionalAgreement??.5),
+    sourceUp=clamp(.5+.5*sourceBreadth),sourceDown=clamp(.5-.5*sourceBreadth),
     sourceStress=clamp((q?.disagreementRate??0)/.012),
-    top=100*clamp((ret6>0?.18:0)*location+.18*clamp(upperWick/.45)+.16*(failedHigh?1:0)+.14*decel+.10*(effortFailure?1:0)
-      +.12*(ms.breakDown?1:0)+.06*sourceStress+.06*(1-efficiency)),
-    bottom=100*clamp((ret6<0?.18:0)*(1-location)+.18*clamp(lowerWick/.45)+.16*(failedLow?1:0)+.14*decel+.10*(effortFailure?1:0)
-      +.12*(ms.breakUp?1:0)+.06*sourceStress+.06*(1-efficiency));
-  const momentumOverride=efficiency>=.72&&moveNorm>=1.25&&Math.max(up,down)>=74&&sq>=.55&&bodyAtr>=1.15;
+    sourceTurnDown=ret6>0?clamp(-sourceBreadth):0,sourceTurnUp=ret6<0?clamp(sourceBreadth):0,
+    top=100*clamp((ret6>0?.17:0)*location+.17*clamp(upperWick/.45)+.15*(failedHigh?1:0)+.13*decel+.09*(effortFailure?1:0)
+      +.12*(ms.breakDown?1:0)+.06*sourceStress+.07*sourceTurnDown+.04*(1-efficiency)),
+    bottom=100*clamp((ret6<0?.17:0)*(1-location)+.17*clamp(lowerWick/.45)+.15*(failedLow?1:0)+.13*decel+.09*(effortFailure?1:0)
+      +.12*(ms.breakUp?1:0)+.06*sourceStress+.07*sourceTurnUp+.04*(1-efficiency));
+  const momentumOverride=efficiency>=.72&&moveNorm>=1.25&&Math.max(up,down)>=74&&sq>=.55&&bodyAtr>=1.15
+    &&sourceAgreement>=.67&&(ret6>0?sourceBreadth>=0:sourceBreadth<=0);
   let regime:ExtremumRegime="SWING";
   const old=prior?.regime??null,upRaw=up>=66&&up>down+16&&efficiency>=.43,downRaw=down>=66&&down>up+16&&efficiency>=.43;
   if(old==="TREND_UP"||old==="WEAKENING"){
