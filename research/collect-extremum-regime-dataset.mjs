@@ -1,7 +1,7 @@
 import { writeFile } from "node:fs/promises";
 
 const SOURCES=["GATE","BYBIT","OKX","KUCOIN","BITGET","BINANCE"];
-const SYMBOLS=(process.env.SYMBOLS??"BTC,ETH,SOL,XRP,DOGE,ADA,LINK,BCH").split(",").map(x=>x.trim().toUpperCase()).filter(Boolean);
+const SYMBOLS=(process.env.SYMBOLS??"BROCCOLI,PUMP,BTW,NIL,ONE,ONDO,BTC,ETH,SOL,NEAR,SAGA,AKE,ENA,XLM,XPL,ZEC,VIRTUAL,FET,ADA,FIL,LSK,BR,LIT,XRP,XAI").split(",").map(x=>x.trim().toUpperCase()).filter(Boolean);
 const LIMIT=Number(process.env.LIMIT??300);
 const collectedAt=Date.now();
 
