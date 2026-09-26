@@ -66,11 +66,6 @@ import { advanceStrategyArena as advancePreviousStrategyArena,
   type StrategyArenaState as PreviousStrategyArenaState } from "../lib/previous-strategy-arena.ts";
 
 const LOOP_MS = 2_000;
-const LIVE_FAST_SNAPSHOT_MAX_AGE_MS = 5_000;
-const LIVE_RECONCILE_ACTIVE_MS = 5_000;
-const LIVE_RECONCILE_IDLE_MS = 10_000;
-const LIVE_ORDER_AUDIT_MAX_AGE_MS = 120_000;
-const LIVE_ORDER_AUDIT_ADMISSION_MAX_AGE_MS = 300_000;
 // Whole-system display/health tolerance only. Executable quotes remain guarded
 // by the stricter per-symbol STALE_AFTER_MS/freshQuote checks; this must never
 // authorize an order from an old price. A few missed 2s polls should not make
@@ -517,16 +512,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private turnoverPersisted: {accountKey:string;at:number} | null = null;
   protected nonAlarmPendingWrites = 0;
   protected liveSyncWork: Promise<void> | null = null;
-  private liveBackgroundWork: Promise<void> | null = null;
-  private liveSourcePending=false;
-  private liveFastSourcePending=false;
-  private livePreferCachedNext=false;
   private liveSnapshotCache:GateLiveSnapshot|null=null;
   private liveOrderSnapshotCache:GateLiveOrderSnapshot|null=null;
   private liveOrderAuditAt=0;
-  private liveNextReconcileAt=0;
-  private liveSyncUsedCached=false;
-  private liveExecution={version:"event-driven-live-v2",cycles:0,sourceWakeups:0,
+  private liveExecution={version:"stable-loop-live-v1",cycles:0,sourceWakeups:0,
     startedAt:null as number|null,finishedAt:null as number|null,lastDurationMs:null as number|null};
   private liveReadTimeoutStreak=0;
   protected liveJournal = new Map<string, unknown>();
@@ -1094,8 +1083,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // Publish only committed lifecycle events. A source born in the candle
       // lane must not wait for the next alarm; a source closed while Gate is
       // awaiting I/O must wake the serialized reconciler as well.
-      if(previous.positions.length!==next.state.positions.length
-        ||previous.positions.some(p=>!next.state.positions.some(n=>n.id===p.id)))this.launchLiveWork(true);
+      // LIVE is reconciled synchronously by the primary alarm immediately after
+      // this durable PAPER commit, matching the proven 2026-09-20 execution path.
     } catch (error) { this.forwardError = safeError(error); }
     finally { this.forwardBusy = false; }
   }
@@ -2017,49 +2006,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return current;
   }
 
-  private launchLiveWork(sourceChanged=false) {
-    if(!this.liveNeedsSync())return;
-    const requestedAt=Date.now();
-    if(sourceChanged){
-      this.liveSourcePending=true;this.liveFastSourcePending=true;this.liveExecution.sourceWakeups++;
-    }else if(requestedAt<this.liveNextReconcileAt)return;
-    if(this.liveBackgroundWork)return;
-    const task=(async()=>{
-      do{
-        const preferCached=this.liveFastSourcePending;
-        this.liveFastSourcePending=false;this.liveSourcePending=false;this.liveSyncUsedCached=false;
-        const started=Date.now(),requestsBefore=this.liveClient?.requestCount??0;
-        this.liveExecution.startedAt=started;this.liveExecution.cycles++;
-        try{
-          this.livePreferCachedNext=preferCached;
-          await this.syncLive(started);
-          // If a committed PAPER source was handled from a very recent verified
-          // Gate snapshot, immediately follow with one network reconciliation.
-          // This removes the pre-submit private-read delay without pretending the
-          // cache is exchange confirmation.
-          if(preferCached&&this.liveSyncUsedCached)this.liveSourcePending=true;
-        }
-        catch(error){
-          const message=safeError(error),blocked=liveFailureRequiresOff(error);
-          const shouldRecord=this.runtime.live.lastError!==message||this.runtime.live.operational;
-          this.runtime.live.operational=false;this.runtime.live.lastError=message;
-          if(shouldRecord)this.recordLiveAudit({observedAt:Date.now(),symbol:null,planId:null,
-            stage:"LIVE_CONTROL",level:"RECOVERING",reason:blocked
-              ?`账户纳管冲突，执行暂停但不改写所有者开关：${message}`
-              :`实盘核对暂时失败，所有者开关选择保持不变：${message}`,error});
-        }finally{
-          this.liveExecution.finishedAt=Date.now();
-          this.liveExecution.lastDurationMs=Date.now()-started;
-          this.runtime.subrequestCount+=Math.max(0,(this.liveClient?.requestCount??requestsBefore)-requestsBefore);
-        }
-      }while(this.liveSourcePending&&this.liveNeedsSync());
-      const active=Object.values(this.runtime.live.positions).some(p=>p?.status==="OPEN")
-        ||Object.values(this.runtime.live.entries).some(e=>e&&!["FILLED","CANCELLED"].includes(e.status));
-      this.liveNextReconcileAt=Date.now()+(active?LIVE_RECONCILE_ACTIVE_MS:LIVE_RECONCILE_IDLE_MS);
-    })();
-    this.liveBackgroundWork=task;
-    this.ctx.waitUntil(task.finally(()=>{if(this.liveBackgroundWork===task)this.liveBackgroundWork=null;}));
-  }
+
 
   protected async syncLive(now:number,initialEnable=false,forceEntryCleanup=false) {
     while(this.liveSyncWork){
@@ -2095,7 +2042,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private async syncLiveOnce(now: number, initialEnable = false, forceEntryCleanup = false) {
-    this.livePreferCachedNext=false;this.liveSyncUsedCached=false;
     // Restore the 2026-09-20 primary LIVE path: one complete Gate snapshot is
     // the execution authority for account, positions, orders and protection.
     this.reconcileCanonicalMirror(now);
@@ -2623,9 +2569,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             this.recordLiveAudit({ observedAt: now, symbol, planId: plan.id, stage: "ENTRY_SUBMIT", level: "SKIPPED", reason, error });
           } else {
             entry.status = "ERROR";entry.missingSince = now;recoveringSubmission = entry;
-            this.liveSourcePending=true;this.liveFastSourcePending=false;
             this.recordLiveAudit({ observedAt: now, symbol, planId: plan.id, stage: "ENTRY_SUBMIT", level: "RECOVERING",
-              reason: `${reason}；唯一订单身份与风险额度已冻结，立即用新账户/订单快照核对，不自动重复提交，其他已通过风险检查的新源单继续执行`, error });
+              reason: reason+"；结果不明确，保留风险额度并按订单标签核对，不自动重复提交", error });
           }
         }
       } catch (error) {
@@ -3009,7 +2954,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(radarDue){
         // Gate bulk discovery is optional and explicitly yields to private LIVE
         // work. Bybit/OKX/KuCoin remain the normal scan surface.
-        if(!this.liveBackgroundWork&&!this.liveSyncWork){
+        if(!this.liveSyncWork){
           try{this.gateRadarCache=await fetchGateRadarTickers();this.gateRadarAt=Date.now();subrequests++;}
           catch{/* stale Gate-only discovery must never block external analysis */}
         }
@@ -3072,8 +3017,28 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // Forward/PAPER is financial authority, not optional analysis. Keep its
       // exits and 5-minute account archive on the same critical protection clock.
       await this.advanceForwardNow(Date.now(),false);
-      // Private network latency must not hold the 2s executable-book/PAPER clock.
-      this.launchLiveWork();
+      // Proven 2026-09-20 scheduling: PAPER is persisted first, then LIVE is
+      // reconciled in the same serialized primary pass. No second LIVE executor
+      // runs in the background.
+      if(this.liveNeedsSync()){
+        const liveStarted=Date.now(),liveRequestsBefore=this.liveClient?.requestCount??0;
+        this.liveExecution.startedAt=liveStarted;this.liveExecution.cycles++;
+        try{
+          await this.syncLive(liveStarted);
+        }catch(error){
+          const message=safeError(error),blocked=liveFailureRequiresOff(error);
+          const shouldRecord=this.runtime.live.lastError!==message||this.runtime.live.operational;
+          this.runtime.live.operational=false;this.runtime.live.lastError=message;
+          if(shouldRecord)this.recordLiveAudit({observedAt:Date.now(),symbol:null,planId:null,
+            stage:"LIVE_CONTROL",level:"RECOVERING",reason:blocked
+              ?"账户纳管冲突，执行暂停但不改写所有者开关："+message
+              :"实盘核对暂时失败，所有者开关选择保持不变："+message,error});
+        }finally{
+          this.liveExecution.finishedAt=Date.now();
+          this.liveExecution.lastDurationMs=Date.now()-liveStarted;
+          subrequests+=Math.max(0,(this.liveClient?.requestCount??liveRequestsBefore)-liveRequestsBefore);
+        }
+      }
       this.launchOptionalWork(now, universeDue);
       this.launchTurnoverWork(Date.now());
     } catch (error) {
@@ -3218,7 +3183,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         symbols: this.runtime.symbols,
         realtimeReadiness: this.realtimeReadiness(),
         liveMode: { requestedEnabled: this.runtime.live.requestedEnabled, operational: this.runtime.live.operational },
-        liveExecution:{...this.liveExecution,inFlight:!!this.liveBackgroundWork,queued:this.liveSourcePending,
+        liveExecution:{...this.liveExecution,inFlight:!!this.liveSyncWork,queued:false,
           timeoutStreak:this.liveReadTimeoutStreak,lastAccountAt:this.runtime.live.lastSyncAt,
           lastOrderAuditAt:(this.liveOrderSnapshotCache?.checkedAt??this.liveOrderAuditAt)||null,
           readTransport:this.liveClient?.readTransport??null,writeTransport:this.liveClient?.writeTransport??null},

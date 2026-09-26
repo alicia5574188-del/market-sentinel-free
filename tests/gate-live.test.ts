@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildLiveEntryIntent, buildLiveStopIntent, gateUnknownSubmissionCanResolve, GateEntryCancelledError, GateLiveClient, LiveEntrySizingError, liveEntryDisposition, liveOrderId, liveStopPriceForTick } from "../lib/gate-live.ts";
+import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, LiveEntrySizingError, liveEntryDisposition, liveOrderId, liveStopPriceForTick } from "../lib/gate-live.ts";
 import type { PaperPlan } from "../lib/liquidity-core.ts";
 
 function plan(marketState: PaperPlan["marketState"], side: PaperPlan["side"]): PaperPlan {
