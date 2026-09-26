@@ -21,9 +21,18 @@ const gateRows=new Map(datasets.map(d=>[d.symbol,(d.rows??[]).sort((a,b)=>a.time
 const gateIndex=new Map([...gateRows].map(([s,rows])=>[s,new Map(rows.map((r,i)=>[r.time,i]))]));
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function json(url,timeout=9000){
-  const response=await fetch(url,{headers:{Accept:"application/json"},signal:AbortSignal.timeout(timeout)});
-  if(!response.ok){const detail=(await response.text().catch(()=>"")).slice(0,180);throw new Error(url+" -> "+response.status+" "+detail);}
-  return await response.json();
+  let last;
+  for(let attempt=0;attempt<6;attempt++){
+    try{
+      const response=await fetch(url,{headers:{Accept:"application/json"},signal:AbortSignal.timeout(timeout)});
+      if(response.ok)return await response.json();
+      const detail=(await response.text().catch(()=>"")).slice(0,180);
+      if(response.status!==429)throw new Error(url+" -> "+response.status+" "+detail);
+      last=new Error(url+" -> 429 "+detail);
+    }catch(error){last=error;if(!/429|Too Many Requests|50011/.test(String(error?.message??error)))throw error;}
+    await sleep(Math.min(2500,180*2**attempt));
+  }
+  throw last??new Error(url+" retry exhausted");
 }
 const extSymbol=s=>s.endsWith("_USDT")?s.slice(0,-5)+"USDT":s;
 const kucoinSymbol=s=>{let b=s.slice(0,-5);if(b==="BTC")b="XBT";return b+"USDTM";};
@@ -39,7 +48,7 @@ async function okxHistory(symbol,from,to){
     for(const r of rows)out.push(r);
     if(!body.data.length)break;
     const oldest=Math.min(...body.data.map(r=>Number(r[0])/1000).filter(Number.isFinite));
-    if(!(oldest>0)||oldest*1000>=after)break;after=oldest*1000-1;await sleep(22);
+    if(!(oldest>0)||oldest*1000>=after)break;after=oldest*1000-1;await sleep(95);
   }
   return [...new Map(out.map(r=>[r.time,r])).values()].sort((a,b)=>a.time-b.time);
 }
@@ -113,7 +122,7 @@ async function loadWorker(){
     console.log(symbol+" external="+okx.length+"/"+kucoin.length+" stats="+stats.length+" funding="+funding.length+" premium="+premium.length);
   }
 }
-await Promise.all(Array.from({length:Math.min(3,symbols.length)},loadWorker));
+await Promise.all(Array.from({length:1},loadWorker));
 
 function gateReturn(symbol,time,bars){
   const rows=gateRows.get(symbol),idx=gateIndex.get(symbol)?.get(time);return rows&&idx!=null&&idx>=bars?rows[idx].close/rows[idx-bars].close-1:0;
