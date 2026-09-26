@@ -6,6 +6,7 @@ import {recordWindows,archivePage} from "../lib/record-view.ts";
 import {ArchivePagination} from "./record-controls.tsx";
 import EquityCurve from "./equity-curve.tsx";
 import {EquityHistoryCache} from "../lib/equity-cache.ts";
+import ExtremumExecution from "./extremum-execution.tsx";
 
 type View=ReturnType<typeof forwardSummary>;
 type Tab="overview"|"execution"|"paper"|"live"|"journal"|"settings";
@@ -75,31 +76,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
         <OpportunityGrid rows={opportunities.slice(0,6)}/></section>
     </>}
 
-    {tab==="execution"&&<>
-      <PageTitle eyebrow="FORWARD PATH RELATION 3.0" title="执行" text="系统每5分钟记录根样本，15分钟起逐步成熟并补全至60分钟；方向、最佳持仓与退出计划来自同一条真实路径，反方向仍必须靠自己的成熟样本获得资格。"/>
-      <section className="fr-section fr-exec-flow-section"><div className="fr-section-head"><div><small>当前执行层</small><h2>Forward Path Relation 3.0 闭环</h2></div><span>{time(data?.updatedAt)}</span></div>
-        <div className="fr-exec-flow">
-          <ExecStep index="01" title="真实条件采样" status={(relation?.markets??0)>0?"运行中":"等待5m"} text={`30市场持续记录条件；当前 ${fmt(relation?.matureSamples,0)} 份反应已经成熟，不用历史结果伪造冷启动成交。`}/>
-          <ExecStep index="02" title="15 / 30 / 45 / 60 分钟最佳持仓" status={(relation?.rules??0)>0?"已生成":"积累中"} text={`当前关系 ${fmt(relation?.rules,0)} 条：15m ${fmt(relation?.qualified15,0)} · 30m ${fmt(relation?.qualified30,0)} · 45m ${fmt(relation?.qualified45,0)} · 60m ${fmt(relation?.qualified60,0)}。`}/>
-          <ExecStep index="03" title="同根路径检查" status={(relation?.liveAnomalies??0)>0?"发现偏离":"持续核对"} text="5/10/15/20/30/45/60分钟属于同一根样本，只比较真实路径是否仍像历史有效路径，不重复计票、不负责预测反向。"/>
-          <ExecStep index="04" title="关系生命周期" status={(relation?.degraded??0)>0?"正在迁移风险":"正常"} text={`ACTIVE ${fmt(relation?.active,0)} · 承压 ${fmt(relation?.pressured,0)} · 降级 ${fmt(relation?.degraded,0)} · 恢复中 ${fmt(relation?.recovering,0)}。`}/>
-          <ExecStep index="05" title="独立反向确认" status="只认成熟样本" text="旧多头关系失效只降低多头权重；空头必须由自己的已成熟真实反应证明扣成本后有效，禁止失效即反手。"/>
-          <ExecStep index="06" title="风险驱动持仓" status={riskUse>=.09?"接近风险上限":"持续竞争"} text={`当前 ${positions.length} 笔持仓，组合预算已用 ${fmt(riskUse*100,1)}%；主仓/探测仓分预算，同一关系≤2.5%，每个5m周期新增≤2.5%，风险越高新仓门槛越高。`}/>
-          <ExecStep index="07" title="样本退出计划" status={positions.length?"持续核对":"等待持仓"} text="每笔新单冻结正反馈期限、正常MAE、最佳持仓、剩余优势与利润保留率；结构止损仍是硬边界。"/>
-        </div></section>
-      <section className="fr-stats">
-        <Stat label="关系状态" value={relation?`${relation.active} / ${relation.rules}`:"—"} note={relation?`ACTIVE / 总关系 · 承压 ${relation.pressured} · 降级 ${relation.degraded}`:"等待样本"}/>
-        <Stat label="候选总数" value={data?`${opportunities.length}`:"—"} note={`${eligible.length} 个当前可参与`}/>
-        <Stat label="本轮新开" value={fmt(data?.entryDiagnostics?.opened,0)} note={`匹配 ${fmt(data?.entryDiagnostics?.matched,0)}`}/>
-        <Stat label="主要阻塞" value={mainBlocker} note={blockers[0]?`${blockers[0][1]} 次`:"没有额外阻塞"}/>
-      </section>
-      <section className="fr-section fr-scoreboard-section"><div className="fr-section-head"><div><small>LIVE RANKING</small><h2>机会排名</h2><p>这里就是实际开仓排名，不是研究影子列表。</p></div><span>{eligible.length} 可参与</span></div>
-        <OpportunityGrid rows={opportunities.slice(0,16)} details/></section>
-      {blockers.length>0&&<section className="fr-section"><div className="fr-section-head"><h2>本轮未开仓原因</h2><span>真实阻塞统计</span></div>
-        <div className="fr-rule-grid">{blockers.slice(0,8).map(([reason,count])=><article className="fr-setting" key={reason}><div><h3>{reason}</h3><p>只有当前轮实际经过开仓检查才会计入。</p></div><b>{count}</b></article>)}</div></section>}
-    </>}
-
-    {tab==="paper"&&<>
+    {tab==="execution"&&<ExtremumExecution data={data} now={now}/>}\n\n    {tab==="paper"&&<>
       <PageTitle eyebrow="REAL-FEED PAPER" title="模拟账户" text="模拟和实盘读取同一个持久化交易事件；模拟成交计入手续费、滑点和资金费占位，实盘仍以Gate真实成交为准。"/>
       <nav className="fr-live-tabs fr-paper-tabs">{([["account","账户"],["positions","持仓"],["history","记录"],["archive","归档"]] as const).map(([id,label])=><button key={id} className={paperTab===id?"selected":""} onClick={()=>setPaperTab(id)}>{label}</button>)}</nav>
       {paperTab==="account"&&<><section className="fr-stats fr-paper-summary"><Stat label="模拟权益" value={`${fmt(data?.equity)} U`} note={`起始 ${fmt(data?.initialEquity)} U`}/><Stat label="保证金占用" value={`${fmt(paperMargin)} U`} note={`${positions.length} 笔持仓 · 无席位数量上限`}/><Stat label="浮动盈亏" value={`${signed(data?.floating)} U`} note="按当前可执行价估值"/><Stat label="累计成交额" value={`${fmt(data?.turnover)} U`} note={`已完成 ${fmt(data?.resolved,0)} 笔`}/></section>
