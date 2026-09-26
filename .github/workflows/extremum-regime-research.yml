@@ -3,7 +3,7 @@ name: Extremum Regime Research
 on:
   pull_request:
     paths:
-      - "research/collect-extremum-regime-dataset.mjs"
+      - "research/collect-extremum-regime-dataset.mjs"\n      - "research/analyze-extremum-regime-dataset.mjs"
       - ".github/workflows/extremum-regime-research.yml"
   workflow_dispatch:
 
