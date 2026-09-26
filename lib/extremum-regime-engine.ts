@@ -136,8 +136,10 @@ function deriveState(symbol:string,input:Candle[],minute:Candle[]|undefined,q:Qu
     if(topWins&&ms.reclaimTop||!topWins&&ms.reclaimBottom)stage="READY";
     else if(prior?.stage==="STRUCTURE_BREAK"&&prior.candidateSide===candidateSide)stage="RECLAIM_TEST";
   }
-  const watchScore=Math.max(top,bottom,up,down);
-  const pullbackRate=ret6>=0?pullbackUp:pullbackDown,
+  const trendBias:ExtremumSymbolState["trendBias"]=regime==="TREND_UP"?"UP":regime==="TREND_DOWN"?"DOWN"
+    :(regime==="WEAKENING"||regime==="TRANSITION")?priorBias:null,
+    watchScore=Math.max(top,bottom,up,down),
+    pullbackRate=ret6>=0?pullbackUp:pullbackDown,
     microPullbackRate=(regime==="TREND_DOWN"||trendBias==="DOWN")?ms.pullbackDownRate:ms.pullbackUpRate,
     recoveryScore=ret6>=0?ms.recoveryUp:ms.recoveryDown,followThrough=ret6>=0?followUp:followDown;
   const reason=`${regime}｜上存活${up.toFixed(0)} 下存活${down.toFixed(0)}｜顶压${top.toFixed(0)} 底压${bottom.toFixed(0)}｜效率${pct(efficiency)}%｜${q?.sourceCount??0}源`;
@@ -147,8 +149,6 @@ function deriveState(symbol:string,input:Candle[],minute:Candle[]|undefined,q:Qu
   else if(regime==="WEAKENING")nextAction="原趋势减速：停止追价，等待恢复或趋势死亡";
   else if(regime==="TRANSITION")nextAction="不立即反手：等待结构破坏与夺回失败完成";
   else if(stage==="READY")nextAction=candidateSide==="LONG"?"底部确认，等待实时盘口执行多单":"顶部确认，等待实时盘口执行空单";
-  const trendBias:ExtremumSymbolState["trendBias"]=regime==="TREND_UP"?"UP":regime==="TREND_DOWN"?"DOWN"
-    :(regime==="WEAKENING"||regime==="TRANSITION")?priorBias:null;
   return{symbol,updatedAt:now,regime,priorRegime:old,trendBias,topPressure:top,bottomPressure:bottom,upSurvival:up,downSurvival:down,
     pathEfficiency:efficiency,atrRate,normalizedMove:moveNorm,pullbackRate,microPullbackRate,recoveryScore,followThrough,stage,candidateSide,candidateExtreme,breakLevel,
     sourceCount:q?.sourceCount??0,disagreementRate:q?.disagreementRate??0,sourceQuality:sq,momentumOverride,watchScore,reason,nextAction};
