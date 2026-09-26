@@ -1,0 +1,64 @@
+name: Predictive Path V1 Train
+
+on:
+  push:
+    branches: [feature/predictive-path-v1-20260926]
+    paths:
+      - "lib/predictive-path-types.ts"
+      - "lib/predictive-path-features.ts"
+      - "lib/predictive-path-model.ts"
+      - "scripts/train-predictive-path.mjs"
+      - "tests/predictive-path-production.test.ts"
+      - ".github/workflows/predictive-path-train.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+          cache: npm
+      - run: npm ci
+      - name: Production predictive core checks
+        run: |
+          set -euo pipefail
+          npm run typecheck
+          node --experimental-strip-types --test tests/predictive-path-production.test.ts
+      - name: Download official Gate 5m backbone
+        env:
+          RESEARCH_DATASET: /tmp/gate-predictive-12m.json
+          RESEARCH_INTERVAL: 5m
+          RESEARCH_MIN_CONTRACTS: "12"
+          RESEARCH_CONCURRENCY: "8"
+        run: node scripts/fetch-gate-history.mjs
+      - name: Train predictive path artifact
+        env:
+          PREDICTIVE_DATASET: /tmp/gate-predictive-12m.json
+          PREDICTIVE_ARTIFACT: lib/predictive-path-artifact-v1.json
+          PREDICTIVE_STRIDE: "3"
+          PREDICTIVE_MAX_SAMPLES: "260000"
+        run: node --experimental-strip-types scripts/train-predictive-path.mjs
+      - name: Validate trained artifact
+        run: |
+          node -e 'const a=require("./lib/predictive-path-artifact-v1.json"); if(a.version!=="predictive-path-v1"||!a.featureNames?.length||a.metrics?.testSamples<1000) process.exit(1); console.log(a.metrics)'
+          git diff --check
+      - name: Commit trained artifact to feature branch
+        run: |
+          set -euo pipefail
+          git config user.name "predictive-path-ci"
+          git config user.email "actions@users.noreply.github.com"
+          git add lib/predictive-path-artifact-v1.json
+          if git diff --cached --quiet; then
+            echo "artifact unchanged"
+          else
+            git commit -m "Train Predictive Path V1 artifact [skip ci]"
+            git push origin HEAD:feature/predictive-path-v1-20260926
+          fi
