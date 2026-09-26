@@ -680,6 +680,66 @@ function entryValidationReason(s:ForwardState,o:Opportunity,q:Quote,now:number){
   if(now>=row.deadlineAt){row.status="CANCELLED";row.reason="验证窗口内未获得方向推进";return row.reason;}
   return `等待秒级入场正反馈（${Math.ceil((row.deadlineAt-now)/1000)}秒）`;
 }
+function isExtremumOpportunity(o:Opportunity){return o.strategyVersion===EXTREMUM_REGIME_VERSION;}
+
+function openExtremumTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:number,equity:number){
+  if(!isExtremumOpportunity(o))return"新策略身份缺失";
+  const side=o.side,d=dir(side),price=side==="LONG"?q.bestAsk:q.bestBid,stopRate=o.stopRate;
+  if(!(stopRate>=.002&&stopRate<=.03))return"结构止损宽度不合理";
+  const totalHeadroom=equity*(TOTAL_RISK_RATE-.001)-existingRisk(s),
+    sideHeadroom=equity*(SIDE_RISK_RATE-.0005)-existingRisk(s,side),
+    cycleHeadroom=equity*FIVE_MINUTE_NEW_RISK_RATE-cycleRiskAdded(s,s.lastCandleAt),
+    headroom=Math.min(totalHeadroom,sideHeadroom,cycleHeadroom);
+  const riskRate=o.mode==="TREND_PULLBACK"?.008:o.mode==="IMPULSE"?.0075:.007,
+    wantedRisk=equity*riskRate,riskBudget=Math.min(wantedRisk,headroom);
+  if(riskBudget<equity*.004)return"剩余风险预算不足以形成有效仓位";
+  const rawNotional=riskBudget/(stopRate+ROUND_TRIP_COST),
+    targetNotional=Math.min(rawNotional,equity*(o.mode==="IMPULSE"?.55:.65)),
+    leverage=Math.max(1,Math.min(10,Math.floor(contract.leverageMax||10))),
+    mult=Math.max(contract.quantoMultiplier,1e-12),
+    minContracts=Math.max(1,Math.ceil(contract.minContracts??(Number(contract.orderSizeMin??1)||1))),
+    contracts=Math.floor(targetNotional/(price*mult));
+  if(contracts<minContracts)return"低于最小模拟合约数量";
+  const quantity=contracts*mult,notional=quantity*price,margin=notional/leverage,
+    totalMargin=s.positions.reduce((n,t)=>n+t.margin,0);
+  if(totalMargin+margin>equity*TOTAL_MARGIN_RATE)return"组合保证金已满";
+  const consumed=Math.max(0,d*(price/Math.max(o.price,1e-9)-1)),remainingNet=o.netRemainingSpaceRate-consumed;
+  if(remainingNet<=0)return"实时入场已消耗剩余空间";
+  const sourceExitPlan=o.exitPlan;if(!sourceExitPlan)return"缺少冻结退出计划";
+  const exitPlan=consumeExitPlan(sourceExitPlan,consumed),
+    plannedRisk=notional*(stopRate+ROUND_TRIP_COST),entryFee=notional*PAPER_COST.feeRate,
+    stopPrice=price*(1-d*stopRate),target=price*(1+d*Math.max(.003,exitPlan.targetRate)),
+    horizon=Math.max(5,Math.round(exitPlan.bestHoldMinutes)),
+    id=`ft-${now.toString(36)}-${o.symbol.replace(/[^A-Z0-9]/g,"")}-${side[0]}-${o.mode[0]}`,
+    ruleId=`extremum-${o.mode.toLowerCase()}-${o.symbol}`,
+    rule:Rule={id:ruleId,signature:`EXTREMUM_REGIME:${o.regime??"UNKNOWN"}:${o.mode}`,parentId:null,version:1,createdAt:now,
+      expiresAt:now+exitPlan.maxHoldMinutes*60_000,status:"EXPERIMENTAL",conditions:[],side,horizon,stopRate,
+      armRate:exitPlan.protectionActivationRate,givebackRate:Math.max(.001,exitPlan.targetRate*(1-exitPlan.retentionRate)),
+      exitMode:"REACTION_DECAY",samples:0,trainGroups:0,checkGroups:0,estimatedNetRate:remainingNet,priorResponse:null,
+      recentResponse:0,standardError:0,reason:o.reason,mutation:"CREATE",grammar:EXTREMUM_REGIME_VERSION,liveEligible:false,
+      authority:"ADAPTIVE_TEN",turnTimeframe:"5m"},
+    t:Trade={id,symbol:o.symbol,side,rule,openedAt:now,closedAt:null,status:"OPEN",entryPrice:price,exitPrice:null,quantity,contracts,
+      quantoMultiplier:mult,notional,leverage,margin,plannedRisk,stopPrice,armPrice:target,favorable:0,adverse:0,lastPrice:price,
+      lastQuoteAt:q.observedAt,entryFee,exitFee:0,fundingAllowance:0,grossPnl:null,netPnl:null,exitReason:null,relationFailureBars:0,lastRelationBar:now,
+      execution:"REAL_QUOTE_PAPER_MODEL",liveEligible:false,firstProfitAt:null,holdScore:o.score,profitFloorRate:0,expectedHoldMinutes:exitPlan.bestHoldMinutes,
+      exitPlan,peakPnlRate:0,exitControl:{policy:EXTREMUM_REGIME_VERSION,armedAt:null,armedQuoteAt:null,maxObservationGapMs:30_000,maxQuoteAgeMs:10_000},
+      entryContext:{version:"adaptive-ten-entry-v1",capturedAt:now,timeframe:"5m",side,mode:o.mode,reserve:false,reason:o.reason,
+        entryScore:o.score,directionStrength:o.directionStrength,spaceScore:o.spaceScore,positionScore:o.positionScore,executionScore:o.executionScore,
+        remainingSpaceRate:remainingNet,pullbackRiskRate:o.pullbackRiskRate,edgeRatio:remainingNet/Math.max(o.pullbackRiskRate,1e-9),
+        expectedHoldMinutes:exitPlan.bestHoldMinutes,marketFit:o.marketFit,regionId:null,portfolioRiskCharge:riskBudget,
+        strategyVersion:EXTREMUM_REGIME_VERSION,regime:o.regime,topPressure:o.topPressure,bottomPressure:o.bottomPressure,
+        upSurvival:o.upSurvival,downSurvival:o.downSurvival,confirmationStage:o.confirmationStage,sourceCount:o.sourceCount,
+        disagreementRate:o.disagreementRate,postEntryState:"PENDING"},
+      forecast:{remainingNetRate:remainingNet,quality:o.score/100,sizingEquity:equity}};
+  s.positions.push(t);s.balance-=entryFee;s.fees+=entryFee;s.turnover+=notional;s.lastEntryAt[o.symbol]=now;s.lastSide[o.symbol]=side;
+  event(s,now,"ENTRY",id,`${o.symbol} ${side} ${o.mode} 评分${o.score.toFixed(0)}`,{notional,plannedRisk});
+  return null;
+}
+
+function openAuthorityTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:number,equity:number){
+  return isExtremumOpportunity(o)?openExtremumTrade(s,o,q,contract,now,equity):openTrade(s,o,q,contract,now,equity);
+}
+
 function openTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:number,equity:number){
   const side=o.side,d=dir(side),price=side==="LONG"?q.bestAsk:q.bestBid,isShock=o.mode==="SHOCK";
   if(!isShock&&!o.relationRuleId)return"缺少Forward关系授权";
