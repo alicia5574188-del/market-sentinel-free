@@ -45,7 +45,7 @@ test("multi-source analysis is non-blocking while Gate stays execution-only",asy
 
 test("market narrative is exposed in bounded health diagnostics",async()=>{
   const worker=await read("worker/index-clean.ts"),health=worker.slice(worker.indexOf("private forwardHealth()"),worker.indexOf("protected liveMirrorView()"));
-  assert.match(health,/marketIntelligenceCounts/);assert.match(health,/marketNarrative/);assert.match(health,/correlationClusters/);
+  assert.match(health,/marketIntelligenceCounts/);assert.match(health,/marketNarrative/);assert.match(health,/marketIntelligenceCoverage/);assert.match(health,/correlationClusters/);
   assert.match(health,/candidateDiagnostics/);assert.match(health,/slice\(0,8\)/);
   assert.doesNotMatch(health,/openTrade\(|fillForwardPortfolio\(|GateLiveClient/);
 });
@@ -78,5 +78,7 @@ test("execution page exposes the same narrative used by strategy decisions",asyn
   assert.match(dashboard,/哨兵 · 市场智能系统/);assert.match(dashboard,/MarketIntelligenceExecution/);assert.match(dashboard,/market-intelligence-v1/);
   for(const text of["超大周期","大方向","短期优势","系统刚刚发现的细节","当前交易假设","持仓自己的理由"])assert.match(execution,new RegExp(text));
   assert.match(workflow,/market-intelligence-v1/);
+  assert.match(workflow,/marketIntelligenceTracked >= 20/);assert.match(workflow,/marketIntelligenceCoverage\.dailyMarkets >= 3/);
+  assert.match(execution,/数据覆盖/);assert.match(execution,/超大周期至少需要3个真实日线市场/);
   assert.match(wrangler,/MarketStream/);assert.match(wrangler,/MemberExecutor/);assert.match(wrangler,/MemberDirectory/);
 });
