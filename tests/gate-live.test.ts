@@ -219,37 +219,28 @@ test("int64 order IDs from Gate snapshots survive JSON parsing and cancellation 
 });
 
 
-test("Gate LIVE hedges a timed-out read and still returns a complete snapshot without duplicating any write",async()=>{
-  const real=globalThis.fetch;
-  const attempts=new Map<string,number>();
-  globalThis.fetch=async(input,init)=>{
-    const req=new Request(input,init),path=new URL(req.url).pathname;
-    attempts.set(path,(attempts.get(path)??0)+1);
-    if(path.endsWith("/accounts")&&(attempts.get(path)??0)===1){
-      const error=new Error("The operation was aborted due to timeout");error.name="TimeoutError";throw error;
-    }
-    if(path.endsWith("/accounts"))return Response.json({user:1,total:"100",available:"100",unrealised_pnl:"0",in_dual_mode:false});
+test("the restored full snapshot does not hide or retry a private read timeout",async()=>{
+  const real=globalThis.fetch;let requests=0;
+  globalThis.fetch=async(input)=>{
+    requests++;const path=new URL(String(input)).pathname;
+    if(path.endsWith("/accounts")){const error=new Error("The operation was aborted due to timeout");error.name="TimeoutError";throw error;}
     return Response.json([]);
   };
   try{
     const client=new GateLiveClient({apiKey:"abcdefgh12345678",apiSecret:"secret-value-12345678",environment:"live"});
-    const snapshot=await client.snapshot();
-    assert.equal(snapshot.account.total,"100");
-    assert.equal(snapshot.positions.length,0);
-    assert.equal(attempts.get("/api/v4/futures/usdt/accounts"),2);
-    assert.equal(client.requestCount,5,"four normal reads plus one safe hedge");
+    await assert.rejects(client.snapshot(),/timeout/i);
+    assert.equal(requests,4,"one full snapshot issues its four reads once; no hedge or retry is created");
+    assert.equal(client.readTransport.hedges,0);assert.equal(client.readTransport.recovered,0);
   }finally{globalThis.fetch=real;}
 });
 
-test("Gate LIVE never retries a timed-out write because the exchange may already have accepted it",async()=>{
+test("the restored adapter still never retries a timed-out write",async()=>{
   const real=globalThis.fetch;let requests=0;
   globalThis.fetch=async()=>{requests++;const error=new Error("The operation was aborted due to timeout");error.name="TimeoutError";throw error;};
   try{
     const client=new GateLiveClient({apiKey:"abcdefgh12345678",apiSecret:"secret-value-12345678",environment:"live"});
-    await assert.rejects(client.setLeverage("BTC_USDT",10),error=>error instanceof Error
-      &&/提交结果可能不明确/.test(error.message)&&!/The operation was aborted due to timeout/.test(error.message));
-    assert.equal(requests,1);
-    assert.equal(client.requestCount,1);
+    await assert.rejects(client.setLeverage("BTC_USDT",10),/timeout/i);
+    assert.equal(requests,1);assert.equal(client.requestCount,1);
   }finally{globalThis.fetch=real;}
 });
 
