@@ -2,16 +2,42 @@ import {readFileSync,writeFileSync} from "node:fs";
 import {buildPredictiveFeatures} from "../lib/predictive-path-features.ts";
 
 const INPUT=process.env.PREDICTIVE_DATASET??"/tmp/gate-predictive-12m.json";
+const ANCILLARY=process.env.PREDICTIVE_ANCILLARY??"/tmp/gate-predictive-ancillary.json";
 const OUTPUT=process.env.PREDICTIVE_ARTIFACT??"lib/predictive-path-artifact-v1.json";
 const raw=JSON.parse(readFileSync(INPUT,"utf8"));
+const ancillaryRaw=JSON.parse(readFileSync(ANCILLARY,"utf8"));
 if(raw.interval!=="5m")throw new Error("Predictive trainer requires Gate 5m dataset");
 const horizons={15:3,30:6,60:12,120:24},STRIDE=Math.max(1,Number(process.env.PREDICTIVE_STRIDE??3)),
   MAX_SAMPLES=Math.max(20_000,Number(process.env.PREDICTIVE_MAX_SAMPLES??260_000)),COST=.0019;
+const datasets=raw.datasets??[],seriesBySymbol=new Map(datasets.map(d=>[d.symbol,(d.rows??[]).filter(x=>x&&x.open>0&&x.close>0).sort((a,b)=>a.time-b.time)]));
+const timeIndex=new Map();
+for(const [symbol,rows] of seriesBySymbol)timeIndex.set(symbol,new Map(rows.map((row,i)=>[row.time,i])));
+const breadth=new Map();
+for(const rows of seriesBySymbol.values())for(let i=3;i<rows.length;i++){const r=rows[i].close/rows[i-3].close-1,v=breadth.get(rows[i].time)??{sum:0,count:0};v.sum+=Math.sign(r);v.count++;breadth.set(rows[i].time,v);}
+function priorAt(rows,time){let lo=0,hi=rows.length-1,best=-1;while(lo<=hi){const m=(lo+hi)>>1;if(Number(rows[m].time)<=time){best=m;lo=m+1;}else hi=m-1;}return best;}
+function marketReturn(symbol,time,bars){const rows=seriesBySymbol.get(symbol),idx=timeIndex.get(symbol)?.get(time);return rows&&idx!=null&&idx>=bars?rows[idx].close/rows[idx-bars].close-1:0;}
+function ancillaryAt(symbol,time){
+  const d=ancillaryRaw.datasets?.[symbol]??{},stats=d.stats??[],funding=d.funding??[],premium=d.premium??[],
+    si=priorAt(stats,time),fi=priorAt(funding,time),pi=priorAt(premium,time),s=si>=0?stats[si]:null,prev=si>0?stats[si-1]:null,
+    oi=Number(s?.openInterestUsd??s?.openInterest??0),prevOi=Number(prev?.openInterestUsd??prev?.openInterest??0),
+    longLiq=Number(s?.longLiqUsd??0),shortLiq=Number(s?.shortLiqUsd??0),liqSum=longLiq+shortLiq,b=breadth.get(time);
+  return{fundingRate:fi>=0?Number(funding[fi].rate??0):0,basisRate:pi>=0?Number(premium[pi].close??0):0,
+    openInterest:oi,openInterestChangeRate:prevOi>0?oi/prevOi-1:0,
+    liquidationLongNotionalRate:oi>0?longLiq/oi:0,liquidationShortNotionalRate:oi>0?shortLiq/oi:0,
+    liquidationImbalance:liqSum>0?(shortLiq-longLiq)/liqSum:0,
+    takerLongShortLog:Number(s?.lsrTaker)>0?Math.log(Number(s.lsrTaker)):0,
+    accountLongShortLog:Number(s?.lsrAccount)>0?Math.log(Number(s.lsrAccount)):0,
+    topLongShortLog:Number(s?.topLsrSize)>0?Math.log(Number(s.topLsrSize)):0,
+    btcReturn15m:marketReturn("BTC_USDT",time,3),btcReturn60m:marketReturn("BTC_USDT",time,12),
+    ethReturn15m:marketReturn("ETH_USDT",time,3),ethReturn60m:marketReturn("ETH_USDT",time,12),
+    marketBreadth:b?.count?b.sum/b.count:0};
+}
 const samples=[];
-for(const dataset of raw.datasets??[]){
+for(const dataset of datasets){
   const rows=(dataset.rows??[]).filter(x=>x&&x.open>0&&x.high>=x.low&&x.low>0&&x.close>0).sort((a,b)=>a.time-b.time);
   for(let i=60;i<rows.length-25;i+=STRIDE){
-    const current=rows[i],bars=rows.slice(i-80,i+1),feature=buildPredictiveFeatures({symbol:dataset.symbol,decisionAt:(current.time+300)*1000,bars5m:bars});
+    const current=rows[i],bars=rows.slice(i-80,i+1),feature=buildPredictiveFeatures({symbol:dataset.symbol,decisionAt:(current.time+300)*1000,bars5m:bars,
+      ancillary:ancillaryAt(dataset.symbol,current.time)});
     if(!feature)continue;
     const entry=current.close,ret={},future={};
     for(const [k,h] of Object.entries(horizons)){const end=rows[i+h];ret[k]=end.close/entry-1;future[k]=end;}
@@ -81,7 +107,7 @@ const longMfe60=fitLinear(train,s=>s.longMfe),longMae60=fitLinear(train,s=>s.lon
 metrics.longTouchBrier=brier(longTargetBeforeRisk60,test,s=>s.longTouch);metrics.shortTouchBrier=brier(shortTargetBeforeRisk60,test,s=>s.shortTouch);
 metrics.longMfeMae=mae(longMfe60,test,s=>s.longMfe);metrics.longMaeMae=mae(longMae60,test,s=>s.longMae);
 metrics.longRegretMae=mae(longEntryRegret10,test,s=>s.longRegret);metrics.shortRegretMae=mae(shortEntryRegret10,test,s=>s.shortRegret);
-const artifact={version:"predictive-path-v1",trainedAt:Date.now(),source:String(raw.source??"gate-5m"),featureNames,mean,scale,costRate:COST,horizons:[15,30,60,120],
+const artifact={version:"predictive-path-v1",trainedAt:Date.now(),source:String(raw.source??"gate-5m")+"+gate-stats-funding-premium",featureNames,mean,scale,costRate:COST,horizons:[15,30,60,120],
   direction,expectedReturn,longMfe60,longMae60,shortMfe60,shortMae60,longTargetBeforeRisk60,shortTargetBeforeRisk60,longEntryRegret10,shortEntryRegret10,metrics};
 writeFileSync(OUTPUT,JSON.stringify(artifact)+"\n");
 console.log(JSON.stringify({output:OUTPUT,source:artifact.source,features:width,metrics},null,2));
