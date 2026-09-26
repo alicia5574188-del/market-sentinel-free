@@ -7,7 +7,7 @@ import { FORWARD_RELATION_V2_VERSION, advanceRelationEngine, initialRelationEngi
 import { STRUCTURAL_INTERRUPT_VERSION, advanceStructuralInterrupt, detectOuterRegion, initialStructuralInterruptState,
   normalizeStructuralInterruptState, structuralInterruptBlockReason, structuralInterruptCandidates,
   type StructuralInterruptCandidate, type StructuralInterruptState } from "./forward-structural-interrupt.ts";
-import { EXTREMUM_REGIME_VERSION, buildExtremumRegime, urgentMinuteSymbols as extremumUrgentMinuteSymbols,
+import { EXTREMUM_REGIME_VERSION, buildExtremumRegime, extremumExitDecision, urgentMinuteSymbols as extremumUrgentMinuteSymbols,
   type ExtremumRegimeState, type ExtremumSymbolState } from "./extremum-regime-engine.ts";
 
 /**
@@ -519,49 +519,27 @@ function manageExtremumTrades(s:ForwardState,quotes:Record<string,Quote>,now:num
     const q=quotes[t.symbol];if(!freshQuote(q,now))continue;
     const state=s.extremumRegime.symbols[t.symbol],px=t.side==="LONG"?q!.bestBid:q!.bestAsk,d=dir(t.side),
       signed=d*(px/t.entryPrice-1),favorable=Math.max(0,signed),adverse=Math.max(0,-signed),
-      ageMin=(now-t.openedAt)/60_000,stopRate=Math.max(.002,Math.abs(t.entryPrice-t.stopPrice)/t.entryPrice);
+      ageMin=(now-t.openedAt)/60_000,
+      originalStopRate=Math.max(.002,t.entryContext?.pullbackRiskRate??Math.abs(t.entryPrice-t.stopPrice)/t.entryPrice);
     t.lastPrice=px;t.lastQuoteAt=q!.observedAt;t.favorable=Math.max(t.favorable,favorable);t.adverse=Math.max(t.adverse,adverse);
     t.peakPnlRate=Math.max(t.peakPnlRate??0,favorable);
     if(!t.firstProfitAt&&favorable>=ROUND_TRIP_COST*.6){t.firstProfitAt=now;if(t.entryContext)t.entryContext.postEntryState="CONFIRMED";}
-    const survival=t.side==="LONG"?(state?.upSurvival??50):(state?.downSurvival??50),
-      opposite=t.side==="LONG"?(state?.topPressure??0):(state?.bottomPressure??0),
-      oppositeReady=!!state&&state.stage==="READY"&&state.candidateSide===(t.side==="LONG"?"SHORT":"LONG"),
-      trendEntry=t.entryContext?.mode==="TREND_PULLBACK"||t.entryContext?.mode==="IMPULSE",
-      trendDeath=trendEntry&&!!state&&state.regime==="TRANSITION"&&survival<=42&&opposite>=66
-        &&(state.stage==="STRUCTURE_BREAK"||state.stage==="RECLAIM_TEST"||state.stage==="READY"),
-      swingOpposite=t.entryContext?.mode==="SWING"&&oppositeReady&&opposite>=70,
-      weakening=!!state&&(state.regime==="WEAKENING"||state.regime==="TRANSITION");
-    const activation=Math.max(ROUND_TRIP_COST*1.35,Math.min(.007,Math.max(.0032,stopRate*.52)));
-    if(t.favorable>=activation){
-      const retention=trendEntry&&survival>=82&&!weakening?.76:weakening?.88:.82,
-        floor=t.favorable*retention;
-      if(floor>Math.max(t.profitFloorRate??0,ROUND_TRIP_COST*.8)){
-        t.profitFloorRate=floor;const next=t.entryPrice*(1+d*floor);
-        if(t.side==="LONG"&&next>t.stopPrice||t.side==="SHORT"&&next<t.stopPrice){
-          t.stopPrice=next;event(s,now,"PROTECTION",t.id,`峰谷系统利润保护提升至约${(floor*100).toFixed(2)}%`);
-        }
+    const stopped=t.side==="LONG"?px<=t.stopPrice:px>=t.stopPrice,
+      decision=extremumExitDecision({side:t.side,mode:t.entryContext.mode,ageMin,signedRate:signed,peakFavorableRate:t.favorable,
+        firstProfit:!!t.firstProfitAt,stopRate:originalStopRate,stopped,profitFloorRate:t.profitFloorRate??0,
+        expectedHoldMinutes:t.expectedHoldMinutes??30,maxHoldMinutes:t.exitPlan?.maxHoldMinutes??Math.max(15,(t.expectedHoldMinutes??30)*2),state});
+    if(decision.floorCandidate>Math.max(t.profitFloorRate??0,ROUND_TRIP_COST*.8)){
+      t.profitFloorRate=decision.floorCandidate;const next=t.entryPrice*(1+d*decision.floorCandidate);
+      if(t.side==="LONG"&&next>t.stopPrice||t.side==="SHORT"&&next<t.stopPrice){
+        t.stopPrice=next;event(s,now,"PROTECTION",t.id,`峰谷系统利润保护提升至约${(decision.floorCandidate*100).toFixed(2)}%`);
       }
     }
-    const feedbackAdverse=Math.max(ROUND_TRIP_COST*.75,Math.min(.0022,stopRate*.24)),
-      noFastFeedback=ageMin>=3&&!t.firstProfitAt&&t.favorable<ROUND_TRIP_COST*.45,
-      feedbackFailed=noFastFeedback&&(signed<=-feedbackAdverse||opposite>=72&&survival<=48),
-      stopped=t.side==="LONG"?px<=t.stopPrice:px>=t.stopPrice,
-      noProgress=ageMin>=Math.max(8,(t.expectedHoldMinutes??30)*.55)&&!t.firstProfitAt&&Math.abs(signed)<ROUND_TRIP_COST*.65,
-      maxHold=ageMin>=Math.max(15,(t.exitPlan?.maxHoldMinutes??(t.expectedHoldMinutes??30)*2));
-    let reason:string|null=null;
-    if(stopped)reason=(t.profitFloorRate??0)>0?"PROFIT_GIVEBACK":"STRUCTURE_STOP";
-    else if(feedbackFailed)reason="ENTRY_FEEDBACK_FAILED";
-    else if(swingOpposite)reason="OPPOSITE_EXTREMUM";
-    else if(trendDeath)reason="TREND_DEATH";
-    else if(weakening&&opposite>=78&&t.favorable>=ROUND_TRIP_COST)reason="EXTREMUM_PROFIT_EXIT";
-    else if(noProgress)reason="NO_PROGRESS";
-    else if(maxHold)reason="MAX_HOLD";
-    t.holdScore=clip(.55*survival+.25*(100-opposite)+.20*clip(50+signed/Math.max(stopRate,.001)*25,0,100),0,100);
-    t.holdValue={action:reason?(t.favorable>ROUND_TRIP_COST?"EXIT_PROFIT":"EXIT_RISK"):"HOLD",
-      pullbackRiskRate:stopRate,bestHoldMinutes:t.expectedHoldMinutes??30,score:t.holdScore};
-    if(reason){
-      if(t.entryContext&&reason==="ENTRY_FEEDBACK_FAILED")t.entryContext.postEntryState="FAILED";
-      closeTrade(s,t,px,now,reason);closed.add(t.id);
+    t.holdScore=decision.holdScore;
+    t.holdValue={action:decision.reason?(t.favorable>ROUND_TRIP_COST?"EXIT_PROFIT":"EXIT_RISK"):"HOLD",
+      pullbackRiskRate:originalStopRate,bestHoldMinutes:t.expectedHoldMinutes??30,score:t.holdScore};
+    if(decision.reason){
+      if(t.entryContext&&decision.reason==="ENTRY_FEEDBACK_FAILED")t.entryContext.postEntryState="FAILED";
+      closeTrade(s,t,px,now,decision.reason);closed.add(t.id);
     }
   }
   if(closed.size)s.positions=s.positions.filter(t=>!closed.has(t.id));
