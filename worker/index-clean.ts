@@ -963,6 +963,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       participationCandidateCount:opportunities.length,participationEligibleCount:eligible.length,
       premiumOpportunityCount:eligible.filter(row=>row.premium).length,
       marketIntelligenceTracked:states.length,marketIntelligenceCounts:counts,marketNarrative:s?.extremumRegime?.narrative??null,
+      marketIntelligenceCoverage:s?.extremumRegime?.coverage??{intradayMarkets:0,dailyMarkets:0,quoteMarkets:0,multiVenueMarkets:0},
       correlationClusters:s?.extremumRegime?.clusters?.length??0,evidenceCount:s?.extremumRegime?.evidence?.length??0,
       legacyResearchSampleCount:s?.relationEngine?.samples.length??0,entryDiagnostics:s?.entryDiagnostics??null,
       candidateDiagnostics:blocked,storage:{persistedAt:s?.storage.persistedAt??0,layout:s?.storage.layout??null,error:this.forwardError}};
