@@ -204,7 +204,8 @@ export class MarketDataHub{
       const last=q?.mid??row.last,high=Number.isFinite(gateHigh)&&gateHigh>0?gateHigh:last,low=Number.isFinite(gateLow)&&gateLow>0?gateLow:last;
       return{symbol:row.symbol,last,volume24hUsd:Math.max(row.volume24hUsd,q?.volume24hUsd??0),executionVolume24hUsd:Math.max(0,row.volume24hUsd),
         high24h:Math.max(high,low),low24h:Math.min(high,low),change24hRate:Number.isFinite(gateChange)?gateChange:q?.change24hRate??0,
-        fundingRate:row.fundingRate,openInterest:Number.isFinite(Number(row.openInterest))?Number(row.openInterest):0,sourceCount:q?.sourceCount??0};});
+        fundingRate:row.fundingRate,openInterest:Number.isFinite(Number(row.openInterest))?Number(row.openInterest):0,
+        sourceCount:q?.sourceCount??0,sourceDisagreementRate:q?.disagreementRate??0};});
   }
 
   async candles(symbol:string,interval:"1m"|"5m",limit=120):Promise<{source:MarketSource;rows:HubCandle[]}|null>{
