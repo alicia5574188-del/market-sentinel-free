@@ -229,6 +229,7 @@ test("the restored full snapshot does not hide or retry a private read timeout",
   try{
     const client=new GateLiveClient({apiKey:"abcdefgh12345678",apiSecret:"secret-value-12345678",environment:"live"});
     await assert.rejects(client.snapshot(),/timeout/i);
+    await new Promise<void>(resolve=>setImmediate(resolve)); // drain the other three already-started reads before restoring global fetch
     assert.equal(requests,4,"one full snapshot issues its four reads once; no hedge or retry is created");
     assert.equal(client.readTransport.hedges,0);assert.equal(client.readTransport.recovered,0);
   }finally{globalThis.fetch=real;}
