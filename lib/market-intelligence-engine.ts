@@ -124,7 +124,7 @@ export function buildMarketIntelligence(input:{paths:Record<string,CandleLike[]>
     macroRaw=macroReady?clip(median(macroMoves.map(x=>.45*x.r7/(x.vol*Math.sqrt(7))+.55*x.r30/(x.vol*Math.sqrt(x.n))))/3,-1,1):0,
     macroBreadth=macroReady?2*(macroMoves.filter(x=>x.r30>0).length/macroMoves.length)-1:0;
 
-  type Provisional=Omit<MarketSymbolState,"clusterId"|"watchScore"|"regime"|"stage"|"longScore"|"shortScore"|"reasons">;
+  type Provisional=Omit<MarketSymbolState,"clusterId"|"watchScore"|"regime"|"stage"|"longScore"|"shortScore"|"reasons"|"signalSide"|"signalSince"|"signalBars"|"signalLastBar">;
   const provisional:Record<string,Provisional>={},residualZs:number[]=[];
   for(const [symbol,rows] of Object.entries(paths)){
     const series=retSeries[symbol]??[],c=corr(series,factor),b=beta(series,factor),actual=ret(rows,6),expected=b*factor6,residual=actual-expected,
