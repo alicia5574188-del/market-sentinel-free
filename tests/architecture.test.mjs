@@ -141,3 +141,22 @@ test("existing multi-source BBO refresh exposes liquidity migration without extr
   assert.match(position,/alignedLiquidity/);
   assert.match(execution,/跨所流动性/);
 });
+
+
+test("counterfactual research is isolated from trading authority and exported for review",async()=>{
+  const [worker,forward,research]=await Promise.all([
+    read("worker/index-clean.ts"),read("lib/forward-relations.ts"),read("lib/market-intelligence-research.ts")
+  ]);
+  assert.doesNotMatch(forward,/market-intelligence-research|advanceCounterfactualResearch|counterfactualResearch/);
+  const optional=worker.slice(worker.indexOf("private launchOptionalWork"),worker.indexOf("async alarm("));
+  assert.match(optional,/advanceForwardNow\(Date\.now\(\),true\)/);
+  assert.match(optional,/advanceCounterfactualResearchNow\(Date\.now\(\),true\)/);
+  assert.ok(optional.indexOf("advanceForwardNow(Date.now(),true)")<optional.indexOf("advanceCounterfactualResearchNow(Date.now(),true)"),
+    "research must run only after authoritative PAPER processing");
+  assert.match(worker,/counterfactualResearch:counterfactualResearchView/);
+  assert.match(research,/RESEARCH_CHECKPOINTS=\[5,15,30,60,120,240\]/);
+  assert.match(research,/ACCOUNT_RESET/);
+  assert.match(research,/FILTERED_NOT_MATURE/);
+  assert.match(research,/EXECUTABLE_NOT_SELECTED/);
+  assert.match(research,/marketAt/);
+});
