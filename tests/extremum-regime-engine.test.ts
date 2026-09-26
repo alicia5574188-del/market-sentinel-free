@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {buildExtremumRegime,extremumExitDecision,EXTREMUM_REGIME_VERSION,type ExtremumSymbolState} from "../lib/extremum-regime-engine.ts";
-import {advanceForward,forwardEquity,initialForward,type Candle,type Quote} from "../lib/forward-relations.ts";
+import {advanceForward,fillForwardPortfolio,forwardEquity,initialForward,type Candle,type Opportunity,type Quote} from "../lib/forward-relations.ts";
+import {PREDICTIVE_PATH_VERSION} from "../lib/predictive-path-types.ts";
 import {forwardMirrorSources} from "../lib/live-parity.ts";
 import {selectAnchorOpportunityUniverse} from "../lib/multi-turn-universe.ts";
 
@@ -133,19 +134,28 @@ test("30-market selector balances Gate liquidity, usable movement and multi-sour
 });
 
 
-test("new extremum strategy emits a complete source trade consumable by the unchanged LIVE mirror",()=>{
-  const five=trend("UP"),last=five.at(-1)!,now=(last.time+300)*1000+1000,
-    minute=minuteRestart("LONG",last.close,true),q=quote(last.close,"UP"),
-    start=initialForward(now-60_000),
-    next=advanceForward({state:start,now,paths:{SOL_USDT:five},minutePaths:{SOL_USDT:minute},quotes:{SOL_USDT:q},
-      contracts:{SOL_USDT:{quantoMultiplier:.01,leverageMax:20,maintenanceRate:.005,minContracts:1}},
-      entrySymbols:["SOL_USDT"],allowDataCycle:true}).state;
-  assert.equal(next.positions.length,1,JSON.stringify({opportunities:next.opportunities,diagnostics:next.entryDiagnostics}));
-  const trade=next.positions[0]!;
-  assert.equal(trade.entryContext?.strategyVersion,EXTREMUM_REGIME_VERSION);
-  assert.equal(trade.exitControl?.policy,EXTREMUM_REGIME_VERSION);
-  const equity=forwardEquity(next,{SOL_USDT:q},now).equity,mirror=forwardMirrorSources(next,equity);
+test("new causal predictive strategy emits a complete source trade consumable by the unchanged LIVE mirror",()=>{
+  const now=(START+40*300)*1000+1000,q=quote(100,"UP"),start=initialForward(now-60_000),
+    forecast={version:PREDICTIVE_PATH_VERSION,symbol:"SOL_USDT",at:now,lastBarTime:now-1000,
+      upProbability:{m15:.62,m30:.66,m60:.70,m120:.72},expectedReturn:{m15:.004,m30:.007,m60:.016,m120:.024},
+      long:{mfe60:.027,mae60:.006,targetBeforeRisk60:.68,entryRegret10:.001,netEv60:.011},
+      short:{mfe60:.006,mae60:.027,targetBeforeRisk60:.25,entryRegret10:.004,netEv60:-.012},
+      crossVenue:{sourceCount:4,agreement:.9,breadth:.8,disagreementRate:.0002},
+      evidence:{price:.7,technical:.6,derivatives:.45,liquidation:.2,multiVenue:.75,context:.55,persistence:.82,uncertainty:.8},
+      rawSide:"LONG" as const,stableSide:"LONG" as const,directionProbability:.70,entryQuality:.82,enterNow:true,waitReason:null,confidence:.78},
+    opportunity:Opportunity={id:"causal-fixture",symbol:"SOL_USDT",side:"LONG",mode:"PREDICTIVE",premium:true,reserve:false,score:78,eligible:true,
+      completedAt:now,expiresAt:now+300_000,price:100,stopPrice:99.2,targetPrice:102,stopRate:.008,targetRate:.02,directionStrength:70,
+      pathEfficiency:.7,momentumPersistence:72,positionScore:85,spaceScore:80,executionScore:90,grossRemainingSpaceRate:.016,
+      netRemainingSpaceRate:.014,pullbackRiskRate:.008,edgeRatio:1.75,expectedHoldMinutes:60,marketFit:78,regionId:null,regionQuality:null,
+      reason:"predictive source contract fixture",strategyVersion:PREDICTIVE_PATH_VERSION,sourceCount:4,disagreementRate:.0002,predictiveForecast:forecast};
+  start.opportunities=[opportunity];
+  const opened=fillForwardPortfolio(start,{SOL_USDT:q},{SOL_USDT:{quantoMultiplier:.01,leverageMax:20,maintenanceRate:.005,minContracts:1}},now,1000,false);
+  assert.equal(opened,1,JSON.stringify(start.entryDiagnostics));assert.equal(start.positions.length,1);
+  const trade=start.positions[0]!;
+  assert.equal(trade.entryContext?.strategyVersion,PREDICTIVE_PATH_VERSION);
+  assert.equal(trade.exitControl?.policy,PREDICTIVE_PATH_VERSION);
+  const equity=forwardEquity(start,{SOL_USDT:q},now).equity,mirror=forwardMirrorSources(start,equity);
   assert.equal(mirror.SOL_USDT?.id,trade.id);
-  assert.equal(mirror.SOL_USDT?.forwardSource?.entryContext?.strategyVersion,EXTREMUM_REGIME_VERSION);
+  assert.equal(mirror.SOL_USDT?.forwardSource?.entryContext?.strategyVersion,PREDICTIVE_PATH_VERSION);
   assert.equal(mirror.SOL_USDT?.forwardSource?.stopPrice,trade.stopPrice);
 });
