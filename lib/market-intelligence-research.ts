@@ -125,7 +125,7 @@ function rejectedFromOpportunity(o:Opportunity,q:Quote|undefined,s:ForwardState,
     lastObservedAt:now,maxFavorableRate:0,maxAdverseRate:0,checkpoints:[],completed:false};
 }
 function trimForStorage<T extends {completed:boolean;lastObservedAt:number}>(items:T[]){
-  let out=[...items].sort((a,b)=>b.lastObservedAt-a.lastObservedAt).slice(0,220);
+  const out=[...items].sort((a,b)=>b.lastObservedAt-a.lastObservedAt).slice(0,220);
   while(out.length>40&&bytes({version:COUNTERFACTUAL_RESEARCH_VERSION,items:out})>MAX_VALUE_BYTES){
     const idx=[...out].reverse().findIndex(x=>x.completed),actual=idx<0?out.length-1:out.length-1-idx;out.splice(actual,1);
   }
