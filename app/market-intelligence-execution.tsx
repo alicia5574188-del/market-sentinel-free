@@ -47,6 +47,7 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
       <p className="fr-note"><b>市场变化预测：</b>{n?.transition.detail??"—"} · 阶段 {n?.transition.stage??"STABLE"} · 压力 {fmt(n?.transition.pressure,0)}/100</p>
       {!!n?.transition.drivers?.length&&<p className="fr-note"><b>当前迁移驱动：</b>{n.transition.drivers.join(" · ")}</p>}
       <p className="fr-note"><b>风险背景：</b>{n?.tailRisk.detail??"—"}</p>
+      <p className="fr-note"><b>跨所流动性：</b>盘口失衡 {fmt((mi?.internals?.bookImbalance??0)*100,0)}% · 买方流动性变化 {fmt((mi?.internals?.bidLiquidityChange??0)*100,0)}% · 卖方流动性变化 {fmt((mi?.internals?.askLiquidityChange??0)*100,0)}% · 中位点差 {fmt((mi?.internals?.spreadRate??0)*100,3)}%</p>
       <p className="fr-trade-reason"><b>当前计划：</b>{n?.plan??"继续观察。"}</p>
     </section>
 
