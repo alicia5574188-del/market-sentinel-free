@@ -67,7 +67,11 @@ export function buildPredictiveFeatures(input:{symbol:string;decisionAt:number;b
   add(names,values,groups,"multisource","source_agreement",(q?.directionalAgreement??.5)-.5);
   add(names,values,groups,"multisource","source_short_move",q?.medianShortMove??0);
   add(names,values,groups,"derivatives","funding_rate",a.fundingRate??0);
+  add(names,values,groups,"derivatives","basis_rate",a.basisRate??0);
   add(names,values,groups,"derivatives","oi_change",a.openInterestChangeRate??0);
+  add(names,values,groups,"derivatives","taker_lsr_log",a.takerLongShortLog??0);
+  add(names,values,groups,"derivatives","account_lsr_log",a.accountLongShortLog??0);
+  add(names,values,groups,"derivatives","top_lsr_log",a.topLongShortLog??0);
   add(names,values,groups,"liquidation","liq_imbalance",a.liquidationImbalance??0);
   add(names,values,groups,"liquidation","liq_long_rate",a.liquidationLongNotionalRate??0);
   add(names,values,groups,"liquidation","liq_short_rate",a.liquidationShortNotionalRate??0);
