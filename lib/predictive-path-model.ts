@@ -33,18 +33,20 @@ export function forecastPredictivePath(feature:PredictiveFeatureVector,artifact:
     longNet=r60-artifact.costRate,shortNet=-r60-artifact.costRate,
     longEv=.5*longNet+.3*(lm-la-artifact.costRate)+.2*(touchLong-.5)*.01-regretLong*.35,
     shortEv=.5*shortNet+.3*(sm-sa-artifact.costRate)+.2*(touchShort-.5)*.01-regretShort*.35,
-    preferredSide=longEv>0&&directionalLong>=.58?"LONG":shortEv>0&&directionalShort>=.58?"SHORT":null,
+    preferredSide=longEv>=artifact.policy.minNetEv&&directionalLong>=artifact.policy.directionMin?"LONG"
+      :shortEv>=artifact.policy.minNetEv&&directionalShort>=artifact.policy.directionMin?"SHORT":null,
     sideProbability=preferredSide==="LONG"?directionalLong:preferredSide==="SHORT"?directionalShort:.5,
     sideTouch=preferredSide==="LONG"?touchLong:preferredSide==="SHORT"?touchShort:.5,
     sideRegret=preferredSide==="LONG"?regretLong:preferredSide==="SHORT"?regretShort:Infinity,
     confidence=clamp(.6*sideProbability+.25*sideTouch+.15*multiConfidence,0,1),
-    enterNow=!!preferredSide&&sideProbability>=.62&&sideTouch>=.56&&sideRegret<=.0045&&multiConfidence>=.45&&disagreementRate<=.012,
+    enterNow=!!preferredSide&&sideProbability>=artifact.policy.directionMin&&sideTouch>=artifact.policy.touchMin
+      &&sideRegret<=artifact.policy.regretMax&&sourceCount>=artifact.policy.minSources&&disagreementRate<=artifact.policy.maxDisagreement,
     waitReason=enterNow?null:!preferredSide?"未来路径没有正的成本后期望"
-      :sideProbability<.62?"方向概率不足"
-      :sideTouch<.56?"目标先于风险概率不足"
-      :sideRegret>.0045?"模型预计未来10分钟有更好入场价"
-      :multiConfidence<.45?"多数据源不足"
-      :disagreementRate>.012?"多市场分歧过大":"等待";
+      :sideProbability<artifact.policy.directionMin?"方向概率不足"
+      :sideTouch<artifact.policy.touchMin?"目标先于风险概率不足"
+      :sideRegret>artifact.policy.regretMax?"模型预计未来10分钟有更好入场价"
+      :sourceCount<artifact.policy.minSources?"多数据源不足"
+      :disagreementRate>artifact.policy.maxDisagreement?"多市场分歧过大":"等待";
   return{version:PREDICTIVE_PATH_VERSION,symbol:feature.symbol,at:feature.decisionAt,
     upProbability:{m15:p15,m30:p30,m60:p60,m120:p120},expectedReturn:{m15:r15,m30:r30,m60:r60,m120:r120},
     long:{mfe60:lm,mae60:la,targetBeforeRisk60:touchLong,entryRegret10:regretLong,netEv60:longEv},
