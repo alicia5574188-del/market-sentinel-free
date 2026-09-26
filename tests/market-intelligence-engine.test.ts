@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {buildMarketIntelligence,initialMarketIntelligenceState,intelligenceExitDecision,MARKET_INTELLIGENCE_VERSION} from "../lib/market-intelligence-engine.ts";
+import {advanceForward,initialForward} from "../lib/forward-relations.ts";
 
 const T=2_000_000_000_000;
 function candles(start:number,step:number,vol=.002){
@@ -76,4 +77,21 @@ test("L0 macro begins updating only after genuine daily coverage is available",(
   assert.equal(r.state.coverage?.dailyMarkets,3);
   assert.ok(r.state.narrative.macro.score>0);
   assert.doesNotMatch(r.state.narrative.macro.detail,/沿用上一份/);
+});
+
+
+test("Worker warm restart preserves the last market map until broad 5m coverage returns",()=>{
+  const paths={BTC_USDT:candles(100,.0010),ETH_USDT:candles(100,.0012),SOL_USDT:candles(100,.0009)};
+  const quotes=Object.fromEntries(Object.entries(paths).map(([s,v])=>[s,q(v.at(-1)!.close,.0002)]));
+  const built=buildMarketIntelligence({paths,quotes,previous:initialMarketIntelligenceState(T-300_000),now:T-1000});
+  const state=initialForward(T-60_000);
+  state.extremumRegime=built.state;state.opportunities=built.opportunities;state.selectedSymbols=Object.keys(built.state.symbols);
+  const beforeSymbols=Object.keys(state.extremumRegime.symbols).sort();
+  const next=advanceForward({state,now:T,paths:{},quotes:{},contracts:{},
+    entrySymbols:Array.from({length:30},(_,i)=>`S${i}_USDT`),allowDataCycle:false}).state;
+  assert.deepEqual(Object.keys(next.extremumRegime.symbols).sort(),beforeSymbols);
+  assert.equal(next.opportunities.length,0,"partial restart coverage must never manufacture a fresh entry");
+  assert.equal(next.extremumRegime.coverage?.intradayMarkets,0);
+  assert.equal(next.extremumRegime.coverage?.targetIntradayMarkets,30);
+  assert.match(next.latestReason,/沿用上一份市场叙事/);
 });
