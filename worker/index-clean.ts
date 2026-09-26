@@ -2718,11 +2718,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if(!this.forwardState||!this.runtime.evidence)return this.regimeQuotes(now);
     return Object.fromEntries(Object.entries(this.runtime.evidence).flatMap(([symbol,row])=>{
       if(!row?.fresh||row.bestBid==null||row.bestAsk==null||now-row.observedAt>STALE_AFTER_MS)return[];
-      const external=this.marketHub.quote(symbol,now);
+      const external=this.marketHub.quote(symbol,now),mid=(row.bestBid+row.bestAsk)/2,
+        meta=this.runtime.contractMeta[symbol],book=meta?this.gateStream.book(symbol,this.runtime.tickSize[symbol]??1e-8,meta.quantoMultiplier,now):null,
+        bidDepth=book?.bids.slice(0,5).reduce((n,x)=>n+x.size,0)??0,askDepth=book?.asks.slice(0,5).reduce((n,x)=>n+x.size,0)??0,
+        bookImbalance=bidDepth+askDepth>0?(bidDepth-askDepth)/(bidDepth+askDepth):0;
       return[[symbol,{bestBid:row.bestBid,bestAsk:row.bestAsk,observedAt:row.observedAt,fresh:true,
         entryReady:this.symbolEntryReady(symbol,now),sourceCount:external?.sourceCount??0,
         disagreementRate:external?.disagreementRate??0,sourceBreadth:external?.sourceBreadth??0,
-        directionalAgreement:external?.directionalAgreement??.5,medianShortMove:external?.medianShortMove??0}]];
+        directionalAgreement:external?.directionalAgreement??.5,medianShortMove:external?.medianShortMove??0,
+        spreadRate:mid>0?(row.bestAsk-row.bestBid)/mid:0,bookImbalance}]];
     }));
   }
 
