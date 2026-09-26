@@ -412,12 +412,30 @@ test("live market entry uses authenticated Gate futures WebSocket and receives t
     assert.equal(id,"123456789012345678");assert.equal(fetches.length,1);assert.ok(socket.accepted);
     const [login,order]=socket.sent;
     assert.equal(login?.channel,"futures.login");assert.equal(order?.channel,"futures.order_place");
-    const loginPayload=login?.payload as Record<string,unknown>;
+    const loginPayload=login?.payload as Record<string,unknown>,loginHeader=loginPayload.req_header as Record<string,unknown>;
     assert.equal(loginPayload.api_key,"fixture-key");assert.match(String(loginPayload.signature),/^[0-9a-f]{128}$/);
-    assert.deepEqual((order?.payload as Record<string,unknown>).req_param,
+    assert.equal(loginHeader["X-Gate-Channel-Id"],"market-sentinel-free");
+    const orderPayload=order?.payload as Record<string,unknown>,orderHeader=orderPayload.req_header as Record<string,unknown>;
+    assert.equal(orderHeader["X-Gate-Channel-Id"],"market-sentinel-free");
+    assert.ok(Number(orderHeader["x-gate-exptime"])>Date.now());
+    assert.deepEqual(orderPayload.req_param,
       {contract:"BTC_USDT",size:"1",price:"0",tif:"ioc",text:"t-ms-e-test",reduce_only:false});
     assert.equal(client.writeTransport.orderRequests,1);assert.equal(client.writeTransport.orderAcks,1);
     assert.equal(client.writeTransport.orderResults,1);assert.equal(client.writeTransport.loggedIn,true);
+  }finally{globalThis.fetch=real;}
+});
+
+test("trade-channel preflight authenticates without sending an order",async()=>{
+  const real=globalThis.fetch,socket=new FakeTradeSocket();
+  globalThis.fetch=async()=>({status:101,webSocket:socket}) as unknown as Response;
+  try{
+    const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
+    const ready=await client.prepareTradingChannel();
+    assert.equal(ready.connected,true);assert.equal(ready.loggedIn,true);
+    assert.equal(client.writeTransport.orderRequests,0);
+    assert.equal(socket.sent.filter(row=>row.channel==="futures.order_place").length,0);
+    const login=socket.sent.find(row=>row.channel==="futures.login")!,payload=login.payload as Record<string,unknown>;
+    assert.equal((payload.req_header as Record<string,unknown>)["X-Gate-Channel-Id"],"market-sentinel-free");
   }finally{globalThis.fetch=real;}
 });
 
