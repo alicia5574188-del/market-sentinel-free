@@ -1,4 +1,4 @@
-name: Extremum Regime Stage 1
+name: Extremum Regime Release Candidate
 
 on:
   push:
@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 jobs:
-  stage1:
+  verify:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -18,15 +18,20 @@ jobs:
           node-version: 22.16.0
           cache: npm
       - run: npm ci
-      - name: Strategy core typecheck
-        run: npm run typecheck
-      - name: Closed-loop strategy tests
-        run: node --experimental-strip-types --test tests/extremum-regime-engine.test.ts
-      - name: Multi-source input tests
-        run: node --experimental-strip-types --test tests/market-data-hub.test.ts
-      - name: Cutover continuity tests
-        run: node --experimental-strip-types --test --test-name-pattern="strategy migration|summary exposes the extremum regime lifecycle|manual PAPER reset preserves" tests/adaptive-ten-core.test.ts
-      - name: Persistent account compatibility
-        run: node --experimental-strip-types --test tests/forward-compact-store.test.ts
-      - name: Diff integrity
-        run: git diff --check
+      - name: Strategy and product tests
+        run: |
+          set -euo pipefail
+          npm run typecheck
+          npm run test:direct
+          npm run test:live-parity
+          npm run test:members
+          npm run test:equity
+          npm run test:feed:workerd
+      - name: Build and release gates
+        run: |
+          set -euo pipefail
+          npm run build
+          npm run lint
+          node --test tests/architecture.test.mjs tests/migration.test.mjs
+          git diff --check
+          npx wrangler deploy --dry-run --config dist/server/wrangler.json
