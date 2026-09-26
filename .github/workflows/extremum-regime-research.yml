@@ -3,7 +3,8 @@ name: Extremum Regime Research
 on:
   pull_request:
     paths:
-      - "research/collect-extremum-regime-dataset.mjs"\n      - "research/analyze-extremum-regime-dataset.mjs"
+      - "research/collect-extremum-regime-dataset.mjs"
+      - "research/analyze-extremum-regime-dataset.mjs"
       - ".github/workflows/extremum-regime-research.yml"
   workflow_dispatch:
 
@@ -21,10 +22,15 @@ jobs:
           node-version: 22.16.0
       - name: Collect independent public futures candles
         run: node research/collect-extremum-regime-dataset.mjs
-      - name: Upload research dataset
+      - name: Analyze causal extremum/regime behavior
+        run: node research/analyze-extremum-regime-dataset.mjs extremum-regime-dataset.json
+      - name: Upload research dataset and report
         uses: actions/upload-artifact@v4
         with:
           name: extremum-regime-dataset
-          path: extremum-regime-dataset.json
+          path: |
+            extremum-regime-dataset.json
+            extremum-regime-report.json
+            extremum-regime-report.md
           if-no-files-found: error
           retention-days: 7
