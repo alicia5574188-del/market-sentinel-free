@@ -1,6 +1,7 @@
 export type MultiTurnUniverseTicker={
   symbol:string;last:number;high24h:number;low24h:number;change24hRate:number;
   volume24hUsd:number;executionVolume24hUsd?:number;fundingRate:number;openInterest:number;
+  sourceCount?:number;sourceDisagreementRate?:number;
 };
 export type MultiTurnUniverseClass="MARKET_AMPLIFIER"|"INDEPENDENT_VOLATILITY";
 export type RankedMultiTurnUniverse=MultiTurnUniverseTicker&{
@@ -70,6 +71,7 @@ export type AnchorOpportunityUniverseRow=MultiTurnUniverseTicker&{
   activityScore:number;
   range24hRate:number;
   liquidityFloorUsd:number;
+  liquidityScore?:number;movementScore?:number;dataQualityScore?:number;
 };
 
 /**
@@ -103,13 +105,17 @@ export function selectAnchorOpportunityUniverse(input:{
   const bySymbol=new Map(liquid.map(r=>[r.symbol,r]));
   const current=new Set(input.currentSymbols??[]);
   const scored=liquid.map(row=>{
-    const range24hRate=Math.max(0,(row.high24h-row.low24h)/Math.max(row.last,1e-12));
-    const travel=clip(range24hRate/.08),netMove=clip(Math.abs(row.change24hRate)/.05),
+    const range24hRate=Math.max(0,(row.high24h-row.low24h)/Math.max(row.last,1e-12)),
       executionVolume=forwardExecutionVolume24hUsd(row),
       liquidityScore=clip((Math.log10(Math.max(executionVolume,1))-6)/3),
-      movement=.70*travel+.30*netMove;
-    const activityScore=movement*(.72+.28*liquidityScore)+.04*liquidityScore+(current.has(row.symbol)?.02:0);
-    return{row,range24hRate,activityScore,executionVolume};
+      directionalEfficiency=clip(Math.abs(row.change24hRate)/Math.max(range24hRate,.004)),
+      travel=clip((range24hRate-.010)/.070),netMove=clip(Math.abs(row.change24hRate)/.045),
+      movementScore=.55*travel+.25*netMove+.20*directionalEfficiency,
+      sourceCoverage=clip((row.sourceCount??0)/4),
+      sourceAgreement=Math.exp(-Math.max(0,row.sourceDisagreementRate??0)/.006),
+      dataQualityScore=.65*sourceCoverage+.35*sourceAgreement,
+      activityScore=.40*liquidityScore+.35*movementScore+.25*dataQualityScore+(current.has(row.symbol)?.015:0);
+    return{row,range24hRate,activityScore,executionVolume,liquidityScore,movementScore,dataQualityScore};
   });
   const selected:AnchorOpportunityUniverseRow[]=[];
   const used=new Set<string>();
@@ -117,7 +123,8 @@ export function selectAnchorOpportunityUniverse(input:{
     if(used.has(symbol)||selected.length>=limit)return;
     const row=bySymbol.get(symbol),score=scored.find(x=>x.row.symbol===symbol);if(!row||!score)return;
     used.add(symbol);selected.push({...row,selectionSource:source,activityScore:score.activityScore,
-      range24hRate:score.range24hRate,liquidityFloorUsd});
+      range24hRate:score.range24hRate,liquidityFloorUsd,liquidityScore:score.liquidityScore,
+      movementScore:score.movementScore,dataQualityScore:score.dataQualityScore});
   };
 
   for(const symbol of input.lockedSymbols??[])push(symbol,"LOCKED_ANCHOR");
