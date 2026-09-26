@@ -2731,8 +2731,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if(!this.forwardState||!this.runtime.evidence)return this.regimeQuotes(now);
     return Object.fromEntries(Object.entries(this.runtime.evidence).flatMap(([symbol,row])=>{
       if(!row?.fresh||row.bestBid==null||row.bestAsk==null||now-row.observedAt>STALE_AFTER_MS)return[];
+      const external=this.marketHub.quote(symbol,now);
       return[[symbol,{bestBid:row.bestBid,bestAsk:row.bestAsk,observedAt:row.observedAt,fresh:true,
-        entryReady:this.symbolEntryReady(symbol,now)}]];
+        entryReady:this.symbolEntryReady(symbol,now),sourceCount:external?.sourceCount??0,
+        disagreementRate:external?.disagreementRate??0,sourceBreadth:external?.sourceBreadth??0,
+        directionalAgreement:external?.directionalAgreement??.5,medianShortMove:external?.medianShortMove??0}]];
     }));
   }
 
