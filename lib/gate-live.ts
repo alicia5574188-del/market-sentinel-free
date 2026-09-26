@@ -338,8 +338,7 @@ export class GateLiveClient {
 
   private async ensureTradeSocket(){
     if(this.credentials.environment!=="live")throw new GateWsUnavailableBeforeSendError("Gate WebSocket交易通道仅用于实盘环境，未发送订单");
-    const now=Date.now();
-    if(this.tradeSocket?.readyState===1&&this.tradeLoggedIn&&now-this.tradeLastMessageAt<=30_000)return;
+    if(this.tradeSocket?.readyState===1&&this.tradeLoggedIn)return;
     if(this.tradeSocket)this.failTradeSocket("Gate WebSocket交易连接已过期，重新建立");
     if(this.tradeConnecting){await this.tradeConnecting;return;}
     const task=(async()=>{
@@ -370,13 +369,20 @@ export class GateLiveClient {
           this.tradeLoginWaiter={reqId,resolve,reject,timer:loginTimer};
         });
         socket.send(JSON.stringify({time:ts,channel:"futures.login",event:"api",payload:{
-          api_key:this.credentials.apiKey,signature,timestamp:String(ts),req_id:reqId,req_param:""
+          req_id:reqId,req_header:{"X-Gate-Channel-Id":"market-sentinel-free"},
+          api_key:this.credentials.apiKey,req_param:"",timestamp:String(ts),signature
         }}));
         try{await login;}catch(error){this.failTradeSocket(error instanceof Error?error.message:"Gate WebSocket登录失败");throw error;}
       }finally{clearTimeout(timer);}
     })();
     this.tradeConnecting=task;
     try{await task;}finally{if(this.tradeConnecting===task)this.tradeConnecting=null;}
+  }
+
+  async prepareTradingChannel(){
+    await this.ensureTradeSocket();
+    return{connected:this.writeTransport.connected,loggedIn:this.writeTransport.loggedIn,
+      connections:this.writeTransport.connections,lastError:this.writeTransport.lastError};
   }
 
   private async placeTradeOrder(body:Record<string,unknown>,beforeSend?:()=>boolean){
@@ -397,7 +403,9 @@ export class GateLiveClient {
         this.writeTransport.lastError=reason;reject(new Error(reason));this.failTradeSocket(reason);
       },GATE_TRADE_WS_RESULT_MS);
       this.tradeWaiters.set(reqId,{reqId,acked:false,resolve,reject,timer});
-      try{socket.send(JSON.stringify({time:ts,channel:"futures.order_place",event:"api",payload:{req_id:reqId,req_param:body}}));}
+      try{socket.send(JSON.stringify({time:ts,channel:"futures.order_place",event:"api",payload:{
+        req_id:reqId,req_header:{"X-Gate-Channel-Id":"market-sentinel-free","x-gate-exptime":String(Date.now()+5_000)},req_param:body
+      }}));}
       catch(error){
         this.tradeWaiters.delete(reqId);clearTimeout(timer);
         const reason=`Gate WebSocket下单发送异常；提交结果可能不明确，只按订单身份核对，不重复提交：${error instanceof Error?error.message:"send failed"}`;
