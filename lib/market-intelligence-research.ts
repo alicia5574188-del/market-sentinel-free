@@ -9,7 +9,7 @@ const ROUND_TRIP_COST=2*(PAPER_COST.feeRate+PAPER_COST.slippageRate);
 const MAX_VALUE_BYTES=100*1024;
 
 export type ResearchCheckpoint={
-  minutes:number;targetAt:number;observedAt:number;price:number;signedRate:number;netAfterCostRate:number;
+  minutes:number;targetAt:number;observedAt:number;marketAt:number;price:number;signedRate:number;netAfterCostRate:number;
   maxFavorableRate:number;maxAdverseRate:number;stopHit:boolean;
 };
 export type PostExitResearch={
@@ -40,7 +40,7 @@ export function initialCounterfactualResearch(now=Date.now()):CounterfactualRese
 function normalizePoint(row:ResearchCheckpoint):ResearchCheckpoint|null{
   return row&&RESEARCH_CHECKPOINTS.includes(row.minutes as typeof RESEARCH_CHECKPOINTS[number])&&finite(row.targetAt)&&finite(row.observedAt)
     &&finite(row.price)&&finite(row.signedRate)&&finite(row.netAfterCostRate)&&finite(row.maxFavorableRate)&&finite(row.maxAdverseRate)
-    ?{...row,stopHit:Boolean(row.stopHit)}:null;
+    ?{...row,marketAt:finite(row.marketAt)?row.marketAt:row.observedAt,stopHit:Boolean(row.stopHit)}:null;
 }
 function normalizePost(row:PostExitResearch):PostExitResearch|null{
   if(!row||typeof row.id!=="string"||typeof row.tradeId!=="string"||typeof row.symbol!=="string"
@@ -74,6 +74,13 @@ function pathExtremes(side:"LONG"|"SHORT",startPrice:number,startAt:number,rows:
   if(currentPrice&&currentPrice>0){const signed=d*(currentPrice/startPrice-1);favorable=Math.max(favorable,signed);adverse=Math.max(adverse,-signed);}
   return{favorable:Math.max(0,favorable),adverse:Math.max(0,adverse)};
 }
+function checkpointSnapshot(side:"LONG"|"SHORT",startPrice:number,startAt:number,targetAt:number,rows:Candle[]|undefined,
+  fallbackPrice:number|null,observedAt:number){
+  const eligible=(rows??[]).filter(bar=>{const end=bar.time*1000+300_000;return end>startAt&&end<=targetAt;}),
+    last=eligible.at(-1),price=last?.close??fallbackPrice??startPrice,marketAt=last?last.time*1000+300_000:observedAt,
+    ext=pathExtremes(side,startPrice,startAt,eligible,targetAt,null),signed=dir(side)*(price/startPrice-1);
+  return{marketAt,price,signed,maxFavorableRate:ext.favorable,maxAdverseRate:ext.adverse};
+}
 function updateCheckpoints<T extends {side:"LONG"|"SHORT";startedAt:number;lastObservedAt:number;maxFavorableRate:number;maxAdverseRate:number;
   checkpoints:ResearchCheckpoint[];completed:boolean}>(row:T,startPrice:number,stopRate:number,now:number,rows:Candle[]|undefined,q:Quote|undefined){
   const current=quotePrice(q),ext=pathExtremes(row.side,startPrice,row.startedAt,rows,now,current);
@@ -81,9 +88,10 @@ function updateCheckpoints<T extends {side:"LONG"|"SHORT";startedAt:number;lastO
   row.lastObservedAt=now;let checkpointAdded=false;
   for(const minutes of RESEARCH_CHECKPOINTS){
     const targetAt=row.startedAt+minutes*60_000;if(now<targetAt||row.checkpoints.some(x=>x.minutes===minutes))continue;
-    const price=current??rows?.at(-1)?.close??startPrice,d=dir(row.side),signed=d*(price/startPrice-1);
-    row.checkpoints.push({minutes,targetAt,observedAt:now,price,signedRate:signed,netAfterCostRate:signed-ROUND_TRIP_COST,
-      maxFavorableRate:row.maxFavorableRate,maxAdverseRate:row.maxAdverseRate,stopHit:row.maxAdverseRate>=stopRate});
+    const snap=checkpointSnapshot(row.side,startPrice,row.startedAt,targetAt,rows,current,now);
+    row.checkpoints.push({minutes,targetAt,observedAt:now,marketAt:snap.marketAt,price:snap.price,signedRate:snap.signed,
+      netAfterCostRate:snap.signed-ROUND_TRIP_COST,maxFavorableRate:snap.maxFavorableRate,maxAdverseRate:snap.maxAdverseRate,
+      stopHit:snap.maxAdverseRate>=stopRate});
     checkpointAdded=true;
   }
   row.checkpoints.sort((a,b)=>a.minutes-b.minutes);row.completed=row.checkpoints.some(x=>x.minutes===240);
