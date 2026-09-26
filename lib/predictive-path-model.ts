@@ -20,7 +20,7 @@ export function forecastPredictivePath(feature:PredictiveFeatureVector,artifact:
     r15=reg(artifact.expectedReturn["15"],x),r30=reg(artifact.expectedReturn["30"],x),r60=reg(artifact.expectedReturn["60"],x),r120=reg(artifact.expectedReturn["120"],x),
     lm=Math.max(0,reg(artifact.longMfe60,x)),la=Math.max(0,reg(artifact.longMae60,x)),
     sm=Math.max(0,reg(artifact.shortMfe60,x)),sa=Math.max(0,reg(artifact.shortMae60,x)),
-    touchLong=prob(artifact.targetBeforeRisk60,x),touchShort=1-touchLong,
+    touchLong=prob(artifact.longTargetBeforeRisk60,x),touchShort=prob(artifact.shortTargetBeforeRisk60,x),
     regretLong=Math.max(0,reg(artifact.longEntryRegret10,x)),regretShort=Math.max(0,reg(artifact.shortEntryRegret10,x)),
     qIndex=feature.names.indexOf("source_count"),aIndex=feature.names.indexOf("source_agreement"),
     bIndex=feature.names.indexOf("source_breadth"),dIndex=feature.names.indexOf("source_disagreement"),
