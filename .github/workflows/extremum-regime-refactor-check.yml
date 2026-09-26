@@ -18,8 +18,20 @@ jobs:
           node-version: 22.16.0
           cache: npm
       - run: npm ci
-      - run: npm run typecheck
-      - run: npm run test:direct
-      - run: npm run test:live-parity
-      - run: npm run build
-      - run: git diff --check
+      - name: Core and strategy tests
+        run: |
+          set -euo pipefail
+          npm run typecheck
+          npm run test:direct
+          npm run test:live-parity
+          npm run test:members
+          npm run test:equity
+          npm run test:feed:workerd
+      - name: Build and architecture gates
+        run: |
+          set -euo pipefail
+          npm run build
+          npm run lint
+          node --test tests/architecture.test.mjs tests/migration.test.mjs
+          git diff --check
+          npx wrangler deploy --dry-run --config dist/server/wrangler.json
