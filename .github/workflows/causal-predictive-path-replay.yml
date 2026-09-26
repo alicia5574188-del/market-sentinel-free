@@ -31,6 +31,10 @@ jobs:
           node-version: 22.16.0
           cache: npm
       - run: npm ci
+      - uses: actions/cache@v4
+        with:
+          path: .causal-replay-cache
+          key: causal-replay-public-v2-202607-202608
       - name: Typecheck
         run: npm run typecheck
       - name: Download official Gate July-August 5m path
@@ -48,6 +52,7 @@ jobs:
           CAUSAL_REPLAY_OUTPUT: /tmp/causal-replay-report.json
           CAUSAL_DESIGN_MONTH: "202607"
           CAUSAL_HOLDOUT_MONTH: "202608"
+          CAUSAL_REPLAY_CACHE: .causal-replay-cache
         run: node --experimental-strip-types scripts/replay-causal-predictive-path.mjs
       - name: Print release evidence
         if: always()
