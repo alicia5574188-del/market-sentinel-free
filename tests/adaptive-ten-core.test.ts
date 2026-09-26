@@ -479,11 +479,11 @@ test("manual PAPER reset preserves causal learning while resetting the financial
   assert.match(n.latestReason,/保留/);
 });
 
-test("summary exposes the extremum regime lifecycle and separates profit-taking from reversal",()=>{
+test("summary exposes Market Intelligence lifecycle and separates market narrative from each trade thesis",()=>{
   const s=initialForward(1000),view=forwardSummary(s,{},2000);
   assert.equal(view.engineVersion,ADAPTIVE_ENGINE_VERSION);assert.equal(view.targetPositions,null);assert.equal(view.positionLimit,null);
   assert.equal(view.executionBboCapacity,30);assert.equal(view.minuteConfirmationCapacity,11);
-  assert.equal(view.extremumRegime.version,ADAPTIVE_ENGINE_VERSION);
-  assert.match(view.boundaries.grammar,/峰谷状态机/);assert.equal(view.boundaries.historyBackfill,false);
-  assert.match(view.boundaries.validation,/只有趋势死亡/);assert.equal(view.relationEngine.retired,true);
+  assert.equal(view.marketIntelligence.version,ADAPTIVE_ENGINE_VERSION);assert.equal(view.extremumRegime.retired,true);
+  assert.match(view.boundaries.grammar,/四层市场智能/);assert.equal(view.boundaries.historyBackfill,false);
+  assert.match(view.boundaries.validation,/单一噪声不能让大方向来回翻转/);assert.equal(view.relationEngine.retired,true);
 });
