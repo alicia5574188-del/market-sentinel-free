@@ -101,3 +101,26 @@ test("Market Intelligence uses thesis lifecycle, not scalp profit locking or bat
   const boundaries=core.slice(core.indexOf("boundaries:{scope"));
   assert.match(boundaries,/Market Intelligence 不使用动态锁利/);
 });
+
+
+test("Market Intelligence active exits are evidence-family gated, not two-bar thesis invalidation",async()=>{
+  const [core,position,engine,execution]=await Promise.all([
+    read("lib/forward-relations.ts"),read("lib/position-intelligence-engine.ts"),
+    read("lib/market-intelligence-engine.ts"),read("app/market-intelligence-execution.tsx")
+  ]);
+  const manage=core.slice(core.indexOf("function manageIntelligenceTrades"),core.indexOf("function markAndManage"));
+  assert.match(manage,/evaluatePositionIntelligence/);
+  assert.match(manage,/POSITION_VALUE_EXIT/);
+  assert.doesNotMatch(manage,/invalidationBars|relationFailureBars.*>=2|THESIS_INVALIDATED/);
+  assert.match(position,/concernFamilies\.length>=2&&coreConcern/);
+  assert.match(position,/reviewBars>=2/);
+  assert.match(position,/contextOnly:true/);
+  assert.match(position,/market context can never/);
+  assert.match(position,/dataConfidence>=60/);
+  assert.match(engine,/samples:\(same\.samples\?\?1\)\+1/);
+  assert.match(engine,/LEADERSHIP_ROTATION/);
+  assert.match(engine,/FLOW_ABSORBED_OR_STALLED/);
+  assert.doesNotMatch(execution,/偏多细节|偏空细节/);
+  assert.match(execution,/复核已持续/);
+  assert.match(execution,/剩余空间/);
+});
