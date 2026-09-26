@@ -6,6 +6,7 @@ import handler from "vinext/server/app-router-entry";
 import { GatePublicError, fetchActiveContracts, fetchContractStats, fetchGateRadarTickers, fetchLiquidations, fetchRecentTrades,
   fetchStructureCandles, fetchTickerBbo, fetchUrgentFuturesBook } from "../lib/gate-market.ts";
 import { MarketDataHub } from "../lib/market-data-hub.ts";
+import type { PredictiveAncillary } from "../lib/predictive-path-types.ts";
 import { GateStreamingFeed } from "../lib/gate-stream.ts";
 import { CORRELATED_DIRECTION_RISK_CAP, PORTFOLIO_RISK_CAP, remainingStressRisk, STALE_AFTER_MS, SYSTEM_VERSION, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
 import { aggregateFourHourCandles, analyzeSnapshot, ancillarySchedule, deriveMinuteNoiseRate, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, structureDirection, updateOpenInterestCohorts, type SymbolMemory } from "../lib/liquidity-runtime.ts";
@@ -493,6 +494,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private contractCatalog = new Map<string, Awaited<ReturnType<typeof fetchActiveContracts>>[number]>();
   private gateRadarCache: Awaited<ReturnType<typeof fetchGateRadarTickers>> = [];
   private gateRadarAt=0;
+  private predictiveStats=new Map<string,{at:number;row:Awaited<ReturnType<typeof fetchContractStats>>}>();
+  private predictiveStatsLastAttemptAt=0;
+  private predictiveOiHistory=new Map<string,Array<{at:number;value:number}>>();
   private authorityReady = true;
   private authorityView = { positions: {} as RuntimeState["positions"], equity: CANONICAL_PAPER_REFERENCE_EQUITY, equityVersion: 0 };
   protected liveClient: GateLiveClient | null = null;
