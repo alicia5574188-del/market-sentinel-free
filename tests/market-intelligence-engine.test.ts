@@ -48,13 +48,16 @@ test("trade lifecycle exits only when its own thesis degrades or risk boundary i
   const healthy={symbol:"ETH_USDT",watchScore:80,regime:"DIVERGENT" as const,stage:"READY" as const,clusterId:"corr:BTC_USDT",
     correlation:.9,beta:1.1,volatility:.004,dataConfidence:90,actualMove:.01,expectedMove:.004,residual:.006,residualZ:1.2,
     residualPersistence:.9,relativeStrength:.7,longScore:82,shortScore:28,pathLong:.75,pathShort:.25,roomLong:.02,roomShort:.01,
-    sourceCount:4,venueAgreement:.9,venuePressure:.4,reasons:[]};
+    sourceCount:4,venueAgreement:.9,venuePressure:.4,reasons:[],signalSide:"LONG" as const,signalSince:T-600_000,signalBars:3,signalLastBar:T-300_000};
   const hold=intelligenceExitDecision({side:"LONG",ageMin:90,signedRate:.012,peakFavorableRate:.018,firstProfit:true,stopRate:.009,stopped:false,
-    profitFloorRate:0,expectedHoldMinutes:180,maxHoldMinutes:360,state:healthy});
-  assert.equal(hold.reason,null);assert.ok(hold.floorCandidate>0);
-  const broken={...healthy,longScore:35,shortScore:72,residualZ:-.8};
-  const exit=intelligenceExitDecision({side:"LONG",ageMin:30,signedRate:-.003,peakFavorableRate:.002,firstProfit:false,stopRate:.009,stopped:false,
-    profitFloorRate:0,expectedHoldMinutes:180,maxHoldMinutes:360,state:broken});
+    expectedHoldMinutes:180,maxHoldMinutes:450,invalidationBars:0,state:healthy});
+  assert.equal(hold.reason,null);assert.equal(hold.floorCandidate,0,"Market Intelligence must never trail/lock profit");
+  const broken={...healthy,longScore:35,shortScore:72,residualZ:-.8,signalSide:"SHORT" as const};
+  const firstWarning=intelligenceExitDecision({side:"LONG",ageMin:30,signedRate:-.003,peakFavorableRate:.002,firstProfit:false,stopRate:.009,stopped:false,
+    expectedHoldMinutes:180,maxHoldMinutes:450,invalidationBars:1,state:broken});
+  assert.equal(firstWarning.reason,null,"one contradictory completed bar is observation, not an exit");
+  const exit=intelligenceExitDecision({side:"LONG",ageMin:35,signedRate:-.003,peakFavorableRate:.002,firstProfit:false,stopRate:.009,stopped:false,
+    expectedHoldMinutes:180,maxHoldMinutes:450,invalidationBars:2,state:broken});
   assert.equal(exit.reason,"THESIS_INVALIDATED");
 });
 
@@ -89,4 +92,31 @@ test("Worker warm restart keeps the last confirmed market map until broad 5m cov
   assert.equal(next.opportunities.length,0,"partial restart coverage must not create or retain executable entries");
   assert.equal(next.extremumRegime.coverage.intradayMarkets,0);
   assert.match(next.latestReason,/沿用上一份市场叙事/);
+});
+
+
+test("same market anomaly keeps one thesis id across completed bars and matures instead of respawning",()=>{
+  const firstPaths={BTC_USDT:candles(100,.0010),ETH_USDT:candles(100,.0018),SOL_USDT:candles(100,.0009)};
+  for(let i=56;i<firstPaths.ETH_USDT.length;i++){const k=1+(i-55)*.0008;for(const key of["open","high","low","close"] as const)firstPaths.ETH_USDT[i]![key]*=k;}
+  const quotes=Object.fromEntries(Object.entries(firstPaths).map(([s,v])=>[s,q(v.at(-1)!.close,.0003)]));
+  const first=buildMarketIntelligence({paths:firstPaths,quotes,previous:initialMarketIntelligenceState(T-600_000),now:T});
+  const shifted=Object.fromEntries(Object.entries(firstPaths).map(([s,rows])=>[s,rows.map(r=>({...r,time:r.time+300}))]));
+  const quotes2=Object.fromEntries(Object.entries(shifted).map(([s,v])=>[s,{...q(v.at(-1)!.close,.0003),observedAt:T+300_000}]));
+  const second=buildMarketIntelligence({paths:shifted,quotes:quotes2,previous:first.state,now:T+300_000});
+  const a=first.state.symbols.ETH_USDT!,b=second.state.symbols.ETH_USDT!;
+  assert.equal(b.signalSide,a.signalSide);assert.ok(b.signalBars>=a.signalBars+1);
+  const o1=first.opportunities.find(o=>o.symbol==="ETH_USDT"),o2=second.opportunities.find(o=>o.symbol==="ETH_USDT");
+  assert.equal(o2?.thesisId,o1?.thesisId,"same anomaly episode must keep one thesis identity");
+});
+
+test("major market direction uses hysteresis instead of flipping neutral on small counter-moves",()=>{
+  const up={BTC_USDT:candles(100,.0015),ETH_USDT:candles(100,.0014),SOL_USDT:candles(100,.0016)};
+  const qUp=Object.fromEntries(Object.entries(up).map(([s,v])=>[s,q(v.at(-1)!.close,.00025)]));
+  let state=initialMarketIntelligenceState(T-1_800_000);const now=T-1_500_000;
+  for(let i=0;i<4;i++){const r=buildMarketIntelligence({paths:up,quotes:qUp,previous:state,now:now+i*300_000});state=r.state;}
+  assert.equal(state.narrative.major.bias,"BULLISH");
+  const mild={BTC_USDT:candles(100,-.00008),ETH_USDT:candles(100,-.00006),SOL_USDT:candles(100,-.00009)};
+  const qMild=Object.fromEntries(Object.entries(mild).map(([s,v])=>[s,q(v.at(-1)!.close,-.00005)]));
+  const next=buildMarketIntelligence({paths:mild,quotes:qMild,previous:state,now:T+600_000});
+  assert.equal(next.state.narrative.major.bias,"BULLISH","minor counter-move should update details without rewriting the major narrative");
 });

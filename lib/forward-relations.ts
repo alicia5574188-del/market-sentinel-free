@@ -70,6 +70,7 @@ export type Opportunity={
   strategyVersion?:string;regime?:MarketSymbolState["regime"];topPressure?:number;bottomPressure?:number;upSurvival?:number;downSurvival?:number;
   confirmationStage?:MarketSymbolState["stage"];sourceCount?:number;disagreementRate?:number;
   clusterId?:string;thesisId?:string;thesisSummary?:string;invalidationSummary?:string;residual?:number;relativeStrength?:number;dataConfidence?:number;
+  thesisSince?:number;thesisBars?:number;
 };
 export type MarketPulse={at:number;up:number;down:number;neutral:number;bias:"UP"|"DOWN"|"MIXED";strength:number;expansion:number};
 
@@ -84,6 +85,7 @@ export type EntryContext={
   strategyVersion?:string;regime?:MarketSymbolState["regime"]|"TREND_UP"|"TREND_DOWN"|"SWING"|"WEAKENING";topPressure?:number;bottomPressure?:number;upSurvival?:number;downSurvival?:number;
   confirmationStage?:MarketSymbolState["stage"]|"WATCH"|"CANDIDATE"|"STRUCTURE_BREAK"|"RECLAIM_TEST"|"IMPULSE";sourceCount?:number;disagreementRate?:number;postEntryState?:"PENDING"|"CONFIRMED"|"FAILED";
   clusterId?:string;thesisId?:string;marketNarrativeId?:string;thesisSummary?:string;invalidationSummary?:string;entryResidual?:number;entryRelativeStrength?:number;
+  thesisSince?:number;thesisBars?:number;
 };
 export type Trade={
   id:string;symbol:string;side:"LONG"|"SHORT";rule:Rule;openedAt:number;closedAt:number|null;status:"OPEN"|"CLOSED";
@@ -364,20 +366,27 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
     const q=quotes[t.symbol];if(!freshQuote(q,now))continue;
     const state=s.extremumRegime.symbols[t.symbol],px=t.side==="LONG"?q!.bestBid:q!.bestAsk,d=dir(t.side),
       signed=d*(px/t.entryPrice-1),favorable=Math.max(0,signed),adverse=Math.max(0,-signed),ageMin=(now-t.openedAt)/60_000,
-      originalStopRate=Math.max(.004,t.entryContext?.pullbackRiskRate??Math.abs(t.entryPrice-t.stopPrice)/t.entryPrice);
+      originalStopRate=Math.max(.004,t.entryContext?.pullbackRiskRate??Math.abs(t.entryPrice-t.stopPrice)/t.entryPrice),
+      structuralStop=t.entryPrice*(1-d*originalStopRate);
+    // Market Intelligence positions are thesis positions, not trailing-stop scalps.
+    // Remove any profit floor left by the first V1 implementation and restore
+    // the original structural risk boundary once.
+    if((t.profitFloorRate??0)>0){t.profitFloorRate=0;t.stopPrice=structuralStop;
+      event(s,now,"DATA",t.id,"已移除旧式动态锁利；恢复独立交易假设的结构止损");}
     t.lastPrice=px;t.lastQuoteAt=q!.observedAt;t.favorable=Math.max(t.favorable,favorable);t.adverse=Math.max(t.adverse,adverse);t.peakPnlRate=Math.max(t.peakPnlRate??0,favorable);
     if(!t.firstProfitAt&&favorable>=ROUND_TRIP_COST*.65){t.firstProfitAt=now;if(t.entryContext)t.entryContext.postEntryState="CONFIRMED";}
+    const stateBar=state?.signalLastBar??0,oppositeScore=state?(t.side==="LONG"?state.shortScore:state.longScore):50,
+      relative=state?(t.side==="LONG"?1:-1)*state.residualZ:0,
+      contradicted=!!state&&state.signalSide!==t.side&&oppositeScore>=64&&relative<-.25;
+    if(stateBar>t.lastRelationBar){t.relationFailureBars=contradicted?(t.relationFailureBars??0)+1:0;t.lastRelationBar=stateBar;}
     const stopped=t.side==="LONG"?px<=t.stopPrice:px>=t.stopPrice,
       decision=intelligenceExitDecision({side:t.side,ageMin,signedRate:signed,peakFavorableRate:t.favorable,firstProfit:!!t.firstProfitAt,
-        stopRate:originalStopRate,stopped,profitFloorRate:t.profitFloorRate??0,expectedHoldMinutes:t.expectedHoldMinutes??120,
-        maxHoldMinutes:Math.min(720,Math.max(180,(t.expectedHoldMinutes??120)*2.2)),state});
-    if(decision.floorCandidate>Math.max(t.profitFloorRate??0,ROUND_TRIP_COST*.8)){
-      t.profitFloorRate=decision.floorCandidate;const next=t.entryPrice*(1+d*decision.floorCandidate);
-      if(t.side==="LONG"&&next>t.stopPrice||t.side==="SHORT"&&next<t.stopPrice){t.stopPrice=next;
-        event(s,now,"PROTECTION",t.id,`市场假设仍成立，利润保护提升至约${(decision.floorCandidate*100).toFixed(2)}%`);}}
-    t.holdScore=decision.holdScore;t.holdValue={action:decision.reason?(t.favorable>ROUND_TRIP_COST?"EXIT_PROFIT":"EXIT_RISK"):"HOLD",
-      pullbackRiskRate:originalStopRate,bestHoldMinutes:t.expectedHoldMinutes??120,score:t.holdScore};
-    if(decision.reason){if(t.entryContext&&decision.reason==="NO_POSITIVE_FEEDBACK")t.entryContext.postEntryState="FAILED";
+        stopRate:originalStopRate,stopped,expectedHoldMinutes:t.expectedHoldMinutes??180,
+        maxHoldMinutes:Math.min(960,Math.max(300,(t.expectedHoldMinutes??180)*2.5)),invalidationBars:t.relationFailureBars??0,state});
+    const riskExit=decision.reason==="STRUCTURE_STOP"||decision.reason==="THESIS_INVALIDATED"||decision.reason==="NO_POSITIVE_FEEDBACK";
+    t.holdScore=decision.holdScore;t.holdValue={action:decision.reason?(riskExit?"EXIT_RISK":"EXIT_PROFIT"):"HOLD",
+      pullbackRiskRate:originalStopRate,bestHoldMinutes:t.expectedHoldMinutes??180,score:t.holdScore};
+    if(decision.reason){if(t.entryContext&&(decision.reason==="NO_POSITIVE_FEEDBACK"||decision.reason==="THESIS_INVALIDATED"))t.entryContext.postEntryState="FAILED";
       closeTrade(s,t,px,now,decision.reason);closed.add(t.id);}
   }
   if(closed.size)s.positions=s.positions.filter(t=>!closed.has(t.id));
@@ -505,7 +514,7 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
     id=`mi-${now.toString(36)}-${o.symbol.replace(/[^A-Z0-9]/g,"")}-${side[0]}`,
     rule:Rule={id:o.thesisId??o.id,signature:`MARKET_INTELLIGENCE:${o.clusterId??"solo"}:${o.mode}`,parentId:null,version:1,createdAt:now,
       expiresAt:now+Math.max(180,horizon*2.2)*60_000,status:"EXPERIMENTAL",conditions:[],side,horizon,stopRate,
-      armRate:Math.max(.0035,stopRate*.65),givebackRate:Math.max(.0015,stopRate*.45),exitMode:"REACTION_DECAY",samples:0,trainGroups:0,checkGroups:0,
+      armRate:0,givebackRate:0,exitMode:"HORIZON",samples:0,trainGroups:0,checkGroups:0,
       estimatedNetRate:remainingNet,priorResponse:null,recentResponse:0,standardError:0,reason:o.reason,mutation:"CREATE",
       grammar:MARKET_INTELLIGENCE_VERSION,liveEligible:false,authority:"ADAPTIVE_TEN",turnTimeframe:"5m"},
     t:Trade={id,symbol:o.symbol,side,rule,openedAt:now,closedAt:null,status:"OPEN",entryPrice:price,exitPrice:null,quantity,contracts,quantoMultiplier:mult,
@@ -519,7 +528,8 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
         expectedHoldMinutes:horizon,marketFit:o.marketFit,regionId:null,portfolioRiskCharge:riskBudget,strategyVersion:MARKET_INTELLIGENCE_VERSION,
         regime:o.regime,confirmationStage:o.confirmationStage,sourceCount:o.sourceCount,disagreementRate:o.disagreementRate,postEntryState:"PENDING",
         clusterId:o.clusterId,thesisId:o.thesisId,marketNarrativeId:s.extremumRegime.narrative.id,thesisSummary:o.thesisSummary,
-        invalidationSummary:o.invalidationSummary,entryResidual:o.residual,entryRelativeStrength:o.relativeStrength},
+        invalidationSummary:o.invalidationSummary,entryResidual:o.residual,entryRelativeStrength:o.relativeStrength,
+        thesisSince:o.thesisSince,thesisBars:o.thesisBars},
       forecast:{remainingNetRate:remainingNet,quality:o.score/100,sizingEquity:equity}};
   s.positions.push(t);s.balance-=entryFee;s.fees+=entryFee;s.turnover+=notional;s.lastEntryAt[o.symbol]=now;s.lastSide[o.symbol]=side;
   event(s,now,"ENTRY",id,`${o.symbol} ${side} ${o.mode} 评分${o.score.toFixed(0)}`,{notional,plannedRisk});
@@ -527,42 +537,25 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
 }
 
 function rankedEligible(s:ForwardState,now:number){
-  return s.opportunities.filter(o=>isIntelligenceOpportunity(o)&&o.eligible&&o.expiresAt>now&&!s.positions.some(t=>t.symbol===o.symbol)).sort(opportunityCompare);
+  return s.opportunities.filter(o=>isIntelligenceOpportunity(o)&&o.eligible&&o.expiresAt>now
+    &&!s.positions.some(t=>t.symbol===o.symbol)
+    &&!s.history.some(t=>t.entryContext?.thesisId===o.thesisId)).sort(opportunityCompare);
 }
-function rotateIfNeeded(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<string,Contract>,now:number,equity:number){
-  const candidate=rankedEligible(s,now).find(o=>!o.reserve);if(!candidate)return false;
-  if(now-s.lastRotationAt<ROTATION_COOLDOWN_MS)return false;
-  const totalRisk=existingRisk(s),totalMargin=s.positions.reduce((n,t)=>n+t.margin,0),sideRisk=existingRisk(s,candidate.side);
-  const totalFull=equity>0&&totalRisk>=equity*(TOTAL_RISK_RATE-.006),sideFull=equity>0&&sideRisk>=equity*(SIDE_RISK_RATE-.004),
-    marginFull=equity>0&&totalMargin>=equity*(TOTAL_MARGIN_RATE-.05);
-  if(!totalFull&&!sideFull&&!marginFull)return false;
-  const current=s.positions.filter(t=>t.entryContext?.strategyVersion===MARKET_INTELLIGENCE_VERSION),
-    pool=sideFull?current.filter(t=>t.side===candidate.side):current;
-  const weak=[...pool].sort((a,b)=>(a.holdScore??50)-(b.holdScore??50))[0];if(!weak)return false;
-  const weakScore=weak.holdScore??50;if(candidate.score<weakScore+ROTATION_GAP)return false;
-  const qOld=quotes[weak.symbol],qNew=quotes[candidate.symbol],meta=contracts[candidate.symbol];
-  if(!freshQuote(qOld,now)||!freshQuote(qNew,now)||qNew!.entryReady!==true||!meta)return false;
-  const probe=structuredClone(s),probeWeak=probe.positions.find(t=>t.id===weak.id);if(!probeWeak)return false;
-  closeTrade(probe,probeWeak,probeWeak.side==="LONG"?qOld!.bestBid:qOld!.bestAsk,now,"OPPORTUNITY_REPLACED");
-  probe.positions=probe.positions.filter(t=>t.id!==probeWeak.id);
-  if(openIntelligenceTrade(probe,candidate,qNew!,meta,now,equity))return false;
-  closeTrade(s,weak,weak.side==="LONG"?qOld!.bestBid:qOld!.bestAsk,now,"OPPORTUNITY_REPLACED");s.positions=s.positions.filter(t=>t.id!==weak.id);
-  const err=openIntelligenceTrade(s,candidate,qNew!,meta,now,equity);if(err)throw new Error(`换仓预检通过但正式开仓失败：${err}`);
-  s.lastRotationAt=now;event(s,now,"ROTATION",candidate.symbol,`${weak.symbol} → ${candidate.symbol}，优势差${(candidate.score-weakScore).toFixed(0)}分`);
-  return true;
-}
+
 export function fillForwardPortfolio(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<string,Contract>,now:number,equity:number,premiumOnly:boolean){
   const eligible=rankedEligible(s,now).filter(o=>!premiumOnly||o.premium||s.entryValidations[o.id]?.status==="WAITING");
-  // This is a current-state blocker view, not a retry counter. One candidate can
-  // contribute at most once per execution pass, so the UI can never show
-  // hundreds of fake "failures" from the same waiting opportunity.
+  // One completed whole-market step chooses one best new expression. The
+  // portfolio can still accumulate many independent theses over time, but it
+  // cannot spray every currently-positive score into positions at once.
   s.entryDiagnostics={at:now,matched:eligible.length,opened:0,reasons:{}};
   let opened=0;const reject=(reason:string)=>{s.entryDiagnostics.reasons[reason]=(s.entryDiagnostics.reasons[reason]??0)+1;};
   for(const o of eligible){
     const q=quotes[o.symbol],meta=contracts[o.symbol];if(!freshQuote(q,now)||q!.entryReady!==true){reject("等待实时盘口");continue;}
     if(!meta){reject("等待合约规格");continue;}
-    const last=s.lastExitAt[o.symbol]??0;if(now-last<90_000){reject("同币短时防抖");continue;}
-    const error=openIntelligenceTrade(s,o,q!,meta,now,equity);if(error){reject(error);continue;}opened++;
+    const last=s.lastExitAt[o.symbol]??0,lastSide=s.lastSide[o.symbol];
+    if(now-last<15*60_000&&lastSide===o.side){reject("同币同方向假设尚未重置");continue;}
+    const error=openIntelligenceTrade(s,o,q!,meta,now,equity);if(error){reject(error);continue;}
+    opened=1;break;
   }
   s.entryDiagnostics.opened=opened;return opened;
 }
@@ -604,8 +597,9 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
 
   const mark=equityMark(s,input.quotes,input.now);s.peakEquity=Math.max(s.peakEquity,mark.equity);
   s.maxDrawdown=Math.max(s.maxDrawdown,1-mark.equity/Math.max(s.peakEquity,1));updateDaily(s,input.now,mark.equity);
-  if(marketReady)rotateIfNeeded(s,input.quotes,input.contracts,input.now,mark.equity);
-  const opened=marketReady?fillForwardPortfolio(s,input.quotes,input.contracts,input.now,mark.equity,false):0;
+  // A new opportunity never evicts a still-valid independent thesis. New
+  // positions are considered only on a new completed 5m whole-market step.
+  const opened=marketReady&&dataDue?fillForwardPortfolio(s,input.quotes,input.contracts,input.now,mark.equity,false):0;
 
   const states=Object.values(s.extremumRegime.symbols),longReady=states.filter(x=>x.longScore>=62).length,
     shortReady=states.filter(x=>x.shortScore>=62).length,divergent=states.filter(x=>x.regime==="DIVERGENT").length,
@@ -677,6 +671,6 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
       accounting:"模拟仍使用新鲜买卖价并计入手续费、滑点和资金费占位；每笔新Trade冻结独立交易假设、相关组、失效条件与持仓计划。",
       risk:"总结构风险≤10%、同方向≤6.5%、组合保证金≤75%；同一高相关组正常只允许一个同方向主仓，反方向独立假设可并存。",
       validation:"任何细节都会进入证据池，但市场叙事使用慢速记忆和持续证据更新，单一噪声不能让大方向来回翻转。",
-      liquidation:"硬止损→交易假设健康度→相对优势是否消失→动态利润保护→最大持仓。新机会不会自动否定旧仓，每笔仓位独立验证。"},
+      liquidation:"固定结构止损→连续两根完成5m确认的交易假设失效→预期持有期后的相对优势消失→最大持仓。Market Intelligence 不使用动态锁利，新机会也不会自动挤掉仍成立的旧仓。"},
     cost:PAPER_COST,nextCycleAt:s.lastCandleAt+BAR_MS};
 }
