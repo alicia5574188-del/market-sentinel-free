@@ -577,11 +577,25 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
   const allowed=input.entrySymbols?new Set(input.entrySymbols):undefined,
     candleAt=nextCandleAt(input.paths,input.now),
     dataDue=input.allowDataCycle!==false&&candleAt>s.lastCandleAt,
-    built=buildMarketIntelligence({paths:input.paths,minutePaths:input.minutePaths,daily:input.daily,quotes:input.quotes,
+    readyPaths=Object.values(input.paths).filter(rows=>!!validPath(rows,input.now)).length,
+    expectedMarkets=Math.max(1,allowed?.size??Math.max(Object.keys(input.paths).length,s.selectedSymbols.length)),
+    requiredPaths=Math.min(expectedMarkets,Math.max(3,Math.ceil(expectedMarkets*.60))),
+    marketReady=readyPaths>=requiredPaths;
+  if(marketReady){
+    const built=buildMarketIntelligence({paths:input.paths,minutePaths:input.minutePaths,daily:input.daily,quotes:input.quotes,
       previous:s.extremumRegime,now:input.now,allowed});
-  s.extremumRegime=built.state;s.marketPulse=built.pulse;s.opportunities=built.opportunities;
-  if(dataDue){s.lastCandleAt=candleAt;s.lastCycleAt=input.now;}
-  s.selectedSymbols=Object.values(s.extremumRegime.symbols).sort((a,b)=>b.watchScore-a.watchScore).slice(0,30).map(row=>row.symbol);
+    s.extremumRegime=built.state;s.marketPulse=built.pulse;s.opportunities=built.opportunities;
+    if(dataDue){s.lastCandleAt=candleAt;s.lastCycleAt=input.now;}
+    s.selectedSymbols=Object.values(s.extremumRegime.symbols).sort((a,b)=>b.watchScore-a.watchScore).slice(0,30).map(row=>row.symbol);
+  }else{
+    // A Worker restart restores durable strategy memory before in-memory 5m
+    // paths have been rehydrated. Preserve the last confirmed whole-market map
+    // for existing-position protection, but never create fresh entries from a
+    // partial market snapshot.
+    s.opportunities=[];
+    s.extremumRegime.coverage={...s.extremumRegime.coverage,intradayMarkets:readyPaths};
+    s.entryDiagnostics={at:input.now,matched:0,opened:0,reasons:{[`等待全市场路径恢复 ${readyPaths}/${requiredPaths}`]:1}};
+  }
 
   manageIntelligenceTrades(s,input.quotes,input.now);
   // Positions opened before cutover keep their frozen lifecycle and cannot gain
@@ -590,15 +604,17 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
 
   const mark=equityMark(s,input.quotes,input.now);s.peakEquity=Math.max(s.peakEquity,mark.equity);
   s.maxDrawdown=Math.max(s.maxDrawdown,1-mark.equity/Math.max(s.peakEquity,1));updateDaily(s,input.now,mark.equity);
-  rotateIfNeeded(s,input.quotes,input.contracts,input.now,mark.equity);
-  const opened=fillForwardPortfolio(s,input.quotes,input.contracts,input.now,mark.equity,false);
+  if(marketReady)rotateIfNeeded(s,input.quotes,input.contracts,input.now,mark.equity);
+  const opened=marketReady?fillForwardPortfolio(s,input.quotes,input.contracts,input.now,mark.equity,false):0;
 
   const states=Object.values(s.extremumRegime.symbols),longReady=states.filter(x=>x.longScore>=62).length,
     shortReady=states.filter(x=>x.shortScore>=62).length,divergent=states.filter(x=>x.regime==="DIVERGENT").length,
     ready=states.filter(x=>x.stage==="READY").length,totalRisk=existingRisk(s),riskUse=mark.equity>0?100*totalRisk/mark.equity:0;
   s.fitDiagnostics={tested:states.length,qualified:s.opportunities.filter(o=>o.eligible).length,trainGroups:s.extremumRegime.clusters.length,
     checkGroups:s.extremumRegime.evidence.length,latestAt:input.now,rapidQualified:ready,activeLong:longReady,activeShort:shortReady};
-  s.latestReason=s.extremumRegime.narrative.summary+` 当前${s.positions.length}笔持仓，${s.opportunities.filter(o=>o.eligible).length}个可参与异类机会，计划风险已用${riskUse.toFixed(1)}%。 ${s.extremumRegime.narrative.plan}`;
+  s.latestReason=(marketReady?s.extremumRegime.narrative.summary
+    :`全市场5m路径正在恢复 ${readyPaths}/${requiredPaths}；沿用上一份市场叙事保护已有仓位，覆盖恢复前不生成新单。`)
+    +` 当前${s.positions.length}笔持仓，${s.opportunities.filter(o=>o.eligible).length}个可参与异类机会，计划风险已用${riskUse.toFixed(1)}%。 ${s.extremumRegime.narrative.plan}`;
   if(divergent)s.latestReason+=` 当前发现${divergent}个明显分化资产。`;
   if(opened)s.latestReason+=` 本轮新开${opened}笔。`;
   const after=JSON.stringify({p:s.positions.map(t=>[t.id,t.status,t.stopPrice,t.profitFloorRate]),h:s.history.length,b:s.balance,r:s.revision});
