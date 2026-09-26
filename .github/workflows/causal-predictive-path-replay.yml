@@ -31,7 +31,7 @@ jobs:
           node-version: 22.16.0
           cache: npm
       - run: npm ci
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
         with:
           path: .causal-replay-cache
           key: causal-replay-public-v2-202607-202608
@@ -47,6 +47,7 @@ jobs:
           RESEARCH_CONCURRENCY: "8"
         run: node scripts/fetch-gate-history.mjs
       - name: Causal replay design then untouched holdout
+        continue-on-error: true
         env:
           CAUSAL_REPLAY_DATASET: /tmp/causal-replay-gate.json
           CAUSAL_REPLAY_OUTPUT: /tmp/causal-replay-report.json
@@ -54,9 +55,18 @@ jobs:
           CAUSAL_HOLDOUT_MONTH: "202608"
           CAUSAL_REPLAY_CACHE: .causal-replay-cache
         run: node --experimental-strip-types scripts/replay-causal-predictive-path.mjs
+      - name: Save public replay cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .causal-replay-cache
+          key: causal-replay-public-v2-202607-202608
       - name: Print release evidence
         if: always()
         run: |
           if [ -f /tmp/causal-replay-report.json ]; then cat /tmp/causal-replay-report.json; fi
+      - name: Enforce replay gate
+        run: |
+          node -e 'const fs=require("fs");const p="/tmp/causal-replay-report.json";if(!fs.existsSync(p))process.exit(1);const r=JSON.parse(fs.readFileSync(p,"utf8"));if(r.designFailures?.length||r.holdoutFailures?.length)process.exit(1);'
       - name: Diff integrity
         run: git diff --check origin/main...HEAD
