@@ -3105,8 +3105,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
               ?(this.forwardMinutePaths()[symbol]!.at(-1)!.time+60)*1_000:null,
             failure:this.runtime.feedFailures[symbol]??null}))},
         measurements: state?.relationEngine?.samples ?? [],
-        relationResearch:{version:"forward-path-relation-v3",rules:state?.relationEngine?.rules??[],diagnostics:state?.relationEngine?.diagnostics??null},
-        research:{version:"forward-path-relation-v3-trade-review-v1",purpose:"逐单复盘成熟关系、关系生命周期、MFE/MAE、持仓反馈、利润保护与退出结果",trades:researchTrades},
+        retainedLegacyResearch:{version:"forward-path-relation-v3",rules:state?.relationEngine?.rules??[],diagnostics:state?.relationEngine?.diagnostics??null},
+        extremumResearch:{version:ADAPTIVE_ENGINE_VERSION,state:state?.extremumRegime??null,
+          purpose:"记录TOP/BOTTOM压力、趋势生命、确认阶段、多源一致性以及持仓期间的即时反馈与退出闭环"},
+        research:{version:"extremum-regime-v1-trade-review",purpose:"逐单复盘峰谷/趋势入场、MFE/MAE、即时反馈、利润保护、趋势死亡与退出结果",trades:researchTrades},
         archiveEndpoint: "/api/forward/archive", completeness: "当前快照与滚动样本；完整不可变记录按archive接口分页读取" });
     }
     if (path === "/forward-equity" && request.method === "GET") {
