@@ -125,6 +125,8 @@ test("30-market selector balances Gate liquidity, usable movement and multi-sour
   const picked=selectAnchorOpportunityUniverse({rows,limit:3,coreSymbols:["BTC_USDT"],explorationSlots:0,liquiditySlots:0});
   assert.equal(picked[0]?.symbol,"BTC_USDT");
   assert.ok(picked.some(x=>x.symbol==="MOVE_USDT"),JSON.stringify(picked));
-  assert.ok((picked.find(x=>x.symbol==="MOVE_USDT")?.activityScore??0)>(picked.find(x=>x.symbol==="STATIC_USDT")?.activityScore??-1));
-  assert.ok((picked.find(x=>x.symbol==="MOVE_USDT")?.dataQualityScore??0)>(picked.find(x=>x.symbol==="NOISY_USDT")?.dataQualityScore??1));
+  const moving=picked.find(x=>x.symbol==="MOVE_USDT"),staticRow=picked.find(x=>x.symbol==="STATIC_USDT"),
+    noisy=picked.find(x=>x.symbol==="NOISY_USDT");
+  assert.ok(moving);assert.ok(staticRow);assert.ok(moving!.activityScore>staticRow!.activityScore);
+  assert.equal(noisy,undefined,"poor one-source/high-disagreement market should lose the final activity slot");
 });
