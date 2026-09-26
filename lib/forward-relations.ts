@@ -7,6 +7,8 @@ import { FORWARD_RELATION_V2_VERSION, advanceRelationEngine, initialRelationEngi
 import { STRUCTURAL_INTERRUPT_VERSION, advanceStructuralInterrupt, detectOuterRegion, initialStructuralInterruptState,
   normalizeStructuralInterruptState, structuralInterruptBlockReason, structuralInterruptCandidates,
   type StructuralInterruptCandidate, type StructuralInterruptState } from "./forward-structural-interrupt.ts";
+import { EXTREMUM_REGIME_VERSION, buildExtremumRegime, urgentMinuteSymbols as extremumUrgentMinuteSymbols,
+  type ExtremumRegimeState, type ExtremumSymbolState } from "./extremum-regime-engine.ts";
 
 /**
  * Forward Path Relation 3.0 — PAPER authority.
@@ -17,7 +19,7 @@ import { STRUCTURAL_INTERRUPT_VERSION, advanceStructuralInterrupt, detectOuterRe
  * execution enhancement, never a second directional authority.
  */
 export const FORWARD_VERSION="forward-relations-v1.0";
-export const ADAPTIVE_ENGINE_VERSION=FORWARD_RELATION_V2_VERSION;
+export const ADAPTIVE_ENGINE_VERSION=EXTREMUM_REGIME_VERSION;
 export const FORWARD_EXECUTION_BBO_CAP=30;
 export const FORWARD_MINUTE_CONFIRMATION_CAP=11;
 export const BAR_MS=300_000;
@@ -39,7 +41,7 @@ const dayKey=(now:number)=>new Date(now+7*3600_000).toISOString().slice(0,10);
 const safe=(v:number|null|undefined,fallback=0)=>typeof v==="number"&&Number.isFinite(v)?v:fallback;
 
 export type Candle={time:number;open:number;high:number;low:number;close:number;volume:number};
-export type Quote={bestBid:number;bestAsk:number;observedAt:number;fresh:boolean;entryReady?:boolean};
+export type Quote={bestBid:number;bestAsk:number;observedAt:number;fresh:boolean;entryReady?:boolean;sourceCount?:number;disagreementRate?:number};
 export type Contract={quantoMultiplier:number;leverageMax:number;maintenanceRate:number;minContracts?:number;
   enableDecimal?:boolean;orderSizeMin?:string|number;orderSizeMax?:string|number;marketOrderSizeMax?:string|number};
 
@@ -50,7 +52,7 @@ export type Rule={id:string;signature:string;parentId:string|null;version:number
   estimatedNetRate:number;priorResponse:number|null;recentResponse:number;standardError:number;reason:string;
   mutation:"CREATE"|"REVISE"|"RECALL";grammar:string;liveEligible:false;authority?:"ADAPTIVE_TEN"|"FORWARD_RELATION"|"STRUCTURAL_INTERRUPT";turnTimeframe?:"5m"};
 
-export type OpportunityMode="RELATION"|"BREAKOUT"|"RETEST"|"FAILED_BREAKOUT"|"RANGE"|"SHOCK";
+export type OpportunityMode="RELATION"|"BREAKOUT"|"RETEST"|"FAILED_BREAKOUT"|"RANGE"|"SHOCK"|"SWING"|"TREND_PULLBACK"|"IMPULSE";
 export type RegionState="IN_REGION"|"ABOVE"|"BELOW";
 export type Region={
   id:string;symbol:string;confirmedAt:number;lower:number;upper:number;center:number;widthRate:number;bars:number;
@@ -67,6 +69,8 @@ export type Opportunity={
   interruptEventId?:string;interruptMarketWide?:boolean;interruptBoundary?:number;interruptStrength?:number;
   interruptIndependent?:boolean;interruptConfirmation?:"CONTINUATION"|"RETEST_RESTART";
   exitPlan?:RelationExitProfile;
+  strategyVersion?:string;regime?:ExtremumSymbolState["regime"];topPressure?:number;bottomPressure?:number;upSurvival?:number;downSurvival?:number;
+  confirmationStage?:ExtremumSymbolState["stage"];sourceCount?:number;disagreementRate?:number;
 };
 export type MarketPulse={at:number;up:number;down:number;neutral:number;bias:"UP"|"DOWN"|"MIXED";strength:number;expansion:number};
 
@@ -78,6 +82,8 @@ export type EntryContext={
   relationRuleId?:string;relationStatus?:RelationStatus;relationHorizon?:15|30|45|60;relationHealth?:number;portfolioRiskCharge?:number;
   relationFamilyId?:string;relationEvidenceAt?:number;relationLivePathScore?:number;
   interruptEventId?:string;interruptMarketWide?:boolean;interruptBoundary?:number;interruptStrength?:number;
+  strategyVersion?:string;regime?:ExtremumSymbolState["regime"];topPressure?:number;bottomPressure?:number;upSurvival?:number;downSurvival?:number;
+  confirmationStage?:ExtremumSymbolState["stage"];sourceCount?:number;disagreementRate?:number;postEntryState?:"PENDING"|"CONFIRMED"|"FAILED";
 };
 export type Trade={
   id:string;symbol:string;side:"LONG"|"SHORT";rule:Rule;openedAt:number;closedAt:number|null;status:"OPEN"|"CLOSED";
@@ -107,7 +113,7 @@ export type ForwardState={
   version:string;engineVersion:string;startedAt:number;revision:number;lastCycleAt:number;lastQuoteCycleAt:number;lastCandleAt:number;
   balance:number;initialEquity:number;peakEquity:number;maxDrawdown:number;resolved:number;wins:number;grossPnl:number;fees:number;
   fundingAllowance:number;turnover:number;positions:Trade[];history:Trade[];events:AuditEvent[];daily:Daily[];
-  selectedSymbols:string[];opportunities:Opportunity[];regions:Record<string,Region>;relationEngine:RelationEngineState;
+  selectedSymbols:string[];opportunities:Opportunity[];regions:Record<string,Region>;relationEngine:RelationEngineState;extremumRegime:ExtremumRegimeState;
   familyExperiment:FamilyExperimentState;structuralInterrupt:StructuralInterruptState;
   entryValidations:Record<string,EntryValidation>;
   marketPulse:MarketPulse;lastEntryAt:Record<string,number>;lastExitAt:Record<string,number>;lastSide:Record<string,"LONG"|"SHORT">;
@@ -134,6 +140,7 @@ export function initialForward(now:number):ForwardState{
   const s:ForwardState={version:FORWARD_VERSION,engineVersion:ADAPTIVE_ENGINE_VERSION,startedAt:now,revision:0,lastCycleAt:0,lastQuoteCycleAt:0,lastCandleAt:0,
     balance:1000,initialEquity:1000,peakEquity:1000,maxDrawdown:0,resolved:0,wins:0,grossPnl:0,fees:0,fundingAllowance:0,turnover:0,
     positions:[],history:[],events:[],daily:[],selectedSymbols:[],opportunities:[],regions:{},relationEngine:initialRelationEngine(now),
+    extremumRegime:{version:EXTREMUM_REGIME_VERSION,updatedAt:now,symbols:{}},
     familyExperiment:initialFamilyExperimentState(),structuralInterrupt:initialStructuralInterruptState(),entryValidations:{},marketPulse:blankPulse(now),
     lastEntryAt:{},lastExitAt:{},lastSide:{},lastRotationAt:0,latestReason:"Forward Path Relation 3.0 已启动：根样本学习完整5–60分钟路径；方向与退出由同一证据生成。",
     entryDiagnostics:{at:now,matched:0,opened:0,reasons:{}},storage:{persistedAt:0,error:null},liveEligible:false,
