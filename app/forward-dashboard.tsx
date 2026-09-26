@@ -97,7 +97,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       <section ref={fontControl} className="fr-section fr-font-control"><div className="fr-section-head"><div><small>界面显示</small><h2>界面字号</h2></div><b>{fontScale}%</b></div>
         <div className="fr-font-options">{[70,80,90,100,110].map(value=><button key={value} className={fontScale===value?"selected":""} onClick={()=>{setFontScale(value);try{localStorage.setItem("sentinel-ui-font-scale-v1",String(value));}catch{}}}>{value}%</button>)}</div></section>
       <section className="fr-section"><div className="fr-section-head"><h2>当前系统边界</h2><span>extremum-regime-v1</span></div>
-        <Setting title="学习周期" value="15m / 30m / 45m / 60m" text="同一个5分钟根样本沿四个持仓时间逐步成熟；系统比较哪段路径最有价值，不把四个时间当四份独立证据。"/>
+        <Setting title="核心周期" value="5m结构 / 1m确认 / BBO执行" text="5分钟判断趋势与峰谷背景，1分钟完成结构破坏和夺回测试，实时盘口只负责最后执行与入场后反馈。"/>
         <Setting title="路径检查" value="5/10/15/20/30/45/60m" text="检查点持续核对真实走势是否仍像成功样本；旧方向失效绝不自动等于反方向成立。"/>
         <Setting title="组合" value="无席位数量上限" text="持仓数量由10%组合计划风险、6.5%同向风险、75%保证金和单币一仓共同决定；ACTIVE关系正常竞争风险。"/>
         <Setting title="市场变化" value="时间组 + 环境适配" text="样本按时间组和市场环境验证，近期真实路径决定旧关系是否继续有交易权，避免同一波行情重复投票。"/>
