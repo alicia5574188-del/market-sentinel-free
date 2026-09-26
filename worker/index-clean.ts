@@ -2438,11 +2438,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     for (const trade of desiredTrades) {
       const symbol = trade.symbol;
       if(!trade.forwardSource)continue; // Legacy sources only drain existing exposure.
-      if(!orderAuditUsable){
-        this.runtime.live.entrySkips[symbol]={planId:trade.id,symbol,code:"ECONOMICS",
-          reason:"Gate账户与持仓核对正常，但挂单审计通道暂未恢复；只暂停新增复制，已有原生保护和持仓管理不受影响",observedAt:now};
-        continue;
-      }
       const plan = { ...arenaTradePlan(trade), expiresAt:trade.openedAt+trade.forwardSource.rule.horizon*60_000 };
       const prior = this.runtime.live.entries[symbol];
       // Identity fencing comes before quote/admission diagnostics. Once a market
