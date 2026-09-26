@@ -249,9 +249,9 @@ export class MarketDataHub{
 
   private async kucoinCandles(symbol:string,interval:"1m"|"5m",limit:number){
     type Res={code?:string;data?:Array<[number|string,number|string,number|string,number|string,number|string,number|string,...unknown[]]>};
-    const n=Math.max(6,Math.min(120,Math.floor(limit))),seconds=interval==="1m"?60:300,now=Date.now(),
+    const n=Math.max(6,Math.min(120,Math.floor(limit))),seconds=interval==="1m"?60:300,granularity=interval==="1m"?1:5,now=Date.now(),
       from=now-(n+6)*seconds*1000;
-    const body=await json<Res>(`${KUCOIN}/api/v1/kline/query?symbol=${encodeURIComponent(symbol)}&granularity=${seconds}&from=${from}&to=${now}`,CANDLE_TIMEOUT_MS);
+    const body=await json<Res>(`${KUCOIN}/api/v1/kline/query?symbol=${encodeURIComponent(symbol)}&granularity=${granularity}&from=${from}&to=${now}`,CANDLE_TIMEOUT_MS);
     if(body.code!=="200000"||!Array.isArray(body.data))throw new Error("KuCoin kline payload");
     const completed=Math.floor(now/1000/seconds)*seconds;
     return continuous(body.data.map(r=>({time:Number(r[0])/1000,open:Number(r[1]),high:Number(r[2]),low:Number(r[3]),
