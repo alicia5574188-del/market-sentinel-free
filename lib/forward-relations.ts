@@ -81,8 +81,8 @@ export type EntryContext={
   relationRuleId?:string;relationStatus?:RelationStatus;relationHorizon?:15|30|45|60;relationHealth?:number;portfolioRiskCharge?:number;
   relationFamilyId?:string;relationEvidenceAt?:number;relationLivePathScore?:number;
   interruptEventId?:string;interruptMarketWide?:boolean;interruptBoundary?:number;interruptStrength?:number;
-  strategyVersion?:string;regime?:MarketSymbolState["regime"];topPressure?:number;bottomPressure?:number;upSurvival?:number;downSurvival?:number;
-  confirmationStage?:MarketSymbolState["stage"];sourceCount?:number;disagreementRate?:number;postEntryState?:"PENDING"|"CONFIRMED"|"FAILED";
+  strategyVersion?:string;regime?:MarketSymbolState["regime"]|"TREND_UP"|"TREND_DOWN"|"SWING"|"WEAKENING";topPressure?:number;bottomPressure?:number;upSurvival?:number;downSurvival?:number;
+  confirmationStage?:MarketSymbolState["stage"]|"WATCH"|"CANDIDATE"|"STRUCTURE_BREAK"|"RECLAIM_TEST"|"IMPULSE";sourceCount?:number;disagreementRate?:number;postEntryState?:"PENDING"|"CONFIRMED"|"FAILED";
   clusterId?:string;thesisId?:string;marketNarrativeId?:string;thesisSummary?:string;invalidationSummary?:string;entryResidual?:number;entryRelativeStrength?:number;
 };
 export type Trade={
