@@ -613,7 +613,7 @@ export function resetForwardAccountPreservingLearning(previous:ForwardState,now:
   next.relationEngine=structuredClone(prior.relationEngine);
   next.familyExperiment=structuredClone(prior.familyExperiment);
   next.observations=next.relationEngine.observations;next.measured=next.relationEngine.measured;next.invalidated=next.relationEngine.invalidated;
-  next.latestReason="模拟账户已重置为1000U；Market Intelligence 从当前全市场关系重新建立叙事，实盘复制契约与账户历史不变。";
+  next.latestReason="模拟账户已重置为1000U；Market Intelligence 从当前全市场关系重新建立叙事，并保留研究证据、账户历史与现有实盘复制契约。";
   return next;
 }
 export function forwardUrgentQuoteSymbols(s:ForwardState,now:number,entrySymbols?:Iterable<string>){
