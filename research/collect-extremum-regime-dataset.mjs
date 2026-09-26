@@ -1,26 +1,17 @@
 import { writeFile } from "node:fs/promises";
 
 const SOURCES = ["BYBIT","OKX","KUCOIN","BITGET"];
-const SYMBOLS = (process.env.SYMBOLS ?? "BTC,ETH,SOL,XRP,DOGE,ADA,LINK,BCH,LTC,AVAX,DOT,NEAR")
+const SYMBOLS = (process.env.SYMBOLS ?? "BTC,ETH,SOL,XRP,DOGE,ADA,LINK,BCH")
   .split(",").map(x=>x.trim().toUpperCase()).filter(Boolean);
 const LIMIT = Number(process.env.LIMIT ?? 300);
 const collectedAt = Date.now();
 
 const sleep = ms => new Promise(r=>setTimeout(r,ms));
 
-async function getJson(url, attempts=3){
-  let last;
-  for(let i=0;i<attempts;i++){
-    try{
-      const res = await fetch(url,{headers:{accept:"application/json","user-agent":"market-sentinel-extremum-lab/1.0"},signal:AbortSignal.timeout(12000)});
-      if(!res.ok) throw new Error(`HTTP ${res.status}`);
-      return await res.json();
-    }catch(err){
-      last = err;
-      if(i+1<attempts) await sleep(400*(i+1));
-    }
-  }
-  throw last;
+async function getJson(url){
+  const res = await fetch(url,{headers:{accept:"application/json","user-agent":"market-sentinel-extremum-lab/1.0"},signal:AbortSignal.timeout(3500)});
+  if(!res.ok) throw new Error(`HTTP ${res.status}`);
+  return await res.json();
 }
 
 function normalize(rows, seconds, limit){
@@ -30,8 +21,7 @@ function normalize(rows, seconds, limit){
       r.open>0 && r.close>0 && r.low>0 && r.high>=Math.max(r.open,r.close) &&
       r.low<=Math.min(r.open,r.close) && r.time+seconds<=completed)
     .sort((a,b)=>a.time-b.time);
-  const unique = [...new Map(valid.map(r=>[r.time,r])).values()];
-  return unique.slice(-limit);
+  return [...new Map(valid.map(r=>[r.time,r])).values()].slice(-limit);
 }
 
 async function bybit(base, interval, limit){
@@ -69,7 +59,7 @@ async function kucoin(base, interval, limit){
     if(!page.length) break;
     out=[...page,...out];
     end=page[0].time*1000-1;
-    await sleep(120);
+    await sleep(80);
   }
   return normalize(out,seconds,limit);
 }
@@ -86,20 +76,13 @@ for(const base of SYMBOLS){
   candles[base]={};
   for(const interval of ["5m","1m"]){
     candles[base][interval]={};
-    const settled=await Promise.allSettled(SOURCES.map(async source=>{
-      const rows=await fetchSource(source,base,interval,LIMIT);
-      return {source,rows};
-    }));
+    const settled=await Promise.allSettled(SOURCES.map(async source=>({source,rows:await fetchSource(source,base,interval,LIMIT)})));
     for(let i=0;i<settled.length;i++){
-      const source=SOURCES[i];
-      const result=settled[i];
-      if(result.status==="fulfilled" && result.value.rows.length>=30){
-        candles[base][interval][source]=result.value.rows;
-      }else{
-        errors.push({base,interval,source,error:result.status==="rejected"?String(result.reason?.message??result.reason):"too few rows"});
-      }
+      const source=SOURCES[i], result=settled[i];
+      if(result.status==="fulfilled" && result.value.rows.length>=30) candles[base][interval][source]=result.value.rows;
+      else errors.push({base,interval,source,error:result.status==="rejected"?String(result.reason?.message??result.reason):"too few rows"});
     }
-    await sleep(250);
+    await sleep(120);
   }
 }
 
@@ -112,16 +95,6 @@ for(const base of SYMBOLS){
   }
 }
 
-const dataset={
-  version:"extremum-regime-dataset-v1",
-  collectedAt,
-  generatedAt:Date.now(),
-  symbols:SYMBOLS,
-  sources:SOURCES,
-  limit:LIMIT,
-  coverage,
-  errors,
-  candles
-};
+const dataset={version:"extremum-regime-dataset-v1",collectedAt,generatedAt:Date.now(),symbols:SYMBOLS,sources:SOURCES,limit:LIMIT,coverage,errors,candles};
 await writeFile("extremum-regime-dataset.json",JSON.stringify(dataset));
 console.log(JSON.stringify({version:dataset.version,collectedAt,symbols:SYMBOLS.length,errors:errors.length,coverage},null,2));
