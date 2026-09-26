@@ -97,7 +97,6 @@ function deriveState(symbol:string,input:Candle[],minute:Candle[]|undefined,q:Qu
     failedLow=last.low<low12&&last.close>=low12||last.low<=prev.low&&closePos>.58,
     effortFailure=volumeRatio>=1.15&&bodyAtr<.65,
     sourceBreadth=clamp(q?.sourceBreadth??0,-1,1),sourceAgreement=clamp(q?.directionalAgreement??.5),
-    sourceUp=clamp(.5+.5*sourceBreadth),sourceDown=clamp(.5-.5*sourceBreadth),
     sourceStress=clamp((q?.disagreementRate??0)/.012),
     sourceTurnDown=ret6>0?clamp(-sourceBreadth):0,sourceTurnUp=ret6<0?clamp(sourceBreadth):0,
     top=100*clamp((ret6>0?.17:0)*location+.17*clamp(upperWick/.45)+.15*(failedHigh?1:0)+.13*decel+.09*(effortFailure?1:0)
@@ -137,9 +136,8 @@ function deriveState(symbol:string,input:Candle[],minute:Candle[]|undefined,q:Qu
     else if(prior?.stage==="STRUCTURE_BREAK"&&prior.candidateSide===candidateSide)stage="RECLAIM_TEST";
   }
   const trendBias:ExtremumSymbolState["trendBias"]=regime==="TREND_UP"?"UP":regime==="TREND_DOWN"?"DOWN"
-    :(regime==="WEAKENING"||regime==="TRANSITION")?priorBias:null,
-    watchScore=Math.max(top,bottom,up,down),
-    pullbackRate=ret6>=0?pullbackUp:pullbackDown,
+    :(regime==="WEAKENING"||regime==="TRANSITION")?priorBias:null;
+  const watchScore=Math.max(top,bottom,up,down),pullbackRate=ret6>=0?pullbackUp:pullbackDown,
     microPullbackRate=(regime==="TREND_DOWN"||trendBias==="DOWN")?ms.pullbackDownRate:ms.pullbackUpRate,
     recoveryScore=ret6>=0?ms.recoveryUp:ms.recoveryDown,followThrough=ret6>=0?followUp:followDown;
   const reason=`${regime}｜上存活${up.toFixed(0)} 下存活${down.toFixed(0)}｜顶压${top.toFixed(0)} 底压${bottom.toFixed(0)}｜效率${pct(efficiency)}%｜${q?.sourceCount??0}源`;
