@@ -6,7 +6,7 @@ export type ExtremumStage="WATCH"|"CANDIDATE"|"STRUCTURE_BREAK"|"RECLAIM_TEST"|"
 export type ExtremumSide="LONG"|"SHORT"|null;
 
 export type ExtremumSymbolState={
-  symbol:string;updatedAt:number;regime:ExtremumRegime;priorRegime:ExtremumRegime|null;
+  symbol:string;updatedAt:number;regime:ExtremumRegime;priorRegime:ExtremumRegime|null;trendBias:"UP"|"DOWN"|null;
   topPressure:number;bottomPressure:number;upSurvival:number;downSurvival:number;
   pathEfficiency:number;atrRate:number;normalizedMove:number;pullbackRate:number;recoveryScore:number;followThrough:number;
   stage:ExtremumStage;candidateSide:ExtremumSide;candidateExtreme:number|null;breakLevel:number|null;
@@ -99,19 +99,27 @@ function deriveState(symbol:string,input:Candle[],minute:Candle[]|undefined,q:Qu
       +.12*(ms.breakUp?1:0)+.06*sourceStress+.07*sourceTurnUp+.04*(1-efficiency));
   const momentumOverride=efficiency>=.72&&moveNorm>=1.25&&Math.max(up,down)>=74&&sq>=.55&&bodyAtr>=1.15
     &&sourceAgreement>=.67&&(ret6>0?sourceBreadth>=0:sourceBreadth<=0);
-  let regime:ExtremumRegime="SWING";
-  const old=prior?.regime??null,upRaw=up>=66&&up>down+16&&efficiency>=.43,downRaw=down>=66&&down>up+16&&efficiency>=.43;
-  if(old==="TREND_UP"||old==="WEAKENING"){
-    if(up>=58)regime=top>=68||up<70?"WEAKENING":"TREND_UP";
-    else if(up<45&&top>=65)regime="TRANSITION";
-    else regime=upRaw?"TREND_UP":efficiency<.36?"SWING":"WEAKENING";
-  }else if(old==="TREND_DOWN"){
-    if(down>=58)regime=bottom>=68||down<70?"WEAKENING":"TREND_DOWN";
-    else if(down<45&&bottom>=65)regime="TRANSITION";
-    else regime=downRaw?"TREND_DOWN":efficiency<.36?"SWING":"WEAKENING";
-  }else if(upRaw)regime="TREND_UP";else if(downRaw)regime="TREND_DOWN";
-  else if(efficiency>=.42&&Math.max(up,down)>=52)regime="TRANSITION";
   const topCandidate=top>=58&&ret6>=0,bottomCandidate=bottom>=58&&ret6<=0;
+  let regime:ExtremumRegime="SWING";
+  const old=prior?.regime??null,priorBias=prior?.trendBias??(old==="TREND_UP"?"UP":old==="TREND_DOWN"?"DOWN":null),
+    upRaw=up>=66&&up>down+16&&efficiency>=.43,downRaw=down>=66&&down>up+16&&efficiency>=.43,
+    topBreak=topCandidate&&(ms.breakDown||ms.reclaimTop),bottomBreak=bottomCandidate&&(ms.breakUp||ms.reclaimBottom);
+  if(old==="TREND_UP"||(old==="WEAKENING"&&priorBias==="UP")){
+    if(up>=70&&top<68)regime="TREND_UP";
+    else if(up<48&&top>=58)regime="TRANSITION";
+    else regime="WEAKENING";
+  }else if(old==="TREND_DOWN"||(old==="WEAKENING"&&priorBias==="DOWN")){
+    if(down>=70&&bottom<68)regime="TREND_DOWN";
+    else if(down<48&&bottom>=58)regime="TRANSITION";
+    else regime="WEAKENING";
+  }else if(old==="TRANSITION"){
+    if(priorBias==="UP"&&downRaw&&topBreak)regime="TREND_DOWN";
+    else if(priorBias==="DOWN"&&upRaw&&bottomBreak)regime="TREND_UP";
+    else if(efficiency<.32&&top<58&&bottom<58)regime="SWING";
+    else regime="TRANSITION";
+  }else if(upRaw)regime="TREND_UP";
+  else if(downRaw)regime="TREND_DOWN";
+  else if(efficiency>=.42&&Math.max(up,down)>=52)regime="TRANSITION";
   let stage:ExtremumStage="WATCH",candidateSide:ExtremumSide=null,candidateExtreme:number|null=null,breakLevel:number|null=null;
   if(momentumOverride){stage="IMPULSE";candidateSide=up>down?"LONG":"SHORT";}
   else if(topCandidate||bottomCandidate){
@@ -130,7 +138,9 @@ function deriveState(symbol:string,input:Candle[],minute:Candle[]|undefined,q:Qu
   else if(regime==="WEAKENING")nextAction="原趋势减速：停止追价，等待恢复或趋势死亡";
   else if(regime==="TRANSITION")nextAction="不立即反手：等待结构破坏与夺回失败完成";
   else if(stage==="READY")nextAction=candidateSide==="LONG"?"底部确认，等待实时盘口执行多单":"顶部确认，等待实时盘口执行空单";
-  return{symbol,updatedAt:now,regime,priorRegime:old,topPressure:top,bottomPressure:bottom,upSurvival:up,downSurvival:down,
+  const trendBias:ExtremumSymbolState["trendBias"]=regime==="TREND_UP"?"UP":regime==="TREND_DOWN"?"DOWN"
+    :(regime==="WEAKENING"||regime==="TRANSITION")?priorBias:null;
+  return{symbol,updatedAt:now,regime,priorRegime:old,trendBias,topPressure:top,bottomPressure:bottom,upSurvival:up,downSurvival:down,
     pathEfficiency:efficiency,atrRate,normalizedMove:moveNorm,pullbackRate,recoveryScore,followThrough,stage,candidateSide,candidateExtreme,breakLevel,
     sourceCount:q?.sourceCount??0,disagreementRate:q?.disagreementRate??0,sourceQuality:sq,momentumOverride,watchScore,reason,nextAction};
 }
@@ -172,13 +182,16 @@ function opportunitiesFor(state:ExtremumSymbolState,p:Candle[],minute:Candle[]|u
     const o=makeOpportunity(state,p,minute,q,now,side,"SWING",56+pressure*.34,
       `${side==="LONG"?"底部":"顶部"}确认｜结构破坏后夺回失败｜${state.reason}`);if(o)out.push(o);
   }
-  if(state.regime==="TREND_UP"&&state.upSurvival>=68&&state.bottomPressure>=38&&restartUp){
-    const o=makeOpportunity(state,p,minute,q,now,"LONG","TREND_PULLBACK",56+state.upSurvival*.28+state.bottomPressure*.12,
-      `上涨趋势回调结束再启动｜${state.reason}`);if(o)out.push(o);
+  const controlledPullback=state.pullbackRate>=.06&&state.pullbackRate<=.58;
+  if(state.regime==="TREND_UP"&&state.upSurvival>=68&&controlledPullback&&restartUp){
+    const pullbackQuality=100*clamp(1-Math.abs(state.pullbackRate-.24)/.42);
+    const o=makeOpportunity(state,p,minute,q,now,"LONG","TREND_PULLBACK",54+state.upSurvival*.30+pullbackQuality*.10,
+      `上涨趋势浅回调结束再启动｜回调占前段推进${pct(state.pullbackRate)}%｜${state.reason}`);if(o)out.push(o);
   }
-  if(state.regime==="TREND_DOWN"&&state.downSurvival>=68&&state.topPressure>=38&&restartDown){
-    const o=makeOpportunity(state,p,minute,q,now,"SHORT","TREND_PULLBACK",56+state.downSurvival*.28+state.topPressure*.12,
-      `下跌趋势反弹结束再启动｜${state.reason}`);if(o)out.push(o);
+  if(state.regime==="TREND_DOWN"&&state.downSurvival>=68&&controlledPullback&&restartDown){
+    const pullbackQuality=100*clamp(1-Math.abs(state.pullbackRate-.24)/.42);
+    const o=makeOpportunity(state,p,minute,q,now,"SHORT","TREND_PULLBACK",54+state.downSurvival*.30+pullbackQuality*.10,
+      `下跌趋势浅反弹结束再启动｜反弹占前段推进${pct(state.pullbackRate)}%｜${state.reason}`);if(o)out.push(o);
   }
   if(state.momentumOverride&&state.stage==="IMPULSE"){
     const side: "LONG"|"SHORT"=state.upSurvival>=state.downSurvival?"LONG":"SHORT",
