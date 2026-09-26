@@ -101,8 +101,8 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
         <Setting title="状态" value="TREND / SWING / WEAKENING / TRANSITION" text="TOP/BOTTOM压力和UP/DOWN趋势生命分开计算；高极值压力本身不等于自动反手。"/>
         <Setting title="组合" value="无席位数量上限" text="持仓数量由10%组合计划风险、6.5%同向风险、75%保证金和单币一仓共同决定；ACTIVE关系正常竞争风险。"/>
         <Setting title="单边行情" value="主动进攻" text="上涨只做回调谷和强势延续，下跌只做反弹峰和强势延续；反向极值先负责利润保护。"/>
-        <Setting title="退出" value="每单冻结样本计划" text="正反馈期限、正常MAE、最佳/最大持仓、剩余优势和利润保留率在开仓时冻结；旧仓继续原生命周期。"/><Setting title="风险" value="10%组合 / 6.5%同向" text={data?.boundaries.risk??"读取中"}/>
-        <Setting title="实盘" value="同一持久化事件" text="模拟事件提交成功后立即唤醒event-driven LIVE；过期事件不补开，Gate是成交与账户唯一真相。"/>
+        <Setting title="退出" value="即时反馈 + 极值 + 趋势死亡" text="硬止损、入场后正反馈、动态利润保护、相反极值、趋势死亡和无进展共同构成同一生命周期；旧仓继续原生命周期。"/><Setting title="风险" value="10%组合 / 6.5%同向" text={data?.boundaries.risk??"读取中"}/>
+        <Setting title="实盘" value="同一持久化事件" text="新策略只生成标准PAPER源单；现有串行PAPER→LIVE适配器继续按源ID复制，过期事件不补开，Gate仍是成交与账户唯一真相。"/>
         <Setting title="账户连续性" value="原地升级" text="策略版本变化不自动重置模拟账户、不改startedAt、不清历史；只有所有者重置按钮可以重置。"/>
       </section></>}
 
