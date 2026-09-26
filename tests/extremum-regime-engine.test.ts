@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {buildExtremumRegime,extremumExitDecision,EXTREMUM_REGIME_VERSION,type ExtremumSymbolState} from "../lib/extremum-regime-engine.ts";
-import type {Candle,Quote} from "../lib/forward-relations.ts";
+import {advanceForward,forwardEquity,initialForward,type Candle,type Quote} from "../lib/forward-relations.ts";
+import {forwardMirrorSources} from "../lib/live-parity.ts";
 import {selectAnchorOpportunityUniverse} from "../lib/multi-turn-universe.ts";
 
 const START=Date.parse("2026-09-26T00:00:00Z")/1000;
@@ -129,4 +130,22 @@ test("30-market selector balances Gate liquidity, usable movement and multi-sour
     noisy=picked.find(x=>x.symbol==="NOISY_USDT");
   assert.ok(moving);assert.ok(staticRow);assert.ok(moving!.activityScore>staticRow!.activityScore);
   assert.equal(noisy,undefined,"poor one-source/high-disagreement market should lose the final activity slot");
+});
+
+
+test("new extremum strategy emits a complete source trade consumable by the unchanged LIVE mirror",()=>{
+  const five=trend("UP"),last=five.at(-1)!,now=(last.time+300)*1000+1000,
+    minute=minuteRestart("LONG",last.close,true),q=quote(last.close,"UP"),
+    start=initialForward(now-60_000),
+    next=advanceForward({state:start,now,paths:{SOL_USDT:five},minutePaths:{SOL_USDT:minute},quotes:{SOL_USDT:q},
+      contracts:{SOL_USDT:{quantoMultiplier:.01,leverageMax:20,maintenanceRate:.005,minContracts:1}},
+      entrySymbols:["SOL_USDT"],allowDataCycle:true}).state;
+  assert.equal(next.positions.length,1,JSON.stringify({opportunities:next.opportunities,diagnostics:next.entryDiagnostics}));
+  const trade=next.positions[0]!;
+  assert.equal(trade.entryContext?.strategyVersion,EXTREMUM_REGIME_VERSION);
+  assert.equal(trade.exitControl?.policy,EXTREMUM_REGIME_VERSION);
+  const equity=forwardEquity(next,{SOL_USDT:q},now).equity,mirror=forwardMirrorSources(next,equity);
+  assert.equal(mirror.SOL_USDT?.id,trade.id);
+  assert.equal(mirror.SOL_USDT?.forwardSource?.entryContext?.strategyVersion,EXTREMUM_REGIME_VERSION);
+  assert.equal(mirror.SOL_USDT?.forwardSource?.stopPrice,trade.stopPrice);
 });
