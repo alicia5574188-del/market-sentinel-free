@@ -8,8 +8,7 @@ import { STRUCTURAL_INTERRUPT_VERSION, initialStructuralInterruptState, normaliz
   type StructuralInterruptState } from "./forward-structural-interrupt.ts";
 import { EXTREMUM_REGIME_VERSION, extremumExitDecision,
   type ExtremumRegimeState, type ExtremumSymbolState } from "./extremum-regime-engine.ts";
-import artifactData from "./predictive-path-artifact-v1.json" with { type: "json" };
-import { PREDICTIVE_PATH_VERSION, type PredictiveAncillary, type PredictivePathArtifact, type PredictivePathForecast } from "./predictive-path-types.ts";
+import { PREDICTIVE_PATH_POLICY, PREDICTIVE_PATH_VERSION, type PredictiveAncillary, type PredictivePathForecast } from "./predictive-path-types.ts";
 import { buildPredictivePathEngine, predictiveExitDecision, type PredictiveCandidate, type PredictiveEngineState } from "./predictive-path-engine.ts";
 
 /**
@@ -22,7 +21,6 @@ import { buildPredictivePathEngine, predictiveExitDecision, type PredictiveCandi
  */
 export const FORWARD_VERSION="forward-relations-v1.0";
 export const ADAPTIVE_ENGINE_VERSION=PREDICTIVE_PATH_VERSION;
-const PREDICTIVE_ARTIFACT=artifactData as unknown as PredictivePathArtifact;
 export const FORWARD_EXECUTION_BBO_CAP=30;
 export const FORWARD_MINUTE_CONFIRMATION_CAP=11;
 export const BAR_MS=300_000;
@@ -146,7 +144,7 @@ export function initialForward(now:number):ForwardState{
     balance:1000,initialEquity:1000,peakEquity:1000,maxDrawdown:0,resolved:0,wins:0,grossPnl:0,fees:0,fundingAllowance:0,turnover:0,
     positions:[],history:[],events:[],daily:[],selectedSymbols:[],opportunities:[],regions:{},relationEngine:initialRelationEngine(now),
     extremumRegime:{version:EXTREMUM_REGIME_VERSION,updatedAt:now,symbols:{}},
-    predictivePath:{version:PREDICTIVE_PATH_VERSION,updatedAt:now,symbols:{}},
+    predictivePath:{version:PREDICTIVE_PATH_VERSION,updatedAt:now,symbols:{},directionMemory:{}},
     familyExperiment:initialFamilyExperimentState(),structuralInterrupt:initialStructuralInterruptState(),entryValidations:{},marketPulse:blankPulse(now),
     lastEntryAt:{},lastExitAt:{},lastSide:{},lastRotationAt:0,latestReason:"Predictive Path V1 已启动：预测未来15/30/60/120分钟路径、MFE/MAE和入场后悔，旧策略只保留已有仓位退出。",
     entryDiagnostics:{at:now,matched:0,opened:0,reasons:{}},storage:{persistedAt:0,error:null},liveEligible:false,
@@ -498,7 +496,7 @@ function isPredictiveOpportunity(o:Opportunity){return o.strategyVersion===PREDI
 
 function predictiveOpportunity(c:PredictiveCandidate):Opportunity{
   const f=c.forecast,d=dir(c.side),sourceCount=f.crossVenue.sourceCount,disagreementRate=f.crossVenue.disagreementRate,
-    net=Math.max(0,c.expectedReturnRate-PREDICTIVE_ARTIFACT.costRate),score=clip(c.confidence*100,0,100),
+    net=Math.max(0,c.expectedReturnRate-ROUND_TRIP_COST),score=clip(c.confidence*100,0,100),
     stopRate=c.catastrophicStopRate,targetRate=Math.max(.004,c.predictedMfeRate),
     price=c.price;
   return{id:c.id,symbol:c.symbol,side:c.side,mode:"PREDICTIVE",premium:c.confidence>=.70,reserve:false,score,eligible:c.eligible,
@@ -521,7 +519,7 @@ function managePredictiveTrades(s:ForwardState,quotes:Record<string,Quote>,now:n
       favorable=Math.max(0,signed),adverse=Math.max(0,-signed),ageMinutes=(now-t.openedAt)/60_000,
       stopped=t.side==="LONG"?px<=t.stopPrice:px>=t.stopPrice,
       forecast=s.predictivePath.symbols[t.symbol],
-      decision=predictiveExitDecision({side:t.side,forecast,stopped,ageMinutes});
+      decision=predictiveExitDecision({side:t.side,forecast,memory:s.predictivePath.directionMemory[t.symbol],stopped,ageMinutes});
     t.lastPrice=px;t.lastQuoteAt=q!.observedAt;t.favorable=Math.max(t.favorable,favorable);t.adverse=Math.max(t.adverse,adverse);
     t.peakPnlRate=Math.max(t.peakPnlRate??0,favorable);
     const score=clip(decision.directionProbability*70+clip(decision.remainingEdge/.01,0,1)*30,0,100);
@@ -693,7 +691,7 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
   const allowed=input.entrySymbols?new Set(input.entrySymbols):undefined,
     candleAt=nextCandleAt(input.paths,input.now),
     dataDue=input.allowDataCycle!==false&&candleAt>s.lastCandleAt,
-    built=buildPredictivePathEngine({paths:input.paths,quotes:input.quotes,ancillary:input.ancillary,artifact:PREDICTIVE_ARTIFACT,now:input.now,allowed}),
+    built=buildPredictivePathEngine({paths:input.paths,quotes:input.quotes,ancillary:input.ancillary,previous:s.predictivePath,now:input.now,allowed}),
     forecasts=Object.values(built.state.symbols);
   s.predictivePath=built.state;s.opportunities=input.legacyDrainOnly?[]:built.candidates.map(predictiveOpportunity);
   const up=forecasts.filter(f=>f.upProbability.m60>=.55).length,down=forecasts.filter(f=>f.upProbability.m60<=.45).length,
@@ -784,8 +782,8 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
     netPnl:mark.equity-s.initialEquity,maxDrawdown:s.maxDrawdown,resolved:s.resolved,wins:s.wins,grossPnl:s.grossPnl,fees:s.fees,
     fundingAllowance:s.fundingAllowance,turnover:s.turnover,positions:s.positions,history:s.history,events:s.events,daily:s.daily,
     opportunities:s.opportunities,entryOpportunities:s.opportunities,regions:[],marketPulse:s.marketPulse,
-    predictivePath:{version:s.predictivePath.version,updatedAt:s.predictivePath.updatedAt,counts,policy:PREDICTIVE_ARTIFACT.policy,
-      artifact:{trainedAt:PREDICTIVE_ARTIFACT.trainedAt,source:PREDICTIVE_ARTIFACT.source,metrics:PREDICTIVE_ARTIFACT.metrics},symbols:forecasts.slice(0,30)},
+    predictivePath:{version:s.predictivePath.version,updatedAt:s.predictivePath.updatedAt,counts,policy:PREDICTIVE_PATH_POLICY,
+      source:"实时因果统计：当前价格/技术/OI/Funding/Basis/清算/多交易所/市场环境，无离线训练模型",symbols:forecasts.slice(0,30)},
     extremumRegime:{version:s.extremumRegime.version,retired:true,updatedAt:s.extremumRegime.updatedAt,counts:legacyCounts,symbols:legacyRows.slice(0,30)},
     structuralInterrupt:{version:STRUCTURAL_INTERRUPT_VERSION,retired:true,marketEvent:null,vetoSide:null,vetoUntil:0,preAlerts:0,confirmed:0},
     relationEngine:{version:s.relationEngine.version,retired:true,updatedAt:s.relationEngine.updatedAt,diagnostics:s.relationEngine.diagnostics,rules:[]},
