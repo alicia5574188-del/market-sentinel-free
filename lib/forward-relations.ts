@@ -822,13 +822,13 @@ function rotateIfNeeded(s:ForwardState,quotes:Record<string,Quote>,contracts:Rec
   const weakScore=weak.holdScore??50;if(candidate.score<weakScore+ROTATION_GAP)return false;
   const qOld=quotes[weak.symbol],qNew=quotes[candidate.symbol],meta=contracts[candidate.symbol];
   if(!freshQuote(qOld,now)||!freshQuote(qNew,now)||qNew!.entryReady!==true||!meta)return false;
-  if(entryValidationReason(s,candidate,qNew!,now))return false;
+  if(!isExtremumOpportunity(candidate)&&entryValidationReason(s,candidate,qNew!,now))return false;
   const probe=structuredClone(s),probeWeak=probe.positions.find(t=>t.id===weak.id);if(!probeWeak)return false;
   closeTrade(probe,probeWeak,probeWeak.side==="LONG"?qOld!.bestBid:qOld!.bestAsk,now,"OPPORTUNITY_REPLACED");
   probe.positions=probe.positions.filter(t=>t.id!==probeWeak.id);
-  if(openTrade(probe,candidate,qNew!,meta,now,equity))return false;
+  if(openAuthorityTrade(probe,candidate,qNew!,meta,now,equity))return false;
   closeTrade(s,weak,weak.side==="LONG"?qOld!.bestBid:qOld!.bestAsk,now,"OPPORTUNITY_REPLACED");s.positions=s.positions.filter(t=>t.id!==weak.id);
-  const err=openTrade(s,candidate,qNew!,meta,now,equity);if(err)throw new Error(`换仓预检通过但正式开仓失败：${err}`);
+  const err=openAuthorityTrade(s,candidate,qNew!,meta,now,equity);if(err)throw new Error(`换仓预检通过但正式开仓失败：${err}`);
   s.lastRotationAt=now;event(s,now,"ROTATION",candidate.symbol,`${weak.symbol} → ${candidate.symbol}，优势差${(candidate.score-weakScore).toFixed(0)}分`);
   return true;
 }
@@ -842,13 +842,13 @@ export function fillForwardPortfolio(s:ForwardState,quotes:Record<string,Quote>,
   for(const o of eligible){
     const q=quotes[o.symbol],meta=contracts[o.symbol];if(!freshQuote(q,now)||q!.entryReady!==true){reject("等待实时盘口");continue;}
     if(!meta){reject("等待合约规格");continue;}
-    const interruptBlock=o.mode==="SHOCK"?null:structuralInterruptBlockReason(s.structuralInterrupt,o.symbol,o.side,now);
+    const interruptBlock=isExtremumOpportunity(o)||o.mode==="SHOCK"?null:structuralInterruptBlockReason(s.structuralInterrupt,o.symbol,o.side,now);
     if(interruptBlock){reject(interruptBlock);continue;}
     const last=s.lastExitAt[o.symbol]??0,lastSide=s.lastSide[o.symbol],
       cooldown=o.mode==="SHOCK"&&lastSide&&lastSide!==o.side?0:lastSide&&lastSide!==o.side?5*60_000:8*60_000;
-    if(now-last<cooldown){reject("同币短时防抖");continue;}
-    const validation=entryValidationReason(s,o,q!,now);if(validation){reject(validation);continue;}
-    const error=openTrade(s,o,q!,meta,now,equity);if(error){reject(error);continue;}opened++;
+    if(now-last<(isExtremumOpportunity(o)?90_000:cooldown)){reject("同币短时防抖");continue;}
+    if(!isExtremumOpportunity(o)){const validation=entryValidationReason(s,o,q!,now);if(validation){reject(validation);continue;}}
+    const error=openAuthorityTrade(s,o,q!,meta,now,equity);if(error){reject(error);continue;}opened++;
   }
   s.entryDiagnostics.opened=opened;return opened;
 }
