@@ -482,84 +482,9 @@ function markAndManage(s:ForwardState,quotes:Record<string,Quote>,now:number){
   }
   if(closed.size)s.positions=s.positions.filter(t=>!closed.has(t.id));
 }
-function candidateRiskRate(o:Opportunity){
-  if(o.mode==="SHOCK")return SHOCK_TRADE_RISK_RATE;
-  if(o.reserve)return .003;
-  const base=o.mode==="RANGE"?.006:o.premium?.009:.008;
-  return clip(base*clip(o.riskScale??1,.75,1),.006,.009);
-}
-const riskCharge=(t:Trade)=>Math.max(t.plannedRisk,t.entryContext?.portfolioRiskCharge??((t.forecast?.sizingEquity??0)*(t.entryContext?.reserve===true?.003:.006)));
+const riskCharge=(t:Trade)=>Math.max(t.plannedRisk,t.entryContext?.portfolioRiskCharge??((t.forecast?.sizingEquity??0)*.006));
 function existingRisk(s:ForwardState,side?:"LONG"|"SHORT"){return s.positions.filter(t=>!side||t.side===side).reduce((n,t)=>n+riskCharge(t),0);}
-function probeRisk(s:ForwardState){return s.positions.filter(t=>t.entryContext?.reserve===true).reduce((n,t)=>n+riskCharge(t),0);}
-function tradeFamilyId(s:ForwardState,t:Trade){
-  if(t.entryContext?.relationFamilyId)return t.entryContext.relationFamilyId;
-  const rule=t.entryContext?.relationRuleId?s.relationEngine.rules.find(r=>r.id===t.entryContext?.relationRuleId):undefined;
-  return rule?relationFamilyId(rule):null;
-}
-function familyRisk(s:ForwardState,familyId:string){return s.positions.reduce((n,t)=>tradeFamilyId(s,t)===familyId?n+riskCharge(t):n,0);}
-function openReserveFamilyIds(s:ForwardState){return new Set(s.positions.filter(t=>t.entryContext?.reserve===true)
-  .map(t=>tradeFamilyId(s,t)).filter((x):x is string=>!!x));}
 function cycleRiskAdded(s:ForwardState,since:number){return[...s.positions,...s.history].filter(t=>t.openedAt>=since).reduce((n,t)=>n+riskCharge(t),0);}
-function reserveEntriesThisCycle(s:ForwardState){return[...s.positions,...s.history]
-  .filter(t=>t.openedAt>=s.lastCandleAt&&t.entryContext?.reserve===true).length;}
-function shockEntriesForEvent(s:ForwardState,eventId:string){
-  return[...s.positions,...s.history].filter(t=>t.entryContext?.interruptEventId===eventId).length;
-}
-function shockRiskForEvent(s:ForwardState,eventId:string){
-  return s.positions.filter(t=>t.entryContext?.interruptEventId===eventId).reduce((n,t)=>n+riskCharge(t),0);
-}
-function qualityBlockReason(s:ForwardState,o:Opportunity,equity:number){
-  if(!(equity>0))return"账户权益无效";
-  if(o.mode==="SHOCK"){
-    if(!o.interruptEventId)return"突变事件身份缺失";
-    if(shockEntriesForEvent(s,o.interruptEventId)>=MAX_SHOCK_ENTRIES_PER_EVENT)return"同一突变事件已完成最大参与数量";
-    if(shockEntriesForEvent(s,o.interruptEventId)>=1&&!(o.interruptIndependent&&o.score>=90))return"同一市场冲击默认只参与最优标的";
-    if(shockRiskForEvent(s,o.interruptEventId)>=equity*SHOCK_EVENT_RISK_RATE-equity*.0005)return"同一突变事件风险池已满";
-    return null;
-  }
-  const use=existingRisk(s)/equity,health=o.relationHealth??0;
-  if(o.reserve){
-    if(reserveEntriesThisCycle(s)>=MAX_NEW_RESERVE_EXPERIMENTS_PER_5M)return"本5分钟探测实验额度已满";
-    if(use>=.05)return"探测仓只在组合风险低于5%时新增";
-    if(probeRisk(s)>=equity*PROBE_RISK_POOL_RATE-equity*.0005)return"探测风险池已满";
-    return null;
-  }
-  if(use>=.09&&(o.score<86||health<.84))return"高风险占用下只接受顶级成熟关系";
-  if(use>=.08&&(o.score<80||health<.78))return"风险占用超过8%，候选质量不足";
-  if(use>=.06&&(o.score<72||health<.70))return"风险占用超过6%，候选质量不足";
-  return null;
-}
-function strongImmediateEntry(s:ForwardState,o:Opportunity){
-  if(o.mode!=="RELATION")return false;
-  const rule=o.relationRuleId?s.relationEngine.rules.find(r=>r.id===o.relationRuleId):undefined,
-    calibration=familyCalibration(s.familyExperiment,rule?relationFamilyId(rule):undefined);
-  return !calibration.requiresValidation&&o.score>=82&&o.netRemainingSpaceRate>=.0045&&o.edgeRatio>=.65
-    &&(o.relationHealth??0)>=.64&&(rule?.livePathScore??0)>=.60&&o.marketFit>=65;
-}
-function entryValidationReason(s:ForwardState,o:Opportunity,q:Quote,now:number){
-  if(o.mode==="SHOCK"||strongImmediateEntry(s,o))return null;
-  const rule=o.relationRuleId?s.relationEngine.rules.find(r=>r.id===o.relationRuleId):undefined,
-    calibration=familyCalibration(s.familyExperiment,rule?relationFamilyId(rule):undefined),id=o.id,
-    price=o.side==="LONG"?q.bestAsk:q.bestBid,d=dir(o.side),windowMs=o.reserve||calibration.requiresValidation?24_000:12_000;
-  const row=s.entryValidations[id];
-  if(!row){s.entryValidations[id]={id,candidateId:o.id,symbol:o.symbol,side:o.side,startedAt:now,
-      expiresAt:o.expiresAt,deadlineAt:Math.min(o.expiresAt,now+windowMs),initialPrice:price,lastPrice:price,lastQuoteAt:q.observedAt,samples:1,
-      bestAdvanceRate:0,maxAdverseRate:0,status:"WAITING",reason:null};
-    return calibration.requiresValidation?"实际成交校准要求短时正反馈":"等待秒级入场正反馈";
-  }
-  if(row.status==="CANCELLED")return row.reason??"本次入场验证已取消";
-  if(q.observedAt>row.lastQuoteAt){const signed=d*(price/row.initialPrice-1);row.lastPrice=price;row.lastQuoteAt=q.observedAt;row.samples++;
-    row.bestAdvanceRate=Math.max(row.bestAdvanceRate,signed);row.maxAdverseRate=Math.max(row.maxAdverseRate,-signed);}
-  const elapsed=now-row.startedAt,adverseLimit=Math.max(.0007,Math.min(.0020,o.pullbackRiskRate*.22)),region=s.regions[o.symbol],
-    outerUpper=region?.outerUpper??region?.upper,outerLower=region?.outerLower??region?.lower,
-    returnedToRegion=(o.mode==="BREAKOUT"||o.mode==="RETEST")&&region!=null
-      &&(o.side==="LONG"&&outerUpper!=null&&price<=outerUpper||o.side==="SHORT"&&outerLower!=null&&price>=outerLower);
-  if(returnedToRegion||row.maxAdverseRate>=adverseLimit){row.status="CANCELLED";row.reason=returnedToRegion?"入场前重新回到结构区域":"入场前出现反向吞没";return row.reason;}
-  const progressFloor=Math.max(.00025,Math.min(.0006,o.netRemainingSpaceRate*.12));
-  if(elapsed>=4_000&&row.samples>=3&&row.bestAdvanceRate>=progressFloor){delete s.entryValidations[id];return null;}
-  if(now>=row.deadlineAt){row.status="CANCELLED";row.reason="验证窗口内未获得方向推进";return row.reason;}
-  return `等待秒级入场正反馈（${Math.ceil((row.deadlineAt-now)/1000)}秒）`;
-}
 function isExtremumOpportunity(o:Opportunity){return o.strategyVersion===EXTREMUM_REGIME_VERSION;}
 
 function openExtremumTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:number,equity:number){
@@ -616,77 +541,6 @@ function openExtremumTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contrac
   return null;
 }
 
-function openAuthorityTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:number,equity:number){
-  return isExtremumOpportunity(o)?openExtremumTrade(s,o,q,contract,now,equity):openTrade(s,o,q,contract,now,equity);
-}
-
-function openTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:number,equity:number){
-  const side=o.side,d=dir(side),price=side==="LONG"?q.bestAsk:q.bestBid,isShock=o.mode==="SHOCK";
-  if(!isShock&&!o.relationRuleId)return"缺少Forward关系授权";
-  const authorityRule=o.relationRuleId?s.relationEngine.rules.find(r=>r.id===o.relationRuleId):undefined;
-  if(!isShock&&!authorityRule)return"Forward关系证据已更新，等待下一轮";
-  const familyId=authorityRule?relationFamilyId(authorityRule):null;
-  if(authorityRule){
-    const familyBlock=familyAdmissionBlock({state:s.familyExperiment,rule:authorityRule,
-      allRules:s.relationEngine.rules,reserve:o.reserve===true,openFamilyIds:openReserveFamilyIds(s),netRate:o.netRemainingSpaceRate,
-      edgeRatio:o.edgeRatio,roundTripCost:ROUND_TRIP_COST});
-    if(familyBlock)return familyBlock;
-  }
-  const qualityBlock=qualityBlockReason(s,o,equity);if(qualityBlock)return qualityBlock;
-  // Analysis can come from Bybit/OKX/KuCoin. Only relative structure may cross
-  // venues; all executable prices are re-anchored to the actual Gate quote.
-  const stopRate=Number.isFinite(o.stopRate)?o.stopRate:Math.abs(o.price-o.stopPrice)/Math.max(o.price,1e-9);
-  if(!(stopRate>=.002&&stopRate<=.03))return"结构止损宽度不合理";
-  const totalHeadroom=equity*(TOTAL_RISK_RATE-.001)-existingRisk(s),sideHeadroom=equity*(SIDE_RISK_RATE-.0005)-existingRisk(s,side),
-    familyHeadroom=familyId?equity*FAMILY_RISK_CAP_RATE-familyRisk(s,familyId):Infinity,
-    shockHeadroom=isShock&&o.interruptEventId?equity*SHOCK_EVENT_RISK_RATE-shockRiskForEvent(s,o.interruptEventId):Infinity,
-    probeHeadroom=o.reserve?equity*PROBE_RISK_POOL_RATE-probeRisk(s):Infinity,
-    cycleHeadroom=equity*FIVE_MINUTE_NEW_RISK_RATE-cycleRiskAdded(s,s.lastCandleAt);
-  const headroom=Math.min(totalHeadroom,sideHeadroom,familyHeadroom,shockHeadroom,probeHeadroom,cycleHeadroom);
-  const wantedRisk=equity*candidateRiskRate(o);if(headroom<=equity*.001)return"风险预算已满";
-  const riskBudget=Math.min(wantedRisk,headroom),minCharge=equity*(isShock?SHOCK_MIN_CHARGE_RATE:o.reserve?PROBE_MIN_CHARGE_RATE:PRIMARY_MIN_CHARGE_RATE);
-  if(riskBudget<minCharge)return o.reserve?"剩余探测预算不足以形成有效仓位":"剩余组合预算不足以形成有效主仓";
-  const rawNotional=riskBudget/(stopRate+ROUND_TRIP_COST);
-  const notionalCap=equity*(o.premium?.70:.60),targetNotional=Math.min(rawNotional,notionalCap);
-  const leverage=Math.max(1,Math.min(10,Math.floor(contract.leverageMax||10))),mult=Math.max(contract.quantoMultiplier,1e-12);
-  const minContracts=Math.max(1,Math.ceil(contract.minContracts??(Number(contract.orderSizeMin??1)||1)));
-  const contracts=Math.floor(targetNotional/(price*mult));if(contracts<minContracts)return"低于最小模拟合约数量";
-  const quantity=contracts*mult,notional=quantity*price,margin=notional/leverage,totalMargin=s.positions.reduce((n,t)=>n+t.margin,0);
-  if(totalMargin+margin>equity*TOTAL_MARGIN_RATE)return"组合保证金已满";
-  const consumed=Math.max(0,d*(price/Math.max(o.price,1e-9)-1)),remainingNet=o.netRemainingSpaceRate-consumed;
-  if(!isShock&&remainingNet<=0)return"实时入场已消耗样本剩余优势";
-  const sourceExitPlan=o.exitPlan??authorityRule?.exitProfile;if(!sourceExitPlan)return"缺少冻结退出计划";
-  const plannedRisk=notional*(stopRate+ROUND_TRIP_COST),entryFee=notional*PAPER_COST.feeRate,
-    exitPlan=consumeExitPlan(sourceExitPlan,consumed);
-  const stopPrice=price*(1-d*stopRate),target=price*(1+d*Math.max(isShock?ROUND_TRIP_COST*1.25:.003,exitPlan.targetRate)),
-    horizon=Math.max(5,Math.round(exitPlan.bestHoldMinutes)),id=`ft-${now.toString(36)}-${o.symbol.replace(/[^A-Z0-9]/g,"")}-${side[0]}-${o.mode[0]}`;
-  const ruleId=o.relationRuleId??`structural-interrupt-${o.interruptEventId??now}`;
-  const rule:Rule={id:ruleId,signature:o.relationRuleId??`STRUCTURAL_INTERRUPT:${o.interruptEventId??o.symbol}`,parentId:null,version:1,createdAt:now,
-    expiresAt:now+exitPlan.maxHoldMinutes*60_000,status:"EXPERIMENTAL",conditions:[],side,horizon,stopRate,
-    armRate:exitPlan.protectionActivationRate,givebackRate:Math.max(.001,exitPlan.targetRate*(1-exitPlan.retentionRate)),
-    exitMode:"REACTION_DECAY",samples:0,trainGroups:0,checkGroups:0,estimatedNetRate:remainingNet,priorResponse:null,
-    recentResponse:0,standardError:0,reason:o.reason,mutation:"CREATE",grammar:ADAPTIVE_ENGINE_VERSION,liveEligible:false,
-    authority:isShock?"STRUCTURAL_INTERRUPT":"FORWARD_RELATION",turnTimeframe:"5m"};
-  const region=o.regionId?s.regions[o.symbol]:null;
-  const scale=o.price>0?price/o.price:1;
-  const t:Trade={id,symbol:o.symbol,side,rule,openedAt:now,closedAt:null,status:"OPEN",entryPrice:price,exitPrice:null,quantity,contracts,
-    quantoMultiplier:mult,notional,leverage,margin,plannedRisk,stopPrice,armPrice:target,favorable:0,adverse:0,lastPrice:price,
-    lastQuoteAt:q.observedAt,entryFee,exitFee:0,fundingAllowance:0,grossPnl:null,netPnl:null,exitReason:null,relationFailureBars:0,lastRelationBar:now,
-    execution:"REAL_QUOTE_PAPER_MODEL",liveEligible:false,firstProfitAt:null,holdScore:o.score,profitFloorRate:0,expectedHoldMinutes:exitPlan.bestHoldMinutes,
-    exitPlan,peakPnlRate:0,exitControl:{policy:ADAPTIVE_ENGINE_VERSION,armedAt:null,armedQuoteAt:null,maxObservationGapMs:30_000,maxQuoteAgeMs:10_000},entryContext:{version:"adaptive-ten-entry-v1",capturedAt:now,timeframe:"5m",side,mode:o.mode,reserve:o.reserve===true,reason:o.reason,entryScore:o.score,
-      directionStrength:o.directionStrength,spaceScore:o.spaceScore,positionScore:o.positionScore,executionScore:o.executionScore,
-      remainingSpaceRate:remainingNet,pullbackRiskRate:o.pullbackRiskRate,edgeRatio:remainingNet/Math.max(o.pullbackRiskRate,1e-9),expectedHoldMinutes:exitPlan.bestHoldMinutes,
-      marketFit:o.marketFit,regionId:o.regionId,relationRuleId:o.relationRuleId,relationStatus:o.relationStatus,relationHorizon:o.relationHorizon,
-      relationHealth:o.relationHealth,portfolioRiskCharge:riskBudget,
-      ...(familyId?{relationFamilyId:familyId}:{}),...(authorityRule?{relationEvidenceAt:authorityRule.lastQualifiedAt,relationLivePathScore:authorityRule.livePathScore}:{}),
-      ...(o.interruptEventId?{interruptEventId:o.interruptEventId,interruptMarketWide:o.interruptMarketWide===true,
-        interruptBoundary:o.interruptBoundary,interruptStrength:o.interruptStrength}:{}),
-      ...(region?{regionLower:region.lower*scale,regionUpper:region.upper*scale,regionCenter:region.center*scale}:{})},
-    forecast:{remainingNetRate:remainingNet,quality:o.score/100,sizingEquity:equity}};
-  s.positions.push(t);s.balance-=entryFee;s.fees+=entryFee;s.turnover+=notional;s.lastEntryAt[o.symbol]=now;s.lastSide[o.symbol]=side;
-  event(s,now,"ENTRY",id,`${o.symbol} ${side} ${o.mode} 评分${o.score.toFixed(0)}`,{notional,plannedRisk});
-  return null;
-}
 function rankedEligible(s:ForwardState,now:number){
   return s.opportunities.filter(o=>isExtremumOpportunity(o)&&o.eligible&&o.expiresAt>now&&!s.positions.some(t=>t.symbol===o.symbol)).sort(opportunityCompare);
 }
@@ -722,13 +576,8 @@ export function fillForwardPortfolio(s:ForwardState,quotes:Record<string,Quote>,
   for(const o of eligible){
     const q=quotes[o.symbol],meta=contracts[o.symbol];if(!freshQuote(q,now)||q!.entryReady!==true){reject("等待实时盘口");continue;}
     if(!meta){reject("等待合约规格");continue;}
-    const interruptBlock=isExtremumOpportunity(o)||o.mode==="SHOCK"?null:structuralInterruptBlockReason(s.structuralInterrupt,o.symbol,o.side,now);
-    if(interruptBlock){reject(interruptBlock);continue;}
-    const last=s.lastExitAt[o.symbol]??0,lastSide=s.lastSide[o.symbol],
-      cooldown=o.mode==="SHOCK"&&lastSide&&lastSide!==o.side?0:lastSide&&lastSide!==o.side?5*60_000:8*60_000;
-    if(now-last<(isExtremumOpportunity(o)?90_000:cooldown)){reject("同币短时防抖");continue;}
-    if(!isExtremumOpportunity(o)){const validation=entryValidationReason(s,o,q!,now);if(validation){reject(validation);continue;}}
-    const error=openAuthorityTrade(s,o,q!,meta,now,equity);if(error){reject(error);continue;}opened++;
+    const last=s.lastExitAt[o.symbol]??0;if(now-last<90_000){reject("同币短时防抖");continue;}
+    const error=openExtremumTrade(s,o,q!,meta,now,equity);if(error){reject(error);continue;}opened++;
   }
   s.entryDiagnostics.opened=opened;return opened;
 }
