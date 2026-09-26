@@ -237,17 +237,15 @@ test("fast quote normalization preserves current v3 frames and evidence diagnost
   assert.equal(state.relationEngine.diagnostics.rules,ruleCount);
 });
 
-test("fast quote dedup keeps the best same-symbol candidate instead of the last weaker one",()=>{
+test("quote-only cycles rebuild candidate truth from the new extremum state instead of retaining retired relation duplicates",()=>{
   const now=nowAt(39),symbol=symbols[0]!,state=initialForward(now-60_000);state.lastCandleAt=now;
   const good=manualOpportunity(symbol,0,{premium:false,score:92,health:.9}),bad={...manualOpportunity(symbol,0,{premium:false,reserve:true,score:55,health:.25}),
     id:"weaker-same-symbol",eligible:false,reason:"weaker duplicate"};
   state.opportunities=[good,bad];
   const next=advanceForward({state,now:now+1000,paths:sliced(39),quotes:quotesAt(39,now+1000),contracts,entrySymbols:symbols,allowDataCycle:false}).state;
-  assert.equal(next.opportunities.filter(o=>o.symbol===symbol).length,1);
-  assert.equal(next.opportunities.find(o=>o.symbol===symbol)?.id,good.id,"sorted best candidate must survive symbol dedup");
-  assert.equal(next.opportunities.find(o=>o.symbol===symbol)?.eligible,true);
+  assert.equal(next.opportunities.some(o=>o.id===good.id||o.id===bad.id),false,"retired relation candidates must not survive the new authority rebuild");
+  assert.equal(next.engineVersion,ADAPTIVE_ENGINE_VERSION);
 });
-
 test("ordinary 5m relation inventory cannot keep opening on the fast quote loop",()=>{
   const now=nowAt(39),paths=sliced(39),symbol=symbols[0]!,s=initialForward(now-60_000);
   s.lastCandleAt=now;s.opportunities=[manualOpportunity(symbol,0,{premium:false})];
@@ -454,18 +452,17 @@ test("real Forward Relation 2.0 horizon records migrate into v3 root samples",()
   assert.equal(migrated.diagnostics.effectiveGroups,1);
 });
 
-test("strategy migration preserves account identity, financial history and causal samples instead of cold-resetting learning",()=>{
+test("strategy migration preserves account identity and retained research evidence while switching new-entry authority",()=>{
   const learned=learnThrough(39),s=initialForward(1000);s.startedAt=123;s.balance=876.54;s.initialEquity=1000;s.resolved=7;s.turnover=4321;
   s.relationEngine=structuredClone(learned);(s.relationEngine as unknown as {version:string}).version="forward-relation-v2";
   s.engineVersion="legacy";s.strategyAuthorityVersion="legacy";s.executionVersion="legacy";s.storage={persistedAt:999,error:null};
   const n=normalizeForward(s,5000);
   assert.equal(n.startedAt,123);assert.equal(n.balance,876.54);assert.equal(n.resolved,7);assert.equal(n.turnover,4321);
   assert.equal(n.storage.persistedAt,999);assert.equal(n.engineVersion,ADAPTIVE_ENGINE_VERSION);
-  assert.equal(n.strategyAuthorityVersion,FORWARD_RELATION_V2_VERSION);assert.equal(n.executionVersion,FORWARD_RELATION_V2_VERSION);
-  assert.ok(n.relationEngine.samples.length>0);assert.ok(n.relationEngine.measured>=learned.measured);
+  assert.equal(n.strategyAuthorityVersion,ADAPTIVE_ENGINE_VERSION);assert.equal(n.executionVersion,ADAPTIVE_ENGINE_VERSION);
+  assert.ok(n.relationEngine.samples.length>0,"old samples remain retained research evidence instead of being deleted");
+  assert.equal(n.extremumRegime.version,ADAPTIVE_ENGINE_VERSION);
 });
-
-
 test("manual PAPER reset preserves causal learning while resetting the financial account",()=>{
   const learned=learnThrough(39),now=nowAt(39),s=initialForward(now-60_000);s.relationEngine=learned;
   const guardRule=learned.rules[0]!,familyId=relationFamilyId(guardRule);
@@ -482,10 +479,11 @@ test("manual PAPER reset preserves causal learning while resetting the financial
   assert.match(n.latestReason,/保留/);
 });
 
-test("summary exposes relation lifecycle and the no-forced-reversal boundary",()=>{
+test("summary exposes the extremum regime lifecycle and separates profit-taking from reversal",()=>{
   const s=initialForward(1000),view=forwardSummary(s,{},2000);
-  assert.equal(view.engineVersion,FORWARD_RELATION_V2_VERSION);assert.equal(view.targetPositions,null);assert.equal(view.positionLimit,null);
+  assert.equal(view.engineVersion,ADAPTIVE_ENGINE_VERSION);assert.equal(view.targetPositions,null);assert.equal(view.positionLimit,null);
   assert.equal(view.executionBboCapacity,30);assert.equal(view.minuteConfirmationCapacity,11);
-  assert.match(view.boundaries.grammar,/15\/30\/45\/60/);assert.equal(view.boundaries.historyBackfill,true);assert.match(view.boundaries.sampleMeaning,/旧方向失效不会自动生成反向订单/);
-  assert.equal(view.relationEngine.version,FORWARD_RELATION_V2_VERSION);
+  assert.equal(view.extremumRegime.version,ADAPTIVE_ENGINE_VERSION);
+  assert.match(view.boundaries.grammar,/峰谷状态机/);assert.equal(view.boundaries.historyBackfill,false);
+  assert.match(view.boundaries.validation,/只有趋势死亡/);assert.equal(view.relationEngine.retired,true);
 });

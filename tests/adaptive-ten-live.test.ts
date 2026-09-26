@@ -1,18 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {fillForwardPortfolio,forwardEquity,initialForward,type Candle,type Contract,type Opportunity,type Quote} from "../lib/forward-relations.ts";
+import {EXTREMUM_REGIME_VERSION} from "../lib/extremum-regime-engine.ts";
 import {buildProportionalMirror,forwardMirrorSources,liveEntryDriftGuard,mirrorSourceFresh} from "../lib/live-parity.ts";
 import {sourceAfterEnable,startLiveSession} from "../lib/live-session.ts";
-import type {RelationExitProfile,RelationRule} from "../lib/forward-relation-v2.ts";
+import type {RelationExitProfile} from "../lib/forward-relation-v2.ts";
 
 const START=Date.parse("2026-09-24T00:00:00Z")/1000;
 const makePath=(step=.0016,bars=60):Candle[]=>{const out:Candle[]=[];let p=100;
   for(let i=0;i<bars;i++){const c=p*(1+step);out.push({time:START+i*300,open:p,close:c,
     high:Math.max(p,c)*1.0006,low:Math.min(p,c)*.9994,volume:1000+i});p=c;}return out;};
-const q=(p:number,now:number):Quote=>({bestBid:p*.9999,bestAsk:p*1.0001,observedAt:now,fresh:true,entryReady:true});
+const q=(p:number,now:number):Quote=>({bestBid:p*.9999,bestAsk:p*1.0001,observedAt:now,fresh:true,entryReady:true,
+  sourceCount:4,disagreementRate:.0002,sourceBreadth:1,directionalAgreement:1,medianShortMove:.0006});
 const contract:Contract={quantoMultiplier:.001,leverageMax:20,maintenanceRate:.005,minContracts:1,
   enableDecimal:false,orderSizeMin:"1",orderSizeMax:"1000000"};
-const exitProfile:RelationExitProfile={version:"sample-exit-plan-v1",bestHoldMinutes:30,feedbackDeadlineMinutes:10,maxHoldMinutes:60,
+const exitProfile:RelationExitProfile={version:"sample-exit-plan-v2",bestHoldMinutes:30,feedbackDeadlineMinutes:5,maxHoldMinutes:60,
   normalAdverseRate:.008,targetRate:.012,protectionActivationRate:.004,retentionRate:.80,samples:40,groups:6,
   path:{5:{expectedRate:.001,adverseRate:.004,remainingEdgeRate:.008},15:{expectedRate:.004,adverseRate:.006,remainingEdgeRate:.005},
     30:{expectedRate:.009,adverseRate:.008,remainingEdgeRate:0}}};
@@ -20,18 +22,14 @@ const exitProfile:RelationExitProfile={version:"sample-exit-plan-v1",bestHoldMin
 function source(){
   const path=makePath(),now=(path.at(-1)!.time+300)*1000+1000,price=path.at(-1)!.close;
   const s=initialForward(now-60_000);
-  const opportunity:Opportunity={id:"fixture-relation",symbol:"BTC_USDT",side:"LONG",mode:"RELATION",premium:false,reserve:false,
-    score:82,eligible:true,completedAt:now-1000,expiresAt:now+60_000,price,stopPrice:price*.992,targetPrice:price*1.012,
-    stopRate:.008,targetRate:.012,directionStrength:82,pathEfficiency:80,momentumPersistence:80,positionScore:80,spaceScore:80,
+  const opportunity:Opportunity={id:"fixture-extremum",symbol:"BTC_USDT",side:"LONG",mode:"TREND_PULLBACK",premium:true,reserve:false,
+    score:86,eligible:true,completedAt:now-1000,expiresAt:now+60_000,price,stopPrice:price*.992,targetPrice:price*1.012,
+    stopRate:.008,targetRate:.012,directionStrength:84,pathEfficiency:82,momentumPersistence:78,positionScore:76,spaceScore:80,
     executionScore:90,grossRemainingSpaceRate:.012,netRemainingSpaceRate:.0101,pullbackRiskRate:.008,edgeRatio:1.26,
-    expectedHoldMinutes:60,marketFit:80,regionId:null,regionQuality:null,reason:"已成熟Forward关系的LIVE同源测试事件",
-    relationRuleId:"fixture-rule",relationStatus:"ACTIVE",relationHorizon:30,relationHealth:.85,riskScale:.85,exitPlan:structuredClone(exitProfile),
-    interruptEventId:"market-shock-SHORT-parity",interruptMarketWide:true,interruptBoundary:price*.99,interruptStrength:91};
+    expectedHoldMinutes:30,marketFit:84,regionId:null,regionQuality:null,reason:"Extremum Regime LIVE同源测试事件",
+    strategyVersion:EXTREMUM_REGIME_VERSION,regime:"TREND_UP",topPressure:35,bottomPressure:58,upSurvival:84,downSurvival:12,
+    confirmationStage:"READY",sourceCount:4,disagreementRate:.0003,exitPlan:structuredClone(exitProfile)};
   s.opportunities=[opportunity];s.lastCandleAt=now;
-  s.relationEngine.rules=[{id:"fixture-rule",signature:"fixture-rule",scope:"BASE",horizon:30,side:"LONG",
-    conditions:[{feature:0,op:"GE",threshold:0}],longNet:.01,recentNet:.008,standardError:.001,samples:40,longGroups:6,recentGroups:3,
-    health:.85,status:"ACTIVE",livePathScore:.80,environmentFit:.82,stopRate:.008,targetRate:.012,exitProfile:structuredClone(exitProfile),updatedAt:now,lastQualifiedAt:now-60_000,
-    symbols:["BTC_USDT"],reason:"LIVE parity fixture"} satisfies RelationRule];
   fillForwardPortfolio(s,{BTC_USDT:q(price,now)},{BTC_USDT:contract},now,1000,false);
   assert.equal(s.positions.length,1);return{s,trade:s.positions[0]!,now,price};
 }
@@ -45,7 +43,8 @@ test("LIVE sees the exact persisted PAPER trade rather than rebuilding a strateg
   assert.equal(rows.BTC_USDT.notional,trade.notional);
   assert.deepEqual(rows.BTC_USDT.forwardSource?.exitPlan,trade.exitPlan);
   assert.equal(rows.BTC_USDT.forwardSource?.side,trade.side);assert.equal(rows.BTC_USDT.forwardSource?.stopPrice,trade.stopPrice);
-  assert.equal(rows.BTC_USDT.forwardSource?.entryContext?.interruptEventId,"market-shock-SHORT-parity");
+  assert.equal(rows.BTC_USDT.forwardSource?.entryContext?.strategyVersion,EXTREMUM_REGIME_VERSION);
+  assert.equal(rows.BTC_USDT.forwardSource?.entryContext?.mode,"TREND_PULLBACK");
 });
 
 test("owner enable fences old PAPER positions and admits only new events",()=>{
@@ -70,7 +69,7 @@ test("proportional LIVE sizing preserves source leverage and does not enlarge a 
   assert.ok(result.intent.notional<=trade.notional*.1+trade.entryPrice*trade.quantoMultiplier);
   assert.equal(result.binding.receipt.sourceId,trade.id);
   assert.equal(result.binding.receipt.ratio,.1);
-  assert.equal(result.binding.receipt.sourceExitPlanVersion,"sample-exit-plan-v1");
+  assert.equal(result.binding.receipt.sourceExitPlanVersion,"sample-exit-plan-v2");
   assert.equal(result.binding.receipt.sourceBestHoldMinutes,trade.exitPlan?.bestHoldMinutes);
   assert.equal(result.binding.receipt.sourceMaxHoldMinutes,trade.exitPlan?.maxHoldMinutes);
 });

@@ -10,7 +10,8 @@ export type HubQuote={source:MarketSource;symbol:string;observedAt:number;last:n
   volume24hUsd:number;change24hRate:number};
 export type HubCandle={time:number;open:number;high:number;low:number;close:number;volume:number};
 export type ConsensusQuote={symbol:string;observedAt:number;mid:number;bid:number;ask:number;sources:MarketSource[];
-  sourceCount:number;disagreementRate:number;volume24hUsd:number;change24hRate:number};
+  sourceCount:number;disagreementRate:number;volume24hUsd:number;change24hRate:number;
+  sourceBreadth:number;directionalAgreement:number;medianShortMove:number};
 type SourceHealth={lastSuccessAt:number;lastFailureAt:number;failures:number;lastError:string|null;rows:number;nextRetryAt:number};
 
 const BYBIT="https://api.bybit.com";
@@ -61,6 +62,7 @@ export class MarketDataHub{
   private lastAttemptAt=0;
   private inFlight:Promise<void>|null=null;
   private candleSource=new Map<string,{source:MarketSource;at:number}>();
+  private quoteHistory=new Map<string,Map<MarketSource,{at:number;mid:number}[]>>();
 
   launchRefresh(now:number){
     if(this.inFlight)return this.inFlight;
@@ -175,10 +177,23 @@ export class MarketDataHub{
     const mid=mids.length%2?mids[Math.floor(mids.length/2)]!:(mids[mids.length/2-1]!+mids[mids.length/2]!)/2;
     const bid=Math.min(...rows.map(q=>q.bid)),ask=Math.max(...rows.map(q=>q.ask));
     const disagreement=rows.length>1?(Math.max(...mids)-Math.min(...mids))/Math.max(mid,1e-12):0;
+    let history=this.quoteHistory.get(symbol);if(!history){history=new Map();this.quoteHistory.set(symbol,history);}
+    const moves:number[]=[];
+    for(const q of rows){
+      const qMid=(q.bid+q.ask)/2,series=history.get(q.source)??[],last=series.at(-1);
+      if(!last||last.at!==q.observedAt){series.push({at:q.observedAt,mid:qMid});while(series.length>8)series.shift();history.set(q.source,series);}
+      const anchor=[...series].reverse().find(x=>q.observedAt-x.at>=4_000)??series[0];
+      if(anchor&&anchor.mid>0&&q.observedAt>anchor.at)moves.push(qMid/anchor.mid-1);
+    }
+    const up=moves.filter(v=>v>0.00002).length,down=moves.filter(v=>v<-0.00002).length,
+      active=up+down,sourceBreadth=active?(up-down)/active:0,
+      directionalAgreement=active?Math.max(up,down)/active:.5,
+      ordered=moves.filter(Number.isFinite).sort((a,b)=>a-b),
+      medianShortMove=ordered.length?(ordered.length%2?ordered[(ordered.length-1)/2]!:(ordered[ordered.length/2-1]!+ordered[ordered.length/2]!)/2):0;
     const directional=rows.find(q=>q.source==="BYBIT")??rows.find(q=>q.source==="OKX")??rows.find(q=>q.source==="KUCOIN")??rows.find(q=>q.source==="BITGET");
     return{symbol,observedAt:Math.max(...rows.map(q=>q.observedAt)),mid,bid,ask,sources:rows.map(q=>q.source),sourceCount:rows.length,
       disagreementRate:disagreement,volume24hUsd:Math.max(...rows.map(q=>q.volume24hUsd)),
-      change24hRate:directional?.change24hRate??0};
+      change24hRate:directional?.change24hRate??0,sourceBreadth,directionalAgreement,medianShortMove};
   }
   coverage(symbol:string,now=Date.now()){const q=this.quote(symbol,now);return q?{sourceCount:q.sourceCount,sources:q.sources,disagreementRate:q.disagreementRate}
     :{sourceCount:0,sources:[] as MarketSource[],disagreementRate:0};}
@@ -189,7 +204,8 @@ export class MarketDataHub{
       const last=q?.mid??row.last,high=Number.isFinite(gateHigh)&&gateHigh>0?gateHigh:last,low=Number.isFinite(gateLow)&&gateLow>0?gateLow:last;
       return{symbol:row.symbol,last,volume24hUsd:Math.max(row.volume24hUsd,q?.volume24hUsd??0),executionVolume24hUsd:Math.max(0,row.volume24hUsd),
         high24h:Math.max(high,low),low24h:Math.min(high,low),change24hRate:Number.isFinite(gateChange)?gateChange:q?.change24hRate??0,
-        fundingRate:row.fundingRate,openInterest:Number.isFinite(Number(row.openInterest))?Number(row.openInterest):0,sourceCount:q?.sourceCount??0};});
+        fundingRate:row.fundingRate,openInterest:Number.isFinite(Number(row.openInterest))?Number(row.openInterest):0,
+        sourceCount:q?.sourceCount??0,sourceDisagreementRate:q?.disagreementRate??0};});
   }
 
   async candles(symbol:string,interval:"1m"|"5m",limit=120):Promise<{source:MarketSource;rows:HubCandle[]}|null>{

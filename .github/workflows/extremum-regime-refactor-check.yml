@@ -1,0 +1,42 @@
+name: Extremum Regime Stage 3 Release Candidate
+
+on:
+  push:
+    branches: [refactor-20260926]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+          cache: npm
+      - run: npm ci
+      - name: Full strategy and product tests
+        run: |
+          set -euo pipefail
+          npm run typecheck
+          npm run test:direct
+          npm run test:live-parity
+          npm run test:members
+          npm run test:equity
+          npm run test:feed:workerd
+      - name: Build and architecture gates
+        run: |
+          set -euo pipefail
+          npm run build
+          npm run lint
+          node --test tests/architecture.test.mjs tests/migration.test.mjs
+          git diff --check
+          npx wrangler deploy --dry-run --config dist/server/wrangler.json
+      - name: Proven Gate execution modules remain untouched
+        run: |
+          git diff --exit-code origin/main -- lib/gate-live.ts lib/live-session.ts lib/gate-quantity.ts LIVE_MIRROR_CONTRACT.md

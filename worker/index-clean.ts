@@ -65,6 +65,8 @@ import { advanceStrategyArena as advancePreviousStrategyArena,
   resetStrategyArenaAccount as resetPreviousStrategyArenaAccount,
   type StrategyArenaState as PreviousStrategyArenaState } from "../lib/previous-strategy-arena.ts";
 
+const executionEligibleCount=(catalog:Map<string,{symbol:string;volume24hUsd:number}>)=>
+  [...catalog.values()].filter(row=>adaptiveSymbolAllowed(row.symbol)&&row.volume24hUsd>=FORWARD_EXECUTION_VOLUME_FLOOR_USD).length;
 const LOOP_MS = 2_000;
 // Whole-system display/health tolerance only. Executable quotes remain guarded
 // by the stricter per-symbol STALE_AFTER_MS/freshQuote checks; this must never
@@ -491,7 +493,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private contractCatalog = new Map<string, Awaited<ReturnType<typeof fetchActiveContracts>>[number]>();
   private gateRadarCache: Awaited<ReturnType<typeof fetchGateRadarTickers>> = [];
   private gateRadarAt=0;
-  private forwardLearningUniverse:string[]=[];
   private authorityReady = true;
   private authorityView = { positions: {} as RuntimeState["positions"], equity: CANONICAL_PAPER_REFERENCE_EQUITY, equityVersion: 0 };
   protected liveClient: GateLiveClient | null = null;
@@ -648,8 +649,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if (this.authorityReady) {
         try{
           const cachedCatalog=await ctx.storage.get<Awaited<ReturnType<typeof fetchActiveContracts>>>("gate-contract-catalog:v1");
-          if(cachedCatalog?.length){this.contractCatalog=new Map(cachedCatalog.map(row=>[row.symbol,row]));
-            this.forwardLearningUniverse=cachedCatalog.filter(row=>adaptiveSymbolAllowed(row.symbol)&&row.volume24hUsd>=FORWARD_EXECUTION_VOLUME_FLOOR_USD).map(row=>row.symbol);}
+          if(cachedCatalog?.length)this.contractCatalog=new Map(cachedCatalog.map(row=>[row.symbol,row]));
         }catch{/* cached Gate universe is optional; live refresh will retry */}
         const loaded = await Promise.all(REGIME_EXECUTION_UNIVERSE.map(async (symbol) => {
           try {
@@ -814,7 +814,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private refreshUniverse(now: number, ranked: Awaited<ReturnType<typeof fetchActiveContracts>>) {
     if (ranked.length === 0) throw new Error("contract catalog unavailable: empty active-contract response");
     this.contractCatalog = new Map(ranked.map((row) => [row.symbol, row]));
-    this.forwardLearningUniverse=ranked.filter(row=>adaptiveSymbolAllowed(row.symbol)&&row.volume24hUsd>=FORWARD_EXECUTION_VOLUME_FLOOR_USD).map(row=>row.symbol);
     this.runtime.lastUniverseAt = now;
     for (const symbol of new Set([...this.runtime.symbols,...this.runtime.liquidUniverse])) this.applyContractMetadata(symbol);
     this.ctx.waitUntil(this.ctx.storage.put("gate-contract-catalog:v1",ranked).catch(()=>undefined));
@@ -887,14 +886,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         const q=this.marketHub.quote(symbol,now);return q?[{symbol,last:q.mid,volume24hUsd:q.volume24hUsd,fundingRate:0}]:[];
       });
     const eligibleRows=this.marketHub.radarRows(known,now);
-    if(!eligibleRows.length)throw new Error("no Gate-tradable Forward Relation markets");
+    if(!eligibleRows.length)throw new Error("no Gate-tradable extremum-regime markets");
     const executionEligible=eligibleRows.filter(forwardExecutionUniverseEligible);
-    if(this.contractCatalog.size&&executionEligible.length)this.forwardLearningUniverse=executionEligible.map(row=>row.symbol);
     const locked=this.forwardState?.positions.map(p=>p.symbol)??[];
     const universeRows=selectAnchorOpportunityUniverse({rows:eligibleRows,limit:SCAN_UNIVERSE_SIZE,
       lockedSymbols:locked,currentSymbols:this.runtime.liquidUniverse,coreSymbols:DEFAULT_SYMBOLS,
       rotationSeed:Math.floor(now/BAR_MS),explorationSlots:2,liquiditySlots:0});
-    if(!universeRows.length)throw new Error("no liquid Forward Relation markets");
+    if(!universeRows.length)throw new Error("no liquid extremum-regime markets");
     this.runtime.liquidUniverse=universeRows.map(row=>row.symbol);
     this.runtime.radar=successfulRadarRuntime(this.runtime.radar,now,universeRows.length,[]);
     this.runtime.lastRadarAt=now;
@@ -943,45 +941,30 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private forwardHealth() {
-    const s=this.forwardState,now=Date.now(),opportunities=s?.opportunities??[];
-    const eligible=opportunities.filter(row=>row.eligible&&row.expiresAt>now);
-    const blocked=opportunities.filter(row=>!row.eligible&&row.expiresAt>now).slice(0,8).map(row=>({
-      symbol:row.symbol,side:row.side,mode:row.mode,reserve:row.reserve===true,score:Math.round(row.score),
-      netRate:row.netRemainingSpaceRate,edgeRatio:row.edgeRatio,relationStatus:row.relationStatus??null,
-      relationHealth:row.relationHealth??null,reason:row.reason,
-    }));
-    const frames=Object.values(s?.relationEngine?.frames??{});
-    const ruleDiagnostics=(s?.relationEngine?.rules??[]).slice(0,12).map(row=>({
-      id:row.id,scope:row.scope,horizon:row.horizon,side:row.side,status:row.status,health:row.health,
-      currentMatches:frames.filter(frame=>row.symbols.includes(frame.symbol)&&row.conditions.every(c=>
-        Number.isFinite(frame.x[c.feature])&&(c.op==="GE"?frame.x[c.feature]!>=c.threshold:frame.x[c.feature]!<=c.threshold))).length,
-      longNet:row.longNet,recentNet:row.recentNet,standardError:row.standardError,samples:row.samples,
-      longGroups:row.longGroups,recentGroups:row.recentGroups,livePathScore:row.livePathScore,
-      environmentFit:row.environmentFit,lastQualifiedAt:row.lastQualifiedAt,
-      bestHoldMinutes:row.exitProfile.bestHoldMinutes,feedbackDeadlineMinutes:row.exitProfile.feedbackDeadlineMinutes,
-      maxHoldMinutes:row.exitProfile.maxHoldMinutes,normalAdverseRate:row.exitProfile.normalAdverseRate,
-      targetRate:row.exitProfile.targetRate,retentionRate:row.exitProfile.retentionRate,winRate:row.exitProfile.winRate??null,
-      medianWinNetRate:row.exitProfile.medianWinNetRate??null,medianLossNetRate:row.exitProfile.medianLossNetRate??null,
-      adverseP80Rate:row.exitProfile.adverseP80Rate??null,adverseP95Rate:row.exitProfile.adverseP95Rate??null,reason:row.reason,
-    }));
+    const s=this.forwardState,now=Date.now(),opportunities=s?.opportunities??[],
+      eligible=opportunities.filter(row=>row.eligible&&row.expiresAt>now),
+      states=Object.values(s?.extremumRegime?.symbols??{}),
+      counts={trendUp:states.filter(row=>row.regime==="TREND_UP").length,trendDown:states.filter(row=>row.regime==="TREND_DOWN").length,
+        swing:states.filter(row=>row.regime==="SWING").length,weakening:states.filter(row=>row.regime==="WEAKENING").length,
+        transition:states.filter(row=>row.regime==="TRANSITION").length,ready:states.filter(row=>row.stage==="READY").length,
+        impulse:states.filter(row=>row.stage==="IMPULSE").length},
+      blocked=opportunities.filter(row=>!row.eligible&&row.expiresAt>now).slice(0,8).map(row=>({
+        symbol:row.symbol,side:row.side,mode:row.mode,score:Math.round(row.score),regime:row.regime??null,
+        stage:row.confirmationStage??null,topPressure:row.topPressure??null,bottomPressure:row.bottomPressure??null,
+        upSurvival:row.upSurvival??null,downSurvival:row.downSurvival??null,sourceCount:row.sourceCount??null,
+        disagreementRate:row.disagreementRate??null,reason:row.reason,
+      }));
     return {version:FORWARD_VERSION,engineVersion:ADAPTIVE_ENGINE_VERSION,policyVersion:s?.policyVersion??null,
       strategyAuthorityVersion:s?.strategyAuthorityVersion??null,executionVersion:s?.executionVersion??null,
       regionVersion:s?.regionVersion??null,regionLaunchVersion:s?.regionLaunchVersion??null,liveEligible:false,
       startedAt:s?.startedAt??null,initialEquity:s?.initialEquity??null,balance:s?.balance??null,lastCycleAt:s?.lastCycleAt??null,
       resolved:s?.resolved??0,openCount:s?.positions.length??0,targetPositionCount:null,positionLimit:null,
       executionBboCapacity:FORWARD_EXECUTION_BBO_CAP,minuteConfirmationCapacity:FORWARD_MINUTE_CONFIRMATION_CAP,
-      executionVolumeFloorUsd:FORWARD_EXECUTION_VOLUME_FLOOR_USD,learningEligibleMarkets:this.forwardLearningUniverse.length,
+      executionVolumeFloorUsd:FORWARD_EXECUTION_VOLUME_FLOOR_USD,learningEligibleMarkets:executionEligibleCount(this.contractCatalog),
       participationCandidateCount:opportunities.length,participationEligibleCount:eligible.length,
-      premiumOpportunityCount:eligible.filter(row=>row.premium).length,regionCount:Object.keys(s?.regions??{}).length,
-      relationSampleCount:s?.relationEngine?.samples.length??0,relationRuleCount:s?.relationEngine?.rules.length??0,
-      relationPendingCount:Object.keys(s?.relationEngine?.pending??{}).length,
-      relationFrameCount:Object.keys(s?.relationEngine?.frames??{}).length,
-      relationDiagnostics:s?.relationEngine?.diagnostics??null,entryDiagnostics:s?.entryDiagnostics??null,
-      entryValidation:{waiting:Object.values(s?.entryValidations??{}).filter(row=>row.status==="WAITING"&&row.expiresAt>now).length,
-        cancelled:Object.values(s?.entryValidations??{}).filter(row=>row.status==="CANCELLED"&&row.expiresAt>now).length},
-      familyCalibrationCount:Object.keys(s?.familyExperiment?.calibrations??{}).length,
-      ruleDiagnostics,candidateDiagnostics:blocked,storage:{persistedAt:s?.storage.persistedAt??0,
-        layout:s?.storage.layout??null,error:this.forwardError}};
+      premiumOpportunityCount:eligible.filter(row=>row.premium).length,extremumTracked:states.length,extremumCounts:counts,
+      legacyResearchSampleCount:s?.relationEngine?.samples.length??0,entryDiagnostics:s?.entryDiagnostics??null,
+      candidateDiagnostics:blocked,storage:{persistedAt:s?.storage.persistedAt??0,layout:s?.storage.layout??null,error:this.forwardError}};
   }
 
   protected liveMirrorView() {
@@ -1037,8 +1020,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const previous = state;
       const next = advanceForward({ state: previous, now, paths: this.strategyCandles,minutePaths:this.forwardMinutePaths(),
         quotes: this.forwardQuotes(now), contracts: this.regimeContracts(),
-        entrySymbols: this.runtime.liquidUniverse,learningSymbols:this.forwardLearningUniverse.length?this.forwardLearningUniverse:undefined,
-        allowDataCycle:dataCycleDue });
+        entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue });
       if (next.changed || !previous.storage.persistedAt) {
         next.state.storage = { persistedAt: now, error: null };
         const prepared = await prepareForwardWrite(previous.storage.persistedAt ? previous : null, next.state, now, {compact:true});
@@ -2377,9 +2359,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if (!skip || !trade || trade.id !== skip.planId || now >= trade.openedAt + 45 * 60_000) delete this.runtime.live.entrySkips[symbol];
     }
     const desiredTrades=Object.values(desiredPortfolio).sort((a,b)=>{
-      const sa=a.forwardSource,sb=b.forwardSource,shockA=sa?.entryContext?.mode==="SHOCK"?1:0,shockB=sb?.entryContext?.mode==="SHOCK"?1:0,
-        scoreA=sa?.entryContext?.entryScore??0,scoreB=sb?.entryContext?.entryScore??0;
-      return shockB-shockA||scoreB-scoreA||b.openedAt-a.openedAt;
+      const scoreA=a.forwardSource?.entryContext?.entryScore??0,scoreB=b.forwardSource?.entryContext?.entryScore??0;
+      return scoreB-scoreA||b.openedAt-a.openedAt;
     });
     for (const trade of desiredTrades) {
       const symbol = trade.symbol;
@@ -2731,8 +2712,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if(!this.forwardState||!this.runtime.evidence)return this.regimeQuotes(now);
     return Object.fromEntries(Object.entries(this.runtime.evidence).flatMap(([symbol,row])=>{
       if(!row?.fresh||row.bestBid==null||row.bestAsk==null||now-row.observedAt>STALE_AFTER_MS)return[];
+      const external=this.marketHub.quote(symbol,now);
       return[[symbol,{bestBid:row.bestBid,bestAsk:row.bestAsk,observedAt:row.observedAt,fresh:true,
-        entryReady:this.symbolEntryReady(symbol,now)}]];
+        entryReady:this.symbolEntryReady(symbol,now),sourceCount:external?.sourceCount??0,
+        disagreementRate:external?.disagreementRate??0,sourceBreadth:external?.sourceBreadth??0,
+        directionalAgreement:external?.directionalAgreement??.5,medianShortMove:external?.medianShortMove??0}]];
     }));
   }
 
@@ -3117,8 +3101,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
               ?(this.forwardMinutePaths()[symbol]!.at(-1)!.time+60)*1_000:null,
             failure:this.runtime.feedFailures[symbol]??null}))},
         measurements: state?.relationEngine?.samples ?? [],
-        relationResearch:{version:"forward-path-relation-v3",rules:state?.relationEngine?.rules??[],diagnostics:state?.relationEngine?.diagnostics??null},
-        research:{version:"forward-path-relation-v3-trade-review-v1",purpose:"逐单复盘成熟关系、关系生命周期、MFE/MAE、持仓反馈、利润保护与退出结果",trades:researchTrades},
+        retainedLegacyResearch:{version:"forward-path-relation-v3",rules:state?.relationEngine?.rules??[],diagnostics:state?.relationEngine?.diagnostics??null},
+        extremumResearch:{version:ADAPTIVE_ENGINE_VERSION,state:state?.extremumRegime??null,
+          purpose:"记录TOP/BOTTOM压力、趋势生命、确认阶段、多源一致性以及持仓期间的即时反馈与退出闭环"},
+        research:{version:"extremum-regime-v1-trade-review",purpose:"逐单复盘峰谷/趋势入场、MFE/MAE、即时反馈、利润保护、趋势死亡与退出结果",trades:researchTrades},
         archiveEndpoint: "/api/forward/archive", completeness: "当前快照与滚动样本；完整不可变记录按archive接口分页读取" });
     }
     if (path === "/forward-equity" && request.method === "GET") {
