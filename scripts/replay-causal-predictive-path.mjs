@@ -1,4 +1,4 @@
-import {readFileSync,writeFileSync} from "node:fs";
+import {existsSync,mkdirSync,readFileSync,writeFileSync} from "node:fs";
 import {buildPredictivePathEngine,predictiveExitDecision} from "../lib/predictive-path-engine.ts";
 import {PREDICTIVE_PATH_POLICY,PREDICTIVE_PATH_VERSION} from "../lib/predictive-path-types.ts";
 
@@ -6,6 +6,8 @@ const INPUT=process.env.CAUSAL_REPLAY_DATASET??"/tmp/causal-replay-gate.json";
 const OUTPUT=process.env.CAUSAL_REPLAY_OUTPUT??"/tmp/causal-replay-report.json";
 const DESIGN_MONTH=process.env.CAUSAL_DESIGN_MONTH??"202607";
 const HOLDOUT_MONTH=process.env.CAUSAL_HOLDOUT_MONTH??"202608";
+const CACHE=process.env.CAUSAL_REPLAY_CACHE??".causal-replay-cache";
+mkdirSync(CACHE,{recursive:true});
 const raw=JSON.parse(readFileSync(INPUT,"utf8"));
 if(raw.interval!=="5m")throw new Error("causal replay requires 5m Gate data");
 const datasets=raw.datasets??[],symbols=datasets.map(d=>d.symbol);
@@ -112,11 +114,17 @@ function percentile(values,p){const a=values.filter(Number.isFinite).sort((x,y)=
 
 const external={},derivatives={};let cursor=0;
 async function loadWorker(){
-  while(cursor<symbols.length){const symbol=symbols[cursor++];
-    const [okx,kucoin,stats,funding,premium]=await Promise.all([
-      okxHistory(symbol,design.from,holdout.to),kucoinHistory(symbol,design.from,holdout.to),
-      gateStats(symbol,design.from,holdout.to),gateFunding(symbol,design.from,holdout.to),gatePremium(symbol,design.from,holdout.to)
-    ]);
+  while(cursor<symbols.length){const symbol=symbols[cursor++],cachePath=CACHE+"/"+symbol+"-"+DESIGN_MONTH+"-"+HOLDOUT_MONTH+".json";
+    let okx,kucoin,stats,funding,premium;
+    if(existsSync(cachePath)){
+      ({okx,kucoin,stats,funding,premium}=JSON.parse(readFileSync(cachePath,"utf8")));
+    }else{
+      [okx,kucoin,stats,funding,premium]=await Promise.all([
+        okxHistory(symbol,design.from,holdout.to),kucoinHistory(symbol,design.from,holdout.to),
+        gateStats(symbol,design.from,holdout.to),gateFunding(symbol,design.from,holdout.to),gatePremium(symbol,design.from,holdout.to)
+      ]);
+      writeFileSync(cachePath,JSON.stringify({okx,kucoin,stats,funding,premium})+"\n");
+    }
     external[symbol]={okx:new Map(okx.map(x=>[x.time,x])),kucoin:new Map(kucoin.map(x=>[x.time,x]))};
     derivatives[symbol]={stats,funding,premium};
     console.log(symbol+" external="+okx.length+"/"+kucoin.length+" stats="+stats.length+" funding="+funding.length+" premium="+premium.length);
@@ -159,7 +167,8 @@ function ancillary(symbol,time){
 function runWindow(window,label){
   const commonTimes=(gateRows.get(symbols[0])??[]).map(x=>x.time).filter(t=>t>=window.from&&t<window.to);
   let state={version:PREDICTIVE_PATH_VERSION,updatedAt:window.from*1000,symbols:{},directionMemory:{}},positions=new Map(),trades=[],
-    eligibleSignals=0,waitSignals=0,directionChecks=0,directionCorrect=0;
+    eligibleSignals=0,waitSignals=0,directionChecks=0,directionCorrect=0,entryDirectionChecks=0,entryDirectionCorrect=0,
+    eligibleFutureNetSum=0,eligibleFutureNetCount=0;
   for(const time of commonTimes){
     const paths={},quotes={},anc={};
     for(const symbol of symbols){
@@ -173,8 +182,14 @@ function runWindow(window,label){
     waitSignals+=Object.values(state.symbols).filter(x=>!x.enterNow&&x.rawSide).length;
     for(const [symbol,forecast] of Object.entries(state.symbols)){
       const rows=gateRows.get(symbol),idx=gateIndex.get(symbol)?.get(time);if(idx==null||idx+12>=rows.length)continue;
-      if(forecast.stableSide){directionChecks++;const future=rows[idx+12].close/rows[idx].close-1;
+      const future=rows[idx+12].close/rows[idx].close-1;
+      if(forecast.stableSide){directionChecks++;
         if((forecast.stableSide==="LONG"&&future>0)||(forecast.stableSide==="SHORT"&&future<0))directionCorrect++;}
+      if(forecast.enterNow&&forecast.stableSide&&forecast.rawSide===forecast.stableSide){
+        entryDirectionChecks++;const d=forecast.stableSide==="LONG"?1:-1,net=d*future-ROUND_TRIP_COST;
+        eligibleFutureNetSum+=net;eligibleFutureNetCount++;
+        if(d*future>0)entryDirectionCorrect++;
+      }
     }
     for(const [symbol,pos] of [...positions]){
       const rows=gateRows.get(symbol),idx=gateIndex.get(symbol)?.get(time),forecast=state.symbols[symbol],memory=state.directionMemory[symbol];
@@ -215,15 +230,17 @@ function runWindow(window,label){
     mfeBeatMaeRate:closed.length?mfeBeat/closed.length:0,first15AdverseDominanceRate:closed.length?immediateBad/closed.length:0,
     winnerMedianNetRate:winnerMedian,avgWinRate:avgWin,avgLossRate:avgLoss,payoffRatio:avgLoss>0?avgWin/avgLoss:0,
     directionChecks,directionAccuracy:directionChecks?directionCorrect/directionChecks:0,
+    entryDirectionChecks,entryDirectionAccuracy:entryDirectionChecks?entryDirectionCorrect/entryDirectionChecks:0,
+    eligibleFutureAvgNet60:eligibleFutureNetCount?eligibleFutureNetSum/eligibleFutureNetCount:0,
     exitReasons:Object.fromEntries([...new Set(closed.map(t=>t.reason))].map(r=>[r,closed.filter(t=>t.reason===r).length])),
     symbols:Object.fromEntries(symbols.map(s=>[s,{trades:closed.filter(t=>t.symbol===s).length,net:closed.filter(t=>t.symbol===s).reduce((n,t)=>n+t.net,0)}])),
     sample:closed.slice(-20)};
 }
 const thresholds={
-  design:{minTrades:35,minProfitFactor:1.05,minAvgNetRate:0,minMedianHoldMinutes:25,maxFastExitRate:.35,maxCatastrophicStopRate:.38,
-    minMfeBeatMaeRate:.55,maxFirst15AdverseDominanceRate:.48,minWinnerMedianNetRate:.006,minDirectionAccuracy:.52},
-  holdout:{minTrades:25,minProfitFactor:1.00,minAvgNetRate:0,minMedianHoldMinutes:25,maxFastExitRate:.40,maxCatastrophicStopRate:.42,
-    minMfeBeatMaeRate:.52,maxFirst15AdverseDominanceRate:.52,minWinnerMedianNetRate:.005,minDirectionAccuracy:.50}
+  design:{minClosedTrades:35,minProfitFactor:1.05,minAvgNetRate:0,minMedianHoldMinutes:25,maxFastExitRate:.35,maxCatastrophicStopRate:.38,
+    minMfeBeatMaeRate:.55,maxFirst15AdverseDominanceRate:.48,minWinnerMedianNetRate:.006,minEntryDirectionAccuracy:.55,minEligibleFutureAvgNet60:0},
+  holdout:{minClosedTrades:25,minProfitFactor:1.00,minAvgNetRate:0,minMedianHoldMinutes:25,maxFastExitRate:.40,maxCatastrophicStopRate:.42,
+    minMfeBeatMaeRate:.52,maxFirst15AdverseDominanceRate:.52,minWinnerMedianNetRate:.005,minEntryDirectionAccuracy:.52,minEligibleFutureAvgNet60:0}
 };
 function failures(m,t){
   const out=[];for(const [key,value] of Object.entries(t)){
