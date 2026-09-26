@@ -79,7 +79,7 @@ test("proportional LIVE sizing preserves source leverage and does not enlarge a 
 test("stale events are never replayed into LIVE and adverse chase is bounded",()=>{
   const {trade}=source();
   assert.equal(mirrorSourceFresh(trade,trade.id,trade.openedAt+1000),true);
-  assert.equal(mirrorSourceFresh(trade,trade.id,trade.openedAt+31_000),false);
+  assert.equal(mirrorSourceFresh(trade,trade.id,trade.openedAt+(trade.expectedHoldMinutes??trade.rule.horizon)*60_000),false);
   const favorable=trade.side==="LONG"?trade.entryPrice*.999:trade.entryPrice*1.001;
   assert.equal(liveEntryDriftGuard(trade,favorable).adverse,0);
   const bad=trade.side==="LONG"?trade.entryPrice*1.02:trade.entryPrice*.98;
