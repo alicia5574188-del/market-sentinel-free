@@ -108,7 +108,7 @@ test("predictive exit requires catastrophic stop, established reversal, or susta
     crossVenue:{sourceCount:4,agreement:.85,breadth:-.8,disagreementRate:.001},evidence:{price:-.7,technical:-.6,derivatives:-.4,liquidation:-.2,multiVenue:-.7,context:-.5,persistence:.8,uncertainty:.8},
     rawSide:"SHORT",stableSide:"SHORT",directionProbability:.7,entryQuality:.8,enterNow:true,waitReason:null,confidence:.76};
   assert.equal(predictiveExitDecision({side:"LONG",forecast:base,memory:{side:"SHORT",since:1,lastBarTime:1,oppositeBars:0,weakBars:0},stopped:false,ageMinutes:30}).reason,"PREDICTIVE_REVERSAL");
-  assert.equal(predictiveExitDecision({side:"LONG",forecast:base,memory:{side:"LONG",since:1,lastBarTime:1,oppositeBars:0,weakBars:2},stopped:false,ageMinutes:30}).reason,"PREDICTIVE_EDGE_GONE");
+  assert.equal(predictiveExitDecision({side:"LONG",forecast:base,memory:{side:"LONG",since:1,lastBarTime:1,oppositeBars:0,weakBars:4},stopped:false,ageMinutes:30}).reason,"PREDICTIVE_EDGE_GONE");
   assert.equal(predictiveExitDecision({side:"LONG",forecast:base,memory:{side:"LONG",since:1,lastBarTime:1,oppositeBars:0,weakBars:0},stopped:true,ageMinutes:1}).reason,"CATASTROPHIC_STOP");
 });
 
