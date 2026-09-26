@@ -685,37 +685,49 @@ function nextCandleAt(paths:Record<string,Candle[]>,now:number){
   let latest=0;for(const p of Object.values(paths)){const a=validPath(p,now);if(a)latest=Math.max(latest,(a.at(-1)!.time+300)*1000);}return latest;
 }
 export function advanceForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;minutePaths?:Record<string,Candle[]>;daily?:Record<string,Candle[]>;
-  quotes:Record<string,Quote>;contracts:Record<string,Contract>;entrySymbols?:Iterable<string>;learningSymbols?:Iterable<string>;allowDataCycle?:boolean;legacyDrainOnly?:boolean}){
+  quotes:Record<string,Quote>;contracts:Record<string,Contract>;ancillary?:Record<string,PredictiveAncillary>;entrySymbols?:Iterable<string>;
+  learningSymbols?:Iterable<string>;allowDataCycle?:boolean;legacyDrainOnly?:boolean}){
   const s=normalizeForward(structuredClone(input.state),input.now),
     before=JSON.stringify({p:s.positions.map(t=>[t.id,t.status,t.stopPrice,t.profitFloorRate]),h:s.history.length,b:s.balance,r:s.revision});
   s.entryValidations={};s.lastQuoteCycleAt=input.now;
   const allowed=input.entrySymbols?new Set(input.entrySymbols):undefined,
     candleAt=nextCandleAt(input.paths,input.now),
     dataDue=input.allowDataCycle!==false&&candleAt>s.lastCandleAt,
-    built=buildExtremumRegime({paths:input.paths,minutePaths:input.minutePaths,quotes:input.quotes,
-      previous:s.extremumRegime,now:input.now,allowed});
-  s.extremumRegime=built.state;s.marketPulse=built.pulse;s.opportunities=built.opportunities;
+    built=buildPredictivePathEngine({paths:input.paths,quotes:input.quotes,ancillary:input.ancillary,artifact:PREDICTIVE_ARTIFACT,now:input.now,allowed}),
+    forecasts=Object.values(built.state.symbols);
+  s.predictivePath=built.state;s.opportunities=input.legacyDrainOnly?[]:built.candidates.map(predictiveOpportunity);
+  const up=forecasts.filter(f=>f.upProbability.m60>=.55).length,down=forecasts.filter(f=>f.upProbability.m60<=.45).length,
+    neutral=Math.max(0,forecasts.length-up-down),avgDirection=forecasts.length
+      ?forecasts.reduce((n,f)=>n+(f.upProbability.m60-.5),0)/forecasts.length:0,
+    avgStrength=forecasts.length?forecasts.reduce((n,f)=>n+Math.abs(f.upProbability.m60-.5)*2,0)/forecasts.length:0,
+    avgExpansion=forecasts.length?forecasts.reduce((n,f)=>n+Math.min(.05,Math.abs(f.expectedReturn.m60)),0)/forecasts.length/.05:0;
+  s.marketPulse={at:input.now,up,down,neutral,bias:avgDirection>.025?"UP":avgDirection<-.025?"DOWN":"MIXED",
+    strength:clip(avgStrength),expansion:clip(avgExpansion)};
   if(dataDue){s.lastCandleAt=candleAt;s.lastCycleAt=input.now;}
-  s.selectedSymbols=Object.values(s.extremumRegime.symbols).sort((a,b)=>b.watchScore-a.watchScore).slice(0,30).map(row=>row.symbol);
+  s.selectedSymbols=[...forecasts].sort((a,b)=>{
+    const av=Math.abs(a.upProbability.m60-.5)+Math.min(.10,Math.abs(a.expectedReturn.m60))*3+a.confidence*.15,
+      bv=Math.abs(b.upProbability.m60-.5)+Math.min(.10,Math.abs(b.expectedReturn.m60))*3+b.confidence*.15;
+    return bv-av;
+  }).slice(0,30).map(row=>row.symbol);
 
+  managePredictiveTrades(s,input.quotes,input.now);
+  // Positions born before predictive cutover retain their original frozen lifecycle.
   manageExtremumTrades(s,input.quotes,input.now);
-  // Positions opened before cutover keep their frozen lifecycle and cannot gain
-  // new-entry authority from the retired relation/region/interrupt stack.
   markAndManage(s,input.quotes,input.now);
 
   const mark=equityMark(s,input.quotes,input.now);s.peakEquity=Math.max(s.peakEquity,mark.equity);
   s.maxDrawdown=Math.max(s.maxDrawdown,1-mark.equity/Math.max(s.peakEquity,1));updateDaily(s,input.now,mark.equity);
-  rotateIfNeeded(s,input.quotes,input.contracts,input.now,mark.equity);
-  const opened=fillForwardPortfolio(s,input.quotes,input.contracts,input.now,mark.equity,false);
+  if(!input.legacyDrainOnly)rotateIfNeeded(s,input.quotes,input.contracts,input.now,mark.equity);
+  const opened=input.legacyDrainOnly?0:fillForwardPortfolio(s,input.quotes,input.contracts,input.now,mark.equity,false);
 
-  const states=Object.values(s.extremumRegime.symbols),trendUp=states.filter(x=>x.regime==="TREND_UP").length,
-    trendDown=states.filter(x=>x.regime==="TREND_DOWN").length,swing=states.filter(x=>x.regime==="SWING").length,
-    transition=states.filter(x=>x.regime==="TRANSITION"||x.regime==="WEAKENING").length,
+  const eligible=s.opportunities.filter(o=>o.eligible&&o.expiresAt>input.now),
+    longForecasts=forecasts.filter(f=>f.preferredSide==="LONG").length,
+    shortForecasts=forecasts.filter(f=>f.preferredSide==="SHORT").length,
     totalRisk=existingRisk(s),riskUse=mark.equity>0?100*totalRisk/mark.equity:0;
-  s.fitDiagnostics={tested:states.length,qualified:s.opportunities.filter(o=>o.eligible).length,trainGroups:0,checkGroups:0,
-    latestAt:input.now,rapidQualified:s.opportunities.filter(o=>o.confirmationStage==="READY").length,activeLong:trendUp,activeShort:trendDown};
-  s.latestReason=`峰谷状态系统：趋势多 ${trendUp} · 趋势空 ${trendDown} · 震荡 ${swing} · 弱化/切换 ${transition}；`
-    +`当前${s.positions.length}笔持仓，${s.opportunities.filter(o=>o.eligible).length}个可参与机会，计划风险已用${riskUse.toFixed(1)}%。`;
+  s.fitDiagnostics={tested:forecasts.length,qualified:eligible.length,trainGroups:0,checkGroups:0,
+    latestAt:input.now,rapidQualified:eligible.length,activeLong:longForecasts,activeShort:shortForecasts};
+  s.latestReason=`预测路径系统：${forecasts.length}个市场完成预测 · LONG ${longForecasts} · SHORT ${shortForecasts} · ${eligible.length}个当前可执行；`
+    +`当前${s.positions.length}笔持仓，计划风险已用${riskUse.toFixed(1)}%。`;
   if(opened)s.latestReason+=` 本轮新开${opened}笔。`;
   const after=JSON.stringify({p:s.positions.map(t=>[t.id,t.status,t.stopPrice,t.profitFloorRate]),h:s.history.length,b:s.balance,r:s.revision});
   return{state:s,changed:before!==after||dataDue,protectionChanged:input.state.positions.some(t=>s.positions.find(n=>n.id===t.id)?.stopPrice!==t.stopPrice)};
