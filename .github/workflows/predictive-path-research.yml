@@ -1,0 +1,32 @@
+name: Predictive Path Research Stage 1
+
+on:
+  push:
+    branches: [research/predictive-path-engine-v1-20260926]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    if: github.head_ref == 'research/predictive-path-engine-v1-20260926' || github.ref == 'refs/heads/research/predictive-path-engine-v1-20260926'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+          cache: npm
+      - run: npm ci
+      - name: Causal dataset and labels
+        run: node --experimental-strip-types --test tests/predictive-path-research.test.ts
+      - name: Research branch must not alter production strategy or execution
+        run: |
+          set -euo pipefail
+          git fetch origin main --depth=1
+          git diff --exit-code origin/main --             app             lib             worker             LIVE_MIRROR_CONTRACT.md             wrangler.jsonc             package.json             package-lock.json
+      - name: Diff integrity
+        run: git diff --check origin/main...HEAD
