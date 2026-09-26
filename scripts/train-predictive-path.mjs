@@ -36,7 +36,8 @@ const samples=[];
 for(const dataset of datasets){
   const rows=(dataset.rows??[]).filter(x=>x&&x.open>0&&x.high>=x.low&&x.low>0&&x.close>0).sort((a,b)=>a.time-b.time);
   for(let i=60;i<rows.length-25;i+=STRIDE){
-    const current=rows[i],bars=rows.slice(i-80,i+1),feature=buildPredictiveFeatures({symbol:dataset.symbol,decisionAt:(current.time+300)*1000,bars5m:bars,
+    const current=rows[i];if(current.time<Number(ancillaryRaw.from??0))continue;
+    const bars=rows.slice(i-80,i+1),feature=buildPredictiveFeatures({symbol:dataset.symbol,decisionAt:(current.time+300)*1000,bars5m:bars,
       ancillary:ancillaryAt(dataset.symbol,current.time)});
     if(!feature)continue;
     const entry=current.close,ret={},future={};
