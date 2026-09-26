@@ -1,5 +1,20 @@
-export const PREDICTIVE_PATH_VERSION="predictive-path-v1";
+export const PREDICTIVE_PATH_VERSION="causal-predictive-path-v1";
 
+export const PREDICTIVE_PATH_POLICY={
+  directionAcquire:.60,
+  directionKeep:.50,
+  directionFlip:.62,
+  flipBars:2,
+  edgeExitProbability:.45,
+  minTouch:.56,
+  minSources:2,
+  maxDisagreement:.012,
+  minimumNetEdge:.00035,
+  catastrophicStopMin:.005,
+  catastrophicStopMax:.03,
+} as const;
+
+export type PredictiveSide="LONG"|"SHORT";
 export type PredictiveBar={time:number;open:number;high:number;low:number;close:number;volume:number};
 export type PredictiveQuote={bestBid:number;bestAsk:number;observedAt:number;fresh:boolean;entryReady?:boolean;
   sourceCount?:number;disagreementRate?:number;sourceBreadth?:number;directionalAgreement?:number;medianShortMove?:number};
@@ -9,41 +24,40 @@ export type PredictiveAncillary={fundingRate?:number;basisRate?:number;openInter
   btcReturn15m?:number;btcReturn60m?:number;ethReturn15m?:number;ethReturn60m?:number;marketBreadth?:number};
 export type PredictiveFeatureVector={version:typeof PREDICTIVE_PATH_VERSION;symbol:string;decisionAt:number;names:string[];values:number[];
   groups:Record<string,number[]>};
-export type LinearHead={kind?:"linear";bias:number;weights:number[];calibration?:{a:number;b:number}};
-export type PredictiveTreeNode={f?:number;t?:number;d?:boolean;l?:PredictiveTreeNode;r?:PredictiveTreeNode;v?:number};
-export type TreeHead={kind:"lgbm";baseScore:number;trees:PredictiveTreeNode[];calibration?:{a:number;b:number}};
-export type PredictiveHead=LinearHead|TreeHead;
-export type PredictivePathArtifact={
-  version:typeof PREDICTIVE_PATH_VERSION;
-  trainedAt:number;
-  source:string;
-  featureNames:string[];
-  mean?:number[];
-  scale?:number[];
-  costRate:number;
-  horizons:[15,30,60,120];
-  direction:Record<"15"|"30"|"60"|"120",PredictiveHead>;
-  expectedReturn:Record<"15"|"30"|"60"|"120",PredictiveHead>;
-  longMfe60:PredictiveHead;
-  longMae60:PredictiveHead;
-  shortMfe60:PredictiveHead;
-  shortMae60:PredictiveHead;
-  longTargetBeforeRisk60:PredictiveHead;
-  shortTargetBeforeRisk60:PredictiveHead;
-  longEntryRegret10:PredictiveHead;
-  shortEntryRegret10:PredictiveHead;
-  policy:{directionMin:number;touchMin:number;regretMax:number;minNetEv:number;minSources:number;maxDisagreement:number};
-  metrics:Record<string,number>;
+
+export type PredictiveEvidence={
+  price:number;technical:number;derivatives:number;liquidation:number;multiVenue:number;context:number;
+  persistence:number;uncertainty:number;
 };
+
+export type PredictiveDirectionMemory={
+  side:PredictiveSide|null;
+  since:number;
+  lastBarTime:number;
+  oppositeBars:number;
+  weakBars:number;
+};
+
 export type PredictivePathForecast={
-  version:typeof PREDICTIVE_PATH_VERSION;symbol:string;at:number;
+  version:typeof PREDICTIVE_PATH_VERSION;symbol:string;at:number;lastBarTime:number;
   upProbability:{m15:number;m30:number;m60:number;m120:number};
   expectedReturn:{m15:number;m30:number;m60:number;m120:number};
   long:{mfe60:number;mae60:number;targetBeforeRisk60:number;entryRegret10:number;netEv60:number};
   short:{mfe60:number;mae60:number;targetBeforeRisk60:number;entryRegret10:number;netEv60:number};
   crossVenue:{sourceCount:number;agreement:number;breadth:number;disagreementRate:number};
-  preferredSide:"LONG"|"SHORT"|null;
+  evidence:PredictiveEvidence;
+  rawSide:PredictiveSide|null;
+  stableSide:PredictiveSide|null;
+  directionProbability:number;
+  entryQuality:number;
   enterNow:boolean;
   waitReason:string|null;
   confidence:number;
+};
+
+export type PredictiveEngineState={
+  version:typeof PREDICTIVE_PATH_VERSION;
+  updatedAt:number;
+  symbols:Record<string,PredictivePathForecast>;
+  directionMemory:Record<string,PredictiveDirectionMemory>;
 };
