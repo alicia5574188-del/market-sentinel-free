@@ -2913,12 +2913,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (!force && this.runtime.lastHeartbeatAt != null && now - this.runtime.lastHeartbeatAt < HEARTBEAT_MS) return;
     const openCount = Object.values(this.runtime.positions).filter((position) => position?.status === "OPEN").length;
     const journal=new Map(this.liveJournal);
-    const writes=1+journal.size;
-    const reservation=this.reserveNonAlarmWrites(writes,openCount);
-    if (!reservation) {
-      if (force) throw new Error("Durable Object non-alarm write reserve reached");
-      return;
-    }
+    const writes=1+journal.size,critical=force||journal.size>0;
+    const reservation=critical?this.reserveCriticalWrites(writes):this.reserveNonAlarmWrites(writes,openCount);
+    if (!reservation) return;
     try {
       // Full immutable source snapshots live outside the bounded hot checkpoint.
       // A binding and its entry reservation commit atomically BEFORE a Gate call.
@@ -2929,7 +2926,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const checkpoint = { ...this.runtime, live:{...this.runtime.live,
         entries:Object.fromEntries(Object.entries(this.runtime.live.entries).map(([k,e])=>[k,compact(e)])),
         positions:Object.fromEntries(Object.entries(this.runtime.live.positions).map(([k,p])=>[k,compact(p)]))},
-        analysisMs: [], nonAlarmWrites: this.runtime.nonAlarmWrites + this.nonAlarmPendingWrites, lastHeartbeatAt: now };
+        analysisMs: [], nonAlarmWrites: this.runtime.nonAlarmWrites + this.nonAlarmPendingWrites,
+        criticalWrites: this.runtime.criticalWrites + this.criticalPendingWrites, lastHeartbeatAt: now };
       await this.ctx.storage.transaction(async transaction=>{
         await transaction.put({checkpoint,...Object.fromEntries(journal)});
       });
@@ -3230,7 +3228,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         liveMirror: {...this.liveMirrorView(),rows:undefined},
         liveTurnover:this.turnoverStatus(),
         resourceAccounting:{policy:RESOURCE_DAY_POLICY,day:this.runtime.utcDay,nonAlarmWrites:this.runtime.nonAlarmWrites,
-          cap:NON_ALARM_WRITE_CAP,pendingWrites:this.nonAlarmPendingWrites??0,
+          cap:NON_ALARM_WRITE_CAP,pendingWrites:this.nonAlarmPendingWrites??0,criticalWrites:this.runtime.criticalWrites,
+          criticalPendingWrites:this.criticalPendingWrites??0,financialAdmission:"independent-of-optional-cap",
           criticalProtection:protectionWriteBudgetView(this.forwardProtectionBudget,Date.now()),
           previous:this.runtime.resourceRollovers?.at(-1)??null,forwardCompression:this.forwardCompression},
         forward: this.forwardHealth(),
@@ -3397,6 +3396,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           maxAncillaryConcurrency: MAX_ANCILLARY_CONCURRENCY, maxSubrequestsPerAlarm: 32, plannedAlarmRequestsPerDay: 43_200,
           plannedAlarmWritesPerDay: 43_200, watchdogWriteReservePerDay: WATCHDOG_WRITE_RESERVE,
           nonAlarmWriteCapPerDay: NON_ALARM_WRITE_CAP, nonAlarmWritesToday: this.runtime.nonAlarmWrites,
+          criticalFinancialWritesToday:this.runtime.criticalWrites,criticalFinancialPending:this.criticalPendingWrites??0,
+          criticalFinancialAdmission:"independent-of-optional-cap",
           criticalProtection:protectionWriteBudgetView(this.forwardProtectionBudget,Date.now()),
           plannedDoWritesPerDay: PRIMARY_PLANNED_DO_ROWS,
           twoMemberReservedDoRowsPerDay: TWO_MEMBER_PLANNED_DO_ROWS,
