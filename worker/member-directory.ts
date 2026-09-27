@@ -1,6 +1,6 @@
 /// <reference types="@cloudflare/workers-types" />
 import { DurableObject } from "cloudflare:workers";
-import { MEMBERS_VERSION, MEMBER_LIMIT, MEMBER_ACTIVE_LIMIT, MEMBER_AUTH_VERSION, digestMember, randomHex, validMemberId,
+import { MEMBERS_VERSION, MEMBER_LIMIT, MEMBER_ACTIVE_LIMIT, MEMBER_USAGE_HEARTBEAT_MS, MEMBER_AUTH_VERSION, digestMember, randomHex, validMemberId,
   encryptMemberText, decryptMemberText, normalizeMemberUsername, normalizeInviteCode, validateMemberPassword, createMemberPassword, verifyMemberPassword } from "../lib/member-auth.ts";
 import type { CloudflareEnv } from "./index-clean.ts";
 import type { ForwardState, Trade, forwardSummary } from "../lib/forward-relations.ts";
@@ -239,7 +239,12 @@ export class MemberDirectory extends DurableObject<CloudflareEnv> {
         if(!Number.isSafeInteger(b.fills)||b.fills<0||!Number.isFinite(b.reportedAt)||b.reportedAt<=0||b.reportedAt>now+1000
           ||(b.through!==null&&(!Number.isFinite(b.through)||b.through<=0||b.through>now+1000))||typeof b.partial!=="boolean"||typeof b.error!=="boolean")return json({error:"统计参数无效"},400);
         await this.ctx.storage.transaction(async tx=>{
-          const row=await tx.get<MemberRecord>(`member:${id}`);if(row&&b.reportedAt>(row.usage?.reportedAt??0))await tx.put(`member:${id}`,{...row,usage:{notional:b.notional,fills:b.fills,through:b.through,reportedAt:b.reportedAt,partial:b.partial,error:b.error}});
+          const row=await tx.get<MemberRecord>(`member:${id}`),prior=row?.usage;
+          if(!row||b.reportedAt<=(prior?.reportedAt??0))return;
+          const changed=!prior||prior.notional!==b.notional||prior.fills!==b.fills||prior.through!==b.through
+            ||prior.partial!==b.partial||prior.error!==b.error,
+            heartbeatDue=!prior||b.reportedAt-prior.reportedAt>=MEMBER_USAGE_HEARTBEAT_MS;
+          if(changed||heartbeatDue)await tx.put(`member:${id}`,{...row,usage:{notional:b.notional,fills:b.fills,through:b.through,reportedAt:b.reportedAt,partial:b.partial,error:b.error}});
         });return json({ok:true});
       }
       return json({error:"操作不可用"},404);
