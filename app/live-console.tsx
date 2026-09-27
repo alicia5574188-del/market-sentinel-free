@@ -35,7 +35,7 @@ function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade
     let active=true,reading=false;
     const load=async()=>{if(reading)return;reading=true;try{const value=await operatorRequest<HistoryView>("/api/live/history");if(active){setHistoryView(value);setHistoryError(null);}}
       catch(e){if(active&&!(e instanceof OperatorRequestError&&e.status===0))setHistoryError(e instanceof Error?e.message:"历史记录读取失败");}finally{reading=false;}};
-    void load();const timer=setInterval(()=>void load(),10000);return()=>{active=false;clearInterval(timer);};
+    void load();const timer=setInterval(()=>void load(),auth.role==="member"?60000:10000);return()=>{active=false;clearInterval(timer);};
   },[auth?.authenticated,auth?.memberId,section,view]);
   const submitting=useRef(false);
   useEffect(()=>{const timer=setInterval(()=>setClock(Date.now()),1000);return()=>clearInterval(timer);},[]);
