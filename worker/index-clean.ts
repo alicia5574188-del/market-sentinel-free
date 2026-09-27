@@ -2644,11 +2644,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if(wasEnabled!==enabled||this.runtime.live.changedAt==null)this.runtime.live.changedAt = changedAt;
     this.runtime.live.lastError = null;
     try {
-      const intentReservation=this.reserveCriticalWrites(1);
-      try {
-        await this.ctx.storage.put(`${LIVE_PARITY_PREFIX}owner-intent`,{enabled,changedAt:this.runtime.live.changedAt,activation:this.runtime.live.activation??null});
-        intentReservation.finish(true);
-      } finally {intentReservation.finish(false);}
+      await this.ctx.storage.put(`${LIVE_PARITY_PREFIX}owner-intent`,{enabled,changedAt:this.runtime.live.changedAt,activation:this.runtime.live.activation??null});
       await this.saveCheckpoint(Date.now(),true);
       await this.syncLive(Date.now(), enabled, !enabled);
       this.recordLiveAudit({ observedAt: Date.now(), symbol: null, planId: null, stage: "LIVE_CONTROL", level: "INFO",
