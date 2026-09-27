@@ -48,6 +48,7 @@ import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite, p
 import { advanceCounterfactualResearch, counterfactualResearchView, counterfactualResearchWrites,
   initialCounterfactualResearch, readCounterfactualResearch, type CounterfactualResearchState } from "../lib/market-intelligence-research.ts";
 import { nextProtectionWriteBudget, readProtectionWriteBudget, protectionWriteBudgetView,
+  OPTIONAL_WRITE_GUARD_PER_DAY, PAID_PLAN_PLANNED_MONTHLY_ROWS, PAID_DO_INCLUDED_ROWS_PER_MONTH, PAID_PLAN_ROW_SAFETY_LIMIT,
   PRIMARY_PLANNED_DO_ROWS, TWO_MEMBER_PLANNED_DO_ROWS, type ProtectionWriteBudget } from "../lib/forward-write-budget.ts";
 import { EquityReader } from "../lib/equity-reader.ts";
 import { EQUITY_CURVE_VERSION } from "../lib/equity-curve.ts";
@@ -93,7 +94,7 @@ const SCAN_UNIVERSE_SIZE = 30;
 // Optional/background writes may yield at this self-imposed cap. Financial
 // authority, owner intent and LIVE durability use a separate non-blocking lane
 // and are never rejected merely because analytics/cache work used this budget.
-const NON_ALARM_WRITE_CAP = 100_000;
+const NON_ALARM_WRITE_CAP = OPTIONAL_WRITE_GUARD_PER_DAY;
 const WATCHDOG_WRITE_RESERVE = 2_880;
 const AUTHORITY_SCHEMA_VERSION = 1;
 const DEFAULT_SYMBOLS = ["BTC_USDT", "ETH_USDT", "SOL_USDT"];
@@ -3352,7 +3353,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           realtimeCapacity: FORWARD_EXECUTION_BBO_CAP, minuteConfirmationCapacity: FORWARD_MINUTE_CONFIRMATION_CAP,
           plannedDoWritesPerDay: PRIMARY_PLANNED_DO_ROWS,
           twoMemberReservedDoRowsPerDay: TWO_MEMBER_PLANNED_DO_ROWS,
-          resourceModelScope:"reserved rows; retries, controls, other workloads, request traffic and duration not certified",
+          plannedDoRowsPer31DayMonth:PAID_PLAN_PLANNED_MONTHLY_ROWS,
+          paidDoIncludedRowsPerMonth:PAID_DO_INCLUDED_ROWS_PER_MONTH,
+          paidDoSafetyLimitRowsPerMonth:PAID_PLAN_ROW_SAFETY_LIMIT,
+          resourceModelScope:"Workers Paid row-write contract; requests, duration and unbounded external retries remain separately metered",
           capacityCertified: false,
           plannedTotalDoRequestsPerDay: 53_280,
           plannedMaxD1BilledWritesPerDay: 4_800,
