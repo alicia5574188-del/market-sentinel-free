@@ -177,3 +177,16 @@ test("Forward long-run storage is hot/cold bounded and keeps thesis dedupe outsi
   assert.match(forward,/o\.thesisId&&s\.consumedTheses\[o\.thesisId\]/);
   assert.match(forward,/next\.consumedTheses=\{\.\.\.prior\.consumedTheses\}/);
 });
+
+
+test("counterfactual checkpoints never use far-future current prices as historical evidence",async()=>{
+  const research=await read("lib/market-intelligence-research.ts");
+  assert.match(research,/CHECKPOINT_QUOTE_TOLERANCE_MS=90_000/);
+  assert.match(research,/CHECKPOINT_CANDLE_LAG_MS=6\*60_000/);
+  assert.match(research,/CHECKPOINT_UNAVAILABLE_AFTER_MS=7\*60_000/);
+  assert.match(research,/unavailableCheckpoints/);
+  assert.match(research,/marketAt<=raw\.targetAt\+CHECKPOINT_QUOTE_TOLERANCE_MS/);
+  assert.match(research,/if\(!quoteNear&&!candleNear\)return null/);
+  assert.doesNotMatch(research,/last\?\.close\?\?fallbackPrice\?\?startPrice/);
+  assert.match(research,/pathCoverage:"FULL"\|"PARTIAL"/);
+});
