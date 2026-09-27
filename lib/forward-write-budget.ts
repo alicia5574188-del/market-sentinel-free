@@ -17,6 +17,7 @@ export const PROTECTION_WRITE_INTERVAL_MS = 10_000;
  * silently consume the remaining headroom.
  */
 export const PAID_DO_INCLUDED_ROWS_PER_MONTH = 50_000_000;
+export const PAID_DO_INCLUDED_REQUESTS_PER_MONTH = 1_000_000;
 export const RESOURCE_MODEL_MONTH_DAYS = 31;
 export const OPTIONAL_WRITE_GUARD_PER_DAY = 100_000;
 export const CRITICAL_FINANCIAL_STRESS_ROWS_PER_DAY = 10_000;
@@ -25,6 +26,7 @@ export const MEMBER_ALARM_ROWS_PER_DAY = 8_640;
 export const WATCHDOG_ROWS_PER_DAY = 2_880;
 export const HOURLY_PATH_ROWS_PER_DAY = 13 * 24;
 export const MEMBER_USAGE_HEARTBEATS_PER_DAY = Math.ceil(86_400_000 / MEMBER_USAGE_HEARTBEAT_MS);
+export const MEMBER_USAGE_REQUEST_STRESS_PER_DAY = 1_440;
 export const PAID_RESOURCE_SAFETY_FRACTION = 0.50;
 
 export const PRIMARY_PLANNED_DO_ROWS = PRIMARY_ALARM_ROWS_PER_DAY + OPTIONAL_WRITE_GUARD_PER_DAY
@@ -41,6 +43,15 @@ export const TWO_MEMBER_PLANNED_DO_ROWS = plannedDoRowsPerDay(2);
 export const ACTIVE_MEMBER_PLANNED_DO_ROWS = plannedDoRowsPerDay(MEMBER_ACTIVE_LIMIT);
 export const PAID_PLAN_PLANNED_MONTHLY_ROWS = ACTIVE_MEMBER_PLANNED_DO_ROWS * RESOURCE_MODEL_MONTH_DAYS;
 export const PAID_PLAN_ROW_SAFETY_LIMIT = PAID_DO_INCLUDED_ROWS_PER_MONTH * PAID_RESOURCE_SAFETY_FRACTION;
+
+export function plannedDoRequestsPerDay(activeMembers:number) {
+  if(!Number.isSafeInteger(activeMembers)||activeMembers<0)throw new Error("active member count invalid");
+  const sharedMemberFeed=activeMembers>0?MEMBER_ALARM_ROWS_PER_DAY:0;
+  return PRIMARY_ALARM_ROWS_PER_DAY + 1_440 + sharedMemberFeed
+    + activeMembers * (MEMBER_ALARM_ROWS_PER_DAY + MEMBER_ALARM_ROWS_PER_DAY + MEMBER_USAGE_REQUEST_STRESS_PER_DAY);
+}
+export const ACTIVE_MEMBER_PLANNED_DO_REQUESTS_PER_DAY = plannedDoRequestsPerDay(MEMBER_ACTIVE_LIMIT);
+export const PAID_PLAN_PLANNED_MONTHLY_REQUESTS = ACTIVE_MEMBER_PLANNED_DO_REQUESTS_PER_DAY * RESOURCE_MODEL_MONTH_DAYS;
 export type ProtectionWriteBudget = { version: typeof PROTECTION_WRITE_BUDGET_VERSION;
   day: string; writes: number; lastCommittedAt: number };
 
