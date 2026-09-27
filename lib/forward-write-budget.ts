@@ -2,7 +2,7 @@
  * original financial/exit budget and adds no alarm or per-counter KV record.
  */
 import { resourceDay } from "./resource-day.ts";
-import { MEMBER_ACTIVE_LIMIT } from "./member-auth.ts";
+import { MEMBER_ACTIVE_LIMIT, MEMBER_USAGE_HEARTBEAT_MS } from "./member-auth.ts";
 
 export const PROTECTION_WRITE_BUDGET_VERSION = "critical-protection-budget-v1";
 export const PROTECTION_WRITE_CAP = 8_640;
@@ -24,16 +24,22 @@ export const PRIMARY_ALARM_ROWS_PER_DAY = 43_200;
 export const MEMBER_ALARM_ROWS_PER_DAY = 8_640;
 export const WATCHDOG_ROWS_PER_DAY = 2_880;
 export const HOURLY_PATH_ROWS_PER_DAY = 13 * 24;
-export const DIRECTORY_USAGE_ROWS_PER_DAY = MEMBER_ACTIVE_LIMIT * 1_440;
+export const MEMBER_USAGE_HEARTBEATS_PER_DAY = Math.ceil(86_400_000 / MEMBER_USAGE_HEARTBEAT_MS);
 export const PAID_RESOURCE_SAFETY_FRACTION = 0.50;
 
 export const PRIMARY_PLANNED_DO_ROWS = PRIMARY_ALARM_ROWS_PER_DAY + OPTIONAL_WRITE_GUARD_PER_DAY
   + PROTECTION_WRITE_CAP + WATCHDOG_ROWS_PER_DAY + HOURLY_PATH_ROWS_PER_DAY
   + CRITICAL_FINANCIAL_STRESS_ROWS_PER_DAY;
-export const TWO_MEMBER_PLANNED_DO_ROWS = PRIMARY_PLANNED_DO_ROWS
-  + MEMBER_ACTIVE_LIMIT * (MEMBER_ALARM_ROWS_PER_DAY + OPTIONAL_WRITE_GUARD_PER_DAY + CRITICAL_FINANCIAL_STRESS_ROWS_PER_DAY)
-  + DIRECTORY_USAGE_ROWS_PER_DAY;
-export const PAID_PLAN_PLANNED_MONTHLY_ROWS = TWO_MEMBER_PLANNED_DO_ROWS * RESOURCE_MODEL_MONTH_DAYS;
+export function plannedDoRowsPerDay(activeMembers:number) {
+  if(!Number.isSafeInteger(activeMembers)||activeMembers<0)throw new Error("active member count invalid");
+  return PRIMARY_PLANNED_DO_ROWS
+    + activeMembers * (MEMBER_ALARM_ROWS_PER_DAY + OPTIONAL_WRITE_GUARD_PER_DAY + CRITICAL_FINANCIAL_STRESS_ROWS_PER_DAY)
+    + activeMembers * MEMBER_USAGE_HEARTBEATS_PER_DAY;
+}
+export const DIRECTORY_USAGE_ROWS_PER_DAY = MEMBER_ACTIVE_LIMIT * MEMBER_USAGE_HEARTBEATS_PER_DAY;
+export const TWO_MEMBER_PLANNED_DO_ROWS = plannedDoRowsPerDay(2);
+export const ACTIVE_MEMBER_PLANNED_DO_ROWS = plannedDoRowsPerDay(MEMBER_ACTIVE_LIMIT);
+export const PAID_PLAN_PLANNED_MONTHLY_ROWS = ACTIVE_MEMBER_PLANNED_DO_ROWS * RESOURCE_MODEL_MONTH_DAYS;
 export const PAID_PLAN_ROW_SAFETY_LIMIT = PAID_DO_INCLUDED_ROWS_PER_MONTH * PAID_RESOURCE_SAFETY_FRACTION;
 export type ProtectionWriteBudget = { version: typeof PROTECTION_WRITE_BUDGET_VERSION;
   day: string; writes: number; lastCommittedAt: number };
