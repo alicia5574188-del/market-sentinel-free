@@ -609,7 +609,10 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
 function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<string,Contract>,
   minutePaths:Record<string,Candle[]>|undefined,now:number,equity:number){
   const opportunities=new Map(s.opportunities.map(o=>[o.id,o])),waiting=Object.values(s.entryValidations)
-    .filter(v=>v.status==="WAITING").sort((a,b)=>opportunityCompare(opportunities.get(a.candidateId)!,opportunities.get(b.candidateId)!));
+    .filter(v=>v.status==="WAITING").sort((a,b)=>{
+      const ao=opportunities.get(a.candidateId),bo=opportunities.get(b.candidateId);
+      if(!ao)return bo?1:0;if(!bo)return-1;return opportunityCompare(ao,bo);
+    });
   const reasons:Record<string,number>={};let opened=0;
   const reject=(reason:string)=>{reasons[reason]=(reasons[reason]??0)+1;};
   for(const validation of waiting){
