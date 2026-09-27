@@ -2,9 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { nextProtectionWriteBudget, readProtectionWriteBudget, protectionWriteBudgetView,
   PROTECTION_WRITE_BUDGET_VERSION, PROTECTION_WRITE_CAP, PROTECTION_WRITE_INTERVAL_MS,
-  OPTIONAL_WRITE_GUARD_PER_DAY, PAID_DO_INCLUDED_ROWS_PER_MONTH, RESOURCE_MODEL_MONTH_DAYS,
+  OPTIONAL_WRITE_GUARD_PER_DAY, PAID_DO_INCLUDED_ROWS_PER_MONTH, PAID_DO_INCLUDED_REQUESTS_PER_MONTH, RESOURCE_MODEL_MONTH_DAYS,
   PAID_PLAN_PLANNED_MONTHLY_ROWS, PAID_PLAN_ROW_SAFETY_LIMIT, MEMBER_USAGE_HEARTBEATS_PER_DAY,
   PRIMARY_PLANNED_DO_ROWS, TWO_MEMBER_PLANNED_DO_ROWS, ACTIVE_MEMBER_PLANNED_DO_ROWS, plannedDoRowsPerDay,
+  ACTIVE_MEMBER_PLANNED_DO_REQUESTS_PER_DAY, PAID_PLAN_PLANNED_MONTHLY_REQUESTS, plannedDoRequestsPerDay,
   type ProtectionWriteBudget } from "../lib/forward-write-budget.ts";
 import { MEMBER_ACTIVE_LIMIT } from "../lib/member-auth.ts";
 
@@ -127,4 +128,9 @@ test("paid-plan row contract certifies five active members but rejects six at th
     "six seats must remain blocked until the resource model is improved again");
   assert.ok(PAID_DO_INCLUDED_ROWS_PER_MONTH-PAID_PLAN_PLANNED_MONTHLY_ROWS>25_000_000,
     "five-seat plan must leave more than 25M monthly rows of total paid headroom");
+  assert.equal(ACTIVE_MEMBER_PLANNED_DO_REQUESTS_PER_DAY,plannedDoRequestsPerDay(MEMBER_ACTIVE_LIMIT));
+  assert.equal(PAID_PLAN_PLANNED_MONTHLY_REQUESTS,ACTIVE_MEMBER_PLANNED_DO_REQUESTS_PER_DAY*RESOURCE_MODEL_MONTH_DAYS);
+  assert.equal(PAID_DO_INCLUDED_REQUESTS_PER_MONTH,1_000_000);
+  assert.ok(PAID_PLAN_PLANNED_MONTHLY_REQUESTS>PAID_DO_INCLUDED_REQUESTS_PER_MONTH,
+    "request usage is a paid metered dimension, not a hidden hard-cap admission gate");
 });
