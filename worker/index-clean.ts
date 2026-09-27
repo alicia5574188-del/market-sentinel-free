@@ -93,7 +93,7 @@ const SCAN_UNIVERSE_SIZE = 30;
 // Optional/background writes may yield at this self-imposed cap. Financial
 // authority, owner intent and LIVE durability use a separate non-blocking lane
 // and are never rejected merely because analytics/cache work used this budget.
-const NON_ALARM_WRITE_CAP = 8_000;
+const NON_ALARM_WRITE_CAP = 100_000;
 const WATCHDOG_WRITE_RESERVE = 2_880;
 const AUTHORITY_SCHEMA_VERSION = 1;
 const DEFAULT_SYMBOLS = ["BTC_USDT", "ETH_USDT", "SOL_USDT"];
