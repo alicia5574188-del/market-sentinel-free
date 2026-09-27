@@ -1,3 +1,59 @@
+# Causal retention / rolling rotation amendment — 2026-09-28
+
+This amendment fixes two research-validity defects discovered from snapshot `market-intelligence-v1-snapshot-2026-09-27(6).json` without changing trading authority.
+
+## 1. Newest-trade retention
+
+Shadow trade storage is byte-bounded. Previous V2 migration could stamp many historical rows with the same migration-time `updatedAt`, which made byte trimming ambiguous and could evict newer trades first.
+
+The corrected retention order is based on the trade's real chronology:
+- OPEN trades first;
+- then newest real `closedAt` / `openedAt`;
+- when the byte cap is exceeded, the oldest CLOSED trade is removed first.
+
+Migration time is no longer an admission/retention signal.
+
+## 2. Causal milestones
+
+Every Profit Conversion milestone now carries explicit provenance:
+- `LIVE_OBSERVED`: the state was actually observed by the shadow layer while the trade was live;
+- `BACKFILLED`: the state was reconstructed after the fact from an already-closed/historical trade.
+
+All pre-amendment milestones are normalized to `BACKFILLED`. A historical or migration-time `PROTECT_CANDIDATE` / `EXIT_CANDIDATE` must never be reported as evidence that the system would have warned in real time.
+
+The exported summary separately reports:
+- live-observed milestones;
+- backfilled milestones;
+- live pre-exit protection/exit candidates;
+- closed trades that had a live protection candidate before the real close;
+- average causal lead time.
+
+Only `LIVE_OBSERVED` milestones with `status=OPEN` and timestamp before the actual close count as pre-exit evidence.
+
+## 3. Rolling Market Stability / Rotation
+
+The original instantaneous Geometry label remains for compatibility, but each 5-minute snapshot now receives a causal rolling state derived only from snapshots at or before that timestamp.
+
+The 60/90-minute rolling study tracks:
+- short-direction flips;
+- major-direction flips;
+- breadth sign crossings;
+- instantaneous-label transitions;
+- leadership-rotation share;
+- MIXED / TRENDING share.
+
+It produces a research-only state:
+- `INSUFFICIENT`
+- `STABLE_TREND`
+- `ROTATIONAL`
+- `TRANSITIONAL`
+
+This allows repeated MIXED ↔ TRENDING / bullish ↔ bearish switching to be recognized as rotation even when no single instantaneous snapshot satisfies the old strict `ROTATIONAL` rule.
+
+## Authority boundary
+
+These changes remain strictly post-authority and optional. They do not alter `advanceForward`, ENTRY_RESPONSE PASS/CANCEL, Position Intelligence, stops, sizing, leverage, PAPER state, LIVE parity, Gate execution or member copying.
+
 # Shadow Quality V2 / Geometry retention amendment — 2026-09-27
 
 This amendment keeps the original research-only boundary intact and fixes the first live research defect found from snapshot `market-intelligence-v1-snapshot-2026-09-27(5).json`.
