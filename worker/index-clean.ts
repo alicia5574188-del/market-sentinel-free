@@ -90,6 +90,9 @@ const STRATEGY_LOG_RETENTION_MS = 14 * 24 * 60 * 60_000;
 const WARMUP_SNAPSHOTS = 4;
 const MAX_ANCILLARY_CONCURRENCY = 2;
 const SCAN_UNIVERSE_SIZE = 30;
+// Optional/background writes may yield at this self-imposed cap. Financial
+// authority, owner intent and LIVE durability use a separate non-blocking lane
+// and are never rejected merely because analytics/cache work used this budget.
 const NON_ALARM_WRITE_CAP = 8_000;
 const WATCHDOG_WRITE_RESERVE = 2_880;
 const AUTHORITY_SCHEMA_VERSION = 1;
@@ -275,6 +278,7 @@ type RuntimeState = {
   alarmCount: number;
   d1Writes: number;
   nonAlarmWrites: number;
+  criticalWrites: number;
   d1RetryAt: number;
   d1FailureCount: number;
   equityVersion: number;
@@ -424,7 +428,7 @@ function initialState(): RuntimeState {
     version: SYSTEM_VERSION, authoritySchemaVersion: AUTHORITY_SCHEMA_VERSION, mode: "PAPER", state: "STARTING", symbols: DEFAULT_SYMBOLS,
     lastAlarmAt: null, lastSuccessAt: null, lastHeartbeatAt: null, lastStopCheckpointAt: null, nextAlarmAt: null, lastUniverseAt: 0, lastRadarAt: 0,
     lastStrategyCandleAt: 0, lastStrategyLogAt: 0,
-    utcDay: day(), dailyStartEquity: PAPER_INITIAL_EQUITY, alarmCount: 0, d1Writes: 0, nonAlarmWrites: 0, d1RetryAt: 0, d1FailureCount: 0, equityVersion: 0, ancillaryCursor: 0, subrequestCount: 0, maxSubrequestsInAlarm: 0, sequenceRebuilds: 0, lastProcessedSlot: -1, feedFailures: {},
+    utcDay: day(), dailyStartEquity: PAPER_INITIAL_EQUITY, alarmCount: 0, d1Writes: 0, nonAlarmWrites: 0, criticalWrites: 0, d1RetryAt: 0, d1FailureCount: 0, equityVersion: 0, ancillaryCursor: 0, subrequestCount: 0, maxSubrequestsInAlarm: 0, sequenceRebuilds: 0, lastProcessedSlot: -1, feedFailures: {},
     feedQuality: { windowStartedAt: Date.now(), attempts: 0, failures: 0, recoveries: 0,
       lastFailureAt: null, lastFailureSymbol: null, lastError: null },
     lastError: null, d1MirrorError: null, riskBreach: false, tickSize: Object.fromEntries(DEFAULT_SYMBOLS.map((symbol) => [symbol, 0.0001])), contractMeta: {},
@@ -516,6 +520,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   protected turnoverAttemptAt = 0;
   private turnoverPersisted: {accountKey:string;at:number} | null = null;
   protected nonAlarmPendingWrites = 0;
+  protected criticalPendingWrites = 0;
   protected liveSyncWork: Promise<void> | null = null;
   private liveSnapshotCache:GateLiveSnapshot|null=null;
   private liveOrderSnapshotCache:GateLiveOrderSnapshot|null=null;
@@ -812,6 +817,28 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       roll();
       if(committed)this.runtime.nonAlarmWrites+=writes;
       this.nonAlarmPendingWrites-=writes;finished=true;
+    }};
+  }
+
+  /** Financial authority is not an optional workload. This reservation only
+   * accounts rows; it deliberately has no self-imposed daily admission cap.
+   * The storage transaction itself remains fail-closed authority. */
+  protected reserveCriticalWrites(writes:number) {
+    if(!Number.isSafeInteger(writes)||writes<1)throw new Error("Invalid critical write reservation");
+    const roll=()=>{
+      if(this.runtime.utcDay)this.resetDailyCounters(Date.now());
+      else this.runtime.utcDay=resourceDay(Date.now());
+    };
+    roll();this.criticalPendingWrites??=0;
+    if(!Number.isFinite(this.runtime.criticalWrites)||this.runtime.criticalWrites<0)
+      throw new Error("Critical write accounting invalid");
+    this.criticalPendingWrites+=writes;
+    let finished=false;
+    return {finish:(committed:boolean)=>{
+      if(finished)return;
+      roll();
+      if(committed)this.runtime.criticalWrites+=writes;
+      this.criticalPendingWrites-=writes;finished=true;
     }};
   }
 
