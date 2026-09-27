@@ -1,3 +1,9 @@
+# Resource sufficiency is a permanent quality invariant — 2026-09-27
+
+The owner requires every future change to preserve full trading/data quality **and** keep the deployed Workers Paid resource model comfortably inside the already-paid monthly allowances. This supersedes older instructions that treated the legacy 8,000/day non-alarm counter as a financial admission limit. Never solve a resource problem by scanning fewer markets, reducing the 2s execution observation quality, suppressing valid trades, dropping evidence/history, weakening LIVE protection, or disabling research/data sources. Prefer lossless compaction, deduplication, event-driven persistence, immutable-write reuse and explicit priority lanes.
+
+Financial authority (PAPER open/close/account generations), owner LIVE intent, source-close durability and forced LIVE journals are critical writes: they may fail only on a real storage/platform error, never because optional analytics/cache work reached a self-imposed counter. Optional/background writes retain a generous runaway guard and yield first. Keep critical-protection persistence independent. The current paid-plan storage contract models the owner plus the two admitted member execution seats over a 31-day month and must remain below 50% of Cloudflare's included SQLite Durable Object row writes, leaving >35M rows/month headroom at the current topology. CI must fail if that contract is violated. Requests, duration, D1 and other metered dimensions remain separate resource gates and must be reviewed whenever cadence/topology changes. Do not claim a capacity guarantee for dimensions that were not checked.
+
 # LIVE edge and broad-shock continuity — 2026-09-23
 
 The latest owner request authorizes the scoped repair in
