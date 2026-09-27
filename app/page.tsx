@@ -10,6 +10,7 @@ import { operatorRequest, type AuthSession, type LiveRuntime, type OperatorRunti
 
 const RUNTIME_REQUEST_TIMEOUT_MS = 12_000;
 const RUNTIME_REFRESH_MS = 10_000;
+const MEMBER_RUNTIME_REFRESH_MS = 60_000;
 const RUNTIME_RETRY_MS = 3_000;
 
 export default function Home() {
@@ -63,7 +64,8 @@ export default function Home() {
       }
       finally{clearTimeout(timeout);inFlight=false;controller=null;}
     };
-    const cycle=async()=>{const succeeded=await read();if(active&&!document.hidden)timer=setTimeout(cycle,succeeded?RUNTIME_REFRESH_MS:RUNTIME_RETRY_MS);};
+    const refreshMs=auth.role==="member"?MEMBER_RUNTIME_REFRESH_MS:RUNTIME_REFRESH_MS;
+    const cycle=async()=>{const succeeded=await read();if(active&&!document.hidden)timer=setTimeout(cycle,succeeded?refreshMs:RUNTIME_RETRY_MS);};
     const resume=()=>{if(timer)clearTimeout(timer);timer=null;if(document.hidden){controller?.abort();return;}if(!inFlight)void cycle();};
     void cycle();document.addEventListener("visibilitychange",resume);
     window.addEventListener("focus",resume);window.addEventListener("online",resume);window.addEventListener("pageshow",resume);
