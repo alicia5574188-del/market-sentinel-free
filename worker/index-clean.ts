@@ -48,6 +48,7 @@ import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite, p
 import { advanceCounterfactualResearch, counterfactualResearchView, counterfactualResearchWrites,
   initialCounterfactualResearch, readCounterfactualResearch, type CounterfactualResearchState } from "../lib/market-intelligence-research.ts";
 import { nextProtectionWriteBudget, readProtectionWriteBudget, protectionWriteBudgetView,
+  OPTIONAL_WRITE_GUARD_PER_DAY, PAID_PLAN_PLANNED_MONTHLY_ROWS, PAID_DO_INCLUDED_ROWS_PER_MONTH, PAID_PLAN_ROW_SAFETY_LIMIT,
   PRIMARY_PLANNED_DO_ROWS, TWO_MEMBER_PLANNED_DO_ROWS, type ProtectionWriteBudget } from "../lib/forward-write-budget.ts";
 import { EquityReader } from "../lib/equity-reader.ts";
 import { EQUITY_CURVE_VERSION } from "../lib/equity-curve.ts";
@@ -90,7 +91,10 @@ const STRATEGY_LOG_RETENTION_MS = 14 * 24 * 60 * 60_000;
 const WARMUP_SNAPSHOTS = 4;
 const MAX_ANCILLARY_CONCURRENCY = 2;
 const SCAN_UNIVERSE_SIZE = 30;
-const NON_ALARM_WRITE_CAP = 8_000;
+// Optional/background writes may yield at this self-imposed cap. Financial
+// authority, owner intent and LIVE durability use a separate non-blocking lane
+// and are never rejected merely because analytics/cache work used this budget.
+const NON_ALARM_WRITE_CAP = OPTIONAL_WRITE_GUARD_PER_DAY;
 const WATCHDOG_WRITE_RESERVE = 2_880;
 const AUTHORITY_SCHEMA_VERSION = 1;
 const DEFAULT_SYMBOLS = ["BTC_USDT", "ETH_USDT", "SOL_USDT"];
@@ -275,6 +279,7 @@ type RuntimeState = {
   alarmCount: number;
   d1Writes: number;
   nonAlarmWrites: number;
+  criticalWrites: number;
   d1RetryAt: number;
   d1FailureCount: number;
   equityVersion: number;
@@ -424,7 +429,7 @@ function initialState(): RuntimeState {
     version: SYSTEM_VERSION, authoritySchemaVersion: AUTHORITY_SCHEMA_VERSION, mode: "PAPER", state: "STARTING", symbols: DEFAULT_SYMBOLS,
     lastAlarmAt: null, lastSuccessAt: null, lastHeartbeatAt: null, lastStopCheckpointAt: null, nextAlarmAt: null, lastUniverseAt: 0, lastRadarAt: 0,
     lastStrategyCandleAt: 0, lastStrategyLogAt: 0,
-    utcDay: day(), dailyStartEquity: PAPER_INITIAL_EQUITY, alarmCount: 0, d1Writes: 0, nonAlarmWrites: 0, d1RetryAt: 0, d1FailureCount: 0, equityVersion: 0, ancillaryCursor: 0, subrequestCount: 0, maxSubrequestsInAlarm: 0, sequenceRebuilds: 0, lastProcessedSlot: -1, feedFailures: {},
+    utcDay: day(), dailyStartEquity: PAPER_INITIAL_EQUITY, alarmCount: 0, d1Writes: 0, nonAlarmWrites: 0, criticalWrites: 0, d1RetryAt: 0, d1FailureCount: 0, equityVersion: 0, ancillaryCursor: 0, subrequestCount: 0, maxSubrequestsInAlarm: 0, sequenceRebuilds: 0, lastProcessedSlot: -1, feedFailures: {},
     feedQuality: { windowStartedAt: Date.now(), attempts: 0, failures: 0, recoveries: 0,
       lastFailureAt: null, lastFailureSymbol: null, lastError: null },
     lastError: null, d1MirrorError: null, riskBreach: false, tickSize: Object.fromEntries(DEFAULT_SYMBOLS.map((symbol) => [symbol, 0.0001])), contractMeta: {},
@@ -516,6 +521,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   protected turnoverAttemptAt = 0;
   private turnoverPersisted: {accountKey:string;at:number} | null = null;
   protected nonAlarmPendingWrites = 0;
+  protected criticalPendingWrites = 0;
   protected liveSyncWork: Promise<void> | null = null;
   private liveSnapshotCache:GateLiveSnapshot|null=null;
   private liveOrderSnapshotCache:GateLiveOrderSnapshot|null=null;
@@ -689,8 +695,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         // One-time rule migration: protect already-bound real positions, but do
         // not catch up any as-yet-unsubmitted position present at deployment.
         const activation=startLiveSession(Date.now(),this.forwardState,true);
-        const reservation=this.reserveNonAlarmWrites(1);
-        if(!reservation)throw new Error("实盘会话迁移写入预算不足");
+        const reservation=this.reserveCriticalWrites(1);
         try {await ctx.storage.put(`${LIVE_PARITY_PREFIX}owner-intent`,{enabled:true,changedAt:this.runtime.live.changedAt,activation});reservation.finish(true);}
         finally {reservation.finish(false);}
         this.runtime.live.activation=activation;
@@ -803,6 +808,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       else this.runtime.utcDay=resourceDay(Date.now()); // isolated legacy/test state: retain its existing count
     };
     roll();this.nonAlarmPendingWrites??=0;
+    if((this.criticalPendingWrites??0)>0)return null;
     if(!Number.isFinite(this.runtime.nonAlarmWrites)||this.runtime.nonAlarmWrites<0
       ||this.runtime.nonAlarmWrites+this.nonAlarmPendingWrites+writes+headroom>NON_ALARM_WRITE_CAP)return null;
     this.nonAlarmPendingWrites+=writes;
@@ -812,6 +818,28 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       roll();
       if(committed)this.runtime.nonAlarmWrites+=writes;
       this.nonAlarmPendingWrites-=writes;finished=true;
+    }};
+  }
+
+  /** Financial authority is not an optional workload. This reservation only
+   * accounts rows; it deliberately has no self-imposed daily admission cap.
+   * The storage transaction itself remains fail-closed authority. */
+  protected reserveCriticalWrites(writes:number) {
+    if(!Number.isSafeInteger(writes)||writes<1)throw new Error("Invalid critical write reservation");
+    const roll=()=>{
+      if(this.runtime.utcDay)this.resetDailyCounters(Date.now());
+      else this.runtime.utcDay=resourceDay(Date.now());
+    };
+    roll();this.criticalPendingWrites??=0;
+    if(!Number.isFinite(this.runtime.criticalWrites)||this.runtime.criticalWrites<0)
+      throw new Error("Critical write accounting invalid");
+    this.criticalPendingWrites+=writes;
+    let finished=false;
+    return {finish:(committed:boolean)=>{
+      if(finished)return;
+      roll();
+      if(committed)this.runtime.criticalWrites+=writes;
+      this.criticalPendingWrites-=writes;finished=true;
     }};
   }
 
@@ -1063,8 +1091,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         for(const t of closures)prepared.entries[`${LIVE_PARITY_PREFIX}source-close:${t.id}`]=structuredClone(t);
         prepared.writes+=closures.length;
         // All extra persistence consumes the existing non-alarm write reserve.
-        const reservation=this.reserveNonAlarmWrites(prepared.writes,64);
-        if(!reservation)throw new Error("前向写入预算不足；保留原账户，不提交未持久化订单");
+        const reservation=this.reserveCriticalWrites(prepared.writes);
         try {await this.ctx.storage.transaction(async transaction => { await transaction.put(prepared.entries); });reservation.finish(true);}
         finally {reservation.finish(false);}
         next.state.storage.layout=FORWARD_PAGED_STATE_VERSION;next.state.storage.sampleIntegrity="raw-sha256";
@@ -1714,8 +1741,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(protection&&saved?.writeBudget!==undefined)
         prepared.accountEntries[FORWARD_PROTECTION_STORAGE]={...protection,writeBudget:saved.writeBudget};
 
-      const reservation=this.reserveNonAlarmWrites(prepared.writes,64);
-      if(!reservation)throw new Error("模拟账户重置等待写入预算；当前账户保持完整");
+      const reservation=this.reserveCriticalWrites(prepared.writes);
       stage="原子写入重置账户";
       try{
         await this.ctx.storage.transaction(async transaction=>{
@@ -1797,8 +1823,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       :establishLiveScale(activation,sourceEquity,liveEquity,now,this.liveSessionSeedRatio()??undefined);
     if(scaled===activation)return activation;
     const prior=activation.scaleRatio??null;
-    const reservation=this.reserveNonAlarmWrites(1);
-    if(!reservation)throw new Error("实盘比例保存预算不足，保留原比例");
+    const reservation=this.reserveCriticalWrites(1);
     this.runtime.live.activation=scaled;
     try {
       await this.ctx.storage.put(`${LIVE_PARITY_PREFIX}owner-intent`,{
@@ -2890,12 +2915,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (!force && this.runtime.lastHeartbeatAt != null && now - this.runtime.lastHeartbeatAt < HEARTBEAT_MS) return;
     const openCount = Object.values(this.runtime.positions).filter((position) => position?.status === "OPEN").length;
     const journal=new Map(this.liveJournal);
-    const writes=1+journal.size;
-    const reservation=this.reserveNonAlarmWrites(writes,openCount);
-    if (!reservation) {
-      if (force) throw new Error("Durable Object non-alarm write reserve reached");
-      return;
-    }
+    const writes=1+journal.size,critical=force||journal.size>0;
+    const reservation=critical?this.reserveCriticalWrites(writes):this.reserveNonAlarmWrites(writes,openCount);
+    if (!reservation) return;
     try {
       // Full immutable source snapshots live outside the bounded hot checkpoint.
       // A binding and its entry reservation commit atomically BEFORE a Gate call.
@@ -2906,7 +2928,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const checkpoint = { ...this.runtime, live:{...this.runtime.live,
         entries:Object.fromEntries(Object.entries(this.runtime.live.entries).map(([k,e])=>[k,compact(e)])),
         positions:Object.fromEntries(Object.entries(this.runtime.live.positions).map(([k,p])=>[k,compact(p)]))},
-        analysisMs: [], nonAlarmWrites: this.runtime.nonAlarmWrites + this.nonAlarmPendingWrites, lastHeartbeatAt: now };
+        analysisMs: [], nonAlarmWrites: this.runtime.nonAlarmWrites + this.nonAlarmPendingWrites,
+        criticalWrites: this.runtime.criticalWrites + this.criticalPendingWrites, lastHeartbeatAt: now };
       await this.ctx.storage.transaction(async transaction=>{
         await transaction.put({checkpoint,...Object.fromEntries(journal)});
       });
@@ -3207,7 +3230,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         liveMirror: {...this.liveMirrorView(),rows:undefined},
         liveTurnover:this.turnoverStatus(),
         resourceAccounting:{policy:RESOURCE_DAY_POLICY,day:this.runtime.utcDay,nonAlarmWrites:this.runtime.nonAlarmWrites,
-          cap:NON_ALARM_WRITE_CAP,pendingWrites:this.nonAlarmPendingWrites??0,
+          cap:NON_ALARM_WRITE_CAP,pendingWrites:this.nonAlarmPendingWrites??0,criticalWrites:this.runtime.criticalWrites,
+          criticalPendingWrites:this.criticalPendingWrites??0,financialAdmission:"independent-of-optional-cap",
           criticalProtection:protectionWriteBudgetView(this.forwardProtectionBudget,Date.now()),
           previous:this.runtime.resourceRollovers?.at(-1)??null,forwardCompression:this.forwardCompression},
         forward: this.forwardHealth(),
@@ -3325,7 +3349,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           realtimeCapacity: FORWARD_EXECUTION_BBO_CAP, minuteConfirmationCapacity: FORWARD_MINUTE_CONFIRMATION_CAP,
           plannedDoWritesPerDay: PRIMARY_PLANNED_DO_ROWS,
           twoMemberReservedDoRowsPerDay: TWO_MEMBER_PLANNED_DO_ROWS,
-          resourceModelScope:"reserved rows; retries, controls, other workloads, request traffic and duration not certified",
+          plannedDoRowsPer31DayMonth:PAID_PLAN_PLANNED_MONTHLY_ROWS,
+          paidDoIncludedRowsPerMonth:PAID_DO_INCLUDED_ROWS_PER_MONTH,
+          paidDoSafetyLimitRowsPerMonth:PAID_PLAN_ROW_SAFETY_LIMIT,
+          resourceModelScope:"Workers Paid row-write contract; requests, duration and unbounded external retries remain separately metered",
           capacityCertified: false,
           plannedTotalDoRequestsPerDay: 53_280,
           plannedMaxD1BilledWritesPerDay: 4_800,
@@ -3374,6 +3401,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           maxAncillaryConcurrency: MAX_ANCILLARY_CONCURRENCY, maxSubrequestsPerAlarm: 32, plannedAlarmRequestsPerDay: 43_200,
           plannedAlarmWritesPerDay: 43_200, watchdogWriteReservePerDay: WATCHDOG_WRITE_RESERVE,
           nonAlarmWriteCapPerDay: NON_ALARM_WRITE_CAP, nonAlarmWritesToday: this.runtime.nonAlarmWrites,
+          criticalFinancialWritesToday:this.runtime.criticalWrites,criticalFinancialPending:this.criticalPendingWrites??0,
+          criticalFinancialAdmission:"independent-of-optional-cap",
           criticalProtection:protectionWriteBudgetView(this.forwardProtectionBudget,Date.now()),
           plannedDoWritesPerDay: PRIMARY_PLANNED_DO_ROWS,
           twoMemberReservedDoRowsPerDay: TWO_MEMBER_PLANNED_DO_ROWS,
