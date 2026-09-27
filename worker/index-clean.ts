@@ -19,7 +19,7 @@ import { LIVE_SESSION_VERSION, establishLiveScale, reconcileLiveScale, startLive
 import type { GateSizeRules, SizeDiagnostic } from "../lib/gate-quantity.ts";
 import { encryptGateCredentials, gateKeyHint, normalizeGateCredentials, type GateCredentials } from "../lib/credential-vault.ts";
 import { credentialMetadata } from "../lib/gate-readonly.ts";
-import { MEMBERS_VERSION, digestMember, clearMemberCookie } from "../lib/member-auth.ts";
+import { MEMBERS_VERSION, MEMBER_ACTIVE_LIMIT, digestMember, clearMemberCookie } from "../lib/member-auth.ts";
 import { MemberDirectory, type MemberFeed } from "./member-directory.ts";
 import { memberExecutionClass } from "./member-executor.ts";
 import { memberRoutes } from "./member-routes.ts";
@@ -49,7 +49,7 @@ import { advanceCounterfactualResearch, counterfactualResearchView, counterfactu
   initialCounterfactualResearch, readCounterfactualResearch, type CounterfactualResearchState } from "../lib/market-intelligence-research.ts";
 import { nextProtectionWriteBudget, readProtectionWriteBudget, protectionWriteBudgetView,
   OPTIONAL_WRITE_GUARD_PER_DAY, PAID_PLAN_PLANNED_MONTHLY_ROWS, PAID_DO_INCLUDED_ROWS_PER_MONTH, PAID_PLAN_ROW_SAFETY_LIMIT,
-  PRIMARY_PLANNED_DO_ROWS, TWO_MEMBER_PLANNED_DO_ROWS, type ProtectionWriteBudget } from "../lib/forward-write-budget.ts";
+  PRIMARY_PLANNED_DO_ROWS, TWO_MEMBER_PLANNED_DO_ROWS, ACTIVE_MEMBER_PLANNED_DO_ROWS, type ProtectionWriteBudget } from "../lib/forward-write-budget.ts";
 import { EquityReader } from "../lib/equity-reader.ts";
 import { EQUITY_CURVE_VERSION } from "../lib/equity-curve.ts";
 import { resourceDay, rollResourceDay, RESOURCE_DAY_POLICY, type ResourceCounters } from "../lib/resource-day.ts";
@@ -3349,6 +3349,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           realtimeCapacity: FORWARD_EXECUTION_BBO_CAP, minuteConfirmationCapacity: FORWARD_MINUTE_CONFIRMATION_CAP,
           plannedDoWritesPerDay: PRIMARY_PLANNED_DO_ROWS,
           twoMemberReservedDoRowsPerDay: TWO_MEMBER_PLANNED_DO_ROWS,
+          activeMemberLimit:MEMBER_ACTIVE_LIMIT,
+          activeMemberReservedDoRowsPerDay:ACTIVE_MEMBER_PLANNED_DO_ROWS,
           plannedDoRowsPer31DayMonth:PAID_PLAN_PLANNED_MONTHLY_ROWS,
           paidDoIncludedRowsPerMonth:PAID_DO_INCLUDED_ROWS_PER_MONTH,
           paidDoSafetyLimitRowsPerMonth:PAID_PLAN_ROW_SAFETY_LIMIT,
