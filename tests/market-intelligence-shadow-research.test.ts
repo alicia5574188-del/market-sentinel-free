@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { initialForward, type Candle, type Quote, type Trade } from "../lib/forward-relations.ts";
-import { SHADOW_GEOMETRY_LIMIT, SHADOW_GEOMETRY_SAMPLE_MS, advanceShadowResearch, initialShadowResearch, profitConversionV2,
-  responseQualityV2, shadowResearchView, type EntryLocationWindow, type ProfitConversion, type ResponseQuality } from "../lib/market-intelligence-shadow-research.ts";
+import { SHADOW_GEOMETRY_LIMIT, SHADOW_GEOMETRY_SAMPLE_MS, advanceShadowResearch, deriveRollingGeometry, initialShadowResearch,
+  profitConversionV2, responseQualityV2, shadowResearchView, trimShadowTrades, type EntryLocationWindow, type MarketGeometrySnapshot,
+  type ProfitConversion, type ResponseQuality } from "../lib/market-intelligence-shadow-research.ts";
 
 const T=1_800_000_000_000;
 const q=(px:number,at:number):Quote=>({bestBid:px-.01,bestAsk:px+.01,observedAt:at,fresh:true,entryReady:true,sourceCount:3,disagreementRate:.0002});
@@ -159,4 +160,66 @@ test("shadow milestones are appended only when response/profit research state ch
   state=advanceShadowResearch({state,forward:f,now:T+600_000,paths:{RARE_USDT:[...quiet,{time:(T+300_000)/1000,open:100.05,high:105,low:100,close:101,volume:1}]},
     quotes:{RARE_USDT:q(101,T+600_000)}}).state;
   assert.ok(state.trades[0]!.milestones!.length>first);
+  assert.ok(state.trades[0]!.milestones!.every(x=>x.source==="LIVE_OBSERVED"));
+});
+
+
+test("rolling geometry recognizes repeated direction/breadth flips as rotation while stable trend remains distinct",()=>{
+  const row=(i:number,alternating:boolean):MarketGeometrySnapshot=>{
+    const bullish=!alternating||i%2===0;
+    return{at:T+i*SHADOW_GEOMETRY_SAMPLE_MS,label:alternating?(i%3===0?"TRENDING":"MIXED"):"TRENDING",
+      macro:"BULLISH",major:alternating?(i%4<2?"BULLISH":"BEARISH"):"BULLISH",short:bullish?"BULLISH":"BEARISH",
+      shortPhase:alternating?"BALANCED":"TRENDING",transitionDirection:bullish?"BULLISH":"BEARISH",transitionStage:"STABLE",
+      breadth3:bullish?.7:-.7,breadth12:bullish?.4:-.4,breadthSlope:bullish?.3:-.3,dispersion:alternating?.55:.25,
+      synchrony:alternating?.45:.8,residualBalance:0,leaderPersistence:alternating?.35:.9,venuePressure:0,
+      leadershipRotation:alternating&&i%2===0,summary:"test"};
+  };
+  const rotating=Array.from({length:18},(_,i)=>row(i,true)),stable=Array.from({length:18},(_,i)=>row(i,false)),
+    r=deriveRollingGeometry(rotating,rotating.at(-1)!.at),s=deriveRollingGeometry(stable,stable.at(-1)!.at);
+  assert.equal(r.state,"ROTATIONAL");assert.ok(r.rotationScore>=.55);assert.ok(r.shortFlips90>=4);assert.ok(r.breadthCrosses90>=4);
+  assert.equal(s.state,"STABLE_TREND");assert.ok(s.stabilityScore>=.68);assert.equal(s.shortFlips90,0);
+});
+
+test("trade shadow byte trimming keeps newest closed trades even when migration updatedAt values are identical",()=>{
+  const f=initialForward(T-3_600_000),closed=trade("seed","CLOSED",12_000,.02,101,1);f.history=[closed];f.extremumRegime.updatedAt=T;
+  f.extremumRegime.internals={breadth3:0,breadth12:0,breadthSlope:0,dispersion:.5,synchrony:.4,venuePressure:0,residualBalance:0,leaderPersistence:.5};
+  const seed=advanceShadowResearch({state:initialShadowResearch(T),forward:f,now:T+600_000,paths:{RARE_USDT:candles(T)},
+    quotes:{RARE_USDT:q(101,T+600_000)}}).state.trades[0]!;
+  const rows=Array.from({length:40},(_,i)=>({...structuredClone(seed),id:`shadow:t-${i}`,tradeId:`t-${i}`,
+    openedAt:T+i*60_000,closedAt:T+i*60_000+30_000,updatedAt:T+9_999_999,
+    entryMarket:{...(seed.entryMarket??{at:T,label:"MIXED",macro:"BULLISH",major:"NEUTRAL",short:"NEUTRAL",shortPhase:"BALANCED",
+      transitionDirection:"NEUTRAL",transitionStage:null,breadth3:0,breadth12:0,breadthSlope:0,dispersion:.5,synchrony:.5,
+      residualBalance:0,leaderPersistence:.5,venuePressure:0,leadershipRotation:false,summary:""}),summary:"x".repeat(5000)}})),
+    kept=trimShadowTrades(rows),ids=new Set(kept.map(x=>x.tradeId));
+  assert.ok(kept.length<40);for(const id of["t-39","t-38","t-37","t-36","t-35"])assert.ok(ids.has(id),`${id} must survive`);
+  assert.ok(!ids.has("t-0"),"oldest migrated trade should be trimmed before newest trades");
+});
+
+test("closed-history migration is BACKFILLED and cannot masquerade as a live pre-exit protection signal",()=>{
+  const f=initialForward(T-3_600_000),closed=trade("RARE-backfill","CLOSED",12_000,.05,99.5,-1);f.history=[closed];
+  f.extremumRegime.updatedAt=T;f.extremumRegime.internals={breadth3:0,breadth12:0,breadthSlope:0,dispersion:.5,synchrony:.4,
+    venuePressure:0,residualBalance:0,leaderPersistence:.5};
+  const state=advanceShadowResearch({state:initialShadowResearch(T),forward:f,now:T+900_000,paths:{RARE_USDT:candles(T)},
+    quotes:{RARE_USDT:q(99.5,T+900_000)}}).state,row=state.trades[0]!,view=shadowResearchView(state);
+  assert.ok(row.milestones!.every(x=>x.source==="BACKFILLED"));
+  assert.equal(row.milestones![0]!.at,closed.closedAt);
+  assert.equal(view.summary.causalMilestones.liveObserved,0);
+  assert.equal(view.summary.causalMilestones.livePreExitProtectionCandidates,0);
+  assert.ok(view.summary.causalMilestones.backfilled>=1);
+});
+
+test("only a protection candidate observed while the trade is OPEN counts as causal lead time",()=>{
+  const f=initialForward(T-3_600_000),live=trade("RARE-live","OPEN",12_000,.05,null,null);f.positions=[live];
+  f.extremumRegime.updatedAt=T;f.extremumRegime.internals={breadth3:0,breadth12:0,breadthSlope:0,dispersion:.5,synchrony:.4,
+    venuePressure:0,residualBalance:0,leaderPersistence:.5};
+  let state=advanceShadowResearch({state:initialShadowResearch(T),forward:f,now:T+300_000,paths:{RARE_USDT:candles(T)},
+    quotes:{RARE_USDT:q(99.8,T+300_000)}}).state;
+  const openMilestone=state.trades[0]!.milestones!.find(x=>x.source==="LIVE_OBSERVED"&&x.status==="OPEN");
+  assert.ok(openMilestone);assert.ok(["PROTECT_CANDIDATE","EXIT_CANDIDATE"].includes(openMilestone!.profitSignal));
+  live.status="CLOSED";live.closedAt=T+900_000;live.exitPrice=99.5;live.lastPrice=99.5;live.netPnl=-1;live.grossPnl=-.5;
+  live.exitFee=.07;live.exitReason="POSITION_VALUE_EXIT";f.positions=[];f.history=[live];
+  state=advanceShadowResearch({state,forward:f,now:T+900_000,paths:{RARE_USDT:candles(T)},quotes:{RARE_USDT:q(99.5,T+900_000)}}).state;
+  const view=shadowResearchView(state);
+  assert.equal(view.summary.causalMilestones.closedTradesWithLiveProtectionLead,1);
+  assert.ok((view.summary.causalMilestones.averageLiveLeadMinutes??0)>0);
 });
