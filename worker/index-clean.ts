@@ -694,8 +694,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         // One-time rule migration: protect already-bound real positions, but do
         // not catch up any as-yet-unsubmitted position present at deployment.
         const activation=startLiveSession(Date.now(),this.forwardState,true);
-        const reservation=this.reserveNonAlarmWrites(1);
-        if(!reservation)throw new Error("实盘会话迁移写入预算不足");
+        const reservation=this.reserveCriticalWrites(1);
         try {await ctx.storage.put(`${LIVE_PARITY_PREFIX}owner-intent`,{enabled:true,changedAt:this.runtime.live.changedAt,activation});reservation.finish(true);}
         finally {reservation.finish(false);}
         this.runtime.live.activation=activation;
@@ -1090,8 +1089,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         for(const t of closures)prepared.entries[`${LIVE_PARITY_PREFIX}source-close:${t.id}`]=structuredClone(t);
         prepared.writes+=closures.length;
         // All extra persistence consumes the existing non-alarm write reserve.
-        const reservation=this.reserveNonAlarmWrites(prepared.writes,64);
-        if(!reservation)throw new Error("前向写入预算不足；保留原账户，不提交未持久化订单");
+        const reservation=this.reserveCriticalWrites(prepared.writes);
         try {await this.ctx.storage.transaction(async transaction => { await transaction.put(prepared.entries); });reservation.finish(true);}
         finally {reservation.finish(false);}
         next.state.storage.layout=FORWARD_PAGED_STATE_VERSION;next.state.storage.sampleIntegrity="raw-sha256";
@@ -1741,8 +1739,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(protection&&saved?.writeBudget!==undefined)
         prepared.accountEntries[FORWARD_PROTECTION_STORAGE]={...protection,writeBudget:saved.writeBudget};
 
-      const reservation=this.reserveNonAlarmWrites(prepared.writes,64);
-      if(!reservation)throw new Error("模拟账户重置等待写入预算；当前账户保持完整");
+      const reservation=this.reserveCriticalWrites(prepared.writes);
       stage="原子写入重置账户";
       try{
         await this.ctx.storage.transaction(async transaction=>{
@@ -1824,8 +1821,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       :establishLiveScale(activation,sourceEquity,liveEquity,now,this.liveSessionSeedRatio()??undefined);
     if(scaled===activation)return activation;
     const prior=activation.scaleRatio??null;
-    const reservation=this.reserveNonAlarmWrites(1);
-    if(!reservation)throw new Error("实盘比例保存预算不足，保留原比例");
+    const reservation=this.reserveCriticalWrites(1);
     this.runtime.live.activation=scaled;
     try {
       await this.ctx.storage.put(`${LIVE_PARITY_PREFIX}owner-intent`,{
