@@ -2,7 +2,6 @@ import type { CandleLike, MarketSymbolState, QuoteLike } from "./market-intellig
 
 export const ENTRY_RESPONSE_VERSION="market-intelligence-entry-response-v1";
 const DEFAULT_COST=.0019;
-const clip=(v:number,a=0,b=1)=>Math.max(a,Math.min(b,v));
 const dir=(side:"LONG"|"SHORT")=>side==="LONG"?1:-1;
 
 export type EntryResponseMemory={
