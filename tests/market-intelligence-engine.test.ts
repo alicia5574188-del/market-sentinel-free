@@ -93,10 +93,10 @@ test("a transient favorable tick cannot pass entry response while cross-venue fl
   const quote={bestBid:100.17,bestAsk:100.18,observedAt:T+30_000,fresh:true,entryReady:true,sourceCount:3,disagreementRate:.0004,
     sourceBreadth:-.8,directionalAgreement:.9,medianShortMove:-.001,bookImbalance:-.3,bidLiquidityChange:-.12,askLiquidityChange:.14,liquiditySourceCount:3};
   const memory={startedAt:T,deadlineAt:T+180_000,initialPrice:100,samples:2,bestAdvanceRate:.0018,maxAdverseRate:0,supportSamples:0,oppositionSamples:0};
-  const result=evaluateEntryResponse({now:T+30_000,side:"LONG",score:89,edgeRatio:2.1,pullbackRiskRate:.005,stopRate:.007,
+  const result=evaluateEntryResponse({now:T+30_000,side:"LONG",score:87,edgeRatio:2.1,pullbackRiskRate:.005,stopRate:.007,
     sourceCount:3,disagreementRate:.0004,price:100.18,memory,state,quote});
   assert.equal(result.action,"WAIT");assert.ok(result.concernFamilies.includes("FLOW"));
-  const expired=evaluateEntryResponse({now:T+180_001,side:"LONG",score:89,edgeRatio:2.1,pullbackRiskRate:.005,stopRate:.007,
+  const expired=evaluateEntryResponse({now:T+180_001,side:"LONG",score:87,edgeRatio:2.1,pullbackRiskRate:.005,stopRate:.007,
     sourceCount:3,disagreementRate:.0004,price:100.18,memory:{...memory,deadlineAt:T+180_000},state,quote:{...quote,observedAt:T+180_001}});
   assert.equal(expired.action,"CANCEL");
 });
