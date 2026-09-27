@@ -7,7 +7,7 @@ import {createHash} from "node:crypto";
 import {Memory,FakeGate,T,trade} from "./member-fixtures.ts";
 import {advanceForward,initialForward} from "../lib/forward-relations.ts";
 import {newExitControl} from "../lib/forward-protection.ts";
-import {MEMBERS_VERSION,MEMBER_LIMIT,memberCookie,issueMemberSession,verifyMemberSession,digestMember,memberVaultRoot,encryptMemberText,decryptMemberText} from "../lib/member-auth.ts";
+import {MEMBERS_VERSION,MEMBER_LIMIT,MEMBER_ACTIVE_LIMIT,MEMBER_USAGE_HEARTBEAT_MS,memberCookie,issueMemberSession,verifyMemberSession,digestMember,memberVaultRoot,encryptMemberText,decryptMemberText} from "../lib/member-auth.ts";
 import {createOwnerSession,ownerSessionCookie} from "../lib/owner-auth.ts";
 import {encryptGateCredentials,decryptGateCredentials} from "../lib/credential-vault.ts";
 import {liveEntryTag,liveExitTag} from "../lib/gate-live.ts";
@@ -280,12 +280,15 @@ test("master Gate account and another member's Gate account cannot be claimed",(
   const hash=await digestMember("gate-user:distinct");assert.equal((await h.rpc(`/claim-account?id=${a.id}`,{accountHash:hash})).status,200);
   assert.equal((await h.rpc(`/claim-account?id=${b.id}`,{accountHash:hash})).status,409);
 }));
-test("bounded admission never evicts an already enabled member or counts the master",()=>clock(async()=>{
-  const h=await harness(),a=await h.issue(),b=await h.issue(),c=await h.issue();
-  for(const m of [a,b])assert.equal((await h.rpc(`/seat?id=${m.id}`,{enabled:true})).status,200);
-  assert.equal((await h.rpc(`/seat?id=${c.id}`,{enabled:true})).status,409);
-  assert.equal((await h.rpc(`/seat?id=${a.id}`,{enabled:true})).status,200);
-  await h.rpc(`/seat?id=${a.id}`,{enabled:false});assert.equal((await h.rpc(`/seat?id=${c.id}`,{enabled:true})).status,200);
+test("bounded admission certifies five active members, never evicts them, and excludes the master",()=>clock(async()=>{
+  assert.equal(MEMBER_ACTIVE_LIMIT,5);
+  const h=await harness(),members=[];for(let i=0;i<MEMBER_ACTIVE_LIMIT+1;i++)members.push(await h.issue(`seat-${i}`));
+  for(const m of members.slice(0,MEMBER_ACTIVE_LIMIT))
+    assert.equal((await h.rpc(`/seat?id=${m.id}`,{enabled:true})).status,200);
+  const overflow=members.at(-1)!;assert.equal((await h.rpc(`/seat?id=${overflow.id}`,{enabled:true})).status,409);
+  assert.equal((await h.rpc(`/seat?id=${members[0]!.id}`,{enabled:true})).status,200);
+  await h.rpc(`/seat?id=${members[0]!.id}`,{enabled:false});
+  assert.equal((await h.rpc(`/seat?id=${overflow.id}`,{enabled:true})).status,200);
 }));
 test("enabling A neither opens an old source nor changes B or the master",()=>clock(async()=>{
   const h=await harness(),a=await h.issue(),b=await h.issue();h.source.positions=[trade()];const before=structuredClone(h.source);
@@ -352,6 +355,19 @@ test("admin usage projection contains volume only and rejects invalid totals",()
   const v=await(await h.rpc("/overview")).json<any>(),row=v.members[0];assert.equal(row.usage.notional,123.45);assert.equal(row.usage.balance,undefined);assert.ok(!JSON.stringify(row).includes("apiKey"));
   assert.equal((await h.rpc(`/usage?id=${a.id}`,{notional:-1,fills:3,reportedAt:now})).status,400);
 }));
+test("unchanged member usage is deduplicated until the 15-minute display heartbeat",()=>clock(async()=>{
+  const h=await harness(),a=await h.issue(),payload={notional:123.45,fills:3,through:now-1000,partial:false,error:false};
+  assert.equal(MEMBER_USAGE_HEARTBEAT_MS,15*60_000);
+  await h.rpc(`/usage?id=${a.id}`,{...payload,reportedAt:now});
+  const first=await h.dstore.get<any>(`member:${a.id}`),firstAt=first.usage.reportedAt,writes=h.dstore.writes;
+  now+=60_000;await h.rpc(`/usage?id=${a.id}`,{...payload,reportedAt:now});
+  const second=await h.dstore.get<any>(`member:${a.id}`);assert.equal(second.usage.reportedAt,firstAt);assert.equal(h.dstore.writes,writes);
+  now+=MEMBER_USAGE_HEARTBEAT_MS;await h.rpc(`/usage?id=${a.id}`,{...payload,reportedAt:now});
+  const heartbeat=await h.dstore.get<any>(`member:${a.id}`);assert.ok(heartbeat.usage.reportedAt>firstAt);
+  now+=1;await h.rpc(`/usage?id=${a.id}`,{...payload,fills:4,reportedAt:now});
+  const changed=await h.dstore.get<any>(`member:${a.id}`);assert.equal(changed.usage.fills,4);
+}));
+
 test("program-volume attribution excludes another program/manual tag even when regex prefix matches",()=>clock(async()=>{
   const h=await harness(),a=await h.issue(),aa=await h.member(a.id);await aa.storage.put(`member-program-tag:${liveEntryTag("mine")}`,true);
   const rows=await aa.engine.turnoverRows([{id:"1",text:liveEntryTag("mine")},{id:"2",text:liveExitTag("not-mine")},{id:"3",text:"manual"}]);
