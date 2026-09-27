@@ -145,16 +145,18 @@ test("moderate profit needs converged deterioration before shadow protection esc
 
 test("shadow milestones are appended only when response/profit research state changes",()=>{
   const f=initialForward(T-3_600_000),rare=trade("RARE-milestone","OPEN",12_000,.001,null,null);f.positions=[rare];
-  f.extremumRegime.updatedAt=T;const paths={RARE_USDT:candles(T)};
-  let state=advanceShadowResearch({state:initialShadowResearch(T),forward:f,now:T+300_000,paths,quotes:{RARE_USDT:q(100.2,T+300_000)}}).state;
+  f.extremumRegime.updatedAt=T;
+  const quiet=candles(T).slice(0,24);quiet.push({time:T/1000,open:100,high:100.1,low:99.9,close:100.05,volume:1});
+  let state=advanceShadowResearch({state:initialShadowResearch(T),forward:f,now:T+300_000,paths:{RARE_USDT:quiet},
+    quotes:{RARE_USDT:q(100.05,T+300_000)}}).state;
   const first=state.trades[0]!.milestones!.length;
-  state=advanceShadowResearch({state,forward:f,now:T+301_000,paths,quotes:{RARE_USDT:q(100.2,T+301_000)}}).state;
+  state=advanceShadowResearch({state,forward:f,now:T+301_000,paths:{RARE_USDT:quiet},quotes:{RARE_USDT:q(100.05,T+301_000)}}).state;
   assert.equal(state.trades[0]!.milestones!.length,first);
   rare.favorable=.05;rare.lastPrice=101;rare.positionIntelligence={version:"position-intelligence-v1",updatedAt:T+600_000,decision:"REVIEW",phase:"AT_RISK",
     reviewSince:T+600_000,reviewBars:1,lastCompletedBar:T+600_000,entryAdvantage:90,currentAdvantage:45,advantageChange:-45,
     remainingSpaceRate:.01,expectedPullbackRate:.006,continuationRatio:1,holdValueScore:35,exitValueScore:65,dataConfidence:90,counterfactualNewEntry:false,
     supportFamilies:[],concernFamilies:["RELATIVE","FLOW"],assessments:[],reasons:[],concerns:[],summary:"test"};
-  state=advanceShadowResearch({state,forward:f,now:T+600_000,paths:{RARE_USDT:[...candles(T),{time:(T+600_000)/1000,open:104,high:105,low:101,close:101,volume:1}]},
+  state=advanceShadowResearch({state,forward:f,now:T+600_000,paths:{RARE_USDT:[...quiet,{time:(T+300_000)/1000,open:100.05,high:105,low:100,close:101,volume:1}]},
     quotes:{RARE_USDT:q(101,T+600_000)}}).state;
   assert.ok(state.trades[0]!.milestones!.length>first);
 });
