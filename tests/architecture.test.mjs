@@ -94,7 +94,9 @@ test("Market Intelligence uses thesis lifecycle, not scalp profit locking or bat
   const fill=core.slice(core.indexOf("export function fillForwardPortfolio"),core.indexOf("function nextCandleAt"));
   assert.match(fill,/opened=1;break/);
   const advance=core.slice(core.indexOf("export function advanceForward"),core.indexOf("export function closeForwardForReset"));
-  assert.match(advance,/marketReady&&dataDue\?fillForwardPortfolio/);
+  assert.match(advance,/if\(marketReady&&dataDue\)seedEntryResponses/);
+  assert.match(advance,/marketReady\?advanceEntryResponses/);
+  assert.doesNotMatch(advance,/marketReady&&dataDue\?fillForwardPortfolio/);
   assert.doesNotMatch(advance,/rotateIfNeeded\(/);
   assert.match(engine,/thesisId=.*row\.signalSince/);
   assert.match(engine,/signalBars>=2/);
