@@ -59,8 +59,9 @@ test("late near-deadline response remains distinct from a fast response and gros
   const f=initialForward(T-3_600_000);f.extremumRegime.updatedAt=T-60_000;f.extremumRegime.narrative.short.phase="BALANCED";
   f.extremumRegime.internals={breadth3:0,breadth12:0,breadthSlope:0,dispersion:.5,synchrony:.4,venuePressure:0,residualBalance:0,leaderPersistence:.5};
   const bnb=trade("BNB-open","OPEN",148_000,.00013,null,null);f.positions=[bnb];
+  const quiet=candles(T).slice(0,24);quiet.push({time:T/1000,open:100,high:100.01,low:99.8,close:99.9,volume:1000});
   const result=advanceShadowResearch({state:initialShadowResearch(T),forward:f,now:T+300_000,
-    paths:{BNB_USDT:candles(T)},quotes:{BNB_USDT:q(99.8,T+300_000)}});
+    paths:{BNB_USDT:quiet},quotes:{BNB_USDT:q(99.8,T+300_000)}});
   const row=result.state.trades[0]!;
   assert.equal(row.response?.tempo,"LATE");assert.ok((row.response?.elapsedFraction??0)>.8);
   assert.equal(row.profit.state,"GROSS_ONLY");assert.ok(row.profit.modeledCurrentNetRate<0);
