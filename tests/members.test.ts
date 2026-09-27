@@ -379,6 +379,16 @@ test("corrupt execution checkpoint fails closed without resetting a member ident
   const c=context(aa.storage),e=new MemberExecutor(c.ctx as never,h.env) as any;await c.ready();assert.ok(e.bootError);assert.equal(e.identity.id,a.id);
   assert.equal(aa.storage.data.has("member-execution:v1:checkpoint"),true);
 }));
+test("member UI may poll less often without changing the ten-second LIVE execution cadence",()=>{
+  const executor=readFileSync(new URL("../worker/member-executor.ts",import.meta.url),"utf8"),
+    page=readFileSync(new URL("../app/page.tsx",import.meta.url),"utf8"),
+    live=readFileSync(new URL("../app/live-console.tsx",import.meta.url),"utf8");
+  assert.match(executor,/const cadence=trading\?10000:60000/);
+  assert.match(executor,/const cadence=this\.liveNeedsSync\(\)\?10000:60000/);
+  assert.match(page,/MEMBER_RUNTIME_REFRESH_MS = 60_000/);
+  assert.match(live,/auth\.role==="member"\?60000:10000/);
+});
+
 test("owner authentication, credential format and member execution isolation remain frozen",()=>{
   const baseline=JSON.parse(readFileSync(new URL("./ui-authority-baseline.json",import.meta.url),"utf8"));
   for(const path of["lib/owner-auth.ts","lib/credential-vault.ts"]){
