@@ -71,7 +71,7 @@ export function evaluatePositionIntelligence(input:{
   now:number;side:"LONG"|"SHORT";signedRate:number;peakFavorableRate:number;ageMin:number;firstProfit:boolean;
   expectedHoldMinutes:number;stopRate:number;entryScore:number;entryResidual:number;entryRelativeStrength:number;
   entryRemainingSpaceRate:number;state?:MarketSymbolState;narrative?:MarketNarrative;quote?:QuoteDetail;minutePath?:CandleLike[];
-  previous?:PositionIntelligenceState;costRate?:number;marketStateAgeMs?:number;
+  previous?:PositionIntelligenceState;costRate?:number;marketStateAgeMs?:number;entryResponseValidated?:boolean;
 }):PositionIntelligenceState{
   const d=input.side==="LONG"?1:-1,state=input.state,q=input.quote,cost=Math.max(.0005,input.costRate??.0019),
     alignedResidual=state?d*state.residual:0,alignedZ=state?d*state.residualZ:0,
@@ -164,7 +164,9 @@ export function evaluatePositionIntelligence(input:{
     familyNet=support.reduce((n,x)=>n+x.severity,0)-concern.reduce((n,x)=>n+x.severity,0),
     currentAdvantage=clip((same*.55+(50+alignedZ*14)*.20+pathSide*100*.15+(50+alignedPressure*25)*.10),0,100),
     entryAdvantage=clip(input.entryScore,0,100),advantageChange=currentAdvantage-entryAdvantage,
-    holdValueScore=clip(50+18*(continuationRatio-1)+12*familyNet+.28*advantageChange,0,100),
+    scoredContinuationRatio=input.entryResponseValidated?Math.min(2.5,continuationRatio):continuationRatio,
+    spaceWeight=input.entryResponseValidated&&concernFamilies.length>=2?10:18,
+    holdValueScore=clip(50+spaceWeight*(scoredContinuationRatio-1)+12*familyNet+.28*advantageChange,0,100),
     exitValueScore=100-holdValueScore,
     stateFreshness=input.marketStateAgeMs==null?1:input.marketStateAgeMs<=8*60_000?1:input.marketStateAgeMs<=15*60_000?.55:0,
     dataConfidence=clip((((state?.dataConfidence??45)*.70+Math.min(4,sourceCount)*6.25+Math.min(3,liquiditySources)*3.5)
@@ -179,8 +181,10 @@ export function evaluatePositionIntelligence(input:{
     continuedReview=shouldReview&&prior&&(prior.decision==="REVIEW"||prior.decision==="EXIT"),
     reviewBars=shouldReview?(continuedReview?(prior.reviewBars+(newCompletedBar?1:0)):1):0,
     reviewSince=shouldReview?(continuedReview?prior.reviewSince??input.now:input.now):null,
+    unconfirmedFailure=!!input.entryResponseValidated&&!input.firstProfit&&enoughIndependentConcern&&dataConfidence>=60&&reviewBars>=2
+      &&(advantageChange<-18||input.signedRate<-cost*.25),
     hardExit=enoughIndependentConcern&&valueWeak&&dataConfidence>=60&&reviewBars>=2,
-    decision:PositionDecision=hardExit?"EXIT":shouldReview?"REVIEW":"HOLD",
+    decision:PositionDecision=hardExit||unconfirmedFailure?"EXIT":shouldReview?"REVIEW":"HOLD",
     phase:PositionPhase=decision==="EXIT"?"AT_RISK":decision==="REVIEW"?(input.signedRate>cost?"DECAYING":"AT_RISK")
       :input.ageMin<input.expectedHoldMinutes*.20?"BUILDING":continuationRatio>=1.6?"HEALTHY":"MATURE",
     counterfactualNewEntry=remainingSpaceRate>=expectedPullbackRate*1.35&&same>=65&&dataConfidence>=60,
