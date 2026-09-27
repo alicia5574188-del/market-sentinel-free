@@ -51,6 +51,9 @@ test("shadow geometry research is post-authority, optional and cannot become tra
   assert.ok(optional.indexOf("await this.advanceForwardNow(Date.now(),true)")>=0);
   assert.ok(optional.indexOf("await this.advanceShadowResearchNow(Date.now())")>optional.indexOf("await this.advanceForwardNow(Date.now(),true)"));
   assert.match(worker,/reserveNonAlarmWrites\(writes,512\)/);
+  assert.match(shadow,/SHADOW_MILESTONE_CAUSALITY_VERSION/);
+  assert.match(shadow,/BACKFILLED/);assert.match(shadow,/LIVE_OBSERVED/);
+  assert.match(shadow,/deriveRollingGeometry/);assert.match(shadow,/shortFlips90/);assert.match(shadow,/breadthCrosses90/);
   assert.doesNotMatch(shadow,/openIntelligenceTrade|closeTrade|setLiveMode|GateLiveClient|createEntry\(/);
   const advance=core.slice(core.indexOf("export function advanceForward"),core.indexOf("export function closeForwardForReset"));
   assert.doesNotMatch(advance,/shadowResearch|ShadowResearch/);

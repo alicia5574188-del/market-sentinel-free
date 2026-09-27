@@ -5,6 +5,8 @@ import { PAPER_COST, type Candle, type ForwardState, type Quote, type Trade } fr
 export const SHADOW_RESEARCH_VERSION="market-intelligence-shadow-research-v1";
 export const SHADOW_RESPONSE_QUALITY_VERSION="shadow-response-quality-v2";
 export const SHADOW_PROFIT_CONVERSION_VERSION="shadow-profit-conversion-v2";
+export const SHADOW_ROLLING_GEOMETRY_VERSION="shadow-rolling-geometry-v1";
+export const SHADOW_MILESTONE_CAUSALITY_VERSION="shadow-causal-milestones-v1";
 export const SHADOW_MARKET_KEY="market-intelligence:research:v1:shadow-market-geometry";
 export const SHADOW_TRADE_KEY="market-intelligence:research:v1:shadow-trade-quality";
 export const SHADOW_GEOMETRY_SAMPLE_MS=5*60_000;
@@ -19,10 +21,16 @@ const clip=(v:number,a=0,b=1)=>Math.max(a,Math.min(b,v));
 const geometryBucket=(at:number)=>Math.floor(at/SHADOW_GEOMETRY_SAMPLE_MS)*SHADOW_GEOMETRY_SAMPLE_MS;
 
 export type ShadowGeometryLabel="TRENDING"|"ROTATIONAL"|"MIXED";
+export type RollingGeometryState={
+  version:typeof SHADOW_ROLLING_GEOMETRY_VERSION;state:"INSUFFICIENT"|"STABLE_TREND"|"ROTATIONAL"|"TRANSITIONAL";
+  samples60:number;samples90:number;shortFlips60:number;shortFlips90:number;majorFlips90:number;
+  breadthCrosses60:number;breadthCrosses90:number;labelTransitions60:number;labelTransitions90:number;
+  leadershipRotationShare60:number;mixedShare60:number;trendingShare60:number;rotationScore:number;stabilityScore:number;
+};
 export type MarketGeometrySnapshot={
   at:number;label:ShadowGeometryLabel;macro:string;major:string;short:string;shortPhase:string;transitionDirection:string;transitionStage:string|null;
   breadth3:number|null;breadth12:number|null;breadthSlope:number|null;dispersion:number|null;synchrony:number|null;residualBalance:number|null;
-  leaderPersistence:number|null;venuePressure:number|null;leadershipRotation:boolean;summary:string;
+  leaderPersistence:number|null;venuePressure:number|null;leadershipRotation:boolean;summary:string;rolling?:RollingGeometryState|null;
 };
 export type EntryLocationWindow={
   minutes:number;bars:number;low:number;high:number;rangeRate:number;rangePosition:number;sidePosition:number;
@@ -48,8 +56,9 @@ export type ProfitConversionV2={
   proof:"NONE"|"THIN"|"MEANINGFUL"|"EXPANSION";deteriorationScore:number;concernFamilies:number;supportFamilies:number;
   signal:"NO_PROOF"|"LET_RUN"|"WATCH"|"PROTECT_CANDIDATE"|"EXIT_CANDIDATE";reasons:string[];
 };
+export type ShadowMilestoneSource="LIVE_OBSERVED"|"BACKFILLED";
 export type ShadowMilestone={
-  at:number;barAt:number|null;status:"OPEN"|"CLOSED";responseBand:ResponseQualityV2["band"]|null;
+  at:number;barAt:number|null;status:"OPEN"|"CLOSED";source:ShadowMilestoneSource;responseBand:ResponseQualityV2["band"]|null;
   profitSignal:ProfitConversionV2["signal"];proof:ProfitConversionV2["proof"];peakNetRate:number;currentNetRate:number;
   givebackRatio:number|null;deteriorationScore:number;concernFamilies:number;advantageChange:number|null;
 };
@@ -58,6 +67,7 @@ export type TradeShadowResearch={
   entryMode:string|null;entryScore:number|null;entryGeometryProvenance:"CAUSAL_5M"|"PARTIAL_5M"|"UNAVAILABLE";
   entryLocation:EntryLocationWindow[];entryMarket:MarketGeometrySnapshot|null;response:ResponseQuality|null;responseV2?:ResponseQualityV2|null;
   profit:ProfitConversion;profitV2?:ProfitConversionV2;milestones?:ShadowMilestone[];
+  milestoneCausalityVersion?:typeof SHADOW_MILESTONE_CAUSALITY_VERSION;
   latestPositionIntelligence:{decision:string;phase:string;holdValueScore:number;continuationRatio:number;
     advantageChange:number;supportFamilies:string[];concernFamilies:string[]} | null;
   lastBarAt:number|null;updatedAt:number;
@@ -69,6 +79,41 @@ type Reader={get<T>(key:string):Promise<T|undefined>};
 
 export function initialShadowResearch(now=Date.now()):ShadowResearchState{
   return{version:SHADOW_RESEARCH_VERSION,updatedAt:now,market:[],trades:[]};
+}
+const bias=(v:string)=>v==="BULLISH"||v==="BEARISH"?v:null;
+function directionalFlips(rows:MarketGeometrySnapshot[],pick:(x:MarketGeometrySnapshot)=>string){
+  let prior:string|null=null,n=0;
+  for(const row of rows){const next=bias(pick(row));if(!next)continue;if(prior&&next!==prior)n++;prior=next;}
+  return n;
+}
+function breadthCrosses(rows:MarketGeometrySnapshot[]){
+  let prior=0,n=0;
+  for(const row of rows){const v=row.breadth3;if(v==null||!Number.isFinite(v))continue;const next=v>.12?1:v<-.12?-1:0;
+    if(!next)continue;if(prior&&next!==prior)n++;prior=next;}
+  return n;
+}
+function labelTransitions(rows:MarketGeometrySnapshot[]){
+  return rows.slice(1).reduce((n,row,i)=>n+Number(row.label!==rows[i]!.label),0);
+}
+export function deriveRollingGeometry(rows:MarketGeometrySnapshot[],at:number):RollingGeometryState{
+  const past=rows.filter(x=>x.at<=at).sort((a,b)=>a.at-b.at),w60=past.filter(x=>at-x.at<60*60_000),
+    w90=past.filter(x=>at-x.at<90*60_000),short60=directionalFlips(w60,x=>x.short),short90=directionalFlips(w90,x=>x.short),
+    major90=directionalFlips(w90,x=>x.major),breadth60=breadthCrosses(w60),breadth90=breadthCrosses(w90),
+    trans60=labelTransitions(w60),trans90=labelTransitions(w90),
+    leadership=w60.length?w60.filter(x=>x.leadershipRotation).length/w60.length:0,
+    mixed=w60.length?w60.filter(x=>x.label==="MIXED").length/w60.length:0,
+    trending=w60.length?w60.filter(x=>x.label==="TRENDING").length/w60.length:0,
+    rotation=clip(.28*clip(short90/4)+.16*clip(major90/3)+.20*clip(breadth90/5)+.16*clip(trans90/6)+.10*leadership+.10*mixed),
+    stability=1-rotation,state:RollingGeometryState["state"]=w60.length<6?"INSUFFICIENT":rotation>=.55?"ROTATIONAL":
+      stability>=.68&&trending>=.45?"STABLE_TREND":"TRANSITIONAL";
+  return{version:SHADOW_ROLLING_GEOMETRY_VERSION,state,samples60:w60.length,samples90:w90.length,shortFlips60:short60,shortFlips90:short90,
+    majorFlips90:major90,breadthCrosses60:breadth60,breadthCrosses90:breadth90,labelTransitions60:trans60,labelTransitions90:trans90,
+    leadershipRotationShare60:leadership,mixedShare60:mixed,trendingShare60:trending,rotationScore:rotation,stabilityScore:stability};
+}
+function rebuildRollingGeometry(items:MarketGeometrySnapshot[]){
+  const chronological=[...items].sort((a,b)=>a.at-b.at),built:MarketGeometrySnapshot[]=[];
+  for(const row of chronological){const clean={...row,rolling:undefined};built.push({...clean,rolling:deriveRollingGeometry([...built,clean],row.at)});}
+  return built.sort((a,b)=>b.at-a.at);
 }
 function geometryLabel(s:MarketIntelligenceState){
   const i=s.internals,phase=s.narrative.short.phase;
@@ -209,18 +254,19 @@ function entryMarket(state:ShadowResearchState,forward:ForwardState,t:Trade,old?
   return fallbackNarrativeAt(live,t.openedAt);
 }
 function appendMilestone(old:TradeShadowResearch|undefined,fresh:{
-  status:"OPEN"|"CLOSED";lastBarAt:number|null;responseV2:ResponseQualityV2|null;profitV2:ProfitConversionV2;
+  status:"OPEN"|"CLOSED";closedAt:number|null;lastBarAt:number|null;responseV2:ResponseQualityV2|null;profitV2:ProfitConversionV2;
   latestPositionIntelligence:TradeShadowResearch["latestPositionIntelligence"];
-},now:number){
-  const prior=[...(old?.milestones??[])],pi=fresh.latestPositionIntelligence,
-    point:ShadowMilestone={at:now,barAt:fresh.lastBarAt,status:fresh.status,responseBand:fresh.responseV2?.band??null,
-      profitSignal:fresh.profitV2.signal,proof:fresh.profitV2.proof,peakNetRate:fresh.profitV2.peakNetRate,
-      currentNetRate:fresh.profitV2.currentNetRate,givebackRatio:fresh.profitV2.givebackRatio,
+},now:number,source:ShadowMilestoneSource){
+  const prior=[...(old?.milestones??[])].map(x=>({...x,source:x.source==="LIVE_OBSERVED"?"LIVE_OBSERVED" as const:"BACKFILLED" as const})),
+    pi=fresh.latestPositionIntelligence,
+    point:ShadowMilestone={at:source==="BACKFILLED"&&fresh.status==="CLOSED"?(fresh.closedAt??old?.closedAt??now):now,barAt:fresh.lastBarAt,status:fresh.status,source,
+      responseBand:fresh.responseV2?.band??null,profitSignal:fresh.profitV2.signal,proof:fresh.profitV2.proof,
+      peakNetRate:fresh.profitV2.peakNetRate,currentNetRate:fresh.profitV2.currentNetRate,givebackRatio:fresh.profitV2.givebackRatio,
       deteriorationScore:fresh.profitV2.deteriorationScore,concernFamilies:fresh.profitV2.concernFamilies,
       advantageChange:pi?.advantageChange??null},
     last=prior.at(-1);
-  if(!last||last.status!==point.status||last.responseBand!==point.responseBand||last.profitSignal!==point.profitSignal||last.proof!==point.proof)
-    prior.push(point);
+  if(!last||last.status!==point.status||last.source!==point.source||last.responseBand!==point.responseBand
+    ||last.profitSignal!==point.profitSignal||last.proof!==point.proof)prior.push(point);
   return prior.slice(-8);
 }
 function makeTrade(state:ShadowResearchState,forward:ForwardState,t:Trade,paths:Record<string,Candle[]>,quotes:Record<string,Quote>,now:number,old?:TradeShadowResearch):TradeShadowResearch{
@@ -230,15 +276,22 @@ function makeTrade(state:ShadowResearchState,forward:ForwardState,t:Trade,paths:
     response=responseQuality(t),responseV2=responseQualityV2(response,windows),
     profit=pathProfit(t,paths[t.symbol],quotes[t.symbol],now,old),latestPositionIntelligence=intelligence(t),
     profitV2=profitConversionV2(profit,latestPositionIntelligence),lastBarAt=profit.barAt,
-    milestones=appendMilestone(old,{status:t.status,lastBarAt,responseV2,profitV2,latestPositionIntelligence},now);
+    needsCausalityMigration=old?.milestoneCausalityVersion!==SHADOW_MILESTONE_CAUSALITY_VERSION,
+    milestoneSource:ShadowMilestoneSource=t.status==="CLOSED"&&needsCausalityMigration?"BACKFILLED":"LIVE_OBSERVED",
+    milestones=appendMilestone(old,{status:t.status,closedAt:t.closedAt,lastBarAt,responseV2,profitV2,latestPositionIntelligence},now,milestoneSource),
+    updatedAt=t.status==="CLOSED"?(t.closedAt??old?.updatedAt??now):now;
   return{id:`shadow:${t.id}`,tradeId:t.id,symbol:t.symbol,side:t.side,status:t.status,openedAt:t.openedAt,closedAt:t.closedAt,entryPrice:t.entryPrice,
     entryMode:t.entryContext?.mode??null,entryScore:t.entryContext?.entryScore??null,entryGeometryProvenance:provenance,entryLocation:windows,
-    entryMarket:entryMarket(state,forward,t,old),response,responseV2,profit,profitV2,milestones,latestPositionIntelligence,lastBarAt,updatedAt:now};
+    entryMarket:entryMarket(state,forward,t,old),response,responseV2,profit,profitV2,milestones,
+    milestoneCausalityVersion:SHADOW_MILESTONE_CAUSALITY_VERSION,latestPositionIntelligence,lastBarAt,updatedAt};
 }
-function trimTrades(items:TradeShadowResearch[]){
-  const out=[...items].sort((a,b)=>Number(b.status==="OPEN")-Number(a.status==="OPEN")||b.updatedAt-a.updatedAt).slice(0,100);
+const tradeRecency=(x:TradeShadowResearch)=>x.closedAt??x.openedAt;
+export function trimShadowTrades(items:TradeShadowResearch[]){
+  const out=[...items].sort((a,b)=>Number(b.status==="OPEN")-Number(a.status==="OPEN")
+    ||tradeRecency(b)-tradeRecency(a)||b.openedAt-a.openedAt).slice(0,100);
   while(out.length>12&&bytes({version:SHADOW_RESEARCH_VERSION,items:out})>MAX_VALUE_BYTES){
-    const idx=out.map((x,i)=>({x,i})).filter(v=>v.x.status==="CLOSED").sort((a,b)=>a.x.updatedAt-b.x.updatedAt)[0]?.i??out.length-1;
+    const idx=out.map((x,i)=>({x,i})).filter(v=>v.x.status==="CLOSED")
+      .sort((a,b)=>tradeRecency(a.x)-tradeRecency(b.x)||a.x.openedAt-b.x.openedAt)[0]?.i??out.length-1;
     out.splice(idx,1);
   }
   return out;
@@ -249,10 +302,12 @@ function normalizeMarket(items:MarketGeometrySnapshot[]|undefined){
     const bucket=geometryBucket(row.at);if(seen.has(bucket))continue;seen.add(bucket);out.push(row);
     if(out.length>=SHADOW_GEOMETRY_LIMIT)break;
   }
-  return out;
+  return rebuildRollingGeometry(out);
 }
 function normalizeTrades(items:TradeShadowResearch[]|undefined){
-  return(items??[]).filter(x=>x&&typeof x.tradeId==="string"&&finite(x.openedAt)&&finite(x.entryPrice)&&x.entryPrice>0).slice(0,100);
+  const normalized=(items??[]).filter(x=>x&&typeof x.tradeId==="string"&&finite(x.openedAt)&&finite(x.entryPrice)&&x.entryPrice>0)
+    .map(x=>({...x,milestones:(x.milestones??[]).map(m=>({...m,source:m.source==="LIVE_OBSERVED"?"LIVE_OBSERVED" as const:"BACKFILLED" as const}))}));
+  return trimShadowTrades(normalized);
 }
 export async function readShadowResearch(storage:Reader,now=Date.now()):Promise<ShadowResearchState>{
   const [m,t]=await Promise.all([
@@ -277,13 +332,14 @@ export function advanceShadowResearch(input:{state:ShadowResearchState;forward:F
     const statusChanged=!old||old.status!==fresh.status||old.closedAt!==fresh.closedAt,
       barChanged=!old||old.lastBarAt!==fresh.lastBarAt,
       responseChanged=!old||JSON.stringify(old.response)!==JSON.stringify(fresh.response),
-      v2Migration=!old?.responseV2||!old?.profitV2||!Array.isArray(old.milestones);
+      v2Migration=!old?.responseV2||!old?.profitV2||!Array.isArray(old.milestones)
+        ||old?.milestoneCausalityVersion!==SHADOW_MILESTONE_CAUSALITY_VERSION;
     if(statusChanged||barChanged||responseChanged||v2Migration){
       if(old)next.trades.splice(next.trades.findIndex(x=>x.tradeId===trade.id),1);
       next.trades.push(fresh);byId.set(trade.id,fresh);tradesChanged=true;
     }
   }
-  if(tradesChanged)next.trades=trimTrades(next.trades);
+  if(tradesChanged)next.trades=trimShadowTrades(next.trades);
   if(marketChanged||tradesChanged)next.updatedAt=input.now;
   return{state:next,marketChanged,tradesChanged,changed:marketChanged||tradesChanged};
 }
@@ -303,21 +359,41 @@ export function shadowResearchView(state:ShadowResearchState){
     grossOnly=closed.filter(x=>x.profit.state==="GROSS_ONLY"),late=state.trades.filter(x=>x.response?.tempo==="LATE"),
     immediate=state.trades.filter(x=>x.response?.tempo==="IMMEDIATE"),rotational=state.market.filter(x=>x.label==="ROTATIONAL"),
     trending=state.market.filter(x=>x.label==="TRENDING"),mixed=state.market.filter(x=>x.label==="MIXED"),
+    rollingRotational=state.market.filter(x=>x.rolling?.state==="ROTATIONAL"),
+    rollingStable=state.market.filter(x=>x.rolling?.state==="STABLE_TREND"),
+    rollingTransitional=state.market.filter(x=>x.rolling?.state==="TRANSITIONAL"),
     marketSorted=[...state.market].sort((a,b)=>a.at-b.at),
     coverage=marketSorted.length>1?(marketSorted.at(-1)!.at-marketSorted[0]!.at)/60_000:0,
     transitions=marketSorted.slice(1).reduce((n,x,i)=>n+Number(x.label!==marketSorted[i]!.label),0),
     profitSignals=["NO_PROOF","LET_RUN","WATCH","PROTECT_CANDIDATE","EXIT_CANDIDATE"].reduce<Record<string,number>>((a,k)=>{
       a[k]=state.trades.filter(x=>x.profitV2?.signal===k).length;return a;
-    },{});
+    },{}),
+    allMilestones=state.trades.flatMap(x=>x.milestones??[]),
+    liveMilestones=allMilestones.filter(x=>x.source==="LIVE_OBSERVED"),
+    backfilledMilestones=allMilestones.filter(x=>x.source==="BACKFILLED"),
+    livePreExit=liveMilestones.filter(x=>x.status==="OPEN"&&(x.profitSignal==="PROTECT_CANDIDATE"||x.profitSignal==="EXIT_CANDIDATE")),
+    liveExit=livePreExit.filter(x=>x.profitSignal==="EXIT_CANDIDATE"),
+    closedWithLiveLead=closed.flatMap(t=>{
+      const first=(t.milestones??[]).filter(x=>x.source==="LIVE_OBSERVED"&&x.status==="OPEN"
+        &&(x.profitSignal==="PROTECT_CANDIDATE"||x.profitSignal==="EXIT_CANDIDATE")
+        &&t.closedAt!=null&&x.at<t.closedAt).sort((a,b)=>a.at-b.at)[0];
+      return first&&t.closedAt!=null?[t.closedAt-first.at]:[];
+    });
   const avg=(xs:number[])=>xs.length?xs.reduce((a,b)=>a+b,0)/xs.length:null;
   return{version:state.version,updatedAt:state.updatedAt,purpose:"只读影子研究：市场几何、入场位置、响应质量、盈利转化；不参与任何交易决策。",
     summary:{marketSnapshots:state.market.length,geometrySampleMinutes:SHADOW_GEOMETRY_SAMPLE_MS/60_000,marketCoverageMinutes:coverage,
       geometryTransitions:transitions,rotationalShare:state.market.length?rotational.length/state.market.length:null,
       trendingShare:state.market.length?trending.length/state.market.length:null,mixedShare:state.market.length?mixed.length/state.market.length:null,
+      rollingGeometry:{latest:state.market[0]?.rolling??null,rotationalShare:state.market.length?rollingRotational.length/state.market.length:null,
+        stableTrendShare:state.market.length?rollingStable.length/state.market.length:null,
+        transitionalShare:state.market.length?rollingTransitional.length/state.market.length:null},
       tradesTracked:state.trades.length,closedTracked:closed.length,profitLostAfterCostCoverage:lost.length,grossOnlyThenClosed:grossOnly.length,
       immediateResponses:immediate.length,lateResponses:late.length,responseV2:{ROBUST:responseBandSummary(state.trades,"ROBUST"),
         MIXED:responseBandSummary(state.trades,"MIXED"),FRAGILE:responseBandSummary(state.trades,"FRAGILE")},
-      profitV2Signals:profitSignals,averageClosedPeakFavorableRate:avg(closed.map(x=>x.profit.peakFavorableRate)),
+      profitV2Signals:profitSignals,causalMilestones:{liveObserved:liveMilestones.length,backfilled:backfilledMilestones.length,
+        livePreExitProtectionCandidates:livePreExit.length,livePreExitExitCandidates:liveExit.length,
+        closedTradesWithLiveProtectionLead:closedWithLiveLead.length,averageLiveLeadMinutes:avg(closedWithLiveLead.map(x=>x/60_000))},
+      averageClosedPeakFavorableRate:avg(closed.map(x=>x.profit.peakFavorableRate)),
       averageClosedCapturedNetVsPeakRatio:avg(closed.map(x=>x.profit.capturedNetVsPeakRatio).filter((x):x is number=>x!==null&&Number.isFinite(x)))},
     marketGeometry:state.market,trades:state.trades};
 }
