@@ -254,12 +254,12 @@ function entryMarket(state:ShadowResearchState,forward:ForwardState,t:Trade,old?
   return fallbackNarrativeAt(live,t.openedAt);
 }
 function appendMilestone(old:TradeShadowResearch|undefined,fresh:{
-  status:"OPEN"|"CLOSED";lastBarAt:number|null;responseV2:ResponseQualityV2|null;profitV2:ProfitConversionV2;
+  status:"OPEN"|"CLOSED";closedAt:number|null;lastBarAt:number|null;responseV2:ResponseQualityV2|null;profitV2:ProfitConversionV2;
   latestPositionIntelligence:TradeShadowResearch["latestPositionIntelligence"];
 },now:number,source:ShadowMilestoneSource){
   const prior=[...(old?.milestones??[])].map(x=>({...x,source:x.source==="LIVE_OBSERVED"?"LIVE_OBSERVED" as const:"BACKFILLED" as const})),
     pi=fresh.latestPositionIntelligence,
-    point:ShadowMilestone={at:source==="BACKFILLED"&&fresh.status==="CLOSED"?(old?.closedAt??now):now,barAt:fresh.lastBarAt,status:fresh.status,source,
+    point:ShadowMilestone={at:source==="BACKFILLED"&&fresh.status==="CLOSED"?(fresh.closedAt??old?.closedAt??now):now,barAt:fresh.lastBarAt,status:fresh.status,source,
       responseBand:fresh.responseV2?.band??null,profitSignal:fresh.profitV2.signal,proof:fresh.profitV2.proof,
       peakNetRate:fresh.profitV2.peakNetRate,currentNetRate:fresh.profitV2.currentNetRate,givebackRatio:fresh.profitV2.givebackRatio,
       deteriorationScore:fresh.profitV2.deteriorationScore,concernFamilies:fresh.profitV2.concernFamilies,
@@ -278,7 +278,7 @@ function makeTrade(state:ShadowResearchState,forward:ForwardState,t:Trade,paths:
     profitV2=profitConversionV2(profit,latestPositionIntelligence),lastBarAt=profit.barAt,
     needsCausalityMigration=old?.milestoneCausalityVersion!==SHADOW_MILESTONE_CAUSALITY_VERSION,
     milestoneSource:ShadowMilestoneSource=t.status==="CLOSED"&&needsCausalityMigration?"BACKFILLED":"LIVE_OBSERVED",
-    milestones=appendMilestone(old,{status:t.status,lastBarAt,responseV2,profitV2,latestPositionIntelligence},now,milestoneSource),
+    milestones=appendMilestone(old,{status:t.status,closedAt:t.closedAt,lastBarAt,responseV2,profitV2,latestPositionIntelligence},now,milestoneSource),
     updatedAt=t.status==="CLOSED"?(t.closedAt??old?.updatedAt??now):now;
   return{id:`shadow:${t.id}`,tradeId:t.id,symbol:t.symbol,side:t.side,status:t.status,openedAt:t.openedAt,closedAt:t.closedAt,entryPrice:t.entryPrice,
     entryMode:t.entryContext?.mode??null,entryScore:t.entryContext?.entryScore??null,entryGeometryProvenance:provenance,entryLocation:windows,
