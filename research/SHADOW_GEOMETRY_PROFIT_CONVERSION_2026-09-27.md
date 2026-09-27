@@ -1,3 +1,52 @@
+# Shadow Quality V2 / Geometry retention amendment — 2026-09-27
+
+This amendment keeps the original research-only boundary intact and fixes the first live research defect found from snapshot `market-intelligence-v1-snapshot-2026-09-27(5).json`.
+
+## Geometry retention repair
+
+The first implementation stored every high-frequency Market Intelligence update and capped the array at 96 rows. In production this meant 96 rows covered only a few minutes, so it could not support multi-hour regime analysis.
+
+The corrected design stores at most one Market Geometry representative per **5-minute time bucket** and keeps 96 buckets, giving roughly **8 hours** of bounded research coverage. Existing high-frequency rows are losslessly normalized to one representative per 5-minute bucket on read. This lowers optional write volume; it does not add an alarm, quote request, data source, or financial write.
+
+## Response Quality V2
+
+The original PASS/CANCEL authority is unchanged. Shadow V2 computes a continuous, outcome-blind research score from only information available at entry:
+- fraction of the allowed response window consumed;
+- best favorable response;
+- favorable response per second;
+- adverse response during confirmation;
+- support-family breadth;
+- 30-minute side-relative entry location and pre-entry path efficiency.
+
+It records `ROBUST / MIXED / FRAGILE` plus flags such as `OVER_15S_OBSERVED_RISK`, `WEAK_RESPONSE_SPEED`, `EXTENDED_LOCATION`, and `STRONG_EXTENSION_CONFIRMED`.
+
+The 15-second observation from the current sample is **not** a production veto. It is retained as a shadow flag so later data can test whether it remains stable out of sample. Final PnL and post-entry outcome labels are not inputs to the response score.
+
+## Profit Conversion V2
+
+Shadow V2 separates peak gross excursion from peak net opportunity after modeled round-trip friction, then combines giveback with the already-existing Position Intelligence evidence state.
+
+Profit proof tiers:
+- NONE
+- THIN
+- MEANINGFUL
+- EXPANSION
+
+Shadow-only research signals:
+- NO_PROOF
+- LET_RUN
+- WATCH
+- PROTECT_CANDIDATE
+- EXIT_CANDIDATE
+
+Moderate profits do not escalate merely because price pulls back; they require converged deterioration evidence. Large EXPANSION profits deliberately receive wider giveback room so the study does not recreate a tight universal trailing stop, but destructive tail giveback can still be flagged before a full structural stop.
+
+Each trade keeps a bounded milestone history only when response/profit research state changes. This allows later snapshots to ask whether a shadow protection candidate appeared materially before the real exit without creating per-tick writes.
+
+## Authority boundary
+
+Response Quality V2 and Profit Conversion V2 are not imported by `forward-relations.ts` and cannot open, close, size, score, rank or protect a real PAPER/LIVE/member position. A later authority change still requires separate evidence, explicit owner approval, and a new release scope.
+
 # Shadow Market Geometry & Profit Conversion — 2026-09-27
 
 ## Owner intent
