@@ -18,7 +18,7 @@ export type ResearchCheckpoint={
 export type PostExitResearch={
   id:string;tradeId:string;symbol:string;side:"LONG"|"SHORT";openedAt:number;exitAt:number;exitPrice:number;
   exitReason:string|null;actualNetPnl:number|null;actualGrossPnl:number|null;notional:number;peakBeforeExitRate:number;
-  startedAt:number;lastObservedAt:number;maxFavorableRate:number;maxAdverseRate:number;checkpoints:ResearchCheckpoint[];
+  startedAt:number;lastObservedAt:number;pathCoverage:"FULL"|"PARTIAL";maxFavorableRate:number;maxAdverseRate:number;checkpoints:ResearchCheckpoint[];
   unavailableCheckpoints:number[];completed:boolean;
 };
 export type RejectedOpportunityResearch={
@@ -66,9 +66,16 @@ function normalizePost(row:PostExitResearch):PostExitResearch|null{
   if(!row||typeof row.id!=="string"||typeof row.tradeId!=="string"||typeof row.symbol!=="string"
     ||(row.side!=="LONG"&&row.side!=="SHORT")||!finite(row.exitAt)||!finite(row.exitPrice)||row.exitPrice<=0)return null;
   const startAt=finite(row.startedAt)?row.startedAt:row.exitAt,normalized=normalizeCheckpointSet(row.checkpoints,startAt),
-    unavailable=mergeUnavailable((row as {unavailableCheckpoints?:unknown}).unavailableCheckpoints,normalized.unavailable,normalized.checkpoints);
-  return{...row,startedAt:startAt,checkpoints:normalized.checkpoints,unavailableCheckpoints:unavailable,
-    maxFavorableRate:Math.max(0,Number(row.maxFavorableRate)||0),maxAdverseRate:Math.max(0,Number(row.maxAdverseRate)||0),
+    unavailable=mergeUnavailable((row as {unavailableCheckpoints?:unknown}).unavailableCheckpoints,normalized.unavailable,normalized.checkpoints),
+    inferredCoverage=(row as {pathCoverage?:unknown}).pathCoverage==="FULL"?"FULL"
+      :(row as {pathCoverage?:unknown}).pathCoverage==="PARTIAL"?"PARTIAL"
+      :normalized.checkpoints.some(p=>p.minutes===5)&&normalized.unavailable.length===0?"FULL":"PARTIAL",
+    checkpointFavorable=normalized.checkpoints.reduce((m,p)=>Math.max(m,p.maxFavorableRate),0),
+    checkpointAdverse=normalized.checkpoints.reduce((m,p)=>Math.max(m,p.maxAdverseRate),0);
+  return{...row,startedAt:startAt,pathCoverage:normalized.unavailable.length?"PARTIAL":inferredCoverage,
+    checkpoints:normalized.checkpoints,unavailableCheckpoints:unavailable,
+    maxFavorableRate:normalized.unavailable.length?checkpointFavorable:Math.max(checkpointFavorable,Math.max(0,Number(row.maxFavorableRate)||0)),
+    maxAdverseRate:normalized.unavailable.length?checkpointAdverse:Math.max(checkpointAdverse,Math.max(0,Number(row.maxAdverseRate)||0)),
     completed:researchCompleted(normalized.checkpoints,unavailable)};
 }
 function normalizeRejected(row:RejectedOpportunityResearch):RejectedOpportunityResearch|null{
@@ -133,12 +140,14 @@ function updateCheckpoints<T extends {side:"LONG"|"SHORT";startedAt:number;lastO
   row.completed=researchCompleted(row.checkpoints,row.unavailableCheckpoints);
   return changed;
 }
-function postFromTrade(t:Trade):PostExitResearch|null{
+function postFromTrade(t:Trade,now:number):PostExitResearch|null{
   if(t.status!=="CLOSED"||!t.closedAt||!t.exitPrice||t.exitPrice<=0||t.exitReason==="ACCOUNT_RESET")return null;
   if(t.entryContext?.strategyVersion!==MARKET_INTELLIGENCE_VERSION)return null;
+  const pathCoverage=now-t.closedAt<=CHECKPOINT_UNAVAILABLE_AFTER_MS?"FULL":"PARTIAL";
   return{id:`post:${t.id}`,tradeId:t.id,symbol:t.symbol,side:t.side,openedAt:t.openedAt,exitAt:t.closedAt,exitPrice:t.exitPrice,
     exitReason:t.exitReason,actualNetPnl:t.netPnl,actualGrossPnl:t.grossPnl,notional:t.notional,peakBeforeExitRate:t.favorable,
-    startedAt:t.closedAt,lastObservedAt:t.closedAt,maxFavorableRate:0,maxAdverseRate:0,checkpoints:[],unavailableCheckpoints:[],completed:false};
+    startedAt:t.closedAt,lastObservedAt:t.closedAt,pathCoverage,maxFavorableRate:0,maxAdverseRate:0,checkpoints:[],
+    unavailableCheckpoints:[],completed:false};
 }
 function rejectionClass(o:Opportunity){
   if(o.eligible)return"EXECUTABLE_NOT_SELECTED";
@@ -172,7 +181,7 @@ export function advanceCounterfactualResearch(input:{state:CounterfactualResearc
   const next:CounterfactualResearchState=structuredClone(input.state);let postChanged=false,rejectedChanged=false;
   const postIds=new Set(next.postExit.map(x=>x.tradeId));
   for(const t of input.forward.history){
-    if(postIds.has(t.id))continue;const row=postFromTrade(t);
+    if(postIds.has(t.id))continue;const row=postFromTrade(t,input.now);
     if(row){next.postExit.unshift(row);postIds.add(t.id);postChanged=true;}
   }
   if(input.observeCandidates){
@@ -206,6 +215,8 @@ export function counterfactualResearchView(state:CounterfactualResearchState){
   const avg=(xs:number[])=>xs.length?xs.reduce((a,b)=>a+b,0)/xs.length:null;
   return{version:state.version,updatedAt:state.updatedAt,checkpoints:[...RESEARCH_CHECKPOINTS],
     summary:{postExitTracked:state.postExit.length,postExitCompleted:postComplete.length,rejectedTracked:state.rejected.length,rejectedCompleted:rejectComplete.length,
+      postExitFullCoverage:state.postExit.filter(x=>x.pathCoverage==="FULL").length,
+      postExitPartialCoverage:state.postExit.filter(x=>x.pathCoverage==="PARTIAL").length,
       postExitValid60m:post60.length,postExitUnavailable60m:postUnavailable60,rejectedValid60m:reject60.length,
       rejectedUnavailable60m:rejectUnavailable60,averagePostExitExtraFavorable60m:avg(exitRegret60),
       averagePostExitAdverse60m:avg(savedLoss60),
