@@ -1,3 +1,9 @@
+# Resource-certified member capacity update — 2026-09-27
+
+This section supersedes the original first-rollout capacity numbers below without changing the execution contract. The paid-plan resource model now certifies **5 concurrently enabled/managed member LIVE accounts**, excluding the primary owner. Member execution cadence remains exactly 10 seconds while trading; Gate reconciliation, source-close handling, proportional copy sizing, leverage, stops, unknown-order recovery, OFF semantics and per-member isolation are unchanged. Capacity was increased by coalescing display-only usage reporting and member UI polling, not by reducing execution quality.
+
+Unchanged member usage is reported immediately when it changes and otherwise at most once per 15-minute heartbeat. Member browser runtime/history views refresh less frequently and still refresh on foreground/focus; browser polling is not execution authority. The 31-day SQLite Durable Object row-write model for the owner plus 5 active members must remain below 50% of the Workers Paid included row writes. CI must prove 5 remains below that safety line and 6 remains above it until a later lossless resource improvement changes the model. A full seat never evicts existing managed risk; OFF accounts with outstanding exposure retain their seat until safely drained.
+
 # Authorized source timing update — 2026-09-18
 
 The protection timing change documented in `research/TIMELY_PROTECTION.md` is an explicit exception to the original UI-only pure-source byte freeze below. Members still consume the identical source including its full exit policy; the member executor, primary execution methods, keys, seats and owner switches are unchanged. The new source→primary and source→member early-exit integration tests are mandatory.
