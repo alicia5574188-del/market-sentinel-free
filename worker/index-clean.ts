@@ -807,6 +807,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       else this.runtime.utcDay=resourceDay(Date.now()); // isolated legacy/test state: retain its existing count
     };
     roll();this.nonAlarmPendingWrites??=0;
+    if((this.criticalPendingWrites??0)>0)return null;
     if(!Number.isFinite(this.runtime.nonAlarmWrites)||this.runtime.nonAlarmWrites<0
       ||this.runtime.nonAlarmWrites+this.nonAlarmPendingWrites+writes+headroom>NON_ALARM_WRITE_CAP)return null;
     this.nonAlarmPendingWrites+=writes;
