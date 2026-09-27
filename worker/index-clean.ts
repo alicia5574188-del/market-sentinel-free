@@ -47,6 +47,8 @@ import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite, p
   FORWARD_STORAGE, FORWARD_PROTECTION_STORAGE, FORWARD_PAGED_STATE_VERSION } from "../lib/forward-store.ts";
 import { advanceCounterfactualResearch, counterfactualResearchView, counterfactualResearchWrites,
   initialCounterfactualResearch, readCounterfactualResearch, type CounterfactualResearchState } from "../lib/market-intelligence-research.ts";
+import { advanceShadowResearch, initialShadowResearch, readShadowResearch, shadowResearchView, shadowResearchWrites,
+  type ShadowResearchState } from "../lib/market-intelligence-shadow-research.ts";
 import { nextProtectionWriteBudget, readProtectionWriteBudget, protectionWriteBudgetView,
   OPTIONAL_WRITE_GUARD_PER_DAY, PAID_PLAN_PLANNED_MONTHLY_ROWS, PAID_DO_INCLUDED_ROWS_PER_MONTH, PAID_PLAN_ROW_SAFETY_LIMIT,
   PRIMARY_PLANNED_DO_ROWS, TWO_MEMBER_PLANNED_DO_ROWS, type ProtectionWriteBudget } from "../lib/forward-write-budget.ts";
@@ -508,6 +510,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   protected forwardError: string | null = null;
   private counterfactualResearch: CounterfactualResearchState = initialCounterfactualResearch();
   private counterfactualResearchLoaded = false;
+  private shadowResearch: ShadowResearchState = initialShadowResearch();
+  private shadowResearchLoaded = false;
   private forwardBusy = false;
   private forwardLastAttemptAt = 0;
   private forwardProtectionBudget: ProtectionWriteBudget | null = null;
@@ -1054,6 +1058,25 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.counterfactualResearch=next.state;
     if(!next.changed)return;
     const entries=counterfactualResearchWrites(next.state,next.postChanged,next.rejectedChanged),writes=Object.keys(entries).length;
+    if(!writes)return;
+    const reservation=this.reserveNonAlarmWrites(writes,512);
+    if(!reservation)return;
+    try{await this.ctx.storage.put(entries);reservation.finish(true);}
+    catch{reservation.finish(false);}
+  }
+
+  private async advanceShadowResearchNow(now:number){
+    if(!this.forwardState)return;
+    if(!this.shadowResearchLoaded){
+      try{this.shadowResearch=await readShadowResearch(this.ctx.storage,now);}
+      catch{this.shadowResearch=initialShadowResearch(now);}
+      this.shadowResearchLoaded=true;
+    }
+    const next=advanceShadowResearch({state:this.shadowResearch,forward:this.forwardState,now,
+      paths:this.strategyCandles,quotes:this.forwardQuotes(now)});
+    this.shadowResearch=next.state;
+    if(!next.changed)return;
+    const entries=shadowResearchWrites(next.state,next.marketChanged,next.tradesChanged),writes=Object.keys(entries).length;
     if(!writes)return;
     const reservation=this.reserveNonAlarmWrites(writes,512);
     if(!reservation)return;
@@ -3020,6 +3043,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // Research-only counterfactuals run after the authoritative PAPER commit.
       // They never feed back into entry, exit, risk or LIVE execution.
       await this.advanceCounterfactualResearchNow(Date.now(),true);
+      await this.advanceShadowResearchNow(Date.now());
       this.runtime.subrequestCount+=subrequests;
       this.runtime.maxSubrequestsInAlarm=Math.max(this.runtime.maxSubrequestsInAlarm,subrequests);
     })().catch(error=>{this.runtime.strategyLogError=`adaptive: ${safeError(error)}`;});
@@ -3150,6 +3174,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       await this.ensureAlarm();
       const exportedAt=Date.now();await this.ensureAdaptiveAccount(exportedAt);
       await this.advanceCounterfactualResearchNow(exportedAt,false);
+      await this.advanceShadowResearchNow(exportedAt);
       const state=this.forwardState;
       const researchTrades=state?[...state.positions,...state.history].map(trade=>({
         id:trade.id,symbol:trade.symbol,side:trade.side,status:trade.status,openedAt:trade.openedAt,closedAt:trade.closedAt,
@@ -3180,8 +3205,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           purpose:"记录超大周期、大方向、短期变化、证据池、相关组、相对残差、跨交易所共识以及每笔独立交易假设"},
         research:{version:"market-intelligence-v1-trade-review",purpose:"逐单复盘入场时市场叙事、相关组、相对优势、MFE/MAE、假设失效和利润保护",trades:researchTrades},
         counterfactualResearch:counterfactualResearchView(this.counterfactualResearch),
+        shadowResearch:shadowResearchView(this.shadowResearch),
         archiveEndpoint: "/api/forward/archive",
-        completeness: "交易主账本与研究影子完全隔离；counterfactualResearch持续记录平仓后和未执行候选的5/15/30/60/120/240分钟路径。" });
+        completeness: "交易主账本与研究影子完全隔离；counterfactualResearch记录平仓后/未执行候选路径；shadowResearch仅记录市场几何、入场位置、响应质量和盈利转化，不参与选币、开平仓、风险或LIVE。" });
     }
     if (path === "/forward-equity" && request.method === "GET") {
       const s=this.forwardState;
