@@ -20,7 +20,9 @@ class Memory {
  async list<T>(o:{prefix:string;reverse?:boolean;limit?:number}){const a=[...this.data].filter(([k])=>k.startsWith(o.prefix)).sort(([a],[b])=>a.localeCompare(b));if(o.reverse)a.reverse();return new Map(a.slice(0,o.limit??Infinity)) as Map<string,T>;}
  async getAlarm(){return this.alarm;}async setAlarm(x:number){this.alarm=x;}
 }
-async function page(s:TurnoverState,db:Memory,rows:GateConfirmedFill[],now=NOW,key=KEY){return prepareTurnoverPage({state:s,storage:db,rows,window:nextFillWindow(s,now)!,accountKey:key,multipliers,now});}
+async function page(s:TurnoverState,db:Memory,rows:GateConfirmedFill[],now=NOW,key=KEY,sessionStartedAt?:number|null){
+ return prepareTurnoverPage({state:s,storage:db,rows,window:nextFillWindow(s,now)!,accountKey:key,multipliers,now,sessionStartedAt});
+}
 test("ASCII signing matches independent Node HMAC and Unicode signs decoded path once",async()=>{
  const secret="test-only-secret",body='{"contract":"龙虾_USDT"}',t="1789693322";
  for(const [path,query,plainPath,plainQuery]of[
@@ -92,6 +94,34 @@ test("actual Gate fees accumulate with turnover and system-tagged fees exclude m
  assert.equal(p.state.fees,.07);assert.equal(p.state.systemTaggedFees,.04);
  const view=turnoverView(p.state,null,NOW);assert.equal(view.fees,.07);assert.equal(view.systemTaggedFees,.04);
 });
+test("LIVE session turnover excludes fills before the latest enable even when backlog is scanned later",async()=>{
+ const sessionAt=START+90_000,s=initialTurnover(START,NOW),db=new Memory();
+ const p=await page(s,db,[
+   fill("1",{create_time:(START+60_000)/1000,fee:"0.04",text:"t-ms-e-old"}),
+   fill("2",{create_time:(START+120_000)/1000,fee:"0.05",text:"t-ms-e-new"}),
+   fill("3",{create_time:(START+130_000)/1000,fee:"0.03",text:"manual"}),
+ ],NOW,KEY,sessionAt);
+ assert.equal(p.state.systemTagged,100);assert.equal(p.state.systemTaggedFees,.09);
+ const view=turnoverView(p.state,null,NOW,sessionAt);
+ assert.equal(view.sessionSystemTagged,50);assert.equal(view.sessionSystemTaggedFees,.05);assert.equal(view.sessionFillCount,1);
+});
+
+test("a new LIVE enable resets only the displayed session totals and preserves the cumulative Gate ledger",async()=>{
+ const firstAt=START+30_000,nextAt=START+150_000,db=new Memory(),s=initialTurnover(START,NOW);
+ let p=await page(s,db,[fill("1",{create_time:(START+60_000)/1000,fee:"0.04",text:"t-ms-e-first"})],NOW,KEY,firstAt);
+ await db.put(p.entries);
+ assert.equal(turnoverView(p.state,null,NOW,firstAt).sessionSystemTagged,50);
+ p=await page(p.state,db,[fill("1",{create_time:(START+60_000)/1000,fee:"0.04",text:"t-ms-e-first"})],NOW+60_000,KEY,nextAt);
+ assert.equal(p.state.total,50);assert.equal(p.state.systemTagged,50);
+ let view=turnoverView(p.state,null,NOW+60_000,nextAt);
+ assert.equal(view.sessionSystemTagged,0);assert.equal(view.sessionSystemTaggedFees,0);
+ await db.put(p.entries);
+ p=await page(p.state,db,[fill("2",{create_time:(START+170_000)/1000,fee:"0.06",text:"t-ms-e-second"})],NOW+120_000,KEY,nextAt);
+ view=turnoverView(p.state,null,NOW+120_000,nextAt);
+ assert.equal(p.state.total,100);assert.equal(p.state.systemTagged,100);
+ assert.equal(view.sessionSystemTagged,50);assert.equal(view.sessionSystemTaggedFees,.06);assert.equal(view.sessionFillCount,1);
+});
+
 test("missing Gate fee fails closed rather than estimating a live fee",()=>{
  assert.throws(()=>normalizeGateFill(fill("1",{fee:undefined}),multipliers),/实际手续费/);
 });
@@ -259,8 +289,8 @@ test("actual Worker turnover storage failure never publishes uncommitted money o
 });
 test("UI shows system LIVE turnover and actual Gate fees beside the account summary",()=>{
  const ui=readFileSync(new URL("../app/live-console.tsx",import.meta.url),"utf8");
- assert.match(ui,/实盘成交额/);assert.match(ui,/已扣费用/);assert.match(ui,/live\?\.turnover\?\.systemTagged/);assert.match(ui,/live\?\.turnover\?\.systemTaggedFees/);
- assert.match(ui,/实盘累计成交额/);assert.match(ui,/live\?\.turnover\?\.total/);assert.match(ui,/全账户成交可能包含手工成交/);
+ assert.match(ui,/实盘成交额/);assert.match(ui,/已扣费用/);assert.match(ui,/live\?\.turnover\?\.sessionSystemTagged/);assert.match(ui,/live\?\.turnover\?\.sessionSystemTaggedFees/);
+ assert.match(ui,/实盘累计成交额/);assert.match(ui,/live\?\.turnover\?\.systemTagged/);assert.match(ui,/live\?\.turnover\?\.total/);assert.match(ui,/全账户成交可能包含手工成交/);
  const worker=readFileSync(new URL("../worker/index-clean.ts",import.meta.url),"utf8");assert.match(worker,/now-this.turnoverAttemptAt<60_000/);assert.match(worker,/this\.ctx\.waitUntil\(work\.finally/);
 });
 
