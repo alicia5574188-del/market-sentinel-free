@@ -7,6 +7,9 @@ export const REJECTED_RESEARCH_KEY="market-intelligence:research:v1:rejected";
 export const RESEARCH_CHECKPOINTS=[5,15,30,60,120,240] as const;
 const ROUND_TRIP_COST=2*(PAPER_COST.feeRate+PAPER_COST.slippageRate);
 const MAX_VALUE_BYTES=100*1024;
+const CHECKPOINT_QUOTE_TOLERANCE_MS=90_000;
+const CHECKPOINT_CANDLE_LAG_MS=6*60_000;
+const CHECKPOINT_UNAVAILABLE_AFTER_MS=7*60_000;
 
 export type ResearchCheckpoint={
   minutes:number;targetAt:number;observedAt:number;marketAt:number;price:number;signedRate:number;netAfterCostRate:number;
@@ -15,15 +18,15 @@ export type ResearchCheckpoint={
 export type PostExitResearch={
   id:string;tradeId:string;symbol:string;side:"LONG"|"SHORT";openedAt:number;exitAt:number;exitPrice:number;
   exitReason:string|null;actualNetPnl:number|null;actualGrossPnl:number|null;notional:number;peakBeforeExitRate:number;
-  startedAt:number;lastObservedAt:number;maxFavorableRate:number;maxAdverseRate:number;checkpoints:ResearchCheckpoint[];
-  completed:boolean;
+  startedAt:number;lastObservedAt:number;pathCoverage:"FULL"|"PARTIAL";maxFavorableRate:number;maxAdverseRate:number;checkpoints:ResearchCheckpoint[];
+  unavailableCheckpoints:number[];completed:boolean;
 };
 export type RejectedOpportunityResearch={
   id:string;thesisId:string;symbol:string;side:"LONG"|"SHORT";mode:string;observedAt:number;startedAt:number;entryPrice:number;
   stopRate:number;score:number;eligibleAtObservation:boolean;stage:string|null;dataConfidence:number|null;sourceCount:number|null;
   marketNarrativeId:string|null;marketMajor:string|null;marketShort:string|null;transitionStage:string|null;
   reason:string;executionBlockers:Record<string,number>;lastObservedAt:number;maxFavorableRate:number;maxAdverseRate:number;
-  checkpoints:ResearchCheckpoint[];completed:boolean;
+  checkpoints:ResearchCheckpoint[];unavailableCheckpoints:number[];completed:boolean;
 };
 export type CounterfactualResearchState={
   version:typeof COUNTERFACTUAL_RESEARCH_VERSION;updatedAt:number;postExit:PostExitResearch[];rejected:RejectedOpportunityResearch[];
@@ -37,22 +40,52 @@ const bytes=(value:unknown)=>new TextEncoder().encode(JSON.stringify(value)).len
 export function initialCounterfactualResearch(now=Date.now()):CounterfactualResearchState{
   return{version:COUNTERFACTUAL_RESEARCH_VERSION,updatedAt:now,postExit:[],rejected:[]};
 }
-function normalizePoint(row:ResearchCheckpoint):ResearchCheckpoint|null{
-  return row&&RESEARCH_CHECKPOINTS.includes(row.minutes as typeof RESEARCH_CHECKPOINTS[number])&&finite(row.targetAt)&&finite(row.observedAt)
-    &&finite(row.price)&&finite(row.signedRate)&&finite(row.netAfterCostRate)&&finite(row.maxFavorableRate)&&finite(row.maxAdverseRate)
-    ?{...row,marketAt:finite(row.marketAt)?row.marketAt:row.observedAt,stopHit:Boolean(row.stopHit)}:null;
+function normalizeCheckpointSet(rows:ResearchCheckpoint[]|undefined,startAt:number){
+  const checkpoints:ResearchCheckpoint[]=[],unavailable=new Set<number>();
+  for(const raw of rows??[]){
+    const minutes=Number(raw?.minutes),expected=startAt+minutes*60_000,marketAt=finite(raw?.marketAt)?raw.marketAt:raw?.observedAt;
+    const valid=RESEARCH_CHECKPOINTS.includes(minutes as typeof RESEARCH_CHECKPOINTS[number])&&finite(raw?.targetAt)&&finite(raw?.observedAt)
+      &&finite(marketAt)&&finite(raw?.price)&&finite(raw?.signedRate)&&finite(raw?.netAfterCostRate)
+      &&finite(raw?.maxFavorableRate)&&finite(raw?.maxAdverseRate)
+      &&Math.abs(raw.targetAt-expected)<=1000&&marketAt>=startAt&&marketAt<=raw.targetAt+CHECKPOINT_QUOTE_TOLERANCE_MS;
+    if(valid)checkpoints.push({...raw,minutes,marketAt,stopHit:Boolean(raw.stopHit)});
+    else if(RESEARCH_CHECKPOINTS.includes(minutes as typeof RESEARCH_CHECKPOINTS[number]))unavailable.add(minutes);
+  }
+  checkpoints.sort((a,b)=>a.minutes-b.minutes);
+  return{checkpoints,unavailable:[...unavailable].filter(m=>!checkpoints.some(p=>p.minutes===m)).sort((a,b)=>a-b)};
+}
+function mergeUnavailable(raw:unknown,invalid:number[],checkpoints:ResearchCheckpoint[]){
+  const values=Array.isArray(raw)?raw.map(Number):[];
+  return[...new Set([...values,...invalid].filter(v=>RESEARCH_CHECKPOINTS.includes(v as typeof RESEARCH_CHECKPOINTS[number])
+    &&!checkpoints.some(p=>p.minutes===v)))].sort((a,b)=>a-b);
+}
+function researchCompleted(checkpoints:ResearchCheckpoint[],unavailable:number[]){
+  return RESEARCH_CHECKPOINTS.every(minutes=>checkpoints.some(x=>x.minutes===minutes)||unavailable.includes(minutes));
 }
 function normalizePost(row:PostExitResearch):PostExitResearch|null{
   if(!row||typeof row.id!=="string"||typeof row.tradeId!=="string"||typeof row.symbol!=="string"
     ||(row.side!=="LONG"&&row.side!=="SHORT")||!finite(row.exitAt)||!finite(row.exitPrice)||row.exitPrice<=0)return null;
-  return{...row,checkpoints:(row.checkpoints??[]).map(normalizePoint).filter((x):x is ResearchCheckpoint=>!!x),
-    maxFavorableRate:Math.max(0,Number(row.maxFavorableRate)||0),maxAdverseRate:Math.max(0,Number(row.maxAdverseRate)||0),completed:Boolean(row.completed)};
+  const startAt=finite(row.startedAt)?row.startedAt:row.exitAt,normalized=normalizeCheckpointSet(row.checkpoints,startAt),
+    unavailable=mergeUnavailable((row as {unavailableCheckpoints?:unknown}).unavailableCheckpoints,normalized.unavailable,normalized.checkpoints),
+    inferredCoverage=(row as {pathCoverage?:unknown}).pathCoverage==="FULL"?"FULL"
+      :(row as {pathCoverage?:unknown}).pathCoverage==="PARTIAL"?"PARTIAL"
+      :normalized.checkpoints.some(p=>p.minutes===5)&&normalized.unavailable.length===0?"FULL":"PARTIAL",
+    checkpointFavorable=normalized.checkpoints.reduce((m,p)=>Math.max(m,p.maxFavorableRate),0),
+    checkpointAdverse=normalized.checkpoints.reduce((m,p)=>Math.max(m,p.maxAdverseRate),0);
+  return{...row,startedAt:startAt,pathCoverage:normalized.unavailable.length?"PARTIAL":inferredCoverage,
+    checkpoints:normalized.checkpoints,unavailableCheckpoints:unavailable,
+    maxFavorableRate:normalized.unavailable.length?checkpointFavorable:Math.max(checkpointFavorable,Math.max(0,Number(row.maxFavorableRate)||0)),
+    maxAdverseRate:normalized.unavailable.length?checkpointAdverse:Math.max(checkpointAdverse,Math.max(0,Number(row.maxAdverseRate)||0)),
+    completed:researchCompleted(normalized.checkpoints,unavailable)};
 }
 function normalizeRejected(row:RejectedOpportunityResearch):RejectedOpportunityResearch|null{
   if(!row||typeof row.id!=="string"||typeof row.thesisId!=="string"||typeof row.symbol!=="string"
     ||(row.side!=="LONG"&&row.side!=="SHORT")||!finite(row.observedAt)||!finite(row.entryPrice)||row.entryPrice<=0)return null;
-  return{...row,startedAt:finite(row.startedAt)?row.startedAt:row.observedAt,executionBlockers:row.executionBlockers??{},checkpoints:(row.checkpoints??[]).map(normalizePoint).filter((x):x is ResearchCheckpoint=>!!x),
-    maxFavorableRate:Math.max(0,Number(row.maxFavorableRate)||0),maxAdverseRate:Math.max(0,Number(row.maxAdverseRate)||0),completed:Boolean(row.completed)};
+  const startAt=finite(row.startedAt)?row.startedAt:row.observedAt,normalized=normalizeCheckpointSet(row.checkpoints,startAt),
+    unavailable=mergeUnavailable((row as {unavailableCheckpoints?:unknown}).unavailableCheckpoints,normalized.unavailable,normalized.checkpoints);
+  return{...row,startedAt:startAt,executionBlockers:row.executionBlockers??{},checkpoints:normalized.checkpoints,
+    unavailableCheckpoints:unavailable,maxFavorableRate:Math.max(0,Number(row.maxFavorableRate)||0),
+    maxAdverseRate:Math.max(0,Number(row.maxAdverseRate)||0),completed:researchCompleted(normalized.checkpoints,unavailable)};
 }
 export async function readCounterfactualResearch(storage:Reader,now=Date.now()):Promise<CounterfactualResearchState>{
   const [p,r]=await Promise.all([
@@ -74,35 +107,47 @@ function pathExtremes(side:"LONG"|"SHORT",startPrice:number,startAt:number,rows:
   if(currentPrice&&currentPrice>0){const signed=d*(currentPrice/startPrice-1);favorable=Math.max(favorable,signed);adverse=Math.max(adverse,-signed);}
   return{favorable:Math.max(0,favorable),adverse:Math.max(0,adverse)};
 }
-function checkpointSnapshot(side:"LONG"|"SHORT",startPrice:number,startAt:number,targetAt:number,rows:Candle[]|undefined,
-  fallbackPrice:number|null,observedAt:number){
+function checkpointSnapshot(side:"LONG"|"SHORT",startPrice:number,startAt:number,targetAt:number,rows:Candle[]|undefined,q:Quote|undefined){
   const eligible=(rows??[]).filter(bar=>{const end=bar.time*1000+300_000;return end>startAt&&end<=targetAt;}),
-    last=eligible.at(-1),price=last?.close??fallbackPrice??startPrice,marketAt=last?last.time*1000+300_000:observedAt,
-    ext=pathExtremes(side,startPrice,startAt,eligible,targetAt,null),signed=dir(side)*(price/startPrice-1);
+    last=eligible.at(-1),lastAt=last?last.time*1000+300_000:null,
+    quoteAt=q&&q.fresh&&finite(q.observedAt)?q.observedAt:null,
+    quoteNear=quoteAt!==null&&Math.abs(quoteAt-targetAt)<=CHECKPOINT_QUOTE_TOLERANCE_MS,
+    candleNear=lastAt!==null&&targetAt-lastAt<=CHECKPOINT_CANDLE_LAG_MS;
+  if(!quoteNear&&!candleNear)return null;
+  const price=quoteNear?quotePrice(q)!:last!.close,marketAt=quoteNear?quoteAt!:lastAt!,
+    ext=pathExtremes(side,startPrice,startAt,eligible,targetAt,quoteNear?price:null),signed=dir(side)*(price/startPrice-1);
   return{marketAt,price,signed,maxFavorableRate:ext.favorable,maxAdverseRate:ext.adverse};
 }
 function updateCheckpoints<T extends {side:"LONG"|"SHORT";startedAt:number;lastObservedAt:number;maxFavorableRate:number;maxAdverseRate:number;
-  checkpoints:ResearchCheckpoint[];completed:boolean}>(row:T,startPrice:number,stopRate:number,now:number,rows:Candle[]|undefined,q:Quote|undefined){
+  checkpoints:ResearchCheckpoint[];unavailableCheckpoints:number[];completed:boolean}>(row:T,startPrice:number,stopRate:number,now:number,rows:Candle[]|undefined,q:Quote|undefined){
   const current=quotePrice(q),ext=pathExtremes(row.side,startPrice,row.startedAt,rows,now,current);
   row.maxFavorableRate=Math.max(row.maxFavorableRate,ext.favorable);row.maxAdverseRate=Math.max(row.maxAdverseRate,ext.adverse);
-  row.lastObservedAt=now;let checkpointAdded=false;
+  row.lastObservedAt=now;let changed=false;
   for(const minutes of RESEARCH_CHECKPOINTS){
-    const targetAt=row.startedAt+minutes*60_000;if(now<targetAt||row.checkpoints.some(x=>x.minutes===minutes))continue;
-    const snap=checkpointSnapshot(row.side,startPrice,row.startedAt,targetAt,rows,current,now);
-    row.checkpoints.push({minutes,targetAt,observedAt:now,marketAt:snap.marketAt,price:snap.price,signedRate:snap.signed,
-      netAfterCostRate:snap.signed-ROUND_TRIP_COST,maxFavorableRate:snap.maxFavorableRate,maxAdverseRate:snap.maxAdverseRate,
-      stopHit:snap.maxAdverseRate>=stopRate});
-    checkpointAdded=true;
+    const targetAt=row.startedAt+minutes*60_000;
+    if(now<targetAt||row.checkpoints.some(x=>x.minutes===minutes)||row.unavailableCheckpoints.includes(minutes))continue;
+    const snap=checkpointSnapshot(row.side,startPrice,row.startedAt,targetAt,rows,q);
+    if(snap){
+      row.checkpoints.push({minutes,targetAt,observedAt:now,marketAt:snap.marketAt,price:snap.price,signedRate:snap.signed,
+        netAfterCostRate:snap.signed-ROUND_TRIP_COST,maxFavorableRate:snap.maxFavorableRate,maxAdverseRate:snap.maxAdverseRate,
+        stopHit:snap.maxAdverseRate>=stopRate});
+      changed=true;
+    }else if(now>=targetAt+CHECKPOINT_UNAVAILABLE_AFTER_MS){
+      row.unavailableCheckpoints.push(minutes);changed=true;
+    }
   }
-  row.checkpoints.sort((a,b)=>a.minutes-b.minutes);row.completed=row.checkpoints.some(x=>x.minutes===240);
-  return checkpointAdded;
+  row.checkpoints.sort((a,b)=>a.minutes-b.minutes);row.unavailableCheckpoints=[...new Set(row.unavailableCheckpoints)].sort((a,b)=>a-b);
+  row.completed=researchCompleted(row.checkpoints,row.unavailableCheckpoints);
+  return changed;
 }
-function postFromTrade(t:Trade):PostExitResearch|null{
+function postFromTrade(t:Trade,now:number):PostExitResearch|null{
   if(t.status!=="CLOSED"||!t.closedAt||!t.exitPrice||t.exitPrice<=0||t.exitReason==="ACCOUNT_RESET")return null;
   if(t.entryContext?.strategyVersion!==MARKET_INTELLIGENCE_VERSION)return null;
+  const pathCoverage=now-t.closedAt<=CHECKPOINT_UNAVAILABLE_AFTER_MS?"FULL":"PARTIAL";
   return{id:`post:${t.id}`,tradeId:t.id,symbol:t.symbol,side:t.side,openedAt:t.openedAt,exitAt:t.closedAt,exitPrice:t.exitPrice,
     exitReason:t.exitReason,actualNetPnl:t.netPnl,actualGrossPnl:t.grossPnl,notional:t.notional,peakBeforeExitRate:t.favorable,
-    startedAt:t.closedAt,lastObservedAt:t.closedAt,maxFavorableRate:0,maxAdverseRate:0,checkpoints:[],completed:false};
+    startedAt:t.closedAt,lastObservedAt:t.closedAt,pathCoverage,maxFavorableRate:0,maxAdverseRate:0,checkpoints:[],
+    unavailableCheckpoints:[],completed:false};
 }
 function rejectionClass(o:Opportunity){
   if(o.eligible)return"EXECUTABLE_NOT_SELECTED";
@@ -122,7 +167,7 @@ function rejectedFromOpportunity(o:Opportunity,q:Quote|undefined,s:ForwardState,
     stopRate:o.stopRate,score:o.score,eligibleAtObservation:o.eligible,stage:o.confirmationStage??null,dataConfidence:o.dataConfidence??null,
     sourceCount:o.sourceCount??null,marketNarrativeId:n.id??null,marketMajor:n.major.bias??null,marketShort:n.short.bias??null,
     transitionStage:n.transition.stage??null,reason:`${rejectionClass(o)} | ${o.reason}`,executionBlockers:{...s.entryDiagnostics.reasons},
-    lastObservedAt:now,maxFavorableRate:0,maxAdverseRate:0,checkpoints:[],completed:false};
+    lastObservedAt:now,maxFavorableRate:0,maxAdverseRate:0,checkpoints:[],unavailableCheckpoints:[],completed:false};
 }
 function trimForStorage<T extends {completed:boolean;lastObservedAt:number}>(items:T[]){
   const out=[...items].sort((a,b)=>b.lastObservedAt-a.lastObservedAt).slice(0,220);
@@ -136,7 +181,7 @@ export function advanceCounterfactualResearch(input:{state:CounterfactualResearc
   const next:CounterfactualResearchState=structuredClone(input.state);let postChanged=false,rejectedChanged=false;
   const postIds=new Set(next.postExit.map(x=>x.tradeId));
   for(const t of input.forward.history){
-    if(postIds.has(t.id))continue;const row=postFromTrade(t);
+    if(postIds.has(t.id))continue;const row=postFromTrade(t,input.now);
     if(row){next.postExit.unshift(row);postIds.add(t.id);postChanged=true;}
   }
   if(input.observeCandidates){
@@ -161,13 +206,20 @@ export function counterfactualResearchWrites(state:CounterfactualResearchState,p
 }
 export function counterfactualResearchView(state:CounterfactualResearchState){
   const postComplete=state.postExit.filter(x=>x.completed),rejectComplete=state.rejected.filter(x=>x.completed),
-    exitRegret60=postComplete.flatMap(x=>x.checkpoints.filter(p=>p.minutes===60).map(p=>p.maxFavorableRate)),
-    savedLoss60=postComplete.flatMap(x=>x.checkpoints.filter(p=>p.minutes===60).map(p=>p.maxAdverseRate)),
-    rejectedWin60=rejectComplete.flatMap(x=>x.checkpoints.filter(p=>p.minutes===60).map(p=>p.netAfterCostRate));
+    post60=state.postExit.flatMap(x=>x.checkpoints.filter(p=>p.minutes===60)),
+    reject60=state.rejected.flatMap(x=>x.checkpoints.filter(p=>p.minutes===60)),
+    exitRegret60=post60.map(p=>p.maxFavorableRate),savedLoss60=post60.map(p=>p.maxAdverseRate),
+    rejectedWin60=reject60.map(p=>p.netAfterCostRate),
+    postUnavailable60=state.postExit.filter(x=>x.unavailableCheckpoints.includes(60)).length,
+    rejectUnavailable60=state.rejected.filter(x=>x.unavailableCheckpoints.includes(60)).length;
   const avg=(xs:number[])=>xs.length?xs.reduce((a,b)=>a+b,0)/xs.length:null;
   return{version:state.version,updatedAt:state.updatedAt,checkpoints:[...RESEARCH_CHECKPOINTS],
     summary:{postExitTracked:state.postExit.length,postExitCompleted:postComplete.length,rejectedTracked:state.rejected.length,rejectedCompleted:rejectComplete.length,
-      averagePostExitExtraFavorable60m:avg(exitRegret60),averagePostExitAdverse60m:avg(savedLoss60),
+      postExitFullCoverage:state.postExit.filter(x=>x.pathCoverage==="FULL").length,
+      postExitPartialCoverage:state.postExit.filter(x=>x.pathCoverage==="PARTIAL").length,
+      postExitValid60m:post60.length,postExitUnavailable60m:postUnavailable60,rejectedValid60m:reject60.length,
+      rejectedUnavailable60m:rejectUnavailable60,averagePostExitExtraFavorable60m:avg(exitRegret60),
+      averagePostExitAdverse60m:avg(savedLoss60),
       rejectedPositiveAfterCost60m:rejectedWin60.length?rejectedWin60.filter(x=>x>0).length/rejectedWin60.length:null},
     postExit:state.postExit,rejectedOpportunities:state.rejected};
 }

@@ -97,3 +97,47 @@ test("counterfactual research persists in independent keys and restores without 
   assert.equal(restored.postExit[0]!.tradeId,"trade-1");
   assert.equal(restored.rejected.length,0);
 });
+
+
+test("old post-exit trades never backfill checkpoints with a many-hours-later current quote",()=>{
+  const forward=initialForward(T),old=closedTrade();old.closedAt=T;old.exitPrice=100;forward.history=[old];
+  const now=T+10*60*60_000;
+  const result=advanceCounterfactualResearch({state:initialCounterfactualResearch(now),forward,now,
+    paths:{BTC_USDT:[]},quotes:{BTC_USDT:quote(135,now)},observeCandidates:false});
+  const row=result.state.postExit[0]!;
+  assert.equal(row.checkpoints.length,0,"no historical market observation means no synthetic checkpoint");
+  assert.deepEqual(row.unavailableCheckpoints,[5,15,30,60,120,240]);
+  assert.equal(row.pathCoverage,"PARTIAL");
+  assert.equal(row.completed,true);
+});
+
+test("legacy polluted checkpoints are quarantined during restore and excluded from 60m statistics",async()=>{
+  const bad={
+    id:"post:legacy",tradeId:"legacy",symbol:"BTC_USDT",side:"LONG" as const,openedAt:T-3_600_000,exitAt:T,exitPrice:100,
+    exitReason:"POSITION_VALUE_EXIT",actualNetPnl:1,actualGrossPnl:2,notional:100,peakBeforeExitRate:.01,startedAt:T,
+    lastObservedAt:T+10*60*60_000,maxFavorableRate:.2,maxAdverseRate:.1,completed:true,
+    checkpoints:[{minutes:60,targetAt:T+60*60_000,observedAt:T+10*60*60_000,marketAt:T+10*60*60_000,price:130,
+      signedRate:.3,netAfterCostRate:.298,maxFavorableRate:.3,maxAdverseRate:0,stopHit:false}]
+  };
+  const memory=new Map<string,unknown>([["market-intelligence:research:v1:post-exit",
+    {version:"market-intelligence-counterfactual-v1",updatedAt:T+10*60*60_000,items:[bad]}]]);
+  const restored=await readCounterfactualResearch({get:async<T>(key:string)=>memory.get(key) as T|undefined},T+10*60*60_000);
+  assert.equal(restored.postExit[0]!.checkpoints.length,0);
+  assert.deepEqual(restored.postExit[0]!.unavailableCheckpoints,[60]);
+  assert.equal(restored.postExit[0]!.pathCoverage,"PARTIAL");
+  const view=(await import("../lib/market-intelligence-research.ts")).counterfactualResearchView(restored);
+  assert.equal(view.summary.postExitValid60m,0);
+  assert.equal(view.summary.postExitUnavailable60m,1);
+  assert.equal(view.summary.averagePostExitExtraFavorable60m,null);
+});
+
+test("a checkpoint may use a fresh quote only when the quote is actually near the target time",()=>{
+  const forward=initialForward(T);forward.history=[closedTrade()];
+  const first=advanceCounterfactualResearch({state:initialCounterfactualResearch(T),forward,now:T+5*60_000+30_000,
+    paths:{BTC_USDT:[]},quotes:{BTC_USDT:quote(101,T+5*60_000+30_000)},observeCandidates:false});
+  const at5=first.state.postExit[0]!.checkpoints.find(x=>x.minutes===5);
+  assert.ok(at5);
+  assert.equal(first.state.postExit[0]!.pathCoverage,"FULL");
+  assert.ok(Math.abs(at5!.marketAt-at5!.targetAt)<=90_000);
+  assert.equal(first.state.postExit[0]!.unavailableCheckpoints.length,0);
+});
