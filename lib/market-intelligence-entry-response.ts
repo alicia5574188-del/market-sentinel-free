@@ -74,8 +74,8 @@ export function evaluateEntryResponse(input:{
       ...(structureOpposition?["STRUCTURE"]:[]),
       ...(minute.concern?["MINUTE"]:[]),
     ],
-    supportNow=dataReady&&priceResponse&&thesisSupport&&!flowOpposition
-      &&(profile.fastLane||flowSupport||minute.support),
+    supportNow=dataReady&&priceResponse&&thesisSupport&&!structureOpposition
+      &&(profile.fastLane||(!flowOpposition&&(flowSupport||minute.support))),
     deepAdverse=currentAdvance<=-Math.min(input.stopRate*.80,Math.max(input.pullbackRiskRate*.90,cost*2.2)),
     oppositionNow=structureOpposition||(flowOpposition&&currentAdvance<=cost*.15)||deepAdverse,
     supportSamples=supportNow?input.memory.supportSamples+1:0,
