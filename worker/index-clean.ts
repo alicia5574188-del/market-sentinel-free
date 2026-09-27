@@ -1576,7 +1576,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if(this.liveClient!==client||this.turnoverAccountUser!==accountUser||this.turnoverAccountKey!==key)return;
     const multipliers=Object.fromEntries([...this.contractCatalog].map(([symbol,m])=>[symbol,m.quantoMultiplier]));
     for(const [symbol,m]of Object.entries(this.runtime.contractMeta))multipliers[symbol]=m.quantoMultiplier;
-    const prepared=await prepareTurnoverPage({state:previous,window,rows,accountKey:key,storage:this.ctx.storage,multipliers,now});
+    const prepared=await prepareTurnoverPage({state:previous,window,rows,accountKey:key,storage:this.ctx.storage,multipliers,now,
+      sessionStartedAt:this.runtime.live.activation?.enabledAt??null});
     if(this.liveClient!==client||this.turnoverAccountUser!==accountUser||this.turnoverAccountKey!==key||this.turnoverState!==previous)return;
     // Only an unchanged-money, non-paginated scan may advance in memory. Every
     // new fill/dedupe bucket and every pending-page transition remains atomic
@@ -3365,7 +3366,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         liveMirror: this.liveMirrorView(),
         liveTurnover:this.turnoverStatus(),
         ...(path === "/owner-runtime" ? { live:{...live,history:this.liveHistory,mirror:this.liveMirrorView(),
-          turnover:turnoverView(this.turnoverState,this.turnoverError,Date.now())} } : {}), liveMode: { requestedEnabled: live.requestedEnabled, operational: live.operational }, outboxLength: outbox.length + bankruptcyOutbox.length,
+          turnover:turnoverView(this.turnoverState,this.turnoverError,Date.now(),live.activation?.enabledAt??null)} } : {}), liveMode: { requestedEnabled: live.requestedEnabled, operational: live.operational }, outboxLength: outbox.length + bankruptcyOutbox.length,
         oldestOutboxAgeMs: outbox.length ? Math.max(0, Date.now() - (outbox[0].position.exitAt ?? outbox[0].position.entryAt)) : 0,
         authorityReady: this.authorityReady, realtimeReadiness: this.realtimeReadiness(), multiSourceMarket:this.marketHub.status(),
         generatedAt: Date.now(), state: effectiveState, stale,
@@ -3387,7 +3388,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       await this.ensureAlarm();
       this.launchTurnoverWork(Date.now());
       return json({ live:{...this.runtime.live,history:this.liveHistory,mirror:this.liveMirrorView(),
-        turnover:turnoverView(this.turnoverState,this.turnoverError,Date.now())}, generatedAt: Date.now() });
+        turnover:turnoverView(this.turnoverState,this.turnoverError,Date.now(),this.runtime.live.activation?.enabledAt??null)}, generatedAt: Date.now() });
     }
     if (path === "/credential-status" && request.method === "GET") {
       return json({ credential: await credentialMetadata(this.env.DB) });
