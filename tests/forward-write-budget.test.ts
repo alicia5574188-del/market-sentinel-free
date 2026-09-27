@@ -3,8 +3,10 @@ import assert from "node:assert/strict";
 import { nextProtectionWriteBudget, readProtectionWriteBudget, protectionWriteBudgetView,
   PROTECTION_WRITE_BUDGET_VERSION, PROTECTION_WRITE_CAP, PROTECTION_WRITE_INTERVAL_MS,
   OPTIONAL_WRITE_GUARD_PER_DAY, PAID_DO_INCLUDED_ROWS_PER_MONTH, RESOURCE_MODEL_MONTH_DAYS,
-  PAID_PLAN_PLANNED_MONTHLY_ROWS, PAID_PLAN_ROW_SAFETY_LIMIT,
-  PRIMARY_PLANNED_DO_ROWS, TWO_MEMBER_PLANNED_DO_ROWS, type ProtectionWriteBudget } from "../lib/forward-write-budget.ts";
+  PAID_PLAN_PLANNED_MONTHLY_ROWS, PAID_PLAN_ROW_SAFETY_LIMIT, MEMBER_USAGE_HEARTBEATS_PER_DAY,
+  PRIMARY_PLANNED_DO_ROWS, TWO_MEMBER_PLANNED_DO_ROWS, ACTIVE_MEMBER_PLANNED_DO_ROWS, plannedDoRowsPerDay,
+  type ProtectionWriteBudget } from "../lib/forward-write-budget.ts";
+import { MEMBER_ACTIVE_LIMIT } from "../lib/member-auth.ts";
 
 const T=Date.parse("2026-09-20T12:00:00.000Z");
 function budget(writes=1,lastCommittedAt=T):ProtectionWriteBudget {
@@ -111,14 +113,18 @@ test("health view of a legacy missing lane is explicit and requires no synthetic
   }
 });
 
-test("paid-plan row contract keeps the full owner plus two-member topology below half the included monthly writes",()=>{
+test("paid-plan row contract certifies five active members but rejects six at the 50% safety line",()=>{
   assert.equal(OPTIONAL_WRITE_GUARD_PER_DAY,100_000);
+  assert.equal(MEMBER_ACTIVE_LIMIT,5);assert.equal(MEMBER_USAGE_HEARTBEATS_PER_DAY,96);
   assert.ok(Number.isSafeInteger(PRIMARY_PLANNED_DO_ROWS)&&PRIMARY_PLANNED_DO_ROWS>OPTIONAL_WRITE_GUARD_PER_DAY);
-  assert.ok(Number.isSafeInteger(TWO_MEMBER_PLANNED_DO_ROWS)&&TWO_MEMBER_PLANNED_DO_ROWS>PRIMARY_PLANNED_DO_ROWS);
-  assert.equal(PAID_PLAN_PLANNED_MONTHLY_ROWS,TWO_MEMBER_PLANNED_DO_ROWS*RESOURCE_MODEL_MONTH_DAYS);
+  assert.equal(TWO_MEMBER_PLANNED_DO_ROWS,plannedDoRowsPerDay(2));
+  assert.equal(ACTIVE_MEMBER_PLANNED_DO_ROWS,plannedDoRowsPerDay(MEMBER_ACTIVE_LIMIT));
+  assert.equal(PAID_PLAN_PLANNED_MONTHLY_ROWS,ACTIVE_MEMBER_PLANNED_DO_ROWS*RESOURCE_MODEL_MONTH_DAYS);
   assert.equal(PAID_PLAN_ROW_SAFETY_LIMIT,PAID_DO_INCLUDED_ROWS_PER_MONTH*.5);
   assert.ok(PAID_PLAN_PLANNED_MONTHLY_ROWS<PAID_PLAN_ROW_SAFETY_LIMIT,
-    `planned ${PAID_PLAN_PLANNED_MONTHLY_ROWS} rows must remain below 50% of paid included ${PAID_DO_INCLUDED_ROWS_PER_MONTH}`);
-  assert.ok(PAID_DO_INCLUDED_ROWS_PER_MONTH-PAID_PLAN_PLANNED_MONTHLY_ROWS>35_000_000,
-    "resource contract must leave more than 35M monthly rows of headroom for admin/retries/future features");
+    `five-seat plan ${PAID_PLAN_PLANNED_MONTHLY_ROWS} must remain below safety line ${PAID_PLAN_ROW_SAFETY_LIMIT}`);
+  assert.ok(plannedDoRowsPerDay(6)*RESOURCE_MODEL_MONTH_DAYS>PAID_PLAN_ROW_SAFETY_LIMIT,
+    "six seats must remain blocked until the resource model is improved again");
+  assert.ok(PAID_DO_INCLUDED_ROWS_PER_MONTH-PAID_PLAN_PLANNED_MONTHLY_ROWS>25_000_000,
+    "five-seat plan must leave more than 25M monthly rows of total paid headroom");
 });
