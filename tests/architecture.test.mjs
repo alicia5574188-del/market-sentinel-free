@@ -43,6 +43,19 @@ test("multi-source analysis is non-blocking while Gate stays execution-only",asy
   assert.match(daily,/external 1d temporarily unavailable/);
 });
 
+test("shadow geometry research is post-authority, optional and cannot become trading authority",async()=>{
+  const [worker,shadow,core]=await Promise.all([
+    read("worker/index-clean.ts"),read("lib/market-intelligence-shadow-research.ts"),read("lib/forward-relations.ts")
+  ]);
+  const optional=worker.slice(worker.indexOf("private launchOptionalWork"),worker.indexOf("async alarm("));
+  assert.ok(optional.indexOf("await this.advanceForwardNow(Date.now(),true)")>=0);
+  assert.ok(optional.indexOf("await this.advanceShadowResearchNow(Date.now())")>optional.indexOf("await this.advanceForwardNow(Date.now(),true)"));
+  assert.match(worker,/reserveNonAlarmWrites\(writes,512\)/);
+  assert.doesNotMatch(shadow,/openIntelligenceTrade|closeTrade|setLiveMode|GateLiveClient|createEntry\(/);
+  const advance=core.slice(core.indexOf("export function advanceForward"),core.indexOf("export function closeForwardForReset"));
+  assert.doesNotMatch(advance,/shadowResearch|ShadowResearch/);
+});
+
 test("market narrative is exposed in bounded health diagnostics",async()=>{
   const worker=await read("worker/index-clean.ts"),health=worker.slice(worker.indexOf("private forwardHealth()"),worker.indexOf("protected liveMirrorView()"));
   assert.match(health,/marketIntelligenceCounts/);assert.match(health,/marketNarrative/);assert.match(health,/marketIntelligenceCoverage/);assert.match(health,/correlationClusters/);

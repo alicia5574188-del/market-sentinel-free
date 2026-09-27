@@ -1,3 +1,7 @@
+# Shadow Market Geometry / Profit Conversion research — 2026-09-27
+
+The owner explicitly wants to preserve the currently promising Market Intelligence account while researching whether choppy/rotational conditions, late chase entries and profit giveback are still under-modeled. Read `research/SHADOW_GEOMETRY_PROFIT_CONVERSION_2026-09-27.md`. This work is research-only: it may observe existing Market Intelligence state, completed 5m candles, ENTRY_RESPONSE receipts and trade MFE/MAE, but it may not feed back into symbol selection, entry, exit, stops, sizing, risk, PAPER state, LIVE parity or member copying. Do not reset the account. New research writes must stay optional/background, add no market-data requests or alarm cadence, and yield before financial authority. Any later strategy change requires separate evidence and explicit owner approval.
+
 # Resource sufficiency is a permanent quality invariant — 2026-09-27
 
 The owner requires every future change to preserve full trading/data quality **and** keep the deployed Workers Paid resource model comfortably inside the already-paid monthly allowances. This supersedes older instructions that treated the legacy 8,000/day non-alarm counter as a financial admission limit. Never solve a resource problem by scanning fewer markets, reducing the 2s execution observation quality, suppressing valid trades, dropping evidence/history, weakening LIVE protection, or disabling research/data sources. Prefer lossless compaction, deduplication, event-driven persistence, immutable-write reuse and explicit priority lanes.
