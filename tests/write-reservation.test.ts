@@ -51,7 +51,7 @@ test("UTC rollover retains old-day pending reservations until completion and can
  set(Date.parse("2026-09-21T00:00:01Z"));assert.equal(w.reserveNonAlarmWrites(100_000),null);
  assert.equal(w.runtime.nonAlarmWrites,0);assert.equal(w.nonAlarmPendingWrites,1);
  const today=w.reserveNonAlarmWrites(99_999);assert.ok(today);
- old.finish(true);assert.equal(w.runtime.nonAlarmWrites,1);assert.equal(w.nonAlarmPendingWrites,7999);
+ old.finish(true);assert.equal(w.runtime.nonAlarmWrites,1);assert.equal(w.nonAlarmPendingWrites,99_999);
  today.finish(true);assert.equal(w.runtime.nonAlarmWrites,100_000);assert.equal(w.nonAlarmPendingWrites,0);
  w.resetDailyCounters(T);assert.equal(w.runtime.utcDay,"2026-09-21");assert.equal(w.runtime.nonAlarmWrites,100_000);
 }));
@@ -72,16 +72,16 @@ test("critical checkpoint failure releases its reservation without deleting the 
  db.fail=false;await w.saveCheckpoint(T,true);assert.equal(w.runtime.nonAlarmWrites,100_000);
  assert.equal(w.runtime.criticalWrites,before+2);assert.equal(w.liveJournal.size,0);
 }));
-test("primary checkpoint and turnover share the reservation before either transaction completes",()=>clock(async()=>{
+test("optional primary checkpoint and turnover share the optional reservation before either transaction completes",()=>clock(async()=>{
  const {w,db}=await harness();w.runtime.nonAlarmWrites=99_743;const hold=holdPut(db);
- const first=w.saveCheckpoint(T,true);await hold.started;
+ const first=w.saveCheckpoint(T,false);await hold.started;
  await assert.rejects(()=>w.syncTurnover(T),/交易保护优先/);
  assert.equal(w.nonAlarmPendingWrites,1);assert.equal(w.turnoverState.total,0);
  hold.release();await first;assert.equal(w.runtime.nonAlarmWrites,99_744);assert.equal(w.nonAlarmPendingWrites,0);
 }));
-test("actual member checkpoint and inherited turnover share the same isolated reservation",()=>clock(async()=>{
+test("optional member checkpoint and inherited turnover share the same isolated reservation",()=>clock(async()=>{
  const {w,db}=await harness(true);w.runtime.nonAlarmWrites=99_743;const hold=holdPut(db);
- const first=w.saveCheckpoint(T,true);await hold.started;assert.equal(w.nonAlarmPendingWrites,1);
+ const first=w.saveCheckpoint(T,false);await hold.started;assert.equal(w.nonAlarmPendingWrites,1);
  await assert.rejects(()=>w.syncTurnover(T),/交易保护优先/);
  const other=await harness(true);assert.equal(other.w.nonAlarmPendingWrites,0);assert.equal(other.w.runtime.nonAlarmWrites,0);
  hold.release();await first;assert.equal(w.runtime.nonAlarmWrites,99_744);assert.equal(w.nonAlarmPendingWrites,0);
