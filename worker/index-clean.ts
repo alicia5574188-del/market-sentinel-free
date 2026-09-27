@@ -49,6 +49,7 @@ import { advanceCounterfactualResearch, counterfactualResearchView, counterfactu
   initialCounterfactualResearch, readCounterfactualResearch, type CounterfactualResearchState } from "../lib/market-intelligence-research.ts";
 import { nextProtectionWriteBudget, readProtectionWriteBudget, protectionWriteBudgetView,
   OPTIONAL_WRITE_GUARD_PER_DAY, PAID_PLAN_PLANNED_MONTHLY_ROWS, PAID_DO_INCLUDED_ROWS_PER_MONTH, PAID_PLAN_ROW_SAFETY_LIMIT,
+  PAID_DO_INCLUDED_REQUESTS_PER_MONTH, ACTIVE_MEMBER_PLANNED_DO_REQUESTS_PER_DAY, PAID_PLAN_PLANNED_MONTHLY_REQUESTS,
   PRIMARY_PLANNED_DO_ROWS, TWO_MEMBER_PLANNED_DO_ROWS, ACTIVE_MEMBER_PLANNED_DO_ROWS, type ProtectionWriteBudget } from "../lib/forward-write-budget.ts";
 import { EquityReader } from "../lib/equity-reader.ts";
 import { EQUITY_CURVE_VERSION } from "../lib/equity-curve.ts";
@@ -3356,7 +3357,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           paidDoSafetyLimitRowsPerMonth:PAID_PLAN_ROW_SAFETY_LIMIT,
           resourceModelScope:"Workers Paid row-write contract; requests, duration and unbounded external retries remain separately metered",
           capacityCertified: false,
-          plannedTotalDoRequestsPerDay: 53_280,
+          plannedTotalDoRequestsPerDay:ACTIVE_MEMBER_PLANNED_DO_REQUESTS_PER_DAY,
+          plannedDoRequestsPer31DayMonth:PAID_PLAN_PLANNED_MONTHLY_REQUESTS,
+          paidDoIncludedRequestsPerMonth:PAID_DO_INCLUDED_REQUESTS_PER_MONTH,
           plannedMaxD1BilledWritesPerDay: 4_800,
         },
       });
