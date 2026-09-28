@@ -30,7 +30,7 @@ test("old strategy stacks remain compatibility-only and cannot manufacture new e
 
 test("multi-source analysis is non-blocking while Gate stays execution-only",async()=>{
   const hub=await read("lib/market-data-hub.ts"),worker=await read("worker/index-clean.ts");
-  for(const venue of["BYBIT","OKX","KUCOIN","BITGET","BINANCE"])assert.match(hub,new RegExp(venue));
+  for(const venue of["BYBIT","OKX","KUCOIN","MEXC","HTX"])assert.match(hub,new RegExp(venue));
   assert.match(hub,/Promise\.any\(primary\.map\(fetchOne\)\)/);
   assert.match(hub,/Cached rows remain/);
   assert.match(hub,/interval:"1m"\|"5m"\|"1d"/);
@@ -155,7 +155,7 @@ test("existing multi-source BBO refresh exposes liquidity migration without extr
     read("lib/market-data-hub.ts"),read("worker/index-clean.ts"),read("lib/market-intelligence-engine.ts"),
     read("lib/position-intelligence-engine.ts"),read("app/market-intelligence-execution.tsx")
   ]);
-  for(const token of["bid1Size","bidSz","bestBidSize","bidQty","bookImbalance","bidLiquidityChange","askLiquidityChange"])
+  for(const token of["bid1Size","bidSz","bestBidSize","contract_code","trade_turnover","bookImbalance","bidLiquidityChange","askLiquidityChange"])
     assert.match(hub,new RegExp(token));
   assert.match(worker,/external\?\.liquiditySourceCount/);
   assert.match(worker,/bidLiquidityChange:external\?\.bidLiquidityChange/);
