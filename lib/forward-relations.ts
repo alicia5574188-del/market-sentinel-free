@@ -843,6 +843,6 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
       accounting:"模拟仍使用新鲜买卖价并计入手续费、滑点和资金费占位；每笔新Trade冻结独立交易假设、相关组、失效条件与持仓计划。",
       risk:"总结构风险≤10%、同方向≤6.5%、组合保证金≤75%；同一高相关组正常只允许一个同方向主仓，反方向独立假设可并存。",
       validation:"任何细节都会进入证据池，但市场叙事使用慢速记忆和持续证据更新，单一噪声不能让大方向来回翻转。完成5m只产生交易假设，真实成交由随后2秒实时价格/跨所证据响应确认；极端个体扩张若仍处于轮动市场，不被禁止，但必须通过加强实时延续确认，避免把尾部强势误当成新趋势。",
-      liquidation:"固定结构止损仍是最后保险；主动退出由 Position Intelligence＋Lifecycle Research 共同判断。已证明的大赢家在趋势形成/扩张时保留尾部空间；利润扩张后若市场重新轮动且相对优势、路径、跨所推动等独立证据同步衰退，执行层会先PROTECT再EXIT，不再允许大量已证明利润自然吐回结构止损。"},
+      liquidation:"固定结构止损仍是最后保险；主动退出由 Position Intelligence＋Lifecycle Research 共同判断。单一细节、单一市场转向或连续两根5m都没有独立平仓权。已证明的大赢家在趋势形成/扩张时保留尾部空间；利润扩张后若市场重新轮动且相对优势、路径、跨所推动等独立证据同步衰退，执行层会先PROTECT再EXIT，不再允许大量已证明利润自然吐回结构止损。"},
     cost:PAPER_COST,nextCycleAt:s.lastCandleAt+BAR_MS};
 }
