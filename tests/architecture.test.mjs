@@ -100,12 +100,17 @@ test("execution page exposes the same narrative used by strategy decisions",asyn
 });
 
 
-test("Market Intelligence uses thesis lifecycle, not scalp profit locking or batch spraying",async()=>{
-  const core=await read("lib/forward-relations.ts"),engine=await read("lib/market-intelligence-engine.ts");
+test("Market Intelligence uses research lifecycle protection, not blind scalp locking or batch spraying",async()=>{
+  const core=await read("lib/forward-relations.ts"),engine=await read("lib/market-intelligence-engine.ts"),
+    lifecycle=await read("lib/market-intelligence-lifecycle.ts");
   const manage=core.slice(core.indexOf("function manageIntelligenceTrades"),core.indexOf("function markAndManage"));
-  assert.doesNotMatch(manage,/利润保护提升|PROFIT_GIVEBACK/);
-  assert.match(manage,/已移除旧式动态锁利/);
   assert.match(manage,/evaluatePositionIntelligence/);
+  assert.match(manage,/deriveProfitLifecycle/);
+  assert.match(manage,/RESEARCH_PROFIT_PROTECT|RESEARCH_LIFECYCLE_EXIT/);
+  assert.match(manage,/研究层进入利润保护/);
+  assert.doesNotMatch(manage,/样本利润保护提升|已移除旧式动态锁利/);
+  assert.match(lifecycle,/healthyTrend/);
+  assert.match(lifecycle,/action="PROTECT"/);
   assert.doesNotMatch(manage,/relationFailureBars.*>=2|THESIS_INVALIDATED/);
   const fill=core.slice(core.indexOf("export function fillForwardPortfolio"),core.indexOf("function nextCandleAt"));
   assert.match(fill,/opened=1;break/);

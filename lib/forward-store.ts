@@ -55,7 +55,7 @@ function compactClosedTrade(t:Trade,keepIntelligence:boolean){
   if(row.entryContext)row.entryContext={...row.entryContext,reason:shortText(row.entryContext.reason,320)??"",
     thesisSummary:shortText(row.entryContext.thesisSummary,260),invalidationSummary:shortText(row.entryContext.invalidationSummary,260)};
   if(!keepIntelligence){
-    delete row.positionIntelligence;delete row.profitProtection;delete row.profitProtectionMigration;delete row.exitPlan;delete row.turn;
+    delete row.positionIntelligence;delete row.profitLifecycle;delete row.profitProtection;delete row.profitProtectionMigration;delete row.exitPlan;delete row.turn;
   }
   return row;
 }

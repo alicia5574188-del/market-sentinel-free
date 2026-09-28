@@ -1041,6 +1041,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       catch{this.counterfactualResearch=initialCounterfactualResearch(now);}
       this.counterfactualResearchLoaded=true;
     }
+    if(!this.shadowResearchLoaded){
+      try{this.shadowResearch=await readShadowResearch(this.ctx.storage,now);}
+      catch{this.shadowResearch=initialShadowResearch(now);}
+      this.shadowResearchLoaded=true;
+    }
     // normalizeForward already upgrades old records in place. Strategy revisions
     // must never close positions, replace startedAt or create a fresh 1000U ledger.
     return false;
@@ -1101,7 +1106,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const previous = state;
       const next = advanceForward({ state: previous, now, paths: this.strategyCandles,minutePaths:this.forwardMinutePaths(),
         daily:this.turnDailyCandles,quotes: this.forwardQuotes(now), contracts: this.regimeContracts(),
-        entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue });
+        entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue,
+        research:{rolling:this.shadowResearch.market[0]?.rolling??null} });
       if (next.changed || !previous.storage.persistedAt) {
         next.state.storage = { persistedAt: now, error: null };
         const prepared = await prepareForwardWrite(previous.storage.persistedAt ? previous : null, next.state, now, {compact:true});
@@ -3187,7 +3193,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           turnProbability:trade.turn?.entryTurnProbability??null,continuationScore:trade.turn?.entryContinuation??null,
           directionConfidence:trade.turn?.entryDirectionConfidence??null,forecast:trade.forecast??null,ruleReason:trade.rule.reason,
         },
-        holdAssessment:trade.holdValue??null,
+        holdAssessment:trade.holdValue??null,profitLifecycle:trade.profitLifecycle??null,
         path:{maxFavorableRate:trade.favorable,maxAdverseRate:trade.adverse,lastPrice:trade.lastPrice,lastQuoteAt:trade.lastQuoteAt},
         exit:trade.status==="CLOSED"?{reason:trade.exitReason,closedAt:trade.closedAt,exitPrice:trade.exitPrice,
           netPnl:trade.netPnl,grossPnl:trade.grossPnl,audit:trade.exitAudit??null}:null,
@@ -3207,7 +3213,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         counterfactualResearch:counterfactualResearchView(this.counterfactualResearch),
         shadowResearch:shadowResearchView(this.shadowResearch),
         archiveEndpoint: "/api/forward/archive",
-        completeness: "交易主账本与研究影子完全隔离；counterfactualResearch记录平仓后/未执行候选路径；shadowResearch仅记录市场几何、入场位置、响应质量和盈利转化，不参与选币、开平仓、风险或LIVE。" });
+        completeness: "交易主账本与反事实研究仍隔离；counterfactualResearch只记录平仓后/未执行候选路径。shadowResearch继续保存市场几何、入场位置、响应质量和盈利转化，其中滚动市场几何只作为Lifecycle Research的只读环境输入；真实开平仓仍由Forward主账本提交并由Lifecycle Research输出HOLD/WATCH/PROTECT/EXIT执行契约。" });
     }
     if (path === "/forward-equity" && request.method === "GET") {
       const s=this.forwardState;
