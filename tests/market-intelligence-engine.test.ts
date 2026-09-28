@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {buildMarketIntelligence,initialMarketIntelligenceState,MARKET_INTELLIGENCE_VERSION} from "../lib/market-intelligence-engine.ts";
 import {evaluatePositionIntelligence} from "../lib/position-intelligence-engine.ts";
 import {entryResponseWindowMs,evaluateEntryResponse} from "../lib/market-intelligence-entry-response.ts";
-import {advanceForward,fillForwardPortfolio,initialForward,resetForwardAccountPreservingLearning} from "../lib/forward-relations.ts";
+import {advanceForward,extremeResidualConfirmationProfile,fillForwardPortfolio,initialForward,resetForwardAccountPreservingLearning} from "../lib/forward-relations.ts";
 
 const T=2_000_000_000_000;
 function candles(start:number,step:number,vol=.002){
@@ -300,4 +300,34 @@ test("cold-archived history cannot make an already-consumed thesis executable ag
   const opened=fillForwardPortfolio(s,{[opportunity!.symbol]:shiftQuotes[opportunity!.symbol]!},contracts,now,1000,false);
   assert.equal(opened,0);
   assert.equal(s.positions.length,0,"thesis dedupe must survive even after the full closed trade leaves hot history");
+});
+
+
+test("stable market narrative advances only on a new completed five-minute step",()=>{
+  const paths={BTC_USDT:candles(100,.0011),ETH_USDT:candles(100,.0013),SOL_USDT:candles(100,.0010)};
+  const quotes1=Object.fromEntries(Object.entries(paths).map(([sym,rows])=>[sym,{...q(rows.at(-1)!.close,.0004),observedAt:T}]));
+  const first=advanceForward({state:initialForward(T-600_000),now:T,paths,quotes:quotes1,contracts:{},
+    entrySymbols:Object.keys(paths)}).state;
+  const narrative=structuredClone(first.extremumRegime.narrative),history=structuredClone(first.extremumRegime.history);
+  const quotes2=Object.fromEntries(Object.entries(paths).map(([sym,rows])=>[sym,{
+    ...q(rows.at(-1)!.close,-.003),observedAt:T+2_000,sourceBreadth:-1,directionalAgreement:1,medianShortMove:-.004,
+    bookImbalance:-.9,bidLiquidityChange:-.7,askLiquidityChange:.7
+  }]));
+  const second=advanceForward({state:first,now:T+2_000,paths,quotes:quotes2,contracts:{},
+    entrySymbols:Object.keys(paths)}).state;
+  assert.deepEqual(second.extremumRegime.narrative,narrative,
+    "quote-level detail may update observations but cannot rewrite the stable market narrative inside the same 5m bucket");
+  assert.deepEqual(second.extremumRegime.history,history);
+});
+
+test("BTW-like extreme residual requires substantially stronger live proof instead of treating magnitude as quality",()=>{
+  const risky=extremeResidualConfirmationProfile({residual:.075,sourceCount:4,dataConfidence:83,
+    disagreementRate:.0044,recentExtremeLosses:2});
+  assert.equal(risky.required,true);
+  assert.ok(risky.minimumElapsedMs>=120_000);
+  assert.ok(risky.minimumSupportSamples>=9);
+  assert.ok(risky.minimumRetainedRate>=.76);
+  const ordinary=extremeResidualConfirmationProfile({residual:.012,sourceCount:5,dataConfidence:95,
+    disagreementRate:.0005,recentExtremeLosses:0});
+  assert.equal(ordinary.required,false);
 });

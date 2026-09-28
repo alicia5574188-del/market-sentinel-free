@@ -28,7 +28,7 @@ const hypothesisKind=(v?:string)=>({
   PULLBACK_AHEAD:"回调正在酝酿",REBOUND_AHEAD:"反弹正在酝酿",ROTATION_AHEAD:"轮动/震荡正在形成",
   TREND_EXPANSION_AHEAD:"趋势扩张正在形成",REVERSAL_AHEAD:"真正转向正在形成"
 }[v??""]??v??"未来状态研究");
-const hypothesisStatus=(v?:string)=>v==="CONFIRMED"?"已被后续市场确认":v==="CONFIRMING"?"正在加强":"正在形成";
+const hypothesisStatus=(v?:string)=>v==="CONFIRMED"?"已被后续市场确认":v==="WEAKENING"?"确认后正在减弱":v==="CONFIRMING"?"正在加强":"正在形成";
 const researchAction=(v?:string)=>v==="CONFIRM_MORE"?"加强实时确认":v==="SUPPORTED"?"前瞻研究支持":"沿用原确认";
 const side=(v:string)=>v==="LONG"?"做多":"做空";
 const family=(v?:string)=>({
@@ -80,9 +80,10 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
             <span><small>峰值净幅</small><b>{pct(l?.peakNetRate)}</b></span>
             <span><small>当前净幅</small><b>{pct(l?.currentNetRate)}</b></span>
             <span><small>利润回吐</small><b>{typeof l?.givebackRatio==="number"?fmt(l.givebackRatio*100,0)+"%":"—"}</b></span>
-            <span><small>保护底线</small><b>{(l?.floorRate??0)>0?pct(l?.floorRate):"未启动"}</b></span>
+            <span><small>利润平台/保护</small><b>{Math.max(l?.platformFloorRate??0,l?.floorRate??0)>0?pct(Math.max(l?.platformFloorRate??0,l?.floorRate??0)):"未启动"}</b></span>
           </div>
           <p className="fr-exec-judgement"><b>研究判断：</b>{l?.reason??p?.summary??"Position Intelligence 正在建立这笔仓位自己的连续观察基线。"}</p>
+          {l?.platformKind&&l.platformKind!=="NONE"&&<p className="fr-trade-reason"><b>{l.platformKind==="RUNNER"?"Runner利润平台":"已证明利润平台"}：</b>{l.platformReason}</p>}
           <details className="fr-exec-research-details"><summary>查看这笔仓位的研究依据</summary>
             <p><b>入场假设：</b>{t.entryContext?.thesisSummary??t.entryContext?.reason??"历史兼容持仓"}</p>
             {t.entryContext?.futureResearchReason&&<p><b>入场时前瞻研究：</b>{researchAction(t.entryContext.futureResearchAction)} · {t.entryContext.futureResearchReason}</p>}

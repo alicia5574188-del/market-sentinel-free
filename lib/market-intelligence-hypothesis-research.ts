@@ -1,6 +1,6 @@
 import type { EvidenceDirection, MarketBias, MarketEvidence, MarketIntelligenceState } from "./market-intelligence-engine.ts";
 
-export const MARKET_HYPOTHESIS_RESEARCH_VERSION="market-hypothesis-research-v1";
+export const MARKET_HYPOTHESIS_RESEARCH_VERSION="market-hypothesis-research-v2";
 export const MARKET_HYPOTHESIS_ACTIVE_LIMIT=12;
 export const MARKET_HYPOTHESIS_RESOLVED_LIMIT=48;
 export const MARKET_HYPOTHESIS_MEMORY_LIMIT=16;
@@ -12,7 +12,7 @@ export type MarketHypothesisKind=
   |"TREND_EXPANSION_AHEAD"
   |"REVERSAL_AHEAD";
 export type MarketHypothesisDirection="LONG"|"SHORT"|"MIXED";
-export type MarketHypothesisStatus="FORMING"|"CONFIRMING"|"CONFIRMED";
+export type MarketHypothesisStatus="FORMING"|"CONFIRMING"|"CONFIRMED"|"WEAKENING";
 export type MarketHypothesis={
   id:string;key:string;kind:MarketHypothesisKind;direction:MarketHypothesisDirection;status:MarketHypothesisStatus;
   confidence:number;startedAt:number;updatedAt:number;expiresAt:number;confirmedAt:number|null;
@@ -29,8 +29,8 @@ export type MarketHypothesisMemory={
   averageLeadMinutes:number|null;lastAt:number;
 };
 export type MarketHypothesisResearchState={
-  version:typeof MARKET_HYPOTHESIS_RESEARCH_VERSION;updatedAt:number;active:MarketHypothesis[];resolved:ResolvedMarketHypothesis[];
-  memory:MarketHypothesisMemory[];summary:string;
+  version:typeof MARKET_HYPOTHESIS_RESEARCH_VERSION;updatedAt:number;lastDecisionBucketAt:number;
+  active:MarketHypothesis[];resolved:ResolvedMarketHypothesis[];memory:MarketHypothesisMemory[];summary:string;
 };
 export type EntryHypothesisGuidance={
   action:"SUPPORTED"|"NORMAL"|"CONFIRM_MORE";extendedConfirmation:boolean;supportConfidence:number;adverseConfidence:number;
@@ -44,8 +44,11 @@ const clip=(v:number,a=0,b=1)=>Math.max(a,Math.min(b,v));
 const sideBias=(side:"LONG"|"SHORT"):MarketBias=>side==="LONG"?"BULLISH":"BEARISH";
 const dirFromBias=(bias:MarketBias):MarketHypothesisDirection=>bias==="BULLISH"?"LONG":bias==="BEARISH"?"SHORT":"MIXED";
 const opposite=(d:MarketHypothesisDirection)=>d==="LONG"?"SHORT":d==="SHORT"?"LONG":"MIXED";
-const statusFor=(confidence:number,confirmedAt:number|null,observations=1,targetHitStreak=0):MarketHypothesisStatus=>
-  confirmedAt?"CONFIRMED":observations>=2&&targetHitStreak>=1&&confidence>=.55?"CONFIRMING":"FORMING";
+const statusFor=(confidence:number,confirmedAt:number|null,observations=1,targetHitStreak=0):MarketHypothesisStatus=>{
+  if(confirmedAt)return confidence<.55||targetHitStreak<2?"WEAKENING":"CONFIRMED";
+  return observations>=2&&targetHitStreak>=1&&confidence>=.55?"CONFIRMING":"FORMING";
+};
+const decisionBucketAt=(now:number)=>Math.floor(now/(5*60_000))*(5*60_000);
 const keyOf=(kind:MarketHypothesisKind,direction:MarketHypothesisDirection)=>`${kind}:${direction}`;
 const evidenceFresh=(row:MarketEvidence,now:number)=>row.expiresAt>now&&now-(row.lastAt??row.at)<=30*60_000;
 const strength=(rows:MarketEvidence[],predicate:(row:MarketEvidence)=>boolean)=>rows.filter(predicate)
@@ -56,8 +59,8 @@ const familyList=(rows:MarketEvidence[],types:string[])=>[...new Set(rows.filter
 const evidenceList=(rows:MarketEvidence[],types:string[])=>[...new Set(rows.filter(row=>types.includes(row.type)).map(row=>row.type))].slice(0,6);
 
 export function initialMarketHypothesisResearch(now:number):MarketHypothesisResearchState{
-  return{version:MARKET_HYPOTHESIS_RESEARCH_VERSION,updatedAt:now,active:[],resolved:[],memory:[],
-    summary:"前瞻研究正在建立：把市场细节转成可验证的未来状态假设，而不是只描述当前状态。"};
+  return{version:MARKET_HYPOTHESIS_RESEARCH_VERSION,updatedAt:now,lastDecisionBucketAt:0,active:[],resolved:[],memory:[],
+    summary:"前瞻研究正在建立：实时细节持续记录，但只有新的完成5m证据块才推进稳定前瞻状态。"};
 }
 export function normalizeMarketHypothesisResearch(value:unknown,now:number):MarketHypothesisResearchState{
   if(!value||typeof value!=="object")return initialMarketHypothesisResearch(now);
@@ -77,8 +80,9 @@ export function normalizeMarketHypothesisResearch(value:unknown,now:number):Mark
     .sort((a,b)=>b.resolvedAt-a.resolvedAt).slice(0,MARKET_HYPOTHESIS_RESOLVED_LIMIT);
   const memory=(Array.isArray(raw.memory)?raw.memory:[]).filter((m):m is MarketHypothesisMemory=>!!m&&typeof m.key==="string"&&Number.isFinite(m.observations))
     .sort((a,b)=>b.lastAt-a.lastAt).slice(0,MARKET_HYPOTHESIS_MEMORY_LIMIT);
-  return{version:MARKET_HYPOTHESIS_RESEARCH_VERSION,updatedAt:Number.isFinite(raw.updatedAt)?raw.updatedAt!:now,active,resolved,memory,
-    summary:typeof raw.summary==="string"?raw.summary:"前瞻研究正在持续验证市场状态转移。"};
+  return{version:MARKET_HYPOTHESIS_RESEARCH_VERSION,updatedAt:Number.isFinite(raw.updatedAt)?raw.updatedAt!:now,
+    lastDecisionBucketAt:Number.isFinite(raw.lastDecisionBucketAt)?Math.max(0,raw.lastDecisionBucketAt!):0,
+    active,resolved,memory,summary:typeof raw.summary==="string"?raw.summary:"前瞻研究正在持续验证市场状态转移。"};
 }
 
 type Candidate=Omit<MarketHypothesis,"id"|"startedAt"|"updatedAt"|"expiresAt"|"confirmedAt"|"status"
@@ -199,7 +203,9 @@ function remember(memory:MarketHypothesisMemory[],row:ResolvedMarketHypothesis){
     averageLeadMinutes:row.outcome==="CONFIRMED"?lead:null,lastAt:row.resolvedAt});
 }
 export function advanceMarketHypothesisResearch(previous:MarketHypothesisResearchState|undefined,market:MarketIntelligenceState,now:number){
-  const prior=normalizeMarketHypothesisResearch(previous,now),detected=detectCandidates(market,now),detectedByKey=new Map(detected.map(c=>[c.key,c])),
+  const prior=normalizeMarketHypothesisResearch(previous,now),bucketAt=decisionBucketAt(now);
+  if(prior.lastDecisionBucketAt===bucketAt)return{...prior,updatedAt:now};
+  const detected=detectCandidates(market,now),detectedByKey=new Map(detected.map(c=>[c.key,c])),
     next:MarketHypothesis[]=[],resolved=[...prior.resolved],memory=structuredClone(prior.memory);
   for(const old of prior.active){
     const fresh=detectedByKey.get(old.key),met=targetMet(old,market),bad=invalidated(old,market),
@@ -237,9 +243,10 @@ export function advanceMarketHypothesisResearch(previous:MarketHypothesisResearc
   next.sort((a,b)=>b.confidence-a.confidence||b.updatedAt-a.updatedAt);
   resolved.sort((a,b)=>b.resolvedAt-a.resolvedAt);memory.sort((a,b)=>b.lastAt-a.lastAt);
   const active=next.slice(0,MARKET_HYPOTHESIS_ACTIVE_LIMIT),top=active[0],
-    summary=top?`前瞻研究：${top.thesis} 当前置信 ${(top.confidence*100).toFixed(0)}%，状态 ${top.status}，已持续观察 ${top.observations} 次。`
+    summary=top?`前瞻研究：${top.thesis} 当前置信 ${(top.confidence*100).toFixed(0)}%，状态 ${top.status}，已累计 ${top.observations} 个完成5m证据块。`
       :"前瞻研究暂未发现足够集中的下一阶段状态转移证据。";
-  return{version:MARKET_HYPOTHESIS_RESEARCH_VERSION,updatedAt:now,active,resolved:resolved.slice(0,MARKET_HYPOTHESIS_RESOLVED_LIMIT),
+  return{version:MARKET_HYPOTHESIS_RESEARCH_VERSION,updatedAt:now,lastDecisionBucketAt:bucketAt,active,
+    resolved:resolved.slice(0,MARKET_HYPOTHESIS_RESOLVED_LIMIT),
     memory:memory.slice(0,MARKET_HYPOTHESIS_MEMORY_LIMIT),summary} satisfies MarketHypothesisResearchState;
 }
 

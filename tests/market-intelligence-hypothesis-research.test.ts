@@ -118,3 +118,36 @@ test("max-bounded hypothesis research remains far below the hot account storage 
   assert.ok(write.compression.utilization<.35,`hypothesis memory must stay comfortably bounded, got ${write.compression.utilization}`);
   assert.ok(write.compression.rawBytes<write.compression.accountBudgetBytes);
 });
+
+
+test("realtime loops inside one five-minute bucket do not accumulate fake persistence",()=>{
+  const bucket=Math.floor(T/(5*60_000))*(5*60_000);
+  const first=advanceMarketHypothesisResearch(initialMarketHypothesisResearch(bucket-60_000),market(),bucket+10_000);
+  const h1=first.active.find(x=>x.kind==="PULLBACK_AHEAD");
+  assert.ok(h1);
+  const second=advanceMarketHypothesisResearch(first,market(),bucket+20_000);
+  const h2=second.active.find(x=>x.kind==="PULLBACK_AHEAD");
+  assert.equal(h2?.observations,h1?.observations);
+  assert.equal(second.lastDecisionBucketAt,first.lastDecisionBucketAt);
+});
+
+test("a previously confirmed hypothesis becomes WEAKENING when confidence support disappears",()=>{
+  const base=initialMarketHypothesisResearch(T);
+  base.active=[{
+    id:"old",key:"TREND_EXPANSION_AHEAD:SHORT",kind:"TREND_EXPANSION_AHEAD",direction:"SHORT",status:"CONFIRMED",
+    confidence:.002,startedAt:T-30*60_000,updatedAt:T,expiresAt:T+30*60_000,confirmedAt:T-20*60_000,
+    observations:8,targetHits:6,targetHitStreak:0,invalidationHitStreak:0,lastTargetAt:T-5*60_000,
+    horizonMinutes:[5,15,30],families:["BREADTH","FLOW"],evidenceTypes:["BREADTH_CONTRACTION"],thesis:"x",expectedNext:["x"],invalidation:"x"
+  }];
+  const restored=normalizeMarketHypothesisResearch(base,T);
+  assert.equal(restored.active[0]?.status,"WEAKENING");
+  const g=positionHypothesisGuidance(restored,"LONG");
+  assert.equal(g.confirmedAdverse,false,"weakening/near-zero-confidence research cannot influence a position as confirmed");
+});
+
+test("forward research version 2 starts with completed-bar persistence instead of legacy realtime counters",()=>{
+  const state=initialMarketHypothesisResearch(T);
+  assert.equal(state.version,"market-hypothesis-research-v2");
+  assert.equal(state.lastDecisionBucketAt,0);
+  assert.match(state.summary,/完成5m证据块/);
+});

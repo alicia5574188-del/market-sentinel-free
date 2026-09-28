@@ -27,6 +27,7 @@ export type ProfitLifecycleState={
   floorRate:number;retentionRate:number;reason:string;
   trajectory:"BASE"|"OUTPERFORMING"|"RUNNER"|"DECAYING";runner:boolean;
   expectedAtEntryRate:number;revaluedPotentialRate:number;outperformanceMultiple:number;
+  platformKind:"NONE"|"PROVEN"|"RUNNER";platformFloorRate:number;platformLevel:number;platformReason:string;
 };
 
 const clip=(v:number,a=0,b=1)=>Math.max(a,Math.min(b,v));
@@ -97,10 +98,14 @@ export function deriveOpportunityLifecycle(input:{
 
 export function extendedEntryConfirmationReady(input:{
   required:boolean;elapsedMs:number;supportSamples:number;currentAdvanceRate:number;bestAdvanceRate:number;
+  minimumElapsedMs?:number;minimumSupportSamples?:number;minimumRetainedRate?:number;
 }){
   if(!input.required)return true;
-  const retained=input.bestAdvanceRate<=0?0:input.currentAdvanceRate/input.bestAdvanceRate;
-  return input.elapsedMs>=12_000&&input.supportSamples>=3&&retained>=.70;
+  const retained=input.bestAdvanceRate<=0?0:input.currentAdvanceRate/input.bestAdvanceRate,
+    minimumElapsedMs=Math.max(12_000,input.minimumElapsedMs??12_000),
+    minimumSupportSamples=Math.max(3,input.minimumSupportSamples??3),
+    minimumRetainedRate=Math.max(.60,Math.min(.90,input.minimumRetainedRate??.70));
+  return input.elapsedMs>=minimumElapsedMs&&input.supportSamples>=minimumSupportSamples&&retained>=minimumRetainedRate;
 }
 
 export function deriveProfitLifecycle(input:{
@@ -137,6 +142,22 @@ export function deriveProfitLifecycle(input:{
       ||researchSupported),
     revaluedPotentialRate=Math.max(expectedAtEntryRate,peakNet,
       currentNet+Math.max(0,input.position.remainingSpaceRate)*(runner?.90:.60)),
+    provenProfit=input.firstProfit&&peakNet>=Math.max(cost*4,input.pullbackRiskRate*.75),
+    runnerLevel=runner?(outperformanceMultiple>=4.5?4:outperformanceMultiple>=3.2?3:outperformanceMultiple>=2.4?2:
+      outperformanceMultiple>=1.6?1:runnerByAbsolute?1:0):0,
+    runnerPlatformNet=runnerLevel===4?Math.max(expectedAtEntryRate*2.40,peakNet*.55):
+      runnerLevel===3?Math.max(expectedAtEntryRate*1.85,peakNet*.48):
+      runnerLevel===2?Math.max(expectedAtEntryRate*1.35,peakNet*.40):
+      runnerLevel===1?Math.max(expectedAtEntryRate*.80,peakNet*.30):0,
+    provenPlatformNet=!runner&&provenProfit?Math.max(cost*.25,peakNet*.30):0,
+    platformKind:ProfitLifecycleState["platformKind"]=runnerPlatformNet>0?"RUNNER":provenPlatformNet>0?"PROVEN":"NONE",
+    platformNet=Math.max(runnerPlatformNet,provenPlatformNet),
+    platformFloorRate=platformNet>0?cost+platformNet:0,
+    platformReason=platformKind==="RUNNER"
+      ?`Runner已跨过第${runnerLevel}级已证明利润平台；平台只限制灾难性回吐，不限制继续创新高。`
+      :platformKind==="PROVEN"
+      ?"订单已经形成超过正常噪声的已证明利润；建立宽松利润平台，避免正收益完整回吐成亏损。"
+      :"尚未形成需要独立锁定的已证明利润平台。",
     trajectory:ProfitLifecycleState["trajectory"]=persistentDeterioration?"DECAYING":runner?"RUNNER":
       outperformanceMultiple>=1.25?"OUTPERFORMING":"BASE";
 
@@ -200,5 +221,5 @@ export function deriveProfitLifecycle(input:{
   const floorRate=action==="PROTECT"&&peakNet>0?cost+peakNet*retention:0;
   return{version:MARKET_LIFECYCLE_VERSION,phase,action,proof,peakNetRate:peakNet,currentNetRate:currentNet,
     givebackRatio:giveback,floorRate,retentionRate:retention,reason,trajectory,runner,
-    expectedAtEntryRate,revaluedPotentialRate,outperformanceMultiple};
+    expectedAtEntryRate,revaluedPotentialRate,outperformanceMultiple,platformKind,platformFloorRate,platformLevel:runnerLevel,platformReason};
 }

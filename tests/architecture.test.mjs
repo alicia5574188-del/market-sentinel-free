@@ -113,6 +113,10 @@ test("Market Intelligence uses research lifecycle protection, not blind scalp lo
   assert.match(lifecycle,/persistentDeterioration/);
   assert.match(lifecycle,/runnerHealthy/);
   assert.match(lifecycle,/initialExpectedNetRate/);
+  assert.match(lifecycle,/platformFloorRate/);
+  assert.match(lifecycle,/runnerPlatformNet/);
+  assert.match(manage,/PROFIT_PLATFORM_BREACH/);
+  assert.match(manage,/Runner利润平台/);
   assert.match(lifecycle,/action="PROTECT"/);
   assert.doesNotMatch(manage,/relationFailureBars.*>=2|THESIS_INVALIDATED/);
   const fill=core.slice(core.indexOf("export function fillForwardPortfolio"),core.indexOf("function nextCandleAt"));
@@ -201,6 +205,9 @@ test("forward hypothesis research is bounded, causal, and cannot hard-veto big-w
   assert.match(research,/MARKET_HYPOTHESIS_ACTIVE_LIMIT=12/);
   assert.match(research,/MARKET_HYPOTHESIS_RESOLVED_LIMIT=48/);
   assert.match(research,/MARKET_HYPOTHESIS_MEMORY_LIMIT=16/);
+  assert.match(research,/market-hypothesis-research-v2/);
+  assert.match(research,/WEAKENING/);
+  assert.match(research,/lastDecisionBucketAt/);
   assert.match(research,/independent=input\.score>=82/);
   assert.match(research,/不削弱原大赢家快速通道/);
   assert.doesNotMatch(research,/eligible=false|closeTrade\(|openIntelligenceTrade\(/);
@@ -249,7 +256,21 @@ test("forward research cannot influence orders from a one-cycle detail change",a
   assert.match(research,/now-old\.startedAt>=8\*60_000/);
   assert.match(research,/stableInvalidation/);
   assert.match(research,/status==="CONFIRMED"&&h\.observations>=3&&h\.targetHits>=2/);
+  assert.match(research,/decisionBucketAt/);
+  const advance=core.slice(core.indexOf("export function advanceForward"),core.indexOf("export function closeForwardForReset"));
+  assert.match(advance,/marketReady&&dataDue\)s\.hypothesisResearch=advanceMarketHypothesisResearch/);
+  assert.match(advance,/built\.state\.narrative=priorNarrative/);
   const manage=core.slice(core.indexOf("function manageIntelligenceTrades"),core.indexOf("function markAndManage"));
   assert.doesNotMatch(manage,/if\(position\.decision==="EXIT"\)/);
   assert.match(manage,/initialExpectedNetRate/);
+});
+
+
+test("extreme residual magnitude cannot bypass stability confirmation after repeated symbol losses",async()=>{
+  const core=await read("lib/forward-relations.ts");
+  assert.match(core,/extremeResidualConfirmationProfile/);
+  assert.match(core,/Math\.abs\(input\.residual\)>=\.05/);
+  assert.match(core,/recentExtremeLosses/);
+  assert.match(core,/minimumElapsedMs/);
+  assert.match(core,/极端残差机会不按偏离幅度直接追单/);
 });

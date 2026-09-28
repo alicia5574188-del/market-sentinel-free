@@ -55,6 +55,10 @@ test("extended confirmation prevents a five-second chase but accepts sustained r
   assert.equal(extendedEntryConfirmationReady({required:true,elapsedMs:6_000,supportSamples:2,currentAdvanceRate:.003,bestAdvanceRate:.003}),false);
   assert.equal(extendedEntryConfirmationReady({required:true,elapsedMs:14_000,supportSamples:3,currentAdvanceRate:.0024,bestAdvanceRate:.003}),true);
   assert.equal(extendedEntryConfirmationReady({required:false,elapsedMs:4_000,supportSamples:2,currentAdvanceRate:.001,bestAdvanceRate:.001}),true);
+  assert.equal(extendedEntryConfirmationReady({required:true,elapsedMs:55_000,supportSamples:8,currentAdvanceRate:.008,bestAdvanceRate:.01,
+    minimumElapsedMs:60_000,minimumSupportSamples:6,minimumRetainedRate:.76}),false);
+  assert.equal(extendedEntryConfirmationReady({required:true,elapsedMs:65_000,supportSamples:8,currentAdvanceRate:.008,bestAdvanceRate:.01,
+    minimumElapsedMs:60_000,minimumSupportSamples:6,minimumRetainedRate:.76}),true);
 });
 
 test("healthy trend pullback preserves a large winner instead of forcing profit protection",()=>{
@@ -114,8 +118,11 @@ test("historical big-winner profiles are dynamically repriced as runners instead
     assert.equal(life.runner,true,p.name+" must be recognized as a runner after materially exceeding its entry estimate");
     assert.equal(life.trajectory,"RUNNER",p.name+" must stay in runner trajectory");
     assert.ok(life.revaluedPotentialRate>p.expected,p.name+" must reprice future potential above the original estimate");
-    assert.ok(life.action==="HOLD"||life.action==="WATCH",p.name+" must not receive mechanical profit protection");
-    assert.equal(life.floorRate,0,p.name+" must preserve the historical no-lock runner path while healthy");
+    assert.ok(life.action==="HOLD"||life.action==="WATCH",p.name+" must not receive active deterioration protection");
+    assert.equal(life.floorRate,0,p.name+" must preserve the historical no-tight-trail runner path while healthy");
+    assert.equal(life.platformKind,"RUNNER",p.name+" must establish a coarse runner profit platform");
+    assert.ok(life.platformFloorRate>0&&life.platformFloorRate<p.current,
+      p.name+" platform must be well below current profit so upside remains uncapped");
   }
 });
 
@@ -145,4 +152,34 @@ test("meaningful profit plus persistent thesis deterioration protects before pro
   assert.equal(life.action,"PROTECT");
   assert.ok(life.floorRate>.0019);
   assert.match(life.reason,/浮盈转亏|保护利润|保护已兑现空间/);
+});
+
+
+test("US-like 3.35x outperformance installs a runner plateau before an 85% giveback can happen",()=>{
+  const market:MarketEvolutionState={version:"market-intelligence-lifecycle-v1",phase:"ROTATIONAL",trendSide:"LONG",
+    expansionScore:.40,rotationRisk:.68,decisionStable:false,stabilityScore:.32,reason:""};
+  const life=deriveProfitLifecycle({side:"LONG",signedRate:.120,peakFavorableRate:.13398,pullbackRiskRate:.01367,firstProfit:true,
+    costRate:.0019,initialExpectedNetRate:.03944756,
+    position:position({decision:"HOLD",reviewBars:0,advantageChange:-12,remainingSpaceRate:.04,continuationRatio:2.4,
+      supportFamilies:["RELATIVE","PATH","STRUCTURE"],concernFamilies:[]}),market});
+  assert.equal(life.runner,true);
+  assert.equal(life.platformKind,"RUNNER");
+  assert.ok(life.platformLevel>=3);
+  assert.ok(life.platformFloorRate>.07,"US-like runner should lock a coarse ~7%+ gross platform after proving 3x expansion");
+  assert.ok(life.platformFloorRate<.10,"platform must remain loose enough for ordinary runner pullbacks");
+  assert.ok(life.action==="HOLD"||life.action==="WATCH");
+});
+
+test("AZTEC-like one-R proven profit creates a low platform even before multiple concern families converge",()=>{
+  const market:MarketEvolutionState={version:"market-intelligence-lifecycle-v1",phase:"TRANSITIONAL",trendSide:"LONG",
+    expansionScore:.46,rotationRisk:.54,decisionStable:false,stabilityScore:.38,reason:""};
+  const life=deriveProfitLifecycle({side:"LONG",signedRate:.021,peakFavorableRate:.0257657,pullbackRiskRate:.0196647,firstProfit:true,
+    costRate:.0019,initialExpectedNetRate:.0463707,
+    position:position({decision:"HOLD",reviewBars:0,advantageChange:-8,remainingSpaceRate:.03,continuationRatio:1.8,
+      supportFamilies:["RELATIVE","STRUCTURE"],concernFamilies:["FLOW"]}),market});
+  assert.equal(life.runner,false);
+  assert.equal(life.platformKind,"PROVEN");
+  assert.ok(life.platformFloorRate>.006,"proven-profit platform must keep the trade net-positive if the reversal accelerates");
+  assert.ok(life.platformFloorRate<.015,"ordinary proven-profit platform must stay broad and not scalp the trade");
+  assert.notEqual(life.action,"EXIT");
 });
