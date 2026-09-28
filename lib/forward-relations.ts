@@ -131,7 +131,9 @@ export type Daily={day:string;firstAt:number;lastAt:number;startEquity:number;en
 export type EntryValidation={id:string;candidateId:string;symbol:string;side:"LONG"|"SHORT";startedAt:number;expiresAt:number;
   deadlineAt:number;
   initialPrice:number;lastPrice:number;lastQuoteAt:number;samples:number;bestAdvanceRate:number;maxAdverseRate:number;
-  supportSamples:number;oppositionSamples:number;extendedConfirmation?:boolean;status:"WAITING"|"CANCELLED";reason:string|null};
+  supportSamples:number;oppositionSamples:number;extendedConfirmation?:boolean;extremeResidual?:boolean;
+  minimumElapsedMs?:number;minimumSupportSamples?:number;minimumRetainedRate?:number;
+  status:"WAITING"|"CANCELLED";reason:string|null};
 export type ForwardState={
   version:string;engineVersion:string;startedAt:number;revision:number;lastCycleAt:number;lastQuoteCycleAt:number;lastCandleAt:number;
   balance:number;initialEquity:number;peakEquity:number;maxDrawdown:number;resolved:number;wins:number;grossPnl:number;fees:number;
@@ -627,6 +629,20 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
   return null;
 }
 
+export function extremeResidualConfirmationProfile(input:{
+  residual:number;sourceCount:number;dataConfidence:number;disagreementRate:number;recentExtremeLosses:number;
+}){
+  const extreme=Math.abs(input.residual)>=.05;
+  if(!extreme)return{required:false,minimumElapsedMs:12_000,minimumSupportSamples:3,minimumRetainedRate:.70,reason:""};
+  const recentLosses=Math.min(2,Math.max(0,Math.floor(input.recentExtremeLosses))),
+    dataUnstable=input.sourceCount<5||input.dataConfidence<90||input.disagreementRate>.002,
+    minimumElapsedMs=Math.min(120_000,30_000+recentLosses*30_000+(dataUnstable?30_000:0)),
+    minimumSupportSamples=4+recentLosses*2+(dataUnstable?1:0),
+    minimumRetainedRate=dataUnstable||recentLosses>0?.76:.72;
+  return{required:true,minimumElapsedMs,minimumSupportSamples,minimumRetainedRate,
+    reason:`极端残差机会不按偏离幅度直接追单；要求${Math.round(minimumElapsedMs/1000)}秒持续实时响应、${minimumSupportSamples}次支持证据后再执行。`};
+}
+
 function rankedEligible(s:ForwardState,now:number){
   return s.opportunities.filter(o=>isIntelligenceOpportunity(o)&&o.eligible&&o.expiresAt>now
     &&!s.positions.some(t=>t.symbol===o.symbol)
@@ -646,13 +662,23 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
     const q=quotes[o.symbol];if(!freshQuote(q,now)||q!.entryReady!==true){reject("等待实时盘口");continue;}
     const state=s.extremumRegime.symbols[o.symbol],sourceCount=Math.max(o.sourceCount??0,state?.sourceCount??0,q!.sourceCount??0),
       disagreement=q!.disagreementRate??o.disagreementRate??0,
+      recentExtremeLosses=s.history.filter(t=>t.symbol===o.symbol&&t.closedAt!=null&&now-t.closedAt<4*60*60_000
+        &&(t.netPnl??0)<0&&Math.abs(t.entryContext?.entryResidual??0)>=.05).length,
+      extreme=extremeResidualConfirmationProfile({residual:o.residual??0,sourceCount,
+        dataConfidence:o.dataConfidence??state?.dataConfidence??0,disagreementRate:disagreement,recentExtremeLosses}),
       profile=entryResponseWindowMs({score:o.score,edgeRatio:o.edgeRatio,sourceCount,disagreementRate:disagreement}),
+      minimumElapsedMs=Math.max(o.extendedConfirmation?12_000:0,extreme.minimumElapsedMs),
+      minimumSupportSamples=Math.max(o.extendedConfirmation?3:0,extreme.minimumSupportSamples),
+      minimumRetainedRate=Math.max(o.extendedConfirmation?.70:0,extreme.minimumRetainedRate),
       price=o.side==="LONG"?q!.bestAsk:q!.bestBid;
     s.entryValidations[o.id]={id:o.id,candidateId:o.id,symbol:o.symbol,side:o.side,startedAt:now,
-      expiresAt:Math.min(o.expiresAt,now+BAR_MS),deadlineAt:Math.min(o.expiresAt,now+profile.windowMs),
+      expiresAt:Math.min(o.expiresAt,now+BAR_MS),
+      deadlineAt:Math.min(o.expiresAt,now+Math.max(profile.windowMs,minimumElapsedMs+30_000)),
       initialPrice:price,lastPrice:price,lastQuoteAt:q!.observedAt,samples:1,bestAdvanceRate:0,maxAdverseRate:0,
-      supportSamples:0,oppositionSamples:0,extendedConfirmation:!!o.extendedConfirmation,status:"WAITING",
-      reason:o.extendedConfirmation?(o.futureResearchAction==="CONFIRM_MORE"?"前瞻研究发现状态转移风险，进入加强实时延续确认。":"极端轮动延伸机会进入加强实时延续确认。")
+      supportSamples:0,oppositionSamples:0,extendedConfirmation:!!o.extendedConfirmation||extreme.required,
+      extremeResidual:extreme.required,minimumElapsedMs,minimumSupportSamples,minimumRetainedRate,status:"WAITING",
+      reason:extreme.required?extreme.reason:o.extendedConfirmation
+        ?(o.futureResearchAction==="CONFIRM_MORE"?"前瞻研究发现状态转移风险，进入加强实时延续确认。":"极端轮动延伸机会进入加强实时延续确认。")
         :profile.fastLane?"高质量机会进入快速实时响应确认。":"候选进入实时响应确认。"};
     seeded++;
   }
@@ -685,8 +711,13 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
     if(decision.action==="CANCEL"){validation.status="CANCELLED";reject(decision.reason);continue;}
     if(decision.action==="WAIT"){reject(decision.reason);continue;}
     if(!extendedEntryConfirmationReady({required:!!validation.extendedConfirmation,elapsedMs:Math.max(0,now-validation.startedAt),
-      supportSamples:decision.supportSamples,currentAdvanceRate:decision.currentAdvanceRate,bestAdvanceRate:decision.bestAdvanceRate})){
-      validation.reason="研究层要求更完整的实时延续确认，当前证据仍不足";reject(validation.reason);continue;
+      supportSamples:decision.supportSamples,currentAdvanceRate:decision.currentAdvanceRate,bestAdvanceRate:decision.bestAdvanceRate,
+      minimumElapsedMs:validation.minimumElapsedMs,minimumSupportSamples:validation.minimumSupportSamples,
+      minimumRetainedRate:validation.minimumRetainedRate})){
+      validation.reason=validation.extremeResidual
+        ?"极端残差仍在验证稳定性，尚未获得足够持续实时响应"
+        :"研究层要求更完整的实时延续确认，当前证据仍不足";
+      reject(validation.reason);continue;
     }
     const meta=contracts[o.symbol];if(!meta){reject("等待合约规格");continue;}
     const last=s.lastExitAt[o.symbol]??0,lastSide=s.lastSide[o.symbol];
@@ -732,8 +763,15 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
     requiredPaths=Math.min(expectedMarkets,Math.max(3,Math.ceil(expectedMarkets*.60))),
     marketReady=readyPaths>=requiredPaths;
   if(marketReady){
-    const built=buildMarketIntelligence({paths:input.paths,minutePaths:input.minutePaths,daily:input.daily,quotes:input.quotes,
-      previous:s.extremumRegime,now:input.now,allowed});
+    const priorNarrative=structuredClone(s.extremumRegime.narrative),priorHistory=structuredClone(s.extremumRegime.history),
+      priorInternals=s.extremumRegime.internals?structuredClone(s.extremumRegime.internals):undefined,
+      built=buildMarketIntelligence({paths:input.paths,minutePaths:input.minutePaths,daily:input.daily,quotes:input.quotes,
+        previous:s.extremumRegime,now:input.now,allowed});
+    if(!dataDue){
+      built.state.narrative=priorNarrative;
+      built.state.history=priorHistory;
+      built.state.internals=priorInternals;
+    }
     s.extremumRegime=built.state;s.marketPulse=built.pulse;s.opportunities=built.opportunities;
     if(dataDue){s.lastCandleAt=candleAt;s.lastCycleAt=input.now;}
     s.selectedSymbols=Object.values(s.extremumRegime.symbols).sort((a,b)=>b.watchScore-a.watchScore).slice(0,30).map(row=>row.symbol);
@@ -747,7 +785,7 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
     s.entryDiagnostics={at:input.now,matched:0,opened:0,reasons:{[`等待全市场路径恢复 ${readyPaths}/${requiredPaths}`]:1}};
   }
 
-  if(marketReady)s.hypothesisResearch=advanceMarketHypothesisResearch(s.hypothesisResearch,s.extremumRegime,input.now);
+  if(marketReady&&dataDue)s.hypothesisResearch=advanceMarketHypothesisResearch(s.hypothesisResearch,s.extremumRegime,input.now);
   const marketEvolution=deriveMarketEvolution(s.extremumRegime,input.research);
   if(marketReady)annotateLifecycleOpportunities(s,marketEvolution);
   manageIntelligenceTrades(s,input.quotes,input.now,input.minutePaths,marketEvolution);
