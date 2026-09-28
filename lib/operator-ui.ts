@@ -1,5 +1,6 @@
 /** UI contracts only. No strategy, credentials storage, or exchange execution. */
 import {isTransientLiveReadErrorText} from "./live-read-resilience.ts";
+import { BEIJING_TIME_ZONE } from "./beijing-time.ts";
 import type { forwardSummary } from "./forward-relations.ts";
 import type { RuntimeHealthShape } from "./runtime-health.ts";
 import type { MirrorReceipt, mirrorCoverage } from "./live-parity.ts";
@@ -46,7 +47,7 @@ export const signedText = (value: number | null | undefined, digits=2) =>
 export const contractText = (value: number | null | undefined) => typeof value === "number" && Number.isFinite(value)
   ? value.toLocaleString("en-US",{minimumFractionDigits:0,maximumFractionDigits:12}) : "—";
 export const operatorTime = (value?: number | null) => value ? new Date(value).toLocaleString("zh-CN", {
-  timeZone: "Asia/Vientiane", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+  timeZone: BEIJING_TIME_ZONE, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
 }) : "—";
 export function holdingTime(start: number | undefined, end: number) {
   if (!start || !end) return "—";
