@@ -66,6 +66,16 @@ test("healthy trend pullback preserves a large winner instead of forcing profit 
   assert.equal(life.floorRate,0);
 });
 
+test("a strong independent runner is allowed to keep running even while the broad market remains rotational",()=>{
+  const market:MarketEvolutionState={version:"market-intelligence-lifecycle-v1",phase:"ROTATIONAL",trendSide:"LONG",
+    expansionScore:.34,rotationRisk:.76,reason:""};
+  const life=deriveProfitLifecycle({signedRate:.045,peakFavorableRate:.065,pullbackRiskRate:.02,firstProfit:true,costRate:.0019,
+    position:position({decision:"HOLD",phase:"HEALTHY",advantageChange:-12,continuationRatio:2.2,
+      supportFamilies:["RELATIVE","PATH","FLOW","STRUCTURE"],concernFamilies:[]}),market});
+  assert.ok(life.action==="HOLD"||life.action==="WATCH");
+  assert.equal(life.floorRate,0);
+});
+
 test("rotational profit decay becomes executable protection before profit returns to zero",()=>{
   const market:MarketEvolutionState={version:"market-intelligence-lifecycle-v1",phase:"ROTATIONAL",trendSide:"LONG",
     expansionScore:.3,rotationRisk:.78,reason:""};
