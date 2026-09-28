@@ -107,6 +107,23 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
       <p className="fr-trade-reason"><b>当前计划：</b>{n?.plan??"继续观察。"}</p>
     </section>
 
+    <section className="fr-section fr-hypothesis-section">
+      <div className="fr-section-head"><div><small>FORWARD RESEARCH</small><h2>研究层正在提前推演什么</h2>
+        <p>重要细节不会只停留在“现在发生了什么”，而会形成5 / 15 / 30分钟可验证的未来状态假设；后续数据会持续确认或否定。</p></div>
+        <span>{hypotheses.length} 个活跃假设</span></div>
+      <div className="fr-hypothesis-summary">{hypothesisResearch?.summary??"前瞻研究正在建立市场状态转移基线。"}</div>
+      {hypotheses.length?<div className="fr-hypothesis-grid">{hypotheses.slice(0,5).map(h=>{
+        const memory=hypothesisResearch?.memory?.find(m=>m.key===h.key);
+        return <article className={"fr-hypothesis-card is-"+h.direction.toLowerCase()} key={h.id}>
+          <header><div><small>{h.direction==="LONG"?"偏多未来":h.direction==="SHORT"?"偏空未来":"双向 / 轮动"}</small>
+            <h3>{hypothesisKind(h.kind)}</h3></div><span><b>{fmt(h.confidence*100,0)}%</b><small>{hypothesisStatus(h.status)}</small></span></header>
+          <p className="fr-hypothesis-thesis">{h.thesis}</p>
+          <div className="fr-hypothesis-evidence"><small>当前证据家族</small><b>{h.families.join(" / ")||"正在积累"}</b></div>
+          <div className="fr-hypothesis-next"><small>如果判断正确，接下来应该看到</small>{h.expectedNext.map(x=><p key={x}>• {x}</p>)}</div>
+          <p className="fr-hypothesis-invalidation"><b>否定条件：</b>{h.invalidation}</p>
+          <footer><span>观察窗口 5 / 15 / 30 分钟</span><span>{memory?("历史 "+memory.observations+" 次 · 确认 "+memory.confirmed):"首次 / 样本积累中"}</span></footer>
+        </article>})}</div>:<p className="fr-note">当前还没有足够集中的特殊变化形成未来状态假设；这不是停止交易，只代表继续沿用原市场智能与实时响应链。</p>}
+    </section>
     <section className="fr-section">
       <div className="fr-section-head"><div><small>NEXT OPPORTUNITIES</small><h2>当前交易假设 · 最值得关注的机会</h2>
         <p>先看机会处于哪个阶段，再看评分。过度延伸不会直接被禁止，但会进入加强实时确认。</p></div><span>{actionable.length} 个可参与</span></div>
