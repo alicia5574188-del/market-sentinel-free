@@ -185,6 +185,27 @@ test("counterfactual research is isolated from trading authority and exported fo
 });
 
 
+
+test("forward hypothesis research is bounded, causal, and cannot hard-veto big-winner entry paths",async()=>{
+  const [core,research,store,execution]=await Promise.all([
+    read("lib/forward-relations.ts"),read("lib/market-intelligence-hypothesis-research.ts"),
+    read("lib/forward-store.ts"),read("app/market-intelligence-execution.tsx")
+  ]);
+  assert.match(core,/advanceMarketHypothesisResearch/);
+  assert.match(core,/entryHypothesisGuidance/);
+  assert.match(core,/positionHypothesisGuidance/);
+  assert.match(research,/MARKET_HYPOTHESIS_ACTIVE_LIMIT=12/);
+  assert.match(research,/MARKET_HYPOTHESIS_RESOLVED_LIMIT=48/);
+  assert.match(research,/MARKET_HYPOTHESIS_MEMORY_LIMIT=16/);
+  assert.match(research,/independent=input\.score>=82/);
+  assert.match(research,/不削弱原大赢家快速通道/);
+  assert.doesNotMatch(research,/eligible=false|closeTrade\(|openIntelligenceTrade\(/);
+  assert.match(store,/hypothesisResearch:\{\.\.\.next\.hypothesisResearch/);
+  assert.match(store,/MARKET_HYPOTHESIS_ACTIVE_LIMIT/);
+  assert.match(execution,/研究层正在提前推演什么/);
+  assert.match(execution,/5 \/ 15 \/ 30 分钟/);
+});
+
 test("Forward long-run storage is hot/cold bounded and keeps thesis dedupe outside hot history",async()=>{
   const [store,forward]=await Promise.all([read("lib/forward-store.ts"),read("lib/forward-relations.ts")]);
   assert.match(store,/FORWARD_ACCOUNT_TARGET_BYTES\s*=\s*640\*1024/);
