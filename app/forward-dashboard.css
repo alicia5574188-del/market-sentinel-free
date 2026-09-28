@@ -299,3 +299,23 @@ main.fr-app{--fr-ink:#eef4fc;--fr-muted:#b8c6d9;--fr-line:#304158;--fr-green:#71
   .fr-exec-candidate>summary{grid-template-columns:32px minmax(0,1fr)}
   .fr-exec-candidate>summary>em{display:none}
 }
+
+
+.fr-hypothesis-section{border-color:#4b5f79;background:linear-gradient(180deg,#172433 0%,var(--fr-panel) 52%)}
+.fr-hypothesis-summary{padding:14px 16px;border:1px solid #3b536d;border-radius:11px;background:#172838;color:#d0deec;font-size:15px;font-size:var(--fr-fs15,15px);line-height:1.8;margin-bottom:14px}
+.fr-hypothesis-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.fr-hypothesis-card{min-width:0;border:1px solid #3a4d62;border-radius:15px;background:#162331;padding:17px}
+.fr-hypothesis-card.is-long{border-color:#3e6759}.fr-hypothesis-card.is-short{border-color:#745452}.fr-hypothesis-card.is-mixed{border-color:#655e49}
+.fr-hypothesis-card header{display:flex;align-items:flex-start;justify-content:space-between;gap:14px}
+.fr-hypothesis-card header small{display:block;color:var(--fr-muted);font-size:13px}
+.fr-hypothesis-card h3{margin-top:4px;font-size:19px;font-size:var(--fr-fs19,19px);line-height:1.5}
+.fr-hypothesis-card header>span{display:grid;justify-items:end;gap:2px;white-space:nowrap}
+.fr-hypothesis-card header>span>b{font-size:24px;font-size:var(--fr-fs24,24px)}
+.fr-hypothesis-thesis{margin-top:13px!important;color:#c8d7e6;font-size:15px;font-size:var(--fr-fs15,15px);line-height:1.8}
+.fr-hypothesis-evidence{display:grid;gap:4px;margin-top:13px;padding:10px 11px;border:1px solid #31475b;border-radius:9px;background:#192838}
+.fr-hypothesis-evidence small,.fr-hypothesis-next small{color:var(--fr-muted);font-size:13px}
+.fr-hypothesis-evidence b{font-size:14px;font-size:var(--fr-fs14,14px);overflow-wrap:anywhere}
+.fr-hypothesis-next{margin-top:13px}.fr-hypothesis-next p{margin-top:5px!important;color:#bdd0df;font-size:14px;font-size:var(--fr-fs14,14px);line-height:1.65}
+.fr-hypothesis-invalidation{margin-top:13px!important;padding-top:11px;border-top:1px solid #31475b;color:#c9bca9;font-size:14px;font-size:var(--fr-fs14,14px);line-height:1.7}
+.fr-hypothesis-card footer{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:13px;color:var(--fr-muted);font-size:13px}
+@media(max-width:760px){.fr-hypothesis-grid{grid-template-columns:1fr}}
