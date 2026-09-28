@@ -45,7 +45,7 @@ const sideBias=(side:"LONG"|"SHORT"):MarketBias=>side==="LONG"?"BULLISH":"BEARIS
 const dirFromBias=(bias:MarketBias):MarketHypothesisDirection=>bias==="BULLISH"?"LONG":bias==="BEARISH"?"SHORT":"MIXED";
 const opposite=(d:MarketHypothesisDirection)=>d==="LONG"?"SHORT":d==="SHORT"?"LONG":"MIXED";
 const statusFor=(confidence:number,confirmedAt:number|null,observations=1,targetHitStreak=0):MarketHypothesisStatus=>
-  confirmedAt?"CONFIRMED":observations>=2&&targetHitStreak>=1&&confidence>=.62?"CONFIRMING":"FORMING";
+  confirmedAt?"CONFIRMED":observations>=2&&targetHitStreak>=1&&confidence>=.55?"CONFIRMING":"FORMING";
 const keyOf=(kind:MarketHypothesisKind,direction:MarketHypothesisDirection)=>`${kind}:${direction}`;
 const evidenceFresh=(row:MarketEvidence,now:number)=>row.expiresAt>now&&now-(row.lastAt??row.at)<=30*60_000;
 const strength=(rows:MarketEvidence[],predicate:(row:MarketEvidence)=>boolean)=>rows.filter(predicate)
@@ -220,7 +220,7 @@ export function advanceMarketHypothesisResearch(previous:MarketHypothesisResearc
     }
     const confidence=clip(fresh?old.confidence*.68+fresh.confidence*.32:old.confidence*.94),
       canConfirm=!old.confirmedAt&&observations>=3&&targetHits>=2&&targetHitStreak>=2
-        &&confidence>=.62&&now-old.startedAt>=8*60_000,
+        &&confidence>=.55&&now-old.startedAt>=8*60_000,
       confirmedAt=old.confirmedAt??(canConfirm?now:null),source=fresh??old;
     next.push({...old,...source,confidence,updatedAt:now,expiresAt:now+45*60_000,confirmedAt,observations,targetHits,targetHitStreak,
       invalidationHitStreak,lastTargetAt:met?now:old.lastTargetAt??null,
