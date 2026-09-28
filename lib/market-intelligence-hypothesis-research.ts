@@ -45,7 +45,7 @@ const sideBias=(side:"LONG"|"SHORT"):MarketBias=>side==="LONG"?"BULLISH":"BEARIS
 const dirFromBias=(bias:MarketBias):MarketHypothesisDirection=>bias==="BULLISH"?"LONG":bias==="BEARISH"?"SHORT":"MIXED";
 const opposite=(d:MarketHypothesisDirection)=>d==="LONG"?"SHORT":d==="SHORT"?"LONG":"MIXED";
 const statusFor=(confidence:number,confirmedAt:number|null,observations=1,targetHitStreak=0):MarketHypothesisStatus=>{
-  if(confirmedAt)return confidence<.45||targetHitStreak===0?"WEAKENING":"CONFIRMED";
+  if(confirmedAt)return confidence<.55||targetHitStreak<2?"WEAKENING":"CONFIRMED";
   return observations>=2&&targetHitStreak>=1&&confidence>=.55?"CONFIRMING":"FORMING";
 };
 const decisionBucketAt=(now:number)=>Math.floor(now/(5*60_000))*(5*60_000);
