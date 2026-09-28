@@ -28,7 +28,6 @@ export type ProfitLifecycleState={
 
 const clip=(v:number,a=0,b=1)=>Math.max(a,Math.min(b,v));
 const biasSign=(bias:string)=>bias==="BULLISH"?1:bias==="BEARISH"?-1:0;
-const sideSign=(side:"LONG"|"SHORT")=>side==="LONG"?1:-1;
 const trendLike=(phase:MarketEvolutionPhase)=>phase==="TREND_FORMING"||phase==="EXPANDING"||phase==="STABLE_TREND";
 
 export function deriveMarketEvolution(market:MarketIntelligenceState,research?:MarketLifecycleResearchContext|null):MarketEvolutionState{
@@ -110,22 +109,20 @@ export function deriveProfitLifecycle(input:{
     proof:ProfitLifecycleState["proof"]=peakNet<=0?"NONE":peakNet<meaningfulThreshold?"THIN":peakNet<expansionThreshold?"MEANINGFUL":"EXPANSION",
     concerns=input.position.concernFamilies.length,supports=input.position.supportFamilies.length,
     deteriorating=concerns>=2||input.position.advantageChange<=-22||(input.position.decision==="REVIEW"&&concerns>=1),
-    healthyTrend=trendLike(input.market.phase)&&supports>=2&&concerns<=1&&input.position.advantageChange>-25;
+    healthyTrend=trendLike(input.market.phase)&&supports>=2&&concerns<=1&&input.position.advantageChange>-25,
+    independentRunner=supports>=3&&concerns<=1&&input.position.continuationRatio>=1.45&&input.position.advantageChange>-28,
+    runnerHealthy=healthyTrend||independentRunner;
   let phase:ProfitLifecyclePhase="UNPROVEN",action:ProfitLifecycleAction="HOLD",reason="交易尚未形成足够可兑现利润，继续由原持仓研究判断。";
   if(!input.firstProfit||proof==="NONE"){
     if(input.position.decision==="EXIT"){phase="INVALIDATED";action="EXIT";reason="尚未证明交易价值且独立持仓证据已经确认失效。";}
     else if(input.position.decision==="REVIEW"){action="WATCH";reason="尚未形成有效利润，同时持仓证据开始冲突，进入观察。";}
   }else{
     phase=proof==="EXPANSION"?"EXPANDING":"PROVEN";
-    if(healthyTrend&&(giveback??0)<.55){
+    if(runnerHealthy&&(giveback??0)<.60){
       if((giveback??0)>=.30){phase="PULLBACK";action="WATCH";reason="利润发生回调，但市场正在形成/延续趋势，保留大赢家尾部空间。";}
       else{action="HOLD";reason="利润仍处于健康扩张，市场趋势证据支持继续持有。";}
     }else if(input.position.decision==="EXIT"&&((giveback??0)>=.30||currentNet<=0)){
       phase="INVALIDATED";action="EXIT";reason="利润生命周期与独立持仓证据同时确认原交易优势已经失效。";
-    }else if(proof==="EXPANSION"&&(giveback??0)>=.72&&deteriorating){
-      phase="INVALIDATED";action="EXIT";reason="大幅利润已回吐超过七成且多个独立证据同步恶化，不再允许利润完全转亏。";
-    }else if(proof!=="THIN"&&(giveback??0)>=.82&&concerns>=2){
-      phase="INVALIDATED";action="EXIT";reason="已证明利润几乎全部回吐且至少两个独立证据家族恶化。";
     }else if(proof==="EXPANSION"&&(giveback??0)>=.42&&deteriorating){
       phase="DECAYING";action="PROTECT";reason="扩张利润明显回吐且优势衰退，开始建立真实利润底线。";
     }else if(proof==="MEANINGFUL"&&(giveback??0)>=.50&&deteriorating){
