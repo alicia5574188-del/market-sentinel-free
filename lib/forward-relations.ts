@@ -14,7 +14,7 @@ import { evaluatePositionIntelligence, POSITION_INTELLIGENCE_VERSION,
 import { ENTRY_RESPONSE_VERSION, entryResponseWindowMs, evaluateEntryResponse,
   type EntryResponseDecision } from "./market-intelligence-entry-response.ts";
 import { deriveMarketEvolution, deriveOpportunityLifecycle, deriveProfitLifecycle, extendedEntryConfirmationReady,
-  MARKET_LIFECYCLE_VERSION, type MarketEvolutionState, type MarketLifecycleResearchContext,
+  type MarketEvolutionState, type MarketLifecycleResearchContext,
   type OpportunityLifecyclePhase, type ProfitLifecycleState } from "./market-intelligence-lifecycle.ts";
 
 /**
