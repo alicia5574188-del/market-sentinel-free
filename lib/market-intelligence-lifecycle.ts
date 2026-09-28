@@ -13,6 +13,7 @@ export type MarketEvolutionPhase="ROTATIONAL"|"TREND_FORMING"|"EXPANDING"|"STABL
 export type MarketEvolutionState={
   version:typeof MARKET_LIFECYCLE_VERSION;phase:MarketEvolutionPhase;trendSide:"LONG"|"SHORT"|null;
   expansionScore:number;rotationRisk:number;reason:string;
+  decisionStable?:boolean;stabilityScore?:number;
 };
 export type OpportunityLifecyclePhase="EMERGING"|"CONFIRMED"|"EXPANDING"|"MATURE"|"OVEREXTENDED";
 export type OpportunityLifecycleState={
@@ -24,6 +25,8 @@ export type ProfitLifecycleState={
   version:typeof MARKET_LIFECYCLE_VERSION;phase:ProfitLifecyclePhase;action:ProfitLifecycleAction;
   proof:"NONE"|"THIN"|"MEANINGFUL"|"EXPANSION";peakNetRate:number;currentNetRate:number;givebackRatio:number|null;
   floorRate:number;retentionRate:number;reason:string;
+  trajectory:"BASE"|"OUTPERFORMING"|"RUNNER"|"DECAYING";runner:boolean;
+  expectedAtEntryRate:number;revaluedPotentialRate:number;outperformanceMultiple:number;
 };
 
 const clip=(v:number,a=0,b=1)=>Math.max(a,Math.min(b,v));
@@ -44,7 +47,9 @@ export function deriveMarketEvolution(market:MarketIntelligenceState,research?:M
     flowAligned=shortSign?clip(shortSign*(i?.venuePressure??0)/.45):0,
     expansionScore=clip(.22*breadthAligned+.10*breadthSlopeAligned+.17*synchrony+.19*leaderPersistence
       +.14*shortStrength+.10*transitionStrength+.08*flowAligned),
-    rotationRisk=rolling?clip(rolling.rotationScore):clip(.40*(1-leaderPersistence)+.30*clip((i?.dispersion??0)/1.2)+.30*(1-synchrony));
+    rotationRisk=rolling?clip(rolling.rotationScore):clip(.40*(1-leaderPersistence)+.30*clip((i?.dispersion??0)/1.2)+.30*(1-synchrony)),
+    stabilityScore=rolling?clip(rolling.stabilityScore):0,
+    decisionStable=rolling?.state==="STABLE_TREND"||((rolling?.trendingShare60??0)>=.65&&rotationRisk<=.48);
   let phase:MarketEvolutionPhase="TRANSITIONAL";
   if(rolling?.state==="STABLE_TREND"&&directional&&expansionScore>=.44)phase="STABLE_TREND";
   else if(alignedTransition&&expansionScore>=.55)phase="TREND_FORMING";
@@ -63,7 +68,7 @@ export function deriveMarketEvolution(market:MarketIntelligenceState,research?:M
       :phase==="DECAYING"
       ?`原方向领导结构正在衰退，轮动/反向迁移风险上升。`
       :`市场处于过渡阶段，尚不足以确认稳定趋势或纯轮动。`;
-  return{version:MARKET_LIFECYCLE_VERSION,phase,trendSide,expansionScore,rotationRisk,reason};
+  return{version:MARKET_LIFECYCLE_VERSION,phase,trendSide,expansionScore,rotationRisk,reason,decisionStable,stabilityScore};
 }
 
 export function deriveOpportunityLifecycle(input:{
@@ -99,51 +104,101 @@ export function extendedEntryConfirmationReady(input:{
 }
 
 export function deriveProfitLifecycle(input:{
-  signedRate:number;peakFavorableRate:number;pullbackRiskRate:number;firstProfit:boolean;costRate:number;
-  position:PositionIntelligenceState;market:MarketEvolutionState;
+  side:"LONG"|"SHORT";signedRate:number;peakFavorableRate:number;pullbackRiskRate:number;firstProfit:boolean;costRate:number;
+  initialExpectedNetRate?:number;position:PositionIntelligenceState;market:MarketEvolutionState;
   forwardResearch?:{supportConfidence:number;adverseConfidence:number;confirmedAdverse:boolean};
 }):ProfitLifecycleState{
   const cost=Math.max(.0005,input.costRate),peakNet=Math.max(0,input.peakFavorableRate-cost),currentNet=input.signedRate-cost,
     givebackNet=Math.max(0,peakNet-currentNet),giveback=peakNet>1e-12?givebackNet/peakNet:null,
+    expectedAtEntryRate=Math.max(0,input.initialExpectedNetRate??0),
     meaningfulThreshold=Math.max(cost*1.5,input.pullbackRiskRate*.20),
     expansionThreshold=Math.max(cost*5,input.pullbackRiskRate*.45),
     proof:ProfitLifecycleState["proof"]=peakNet<=0?"NONE":peakNet<meaningfulThreshold?"THIN":peakNet<expansionThreshold?"MEANINGFUL":"EXPANSION",
     concerns=input.position.concernFamilies.length,supports=input.position.supportFamilies.length,
     researchAdverse=input.forwardResearch?.adverseConfidence??0,researchSupport=input.forwardResearch?.supportConfidence??0,
     researchDeteriorating=!!input.forwardResearch?.confirmedAdverse&&researchAdverse>=.68&&concerns>=1,
-    deteriorating=concerns>=2||input.position.advantageChange<=-22||(input.position.decision==="REVIEW"&&concerns>=1)||researchDeteriorating,
-    healthyTrend=trendLike(input.market.phase)&&supports>=2&&concerns<=1&&input.position.advantageChange>-25,
-    independentRunner=supports>=3&&concerns<=1&&input.position.continuationRatio>=1.45&&input.position.advantageChange>-28,
+    persistentDeterioration=input.position.decision==="EXIT"
+      ||(input.position.reviewBars>=2&&(concerns>=2||input.position.advantageChange<=-30))
+      ||(researchDeteriorating&&input.position.reviewBars>=1),
+    earlyDeterioration=input.position.decision==="REVIEW"&&input.position.reviewBars>=1
+      &&(concerns>=2||input.position.advantageChange<=-24),
+    stableMarketSupport=(input.market.decisionStable??input.market.phase==="STABLE_TREND")
+      &&input.market.trendSide===input.side&&trendLike(input.market.phase),
+    independentStrength=supports>=2&&input.position.continuationRatio>=1.25&&input.position.advantageChange>-30,
     researchSupported=researchSupport>=.72&&researchAdverse<.55&&supports>=2,
-    runnerHealthy=healthyTrend||independentRunner||researchSupported;
-  let phase:ProfitLifecyclePhase="UNPROVEN",action:ProfitLifecycleAction="HOLD",reason="交易尚未形成足够可兑现利润，继续由原持仓研究判断。";
+    outperformanceMultiple=expectedAtEntryRate>Math.max(cost,1e-9)?peakNet/expectedAtEntryRate:0,
+    runnerByReprice=expectedAtEntryRate>0&&outperformanceMultiple>=1.55
+      &&peakNet>=Math.max(expectedAtEntryRate*1.55,cost*7),
+    runnerByAbsolute=peakNet>=Math.max(.045,input.pullbackRiskRate*1.6)&&supports>=3,
+    runner=proof==="EXPANSION"&&(runnerByReprice||runnerByAbsolute),
+    runnerHealthy=runner&&!persistentDeterioration&&(independentStrength||stableMarketSupport||researchSupported),
+    healthyTrend=!persistentDeterioration&&((stableMarketSupport&&supports>=1)
+      ||(supports>=3&&input.position.continuationRatio>=1.35&&input.position.advantageChange>-25)
+      ||researchSupported),
+    revaluedPotentialRate=Math.max(expectedAtEntryRate,peakNet,
+      currentNet+Math.max(0,input.position.remainingSpaceRate)*(runner?.90:.60)),
+    trajectory:ProfitLifecycleState["trajectory"]=persistentDeterioration?"DECAYING":runner?"RUNNER":
+      outperformanceMultiple>=1.25?"OUTPERFORMING":"BASE";
+
+  let phase:ProfitLifecyclePhase="UNPROVEN",action:ProfitLifecycleAction="HOLD",
+    reason="交易尚未形成足够可兑现利润，继续由原持仓研究判断。";
   if(!input.firstProfit||proof==="NONE"){
-    if(input.position.decision==="EXIT"){phase="INVALIDATED";action="EXIT";reason="尚未证明交易价值且独立持仓证据已经确认失效。";}
+    if(input.position.decision==="EXIT"){phase="INVALIDATED";action="EXIT";reason="尚未证明交易价值且独立持仓证据已经持续确认失效。";}
     else if(input.position.decision==="REVIEW"){action="WATCH";reason="尚未形成有效利润，同时持仓证据开始冲突，进入观察。";}
   }else{
     phase=proof==="EXPANSION"?"EXPANDING":"PROVEN";
-    if(runnerHealthy&&(giveback??0)<.60){
-      if((giveback??0)>=.30){phase="PULLBACK";action="WATCH";reason="利润发生回调，但市场正在形成/延续趋势，保留大赢家尾部空间。";}
-      else{action="HOLD";reason="利润仍处于健康扩张，市场趋势证据支持继续持有。";}
-    }else if(input.position.decision==="EXIT"&&((giveback??0)>=.30||currentNet<=0)){
-      phase="INVALIDATED";action="EXIT";reason="利润生命周期与独立持仓证据同时确认原交易优势已经失效。";
-    }else if(proof==="EXPANSION"&&(giveback??0)>=.42&&deteriorating){
-      phase="DECAYING";action="PROTECT";reason="扩张利润明显回吐且优势衰退，开始建立真实利润底线。";
-    }else if(proof==="MEANINGFUL"&&(giveback??0)>=.50&&deteriorating){
-      phase="DECAYING";action="PROTECT";reason="可兑现利润已回吐过半且优势衰退，进入保护阶段。";
-    }else if((giveback??0)>=.30){
-      phase="PULLBACK";action="WATCH";reason="利润从峰值回调，但独立证据尚不足以证明趋势结束。";
+    if(runnerHealthy){
+      if((giveback??0)>=.40){
+        phase="PULLBACK";action="WATCH";
+        reason="实际发展已显著超过入场预期并成长为Runner；当前仅属回调，稳定失效证据不足，不提前截断大赢家。";
+      }else{
+        action="HOLD";
+        reason="实际发展显著超过入场预期，未来空间已上调；Runner仍健康，继续允许利润扩张。";
+      }
+    }else if(runner){
+      if(input.position.decision==="EXIT"&&persistentDeterioration
+        &&((giveback??0)>=.42||currentNet<=Math.max(cost*.40,peakNet*.18))){
+        phase="INVALIDATED";action="EXIT";
+        reason="Runner曾显著超预期，但持仓优势已持续失效且利润大幅回吐，确认结束尾部持有。";
+      }else if(persistentDeterioration&&(giveback??0)>=.48){
+        phase="DECAYING";action="PROTECT";
+        reason="Runner不再只是普通回调：多轮独立证据持续恶化且利润明显回吐，开始建立真实利润底线。";
+      }else if((giveback??0)>=.28||earlyDeterioration){
+        phase="PULLBACK";action="WATCH";
+        reason="Runner出现回调/早期衰退迹象，但尚未达到稳定状态迁移标准，继续观察而不机械锁利。";
+      }else{
+        action="HOLD";reason="Runner尚未出现持续性失效证据，继续持有。";
+      }
+    }else if(input.position.decision==="EXIT"&&((giveback??0)>=.22||currentNet<=0)){
+      phase="INVALIDATED";action="EXIT";
+      reason="已获得利润但核心持仓假设经过持续复核后确认失效，避免由浮盈继续转成亏损。";
+    }else if(persistentDeterioration&&proof==="EXPANSION"&&(giveback??0)>=.36){
+      phase="DECAYING";action="PROTECT";
+      reason="非Runner的扩张利润已出现持续性优势衰退，优先保护已兑现空间，避免不错浮盈最终转亏。";
+    }else if(persistentDeterioration&&proof==="MEANINGFUL"&&(giveback??0)>=.30){
+      phase="DECAYING";action="PROTECT";
+      reason="已有意义利润且多轮独立证据持续恶化，开始保护利润，重点阻止浮盈转亏。";
+    }else if(healthyTrend&&(giveback??0)<.55){
+      if((giveback??0)>=.30){phase="PULLBACK";action="WATCH";reason="利润回调，但稳定趋势/独立优势仍成立，暂不把正常呼吸误判为结束。";}
+      else{action="HOLD";reason="利润仍处于健康扩张，稳定趋势或独立优势支持继续持有。";}
+    }else if(earlyDeterioration||(giveback??0)>=.35){
+      phase="PULLBACK";action="WATCH";
+      reason="利润从峰值回调，但尚未形成持续的新状态；记录风险，不直接触发保护或退出。";
     }else{
-      action="HOLD";reason="利润已被证明且尚未出现足够衰退证据。";
+      action="HOLD";reason="利润已被证明且尚未出现持续性衰退证据。";
     }
   }
+
   let retention=0;
   if(action==="PROTECT"){
-    retention=input.market.phase==="ROTATIONAL"?.58:input.market.phase==="DECAYING"?.65:
-      trendLike(input.market.phase)?.38:.50;
-    if(concerns>=3)retention=Math.min(.78,retention+.08);
+    retention=runner
+      ?(input.market.phase==="DECAYING"?.52:input.market.phase==="ROTATIONAL"?.46:.40)
+      :(input.market.phase==="DECAYING"?.70:input.market.phase==="ROTATIONAL"?.62:
+        input.market.phase==="STABLE_TREND"?.48:.58);
+    if(concerns>=3)retention=Math.min(.80,retention+.06);
   }
   const floorRate=action==="PROTECT"&&peakNet>0?cost+peakNet*retention:0;
   return{version:MARKET_LIFECYCLE_VERSION,phase,action,proof,peakNetRate:peakNet,currentNetRate:currentNet,
-    givebackRatio:giveback,floorRate,retentionRate:retention,reason};
+    givebackRatio:giveback,floorRate,retentionRate:retention,reason,trajectory,runner,
+    expectedAtEntryRate,revaluedPotentialRate,outperformanceMultiple};
 }
