@@ -1,5 +1,6 @@
 "use client";
 import {useEffect,useMemo,useRef,useState,useSyncExternalStore,type PointerEvent} from "react";
+import {BEIJING_TIME_ZONE} from "../lib/beijing-time.ts";
 import {DAY_MS,EQUITY_CURVE_VERSION,curveSegments,equityReference,mergeEquity,nearestPoint,smoothPath,
   type CurveContext,type EquityPoint} from "../lib/equity-curve.ts";
 import type {forwardSummary} from "../lib/forward-relations.ts";
@@ -7,7 +8,7 @@ import {EquityHistoryCache,EQUITY_CACHE_VERSION} from "../lib/equity-cache.ts";
 import "./equity-curve.css";
 type View=ReturnType<typeof forwardSummary>;
 const number=(v:number)=>v.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
-const stamp=(t:number)=>new Date(t).toLocaleString("zh-CN",{timeZone:"Asia/Vientiane",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false});
+const stamp=(t:number)=>new Date(t).toLocaleString("zh-CN",{timeZone:BEIJING_TIME_ZONE,month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false});
 type Range="24h"|"7d"|"all";
 export default function EquityCurve({data,healthy,fixture,cache,cacheScope="owner"}:{data:View|null;healthy:boolean;
   fixture?:{points:EquityPoint[];complete:boolean};cache?:EquityHistoryCache;cacheScope?:string}){
