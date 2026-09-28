@@ -97,6 +97,6 @@ test("max-bounded hypothesis research remains far below the hot account storage 
     resolved:Array.from({length:MARKET_HYPOTHESIS_RESOLVED_LIMIT},(_,i)=>({id:"max-r-"+i,key:"PULLBACK_AHEAD:SHORT:"+i,kind:"PULLBACK_AHEAD",direction:"SHORT",outcome:"EXPIRED",startedAt:T-i*1000,resolvedAt:T-i,confidence:.7,leadMinutes:null})),
     memory:Array.from({length:MARKET_HYPOTHESIS_MEMORY_LIMIT},(_,i)=>({key:"PULLBACK_AHEAD:SHORT:"+i,kind:"PULLBACK_AHEAD",direction:"SHORT",observations:999999,confirmed:500000,invalidated:300000,expired:199999,averageLeadMinutes:12.5,lastAt:T-i}))},T);
   const write=await prepareForwardWrite(null,state,T,{compact:true});
-  assert.ok(write.compression.utilization<.35,\`hypothesis memory must stay comfortably bounded, got ${write.compression.utilization}\`);
+  assert.ok(write.compression.utilization<.35,`hypothesis memory must stay comfortably bounded, got ${write.compression.utilization}`);
   assert.ok(write.compression.rawBytes<write.compression.accountBudgetBytes);
 });
