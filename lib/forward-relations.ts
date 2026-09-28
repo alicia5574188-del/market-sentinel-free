@@ -11,6 +11,7 @@ import { MARKET_INTELLIGENCE_VERSION, buildMarketIntelligence,
   type MarketIntelligenceState, type MarketSymbolState } from "./market-intelligence-engine.ts";
 import { evaluatePositionIntelligence, POSITION_INTELLIGENCE_VERSION,
   type PositionIntelligenceState } from "./position-intelligence-engine.ts";
+import { beijingDayKey } from "./beijing-time.ts";
 import { ENTRY_RESPONSE_VERSION, entryResponseWindowMs, evaluateEntryResponse,
   type EntryResponseDecision } from "./market-intelligence-entry-response.ts";
 import { deriveMarketEvolution, deriveOpportunityLifecycle, deriveProfitLifecycle, extendedEntryConfirmationReady,
@@ -41,7 +42,7 @@ const HISTORY_LIMIT=240,EVENT_LIMIT=160,CONSUMED_THESIS_LIMIT=512,CONSUMED_THESI
 const clip=(v:number,a=0,b=1)=>Math.max(a,Math.min(b,v));
 const median=(v:number[])=>{const a=v.filter(Number.isFinite).sort((x,y)=>x-y);return a.length?(a.length%2?a[(a.length-1)/2]:(a[a.length/2-1]+a[a.length/2])/2):0;};
 const dir=(side:"LONG"|"SHORT")=>side==="LONG"?1:-1;
-const dayKey=(now:number)=>new Date(now+7*3600_000).toISOString().slice(0,10);
+const dayKey=(now:number)=>beijingDayKey(now);
 const safe=(v:number|null|undefined,fallback=0)=>typeof v==="number"&&Number.isFinite(v)?v:fallback;
 
 export type Candle={time:number;open:number;high:number;low:number;close:number;volume:number};
