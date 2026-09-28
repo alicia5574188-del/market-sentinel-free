@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { initialMarketIntelligenceState, type MarketEvidence } from "../lib/market-intelligence-engine.ts";
+import { initialForward } from "../lib/forward-relations.ts";
+import { prepareForwardWrite } from "../lib/forward-store.ts";
 import { advanceMarketHypothesisResearch, entryHypothesisGuidance, initialMarketHypothesisResearch,
   MARKET_HYPOTHESIS_ACTIVE_LIMIT, MARKET_HYPOTHESIS_MEMORY_LIMIT, MARKET_HYPOTHESIS_RESOLVED_LIMIT,
   normalizeMarketHypothesisResearch, positionHypothesisGuidance } from "../lib/market-intelligence-hypothesis-research.ts";
@@ -85,4 +87,16 @@ test("hypothesis storage is hard bounded even if malformed oversized state is re
   assert.equal(restored.active.length,MARKET_HYPOTHESIS_ACTIVE_LIMIT);
   assert.equal(restored.resolved.length,MARKET_HYPOTHESIS_RESOLVED_LIMIT);
   assert.equal(restored.memory.length,MARKET_HYPOTHESIS_MEMORY_LIMIT);
+});
+
+
+test("max-bounded hypothesis research remains far below the hot account storage ceiling",async()=>{
+  const state=initialForward(T),template=advanceMarketHypothesisResearch(initialMarketHypothesisResearch(T-60_000),market(),T);
+  state.hypothesisResearch=normalizeMarketHypothesisResearch({...template,
+    active:Array.from({length:MARKET_HYPOTHESIS_ACTIVE_LIMIT},(_,i)=>({...template.active[0]!,id:"max-a-"+i,key:"PULLBACK_AHEAD:SHORT:"+i,updatedAt:T-i})),
+    resolved:Array.from({length:MARKET_HYPOTHESIS_RESOLVED_LIMIT},(_,i)=>({id:"max-r-"+i,key:"PULLBACK_AHEAD:SHORT:"+i,kind:"PULLBACK_AHEAD",direction:"SHORT",outcome:"EXPIRED",startedAt:T-i*1000,resolvedAt:T-i,confidence:.7,leadMinutes:null})),
+    memory:Array.from({length:MARKET_HYPOTHESIS_MEMORY_LIMIT},(_,i)=>({key:"PULLBACK_AHEAD:SHORT:"+i,kind:"PULLBACK_AHEAD",direction:"SHORT",observations:999999,confirmed:500000,invalidated:300000,expired:199999,averageLeadMinutes:12.5,lastAt:T-i}))},T);
+  const write=await prepareForwardWrite(null,state,T,{compact:true});
+  assert.ok(write.compression.utilization<.35,\`hypothesis memory must stay comfortably bounded, got ${write.compression.utilization}\`);
+  assert.ok(write.compression.rawBytes<write.compression.accountBudgetBytes);
 });
