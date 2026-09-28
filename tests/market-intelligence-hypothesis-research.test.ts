@@ -38,14 +38,21 @@ test("forward research can detect pullback risk before the broad direction flips
   assert.equal(market().narrative.major.bias,"BULLISH");
 });
 
-test("future hypotheses are falsifiable and become confirmed when the expected state appears",()=>{
+test("future hypotheses require sustained confirmation instead of reacting to one detail change",()=>{
   const first=advanceMarketHypothesisResearch(initialMarketHypothesisResearch(T-60_000),market(),T);
   const nextMarket=market();
   nextMarket.narrative.short={...nextMarket.narrative.short,bias:"BEARISH",score:-.35,phase:"PULLBACK_BUILDING"};
   const second=advanceMarketHypothesisResearch(first,nextMarket,T+5*60_000);
-  const h=second.active.find(x=>x.kind==="PULLBACK_AHEAD");
+  const early=second.active.find(x=>x.kind==="PULLBACK_AHEAD");
+  assert.ok(early);
+  assert.notEqual(early?.status,"CONFIRMED");
+  assert.equal(early?.confirmedAt,null);
+  const third=advanceMarketHypothesisResearch(second,nextMarket,T+10*60_000);
+  const h=third.active.find(x=>x.kind==="PULLBACK_AHEAD");
   assert.ok(h?.confirmedAt);
   assert.equal(h?.status,"CONFIRMED");
+  assert.ok((h?.targetHitStreak??0)>=2);
+  assert.ok((h?.observations??0)>=3);
 });
 
 test("big-winner-quality independent opportunities keep the original fast path",()=>{
@@ -55,9 +62,20 @@ test("big-winner-quality independent opportunities keep the original fast path",
   assert.notEqual(guidance.action,"CONFIRM_MORE");
 });
 
+test("a newly detected opposite hypothesis remains research-only and cannot slow an ordinary entry immediately",()=>{
+  const state=advanceMarketHypothesisResearch(initialMarketHypothesisResearch(T-60_000),market(),T);
+  const h=state.active.find(x=>x.kind==="PULLBACK_AHEAD");
+  assert.ok(h);
+  h!.confidence=.86;
+  const guidance=entryHypothesisGuidance(state,{side:"LONG",score:77,residualZ:.45,residualPersistence:.67,sourceCount:2,dataConfidence:78});
+  assert.notEqual(guidance.action,"CONFIRM_MORE");
+  assert.equal(guidance.extendedConfirmation,false);
+});
+
+
 test("ordinary opportunities facing a strong opposite hypothesis get more live confirmation, not a hard veto",()=>{
   const state=advanceMarketHypothesisResearch(initialMarketHypothesisResearch(T-60_000),market(),T);
-  for(const h of state.active)if(h.kind==="PULLBACK_AHEAD"){h.confidence=.82;h.status="CONFIRMED";h.confirmedAt=T;}
+  for(const h of state.active)if(h.kind==="PULLBACK_AHEAD"){h.confidence=.82;h.status="CONFIRMED";h.confirmedAt=T;h.observations=4;h.targetHits=3;h.targetHitStreak=2;}
   const guidance=entryHypothesisGuidance(state,{side:"LONG",score:77,residualZ:.45,residualPersistence:.67,sourceCount:2,dataConfidence:78});
   assert.equal(guidance.action,"CONFIRM_MORE");
   assert.equal(guidance.extendedConfirmation,true);
@@ -65,7 +83,7 @@ test("ordinary opportunities facing a strong opposite hypothesis get more live c
 
 test("forward hypotheses can strengthen protection context but cannot independently command exit",()=>{
   const state=advanceMarketHypothesisResearch(initialMarketHypothesisResearch(T-60_000),market(),T);
-  for(const h of state.active)if(h.kind==="PULLBACK_AHEAD"){h.confidence=.80;h.status="CONFIRMED";h.confirmedAt=T;}
+  for(const h of state.active)if(h.kind==="PULLBACK_AHEAD"){h.confidence=.80;h.status="CONFIRMED";h.confirmedAt=T;h.observations=4;h.targetHits=3;h.targetHitStreak=2;}
   const g=positionHypothesisGuidance(state,"LONG");
   assert.equal(g.confirmedAdverse,true);
   assert.ok(g.adverseConfidence>=.68);
