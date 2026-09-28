@@ -16,6 +16,7 @@ export type MarketHypothesisStatus="FORMING"|"CONFIRMING"|"CONFIRMED";
 export type MarketHypothesis={
   id:string;key:string;kind:MarketHypothesisKind;direction:MarketHypothesisDirection;status:MarketHypothesisStatus;
   confidence:number;startedAt:number;updatedAt:number;expiresAt:number;confirmedAt:number|null;
+  observations:number;targetHits:number;targetHitStreak:number;invalidationHitStreak:number;lastTargetAt:number|null;
   horizonMinutes:[number,number,number];families:string[];evidenceTypes:string[];
   thesis:string;expectedNext:string[];invalidation:string;
 };
@@ -43,7 +44,8 @@ const clip=(v:number,a=0,b=1)=>Math.max(a,Math.min(b,v));
 const sideBias=(side:"LONG"|"SHORT"):MarketBias=>side==="LONG"?"BULLISH":"BEARISH";
 const dirFromBias=(bias:MarketBias):MarketHypothesisDirection=>bias==="BULLISH"?"LONG":bias==="BEARISH"?"SHORT":"MIXED";
 const opposite=(d:MarketHypothesisDirection)=>d==="LONG"?"SHORT":d==="SHORT"?"LONG":"MIXED";
-const statusFor=(confidence:number,confirmedAt:number|null):MarketHypothesisStatus=>confirmedAt?"CONFIRMED":confidence>=.68?"CONFIRMING":"FORMING";
+const statusFor=(confidence:number,confirmedAt:number|null,observations=1,targetHitStreak=0):MarketHypothesisStatus=>
+  confirmedAt?"CONFIRMED":observations>=2&&targetHitStreak>=1&&confidence>=.62?"CONFIRMING":"FORMING";
 const keyOf=(kind:MarketHypothesisKind,direction:MarketHypothesisDirection)=>`${kind}:${direction}`;
 const evidenceFresh=(row:MarketEvidence,now:number)=>row.expiresAt>now&&now-(row.lastAt??row.at)<=30*60_000;
 const strength=(rows:MarketEvidence[],predicate:(row:MarketEvidence)=>boolean)=>rows.filter(predicate)
@@ -63,6 +65,13 @@ export function normalizeMarketHypothesisResearch(value:unknown,now:number):Mark
   if(raw.version!==MARKET_HYPOTHESIS_RESEARCH_VERSION)return initialMarketHypothesisResearch(now);
   const active=(Array.isArray(raw.active)?raw.active:[]).filter((h):h is MarketHypothesis=>!!h&&typeof h.id==="string"&&typeof h.key==="string"
       &&Number.isFinite(h.updatedAt)&&h.updatedAt>now-3*60*60_000)
+    .map(h=>({...h,observations:Number.isFinite(h.observations)?Math.max(1,h.observations):1,
+      targetHits:Number.isFinite(h.targetHits)?Math.max(0,h.targetHits):0,
+      targetHitStreak:Number.isFinite(h.targetHitStreak)?Math.max(0,h.targetHitStreak):0,
+      invalidationHitStreak:Number.isFinite(h.invalidationHitStreak)?Math.max(0,h.invalidationHitStreak):0,
+      lastTargetAt:Number.isFinite(h.lastTargetAt)?h.lastTargetAt:null,
+      status:statusFor(h.confidence,h.confirmedAt,Number.isFinite(h.observations)?Math.max(1,h.observations):1,
+        Number.isFinite(h.targetHitStreak)?Math.max(0,h.targetHitStreak):0)}))
     .sort((a,b)=>b.confidence-a.confidence||b.updatedAt-a.updatedAt).slice(0,MARKET_HYPOTHESIS_ACTIVE_LIMIT);
   const resolved=(Array.isArray(raw.resolved)?raw.resolved:[]).filter((h):h is ResolvedMarketHypothesis=>!!h&&typeof h.id==="string"&&Number.isFinite(h.resolvedAt))
     .sort((a,b)=>b.resolvedAt-a.resolvedAt).slice(0,MARKET_HYPOTHESIS_RESOLVED_LIMIT);
@@ -72,7 +81,8 @@ export function normalizeMarketHypothesisResearch(value:unknown,now:number):Mark
     summary:typeof raw.summary==="string"?raw.summary:"前瞻研究正在持续验证市场状态转移。"};
 }
 
-type Candidate=Omit<MarketHypothesis,"id"|"startedAt"|"updatedAt"|"expiresAt"|"confirmedAt"|"status">;
+type Candidate=Omit<MarketHypothesis,"id"|"startedAt"|"updatedAt"|"expiresAt"|"confirmedAt"|"status"
+  |"observations"|"targetHits"|"targetHitStreak"|"invalidationHitStreak"|"lastTargetAt">;
 function candidate(kind:MarketHypothesisKind,direction:MarketHypothesisDirection,confidence:number,rows:MarketEvidence[],types:string[],
   thesis:string,expectedNext:string[],invalidation:string):Candidate|null{
   if(confidence<.42)return null;
@@ -192,8 +202,13 @@ export function advanceMarketHypothesisResearch(previous:MarketHypothesisResearc
   const prior=normalizeMarketHypothesisResearch(previous,now),detected=detectCandidates(market,now),detectedByKey=new Map(detected.map(c=>[c.key,c])),
     next:MarketHypothesis[]=[],resolved=[...prior.resolved],memory=structuredClone(prior.memory);
   for(const old of prior.active){
-    const fresh=detectedByKey.get(old.key),met=targetMet(old,market),bad=invalidated(old,market);
-    if(bad){
+    const fresh=detectedByKey.get(old.key),met=targetMet(old,market),bad=invalidated(old,market),
+      observations=(old.observations??1)+1,
+      targetHits=(old.targetHits??0)+(met?1:0),
+      targetHitStreak=met?(old.targetHitStreak??0)+1:0,
+      invalidationHitStreak=bad?(old.invalidationHitStreak??0)+1:0,
+      stableInvalidation=invalidationHitStreak>=2&&observations>=3&&now-old.startedAt>=5*60_000;
+    if(stableInvalidation){
       const row:ResolvedMarketHypothesis={id:old.id,key:old.key,kind:old.kind,direction:old.direction,outcome:"INVALIDATED",
         startedAt:old.startedAt,resolvedAt:now,confidence:old.confidence,leadMinutes:null};resolved.unshift(row);remember(memory,row);continue;
     }
@@ -203,20 +218,26 @@ export function advanceMarketHypothesisResearch(previous:MarketHypothesisResearc
         leadMinutes:old.confirmedAt?Math.max(0,(old.confirmedAt-old.startedAt)/60_000):null};
       resolved.unshift(row);remember(memory,row);continue;
     }
-    const confidence=clip(fresh?old.confidence*.58+fresh.confidence*.42:old.confidence*.90),confirmedAt=old.confirmedAt??(met?now:null),
-      source=fresh??old;
-    next.push({...old,...source,confidence,updatedAt:now,expiresAt:now+45*60_000,confirmedAt,status:statusFor(confidence,confirmedAt)});
+    const confidence=clip(fresh?old.confidence*.68+fresh.confidence*.32:old.confidence*.94),
+      canConfirm=!old.confirmedAt&&observations>=3&&targetHits>=2&&targetHitStreak>=2
+        &&confidence>=.62&&now-old.startedAt>=8*60_000,
+      confirmedAt=old.confirmedAt??(canConfirm?now:null),source=fresh??old;
+    next.push({...old,...source,confidence,updatedAt:now,expiresAt:now+45*60_000,confirmedAt,observations,targetHits,targetHitStreak,
+      invalidationHitStreak,lastTargetAt:met?now:old.lastTargetAt??null,
+      status:statusFor(confidence,confirmedAt,observations,targetHitStreak)});
     detectedByKey.delete(old.key);
   }
   for(const c of detectedByKey.values()){
-    const confirmed=targetMet({...c,id:"",startedAt:now,updatedAt:now,expiresAt:now+45*60_000,confirmedAt:null,status:"FORMING"},market)?now:null;
+    const met=targetMet({...c,id:"",startedAt:now,updatedAt:now,expiresAt:now+45*60_000,confirmedAt:null,status:"FORMING",
+      observations:1,targetHits:0,targetHitStreak:0,invalidationHitStreak:0,lastTargetAt:null},market);
     next.push({...c,id:`fh-${now.toString(36)}-${c.kind.toLowerCase()}-${c.direction.toLowerCase()}`,
-      startedAt:now,updatedAt:now,expiresAt:now+45*60_000,confirmedAt:confirmed,status:statusFor(c.confidence,confirmed)});
+      startedAt:now,updatedAt:now,expiresAt:now+45*60_000,confirmedAt:null,observations:1,targetHits:met?1:0,
+      targetHitStreak:met?1:0,invalidationHitStreak:0,lastTargetAt:met?now:null,status:"FORMING"});
   }
   next.sort((a,b)=>b.confidence-a.confidence||b.updatedAt-a.updatedAt);
   resolved.sort((a,b)=>b.resolvedAt-a.resolvedAt);memory.sort((a,b)=>b.lastAt-a.lastAt);
   const active=next.slice(0,MARKET_HYPOTHESIS_ACTIVE_LIMIT),top=active[0],
-    summary=top?`前瞻研究：${top.thesis} 当前置信 ${(top.confidence*100).toFixed(0)}%，状态 ${top.status}。`
+    summary=top?`前瞻研究：${top.thesis} 当前置信 ${(top.confidence*100).toFixed(0)}%，状态 ${top.status}，已持续观察 ${top.observations} 次。`
       :"前瞻研究暂未发现足够集中的下一阶段状态转移证据。";
   return{version:MARKET_HYPOTHESIS_RESEARCH_VERSION,updatedAt:now,active,resolved:resolved.slice(0,MARKET_HYPOTHESIS_RESOLVED_LIMIT),
     memory:memory.slice(0,MARKET_HYPOTHESIS_MEMORY_LIMIT),summary} satisfies MarketHypothesisResearchState;
@@ -225,28 +246,37 @@ export function advanceMarketHypothesisResearch(previous:MarketHypothesisResearc
 export function entryHypothesisGuidance(state:MarketHypothesisResearchState,input:{
   side:"LONG"|"SHORT";score:number;residualZ:number;residualPersistence:number;sourceCount:number;dataConfidence:number;
 }):EntryHypothesisGuidance{
-  const active=state.active.filter(h=>h.confidence>=.55),support=active.filter(h=>h.direction===input.side),
-    adverse=active.filter(h=>h.direction===opposite(input.side)),rotation=active.filter(h=>h.kind==="ROTATION_AHEAD"),
-    supportConfidence=support.reduce((m,h)=>Math.max(m,h.confidence),0),adverseConfidence=adverse.reduce((m,h)=>Math.max(m,h.confidence),0),
-    rotationConfidence=rotation.reduce((m,h)=>Math.max(m,h.confidence),0),
+  const active=state.active.filter(h=>h.confidence>=.55),
+    persistent=active.filter(h=>h.status==="CONFIRMED"||(h.status==="CONFIRMING"&&h.observations>=3&&h.targetHits>=2)),
+    support=active.filter(h=>h.direction===input.side),adverse=active.filter(h=>h.direction===opposite(input.side)),
+    stableSupport=persistent.filter(h=>h.direction===input.side),stableAdverse=persistent.filter(h=>h.direction===opposite(input.side)),
+    stableRotation=persistent.filter(h=>h.kind==="ROTATION_AHEAD"),
+    supportConfidence=stableSupport.reduce((m,h)=>Math.max(m,h.confidence),0),
+    adverseConfidence=stableAdverse.reduce((m,h)=>Math.max(m,h.confidence),0),
+    rotationConfidence=stableRotation.reduce((m,h)=>Math.max(m,h.confidence),0),
     independent=input.score>=82&&input.residualPersistence>=.95&&input.sourceCount>=3&&input.dataConfidence>=78&&Math.abs(input.residualZ)>=.55,
     extendedConfirmation=!independent&&(adverseConfidence>=.68||(rotationConfidence>=.72&&input.score<88&&Math.abs(input.residualZ)<1.15)),
     action:EntryHypothesisGuidance["action"]=extendedConfirmation?"CONFIRM_MORE":supportConfidence>=.72&&adverseConfidence<.50?"SUPPORTED":"NORMAL",
-    picked=[...support,...adverse,...rotation].sort((a,b)=>b.confidence-a.confidence).slice(0,3),
+    picked=[...support,...adverse].sort((a,b)=>b.confidence-a.confidence).slice(0,3),
     reason=extendedConfirmation
-      ?"前瞻研究发现与入场方向冲突的状态转移风险；不禁止机会，但要求更完整的实时延续证明。"
-      :action==="SUPPORTED"?"前瞻研究与入场方向一致；沿用原大赢家捕获链，不增加额外门槛。"
-      :independent?"该机会具备高质量独立优势；前瞻研究只作上下文，不削弱原大赢家快速通道。"
-      :"前瞻研究暂无足够强的支持或反对证据，沿用原实时响应确认。";
+      ?"前瞻研究已形成持续、稳定且与入场方向冲突的状态迁移判断；不禁止机会，但要求更完整的实时延续证明。"
+      :action==="SUPPORTED"?"持续前瞻研究与入场方向一致；沿用原大赢家捕获链，不增加额外门槛。"
+      :independent?"该机会具备高质量独立优势；形成中的短期前瞻细节只作上下文，不削弱原大赢家快速通道。"
+      :"前瞻研究尚未形成足够持续的反向判断，沿用原实时响应确认。";
   return{action,extendedConfirmation,supportConfidence,adverseConfidence,rotationConfidence,hypothesisIds:picked.map(h=>h.id),reason};
 }
 
 export function positionHypothesisGuidance(state:MarketHypothesisResearchState,side:"LONG"|"SHORT"):PositionHypothesisGuidance{
-  const active=state.active.filter(h=>h.confidence>=.55),support=active.filter(h=>h.direction===side),
-    adverse=active.filter(h=>h.direction===opposite(side)),supportConfidence=support.reduce((m,h)=>Math.max(m,h.confidence),0),
-    adverseConfidence=adverse.reduce((m,h)=>Math.max(m,h.confidence),0),confirmedAdverse=adverse.some(h=>h.status==="CONFIRMED"&&h.confidence>=.68),
+  const active=state.active.filter(h=>h.confidence>=.55),
+    persistent=active.filter(h=>h.status==="CONFIRMED"&&h.observations>=3&&h.targetHits>=2),
+    support=persistent.filter(h=>h.direction===side),adverse=persistent.filter(h=>h.direction===opposite(side)),
+    supportConfidence=support.reduce((m,h)=>Math.max(m,h.confidence),0),
+    adverseConfidence=adverse.reduce((m,h)=>Math.max(m,h.confidence),0),
+    confirmedAdverse=adverse.some(h=>h.confidence>=.68),
     picked=[...support,...adverse].sort((a,b)=>b.confidence-a.confidence).slice(0,3),
-    reason=confirmedAdverse?"前瞻研究已确认与持仓方向相反的状态转移；它只能加强保护/复核，不能单独强制平仓。"
-      :supportConfidence>=.68?"前瞻研究仍支持持仓方向，可给健康赢家保留尾部空间。":"前瞻研究暂不对该仓位形成决定性上下文。";
+    reason=confirmedAdverse?"前瞻研究经过多轮持续验证后确认与持仓方向相反；它只能与持仓自身持续恶化共同触发保护/退出。"
+      :supportConfidence>=.68?"稳定前瞻研究仍支持持仓方向，可给健康赢家继续上调未来空间。"
+      :"前瞻研究尚未形成足够持续的决定性上下文，不干扰正常持仓。";
   return{supportConfidence,adverseConfidence,confirmedAdverse,hypothesisIds:picked.map(h=>h.id),reason};
 }
+
