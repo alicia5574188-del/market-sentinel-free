@@ -434,16 +434,16 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
       closeTrade(s,t,px,now,"RESEARCH_LIFECYCLE_EXIT");closed.add(t.id);continue;
     }
     if(lifecycle.action==="PROTECT"&&lifecycle.floorRate>Math.max(t.profitFloorRate??0,ROUND_TRIP_COST*.8)){
-      const floor=lifecycle.floorRate;
-      if(signed<=floor){
-        if(t.entryContext)t.entryContext.postEntryState=signed>0?"CONFIRMED":"FAILED";
-        closeTrade(s,t,px,now,"RESEARCH_PROFIT_PROTECT");closed.add(t.id);continue;
-      }
-      const next=t.entryPrice*(1+d*floor);
-      if(t.side==="LONG"&&next>t.stopPrice||t.side==="SHORT"&&next<t.stopPrice){
-        t.profitFloorRate=floor;t.stopPrice=next;
-        event(s,now,"PROTECTION",t.id,`研究层进入利润保护：保留峰值净利润约${(lifecycle.retentionRate*100).toFixed(0)}%`,
-          {floorRate:floor,peakNetRate:lifecycle.peakNetRate,givebackRatio:lifecycle.givebackRatio??0});
+      const buffer=Math.max(position.expectedPullbackRate*.25,ROUND_TRIP_COST*.35),
+        executableFloor=Math.min(lifecycle.floorRate,Math.max(0,signed-buffer)),
+        floor=executableFloor>ROUND_TRIP_COST*.8?executableFloor:0;
+      if(floor>Math.max(t.profitFloorRate??0,ROUND_TRIP_COST*.8)){
+        const next=t.entryPrice*(1+d*floor);
+        if(t.side==="LONG"&&next>t.stopPrice||t.side==="SHORT"&&next<t.stopPrice){
+          t.profitFloorRate=floor;t.stopPrice=next;
+          event(s,now,"PROTECTION",t.id,`研究层进入利润保护：目标保留峰值净利润约${(lifecycle.retentionRate*100).toFixed(0)}%，保护位按当前可执行价格留出正常噪声`,
+            {floorRate:floor,peakNetRate:lifecycle.peakNetRate,givebackRatio:lifecycle.givebackRatio??0});
+        }
       }
     }
     if(position.decision==="EXIT"){
