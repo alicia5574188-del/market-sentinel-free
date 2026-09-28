@@ -3193,7 +3193,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           turnProbability:trade.turn?.entryTurnProbability??null,continuationScore:trade.turn?.entryContinuation??null,
           directionConfidence:trade.turn?.entryDirectionConfidence??null,forecast:trade.forecast??null,ruleReason:trade.rule.reason,
         },
-        holdAssessment:trade.holdValue??null,
+        holdAssessment:trade.holdValue??null,profitLifecycle:trade.profitLifecycle??null,
         path:{maxFavorableRate:trade.favorable,maxAdverseRate:trade.adverse,lastPrice:trade.lastPrice,lastQuoteAt:trade.lastQuoteAt},
         exit:trade.status==="CLOSED"?{reason:trade.exitReason,closedAt:trade.closedAt,exitPrice:trade.exitPrice,
           netPnl:trade.netPnl,grossPnl:trade.grossPnl,audit:trade.exitAudit??null}:null,
