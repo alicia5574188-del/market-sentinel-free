@@ -110,6 +110,9 @@ test("Market Intelligence uses research lifecycle protection, not blind scalp lo
   assert.match(manage,/研究层进入利润保护/);
   assert.doesNotMatch(manage,/样本利润保护提升|已移除旧式动态锁利/);
   assert.match(lifecycle,/healthyTrend/);
+  assert.match(lifecycle,/persistentDeterioration/);
+  assert.match(lifecycle,/runnerHealthy/);
+  assert.match(lifecycle,/initialExpectedNetRate/);
   assert.match(lifecycle,/action="PROTECT"/);
   assert.doesNotMatch(manage,/relationFailureBars.*>=2|THESIS_INVALIDATED/);
   const fill=core.slice(core.indexOf("export function fillForwardPortfolio"),core.indexOf("function nextCandleAt"));
@@ -135,7 +138,8 @@ test("Market Intelligence active exits are evidence-family gated, not two-bar th
   ]);
   const manage=core.slice(core.indexOf("function manageIntelligenceTrades"),core.indexOf("function markAndManage"));
   assert.match(manage,/evaluatePositionIntelligence/);
-  assert.match(manage,/POSITION_VALUE_EXIT/);
+  assert.doesNotMatch(manage,/if\(position\.decision==="EXIT"\)/);
+  assert.match(manage,/lifecycle\.action==="EXIT"/);
   assert.doesNotMatch(manage,/invalidationBars|relationFailureBars.*>=2|THESIS_INVALIDATED/);
   assert.match(position,/coreConcern&&independentConfirm/);
   assert.match(position,/reviewBars>=2/);
@@ -233,4 +237,19 @@ test("counterfactual checkpoints never use far-future current prices as historic
   assert.match(research,/if\(!quoteNear&&!candleNear\)return null/);
   assert.doesNotMatch(research,/last\?\.close\?\?fallbackPrice\?\?startPrice/);
   assert.match(research,/pathCoverage:"FULL"\|"PARTIAL"/);
+});
+
+
+test("forward research cannot influence orders from a one-cycle detail change",async()=>{
+  const [research,core]=await Promise.all([
+    read("lib/market-intelligence-hypothesis-research.ts"),read("lib/forward-relations.ts")
+  ]);
+  assert.match(research,/targetHitStreak>=2/);
+  assert.match(research,/observations>=3/);
+  assert.match(research,/now-old\.startedAt>=8\*60_000/);
+  assert.match(research,/stableInvalidation/);
+  assert.match(research,/status==="CONFIRMED"&&h\.observations>=3&&h\.targetHits>=2/);
+  const manage=core.slice(core.indexOf("function manageIntelligenceTrades"),core.indexOf("function markAndManage"));
+  assert.doesNotMatch(manage,/if\(position\.decision==="EXIT"\)/);
+  assert.match(manage,/initialExpectedNetRate/);
 });

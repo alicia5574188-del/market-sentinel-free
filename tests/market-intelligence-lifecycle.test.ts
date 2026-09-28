@@ -60,16 +60,16 @@ test("extended confirmation prevents a five-second chase but accepts sustained r
 test("healthy trend pullback preserves a large winner instead of forcing profit protection",()=>{
   const market:MarketEvolutionState={version:"market-intelligence-lifecycle-v1",phase:"STABLE_TREND",trendSide:"LONG",
     expansionScore:.82,rotationRisk:.18,reason:""};
-  const life=deriveProfitLifecycle({signedRate:.08,peakFavorableRate:.12,pullbackRiskRate:.02,firstProfit:true,costRate:.0019,
+  const life=deriveProfitLifecycle({side:"LONG",signedRate:.08,peakFavorableRate:.12,pullbackRiskRate:.02,firstProfit:true,costRate:.0019,
     position:position(),market});
-  assert.equal(life.action,"WATCH");
+  assert.ok(life.action==="HOLD"||life.action==="WATCH");
   assert.equal(life.floorRate,0);
 });
 
 test("a strong independent runner is allowed to keep running even while the broad market remains rotational",()=>{
   const market:MarketEvolutionState={version:"market-intelligence-lifecycle-v1",phase:"ROTATIONAL",trendSide:"LONG",
     expansionScore:.34,rotationRisk:.76,reason:""};
-  const life=deriveProfitLifecycle({signedRate:.045,peakFavorableRate:.065,pullbackRiskRate:.02,firstProfit:true,costRate:.0019,
+  const life=deriveProfitLifecycle({side:"LONG",signedRate:.045,peakFavorableRate:.065,pullbackRiskRate:.02,firstProfit:true,costRate:.0019,
     position:position({decision:"HOLD",phase:"HEALTHY",advantageChange:-12,continuationRatio:2.2,
       supportFamilies:["RELATIVE","PATH","FLOW","STRUCTURE"],concernFamilies:[]}),market});
   assert.ok(life.action==="HOLD"||life.action==="WATCH");
@@ -79,8 +79,9 @@ test("a strong independent runner is allowed to keep running even while the broa
 test("rotational profit decay becomes executable protection before profit returns to zero",()=>{
   const market:MarketEvolutionState={version:"market-intelligence-lifecycle-v1",phase:"ROTATIONAL",trendSide:"LONG",
     expansionScore:.3,rotationRisk:.78,reason:""};
-  const life=deriveProfitLifecycle({signedRate:.010,peakFavorableRate:.018,pullbackRiskRate:.02,firstProfit:true,costRate:.0019,
-    position:position({decision:"REVIEW",phase:"DECAYING",advantageChange:-35,supportFamilies:[],concernFamilies:["RELATIVE","FLOW"]}),market});
+  const life=deriveProfitLifecycle({side:"LONG",signedRate:.010,peakFavorableRate:.018,pullbackRiskRate:.02,firstProfit:true,costRate:.0019,
+    position:position({decision:"REVIEW",phase:"DECAYING",reviewBars:2,reviewSince:T-600_000,advantageChange:-35,
+      supportFamilies:[],concernFamilies:["RELATIVE","FLOW"]}),market});
   assert.equal(life.action,"PROTECT");
   assert.ok(life.floorRate>.0019);
   assert.ok(life.retentionRate>=.55);
@@ -89,8 +90,59 @@ test("rotational profit decay becomes executable protection before profit return
 test("deep giveback plus independent deterioration exits a previously proven trade",()=>{
   const market:MarketEvolutionState={version:"market-intelligence-lifecycle-v1",phase:"DECAYING",trendSide:"LONG",
     expansionScore:.28,rotationRisk:.72,reason:""};
-  const life=deriveProfitLifecycle({signedRate:.001,peakFavorableRate:.020,pullbackRiskRate:.015,firstProfit:true,costRate:.0019,
+  const life=deriveProfitLifecycle({side:"LONG",signedRate:.001,peakFavorableRate:.020,pullbackRiskRate:.015,firstProfit:true,costRate:.0019,
     position:position({decision:"EXIT",phase:"AT_RISK",advantageChange:-42,supportFamilies:[],concernFamilies:["RELATIVE","PATH","FLOW"]}),market});
   assert.equal(life.action,"EXIT");
   assert.equal(life.phase,"INVALIDATED");
+});
+
+
+test("historical big-winner profiles are dynamically repriced as runners instead of capped by entry estimates",()=>{
+  const market:MarketEvolutionState={version:"market-intelligence-lifecycle-v1",phase:"ROTATIONAL",trendSide:"LONG",
+    expansionScore:.42,rotationRisk:.64,decisionStable:false,stabilityScore:.36,reason:""};
+  const profiles=[
+    {name:"FIL",expected:.0191,peak:.1251,current:.101},
+    {name:"ZEC",expected:.0191,peak:.0801,current:.062},
+    {name:"SUI",expected:.0219,peak:.0723,current:.056},
+    {name:"SOON",expected:.0550,peak:.1448,current:.112},
+  ];
+  for(const p of profiles){
+    const life=deriveProfitLifecycle({side:"LONG",signedRate:p.current+.0019,peakFavorableRate:p.peak+.0019,
+      pullbackRiskRate:.012,firstProfit:true,costRate:.0019,initialExpectedNetRate:p.expected,
+      position:position({decision:"HOLD",reviewBars:0,advantageChange:-10,remainingSpaceRate:.035,continuationRatio:2.1,
+        supportFamilies:["RELATIVE","PATH","STRUCTURE"],concernFamilies:[]}),market});
+    assert.equal(life.runner,true,p.name+" must be recognized as a runner after materially exceeding its entry estimate");
+    assert.equal(life.trajectory,"RUNNER",p.name+" must stay in runner trajectory");
+    assert.ok(life.revaluedPotentialRate>p.expected,p.name+" must reprice future potential above the original estimate");
+    assert.ok(life.action==="HOLD"||life.action==="WATCH",p.name+" must not receive mechanical profit protection");
+    assert.equal(life.floorRate,0,p.name+" must preserve the historical no-lock runner path while healthy");
+  }
+});
+
+test("one noisy deterioration review cannot protect a healthy winner",()=>{
+  const market:MarketEvolutionState={version:"market-intelligence-lifecycle-v1",phase:"TRANSITIONAL",trendSide:"LONG",
+    expansionScore:.45,rotationRisk:.55,decisionStable:false,stabilityScore:.42,reason:""};
+  const life=deriveProfitLifecycle({side:"LONG",signedRate:.015,peakFavorableRate:.026,pullbackRiskRate:.012,firstProfit:true,
+    costRate:.0019,initialExpectedNetRate:.022,
+    position:position({decision:"REVIEW",reviewBars:1,reviewSince:T,advantageChange:-26,remainingSpaceRate:.018,
+      supportFamilies:["STRUCTURE"],concernFamilies:["FLOW"]}),market,
+    forwardResearch:{supportConfidence:0,adverseConfidence:.74,confirmedAdverse:false}});
+  assert.notEqual(life.action,"PROTECT");
+  assert.notEqual(life.action,"EXIT");
+  assert.equal(life.floorRate,0);
+});
+
+test("meaningful profit plus persistent thesis deterioration protects before profit can round-trip to a loss",()=>{
+  const market:MarketEvolutionState={version:"market-intelligence-lifecycle-v1",phase:"ROTATIONAL",trendSide:"LONG",
+    expansionScore:.30,rotationRisk:.76,decisionStable:false,stabilityScore:.24,reason:""};
+  const life=deriveProfitLifecycle({side:"LONG",signedRate:.012,peakFavorableRate:.025,pullbackRiskRate:.014,firstProfit:true,
+    costRate:.0019,initialExpectedNetRate:.024,
+    position:position({decision:"REVIEW",phase:"DECAYING",reviewBars:2,reviewSince:T-600_000,advantageChange:-38,
+      remainingSpaceRate:.005,continuationRatio:.7,supportFamilies:[],concernFamilies:["RELATIVE","FLOW","STRUCTURE"]}),market,
+    forwardResearch:{supportConfidence:0,adverseConfidence:.76,confirmedAdverse:true}});
+  assert.equal(life.runner,false);
+  assert.equal(life.trajectory,"DECAYING");
+  assert.equal(life.action,"PROTECT");
+  assert.ok(life.floorRate>.0019);
+  assert.match(life.reason,/浮盈转亏|保护利润|保护已兑现空间/);
 });
