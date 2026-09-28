@@ -54,7 +54,7 @@ export function deriveMarketEvolution(market:MarketIntelligenceState,research?:M
   else if((rolling?.state==="TRANSITIONAL"||rolling?.state==="ROTATIONAL")
     &&shortSign!==0&&((transitionSign!==0&&transitionSign!==shortSign)||(i?.leaderPersistence??.5)<.32)
     &&market.narrative.transition.pressure>=28)phase="DECAYING";
-  const trendSide=shortSign>0?"LONG":shortSign<0?"SHORT":transitionSign>0?"LONG":transitionSign<0?"SHORT":null,
+  const trendSide:MarketEvolutionState["trendSide"]=shortSign>0?"LONG":shortSign<0?"SHORT":transitionSign>0?"LONG":transitionSign<0?"SHORT":null,
     reason=phase==="ROTATIONAL"
       ?`市场仍以轮动为主：轮动风险 ${(rotationRisk*100).toFixed(0)}%，趋势扩张证据仅 ${(expansionScore*100).toFixed(0)}%。`
       :phase==="TREND_FORMING"
