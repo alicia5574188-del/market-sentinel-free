@@ -24,6 +24,12 @@ const profitPhase=(v?:string)=>({
   UNPROVEN:"尚未证明",PROVEN:"已证明",EXPANDING:"利润扩张",PULLBACK:"正常回调",DECAYING:"优势衰退",INVALIDATED:"原假设失效"
 }[v??""]??v??"建立中");
 const action=(v?:string)=>v==="EXIT"?"退出":v==="PROTECT"?"保护利润":v==="WATCH"?"观察":v==="HOLD"?"继续持有":"观察";
+const hypothesisKind=(v?:string)=>({
+  PULLBACK_AHEAD:"回调正在酝酿",REBOUND_AHEAD:"反弹正在酝酿",ROTATION_AHEAD:"轮动/震荡正在形成",
+  TREND_EXPANSION_AHEAD:"趋势扩张正在形成",REVERSAL_AHEAD:"真正转向正在形成"
+}[v??""]??v??"未来状态研究");
+const hypothesisStatus=(v?:string)=>v==="CONFIRMED"?"已被后续市场确认":v==="CONFIRMING"?"正在加强":"正在形成";
+const researchAction=(v?:string)=>v==="CONFIRM_MORE"?"加强实时确认":v==="SUPPORTED"?"前瞻研究支持":"沿用原确认";
 const side=(v:string)=>v==="LONG"?"做多":"做空";
 const family=(v?:string)=>({
   BREADTH:"市场广度",LEADERSHIP:"领导结构",RELATIVE:"相对强弱",FLOW:"跨所/盘口响应",CORRELATION:"相关性",
@@ -50,6 +56,7 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
     }),
     currentEvolution=opportunities.find(o=>o.marketEvolutionPhase)?.marketEvolutionPhase,
     lifecycleText=lifecycleNarrative(data?.latestReason),
+    hypothesisResearch=data?.hypothesisResearch,hypotheses=hypothesisResearch?.active??[],
     actionable=opportunities.filter(o=>o.eligible),
     candidateRows=(actionable.length?actionable:opportunities).slice(0,8);
 
@@ -78,6 +85,7 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
           <p className="fr-exec-judgement"><b>研究判断：</b>{l?.reason??p?.summary??"Position Intelligence 正在建立这笔仓位自己的连续观察基线。"}</p>
           <details className="fr-exec-research-details"><summary>查看这笔仓位的研究依据</summary>
             <p><b>入场假设：</b>{t.entryContext?.thesisSummary??t.entryContext?.reason??"历史兼容持仓"}</p>
+            {t.entryContext?.futureResearchReason&&<p><b>入场时前瞻研究：</b>{researchAction(t.entryContext.futureResearchAction)} · {t.entryContext.futureResearchReason}</p>}
             {p&&<><p><b>持有价值：</b>{fmt(p.holdValueScore,0)} · 剩余空间 {pct(p.remainingSpaceRate)} · 正常回撤 {pct(p.expectedPullbackRate)} · 空间/回撤 {fmt(p.continuationRatio,2)}×</p>
               <p><b>优势变化：</b>{fmt(p.entryAdvantage,0)} → {fmt(p.currentAdvantage,0)}（{p.advantageChange>=0?"+":""}{fmt(p.advantageChange,0)}）</p>
               <p><b>独立证据：</b>支持 {p.supportFamilies?.map(family).join(" / ")||"无"} · 担忧 {p.concernFamilies?.map(family).join(" / ")||"无"} · 复核已持续 {p.reviewBars??0} 根完成5m</p>
@@ -110,6 +118,7 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
           <em>{o.extendedConfirmation?"加强确认":o.eligible?"主候选":"观察"}</em></summary>
         <div className="fr-score-details"><p><b>机会阶段：</b>{opportunityPhase(o.opportunityLifecyclePhase)} · 市场阶段 {evolution(o.marketEvolutionPhase)}</p>
           {o.lifecycleReason&&<p><b>生命周期：</b>{o.lifecycleReason}</p>}
+          {o.futureResearchReason&&<p><b>前瞻研究：</b>{researchAction(o.futureResearchAction)} · {o.futureResearchReason}</p>}
           <p>{o.thesisSummary??o.reason}</p><p><b>失效条件：</b>{o.invalidationSummary??"按独立交易假设与结构止损退出。"}</p></div>
       </details>)}</div>:<p className="fr-note">当前没有形成值得优先展示的交易假设。</p>}
     </section>
