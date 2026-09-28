@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {MarketDataHub,externalSymbol,okxSymbol,kucoinSymbol} from "../lib/market-data-hub.ts";
+import {MarketDataHub,externalSymbol,okxSymbol,kucoinSymbol,mexcSymbol,htxSymbol} from "../lib/market-data-hub.ts";
 
 const priorFetch=globalThis.fetch;
 function withFetch(handler:(url:string)=>Promise<Response>|Response,run:()=>Promise<void>){
@@ -21,6 +21,14 @@ const kucoinSurface=(symbol="XBTUSDTM",bid=99.9,ask=100.1,bidSize=8,askSize=8)=>
   symbol:i===0?symbol:`K${i}USDTM`,price:String(i===0?(bid+ask)/2:50+i),bestBidPrice:String(i===0?bid:49+i),
   bestAskPrice:String(i===0?ask:49.2+i),bestBidSize:String(i===0?bidSize:10),bestAskSize:String(i===0?askSize:10),ts:0
 }))});
+const mexcSurface=(symbol="BTC_USDT",bid=99.9,ask=100.1,time=1_000_000)=>({success:true,code:0,data:Array.from({length:20},(_,i)=>({
+  symbol:i===0?symbol:`M${i}_USDT`,lastPrice:i===0?(bid+ask)/2:70+i,bid1:i===0?bid:69+i,ask1:i===0?ask:69.2+i,
+  amount24:2_000_000,riseFallRate:.02,timestamp:time
+}))});
+const htxSurface=(contractCode="BTC-USDT",bid=99.9,ask=100.1,time=1_000_000,bidSize=7,askSize=7)=>({status:"ok",ticks:Array.from({length:20},(_,i)=>({
+  contract_code:i===0?contractCode:`H${i}-USDT`,close:i===0?(bid+ask)/2:90+i,open:i===0?99:89+i,
+  bid:[i===0?bid:89+i,i===0?bidSize:10],ask:[i===0?ask:89.2+i,i===0?askSize:10],trade_turnover:3_000_000,ts:time
+}))});
 
 test("exact Gate-to-external symbol mapping never invents aliases",()=>{
   assert.equal(externalSymbol("BTC_USDT"),"BTCUSDT");
@@ -31,6 +39,10 @@ test("exact Gate-to-external symbol mapping never invents aliases",()=>{
   assert.equal(kucoinSymbol("BTC_USDT"),"XBTUSDTM");
   assert.equal(kucoinSymbol("ETH_USDT"),"ETHUSDTM");
   assert.equal(kucoinSymbol("BTC_USDC"),null);
+  assert.equal(mexcSymbol("BTC_USDT"),"BTC_USDT");
+  assert.equal(mexcSymbol("BTC_USDC"),null);
+  assert.equal(htxSymbol("BTC_USDT"),"BTC-USDT");
+  assert.equal(htxSymbol("BTC_USDC"),null);
 });
 
 test("Forward radar keeps Gate execution volume and Gate 24h range separate from external analysis liquidity",async()=>{
@@ -57,7 +69,7 @@ test("one healthy venue keeps the market hub alive when the other fails",async()
   });
 });
 
-test("OKX keeps analysis alive when Bybit, KuCoin, Bitget and Binance are unavailable",async()=>{
+test("OKX keeps analysis alive when Bybit, KuCoin, MEXC and HTX are unavailable",async()=>{
   await withFetch(url=>{
     if(url.includes("okx.com"))return Response.json(okxSurface());
     throw new DOMException("timeout","TimeoutError");
@@ -68,20 +80,21 @@ test("OKX keeps analysis alive when Bybit, KuCoin, Bitget and Binance are unavai
   });
 });
 
-test("Bybit, OKX and KuCoin form a three-source consensus while Bitget and Binance are WAF-blocked",async()=>{
+test("Bybit, OKX, KuCoin, MEXC and HTX form a five-source consensus",async()=>{
   await withFetch(url=>{
     if(url.includes("api.bybit.com"))return Response.json(bybitSurface("ETHUSDT",99.9,100.1));
     if(url.includes("okx.com"))return Response.json(okxSurface("ETH-USDT-SWAP",100.0,100.2));
     if(url.includes("api-futures.kucoin.com"))return Response.json(kucoinSurface("ETHUSDTM",100.1,100.3));
-    return new Response("WAF",{status:403});
+    if(url.includes("api.mexc.com"))return Response.json(mexcSurface("ETH_USDT",100.2,100.4));
+    if(url.includes("api.hbdm.com"))return Response.json(htxSurface("ETH-USDT",100.3,100.5));
+    throw new Error("unexpected");
   },async()=>{
     const hub=new MarketDataHub();await hub.refresh(1_000_000);
-    const q=hub.quote("ETH_USDT",1_000_001);assert.ok(q);assert.equal(q.sourceCount,3);
-    assert.deepEqual(new Set(q.sources),new Set(["BYBIT","OKX","KUCOIN"]));
-    assert.ok(q.mid>100&&q.mid<100.3);
-    const status=hub.status(1_000_001);assert.equal(status.healthySources,3);
-    for(const source of["BITGET","BINANCE"] as const){const row=status.sources.find(x=>x.source===source);
-      assert.equal(row?.lastError,"market source 403");assert.ok((row?.nextRetryAt??0)>1_000_001);}
+    const q=hub.quote("ETH_USDT",1_000_001);assert.ok(q);assert.equal(q.sourceCount,5);
+    assert.deepEqual(new Set(q.sources),new Set(["BYBIT","OKX","KUCOIN","MEXC","HTX"]));
+    assert.ok(q.mid>100&&q.mid<100.5);
+    const status=hub.status(1_000_001);assert.equal(status.healthySources,5);
+    assert.equal(status.version,"multi-source-market-hub-v5");
   });
 });
 
@@ -127,22 +140,22 @@ test("5m, 1m and 1d keep venue affinity and fail over from Bybit to KuCoin toget
   });
 });
 
-test("Bitget and Binance 403 enter WAF backoff without delaying three healthy primary sources",async()=>{
-  let bitgetCalls=0,binanceCalls=0;
+test("MEXC and HTX 403 enter bounded backoff without delaying three healthy primary sources",async()=>{
+  let mexcCalls=0,htxCalls=0;
   await withFetch(url=>{
     if(url.includes("api.bybit.com"))return Response.json(bybitSurface());
     if(url.includes("okx.com"))return Response.json(okxSurface());
     if(url.includes("api-futures.kucoin.com"))return Response.json(kucoinSurface());
-    if(url.includes("api.bitget.com")){bitgetCalls++;return new Response("WAF",{status:403});}
-    if(url.includes("fapi.binance.com")){binanceCalls++;return new Response("WAF",{status:403});}
+    if(url.includes("api.mexc.com")){mexcCalls++;return new Response("WAF",{status:403});}
+    if(url.includes("api.hbdm.com")){htxCalls++;return new Response("WAF",{status:403});}
     throw new Error("unexpected");
   },async()=>{
     const hub=new MarketDataHub();
-    await hub.refresh(1_000_000);assert.equal(bitgetCalls,1);assert.equal(binanceCalls,1);
-    await hub.refresh(1_001_000);assert.equal(bitgetCalls,1);assert.equal(binanceCalls,1);
+    await hub.refresh(1_000_000);assert.equal(mexcCalls,1);assert.equal(htxCalls,1);
+    await hub.refresh(1_001_000);assert.equal(mexcCalls,1);assert.equal(htxCalls,1);
     const status=hub.status(1_001_001);assert.equal(status.healthySources,3);
-    assert.equal(status.sources.find(row=>row.source==="BITGET")?.failures,1);
-    assert.equal(status.sources.find(row=>row.source==="BINANCE")?.failures,1);
+    assert.equal(status.sources.find(row=>row.source==="MEXC")?.failures,1);
+    assert.equal(status.sources.find(row=>row.source==="HTX")?.failures,1);
   });
 });
 
@@ -157,19 +170,50 @@ test("existing bulk BBO feeds expose cross-venue liquidity imbalance and migrati
       :okxSurface("ETH-USDT-SWAP",100.15,100.35,1_005_000,16,8));
     if(url.includes("api-futures.kucoin.com"))return Response.json(phase===0
       ?kucoinSurface("ETHUSDTM",100.0,100.2,6,12):kucoinSurface("ETHUSDTM",100.2,100.4,12,6));
-    return new Response("WAF",{status:403});
+    if(url.includes("api.mexc.com"))return Response.json(phase===0
+      ?mexcSurface("ETH_USDT",100.05,100.25,1_000_000):mexcSurface("ETH_USDT",100.25,100.45,1_005_000));
+    if(url.includes("api.hbdm.com"))return Response.json(phase===0
+      ?htxSurface("ETH-USDT",100.02,100.22,1_000_000,7,14):htxSurface("ETH-USDT",100.22,100.42,1_005_000,14,7));
+    throw new Error("unexpected");
   },async()=>{
     const hub=new MarketDataHub();
     await hub.refresh(1_000_000);
     const first=hub.quote("ETH_USDT",1_000_001);assert.ok(first);
-    assert.equal(first.liquiditySourceCount,3);
+    assert.equal(first.liquiditySourceCount,4);
     assert.ok(first.bookImbalance<-.25,"three venues begin ask-heavy");
     phase=1;await hub.refresh(1_005_000);
     const second=hub.quote("ETH_USDT",1_005_001);assert.ok(second);
-    assert.equal(second.liquiditySourceCount,3);
+    assert.equal(second.liquiditySourceCount,4);
     assert.ok(second.bookImbalance>.25,"three venues rotate bid-heavy");
     assert.ok(second.bidLiquidityChange>.5,"bid liquidity expanded versus the prior 4s anchor");
     assert.ok(second.askLiquidityChange<-.4,"ask liquidity withdrew versus the prior 4s anchor");
     assert.ok(second.spreadRate>0);
+  });
+});
+
+
+test("MEXC and HTX provide complete candle fallback when the three primary candle venues fail",async()=>{
+  let fallback:"MEXC"|"HTX"="MEXC";
+  await withFetch(url=>{
+    if(url.includes("api.bybit.com")||url.includes("okx.com")||url.includes("api-futures.kucoin.com"))
+      throw new DOMException("timeout","TimeoutError");
+    const parsed=new URL(url),interval=parsed.searchParams.get("interval"),period=parsed.searchParams.get("period");
+    const isMexc=url.includes("api.mexc.com");
+    if(isMexc&&fallback==="MEXC"){
+      const step=interval==="Day1"?86_400:interval==="Min5"?300:60,now=Math.floor(Date.now()/1000/step)*step;
+      const rows=Array.from({length:10},(_,i)=>now-(10-i)*step);
+      return Response.json({success:true,code:0,data:{time:rows,open:rows.map(()=>100),high:rows.map(()=>101),low:rows.map(()=>99),
+        close:rows.map(()=>100.5),vol:rows.map(()=>10)}});
+    }
+    if(url.includes("api.hbdm.com")&&fallback==="HTX"){
+      const step=period==="1day"?86_400:period==="5min"?300:60,now=Math.floor(Date.now()/1000/step)*step;
+      return Response.json({status:"ok",data:Array.from({length:10},(_,i)=>({id:now-(10-i)*step,open:200,high:201,low:199,close:200.5,amount:10}))});
+    }
+    throw new DOMException("timeout","TimeoutError");
+  },async()=>{
+    const hub=new MarketDataHub();
+    const mexc=await hub.candles("BTC_USDT","5m",8);assert.equal(mexc?.source,"MEXC");assert.ok((mexc?.rows.length??0)>=6);
+    fallback="HTX";
+    const htx=await hub.candles("ETH_USDT","1m",8);assert.equal(htx?.source,"HTX");assert.ok((htx?.rows.length??0)>=6);
   });
 });
