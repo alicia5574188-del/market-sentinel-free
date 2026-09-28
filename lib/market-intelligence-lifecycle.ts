@@ -101,6 +101,7 @@ export function extendedEntryConfirmationReady(input:{
 export function deriveProfitLifecycle(input:{
   signedRate:number;peakFavorableRate:number;pullbackRiskRate:number;firstProfit:boolean;costRate:number;
   position:PositionIntelligenceState;market:MarketEvolutionState;
+  forwardResearch?:{supportConfidence:number;adverseConfidence:number;confirmedAdverse:boolean};
 }):ProfitLifecycleState{
   const cost=Math.max(.0005,input.costRate),peakNet=Math.max(0,input.peakFavorableRate-cost),currentNet=input.signedRate-cost,
     givebackNet=Math.max(0,peakNet-currentNet),giveback=peakNet>1e-12?givebackNet/peakNet:null,
@@ -108,10 +109,13 @@ export function deriveProfitLifecycle(input:{
     expansionThreshold=Math.max(cost*5,input.pullbackRiskRate*.45),
     proof:ProfitLifecycleState["proof"]=peakNet<=0?"NONE":peakNet<meaningfulThreshold?"THIN":peakNet<expansionThreshold?"MEANINGFUL":"EXPANSION",
     concerns=input.position.concernFamilies.length,supports=input.position.supportFamilies.length,
-    deteriorating=concerns>=2||input.position.advantageChange<=-22||(input.position.decision==="REVIEW"&&concerns>=1),
+    researchAdverse=input.forwardResearch?.adverseConfidence??0,researchSupport=input.forwardResearch?.supportConfidence??0,
+    researchDeteriorating=!!input.forwardResearch?.confirmedAdverse&&researchAdverse>=.68&&concerns>=1,
+    deteriorating=concerns>=2||input.position.advantageChange<=-22||(input.position.decision==="REVIEW"&&concerns>=1)||researchDeteriorating,
     healthyTrend=trendLike(input.market.phase)&&supports>=2&&concerns<=1&&input.position.advantageChange>-25,
     independentRunner=supports>=3&&concerns<=1&&input.position.continuationRatio>=1.45&&input.position.advantageChange>-28,
-    runnerHealthy=healthyTrend||independentRunner;
+    researchSupported=researchSupport>=.72&&researchAdverse<.55&&supports>=2,
+    runnerHealthy=healthyTrend||independentRunner||researchSupported;
   let phase:ProfitLifecyclePhase="UNPROVEN",action:ProfitLifecycleAction="HOLD",reason="交易尚未形成足够可兑现利润，继续由原持仓研究判断。";
   if(!input.firstProfit||proof==="NONE"){
     if(input.position.decision==="EXIT"){phase="INVALIDATED";action="EXIT";reason="尚未证明交易价值且独立持仓证据已经确认失效。";}
