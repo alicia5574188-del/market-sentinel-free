@@ -2,6 +2,7 @@ import { FORWARD_VERSION, normalizeForward, type ForwardState, type Trade } from
 import type { RelationMeasurement } from "./forward-relation-v2.ts";
 import { gzip, gunzip, MAX_STATE_BYTES } from "./storage-codec.ts";
 import { buildForwardProtectionCheckpoint, restoreForwardProtectionCheckpoint } from "./forward-protection-checkpoint.ts";
+import { MARKET_HYPOTHESIS_ACTIVE_LIMIT, MARKET_HYPOTHESIS_MEMORY_LIMIT, MARKET_HYPOTHESIS_RESOLVED_LIMIT } from "./market-intelligence-hypothesis-research.ts";
 
 export const FORWARD_STORAGE = "forward-relations:v1:";
 export const FORWARD_PROTECTION_STORAGE = `${FORWARD_STORAGE}protection`;
@@ -69,6 +70,10 @@ function hotProjection(next:ForwardState,includeSamples=true){
   const build=()=>{
     const history=next.history.slice(0,total).map((t,i)=>compactClosedTrade(t,i<full)),
       account={...next,history,events:next.events.slice(0,eventLimit),
+        hypothesisResearch:{...next.hypothesisResearch,
+          active:next.hypothesisResearch.active.slice(0,MARKET_HYPOTHESIS_ACTIVE_LIMIT),
+          resolved:next.hypothesisResearch.resolved.slice(0,MARKET_HYPOTHESIS_RESOLVED_LIMIT),
+          memory:next.hypothesisResearch.memory.slice(0,MARKET_HYPOTHESIS_MEMORY_LIMIT)},
         extremumRegime:{...next.extremumRegime,history:next.extremumRegime.history.slice(0,narrativeLimit),
           evidence:next.extremumRegime.evidence.slice(0,evidenceLimit)},
         storage:{...next.storage,layout:paged?FORWARD_PAGED_STATE_VERSION:next.storage.layout,
