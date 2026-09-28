@@ -60,7 +60,7 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
     </section>
 
     <section className="fr-section fr-exec-primary">
-      <div className="fr-section-head"><div><small>NOW</small><h2>当前持仓与系统动作</h2>
+      <div className="fr-section-head"><div><small>NOW · 持仓自己的理由</small><h2>当前持仓与系统动作</h2>
         <p>打开页面第一眼只回答：现在持有什么，系统准备怎么处理。</p></div><span>{positions.length} 笔持仓</span></div>
       {positions.length?<div className="fr-exec-position-grid">{positions.map(t=>{
         const p=t.positionIntelligence,l=t.profitLifecycle,
@@ -79,7 +79,7 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
             <p><b>入场假设：</b>{t.entryContext?.thesisSummary??t.entryContext?.reason??"历史兼容持仓"}</p>
             {p&&<><p><b>持有价值：</b>{fmt(p.holdValueScore,0)} · 剩余空间 {pct(p.remainingSpaceRate)} · 正常回撤 {pct(p.expectedPullbackRate)} · 空间/回撤 {fmt(p.continuationRatio,2)}×</p>
               <p><b>优势变化：</b>{fmt(p.entryAdvantage,0)} → {fmt(p.currentAdvantage,0)}（{p.advantageChange>=0?"+":""}{fmt(p.advantageChange,0)}）</p>
-              <p><b>独立证据：</b>支持 {p.supportFamilies?.map(family).join(" / ")||"无"} · 担忧 {p.concernFamilies?.map(family).join(" / ")||"无"} · 复核 {p.reviewBars??0} 根完成5m</p>
+              <p><b>独立证据：</b>支持 {p.supportFamilies?.map(family).join(" / ")||"无"} · 担忧 {p.concernFamilies?.map(family).join(" / ")||"无"} · 复核已持续 {p.reviewBars??0} 根完成5m</p>
               {!!p.concerns?.length&&<p><b>当前担忧：</b>{p.concerns.join("；")}</p>}</>}
           </details>
         </article>})}</div>:<div className="fr-empty"><span>0</span><h3>当前没有持仓</h3><p>系统仍在持续更新市场演化和候选生命周期，出现可执行机会后会显示在下方。</p></div>}
@@ -99,7 +99,7 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
     </section>
 
     <section className="fr-section">
-      <div className="fr-section-head"><div><small>NEXT OPPORTUNITIES</small><h2>当前最值得关注的交易机会</h2>
+      <div className="fr-section-head"><div><small>NEXT OPPORTUNITIES</small><h2>当前交易假设 · 最值得关注的机会</h2>
         <p>先看机会处于哪个阶段，再看评分。过度延伸不会直接被禁止，但会进入加强实时确认。</p></div><span>{actionable.length} 个可参与</span></div>
       {candidateRows.length?<div className="fr-exec-candidate-grid">{candidateRows.map((o,index)=><details className={`fr-exec-candidate ${o.eligible?"is-eligible":""} ${o.extendedConfirmation?"is-extended":""}`} key={o.id}>
         <summary><span className="fr-exec-candidate-rank">#{index+1}</span><div className="fr-exec-candidate-main"><div><b>{o.symbol.replace("_"," / ")}</b><small>{side(o.side)} · {o.mode}</small></div>
@@ -114,7 +114,7 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
     </section>
 
     <section className="fr-section">
-      <div className="fr-section-head"><div><small>IMPORTANT EVIDENCE</small><h2>系统刚刚发现的重要变化</h2>
+      <div className="fr-section-head"><div><small>IMPORTANT EVIDENCE</small><h2>系统刚刚发现的细节</h2>
         <p>这里只优先展示最近仍有效、可能改变研究结论的市场证据。</p></div><span>{evidence.length} 条有效证据</span></div>
       {evidence.length?<div className="fr-journal">{evidence.slice(0,8).map(e=><article key={e.id}><time>{clock(e.lastAt??e.at)}</time>
         <div><b>{family(e.family)} · {trend(e.trend)} · 强度 {fmt(e.severity*100,0)}</b><p>{e.summary}</p>
@@ -161,7 +161,7 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
         <span><small>实时跨所报价</small><b>{mi?.coverage?.quoteMarkets??0}</b></span>
         <span><small>多交易所确认</small><b>{mi?.coverage?.multiVenueMarkets??0}</b></span>
       </div>
-      <p className="fr-note">PAPER→LIVE→Gate 复制链保持原样。实盘运行 {liveOverview?.operational?"正常":"未运行"}，当前 {liveOverview?.positionCount??"—"} 笔；本次页面升级不改变任何交易、研究、账户或实盘逻辑。</p>
+      <p className="fr-note"><b>数据覆盖：</b>5m市场 {mi?.coverage?.intradayMarkets??0} · 日线市场 {mi?.coverage?.dailyMarkets??0} · 实时跨所报价 {mi?.coverage?.quoteMarkets??0} · 多交易所确认 {mi?.coverage?.multiVenueMarkets??0}。超大周期至少需要3个真实日线市场才会开始形成牛熊判断。</p>\n      <p className="fr-note">PAPER→LIVE→Gate 复制链保持原样。实盘运行 {liveOverview?.operational?"正常":"未运行"}，当前 {liveOverview?.positionCount??"—"} 笔；本次页面升级不改变任何交易、研究、账户或实盘逻辑。</p>
     </section>
   </div>;
 }
