@@ -430,15 +430,16 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
       });
     t.positionIntelligence=position;t.holdScore=position.holdValueScore;
     const forwardResearch=positionHypothesisGuidance(s.hypothesisResearch,t.side),
-      lifecycle=deriveProfitLifecycle({signedRate:signed,peakFavorableRate:t.favorable,
+      lifecycle=deriveProfitLifecycle({side:t.side,signedRate:signed,peakFavorableRate:t.favorable,
       pullbackRiskRate:t.entryContext?.pullbackRiskRate??originalStopRate,firstProfit:!!t.firstProfitAt,
-      costRate:ROUND_TRIP_COST,position,market:marketEvolution,forwardResearch});
+      costRate:ROUND_TRIP_COST,initialExpectedNetRate:t.entryContext?.remainingSpaceRate??t.forecast?.remainingNetRate??0,
+      position,market:marketEvolution,forwardResearch});
     t.profitLifecycle=lifecycle;
     t.holdValue={action:lifecycle.action==="EXIT"?(signed>ROUND_TRIP_COST?"EXIT_PROFIT":"EXIT_RISK"):
       lifecycle.action==="PROTECT"||lifecycle.action==="WATCH"?"REVIEW":position.decision==="HOLD"?"HOLD":"REVIEW",
       pullbackRiskRate:position.expectedPullbackRate,bestHoldMinutes:t.expectedHoldMinutes??180,score:position.holdValueScore};
     if(stopped){closeTrade(s,t,px,now,(t.profitFloorRate??0)>0?"PROFIT_GIVEBACK":"STRUCTURE_STOP");closed.add(t.id);continue;}
-    if(lifecycle.action==="EXIT"&&!!t.firstProfitAt){
+    if(lifecycle.action==="EXIT"){
       if(t.entryContext)t.entryContext.postEntryState=signed>0?"CONFIRMED":"FAILED";
       closeTrade(s,t,px,now,"RESEARCH_LIFECYCLE_EXIT");closed.add(t.id);continue;
     }
@@ -450,14 +451,11 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
         const next=t.entryPrice*(1+d*floor);
         if(t.side==="LONG"&&next>t.stopPrice||t.side==="SHORT"&&next<t.stopPrice){
           t.profitFloorRate=floor;t.stopPrice=next;
-          event(s,now,"PROTECTION",t.id,`研究层进入利润保护：目标保留峰值净利润约${(lifecycle.retentionRate*100).toFixed(0)}%，保护位按当前可执行价格留出正常噪声`,
-            {floorRate:floor,peakNetRate:lifecycle.peakNetRate,givebackRatio:lifecycle.givebackRatio??0});
+          event(s,now,"PROTECTION",t.id,`研究层确认持续衰退后进入利润保护：目标保留峰值净利润约${(lifecycle.retentionRate*100).toFixed(0)}%，保护位按当前可执行价格留出正常噪声`,
+            {floorRate:floor,peakNetRate:lifecycle.peakNetRate,givebackRatio:lifecycle.givebackRatio??0,
+              revaluedPotentialRate:lifecycle.revaluedPotentialRate,runner:lifecycle.runner?1:0});
         }
       }
-    }
-    if(position.decision==="EXIT"){
-      if(t.entryContext)t.entryContext.postEntryState=signed>0?"CONFIRMED":"FAILED";
-      closeTrade(s,t,px,now,"POSITION_VALUE_EXIT");closed.add(t.id);continue;
     }
   }
   if(closed.size)s.positions=s.positions.filter(t=>!closed.has(t.id));
@@ -860,6 +858,6 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
       accounting:"模拟仍使用新鲜买卖价并计入手续费、滑点和资金费占位；每笔新Trade冻结独立交易假设、相关组、失效条件与持仓计划。",
       risk:"总结构风险≤10%、同方向≤6.5%、组合保证金≤75%；同一高相关组正常只允许一个同方向主仓，反方向独立假设可并存。",
       validation:"任何细节都会进入证据池，但单一噪声不能让大方向来回翻转；前瞻研究把重要细节转成未来状态假设，并持续验证5/15/30分钟预期路径。它不靠单一信号否决交易，也不削弱高质量独立机会的原快速通道；只有多类前瞻证据与候选方向冲突时才要求更完整的实时延续确认。",
-      liquidation:"固定结构止损仍是最后保险；主动退出由 Position Intelligence＋Lifecycle Research 共同判断。单一细节、单一市场转向或连续两根5m都没有独立平仓权。已证明的大赢家在趋势形成/扩张时保留尾部空间；利润扩张后若市场重新轮动且相对优势、路径、跨所推动等独立证据同步衰退，执行层会先PROTECT再EXIT，不再允许大量已证明利润自然吐回结构止损。"},
+      liquidation:"固定结构止损仍是最后保险；Position Intelligence只提供仓位证据，Lifecycle Research拥有最终主动退出权。单一细节、单一市场转向、单次前瞻假设或某一轮Position EXIT都没有独立平仓权。实际发展显著超过入场预期的Runner会动态上调未来空间并保留尾部；只有多轮持续的仓位恶化与稳定前瞻/市场状态共同确认衰退后才PROTECT或EXIT，重点阻止普通盈利单由浮盈转亏。"},
     cost:PAPER_COST,nextCycleAt:s.lastCandleAt+BAR_MS};
 }
