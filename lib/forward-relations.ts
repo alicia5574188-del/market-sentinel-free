@@ -858,6 +858,6 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
       accounting:"模拟仍使用新鲜买卖价并计入手续费、滑点和资金费占位；每笔新Trade冻结独立交易假设、相关组、失效条件与持仓计划。",
       risk:"总结构风险≤10%、同方向≤6.5%、组合保证金≤75%；同一高相关组正常只允许一个同方向主仓，反方向独立假设可并存。",
       validation:"任何细节都会进入证据池，但单一噪声不能让大方向来回翻转；前瞻研究把重要细节转成未来状态假设，并持续验证5/15/30分钟预期路径。它不靠单一信号否决交易，也不削弱高质量独立机会的原快速通道；只有多类前瞻证据与候选方向冲突时才要求更完整的实时延续确认。",
-      liquidation:"固定结构止损仍是最后保险；Position Intelligence只提供仓位证据，Lifecycle Research拥有最终主动退出权。单一细节、单一市场转向、单次前瞻假设或某一轮Position EXIT都没有独立平仓权。实际发展显著超过入场预期的Runner会动态上调未来空间并保留尾部；只有多轮持续的仓位恶化与稳定前瞻/市场状态共同确认衰退后才PROTECT或EXIT，重点阻止普通盈利单由浮盈转亏。"},
+      liquidation:"固定结构止损仍是最后保险；Position Intelligence只提供仓位证据，Lifecycle Research拥有最终主动退出权。单一细节、单一市场转向或连续两根5m都没有独立平仓权。单次前瞻假设或某一轮Position EXIT同样没有独立平仓权。实际发展显著超过入场预期的Runner会动态上调未来空间并保留尾部；只有多轮持续的仓位恶化与稳定前瞻/市场状态共同确认衰退后才PROTECT或EXIT，重点阻止普通盈利单由浮盈转亏。"},
     cost:PAPER_COST,nextCycleAt:s.lastCandleAt+BAR_MS};
 }
