@@ -441,6 +441,25 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
       lifecycle.action==="PROTECT"||lifecycle.action==="WATCH"?"REVIEW":position.decision==="HOLD"?"HOLD":"REVIEW",
       pullbackRiskRate:position.expectedPullbackRate,bestHoldMinutes:t.expectedHoldMinutes??180,score:position.holdValueScore};
     if(stopped){closeTrade(s,t,px,now,(t.profitFloorRate??0)>0?"PROFIT_GIVEBACK":"STRUCTURE_STOP");closed.add(t.id);continue;}
+
+    const existingFloor=Math.max(t.profitFloorRate??0,ROUND_TRIP_COST*.8),
+      platformFloor=lifecycle.platformFloorRate>existingFloor?lifecycle.platformFloorRate:0;
+    if(platformFloor>0){
+      if(signed<=platformFloor){
+        if(t.entryContext)t.entryContext.postEntryState=signed>0?"CONFIRMED":"FAILED";
+        closeTrade(s,t,px,now,"PROFIT_PLATFORM_BREACH");closed.add(t.id);continue;
+      }
+      const next=t.entryPrice*(1+d*platformFloor);
+      if(t.side==="LONG"&&next>t.stopPrice||t.side==="SHORT"&&next<t.stopPrice){
+        t.profitFloorRate=platformFloor;t.stopPrice=next;
+        event(s,now,"PROTECTION",t.id,lifecycle.platformKind==="RUNNER"
+          ?`Runner利润平台提升到约${(platformFloor*100).toFixed(2)}%；只防止灾难性回吐，不限制继续创新高。`
+          :`已证明利润平台提升到约${(platformFloor*100).toFixed(2)}%；保留宽松波动空间，避免明显浮盈完整回吐成亏损。`,
+          {floorRate:platformFloor,peakNetRate:lifecycle.peakNetRate,platformLevel:lifecycle.platformLevel,
+            revaluedPotentialRate:lifecycle.revaluedPotentialRate,runner:lifecycle.runner?1:0});
+      }
+    }
+
     if(lifecycle.action==="EXIT"){
       if(t.entryContext)t.entryContext.postEntryState=signed>0?"CONFIRMED":"FAILED";
       closeTrade(s,t,px,now,"RESEARCH_LIFECYCLE_EXIT");closed.add(t.id);continue;
@@ -896,6 +915,6 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
       accounting:"模拟仍使用新鲜买卖价并计入手续费、滑点和资金费占位；每笔新Trade冻结独立交易假设、相关组、失效条件与持仓计划。",
       risk:"总结构风险≤10%、同方向≤6.5%、组合保证金≤75%；同一高相关组正常只允许一个同方向主仓，反方向独立假设可并存。",
       validation:"任何细节都会进入证据池，但单一噪声不能让大方向来回翻转；前瞻研究把重要细节转成未来状态假设，并持续验证5/15/30分钟预期路径。它不靠单一信号否决交易，也不削弱高质量独立机会的原快速通道；只有多类前瞻证据与候选方向冲突时才要求更完整的实时延续确认。",
-      liquidation:"固定结构止损仍是最后保险；Position Intelligence只提供仓位证据，Lifecycle Research拥有最终主动退出权。单一细节、单一市场转向或连续两根5m都没有独立平仓权。单次前瞻假设或某一轮Position EXIT同样没有独立平仓权。实际发展显著超过入场预期的Runner会动态上调未来空间并保留尾部；只有多轮持续的仓位恶化与稳定前瞻/市场状态共同确认衰退后才PROTECT或EXIT，重点阻止普通盈利单由浮盈转亏。"},
+      liquidation:"固定结构止损仍是最后保险；Position Intelligence只提供仓位证据，Lifecycle Research拥有最终主动退出权。单一细节、单一市场转向或连续两根5m都没有独立平仓权。单次前瞻假设或某一轮Position EXIT同样没有独立平仓权。实际发展显著超过入场预期的Runner会动态上调未来空间，并在跨越离散利润台阶后留下宽松Runner平台防止灾难性回吐；普通单形成超过正常噪声的已证明利润后也会建立更低的平台防止浮盈完整转亏。平台不随每个tick追价；只有多轮持续恶化才触发更主动的PROTECT或EXIT。"},
     cost:PAPER_COST,nextCycleAt:s.lastCandleAt+BAR_MS};
 }
