@@ -451,7 +451,7 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
         const next=t.entryPrice*(1+d*floor);
         if(t.side==="LONG"&&next>t.stopPrice||t.side==="SHORT"&&next<t.stopPrice){
           t.profitFloorRate=floor;t.stopPrice=next;
-          event(s,now,"PROTECTION",t.id,`研究层确认持续衰退后进入利润保护：目标保留峰值净利润约${(lifecycle.retentionRate*100).toFixed(0)}%，保护位按当前可执行价格留出正常噪声`,
+          event(s,now,"PROTECTION",t.id,`研究层进入利润保护：已确认持续衰退；目标保留峰值净利润约${(lifecycle.retentionRate*100).toFixed(0)}%，保护位按当前可执行价格留出正常噪声`,
             {floorRate:floor,peakNetRate:lifecycle.peakNetRate,givebackRatio:lifecycle.givebackRatio??0,
               revaluedPotentialRate:lifecycle.revaluedPotentialRate,runner:lifecycle.runner?1:0});
         }
