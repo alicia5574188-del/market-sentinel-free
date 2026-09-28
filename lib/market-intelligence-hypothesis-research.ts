@@ -274,7 +274,7 @@ export function positionHypothesisGuidance(state:MarketHypothesisResearchState,s
     adverseConfidence=adverse.reduce((m,h)=>Math.max(m,h.confidence),0),
     confirmedAdverse=adverse.some(h=>h.confidence>=.68),
     picked=[...support,...adverse].sort((a,b)=>b.confidence-a.confidence).slice(0,3),
-    reason=confirmedAdverse?"前瞻研究经过多轮持续验证后确认与持仓方向相反；它只能与持仓自身持续恶化共同触发保护/退出。"
+    reason=confirmedAdverse?"前瞻研究经过多轮持续验证后确认与持仓方向相反；它不能单独强制平仓，只能与持仓自身持续恶化共同触发保护/退出。"
       :supportConfidence>=.68?"稳定前瞻研究仍支持持仓方向，可给健康赢家继续上调未来空间。"
       :"前瞻研究尚未形成足够持续的决定性上下文，不干扰正常持仓。";
   return{supportConfidence,adverseConfidence,confirmedAdverse,hypothesisIds:picked.map(h=>h.id),reason};
