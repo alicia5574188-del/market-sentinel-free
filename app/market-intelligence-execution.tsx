@@ -1,5 +1,6 @@
 "use client";
 
+import {BEIJING_TIME_ZONE} from "../lib/beijing-time.ts";
 import {type forwardSummary} from "../lib/forward-relations.ts";
 
 type View=ReturnType<typeof forwardSummary>;
@@ -29,7 +30,7 @@ const family=(v?:string)=>({
   PATH:"价格路径",STRUCTURE:"结构",MARKET:"市场背景"
 }[v??""]??v??"市场细节");
 const trend=(v?:string)=>v==="STRENGTHENING"?"增强":v==="WEAKENING"?"减弱":"稳定";
-const clock=(v?:number)=>v?new Date(v).toLocaleTimeString("zh-CN",{timeZone:"Asia/Vientiane",hour12:false}):"—";
+const clock=(v?:number)=>v?new Date(v).toLocaleTimeString("zh-CN",{timeZone:BEIJING_TIME_ZONE,hour12:false}):"—";
 const actionRank=(v?:string)=>v==="EXIT"?4:v==="PROTECT"?3:v==="WATCH"?2:1;
 const actionClass=(v?:string)=>v==="EXIT"?"is-exit":v==="PROTECT"?"is-protect":v==="WATCH"?"is-watch":"is-hold";
 function lifecycleNarrative(value?:string){
