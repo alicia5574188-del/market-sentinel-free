@@ -3557,6 +3557,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           candleError: publicRuntime.strategyCandleError, logError: publicRuntime.strategyLogError },
         liveMirror: this.liveMirrorView(),
         liveTurnover:this.turnoverStatus(),
+        liveDiagnostics:{
+          pendingProtectionExit:Object.values(live.entries).filter(e=>e?.protectionExitRequestedAt).length,
+          pendingStopSubmission:Object.values(live.entries).filter(e=>e?.stopSubmittingAt&&!e.stopOrderId).length,
+          openPositionExitRequested:Object.values(live.positions).filter(p=>p?.status==="OPEN"&&p.exitRequestedAt).length,
+          recentAudit:live.auditEvents.slice(-16).map(e=>({at:e.observedAt,stage:e.stage,level:e.level,gateLabel:e.gateLabel})),
+        },
         ...(path === "/owner-runtime" ? { live:{...live,history:this.liveHistory,mirror:this.liveMirrorView(),
           turnover:turnoverView(this.turnoverState,this.turnoverError,Date.now(),live.activation?.enabledAt??null)} } : {}), liveMode: { requestedEnabled: live.requestedEnabled, operational: live.operational }, outboxLength: outbox.length + bankruptcyOutbox.length,
         oldestOutboxAgeMs: outbox.length ? Math.max(0, Date.now() - (outbox[0].position.exitAt ?? outbox[0].position.entryAt)) : 0,
