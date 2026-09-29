@@ -822,41 +822,42 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
     if(decision.action==="CANCEL"){validation.status="CANCELLED";reject(decision.reason);continue;}
 
     if(validation.stableThesis){
-      const d=dir(validation.side),expected=Math.max(ROUND_TRIP_COST*2,validation.initialExpectedNetRate??o.netRemainingSpaceRate),
-        pullback=Math.max(ROUND_TRIP_COST*1.5,validation.pullbackRiskRateAtArm??o.pullbackRiskRate),
-        maxChase=Math.max(ROUND_TRIP_COST*1.8,validation.maxChaseRate??Math.min(expected*.45,pullback*.75,.01)),
-        pullbackMin=Math.max(ROUND_TRIP_COST*.35,validation.retestPullbackMin??Math.min(pullback*.30,expected*.18,.004)),
-        restartMin=Math.max(ROUND_TRIP_COST*.30,validation.restartMin??Math.min(pullback*.15,expected*.10,.002)),
-        best=Math.max(validation.bestAdvanceRate,decision.bestAdvanceRate),current=decision.currentAdvanceRate,
-        retrace=Math.max(0,best-current),requiredPullback=Math.max(pullbackMin,best-maxChase),
-        remainingFromThesis=expected-Math.max(0,current);
+      const d=dir(validation.side),expected=validation.initialExpectedNetRate??o.netRemainingSpaceRate,
+        pullback=validation.pullbackRiskRateAtArm??o.pullbackRiskRate,
+        maxChase=validation.maxChaseRate??stableEntryThesisProfile({score:o.score,premium:!!o.premium,
+          thesisBars:o.thesisBars??state?.signalBars??0,stage:o.confirmationStage??state?.stage??"OBSERVE",edgeRatio:o.edgeRatio,
+          sourceCount:o.sourceCount??state?.sourceCount??0,dataConfidence:o.dataConfidence??state?.dataConfidence??0,
+          netRemainingSpaceRate:o.netRemainingSpaceRate,pullbackRiskRate:o.pullbackRiskRate}).maxChaseRate,
+        pullbackMin=validation.retestPullbackMin??ROUND_TRIP_COST*.35,
+        restartMin=validation.restartMin??ROUND_TRIP_COST*.30,
+        restartAdvance=validation.retestBasePrice?d*(price/validation.retestBasePrice-1):undefined,
+        location=stableEntryLocationDecision({currentAdvanceRate:decision.currentAdvanceRate,bestAdvanceRate:decision.bestAdvanceRate,
+          expectedNetRate:expected,pullbackRiskRate:pullback,maxChaseRate:maxChase,retestPullbackMin:pullbackMin,
+          restartMin,retestBaseReady:!!validation.retestBasePrice,restartAdvanceRate:restartAdvance});
 
-      if(best>=maxChase){
-        validation.phase="RETEST_WAIT";
-        if(!validation.retestBasePrice){
-          if(retrace<requiredPullback){
-            validation.reason=`方向判断仍有效，但从首次武装位置已推进 ${(best*100).toFixed(2)}%，超过允许追价 ${(maxChase*100).toFixed(2)}%；不追，等待至少 ${(requiredPullback*100).toFixed(2)}% 回调后重新启动。`;
-            reject(validation.reason);continue;
-          }
-          validation.retestBasePrice=price;validation.retestBaseAt=now;validation.supportSamples=0;validation.oppositionSamples=0;
-          validation.reason="价格已回到可重新评估的位置，保留原稳定假设，等待回调结束后再次按原方向启动。";
-          reject(validation.reason);continue;
-        }
-
-        const restart=d*(price/validation.retestBasePrice-1);
-        if(restart<0){
-          validation.retestBasePrice=price;validation.retestBaseAt=now;validation.supportSamples=0;validation.oppositionSamples=0;
-          validation.reason="回调仍在延伸，持续更新重启基准，不提前猜转折。";reject(validation.reason);continue;
-        }
-        if(remainingFromThesis<=Math.max(ROUND_TRIP_COST*1.4,pullback*.45)){
-          validation.reason="原始交易空间已经大部分消耗，即使方向继续正确也不在当前位置追入；等待新的5m结构生成新假设。";
-          reject(validation.reason);continue;
-        }
-        if(restart<restartMin){
-          validation.reason=`已完成必要回调，等待原方向重新推进至少 ${(restartMin*100).toFixed(2)}% 后再执行。`;
-          reject(validation.reason);continue;
-        }
+      if(location.action!=="DIRECT"&&location.action!=="READY_AFTER_RETEST")validation.phase="RETEST_WAIT";
+      if(location.action==="WAIT_PULLBACK"){
+        validation.reason=`方向判断仍有效，但从首次武装位置已推进 ${(location.best*100).toFixed(2)}%，超过允许追价 ${(maxChase*100).toFixed(2)}%；不追，等待至少 ${(location.requiredPullback*100).toFixed(2)}% 回调后重新启动。`;
+        reject(validation.reason);continue;
       }
+      if(location.action==="SET_RETEST_BASE"){
+        validation.retestBasePrice=price;validation.retestBaseAt=now;validation.supportSamples=0;validation.oppositionSamples=0;
+        validation.reason="价格已回到可重新评估的位置，保留原稳定假设，等待回调结束后再次按原方向启动。";
+        reject(validation.reason);continue;
+      }
+      if(location.action==="UPDATE_RETEST_BASE"){
+        validation.retestBasePrice=price;validation.retestBaseAt=now;validation.supportSamples=0;validation.oppositionSamples=0;
+        validation.reason="回调仍在延伸，持续更新重启基准，不提前猜转折。";reject(validation.reason);continue;
+      }
+      if(location.action==="WAIT_NEW_THESIS"){
+        validation.reason="原始交易空间已经大部分消耗，即使方向继续正确也不在当前位置追入；等待新的5m结构生成新假设。";
+        reject(validation.reason);continue;
+      }
+      if(location.action==="WAIT_RESTART"){
+        validation.reason=`已完成必要回调，等待原方向重新推进至少 ${(location.restartMin*100).toFixed(2)}% 后再执行。`;
+        reject(validation.reason);continue;
+      }
+      if(location.action==="READY_AFTER_RETEST")validation.phase="ARMED";
     }
 
     if(decision.action==="RETEST"){
