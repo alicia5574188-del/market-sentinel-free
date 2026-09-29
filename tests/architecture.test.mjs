@@ -181,7 +181,7 @@ test("forward hypothesis research is bounded, causal, and cannot hard-veto big-w
   ]);
   assert.match(core,/advanceMarketHypothesisResearch/);
   assert.match(core,/entryHypothesisGuidance/);
-  assert.match(core,/positionHypothesisGuidance/);
+  assert.doesNotMatch(core,/positionHypothesisGuidance/,"forward hypotheses may be researched but cannot directly manage open positions");
   assert.match(research,/MARKET_HYPOTHESIS_ACTIVE_LIMIT=12/);
   assert.match(research,/MARKET_HYPOTHESIS_RESOLVED_LIMIT=48/);
   assert.match(research,/MARKET_HYPOTHESIS_MEMORY_LIMIT=16/);
