@@ -786,7 +786,7 @@ test("a first Gate read timeout leaves LIVE pending and a later read recovers wi
 test("storage failure prevents private entry calls and cannot leave a failed ON request armed in memory",()=>clock(async()=>{
   const {h,gate,store}=await harness();store.fail=true;const r=await enableNew(h);
   assert.equal(r.ok,false);assert.equal(gate.placed.length,0);assert.equal(live(h).requestedEnabled,false);
-  assert.equal(live(h).activation,undefined);
+  assert.equal(live(h).activation,null);
 }));
 test("partial execution is adopted and shown as a deviation, not repeated as a full new entry",()=>clock(async()=>{
   const {h,gate}=await harness();gate.partial=true;await enableNew(h);await h.syncLive(T);await h.syncLive(T);
