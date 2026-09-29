@@ -1021,8 +1021,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private mirrorQuoteReady(symbol:string,now=Date.now()) {
     const q=this.runtime.evidence[symbol];
-    return !!q && q.entryReady===true && freshQuote({bestBid:q.bestBid??0,bestAsk:q.bestAsk??0,
-      observedAt:q.observedAt,fresh:q.fresh},now);
+    // PAPER entryReady answers whether a NEW simulated order may be created.
+    // Once PAPER has already persisted a source trade, LIVE copy must not wait
+    // for that strategy-entry gate again. Require only an executable fresh BBO
+    // plus contract metadata; all account/risk/drift/session fences remain later.
+    return !!q && this.runtime.contractMeta[symbol]!=null
+      && freshQuote({bestBid:q.bestBid??0,bestAsk:q.bestAsk??0,observedAt:q.observedAt,fresh:q.fresh},now);
   }
 
   private async queueLiveBinding(entry:LiveEntry) {
