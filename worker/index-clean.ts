@@ -3394,6 +3394,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         buildSha: FORWARD_BUILD_SHA,
         liveMirror: {...this.liveMirrorView(),rows:undefined},
         liveTurnover:this.turnoverStatus(),
+        liveDiagnostics:{
+          pendingProtectionExit:Object.values(this.runtime.live.entries).filter(e=>e?.protectionExitRequestedAt).length,
+          pendingStopSubmission:Object.values(this.runtime.live.entries).filter(e=>e?.stopSubmittingAt&&!e.stopOrderId).length,
+          openPositionExitRequested:Object.values(this.runtime.live.positions).filter(p=>p?.status==="OPEN"&&p.exitRequestedAt).length,
+          recentAudit:this.runtime.live.auditEvents.slice(-16).map(e=>({at:e.observedAt,stage:e.stage,level:e.level,gateLabel:e.gateLabel})),
+        },
         resourceAccounting:{policy:RESOURCE_DAY_POLICY,day:this.runtime.utcDay,nonAlarmWrites:this.runtime.nonAlarmWrites,
           cap:NON_ALARM_WRITE_CAP,pendingWrites:this.nonAlarmPendingWrites??0,criticalWrites:this.runtime.criticalWrites,
           criticalPendingWrites:this.criticalPendingWrites??0,financialAdmission:"independent-of-optional-cap",
