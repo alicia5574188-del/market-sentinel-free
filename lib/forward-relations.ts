@@ -397,7 +397,12 @@ export function relationOpportunity(c:RelationCandidate,rows:Candle[],q:Quote|un
     relationHorizon:c.horizon,relationHealth:c.health,riskScale:clip(c.health,.25,1),exitPlan:consumeExitPlan(c.exitProfile,consumed)};
 }
 function opportunityCompare(a:Opportunity,b:Opportunity){
-  return Number(b.eligible)-Number(a.eligible)||Number(!b.reserve)-Number(!a.reserve)||Number(b.premium)-Number(a.premium)||b.score-a.score;
+  return Number(b.eligible)-Number(a.eligible)
+    ||Number(!b.reserve)-Number(!a.reserve)
+    ||(b.environmentPriority??0)-(a.environmentPriority??0)
+    ||Number(b.premium)-Number(a.premium)
+    ||(b.environmentScore??b.score)-(a.environmentScore??a.score)
+    ||b.score-a.score;
 }
 function equityMark(s:ForwardState,quotes:Record<string,Quote>,now:number){
   let floating=0,stale=0;for(const t of s.positions){const q=quotes[t.symbol],px=freshQuote(q,now)?midpoint(q):t.lastPrice;if(!freshQuote(q,now))stale++;
@@ -610,15 +615,33 @@ function existingRisk(s:ForwardState,side?:"LONG"|"SHORT"){return s.positions.fi
 function cycleRiskAdded(s:ForwardState,since:number){return[...s.positions,...s.history].filter(t=>t.openedAt>=since).reduce((n,t)=>n+riskCharge(t),0);}
 function isIntelligenceOpportunity(o:Opportunity){return o.strategyVersion===MARKET_INTELLIGENCE_VERSION;}
 function annotateLifecycleOpportunities(s:ForwardState,market:MarketEvolutionState){
+  const portfolioLongRisk=existingRisk(s,"LONG"),portfolioShortRisk=existingRisk(s,"SHORT");
   for(const o of s.opportunities){
     if(!isIntelligenceOpportunity(o))continue;
     const symbol=s.extremumRegime.symbols[o.symbol];if(!symbol)continue;
     const lifecycle=deriveOpportunityLifecycle({side:o.side,symbol,thesisBars:o.thesisBars??symbol.signalBars,market}),
       future=entryHypothesisGuidance(s.hypothesisResearch,{side:o.side,score:o.score,residualZ:symbol.residualZ,
-        residualPersistence:symbol.residualPersistence,sourceCount:symbol.sourceCount,dataConfidence:symbol.dataConfidence});
+        residualPersistence:symbol.residualPersistence,sourceCount:symbol.sourceCount,dataConfidence:symbol.dataConfidence}),
+      firstRoute=routeEnvironmentOpportunity({market:s.extremumRegime,evolution:market,symbol,opportunity:{
+        side:o.side,mode:o.mode,score:o.score,premium:o.premium,edgeRatio:o.edgeRatio,
+        netRemainingSpaceRate:o.netRemainingSpaceRate,pullbackRiskRate:o.pullbackRiskRate,
+        thesisBars:o.thesisBars,confirmationStage:o.confirmationStage
+      },portfolioLongRisk,portfolioShortRisk}),
+      performanceFactor=environmentPerformanceFactor(s.environmentPerformance,firstRoute.environment,firstRoute.playbook),
+      route=routeEnvironmentOpportunity({market:s.extremumRegime,evolution:market,symbol,opportunity:{
+        side:o.side,mode:o.mode,score:o.score,premium:o.premium,edgeRatio:o.edgeRatio,
+        netRemainingSpaceRate:o.netRemainingSpaceRate,pullbackRiskRate:o.pullbackRiskRate,
+        thesisBars:o.thesisBars,confirmationStage:o.confirmationStage
+      },performanceFactor,portfolioLongRisk,portfolioShortRisk});
     o.marketEvolutionPhase=market.phase;o.opportunityLifecyclePhase=lifecycle.phase;
     o.extendedConfirmation=lifecycle.extendedConfirmation||future.extendedConfirmation;o.lifecycleReason=lifecycle.reason;
     o.futureResearchAction=future.action;o.futureResearchReason=future.reason;o.futureHypothesisIds=future.hypothesisIds;
+    o.environment=route.environment;o.playbook=route.playbook;o.routeAlignment=route.alignment;
+    o.environmentPriority=route.priority;o.environmentScore=clip(o.score+route.scoreDelta,0,100);
+    o.environmentRiskScale=route.riskScale;o.environmentProbe=route.probe;o.environmentForceRetest=route.forceRetest;
+    o.environmentMainline=route.mainline;o.environmentReason=route.reason;
+    o.probeImpulseMin=route.probeImpulseMin;o.probePullbackMin=route.probePullbackMin;o.probeRestartMin=route.probeRestartMin;
+    if(!o.reason.includes("环境路由"))o.reason+=` 环境路由：${route.reason}`;
     if(o.extendedConfirmation&&!o.reason.includes("更完整的实时延续确认"))o.reason+=` ${lifecycle.extendedConfirmation?lifecycle.reason:future.reason}`;
   }
 }
