@@ -341,7 +341,8 @@ test("Market Intelligence routes every environment to an active playbook instead
   assert.match(core,/requiresProbeRetest/);
   assert.match(core,/主线参与通道/);
   assert.match(core,/next\.environmentPerformance=structuredClone\(prior\.environmentPerformance\)/);
-  assert.match(core,/environmentRouter:\{version:ENVIRONMENT_ROUTER_VERSION/);
+  assert.match(core,/environmentRouter:\{\.\.\.s\.environmentContext,currentEnvironment:s\.environmentContext\.environment/);
+  assert.match(core,/environmentContext:\{version:ENVIRONMENT_ROUTER_VERSION/);
   assert.match(execution,/当前市场环境与交易打法/);
   assert.match(execution,/始终保留参与权/);
   assert.match(execution,/趋势捕获|转折验证|相对强弱|主线参与/);
