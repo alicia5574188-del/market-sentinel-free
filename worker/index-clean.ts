@@ -2561,7 +2561,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         ||!sameLiveSession(activation,this.runtime.live.activation)
         ||!sourceAfterEnable(binding!.sourceAtCopy,this.runtime.live.activation,this.forwardState!.startedAt)
         ||!mirrorSourceFresh(this.currentMirrorSource(plan.id).trade??undefined,plan.id,Date.now()))continue;
-      if(!this.mirrorQuoteReady(symbol)&&!await this.ensureMirrorExecutableQuote(symbol,Date.now())){
+      if(!this.mirrorQuoteReady(symbol)&&!(await this.ensureMirrorExecutableQuote(symbol,Date.now()))){
         this.runtime.live.entrySkips[symbol]={planId:plan.id,symbol,code:"ECONOMICS",
           reason:"模拟源单已持久化，但 Gate 可执行盘口刷新仍未成功；保留源单身份并继续实时重试",observedAt:Date.now()};
         continue;
@@ -2605,7 +2605,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           // Leverage confirmation is another private network wait. Do not cancel
           // an otherwise valid fresh PAPER source merely because its pre-wait
           // public BBO crossed the 10s freshness boundary while Gate replied.
-          if(!this.mirrorQuoteReady(symbol)&&!await this.ensureMirrorExecutableQuote(symbol,Date.now())){
+          if(!this.mirrorQuoteReady(symbol)&&!(await this.ensureMirrorExecutableQuote(symbol,Date.now()))){
             entry.status="CANCELLED";entry.lastError="杠杆确认后 Gate 可执行盘口仍未刷新，未使用旧价提交";
             this.runtime.live.entrySkips[symbol]={planId:entry.planId,symbol,code:"ECONOMICS",reason:entry.lastError,observedAt:Date.now()};
             await this.saveCheckpoint(Date.now(),true);continue;
