@@ -14,6 +14,10 @@ export const LIVE_PARITY_VERSION = "current-paper-live-parity-v1";
 export const LIVE_PARITY_SOURCE = "CURRENT_FORWARD_ACCOUNT";
 export const LIVE_PARITY_PREFIX = "live-parity:v1:";
 export const LIVE_ENTRY_DRIFT_POLICY = "source-entry-drift-v1";
+// Diagnostic target only. Network/account reconciliation may take longer; a
+// still-open source is admitted by current stop/drift/risk economics, not by a
+// fixed wall-clock timeout that can permanently turn one transient outage into
+// a missed LIVE trade.
 export const LIVE_SOURCE_ENTRY_MAX_DELAY_MS = 30_000;
 export const LIVE_MIN_CONTRACT_UPLIFT_MAX_RISK_RATE = .0075;
 const LIVE_MIN_CONTRACT_UPLIFT_RISK_MULTIPLE=4,LIVE_MIN_CONTRACT_UPLIFT_RISK_FLOOR_RATE=.004;
@@ -148,8 +152,6 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
     throw new LiveEntrySizingError(code,t.symbol,`${t.symbol} ${message}；源单 ${t.id} 未完成复制，不冒充已成交`,sizing);
   };
   if (!mirrorSourceFresh(t,t.id,input.now))fail("ECONOMICS","源单已结束或期限已到，不补过期订单");
-  if(input.activationAt&&input.now-t.openedAt>LIVE_SOURCE_ENTRY_MAX_DELAY_MS)
-    fail("ECONOMICS",`源单已超过${Math.round(LIVE_SOURCE_ENTRY_MAX_DELAY_MS/1000)}秒实时复制窗口；不补迟到订单`);
   if (![input.sourceEquity,input.equity,input.entryPrice,input.quantoMultiplier,input.leverageMax].every(positive)
     || ![input.available,input.openRisk,input.sameDirectionRisk,input.openMargin,input.openNotional,input.maintenanceRate].every(v=>Number.isFinite(v)&&v>=0))
     fail("ECONOMICS","实时账户/合约规格不完整");
