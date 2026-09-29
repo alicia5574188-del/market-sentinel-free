@@ -14,7 +14,7 @@ import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem
 import { buildBankruptcyReport, diagnoseClosedPosition, paperCycleSummary, recordCycleTrade, startPaperCycle,
   PAPER_INITIAL_EQUITY, type BankruptcyReport, type PaperCycle } from "../lib/paper-cycle.ts";
 import { runtimeReady, type RuntimeHealthShape } from "../lib/runtime-health.ts";
-import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, gateMarkedEquity, gatePositionValuation, isGateReadTimeoutError, LiveEntrySizingError, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveOrder, type GateLiveOrderSnapshot, type GateLiveSnapshot, type LiveEntrySizingCode } from "../lib/gate-live.ts";
+import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, GATE_STOP_SUBMISSION_RESOLVE_MS, gateMarkedEquity, gatePositionValuation, gateUnknownSubmissionCanResolve, isGateReadTimeoutError, LiveEntrySizingError, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveOrder, type GateLiveOrderSnapshot, type GateLiveSnapshot, type LiveEntrySizingCode } from "../lib/gate-live.ts";
 import { LIVE_SESSION_VERSION, establishLiveScale, reconcileLiveScale, startLiveSession, sourceAfterEnable, sameLiveSession, type LiveSession } from "../lib/live-session.ts";
 import type { GateSizeRules, SizeDiagnostic } from "../lib/gate-quantity.ts";
 import { encryptGateCredentials, gateKeyHint, normalizeGateCredentials, type GateCredentials } from "../lib/credential-vault.ts";
@@ -2003,7 +2003,17 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         entry.lastError = `原生止损提交结果暂不明确，正在按标签核对：${safeError(error)}`;
         this.recordLiveAudit({ observedAt: Date.now(), symbol: entry.symbol, planId: entry.planId,
           stage: "STOP_CREATE", level: "RECOVERING",
-          reason: `${entry.lastError}；不重复挂单，6秒内不能确认则退出`, error });
+          reason: `${entry.lastError}；不重复挂单，先按唯一标签核对，超过保护确认窗口仍无结果才退出`, error });
+        try{
+          const recovered=await client.inspectEntry("PRICE_TRIGGER",entry.symbol,stop.tag,null);
+          if(recovered&&String(recovered.status??"").toLowerCase()==="open"){
+            entry.stopOrderId=liveOrderId(recovered);entry.stopSubmittingAt=null;entry.lastError=null;
+            this.recordLiveAudit({observedAt:Date.now(),symbol:entry.symbol,planId:entry.planId,stage:"STOP_CREATE",level:"INFO",
+              reason:"原生止损提交ACK丢失，但已通过Gate唯一标签恢复保护单"});
+          }
+        }catch(readError){
+          if(!isGateReadTimeoutError(readError))throw readError;
+        }
         return;
       }
       const failedAt = Date.now();
@@ -2050,17 +2060,29 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }
     }
     if (position.stopTag && position.stopSubmittingAt) {
-      if (Date.now() - position.stopSubmittingAt < 6_000) return;
+      try{
+        const recovered=await client.inspectEntry("PRICE_TRIGGER",position.symbol,position.stopTag,position.stopOrderId??null);
+        if(recovered&&String(recovered.status??"").toLowerCase()==="open"){
+          position.stopOrderId=liveOrderId(recovered);position.stopSubmittingAt=null;
+          position.stopPrice=stop.price;
+          this.recordLiveAudit({observedAt:Date.now(),symbol:position.symbol,planId:position.id,
+            stage:"STOP_CREATE",level:"INFO",reason:"止损ACK缺失后已通过Gate唯一标签恢复原生保护单"});
+          return;
+        }
+      }catch(error){
+        if(!isGateReadTimeoutError(error))throw error;
+      }
+      if (Date.now() - position.stopSubmittingAt < GATE_STOP_SUBMISSION_RESOLVE_MS) return;
       const failedAt = Date.now();
       this.recordLiveAudit({ observedAt: failedAt, symbol: position.symbol, planId: position.id,
         stage: "STOP_CREATE", level: "FORCED_EXIT",
-        reason: `Gate 在止损提交后6秒内仍未返回带标签 ${position.stopTag} 的保护单，已请求市价退出` });
+        reason: `Gate 在${Math.round(GATE_STOP_SUBMISSION_RESOLVE_MS/1000)}秒保护确认窗口内仍未返回带标签 ${position.stopTag} 的保护单，已请求市价退出` });
       if (!position.exitRequestedAt) {
         position.exitRequestedAt = failedAt;
         position.exitReason = "PROTECTIVE_STOP_CREATE_UNCONFIRMED";
         await client.closePosition(position.symbol, liveExitTag(position.id));
       }
-      throw new Error("结构止损提交6秒后仍未确认，已请求市价退出");
+      throw new Error("结构止损超过保护确认窗口仍未确认，已请求市价退出");
     }
     position.stopTag = stop.tag;
     position.stopPrice = stop.price;
@@ -2271,13 +2293,25 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             this.recordLiveAudit({ observedAt: now, symbol, planId: entry.planId, stage: "ENTRY_SUBMIT",
               level: "SKIPPED", reason });
           } else entry.lastError = null;
+        } else if (entry.marketSubmittedAt!=null&&gateUnknownSubmissionCanResolve(entry.marketSubmittedAt,now)) {
+          // X-Gate-Exptime prevents a request from becoming executable long
+          // after its send window. Once a successful position/order-history
+          // reconciliation still finds neither exposure nor this unique tag,
+          // the ambiguous submission can be safely re-armed instead of freezing
+          // the PAPER parent forever.
+          entry.status="CANCELLED";entry.submissionResolved=true;entry.missingSince=null;
+          const reason=`Gate 已超过安全提交确认窗口且仍无持仓/订单标签 ${entry.tag}；确认本次无实盘暴露，源单仍有效时允许重新执行`;
+          entry.lastError=reason;delete entry.marketSubmittedAt;entry.exchangeOrderId=null;
+          if(entry.parity){delete entry.parity.submittedAt;delete entry.parity.submitDelayMs;}
+          this.runtime.live.entrySkips[symbol]={planId:entry.planId,symbol,code:"RETRYING",reason,observedAt:now};
+          this.recordLiveAudit({observedAt:now,symbol,planId:entry.planId,stage:"ENTRY_SUBMIT",level:"RECOVERING",reason});
         } else if (now - entry.missingSince >= 6_000) {
-          entry.status = "CANCELLED";
-          const reason = `Gate 在提交后6秒内未返回订单 ${entry.tag}，本计划不自动重放，避免重复开仓`;
+          entry.status = "ERROR";
+          const reason = `Gate 暂未返回唯一订单标签 ${entry.tag}；继续核对成交/持仓，不重放订单，也不永久丢弃源单`;
           entry.lastError = reason;
           this.runtime.live.entrySkips[symbol] = { planId: entry.planId, symbol, code: "SUBMISSION_UNCONFIRMED", reason, observedAt: now };
           this.recordLiveAudit({ observedAt: now, symbol, planId: entry.planId, stage: "ENTRY_SUBMIT",
-            level: "SKIPPED", reason });
+            level: "RECOVERING", reason });
         }
       }
       const selectedTrade = desiredPortfolio[symbol] ?? null;
@@ -2488,11 +2522,16 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       ...Object.values(this.runtime.live.entries).filter(e=>e
         &&(["SUBMITTING","OPEN","ERROR"].includes(e.status)||this.liveEntryAwaitingReconcile(e)))]
       .reduce((n,p)=>n+(p?.notional??0),0);
-    // LIVE sizing depends on the current PAPER equity mark. Refresh every open
-    // PAPER source whose executable Gate book aged while the private account
-    // snapshot was in flight; otherwise one unrelated stale PAPER holding can
-    // block a brand-new eligible source from being copied.
-    await this.refreshMirrorExecutableQuotes(this.forwardState!.positions.map(t=>t.symbol),Date.now());
+    // First activation needs one complete PAPER mark to establish the fixed
+    // scale. After the scale exists, an unrelated stale PAPER mark must not
+    // freeze every future LIVE source: actual LIVE margin/risk plus each source's
+    // own stop/drift economics remain authoritative.
+    try{await this.refreshMirrorExecutableQuotes(this.forwardState!.positions.map(t=>t.symbol),Date.now());}
+    catch(error){
+      if(!this.runtime.live.activation?.scaleRatio)throw error;
+      this.recordLiveAudit({observedAt:Date.now(),symbol:null,planId:null,stage:"ENTRY_QUOTE",level:"RECOVERING",
+        reason:`部分模拟持仓盘口刷新失败，但固定实盘比例已建立；不让无关旧仓阻塞新源单：${safeError(error)}`});
+    }
     const paperMark=forwardEquity(this.forwardState!,this.regimeQuotes(Date.now()),Date.now());
     let mirrorRatio=this.runtime.live.activation?.scaleRatio??null;
     const staged: Array<{ symbol: string; plan: PaperPlan; intent: ReturnType<typeof buildLiveEntryIntent>;binding?:MirrorBinding;activation:LiveSession|null }> = [];
@@ -2531,24 +2570,23 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         continue;
       }
       const justTriggeredEntry = sourceAfterEnable(trade.forwardSource,this.runtime.live.activation,this.forwardState!.startedAt);
-      if(justTriggeredEntry&&this.runtime.live.positions[symbol]?.status!=="OPEN"&&!this.mirrorQuoteReady(symbol))
-        await this.ensureMirrorExecutableQuote(symbol,Date.now());
-      if (!justTriggeredEntry
-        || this.runtime.live.positions[symbol]?.status === "OPEN" || !this.mirrorQuoteReady(symbol)) {
+      if (!justTriggeredEntry || this.runtime.live.positions[symbol]?.status === "OPEN") {
         if(this.runtime.live.positions[symbol]?.id!==trade.id)
           this.runtime.live.entrySkips[symbol]={planId:trade.id,symbol,code:"ECONOMICS",
-            reason:!justTriggeredEntry?"此单在本次开启前已存在，不补开；仅跟随开启后新模拟单":"已识别模拟源单，正在主动刷新 Gate 新鲜可执行盘口",observedAt:Date.now()};
+            reason:!justTriggeredEntry?"此单在本次开启前已存在，不补开；仅跟随开启后新模拟单":"同币已有实盘持仓，等待其生命周期结束",
+            observedAt:Date.now()};
         continue;
       }
-      const midpoint = this.runtime.evidence[symbol]?.midpoint ?? 0;
-      if (!(midpoint > 0)) {
+      let sizingQuote:{bestBid:number;bestAsk:number;observedAt:number;source:"resident"|"rest"};
+      try{sizingQuote=await this.mirrorSubmitQuote(symbol);}
+      catch(error){
         this.runtime.live.entrySkips[symbol]={planId:plan.id,symbol,code:"RETRYING",
-          reason:"模拟源单已识别，但本轮 Gate 可执行中间价无效；未使用旧价，下一轮继续核对",observedAt:Date.now()};
+          reason:`模拟源单已识别，Gate可执行盘口本轮获取失败；不使用旧价、不放弃源单，下一轮自动重试：${safeError(error)}`,
+          observedAt:Date.now()};
         continue;
       }
       const retainedSkip = this.runtime.live.entrySkips[symbol];
-      if (retainedSkip?.planId === plan.id && ["LEVERAGE_REJECTED","ENTRY_REJECTED","SUBMISSION_UNCONFIRMED"].includes(retainedSkip.code)
-        && now-retainedSkip.observedAt<60_000) continue;
+      if (retainedSkip?.planId === plan.id && ["LEVERAGE_REJECTED","ENTRY_REJECTED"].includes(retainedSkip.code)) continue;
       if(this.liveEntryAwaitingReconcile(prior)) {
         this.runtime.live.entrySkips[symbol]={planId:plan.id,symbol,code:"SUBMISSION_UNCONFIRMED",
           reason:"此前源单的提交尚待交易所确认，保留原身份和保护，不覆盖为新源单",observedAt:now};
@@ -2565,22 +2603,29 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       let intent: ReturnType<typeof buildLiveEntryIntent>;
       let binding:MirrorBinding|undefined;
       try {
-        if(paperMark.stalePositions)throw new LiveEntrySizingError("ECONOMICS",symbol,"模拟账户当前估值不完整，不能确定复制比例");
-        const scaled=await this.ensureLiveSessionScale(paperMark.equity,equity,Date.now());
-        mirrorRatio=scaled?.scaleRatio??equity/paperMark.equity;
-        const expectedLiveEquity=paperMark.equity*mirrorRatio;
-        const liveEquityDrift=expectedLiveEquity>0?equity/expectedLiveEquity:0;
-        if(liveEquityDrift<.85)throw new LiveEntrySizingError("ECONOMICS",symbol,
-          `实盘权益已低于固定模拟比例预期的${(liveEquityDrift*100).toFixed(1)}%，暂停新增复制并保留已有保护`);
-        const quote=this.runtime.evidence[symbol];
-        const result=buildProportionalMirror({source:trade.forwardSource,sourceEquity:paperMark.equity,equity,
+        let scaled=this.runtime.live.activation??null;
+        if(!mirrorRatio){
+          if(paperMark.stalePositions)throw new LiveEntrySizingError("ECONOMICS",symbol,
+            "首次实盘固定比例尚未建立，模拟账户估值仍不完整；保留源单并继续刷新，不按时间作废");
+          scaled=await this.ensureLiveSessionScale(paperMark.equity,equity,Date.now());
+          mirrorRatio=scaled?.scaleRatio??equity/paperMark.equity;
+        }else if(!paperMark.stalePositions){
+          // Ordinary PAPER/LIVE PnL divergence does not re-scale or pause
+          // execution; reconcileLiveScale only repairs objectively stale anchors
+          // or a large external capital increase.
+          scaled=await this.ensureLiveSessionScale(paperMark.equity,equity,Date.now());
+          mirrorRatio=scaled?.scaleRatio??mirrorRatio;
+        }
+        const sourceEquityForReceipt=scaled?.scaleSourceEquity
+          ??trade.forwardSource.forecast?.sizingEquity??paperMark.equity??this.forwardState!.initialEquity;
+        const result=buildProportionalMirror({source:trade.forwardSource,sourceEquity:sourceEquityForReceipt,equity,
           available:availableForNewEntries,openRisk:riskForNewEntries,sameDirectionRisk:directionRiskForNewEntries[plan.side],
-          entryPrice:plan.side==="LONG"?quote?.bestAsk??0:quote?.bestBid??0,
+          entryPrice:plan.side==="LONG"?sizingQuote.bestAsk:sizingQuote.bestBid,
           quantoMultiplier:this.runtime.contractMeta[symbol]?.quantoMultiplier??0,
           leverageMax:this.runtime.contractMeta[symbol]?.leverageMax??0,maintenanceRate:this.runtime.contractMeta[symbol]?.maintenanceRate??0.005,
           openMargin:marginForNewEntries,openNotional:notionalForNewEntries,now:Date.now(),policy:this.forwardState!.policyVersion??this.forwardState!.version,
           sizeRules:this.runtime.contractMeta[symbol],activationAt:this.runtime.live.activation?.enabledAt,
-          mirrorRatio,sourceRiskAuthority:true,quoteObservedAt:quote?.observedAt});
+          mirrorRatio,sourceRiskAuthority:true,quoteObservedAt:sizingQuote.observedAt});
         intent=result.intent;binding=result.binding;
       } catch (error) {
         if (!(error instanceof LiveEntrySizingError)) throw error;
@@ -2635,12 +2680,17 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           await this.saveCheckpoint(Date.now(),true);continue;
         }
         try {
-          await client.setLeverage(symbol,intent.leverage);
+          await client.ensureLeverage(symbol,intent.leverage);
         } catch (error) {
-          const reason = `Gate 未确认 ${symbol} 的 ${intent.leverage}× 杠杆，本计划已跳过但不会锁住其他新机会：${safeError(error)}`;
-          entry.status = "CANCELLED";entry.submissionResolved=true;entry.lastError = reason;
-          this.runtime.live.entrySkips[symbol] = { planId: plan.id, symbol, code: "LEVERAGE_REJECTED", reason, observedAt: now };
-          this.recordLiveAudit({ observedAt: now, symbol, planId: plan.id, stage: "LEVERAGE", level: "SKIPPED", reason, error });
+          const definitive=definitiveGateRejection(error),
+            reason=definitive
+              ?`Gate 明确拒绝 ${symbol} 的 ${intent.leverage}× 杠杆；该源单不继续提交：${safeError(error)}`
+              :`Gate 杠杆确认暂时失败；订单尚未发送，保留同一模拟源并在下一轮自动重试：${safeError(error)}`;
+          entry.status="CANCELLED";entry.submissionResolved=true;entry.lastError=reason;
+          this.runtime.live.entrySkips[symbol]={planId:plan.id,symbol,code:definitive?"LEVERAGE_REJECTED":"RETRYING",reason,observedAt:Date.now()};
+          this.recordLiveAudit({observedAt:Date.now(),symbol,planId:plan.id,stage:"LEVERAGE",
+            level:definitive?"SKIPPED":"RECOVERING",reason,error});
+          await this.saveCheckpoint(Date.now(),true);
           continue;
         }
         try {

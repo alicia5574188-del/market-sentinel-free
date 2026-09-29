@@ -126,9 +126,15 @@ test("a small LIVE account may lift only to the exact Gate minimum when real sto
   assert.equal(r.intent.contracts,1);assert.equal(r.intent.notional,10);assert.equal(r.binding.receipt.minimumUplift,true);
   assert.ok((r.binding.receipt.minimumUpliftRiskRate??1)<.0075);
 });
-test("LIVE never catches up a source after the realtime copy window even if the PAPER trade is still open",()=>{
-  const stale={...trade(),openedAt:T-60_000},i=request(stale);i.activationAt=T-120_000;
-  assert.throws(()=>buildProportionalMirror(i),/实时复制窗口/);
+test("a delayed but still-open PAPER source may recover after the old realtime window when current economics remain safe",()=>{
+  const delayed={...trade(),openedAt:T-90_000},i=request(delayed);i.activationAt=T-120_000;i.now=T;i.entryPrice=100.1;
+  const recovered=buildProportionalMirror(i);
+  assert.equal(recovered.binding.receipt.sourceId,delayed.id);
+  assert.equal(recovered.binding.receipt.copyDelayMs,90_000);
+  const chased={...i,entryPrice:100.6};
+  assert.throws(()=>buildProportionalMirror(chased),/不利偏差.*动态上限/);
+  const stopped={...i,entryPrice:98};
+  assert.throws(()=>buildProportionalMirror(stopped),/止损/);
 });
 
 test("margin or leverage failure is explicit, not silent new leverage or smaller-risk re-selection",()=>{
@@ -243,7 +249,10 @@ class FakeGate {
   async snapshot(){this.requestCount++;if(this.readTimeout)throw new GateReadTimeoutError("/futures/usdt/accounts");
     if(this.failSnapshot)throw new Error("injected Gate outage");
     return structuredClone({account:this.account,positions:Object.values(this.holdings),orders:[],priceOrders:this.stops,checkedAt:Date.now()});}
-  async setLeverage(_symbol:string,n:number){this.leverages.push(n);await this.onLeverage?.();}
+  leverageTimeoutOnce=false;
+  async setLeverage(_symbol:string,n:number){this.leverages.push(n);await this.onLeverage?.();
+    if(this.leverageTimeoutOnce){this.leverageTimeoutOnce=false;const error=new Error("The operation was aborted due to timeout");error.name="TimeoutError";throw error;}}
+  async ensureLeverage(symbol:string,n:number){await this.setLeverage(symbol,n);return{verified:true,recovered:false,already:false,actual:n};}
   async createEntry(i:LiveEntryIntent,beforeSend?:()=>boolean){await this.onCreate?.();if(beforeSend&&!beforeSend())throw new GateEntryCancelledError();this.placed.push(structuredClone(i));const id=String(this.counter++);
     if(this.ambiguous)throw new Error("injected submission timeout");
     const filled=this.zero?0:this.partial?Math.floor(i.contracts/2):i.contracts;
@@ -329,7 +338,7 @@ test("LIVE mirror still blocks a genuinely stale BBO when PAPER source exists",(
   h.runtime.evidence={BTC_USDT:{midpoint:100,bestBid:100,bestAsk:100,observedAt:T-60_000,fresh:true,entryReady:false}};
   await h.syncLive(T);
   assert.equal(gate.placed.length,0);
-  assert.match(live(h).entrySkips.BTC_USDT.reason,/新鲜可执行盘口/);
+  assert.match(live(h).entrySkips.BTC_USDT.reason,/Gate可执行盘口.*失败|不使用旧价/);
 }));
 
 test("a healthy eligible source cannot finish LIVE sync as raw WAITING",()=>clock(async()=>{
@@ -726,6 +735,29 @@ test("a first Gate read timeout leaves LIVE pending and a later read recovers wi
   assert.equal(live(h).requestedEnabled,true);assert.equal(live(h).operational,true);assert.equal(live(h).lastError,null);
   assert.deepEqual(live(h).activation,activation);assert.equal(gate.placed.length,0);
 }));
+test("a PAPER source older than 30 seconds still copies after transient reconciliation delay when price remains safe",()=>clock(async()=>{
+  const {h,gate}=await harness();
+  h.forwardState.positions=[];
+  live(h).requestedEnabled=true;live(h).activation=startLiveSession(T-120_000,h.forwardState);
+  const delayed={...trade("delayed-live-copy"),openedAt:T-90_000,lastQuoteAt:T-90_000};
+  h.forwardState.positions=[delayed];
+  h.runtime.evidence={BTC_USDT:{midpoint:100,bestBid:100,bestAsk:100,observedAt:T,fresh:true,entryReady:false}};
+  await h.syncLive(T);await h.syncLive(T);
+  assert.equal(gate.placed.length,1);assert.equal(live(h).positions.BTC_USDT.id,delayed.id);
+  assert.equal(live(h).positions.BTC_USDT.parity?.copyDelayMs,90_000);
+});
+
+test("transient leverage failure keeps the source retryable and succeeds later without toggling LIVE",()=>clock(async()=>{
+  const {h,gate}=await harness();
+  const originalEnsure=gate.ensureLeverage.bind(gate);let first=true;
+  gate.ensureLeverage=async(symbol,n)=>{if(first){first=false;throw new Error("temporary leverage transport failure");}return originalEnsure(symbol,n);};
+  await enableNew(h);
+  assert.equal(gate.placed.length,0);assert.equal(live(h).requestedEnabled,true);
+  assert.match(live(h).entrySkips.BTC_USDT.reason,/自动重试/);
+  await h.syncLive(T);await h.syncLive(T);
+  assert.equal(gate.placed.length,1);assert.equal(live(h).positions.BTC_USDT.id,"ft-fixture-1");
+});
+
 test("storage failure prevents private entry calls and successful copies",()=>clock(async()=>{
   const {h,gate,store}=await harness();store.fail=true;const r=await enableNew(h);
   assert.equal(r.ok,false);assert.equal(gate.placed.length,0);
@@ -840,13 +872,20 @@ test("all current source orders copy across bounded passes without the retired t
   assert.deepEqual(Object.values(live(h).positions).map(p=>p.id).sort(),h.forwardState.positions.map(p=>p.id).sort());
   for(const p of Object.values(live(h).positions))assert.ok(p.parity!.ratio>0);
 }));
-test("ambiguous market submission cannot be replayed after the old six-second and minute timers",()=>clock(async()=>{
+test("ambiguous market submission is never replayed early, then may retry only after Gate proves no exposure past the safe window",()=>clock(async()=>{
   const {h,gate}=await harness();gate.ambiguous=true;await enableNew(h);
-  const realNow=Date.now;Date.now=()=>T+120000;
+  const realNow=Date.now;
   try {
+    Date.now=()=>T+20_000;
     h.runtime.evidence={BTC_USDT:{midpoint:100,bestBid:100,bestAsk:100,observedAt:Date.now(),fresh:true,entryReady:true}};
     await h.syncLive(Date.now());await h.syncLive(Date.now());
-    assert.equal(gate.placed.length,1);assert.equal(live(h).entries.BTC_USDT.status,"CANCELLED");
+    assert.equal(gate.placed.length,1,"no replay while the first network submission is still ambiguous");
+    assert.equal(live(h).entries.BTC_USDT.status,"ERROR");
+    Date.now=()=>T+70_000;
+    h.runtime.evidence={BTC_USDT:{midpoint:100,bestBid:100,bestAsk:100,observedAt:Date.now(),fresh:true,entryReady:true}};
+    await h.syncLive(Date.now());
+    assert.equal(gate.placed.length,2,"after the safe window and a clean Gate reconciliation, the still-open source may retry");
+    assert.equal(live(h).requestedEnabled,true);
   }finally{Date.now=realNow;}
 }));
 test("new arbitrary rule metadata survives the adapter and immutable source binding",()=>{
@@ -881,17 +920,17 @@ test("owner OFF continues reconciling an uncertain submission until a late verif
     assert.equal(scheduler.liveNeedsSync(),false);
   }finally{Date.now=original;}
 }));
-test("the restored six-second ambiguity fence never replays or replaces the same-symbol parent without exchange proof",()=>clock(async()=>{
+test("an unresolved network submission blocks a same-symbol replacement until the safe proof window expires",()=>clock(async()=>{
   const {h,gate}=await harness();gate.ambiguous=true;await enableNew(h);
-  const original=Date.now;Date.now=()=>T+120000;
+  const original=Date.now;Date.now=()=>T+20_000;
   try{
     await h.syncLive(Date.now());
     const old=live(h).entries.BTC_USDT as unknown as {planId:string;status:string;submissionResolved?:boolean};
-    assert.equal(old.status,"CANCELLED");assert.notEqual(old.submissionResolved,true);
+    assert.equal(old.status,"ERROR");assert.notEqual(old.submissionResolved,true);
     h.forwardState.positions=[{...trade("replacement-parent"),openedAt:Date.now()-1_000,lastQuoteAt:Date.now()}];
     h.runtime.evidence={BTC_USDT:{midpoint:100,bestBid:100,bestAsk:100,observedAt:Date.now(),fresh:true,entryReady:true}};
     await h.syncLive(Date.now());
-    assert.equal(gate.placed.length,1,"an ambiguous old network submission is never followed by a same-symbol replacement");
+    assert.equal(gate.placed.length,1,"same-symbol replacement cannot cross the network while the old identity is unresolved");
     assert.equal(live(h).entries.BTC_USDT.planId,old.planId);
   }finally{Date.now=original;}
 }));
