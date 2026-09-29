@@ -208,6 +208,10 @@ export function routeEnvironmentOpportunity(input:{
       :"过渡环境沿当前短期方向做小风险参与，先证明再扩张，不因环境不稳定而停止交易。";
   }
 
+  if(!mainline&&(bars<minimumThesisBars||stage!=="READY")){
+    probe=true;forceRetest=true;riskScale*=.82;scoreDelta-=3;
+    reason+=" 当前交易假设尚未达到本环境的完整成熟度，继续观察并保留Probe执行权，不直接扩大风险。";
+  }
   const finalRisk=clip(riskScale*perf,.20,1.10);
   return{version:ENVIRONMENT_ROUTER_VERSION,environment,playbook,alignment,priority,
     scoreDelta,riskScale:finalRisk,probe,forceRetest,minimumThesisBars,
