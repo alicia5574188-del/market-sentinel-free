@@ -527,7 +527,7 @@ test("an eligible source still copies after more than 30 seconds of recoverable 
     gate.readTimeout=false;await h.syncLive(current);await h.syncLive(current);
     assert.equal(gate.placed.length,1);assert.equal(live(h).positions.BTC_USDT.id,source.id);
   }finally{Date.now=realNow;}
-}));
+});
 
 test("a NEW source after enable copies, repeated ON does not move its eligibility boundary",()=>clock(async()=>{
   const {h,gate}=await harness();await h.setLiveMode(true);
@@ -767,7 +767,7 @@ test("pre-submit leverage timeout stays retryable and cannot age the source out"
     await h.syncLive(current);await h.syncLive(current);
     assert.equal(gate.placed.length,1);assert.equal(live(h).positions.BTC_USDT.id,source.id);
   }finally{Date.now=realNow;}
-}));
+});
 
 test("temporary Gate faults never rewrite owner switch intent",()=>clock(async()=>{
   const {h,gate}=await harness();gate.failSnapshot=true;const r=await enableNew(h);
