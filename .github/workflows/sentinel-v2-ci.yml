@@ -59,10 +59,11 @@ jobs:
           set -uo pipefail
           body="$(curl -sS --max-time 15 "$WORKER_BASE_URL/__health" || true)"
           if jq -e . >/dev/null 2>&1 <<<"$body"; then
-            jq -c '{ok,version,mode,runtime:{state:.runtime.state,stale:.runtime.stale,lastError:.runtime.lastError,
+            jq -c '{ok,version,mode,runtime:{buildSha:.runtime.buildSha,state:.runtime.state,stale:.runtime.stale,lastError:.runtime.lastError,
               lastSuccessAt:.runtime.lastSuccessAt,forward:.runtime.forward,realtimeReadiness:.runtime.realtimeReadiness,
               marketDataTransport:.runtime.marketDataTransport,feedQuality:.runtime.feedQuality,symbols:.runtime.symbols,
-              radar:.runtime.radar,liveMode:.runtime.liveMode,limits:.runtime.limits}}' <<<"$body"
+              radar:.runtime.radar,liveMode:.runtime.liveMode,liveMirror:.runtime.liveMirror,liveExecution:.runtime.liveExecution,
+              limits:.runtime.limits}}' <<<"$body"
           else
             echo '{"runtimeSnapshot":"unavailable"}'
           fi
