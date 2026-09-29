@@ -20,6 +20,10 @@ import { deriveMarketEvolution, deriveOpportunityLifecycle, deriveProfitLifecycl
 import { advanceMarketHypothesisResearch, entryHypothesisGuidance, initialMarketHypothesisResearch,
   normalizeMarketHypothesisResearch, positionHypothesisGuidance,
   type EntryHypothesisGuidance, type MarketHypothesisResearchState } from "./market-intelligence-hypothesis-research.ts";
+import { environmentPerformanceFactor, initialEnvironmentPerformanceState, normalizeEnvironmentPerformanceState,
+  recordEnvironmentOutcome, routeEnvironmentOpportunity,
+  type EnvironmentPerformanceState, type EnvironmentPlaybook, type MarketEnvironment, type RouteAlignment
+} from "./market-intelligence-environment-router.ts";
 
 /**
  * Forward Path Relation 3.0 — PAPER authority.
