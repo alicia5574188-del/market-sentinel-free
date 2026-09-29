@@ -787,7 +787,12 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
           stage:o.confirmationStage??state?.stage??"OBSERVE",edgeRatio:o.edgeRatio,sourceCount,
           dataConfidence:o.dataConfidence??state?.dataConfidence??0,netRemainingSpaceRate:o.netRemainingSpaceRate,
           pullbackRiskRate:o.pullbackRiskRate});
-      if(profile.stable&&!v.stableThesis){
+      v.environment=o.environment;v.playbook=o.playbook;
+      v.requiresProbeRetest=!!o.environmentForceRetest;
+      v.probeImpulseMin=o.probeImpulseMin??v.probeImpulseMin;
+      v.probePullbackMin=o.probePullbackMin??v.probePullbackMin;
+      v.probeRestartMin=o.probeRestartMin??v.probeRestartMin;
+      if((profile.stable||v.requiresProbeRetest)&&!v.stableThesis){
         v.stableThesis=true;v.phase=v.phase??"ARMED";
         v.initialExpectedNetRate=v.initialExpectedNetRate??o.netRemainingSpaceRate;
         v.pullbackRiskRateAtArm=v.pullbackRiskRateAtArm??o.pullbackRiskRate;
@@ -815,8 +820,9 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
         &&(t.netPnl??0)<0&&Math.abs(t.entryContext?.entryResidual??0)>=.05).length,
       extreme=extremeResidualConfirmationProfile({residual:o.residual??0,sourceCount,
         dataConfidence:o.dataConfidence??state?.dataConfidence??0,disagreementRate:disagreement,recentExtremeLosses}),
-      profile=entryResponseWindowMs({score:o.score,edgeRatio:o.edgeRatio,sourceCount,disagreementRate:disagreement}),
-      stable=stableEntryThesisProfile({score:o.score,premium:!!o.premium,thesisBars:o.thesisBars??state?.signalBars??0,
+      routedScore=o.environmentScore??o.score,
+      profile=entryResponseWindowMs({score:routedScore,edgeRatio:o.edgeRatio,sourceCount,disagreementRate:disagreement}),
+      stable=stableEntryThesisProfile({score:routedScore,premium:!!o.premium,thesisBars:o.thesisBars??state?.signalBars??0,
         stage:o.confirmationStage??state?.stage??"OBSERVE",edgeRatio:o.edgeRatio,sourceCount,
         dataConfidence:o.dataConfidence??state?.dataConfidence??0,netRemainingSpaceRate:o.netRemainingSpaceRate,
         pullbackRiskRate:o.pullbackRiskRate}),
@@ -824,17 +830,23 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
       minimumSupportSamples=Math.max(o.extendedConfirmation?3:0,extreme.minimumSupportSamples),
       minimumRetainedRate=Math.max(o.extendedConfirmation?.70:0,extreme.minimumRetainedRate),
       price=o.side==="LONG"?q!.bestAsk:q!.bestBid,
-      expiresAt=stable.stable?Math.min(o.expiresAt,now+20*60_000):Math.min(o.expiresAt,now+BAR_MS),
-      deadlineAt=stable.stable?Math.min(expiresAt,now+stable.armedWindowMs)
+      armed=stable.stable||!!o.environmentForceRetest,
+      expiresAt=armed?Math.min(o.expiresAt,now+20*60_000):Math.min(o.expiresAt,now+BAR_MS),
+      deadlineAt=armed?Math.min(expiresAt,now+12*60_000)
         :Math.min(o.expiresAt,now+Math.max(profile.windowMs,minimumElapsedMs+30_000));
     s.entryValidations[o.id]={id:o.id,candidateId:o.id,symbol:o.symbol,side:o.side,startedAt:now,expiresAt,deadlineAt,
       initialPrice:price,lastPrice:price,lastQuoteAt:q!.observedAt,samples:1,bestAdvanceRate:0,maxAdverseRate:0,
       supportSamples:0,oppositionSamples:0,extendedConfirmation:!!o.extendedConfirmation||extreme.required,
       extremeResidual:extreme.required,minimumElapsedMs,minimumSupportSamples,minimumRetainedRate,
-      stableThesis:stable.stable,phase:"ARMED",initialExpectedNetRate:o.netRemainingSpaceRate,
+      stableThesis:armed,phase:"ARMED",initialExpectedNetRate:o.netRemainingSpaceRate,
       pullbackRiskRateAtArm:o.pullbackRiskRate,maxChaseRate:stable.maxChaseRate,retestPullbackMin:stable.retestPullbackMin,
-      restartMin:stable.restartMin,retestBasePrice:null,retestBaseAt:null,status:"WAITING",
-      reason:extreme.required?extreme.reason:stable.stable
+      restartMin:stable.restartMin,retestBasePrice:null,retestBaseAt:null,
+      environment:o.environment,playbook:o.playbook,requiresProbeRetest:!!o.environmentForceRetest,
+      probeImpulseMin:o.probeImpulseMin,probePullbackMin:o.probePullbackMin,probeRestartMin:o.probeRestartMin,probeRetestSeen:false,
+      status:"WAITING",
+      reason:extreme.required?extreme.reason:o.environmentForceRetest
+        ?`环境路由 ${o.playbook}：先Probe，必须完成第一段正反馈→可控回调→再次启动后才执行。`
+        :stable.stable
         ?"高质量稳定交易假设已武装；短时反向只进入回测等待，不会直接取消，真正结构失效才解除。"
         :o.extendedConfirmation
         ?(o.futureResearchAction==="CONFIRM_MORE"?"前瞻研究发现状态转移风险，进入加强实时延续确认。":"极端轮动延伸机会进入加强实时延续确认。")
