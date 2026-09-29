@@ -933,7 +933,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       lockedSymbols:locked,rotationSeed:Math.floor(now/RADAR_MS),explorationSlots:0,liquiditySlots:0});
     if(!universeRows.length)throw new Error("no liquid extremum-regime markets");
     this.runtime.liquidUniverse=universeRows.map(row=>row.symbol);
-    this.runtime.radar=successfulRadarRuntime(this.runtime.radar,now,eligibleRows.length,[]);
+    this.runtime.radar=successfulRadarRuntime(this.runtime.radar,now,universeRows.length,[]);
     this.runtime.lastRadarAt=now;
     // Gate realtime capacity is execution-only: open exposure and candidates
     // that are actually eligible. Analysis-only markets stay on Bybit/OKX/KuCoin.
