@@ -90,7 +90,7 @@ export function recordEnvironmentOutcome(state:EnvironmentPerformanceState,input
     key,environment:input.environment,playbook:input.playbook,trades:0,wins:0,netRiskUnits:0,lossStreak:0,updatedAt:0
   },risk=Math.max(.01,input.plannedRisk),r=input.netPnl/risk;
   prev.trades++;if(input.netPnl>0)prev.wins++;
-  prev.netRiskUnits=prev.netRiskUnits*.97+r;
+  prev.netRiskUnits+=r;
   prev.lossStreak=input.netPnl>0?0:Math.min(12,prev.lossStreak+1);
   prev.updatedAt=input.now;state.cells[key]=prev;
 }
