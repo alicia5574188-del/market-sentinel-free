@@ -2085,13 +2085,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           }catch(error){
             this.recordLiveAudit({observedAt:Date.now(),symbol:position.symbol,planId:position.id,
               stage:"STOP_UPDATE",level:"RECOVERING",
-              reason:\`新结构止损已在 Gate 确认，旧保护撤销暂未确认；两张均为 close-only，继续保留并下轮清理：\${safeError(error)}\`,error});
+              reason:`新结构止损已在 Gate 确认，旧保护撤销暂未确认；两张均为 close-only，继续保留并下轮清理：${safeError(error)}`,error});
             return;
           }
         }
         if(await this.promoteLiveStopReplacement(position)){
           this.recordLiveAudit({observedAt:Date.now(),symbol:position.symbol,planId:position.id,
-            stage:"STOP_UPDATE",level:"INFO",reason:\`新结构止损 \${position.stopPrice} 已确认接管，旧保护已撤销或已不存在\`});
+            stage:"STOP_UPDATE",level:"INFO",reason:`新结构止损 ${position.stopPrice} 已确认接管，旧保护已撤销或已不存在`});
         }
         return;
       }
@@ -2108,7 +2108,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         }catch(error){
           this.recordLiveAudit({observedAt:Date.now(),symbol:position.symbol,planId:position.id,
             stage:"STOP_UPDATE",level:"RECOVERING",
-            reason:\`新结构止损状态暂时无法核对；旧保护仍保留，不阻塞其他交易：\${safeError(error)}\`,error});
+            reason:`新结构止损状态暂时无法核对；旧保护仍保留，不阻塞其他交易：${safeError(error)}`,error});
           return;
         }
       }
@@ -2135,18 +2135,18 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         await this.saveCheckpoint(Date.now(),true);
         this.recordLiveAudit({observedAt:Date.now(),symbol:position.symbol,planId:position.id,
           stage:"STOP_UPDATE",level:"INFO",
-          reason:\`新的结构止损 \${stop.price} 已提交确认；旧止损 \${position.stopPrice} 在下一轮确认新单可见后才撤销\`});
+          reason:`新的结构止损 ${stop.price} 已提交确认；旧止损 ${position.stopPrice} 在下一轮确认新单可见后才撤销`});
       }catch(error){
         if(definitiveGateRejection(error)){
           this.clearLiveStopReplacement(position);
           await this.saveCheckpoint(Date.now(),true);
           this.recordLiveAudit({observedAt:Date.now(),symbol:position.symbol,planId:position.id,
             stage:"STOP_UPDATE",level:"RECOVERING",
-            reason:\`Gate 拒绝新的结构止损；原保护仍有效，本轮不阻塞其他持仓或新单：\${safeError(error)}\`,error});
+            reason:`Gate 拒绝新的结构止损；原保护仍有效，本轮不阻塞其他持仓或新单：${safeError(error)}`,error});
         }else{
           this.recordLiveAudit({observedAt:Date.now(),symbol:position.symbol,planId:position.id,
             stage:"STOP_UPDATE",level:"RECOVERING",
-            reason:\`新结构止损提交结果暂不明确；原保护仍有效，按新标签核对且不重复提交：\${safeError(error)}\`,error});
+            reason:`新结构止损提交结果暂不明确；原保护仍有效，按新标签核对且不重复提交：${safeError(error)}`,error});
         }
       }
       return;
@@ -2157,7 +2157,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const failedAt=Date.now();
       this.recordLiveAudit({observedAt:failedAt,symbol:position.symbol,planId:position.id,
         stage:"STOP_CREATE",level:"FORCED_EXIT",
-        reason:\`Gate 在止损提交后6秒内仍未返回带标签 \${position.stopTag} 的保护单，已请求市价退出\`});
+        reason:`Gate 在止损提交后6秒内仍未返回带标签 ${position.stopTag} 的保护单，已请求市价退出`});
       if(!position.exitRequestedAt){
         position.exitRequestedAt=failedAt;position.exitReason="PROTECTIVE_STOP_CREATE_UNCONFIRMED";
         await client.closePosition(position.symbol,liveExitTag(position.id));
@@ -2173,18 +2173,18 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(!definitiveGateRejection(error)){
         this.recordLiveAudit({observedAt:Date.now(),symbol:position.symbol,planId:position.id,
           stage:"STOP_CREATE",level:"RECOVERING",
-          reason:\`结构止损提交结果暂不明确；保留标签并核对6秒，不重复挂单也不立即误平仓：\${safeError(error)}\`,error});
-        throw new Error(\`结构止损提交结果暂不明确，正在按标签核对：\${safeError(error)}\`);
+          reason:`结构止损提交结果暂不明确；保留标签并核对6秒，不重复挂单也不立即误平仓：${safeError(error)}`,error});
+        throw new Error(`结构止损提交结果暂不明确，正在按标签核对：${safeError(error)}`);
       }
       const failedAt=Date.now();
       this.recordLiveAudit({observedAt:failedAt,symbol:position.symbol,planId:position.id,
         stage:"STOP_CREATE",level:"FORCED_EXIT",
-        reason:\`结构止损挂单失败，系统已请求市价退出：\${safeError(error)}\`,error});
+        reason:`结构止损挂单失败，系统已请求市价退出：${safeError(error)}`,error});
       if(!position.exitRequestedAt){
         position.exitRequestedAt=failedAt;position.exitReason="PROTECTIVE_STOP_CREATE_FAILED";
         await client.closePosition(position.symbol,liveExitTag(position.id));
       }
-      throw new Error(\`结构止损挂单失败，已请求市价退出：\${safeError(error)}\`);
+      throw new Error(`结构止损挂单失败，已请求市价退出：${safeError(error)}`);
     }
   }
 
