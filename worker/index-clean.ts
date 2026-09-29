@@ -209,7 +209,8 @@ export type LivePosition = PaperPosition & Partial<ReturnType<typeof gatePositio
   mirrorSourceId?: string;
 };
 
-type LiveEntrySkipCode = LiveEntrySizingCode | "LEVERAGE_REJECTED" | "ENTRY_REJECTED" | "SUBMISSION_UNCONFIRMED";
+type LiveEntrySkipCode = LiveEntrySizingCode | "LEVERAGE_REJECTED" | "ENTRY_REJECTED" | "SUBMISSION_UNCONFIRMED"
+  | "RETRYING" | "SOURCE_ENDED_EARLY";
 type LiveAuditEvent = {
   id: string;
   observedAt: number;
@@ -1047,6 +1048,29 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if(this.mirrorQuoteReady(symbol,now))return true;
     await this.refreshMirrorExecutableQuotes([symbol],now);
     return this.mirrorQuoteReady(symbol,Date.now());
+  }
+
+  private async mirrorSubmitQuote(symbol:string) {
+    const now=Date.now(),cached=this.runtime.evidence[symbol],meta=this.runtime.contractMeta[symbol];
+    // The normal websocket book is sufficient when it was observed in the last
+    // two seconds. A merely "under 10s" quote is good for monitoring but is too
+    // close to the freshness edge for the final real-money submission fence.
+    if(meta&&cached&&freshQuote({bestBid:cached.bestBid??0,bestAsk:cached.bestAsk??0,
+      observedAt:cached.observedAt,fresh:cached.fresh},now,2_000))
+      return{bestBid:cached.bestBid!,bestAsk:cached.bestAsk!,observedAt:cached.observedAt,source:"resident" as const};
+    this.applyContractMetadata(symbol);
+    const currentMeta=this.runtime.contractMeta[symbol];
+    if(!currentMeta)throw new Error(`${symbol} Gate合约规格暂不可用`);
+    // One lightweight public REST BBO is allowed only at the final LIVE submit
+    // boundary. fetchTickerBbo timestamps the successful current Gate response
+    // at receipt, so private account/checkpoint latency cannot silently age it.
+    const book=await fetchTickerBbo(symbol,this.runtime.tickSize[symbol]??.0001,currentMeta.quantoMultiplier),
+      bestBid=book.bids[0]?.price??0,bestAsk=book.asks[0]?.price??0;
+    if(!(bestBid>0&&bestAsk>=bestBid))throw new Error(`${symbol} Gate最终可执行盘口不可用`);
+    const prior=this.runtime.evidence[symbol];
+    if(prior)this.runtime.evidence[symbol]={...prior,midpoint:(bestBid+bestAsk)/2,bestBid,bestAsk,
+      observedAt:book.observedAt,fresh:true};
+    return{bestBid,bestAsk,observedAt:book.observedAt,source:"rest" as const};
   }
 
   private async queueLiveBinding(entry:LiveEntry) {
@@ -1892,7 +1916,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private liveEntryAwaitingReconcile(entry: LiveEntry | null | undefined) {
     if(!entry?.parity || entry.marketSubmittedAt == null) return false;
-    if(this.runtime.live.positions[entry.symbol]?.id === entry.planId) return false;
+    const position=this.runtime.live.positions[entry.symbol];
+    // A historical CLOSED record with the same source id is not an active
+    // reconciliation success. Treat only an actually OPEN Gate holding as the
+    // resolved exposure; otherwise the source must surface an explicit result.
+    if(position?.id === entry.planId && position.status === "OPEN") return false;
     return entry.status === "FILLED" || (entry.status === "CANCELLED" && !entry.submissionResolved);
   }
 
@@ -2484,7 +2512,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const symbol = trade.symbol;
       if(!trade.forwardSource)continue; // Legacy sources only drain existing exposure.
       const plan = { ...arenaTradePlan(trade), expiresAt:trade.openedAt+trade.forwardSource.rule.horizon*60_000 };
-      const prior = this.runtime.live.entries[symbol];
+      const prior = this.runtime.live.entries[symbol],priorPosition=this.runtime.live.positions[symbol];
+      if(prior?.planId===plan.id&&prior.marketSubmittedAt!=null
+        &&priorPosition?.id===plan.id&&priorPosition.status==="CLOSED"){
+        const reason="该模拟源单对应的实盘仓位已经在 Gate 归零；同一源单禁止重复开仓，等待下一笔新模拟源单";
+        this.runtime.live.entrySkips[symbol]={planId:plan.id,symbol,code:"SOURCE_ENDED_EARLY",reason,observedAt:now};
+        continue;
+      }
       // Identity fencing comes before quote/admission diagnostics. Once a market
       // request crossed the network boundary, this exact PAPER parent can never
       // be submitted again. If the post-60s reconciliation proved no exposure,
@@ -2511,7 +2545,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         continue;
       }
       const midpoint = this.runtime.evidence[symbol]?.midpoint ?? 0;
-      if (!(midpoint > 0)) continue;
+      if (!(midpoint > 0)) {
+        this.runtime.live.entrySkips[symbol]={planId:plan.id,symbol,code:"RETRYING",
+          reason:"模拟源单已识别，但本轮 Gate 可执行中间价无效；未使用旧价，下一轮继续核对",observedAt:Date.now()};
+        continue;
+      }
       const retainedSkip = this.runtime.live.entrySkips[symbol];
       if (retainedSkip?.planId === plan.id && ["LEVERAGE_REJECTED","ENTRY_REJECTED","SUBMISSION_UNCONFIRMED"].includes(retainedSkip.code)
         && now-retainedSkip.observedAt<60_000) continue;
@@ -2521,7 +2559,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         continue;
       }
       // A non-market or pre-submit prior can still be cancelled/replaced below.
-      if (prior && prior.planId === plan.id && prior.status !== "CANCELLED") continue;
+      if (prior && prior.planId === plan.id && prior.status !== "CANCELLED") {
+        this.runtime.live.entrySkips[symbol]={planId:plan.id,symbol,code:"RETRYING",
+          reason:prior.lastError??`同一模拟源单已有实盘执行记录（${prior.status}），正在核对唯一订单身份，不重复提交`,
+          observedAt:Date.now()};
+        continue;
+      }
       if (prior && !["FILLED", "CANCELLED"].includes(prior.status)) await this.cancelLiveEntry(client, prior);
       let intent: ReturnType<typeof buildLiveEntryIntent>;
       let binding:MirrorBinding|undefined;
@@ -2557,10 +2600,16 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       staged.push({ symbol, plan, intent, binding,activation:structuredClone(this.runtime.live.activation??null) });
     }
     for (const { symbol, plan, intent, binding,activation } of staged) {
-      if(!this.runtime.live.requestedEnabled
-        ||!sameLiveSession(activation,this.runtime.live.activation)
-        ||!sourceAfterEnable(binding!.sourceAtCopy,this.runtime.live.activation,this.forwardState!.startedAt)
-        ||!mirrorSourceFresh(this.currentMirrorSource(plan.id).trade??undefined,plan.id,Date.now()))continue;
+      const stagedSource=this.currentMirrorSource(plan.id).trade,
+        preflightFailure=!this.runtime.live.requestedEnabled?"所有者已关闭实盘复制"
+          :!sameLiveSession(activation,this.runtime.live.activation)?"实盘开启会话在提交前发生变化"
+          :!sourceAfterEnable(binding!.sourceAtCopy,this.runtime.live.activation,this.forwardState!.startedAt)?"模拟源单不再属于本次开启会话"
+          :!mirrorSourceFresh(stagedSource??undefined,plan.id,Date.now())?"模拟源单在提交前已结束或超过自身持有期限":null;
+      if(preflightFailure){
+        this.runtime.live.entrySkips[symbol]={planId:plan.id,symbol,code:"RETRYING",
+          reason:`${preflightFailure}；未发送 Gate 入场订单`,observedAt:Date.now()};
+        continue;
+      }
       if(!this.mirrorQuoteReady(symbol)&&!(await this.ensureMirrorExecutableQuote(symbol,Date.now()))){
         this.runtime.live.entrySkips[symbol]={planId:plan.id,symbol,code:"ECONOMICS",
           reason:"模拟源单已持久化，但 Gate 可执行盘口刷新仍未成功；保留源单身份并继续实时重试",observedAt:Date.now()};
@@ -2583,7 +2632,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(binding)this.liveJournal.set(`${LIVE_PARITY_PREFIX}binding:${plan.id}`,binding);
       await this.saveCheckpoint(now, true);
       try {
-        if(!this.runtime.live.requestedEnabled||!sameLiveSession(activation,this.runtime.live.activation)){entry.status="CANCELLED";continue;}
+        if(!this.runtime.live.requestedEnabled||!sameLiveSession(activation,this.runtime.live.activation)){
+          entry.status="CANCELLED";entry.submissionResolved=true;
+          entry.lastError="实盘会话在杠杆设置前发生变化；订单未发送";
+          this.runtime.live.entrySkips[symbol]={planId:plan.id,symbol,code:"RETRYING",reason:entry.lastError,observedAt:Date.now()};
+          await this.saveCheckpoint(Date.now(),true);continue;
+        }
         try {
           await client.setLeverage(symbol,intent.leverage);
         } catch (error) {
@@ -2596,50 +2650,55 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         try {
           // Owner OFF or source CLOSE during leverage/network await takes
           // precedence over the stale staged entry.
-          if(!this.runtime.live.requestedEnabled
-            ||!sameLiveSession(activation,this.runtime.live.activation)
-            ||!sourceAfterEnable(binding!.sourceAtCopy,this.runtime.live.activation,this.forwardState!.startedAt)
-            ||!mirrorSourceFresh(this.currentMirrorSource(plan.id).trade??undefined,plan.id,Date.now())){
-            entry.status="CANCELLED";await this.saveCheckpoint(Date.now(),true);continue;
-          }
-          // Leverage confirmation is another private network wait. Do not cancel
-          // an otherwise valid fresh PAPER source merely because its pre-wait
-          // public BBO crossed the 10s freshness boundary while Gate replied.
-          if(!this.mirrorQuoteReady(symbol)&&!(await this.ensureMirrorExecutableQuote(symbol,Date.now()))){
-            entry.status="CANCELLED";entry.lastError="杠杆确认后 Gate 可执行盘口仍未刷新，未使用旧价提交";
-            this.runtime.live.entrySkips[symbol]={planId:entry.planId,symbol,code:"ECONOMICS",reason:entry.lastError,observedAt:Date.now()};
+          const source=binding!.sourceAtCopy,currentSource=this.currentMirrorSource(plan.id).trade,
+            sourceFenceFailure=!this.runtime.live.requestedEnabled?"所有者已关闭实盘复制"
+              :!sameLiveSession(activation,this.runtime.live.activation)?"实盘开启会话在杠杆确认期间发生变化"
+              :!sourceAfterEnable(source,this.runtime.live.activation,this.forwardState!.startedAt)?"模拟源单不再属于本次开启会话"
+              :!mirrorSourceFresh(currentSource??undefined,plan.id,Date.now())?"模拟源单在杠杆确认期间已经结束":null;
+          if(sourceFenceFailure){
+            entry.status="CANCELLED";entry.submissionResolved=true;entry.lastError=`${sourceFenceFailure}；未发送 Gate 入场订单`;
+            this.runtime.live.entrySkips[symbol]={planId:entry.planId,symbol,code:"RETRYING",reason:entry.lastError,observedAt:Date.now()};
             await this.saveCheckpoint(Date.now(),true);continue;
           }
-          const q=this.runtime.evidence[symbol],price=entry.side==="LONG"?q?.bestAsk:q?.bestBid;
+          let submitQuote:{bestBid:number;bestAsk:number;observedAt:number;source:"resident"|"rest"};
+          try{submitQuote=await this.mirrorSubmitQuote(symbol);}
+          catch(error){
+            entry.status="CANCELLED";entry.submissionResolved=true;
+            entry.lastError=`最终 Gate 可执行盘口刷新失败：${safeError(error)}；未发送订单，下一轮继续核对`;
+            this.runtime.live.entrySkips[symbol]={planId:entry.planId,symbol,code:"RETRYING",reason:entry.lastError,observedAt:Date.now()};
+            await this.saveCheckpoint(Date.now(),true);continue;
+          }
+          const price=entry.side==="LONG"?submitQuote.bestAsk:submitQuote.bestBid;
           if(!price||(entry.side==="LONG"?price<=entry.invalidation:price>=entry.invalidation)){
-            entry.status="CANCELLED";entry.lastError="等待杠杆确认期间价格已越过源单止损，未追补旧成交";
+            entry.status="CANCELLED";entry.submissionResolved=true;entry.lastError="最终 Gate 盘口已越过源单止损，未追补旧成交";
             this.runtime.live.entrySkips[symbol]={planId:entry.planId,symbol,code:"ECONOMICS",reason:entry.lastError,observedAt:Date.now()};
             await this.saveCheckpoint(Date.now(),true);continue;
           }
-          const source=binding!.sourceAtCopy,drift=liveEntryDriftGuard(source,price);
+          const drift=liveEntryDriftGuard(source,price);
           if(drift.adverse>drift.allowed+1e-9){
-            entry.status="CANCELLED";
-            entry.lastError=`提交前盘口相对模拟入场不利偏差${(drift.adverse*100).toFixed(3)}%，超过动态上限${(drift.allowed*100).toFixed(3)}%，不追价`;
+            entry.status="CANCELLED";entry.submissionResolved=true;
+            entry.lastError=`最终 Gate 盘口相对模拟入场不利偏差${(drift.adverse*100).toFixed(3)}%，超过动态上限${(drift.allowed*100).toFixed(3)}%，不追价`;
             this.runtime.live.entrySkips[symbol]={planId:entry.planId,symbol,code:"ECONOMICS",reason:entry.lastError,observedAt:Date.now()};
             await this.saveCheckpoint(Date.now(),true);continue;
           }
           const submittedAt=Date.now();
-          if(entry.parity)Object.assign(entry.parity,{submitQuoteAt:q?.observedAt,submitQuotePrice:price,submittedAt,
+          if(entry.parity)Object.assign(entry.parity,{submitQuoteAt:submitQuote.observedAt,submitQuotePrice:price,submittedAt,
             submitDelayMs:Math.max(0,submittedAt-source.openedAt),allowedAdverseEntryDriftRate:drift.allowed,
             adverseEntryDriftRate:drift.adverse});
           entry.marketSubmittedAt=submittedAt;
           await this.saveCheckpoint(submittedAt,true);
-          const submissionStillAllowed=()=>{
-            if(!this.runtime.live.requestedEnabled||!this.mirrorQuoteReady(symbol)
+          const finalValidatedAt=Date.now(),submissionStillAllowed=()=>{
+            if(!this.runtime.live.requestedEnabled
               ||!sameLiveSession(activation,this.runtime.live.activation)
-              ||!sourceAfterEnable(binding!.sourceAtCopy,this.runtime.live.activation,this.forwardState?.startedAt??0)
+              ||!sourceAfterEnable(source,this.runtime.live.activation,this.forwardState?.startedAt??0)
               ||!mirrorSourceFresh(this.currentMirrorSource(plan.id).trade??undefined,plan.id,Date.now()))return false;
-            const latest=this.runtime.evidence[symbol],latestPrice=entry.side==="LONG"?latest?.bestAsk:latest?.bestBid;
-            if(!latestPrice||(entry.side==="LONG"?latestPrice<=entry.invalidation:latestPrice>=entry.invalidation))return false;
-            const latestDrift=liveEntryDriftGuard(source,latestPrice);
-            return latestDrift.adverse<=latestDrift.allowed+1e-9;
+            // The executable price was validated immediately before this durable
+            // exactly-once fence. Do not let the older exchange-book timestamp
+            // cross 10s again during checkpoint/signing and create a false
+            // cancellation loop; only a >2.5s local send delay invalidates it.
+            return Date.now()-finalValidatedAt<=2_500;
           };
-          if(!submissionStillAllowed())throw new GateEntryCancelledError();
+          if(!submissionStillAllowed())throw new GateEntryCancelledError("最终提交身份或2.5秒发送窗口已变化，订单尚未发送");
           // Keep the current final local safety fence, but use the proven
           // 2026-09-20 REST transport after it passes. This guard runs after
           // signing and immediately before the one network submission.
@@ -2668,9 +2727,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           await this.saveCheckpoint(Date.now(),true);
         } catch (error) {
           if(error instanceof GateEntryCancelledError){
-            entry.status="CANCELLED";entry.submissionResolved=true;entry.lastError=error.message;
+            entry.status="CANCELLED";entry.submissionResolved=true;
+            entry.lastError=`${error.message}；已确认尚未跨过 Gate 订单网络边界，源单仍有效时下一轮可安全重试`;
             delete entry.marketSubmittedAt;
             if(entry.parity){delete entry.parity.submittedAt;delete entry.parity.submitDelayMs;}
+            this.runtime.live.entrySkips[symbol]={planId:plan.id,symbol,code:"RETRYING",reason:entry.lastError,observedAt:Date.now()};
+            this.recordLiveAudit({observedAt:Date.now(),symbol,planId:plan.id,stage:"ENTRY_SUBMIT",level:"INFO",reason:entry.lastError});
             await this.queueLiveBinding(entry);
             await this.saveCheckpoint(Date.now(),true);
             continue;
@@ -2702,9 +2764,26 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.runtime.live.lastError=recoveringSubmission.lastError
         ?? `${recoveringSubmission.symbol} 的唯一订单身份仍在 Gate 核对；该笔风险已冻结，其他独立新机会继续执行`;
     }
-    // A cached source-trigger pass is provisional by construction; the caller
-    // schedules the immediate full Gate reconciliation. Network-backed passes
-    // become the next fast-event cache.
+    // No eligible source may leave a completed healthy reconciliation as an
+    // unclassified WAITING row. That old fallback hid the real branch behind
+    // "等待报价、账户与交易所确认" even when all three were healthy.
+    for(const trade of Object.values(desiredPortfolio)){
+      if(!trade.forwardSource||!sourceAfterEnable(trade.forwardSource,this.runtime.live.activation,this.forwardState!.startedAt))continue;
+      const symbol=trade.symbol,position=this.runtime.live.positions[symbol],entry=this.runtime.live.entries[symbol],
+        skip=this.runtime.live.entrySkips[symbol],
+        copied=position?.status==="OPEN"&&position.id===trade.id,
+        pending=entry?.planId===trade.id&&["SUBMITTING","OPEN","ERROR"].includes(entry.status);
+      if(copied||pending||skip?.planId===trade.id)continue;
+      const endedEarly=position?.id===trade.id&&position.status==="CLOSED",
+        reason=endedEarly
+          ?"该模拟源单仍开放，但对应实盘仓位已经在 Gate 归零；同一源单不重复开仓，等待下一笔新模拟源单"
+          :entry?.planId===trade.id&&entry.lastError
+            ?entry.lastError
+            :"本轮账户/盘口核对已完成，但源单没有进入提交、挂起或明确阻塞状态；保留源单并在下一2秒循环重新执行";
+      this.runtime.live.entrySkips[symbol]={planId:trade.id,symbol,code:endedEarly?"SOURCE_ENDED_EARLY":"RETRYING",
+        reason,observedAt:Date.now()};
+      this.recordLiveAudit({observedAt:Date.now(),symbol,planId:trade.id,stage:"ENTRY_SUBMIT",level:endedEarly?"SKIPPED":"RECOVERING",reason});
+    }
     this.liveSnapshotCache=structuredClone(snapshot);
   }
 
