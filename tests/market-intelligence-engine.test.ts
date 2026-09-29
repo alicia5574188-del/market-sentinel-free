@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import {buildMarketIntelligence,initialMarketIntelligenceState,MARKET_INTELLIGENCE_VERSION} from "../lib/market-intelligence-engine.ts";
 import {evaluatePositionIntelligence} from "../lib/position-intelligence-engine.ts";
 import {entryResponseWindowMs,evaluateEntryResponse} from "../lib/market-intelligence-entry-response.ts";
-import {advanceForward,extremeResidualConfirmationProfile,fillForwardPortfolio,initialForward,resetForwardAccountPreservingLearning} from "../lib/forward-relations.ts";
+import {advanceForward,extremeResidualConfirmationProfile,fillForwardPortfolio,initialForward,normalizeForward,
+  resetForwardAccountPreservingLearning,stableEntryLocationDecision,stableEntryThesisProfile} from "../lib/forward-relations.ts";
 
 const T=2_000_000_000_000;
 function candles(start:number,step:number,vol=.002){
@@ -330,4 +331,61 @@ test("BTW-like extreme residual requires substantially stronger live proof inste
   const ordinary=extremeResidualConfirmationProfile({residual:.012,sourceCount:5,dataConfidence:95,
     disagreementRate:.0005,recentExtremeLosses:0});
   assert.equal(ordinary.required,false);
+});
+
+
+test("ZEC-like stable short thesis survives a shallow 2s opposition burst as RETEST instead of being cancelled",()=>{
+  const state={symbol:"ZEC_USDT",watchScore:86,regime:"DIVERGENT" as const,stage:"READY" as const,clusterId:"corr:ADA_USDT",
+    correlation:.77,beta:1.38,volatility:.0034,dataConfidence:100,actualMove:-.023,expectedMove:-.012,residual:-.0116,residualZ:-1.39,
+    residualPersistence:1,relativeStrength:.27,longScore:10,shortScore:90,pathLong:.5,pathShort:.5,roomLong:.029,roomShort:.0085,
+    sourceCount:5,venueAgreement:.8,venuePressure:.38,reasons:[],signalSide:"SHORT" as const,signalSince:T-900_000,signalBars:3,signalLastBar:T-300_000};
+  const quote={bestBid:1446.60,bestAsk:1446.61,observedAt:T+8_000,fresh:true,entryReady:true,sourceCount:5,disagreementRate:.001,
+    sourceBreadth:.7,directionalAgreement:.8,medianShortMove:.0005,bookImbalance:.25,bidLiquidityChange:.12,askLiquidityChange:-.05,liquiditySourceCount:4};
+  const memory={startedAt:T,deadlineAt:T+12*60_000,initialPrice:1446.09,samples:4,bestAdvanceRate:0,maxAdverseRate:.0002,
+    supportSamples:0,oppositionSamples:1};
+  const sticky=evaluateEntryResponse({now:T+8_000,side:"SHORT",score:86.1,edgeRatio:1.66,pullbackRiskRate:.00849,stopRate:.0100,
+    sourceCount:5,disagreementRate:.001,price:1446.61,memory,state,quote,allowRetest:true});
+  assert.equal(sticky.action,"RETEST");
+  assert.match(sticky.reason,/保留武装状态/);
+  const ordinary=evaluateEntryResponse({now:T+8_000,side:"SHORT",score:76,edgeRatio:1.4,pullbackRiskRate:.00849,stopRate:.0100,
+    sourceCount:5,disagreementRate:.001,price:1446.61,memory,state,quote,allowRetest:false});
+  assert.equal(ordinary.action,"CANCEL");
+});
+
+test("ZEC-like thesis is armed early but cannot chase after the original location has been consumed",()=>{
+  const profile=stableEntryThesisProfile({score:86.12,premium:true,thesisBars:3,stage:"READY",edgeRatio:1.661,sourceCount:5,
+    dataConfidence:100,netRemainingSpaceRate:.014111,pullbackRiskRate:.008495});
+  assert.equal(profile.stable,true);
+  assert.ok(profile.maxChaseRate>.005&&profile.maxChaseRate<.007,
+    "ZEC-like thesis should stop chasing after roughly the first ~0.6% directional move");
+  const lateAdvance=1446.09/1393.08-1;
+  const late=stableEntryLocationDecision({currentAdvanceRate:lateAdvance,bestAdvanceRate:lateAdvance,
+    expectedNetRate:.014111,pullbackRiskRate:.008495,maxChaseRate:profile.maxChaseRate,
+    retestPullbackMin:profile.retestPullbackMin,restartMin:profile.restartMin,retestBaseReady:false});
+  assert.equal(late.action,"WAIT_PULLBACK","a 1446 -> 1393 move must never be treated as a fresh market-order location");
+  assert.ok(late.requiredPullback>.02,"after such a large missed move the system must wait for a material retrace, not a tiny tick");
+
+  const missedButRecoverable=stableEntryLocationDecision({currentAdvanceRate:.0040,bestAdvanceRate:.0080,
+    expectedNetRate:.014111,pullbackRiskRate:.008495,maxChaseRate:profile.maxChaseRate,
+    retestPullbackMin:profile.retestPullbackMin,restartMin:profile.restartMin,retestBaseReady:false});
+  assert.equal(missedButRecoverable.action,"SET_RETEST_BASE");
+  const restarted=stableEntryLocationDecision({currentAdvanceRate:.0053,bestAdvanceRate:.0080,
+    expectedNetRate:.014111,pullbackRiskRate:.008495,maxChaseRate:profile.maxChaseRate,
+    retestPullbackMin:profile.retestPullbackMin,restartMin:profile.restartMin,retestBaseReady:true,
+    restartAdvanceRate:profile.restartMin+.0002});
+  assert.equal(restarted.action,"READY_AFTER_RETEST");
+});
+
+test("armed thesis fields survive forward normalization instead of silently losing execution authority",()=>{
+  const state=initialForward(T);
+  state.entryValidations.zec={id:"zec",candidateId:"zec",symbol:"ZEC_USDT",side:"SHORT",startedAt:T-10_000,expiresAt:T+600_000,
+    deadlineAt:T+500_000,initialPrice:1446.09,lastPrice:1446.61,lastQuoteAt:T,samples:8,bestAdvanceRate:.0006,maxAdverseRate:.0004,
+    supportSamples:0,oppositionSamples:2,extendedConfirmation:true,extremeResidual:false,minimumElapsedMs:12_000,
+    minimumSupportSamples:3,minimumRetainedRate:.70,stableThesis:true,phase:"RETEST_WAIT",initialExpectedNetRate:.014111,
+    pullbackRiskRateAtArm:.008495,maxChaseRate:.0063,retestPullbackMin:.0025,restartMin:.0012,retestBasePrice:1448,
+    retestBaseAt:T-2_000,status:"WAITING",reason:"x"};
+  const restored=normalizeForward(state,T+1_000).entryValidations.zec!;
+  assert.equal(restored.stableThesis,true);assert.equal(restored.phase,"RETEST_WAIT");
+  assert.equal(restored.extendedConfirmation,true);assert.equal(restored.minimumSupportSamples,3);
+  assert.equal(restored.maxChaseRate,.0063);assert.equal(restored.retestBasePrice,1448);
 });
