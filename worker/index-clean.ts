@@ -2819,8 +2819,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   protected async setLiveMode(enabled: boolean) {
-    const wasEnabled=this.runtime.live.requestedEnabled;
-    const changedAt=Date.now();
+    const wasEnabled=this.runtime.live.requestedEnabled,priorActivation=this.runtime.live.activation??null,
+      priorChangedAt=this.runtime.live.changedAt,changedAt=Date.now();
     if(enabled&&!wasEnabled&&!this.forwardState){
       const error="当前模拟源尚未恢复完整账户代次；实盘开关保持关闭，未建立空的开启起点";
       return {ok:false,error,live:this.runtime.live};
@@ -2830,8 +2830,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (!enabled) this.runtime.live.operational = false;
     if(wasEnabled!==enabled||this.runtime.live.changedAt==null)this.runtime.live.changedAt = changedAt;
     this.runtime.live.lastError = null;
+    let intentPersisted=false;
     try {
-      await this.ctx.storage.put(`${LIVE_PARITY_PREFIX}owner-intent`,{enabled,changedAt:this.runtime.live.changedAt,activation:this.runtime.live.activation??null});
+      await this.ctx.storage.put(LIVE_PARITY_PREFIX+"owner-intent",{enabled,changedAt:this.runtime.live.changedAt,activation:this.runtime.live.activation??null});
+      intentPersisted=true;
       await this.saveCheckpoint(Date.now(),true);
       await this.syncLive(Date.now(), enabled, !enabled);
       this.recordLiveAudit({ observedAt: Date.now(), symbol: null, planId: null, stage: "LIVE_CONTROL", level: "INFO",
@@ -2839,6 +2841,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       await this.saveCheckpoint(Date.now(), true);
       return { ok: true, live: this.runtime.live };
     } catch (error) {
+      if(enabled&&!wasEnabled&&!intentPersisted){
+        this.runtime.live.requestedEnabled=wasEnabled;
+        this.runtime.live.activation=priorActivation;
+        this.runtime.live.changedAt=priorChangedAt;
+      }
       this.runtime.live.operational = false;
       this.runtime.live.lastError = safeError(error);
       this.recordLiveAudit({ observedAt: Date.now(), symbol: null, planId: null, stage: "LIVE_CONTROL",
