@@ -699,11 +699,25 @@ function rankedEligible(s:ForwardState,now:number){
 }
 
 function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:number){
-  s.entryValidations={};
-  const eligible=rankedEligible(s,now),reasons:Record<string,number>={};let seeded=0;
+  const opportunities=new Map(s.opportunities.filter(isIntelligenceOpportunity).map(o=>[o.id,o])),
+    preserved:Record<string,EntryValidation>={};
+  for(const [id,v] of Object.entries(s.entryValidations)){
+    const o=opportunities.get(v.candidateId);
+    if(!o||s.positions.some(t=>t.symbol===v.symbol)||(o.thesisId&&s.consumedTheses[o.thesisId]))continue;
+    preserved[id]=v;
+    if(v.status==="WAITING"&&v.stableThesis){
+      const hardEnd=v.startedAt+20*60_000;
+      v.expiresAt=Math.max(v.expiresAt,Math.min(o.expiresAt,hardEnd));
+      v.deadlineAt=Math.max(v.deadlineAt,Math.min(o.expiresAt,v.startedAt+12*60_000));
+    }
+  }
+  s.entryValidations=preserved;
+  const eligible=rankedEligible(s,now),reasons:Record<string,number>={};
+  let active=Object.values(s.entryValidations).filter(v=>v.status==="WAITING").length;
   const reject=(reason:string)=>{reasons[reason]=(reasons[reason]??0)+1;};
   for(const o of eligible){
-    if(seeded>=3)break;
+    if(active>=3)break;
+    if(s.entryValidations[o.id])continue;
     const q=quotes[o.symbol];if(!freshQuote(q,now)||q!.entryReady!==true){reject("等待实时盘口");continue;}
     const state=s.extremumRegime.symbols[o.symbol],sourceCount=Math.max(o.sourceCount??0,state?.sourceCount??0,q!.sourceCount??0),
       disagreement=q!.disagreementRate??o.disagreementRate??0,
@@ -712,20 +726,30 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
       extreme=extremeResidualConfirmationProfile({residual:o.residual??0,sourceCount,
         dataConfidence:o.dataConfidence??state?.dataConfidence??0,disagreementRate:disagreement,recentExtremeLosses}),
       profile=entryResponseWindowMs({score:o.score,edgeRatio:o.edgeRatio,sourceCount,disagreementRate:disagreement}),
+      stable=stableEntryThesisProfile({score:o.score,premium:!!o.premium,thesisBars:o.thesisBars??state?.signalBars??0,
+        stage:o.confirmationStage??state?.stage??"OBSERVE",edgeRatio:o.edgeRatio,sourceCount,
+        dataConfidence:o.dataConfidence??state?.dataConfidence??0,netRemainingSpaceRate:o.netRemainingSpaceRate,
+        pullbackRiskRate:o.pullbackRiskRate}),
       minimumElapsedMs=Math.max(o.extendedConfirmation?12_000:0,extreme.minimumElapsedMs),
       minimumSupportSamples=Math.max(o.extendedConfirmation?3:0,extreme.minimumSupportSamples),
       minimumRetainedRate=Math.max(o.extendedConfirmation?.70:0,extreme.minimumRetainedRate),
-      price=o.side==="LONG"?q!.bestAsk:q!.bestBid;
-    s.entryValidations[o.id]={id:o.id,candidateId:o.id,symbol:o.symbol,side:o.side,startedAt:now,
-      expiresAt:Math.min(o.expiresAt,now+BAR_MS),
-      deadlineAt:Math.min(o.expiresAt,now+Math.max(profile.windowMs,minimumElapsedMs+30_000)),
+      price=o.side==="LONG"?q!.bestAsk:q!.bestBid,
+      expiresAt=stable.stable?Math.min(o.expiresAt,now+20*60_000):Math.min(o.expiresAt,now+BAR_MS),
+      deadlineAt=stable.stable?Math.min(expiresAt,now+stable.armedWindowMs)
+        :Math.min(o.expiresAt,now+Math.max(profile.windowMs,minimumElapsedMs+30_000));
+    s.entryValidations[o.id]={id:o.id,candidateId:o.id,symbol:o.symbol,side:o.side,startedAt:now,expiresAt,deadlineAt,
       initialPrice:price,lastPrice:price,lastQuoteAt:q!.observedAt,samples:1,bestAdvanceRate:0,maxAdverseRate:0,
       supportSamples:0,oppositionSamples:0,extendedConfirmation:!!o.extendedConfirmation||extreme.required,
-      extremeResidual:extreme.required,minimumElapsedMs,minimumSupportSamples,minimumRetainedRate,status:"WAITING",
-      reason:extreme.required?extreme.reason:o.extendedConfirmation
+      extremeResidual:extreme.required,minimumElapsedMs,minimumSupportSamples,minimumRetainedRate,
+      stableThesis:stable.stable,phase:"ARMED",initialExpectedNetRate:o.netRemainingSpaceRate,
+      pullbackRiskRateAtArm:o.pullbackRiskRate,maxChaseRate:stable.maxChaseRate,retestPullbackMin:stable.retestPullbackMin,
+      restartMin:stable.restartMin,retestBasePrice:null,retestBaseAt:null,status:"WAITING",
+      reason:extreme.required?extreme.reason:stable.stable
+        ?"高质量稳定交易假设已武装；短时反向只进入回测等待，不会直接取消，真正结构失效才解除。"
+        :o.extendedConfirmation
         ?(o.futureResearchAction==="CONFIRM_MORE"?"前瞻研究发现状态转移风险，进入加强实时延续确认。":"极端轮动延伸机会进入加强实时延续确认。")
         :profile.fastLane?"高质量机会进入快速实时响应确认。":"候选进入实时响应确认。"};
-    seeded++;
+    active++;
   }
   s.entryDiagnostics={at:now,matched:eligible.length,opened:0,reasons};
 }
