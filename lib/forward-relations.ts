@@ -642,8 +642,21 @@ function annotateLifecycleOpportunities(s:ForwardState,market:MarketEvolutionSta
     o.environmentRiskScale=route.riskScale;o.environmentProbe=route.probe;o.environmentForceRetest=route.forceRetest;
     o.environmentMainline=route.mainline;o.environmentReason=route.reason;
     o.probeImpulseMin=route.probeImpulseMin;o.probePullbackMin=route.probePullbackMin;o.probeRestartMin=route.probeRestartMin;
+    if(route.mainline&&!o.eligible&&o.environmentScore>=78&&(o.thesisBars??symbol.signalBars)>=1
+      &&symbol.sourceCount>=3&&symbol.dataConfidence>=82&&o.edgeRatio>=1.45){
+      o.eligible=true;o.reason+=" 全市场同步扩张触发主线参与通道：不要求个体先形成极端残差。";
+    }
     if(!o.reason.includes("环境路由"))o.reason+=` 环境路由：${route.reason}`;
     if(o.extendedConfirmation&&!o.reason.includes("更完整的实时延续确认"))o.reason+=` ${lifecycle.extendedConfirmation?lifecycle.reason:future.reason}`;
+  }
+  const groupBest=new Map<string,Opportunity>();
+  for(const o of s.opportunities.filter(x=>isIntelligenceOpportunity(x)&&x.eligible)){
+    const key=`${o.clusterId??o.symbol}:${o.side}`,old=groupBest.get(key);
+    if(!old||opportunityCompare(o,old)<0)groupBest.set(key,o);
+  }
+  for(const o of s.opportunities.filter(x=>isIntelligenceOpportunity(x)&&x.eligible)){
+    const best=groupBest.get(`${o.clusterId??o.symbol}:${o.side}`);
+    if(best&&best.id!==o.id){o.eligible=false;o.reason+=` 环境路由后同相关组保留更优表达 ${best.symbol.replace("_USDT","")}。`;}
   }
 }
 
