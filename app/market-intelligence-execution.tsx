@@ -30,6 +30,9 @@ const hypothesisKind=(v?:string)=>({
 }[v??""]??v??"未来状态研究");
 const hypothesisStatus=(v?:string)=>v==="CONFIRMED"?"已被后续市场确认":v==="WEAKENING"?"确认后正在减弱":v==="CONFIRMING"?"正在加强":"正在形成";
 const researchAction=(v?:string)=>v==="CONFIRM_MORE"?"加强实时确认":v==="SUPPORTED"?"前瞻研究支持":"沿用原确认";
+const entryExecutionState=(v?:{status?:string;phase?:string;stableThesis?:boolean})=>v?.status==="WAITING"
+  ?(v.phase==="RETEST_WAIT"?"等回调重启":v.stableThesis?"已武装":"实时确认")
+  :v?.status==="CANCELLED"?"本假设已取消":"未进入执行";
 const side=(v:string)=>v==="LONG"?"做多":"做空";
 const family=(v?:string)=>({
   BREADTH:"市场广度",LEADERSHIP:"领导结构",RELATIVE:"相对强弱",FLOW:"跨所/盘口响应",CORRELATION:"相关性",
@@ -59,6 +62,8 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
     hypothesisResearch=data?.hypothesisResearch,hypotheses=hypothesisResearch?.active??[],
     entryValidations=data?.entryValidation?.records??[],
     validationById=new Map(entryValidations.map(v=>[v.candidateId,v])),
+    waitingValidations=entryValidations.filter(v=>v.status==="WAITING"),
+    cancelledValidations=entryValidations.filter(v=>v.status==="CANCELLED"),
     actionable=opportunities.filter(o=>o.eligible),
     candidateRows=(actionable.length?actionable:opportunities).slice(0,8);
 
@@ -128,12 +133,26 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
         </article>})}</div>:<p className="fr-note">当前还没有足够集中的特殊变化形成未来状态假设；这不是停止交易，只代表继续沿用原市场智能与实时响应链。</p>}
     </section>
     <section className="fr-section">
+      <div className="fr-section-head"><div><small>ENTRY EXECUTION</small><h2>入场执行状态</h2>
+        <p>这里独立显示系统已经发现并正在处理的入场假设，不受候选榜前8名限制。</p></div>
+        <span>{waitingValidations.length} 个进行中 · {cancelledValidations.length} 个最近取消</span></div>
+      {entryValidations.length?<div className="fr-journal">{entryValidations.map(v=><article key={v.id}>
+        <time>{clock(v.startedAt)}</time>
+        <div><b>{v.symbol.replace("_"," / ")} · {side(v.side)} · {entryExecutionState(v)}</b>
+          <p>{v.reason??"等待实时执行证据。"}</p>
+          <p>{v.stableThesis?"稳定 thesis 已保留执行权":"普通实时确认"}
+            {v.phase==="RETEST_WAIT"?" · 当前不追价，等待回调结束后重新启动":""}
+            {v.status==="CANCELLED"?" · 已解除本轮执行权":""}</p>
+        </div>
+      </article>)}</div>
+        :<p className="fr-note">当前没有已武装或等待回调的入场假设；系统仍在研究候选，但尚未进入实时执行状态。</p>}
+    </section>
+
+    <section className="fr-section">
       <div className="fr-section-head"><div><small>NEXT OPPORTUNITIES</small><h2>当前交易假设 · 最值得关注的机会</h2>
         <p>先看机会处于哪个阶段，再看评分。过度延伸不会直接被禁止，但会进入加强实时确认。</p></div><span>{actionable.length} 个可参与</span></div>
       {candidateRows.length?<div className="fr-exec-candidate-grid">{candidateRows.map((o,index)=>{
-        const v=validationById.get(o.id),entryState=v?.status==="WAITING"
-          ?(v.phase==="RETEST_WAIT"?"等回调重启":v.stableThesis?"已武装":"实时确认")
-          :v?.status==="CANCELLED"?"本假设已取消":o.extendedConfirmation?"加强确认":o.eligible?"主候选":"观察";
+        const v=validationById.get(o.id),entryState=v?entryExecutionState(v):o.extendedConfirmation?"加强确认":o.eligible?"主候选":"观察";
         return <details className={`fr-exec-candidate ${o.eligible?"is-eligible":""} ${o.extendedConfirmation?"is-extended":""}`} key={o.id}>
         <summary><span className="fr-exec-candidate-rank">#{index+1}</span><div className="fr-exec-candidate-main"><div><b>{o.symbol.replace("_"," / ")}</b><small>{side(o.side)} · {o.mode}</small></div>
           <strong>{opportunityPhase(o.opportunityLifecyclePhase)}</strong></div>

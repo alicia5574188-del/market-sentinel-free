@@ -309,3 +309,15 @@ test("high-quality entries keep stable thesis authority through shallow realtime
   assert.doesNotMatch(advance,/opened=1;s\.entryValidations=\{\}/);
   assert.match(core,/2秒级浅反向只能转为RETEST_WAIT/);
 });
+
+
+test("execution page always exposes entry execution state independently of top candidate ranking",async()=>{
+  const execution=await read("app/market-intelligence-execution.tsx");
+  assert.match(execution,/入场执行状态/);
+  assert.match(execution,/不受候选榜前8名限制/);
+  assert.match(execution,/等回调重启/);
+  assert.match(execution,/已武装/);
+  assert.match(execution,/本假设已取消/);
+  assert.match(execution,/当前没有已武装或等待回调的入场假设/);
+  assert.match(execution,/entryValidations\.map/);
+});
