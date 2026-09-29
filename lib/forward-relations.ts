@@ -20,6 +20,10 @@ import { deriveMarketEvolution, deriveOpportunityLifecycle, deriveProfitLifecycl
 import { advanceMarketHypothesisResearch, entryHypothesisGuidance, initialMarketHypothesisResearch,
   normalizeMarketHypothesisResearch, positionHypothesisGuidance,
   type EntryHypothesisGuidance, type MarketHypothesisResearchState } from "./market-intelligence-hypothesis-research.ts";
+import { ENVIRONMENT_ROUTER_VERSION, classifyMarketEnvironment, environmentPerformanceFactor, environmentProbeRetestDecision,
+  initialEnvironmentPerformanceState, normalizeEnvironmentPerformanceState, recordEnvironmentOutcome, routeEnvironmentOpportunity,
+  type EnvironmentPerformanceState, type EnvironmentPlaybook, type MarketEnvironment, type RouteAlignment
+} from "./market-intelligence-environment-router.ts";
 
 /**
  * Forward Path Relation 3.0 — PAPER authority.
@@ -85,6 +89,10 @@ export type Opportunity={
   thesisSince?:number;thesisBars?:number;
   marketEvolutionPhase?:MarketEvolutionState["phase"];opportunityLifecyclePhase?:OpportunityLifecyclePhase;
   extendedConfirmation?:boolean;lifecycleReason?:string;
+  environment?:MarketEnvironment;playbook?:EnvironmentPlaybook;routeAlignment?:RouteAlignment;
+  environmentPriority?:number;environmentScore?:number;environmentRiskScale?:number;environmentProbe?:boolean;
+  environmentForceRetest?:boolean;environmentMainline?:boolean;environmentReason?:string;
+  probeImpulseMin?:number;probePullbackMin?:number;probeRestartMin?:number;
   futureResearchAction?:EntryHypothesisGuidance["action"];futureResearchReason?:string;futureHypothesisIds?:string[];
 };
 export type MarketPulse={at:number;up:number;down:number;neutral:number;bias:"UP"|"DOWN"|"MIXED";strength:number;expansion:number};
@@ -104,7 +112,10 @@ export type EntryContext={
   clusterId?:string;thesisId?:string;marketNarrativeId?:string;thesisSummary?:string;invalidationSummary?:string;entryResidual?:number;entryRelativeStrength?:number;
   thesisSince?:number;thesisBars?:number;
   marketEvolutionPhase?:MarketEvolutionState["phase"];opportunityLifecyclePhase?:OpportunityLifecyclePhase;
-  extendedConfirmation?:boolean;futureResearchAction?:EntryHypothesisGuidance["action"];futureResearchReason?:string;futureHypothesisIds?:string[];
+  extendedConfirmation?:boolean;environment?:MarketEnvironment;playbook?:EnvironmentPlaybook;routeAlignment?:RouteAlignment;
+  environmentRiskScale?:number;environmentProbe?:boolean;environmentReason?:string;
+  baseEntryScore?:number;environmentScore?:number;
+  futureResearchAction?:EntryHypothesisGuidance["action"];futureResearchReason?:string;futureHypothesisIds?:string[];
 };
 export type Trade={
   id:string;symbol:string;side:"LONG"|"SHORT";rule:Rule;openedAt:number;closedAt:number|null;status:"OPEN"|"CLOSED";
@@ -135,6 +146,8 @@ export type EntryValidation={id:string;candidateId:string;symbol:string;side:"LO
   minimumElapsedMs?:number;minimumSupportSamples?:number;minimumRetainedRate?:number;
   stableThesis?:boolean;phase?:"ARMED"|"RETEST_WAIT";initialExpectedNetRate?:number;pullbackRiskRateAtArm?:number;
   maxChaseRate?:number;retestPullbackMin?:number;restartMin?:number;retestBasePrice?:number|null;retestBaseAt?:number|null;
+  environment?:MarketEnvironment;playbook?:EnvironmentPlaybook;requiresProbeRetest?:boolean;probeImpulseMin?:number;
+  probePullbackMin?:number;probeRestartMin?:number;probeRetestSeen?:boolean;
   status:"WAITING"|"CANCELLED";reason:string|null};
 export type ForwardState={
   version:string;engineVersion:string;startedAt:number;revision:number;lastCycleAt:number;lastQuoteCycleAt:number;lastCandleAt:number;
@@ -142,7 +155,9 @@ export type ForwardState={
   fundingAllowance:number;turnover:number;positions:Trade[];history:Trade[];events:AuditEvent[];daily:Daily[];
   selectedSymbols:string[];opportunities:Opportunity[];regions:Record<string,Region>;relationEngine:RelationEngineState;extremumRegime:MarketIntelligenceState;
   familyExperiment:FamilyExperimentState;structuralInterrupt:StructuralInterruptState;
-  hypothesisResearch:MarketHypothesisResearchState;
+  hypothesisResearch:MarketHypothesisResearchState;environmentPerformance:EnvironmentPerformanceState;
+  environmentContext:{version:typeof ENVIRONMENT_ROUTER_VERSION;environment:MarketEnvironment;phase:MarketEvolutionState["phase"];
+    trendSide:"LONG"|"SHORT"|null;updatedAt:number;reason:string};
   entryValidations:Record<string,EntryValidation>;
   marketPulse:MarketPulse;lastEntryAt:Record<string,number>;lastExitAt:Record<string,number>;lastSide:Record<string,"LONG"|"SHORT">;
   consumedTheses:Record<string,number>;
@@ -171,7 +186,10 @@ export function initialForward(now:number):ForwardState{
     positions:[],history:[],events:[],daily:[],selectedSymbols:[],opportunities:[],regions:{},relationEngine:initialRelationEngine(now),
     extremumRegime:initialMarketIntelligenceState(now),
     familyExperiment:initialFamilyExperimentState(),structuralInterrupt:initialStructuralInterruptState(),
-    hypothesisResearch:initialMarketHypothesisResearch(now),entryValidations:{},marketPulse:blankPulse(now),
+    hypothesisResearch:initialMarketHypothesisResearch(now),environmentPerformance:initialEnvironmentPerformanceState(),
+    environmentContext:{version:ENVIRONMENT_ROUTER_VERSION,environment:"TRANSITION",phase:"TRANSITIONAL",
+      trendSide:null,updatedAt:now,reason:"环境路由正在建立稳定市场分类。"},
+    entryValidations:{},marketPulse:blankPulse(now),
     lastEntryAt:{},lastExitAt:{},lastSide:{},consumedTheses:{},lastRotationAt:0,latestReason:"Market Intelligence V1 已启动：从整个市场关系、分化与跨交易所共识中持续寻找异类机会。",
     entryDiagnostics:{at:now,matched:0,opened:0,reasons:{}},storage:{persistedAt:0,error:null},liveEligible:false,
     policyVersion:ADAPTIVE_ENGINE_VERSION,strategyAuthorityVersion:ADAPTIVE_ENGINE_VERSION,executionVersion:ADAPTIVE_ENGINE_VERSION,
@@ -256,6 +274,9 @@ function normalizeEntryValidations(value:unknown,now:number){
       restartMin:Math.max(0,safe(r.restartMin)),
       retestBasePrice:Number.isFinite(r.retestBasePrice)?Math.max(1e-12,r.retestBasePrice!):null,
       retestBaseAt:Number.isFinite(r.retestBaseAt)?Math.max(0,r.retestBaseAt!):null,
+      environment:r.environment,playbook:r.playbook,requiresProbeRetest:!!r.requiresProbeRetest,
+      probeImpulseMin:Math.max(0,safe(r.probeImpulseMin)),probePullbackMin:Math.max(0,safe(r.probePullbackMin)),
+      probeRestartMin:Math.max(0,safe(r.probeRestartMin)),probeRetestSeen:!!r.probeRetestSeen,
       status:r.status==="CANCELLED"?"CANCELLED":"WAITING",reason:typeof r.reason==="string"?r.reason:null};
   }
   return out;
@@ -293,6 +314,9 @@ export function normalizeForward(v:ForwardState|null|undefined,now:number):Forwa
     familyExperiment,
     structuralInterrupt:normalizeStructuralInterruptState((old as {structuralInterrupt?:unknown}).structuralInterrupt,now),
     hypothesisResearch:normalizeMarketHypothesisResearch((old as {hypothesisResearch?:unknown}).hypothesisResearch,now),
+    environmentPerformance:normalizeEnvironmentPerformanceState((old as {environmentPerformance?:unknown}).environmentPerformance,history,now),
+    environmentContext:(old as {environmentContext?:ForwardState["environmentContext"]}).environmentContext?.version===ENVIRONMENT_ROUTER_VERSION
+      ?structuredClone((old as {environmentContext:ForwardState["environmentContext"]}).environmentContext):base.environmentContext,
     entryValidations:normalizeEntryValidations((old as {entryValidations?:unknown}).entryValidations,now),
     marketPulse:v.marketPulse?.bias? v.marketPulse:blankPulse(now),lastEntryAt:v.lastEntryAt??{},lastExitAt:v.lastExitAt??{},lastSide:v.lastSide??{},
     consumedTheses:normalizeConsumedTheses((old as {consumedTheses?:unknown}).consumedTheses,history,positions,now),
@@ -380,7 +404,12 @@ export function relationOpportunity(c:RelationCandidate,rows:Candle[],q:Quote|un
     relationHorizon:c.horizon,relationHealth:c.health,riskScale:clip(c.health,.25,1),exitPlan:consumeExitPlan(c.exitProfile,consumed)};
 }
 function opportunityCompare(a:Opportunity,b:Opportunity){
-  return Number(b.eligible)-Number(a.eligible)||Number(!b.reserve)-Number(!a.reserve)||Number(b.premium)-Number(a.premium)||b.score-a.score;
+  return Number(b.eligible)-Number(a.eligible)
+    ||Number(!b.reserve)-Number(!a.reserve)
+    ||(b.environmentPriority??0)-(a.environmentPriority??0)
+    ||Number(b.premium)-Number(a.premium)
+    ||(b.environmentScore??b.score)-(a.environmentScore??a.score)
+    ||b.score-a.score;
 }
 function equityMark(s:ForwardState,quotes:Record<string,Quote>,now:number){
   let floating=0,stale=0;for(const t of s.positions){const q=quotes[t.symbol],px=freshQuote(q,now)?midpoint(q):t.lastPrice;if(!freshQuote(q,now))stale++;
@@ -403,6 +432,9 @@ function closeTrade(s:ForwardState,t:Trade,price:number,now:number,reason:string
     tradeId:t.id,predictedNetRate:safe(t.forecast?.remainingNetRate),realizedNetRate:net/Math.max(t.notional,1e-9),
     costRate:(t.entryFee+exitFee+funding)/Math.max(t.notional,1e-9),
     targetCapture:clip(t.favorable/Math.max(t.exitPlan?.targetRate??t.entryContext?.remainingSpaceRate??0,1e-9)),now});
+  if(reason!=="ACCOUNT_RESET"&&t.entryContext?.environment&&t.entryContext?.playbook)
+    recordEnvironmentOutcome(s.environmentPerformance,{environment:t.entryContext.environment,playbook:t.entryContext.playbook,
+      netPnl:net,plannedRisk:Math.max(.01,t.plannedRisk),now});
   s.history.unshift(t);s.history=s.history.slice(0,HISTORY_LIMIT);event(s,now,"EXIT",t.id,`${t.symbol} ${reason} ${net>=0?"+":""}${net.toFixed(2)}U`);
 }
 function legacyProtectionFloor(t:Trade){
@@ -590,16 +622,47 @@ function existingRisk(s:ForwardState,side?:"LONG"|"SHORT"){return s.positions.fi
 function cycleRiskAdded(s:ForwardState,since:number){return[...s.positions,...s.history].filter(t=>t.openedAt>=since).reduce((n,t)=>n+riskCharge(t),0);}
 function isIntelligenceOpportunity(o:Opportunity){return o.strategyVersion===MARKET_INTELLIGENCE_VERSION;}
 function annotateLifecycleOpportunities(s:ForwardState,market:MarketEvolutionState){
+  const portfolioLongRisk=existingRisk(s,"LONG"),portfolioShortRisk=existingRisk(s,"SHORT");
   for(const o of s.opportunities){
     if(!isIntelligenceOpportunity(o))continue;
     const symbol=s.extremumRegime.symbols[o.symbol];if(!symbol)continue;
     const lifecycle=deriveOpportunityLifecycle({side:o.side,symbol,thesisBars:o.thesisBars??symbol.signalBars,market}),
       future=entryHypothesisGuidance(s.hypothesisResearch,{side:o.side,score:o.score,residualZ:symbol.residualZ,
-        residualPersistence:symbol.residualPersistence,sourceCount:symbol.sourceCount,dataConfidence:symbol.dataConfidence});
+        residualPersistence:symbol.residualPersistence,sourceCount:symbol.sourceCount,dataConfidence:symbol.dataConfidence}),
+      firstRoute=routeEnvironmentOpportunity({market:s.extremumRegime,evolution:market,symbol,opportunity:{
+        side:o.side,mode:o.mode,score:o.score,premium:o.premium,edgeRatio:o.edgeRatio,
+        netRemainingSpaceRate:o.netRemainingSpaceRate,pullbackRiskRate:o.pullbackRiskRate,
+        thesisBars:o.thesisBars,confirmationStage:o.confirmationStage
+      },portfolioLongRisk,portfolioShortRisk}),
+      performanceFactor=environmentPerformanceFactor(s.environmentPerformance,firstRoute.environment,firstRoute.playbook),
+      route=routeEnvironmentOpportunity({market:s.extremumRegime,evolution:market,symbol,opportunity:{
+        side:o.side,mode:o.mode,score:o.score,premium:o.premium,edgeRatio:o.edgeRatio,
+        netRemainingSpaceRate:o.netRemainingSpaceRate,pullbackRiskRate:o.pullbackRiskRate,
+        thesisBars:o.thesisBars,confirmationStage:o.confirmationStage
+      },performanceFactor,portfolioLongRisk,portfolioShortRisk});
     o.marketEvolutionPhase=market.phase;o.opportunityLifecyclePhase=lifecycle.phase;
     o.extendedConfirmation=lifecycle.extendedConfirmation||future.extendedConfirmation;o.lifecycleReason=lifecycle.reason;
     o.futureResearchAction=future.action;o.futureResearchReason=future.reason;o.futureHypothesisIds=future.hypothesisIds;
+    o.environment=route.environment;o.playbook=route.playbook;o.routeAlignment=route.alignment;
+    o.environmentPriority=route.priority;o.environmentScore=clip(o.score+route.scoreDelta,0,100);
+    o.environmentRiskScale=route.riskScale;o.environmentProbe=route.probe;o.environmentForceRetest=route.forceRetest;
+    o.environmentMainline=route.mainline;o.environmentReason=route.reason;
+    o.probeImpulseMin=route.probeImpulseMin;o.probePullbackMin=route.probePullbackMin;o.probeRestartMin=route.probeRestartMin;
+    if(route.mainline&&!o.eligible&&o.environmentScore>=78&&(o.thesisBars??symbol.signalBars)>=1
+      &&symbol.sourceCount>=3&&symbol.dataConfidence>=82&&o.edgeRatio>=1.45){
+      o.eligible=true;o.reason+=" 全市场同步扩张触发主线参与通道：不要求个体先形成极端残差。";
+    }
+    if(!o.reason.includes("环境路由"))o.reason+=` 环境路由：${route.reason}`;
     if(o.extendedConfirmation&&!o.reason.includes("更完整的实时延续确认"))o.reason+=` ${lifecycle.extendedConfirmation?lifecycle.reason:future.reason}`;
+  }
+  const groupBest=new Map<string,Opportunity>();
+  for(const o of s.opportunities.filter(x=>isIntelligenceOpportunity(x)&&x.eligible)){
+    const key=`${o.clusterId??o.symbol}:${o.side}`,old=groupBest.get(key);
+    if(!old||opportunityCompare(o,old)<0)groupBest.set(key,o);
+  }
+  for(const o of s.opportunities.filter(x=>isIntelligenceOpportunity(x)&&x.eligible)){
+    const best=groupBest.get(`${o.clusterId??o.symbol}:${o.side}`);
+    if(best&&best.id!==o.id){o.eligible=false;o.reason+=` 环境路由后同相关组保留更优表达 ${best.symbol.replace("_USDT","")}。`;}
   }
 }
 
@@ -614,8 +677,11 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
     sideHeadroom=equity*(SIDE_RISK_RATE-.0005)-existingRisk(s,side),
     cycleHeadroom=equity*FIVE_MINUTE_NEW_RISK_RATE-cycleRiskAdded(s,s.lastCandleAt),
     headroom=Math.min(totalHeadroom,sideHeadroom,cycleHeadroom),
-    riskRate=o.premium?.0065:.0055,wantedRisk=equity*riskRate,riskBudget=Math.min(wantedRisk,headroom);
-  if(riskBudget<equity*.0035)return"剩余风险预算不足以形成有效仓位";
+    environmentRiskScale=clip(o.environmentRiskScale??1,.20,1.10),
+    riskRate=(o.premium?.0065:.0055)*environmentRiskScale,
+    wantedRisk=equity*riskRate,riskBudget=Math.min(wantedRisk,headroom),
+    minimumEffectiveRisk=equity*(o.environmentProbe?.0010:.0035);
+  if(riskBudget<minimumEffectiveRisk)return o.environmentProbe?"Probe剩余风险预算不足":"剩余风险预算不足以形成有效仓位";
   const rawNotional=riskBudget/(stopRate+ROUND_TRIP_COST),targetNotional=Math.min(rawNotional,equity*.70),
     leverage=Math.max(1,Math.min(10,Math.floor(contract.leverageMax||10))),mult=Math.max(contract.quantoMultiplier,1e-12),
     minContracts=Math.max(1,Math.ceil(contract.minContracts??(Number(contract.orderSizeMin??1)||1))),
@@ -628,7 +694,7 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
   const plannedRisk=notional*(stopRate+ROUND_TRIP_COST),entryFee=notional*PAPER_COST.feeRate,stopPrice=price*(1-d*stopRate),
     target=price*(1+d*Math.max(.004,o.targetRate-consumed)),horizon=Math.max(60,Math.round(o.expectedHoldMinutes)),
     id=`mi-${now.toString(36)}-${o.symbol.replace(/[^A-Z0-9]/g,"")}-${side[0]}`,
-    rule:Rule={id:o.thesisId??o.id,signature:`MARKET_INTELLIGENCE:${o.clusterId??"solo"}:${o.mode}`,parentId:null,version:1,createdAt:now,
+    rule:Rule={id:o.thesisId??o.id,signature:`MARKET_INTELLIGENCE:${o.clusterId??"solo"}:${o.playbook??o.mode}`,parentId:null,version:1,createdAt:now,
       expiresAt:now+Math.max(180,horizon*2.2)*60_000,status:"EXPERIMENTAL",conditions:[],side,horizon,stopRate,
       armRate:0,givebackRate:0,exitMode:"HORIZON",samples:0,trainGroups:0,checkGroups:0,
       estimatedNetRate:remainingNet,priorResponse:null,recentResponse:0,standardError:0,reason:o.reason,mutation:"CREATE",
@@ -638,7 +704,8 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
       fundingAllowance:0,grossPnl:null,netPnl:null,exitReason:null,relationFailureBars:0,lastRelationBar:now,execution:"REAL_QUOTE_PAPER_MODEL",
       liveEligible:false,firstProfitAt:null,holdScore:o.score,profitFloorRate:0,expectedHoldMinutes:horizon,peakPnlRate:0,
       exitControl:{policy:MARKET_INTELLIGENCE_VERSION,armedAt:null,armedQuoteAt:null,maxObservationGapMs:30_000,maxQuoteAgeMs:10_000},
-      entryContext:{version:"adaptive-ten-entry-v1",capturedAt:now,timeframe:"5m",side,mode:o.mode,reserve:false,reason:o.reason,entryScore:o.score,
+      entryContext:{version:"adaptive-ten-entry-v1",capturedAt:now,timeframe:"5m",side,mode:o.mode,reserve:false,reason:o.reason,
+        entryScore:o.environmentScore??o.score,baseEntryScore:o.score,environmentScore:o.environmentScore??o.score,
         directionStrength:o.directionStrength,spaceScore:o.spaceScore,positionScore:o.positionScore,executionScore:o.executionScore,
         remainingSpaceRate:remainingNet,pullbackRiskRate:o.pullbackRiskRate,edgeRatio:remainingNet/Math.max(o.pullbackRiskRate,1e-9),
         expectedHoldMinutes:horizon,marketFit:o.marketFit,regionId:null,portfolioRiskCharge:riskBudget,strategyVersion:MARKET_INTELLIGENCE_VERSION,
@@ -652,11 +719,14 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
         invalidationSummary:o.invalidationSummary,entryResidual:o.residual,entryRelativeStrength:o.relativeStrength,
         thesisSince:o.thesisSince,thesisBars:o.thesisBars,marketEvolutionPhase:o.marketEvolutionPhase,
         opportunityLifecyclePhase:o.opportunityLifecyclePhase,extendedConfirmation:o.extendedConfirmation,
+        environment:o.environment,playbook:o.playbook,routeAlignment:o.routeAlignment,
+        environmentRiskScale:o.environmentRiskScale,environmentProbe:o.environmentProbe,environmentReason:o.environmentReason,
         futureResearchAction:o.futureResearchAction,futureResearchReason:o.futureResearchReason,futureHypothesisIds:o.futureHypothesisIds},
       forecast:{remainingNetRate:remainingNet,quality:o.score/100,sizingEquity:equity}};
   s.positions.push(t);s.balance-=entryFee;s.fees+=entryFee;s.turnover+=notional;s.lastEntryAt[o.symbol]=now;s.lastSide[o.symbol]=side;
   rememberConsumedThesis(s,o.thesisId,now);
-  event(s,now,"ENTRY",id,`${o.symbol} ${side} ${o.mode} 评分${o.score.toFixed(0)}`,{notional,plannedRisk});
+  event(s,now,"ENTRY",id,`${o.symbol} ${side} ${o.playbook??o.mode} 环境${o.environment??"—"} 评分${(o.environmentScore??o.score).toFixed(0)}`,
+    {notional,plannedRisk,riskScale:environmentRiskScale});
   return null;
 }
 
@@ -736,7 +806,12 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
           stage:o.confirmationStage??state?.stage??"OBSERVE",edgeRatio:o.edgeRatio,sourceCount,
           dataConfidence:o.dataConfidence??state?.dataConfidence??0,netRemainingSpaceRate:o.netRemainingSpaceRate,
           pullbackRiskRate:o.pullbackRiskRate});
-      if(profile.stable&&!v.stableThesis){
+      v.environment=o.environment;v.playbook=o.playbook;
+      v.requiresProbeRetest=!!o.environmentForceRetest;
+      v.probeImpulseMin=o.probeImpulseMin??v.probeImpulseMin;
+      v.probePullbackMin=o.probePullbackMin??v.probePullbackMin;
+      v.probeRestartMin=o.probeRestartMin??v.probeRestartMin;
+      if((profile.stable||v.requiresProbeRetest)&&!v.stableThesis){
         v.stableThesis=true;v.phase=v.phase??"ARMED";
         v.initialExpectedNetRate=v.initialExpectedNetRate??o.netRemainingSpaceRate;
         v.pullbackRiskRateAtArm=v.pullbackRiskRateAtArm??o.pullbackRiskRate;
@@ -764,8 +839,9 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
         &&(t.netPnl??0)<0&&Math.abs(t.entryContext?.entryResidual??0)>=.05).length,
       extreme=extremeResidualConfirmationProfile({residual:o.residual??0,sourceCount,
         dataConfidence:o.dataConfidence??state?.dataConfidence??0,disagreementRate:disagreement,recentExtremeLosses}),
-      profile=entryResponseWindowMs({score:o.score,edgeRatio:o.edgeRatio,sourceCount,disagreementRate:disagreement}),
-      stable=stableEntryThesisProfile({score:o.score,premium:!!o.premium,thesisBars:o.thesisBars??state?.signalBars??0,
+      routedScore=o.environmentScore??o.score,
+      profile=entryResponseWindowMs({score:routedScore,edgeRatio:o.edgeRatio,sourceCount,disagreementRate:disagreement}),
+      stable=stableEntryThesisProfile({score:routedScore,premium:!!o.premium,thesisBars:o.thesisBars??state?.signalBars??0,
         stage:o.confirmationStage??state?.stage??"OBSERVE",edgeRatio:o.edgeRatio,sourceCount,
         dataConfidence:o.dataConfidence??state?.dataConfidence??0,netRemainingSpaceRate:o.netRemainingSpaceRate,
         pullbackRiskRate:o.pullbackRiskRate}),
@@ -773,17 +849,23 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
       minimumSupportSamples=Math.max(o.extendedConfirmation?3:0,extreme.minimumSupportSamples),
       minimumRetainedRate=Math.max(o.extendedConfirmation?.70:0,extreme.minimumRetainedRate),
       price=o.side==="LONG"?q!.bestAsk:q!.bestBid,
-      expiresAt=stable.stable?Math.min(o.expiresAt,now+20*60_000):Math.min(o.expiresAt,now+BAR_MS),
-      deadlineAt=stable.stable?Math.min(expiresAt,now+stable.armedWindowMs)
+      armed=stable.stable||!!o.environmentForceRetest,
+      expiresAt=armed?Math.min(o.expiresAt,now+20*60_000):Math.min(o.expiresAt,now+BAR_MS),
+      deadlineAt=armed?Math.min(expiresAt,now+12*60_000)
         :Math.min(o.expiresAt,now+Math.max(profile.windowMs,minimumElapsedMs+30_000));
     s.entryValidations[o.id]={id:o.id,candidateId:o.id,symbol:o.symbol,side:o.side,startedAt:now,expiresAt,deadlineAt,
       initialPrice:price,lastPrice:price,lastQuoteAt:q!.observedAt,samples:1,bestAdvanceRate:0,maxAdverseRate:0,
       supportSamples:0,oppositionSamples:0,extendedConfirmation:!!o.extendedConfirmation||extreme.required,
       extremeResidual:extreme.required,minimumElapsedMs,minimumSupportSamples,minimumRetainedRate,
-      stableThesis:stable.stable,phase:"ARMED",initialExpectedNetRate:o.netRemainingSpaceRate,
+      stableThesis:armed,phase:"ARMED",initialExpectedNetRate:o.netRemainingSpaceRate,
       pullbackRiskRateAtArm:o.pullbackRiskRate,maxChaseRate:stable.maxChaseRate,retestPullbackMin:stable.retestPullbackMin,
-      restartMin:stable.restartMin,retestBasePrice:null,retestBaseAt:null,status:"WAITING",
-      reason:extreme.required?extreme.reason:stable.stable
+      restartMin:stable.restartMin,retestBasePrice:null,retestBaseAt:null,
+      environment:o.environment,playbook:o.playbook,requiresProbeRetest:!!o.environmentForceRetest,
+      probeImpulseMin:o.probeImpulseMin,probePullbackMin:o.probePullbackMin,probeRestartMin:o.probeRestartMin,probeRetestSeen:false,
+      status:"WAITING",
+      reason:extreme.required?extreme.reason:o.environmentForceRetest
+        ?`环境路由 ${o.playbook}：先Probe，必须完成第一段正反馈→可控回调→再次启动后才执行。`
+        :stable.stable
         ?"高质量稳定交易假设已武装；短时反向只进入回测等待，不会直接取消，真正结构失效才解除。"
         :o.extendedConfirmation
         ?(o.futureResearchAction==="CONFIRM_MORE"?"前瞻研究发现状态转移风险，进入加强实时延续确认。":"极端轮动延伸机会进入加强实时延续确认。")
@@ -809,19 +891,52 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
     }
     const q=quotes[validation.symbol];if(!freshQuote(q,now)||q!.entryReady!==true){reject("等待实时盘口");continue;}
     const price=validation.side==="LONG"?q!.bestAsk:q!.bestBid,state=s.extremumRegime.symbols[validation.symbol],
-      decision=evaluateEntryResponse({now,side:validation.side,score:o.score,edgeRatio:o.edgeRatio,pullbackRiskRate:o.pullbackRiskRate,
+      decision=evaluateEntryResponse({now,side:validation.side,score:o.environmentScore??o.score,edgeRatio:o.edgeRatio,pullbackRiskRate:o.pullbackRiskRate,
         stopRate:o.stopRate,sourceCount:o.sourceCount??0,disagreementRate:o.disagreementRate??0,price,
         memory:{startedAt:validation.startedAt,deadlineAt:validation.deadlineAt,initialPrice:validation.initialPrice,samples:validation.samples,
           bestAdvanceRate:validation.bestAdvanceRate,maxAdverseRate:validation.maxAdverseRate,
           supportSamples:validation.supportSamples,oppositionSamples:validation.oppositionSamples},
-        state,quote:q,minutePath:minutePaths?.[validation.symbol],costRate:ROUND_TRIP_COST,allowRetest:!!validation.stableThesis});
+        state,quote:q,minutePath:minutePaths?.[validation.symbol],costRate:ROUND_TRIP_COST,
+        allowRetest:!!validation.stableThesis||!!validation.requiresProbeRetest});
     validation.lastPrice=price;validation.lastQuoteAt=q!.observedAt;validation.samples++;
     validation.bestAdvanceRate=decision.bestAdvanceRate;validation.maxAdverseRate=decision.maxAdverseRate;
     validation.supportSamples=decision.supportSamples;validation.oppositionSamples=decision.oppositionSamples;validation.reason=decision.reason;
 
     if(decision.action==="CANCEL"){validation.status="CANCELLED";reject(decision.reason);continue;}
 
-    if(validation.stableThesis){
+    if(validation.requiresProbeRetest){
+      const impulseMin=Math.max(ROUND_TRIP_COST*.70,validation.probeImpulseMin??ROUND_TRIP_COST*.90),
+        pullbackMin=Math.max(ROUND_TRIP_COST*.35,validation.probePullbackMin??ROUND_TRIP_COST*.45),
+        restartMin=Math.max(ROUND_TRIP_COST*.30,validation.probeRestartMin??ROUND_TRIP_COST*.40),
+        probe=environmentProbeRetestDecision({side:validation.side,price,currentAdvanceRate:decision.currentAdvanceRate,
+          bestAdvanceRate:decision.bestAdvanceRate,retestBasePrice:validation.retestBasePrice,
+          retestSeen:!!validation.probeRetestSeen,impulseMin,pullbackMin,restartMin});
+      validation.phase="RETEST_WAIT";
+      if(probe.action==="WAIT_IMPULSE"){
+        validation.reason=`环境Probe尚未证明方向：先等待至少 ${(impulseMin*100).toFixed(2)}% 第一段正向推动。`;
+        reject(validation.reason);continue;
+      }
+      if(probe.action==="WAIT_PULLBACK"){
+        validation.reason=`第一段推动已出现，等待至少 ${(pullbackMin*100).toFixed(2)}% 可控回调后再观察第二次启动。`;
+        reject(validation.reason);continue;
+      }
+      if(probe.action==="SET_RETEST_BASE"){
+        validation.retestBasePrice=price;validation.retestBaseAt=now;validation.probeRetestSeen=true;
+        validation.supportSamples=0;validation.oppositionSamples=0;
+        validation.reason="Probe已完成第一段推动和可控回调；现在只等待原方向再次启动，不提前猜转折。";
+        reject(validation.reason);continue;
+      }
+      if(probe.action==="UPDATE_RETEST_BASE"){
+        validation.retestBasePrice=price;validation.retestBaseAt=now;
+        validation.supportSamples=0;validation.oppositionSamples=0;
+        validation.reason="Probe回调仍在延伸，更新二次启动基准。";reject(validation.reason);continue;
+      }
+      if(probe.action==="WAIT_RESTART"){
+        validation.reason=`Probe已回调，等待原方向重新推进至少 ${(restartMin*100).toFixed(2)}% 后才允许成交。`;
+        reject(validation.reason);continue;
+      }
+      validation.phase="ARMED";
+    }else if(validation.stableThesis){
       const d=dir(validation.side),expected=validation.initialExpectedNetRate??o.netRemainingSpaceRate,
         pullback=validation.pullbackRiskRateAtArm??o.pullbackRiskRate,
         maxChase=validation.maxChaseRate??stableEntryThesisProfile({score:o.score,premium:!!o.premium,
@@ -893,6 +1008,7 @@ export function fillForwardPortfolio(s:ForwardState,quotes:Record<string,Quote>,
   let opened=0;const reject=(reason:string)=>{s.entryDiagnostics.reasons[reason]=(s.entryDiagnostics.reasons[reason]??0)+1;};
   for(const o of eligible){
     const q=quotes[o.symbol],meta=contracts[o.symbol];if(!freshQuote(q,now)||q!.entryReady!==true){reject("等待实时盘口");continue;}
+    if(o.environmentForceRetest){reject("环境Playbook要求先完成Probe→回调→再启动，禁止兼容入口直接成交");continue;}
     if(!meta){reject("等待合约规格");continue;}
     const last=s.lastExitAt[o.symbol]??0,lastSide=s.lastSide[o.symbol];
     if(now-last<15*60_000&&lastSide===o.side){reject("同币同方向假设尚未重置");continue;}
@@ -941,7 +1057,10 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
   }
 
   if(marketReady&&dataDue)s.hypothesisResearch=advanceMarketHypothesisResearch(s.hypothesisResearch,s.extremumRegime,input.now);
-  const marketEvolution=deriveMarketEvolution(s.extremumRegime,input.research);
+  const marketEvolution=deriveMarketEvolution(s.extremumRegime,input.research),
+    currentEnvironment=classifyMarketEnvironment(s.extremumRegime,marketEvolution);
+  s.environmentContext={version:ENVIRONMENT_ROUTER_VERSION,environment:currentEnvironment,phase:marketEvolution.phase,
+    trendSide:marketEvolution.trendSide,updatedAt:input.now,reason:marketEvolution.reason};
   if(marketReady)annotateLifecycleOpportunities(s,marketEvolution);
   manageIntelligenceTrades(s,input.quotes,input.now,input.minutePaths,marketEvolution);
   // Positions opened before cutover keep their frozen lifecycle and cannot gain
@@ -962,7 +1081,7 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
     checkGroups:s.extremumRegime.evidence.length,latestAt:input.now,rapidQualified:ready,activeLong:longReady,activeShort:shortReady};
   s.latestReason=(marketReady?s.extremumRegime.narrative.summary
     :`全市场5m路径正在恢复 ${readyPaths}/${requiredPaths}；沿用上一份市场叙事保护已有仓位，覆盖恢复前不生成新单。`)
-    +` 当前${s.positions.length}笔持仓，${s.opportunities.filter(o=>o.eligible).length}个可参与异类机会，计划风险已用${riskUse.toFixed(1)}%。 ${s.extremumRegime.narrative.plan} 生命周期研究：${marketEvolution.reason} ${s.hypothesisResearch.summary}`;
+    +` 当前${s.positions.length}笔持仓，${s.opportunities.filter(o=>o.eligible).length}个可参与机会，计划风险已用${riskUse.toFixed(1)}%。 环境路由=${currentEnvironment}，${marketEvolution.reason} ${s.extremumRegime.narrative.plan} 前瞻：${s.hypothesisResearch.summary}`;
   if(divergent)s.latestReason+=` 当前发现${divergent}个明显分化资产。`;
   if(opened)s.latestReason+=` 本轮新开${opened}笔。`;
   const after=JSON.stringify({p:s.positions.map(t=>[t.id,t.status,t.stopPrice,t.profitFloorRate]),h:s.history.length,b:s.balance,r:s.revision});
@@ -999,14 +1118,16 @@ export function resetForwardAccountPreservingLearning(previous:ForwardState,now:
   next.relationEngine=structuredClone(prior.relationEngine);
   next.familyExperiment=structuredClone(prior.familyExperiment);
   next.hypothesisResearch=structuredClone(prior.hypothesisResearch);
+  next.environmentPerformance=structuredClone(prior.environmentPerformance);
+  next.environmentContext=structuredClone(prior.environmentContext);
   next.observations=next.relationEngine.observations;next.measured=next.relationEngine.measured;next.invalidated=next.relationEngine.invalidated;
   next.latestReason="模拟账户资金已重置为1000U；保留 Market Intelligence 市场叙事、证据、相关组和异常生命周期，当前5m不会因重置重复开仓。";
   return next;
 }
 export function forwardUrgentQuoteSymbols(s:ForwardState,now:number,entrySymbols?:Iterable<string>){
   const allowed=entrySymbols?new Set(entrySymbols):null,keep=(x:string)=>!allowed||allowed.has(x);
-  const premium=s.opportunities.filter(o=>o.premium&&o.eligible&&o.expiresAt>now&&keep(o.symbol)).sort((a,b)=>b.score-a.score);
-  const normal=s.opportunities.filter(o=>!o.premium&&o.eligible&&o.expiresAt>now&&keep(o.symbol)).sort((a,b)=>b.score-a.score);
+  const premium=s.opportunities.filter(o=>o.premium&&o.eligible&&o.expiresAt>now&&keep(o.symbol)).sort(opportunityCompare);
+  const normal=s.opportunities.filter(o=>!o.premium&&o.eligible&&o.expiresAt>now&&keep(o.symbol)).sort(opportunityCompare);
   const watched=Object.values(s.extremumRegime.symbols).filter(r=>keep(r.symbol)&&r.watchScore>=58).sort((a,b)=>b.watchScore-a.watchScore);
   return[...new Set([...s.positions.map(t=>t.symbol),...premium.map(o=>o.symbol),...normal.map(o=>o.symbol),...watched.map(r=>r.symbol)])];
 }
@@ -1024,6 +1145,9 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
     counts={bullish:rows.filter(r=>r.longScore>=62).length,bearish:rows.filter(r=>r.shortScore>=62).length,
       divergent:rows.filter(r=>r.regime==="DIVERGENT").length,transition:rows.filter(r=>r.regime==="TRANSITION").length,
       ready:rows.filter(r=>r.stage==="READY").length};
+  const routed=s.opportunities.filter(isIntelligenceOpportunity),
+    activePlaybooks=[...new Set(routed.filter(o=>o.eligible).map(o=>o.playbook).filter((x):x is EnvironmentPlaybook=>!!x))],
+    performanceCells=Object.values(s.environmentPerformance.cells).sort((a,b)=>b.updatedAt-a.updatedAt);
   return{version:s.version,engineVersion:ADAPTIVE_ENGINE_VERSION,grammar:ADAPTIVE_ENGINE_VERSION,positionIntelligenceVersion:POSITION_INTELLIGENCE_VERSION,mode:"REAL_FEED_PAPER",liveEligible:false,
     strategyAuthorityVersion:ADAPTIVE_ENGINE_VERSION,executionVersion:ADAPTIVE_ENGINE_VERSION,regionVersion:MARKET_INTELLIGENCE_VERSION,
     regionLaunchVersion:MARKET_INTELLIGENCE_VERSION,policyVersion:ADAPTIVE_ENGINE_VERSION,exitPolicyVersion:ADAPTIVE_ENGINE_VERSION,
@@ -1033,6 +1157,8 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
     fundingAllowance:s.fundingAllowance,turnover:s.turnover,positions:s.positions,history:s.history,events:s.events,daily:s.daily,
     opportunities:s.opportunities,entryOpportunities:s.opportunities,regions:[],marketPulse:s.marketPulse,
     hypothesisResearch:s.hypothesisResearch,
+    environmentRouter:{...s.environmentContext,currentEnvironment:s.environmentContext.environment,activePlaybooks,
+      performance:performanceCells.slice(0,8)},
     marketIntelligence:{...s.extremumRegime,counts,symbols:rows.slice(0,30)},
     extremumRegime:{version:"retired",updatedAt:s.extremumRegime.updatedAt,retired:true,counts:{},symbols:[]},
     structuralInterrupt:{version:STRUCTURAL_INTERRUPT_VERSION,retired:true,marketEvent:null,vetoSide:null,vetoUntil:0,preAlerts:0,confirmed:0},
@@ -1050,7 +1176,7 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
       sampleMeaning:"不依赖旧策略样本训练；只使用当前已完成K线、多交易所实时共识和持续市场记忆做因果判断。",
       accounting:"模拟仍使用新鲜买卖价并计入手续费、滑点和资金费占位；每笔新Trade冻结独立交易假设、相关组、失效条件与持仓计划。",
       risk:"总结构风险≤10%、同方向≤6.5%、组合保证金≤75%；同一高相关组正常只允许一个同方向主仓，反方向独立假设可并存。",
-      validation:"任何细节都会进入证据池，但单一噪声不能让大方向来回翻转；前瞻研究把重要细节转成未来状态假设，并持续验证5/15/30分钟预期路径。高质量稳定交易假设进入ARMED后，2秒级浅反向只能转为RETEST_WAIT，不能直接取消；只有自身结构明显失效或等待窗口结束才解除。若行情已经从首次武装位置消耗过多空间，系统禁止追价，只等待足够回调后的重新启动或新的5m交易假设。",
+      validation:"任何细节都会进入证据池，但单一噪声不能让大方向来回翻转。Environment Router 不用停仓逃避坏环境：趋势用TREND_CAPTURE，过渡用TRANSITION_PROBE，轮动用ROTATION_RELATIVE，同步扩张用SHOCK_PARTICIPATION。逆环境机会仍保留交易权，但必须先完成第一段正反馈→可控回调→再次启动；近期某环境连续亏损只缩放风险，不把风险降为0。高质量稳定交易假设进入ARMED后，2秒级浅反向只能转为RETEST_WAIT。",
       liquidation:"固定结构止损仍是最后保险；Position Intelligence只提供仓位证据，Lifecycle Research拥有最终主动退出权。单一细节、单一市场转向或连续两根5m都没有独立平仓权。单次前瞻假设或某一轮Position EXIT同样没有独立平仓权。实际发展显著超过入场预期的Runner会动态上调未来空间，并在跨越离散利润台阶后留下宽松Runner平台防止灾难性回吐；普通单形成超过正常噪声的已证明利润后也会建立更低的平台防止浮盈完整转亏。平台不随每个tick追价；只有多轮持续恶化才触发更主动的PROTECT或EXIT。"},
     cost:PAPER_COST,nextCycleAt:s.lastCandleAt+BAR_MS};
 }
