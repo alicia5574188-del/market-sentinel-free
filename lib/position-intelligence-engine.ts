@@ -174,6 +174,17 @@ export function evaluatePositionIntelligence(input:{
     coreConcern=concern.some(x=>x.family==="RELATIVE"||x.family==="STRUCTURE"),
     independentConfirm=concern.some(x=>x.family==="PATH"||x.family==="FLOW"),
     enoughIndependentConcern=coreConcern&&independentConfirm,
+    // Entry failure is evidence-based, never clock-based. A slow starter may stay
+    // unproven for as long as its own structure/path/flow have not actually
+    // falsified the entry. The fast path only fires when a response-validated
+    // entry never achieved even the normal first-proof threshold, has no
+    // surviving support family, moves materially against the entry relative to
+    // its own stop/pullback geometry, and independent evidence converges.
+    proofThreshold=cost*.65,
+    entryFalsificationAdverse=Math.max(cost*1.15,Math.min(input.stopRate*.45,expectedPullbackRate*.55)),
+    entryNeverProved=!!input.entryResponseValidated&&!input.firstProfit&&input.peakFavorableRate<proofThreshold,
+    entryFalsified=entryNeverProved&&enoughIndependentConcern&&supportFamilies.length===0&&dataConfidence>=70
+      &&input.signedRate<=-entryFalsificationAdverse&&advantageChange<-18,
     valueWeak=continuationRatio<.95||holdValueScore<38,
     noFeedbackRisk=!input.firstProfit&&input.ageMin>=Math.min(60,input.expectedHoldMinutes*.40)&&input.signedRate<cost*.25&&concernFamilies.length>=2,
     shouldReview=(concernFamilies.length>=1&&(continuationRatio<1.35||advantageChange<-10))||concernFamilies.length>=2||noFeedbackRisk,
@@ -181,16 +192,18 @@ export function evaluatePositionIntelligence(input:{
     continuedReview=shouldReview&&prior&&(prior.decision==="REVIEW"||prior.decision==="EXIT"),
     reviewBars=shouldReview?(continuedReview?(prior.reviewBars+(newCompletedBar?1:0)):1):0,
     reviewSince=shouldReview?(continuedReview?prior.reviewSince??input.now:input.now):null,
-    unconfirmedFailure=!!input.entryResponseValidated&&!input.firstProfit&&enoughIndependentConcern&&dataConfidence>=60&&reviewBars>=2
+    unconfirmedFailure=entryNeverProved&&enoughIndependentConcern&&dataConfidence>=60&&reviewBars>=2
       &&(advantageChange<-18||input.signedRate<-cost*.25),
     hardExit=enoughIndependentConcern&&valueWeak&&dataConfidence>=60&&reviewBars>=2,
-    decision:PositionDecision=hardExit||unconfirmedFailure?"EXIT":shouldReview?"REVIEW":"HOLD",
+    decision:PositionDecision=entryFalsified||hardExit||unconfirmedFailure?"EXIT":shouldReview?"REVIEW":"HOLD",
     phase:PositionPhase=decision==="EXIT"?"AT_RISK":decision==="REVIEW"?(input.signedRate>cost?"DECAYING":"AT_RISK")
       :input.ageMin<input.expectedHoldMinutes*.20?"BUILDING":continuationRatio>=1.6?"HEALTHY":"MATURE",
     counterfactualNewEntry=remainingSpaceRate>=expectedPullbackRate*1.35&&same>=65&&dataConfidence>=60,
     reasons=support.map(x=>x.summary),concerns=concern.map(x=>x.summary),
     summary=decision==="EXIT"
-      ?`继续等待的剩余空间/正常回撤比已降至 ${continuationRatio.toFixed(2)}×，且至少两个独立仓位证据家族持续恶化；退出通过防误杀闸门。`
+      ?entryFalsified
+        ?`入场尚未形成过有效正向证明，价格已逆向 ${pct(input.signedRate)} 并超过该交易自身的早期证伪幅度 ${pct(entryFalsificationAdverse)}；至少两个独立证据家族同时反对且没有存活支持，判定为入场位置失败。`
+        :`继续等待的剩余空间/正常回撤比已降至 ${continuationRatio.toFixed(2)}×，且至少两个独立仓位证据家族持续恶化；退出通过防误杀闸门。`
       :decision==="REVIEW"
       ?`发现矛盾但证据尚未收敛：剩余空间/正常回撤约 ${continuationRatio.toFixed(2)}×，进入复核，不因单一细节平仓。`
       :`继续持有价值仍占优：剩余空间/正常回撤约 ${continuationRatio.toFixed(2)}×，${supportFamilies.length}个独立家族支持，${concernFamilies.length}个家族担忧。`;
