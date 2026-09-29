@@ -485,6 +485,7 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
       narrative:s.extremumRegime.narrative,quote:q,minutePath:minutePaths?.[t.symbol],previous:t.positionIntelligence,
       costRate:ROUND_TRIP_COST,marketStateAgeMs:Math.max(0,now-s.extremumRegime.updatedAt),
       entryResponseValidated:!!t.entryContext?.entryResponse,
+      entryResponseBestAdvanceRate:t.entryContext?.entryResponse?.bestAdvanceRate,
     });
     t.positionIntelligence=position;t.holdScore=position.holdValueScore;
     t.holdValue={action:position.decision==="HOLD"?"HOLD":position.decision==="REVIEW"?"REVIEW":
@@ -722,6 +723,30 @@ export function stableEntryThesisProfile(input:{
 }
 
 
+type EntryLocation30={sidePosition30:number;breakoutRate30:number;rangeRate30:number};
+
+function entryLocation30(rows:Candle[]|undefined,side:"LONG"|"SHORT",price:number,at:number):EntryLocation30|null{
+  const completed=(rows??[]).filter(b=>b.time>0&&b.open>0&&b.high>=b.low&&b.low>0&&b.close>0
+    &&b.time*1000+BAR_MS<=at).sort((a,b)=>a.time-b.time).slice(-6);
+  if(completed.length<3||!(price>0))return null;
+  const low=Math.min(...completed.map(b=>b.low)),high=Math.max(...completed.map(b=>b.high));
+  if(!(high>low))return null;
+  const range=high-low,rangePosition=(price-low)/range,
+    sidePosition30=side==="LONG"?rangePosition:1-rangePosition,
+    breakoutRate30=side==="LONG"?Math.max(0,price/high-1):Math.max(0,low/price-1);
+  return{sidePosition30,breakoutRate30,rangeRate30:range/price};
+}
+
+export function entryLocationDecision(input:{
+  sidePosition30:number|null;breakoutRate30:number|null;confirmationAdvanceRate:number;costRate?:number;
+}){
+  const cost=Math.max(.0005,input.costRate??ROUND_TRIP_COST),side=Math.max(0,input.sidePosition30??0),
+    breakout=Math.max(0,input.breakoutRate30??0),confirmation=Math.max(0,input.confirmationAdvanceRate),
+    severelyExtended=side>1.35&&breakout>Math.max(cost,confirmation*2);
+  return{action:severelyExtended?"WAIT_RETEST" as const:"DIRECT" as const,severelyExtended,
+    sidePosition30:input.sidePosition30,breakoutRate30:input.breakoutRate30,confirmationAdvanceRate:confirmation};
+}
+
 export function stableEntryLocationDecision(input:{
   currentAdvanceRate:number;bestAdvanceRate:number;expectedNetRate:number;pullbackRiskRate:number;
   maxChaseRate:number;retestPullbackMin:number;restartMin:number;retestBaseReady:boolean;restartAdvanceRate?:number;
@@ -836,7 +861,7 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
 }
 
 function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<string,Contract>,
-  minutePaths:Record<string,Candle[]>|undefined,now:number,equity:number){
+  minutePaths:Record<string,Candle[]>|undefined,paths:Record<string,Candle[]>|undefined,now:number,equity:number){
   const opportunities=new Map(s.opportunities.map(o=>[o.id,o])),waiting=Object.values(s.entryValidations)
     .filter(v=>v.status==="WAITING").sort((a,b)=>{
       const ao=opportunities.get(a.candidateId),bo=opportunities.get(b.candidateId);
@@ -907,6 +932,16 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
       validation.phase="RETEST_WAIT";validation.reason=decision.reason;reject(decision.reason);continue;
     }
     if(decision.action==="WAIT"){reject(decision.reason);continue;}
+
+    const recentLocation=entryLocation30(paths?.[validation.symbol],validation.side,price,now),
+      locationDecision=entryLocationDecision({sidePosition30:recentLocation?.sidePosition30??null,
+        breakoutRate30:recentLocation?.breakoutRate30??null,confirmationAdvanceRate:decision.bestAdvanceRate,costRate:ROUND_TRIP_COST});
+    if(locationDecision.action==="WAIT_RETEST"){
+      validation.status="CANCELLED";
+      validation.reason=`方向假设未否定，但当前价格已严重越过最近30分钟有利边界（位置 ${(locationDecision.sidePosition30!*100).toFixed(0)}%，
+追出 ${((locationDecision.breakoutRate30??0)*100).toFixed(2)}%），而武装后的新增确认只有 ${(decision.bestAdvanceRate*100).toFixed(2)}%；当前位置作废，等待回调或新的完成5m结构重新武装。`.replace("\n","");
+      reject(validation.reason);continue;
+    }
 
     if(!extendedEntryConfirmationReady({required:!!validation.extendedConfirmation,elapsedMs:Math.max(0,now-validation.startedAt),
       supportSamples:decision.supportSamples,currentAdvanceRate:decision.currentAdvanceRate,bestAdvanceRate:decision.bestAdvanceRate,
@@ -1000,7 +1035,7 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
   // A completed 5m step chooses a bounded set of hypotheses; the critical 2s
   // quote clock then waits for real price/flow response and may open at most one.
   if(marketReady&&dataDue)seedEntryResponses(s,input.quotes,input.now);
-  const opened=marketReady?advanceEntryResponses(s,input.quotes,input.contracts,input.minutePaths,input.now,mark.equity):0;
+  const opened=marketReady?advanceEntryResponses(s,input.quotes,input.contracts,input.minutePaths,input.paths,input.now,mark.equity):0;
 
   const states=Object.values(s.extremumRegime.symbols),longReady=states.filter(x=>x.longScore>=62).length,
     shortReady=states.filter(x=>x.shortScore>=62).length,divergent=states.filter(x=>x.regime==="DIVERGENT").length,
