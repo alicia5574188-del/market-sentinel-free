@@ -183,7 +183,8 @@ export function initialForward(now:number):ForwardState{
     positions:[],history:[],events:[],daily:[],selectedSymbols:[],opportunities:[],regions:{},relationEngine:initialRelationEngine(now),
     extremumRegime:initialMarketIntelligenceState(now),
     familyExperiment:initialFamilyExperimentState(),structuralInterrupt:initialStructuralInterruptState(),
-    hypothesisResearch:initialMarketHypothesisResearch(now),entryValidations:{},marketPulse:blankPulse(now),
+    hypothesisResearch:initialMarketHypothesisResearch(now),environmentPerformance:initialEnvironmentPerformanceState(),
+    entryValidations:{},marketPulse:blankPulse(now),
     lastEntryAt:{},lastExitAt:{},lastSide:{},consumedTheses:{},lastRotationAt:0,latestReason:"Market Intelligence V1 已启动：从整个市场关系、分化与跨交易所共识中持续寻找异类机会。",
     entryDiagnostics:{at:now,matched:0,opened:0,reasons:{}},storage:{persistedAt:0,error:null},liveEligible:false,
     policyVersion:ADAPTIVE_ENGINE_VERSION,strategyAuthorityVersion:ADAPTIVE_ENGINE_VERSION,executionVersion:ADAPTIVE_ENGINE_VERSION,
@@ -268,6 +269,9 @@ function normalizeEntryValidations(value:unknown,now:number){
       restartMin:Math.max(0,safe(r.restartMin)),
       retestBasePrice:Number.isFinite(r.retestBasePrice)?Math.max(1e-12,r.retestBasePrice!):null,
       retestBaseAt:Number.isFinite(r.retestBaseAt)?Math.max(0,r.retestBaseAt!):null,
+      environment:r.environment,playbook:r.playbook,requiresProbeRetest:!!r.requiresProbeRetest,
+      probeImpulseMin:Math.max(0,safe(r.probeImpulseMin)),probePullbackMin:Math.max(0,safe(r.probePullbackMin)),
+      probeRestartMin:Math.max(0,safe(r.probeRestartMin)),probeRetestSeen:!!r.probeRetestSeen,
       status:r.status==="CANCELLED"?"CANCELLED":"WAITING",reason:typeof r.reason==="string"?r.reason:null};
   }
   return out;
@@ -305,6 +309,7 @@ export function normalizeForward(v:ForwardState|null|undefined,now:number):Forwa
     familyExperiment,
     structuralInterrupt:normalizeStructuralInterruptState((old as {structuralInterrupt?:unknown}).structuralInterrupt,now),
     hypothesisResearch:normalizeMarketHypothesisResearch((old as {hypothesisResearch?:unknown}).hypothesisResearch,now),
+    environmentPerformance:normalizeEnvironmentPerformanceState((old as {environmentPerformance?:unknown}).environmentPerformance,history,now),
     entryValidations:normalizeEntryValidations((old as {entryValidations?:unknown}).entryValidations,now),
     marketPulse:v.marketPulse?.bias? v.marketPulse:blankPulse(now),lastEntryAt:v.lastEntryAt??{},lastExitAt:v.lastExitAt??{},lastSide:v.lastSide??{},
     consumedTheses:normalizeConsumedTheses((old as {consumedTheses?:unknown}).consumedTheses,history,positions,now),
@@ -1011,6 +1016,7 @@ export function resetForwardAccountPreservingLearning(previous:ForwardState,now:
   next.relationEngine=structuredClone(prior.relationEngine);
   next.familyExperiment=structuredClone(prior.familyExperiment);
   next.hypothesisResearch=structuredClone(prior.hypothesisResearch);
+  next.environmentPerformance=structuredClone(prior.environmentPerformance);
   next.observations=next.relationEngine.observations;next.measured=next.relationEngine.measured;next.invalidated=next.relationEngine.invalidated;
   next.latestReason="模拟账户资金已重置为1000U；保留 Market Intelligence 市场叙事、证据、相关组和异常生命周期，当前5m不会因重置重复开仓。";
   return next;
