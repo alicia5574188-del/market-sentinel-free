@@ -241,11 +241,11 @@ class FakeGate {
   orders=new Map<string,GateLiveOrder>();holdings:Record<string,GateLivePosition>={};
   closeTags:string[]=[];onLeverage:(()=>Promise<void>)|null=null;onCreate:(()=>Promise<void>)|null=null;
   failSnapshot=false;readTimeout=false;partial=false;zero=false;ambiguous=false;omitExit=false;inspectFailures=0;counter=1;
-  amendError:Error|null=null;
+  amendError:Error|null=null;leverageError:Error|null=null;
   async snapshot(){this.requestCount++;if(this.readTimeout)throw new GateReadTimeoutError("/futures/usdt/accounts");
     if(this.failSnapshot)throw new Error("injected Gate outage");
     return structuredClone({account:this.account,positions:Object.values(this.holdings),orders:[],priceOrders:this.stops,checkedAt:Date.now()});}
-  async setLeverage(_symbol:string,n:number){this.leverages.push(n);await this.onLeverage?.();}
+  async setLeverage(_symbol:string,n:number){this.leverages.push(n);if(this.leverageError)throw this.leverageError;await this.onLeverage?.();}
   async createEntry(i:LiveEntryIntent,beforeSend?:()=>boolean){await this.onCreate?.();if(beforeSend&&!beforeSend())throw new GateEntryCancelledError();this.placed.push(structuredClone(i));const id=String(this.counter++);
     if(this.ambiguous)throw new Error("injected submission timeout");
     const filled=this.zero?0:this.partial?Math.floor(i.contracts/2):i.contracts;
@@ -751,6 +751,24 @@ test("source closure during leverage request cancels the stale entry without ope
   const {h,gate}=await harness();gate.onLeverage=async()=>{h.forwardState.positions=[];};await enableNew(h);
   assert.equal(gate.placed.length,0);
 }));
+test("pre-submit leverage timeout stays retryable and cannot age the source out",async()=>{
+  const {h,gate}=await harness();const realNow=Date.now;let current=T-60_000;Date.now=()=>current;
+  try{
+    h.forwardState.positions=[];await h.setLiveMode(true);
+    current+=1_000;
+    const source={...trade("leverage-timeout-recovery"),openedAt:current,lastQuoteAt:current};
+    h.forwardState.positions=[source];
+    h.runtime.evidence={BTC_USDT:{midpoint:100,bestBid:100,bestAsk:100,observedAt:current,fresh:true,entryReady:true}};
+    const timeout=new Error("The operation was aborted due to timeout");timeout.name="TimeoutError";gate.leverageError=timeout;
+    await h.syncLive(current);
+    assert.equal(gate.placed.length,0);assert.match(live(h).entrySkips.BTC_USDT.reason,/自动重试/);
+    current+=45_000;source.lastQuoteAt=current;gate.leverageError=null;
+    h.runtime.evidence={BTC_USDT:{midpoint:100,bestBid:100,bestAsk:100,observedAt:current,fresh:true,entryReady:true}};
+    await h.syncLive(current);await h.syncLive(current);
+    assert.equal(gate.placed.length,1);assert.equal(live(h).positions.BTC_USDT.id,source.id);
+  }finally{Date.now=realNow;}
+}));
+
 test("temporary Gate faults never rewrite owner switch intent",()=>clock(async()=>{
   const {h,gate}=await harness();gate.failSnapshot=true;const r=await enableNew(h);
   assert.equal(r.ok,false);assert.equal(live(h).requestedEnabled,true);assert.equal(live(h).operational,false);
