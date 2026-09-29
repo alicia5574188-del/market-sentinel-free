@@ -20,8 +20,6 @@ const evolution=(v?:string)=>({
 const opportunityPhase=(v?:string)=>({
   EMERGING:"萌芽",CONFIRMED:"已确认",EXPANDING:"正在扩张",MATURE:"成熟",OVEREXTENDED:"过度延伸"
 }[v??""]??v??"—");
-  UNPROVEN:"尚未证明",PROVEN:"已证明",EXPANDING:"利润扩张",PULLBACK:"正常回调",DECAYING:"优势衰退",INVALIDATED:"原假设失效"
-}[v??""]??v??"建立中");
 const action=(v?:string)=>v==="EXIT"?"退出":v==="PROTECT"?"保护利润":v==="WATCH"?"观察":v==="HOLD"?"继续持有":"观察";
 const hypothesisKind=(v?:string)=>({
   PULLBACK_AHEAD:"回调正在酝酿",REBOUND_AHEAD:"反弹正在酝酿",ROTATION_AHEAD:"轮动/震荡正在形成",
