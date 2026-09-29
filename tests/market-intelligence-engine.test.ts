@@ -193,7 +193,7 @@ test("an unproven starter stays in REVIEW until its own STRUCTURE also turns aga
   assert.equal(second.decision,"REVIEW","relative/path/flow deterioration alone must not kill a slow starter while structure is neutral");
 
   const structureBroken={...neutralStructure,shortScore:82,signalSide:"SHORT" as const,signalLastBar:T+300_000};
-  const third=evaluatePositionIntelligence({now:T+600_000,side:"LONG",signedRate:-.003,peakFavorableRate:0,ageMin:18,firstProfit:false,
+  const third=evaluatePositionIntelligence({now:T+600_000,side:"LONG",signedRate:-.006,peakFavorableRate:0,ageMin:18,firstProfit:false,
     expectedHoldMinutes:240,stopRate:.012,entryScore:92,entryResidual:.012,entryRelativeStrength:.8,entryRemainingSpaceRate:.04,
     state:structureBroken,quote,minutePath:minute,marketStateAgeMs:20_000,entryResponseValidated:true,previous:second});
   assert.equal(third.assessments.find(x=>x.family==="STRUCTURE")?.stance,"CONCERN");
