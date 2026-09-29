@@ -3415,6 +3415,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           timeoutStreak:this.liveReadTimeoutStreak,lastAccountAt:this.runtime.live.lastSyncAt,
           lastOrderAuditAt:(this.liveOrderSnapshotCache?.checkedAt??this.liveOrderAuditAt)||null,
           readTransport:this.liveClient?.readTransport??null,writeTransport:this.liveClient?.writeTransport??null},
+        liveDiagnostics:{
+          pendingProtectionExit:Object.values(this.runtime.live.entries).filter(e=>e?.protectionExitRequestedAt).length,
+          pendingStopSubmission:Object.values(this.runtime.live.entries).filter(e=>e?.stopSubmittingAt&&!e.stopOrderId).length,
+          openPositionExitRequested:Object.values(this.runtime.live.positions).filter(p=>p?.status==="OPEN"&&p.exitRequestedAt).length,
+          recentAudit:this.runtime.live.auditEvents.slice(-16).map(e=>({at:e.observedAt,stage:e.stage,level:e.level,gateLabel:e.gateLabel})),
+        },
         strategyArena: {
           version: canonical.version,
           playbookCount: canonical.playbookCount,
