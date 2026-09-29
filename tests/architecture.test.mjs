@@ -286,3 +286,26 @@ test("profit platforms are discrete milestones, not continuous peak trailing sto
   assert.doesNotMatch(lifecycle,/provenPlatformNet=.*peakNet\*\.30/);
   assert.doesNotMatch(lifecycle,/runnerPlatformNet=.*peakNet\*/);
 });
+
+
+test("high-quality entries keep stable thesis authority through shallow realtime noise and forbid late chasing",async()=>{
+  const [core,response]=await Promise.all([
+    read("lib/forward-relations.ts"),read("lib/market-intelligence-entry-response.ts")
+  ]);
+  assert.match(response,/action:"WAIT"\|"PASS"\|"RETEST"\|"CANCEL"/);
+  assert.match(response,/allowRetest/);
+  assert.match(response,/保留武装状态/);
+  assert.match(core,/stableEntryThesisProfile/);
+  assert.match(core,/stableEntryLocationDecision/);
+  assert.match(core,/phase\?:"ARMED"\|"RETEST_WAIT"/);
+  const seed=core.slice(core.indexOf("function seedEntryResponses"),core.indexOf("function advanceEntryResponses"));
+  assert.doesNotMatch(seed,/s\.entryValidations=\{\};/);
+  assert.match(seed,/preserved:Record<string,EntryValidation>/);
+  const advance=core.slice(core.indexOf("function advanceEntryResponses"),core.indexOf("export function fillForwardPortfolio"));
+  assert.match(advance,/decision\.action==="RETEST"/);
+  assert.match(advance,/超过允许追价/);
+  assert.match(advance,/stableEntryLocationDecision/);
+  assert.match(advance,/delete s\.entryValidations\[validation\.id\]/);
+  assert.doesNotMatch(advance,/opened=1;s\.entryValidations=\{\}/);
+  assert.match(core,/2秒级浅反向只能转为RETEST_WAIT/);
+});

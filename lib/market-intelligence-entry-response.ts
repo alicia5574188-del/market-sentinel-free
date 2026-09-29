@@ -9,7 +9,7 @@ export type EntryResponseMemory={
   supportSamples:number;oppositionSamples:number;
 };
 export type EntryResponseDecision={
-  action:"WAIT"|"PASS"|"CANCEL";fastLane:boolean;currentAdvanceRate:number;bestAdvanceRate:number;maxAdverseRate:number;
+  action:"WAIT"|"PASS"|"RETEST"|"CANCEL";fastLane:boolean;currentAdvanceRate:number;bestAdvanceRate:number;maxAdverseRate:number;
   supportSamples:number;oppositionSamples:number;supportFamilies:string[];concernFamilies:string[];reason:string;
 };
 
@@ -36,7 +36,7 @@ export function entryResponseWindowMs(input:{score:number;edgeRatio:number;sourc
 export function evaluateEntryResponse(input:{
   now:number;side:"LONG"|"SHORT";score:number;edgeRatio:number;pullbackRiskRate:number;stopRate:number;sourceCount:number;
   disagreementRate:number;price:number;memory:EntryResponseMemory;state?:MarketSymbolState;quote?:QuoteLike;minutePath?:CandleLike[];
-  costRate?:number;
+  costRate?:number;allowRetest?:boolean;
 }):EntryResponseDecision{
   const d=dir(input.side),cost=Math.max(.0005,input.costRate??DEFAULT_COST),q=input.quote,state=input.state,
     sourceCount=Math.max(input.sourceCount,state?.sourceCount??0,q?.sourceCount??0),disagreement=q?.disagreementRate??input.disagreementRate,
@@ -77,6 +77,7 @@ export function evaluateEntryResponse(input:{
     supportNow=dataReady&&priceResponse&&thesisSupport&&!structureOpposition
       &&(profile.fastLane||(!flowOpposition&&(flowSupport||minute.support))),
     deepAdverse=currentAdvance<=-Math.min(input.stopRate*.80,Math.max(input.pullbackRiskRate*.90,cost*2.2)),
+    hardStructureOpposition=structureOpposition&&currentAdvance<=-Math.max(cost*.55,input.pullbackRiskRate*.22),
     oppositionNow=structureOpposition||(flowOpposition&&currentAdvance<=cost*.15)||deepAdverse,
     supportSamples=supportNow?input.memory.supportSamples+1:0,
     oppositionSamples=oppositionNow?input.memory.oppositionSamples+1:0,
@@ -84,10 +85,19 @@ export function evaluateEntryResponse(input:{
 
   if(input.now>=input.memory.deadlineAt)
     return{action:"CANCEL",fastLane:profile.fastLane,currentAdvanceRate:currentAdvance,bestAdvanceRate:bestAdvance,maxAdverseRate:maxAdverse,
-      supportSamples,oppositionSamples,supportFamilies,concernFamilies,reason:"实时响应窗口结束，价格与独立证据仍未形成可执行闭环。"};
-  if(oppositionSamples>=2&&elapsed>=4_000)
+      supportSamples,oppositionSamples,supportFamilies,concernFamilies,reason:"武装等待窗口结束，稳定交易假设仍未重新形成可执行价格响应。"};
+  if((deepAdverse||hardStructureOpposition)&&elapsed>=4_000)
+    return{action:"CANCEL",fastLane:profile.fastLane,currentAdvanceRate:currentAdvance,bestAdvanceRate:bestAdvance,maxAdverseRate:maxAdverse,
+      supportSamples,oppositionSamples,supportFamilies,concernFamilies,
+      reason:deepAdverse?"价格已经超出正常回调并接近结构失效，取消本轮入场。":"交易标的自身结构已经持续转向，取消本轮入场。"};
+  if(oppositionSamples>=2&&elapsed>=4_000){
+    if(input.allowRetest)
+      return{action:"RETEST",fastLane:profile.fastLane,currentAdvanceRate:currentAdvance,bestAdvanceRate:bestAdvance,maxAdverseRate:maxAdverse,
+        supportSamples,oppositionSamples,supportFamilies,concernFamilies,
+        reason:"短时实时响应与稳定交易假设冲突，但尚未构成结构失效；保留武装状态，等待回调/噪声结束后重新按原方向启动。"};
     return{action:"CANCEL",fastLane:profile.fastLane,currentAdvanceRate:currentAdvance,bestAdvanceRate:bestAdvance,maxAdverseRate:maxAdverse,
       supportSamples,oppositionSamples,supportFamilies,concernFamilies,reason:"实时响应连续两次与原假设冲突，取消本轮入场。"};
+  }
   if(supportSamples>=2&&elapsed>=4_000)
     return{action:"PASS",fastLane:profile.fastLane,currentAdvanceRate:currentAdvance,bestAdvanceRate:bestAdvance,maxAdverseRate:maxAdverse,
       supportSamples,oppositionSamples,supportFamilies,concernFamilies,

@@ -133,6 +133,8 @@ export type EntryValidation={id:string;candidateId:string;symbol:string;side:"LO
   initialPrice:number;lastPrice:number;lastQuoteAt:number;samples:number;bestAdvanceRate:number;maxAdverseRate:number;
   supportSamples:number;oppositionSamples:number;extendedConfirmation?:boolean;extremeResidual?:boolean;
   minimumElapsedMs?:number;minimumSupportSamples?:number;minimumRetainedRate?:number;
+  stableThesis?:boolean;phase?:"ARMED"|"RETEST_WAIT";initialExpectedNetRate?:number;pullbackRiskRateAtArm?:number;
+  maxChaseRate?:number;retestPullbackMin?:number;restartMin?:number;retestBasePrice?:number|null;retestBaseAt?:number|null;
   status:"WAITING"|"CANCELLED";reason:string|null};
 export type ForwardState={
   version:string;engineVersion:string;startedAt:number;revision:number;lastCycleAt:number;lastQuoteCycleAt:number;lastCandleAt:number;
@@ -239,11 +241,21 @@ function normalizeEntryValidations(value:unknown,now:number){
     if(!raw||typeof raw!=="object")continue;const r=raw as Partial<EntryValidation>;
     if(typeof r.candidateId!=="string"||typeof r.symbol!=="string"||(r.side!=="LONG"&&r.side!=="SHORT"))continue;
     const startedAt=safe(r.startedAt),expiresAt=safe(r.expiresAt);if(!(startedAt>0&&expiresAt>=startedAt&&expiresAt>now-15*60_000))continue;
-    out[id]={id,candidateId:r.candidateId,symbol:r.symbol,side:r.side,startedAt,expiresAt,deadlineAt:safe(r.deadlineAt,Math.min(expiresAt,startedAt+24_000)),
+    out[id]={id,candidateId:r.candidateId,symbol:r.symbol,side:r.side,startedAt,expiresAt,
+      deadlineAt:safe(r.deadlineAt,Math.min(expiresAt,startedAt+24_000)),
       initialPrice:Math.max(1e-12,safe(r.initialPrice,1)),lastPrice:Math.max(1e-12,safe(r.lastPrice,r.initialPrice??1)),
       lastQuoteAt:safe(r.lastQuoteAt,startedAt),samples:Math.max(1,Math.floor(safe(r.samples,1))),
       bestAdvanceRate:Math.max(0,safe(r.bestAdvanceRate)),maxAdverseRate:Math.max(0,safe(r.maxAdverseRate)),
       supportSamples:Math.max(0,Math.floor(safe(r.supportSamples))),oppositionSamples:Math.max(0,Math.floor(safe(r.oppositionSamples))),
+      extendedConfirmation:!!r.extendedConfirmation,extremeResidual:!!r.extremeResidual,
+      minimumElapsedMs:Math.max(0,safe(r.minimumElapsedMs)),minimumSupportSamples:Math.max(0,Math.floor(safe(r.minimumSupportSamples))),
+      minimumRetainedRate:Math.max(0,safe(r.minimumRetainedRate)),stableThesis:!!r.stableThesis,
+      phase:r.phase==="RETEST_WAIT"?"RETEST_WAIT":"ARMED",
+      initialExpectedNetRate:Math.max(0,safe(r.initialExpectedNetRate)),pullbackRiskRateAtArm:Math.max(0,safe(r.pullbackRiskRateAtArm)),
+      maxChaseRate:Math.max(0,safe(r.maxChaseRate)),retestPullbackMin:Math.max(0,safe(r.retestPullbackMin)),
+      restartMin:Math.max(0,safe(r.restartMin)),
+      retestBasePrice:Number.isFinite(r.retestBasePrice)?Math.max(1e-12,r.retestBasePrice!):null,
+      retestBaseAt:Number.isFinite(r.retestBaseAt)?Math.max(0,r.retestBaseAt!):null,
       status:r.status==="CANCELLED"?"CANCELLED":"WAITING",reason:typeof r.reason==="string"?r.reason:null};
   }
   return out;
@@ -662,6 +674,44 @@ export function extremeResidualConfirmationProfile(input:{
     reason:`极端残差机会不按偏离幅度直接追单；要求${Math.round(minimumElapsedMs/1000)}秒持续实时响应、${minimumSupportSamples}次支持证据后再执行。`};
 }
 
+export function stableEntryThesisProfile(input:{
+  score:number;premium:boolean;thesisBars:number;stage:"OBSERVE"|"READY";edgeRatio:number;sourceCount:number;dataConfidence:number;
+  netRemainingSpaceRate:number;pullbackRiskRate:number;
+}){
+  const stable=input.stage==="READY"&&input.thesisBars>=2&&input.edgeRatio>=1.45&&input.sourceCount>=3&&input.dataConfidence>=85
+      &&(input.score>=80||input.premium||input.thesisBars>=4),
+    expected=Math.max(ROUND_TRIP_COST*2,input.netRemainingSpaceRate),
+    pullback=Math.max(ROUND_TRIP_COST*1.5,input.pullbackRiskRate),
+    maxChaseRate=Math.max(ROUND_TRIP_COST*1.8,Math.min(expected*.45,pullback*.75,.01)),
+    retestPullbackMin=Math.max(ROUND_TRIP_COST*.35,Math.min(pullback*.30,expected*.18,.004)),
+    restartMin=Math.max(ROUND_TRIP_COST*.30,Math.min(pullback*.15,expected*.10,.002));
+  return{stable,maxChaseRate,retestPullbackMin,restartMin,armedWindowMs:stable?12*60_000:0};
+}
+
+
+export function stableEntryLocationDecision(input:{
+  currentAdvanceRate:number;bestAdvanceRate:number;expectedNetRate:number;pullbackRiskRate:number;
+  maxChaseRate:number;retestPullbackMin:number;restartMin:number;retestBaseReady:boolean;restartAdvanceRate?:number;
+}){
+  const expected=Math.max(ROUND_TRIP_COST*2,input.expectedNetRate),
+    pullback=Math.max(ROUND_TRIP_COST*1.5,input.pullbackRiskRate),
+    maxChase=Math.max(ROUND_TRIP_COST*1.8,input.maxChaseRate),
+    pullbackMin=Math.max(ROUND_TRIP_COST*.35,input.retestPullbackMin),
+    restartMin=Math.max(ROUND_TRIP_COST*.30,input.restartMin),
+    best=Math.max(0,input.bestAdvanceRate,input.currentAdvanceRate),current=input.currentAdvanceRate,
+    retrace=Math.max(0,best-current),requiredPullback=Math.max(pullbackMin,best-maxChase),
+    remainingFromThesis=expected-Math.max(0,current);
+  if(best<maxChase)return{action:"DIRECT" as const,best,current,retrace,requiredPullback,remainingFromThesis,restartMin};
+  if(!input.retestBaseReady)return{action:retrace>=requiredPullback?"SET_RETEST_BASE" as const:"WAIT_PULLBACK" as const,
+    best,current,retrace,requiredPullback,remainingFromThesis,restartMin};
+  const restart=input.restartAdvanceRate??0;
+  if(restart<0)return{action:"UPDATE_RETEST_BASE" as const,best,current,retrace,requiredPullback,remainingFromThesis,restartMin};
+  if(remainingFromThesis<=Math.max(ROUND_TRIP_COST*1.4,pullback*.45))
+    return{action:"WAIT_NEW_THESIS" as const,best,current,retrace,requiredPullback,remainingFromThesis,restartMin};
+  if(restart<restartMin)return{action:"WAIT_RESTART" as const,best,current,retrace,requiredPullback,remainingFromThesis,restartMin};
+  return{action:"READY_AFTER_RETEST" as const,best,current,retrace,requiredPullback,remainingFromThesis,restartMin};
+}
+
 function rankedEligible(s:ForwardState,now:number){
   return s.opportunities.filter(o=>isIntelligenceOpportunity(o)&&o.eligible&&o.expiresAt>now
     &&!s.positions.some(t=>t.symbol===o.symbol)
@@ -673,11 +723,40 @@ function rankedEligible(s:ForwardState,now:number){
 }
 
 function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:number){
-  s.entryValidations={};
-  const eligible=rankedEligible(s,now),reasons:Record<string,number>={};let seeded=0;
+  const opportunities=new Map(s.opportunities.filter(isIntelligenceOpportunity).map(o=>[o.id,o])),
+    preserved:Record<string,EntryValidation>={};
+  for(const [id,v] of Object.entries(s.entryValidations)){
+    const o=opportunities.get(v.candidateId);
+    if(!o||s.positions.some(t=>t.symbol===v.symbol)||(o.thesisId&&s.consumedTheses[o.thesisId]))continue;
+    preserved[id]=v;
+    if(v.status==="WAITING"){
+      const q=quotes[v.symbol],state=s.extremumRegime.symbols[v.symbol],
+        sourceCount=Math.max(o.sourceCount??0,state?.sourceCount??0,q?.sourceCount??0),
+        profile=stableEntryThesisProfile({score:o.score,premium:!!o.premium,thesisBars:o.thesisBars??state?.signalBars??0,
+          stage:o.confirmationStage??state?.stage??"OBSERVE",edgeRatio:o.edgeRatio,sourceCount,
+          dataConfidence:o.dataConfidence??state?.dataConfidence??0,netRemainingSpaceRate:o.netRemainingSpaceRate,
+          pullbackRiskRate:o.pullbackRiskRate});
+      if(profile.stable&&!v.stableThesis){
+        v.stableThesis=true;v.phase=v.phase??"ARMED";
+        v.initialExpectedNetRate=v.initialExpectedNetRate??o.netRemainingSpaceRate;
+        v.pullbackRiskRateAtArm=v.pullbackRiskRateAtArm??o.pullbackRiskRate;
+        v.maxChaseRate=v.maxChaseRate??profile.maxChaseRate;v.retestPullbackMin=v.retestPullbackMin??profile.retestPullbackMin;
+        v.restartMin=v.restartMin??profile.restartMin;
+      }
+      if(v.stableThesis){
+        const hardEnd=v.startedAt+20*60_000;
+        v.expiresAt=Math.max(v.expiresAt,Math.min(o.expiresAt,hardEnd));
+        v.deadlineAt=Math.max(v.deadlineAt,Math.min(o.expiresAt,v.startedAt+12*60_000));
+      }
+    }
+  }
+  s.entryValidations=preserved;
+  const eligible=rankedEligible(s,now),reasons:Record<string,number>={};
+  let active=Object.values(s.entryValidations).filter(v=>v.status==="WAITING").length;
   const reject=(reason:string)=>{reasons[reason]=(reasons[reason]??0)+1;};
   for(const o of eligible){
-    if(seeded>=3)break;
+    if(active>=3)break;
+    if(s.entryValidations[o.id])continue;
     const q=quotes[o.symbol];if(!freshQuote(q,now)||q!.entryReady!==true){reject("等待实时盘口");continue;}
     const state=s.extremumRegime.symbols[o.symbol],sourceCount=Math.max(o.sourceCount??0,state?.sourceCount??0,q!.sourceCount??0),
       disagreement=q!.disagreementRate??o.disagreementRate??0,
@@ -686,20 +765,30 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
       extreme=extremeResidualConfirmationProfile({residual:o.residual??0,sourceCount,
         dataConfidence:o.dataConfidence??state?.dataConfidence??0,disagreementRate:disagreement,recentExtremeLosses}),
       profile=entryResponseWindowMs({score:o.score,edgeRatio:o.edgeRatio,sourceCount,disagreementRate:disagreement}),
+      stable=stableEntryThesisProfile({score:o.score,premium:!!o.premium,thesisBars:o.thesisBars??state?.signalBars??0,
+        stage:o.confirmationStage??state?.stage??"OBSERVE",edgeRatio:o.edgeRatio,sourceCount,
+        dataConfidence:o.dataConfidence??state?.dataConfidence??0,netRemainingSpaceRate:o.netRemainingSpaceRate,
+        pullbackRiskRate:o.pullbackRiskRate}),
       minimumElapsedMs=Math.max(o.extendedConfirmation?12_000:0,extreme.minimumElapsedMs),
       minimumSupportSamples=Math.max(o.extendedConfirmation?3:0,extreme.minimumSupportSamples),
       minimumRetainedRate=Math.max(o.extendedConfirmation?.70:0,extreme.minimumRetainedRate),
-      price=o.side==="LONG"?q!.bestAsk:q!.bestBid;
-    s.entryValidations[o.id]={id:o.id,candidateId:o.id,symbol:o.symbol,side:o.side,startedAt:now,
-      expiresAt:Math.min(o.expiresAt,now+BAR_MS),
-      deadlineAt:Math.min(o.expiresAt,now+Math.max(profile.windowMs,minimumElapsedMs+30_000)),
+      price=o.side==="LONG"?q!.bestAsk:q!.bestBid,
+      expiresAt=stable.stable?Math.min(o.expiresAt,now+20*60_000):Math.min(o.expiresAt,now+BAR_MS),
+      deadlineAt=stable.stable?Math.min(expiresAt,now+stable.armedWindowMs)
+        :Math.min(o.expiresAt,now+Math.max(profile.windowMs,minimumElapsedMs+30_000));
+    s.entryValidations[o.id]={id:o.id,candidateId:o.id,symbol:o.symbol,side:o.side,startedAt:now,expiresAt,deadlineAt,
       initialPrice:price,lastPrice:price,lastQuoteAt:q!.observedAt,samples:1,bestAdvanceRate:0,maxAdverseRate:0,
       supportSamples:0,oppositionSamples:0,extendedConfirmation:!!o.extendedConfirmation||extreme.required,
-      extremeResidual:extreme.required,minimumElapsedMs,minimumSupportSamples,minimumRetainedRate,status:"WAITING",
-      reason:extreme.required?extreme.reason:o.extendedConfirmation
+      extremeResidual:extreme.required,minimumElapsedMs,minimumSupportSamples,minimumRetainedRate,
+      stableThesis:stable.stable,phase:"ARMED",initialExpectedNetRate:o.netRemainingSpaceRate,
+      pullbackRiskRateAtArm:o.pullbackRiskRate,maxChaseRate:stable.maxChaseRate,retestPullbackMin:stable.retestPullbackMin,
+      restartMin:stable.restartMin,retestBasePrice:null,retestBaseAt:null,status:"WAITING",
+      reason:extreme.required?extreme.reason:stable.stable
+        ?"高质量稳定交易假设已武装；短时反向只进入回测等待，不会直接取消，真正结构失效才解除。"
+        :o.extendedConfirmation
         ?(o.futureResearchAction==="CONFIRM_MORE"?"前瞻研究发现状态转移风险，进入加强实时延续确认。":"极端轮动延伸机会进入加强实时延续确认。")
         :profile.fastLane?"高质量机会进入快速实时响应确认。":"候选进入实时响应确认。"};
-    seeded++;
+    active++;
   }
   s.entryDiagnostics={at:now,matched:eligible.length,opened:0,reasons};
 }
@@ -715,7 +804,9 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
   const reject=(reason:string)=>{reasons[reason]=(reasons[reason]??0)+1;};
   for(const validation of waiting){
     const o=opportunities.get(validation.candidateId);
-    if(!o||!isIntelligenceOpportunity(o)||o.expiresAt<=now){validation.status="CANCELLED";validation.reason="交易假设已过期";reject(validation.reason);continue;}
+    if(!o||!isIntelligenceOpportunity(o)||o.expiresAt<=now){
+      validation.status="CANCELLED";validation.reason="交易假设已过期或已被新的完成5m结构替代";reject(validation.reason);continue;
+    }
     const q=quotes[validation.symbol];if(!freshQuote(q,now)||q!.entryReady!==true){reject("等待实时盘口");continue;}
     const price=validation.side==="LONG"?q!.bestAsk:q!.bestBid,state=s.extremumRegime.symbols[validation.symbol],
       decision=evaluateEntryResponse({now,side:validation.side,score:o.score,edgeRatio:o.edgeRatio,pullbackRiskRate:o.pullbackRiskRate,
@@ -723,12 +814,57 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
         memory:{startedAt:validation.startedAt,deadlineAt:validation.deadlineAt,initialPrice:validation.initialPrice,samples:validation.samples,
           bestAdvanceRate:validation.bestAdvanceRate,maxAdverseRate:validation.maxAdverseRate,
           supportSamples:validation.supportSamples,oppositionSamples:validation.oppositionSamples},
-        state,quote:q,minutePath:minutePaths?.[validation.symbol],costRate:ROUND_TRIP_COST});
+        state,quote:q,minutePath:minutePaths?.[validation.symbol],costRate:ROUND_TRIP_COST,allowRetest:!!validation.stableThesis});
     validation.lastPrice=price;validation.lastQuoteAt=q!.observedAt;validation.samples++;
     validation.bestAdvanceRate=decision.bestAdvanceRate;validation.maxAdverseRate=decision.maxAdverseRate;
     validation.supportSamples=decision.supportSamples;validation.oppositionSamples=decision.oppositionSamples;validation.reason=decision.reason;
+
     if(decision.action==="CANCEL"){validation.status="CANCELLED";reject(decision.reason);continue;}
+
+    if(validation.stableThesis){
+      const d=dir(validation.side),expected=validation.initialExpectedNetRate??o.netRemainingSpaceRate,
+        pullback=validation.pullbackRiskRateAtArm??o.pullbackRiskRate,
+        maxChase=validation.maxChaseRate??stableEntryThesisProfile({score:o.score,premium:!!o.premium,
+          thesisBars:o.thesisBars??state?.signalBars??0,stage:o.confirmationStage??state?.stage??"OBSERVE",edgeRatio:o.edgeRatio,
+          sourceCount:o.sourceCount??state?.sourceCount??0,dataConfidence:o.dataConfidence??state?.dataConfidence??0,
+          netRemainingSpaceRate:o.netRemainingSpaceRate,pullbackRiskRate:o.pullbackRiskRate}).maxChaseRate,
+        pullbackMin=validation.retestPullbackMin??ROUND_TRIP_COST*.35,
+        restartMin=validation.restartMin??ROUND_TRIP_COST*.30,
+        restartAdvance=validation.retestBasePrice?d*(price/validation.retestBasePrice-1):undefined,
+        location=stableEntryLocationDecision({currentAdvanceRate:decision.currentAdvanceRate,bestAdvanceRate:decision.bestAdvanceRate,
+          expectedNetRate:expected,pullbackRiskRate:pullback,maxChaseRate:maxChase,retestPullbackMin:pullbackMin,
+          restartMin,retestBaseReady:!!validation.retestBasePrice,restartAdvanceRate:restartAdvance});
+
+      if(location.action!=="DIRECT"&&location.action!=="READY_AFTER_RETEST")validation.phase="RETEST_WAIT";
+      if(location.action==="WAIT_PULLBACK"){
+        validation.reason=`方向判断仍有效，但从首次武装位置已推进 ${(location.best*100).toFixed(2)}%，超过允许追价 ${(maxChase*100).toFixed(2)}%；不追，等待至少 ${(location.requiredPullback*100).toFixed(2)}% 回调后重新启动。`;
+        reject(validation.reason);continue;
+      }
+      if(location.action==="SET_RETEST_BASE"){
+        validation.retestBasePrice=price;validation.retestBaseAt=now;validation.supportSamples=0;validation.oppositionSamples=0;
+        validation.reason="价格已回到可重新评估的位置，保留原稳定假设，等待回调结束后再次按原方向启动。";
+        reject(validation.reason);continue;
+      }
+      if(location.action==="UPDATE_RETEST_BASE"){
+        validation.retestBasePrice=price;validation.retestBaseAt=now;validation.supportSamples=0;validation.oppositionSamples=0;
+        validation.reason="回调仍在延伸，持续更新重启基准，不提前猜转折。";reject(validation.reason);continue;
+      }
+      if(location.action==="WAIT_NEW_THESIS"){
+        validation.reason="原始交易空间已经大部分消耗，即使方向继续正确也不在当前位置追入；等待新的5m结构生成新假设。";
+        reject(validation.reason);continue;
+      }
+      if(location.action==="WAIT_RESTART"){
+        validation.reason=`已完成必要回调，等待原方向重新推进至少 ${(location.restartMin*100).toFixed(2)}% 后再执行。`;
+        reject(validation.reason);continue;
+      }
+      if(location.action==="READY_AFTER_RETEST")validation.phase="ARMED";
+    }
+
+    if(decision.action==="RETEST"){
+      validation.phase="RETEST_WAIT";validation.reason=decision.reason;reject(decision.reason);continue;
+    }
     if(decision.action==="WAIT"){reject(decision.reason);continue;}
+
     if(!extendedEntryConfirmationReady({required:!!validation.extendedConfirmation,elapsedMs:Math.max(0,now-validation.startedAt),
       supportSamples:decision.supportSamples,currentAdvanceRate:decision.currentAdvanceRate,bestAdvanceRate:decision.bestAdvanceRate,
       minimumElapsedMs:validation.minimumElapsedMs,minimumSupportSamples:validation.minimumSupportSamples,
@@ -743,7 +879,7 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
     if(now-last<15*60_000&&lastSide===o.side){validation.status="CANCELLED";validation.reason="同币同方向假设尚未重置";reject(validation.reason);continue;}
     const error=openIntelligenceTrade(s,o,q!,meta,now,equity,{validation,decision});
     if(error){validation.status="CANCELLED";validation.reason=error;reject(error);continue;}
-    opened=1;s.entryValidations={};break;
+    opened=1;delete s.entryValidations[validation.id];break;
   }
   s.entryDiagnostics={at:now,matched:waiting.length,opened,reasons};return opened;
 }
@@ -914,7 +1050,7 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
       sampleMeaning:"不依赖旧策略样本训练；只使用当前已完成K线、多交易所实时共识和持续市场记忆做因果判断。",
       accounting:"模拟仍使用新鲜买卖价并计入手续费、滑点和资金费占位；每笔新Trade冻结独立交易假设、相关组、失效条件与持仓计划。",
       risk:"总结构风险≤10%、同方向≤6.5%、组合保证金≤75%；同一高相关组正常只允许一个同方向主仓，反方向独立假设可并存。",
-      validation:"任何细节都会进入证据池，但单一噪声不能让大方向来回翻转；前瞻研究把重要细节转成未来状态假设，并持续验证5/15/30分钟预期路径。它不靠单一信号否决交易，也不削弱高质量独立机会的原快速通道；只有多类前瞻证据与候选方向冲突时才要求更完整的实时延续确认。",
+      validation:"任何细节都会进入证据池，但单一噪声不能让大方向来回翻转；前瞻研究把重要细节转成未来状态假设，并持续验证5/15/30分钟预期路径。高质量稳定交易假设进入ARMED后，2秒级浅反向只能转为RETEST_WAIT，不能直接取消；只有自身结构明显失效或等待窗口结束才解除。若行情已经从首次武装位置消耗过多空间，系统禁止追价，只等待足够回调后的重新启动或新的5m交易假设。",
       liquidation:"固定结构止损仍是最后保险；Position Intelligence只提供仓位证据，Lifecycle Research拥有最终主动退出权。单一细节、单一市场转向或连续两根5m都没有独立平仓权。单次前瞻假设或某一轮Position EXIT同样没有独立平仓权。实际发展显著超过入场预期的Runner会动态上调未来空间，并在跨越离散利润台阶后留下宽松Runner平台防止灾难性回吐；普通单形成超过正常噪声的已证明利润后也会建立更低的平台防止浮盈完整转亏。平台不随每个tick追价；只有多轮持续恶化才触发更主动的PROTECT或EXIT。"},
     cost:PAPER_COST,nextCycleAt:s.lastCandleAt+BAR_MS};
 }
