@@ -122,6 +122,35 @@ test("response-gated unconfirmed trades cannot use a huge Remaining Space estima
   assert.equal(second.reviewBars,2);assert.equal(second.decision,"EXIT");
 });
 
+test("fresh entry can exit immediately only when its own evidence fully falsifies the location",()=>{
+  const broken={symbol:"TRB_USDT",watchScore:30,regime:"TRANSITION" as const,stage:"OBSERVE" as const,clusterId:"corr:TRB_USDT",
+    correlation:.6,beta:1,volatility:.004,dataConfidence:96,actualMove:-.012,expectedMove:.001,residual:-.010,residualZ:-1.4,
+    residualPersistence:1,relativeStrength:.20,longScore:20,shortScore:86,pathLong:.18,pathShort:.82,roomLong:.025,roomShort:.02,
+    sourceCount:4,venueAgreement:1,venuePressure:-.8,reasons:[],signalSide:"SHORT" as const,signalSince:T-300_000,signalBars:2,signalLastBar:T-300_000};
+  const quote={sourceCount:4,directionalAgreement:1,sourceBreadth:-1,medianShortMove:-.0015,bookImbalance:-.4,
+    bidLiquidityChange:-.20,askLiquidityChange:.18,liquiditySourceCount:3,disagreementRate:.0002};
+  const minute=candles(100,-.0010).slice(-10);
+  const failed=evaluatePositionIntelligence({now:T,side:"LONG",signedRate:-.006,peakFavorableRate:.0002,ageMin:.4,firstProfit:false,
+    expectedHoldMinutes:240,stopRate:.012,entryScore:93,entryResidual:.012,entryRelativeStrength:.82,entryRemainingSpaceRate:.04,
+    state:broken,quote,minutePath:minute,marketStateAgeMs:20_000,entryResponseValidated:true});
+  assert.equal(failed.reviewBars,1,"fast falsification must not depend on waiting for two completed 5m bars");
+  assert.equal(failed.decision,"EXIT");
+  assert.match(failed.summary,/入场位置失败/);
+
+  const proved=evaluatePositionIntelligence({now:T,side:"LONG",signedRate:-.006,peakFavorableRate:.004,ageMin:.4,firstProfit:true,
+    expectedHoldMinutes:240,stopRate:.012,entryScore:93,entryResidual:.012,entryRelativeStrength:.82,entryRemainingSpaceRate:.04,
+    state:broken,quote,minutePath:minute,marketStateAgeMs:20_000,entryResponseValidated:true});
+  assert.equal(proved.decision,"REVIEW","a trade that already proved itself keeps the normal multi-bar anti-whipsaw gate");
+
+  const slow={...broken,residual:.004,residualZ:.45,relativeStrength:.70,longScore:72,shortScore:38,pathLong:.55,pathShort:.45,
+    venuePressure:.02,signalSide:"LONG" as const};
+  const waiting=evaluatePositionIntelligence({now:T+30*60_000,side:"LONG",signedRate:-.001,peakFavorableRate:.0002,ageMin:30,firstProfit:false,
+    expectedHoldMinutes:240,stopRate:.012,entryScore:86,entryResidual:.008,entryRelativeStrength:.72,entryRemainingSpaceRate:.04,
+    state:slow,quote:{...quote,sourceBreadth:0,medianShortMove:0,bookImbalance:0,bidLiquidityChange:0,askLiquidityChange:0},
+    minutePath:candles(100,0).slice(-10),marketStateAgeMs:20_000,entryResponseValidated:true});
+  assert.notEqual(waiting.decision,"EXIT","elapsed time without profit is not itself an entry-failure trigger");
+});
+
 test("Position Intelligence requires independent concerns and two completed 5m reviews before active exit",()=>{
   const broken={symbol:"ETH_USDT",watchScore:35,regime:"TRANSITION" as const,stage:"OBSERVE" as const,clusterId:"corr:ETH_USDT",
     correlation:.7,beta:1.1,volatility:.004,dataConfidence:90,actualMove:-.009,expectedMove:.001,residual:-.008,residualZ:-1.1,
