@@ -148,8 +148,8 @@ export function isGateReadTimeoutError(error:unknown):error is GateReadTimeoutEr
   return error instanceof GateReadTimeoutError
     ||(error instanceof Error&&(error.name==="GateReadTimeoutError"||(error as Error&{code?:string}).code==="GATE_READ_TIMEOUT"));
 }
-function gateRequestTimedOut(error:unknown):boolean{
-  if(error instanceof AggregateError)return error.errors.length>0&&error.errors.every(gateRequestTimedOut);
+export function isGateTransportTimeoutError(error:unknown):boolean{
+  if(error instanceof AggregateError)return error.errors.length>0&&error.errors.every(isGateTransportTimeoutError);
   return error instanceof Error&&(error.name==="TimeoutError"||error.name==="AbortError"
     ||/aborted due to timeout|timed out|timeout/i.test(error.message));
 }
@@ -243,8 +243,12 @@ export class GateLiveClient {
       if(isOrderWrite){this.writeTransport.orderResults++;this.writeTransport.lastError=null;}
       return { data: (raw ? parseGateJson<T>(raw) : {}) as T, raw };
     }catch(error){
-      if(gateRequestTimedOut(error)){
-        if(method==="GET"){this.readTransport.timeouts++;this.readTransport.lastTimeoutPath=path;}
+      const timedOut=isGateTransportTimeoutError(error);
+      if(timedOut){
+        if(method==="GET"){
+          this.readTransport.timeouts++;this.readTransport.lastTimeoutPath=path;
+          throw new GateReadTimeoutError(path);
+        }
         if(isOrderWrite)this.writeTransport.timeouts++;
       }
       if(isOrderWrite)this.writeTransport.lastError=error instanceof Error?error.message:String(error);
