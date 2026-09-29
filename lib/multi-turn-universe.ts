@@ -100,7 +100,6 @@ export function selectAnchorOpportunityUniverse(input:{
   const liquid=valid.filter(forwardExecutionUniverseEligible);
   if(!liquid.length)return[];
   const bySymbol=new Map(liquid.map(r=>[r.symbol,r]));
-  const current=new Set(input.currentSymbols??[]);
   const scored=liquid.map(row=>{
     const range24hRate=Math.max(0,(row.high24h-row.low24h)/Math.max(row.last,1e-12)),
       executionVolume=forwardExecutionVolume24hUsd(row),
