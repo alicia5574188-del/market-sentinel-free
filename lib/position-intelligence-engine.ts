@@ -72,6 +72,7 @@ export function evaluatePositionIntelligence(input:{
   expectedHoldMinutes:number;stopRate:number;entryScore:number;entryResidual:number;entryRelativeStrength:number;
   entryRemainingSpaceRate:number;state?:MarketSymbolState;narrative?:MarketNarrative;quote?:QuoteDetail;minutePath?:CandleLike[];
   previous?:PositionIntelligenceState;costRate?:number;marketStateAgeMs?:number;entryResponseValidated?:boolean;
+  entryResponseBestAdvanceRate?:number;
 }):PositionIntelligenceState{
   const d=input.side==="LONG"?1:-1,state=input.state,q=input.quote,cost=Math.max(.0005,input.costRate??.0019),
     alignedResidual=state?d*state.residual:0,alignedZ=state?d*state.residualZ:0,
@@ -181,15 +182,21 @@ export function evaluatePositionIntelligence(input:{
     continuedReview=shouldReview&&prior&&(prior.decision==="REVIEW"||prior.decision==="EXIT"),
     reviewBars=shouldReview?(continuedReview?(prior.reviewBars+(newCompletedBar?1:0)):1):0,
     reviewSince=shouldReview?(continuedReview?prior.reviewSince??input.now:input.now):null,
+    entryResponseBest=Math.max(0,input.entryResponseBestAdvanceRate??0),
+    entryProofReversal=Math.max(cost*.35,entryResponseBest*.70),
+    earlyEntryFailure=!!input.entryResponseValidated&&!input.firstProfit&&entryResponseBest>0&&enoughIndependentConcern
+      &&dataConfidence>=60&&input.signedRate<=-entryProofReversal,
     unconfirmedFailure=!!input.entryResponseValidated&&!input.firstProfit&&enoughIndependentConcern&&dataConfidence>=60&&reviewBars>=2
       &&(advantageChange<-18||input.signedRate<-cost*.25),
     hardExit=enoughIndependentConcern&&valueWeak&&dataConfidence>=60&&reviewBars>=2,
-    decision:PositionDecision=hardExit||unconfirmedFailure?"EXIT":shouldReview?"REVIEW":"HOLD",
+    decision:PositionDecision=earlyEntryFailure||hardExit||unconfirmedFailure?"EXIT":shouldReview?"REVIEW":"HOLD",
     phase:PositionPhase=decision==="EXIT"?"AT_RISK":decision==="REVIEW"?(input.signedRate>cost?"DECAYING":"AT_RISK")
       :input.ageMin<input.expectedHoldMinutes*.20?"BUILDING":continuationRatio>=1.6?"HEALTHY":"MATURE",
     counterfactualNewEntry=remainingSpaceRate>=expectedPullbackRate*1.35&&same>=65&&dataConfidence>=60,
     reasons=support.map(x=>x.summary),concerns=concern.map(x=>x.summary),
-    summary=decision==="EXIT"
+    summary=earlyEntryFailure
+      ?`入场时的正向确认已被反向吃掉（反向 ${(-input.signedRate*100).toFixed(2)}%，确认峰值 ${(entryResponseBest*100).toFixed(2)}%），且核心假设与独立路径/流动性证据同时转坏；这是入场证伪，不是时间止损。`
+      :decision==="EXIT"
       ?`继续等待的剩余空间/正常回撤比已降至 ${continuationRatio.toFixed(2)}×，且至少两个独立仓位证据家族持续恶化；退出通过防误杀闸门。`
       :decision==="REVIEW"
       ?`发现矛盾但证据尚未收敛：剩余空间/正常回撤约 ${continuationRatio.toFixed(2)}×，进入复核，不因单一细节平仓。`
