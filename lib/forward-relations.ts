@@ -824,7 +824,7 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
       extreme=extremeResidualConfirmationProfile({residual:o.residual??0,sourceCount,
         dataConfidence:o.dataConfidence??state?.dataConfidence??0,disagreementRate:disagreement,recentExtremeLosses}),
       routedScore=o.environmentScore??o.score,
-      profile=entryResponseWindowMs({score:routedScore,edgeRatio:o.edgeRatio,sourceCount,disagreementRate:disagreement}),
+      profile=entryResponseWindowMs({score:routedScore,edgeRatio:o.edgeRatio,sourceCount,disagreementRate:disagreement,mode:o.mode}),
       stable=stableEntryThesisProfile({score:routedScore,premium:!!o.premium,thesisBars:o.thesisBars??state?.signalBars??0,
         stage:o.confirmationStage??state?.stage??"OBSERVE",edgeRatio:o.edgeRatio,sourceCount,
         dataConfidence:o.dataConfidence??state?.dataConfidence??0,netRemainingSpaceRate:o.netRemainingSpaceRate,
@@ -876,7 +876,7 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
     const q=quotes[validation.symbol];if(!freshQuote(q,now)||q!.entryReady!==true){reject("等待实时盘口");continue;}
     const price=validation.side==="LONG"?q!.bestAsk:q!.bestBid,state=s.extremumRegime.symbols[validation.symbol],
       decision=evaluateEntryResponse({now,side:validation.side,score:o.environmentScore??o.score,edgeRatio:o.edgeRatio,pullbackRiskRate:o.pullbackRiskRate,
-        stopRate:o.stopRate,sourceCount:o.sourceCount??0,disagreementRate:o.disagreementRate??0,price,
+        stopRate:o.stopRate,sourceCount:o.sourceCount??0,disagreementRate:o.disagreementRate??0,mode:o.mode,price,
         memory:{startedAt:validation.startedAt,deadlineAt:validation.deadlineAt,initialPrice:validation.initialPrice,samples:validation.samples,
           bestAdvanceRate:validation.bestAdvanceRate,maxAdverseRate:validation.maxAdverseRate,
           supportSamples:validation.supportSamples,oppositionSamples:validation.oppositionSamples},

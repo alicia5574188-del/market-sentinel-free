@@ -172,8 +172,10 @@ export function evaluatePositionIntelligence(input:{
     dataConfidence=clip((((state?.dataConfidence??45)*.70+Math.min(4,sourceCount)*6.25+Math.min(3,liquiditySources)*3.5)
       -Math.min(.02,disagreement)*600)*stateFreshness,0,100),
     coreConcern=concern.some(x=>x.family==="RELATIVE"||x.family==="STRUCTURE"),
+    structureConcern=concern.some(x=>x.family==="STRUCTURE"),
     independentConfirm=concern.some(x=>x.family==="PATH"||x.family==="FLOW"),
     enoughIndependentConcern=coreConcern&&independentConfirm,
+    entryFailureConcern=structureConcern&&independentConfirm,
     // Entry failure is evidence-based, never clock-based. A slow starter may stay
     // unproven for as long as its own structure/path/flow have not actually
     // falsified the entry. The fast path only fires when a response-validated
@@ -183,7 +185,7 @@ export function evaluatePositionIntelligence(input:{
     proofThreshold=cost*.65,
     entryFalsificationAdverse=Math.max(cost*1.15,Math.min(input.stopRate*.45,expectedPullbackRate*.55)),
     entryNeverProved=!!input.entryResponseValidated&&!input.firstProfit&&input.peakFavorableRate<proofThreshold,
-    entryFalsified=entryNeverProved&&enoughIndependentConcern&&supportFamilies.length===0&&dataConfidence>=70
+    entryFalsified=entryNeverProved&&entryFailureConcern&&supportFamilies.length===0&&dataConfidence>=70
       &&input.signedRate<=-entryFalsificationAdverse&&advantageChange<-18,
     valueWeak=continuationRatio<.95||holdValueScore<38,
     noFeedbackRisk=!input.firstProfit&&input.ageMin>=Math.min(60,input.expectedHoldMinutes*.40)&&input.signedRate<cost*.25&&concernFamilies.length>=2,
@@ -192,9 +194,12 @@ export function evaluatePositionIntelligence(input:{
     continuedReview=shouldReview&&prior&&(prior.decision==="REVIEW"||prior.decision==="EXIT"),
     reviewBars=shouldReview?(continuedReview?(prior.reviewBars+(newCompletedBar?1:0)):1):0,
     reviewSince=shouldReview?(continuedReview?prior.reviewSince??input.now:input.now):null,
-    unconfirmedFailure=entryNeverProved&&enoughIndependentConcern&&dataConfidence>=60&&reviewBars>=2
+    unconfirmedFailure=entryNeverProved&&entryFailureConcern&&dataConfidence>=60&&reviewBars>=2
       &&(advantageChange<-18||input.signedRate<-cost*.25),
-    hardExit=enoughIndependentConcern&&valueWeak&&dataConfidence>=60&&reviewBars>=2,
+    // Proven trades keep the normal two-family value exit. A still-unproven
+    // starter cannot be value-exited while its own STRUCTURE remains neutral.
+    hardExit=enoughIndependentConcern&&valueWeak&&dataConfidence>=60&&reviewBars>=2
+      &&(!entryNeverProved||structureConcern),
     decision:PositionDecision=entryFalsified||hardExit||unconfirmedFailure?"EXIT":shouldReview?"REVIEW":"HOLD",
     phase:PositionPhase=decision==="EXIT"?"AT_RISK":decision==="REVIEW"?(input.signedRate>cost?"DECAYING":"AT_RISK")
       :input.ageMin<input.expectedHoldMinutes*.20?"BUILDING":continuationRatio>=1.6?"HEALTHY":"MATURE",
