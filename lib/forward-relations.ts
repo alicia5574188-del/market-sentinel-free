@@ -20,7 +20,7 @@ import { deriveMarketEvolution, deriveOpportunityLifecycle, deriveProfitLifecycl
 import { advanceMarketHypothesisResearch, entryHypothesisGuidance, initialMarketHypothesisResearch,
   normalizeMarketHypothesisResearch, positionHypothesisGuidance,
   type EntryHypothesisGuidance, type MarketHypothesisResearchState } from "./market-intelligence-hypothesis-research.ts";
-import { ENVIRONMENT_ROUTER_VERSION, environmentPerformanceFactor, environmentProbeRetestDecision,
+import { ENVIRONMENT_ROUTER_VERSION, classifyMarketEnvironment, environmentPerformanceFactor, environmentProbeRetestDecision,
   initialEnvironmentPerformanceState, normalizeEnvironmentPerformanceState, recordEnvironmentOutcome, routeEnvironmentOpportunity,
   type EnvironmentPerformanceState, type EnvironmentPlaybook, type MarketEnvironment, type RouteAlignment
 } from "./market-intelligence-environment-router.ts";
@@ -156,6 +156,8 @@ export type ForwardState={
   selectedSymbols:string[];opportunities:Opportunity[];regions:Record<string,Region>;relationEngine:RelationEngineState;extremumRegime:MarketIntelligenceState;
   familyExperiment:FamilyExperimentState;structuralInterrupt:StructuralInterruptState;
   hypothesisResearch:MarketHypothesisResearchState;environmentPerformance:EnvironmentPerformanceState;
+  environmentContext:{version:typeof ENVIRONMENT_ROUTER_VERSION;environment:MarketEnvironment;phase:MarketEvolutionState["phase"];
+    trendSide:"LONG"|"SHORT"|null;updatedAt:number;reason:string};
   entryValidations:Record<string,EntryValidation>;
   marketPulse:MarketPulse;lastEntryAt:Record<string,number>;lastExitAt:Record<string,number>;lastSide:Record<string,"LONG"|"SHORT">;
   consumedTheses:Record<string,number>;
@@ -185,6 +187,8 @@ export function initialForward(now:number):ForwardState{
     extremumRegime:initialMarketIntelligenceState(now),
     familyExperiment:initialFamilyExperimentState(),structuralInterrupt:initialStructuralInterruptState(),
     hypothesisResearch:initialMarketHypothesisResearch(now),environmentPerformance:initialEnvironmentPerformanceState(),
+    environmentContext:{version:ENVIRONMENT_ROUTER_VERSION,environment:"TRANSITION",phase:"TRANSITIONAL",
+      trendSide:null,updatedAt:now,reason:"环境路由正在建立稳定市场分类。"},
     entryValidations:{},marketPulse:blankPulse(now),
     lastEntryAt:{},lastExitAt:{},lastSide:{},consumedTheses:{},lastRotationAt:0,latestReason:"Market Intelligence V1 已启动：从整个市场关系、分化与跨交易所共识中持续寻找异类机会。",
     entryDiagnostics:{at:now,matched:0,opened:0,reasons:{}},storage:{persistedAt:0,error:null},liveEligible:false,
@@ -311,6 +315,8 @@ export function normalizeForward(v:ForwardState|null|undefined,now:number):Forwa
     structuralInterrupt:normalizeStructuralInterruptState((old as {structuralInterrupt?:unknown}).structuralInterrupt,now),
     hypothesisResearch:normalizeMarketHypothesisResearch((old as {hypothesisResearch?:unknown}).hypothesisResearch,now),
     environmentPerformance:normalizeEnvironmentPerformanceState((old as {environmentPerformance?:unknown}).environmentPerformance,history,now),
+    environmentContext:(old as {environmentContext?:ForwardState["environmentContext"]}).environmentContext?.version===ENVIRONMENT_ROUTER_VERSION
+      ?structuredClone((old as {environmentContext:ForwardState["environmentContext"]}).environmentContext):base.environmentContext,
     entryValidations:normalizeEntryValidations((old as {entryValidations?:unknown}).entryValidations,now),
     marketPulse:v.marketPulse?.bias? v.marketPulse:blankPulse(now),lastEntryAt:v.lastEntryAt??{},lastExitAt:v.lastExitAt??{},lastSide:v.lastSide??{},
     consumedTheses:normalizeConsumedTheses((old as {consumedTheses?:unknown}).consumedTheses,history,positions,now),
@@ -1002,6 +1008,7 @@ export function fillForwardPortfolio(s:ForwardState,quotes:Record<string,Quote>,
   let opened=0;const reject=(reason:string)=>{s.entryDiagnostics.reasons[reason]=(s.entryDiagnostics.reasons[reason]??0)+1;};
   for(const o of eligible){
     const q=quotes[o.symbol],meta=contracts[o.symbol];if(!freshQuote(q,now)||q!.entryReady!==true){reject("等待实时盘口");continue;}
+    if(o.environmentForceRetest){reject("环境Playbook要求先完成Probe→回调→再启动，禁止兼容入口直接成交");continue;}
     if(!meta){reject("等待合约规格");continue;}
     const last=s.lastExitAt[o.symbol]??0,lastSide=s.lastSide[o.symbol];
     if(now-last<15*60_000&&lastSide===o.side){reject("同币同方向假设尚未重置");continue;}
@@ -1050,7 +1057,10 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
   }
 
   if(marketReady&&dataDue)s.hypothesisResearch=advanceMarketHypothesisResearch(s.hypothesisResearch,s.extremumRegime,input.now);
-  const marketEvolution=deriveMarketEvolution(s.extremumRegime,input.research);
+  const marketEvolution=deriveMarketEvolution(s.extremumRegime,input.research),
+    currentEnvironment=classifyMarketEnvironment(s.extremumRegime,marketEvolution);
+  s.environmentContext={version:ENVIRONMENT_ROUTER_VERSION,environment:currentEnvironment,phase:marketEvolution.phase,
+    trendSide:marketEvolution.trendSide,updatedAt:input.now,reason:marketEvolution.reason};
   if(marketReady)annotateLifecycleOpportunities(s,marketEvolution);
   manageIntelligenceTrades(s,input.quotes,input.now,input.minutePaths,marketEvolution);
   // Positions opened before cutover keep their frozen lifecycle and cannot gain
@@ -1071,7 +1081,7 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
     checkGroups:s.extremumRegime.evidence.length,latestAt:input.now,rapidQualified:ready,activeLong:longReady,activeShort:shortReady};
   s.latestReason=(marketReady?s.extremumRegime.narrative.summary
     :`全市场5m路径正在恢复 ${readyPaths}/${requiredPaths}；沿用上一份市场叙事保护已有仓位，覆盖恢复前不生成新单。`)
-    +` 当前${s.positions.length}笔持仓，${s.opportunities.filter(o=>o.eligible).length}个可参与异类机会，计划风险已用${riskUse.toFixed(1)}%。 ${s.extremumRegime.narrative.plan} 生命周期研究：${marketEvolution.reason} ${s.hypothesisResearch.summary}`;
+    +` 当前${s.positions.length}笔持仓，${s.opportunities.filter(o=>o.eligible).length}个可参与机会，计划风险已用${riskUse.toFixed(1)}%。 环境路由=${currentEnvironment}，${marketEvolution.reason} ${s.extremumRegime.narrative.plan} 前瞻：${s.hypothesisResearch.summary}`;
   if(divergent)s.latestReason+=` 当前发现${divergent}个明显分化资产。`;
   if(opened)s.latestReason+=` 本轮新开${opened}笔。`;
   const after=JSON.stringify({p:s.positions.map(t=>[t.id,t.status,t.stopPrice,t.profitFloorRate]),h:s.history.length,b:s.balance,r:s.revision});
@@ -1109,6 +1119,7 @@ export function resetForwardAccountPreservingLearning(previous:ForwardState,now:
   next.familyExperiment=structuredClone(prior.familyExperiment);
   next.hypothesisResearch=structuredClone(prior.hypothesisResearch);
   next.environmentPerformance=structuredClone(prior.environmentPerformance);
+  next.environmentContext=structuredClone(prior.environmentContext);
   next.observations=next.relationEngine.observations;next.measured=next.relationEngine.measured;next.invalidated=next.relationEngine.invalidated;
   next.latestReason="模拟账户资金已重置为1000U；保留 Market Intelligence 市场叙事、证据、相关组和异常生命周期，当前5m不会因重置重复开仓。";
   return next;
