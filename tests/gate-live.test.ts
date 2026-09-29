@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, LiveEntrySizingError, liveEntryDisposition, liveOrderId, liveStopPriceForTick } from "../lib/gate-live.ts";
+import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, GateReadTimeoutError, LiveEntrySizingError, liveEntryDisposition, liveOrderId, liveStopPriceForTick } from "../lib/gate-live.ts";
 import type { PaperPlan } from "../lib/liquidity-core.ts";
 
 function plan(marketState: PaperPlan["marketState"], side: PaperPlan["side"]): PaperPlan {
@@ -215,6 +215,62 @@ test("an IOC market entry is inspected through Gate's regular futures-order endp
   }
 });
 
+test("unknown IOC order id is reconciled by the persisted unique client tag, not by treating the tag as an order id",async()=>{
+  const real=globalThis.fetch,seen:Request[]=[];
+  globalThis.fetch=async(input,init)=>{
+    const req=new Request(input,init);seen.push(req);
+    const url=new URL(req.url);
+    assert.equal(url.pathname,"/api/v4/futures/usdt/orders");
+    assert.equal(url.searchParams.get("status"),"finished");
+    assert.equal(url.searchParams.get("contract"),"BTC_USDT");
+    return Response.json([
+      {id_string:"111",contract:"BTC_USDT",text:"t-ms-e-other",status:"finished",finish_as:"filled"},
+      {id_string:"222",contract:"BTC_USDT",text:"t-ms-e-target",status:"finished",finish_as:"filled",fill_price:"100.2"},
+    ]);
+  };
+  try{
+    const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
+    const order=await client.inspectEntry("MARKET","BTC_USDT","t-ms-e-target",null);
+    assert.equal(order?.id_string,"222");assert.equal(seen.length,1);
+    assert.ok(!new URL(seen[0]!.url).pathname.includes("t-ms-e-target"));
+  }finally{globalThis.fetch=real;}
+});
+
+test("unknown protective-stop id is reconciled by tag from open conditional orders before finished history",async()=>{
+  const real=globalThis.fetch,seen:Request[]=[];
+  globalThis.fetch=async(input,init)=>{
+    const req=new Request(input,init);seen.push(req);const url=new URL(req.url);
+    assert.equal(url.pathname,"/api/v4/futures/usdt/price_orders");
+    if(url.searchParams.get("status")==="open")
+      return Response.json([{id_string:"333",initial:{contract:"BTC_USDT",text:"t-ms-s-stop"},status:"open"}]);
+    throw new Error("finished lookup should not be needed after open tag match");
+  };
+  try{
+    const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
+    const order=await client.inspectEntry("PRICE_TRIGGER","BTC_USDT","t-ms-s-stop",null);
+    assert.equal(order?.id_string,"333");assert.equal(seen.length,1);
+  }finally{globalThis.fetch=real;}
+});
+
+test("leverage ACK timeout is verified once by current Gate position before the source is declared failed",async()=>{
+  const real=globalThis.fetch,calls:Request[]=[];let post=0;
+  globalThis.fetch=async(input,init)=>{
+    const req=new Request(input,init);calls.push(req);
+    if(req.method==="POST"){
+      post++;const error=new Error("The operation was aborted due to timeout");error.name="TimeoutError";throw error;
+    }
+    return Response.json({contract:"BTC_USDT",size:"0",leverage:"10"});
+  };
+  try{
+    const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
+    const result=await client.ensureLeverage("BTC_USDT",10);
+    assert.deepEqual(result,{verified:true,recovered:true,already:true,actual:10});
+    assert.equal(post,1);assert.equal(calls.length,2);
+    assert.equal(calls[1]!.method,"GET");
+    assert.match(new URL(calls[1]!.url).pathname,/\/positions\/BTC_USDT$/);
+  }finally{globalThis.fetch=real;}
+});
+
 test("int64 order IDs from Gate snapshots survive JSON parsing and cancellation unchanged", async () => {
   const originalFetch = globalThis.fetch;
   const seen: Request[] = [];
@@ -254,7 +310,11 @@ test("the restored full snapshot does not hide or retry a private read timeout",
   };
   try{
     const client=new GateLiveClient({apiKey:"abcdefgh12345678",apiSecret:"secret-value-12345678",environment:"live"});
-    await assert.rejects(client.snapshot(),/timeout/i);
+    await assert.rejects(client.snapshot(),error=>{
+      assert.ok(error instanceof GateReadTimeoutError);
+      assert.match(error.message,/只读核对超时/);
+      return true;
+    });
     assert.equal(requests,4,"one full snapshot issues its four reads once; no hedge or retry is created");
     assert.equal(client.readTransport.hedges,0);assert.equal(client.readTransport.recovered,0);
   }finally{globalThis.fetch=real;}
