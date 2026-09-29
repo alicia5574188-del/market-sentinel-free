@@ -76,6 +76,21 @@ jobs:
           else
             echo '{"btwForwardSnapshot":"unavailable"}'
           fi
+          echo "BTW immutable archive matches:"
+          cursor=""
+          for page in $(seq 1 40); do
+            url="$WORKER_BASE_URL/api/forward/archive"
+            if [[ -n "$cursor" ]]; then url="$url?cursor=$(python -c 'import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1],safe=""))' "$cursor")"; fi
+            archive="$(curl -sS --max-time 15 "$url" || true)"
+            if ! jq -e . >/dev/null 2>&1 <<<"$archive"; then break; fi
+            jq -c '[.items[]?.value.trades[]? | select(.symbol=="BTW_USDT")
+              | {id,symbol,side,status,openedAt,closedAt,entryPrice,exitPrice,lastQuoteAt,exitReason,
+                 leverage,margin,notional,plannedRisk,
+                 entryContext:{mode:.entryContext.mode,entryScore:.entryContext.entryScore,reason:.entryContext.reason},
+                 favorable,adverse,netPnl}]' <<<"$archive"
+            cursor="$(jq -r '.nextCursor // empty' <<<"$archive")"
+            [[ -z "$cursor" ]] && break
+          done
 
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
