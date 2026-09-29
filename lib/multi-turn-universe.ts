@@ -2,6 +2,7 @@ export type MultiTurnUniverseTicker={
   symbol:string;last:number;high24h:number;low24h:number;change24hRate:number;
   volume24hUsd:number;executionVolume24hUsd?:number;fundingRate:number;openInterest:number;
   sourceCount?:number;sourceDisagreementRate?:number;
+  shortMoveRate?:number;directionalAgreement?:number;sourceBreadth?:number;
 };
 export type MultiTurnUniverseClass="MARKET_AMPLIFIER"|"INDEPENDENT_VOLATILITY";
 export type RankedMultiTurnUniverse=MultiTurnUniverseTicker&{
@@ -67,11 +68,11 @@ export function rankMultiTurnUniverse(rows:MultiTurnUniverseTicker[],limit=30):R
 
 
 export type AnchorOpportunityUniverseRow=MultiTurnUniverseTicker&{
-  selectionSource:"LOCKED_ANCHOR"|"MARKET_CORE"|"LIQUIDITY"|"ACTIVITY"|"EXPLORATION";
+  selectionSource:"LOCKED_ANCHOR"|"FRESH_IMPULSE"|"MARKET_CORE"|"LIQUIDITY"|"ACTIVITY"|"EXPLORATION";
   activityScore:number;
   range24hRate:number;
   liquidityFloorUsd:number;
-  liquidityScore?:number;movementScore?:number;dataQualityScore?:number;
+  liquidityScore?:number;movementScore?:number;dataQualityScore?:number;freshImpulseScore?:number;
 };
 
 /**
@@ -99,7 +100,6 @@ export function selectAnchorOpportunityUniverse(input:{
   const liquid=valid.filter(forwardExecutionUniverseEligible);
   if(!liquid.length)return[];
   const bySymbol=new Map(liquid.map(r=>[r.symbol,r]));
-  const current=new Set(input.currentSymbols??[]);
   const scored=liquid.map(row=>{
     const range24hRate=Math.max(0,(row.high24h-row.low24h)/Math.max(row.last,1e-12)),
       executionVolume=forwardExecutionVolume24hUsd(row),
@@ -110,8 +110,14 @@ export function selectAnchorOpportunityUniverse(input:{
       sourceCoverage=clip((row.sourceCount??0)/4),
       sourceAgreement=Math.exp(-Math.max(0,row.sourceDisagreementRate??0)/.006),
       dataQualityScore=.65*sourceCoverage+.35*sourceAgreement,
-      activityScore=.40*liquidityScore+.35*movementScore+.25*dataQualityScore+(current.has(row.symbol)?.015:0);
-    return{row,range24hRate,activityScore,executionVolume,liquidityScore,movementScore,dataQualityScore};
+      shortMove=Math.abs(row.shortMoveRate??0),
+      shortAgreement=clip(((row.directionalAgreement??.5)-.5)/.5),
+      freshImpulseScore=clip(shortMove/.0045)*(.55+.45*shortAgreement),
+      // Whole-market discovery must reward what is moving NOW. 24h activity and
+      // liquidity remain useful context, but no residency bonus may hide a new
+      // leader until its move is already over.
+      activityScore=.45*freshImpulseScore+.20*movementScore+.15*liquidityScore+.20*dataQualityScore;
+    return{row,range24hRate,activityScore,executionVolume,liquidityScore,movementScore,dataQualityScore,freshImpulseScore};
   });
   const selected:AnchorOpportunityUniverseRow[]=[];
   const used=new Set<string>();
@@ -120,14 +126,17 @@ export function selectAnchorOpportunityUniverse(input:{
     const row=bySymbol.get(symbol),score=scored.find(x=>x.row.symbol===symbol);if(!row||!score)return;
     used.add(symbol);selected.push({...row,selectionSource:source,activityScore:score.activityScore,
       range24hRate:score.range24hRate,liquidityFloorUsd,liquidityScore:score.liquidityScore,
-      movementScore:score.movementScore,dataQualityScore:score.dataQualityScore});
+      movementScore:score.movementScore,dataQualityScore:score.dataQualityScore,freshImpulseScore:score.freshImpulseScore});
   };
 
   for(const symbol of input.lockedSymbols??[])push(symbol,"LOCKED_ANCHOR");
-  // Stable broad-market anchors keep causal 5m structure before a synchronized
-  // move begins. Turnover below is scan continuity only; neither sleeve chooses
-  // side nor bypasses the later completed-candle/executable-book policy.
-  for(const symbol of input.coreSymbols??[])push(symbol,"MARKET_CORE");
+  // Core symbols no longer reserve deep-research seats. They remain available
+  // to the market background layer and compete for a seat like every other
+  // contract unless already held/armed.
+  const fresh=[...scored].filter(x=>!used.has(x.row.symbol)
+      &&Math.abs(x.row.shortMoveRate??0)>=.0012&&(x.row.directionalAgreement??.5)>=.67)
+    .sort((a,b)=>b.freshImpulseScore-a.freshImpulseScore||b.activityScore-a.activityScore);
+  for(const x of fresh.slice(0,Math.min(10,Math.max(0,limit-selected.length))))push(x.row.symbol,"FRESH_IMPULSE");
 
   const liquiditySlots=Math.min(Math.max(0,Math.floor(input.liquiditySlots??0)),Math.max(0,limit-selected.length));
   const liquidLeaders=[...scored].filter(x=>!used.has(x.row.symbol))

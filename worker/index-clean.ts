@@ -84,7 +84,8 @@ const FEED_RECOVERY_CONFIRMATIONS = 1;
 const FEED_QUALITY_WINDOW_MS = 60 * 60_000;
 const HEARTBEAT_MS = 30_000;
 const UNIVERSE_MS = 10 * 60_000;
-const RADAR_MS = 60_000;
+const RADAR_MS = 15_000;
+const GATE_RADAR_MS = 60_000;
 const RADAR_ENTRY_STALE_MS = 150_000;
 const STRATEGY_CANDLE_GRACE_MS = 8_000;
 const STRATEGY_CANDLE_STALE_MS = 11 * 60_000;
@@ -913,7 +914,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private refreshRadar(now:number) {
-    const cached=this.gateRadarAt>0&&now-this.gateRadarAt<=2*RADAR_MS?new Map(this.gateRadarCache.map(row=>[row.symbol,row])):null;
+    const cached=this.gateRadarAt>0&&now-this.gateRadarAt<=2*GATE_RADAR_MS?new Map(this.gateRadarCache.map(row=>[row.symbol,row])):null;
     const known=this.contractCatalog.size
       ?[...this.contractCatalog.values()].filter(row=>adaptiveSymbolAllowed(row.symbol)).map(row=>{
         const fresh=cached?.get(row.symbol);return fresh?{...fresh,fundingRate:row.fundingRate}:{symbol:row.symbol,last:row.last,
@@ -924,14 +925,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       });
     const eligibleRows=this.marketHub.radarRows(known,now);
     if(!eligibleRows.length)throw new Error("no Gate-tradable extremum-regime markets");
-    const executionEligible=eligibleRows.filter(forwardExecutionUniverseEligible);
-    const locked=this.forwardState?.positions.map(p=>p.symbol)??[];
+    const executionEligible=eligibleRows.filter(forwardExecutionUniverseEligible),
+      held=this.forwardState?.positions.map(p=>p.symbol)??[],
+      armed=Object.values(this.forwardState?.entryValidations??{}).filter(v=>v.status==="WAITING").map(v=>v.symbol),
+      locked=[...new Set([...held,...armed])];
     const universeRows=selectAnchorOpportunityUniverse({rows:eligibleRows,limit:SCAN_UNIVERSE_SIZE,
-      lockedSymbols:locked,currentSymbols:this.runtime.liquidUniverse,coreSymbols:DEFAULT_SYMBOLS,
-      rotationSeed:Math.floor(now/BAR_MS),explorationSlots:2,liquiditySlots:0});
+      lockedSymbols:locked,rotationSeed:Math.floor(now/RADAR_MS),explorationSlots:0,liquiditySlots:0});
     if(!universeRows.length)throw new Error("no liquid extremum-regime markets");
     this.runtime.liquidUniverse=universeRows.map(row=>row.symbol);
-    this.runtime.radar=successfulRadarRuntime(this.runtime.radar,now,universeRows.length,[]);
+    this.runtime.radar=successfulRadarRuntime(this.runtime.radar,now,eligibleRows.length,[]);
     this.runtime.lastRadarAt=now;
     // Gate realtime capacity is execution-only: open exposure and candidates
     // that are actually eligible. Analysis-only markets stay on Bybit/OKX/KuCoin.
@@ -3159,7 +3161,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(radarDue){
         // Gate bulk discovery is optional and explicitly yields to private LIVE
         // work. Bybit/OKX/KuCoin remain the normal scan surface.
-        if(!this.liveSyncWork){
+        if(!this.liveSyncWork&&Date.now()-this.gateRadarAt>=GATE_RADAR_MS){
           try{this.gateRadarCache=await fetchGateRadarTickers();this.gateRadarAt=Date.now();subrequests++;}
           catch{/* stale Gate-only discovery must never block external analysis */}
         }

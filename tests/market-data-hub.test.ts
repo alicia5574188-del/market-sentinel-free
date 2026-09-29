@@ -188,6 +188,10 @@ test("existing bulk BBO feeds expose cross-venue liquidity imbalance and migrati
     assert.ok(second.bidLiquidityChange>.5,"bid liquidity expanded versus the prior 4s anchor");
     assert.ok(second.askLiquidityChange<-.4,"ask liquidity withdrew versus the prior 4s anchor");
     assert.ok(second.spreadRate>0);
+    const radar=hub.radarRows([{symbol:"ETH_USDT",last:100,volume24hUsd:2_000_000,high24h:105,low24h:95,
+      change24hRate:.02,fundingRate:0,openInterest:10}],1_005_001);
+    assert.ok((radar[0]?.shortMoveRate??0)>.001,"whole-market radar receives the same realtime consensus move");
+    assert.ok((radar[0]?.directionalAgreement??0)>=.5);
   });
 });
 
