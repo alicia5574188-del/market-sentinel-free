@@ -126,9 +126,11 @@ test("a small LIVE account may lift only to the exact Gate minimum when real sto
   assert.equal(r.intent.contracts,1);assert.equal(r.intent.notional,10);assert.equal(r.binding.receipt.minimumUplift,true);
   assert.ok((r.binding.receipt.minimumUpliftRiskRate??1)<.0075);
 });
-test("LIVE never catches up a source after the realtime copy window even if the PAPER trade is still open",()=>{
-  const stale={...trade(),openedAt:T-60_000},i=request(stale);i.activationAt=T-120_000;
-  assert.throws(()=>buildProportionalMirror(i),/实时复制窗口/);
+test("infrastructure delay does not permanently expire an OPEN source when current execution is still safe",()=>{
+  const delayed={...trade(),openedAt:T-6*60_000},i=request(delayed);i.activationAt=T-10*60_000;i.now=T;
+  const r=buildProportionalMirror(i);
+  assert.equal(r.binding.receipt.sourceId,delayed.id);
+  assert.equal(r.binding.receipt.copyDelayMs,6*60_000);
 });
 
 test("margin or leverage failure is explicit, not silent new leverage or smaller-risk re-selection",()=>{
@@ -239,11 +241,11 @@ class FakeGate {
   orders=new Map<string,GateLiveOrder>();holdings:Record<string,GateLivePosition>={};
   closeTags:string[]=[];onLeverage:(()=>Promise<void>)|null=null;onCreate:(()=>Promise<void>)|null=null;
   failSnapshot=false;readTimeout=false;partial=false;zero=false;ambiguous=false;omitExit=false;inspectFailures=0;counter=1;
-  amendError:Error|null=null;
+  amendError:Error|null=null;leverageError:Error|null=null;
   async snapshot(){this.requestCount++;if(this.readTimeout)throw new GateReadTimeoutError("/futures/usdt/accounts");
     if(this.failSnapshot)throw new Error("injected Gate outage");
     return structuredClone({account:this.account,positions:Object.values(this.holdings),orders:[],priceOrders:this.stops,checkedAt:Date.now()});}
-  async setLeverage(_symbol:string,n:number){this.leverages.push(n);await this.onLeverage?.();}
+  async setLeverage(_symbol:string,n:number){this.leverages.push(n);if(this.leverageError)throw this.leverageError;await this.onLeverage?.();}
   async createEntry(i:LiveEntryIntent,beforeSend?:()=>boolean){await this.onCreate?.();if(beforeSend&&!beforeSend())throw new GateEntryCancelledError();this.placed.push(structuredClone(i));const id=String(this.counter++);
     if(this.ambiguous)throw new Error("injected submission timeout");
     const filled=this.zero?0:this.partial?Math.floor(i.contracts/2):i.contracts;
@@ -490,6 +492,43 @@ test("actual owner enable excludes all already-open sources without resetting PA
   assert.equal(live(h).requestedEnabled,true);assert.equal(live(h).activation!.enabledAt,T);
   assert.ok(live(h).activation!.excludedSourceIds.includes(before.positions[0].id));
 }));
+test("enabling while the PAPER generation is absent never persists an empty activation fence",()=>clock(async()=>{
+  const {h}=await harness();h.forwardState=null as unknown as ForwardState;
+  const result=await h.setLiveMode(true);
+  assert.equal(result.ok,false);assert.equal(live(h).requestedEnabled,false);assert.equal(live(h).activation,undefined);
+}));
+
+test("a legacy ON session with null source generation self-repairs without moving its original enable time",()=>clock(async()=>{
+  const {h,gate,store}=await harness();
+  h.forwardState.positions=[];
+  live(h).requestedEnabled=true;live(h).changedAt=T-60_000;
+  live(h).activation=startLiveSession(T-60_000,null);
+  const source={...trade("recovered-null-fence"),openedAt:T-30_000,lastQuoteAt:T};
+  h.forwardState.positions=[source];
+  await h.syncLive(T);await h.syncLive(T);
+  assert.equal(live(h).activation!.enabledAt,T-60_000);
+  assert.equal(live(h).activation!.sourceStartedAt,h.forwardState.startedAt);
+  assert.equal(gate.placed.length,1);assert.equal(live(h).positions.BTC_USDT.id,source.id);
+  const persisted=await store.get<{enabled:boolean;activation:LiveSession}>(LIVE_PARITY_PREFIX+"owner-intent");
+  assert.equal(persisted?.enabled,true);assert.equal(persisted?.activation.sourceStartedAt,h.forwardState.startedAt);
+}));
+
+test("an eligible source still copies after more than 30 seconds of recoverable Gate read outage",async()=>{
+  const {h,gate}=await harness();const realNow=Date.now;let current=T-60_000;Date.now=()=>current;
+  try{
+    h.forwardState.positions=[];await h.setLiveMode(true);
+    current+=1_000;
+    const source={...trade("delayed-after-read-outage"),openedAt:current,lastQuoteAt:current};
+    h.forwardState.positions=[source];
+    h.runtime.evidence={BTC_USDT:{midpoint:100,bestBid:100,bestAsk:100,observedAt:current,fresh:true,entryReady:true}};
+    gate.readTimeout=true;await h.syncLive(current);assert.equal(gate.placed.length,0);
+    current+=45_000;source.lastQuoteAt=current;
+    h.runtime.evidence={BTC_USDT:{midpoint:100,bestBid:100,bestAsk:100,observedAt:current,fresh:true,entryReady:true}};
+    gate.readTimeout=false;await h.syncLive(current);await h.syncLive(current);
+    assert.equal(gate.placed.length,1);assert.equal(live(h).positions.BTC_USDT.id,source.id);
+  }finally{Date.now=realNow;}
+});
+
 test("a NEW source after enable copies, repeated ON does not move its eligibility boundary",()=>clock(async()=>{
   const {h,gate}=await harness();await h.setLiveMode(true);
   const epoch=structuredClone(live(h).activation),oldNow=Date.now;Date.now=()=>T+100;
@@ -712,6 +751,24 @@ test("source closure during leverage request cancels the stale entry without ope
   const {h,gate}=await harness();gate.onLeverage=async()=>{h.forwardState.positions=[];};await enableNew(h);
   assert.equal(gate.placed.length,0);
 }));
+test("pre-submit leverage timeout stays retryable and cannot age the source out",async()=>{
+  const {h,gate}=await harness();const realNow=Date.now;let current=T-60_000;Date.now=()=>current;
+  try{
+    h.forwardState.positions=[];await h.setLiveMode(true);
+    current+=1_000;
+    const source={...trade("leverage-timeout-recovery"),openedAt:current,lastQuoteAt:current};
+    h.forwardState.positions=[source];
+    h.runtime.evidence={BTC_USDT:{midpoint:100,bestBid:100,bestAsk:100,observedAt:current,fresh:true,entryReady:true}};
+    const timeout=new Error("The operation was aborted due to timeout");timeout.name="TimeoutError";gate.leverageError=timeout;
+    await h.syncLive(current);
+    assert.equal(gate.placed.length,0);assert.match(live(h).entrySkips.BTC_USDT.reason,/自动重试/);
+    current+=45_000;source.lastQuoteAt=current;gate.leverageError=null;
+    h.runtime.evidence={BTC_USDT:{midpoint:100,bestBid:100,bestAsk:100,observedAt:current,fresh:true,entryReady:true}};
+    await h.syncLive(current);await h.syncLive(current);
+    assert.equal(gate.placed.length,1);assert.equal(live(h).positions.BTC_USDT.id,source.id);
+  }finally{Date.now=realNow;}
+});
+
 test("temporary Gate faults never rewrite owner switch intent",()=>clock(async()=>{
   const {h,gate}=await harness();gate.failSnapshot=true;const r=await enableNew(h);
   assert.equal(r.ok,false);assert.equal(live(h).requestedEnabled,true);assert.equal(live(h).operational,false);
@@ -726,9 +783,10 @@ test("a first Gate read timeout leaves LIVE pending and a later read recovers wi
   assert.equal(live(h).requestedEnabled,true);assert.equal(live(h).operational,true);assert.equal(live(h).lastError,null);
   assert.deepEqual(live(h).activation,activation);assert.equal(gate.placed.length,0);
 }));
-test("storage failure prevents private entry calls and successful copies",()=>clock(async()=>{
+test("storage failure prevents private entry calls and cannot leave a failed ON request armed in memory",()=>clock(async()=>{
   const {h,gate,store}=await harness();store.fail=true;const r=await enableNew(h);
-  assert.equal(r.ok,false);assert.equal(gate.placed.length,0);
+  assert.equal(r.ok,false);assert.equal(gate.placed.length,0);assert.equal(live(h).requestedEnabled,false);
+  assert.equal(live(h).activation,null);
 }));
 test("partial execution is adopted and shown as a deviation, not repeated as a full new entry",()=>clock(async()=>{
   const {h,gate}=await harness();gate.partial=true;await enableNew(h);await h.syncLive(T);await h.syncLive(T);

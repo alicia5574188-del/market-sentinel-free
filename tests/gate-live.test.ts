@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, LiveEntrySizingError, liveEntryDisposition, liveOrderId, liveStopPriceForTick } from "../lib/gate-live.ts";
+import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, GateReadTimeoutError, LiveEntrySizingError, liveEntryDisposition, liveOrderId, liveStopPriceForTick } from "../lib/gate-live.ts";
 import type { PaperPlan } from "../lib/liquidity-core.ts";
 
 function plan(marketState: PaperPlan["marketState"], side: PaperPlan["side"]): PaperPlan {
@@ -239,6 +239,18 @@ test("int64 order IDs from Gate snapshots survive JSON parsing and cancellation 
 });
 
 
+test("native fetch GET timeout is normalized into GateReadTimeoutError for LIVE retry logic",async()=>{
+  const real=globalThis.fetch;
+  globalThis.fetch=async()=>{const error=new Error("The operation was aborted due to timeout");error.name="TimeoutError";throw error;};
+  try{
+    const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
+    await assert.rejects(client.position("BTC_USDT"),error=>{
+      assert.ok(error instanceof GateReadTimeoutError);assert.equal(error.path,"/futures/usdt/positions/BTC_USDT");return true;
+    });
+    assert.equal(client.readTransport.timeouts,1);
+  }finally{globalThis.fetch=real;}
+});
+
 test("the restored full snapshot does not hide or retry a private read timeout",async()=>{
   const real=globalThis.fetch;let requests=0;
   globalThis.fetch=async(input)=>{
@@ -254,7 +266,7 @@ test("the restored full snapshot does not hide or retry a private read timeout",
   };
   try{
     const client=new GateLiveClient({apiKey:"abcdefgh12345678",apiSecret:"secret-value-12345678",environment:"live"});
-    await assert.rejects(client.snapshot(),/timeout/i);
+    await assert.rejects(client.snapshot(),error=>error instanceof GateReadTimeoutError);
     assert.equal(requests,4,"one full snapshot issues its four reads once; no hedge or retry is created");
     assert.equal(client.readTransport.hedges,0);assert.equal(client.readTransport.recovered,0);
   }finally{globalThis.fetch=real;}
