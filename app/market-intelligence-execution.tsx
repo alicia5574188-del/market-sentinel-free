@@ -57,6 +57,8 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
     currentEvolution=opportunities.find(o=>o.marketEvolutionPhase)?.marketEvolutionPhase,
     lifecycleText=lifecycleNarrative(data?.latestReason),
     hypothesisResearch=data?.hypothesisResearch,hypotheses=hypothesisResearch?.active??[],
+    entryValidations=data?.entryValidation?.records??[],
+    validationById=new Map(entryValidations.map(v=>[v.candidateId,v])),
     actionable=opportunities.filter(o=>o.eligible),
     candidateRows=(actionable.length?actionable:opportunities).slice(0,8);
 
@@ -128,17 +130,22 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
     <section className="fr-section">
       <div className="fr-section-head"><div><small>NEXT OPPORTUNITIES</small><h2>当前交易假设 · 最值得关注的机会</h2>
         <p>先看机会处于哪个阶段，再看评分。过度延伸不会直接被禁止，但会进入加强实时确认。</p></div><span>{actionable.length} 个可参与</span></div>
-      {candidateRows.length?<div className="fr-exec-candidate-grid">{candidateRows.map((o,index)=><details className={`fr-exec-candidate ${o.eligible?"is-eligible":""} ${o.extendedConfirmation?"is-extended":""}`} key={o.id}>
+      {candidateRows.length?<div className="fr-exec-candidate-grid">{candidateRows.map((o,index)=>{
+        const v=validationById.get(o.id),entryState=v?.status==="WAITING"
+          ?(v.phase==="RETEST_WAIT"?"等回调重启":v.stableThesis?"已武装":"实时确认")
+          :v?.status==="CANCELLED"?"本假设已取消":o.extendedConfirmation?"加强确认":o.eligible?"主候选":"观察";
+        return <details className={`fr-exec-candidate ${o.eligible?"is-eligible":""} ${o.extendedConfirmation?"is-extended":""}`} key={o.id}>
         <summary><span className="fr-exec-candidate-rank">#{index+1}</span><div className="fr-exec-candidate-main"><div><b>{o.symbol.replace("_"," / ")}</b><small>{side(o.side)} · {o.mode}</small></div>
           <strong>{opportunityPhase(o.opportunityLifecyclePhase)}</strong></div>
           <div className="fr-exec-candidate-metrics"><span><small>评分</small><b>{fmt(o.score,0)}</b></span><span><small>净空间</small><b>{pct(o.netRemainingSpaceRate)}</b></span>
             <span><small>空间/回撤</small><b>{fmt(o.edgeRatio,2)}×</b></span></div>
-          <em>{o.extendedConfirmation?"加强确认":o.eligible?"主候选":"观察"}</em></summary>
+          <em>{entryState}</em></summary>
         <div className="fr-score-details"><p><b>机会阶段：</b>{opportunityPhase(o.opportunityLifecyclePhase)} · 市场阶段 {evolution(o.marketEvolutionPhase)}</p>
+          {v&&<p><b>入场执行：</b>{entryState} · {v.reason??"等待实时响应。"}</p>}
           {o.lifecycleReason&&<p><b>生命周期：</b>{o.lifecycleReason}</p>}
           {o.futureResearchReason&&<p><b>前瞻研究：</b>{researchAction(o.futureResearchAction)} · {o.futureResearchReason}</p>}
           <p>{o.thesisSummary??o.reason}</p><p><b>失效条件：</b>{o.invalidationSummary??"按独立交易假设与结构止损退出。"}</p></div>
-      </details>)}</div>:<p className="fr-note">当前没有形成值得优先展示的交易假设。</p>}
+      </details>})}</div>:<p className="fr-note">当前没有形成值得优先展示的交易假设。</p>}
     </section>
 
     <section className="fr-section">
