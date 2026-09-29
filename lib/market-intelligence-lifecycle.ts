@@ -142,21 +142,29 @@ export function deriveProfitLifecycle(input:{
       ||researchSupported),
     revaluedPotentialRate=Math.max(expectedAtEntryRate,peakNet,
       currentNet+Math.max(0,input.position.remainingSpaceRate)*(runner?.90:.60)),
-    provenProfit=input.firstProfit&&peakNet>=Math.max(cost*4,input.pullbackRiskRate*.75),
-    runnerLevel=runner?(outperformanceMultiple>=4.5?4:outperformanceMultiple>=3.2?3:outperformanceMultiple>=2.4?2:
-      outperformanceMultiple>=1.6?1:runnerByAbsolute?1:0):0,
-    runnerPlatformNet=runnerLevel===4?Math.max(expectedAtEntryRate*2.40,peakNet*.55):
-      runnerLevel===3?Math.max(expectedAtEntryRate*1.85,peakNet*.48):
-      runnerLevel===2?Math.max(expectedAtEntryRate*1.35,peakNet*.40):
-      runnerLevel===1?Math.max(expectedAtEntryRate*.80,peakNet*.30):0,
-    provenPlatformNet=!runner&&provenProfit?Math.max(cost*.25,peakNet*.30):0,
+    provenTrigger1=Math.max(cost*4,input.pullbackRiskRate*.75),
+    provenTrigger2=Math.max(provenTrigger1*1.5,expectedAtEntryRate>0?expectedAtEntryRate*.75:0),
+    provenTrigger3=expectedAtEntryRate>0?Math.max(provenTrigger2,expectedAtEntryRate):provenTrigger2*1.4,
+    provenProfit=input.firstProfit&&peakNet>=provenTrigger1,
+    provenLevel=!runner&&!provenProfit?0:!runner&&peakNet>=provenTrigger3?3:!runner&&peakNet>=provenTrigger2?2:!runner?1:0,
+    runnerLevel=runner?(runnerByReprice
+      ?(outperformanceMultiple>=4.5?4:outperformanceMultiple>=3.2?3:outperformanceMultiple>=2.4?2:1)
+      :runnerByAbsolute?1:0):0,
+    runnerPlatformNet=runnerLevel===4?expectedAtEntryRate*2.50:
+      runnerLevel===3?expectedAtEntryRate*1.75:
+      runnerLevel===2?expectedAtEntryRate*1.05:
+      runnerLevel===1?(runnerByReprice?expectedAtEntryRate*.60:Math.max(cost*.75,input.pullbackRiskRate*.90)):0,
+    provenPlatformNet=provenLevel===3?Math.max(cost*.40,provenTrigger3*.30):
+      provenLevel===2?Math.max(cost*.25,provenTrigger2*.20):
+      provenLevel===1?Math.max(cost*.15,provenTrigger1*.10):0,
     platformKind:ProfitLifecycleState["platformKind"]=runnerPlatformNet>0?"RUNNER":provenPlatformNet>0?"PROVEN":"NONE",
-    platformNet=Math.max(runnerPlatformNet,provenPlatformNet),
+    platformNet=Math.max(0,Math.min(peakNet*.85,Math.max(runnerPlatformNet,provenPlatformNet))),
     platformFloorRate=platformNet>0?cost+platformNet:0,
+    platformLevel=runner?runnerLevel:provenLevel,
     platformReason=platformKind==="RUNNER"
-      ?`Runner已跨过第${runnerLevel}级已证明利润平台；平台只限制灾难性回吐，不限制继续创新高。`
+      ?`Runner已跨过第${runnerLevel}级离散利润平台；只有跨越新的扩张级别才提高底线，普通新高不会逐tick追价。`
       :platformKind==="PROVEN"
-      ?"订单已经形成超过正常噪声的已证明利润；建立宽松利润平台，避免正收益完整回吐成亏损。"
+      ?`订单已跨过第${provenLevel}级已证明利润平台；底线按入场预期/正常回撤的固定台阶计算，避免浮盈转亏但不给潜在Runner设置连续追踪止盈。`
       :"尚未形成需要独立锁定的已证明利润平台。",
     trajectory:ProfitLifecycleState["trajectory"]=persistentDeterioration?"DECAYING":runner?"RUNNER":
       outperformanceMultiple>=1.25?"OUTPERFORMING":"BASE";
@@ -221,5 +229,5 @@ export function deriveProfitLifecycle(input:{
   const floorRate=action==="PROTECT"&&peakNet>0?cost+peakNet*retention:0;
   return{version:MARKET_LIFECYCLE_VERSION,phase,action,proof,peakNetRate:peakNet,currentNetRate:currentNet,
     givebackRatio:giveback,floorRate,retentionRate:retention,reason,trajectory,runner,
-    expectedAtEntryRate,revaluedPotentialRate,outperformanceMultiple,platformKind,platformFloorRate,platformLevel:runnerLevel,platformReason};
+    expectedAtEntryRate,revaluedPotentialRate,outperformanceMultiple,platformKind,platformFloorRate,platformLevel,platformReason};
 }
