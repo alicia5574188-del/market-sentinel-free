@@ -195,6 +195,33 @@ test("an IOC market entry is inspected through Gate's regular futures-order endp
   }
 });
 
+test("price-trigger stop amend sends exact int64 id as JSON integer and changes trigger fields only", async () => {
+  const originalFetch=globalThis.fetch,seen:Request[]=[];
+  globalThis.fetch=async(input,init)=>{const request=new Request(input,init);seen.push(request);return Response.json({});};
+  try{
+    const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
+    await client.amendStop("9223372036854775807",99.25);
+    assert.equal(seen.length,1);
+    const request=seen[0]!,body=await request.text();
+    assert.equal(request.method,"PUT");
+    assert.equal(new URL(request.url).pathname,"/api/v4/futures/usdt/price_orders/amend");
+    assert.equal(body,'{"order_id":9223372036854775807,"trigger_price":"99.25","price_type":0}');
+    assert.doesNotMatch(body,/"order_id":"/);
+    assert.doesNotMatch(body,/"close"|"size"|"price":/);
+    assert.match(request.headers.get("SIGN")??"",/^[0-9a-f]{128}$/);
+  }finally{globalThis.fetch=originalFetch;}
+});
+
+test("price-trigger stop amend rejects a non-int64 id before any Gate request", async () => {
+  const originalFetch=globalThis.fetch;let calls=0;
+  globalThis.fetch=async()=>{calls++;return Response.json({});};
+  try{
+    const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
+    await assert.rejects(()=>client.amendStop('1,"close":false',99),/止损订单编号无效/);
+    assert.equal(calls,0);
+  }finally{globalThis.fetch=originalFetch;}
+});
+
 test("int64 order IDs from Gate snapshots survive JSON parsing and cancellation unchanged", async () => {
   const originalFetch = globalThis.fetch;
   const seen: Request[] = [];

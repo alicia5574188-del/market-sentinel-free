@@ -209,11 +209,16 @@ export class GateLiveClient {
   constructor(credentials: GateCredentials) { this.credentials = credentials; }
 
   private async request<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, query = "", value?: unknown,
-    beforeSend?:()=>boolean) {
+    beforeSend?:()=>boolean, rawBody?:string) {
     this.requestCount += 1;
     const timestamp = Math.floor(Date.now() / 1_000).toString();
     const signedPath = `/api/v4${path}`;
-    const body = value == null ? "" : JSON.stringify(value);
+    // Gate exposes id_string because JavaScript cannot safely round-trip every
+    // int64 order id. A few mutation endpoints nevertheless require the id to
+    // be a JSON integer, not a quoted string. rawBody is private to this adapter
+    // and lets those endpoints sign/send the exact decimal bytes without ever
+    // converting the identifier through Number.
+    const body = rawBody ?? (value == null ? "" : JSON.stringify(value));
     const base = this.credentials.environment === "testnet" ? "https://api-testnet.gateapi.io" : "https://api.gateio.ws";
     const signature=await gateRequestSignature(this.credentials.apiSecret, method, signedPath, query, body, timestamp);
     if(beforeSend&&!beforeSend())throw new GateEntryCancelledError();
@@ -336,9 +341,18 @@ export class GateLiveClient {
   }
 
   async amendStop(orderId: string, stopPrice: number) {
-    await this.request("PUT", "/futures/usdt/price_orders/amend", "", {
-      order_id: orderId, size: 0, price: "0", trigger_price: String(stopPrice), price_type: 0, close: true,
-    });
+    // Production returned AUTO_INVALID_REQUEST_BODY here while createStop()
+    // itself succeeded. The amend schema requires order_id as int64, but the
+    // reconciler intentionally keeps Gate's id_string so 64-bit ids are exact.
+    // Emit that validated decimal id as a raw JSON integer and change only the
+    // trigger fields. The existing close-only order keeps its original initial
+    // order semantics; re-sending size/price/close is unnecessary for a stop
+    // price amendment and previously widened the request-body failure surface.
+    if(!/^[1-9]\d{0,18}$/.test(orderId)||(orderId.length===19&&orderId>"9223372036854775807"))
+      throw new Error("Gate止损订单编号无效");
+    if(!(Number.isFinite(stopPrice)&&stopPrice>0))throw new Error("Gate止损更新价格无效");
+    const rawBody=`{"order_id":${orderId},"trigger_price":${JSON.stringify(String(stopPrice))},"price_type":0}`;
+    await this.request("PUT", "/futures/usdt/price_orders/amend", "", undefined, undefined, rawBody);
   }
 
   async cancelOrder(kind: "PRICE_TRIGGER" | "LIMIT" | "MARKET", orderId: string) {
