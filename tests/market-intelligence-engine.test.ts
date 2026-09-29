@@ -5,6 +5,8 @@ import {evaluatePositionIntelligence} from "../lib/position-intelligence-engine.
 import {entryResponseWindowMs,evaluateEntryResponse} from "../lib/market-intelligence-entry-response.ts";
 import {advanceForward,extremeResidualConfirmationProfile,fillForwardPortfolio,initialForward,normalizeForward,
   resetForwardAccountPreservingLearning,stableEntryLocationDecision,stableEntryThesisProfile} from "../lib/forward-relations.ts";
+import {environmentPerformanceFactor,environmentProbeRetestDecision,initialEnvironmentPerformanceState,
+  normalizeEnvironmentPerformanceState,recordEnvironmentOutcome,routeEnvironmentOpportunity} from "../lib/market-intelligence-environment-router.ts";
 
 const T=2_000_000_000_000;
 function candles(start:number,step:number,vol=.002){
@@ -388,4 +390,107 @@ test("armed thesis fields survive forward normalization instead of silently losi
   assert.equal(restored.stableThesis,true);assert.equal(restored.phase,"RETEST_WAIT");
   assert.equal(restored.extendedConfirmation,true);assert.equal(restored.minimumSupportSamples,3);
   assert.equal(restored.maxChaseRate,.0063);assert.equal(restored.retestBasePrice,1448);
+});
+
+
+test("environment router preserves full trend capture but converts countertrend reversal into a live Probe path",()=>{
+  const market=initialMarketIntelligenceState(T);
+  market.narrative.short={...market.narrative.short,bias:"BEARISH",score:-.46,phase:"DECLINING"};
+  market.narrative.major={...market.narrative.major,bias:"BEARISH",score:-.38};
+  market.internals={...market.internals!,breadth3:-.35,synchrony:.48,venuePressure:-.22};
+  const symbol={symbol:"ENA_USDT",watchScore:85,regime:"DIVERGENT" as const,stage:"READY" as const,clusterId:"corr:ADA_USDT",
+    correlation:.75,beta:1,volatility:.004,dataConfidence:96,actualMove:.007,expectedMove:-.002,residual:.009,residualZ:1.1,
+    residualPersistence:1,relativeStrength:.68,longScore:86,shortScore:25,pathLong:.7,pathShort:.3,roomLong:.03,roomShort:.01,
+    sourceCount:5,venueAgreement:.9,venuePressure:.25,reasons:[],signalSide:"LONG" as const,signalSince:T-600_000,signalBars:3,signalLastBar:T-300_000};
+  const transition={version:"market-intelligence-lifecycle-v1" as const,phase:"TRANSITIONAL" as const,trendSide:"SHORT" as const,
+    expansionScore:.43,rotationRisk:.58,reason:"transition",decisionStable:false,stabilityScore:.35};
+  const probe=routeEnvironmentOpportunity({market,evolution:transition,symbol,opportunity:{side:"LONG",mode:"REVERSAL",score:85,premium:true,
+    edgeRatio:2.2,netRemainingSpaceRate:.03,pullbackRiskRate:.012,thesisBars:3,confirmationStage:"READY"}});
+  assert.equal(probe.environment,"TRANSITION");assert.equal(probe.playbook,"TRANSITION_PROBE");
+  assert.equal(probe.alignment,"COUNTER");assert.equal(probe.forceRetest,true);assert.equal(probe.probe,true);
+  assert.ok(probe.riskScale>0&&probe.riskScale<=.40,"countertrend trade keeps trading authority but at Probe risk");
+
+  market.narrative.short={...market.narrative.short,bias:"BULLISH",score:.48,phase:"ADVANCING"};
+  market.narrative.major={...market.narrative.major,bias:"BULLISH",score:.42};
+  market.internals={...market.internals!,breadth3:.32,synchrony:.50,venuePressure:.20};
+  const trend={...transition,phase:"STABLE_TREND" as const,trendSide:"LONG" as const,expansionScore:.62,rotationRisk:.30,decisionStable:true};
+  const capture=routeEnvironmentOpportunity({market,evolution:trend,symbol,opportunity:{side:"LONG",mode:"CONTINUATION",score:85,premium:true,
+    edgeRatio:2.2,netRemainingSpaceRate:.03,pullbackRiskRate:.012,thesisBars:3,confirmationStage:"READY"}});
+  assert.equal(capture.environment,"TREND");assert.equal(capture.playbook,"TREND_CAPTURE");
+  assert.equal(capture.alignment,"ALIGNED");assert.equal(capture.forceRetest,false);assert.ok(capture.riskScale>=.99);
+});
+
+test("synchronized market expansion activates mainline participation instead of requiring an abnormal residual",()=>{
+  const market=initialMarketIntelligenceState(T);
+  market.narrative.short={...market.narrative.short,bias:"BULLISH",score:.58,phase:"ADVANCING"};
+  market.narrative.major={...market.narrative.major,bias:"BULLISH",score:.52};
+  market.internals={...market.internals!,breadth3:.82,breadth12:.70,synchrony:.84,venuePressure:.55,leaderPersistence:.78};
+  const evolution={version:"market-intelligence-lifecycle-v1" as const,phase:"EXPANDING" as const,trendSide:"LONG" as const,
+    expansionScore:.82,rotationRisk:.18,reason:"expanding",decisionStable:true,stabilityScore:.78};
+  const symbol={symbol:"BTC_USDT",watchScore:76,regime:"MARKET_TREND" as const,stage:"OBSERVE" as const,clusterId:"corr:BTC_USDT",
+    correlation:.9,beta:1,volatility:.003,dataConfidence:98,actualMove:.012,expectedMove:.011,residual:.001,residualZ:.12,
+    residualPersistence:1,relativeStrength:.53,longScore:78,shortScore:22,pathLong:.75,pathShort:.25,roomLong:.02,roomShort:.006,
+    sourceCount:5,venueAgreement:.95,venuePressure:.5,reasons:[],signalSide:"LONG" as const,signalSince:T-300_000,signalBars:1,signalLastBar:T-300_000};
+  const route=routeEnvironmentOpportunity({market,evolution,symbol,opportunity:{side:"LONG",mode:"CONTINUATION",score:76,premium:false,
+    edgeRatio:1.8,netRemainingSpaceRate:.018,pullbackRiskRate:.008,thesisBars:1,confirmationStage:"OBSERVE"}});
+  assert.equal(route.environment,"SHOCK");assert.equal(route.playbook,"SHOCK_PARTICIPATION");
+  assert.equal(route.mainline,true);assert.equal(route.priority,5);assert.equal(route.forceRetest,false);
+});
+
+test("rotation routes capital toward relative-strength balance rather than a one-way market bet",()=>{
+  const market=initialMarketIntelligenceState(T);
+  market.narrative.short={...market.narrative.short,bias:"NEUTRAL",score:.02,phase:"DIVERGING"};
+  market.internals={...market.internals!,breadth3:.05,synchrony:.35,venuePressure:0,dispersion:.9};
+  const evolution={version:"market-intelligence-lifecycle-v1" as const,phase:"ROTATIONAL" as const,trendSide:null,
+    expansionScore:.30,rotationRisk:.82,reason:"rotation",decisionStable:false,stabilityScore:.25};
+  const symbol={symbol:"XLM_USDT",watchScore:82,regime:"DIVERGENT" as const,stage:"READY" as const,clusterId:"corr:XLM_USDT",
+    correlation:.4,beta:.7,volatility:.004,dataConfidence:96,actualMove:-.008,expectedMove:-.001,residual:-.007,residualZ:-1.1,
+    residualPersistence:1,relativeStrength:.3,longScore:25,shortScore:84,pathLong:.3,pathShort:.7,roomLong:.008,roomShort:.022,
+    sourceCount:5,venueAgreement:.9,venuePressure:-.3,reasons:[],signalSide:"SHORT" as const,signalSince:T-600_000,signalBars:3,signalLastBar:T-300_000};
+  const balancing=routeEnvironmentOpportunity({market,evolution,symbol,portfolioLongRisk:18,portfolioShortRisk:4,
+    opportunity:{side:"SHORT",mode:"RELATIVE",score:82,premium:true,edgeRatio:2,netRemainingSpaceRate:.022,pullbackRiskRate:.01,thesisBars:3,confirmationStage:"READY"}});
+  const adding=routeEnvironmentOpportunity({market,evolution,symbol:{...symbol,signalSide:"LONG",residualZ:1.1},
+    portfolioLongRisk:18,portfolioShortRisk:4,
+    opportunity:{side:"LONG",mode:"RELATIVE",score:82,premium:true,edgeRatio:2,netRemainingSpaceRate:.022,pullbackRiskRate:.01,thesisBars:3,confirmationStage:"READY"}});
+  assert.equal(balancing.playbook,"ROTATION_RELATIVE");assert.ok(balancing.scoreDelta>adding.scoreDelta);
+  assert.ok(balancing.riskScale>0,"rotation still trades rather than pausing the book");
+});
+
+test("losing environment adapts by shrinking risk, never by switching trading off",()=>{
+  const perf=initialEnvironmentPerformanceState();
+  for(let i=0;i<6;i++)recordEnvironmentOutcome(perf,{environment:"TRANSITION",playbook:"TRANSITION_PROBE",netPnl:-5,plannedRisk:5,now:T+i});
+  const factor=environmentPerformanceFactor(perf,"TRANSITION","TRANSITION_PROBE");
+  assert.ok(factor>=.55&&factor<.8);
+  const market=initialMarketIntelligenceState(T),symbol={symbol:"LINK_USDT",watchScore:82,regime:"DIVERGENT" as const,stage:"READY" as const,
+    clusterId:"corr:ADA_USDT",correlation:.7,beta:1,volatility:.004,dataConfidence:96,actualMove:.008,expectedMove:.001,residual:.007,
+    residualZ:1,residualPersistence:1,relativeStrength:.7,longScore:84,shortScore:25,pathLong:.7,pathShort:.3,roomLong:.02,roomShort:.008,
+    sourceCount:5,venueAgreement:.9,venuePressure:.3,reasons:[],signalSide:"LONG" as const,signalSince:T-600_000,signalBars:3,signalLastBar:T-300_000};
+  market.narrative.short={...market.narrative.short,bias:"BEARISH",score:-.4,phase:"DECLINING"};
+  const evolution={version:"market-intelligence-lifecycle-v1" as const,phase:"TRANSITIONAL" as const,trendSide:"SHORT" as const,
+    expansionScore:.4,rotationRisk:.6,reason:"",decisionStable:false,stabilityScore:.3};
+  const route=routeEnvironmentOpportunity({market,evolution,symbol,performanceFactor:factor,opportunity:{side:"LONG",mode:"REVERSAL",
+    score:82,premium:true,edgeRatio:2,netRemainingSpaceRate:.025,pullbackRiskRate:.011,thesisBars:3,confirmationStage:"READY"}});
+  assert.ok(route.riskScale>=.20&&route.riskScale<.40);
+  assert.equal(route.forceRetest,true);
+});
+
+test("Probe-Prove-Expand entry path requires impulse, pullback and restart in that order",()=>{
+  const base={side:"LONG" as const,price:100,bestAdvanceRate:.001,currentAdvanceRate:.001,retestSeen:false,
+    impulseMin:.002,pullbackMin:.001,restartMin:.0008};
+  assert.equal(environmentProbeRetestDecision(base).action,"WAIT_IMPULSE");
+  assert.equal(environmentProbeRetestDecision({...base,bestAdvanceRate:.003,currentAdvanceRate:.0026}).action,"WAIT_PULLBACK");
+  assert.equal(environmentProbeRetestDecision({...base,bestAdvanceRate:.003,currentAdvanceRate:.0018}).action,"SET_RETEST_BASE");
+  assert.equal(environmentProbeRetestDecision({...base,retestSeen:true,retestBasePrice:100,price:99.95,bestAdvanceRate:.003,currentAdvanceRate:.0015}).action,"UPDATE_RETEST_BASE");
+  assert.equal(environmentProbeRetestDecision({...base,retestSeen:true,retestBasePrice:99.95,price:99.99,bestAdvanceRate:.003,currentAdvanceRate:.0018}).action,"WAIT_RESTART");
+  assert.equal(environmentProbeRetestDecision({...base,retestSeen:true,retestBasePrice:99.95,price:100.05,bestAdvanceRate:.003,currentAdvanceRate:.0022}).action,"READY");
+});
+
+test("environment performance memory bootstraps from historical losses and survives account reset",()=>{
+  const history=Array.from({length:5},(_,i)=>({closedAt:T-i,netPnl:-5,plannedRisk:5,entryContext:{
+    marketEvolutionPhase:"TRANSITIONAL" as const,mode:"REVERSAL"}}));
+  const memory=normalizeEnvironmentPerformanceState(undefined,history,T);
+  assert.ok(environmentPerformanceFactor(memory,"TRANSITION","TRANSITION_PROBE")<1);
+  const state=initialForward(T);state.environmentPerformance=memory;
+  const reset=resetForwardAccountPreservingLearning(state,T+1_000);
+  assert.deepEqual(reset.environmentPerformance,memory);
 });
