@@ -331,6 +331,54 @@ test("LIVE mirror still blocks a genuinely stale BBO when PAPER source exists",(
   assert.match(live(h).entrySkips.BTC_USDT.reason,/新鲜可执行盘口/);
 }));
 
+test("slow private Gate reconciliation refreshes all PAPER marks before LIVE sizing",()=>clock(async()=>{
+  const {h,gate}=await harness();
+  h.forwardState.positions=[];
+  live(h).requestedEnabled=true;live(h).activation=startLiveSession(T-1_000,h.forwardState);
+  const freshSource={...trade("post-account-refresh","BTC_USDT"),openedAt:T-500,lastQuoteAt:T-500};
+  const oldSource={...trade("pre-enable-mark","SOL_USDT"),openedAt:T-10_000,lastQuoteAt:T-10_000};
+  h.forwardState.positions=[freshSource,oldSource];
+  h.runtime.symbols=["BTC_USDT","SOL_USDT"];
+  h.runtime.tickSize={BTC_USDT:.01,SOL_USDT:.01};
+  h.runtime.contractMeta={
+    BTC_USDT:{quantoMultiplier:.001,leverageMax:20,maintenanceRate:.005,fundingRate:0,enableDecimal:false,orderSizeMin:"1",orderSizeMax:"10000000"},
+    SOL_USDT:{quantoMultiplier:.001,leverageMax:20,maintenanceRate:.005,fundingRate:0,enableDecimal:false,orderSizeMin:"1",orderSizeMax:"10000000"},
+  };
+  h.runtime.evidence={
+    BTC_USDT:{midpoint:100,bestBid:100,bestAsk:100,observedAt:T-60_000,fresh:true,entryReady:false},
+    SOL_USDT:{midpoint:100,bestBid:100,bestAsk:100,observedAt:T-60_000,fresh:true,entryReady:false},
+  };
+  let refreshed:string[]=[];
+  const x=h as unknown as {refreshMirrorExecutableQuotes(symbols:string[],now?:number):Promise<void>};
+  x.refreshMirrorExecutableQuotes=async symbols=>{
+    refreshed=[...symbols];
+    h.runtime.evidence={
+      BTC_USDT:{midpoint:100,bestBid:100,bestAsk:100,observedAt:T,fresh:true,entryReady:false},
+      SOL_USDT:{midpoint:100,bestBid:100,bestAsk:100,observedAt:T,fresh:true,entryReady:false},
+    };
+  };
+  await h.syncLive(T);
+  assert.ok(refreshed.includes("BTC_USDT")&&refreshed.includes("SOL_USDT"));
+  assert.equal(gate.placed.length,1,"an unrelated pre-enable PAPER holding must not leave the current PAPER equity mark stale");
+}));
+
+test("BBO aging during Gate leverage confirmation refreshes instead of cancelling a valid source",()=>clock(async()=>{
+  const {h,gate}=await harness();
+  let refreshes=0;
+  const x=h as unknown as {ensureMirrorExecutableQuote(symbol:string,now?:number):Promise<boolean>};
+  x.ensureMirrorExecutableQuote=async symbol=>{
+    refreshes++;
+    h.runtime.evidence[symbol]={midpoint:100,bestBid:100,bestAsk:100,observedAt:T,fresh:true,entryReady:false};
+    return true;
+  };
+  gate.onLeverage=async()=>{
+    h.runtime.evidence.BTC_USDT={midpoint:100,bestBid:100,bestAsk:100,observedAt:T-60_000,fresh:true,entryReady:false};
+  };
+  await enableNew(h);
+  assert.ok(refreshes>=1);
+  assert.equal(gate.placed.length,1,"a slow leverage acknowledgement may refresh the public BBO but must not force a false cancellation");
+}));
+
 test("persisted new PAPER source reaches LIVE in the same critical pass",()=>clock(async()=>{
   const {h}=await harness();h.forwardState.positions=[];
   live(h).requestedEnabled=true;live(h).activation=startLiveSession(T-1000,h.forwardState);

@@ -386,3 +386,18 @@ test("LIVE mirror readiness uses fresh executable BBO, not PAPER entryReady admi
   assert.doesNotMatch(block,/entryReady===true/);
   assert.match(parity,/LIVE_SOURCE_ENTRY_MAX_DELAY_MS = 30_000/,"late-copy protection must remain in the LIVE sizing path");
 });
+
+
+test("LIVE copy actively refreshes Gate BBO after private reconciliation ages the PAPER quote",async()=>{
+  const worker=await read("worker/index-clean.ts");
+  const refreshStart=worker.indexOf("private async refreshMirrorExecutableQuotes");
+  const refreshEnd=worker.indexOf("private async queueLiveBinding",refreshStart);
+  const refresh=worker.slice(refreshStart,refreshEnd);
+  assert.match(refresh,/processAdaptiveBooks\(Date\.now\(\),executable\)/);
+  assert.match(refresh,/do not re-run|do not re-run/i);
+  const syncStart=worker.indexOf("private async syncLiveOnce");
+  const syncEnd=worker.indexOf("protected async setLiveMode",syncStart);
+  const sync=worker.slice(syncStart,syncEnd);
+  assert.match(sync,/refreshMirrorExecutableQuotes\(this\.forwardState!\.positions\.map\(t=>t\.symbol\),Date\.now\(\)\)/);
+  assert.match(sync,/ensureMirrorExecutableQuote\(symbol,Date\.now\(\)\)/);
+});
