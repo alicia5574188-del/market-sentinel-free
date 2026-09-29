@@ -2060,7 +2060,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private async ensureLiveStop(client: GateLiveClient, position: LivePosition, openPriceOrders: Awaited<ReturnType<GateLiveClient["snapshot"]>>["priceOrders"]) {
     const byIdentity=(tag:string|null|undefined,id:string|null|undefined)=>openPriceOrders.find(order=>
       (!!tag&&liveOrderTag(order)===tag)|| (!!id&&liveOrderId(order)===id))??null;
-    let existing=byIdentity(position.stopTag,position.stopOrderId);
+    const existing=byIdentity(position.stopTag,position.stopOrderId);
     if(existing){
       position.stopOrderId=liveOrderId(existing)??position.stopOrderId;
       position.stopSubmittingAt=null;
