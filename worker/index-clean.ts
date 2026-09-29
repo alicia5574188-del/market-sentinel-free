@@ -1916,11 +1916,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private liveEntryAwaitingReconcile(entry: LiveEntry | null | undefined) {
     if(!entry?.parity || entry.marketSubmittedAt == null) return false;
-    const position=this.runtime.live.positions[entry.symbol];
-    // A historical CLOSED record with the same source id is not an active
-    // reconciliation success. Treat only an actually OPEN Gate holding as the
-    // resolved exposure; otherwise the source must surface an explicit result.
-    if(position?.id === entry.planId && position.status === "OPEN") return false;
+    // Once this source has a durable LIVE position record (OPEN or CLOSED), the
+    // one-shot entry identity itself is resolved. A CLOSED leg that diverges
+    // from an still-OPEN PAPER source is classified separately by mirrorCoverage
+    // and the post-sync invariant; it must not be charged again as pending risk.
+    if(this.runtime.live.positions[entry.symbol]?.id === entry.planId) return false;
     return entry.status === "FILLED" || (entry.status === "CANCELLED" && !entry.submissionResolved);
   }
 
@@ -2691,12 +2691,22 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             if(!this.runtime.live.requestedEnabled
               ||!sameLiveSession(activation,this.runtime.live.activation)
               ||!sourceAfterEnable(source,this.runtime.live.activation,this.forwardState?.startedAt??0)
-              ||!mirrorSourceFresh(this.currentMirrorSource(plan.id).trade??undefined,plan.id,Date.now()))return false;
-            // The executable price was validated immediately before this durable
-            // exactly-once fence. Do not let the older exchange-book timestamp
-            // cross 10s again during checkpoint/signing and create a false
-            // cancellation loop; only a >2.5s local send delay invalidates it.
-            return Date.now()-finalValidatedAt<=2_500;
+              ||!mirrorSourceFresh(this.currentMirrorSource(plan.id).trade??undefined,plan.id,Date.now())
+              ||Date.now()-finalValidatedAt>2_500)return false;
+            // Re-check any newer in-memory Gate book that arrived while the
+            // exactly-once reservation/signature was being prepared. Do NOT
+            // require the earlier quote timestamp to remain inside the broad
+            // 10s monitoring window: the final submit quote was validated just
+            // before this <=2.5s local send window. Price/stop/drift safety,
+            // however, remains mandatory right up to the network boundary.
+            const latest=this.runtime.evidence[symbol],
+              latestPrice=entry.side==="LONG"?latest?.bestAsk:latest?.bestBid;
+            if(latestPrice){
+              if(entry.side==="LONG"?latestPrice<=entry.invalidation:latestPrice>=entry.invalidation)return false;
+              const latestDrift=liveEntryDriftGuard(source,latestPrice);
+              if(latestDrift.adverse>latestDrift.allowed+1e-9)return false;
+            }
+            return true;
           };
           if(!submissionStillAllowed())throw new GateEntryCancelledError("最终提交身份或2.5秒发送窗口已变化，订单尚未发送");
           // Keep the current final local safety fence, but use the proven
