@@ -83,22 +83,35 @@ test("Gate liquidity is a hard floor and still improves ranking among equally ac
   assert.ok(a&&b);assert.ok(b!.activityScore>a!.activityScore);
 });
 
-test("hybrid anchor pool reserves market cores and a bounded liquid sleeve without using either for direction",async()=>{
+test("market cores no longer reserve deep-research seats while locked exposure still does",async()=>{
   const {selectAnchorOpportunityUniverse}=await import("../lib/multi-turn-universe.ts");
   const rows=[
-    row("BTC_USDT",-.025,.035,9_000_000_000),row("ETH_USDT",-.035,.05,7_000_000_000),
-    row("SOL_USDT",-.05,.07,5_000_000_000),row("LIQUID_USDT",.001,.012,8_000_000_000),
-    ...Array.from({length:45},(_,i)=>row(`HOT${String(i).padStart(2,"0")}_USDT`,.08,.16,2_000_000+i*25_000)),
+    row("BTC_USDT",.001,.012,9_000_000_000),row("ETH_USDT",.001,.012,7_000_000_000),
+    row("SOL_USDT",.001,.012,5_000_000_000),row("LOCKED_USDT",.001,.012,2_000_000),
+    ...Array.from({length:35},(_,i)=>({...row(`HOT${String(i).padStart(2,"0")}_USDT`,.03,.07,2_000_000+i*25_000),
+      shortMoveRate:.0025+(i%5)*.0002,directionalAgreement:.9,sourceCount:4,sourceDisagreementRate:.0002})),
   ];
-  const selected=selectAnchorOpportunityUniverse({rows,limit:30,coreSymbols:["BTC_USDT","ETH_USDT","SOL_USDT"],
-    liquiditySlots:1,explorationSlots:4,rotationSeed:0});
-  assert.deepEqual(selected.slice(0,3).map(x=>x.symbol),["BTC_USDT","ETH_USDT","SOL_USDT"]);
-  assert.ok(selected.some(x=>x.symbol==="LIQUID_USDT"&&x.selectionSource==="LIQUIDITY"));
+  const selected=selectAnchorOpportunityUniverse({rows,limit:30,lockedSymbols:["LOCKED_USDT"],
+    coreSymbols:["BTC_USDT","ETH_USDT","SOL_USDT"],explorationSlots:0,rotationSeed:0});
+  assert.equal(selected[0]?.symbol,"LOCKED_USDT");
+  assert.equal(selected[0]?.selectionSource,"LOCKED_ANCHOR");
   assert.equal(selected.length,30);
-  assert.equal(selected.find(x=>x.symbol==="BTC_USDT")?.change24hRate,-.025,
-    "selection continuity must not rewrite or infer trade direction");
+  assert.ok(["BTC_USDT","ETH_USDT","SOL_USDT"].some(symbol=>!selected.some(x=>x.symbol===symbol)),
+    "quiet market cores must compete for deep-research seats instead of being permanently pinned");
 });
 
+test("fresh whole-market impulses preempt quiet high-liquidity residents",async()=>{
+  const {selectAnchorOpportunityUniverse}=await import("../lib/multi-turn-universe.ts");
+  const rows=[
+    ...Array.from({length:40},(_,i)=>({...row(`OLD${String(i).padStart(2,"0")}_USDT`,.02,.06,20_000_000+i*1_000_000),
+      shortMoveRate:.00005,directionalAgreement:.55,sourceCount:4,sourceDisagreementRate:.0002})),
+    {...row("AKE_USDT",.025,.065,2_500_000),shortMoveRate:.0042,directionalAgreement:1,sourceCount:4,sourceDisagreementRate:.0002},
+  ];
+  const selected=selectAnchorOpportunityUniverse({rows,limit:30,currentSymbols:rows.slice(0,30).map(x=>x.symbol),
+    explorationSlots:0,rotationSeed:1});
+  assert.ok(selected.some(x=>x.symbol==="AKE_USDT"),"new realtime impulse must enter the deep pool immediately");
+  assert.equal(selected.find(x=>x.symbol==="AKE_USDT")?.selectionSource,"FRESH_IMPULSE");
+});
 
 test("region lifecycle universe expands completed-5m scanning to 60 while retaining mature-region symbols",async()=>{
   const {selectRegionLifecycleUniverse}=await import("../lib/multi-turn-universe.ts");
