@@ -20,8 +20,8 @@ import { deriveMarketEvolution, deriveOpportunityLifecycle, deriveProfitLifecycl
 import { advanceMarketHypothesisResearch, entryHypothesisGuidance, initialMarketHypothesisResearch,
   normalizeMarketHypothesisResearch, positionHypothesisGuidance,
   type EntryHypothesisGuidance, type MarketHypothesisResearchState } from "./market-intelligence-hypothesis-research.ts";
-import { ENVIRONMENT_ROUTER_VERSION, environmentPerformanceFactor, initialEnvironmentPerformanceState, normalizeEnvironmentPerformanceState,
-  recordEnvironmentOutcome, routeEnvironmentOpportunity,
+import { ENVIRONMENT_ROUTER_VERSION, environmentPerformanceFactor, environmentProbeRetestDecision,
+  initialEnvironmentPerformanceState, normalizeEnvironmentPerformanceState, recordEnvironmentOutcome, routeEnvironmentOpportunity,
   type EnvironmentPerformanceState, type EnvironmentPlaybook, type MarketEnvironment, type RouteAlignment
 } from "./market-intelligence-environment-router.ts";
 
@@ -899,37 +899,35 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
     if(decision.action==="CANCEL"){validation.status="CANCELLED";reject(decision.reason);continue;}
 
     if(validation.requiresProbeRetest){
-      const d=dir(validation.side),best=Math.max(validation.bestAdvanceRate,decision.bestAdvanceRate),
-        current=decision.currentAdvanceRate,retrace=Math.max(0,best-current),
-        impulseMin=Math.max(ROUND_TRIP_COST*.70,validation.probeImpulseMin??ROUND_TRIP_COST*.90),
+      const impulseMin=Math.max(ROUND_TRIP_COST*.70,validation.probeImpulseMin??ROUND_TRIP_COST*.90),
         pullbackMin=Math.max(ROUND_TRIP_COST*.35,validation.probePullbackMin??ROUND_TRIP_COST*.45),
-        restartMin=Math.max(ROUND_TRIP_COST*.30,validation.probeRestartMin??ROUND_TRIP_COST*.40);
+        restartMin=Math.max(ROUND_TRIP_COST*.30,validation.probeRestartMin??ROUND_TRIP_COST*.40),
+        probe=environmentProbeRetestDecision({side:validation.side,price,currentAdvanceRate:decision.currentAdvanceRate,
+          bestAdvanceRate:decision.bestAdvanceRate,retestBasePrice:validation.retestBasePrice,
+          retestSeen:!!validation.probeRetestSeen,impulseMin,pullbackMin,restartMin});
       validation.phase="RETEST_WAIT";
-      if(best<impulseMin){
+      if(probe.action==="WAIT_IMPULSE"){
         validation.reason=`环境Probe尚未证明方向：先等待至少 ${(impulseMin*100).toFixed(2)}% 第一段正向推动。`;
         reject(validation.reason);continue;
       }
-      if(!validation.probeRetestSeen){
-        if(retrace<pullbackMin){
-          validation.reason=`第一段推动已出现，等待至少 ${(pullbackMin*100).toFixed(2)}% 可控回调后再观察第二次启动。`;
-          reject(validation.reason);continue;
-        }
+      if(probe.action==="WAIT_PULLBACK"){
+        validation.reason=`第一段推动已出现，等待至少 ${(pullbackMin*100).toFixed(2)}% 可控回调后再观察第二次启动。`;
+        reject(validation.reason);continue;
+      }
+      if(probe.action==="SET_RETEST_BASE"){
         validation.retestBasePrice=price;validation.retestBaseAt=now;validation.probeRetestSeen=true;
         validation.supportSamples=0;validation.oppositionSamples=0;
         validation.reason="Probe已完成第一段推动和可控回调；现在只等待原方向再次启动，不提前猜转折。";
         reject(validation.reason);continue;
       }
-      if(validation.retestBasePrice){
-        const restart=d*(price/validation.retestBasePrice-1);
-        if(restart<0){
-          validation.retestBasePrice=price;validation.retestBaseAt=now;
-          validation.supportSamples=0;validation.oppositionSamples=0;
-          validation.reason="Probe回调仍在延伸，更新二次启动基准。";reject(validation.reason);continue;
-        }
-        if(restart<restartMin){
-          validation.reason=`Probe已回调，等待原方向重新推进至少 ${(restartMin*100).toFixed(2)}% 后才允许成交。`;
-          reject(validation.reason);continue;
-        }
+      if(probe.action==="UPDATE_RETEST_BASE"){
+        validation.retestBasePrice=price;validation.retestBaseAt=now;
+        validation.supportSamples=0;validation.oppositionSamples=0;
+        validation.reason="Probe回调仍在延伸，更新二次启动基准。";reject(validation.reason);continue;
+      }
+      if(probe.action==="WAIT_RESTART"){
+        validation.reason=`Probe已回调，等待原方向重新推进至少 ${(restartMin*100).toFixed(2)}% 后才允许成交。`;
+        reject(validation.reason);continue;
       }
       validation.phase="ARMED";
     }else if(validation.stableThesis){
