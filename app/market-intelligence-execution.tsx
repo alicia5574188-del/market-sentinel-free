@@ -54,13 +54,15 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
   data:View|null;now:number;liveEnabled:boolean;liveOverview?:{operational:boolean;lastSyncAt:number|null;positionCount:number};
 }){
   const mi=data?.marketIntelligence,n=mi?.narrative,evidence=mi?.evidence??[],symbols=mi?.symbols??[],
-    opportunities=[...(data?.opportunities??[])].sort((a,b)=>Number(b.eligible)-Number(a.eligible)||b.score-a.score),
+    opportunities=[...(data?.opportunities??[])].sort((a,b)=>Number(b.eligible)-Number(a.eligible)
+      ||(b.environmentPriority??0)-(a.environmentPriority??0)
+      ||(b.environmentScore??b.score)-(a.environmentScore??a.score)||b.score-a.score),
     positions=[...(data?.positions??[])].sort((a,b)=>{
       const aa=a.profitLifecycle?.action??(a.positionIntelligence?.decision==="EXIT"?"EXIT":a.positionIntelligence?.decision==="REVIEW"?"WATCH":"HOLD"),
         ba=b.profitLifecycle?.action??(b.positionIntelligence?.decision==="EXIT"?"EXIT":b.positionIntelligence?.decision==="REVIEW"?"WATCH":"HOLD");
       return actionRank(ba)-actionRank(aa);
     }),
-    currentEvolution=opportunities.find(o=>o.marketEvolutionPhase)?.marketEvolutionPhase,
+    currentEvolution=data?.environmentRouter?.phase??opportunities.find(o=>o.marketEvolutionPhase)?.marketEvolutionPhase,
     lifecycleText=lifecycleNarrative(data?.latestReason),
     hypothesisResearch=data?.hypothesisResearch,hypotheses=hypothesisResearch?.active??[],
     environmentRouter=data?.environmentRouter,
@@ -126,10 +128,12 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
         <span>{environmentName(environmentRouter?.currentEnvironment)}</span></div>
       <div className="fr-exec-market-grid">
         <span><small>当前环境</small><b>{environmentName(environmentRouter?.currentEnvironment)}</b></span>
+        <span><small>稳定阶段</small><b>{evolution(environmentRouter?.phase)} · {environmentRouter?.trendSide?side(environmentRouter.trendSide):"无单边主线"}</b></span>
         <span><small>活跃打法</small><b>{environmentRouter?.activePlaybooks?.length?environmentRouter.activePlaybooks.map(playbookName).join(" / "):"等待候选"}</b></span>
         <span><small>连续亏损应对</small><b>缩风险 + 加强证明</b></span>
         <span><small>是否允许交易</small><b>始终保留参与权</b></span>
       </div>
+      <p className="fr-exec-judgement"><b>环境判断：</b>{environmentRouter?.reason??"正在建立环境路由判断。"}</p>
       {!!environmentRouter?.performance?.length&&<div className="fr-journal">{environmentRouter.performance.slice(0,4).map(p=><article key={p.key}>
         <time>{p.trades} 笔</time><div><b>{environmentName(p.environment)} · {playbookName(p.playbook)}</b>
           <p>胜 {p.wins} · 累计风险单位 {fmt(p.netRiskUnits,2)}R · 当前连亏 {p.lossStreak}</p></div>
