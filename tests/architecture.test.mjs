@@ -359,6 +359,18 @@ test("LIVE mirror readiness uses fresh executable BBO, not PAPER entryReady admi
 });
 
 
+test("LIVE structural stops use create-confirm-cancel replacement and never Gate TP/SL amend",async()=>{
+  const [worker,gate]=await Promise.all([read("worker/index-clean.ts"),read("lib/gate-live.ts")]);
+  const start=worker.indexOf("private async ensureLiveStop"),end=worker.indexOf("private systemEntryOrders",start),block=worker.slice(start,end);
+  assert.doesNotMatch(block,/\.amendStop\(/);
+  assert.doesNotMatch(gate,/async amendStop\(/);
+  assert.match(block,/replacementStopTag/);
+  assert.match(block,/replacementStopOrderId/);
+  assert.match(block,/await client\.createStop\(stop\)/);
+  assert.match(block,/await client\.cancelOrder\("PRICE_TRIGGER",position\.stopOrderId\)/);
+  assert.match(block,/两张均为 close-only/);
+});
+
 test("LIVE copy actively refreshes Gate BBO after private reconciliation ages the PAPER quote",async()=>{
   const worker=await read("worker/index-clean.ts");
   const refreshStart=worker.indexOf("private async refreshMirrorExecutableQuotes");

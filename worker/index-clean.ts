@@ -202,6 +202,10 @@ export type LivePosition = PaperPosition & Partial<ReturnType<typeof gatePositio
   stopTag: string | null;
   stopPrice: number | null;
   stopSubmittingAt: number | null;
+  replacementStopOrderId?: string | null;
+  replacementStopTag?: string | null;
+  replacementStopPrice?: number | null;
+  replacementStopSubmittingAt?: number | null;
   exitRequestedAt: number | null;
   exchangeUpdatedAt: number;
   parity?: MirrorReceipt;
@@ -2037,74 +2041,148 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
   }
 
+  private clearLiveStopReplacement(position:LivePosition) {
+    position.replacementStopOrderId=null;
+    position.replacementStopTag=null;
+    position.replacementStopPrice=null;
+    position.replacementStopSubmittingAt=null;
+  }
+
+  private async promoteLiveStopReplacement(position:LivePosition) {
+    const id=position.replacementStopOrderId,tag=position.replacementStopTag,price=position.replacementStopPrice;
+    if(!id||!tag||!(price&&price>0))return false;
+    position.stopOrderId=id;position.stopTag=tag;position.stopPrice=price;position.stopSubmittingAt=null;
+    this.clearLiveStopReplacement(position);
+    await this.saveCheckpoint(Date.now(),true);
+    return true;
+  }
+
   private async ensureLiveStop(client: GateLiveClient, position: LivePosition, openPriceOrders: Awaited<ReturnType<GateLiveClient["snapshot"]>>["priceOrders"]) {
-    const existing = position.stopTag ? openPriceOrders.find((order) => liveOrderTag(order) === position.stopTag) : null;
-    if (existing) {
-      position.stopOrderId = liveOrderId(existing) ?? position.stopOrderId;
-      position.stopSubmittingAt = null;
-    } else if (position.stopOrderId) {
-      position.stopOrderId = null;
-      position.stopTag = null;
-      position.stopPrice = null;
-      position.stopSubmittingAt = null;
+    const byIdentity=(tag:string|null|undefined,id:string|null|undefined)=>openPriceOrders.find(order=>
+      (!!tag&&liveOrderTag(order)===tag)|| (!!id&&liveOrderId(order)===id))??null;
+    const existing=byIdentity(position.stopTag,position.stopOrderId);
+    if(existing){
+      position.stopOrderId=liveOrderId(existing)??position.stopOrderId;
+      position.stopSubmittingAt=null;
+    }else if(position.stopOrderId&&!position.stopSubmittingAt){
+      position.stopOrderId=null;position.stopTag=null;position.stopPrice=null;
     }
-    const tick = this.runtime.tickSize[position.symbol] ?? position.currentStop * 1e-8;
-    const stop = buildLiveStopIntent(position, tick);
-    if (position.stopOrderId && position.stopPrice != null && Math.abs(position.stopPrice - stop.price) < tick * 0.5) return;
-    if (position.stopOrderId) {
-      try {
-        await client.amendStop(position.stopOrderId, stop.price);
-        position.stopPrice = stop.price;
+
+    const replacement=byIdentity(position.replacementStopTag,position.replacementStopOrderId);
+    if(replacement){
+      position.replacementStopOrderId=liveOrderId(replacement)??position.replacementStopOrderId;
+    }
+
+    // Gate rejects editing API-created TP/SL touch orders. Replace instead:
+    // keep the confirmed old close-only stop, create/confirm the new close-only
+    // stop, then cancel the old one. A cancel fault leaves both protections
+    // tracked and never blocks unrelated LIVE entries.
+    if(position.replacementStopTag){
+      if(replacement&&position.replacementStopOrderId){
+        if(existing&&position.stopOrderId&&position.stopOrderId!==position.replacementStopOrderId){
+          try{
+            await client.cancelOrder("PRICE_TRIGGER",position.stopOrderId);
+          }catch(error){
+            this.recordLiveAudit({observedAt:Date.now(),symbol:position.symbol,planId:position.id,
+              stage:"STOP_UPDATE",level:"RECOVERING",
+              reason:`新结构止损已在 Gate 确认，旧保护撤销暂未确认；两张均为 close-only，继续保留并下轮清理：${safeError(error)}`,error});
+            return;
+          }
+        }
+        if(await this.promoteLiveStopReplacement(position)){
+          this.recordLiveAudit({observedAt:Date.now(),symbol:position.symbol,planId:position.id,
+            stage:"STOP_UPDATE",level:"INFO",reason:`新结构止损 ${position.stopPrice} 已确认接管，旧保护已撤销或已不存在`});
+        }
         return;
-      } catch (error) {
-        // An amend failure is NOT loss of protection: the existing Gate-native
-        // stop remains live until Gate confirms a replacement. Never turn a
-        // stop-update API/schema fault into an independent market exit while the
-        // PAPER source is still open. Block this reconciliation pass, preserve
-        // the old stop identity/price, and retry the update on the next cycle.
-        const definite=definitiveGateRejection(error);
-        this.recordLiveAudit({ observedAt: Date.now(), symbol: position.symbol, planId: position.id,
-          stage: "STOP_UPDATE", level: "RECOVERING",
-          reason: `${definite?"结构止损更新被 Gate 拒绝":"结构止损更新结果暂不明确"}；原保护单仍有效，保留旧止损并等待下一轮重试：${safeError(error)}`, error });
-        throw new Error(`结构止损更新失败但原保护仍有效；未擅自平仓：${safeError(error)}`);
       }
+
+      const pendingAt=position.replacementStopSubmittingAt??0;
+      if(pendingAt&&Date.now()-pendingAt<6_000)return;
+      if(position.replacementStopOrderId){
+        try{
+          const inspected=await client.inspectEntry("PRICE_TRIGGER",position.symbol,position.replacementStopTag,position.replacementStopOrderId);
+          if(inspected){
+            const disposition=liveEntryDisposition(inspected,"PRICE_TRIGGER");
+            if(disposition==="OPEN"||disposition==="FILLED")return;
+          }
+        }catch(error){
+          this.recordLiveAudit({observedAt:Date.now(),symbol:position.symbol,planId:position.id,
+            stage:"STOP_UPDATE",level:"RECOVERING",
+            reason:`新结构止损状态暂时无法核对；旧保护仍保留，不阻塞其他交易：${safeError(error)}`,error});
+          return;
+        }
+      }
+      this.clearLiveStopReplacement(position);
+      await this.saveCheckpoint(Date.now(),true);
+      this.recordLiveAudit({observedAt:Date.now(),symbol:position.symbol,planId:position.id,
+        stage:"STOP_UPDATE",level:"RECOVERING",
+        reason:"新结构止损在核对窗口内未形成有效保护；旧保护保持不变，后续轮次重新尝试替换"});
+      return;
     }
-    if (position.stopTag && position.stopSubmittingAt) {
-      if (Date.now() - position.stopSubmittingAt < 6_000) return;
-      const failedAt = Date.now();
-      this.recordLiveAudit({ observedAt: failedAt, symbol: position.symbol, planId: position.id,
-        stage: "STOP_CREATE", level: "FORCED_EXIT",
-        reason: `Gate 在止损提交后6秒内仍未返回带标签 ${position.stopTag} 的保护单，已请求市价退出` });
-      if (!position.exitRequestedAt) {
-        position.exitRequestedAt = failedAt;
-        position.exitReason = "PROTECTIVE_STOP_CREATE_UNCONFIRMED";
-        await client.closePosition(position.symbol, liveExitTag(position.id));
+
+    const tick=this.runtime.tickSize[position.symbol]??position.currentStop*1e-8;
+    const stop=buildLiveStopIntent(position,tick);
+    if(existing&&position.stopOrderId&&position.stopPrice!=null&&Math.abs(position.stopPrice-stop.price)<tick*.5)return;
+
+    if(existing&&position.stopOrderId){
+      position.replacementStopTag=stop.tag;
+      position.replacementStopPrice=stop.price;
+      position.replacementStopOrderId=null;
+      position.replacementStopSubmittingAt=Date.now();
+      await this.saveCheckpoint(Date.now(),true);
+      try{
+        position.replacementStopOrderId=await client.createStop(stop);
+        await this.saveCheckpoint(Date.now(),true);
+        this.recordLiveAudit({observedAt:Date.now(),symbol:position.symbol,planId:position.id,
+          stage:"STOP_UPDATE",level:"INFO",
+          reason:`新的结构止损 ${stop.price} 已提交确认；旧止损 ${position.stopPrice} 在下一轮确认新单可见后才撤销`});
+      }catch(error){
+        if(definitiveGateRejection(error)){
+          this.clearLiveStopReplacement(position);
+          await this.saveCheckpoint(Date.now(),true);
+          this.recordLiveAudit({observedAt:Date.now(),symbol:position.symbol,planId:position.id,
+            stage:"STOP_UPDATE",level:"RECOVERING",
+            reason:`Gate 拒绝新的结构止损；原保护仍有效，本轮不阻塞其他持仓或新单：${safeError(error)}`,error});
+        }else{
+          this.recordLiveAudit({observedAt:Date.now(),symbol:position.symbol,planId:position.id,
+            stage:"STOP_UPDATE",level:"RECOVERING",
+            reason:`新结构止损提交结果暂不明确；原保护仍有效，按新标签核对且不重复提交：${safeError(error)}`,error});
+        }
+      }
+      return;
+    }
+
+    if(position.stopTag&&position.stopSubmittingAt){
+      if(Date.now()-position.stopSubmittingAt<6_000)return;
+      const failedAt=Date.now();
+      this.recordLiveAudit({observedAt:failedAt,symbol:position.symbol,planId:position.id,
+        stage:"STOP_CREATE",level:"FORCED_EXIT",
+        reason:`Gate 在止损提交后6秒内仍未返回带标签 ${position.stopTag} 的保护单，已请求市价退出`});
+      if(!position.exitRequestedAt){
+        position.exitRequestedAt=failedAt;position.exitReason="PROTECTIVE_STOP_CREATE_UNCONFIRMED";
+        await client.closePosition(position.symbol,liveExitTag(position.id));
       }
       throw new Error("结构止损提交6秒后仍未确认，已请求市价退出");
     }
-    position.stopTag = stop.tag;
-    position.stopPrice = stop.price;
-    position.stopSubmittingAt = Date.now();
-    await this.saveCheckpoint(Date.now(), true);
-    try {
-      const nextStopId = await client.createStop(stop);
-      position.stopOrderId = nextStopId;
-      position.stopSubmittingAt = null;
-    } catch (error) {
-      if (!definitiveGateRejection(error)) {
-        this.recordLiveAudit({ observedAt: Date.now(), symbol: position.symbol, planId: position.id,
-          stage: "STOP_CREATE", level: "RECOVERING",
-          reason: `结构止损提交结果暂不明确；保留标签并核对6秒，不重复挂单也不立即误平仓：${safeError(error)}`, error });
+
+    position.stopTag=stop.tag;position.stopPrice=stop.price;position.stopSubmittingAt=Date.now();
+    await this.saveCheckpoint(Date.now(),true);
+    try{
+      position.stopOrderId=await client.createStop(stop);position.stopSubmittingAt=null;
+    }catch(error){
+      if(!definitiveGateRejection(error)){
+        this.recordLiveAudit({observedAt:Date.now(),symbol:position.symbol,planId:position.id,
+          stage:"STOP_CREATE",level:"RECOVERING",
+          reason:`结构止损提交结果暂不明确；保留标签并核对6秒，不重复挂单也不立即误平仓：${safeError(error)}`,error});
         throw new Error(`结构止损提交结果暂不明确，正在按标签核对：${safeError(error)}`);
       }
-      const failedAt = Date.now();
-      this.recordLiveAudit({ observedAt: failedAt, symbol: position.symbol, planId: position.id,
-        stage: "STOP_CREATE", level: "FORCED_EXIT",
-        reason: `结构止损挂单失败，系统已请求市价退出：${safeError(error)}`, error });
-      if (!position.exitRequestedAt) {
-        position.exitRequestedAt = failedAt;
-        position.exitReason = "PROTECTIVE_STOP_CREATE_FAILED";
-        await client.closePosition(position.symbol, liveExitTag(position.id));
+      const failedAt=Date.now();
+      this.recordLiveAudit({observedAt:failedAt,symbol:position.symbol,planId:position.id,
+        stage:"STOP_CREATE",level:"FORCED_EXIT",
+        reason:`结构止损挂单失败，系统已请求市价退出：${safeError(error)}`,error});
+      if(!position.exitRequestedAt){
+        position.exitRequestedAt=failedAt;position.exitReason="PROTECTIVE_STOP_CREATE_FAILED";
+        await client.closePosition(position.symbol,liveExitTag(position.id));
       }
       throw new Error(`结构止损挂单失败，已请求市价退出：${safeError(error)}`);
     }
@@ -2204,7 +2282,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       ...Object.values(this.runtime.live.entries).flatMap((entry) => entry
         &&(!["FILLED","CANCELLED"].includes(entry.status)||this.liveEntryAwaitingReconcile(entry))
         ? [entry.tag, entry.stopTag ?? this.liveEntryStopIntent(entry).tag] : []),
-      ...Object.values(this.runtime.live.positions).flatMap((position) => position?.status === "OPEN" && position.stopTag ? [position.stopTag] : []),
+      ...Object.values(this.runtime.live.positions).flatMap((position) => position?.status === "OPEN"
+        ? [position.stopTag,position.replacementStopTag].filter((tag):tag is string=>!!tag) : []),
     ]);
     const trackedEntryIds = new Set(Object.values(this.runtime.live.entries)
       .flatMap((entry) => entry?.exchangeOrderId ? [entry.exchangeOrderId] : []));
@@ -2427,8 +2506,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(position.parity){
         try {
           verifiedExit=await client.inspectEntry("MARKET",symbol,liveExitTag(position.id),position.exitOrderId??null);
-          if(!verifiedExit&&position.stopOrderId){
-            const stop=await client.inspectEntry("PRICE_TRIGGER",symbol,position.stopTag??"",position.stopOrderId);
+          for(const stopRef of [
+            {id:position.stopOrderId,tag:position.stopTag},
+            {id:position.replacementStopOrderId,tag:position.replacementStopTag},
+          ]){
+            if(verifiedExit||!stopRef.id)continue;
+            const stop=await client.inspectEntry("PRICE_TRIGGER",symbol,stopRef.tag??"",stopRef.id);
             if(stop?.trade_id&&String(stop.trade_id)!=="0")
               verifiedExit=await client.inspectEntry("MARKET",symbol,"",String(stop.trade_id));
           }
@@ -2437,15 +2520,19 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             reason:`交易所仓位已归零，成交价尚待核对，不以模拟价代替：${safeError(error)}`});
         }
       }
-      const stopId = position.stopOrderId ?? (position.stopTag
-        ? liveOrderId(snapshot.priceOrders.find((order) => liveOrderTag(order) === position.stopTag) ?? {})
-        : null);
-      if (stopId) await client.cancelOrder("PRICE_TRIGGER", stopId);
+      const stopIds=[...new Set([
+        position.stopOrderId,
+        position.stopTag?liveOrderId(snapshot.priceOrders.find(order=>liveOrderTag(order)===position.stopTag)??{}):null,
+        position.replacementStopOrderId,
+        position.replacementStopTag?liveOrderId(snapshot.priceOrders.find(order=>liveOrderTag(order)===position.replacementStopTag)??{}):null,
+      ].filter((id):id is string=>!!id))];
+      for(const stopId of stopIds)await client.cancelOrder("PRICE_TRIGGER",stopId);
       const verifiedPrice=Number(verifiedExit?.fill_price),verified=Number.isFinite(verifiedPrice)&&verifiedPrice>0;
       const closed:LivePosition = { ...position, status: "CLOSED", exitAt: now,
         exitPrice: position.parity?(verified?verifiedPrice:undefined):this.runtime.evidence[symbol]?.midpoint??position.entryPrice,
         actualExitPriceVerified:position.parity?verified:undefined,
-        exitReason: position.exitReason ?? "EXCHANGE_FLAT", stopOrderId: null, stopTag: null, stopPrice: null, stopSubmittingAt: null };
+        exitReason: position.exitReason ?? "EXCHANGE_FLAT", stopOrderId: null, stopTag: null, stopPrice: null, stopSubmittingAt: null,
+        replacementStopOrderId:null,replacementStopTag:null,replacementStopPrice:null,replacementStopSubmittingAt:null };
       if(closed.parity){
         closed.parity={...closed.parity,actualExitPriceVerified:verified,actualExitOrderId:verifiedExit?liveOrderId(verifiedExit):position.exitOrderId??null};
         const lifecycle=this.currentMirrorSource(position.id);

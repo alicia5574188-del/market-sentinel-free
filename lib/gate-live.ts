@@ -343,19 +343,6 @@ export class GateLiveClient {
     }
   }
 
-  async amendStop(orderId: string, stopPrice: number) {
-    // Gate's current /price_orders/amend schema declares order_id as int64.
-    // Passing id_string through JSON.stringify produces a quoted string and
-    // Gate rejects the otherwise-valid update as AUTO_INVALID_REQUEST_BODY.
-    // Preserve the exact int64 decimal digits without converting through a
-    // JavaScript Number (which would corrupt IDs above 2^53).
-    const id=String(orderId),max="9223372036854775807";
-    if(!/^[1-9]\d{0,18}$/.test(id)||(id.length===19&&id>max))
-      throw new Error("Gate止损订单编号不是有效int64");
-    if(!Number.isFinite(stopPrice)||stopPrice<=0)throw new Error("Gate止损更新价格无效");
-    const rawBody=`{"order_id":${id},"size":0,"price":"0","trigger_price":${JSON.stringify(String(stopPrice))},"price_type":0,"close":true}`;
-    await this.request("PUT", "/futures/usdt/price_orders/amend", "", undefined, undefined, rawBody);
-  }
 
   async cancelOrder(kind: "PRICE_TRIGGER" | "LIMIT" | "MARKET", orderId: string) {
     const family = kind === "PRICE_TRIGGER" ? "price_orders" : "orders";
