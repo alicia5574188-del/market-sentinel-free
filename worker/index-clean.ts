@@ -1029,6 +1029,26 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       && freshQuote({bestBid:q.bestBid??0,bestAsk:q.bestAsk??0,observedAt:q.observedAt,fresh:q.fresh},now);
   }
 
+  private async refreshMirrorExecutableQuotes(symbols:string[],now=Date.now()) {
+    const due=[...new Set(symbols)].filter(symbol=>!this.mirrorQuoteReady(symbol,now)).slice(0,FORWARD_EXECUTION_BBO_CAP);
+    if(!due.length)return;
+    for(const symbol of due)this.applyContractMetadata(symbol);
+    const executable=due.filter(symbol=>this.runtime.contractMeta[symbol]!=null);
+    if(!executable.length)return;
+    // The primary alarm refreshes public books before PAPER, then LIVE performs
+    // a private Gate account/order snapshot. A slow private read can age that
+    // once-valid BBO past freshQuote() before the already-persisted PAPER source
+    // reaches sizing. Refresh only the affected Gate books here; do not re-run
+    // PAPER admission, strategy ranking or historical signal logic.
+    await this.processAdaptiveBooks(Date.now(),executable);
+  }
+
+  private async ensureMirrorExecutableQuote(symbol:string,now=Date.now()) {
+    if(this.mirrorQuoteReady(symbol,now))return true;
+    await this.refreshMirrorExecutableQuotes([symbol],now);
+    return this.mirrorQuoteReady(symbol,Date.now());
+  }
+
   private async queueLiveBinding(entry:LiveEntry) {
     if(!entry.parity)return;
     const key=`${LIVE_PARITY_PREFIX}binding:${entry.planId}`;
@@ -2444,6 +2464,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       ...Object.values(this.runtime.live.entries).filter(e=>e
         &&(["SUBMITTING","OPEN","ERROR"].includes(e.status)||this.liveEntryAwaitingReconcile(e)))]
       .reduce((n,p)=>n+(p?.notional??0),0);
+    // LIVE sizing depends on the current PAPER equity mark. Refresh every open
+    // PAPER source whose executable Gate book aged while the private account
+    // snapshot was in flight; otherwise one unrelated stale PAPER holding can
+    // block a brand-new eligible source from being copied.
+    await this.refreshMirrorExecutableQuotes(this.forwardState!.positions.map(t=>t.symbol),Date.now());
     const paperMark=forwardEquity(this.forwardState!,this.regimeQuotes(Date.now()),Date.now());
     let mirrorRatio=this.runtime.live.activation?.scaleRatio??null;
     const staged: Array<{ symbol: string; plan: PaperPlan; intent: ReturnType<typeof buildLiveEntryIntent>;binding?:MirrorBinding;activation:LiveSession|null }> = [];
@@ -2476,11 +2501,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         continue;
       }
       const justTriggeredEntry = sourceAfterEnable(trade.forwardSource,this.runtime.live.activation,this.forwardState!.startedAt);
+      if(justTriggeredEntry&&this.runtime.live.positions[symbol]?.status!=="OPEN"&&!this.mirrorQuoteReady(symbol))
+        await this.ensureMirrorExecutableQuote(symbol,Date.now());
       if (!justTriggeredEntry
         || this.runtime.live.positions[symbol]?.status === "OPEN" || !this.mirrorQuoteReady(symbol)) {
         if(this.runtime.live.positions[symbol]?.id!==trade.id)
           this.runtime.live.entrySkips[symbol]={planId:trade.id,symbol,code:"ECONOMICS",
-            reason:!justTriggeredEntry?"此单在本次开启前已存在，不补开；仅跟随开启后新模拟单":"等待源单对应的空闲持仓槽和新鲜可执行盘口",observedAt:now};
+            reason:!justTriggeredEntry?"此单在本次开启前已存在，不补开；仅跟随开启后新模拟单":"已识别模拟源单，正在主动刷新 Gate 新鲜可执行盘口",observedAt:Date.now()};
         continue;
       }
       const midpoint = this.runtime.evidence[symbol]?.midpoint ?? 0;
@@ -2530,10 +2557,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       staged.push({ symbol, plan, intent, binding,activation:structuredClone(this.runtime.live.activation??null) });
     }
     for (const { symbol, plan, intent, binding,activation } of staged) {
-      if(!this.runtime.live.requestedEnabled||!this.mirrorQuoteReady(symbol)
+      if(!this.runtime.live.requestedEnabled
         ||!sameLiveSession(activation,this.runtime.live.activation)
         ||!sourceAfterEnable(binding!.sourceAtCopy,this.runtime.live.activation,this.forwardState!.startedAt)
         ||!mirrorSourceFresh(this.currentMirrorSource(plan.id).trade??undefined,plan.id,Date.now()))continue;
+      if(!this.mirrorQuoteReady(symbol)&&!await this.ensureMirrorExecutableQuote(symbol,Date.now())){
+        this.runtime.live.entrySkips[symbol]={planId:plan.id,symbol,code:"ECONOMICS",
+          reason:"模拟源单已持久化，但 Gate 可执行盘口刷新仍未成功；保留源单身份并继续实时重试",observedAt:Date.now()};
+        continue;
+      }
       const entry: LiveEntry = {
         planId: plan.id, symbol, side: plan.side, scenario: plan.marketState, kind: intent.kind, status: "SUBMITTING",
         tag: intent.tag, exchangeOrderId: null, createdAt: now, expiresAt: plan.expiresAt, trigger: plan.entryTrigger,
@@ -2564,11 +2596,19 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         try {
           // Owner OFF or source CLOSE during leverage/network await takes
           // precedence over the stale staged entry.
-          if(!this.runtime.live.requestedEnabled||!this.mirrorQuoteReady(symbol)
+          if(!this.runtime.live.requestedEnabled
             ||!sameLiveSession(activation,this.runtime.live.activation)
             ||!sourceAfterEnable(binding!.sourceAtCopy,this.runtime.live.activation,this.forwardState!.startedAt)
             ||!mirrorSourceFresh(this.currentMirrorSource(plan.id).trade??undefined,plan.id,Date.now())){
             entry.status="CANCELLED";await this.saveCheckpoint(Date.now(),true);continue;
+          }
+          // Leverage confirmation is another private network wait. Do not cancel
+          // an otherwise valid fresh PAPER source merely because its pre-wait
+          // public BBO crossed the 10s freshness boundary while Gate replied.
+          if(!this.mirrorQuoteReady(symbol)&&!await this.ensureMirrorExecutableQuote(symbol,Date.now())){
+            entry.status="CANCELLED";entry.lastError="杠杆确认后 Gate 可执行盘口仍未刷新，未使用旧价提交";
+            this.runtime.live.entrySkips[symbol]={planId:entry.planId,symbol,code:"ECONOMICS",reason:entry.lastError,observedAt:Date.now()};
+            await this.saveCheckpoint(Date.now(),true);continue;
           }
           const q=this.runtime.evidence[symbol],price=entry.side==="LONG"?q?.bestAsk:q?.bestBid;
           if(!price||(entry.side==="LONG"?price<=entry.invalidation:price>=entry.invalidation)){
