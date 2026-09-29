@@ -765,7 +765,9 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
   const reject=(reason:string)=>{reasons[reason]=(reasons[reason]??0)+1;};
   for(const validation of waiting){
     const o=opportunities.get(validation.candidateId);
-    if(!o||!isIntelligenceOpportunity(o)||o.expiresAt<=now){validation.status="CANCELLED";validation.reason="交易假设已过期";reject(validation.reason);continue;}
+    if(!o||!isIntelligenceOpportunity(o)||o.expiresAt<=now){
+      validation.status="CANCELLED";validation.reason="交易假设已过期或已被新的完成5m结构替代";reject(validation.reason);continue;
+    }
     const q=quotes[validation.symbol];if(!freshQuote(q,now)||q!.entryReady!==true){reject("等待实时盘口");continue;}
     const price=validation.side==="LONG"?q!.bestAsk:q!.bestBid,state=s.extremumRegime.symbols[validation.symbol],
       decision=evaluateEntryResponse({now,side:validation.side,score:o.score,edgeRatio:o.edgeRatio,pullbackRiskRate:o.pullbackRiskRate,
@@ -773,12 +775,56 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
         memory:{startedAt:validation.startedAt,deadlineAt:validation.deadlineAt,initialPrice:validation.initialPrice,samples:validation.samples,
           bestAdvanceRate:validation.bestAdvanceRate,maxAdverseRate:validation.maxAdverseRate,
           supportSamples:validation.supportSamples,oppositionSamples:validation.oppositionSamples},
-        state,quote:q,minutePath:minutePaths?.[validation.symbol],costRate:ROUND_TRIP_COST});
+        state,quote:q,minutePath:minutePaths?.[validation.symbol],costRate:ROUND_TRIP_COST,allowRetest:!!validation.stableThesis});
     validation.lastPrice=price;validation.lastQuoteAt=q!.observedAt;validation.samples++;
     validation.bestAdvanceRate=decision.bestAdvanceRate;validation.maxAdverseRate=decision.maxAdverseRate;
     validation.supportSamples=decision.supportSamples;validation.oppositionSamples=decision.oppositionSamples;validation.reason=decision.reason;
+
     if(decision.action==="CANCEL"){validation.status="CANCELLED";reject(decision.reason);continue;}
+    if(decision.action==="RETEST"){
+      validation.phase="RETEST_WAIT";
+      validation.reason=decision.reason;reject(decision.reason);continue;
+    }
     if(decision.action==="WAIT"){reject(decision.reason);continue;}
+
+    if(validation.stableThesis){
+      const d=dir(validation.side),expected=Math.max(ROUND_TRIP_COST*2,validation.initialExpectedNetRate??o.netRemainingSpaceRate),
+        pullback=Math.max(ROUND_TRIP_COST*1.5,validation.pullbackRiskRateAtArm??o.pullbackRiskRate),
+        maxChase=Math.max(ROUND_TRIP_COST*1.8,validation.maxChaseRate??Math.min(expected*.45,pullback*.75,.01)),
+        pullbackMin=Math.max(ROUND_TRIP_COST*.35,validation.retestPullbackMin??Math.min(pullback*.30,expected*.18,.004)),
+        restartMin=Math.max(ROUND_TRIP_COST*.30,validation.restartMin??Math.min(pullback*.15,expected*.10,.002)),
+        best=Math.max(validation.bestAdvanceRate,decision.bestAdvanceRate),current=decision.currentAdvanceRate,
+        retrace=Math.max(0,best-current),requiredPullback=Math.max(pullbackMin,best-maxChase),
+        remainingFromThesis=expected-Math.max(0,current);
+
+      if(best>=maxChase){
+        validation.phase="RETEST_WAIT";
+        if(!validation.retestBasePrice){
+          if(retrace<requiredPullback){
+            validation.reason=`方向判断仍有效，但从首次武装位置已推进 ${(best*100).toFixed(2)}%，超过允许追价 ${(maxChase*100).toFixed(2)}%；不追，等待至少 ${(requiredPullback*100).toFixed(2)}% 回调后重新启动。`;
+            reject(validation.reason);continue;
+          }
+          validation.retestBasePrice=price;validation.retestBaseAt=now;validation.supportSamples=0;validation.oppositionSamples=0;
+          validation.reason="价格已回到可重新评估的位置，保留原稳定假设，等待回调结束后再次按原方向启动。";
+          reject(validation.reason);continue;
+        }
+
+        let restart=d*(price/validation.retestBasePrice-1);
+        if(restart<0){
+          validation.retestBasePrice=price;validation.retestBaseAt=now;validation.supportSamples=0;validation.oppositionSamples=0;
+          validation.reason="回调仍在延伸，持续更新重启基准，不提前猜转折。";reject(validation.reason);continue;
+        }
+        if(restart<restartMin){
+          validation.reason=`已完成必要回调，等待原方向重新推进至少 ${(restartMin*100).toFixed(2)}% 后再执行。`;
+          reject(validation.reason);continue;
+        }
+        if(remainingFromThesis<=Math.max(ROUND_TRIP_COST*1.4,pullback*.45)){
+          validation.reason="原始交易空间已经大部分消耗，即使方向继续正确也不在当前位置追入；等待新的5m结构生成新假设。";
+          reject(validation.reason);continue;
+        }
+      }
+    }
+
     if(!extendedEntryConfirmationReady({required:!!validation.extendedConfirmation,elapsedMs:Math.max(0,now-validation.startedAt),
       supportSamples:decision.supportSamples,currentAdvanceRate:decision.currentAdvanceRate,bestAdvanceRate:decision.bestAdvanceRate,
       minimumElapsedMs:validation.minimumElapsedMs,minimumSupportSamples:validation.minimumSupportSamples,
@@ -793,7 +839,7 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
     if(now-last<15*60_000&&lastSide===o.side){validation.status="CANCELLED";validation.reason="同币同方向假设尚未重置";reject(validation.reason);continue;}
     const error=openIntelligenceTrade(s,o,q!,meta,now,equity,{validation,decision});
     if(error){validation.status="CANCELLED";validation.reason=error;reject(error);continue;}
-    opened=1;s.entryValidations={};break;
+    opened=1;delete s.entryValidations[validation.id];break;
   }
   s.entryDiagnostics={at:now,matched:waiting.length,opened,reasons};return opened;
 }
