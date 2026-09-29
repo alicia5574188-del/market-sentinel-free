@@ -1919,9 +1919,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private async ensureLiveActivationSourceFence(now:number) {
     const activation=this.runtime.live.activation,state=this.forwardState;
     if(!this.runtime.live.requestedEnabled||!activation||activation.version!==LIVE_SESSION_VERSION
-      ||activation.sourceStartedAt!==null||!state)return activation;
+      ||activation.sourceStartedAt!=null||!state)return activation;
     const repaired:LiveSession={...activation,sourceStartedAt:state.startedAt,
-      excludedSourceIds:[...new Set([...activation.excludedSourceIds,
+      excludedSourceIds:[...new Set([...(activation.excludedSourceIds??[]),
         ...state.positions.filter(t=>t.openedAt<=activation.enabledAt).map(t=>t.id)])]};
     const reservation=this.reserveCriticalWrites(1);
     this.runtime.live.activation=repaired;
