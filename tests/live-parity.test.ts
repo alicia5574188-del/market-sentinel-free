@@ -316,6 +316,7 @@ test("persisted PAPER source copies from fresh executable BBO even when PAPER en
   h.runtime.evidence={BTC_USDT:{midpoint:100,bestBid:100,bestAsk:100,observedAt:T,fresh:true,entryReady:false}};
   await h.syncLive(T);
   assert.equal(gate.placed.length,1,"LIVE copy must use the persisted PAPER source plus fresh BBO, not re-run PAPER entry admission");
+  await h.syncLive(T);
   assert.equal(live(h).positions.BTC_USDT.id,source.id);
 }));
 
