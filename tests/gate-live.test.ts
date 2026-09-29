@@ -178,6 +178,26 @@ test("private REST Gate requests remain signed and 64-bit order IDs remain strin
   }
 });
 
+test("price-order amend sends Gate's int64 order_id as an unquoted JSON integer without precision loss", async () => {
+  const originalFetch = globalThis.fetch;
+  const seen: Request[] = [];
+  globalThis.fetch = async (input, init) => {
+    const request = new Request(input, init); seen.push(request);
+    return Response.json({ id_string: "9223372036854775807" });
+  };
+  try {
+    const client = new GateLiveClient({ apiKey: "abcdefgh12345678", apiSecret: "secret-value-12345678", environment: "live" });
+    await client.amendStop("9223372036854775807", 99.125);
+    assert.equal(seen.length,1);
+    assert.equal(new URL(seen[0].url).pathname,"/api/v4/futures/usdt/price_orders/amend");
+    const body=await seen[0].text();
+    assert.equal(body,'{"order_id":9223372036854775807,"size":0,"price":"0","trigger_price":"99.125","price_type":0,"close":true}');
+    assert.doesNotMatch(body,/"order_id":"9223372036854775807"/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("an IOC market entry is inspected through Gate's regular futures-order endpoint", async () => {
   const originalFetch = globalThis.fetch;
   const seen: Request[] = [];
