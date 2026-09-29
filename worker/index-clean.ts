@@ -2035,22 +2035,16 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         position.stopPrice = stop.price;
         return;
       } catch (error) {
-        if (!definitiveGateRejection(error)) {
-          this.recordLiveAudit({ observedAt: Date.now(), symbol: position.symbol, planId: position.id,
-            stage: "STOP_UPDATE", level: "RECOVERING",
-            reason: `结构止损更新结果暂不明确，原保护单保持有效并等待下一轮核对：${safeError(error)}`, error });
-          throw new Error(`结构止损更新结果暂不明确，保留原保护并核对：${safeError(error)}`);
-        }
-        const failedAt = Date.now();
-        this.recordLiveAudit({ observedAt: failedAt, symbol: position.symbol, planId: position.id,
-          stage: "STOP_UPDATE", level: "FORCED_EXIT",
-          reason: `结构止损更新失败，系统已请求市价退出：${safeError(error)}`, error });
-        if (!position.exitRequestedAt) {
-          position.exitRequestedAt = failedAt;
-          position.exitReason = "PROTECTIVE_STOP_UPDATE_FAILED";
-          await client.closePosition(position.symbol, liveExitTag(position.id));
-        }
-        throw new Error(`结构止损更新失败，已请求市价退出：${safeError(error)}`);
+        // An amend failure is NOT loss of protection: the existing Gate-native
+        // stop remains live until Gate confirms a replacement. Never turn a
+        // stop-update API/schema fault into an independent market exit while the
+        // PAPER source is still open. Block this reconciliation pass, preserve
+        // the old stop identity/price, and retry the update on the next cycle.
+        const definite=definitiveGateRejection(error);
+        this.recordLiveAudit({ observedAt: Date.now(), symbol: position.symbol, planId: position.id,
+          stage: "STOP_UPDATE", level: "RECOVERING",
+          reason: `${definite?"结构止损更新被 Gate 拒绝":"结构止损更新结果暂不明确"}；原保护单仍有效，保留旧止损并等待下一轮重试：${safeError(error)}`, error });
+        throw new Error(`结构止损更新失败但原保护仍有效；未擅自平仓：${safeError(error)}`);
       }
     }
     if (position.stopTag && position.stopSubmittingAt) {

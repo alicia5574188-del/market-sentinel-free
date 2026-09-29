@@ -239,6 +239,7 @@ class FakeGate {
   orders=new Map<string,GateLiveOrder>();holdings:Record<string,GateLivePosition>={};
   closeTags:string[]=[];onLeverage:(()=>Promise<void>)|null=null;onCreate:(()=>Promise<void>)|null=null;
   failSnapshot=false;readTimeout=false;partial=false;zero=false;ambiguous=false;omitExit=false;inspectFailures=0;counter=1;
+  amendError:Error|null=null;
   async snapshot(){this.requestCount++;if(this.readTimeout)throw new GateReadTimeoutError("/futures/usdt/accounts");
     if(this.failSnapshot)throw new Error("injected Gate outage");
     return structuredClone({account:this.account,positions:Object.values(this.holdings),orders:[],priceOrders:this.stops,checkedAt:Date.now()});}
@@ -255,7 +256,7 @@ class FakeGate {
     return structuredClone(this.orders.get(id??"")??[...this.orders.values()].find(o=>o.text===tag)??null);
   }
   async createStop(i:LiveStopIntent){const id=String(this.counter++);this.stops.push({id_string:id,text:i.tag,contract:String((i.body.initial as Record<string,unknown>).contract),status:"open"});return id;}
-  async amendStop(id:string,price:number){this.amendedStops.push({id,price});return;}
+  async amendStop(id:string,price:number){if(this.amendError)throw this.amendError;this.amendedStops.push({id,price});return;}
   async cancelOrder(_kind:string,id:string){this.stops=this.stops.filter(s=>s.id_string!==id);}
   async closePosition(symbol:string,tag:string){this.closeTags.push(tag);delete this.holdings[symbol];const id=String(this.counter++);
     if(!this.omitExit)this.orders.set(id,{id_string:id,text:tag,contract:symbol,status:"finished",finish_as:"filled",fill_price:100.4});return id;}
@@ -599,6 +600,22 @@ test("a tightened PAPER profit stop amends the existing Gate-native protective s
   assert.equal(gate.closeTags.length,0);
 }));
 
+
+test("a rejected stop amendment keeps the confirmed old Gate stop and never market-closes an open PAPER source",()=>clock(async()=>{
+  const {h,gate}=await harness();await enableNew(h);await h.syncLive(T);
+  const source=h.forwardState.positions[0]!,before=structuredClone(live(h).positions.BTC_USDT) as {stopOrderId?:string|null;stopPrice?:number|null};
+  assert.ok(before.stopOrderId);assert.ok(gate.stops.length>0);
+  source.stopPrice=100.8;
+  h.runtime.evidence={BTC_USDT:{midpoint:102,bestBid:101.99,bestAsk:102.01,observedAt:T,fresh:true,entryReady:true}};
+  gate.amendError=new Error("Gate 400 AUTO_INVALID_REQUEST_BODY: invalid request body");
+  await assert.rejects(h.syncLive(T),/原保护仍有效；未擅自平仓/);
+  const after=live(h).positions.BTC_USDT as LiveTest["positions"][string]&{stopOrderId?:string|null;stopPrice?:number|null;exitRequestedAt?:number|null};
+  assert.equal(after.status,"OPEN");
+  assert.equal(after.stopOrderId,before.stopOrderId);
+  assert.equal(after.stopPrice,before.stopPrice);
+  assert.equal(after.exitRequestedAt??null,null);
+  assert.equal(gate.closeTags.length,0,"an amend API/schema rejection must not turn into an independent real-money exit");
+}));
 
 test("real Worker follows source CLOSE reason, not an independently restarted holding timer",()=>clock(async()=>{
   const {h,gate}=await harness();await enableNew(h);await h.syncLive(T);
