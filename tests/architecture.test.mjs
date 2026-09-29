@@ -361,3 +361,15 @@ test("transition countertrend routes through Probe-Prove-Restart, not a static n
   assert.match(advance,/Probe已完成第一段推动和可控回调/);
   assert.match(advance,/Probe已回调，等待原方向重新推进/);
 });
+
+
+test("environment router has no direct-fill bypass and keeps regime memory across account reset",async()=>{
+  const core=await read("lib/forward-relations.ts");
+  const fill=core.slice(core.indexOf("export function fillForwardPortfolio"),core.indexOf("function nextCandleAt"));
+  assert.match(fill,/environmentForceRetest/);
+  assert.match(fill,/Probe→回调→再启动/);
+  assert.match(core,/next\.environmentPerformance=structuredClone\(prior\.environmentPerformance\)/);
+  assert.match(core,/next\.environmentContext=structuredClone\(prior\.environmentContext\)/);
+  assert.match(core,/recordEnvironmentOutcome\(s\.environmentPerformance/);
+  assert.match(core,/environmentRiskScale=clip\(o\.environmentRiskScale\?\?1,.20,1.10\)/);
+});
