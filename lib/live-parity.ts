@@ -227,14 +227,18 @@ export function mirrorCoverage(state:ForwardState|null,live:{requestedEnabled:bo
   catch(e) { sourceError=e instanceof Error?e.message:String(e); }
   const rows=sources.map(t=>{
     const p=live.positions[t.symbol],e=live.entries[t.symbol],skip=live.entrySkips[t.symbol];
-    const copied=p?.status==="OPEN"&&p.id===t.id;
+    const copied=p?.status==="OPEN"&&p.id===t.id,endedEarly=p?.status==="CLOSED"&&p.id===t.id;
     const pending=e?.planId===t.id&&["SUBMITTING","OPEN","ERROR"].includes(e.status);
     const eligible=live.requestedEnabled&&sourceAfterEnable(t,live.activation,state!.startedAt);
-    const status=copied?(p?.parity?.discrepancy?"DEVIATION":"COPIED"):pending?"PENDING":!live.requestedEnabled?"OWNER_OFF":!eligible?"EXCLUDED_BEFORE_ENABLE"
-      :skip?.planId===t.id?(skip.code==="MIN_CONTRACT"?"BLOCKED_MIN_SIZE":"BLOCKED"):"WAITING";
+    const skipStatus=skip?.planId!==t.id?null:skip.code==="MIN_CONTRACT"?"BLOCKED_MIN_SIZE"
+      :skip.code==="RETRYING"?"RETRYING":skip.code==="SOURCE_ENDED_EARLY"?"SOURCE_ENDED_EARLY":"BLOCKED";
+    const status=copied?(p?.parity?.discrepancy?"DEVIATION":"COPIED"):endedEarly?"SOURCE_ENDED_EARLY":pending?"PENDING":
+      !live.requestedEnabled?"OWNER_OFF":!eligible?"EXCLUDED_BEFORE_ENABLE":skipStatus??"WAITING";
     return {sourceId:t.id,symbol:t.symbol,eligible,status,
       reason:copied?p?.parity?.discrepancy??null:status==="EXCLUDED_BEFORE_ENABLE"?"开启前或本次接入前已有的模拟持仓，不补开"
-        :skip?.planId===t.id?skip.reason:sourceError??(!live.requestedEnabled?"等待所有者开启；此前持仓不会补开":"等待当前报价、账户与交易所确认")};
+        :endedEarly?"该模拟源单仍开放，但对应实盘仓位已经在 Gate 归零；同一源单不重复开仓"
+        :skip?.planId===t.id?skip.reason:sourceError??(!live.requestedEnabled?"等待所有者开启；此前持仓不会补开"
+          :"实盘核对已运行，但该源单尚未形成明确执行状态；下一轮会继续核对")};
   });
   const actual=Object.values(live.positions).filter(p=>p?.status==="OPEN");
   const valued=actual.filter(p=>typeof p?.exchangeUnrealisedPnl==="number"&&Number.isFinite(p.exchangeUnrealisedPnl)&&!!p.exchangePnlAt);
@@ -248,6 +252,8 @@ export function mirrorCoverage(state:ForwardState|null,live:{requestedEnabled:bo
     managedBeforeEnableCount:rows.filter(r=>!r.eligible&&["COPIED","DEVIATION"].includes(r.status)).length,
     minimumSizeBlockedCount:rows.filter(r=>r.status==="BLOCKED_MIN_SIZE").length,
     blockedCount:rows.filter(r=>r.status.startsWith("BLOCKED")).length,deviationCount:rows.filter(r=>r.status==="DEVIATION").length,
+    retryingCount:rows.filter(r=>r.status==="RETRYING").length,sourceEndedEarlyCount:rows.filter(r=>r.status==="SOURCE_ENDED_EARLY").length,
+    unclassifiedWaitingCount:rows.filter(r=>r.status==="WAITING").length,
     actualLiveHoldingCount:actual.length,exchangePnlHoldingCount:valued.length,
     lastExchangePnlAt:valued.length?Math.max(...valued.map(p=>p!.exchangePnlAt!)):null};
 }

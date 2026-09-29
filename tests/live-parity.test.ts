@@ -331,6 +331,34 @@ test("LIVE mirror still blocks a genuinely stale BBO when PAPER source exists",(
   assert.match(live(h).entrySkips.BTC_USDT.reason,/新鲜可执行盘口/);
 }));
 
+test("a healthy eligible source cannot finish LIVE sync as raw WAITING",()=>clock(async()=>{
+  const {h,gate}=await harness();
+  h.forwardState.positions=[];
+  live(h).requestedEnabled=true;live(h).activation=startLiveSession(T-1_000,h.forwardState);
+  const source={...trade("no-silent-wait"),openedAt:T-500,lastQuoteAt:T-500};
+  h.forwardState.positions=[source];
+  h.runtime.evidence={BTC_USDT:{midpoint:100,bestBid:100,bestAsk:100,observedAt:T,fresh:true,entryReady:false}};
+  await h.syncLive(T);
+  assert.equal(gate.placed.length,1);
+  const view=mirrorCoverage(h.forwardState,live(h) as never,null);
+  const row=view.rows.find(r=>r.sourceId===source.id);
+  assert.ok(row);assert.notEqual(row.status,"WAITING","eligible source must be copied, pending, retrying or explicitly blocked");
+  assert.equal(view.unclassifiedWaitingCount,0);
+}));
+
+test("an exchange-flat LIVE leg while PAPER stays open is explicit, never generic WAITING",()=>clock(async()=>{
+  const {h,gate}=await harness();
+  await enableNew(h);await h.syncLive(T);
+  assert.equal(live(h).positions.BTC_USDT.status,"OPEN");
+  delete gate.holdings.BTC_USDT;
+  await h.syncLive(T);
+  const view=mirrorCoverage(h.forwardState,live(h) as never,null);
+  const row=view.rows.find(r=>r.symbol==="BTC_USDT");
+  assert.ok(row);assert.equal(row.status,"SOURCE_ENDED_EARLY");
+  assert.match(row.reason??"",/Gate 归零/);
+  assert.equal(view.unclassifiedWaitingCount,0);
+}));
+
 test("slow private Gate reconciliation refreshes all PAPER marks before LIVE sizing",()=>clock(async()=>{
   const {h,gate}=await harness();
   h.forwardState.positions=[];
@@ -362,21 +390,21 @@ test("slow private Gate reconciliation refreshes all PAPER marks before LIVE siz
   assert.equal(gate.placed.length,1,"an unrelated pre-enable PAPER holding must not leave the current PAPER equity mark stale");
 }));
 
-test("BBO aging during Gate leverage confirmation refreshes instead of cancelling a valid source",()=>clock(async()=>{
+test("BBO aging during Gate leverage confirmation refreshes at the final submit boundary instead of cancelling a valid source",()=>clock(async()=>{
   const {h,gate}=await harness();
   let refreshes=0;
-  const x=h as unknown as {ensureMirrorExecutableQuote(symbol:string,now?:number):Promise<boolean>};
-  x.ensureMirrorExecutableQuote=async symbol=>{
+  const x=h as unknown as {mirrorSubmitQuote(symbol:string):Promise<{bestBid:number;bestAsk:number;observedAt:number;source:"resident"|"rest"}>};
+  x.mirrorSubmitQuote=async symbol=>{
     refreshes++;
     h.runtime.evidence[symbol]={midpoint:100,bestBid:100,bestAsk:100,observedAt:T,fresh:true,entryReady:false};
-    return true;
+    return{bestBid:100,bestAsk:100,observedAt:T,source:"rest"};
   };
   gate.onLeverage=async()=>{
     h.runtime.evidence.BTC_USDT={midpoint:100,bestBid:100,bestAsk:100,observedAt:T-60_000,fresh:true,entryReady:false};
   };
   await enableNew(h);
   assert.ok(refreshes>=1);
-  assert.equal(gate.placed.length,1,"a slow leverage acknowledgement may refresh the public BBO but must not force a false cancellation");
+  assert.equal(gate.placed.length,1,"a slow leverage acknowledgement may refresh the final Gate BBO but must not force a false cancellation");
 }));
 
 test("persisted new PAPER source reaches LIVE in the same critical pass",()=>clock(async()=>{
