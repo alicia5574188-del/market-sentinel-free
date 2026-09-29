@@ -75,7 +75,7 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
 
   return <div className="fr-execution-page">
     <section className="fr-page-title fr-exec-title">
-      <small>MARKET INTELLIGENCE 1.1 · EXECUTION</small>
+      <small>MARKET INTELLIGENCE · ENVIRONMENT ROUTER</small>
       <h1>执行</h1>
       <p>先看当前仓位怎么处理，再看市场正在变成什么、下一笔机会处于什么阶段。研究细节和运行状态按重要性向下展开。</p>
     </section>
