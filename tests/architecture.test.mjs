@@ -100,63 +100,43 @@ test("execution page exposes the same narrative used by strategy decisions",asyn
 });
 
 
-test("Market Intelligence uses research lifecycle protection, not blind scalp locking or batch spraying",async()=>{
-  const core=await read("lib/forward-relations.ts"),engine=await read("lib/market-intelligence-engine.ts"),
-    lifecycle=await read("lib/market-intelligence-lifecycle.ts");
-  const manage=core.slice(core.indexOf("function manageIntelligenceTrades"),core.indexOf("function markAndManage"));
+test("Market Intelligence restores golden Position Intelligence authority and keeps only catastrophic winner insurance",async()=>{
+  const core=await read("lib/forward-relations.ts"),engine=await read("lib/market-intelligence-engine.ts");
+  const manage=core.slice(core.indexOf("function catastrophicWinnerInsuranceFloor"),core.indexOf("function markAndManage"));
   assert.match(manage,/evaluatePositionIntelligence/);
-  assert.match(manage,/deriveProfitLifecycle/);
-  assert.match(manage,/RESEARCH_PROFIT_PROTECT|RESEARCH_LIFECYCLE_EXIT/);
-  assert.match(manage,/研究层进入利润保护/);
-  assert.doesNotMatch(manage,/样本利润保护提升|已移除旧式动态锁利/);
-  assert.match(lifecycle,/healthyTrend/);
-  assert.match(lifecycle,/persistentDeterioration/);
-  assert.match(lifecycle,/runnerHealthy/);
-  assert.match(lifecycle,/initialExpectedNetRate/);
-  assert.match(lifecycle,/platformFloorRate/);
-  assert.match(lifecycle,/runnerPlatformNet/);
-  assert.match(manage,/PROFIT_PLATFORM_BREACH/);
-  assert.match(manage,/Runner利润平台/);
-  assert.match(lifecycle,/action="PROTECT"/);
-  assert.doesNotMatch(manage,/relationFailureBars.*>=2|THESIS_INVALIDATED/);
-  const fill=core.slice(core.indexOf("export function fillForwardPortfolio"),core.indexOf("function nextCandleAt"));
-  assert.match(fill,/opened=1;break/);
-  const advance=core.slice(core.indexOf("export function advanceForward"),core.indexOf("export function closeForwardForReset"));
-  assert.match(advance,/if\(marketReady&&dataDue\)seedEntryResponses/);
-  assert.match(advance,/marketReady\?advanceEntryResponses/);
-  assert.doesNotMatch(advance,/marketReady&&dataDue\?fillForwardPortfolio/);
-  assert.doesNotMatch(advance,/rotateIfNeeded\(/);
+  assert.match(manage,/if\(position\.decision==="EXIT"\)/);
+  assert.match(manage,/POSITION_VALUE_EXIT/);
+  assert.match(manage,/catastrophicWinnerInsuranceFloor/);
+  assert.match(manage,/WINNER_INSURANCE_EXIT/);
+  assert.match(manage,/provenThreshold=Math\.max\(\.04,originalStopRate\*3\)/);
+  assert.doesNotMatch(manage,/deriveProfitLifecycle|RESEARCH_LIFECYCLE_EXIT|PROFIT_PLATFORM_BREACH|Runner利润平台|研究层进入利润保护/);
   assert.match(engine,/thesisId=.*row\.signalSince/);
   assert.match(engine,/signalBars>=2/);
-  assert.match(engine,/stableBias/);
-  const boundaries=core.slice(core.indexOf("boundaries:{scope"));
-  assert.match(boundaries,/Position Intelligence/);
-  assert.match(boundaries,/单一细节、单一市场转向或连续两根5m都没有独立平仓权/);
+  const advance=core.slice(core.indexOf("export function advanceForward"),core.indexOf("export function closeForwardForReset"));
+  assert.match(advance,/seedEntryResponses/);
+  assert.match(advance,/advanceEntryResponses/);
+  assert.doesNotMatch(advance,/rotateIfNeeded\(/);
 });
 
-
-test("Market Intelligence active exits are evidence-family gated, not two-bar thesis invalidation",async()=>{
+test("Market Intelligence active exits are evidence-family gated directly by Position Intelligence",async()=>{
   const [core,position,engine,execution]=await Promise.all([
     read("lib/forward-relations.ts"),read("lib/position-intelligence-engine.ts"),
     read("lib/market-intelligence-engine.ts"),read("app/market-intelligence-execution.tsx")
   ]);
   const manage=core.slice(core.indexOf("function manageIntelligenceTrades"),core.indexOf("function markAndManage"));
   assert.match(manage,/evaluatePositionIntelligence/);
-  assert.doesNotMatch(manage,/if\(position\.decision==="EXIT"\)/);
-  assert.match(manage,/lifecycle\.action==="EXIT"/);
-  assert.doesNotMatch(manage,/invalidationBars|relationFailureBars.*>=2|THESIS_INVALIDATED/);
+  assert.match(manage,/if\(position\.decision==="EXIT"\)/);
+  assert.match(manage,/POSITION_VALUE_EXIT/);
+  assert.doesNotMatch(manage,/lifecycle\.action|RESEARCH_LIFECYCLE_EXIT|positionHypothesisGuidance/);
   assert.match(position,/coreConcern&&independentConfirm/);
   assert.match(position,/reviewBars>=2/);
   assert.match(position,/contextOnly:true/);
   assert.match(position,/dataConfidence>=60/);
-  assert.match(engine,/same\.samples=\(same\.samples\?\?1\)\+1/);
   assert.match(engine,/LEADERSHIP_ROTATION/);
   assert.match(engine,/FLOW_ABSORBED_OR_STALLED/);
-  assert.doesNotMatch(execution,/偏多细节|偏空细节/);
   assert.match(execution,/复核已持续/);
   assert.match(execution,/剩余空间/);
 });
-
 
 test("existing multi-source BBO refresh exposes liquidity migration without extra per-symbol REST fanout",async()=>{
   const [hub,worker,engine,position,execution]=await Promise.all([
@@ -261,8 +241,8 @@ test("forward research cannot influence orders from a one-cycle detail change",a
   assert.match(advance,/marketReady&&dataDue\)s\.hypothesisResearch=advanceMarketHypothesisResearch/);
   assert.match(advance,/built\.state\.narrative=priorNarrative/);
   const manage=core.slice(core.indexOf("function manageIntelligenceTrades"),core.indexOf("function markAndManage"));
-  assert.doesNotMatch(manage,/if\(position\.decision==="EXIT"\)/);
-  assert.match(manage,/initialExpectedNetRate/);
+  assert.match(manage,/if\(position\.decision==="EXIT"\)/);
+  assert.doesNotMatch(manage,/positionHypothesisGuidance|deriveProfitLifecycle|futureHypothesisIds/);
 });
 
 
@@ -323,58 +303,43 @@ test("execution page always exposes entry execution state independently of top c
 });
 
 
-test("Market Intelligence routes every environment to an active playbook instead of pausing trading",async()=>{
-  const [router,core,execution,store]=await Promise.all([
-    read("lib/market-intelligence-environment-router.ts"),read("lib/forward-relations.ts"),
-    read("app/market-intelligence-execution.tsx"),read("lib/forward-store.ts")
+test("environment classification is research-only and cannot rewrite Market Intelligence orders",async()=>{
+  const [core,execution]=await Promise.all([
+    read("lib/forward-relations.ts"),read("app/market-intelligence-execution.tsx")
   ]);
-  for(const token of["TREND_CAPTURE","TRANSITION_PROBE","ROTATION_RELATIVE","SHOCK_PARTICIPATION"])
-    assert.match(router,new RegExp(token));
-  assert.match(router,/classifyMarketEnvironment/);
-  assert.match(router,/environmentPerformanceFactor/);
-  assert.match(router,/environmentProbeRetestDecision/);
-  assert.match(router,/clip\(factor,.55,1.10\)/);
-  assert.match(router,/riskScale:finalRisk/);
-  assert.doesNotMatch(router,/riskScale:0/);
-  assert.match(core,/environmentRiskScale=clip\(o\.environmentRiskScale\?\?1,.20,1.10\)/);
-  assert.match(core,/minimumEffectiveRisk=equity\*\(o\.environmentProbe\?\.0010:.0035\)/);
-  assert.match(core,/requiresProbeRetest/);
-  assert.match(core,/主线参与通道/);
-  assert.match(core,/next\.environmentPerformance=structuredClone\(prior\.environmentPerformance\)/);
-  assert.match(core,/environmentRouter:\{\.\.\.s\.environmentContext,currentEnvironment:s\.environmentContext\.environment/);
-  assert.match(core,/environmentContext:\{version:ENVIRONMENT_ROUTER_VERSION/);
-  assert.match(execution,/当前市场环境与交易打法/);
-  assert.match(execution,/始终保留参与权/);
-  assert.match(execution,/趋势捕获|转折验证|相对强弱|主线参与/);
-  assert.match(store,/account=\{\.\.\.next/,"environment performance memory must stay inside the bounded persisted account projection");
+  const annotate=core.slice(core.indexOf("function annotateLifecycleOpportunities"),core.indexOf("function openIntelligenceTrade"));
+  assert.match(annotate,/classifyMarketEnvironment/);
+  assert.match(annotate,/o\.environmentScore=o\.score/);
+  assert.match(annotate,/o\.environmentRiskScale=1/);
+  assert.match(annotate,/o\.environmentProbe=false/);
+  assert.match(annotate,/o\.environmentForceRetest=false/);
+  assert.doesNotMatch(annotate,/routeEnvironmentOpportunity|environmentPerformanceFactor|o\.eligible=true/);
+  const open=core.slice(core.indexOf("function openIntelligenceTrade"),core.indexOf("export function extremeResidualConfirmationProfile"));
+  assert.match(open,/riskRate=o\.premium\?\.0065:\.0055/);
+  assert.doesNotMatch(open,/environmentRiskScale=clip|environmentProbe\?\.0010/);
+  assert.match(execution,/市场环境 · 仅作为研究背景/);
+  assert.match(execution,/交易权.*无 · 只提供背景证据/);
 });
 
-test("transition countertrend routes through Probe-Prove-Restart, not a static no-trade filter",async()=>{
-  const [core,router]=await Promise.all([
-    read("lib/forward-relations.ts"),read("lib/market-intelligence-environment-router.ts")
-  ]);
-  assert.match(router,/COUNTER/);
-  assert.match(router,/forceRetest=true/);
-  assert.match(router,/继续交易但风险缩放/);
-  const advance=core.slice(core.indexOf("function advanceEntryResponses"),core.indexOf("export function fillForwardPortfolio"));
-  assert.match(advance,/环境Probe尚未证明方向/);
-  assert.match(advance,/第一段推动已出现/);
-  assert.match(advance,/Probe已完成第一段推动和可控回调/);
-  assert.match(advance,/Probe已回调，等待原方向重新推进/);
-});
-
-
-test("environment router has no direct-fill bypass and keeps regime memory across account reset",async()=>{
+test("environment Probe-Prove-Restart no longer has entry authority",async()=>{
   const core=await read("lib/forward-relations.ts");
-  const fill=core.slice(core.indexOf("export function fillForwardPortfolio"),core.indexOf("function nextCandleAt"));
-  assert.match(fill,/environmentForceRetest/);
-  assert.match(fill,/Probe→回调→再启动/);
+  const advance=core.slice(core.indexOf("function advanceEntryResponses"),core.indexOf("export function fillForwardPortfolio"));
+  assert.doesNotMatch(advance,/environmentProbeRetestDecision|环境Probe尚未证明方向|Probe已完成第一段推动/);
+  assert.match(advance,/stableEntryLocationDecision/);
+  assert.match(advance,/超过允许追价/);
+  assert.match(advance,/等待原方向重新推进/);
+});
+
+test("environment memory may persist for research but cannot scale risk or force retests",async()=>{
+  const core=await read("lib/forward-relations.ts");
   assert.match(core,/next\.environmentPerformance=structuredClone\(prior\.environmentPerformance\)/);
   assert.match(core,/next\.environmentContext=structuredClone\(prior\.environmentContext\)/);
   assert.match(core,/recordEnvironmentOutcome\(s\.environmentPerformance/);
-  assert.match(core,/environmentRiskScale=clip\(o\.environmentRiskScale\?\?1,.20,1.10\)/);
+  const annotate=core.slice(core.indexOf("function annotateLifecycleOpportunities"),core.indexOf("function openIntelligenceTrade"));
+  assert.doesNotMatch(annotate,/routeEnvironmentOpportunity|environmentPerformanceFactor/);
+  const advance=core.slice(core.indexOf("function advanceEntryResponses"),core.indexOf("export function fillForwardPortfolio"));
+  assert.doesNotMatch(advance,/requiresProbeRetest\).*environment|environmentProbeRetestDecision/);
 });
-
 
 test("LIVE mirror readiness uses fresh executable BBO, not PAPER entryReady admission state",async()=>{
   const [worker,parity]=await Promise.all([read("worker/index-clean.ts"),read("lib/live-parity.ts")]);
