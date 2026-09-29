@@ -4,7 +4,7 @@ import {buildMarketIntelligence,initialMarketIntelligenceState,MARKET_INTELLIGEN
 import {evaluatePositionIntelligence} from "../lib/position-intelligence-engine.ts";
 import {entryResponseWindowMs,evaluateEntryResponse} from "../lib/market-intelligence-entry-response.ts";
 import {advanceForward,extremeResidualConfirmationProfile,fillForwardPortfolio,initialForward,normalizeForward,
-  resetForwardAccountPreservingLearning,stableEntryLocationDecision,stableEntryThesisProfile} from "../lib/forward-relations.ts";
+  entryLocationDecision,resetForwardAccountPreservingLearning,stableEntryLocationDecision,stableEntryThesisProfile} from "../lib/forward-relations.ts";
 import {environmentPerformanceFactor,environmentProbeRetestDecision,initialEnvironmentPerformanceState,
   normalizeEnvironmentPerformanceState,recordEnvironmentOutcome,routeEnvironmentOpportunity} from "../lib/market-intelligence-environment-router.ts";
 
@@ -102,6 +102,33 @@ test("a transient favorable tick cannot pass entry response while cross-venue fl
   const expired=evaluateEntryResponse({now:T+180_001,side:"LONG",score:87,edgeRatio:2.1,pullbackRiskRate:.005,stopRate:.007,
     sourceCount:3,disagreementRate:.0004,price:100.18,memory:{...memory,deadlineAt:T+180_000},state,quote:{...quote,observedAt:T+180_001}});
   assert.equal(expired.action,"CANCEL");
+});
+
+test("severely consumed 30m entry location waits for a new location without blocking ordinary breakout winners",()=>{
+  const late=entryLocationDecision({sidePosition30:1.6346,breakoutRate30:.00672,confirmationAdvanceRate:.00215});
+  assert.equal(late.action,"WAIT_RETEST");
+  const largeWinnerShape=entryLocationDecision({sidePosition30:1.1821,breakoutRate30:.00411,confirmationAdvanceRate:.00246});
+  assert.equal(largeWinnerShape.action,"DIRECT");
+  const strongContinuation=entryLocationDecision({sidePosition30:1.55,breakoutRate30:.006,confirmationAdvanceRate:.0032});
+  assert.equal(strongContinuation.action,"DIRECT");
+});
+
+test("fresh entry can be disproved before two 5m reviews only after its own confirmation is reversed by converged evidence",()=>{
+  const broken={symbol:"GRAM_USDT",watchScore:35,regime:"TRANSITION" as const,stage:"OBSERVE" as const,clusterId:"corr:GRAM_USDT",
+    correlation:.7,beta:1,volatility:.004,dataConfidence:94,actualMove:-.01,expectedMove:.001,residual:-.009,residualZ:-1.3,
+    residualPersistence:1,relativeStrength:.25,longScore:24,shortScore:82,pathLong:.22,pathShort:.78,roomLong:.035,roomShort:.02,
+    sourceCount:3,venueAgreement:1,venuePressure:-.7,reasons:[],signalSide:"SHORT" as const,signalSince:T-300_000,signalBars:2,signalLastBar:T-300_000};
+  const quote={sourceCount:3,directionalAgreement:1,sourceBreadth:-1,medianShortMove:-.001,bookImbalance:-.35,
+    bidLiquidityChange:-.15,askLiquidityChange:.15,liquiditySourceCount:3,disagreementRate:.0002};
+  const minute=candles(100,-.0008).slice(-10);
+  const disproved=evaluatePositionIntelligence({now:T,side:"LONG",signedRate:-.0012,peakFavorableRate:0,ageMin:2,firstProfit:false,
+    expectedHoldMinutes:240,stopRate:.012,entryScore:92,entryResidual:.012,entryRelativeStrength:.8,entryRemainingSpaceRate:.04,
+    state:broken,quote,minutePath:minute,marketStateAgeMs:20_000,entryResponseValidated:true,entryResponseBestAdvanceRate:.0014});
+  assert.equal(disproved.reviewBars,1);assert.equal(disproved.decision,"EXIT");assert.match(disproved.summary,/入场证伪/);
+  const notYetDisproved=evaluatePositionIntelligence({now:T,side:"LONG",signedRate:-.0005,peakFavorableRate:0,ageMin:25,firstProfit:false,
+    expectedHoldMinutes:240,stopRate:.012,entryScore:92,entryResidual:.012,entryRelativeStrength:.8,entryRemainingSpaceRate:.04,
+    state:broken,quote,minutePath:minute,marketStateAgeMs:20_000,entryResponseValidated:true,entryResponseBestAdvanceRate:.0014});
+  assert.equal(notYetDisproved.reviewBars,1);assert.equal(notYetDisproved.decision,"REVIEW");
 });
 
 test("response-gated unconfirmed trades cannot use a huge Remaining Space estimate to override converged failure evidence",()=>{
