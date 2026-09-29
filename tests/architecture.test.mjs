@@ -76,7 +76,10 @@ test("runtime cannot reset PAPER during a strategy revision",async()=>{
 test("LIVE execution infrastructure stays isolated and serialized after PAPER commit",async()=>{
   const [worker,parity,live,member]=await Promise.all([read("worker/index-clean.ts"),read("lib/live-parity.ts"),read("lib/gate-live.ts"),read("worker/member-executor.ts")]);
   assert.match(live,/class GateLiveClient/);assert.match(member,/forwardMirrorSources/);
-  assert.match(parity,/LIVE_SOURCE_ENTRY_MAX_DELAY_MS = 30_000/);assert.match(parity,/minimumUplift/);
+  assert.doesNotMatch(parity,/LIVE_SOURCE_ENTRY_MAX_DELAY_MS|实时复制窗口/);
+  assert.match(parity,/mirrorSourceFresh\(t,t\.id,input\.now\)/);assert.match(parity,/liveEntryDriftGuard\(t,input\.entryPrice\)/);
+  assert.match(parity,/minimumUplift/);
+  assert.match(live,/throw new GateReadTimeoutError\(path\)/);
   const sync=worker.slice(worker.indexOf("protected async syncLive"),worker.indexOf("private suspendSymbol"));
   assert.match(sync,/desiredTrades=Object\.values\(desiredPortfolio\)\.sort/);
   assert.match(sync,/let snapshot=await client\.snapshot\(\)/);
@@ -349,7 +352,10 @@ test("LIVE mirror readiness uses fresh executable BBO, not PAPER entryReady admi
   assert.match(block,/contractMeta\[symbol\]!=null/);
   assert.match(block,/freshQuote/);
   assert.doesNotMatch(block,/entryReady===true/);
-  assert.match(parity,/LIVE_SOURCE_ENTRY_MAX_DELAY_MS = 30_000/,"late-copy protection must remain in the LIVE sizing path");
+  assert.doesNotMatch(parity,/LIVE_SOURCE_ENTRY_MAX_DELAY_MS|实时复制窗口/,"infrastructure delay must not permanently expire an otherwise-valid source");
+  assert.match(parity,/mirrorSourceFresh\(t,t\.id,input\.now\)/);
+  assert.match(parity,/当前价已越过源单止损/);
+  assert.match(parity,/liveEntryDriftGuard\(t,input\.entryPrice\)/);
 });
 
 
