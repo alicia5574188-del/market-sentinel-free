@@ -4,7 +4,7 @@ import {buildMarketIntelligence,initialMarketIntelligenceState,MARKET_INTELLIGEN
 import {evaluatePositionIntelligence} from "../lib/position-intelligence-engine.ts";
 import {entryResponseWindowMs,evaluateEntryResponse} from "../lib/market-intelligence-entry-response.ts";
 import {advanceForward,extremeResidualConfirmationProfile,fillForwardPortfolio,initialForward,normalizeForward,
-  resetForwardAccountPreservingLearning,stableEntryLocationDecision,stableEntryThesisProfile} from "../lib/forward-relations.ts";
+  entryLocationDecision,resetForwardAccountPreservingLearning,stableEntryLocationDecision,stableEntryThesisProfile} from "../lib/forward-relations.ts";
 import {environmentPerformanceFactor,environmentProbeRetestDecision,initialEnvironmentPerformanceState,
   normalizeEnvironmentPerformanceState,recordEnvironmentOutcome,routeEnvironmentOpportunity} from "../lib/market-intelligence-environment-router.ts";
 
@@ -120,6 +120,15 @@ test("response-gated unconfirmed trades cannot use a huge Remaining Space estima
     expectedHoldMinutes:240,stopRate:.012,entryScore:92,entryResidual:.012,entryRelativeStrength:.8,entryRemainingSpaceRate:.04,
     state:{...broken,signalLastBar:T},quote,minutePath:minute,marketStateAgeMs:20_000,entryResponseValidated:true,previous:first});
   assert.equal(second.reviewBars,2);assert.equal(second.decision,"EXIT");
+});
+
+test("severe 30m chase is rejected without blocking the extended shape seen in a large winner",()=>{
+  const late=entryLocationDecision({sidePosition30:1.6346,breakoutRate30:.00672,confirmationAdvanceRate:.00215});
+  assert.equal(late.action,"WAIT_RETEST");
+  const largeWinnerShape=entryLocationDecision({sidePosition30:1.1821,breakoutRate30:.00411,confirmationAdvanceRate:.00246});
+  assert.equal(largeWinnerShape.action,"DIRECT");
+  const strongContinuation=entryLocationDecision({sidePosition30:1.55,breakoutRate30:.006,confirmationAdvanceRate:.0032});
+  assert.equal(strongContinuation.action,"DIRECT","strong fresh continuation may justify an otherwise extended breakout");
 });
 
 test("fresh entry can exit immediately only when its own evidence fully falsifies the location",()=>{
