@@ -401,3 +401,18 @@ test("LIVE copy actively refreshes Gate BBO after private reconciliation ages th
   assert.match(sync,/refreshMirrorExecutableQuotes\(this\.forwardState!\.positions\.map\(t=>t\.symbol\),Date\.now\(\)\)/);
   assert.match(sync,/ensureMirrorExecutableQuote\(symbol,Date\.now\(\)\)/);
 });
+
+
+test("LIVE eligible source cannot hide behind generic quote/account waiting after a healthy pass",async()=>{
+  const [worker,parity]=await Promise.all([read("worker/index-clean.ts"),read("lib/live-parity.ts")]);
+  const syncStart=worker.indexOf("private async syncLiveOnce");
+  const syncEnd=worker.indexOf("protected async setLiveMode",syncStart);
+  const sync=worker.slice(syncStart,syncEnd);
+  assert.match(worker,/private async mirrorSubmitQuote/);
+  assert.match(worker,/freshQuote\([\s\S]*2_000/);
+  assert.match(sync,/finalValidatedAt/);
+  assert.match(sync,/code:"RETRYING"/);
+  assert.match(sync,/No eligible source may leave a completed healthy reconciliation as an/);
+  assert.match(parity,/unclassifiedWaitingCount/);
+  assert.doesNotMatch(parity,/等待当前报价、账户与交易所确认/);
+});
