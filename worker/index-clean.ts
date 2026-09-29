@@ -14,7 +14,7 @@ import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem
 import { buildBankruptcyReport, diagnoseClosedPosition, paperCycleSummary, recordCycleTrade, startPaperCycle,
   PAPER_INITIAL_EQUITY, type BankruptcyReport, type PaperCycle } from "../lib/paper-cycle.ts";
 import { runtimeReady, type RuntimeHealthShape } from "../lib/runtime-health.ts";
-import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, gateMarkedEquity, gatePositionValuation, isGateReadTimeoutError, LiveEntrySizingError, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveOrder, type GateLiveOrderSnapshot, type GateLiveSnapshot, type LiveEntrySizingCode } from "../lib/gate-live.ts";
+import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, gateMarkedEquity, gatePositionValuation, isGateReadTimeoutError, isGateTransportTimeoutError, LiveEntrySizingError, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveOrder, type GateLiveOrderSnapshot, type GateLiveSnapshot, type LiveEntrySizingCode } from "../lib/gate-live.ts";
 import { LIVE_SESSION_VERSION, establishLiveScale, reconcileLiveScale, startLiveSession, sourceAfterEnable, sameLiveSession, type LiveSession } from "../lib/live-session.ts";
 import type { GateSizeRules, SizeDiagnostic } from "../lib/gate-quantity.ts";
 import { encryptGateCredentials, gateKeyHint, normalizeGateCredentials, type GateCredentials } from "../lib/credential-vault.ts";
@@ -1916,6 +1916,26 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return scaled;
   }
 
+  private async ensureLiveActivationSourceFence(now:number) {
+    const activation=this.runtime.live.activation,state=this.forwardState;
+    if(!this.runtime.live.requestedEnabled||!activation||activation.version!==LIVE_SESSION_VERSION
+      ||activation.sourceStartedAt!==null||!state)return activation;
+    const repaired:LiveSession={...activation,sourceStartedAt:state.startedAt,
+      excludedSourceIds:[...new Set([...activation.excludedSourceIds,
+        ...state.positions.filter(t=>t.openedAt<=activation.enabledAt).map(t=>t.id)])]};
+    const reservation=this.reserveCriticalWrites(1);
+    this.runtime.live.activation=repaired;
+    try{
+      await this.ctx.storage.put(LIVE_PARITY_PREFIX+"owner-intent",{
+        enabled:true,changedAt:this.runtime.live.changedAt,activation:repaired,
+      });
+      reservation.finish(true);
+    }finally{reservation.finish(false);}
+    this.recordLiveAudit({observedAt:now,symbol:null,planId:null,stage:"LIVE_CONTROL",level:"INFO",
+      reason:"已修复此前在模拟源尚未恢复时建立的空实盘起点；保留原开启时间，不补开开启前持仓，后续新源单恢复正常跟随"});
+    return repaired;
+  }
+
   private liveEntryAwaitingReconcile(entry: LiveEntry | null | undefined) {
     if(!entry?.parity || entry.marketSubmittedAt == null) return false;
     // Once this source has a durable LIVE position record (OPEN or CLOSED), the
@@ -2164,6 +2184,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     // Restore the 2026-09-20 primary LIVE path: one complete Gate snapshot is
     // the execution authority for account, positions, orders and protection.
     this.reconcileCanonicalMirror(now);
+    await this.ensureLiveActivationSourceFence(now);
     const activePositions = Object.values(this.runtime.live.positions).some((position) => position?.status === "OPEN");
     const activeEntries = Object.values(this.runtime.live.entries).some((entry) => entry &&
       (!["FILLED", "CANCELLED"].includes(entry.status) || this.liveEntryAwaitingReconcile(entry)));
@@ -2637,10 +2658,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         try {
           await client.setLeverage(symbol,intent.leverage);
         } catch (error) {
-          const reason = `Gate 未确认 ${symbol} 的 ${intent.leverage}× 杠杆，本计划已跳过但不会锁住其他新机会：${safeError(error)}`;
-          entry.status = "CANCELLED";entry.submissionResolved=true;entry.lastError = reason;
-          this.runtime.live.entrySkips[symbol] = { planId: plan.id, symbol, code: "LEVERAGE_REJECTED", reason, observedAt: now };
-          this.recordLiveAudit({ observedAt: now, symbol, planId: plan.id, stage: "LEVERAGE", level: "SKIPPED", reason, error });
+          const retryable=isGateTransportTimeoutError(error)||!definitiveGateRejection(error);
+          const reason=retryable
+            ?`Gate 暂未确认 ${symbol} 的 ${intent.leverage}× 杠杆；尚未发送入场订单，保留源单并自动重试：${safeError(error)}`
+            :`Gate 拒绝 ${symbol} 的 ${intent.leverage}× 杠杆，本计划暂不提交且不会锁住其他新机会：${safeError(error)}`;
+          entry.status="CANCELLED";entry.submissionResolved=true;entry.lastError=reason;
+          this.runtime.live.entrySkips[symbol]={planId:plan.id,symbol,code:retryable?"RETRYING":"LEVERAGE_REJECTED",reason,observedAt:Date.now()};
+          this.recordLiveAudit({observedAt:Date.now(),symbol,planId:plan.id,stage:"LEVERAGE",level:retryable?"RECOVERING":"SKIPPED",reason,error});
+          await this.saveCheckpoint(Date.now(),true);
           continue;
         }
         try {
@@ -2796,6 +2821,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   protected async setLiveMode(enabled: boolean) {
     const wasEnabled=this.runtime.live.requestedEnabled;
     const changedAt=Date.now();
+    if(enabled&&!wasEnabled&&!this.forwardState){
+      const error="当前模拟源尚未恢复完整账户代次；实盘开关保持关闭，未建立空的开启起点";
+      return {ok:false,error,live:this.runtime.live};
+    }
     if(enabled&&!wasEnabled)this.runtime.live.activation=startLiveSession(changedAt,this.forwardState);
     this.runtime.live.requestedEnabled = enabled;
     if (!enabled) this.runtime.live.operational = false;
@@ -3614,6 +3643,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (path === "/live-mode" && request.method === "POST") {
       const body = await request.json<{ enabled?: unknown }>().catch(() => ({} as { enabled?: unknown }));
       if (typeof body.enabled !== "boolean") return json({ error: "invalid live mode" }, 400);
+      if(body.enabled&&!this.forwardState){
+        try{await this.ensureAdaptiveAccount(Date.now());}
+        catch(error){return json({error:`模拟源尚未恢复，未改变实盘开关：${safeError(error)}`},409);}
+      }
       const result = await this.setLiveMode(body.enabled);
       return json(result, result.ok ? 200 : 409);
     }
