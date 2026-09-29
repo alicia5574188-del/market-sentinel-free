@@ -674,6 +674,20 @@ export function extremeResidualConfirmationProfile(input:{
     reason:`极端残差机会不按偏离幅度直接追单；要求${Math.round(minimumElapsedMs/1000)}秒持续实时响应、${minimumSupportSamples}次支持证据后再执行。`};
 }
 
+export function stableEntryThesisProfile(input:{
+  score:number;premium:boolean;thesisBars:number;stage:"OBSERVE"|"READY";edgeRatio:number;sourceCount:number;dataConfidence:number;
+  netRemainingSpaceRate:number;pullbackRiskRate:number;
+}){
+  const stable=input.stage==="READY"&&input.thesisBars>=2&&input.edgeRatio>=1.45&&input.sourceCount>=3&&input.dataConfidence>=85
+      &&(input.score>=80||input.premium||input.thesisBars>=4),
+    expected=Math.max(ROUND_TRIP_COST*2,input.netRemainingSpaceRate),
+    pullback=Math.max(ROUND_TRIP_COST*1.5,input.pullbackRiskRate),
+    maxChaseRate=Math.max(ROUND_TRIP_COST*1.8,Math.min(expected*.45,pullback*.75,.01)),
+    retestPullbackMin=Math.max(ROUND_TRIP_COST*.35,Math.min(pullback*.30,expected*.18,.004)),
+    restartMin=Math.max(ROUND_TRIP_COST*.30,Math.min(pullback*.15,expected*.10,.002));
+  return{stable,maxChaseRate,retestPullbackMin,restartMin,armedWindowMs:stable?12*60_000:0};
+}
+
 function rankedEligible(s:ForwardState,now:number){
   return s.opportunities.filter(o=>isIntelligenceOpportunity(o)&&o.eligible&&o.expiresAt>now
     &&!s.positions.some(t=>t.symbol===o.symbol)
