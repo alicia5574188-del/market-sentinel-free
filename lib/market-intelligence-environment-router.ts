@@ -136,6 +136,23 @@ export function environmentPerformanceFactor(state:EnvironmentPerformanceState,e
   return clip(factor,.55,1.10);
 }
 
+export function environmentProbeRetestDecision(input:{
+  side:"LONG"|"SHORT";price:number;currentAdvanceRate:number;bestAdvanceRate:number;
+  retestBasePrice?:number|null;retestSeen:boolean;impulseMin:number;pullbackMin:number;restartMin:number;
+}){
+  const best=Math.max(0,input.bestAdvanceRate,input.currentAdvanceRate),current=input.currentAdvanceRate,
+    retrace=Math.max(0,best-current),d=sideSign(input.side);
+  if(best<input.impulseMin)return{action:"WAIT_IMPULSE" as const,best,current,retrace,restart:0};
+  if(!input.retestSeen){
+    if(retrace<input.pullbackMin)return{action:"WAIT_PULLBACK" as const,best,current,retrace,restart:0};
+    return{action:"SET_RETEST_BASE" as const,best,current,retrace,restart:0};
+  }
+  const base=input.retestBasePrice??input.price,restart=d*(input.price/base-1);
+  if(restart<0)return{action:"UPDATE_RETEST_BASE" as const,best,current,retrace,restart};
+  if(restart<input.restartMin)return{action:"WAIT_RESTART" as const,best,current,retrace,restart};
+  return{action:"READY" as const,best,current,retrace,restart};
+}
+
 export function routeEnvironmentOpportunity(input:{
   market:MarketIntelligenceState;evolution:MarketEvolutionState;symbol:MarketSymbolState;
   opportunity:{
