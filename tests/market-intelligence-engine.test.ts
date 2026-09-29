@@ -74,18 +74,28 @@ test("ZEC-like high-quality reversal can confirm on the 2s lane without waiting 
     sourceCount:3,venueAgreement:.95,venuePressure:.35,reasons:[],signalSide:"LONG" as const,signalSince:T-600_000,signalBars:2,signalLastBar:T-300_000};
   const quote={bestBid:100.12,bestAsk:100.13,observedAt:T+24_000,fresh:true,entryReady:true,sourceCount:3,disagreementRate:.0003,
     sourceBreadth:.7,directionalAgreement:.9,medianShortMove:.0006,bookImbalance:.2,bidLiquidityChange:.14,askLiquidityChange:-.04,liquiditySourceCount:3};
-  const profile=entryResponseWindowMs({score:90.3,edgeRatio:3.43,sourceCount:3,disagreementRate:.0003});
+  const profile=entryResponseWindowMs({score:90.3,edgeRatio:3.43,sourceCount:3,disagreementRate:.0003,mode:"REVERSAL"});
   assert.equal(profile.fastLane,true);assert.equal(profile.windowMs,180_000);
   const memory={startedAt:T,deadlineAt:T+profile.windowMs,initialPrice:100,samples:1,bestAdvanceRate:0,maxAdverseRate:0,supportSamples:0,oppositionSamples:0};
   const first=evaluateEntryResponse({now:T+24_000,side:"LONG",score:90.3,edgeRatio:3.43,pullbackRiskRate:.0056,stopRate:.0066,
-    sourceCount:3,disagreementRate:.0003,price:100.11,memory,state,quote});
+    sourceCount:3,disagreementRate:.0003,mode:"REVERSAL",price:100.11,memory,state,quote});
   assert.equal(first.action,"WAIT");assert.equal(first.supportSamples,1);
   const second=evaluateEntryResponse({now:T+26_000,side:"LONG",score:90.3,edgeRatio:3.43,pullbackRiskRate:.0056,stopRate:.0066,
-    sourceCount:3,disagreementRate:.0003,price:100.13,
+    sourceCount:3,disagreementRate:.0003,mode:"REVERSAL",price:100.13,
     memory:{...memory,samples:2,bestAdvanceRate:first.bestAdvanceRate,maxAdverseRate:first.maxAdverseRate,
       supportSamples:first.supportSamples,oppositionSamples:first.oppositionSamples},
     state,quote:{...quote,observedAt:T+26_000}});
   assert.equal(second.action,"PASS");assert.ok(second.supportFamilies.includes("PRICE"));assert.ok(second.supportFamilies.includes("THESIS"));
+});
+
+test("RELATIVE opportunities cannot use fastLane while continuation keeps the large-winner path",()=>{
+  const common={score:96,edgeRatio:2.8,sourceCount:5,disagreementRate:.0004};
+  const relative=entryResponseWindowMs({...common,mode:"RELATIVE"});
+  const continuation=entryResponseWindowMs({...common,mode:"CONTINUATION"});
+  assert.equal(relative.fastLane,false);
+  assert.equal(relative.windowMs,180_000,"tightening RELATIVE confirmation must not shorten its existing observation window");
+  assert.equal(continuation.fastLane,true);
+  assert.equal(continuation.windowMs,180_000);
 });
 
 test("a transient favorable tick cannot pass entry response while cross-venue flow opposes the thesis",()=>{
@@ -158,6 +168,37 @@ test("fresh entry can exit immediately only when its own evidence fully falsifie
     state:slow,quote:{...quote,sourceBreadth:0,medianShortMove:0,bookImbalance:0,bidLiquidityChange:0,askLiquidityChange:0},
     minutePath:candles(100,0).slice(-10),marketStateAgeMs:20_000,entryResponseValidated:true});
   assert.notEqual(waiting.decision,"EXIT","elapsed time without profit is not itself an entry-failure trigger");
+});
+
+test("an unproven starter stays in REVIEW until its own STRUCTURE also turns against the entry",()=>{
+  const neutralStructure={symbol:"ETH_USDT",watchScore:35,regime:"TRANSITION" as const,stage:"OBSERVE" as const,clusterId:"corr:ETH_USDT",
+    correlation:.7,beta:1,volatility:.004,dataConfidence:96,actualMove:-.01,expectedMove:.001,residual:-.009,residualZ:-1.3,
+    residualPersistence:1,relativeStrength:.25,longScore:50,shortScore:60,pathLong:.22,pathShort:.78,roomLong:.035,roomShort:.02,
+    sourceCount:4,venueAgreement:1,venuePressure:-.7,reasons:[],signalSide:"LONG" as const,signalSince:T-300_000,signalBars:2,signalLastBar:T-300_000};
+  const quote={sourceCount:4,directionalAgreement:1,sourceBreadth:-1,medianShortMove:-.001,bookImbalance:-.35,
+    bidLiquidityChange:-.15,askLiquidityChange:.15,liquiditySourceCount:3,disagreementRate:.0002};
+  const minute=candles(100,-.0008).slice(-10);
+  const first=evaluatePositionIntelligence({now:T,side:"LONG",signedRate:-.001,peakFavorableRate:0,ageMin:8,firstProfit:false,
+    expectedHoldMinutes:240,stopRate:.012,entryScore:92,entryResidual:.012,entryRelativeStrength:.8,entryRemainingSpaceRate:.04,
+    state:neutralStructure,quote,minutePath:minute,marketStateAgeMs:20_000,entryResponseValidated:true});
+  assert.equal(first.decision,"REVIEW");
+  assert.equal(first.assessments.find(x=>x.family==="STRUCTURE")?.stance,"NEUTRAL");
+  assert.ok(first.concernFamilies.includes("RELATIVE"));
+  assert.ok(first.concernFamilies.includes("PATH")||first.concernFamilies.includes("FLOW"));
+
+  const second=evaluatePositionIntelligence({now:T+300_000,side:"LONG",signedRate:-.0015,peakFavorableRate:0,ageMin:13,firstProfit:false,
+    expectedHoldMinutes:240,stopRate:.012,entryScore:92,entryResidual:.012,entryRelativeStrength:.8,entryRemainingSpaceRate:.04,
+    state:{...neutralStructure,signalLastBar:T},quote,minutePath:minute,marketStateAgeMs:20_000,entryResponseValidated:true,previous:first});
+  assert.equal(second.reviewBars,2);
+  assert.equal(second.decision,"REVIEW","relative/path/flow deterioration alone must not kill a slow starter while structure is neutral");
+
+  const structureBroken={...neutralStructure,shortScore:82,signalSide:"SHORT" as const,signalLastBar:T+300_000};
+  const third=evaluatePositionIntelligence({now:T+600_000,side:"LONG",signedRate:-.003,peakFavorableRate:0,ageMin:18,firstProfit:false,
+    expectedHoldMinutes:240,stopRate:.012,entryScore:92,entryResidual:.012,entryRelativeStrength:.8,entryRemainingSpaceRate:.04,
+    state:structureBroken,quote,minutePath:minute,marketStateAgeMs:20_000,entryResponseValidated:true,previous:second});
+  assert.equal(third.assessments.find(x=>x.family==="STRUCTURE")?.stance,"CONCERN");
+  assert.equal(third.decision,"EXIT");
+  assert.match(third.summary,/入场位置失败/);
 });
 
 test("Position Intelligence requires independent concerns and two completed 5m reviews before active exit",()=>{
