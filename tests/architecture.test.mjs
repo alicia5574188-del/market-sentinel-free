@@ -416,3 +416,15 @@ test("LIVE eligible source cannot hide behind generic quote/account waiting afte
   assert.match(parity,/unclassifiedWaitingCount/);
   assert.doesNotMatch(parity,/等待当前报价、账户与交易所确认/);
 });
+
+
+test("LIVE stop amend preserves Gate int64 identity without a Number round-trip",async()=>{
+  const gate=await read("lib/gate-live.ts");
+  const start=gate.indexOf("async amendStop(orderId: string");
+  const end=gate.indexOf("\n  async cancelOrder",start);
+  const block=gate.slice(start,end);
+  assert.match(block,/rawBody=.*"order_id":\\?\$\{orderId\}/);
+  assert.match(block,/price_orders\/amend/);
+  assert.doesNotMatch(block,/Number\(orderId\)|parseInt\(orderId/);
+  assert.doesNotMatch(block,/order_id:\s*orderId/);
+});
