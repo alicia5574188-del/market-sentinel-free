@@ -90,6 +90,7 @@ export function gateMarkedEquity(snapshot:GateLiveSnapshot) {
 
 export const GATE_CUSTOM_TEXT_NO_FILL_LOOKUP_MS = 60_000;
 export const GATE_UNKNOWN_SUBMISSION_RESOLVE_MS = 65_000;
+export const GATE_STOP_SUBMISSION_RESOLVE_MS = 15_000;
 export function gateUnknownSubmissionCanResolve(submittedAt:number,now:number){
   return Number.isFinite(submittedAt)&&submittedAt>0&&Number.isFinite(now)&&now-submittedAt>=GATE_UNKNOWN_SUBMISSION_RESOLVE_MS;
 }
@@ -244,7 +245,10 @@ export class GateLiveClient {
       return { data: (raw ? parseGateJson<T>(raw) : {}) as T, raw };
     }catch(error){
       if(gateRequestTimedOut(error)){
-        if(method==="GET"){this.readTransport.timeouts++;this.readTransport.lastTimeoutPath=path;}
+        if(method==="GET"){
+          this.readTransport.timeouts++;this.readTransport.lastTimeoutPath=path;
+          throw new GateReadTimeoutError(path);
+        }
         if(isOrderWrite)this.writeTransport.timeouts++;
       }
       if(isOrderWrite)this.writeTransport.lastError=error instanceof Error?error.message:String(error);
@@ -287,8 +291,24 @@ export class GateLiveClient {
     await this.request("POST", `/futures/usdt/positions/${encodeURIComponent(symbol)}/leverage`, query);
   }
   async ensureLeverage(symbol:string,leverage:number){
-    await this.setLeverage(symbol,leverage);
-    return{verified:true,recovered:false,already:false,actual:leverage};
+    try{
+      await this.setLeverage(symbol,leverage);
+      return{verified:true,recovered:false,already:false,actual:leverage};
+    }catch(error){
+      if(!gateRequestTimedOut(error))throw error;
+      // Leverage-setting is idempotent but the write acknowledgement can be
+      // lost. Verify the actual contract setting with a read before deciding
+      // whether another cycle needs to retry; never turn an ACK timeout into a
+      // permanently skipped PAPER source.
+      try{
+        const current=await this.position(symbol),actual=Number(current.leverage);
+        if(Number.isFinite(actual)&&Math.abs(actual-leverage)<1e-9)
+          return{verified:true,recovered:true,already:true,actual};
+      }catch(readError){
+        if(!isGateReadTimeoutError(readError))throw readError;
+      }
+      throw error;
+    }
   }
 
   /** Read-only, fixed time-window pagination; individual fills, not orders. */
@@ -325,13 +345,24 @@ export class GateLiveClient {
   async inspectEntry(kind: "PRICE_TRIGGER" | "LIMIT" | "MARKET", symbol: string, tag: string, orderId: string | null) {
     try {
       if (kind !== "PRICE_TRIGGER") {
-        return (await this.request<GateLiveOrder>("GET", `/futures/usdt/orders/${encodeURIComponent(orderId ?? tag)}`)).data;
+        if(orderId)return (await this.request<GateLiveOrder>("GET", `/futures/usdt/orders/${encodeURIComponent(orderId)}`)).data;
+        // A timed-out IOC may have crossed Gate's network boundary without
+        // returning its order id. Search the exchange's finished-order ledger
+        // by the persisted unique client tag instead of incorrectly using the
+        // tag as an order-id path.
+        const query=`status=finished&contract=${encodeURIComponent(symbol)}&limit=100`;
+        const rows=(await this.request<GateLiveOrder[]>("GET","/futures/usdt/orders",query)).data;
+        return rows.find(order=>liveOrderTag(order)===tag)??null;
       }
       if (orderId) {
         return (await this.request<GateLiveOrder>("GET", `/futures/usdt/price_orders/${encodeURIComponent(orderId)}`)).data;
       }
-      const query = `status=finished&contract=${encodeURIComponent(symbol)}&limit=100`;
-      const rows = (await this.request<GateLiveOrder[]>("GET", "/futures/usdt/price_orders", query)).data;
+      const openQuery=`status=open&contract=${encodeURIComponent(symbol)}&limit=100`,
+        open=(await this.request<GateLiveOrder[]>("GET","/futures/usdt/price_orders",openQuery)).data,
+        active=open.find(order=>liveOrderTag(order)===tag);
+      if(active)return active;
+      const finishedQuery = `status=finished&contract=${encodeURIComponent(symbol)}&limit=100`;
+      const rows = (await this.request<GateLiveOrder[]>("GET", "/futures/usdt/price_orders", finishedQuery)).data;
       return rows.find((order) => liveOrderTag(order) === tag) ?? null;
     } catch (error) {
       if (error instanceof Error && /Gate 404|ORDER_NOT_FOUND/.test(error.message)) return null;
