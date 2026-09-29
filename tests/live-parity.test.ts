@@ -390,21 +390,21 @@ test("slow private Gate reconciliation refreshes all PAPER marks before LIVE siz
   assert.equal(gate.placed.length,1,"an unrelated pre-enable PAPER holding must not leave the current PAPER equity mark stale");
 }));
 
-test("BBO aging during Gate leverage confirmation refreshes instead of cancelling a valid source",()=>clock(async()=>{
+test("BBO aging during Gate leverage confirmation refreshes at the final submit boundary instead of cancelling a valid source",()=>clock(async()=>{
   const {h,gate}=await harness();
   let refreshes=0;
-  const x=h as unknown as {ensureMirrorExecutableQuote(symbol:string,now?:number):Promise<boolean>};
-  x.ensureMirrorExecutableQuote=async symbol=>{
+  const x=h as unknown as {mirrorSubmitQuote(symbol:string):Promise<{bestBid:number;bestAsk:number;observedAt:number;source:"resident"|"rest"}>};
+  x.mirrorSubmitQuote=async symbol=>{
     refreshes++;
     h.runtime.evidence[symbol]={midpoint:100,bestBid:100,bestAsk:100,observedAt:T,fresh:true,entryReady:false};
-    return true;
+    return{bestBid:100,bestAsk:100,observedAt:T,source:"rest"};
   };
   gate.onLeverage=async()=>{
     h.runtime.evidence.BTC_USDT={midpoint:100,bestBid:100,bestAsk:100,observedAt:T-60_000,fresh:true,entryReady:false};
   };
   await enableNew(h);
   assert.ok(refreshes>=1);
-  assert.equal(gate.placed.length,1,"a slow leverage acknowledgement may refresh the public BBO but must not force a false cancellation");
+  assert.equal(gate.placed.length,1,"a slow leverage acknowledgement may refresh the final Gate BBO but must not force a false cancellation");
 }));
 
 test("persisted new PAPER source reaches LIVE in the same critical pass",()=>clock(async()=>{
