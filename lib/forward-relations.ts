@@ -20,7 +20,7 @@ import { deriveMarketEvolution, deriveOpportunityLifecycle, deriveProfitLifecycl
 import { advanceMarketHypothesisResearch, entryHypothesisGuidance, initialMarketHypothesisResearch,
   normalizeMarketHypothesisResearch, positionHypothesisGuidance,
   type EntryHypothesisGuidance, type MarketHypothesisResearchState } from "./market-intelligence-hypothesis-research.ts";
-import { environmentPerformanceFactor, initialEnvironmentPerformanceState, normalizeEnvironmentPerformanceState,
+import { ENVIRONMENT_ROUTER_VERSION, environmentPerformanceFactor, initialEnvironmentPerformanceState, normalizeEnvironmentPerformanceState,
   recordEnvironmentOutcome, routeEnvironmentOpportunity,
   type EnvironmentPerformanceState, type EnvironmentPlaybook, type MarketEnvironment, type RouteAlignment
 } from "./market-intelligence-environment-router.ts";
@@ -1117,8 +1117,8 @@ export function resetForwardAccountPreservingLearning(previous:ForwardState,now:
 }
 export function forwardUrgentQuoteSymbols(s:ForwardState,now:number,entrySymbols?:Iterable<string>){
   const allowed=entrySymbols?new Set(entrySymbols):null,keep=(x:string)=>!allowed||allowed.has(x);
-  const premium=s.opportunities.filter(o=>o.premium&&o.eligible&&o.expiresAt>now&&keep(o.symbol)).sort((a,b)=>b.score-a.score);
-  const normal=s.opportunities.filter(o=>!o.premium&&o.eligible&&o.expiresAt>now&&keep(o.symbol)).sort((a,b)=>b.score-a.score);
+  const premium=s.opportunities.filter(o=>o.premium&&o.eligible&&o.expiresAt>now&&keep(o.symbol)).sort(opportunityCompare);
+  const normal=s.opportunities.filter(o=>!o.premium&&o.eligible&&o.expiresAt>now&&keep(o.symbol)).sort(opportunityCompare);
   const watched=Object.values(s.extremumRegime.symbols).filter(r=>keep(r.symbol)&&r.watchScore>=58).sort((a,b)=>b.watchScore-a.watchScore);
   return[...new Set([...s.positions.map(t=>t.symbol),...premium.map(o=>o.symbol),...normal.map(o=>o.symbol),...watched.map(r=>r.symbol)])];
 }
@@ -1136,6 +1136,9 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
     counts={bullish:rows.filter(r=>r.longScore>=62).length,bearish:rows.filter(r=>r.shortScore>=62).length,
       divergent:rows.filter(r=>r.regime==="DIVERGENT").length,transition:rows.filter(r=>r.regime==="TRANSITION").length,
       ready:rows.filter(r=>r.stage==="READY").length};
+  const routed=s.opportunities.filter(isIntelligenceOpportunity),currentEnvironment=routed.find(o=>o.eligible)?.environment??routed[0]?.environment??null,
+    activePlaybooks=[...new Set(routed.filter(o=>o.eligible).map(o=>o.playbook).filter((x):x is EnvironmentPlaybook=>!!x))],
+    performanceCells=Object.values(s.environmentPerformance.cells).sort((a,b)=>b.updatedAt-a.updatedAt);
   return{version:s.version,engineVersion:ADAPTIVE_ENGINE_VERSION,grammar:ADAPTIVE_ENGINE_VERSION,positionIntelligenceVersion:POSITION_INTELLIGENCE_VERSION,mode:"REAL_FEED_PAPER",liveEligible:false,
     strategyAuthorityVersion:ADAPTIVE_ENGINE_VERSION,executionVersion:ADAPTIVE_ENGINE_VERSION,regionVersion:MARKET_INTELLIGENCE_VERSION,
     regionLaunchVersion:MARKET_INTELLIGENCE_VERSION,policyVersion:ADAPTIVE_ENGINE_VERSION,exitPolicyVersion:ADAPTIVE_ENGINE_VERSION,
@@ -1145,6 +1148,8 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
     fundingAllowance:s.fundingAllowance,turnover:s.turnover,positions:s.positions,history:s.history,events:s.events,daily:s.daily,
     opportunities:s.opportunities,entryOpportunities:s.opportunities,regions:[],marketPulse:s.marketPulse,
     hypothesisResearch:s.hypothesisResearch,
+    environmentRouter:{version:ENVIRONMENT_ROUTER_VERSION,currentEnvironment,activePlaybooks,
+      performance:performanceCells.slice(0,8)},
     marketIntelligence:{...s.extremumRegime,counts,symbols:rows.slice(0,30)},
     extremumRegime:{version:"retired",updatedAt:s.extremumRegime.updatedAt,retired:true,counts:{},symbols:[]},
     structuralInterrupt:{version:STRUCTURAL_INTERRUPT_VERSION,retired:true,marketEvent:null,vetoSide:null,vetoUntil:0,preAlerts:0,confirmed:0},
