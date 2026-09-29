@@ -59,9 +59,10 @@ jobs:
           set -uo pipefail
           body="$(curl -sS --max-time 15 "$WORKER_BASE_URL/api/runtime" || true)"
           if jq -e . >/dev/null 2>&1 <<<"$body"; then
-            jq -c '{buildSha,state,stale,lastError,lastSuccessAt,liveMode,liveMirror,liveDiagnostics,liveTurnover,
-              forward:{openCount:.forward.openCount,balance:.forward.balance,storage:.forward.storage},
-              realtimeReadiness}' <<<"$body"
+            jq -c '{keys:(keys),runtimeKeys:(.runtime|keys?),
+              root:{buildSha,state,stale,liveMode,liveMirror,liveDiagnostics,liveTurnover},
+              nested:{buildSha:.runtime.buildSha,state:.runtime.state,stale:.runtime.stale,liveMode:.runtime.liveMode,
+                liveMirror:.runtime.liveMirror,liveDiagnostics:.runtime.liveDiagnostics,liveTurnover:.runtime.liveTurnover}}' <<<"$body"
           else
             echo '{"runtimeSnapshot":"unavailable"}'
           fi
