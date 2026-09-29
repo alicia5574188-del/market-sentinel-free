@@ -241,7 +241,7 @@ class FakeGate {
   orders=new Map<string,GateLiveOrder>();holdings:Record<string,GateLivePosition>={};
   closeTags:string[]=[];onLeverage:(()=>Promise<void>)|null=null;onCreate:(()=>Promise<void>)|null=null;
   failSnapshot=false;readTimeout=false;partial=false;zero=false;ambiguous=false;omitExit=false;inspectFailures=0;counter=1;
-  leverageError:Error|null=null;stopCreateError:Error|null=null;stopCreateAmbiguous=false;cancelFailures=0;
+  leverageError:Error|null=null;stopCreateError:Error|null=null;stopCreateErrorContract:string|null=null;stopCreateAmbiguous=false;cancelFailures=0;
   async snapshot(){this.requestCount++;if(this.readTimeout)throw new GateReadTimeoutError("/futures/usdt/accounts");
     if(this.failSnapshot)throw new Error("injected Gate outage");
     return structuredClone({account:this.account,positions:Object.values(this.holdings),orders:[],priceOrders:this.stops,checkedAt:Date.now()});}
@@ -257,9 +257,10 @@ class FakeGate {
     if(this.inspectFailures>0){this.inspectFailures--;throw new GateReadTimeoutError(`/futures/usdt/orders/${id??tag}`);}
     return structuredClone(this.orders.get(id??"")??[...this.orders.values()].find(o=>o.text===tag)??null);
   }
-  async createStop(i:LiveStopIntent){this.stopCreates.push(structuredClone(i));const id=String(this.counter++);
-    if(this.stopCreateError)throw this.stopCreateError;
-    this.stops.push({id_string:id,text:i.tag,contract:String((i.body.initial as Record<string,unknown>).contract),status:"open"});
+  async createStop(i:LiveStopIntent){this.stopCreates.push(structuredClone(i));const id=String(this.counter++),
+    contract=String((i.body.initial as Record<string,unknown>).contract);
+    if(this.stopCreateError&&(!this.stopCreateErrorContract||this.stopCreateErrorContract===contract))throw this.stopCreateError;
+    this.stops.push({id_string:id,text:i.tag,contract,status:"open"});
     if(this.stopCreateAmbiguous)throw new Error("injected stop create timeout");
     return id;}
   async cancelOrder(_kind:string,id:string){if(this.cancelFailures>0){this.cancelFailures--;throw new Error("injected stop cancel timeout");}
@@ -677,7 +678,7 @@ test("a rejected replacement stop keeps the confirmed old stop and never aborts 
   const {h,gate}=await harness();await enableNew(h);await h.syncLive(T);
   const source=h.forwardState.positions[0]!,before=structuredClone(live(h).positions.BTC_USDT) as {stopOrderId?:string|null;stopPrice?:number|null};
   source.stopPrice=100.8;h.runtime.evidence={BTC_USDT:{midpoint:102,bestBid:101.99,bestAsk:102.01,observedAt:T,fresh:true,entryReady:true}};
-  gate.stopCreateError=new Error("Gate 400 INVALID_ARGUMENT: replacement stop rejected");
+  gate.stopCreateError=new Error("Gate 400 INVALID_ARGUMENT: replacement stop rejected");gate.stopCreateErrorContract="BTC_USDT";
   addRiskTestSource(h,"SHORT");
   await h.syncLive(T);
   const after=live(h).positions.BTC_USDT as unknown as {stopOrderId?:string|null;stopPrice?:number|null;exitRequestedAt?:number|null};
@@ -692,7 +693,7 @@ test("restart during a confirmed stop replacement resumes cleanup without creati
   source.stopPrice=100.8;h.runtime.evidence={BTC_USDT:{midpoint:102,bestBid:101.99,bestAsk:102.01,observedAt:T,fresh:true,entryReady:true}};
   await h.syncLive(T);assert.equal(gate.stops.length,2);const creates=gate.stopCreates.length;
   await h.saveCheckpoint(T,true);const fp=await prepareForwardWrite(null,h.forwardState,T);await store.put(fp.entries);
-  const restored=await harness(store,gate);
+  const restored=await harness(store,gate);restored.h.forwardState.positions[0].stopPrice=100.8;
   restored.h.runtime.evidence={BTC_USDT:{midpoint:102,bestBid:101.99,bestAsk:102.01,observedAt:T,fresh:true,entryReady:true}};
   await restored.h.syncLive(T);
   assert.equal(gate.stopCreates.length,creates);assert.equal(gate.stops.length,1);
