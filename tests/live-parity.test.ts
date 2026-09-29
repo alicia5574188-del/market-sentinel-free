@@ -237,11 +237,11 @@ class Memory {
 }
 class FakeGate {
   account:GateLiveAccount={total:100,available:100,unrealised_pnl:0,in_dual_mode:false};
-  requestCount=0;placed:LiveEntryIntent[]=[];leverages:number[]=[];stops:GateLiveOrder[]=[];amendedStops:Array<{id:string;price:number}>=[];
+  requestCount=0;placed:LiveEntryIntent[]=[];leverages:number[]=[];stops:GateLiveOrder[]=[];stopCreates:LiveStopIntent[]=[];
   orders=new Map<string,GateLiveOrder>();holdings:Record<string,GateLivePosition>={};
   closeTags:string[]=[];onLeverage:(()=>Promise<void>)|null=null;onCreate:(()=>Promise<void>)|null=null;
   failSnapshot=false;readTimeout=false;partial=false;zero=false;ambiguous=false;omitExit=false;inspectFailures=0;counter=1;
-  amendError:Error|null=null;leverageError:Error|null=null;
+  leverageError:Error|null=null;stopCreateError:Error|null=null;stopCreateAmbiguous=false;cancelFailures=0;
   async snapshot(){this.requestCount++;if(this.readTimeout)throw new GateReadTimeoutError("/futures/usdt/accounts");
     if(this.failSnapshot)throw new Error("injected Gate outage");
     return structuredClone({account:this.account,positions:Object.values(this.holdings),orders:[],priceOrders:this.stops,checkedAt:Date.now()});}
@@ -257,9 +257,13 @@ class FakeGate {
     if(this.inspectFailures>0){this.inspectFailures--;throw new GateReadTimeoutError(`/futures/usdt/orders/${id??tag}`);}
     return structuredClone(this.orders.get(id??"")??[...this.orders.values()].find(o=>o.text===tag)??null);
   }
-  async createStop(i:LiveStopIntent){const id=String(this.counter++);this.stops.push({id_string:id,text:i.tag,contract:String((i.body.initial as Record<string,unknown>).contract),status:"open"});return id;}
-  async amendStop(id:string,price:number){if(this.amendError)throw this.amendError;this.amendedStops.push({id,price});return;}
-  async cancelOrder(_kind:string,id:string){this.stops=this.stops.filter(s=>s.id_string!==id);}
+  async createStop(i:LiveStopIntent){this.stopCreates.push(structuredClone(i));const id=String(this.counter++);
+    if(this.stopCreateError)throw this.stopCreateError;
+    this.stops.push({id_string:id,text:i.tag,contract:String((i.body.initial as Record<string,unknown>).contract),status:"open"});
+    if(this.stopCreateAmbiguous)throw new Error("injected stop create timeout");
+    return id;}
+  async cancelOrder(_kind:string,id:string){if(this.cancelFailures>0){this.cancelFailures--;throw new Error("injected stop cancel timeout");}
+    this.stops=this.stops.filter(s=>s.id_string!==id);}
   async closePosition(symbol:string,tag:string){this.closeTags.push(tag);delete this.holdings[symbol];const id=String(this.counter++);
     if(!this.omitExit)this.orders.set(id,{id_string:id,text:tag,contract:symbol,status:"finished",finish_as:"filled",fill_price:100.4});return id;}
 }
@@ -625,35 +629,74 @@ test("real owner-enable path routes current source, freezes binding before submi
   const p=live(h).positions.BTC_USDT;assert.equal(p.id,"ft-fixture-1");assert.equal(p.parity!.sourceRuleId,"fr-fixture-1");
   assert.equal(gate.leverages[0],2);assert.ok(gate.stops.length>0);
 }));
-test("a tightened PAPER profit stop amends the existing Gate-native protective stop before source close",()=>clock(async()=>{
+test("a tightened PAPER stop is replaced create-confirm-cancel with no protection gap and no amend path",()=>clock(async()=>{
   const {h,gate}=await harness();await enableNew(h);await h.syncLive(T);
-  const source=h.forwardState.positions[0]!;
-  assert.ok(gate.stops.length>0);
+  const source=h.forwardState.positions[0]!,before=structuredClone(live(h).positions.BTC_USDT) as {stopOrderId?:string|null;stopPrice?:number|null};
+  assert.ok(before.stopOrderId);assert.equal(gate.stops.length,1);
   source.stopPrice=100.8;
   h.runtime.evidence={BTC_USDT:{midpoint:102,bestBid:101.99,bestAsk:102.01,observedAt:T,fresh:true,entryReady:true}};
   await h.syncLive(T);
-  const p=live(h).positions.BTC_USDT as LiveTest["positions"][string]&{currentStop:number;stopPrice:number|null};
-  assert.equal(p.currentStop,100.8);
-  assert.equal(p.stopPrice,100.8);
-  assert.equal(gate.amendedStops.at(-1)?.price,100.8);
+  const staged=live(h).positions.BTC_USDT as unknown as {stopOrderId:string|null;stopPrice:number|null;replacementStopOrderId?:string|null;replacementStopPrice?:number|null};
+  assert.equal(staged.stopOrderId,before.stopOrderId,"old stop remains primary until the new one is visible in a later Gate snapshot");
+  assert.equal(staged.stopPrice,before.stopPrice);assert.ok(staged.replacementStopOrderId);assert.equal(staged.replacementStopPrice,100.8);
+  assert.equal(gate.stops.length,2,"temporary overlap is intentional: both stops are close-only");
+  await h.syncLive(T);
+  const promoted=live(h).positions.BTC_USDT as unknown as {stopOrderId:string|null;stopPrice:number|null;replacementStopOrderId?:string|null};
+  assert.equal(promoted.stopPrice,100.8);assert.equal(promoted.replacementStopOrderId??null,null);
+  assert.equal(gate.stops.length,1);assert.equal(gate.closeTags.length,0);
+}));
+
+test("an ambiguous replacement-stop POST never duplicates the stop and keeps the old protection until the tagged new stop is observed",()=>clock(async()=>{
+  const {h,gate}=await harness();await enableNew(h);await h.syncLive(T);
+  const source=h.forwardState.positions[0]!,initialStopCreates=gate.stopCreates.length;
+  source.stopPrice=100.8;h.runtime.evidence={BTC_USDT:{midpoint:102,bestBid:101.99,bestAsk:102.01,observedAt:T,fresh:true,entryReady:true}};
+  gate.stopCreateAmbiguous=true;await h.syncLive(T);gate.stopCreateAmbiguous=false;
+  assert.equal(gate.stopCreates.length,initialStopCreates+1);assert.equal(gate.stops.length,2);
+  await h.syncLive(T);
+  assert.equal(gate.stopCreates.length,initialStopCreates+1,"reconciliation by deterministic tag must not POST a duplicate replacement");
+  assert.equal((live(h).positions.BTC_USDT as unknown as {stopPrice:number|null}).stopPrice,100.8);
+  assert.equal(gate.stops.length,1);assert.equal(gate.closeTags.length,0);
+}));
+
+test("old-stop cancellation timeout leaves both close-only protections tracked, does not block another source, and cleans up next pass",()=>clock(async()=>{
+  const {h,gate}=await harness();await enableNew(h);await h.syncLive(T);
+  const source=h.forwardState.positions[0]!;
+  source.stopPrice=100.8;h.runtime.evidence={BTC_USDT:{midpoint:102,bestBid:101.99,bestAsk:102.01,observedAt:T,fresh:true,entryReady:true}};
+  await h.syncLive(T);assert.equal(gate.stops.length,2);
+  addRiskTestSource(h,"SHORT");gate.cancelFailures=1;
+  await h.syncLive(T);
+  assert.equal(gate.stops.length>=2,true,"cancel uncertainty keeps both protections rather than creating a gap");
+  assert.equal(gate.placed.length,2,"an unrelated eligible source must not be blocked by stop replacement cleanup");
+  await h.syncLive(T);
+  assert.equal(gate.stops.filter(s=>s.contract==="BTC_USDT").length,1);
+  assert.equal((live(h).positions.BTC_USDT as unknown as {stopPrice:number|null}).stopPrice,100.8);
   assert.equal(gate.closeTags.length,0);
 }));
 
-
-test("a rejected stop amendment keeps the confirmed old Gate stop and never market-closes an open PAPER source",()=>clock(async()=>{
+test("a rejected replacement stop keeps the confirmed old stop and never aborts the whole LIVE reconciliation",()=>clock(async()=>{
   const {h,gate}=await harness();await enableNew(h);await h.syncLive(T);
   const source=h.forwardState.positions[0]!,before=structuredClone(live(h).positions.BTC_USDT) as {stopOrderId?:string|null;stopPrice?:number|null};
-  assert.ok(before.stopOrderId);assert.ok(gate.stops.length>0);
-  source.stopPrice=100.8;
-  h.runtime.evidence={BTC_USDT:{midpoint:102,bestBid:101.99,bestAsk:102.01,observedAt:T,fresh:true,entryReady:true}};
-  gate.amendError=new Error("Gate 400 AUTO_INVALID_REQUEST_BODY: invalid request body");
-  await assert.rejects(h.syncLive(T),/原保护仍有效；未擅自平仓/);
-  const after=live(h).positions.BTC_USDT as LiveTest["positions"][string]&{stopOrderId?:string|null;stopPrice?:number|null;exitRequestedAt?:number|null};
-  assert.equal(after.status,"OPEN");
-  assert.equal(after.stopOrderId,before.stopOrderId);
-  assert.equal(after.stopPrice,before.stopPrice);
-  assert.equal(after.exitRequestedAt??null,null);
-  assert.equal(gate.closeTags.length,0,"an amend API/schema rejection must not turn into an independent real-money exit");
+  source.stopPrice=100.8;h.runtime.evidence={BTC_USDT:{midpoint:102,bestBid:101.99,bestAsk:102.01,observedAt:T,fresh:true,entryReady:true}};
+  gate.stopCreateError=new Error("Gate 400 INVALID_ARGUMENT: replacement stop rejected");
+  addRiskTestSource(h,"SHORT");
+  await h.syncLive(T);
+  const after=live(h).positions.BTC_USDT as unknown as {stopOrderId?:string|null;stopPrice?:number|null;exitRequestedAt?:number|null};
+  assert.equal(after.stopOrderId,before.stopOrderId);assert.equal(after.stopPrice,before.stopPrice);
+  assert.equal(after.exitRequestedAt??null,null);assert.equal(gate.closeTags.length,0);
+  assert.equal(gate.placed.length,2,"replacement rejection must not prevent unrelated LIVE entries");
+}));
+
+test("restart during a confirmed stop replacement resumes cleanup without creating a third stop",()=>clock(async()=>{
+  const {h,gate,store}=await harness();await enableNew(h);await h.syncLive(T);
+  const source=h.forwardState.positions[0]!;
+  source.stopPrice=100.8;h.runtime.evidence={BTC_USDT:{midpoint:102,bestBid:101.99,bestAsk:102.01,observedAt:T,fresh:true,entryReady:true}};
+  await h.syncLive(T);assert.equal(gate.stops.length,2);const creates=gate.stopCreates.length;
+  await h.saveCheckpoint(T,true);const fp=await prepareForwardWrite(null,h.forwardState,T);await store.put(fp.entries);
+  const restored=await harness(store,gate);
+  restored.h.runtime.evidence={BTC_USDT:{midpoint:102,bestBid:101.99,bestAsk:102.01,observedAt:T,fresh:true,entryReady:true}};
+  await restored.h.syncLive(T);
+  assert.equal(gate.stopCreates.length,creates);assert.equal(gate.stops.length,1);
+  assert.equal((live(restored.h).positions.BTC_USDT as unknown as {stopPrice:number|null}).stopPrice,100.8);
 }));
 
 test("real Worker follows source CLOSE reason, not an independently restarted holding timer",()=>clock(async()=>{
