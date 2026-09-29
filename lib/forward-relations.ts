@@ -872,19 +872,54 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
     }
     const q=quotes[validation.symbol];if(!freshQuote(q,now)||q!.entryReady!==true){reject("等待实时盘口");continue;}
     const price=validation.side==="LONG"?q!.bestAsk:q!.bestBid,state=s.extremumRegime.symbols[validation.symbol],
-      decision=evaluateEntryResponse({now,side:validation.side,score:o.score,edgeRatio:o.edgeRatio,pullbackRiskRate:o.pullbackRiskRate,
+      decision=evaluateEntryResponse({now,side:validation.side,score:o.environmentScore??o.score,edgeRatio:o.edgeRatio,pullbackRiskRate:o.pullbackRiskRate,
         stopRate:o.stopRate,sourceCount:o.sourceCount??0,disagreementRate:o.disagreementRate??0,price,
         memory:{startedAt:validation.startedAt,deadlineAt:validation.deadlineAt,initialPrice:validation.initialPrice,samples:validation.samples,
           bestAdvanceRate:validation.bestAdvanceRate,maxAdverseRate:validation.maxAdverseRate,
           supportSamples:validation.supportSamples,oppositionSamples:validation.oppositionSamples},
-        state,quote:q,minutePath:minutePaths?.[validation.symbol],costRate:ROUND_TRIP_COST,allowRetest:!!validation.stableThesis});
+        state,quote:q,minutePath:minutePaths?.[validation.symbol],costRate:ROUND_TRIP_COST,
+        allowRetest:!!validation.stableThesis||!!validation.requiresProbeRetest});
     validation.lastPrice=price;validation.lastQuoteAt=q!.observedAt;validation.samples++;
     validation.bestAdvanceRate=decision.bestAdvanceRate;validation.maxAdverseRate=decision.maxAdverseRate;
     validation.supportSamples=decision.supportSamples;validation.oppositionSamples=decision.oppositionSamples;validation.reason=decision.reason;
 
     if(decision.action==="CANCEL"){validation.status="CANCELLED";reject(decision.reason);continue;}
 
-    if(validation.stableThesis){
+    if(validation.requiresProbeRetest){
+      const d=dir(validation.side),best=Math.max(validation.bestAdvanceRate,decision.bestAdvanceRate),
+        current=decision.currentAdvanceRate,retrace=Math.max(0,best-current),
+        impulseMin=Math.max(ROUND_TRIP_COST*.70,validation.probeImpulseMin??ROUND_TRIP_COST*.90),
+        pullbackMin=Math.max(ROUND_TRIP_COST*.35,validation.probePullbackMin??ROUND_TRIP_COST*.45),
+        restartMin=Math.max(ROUND_TRIP_COST*.30,validation.probeRestartMin??ROUND_TRIP_COST*.40);
+      validation.phase="RETEST_WAIT";
+      if(best<impulseMin){
+        validation.reason=`环境Probe尚未证明方向：先等待至少 ${(impulseMin*100).toFixed(2)}% 第一段正向推动。`;
+        reject(validation.reason);continue;
+      }
+      if(!validation.probeRetestSeen){
+        if(retrace<pullbackMin){
+          validation.reason=`第一段推动已出现，等待至少 ${(pullbackMin*100).toFixed(2)}% 可控回调后再观察第二次启动。`;
+          reject(validation.reason);continue;
+        }
+        validation.retestBasePrice=price;validation.retestBaseAt=now;validation.probeRetestSeen=true;
+        validation.supportSamples=0;validation.oppositionSamples=0;
+        validation.reason="Probe已完成第一段推动和可控回调；现在只等待原方向再次启动，不提前猜转折。";
+        reject(validation.reason);continue;
+      }
+      if(validation.retestBasePrice){
+        const restart=d*(price/validation.retestBasePrice-1);
+        if(restart<0){
+          validation.retestBasePrice=price;validation.retestBaseAt=now;
+          validation.supportSamples=0;validation.oppositionSamples=0;
+          validation.reason="Probe回调仍在延伸，更新二次启动基准。";reject(validation.reason);continue;
+        }
+        if(restart<restartMin){
+          validation.reason=`Probe已回调，等待原方向重新推进至少 ${(restartMin*100).toFixed(2)}% 后才允许成交。`;
+          reject(validation.reason);continue;
+        }
+      }
+      validation.phase="ARMED";
+    }else if(validation.stableThesis){
       const d=dir(validation.side),expected=validation.initialExpectedNetRate??o.netRemainingSpaceRate,
         pullback=validation.pullbackRiskRateAtArm??o.pullbackRiskRate,
         maxChase=validation.maxChaseRate??stableEntryThesisProfile({score:o.score,premium:!!o.premium,
