@@ -420,6 +420,9 @@ function closeTrade(s:ForwardState,t:Trade,price:number,now:number,reason:string
     tradeId:t.id,predictedNetRate:safe(t.forecast?.remainingNetRate),realizedNetRate:net/Math.max(t.notional,1e-9),
     costRate:(t.entryFee+exitFee+funding)/Math.max(t.notional,1e-9),
     targetCapture:clip(t.favorable/Math.max(t.exitPlan?.targetRate??t.entryContext?.remainingSpaceRate??0,1e-9)),now});
+  if(reason!=="ACCOUNT_RESET"&&t.entryContext?.environment&&t.entryContext?.playbook)
+    recordEnvironmentOutcome(s.environmentPerformance,{environment:t.entryContext.environment,playbook:t.entryContext.playbook,
+      netPnl:net,plannedRisk:Math.max(.01,t.plannedRisk),now});
   s.history.unshift(t);s.history=s.history.slice(0,HISTORY_LIMIT);event(s,now,"EXIT",t.id,`${t.symbol} ${reason} ${net>=0?"+":""}${net.toFixed(2)}U`);
 }
 function legacyProtectionFloor(t:Trade){
