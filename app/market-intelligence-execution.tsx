@@ -30,6 +30,9 @@ const hypothesisKind=(v?:string)=>({
 }[v??""]??v??"未来状态研究");
 const hypothesisStatus=(v?:string)=>v==="CONFIRMED"?"已被后续市场确认":v==="WEAKENING"?"确认后正在减弱":v==="CONFIRMING"?"正在加强":"正在形成";
 const researchAction=(v?:string)=>v==="CONFIRM_MORE"?"加强实时确认":v==="SUPPORTED"?"前瞻研究支持":"沿用原确认";
+const environmentName=(v?:string)=>({TREND:"趋势环境",TRANSITION:"过渡环境",ROTATION:"轮动/震荡",SHOCK:"同步爆发行情"}[v??""]??v??"建立中");
+const playbookName=(v?:string)=>({TREND_CAPTURE:"趋势捕获",TRANSITION_PROBE:"转折验证",ROTATION_RELATIVE:"相对强弱",SHOCK_PARTICIPATION:"主线参与"}[v??""]??v??"未路由");
+const routeAlignment=(v?:string)=>v==="ALIGNED"?"顺环境":v==="COUNTER"?"逆环境":"环境中性";
 const entryExecutionState=(v?:{status?:string;phase?:string;stableThesis?:boolean})=>v?.status==="WAITING"
   ?(v.phase==="RETEST_WAIT"?"等回调重启":v.stableThesis?"已武装":"实时确认")
   :v?.status==="CANCELLED"?"本假设已取消":"未进入执行";
@@ -60,6 +63,7 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
     currentEvolution=opportunities.find(o=>o.marketEvolutionPhase)?.marketEvolutionPhase,
     lifecycleText=lifecycleNarrative(data?.latestReason),
     hypothesisResearch=data?.hypothesisResearch,hypotheses=hypothesisResearch?.active??[],
+    environmentRouter=data?.environmentRouter,
     entryValidations=data?.entryValidation?.records??[],
     validationById=new Map(entryValidations.map(v=>[v.candidateId,v])),
     waitingValidations=entryValidations.filter(v=>v.status==="WAITING"),
@@ -92,6 +96,7 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
           <p className="fr-exec-judgement"><b>研究判断：</b>{l?.reason??p?.summary??"Position Intelligence 正在建立这笔仓位自己的连续观察基线。"}</p>
           {l?.platformKind&&l.platformKind!=="NONE"&&<p className="fr-trade-reason"><b>{l.platformKind==="RUNNER"?"Runner利润平台":"已证明利润平台"}：</b>{l.platformReason}</p>}
           <details className="fr-exec-research-details"><summary>查看这笔仓位的研究依据</summary>
+            {t.entryContext?.playbook&&<p><b>入场环境：</b>{environmentName(t.entryContext.environment)} · {playbookName(t.entryContext.playbook)} · {routeAlignment(t.entryContext.routeAlignment)} · 风险缩放 {fmt((t.entryContext.environmentRiskScale??1)*100,0)}%</p>}
             <p><b>入场假设：</b>{t.entryContext?.thesisSummary??t.entryContext?.reason??"历史兼容持仓"}</p>
             {t.entryContext?.futureResearchReason&&<p><b>入场时前瞻研究：</b>{researchAction(t.entryContext.futureResearchAction)} · {t.entryContext.futureResearchReason}</p>}
             {p&&<><p><b>持有价值：</b>{fmt(p.holdValueScore,0)} · 剩余空间 {pct(p.remainingSpaceRate)} · 正常回撤 {pct(p.expectedPullbackRate)} · 空间/回撤 {fmt(p.continuationRatio,2)}×</p>
@@ -113,6 +118,22 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
       </div>
       <p className="fr-exec-judgement"><b>当前市场判断：</b>{n?.transition.detail??n?.summary??"正在建立市场基线。"}</p>
       <p className="fr-trade-reason"><b>当前计划：</b>{n?.plan??"继续观察。"}</p>
+    </section>
+
+    <section className="fr-section">
+      <div className="fr-section-head"><div><small>ENVIRONMENT ROUTER</small><h2>当前市场环境与交易打法</h2>
+        <p>环境不会决定“停不停单”，而是决定现在靠什么方式赚钱、用多大风险、需要什么入场证明。</p></div>
+        <span>{environmentName(environmentRouter?.currentEnvironment)}</span></div>
+      <div className="fr-exec-market-grid">
+        <span><small>当前环境</small><b>{environmentName(environmentRouter?.currentEnvironment)}</b></span>
+        <span><small>活跃打法</small><b>{environmentRouter?.activePlaybooks?.length?environmentRouter.activePlaybooks.map(playbookName).join(" / "):"等待候选"}</b></span>
+        <span><small>连续亏损应对</small><b>缩风险 + 加强证明</b></span>
+        <span><small>是否允许交易</small><b>始终保留参与权</b></span>
+      </div>
+      {!!environmentRouter?.performance?.length&&<div className="fr-journal">{environmentRouter.performance.slice(0,4).map(p=><article key={p.key}>
+        <time>{p.trades} 笔</time><div><b>{environmentName(p.environment)} · {playbookName(p.playbook)}</b>
+          <p>胜 {p.wins} · 累计风险单位 {fmt(p.netRiskUnits,2)}R · 当前连亏 {p.lossStreak}</p></div>
+      </article>)}</div>}
     </section>
 
     <section className="fr-section fr-hypothesis-section">
@@ -139,6 +160,7 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
       {entryValidations.length?<div className="fr-journal">{entryValidations.map(v=><article key={v.id}>
         <time>{clock(v.startedAt)}</time>
         <div><b>{v.symbol.replace("_"," / ")} · {side(v.side)} · {entryExecutionState(v)}</b>
+          {v.playbook&&<p><b>{environmentName(v.environment)} · {playbookName(v.playbook)}</b></p>}
           <p>{v.reason??"等待实时执行证据。"}</p>
           <p>{v.stableThesis?"稳定 thesis 已保留执行权":"普通实时确认"}
             {v.phase==="RETEST_WAIT"?" · 当前不追价，等待回调结束后重新启动":""}
@@ -156,10 +178,12 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
         return <details className={`fr-exec-candidate ${o.eligible?"is-eligible":""} ${o.extendedConfirmation?"is-extended":""}`} key={o.id}>
         <summary><span className="fr-exec-candidate-rank">#{index+1}</span><div className="fr-exec-candidate-main"><div><b>{o.symbol.replace("_"," / ")}</b><small>{side(o.side)} · {o.mode}</small></div>
           <strong>{opportunityPhase(o.opportunityLifecyclePhase)}</strong></div>
-          <div className="fr-exec-candidate-metrics"><span><small>评分</small><b>{fmt(o.score,0)}</b></span><span><small>净空间</small><b>{pct(o.netRemainingSpaceRate)}</b></span>
+          <div className="fr-exec-candidate-metrics"><span><small>环境评分</small><b>{fmt(o.environmentScore??o.score,0)}</b></span><span><small>净空间</small><b>{pct(o.netRemainingSpaceRate)}</b></span>
             <span><small>空间/回撤</small><b>{fmt(o.edgeRatio,2)}×</b></span></div>
           <em>{entryState}</em></summary>
         <div className="fr-score-details"><p><b>机会阶段：</b>{opportunityPhase(o.opportunityLifecyclePhase)} · 市场阶段 {evolution(o.marketEvolutionPhase)}</p>
+          {o.playbook&&<p><b>环境打法：</b>{environmentName(o.environment)} · {playbookName(o.playbook)} · {routeAlignment(o.routeAlignment)} · 风险 {fmt((o.environmentRiskScale??1)*100,0)}%</p>}
+          {o.environmentReason&&<p><b>路由理由：</b>{o.environmentReason}</p>}
           {v&&<p><b>入场执行：</b>{entryState} · {v.reason??"等待实时响应。"}</p>}
           {o.lifecycleReason&&<p><b>生命周期：</b>{o.lifecycleReason}</p>}
           {o.futureResearchReason&&<p><b>前瞻研究：</b>{researchAction(o.futureResearchAction)} · {o.futureResearchReason}</p>}
