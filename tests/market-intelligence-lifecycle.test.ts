@@ -179,7 +179,41 @@ test("AZTEC-like one-R proven profit creates a low platform even before multiple
       supportFamilies:["RELATIVE","STRUCTURE"],concernFamilies:["FLOW"]}),market});
   assert.equal(life.runner,false);
   assert.equal(life.platformKind,"PROVEN");
-  assert.ok(life.platformFloorRate>.006,"proven-profit platform must keep the trade net-positive if the reversal accelerates");
-  assert.ok(life.platformFloorRate<.015,"ordinary proven-profit platform must stay broad and not scalp the trade");
+  assert.ok(life.platformFloorRate>.0019,"proven-profit platform must keep the trade net-positive after modeled costs");
+  assert.ok(life.platformFloorRate<.006,"early proven-profit floor must stay very broad so a future runner is not clipped");
   assert.notEqual(life.action,"EXIT");
+});
+
+
+test("BTW-like pre-runner pullback survives the old platform exit and keeps room to become a runner",()=>{
+  const market:MarketEvolutionState={version:"market-intelligence-lifecycle-v1",phase:"TRANSITIONAL",trendSide:"LONG",
+    expansionScore:.48,rotationRisk:.52,decisionStable:false,stabilityScore:.40,reason:""};
+  const common={side:"LONG" as const,pullbackRiskRate:.023716767,firstProfit:true,costRate:.0019,
+    initialExpectedNetRate:.041253281,
+    position:position({decision:"HOLD",reviewBars:0,advantageChange:-15,remainingSpaceRate:.02,continuationRatio:1.7,
+      supportFamilies:["STRUCTURE"],concernFamilies:[]}),market};
+  const first=deriveProfitLifecycle({...common,signedRate:.018,peakFavorableRate:.0330});
+  const later=deriveProfitLifecycle({...common,signedRate:.01223,peakFavorableRate:.0374344});
+  assert.equal(later.runner,false,"trade has not exceeded the entry estimate yet and must still be allowed to grow");
+  assert.equal(later.platformKind,"PROVEN");
+  assert.equal(later.platformLevel,2);
+  assert.equal(later.platformFloorRate,first.platformFloorRate,
+    "new highs inside the same proven-profit band must not ratchet the floor every tick");
+  assert.ok(later.platformFloorRate<.01223,
+    "the real BTW pullback level that later resumed strongly must remain above the coarse platform");
+  assert.ok(later.action==="HOLD"||later.action==="WATCH");
+});
+
+test("runner platform is also discrete inside one outperformance band",()=>{
+  const market:MarketEvolutionState={version:"market-intelligence-lifecycle-v1",phase:"ROTATIONAL",trendSide:"LONG",
+    expansionScore:.44,rotationRisk:.60,decisionStable:false,stabilityScore:.36,reason:""};
+  const common={side:"LONG" as const,pullbackRiskRate:.012,firstProfit:true,costRate:.0019,initialExpectedNetRate:.02,
+    position:position({decision:"HOLD",reviewBars:0,advantageChange:-8,remainingSpaceRate:.03,continuationRatio:2.1,
+      supportFamilies:["RELATIVE","PATH","STRUCTURE"],concernFamilies:[]}),market};
+  const a=deriveProfitLifecycle({...common,signedRate:.055,peakFavorableRate:.058});
+  const b=deriveProfitLifecycle({...common,signedRate:.061,peakFavorableRate:.064});
+  assert.equal(a.runner,true);assert.equal(b.runner,true);
+  assert.equal(a.platformLevel,b.platformLevel);
+  assert.equal(a.platformFloorRate,b.platformFloorRate,
+    "ordinary runner new highs inside the same level must not create repeated protection writes");
 });
