@@ -371,6 +371,14 @@ test("LIVE structural stops use create-confirm-cancel replacement and never Gate
   assert.match(block,/两张均为 close-only/);
 });
 
+test("LIVE page describes recoverable copy delay without reviving a fixed realtime-copy window",async()=>{
+  const ui=await read("app/live-console.tsx");
+  assert.doesNotMatch(ui,/超过实时复制窗口/);
+  assert.match(ui,/不会因为固定秒数自动失效/);
+  assert.match(ui,/源单仍开放/);
+  assert.match(ui,/追价偏差/);
+});
+
 test("LIVE copy actively refreshes Gate BBO after private reconciliation ages the PAPER quote",async()=>{
   const worker=await read("worker/index-clean.ts");
   const refreshStart=worker.indexOf("private async refreshMirrorExecutableQuotes");
