@@ -307,6 +307,30 @@ test("real Worker mirrors an extremum source once, protects it, and follows the 
   assert.equal(live(h).positions.BTC_USDT.exitReason,"TREND_DEATH");
 }));
 
+test("persisted PAPER source copies from fresh executable BBO even when PAPER entryReady has already fallen false",()=>clock(async()=>{
+  const {h,gate}=await harness();
+  h.forwardState.positions=[];
+  live(h).requestedEnabled=true;live(h).activation=startLiveSession(T-1_000,h.forwardState);
+  const source={...trade("fresh-bbo-copy"),openedAt:T-500,lastQuoteAt:T-500};
+  h.forwardState.positions=[source];
+  h.runtime.evidence={BTC_USDT:{midpoint:100,bestBid:100,bestAsk:100,observedAt:T,fresh:true,entryReady:false}};
+  await h.syncLive(T);
+  assert.equal(gate.placed.length,1,"LIVE copy must use the persisted PAPER source plus fresh BBO, not re-run PAPER entry admission");
+  await h.syncLive(T);
+  assert.equal(live(h).positions.BTC_USDT.id,source.id);
+}));
+
+test("LIVE mirror still blocks a genuinely stale BBO when PAPER source exists",()=>clock(async()=>{
+  const {h,gate}=await harness();
+  h.forwardState.positions=[];
+  live(h).requestedEnabled=true;live(h).activation=startLiveSession(T-1_000,h.forwardState);
+  h.forwardState.positions=[{...trade("stale-bbo-copy"),openedAt:T-500,lastQuoteAt:T-500}];
+  h.runtime.evidence={BTC_USDT:{midpoint:100,bestBid:100,bestAsk:100,observedAt:T-60_000,fresh:true,entryReady:false}};
+  await h.syncLive(T);
+  assert.equal(gate.placed.length,0);
+  assert.match(live(h).entrySkips.BTC_USDT.reason,/新鲜可执行盘口/);
+}));
+
 test("persisted new PAPER source reaches LIVE in the same critical pass",()=>clock(async()=>{
   const {h}=await harness();h.forwardState.positions=[];
   live(h).requestedEnabled=true;live(h).activation=startLiveSession(T-1000,h.forwardState);

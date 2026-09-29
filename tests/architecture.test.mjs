@@ -374,3 +374,15 @@ test("environment router has no direct-fill bypass and keeps regime memory acros
   assert.match(core,/recordEnvironmentOutcome\(s\.environmentPerformance/);
   assert.match(core,/environmentRiskScale=clip\(o\.environmentRiskScale\?\?1,.20,1.10\)/);
 });
+
+
+test("LIVE mirror readiness uses fresh executable BBO, not PAPER entryReady admission state",async()=>{
+  const [worker,parity]=await Promise.all([read("worker/index-clean.ts"),read("lib/live-parity.ts")]);
+  const start=worker.indexOf("private mirrorQuoteReady");
+  const end=worker.indexOf("private async queueLiveBinding",start);
+  const block=worker.slice(start,end);
+  assert.match(block,/contractMeta\[symbol\]!=null/);
+  assert.match(block,/freshQuote/);
+  assert.doesNotMatch(block,/entryReady===true/);
+  assert.match(parity,/LIVE_SOURCE_ENTRY_MAX_DELAY_MS = 30_000/,"late-copy protection must remain in the LIVE sizing path");
+});
