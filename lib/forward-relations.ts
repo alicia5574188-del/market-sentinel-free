@@ -781,11 +781,6 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
     validation.supportSamples=decision.supportSamples;validation.oppositionSamples=decision.oppositionSamples;validation.reason=decision.reason;
 
     if(decision.action==="CANCEL"){validation.status="CANCELLED";reject(decision.reason);continue;}
-    if(decision.action==="RETEST"){
-      validation.phase="RETEST_WAIT";
-      validation.reason=decision.reason;reject(decision.reason);continue;
-    }
-    if(decision.action==="WAIT"){reject(decision.reason);continue;}
 
     if(validation.stableThesis){
       const d=dir(validation.side),expected=Math.max(ROUND_TRIP_COST*2,validation.initialExpectedNetRate??o.netRemainingSpaceRate),
@@ -809,21 +804,26 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
           reject(validation.reason);continue;
         }
 
-        let restart=d*(price/validation.retestBasePrice-1);
+        const restart=d*(price/validation.retestBasePrice-1);
         if(restart<0){
           validation.retestBasePrice=price;validation.retestBaseAt=now;validation.supportSamples=0;validation.oppositionSamples=0;
           validation.reason="回调仍在延伸，持续更新重启基准，不提前猜转折。";reject(validation.reason);continue;
-        }
-        if(restart<restartMin){
-          validation.reason=`已完成必要回调，等待原方向重新推进至少 ${(restartMin*100).toFixed(2)}% 后再执行。`;
-          reject(validation.reason);continue;
         }
         if(remainingFromThesis<=Math.max(ROUND_TRIP_COST*1.4,pullback*.45)){
           validation.reason="原始交易空间已经大部分消耗，即使方向继续正确也不在当前位置追入；等待新的5m结构生成新假设。";
           reject(validation.reason);continue;
         }
+        if(restart<restartMin){
+          validation.reason=`已完成必要回调，等待原方向重新推进至少 ${(restartMin*100).toFixed(2)}% 后再执行。`;
+          reject(validation.reason);continue;
+        }
       }
     }
+
+    if(decision.action==="RETEST"){
+      validation.phase="RETEST_WAIT";validation.reason=decision.reason;reject(decision.reason);continue;
+    }
+    if(decision.action==="WAIT"){reject(decision.reason);continue;}
 
     if(!extendedEntryConfirmationReady({required:!!validation.extendedConfirmation,elapsedMs:Math.max(0,now-validation.startedAt),
       supportSamples:decision.supportSamples,currentAdvanceRate:decision.currentAdvanceRate,bestAdvanceRate:decision.bestAdvanceRate,
