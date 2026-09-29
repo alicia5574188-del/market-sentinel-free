@@ -705,10 +705,25 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
     const o=opportunities.get(v.candidateId);
     if(!o||s.positions.some(t=>t.symbol===v.symbol)||(o.thesisId&&s.consumedTheses[o.thesisId]))continue;
     preserved[id]=v;
-    if(v.status==="WAITING"&&v.stableThesis){
-      const hardEnd=v.startedAt+20*60_000;
-      v.expiresAt=Math.max(v.expiresAt,Math.min(o.expiresAt,hardEnd));
-      v.deadlineAt=Math.max(v.deadlineAt,Math.min(o.expiresAt,v.startedAt+12*60_000));
+    if(v.status==="WAITING"){
+      const q=quotes[v.symbol],state=s.extremumRegime.symbols[v.symbol],
+        sourceCount=Math.max(o.sourceCount??0,state?.sourceCount??0,q?.sourceCount??0),
+        profile=stableEntryThesisProfile({score:o.score,premium:!!o.premium,thesisBars:o.thesisBars??state?.signalBars??0,
+          stage:o.confirmationStage??state?.stage??"OBSERVE",edgeRatio:o.edgeRatio,sourceCount,
+          dataConfidence:o.dataConfidence??state?.dataConfidence??0,netRemainingSpaceRate:o.netRemainingSpaceRate,
+          pullbackRiskRate:o.pullbackRiskRate});
+      if(profile.stable&&!v.stableThesis){
+        v.stableThesis=true;v.phase=v.phase??"ARMED";
+        v.initialExpectedNetRate=v.initialExpectedNetRate??o.netRemainingSpaceRate;
+        v.pullbackRiskRateAtArm=v.pullbackRiskRateAtArm??o.pullbackRiskRate;
+        v.maxChaseRate=v.maxChaseRate??profile.maxChaseRate;v.retestPullbackMin=v.retestPullbackMin??profile.retestPullbackMin;
+        v.restartMin=v.restartMin??profile.restartMin;
+      }
+      if(v.stableThesis){
+        const hardEnd=v.startedAt+20*60_000;
+        v.expiresAt=Math.max(v.expiresAt,Math.min(o.expiresAt,hardEnd));
+        v.deadlineAt=Math.max(v.deadlineAt,Math.min(o.expiresAt,v.startedAt+12*60_000));
+      }
     }
   }
   s.entryValidations=preserved;
