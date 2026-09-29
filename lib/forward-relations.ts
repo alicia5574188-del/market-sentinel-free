@@ -688,6 +688,30 @@ export function stableEntryThesisProfile(input:{
   return{stable,maxChaseRate,retestPullbackMin,restartMin,armedWindowMs:stable?12*60_000:0};
 }
 
+
+export function stableEntryLocationDecision(input:{
+  currentAdvanceRate:number;bestAdvanceRate:number;expectedNetRate:number;pullbackRiskRate:number;
+  maxChaseRate:number;retestPullbackMin:number;restartMin:number;retestBaseReady:boolean;restartAdvanceRate?:number;
+}){
+  const expected=Math.max(ROUND_TRIP_COST*2,input.expectedNetRate),
+    pullback=Math.max(ROUND_TRIP_COST*1.5,input.pullbackRiskRate),
+    maxChase=Math.max(ROUND_TRIP_COST*1.8,input.maxChaseRate),
+    pullbackMin=Math.max(ROUND_TRIP_COST*.35,input.retestPullbackMin),
+    restartMin=Math.max(ROUND_TRIP_COST*.30,input.restartMin),
+    best=Math.max(0,input.bestAdvanceRate,input.currentAdvanceRate),current=input.currentAdvanceRate,
+    retrace=Math.max(0,best-current),requiredPullback=Math.max(pullbackMin,best-maxChase),
+    remainingFromThesis=expected-Math.max(0,current);
+  if(best<maxChase)return{action:"DIRECT" as const,best,current,retrace,requiredPullback,remainingFromThesis,restartMin};
+  if(!input.retestBaseReady)return{action:retrace>=requiredPullback?"SET_RETEST_BASE" as const:"WAIT_PULLBACK" as const,
+    best,current,retrace,requiredPullback,remainingFromThesis,restartMin};
+  const restart=input.restartAdvanceRate??0;
+  if(restart<0)return{action:"UPDATE_RETEST_BASE" as const,best,current,retrace,requiredPullback,remainingFromThesis,restartMin};
+  if(remainingFromThesis<=Math.max(ROUND_TRIP_COST*1.4,pullback*.45))
+    return{action:"WAIT_NEW_THESIS" as const,best,current,retrace,requiredPullback,remainingFromThesis,restartMin};
+  if(restart<restartMin)return{action:"WAIT_RESTART" as const,best,current,retrace,requiredPullback,remainingFromThesis,restartMin};
+  return{action:"READY_AFTER_RETEST" as const,best,current,retrace,requiredPullback,remainingFromThesis,restartMin};
+}
+
 function rankedEligible(s:ForwardState,now:number){
   return s.opportunities.filter(o=>isIntelligenceOpportunity(o)&&o.eligible&&o.expiresAt>now
     &&!s.positions.some(t=>t.symbol===o.symbol)
