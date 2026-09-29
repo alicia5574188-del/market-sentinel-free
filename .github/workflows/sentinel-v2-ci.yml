@@ -57,12 +57,12 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           set -uo pipefail
-          body="$(curl -sS --max-time 15 "$WORKER_BASE_URL/api/runtime" || true)"
+          body="$(curl -sS --max-time 15 "$WORKER_BASE_URL/__health" || true)"
           if jq -e . >/dev/null 2>&1 <<<"$body"; then
-            jq -c '{keys:(keys),runtimeKeys:(.runtime|keys?),
-              root:{buildSha,state,stale,liveMode,liveMirror,liveDiagnostics,liveTurnover},
-              nested:{buildSha:.runtime.buildSha,state:.runtime.state,stale:.runtime.stale,liveMode:.runtime.liveMode,
-                liveMirror:.runtime.liveMirror,liveDiagnostics:.runtime.liveDiagnostics,liveTurnover:.runtime.liveTurnover}}' <<<"$body"
+            jq -c '{ok,buildSha:.runtime.buildSha,state:.runtime.state,stale:.runtime.stale,
+              liveMode:.runtime.liveMode,liveMirror:.runtime.liveMirror,
+              liveDiagnostics:.runtime.liveDiagnostics,liveExecution:.runtime.liveExecution,
+              forward:{openCount:.runtime.forward.openCount,balance:.runtime.forward.balance}}' <<<"$body"
           else
             echo '{"runtimeSnapshot":"unavailable"}'
           fi
