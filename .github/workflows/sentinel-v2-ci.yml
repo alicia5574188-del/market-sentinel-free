@@ -70,13 +70,14 @@ jobs:
           echo "BTW PAPER lifecycle snapshot:"
           forward="$(curl -sS --max-time 15 "$WORKER_BASE_URL/api/forward/export" || true)"
           if jq -e . >/dev/null 2>&1 <<<"$forward"; then
-            jq -c '[((.forward // .state // .) | .positions[]? // empty),((.forward // .state // .) | .history[]? // empty)]
+            jq -c '(.research.trades // [])
               | map(select(.symbol=="BTW_USDT"))
               | sort_by(.openedAt)
               | reverse
-              | .[:5]
-              | map({id,symbol,side,status,openedAt,closedAt,entryPrice,exitPrice,lastQuoteAt,exitReason,
-                rule:{id:.rule.id,horizon:.rule.horizon},entryContext:{mode:.entryContext.mode,entryScore:.entryContext.entryScore}})' <<<"$forward"
+              | .[:8]
+              | map({id,symbol,side,status,openedAt,closedAt,durationMs,leverage,margin,notional,plannedRisk,
+                entry:{mode:.entry.mode,entryScore:.entry.entryScore,reason:.entry.reason,capturedAt:.entry.capturedAt},
+                path:.path,exit:.exit})' <<<"$forward"
           else
             echo '{"btwForwardSnapshot":"unavailable"}'
           fi
