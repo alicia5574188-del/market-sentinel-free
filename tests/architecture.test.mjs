@@ -274,3 +274,15 @@ test("extreme residual magnitude cannot bypass stability confirmation after repe
   assert.match(core,/minimumElapsedMs/);
   assert.match(core,/极端残差机会不按偏离幅度直接追单/);
 });
+
+
+test("profit platforms are discrete milestones, not continuous peak trailing stops",async()=>{
+  const lifecycle=await read("lib/market-intelligence-lifecycle.ts");
+  assert.match(lifecycle,/provenTrigger1/);
+  assert.match(lifecycle,/provenTrigger2/);
+  assert.match(lifecycle,/provenTrigger3/);
+  assert.match(lifecycle,/platformLevel=runner\?runnerLevel:provenLevel/);
+  assert.match(lifecycle,/普通新高不会逐tick追价/);
+  assert.doesNotMatch(lifecycle,/provenPlatformNet=.*peakNet\*\.30/);
+  assert.doesNotMatch(lifecycle,/runnerPlatformNet=.*peakNet\*/);
+});
