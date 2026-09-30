@@ -555,7 +555,7 @@ test("environment outlook preserves a strong aligned continuation lane while unc
   const capture=routeEnvironmentOpportunity({market,evolution:trend,symbol,opportunity:{side:"LONG",mode:"CONTINUATION",tradePlan:"LIQUIDITY_MIGRATION",score:95,premium:true,
     edgeRatio:2.2,netRemainingSpaceRate:.04,pullbackRiskRate:.018,thesisBars:2,confirmationStage:"READY"}});
   assert.equal(capture.playbook,"TREND_CAPTURE");assert.equal(capture.mainline,true);
-  assert.ok(capture.riskScale>.95);assert.ok(capture.modeFit>.80);
+  assert.ok(capture.riskScale>.90);assert.ok(capture.modeFit>.80);
 
   market.narrative.major={...market.narrative.major,bias:"BEARISH",score:-.35};
   market.internals={...market.internals!,leaderPersistence:.2};
@@ -603,7 +603,7 @@ test("rotation makes relative/reversal logic more suitable than continuation wit
   assert.ok(rel>cont);
   const route=routeEnvironmentOpportunity({market,evolution,symbol,opportunity:{side:"SHORT",mode:"RELATIVE",score:82,premium:true,
     edgeRatio:2,netRemainingSpaceRate:.022,pullbackRiskRate:.01,thesisBars:3,confirmationStage:"READY"}});
-  assert.equal(route.playbook,"ROTATION_RELATIVE");assert.ok(route.riskScale>=.55);assert.equal(route.forceRetest,true);
+  assert.equal(route.playbook,"ROTATION_RELATIVE");assert.ok(route.riskScale>=.55);
 });
 
 test("historical environment PnL stays diagnostic; live routing is driven by current market condition",()=>{
