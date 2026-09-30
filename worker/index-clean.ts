@@ -85,7 +85,7 @@ const FEED_QUALITY_WINDOW_MS = 60 * 60_000;
 const HEARTBEAT_MS = 30_000;
 const UNIVERSE_MS = 10 * 60_000;
 const RADAR_MS = 15_000;
-const GATE_RADAR_MS = 60_000;
+const GATE_RADAR_MS = RADAR_MS;
 const RADAR_ENTRY_STALE_MS = 150_000;
 const STRATEGY_CANDLE_GRACE_MS = 8_000;
 const STRATEGY_CANDLE_STALE_MS = 11 * 60_000;
@@ -507,6 +507,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private sessionWarmup: Record<string, number> = {};
   private contractCatalog = new Map<string, Awaited<ReturnType<typeof fetchActiveContracts>>[number]>();
   private gateRadarCache: Awaited<ReturnType<typeof fetchGateRadarTickers>> = [];
+  private gateRadarShortMoves=new Map<string,number>();
   private gateRadarAt=0;
   private authorityReady = true;
   private authorityView = { positions: {} as RuntimeState["positions"], equity: CANONICAL_PAPER_REFERENCE_EQUITY, equityVersion: 0 };
@@ -921,8 +922,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const cached=this.gateRadarAt>0&&now-this.gateRadarAt<=2*GATE_RADAR_MS?new Map(this.gateRadarCache.map(row=>[row.symbol,row])):null;
     const known=this.contractCatalog.size
       ?[...this.contractCatalog.values()].filter(row=>adaptiveSymbolAllowed(row.symbol)).map(row=>{
-        const fresh=cached?.get(row.symbol);return fresh?{...fresh,fundingRate:row.fundingRate}:{symbol:row.symbol,last:row.last,
-          volume24hUsd:row.volume24hUsd,fundingRate:row.fundingRate};
+        const fresh=cached?.get(row.symbol);return fresh?{...fresh,fundingRate:row.fundingRate,
+          shortMoveRate:this.gateRadarShortMoves.get(row.symbol)??0,directionalAgreement:1,sourceBreadth:Math.sign(this.gateRadarShortMoves.get(row.symbol)??0),
+          sourceCount:1}:{symbol:row.symbol,last:row.last,volume24hUsd:row.volume24hUsd,fundingRate:row.fundingRate};
       })
       :[...new Set([...this.runtime.liquidUniverse,...DEFAULT_SYMBOLS])].flatMap(symbol=>{
         const q=this.marketHub.quote(symbol,now);return q?[{symbol,last:q.mid,volume24hUsd:q.volume24hUsd,fundingRate:0}]:[];
@@ -3329,8 +3331,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         // Gate bulk discovery is optional and explicitly yields to private LIVE
         // work. Bybit/OKX/KuCoin remain the normal scan surface.
         if(!this.liveSyncWork&&Date.now()-this.gateRadarAt>=GATE_RADAR_MS){
-          try{this.gateRadarCache=await fetchGateRadarTickers();this.gateRadarAt=Date.now();subrequests++;}
-          catch{/* stale Gate-only discovery must never block external analysis */}
+          try{
+            const previous=new Map(this.gateRadarCache.map(row=>[row.symbol,row.last])),next=await fetchGateRadarTickers(),
+              moves=new Map<string,number>();
+            for(const row of next){const prior=previous.get(row.symbol);if(prior&&prior>0)moves.set(row.symbol,row.last/prior-1);}
+            this.gateRadarCache=next;this.gateRadarShortMoves=moves;this.gateRadarAt=Date.now();subrequests++;
+          }catch{/* stale Gate-only discovery must never block external analysis */}
         }
         try{this.refreshRadar(Date.now());}
         catch(error){this.runtime.radar=failedRadarRuntime(this.runtime.radar,Date.now(),error);}
