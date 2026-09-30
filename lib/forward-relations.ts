@@ -21,7 +21,7 @@ import { advanceMarketHypothesisResearch, entryHypothesisGuidance, initialMarket
   normalizeMarketHypothesisResearch,
   type EntryHypothesisGuidance, type MarketHypothesisResearchState } from "./market-intelligence-hypothesis-research.ts";
 import { ENVIRONMENT_OUTLOOK_VERSION, ENVIRONMENT_ROUTER_VERSION, classifyMarketEnvironment, deriveEnvironmentOutlook,
-  deriveFastEnvironmentSignal, environmentModeFit, environmentPerformanceFactor, routeEnvironmentOpportunity,
+  deriveFastEnvironmentSignal, environmentModeFit, environmentPerformanceFactor, environmentProbeRetestDecision, routeEnvironmentOpportunity,
   initialEnvironmentPerformanceState, normalizeEnvironmentPerformanceState, recordEnvironmentOutcome,
   type EnvironmentOutlook, type EnvironmentPerformanceState, type EnvironmentPlaybook, type MarketEnvironment, type RouteAlignment
 } from "./market-intelligence-environment-router.ts";
@@ -1099,6 +1099,29 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
     validation.supportSamples=decision.supportSamples;validation.oppositionSamples=decision.oppositionSamples;validation.reason=decision.reason;
 
     if(decision.action==="CANCEL"){validation.status="CANCELLED";reject(decision.reason);continue;}
+
+    if(validation.requiresProbeRetest){
+      const probe=environmentProbeRetestDecision({side:validation.side,price,currentAdvanceRate:decision.currentAdvanceRate,
+        bestAdvanceRate:decision.bestAdvanceRate,retestBasePrice:validation.retestBasePrice,retestSeen:!!validation.probeRetestSeen,
+        impulseMin:validation.probeImpulseMin??ROUND_TRIP_COST*.75,pullbackMin:validation.probePullbackMin??ROUND_TRIP_COST*.40,
+        restartMin:validation.probeRestartMin??ROUND_TRIP_COST*.35});
+      if(probe.action==="WAIT_IMPULSE"){
+        validation.phase="RETEST_WAIT";validation.reason="当前环境不适合直接追单；先等价格证明第一段方向推进。";reject(validation.reason);continue;
+      }
+      if(probe.action==="WAIT_PULLBACK"){
+        validation.phase="RETEST_WAIT";validation.reason="第一段方向已经出现，但当前环境要求先完成可控回调再参与，避免追在末端。";reject(validation.reason);continue;
+      }
+      if(probe.action==="SET_RETEST_BASE"||probe.action==="UPDATE_RETEST_BASE"){
+        validation.retestBasePrice=price;validation.retestBaseAt=now;validation.probeRetestSeen=true;
+        validation.supportSamples=0;validation.oppositionSamples=0;validation.phase="RETEST_WAIT";
+        validation.reason=probe.action==="SET_RETEST_BASE"?"环境回调已出现，建立重启基准；等待原方向重新启动。":"环境回调仍在延伸，更新重启基准，不提前猜底/顶。";
+        reject(validation.reason);continue;
+      }
+      if(probe.action==="WAIT_RESTART"){
+        validation.phase="RETEST_WAIT";validation.reason="回调已经完成，等待原方向重新推进后才执行。";reject(validation.reason);continue;
+      }
+      validation.requiresProbeRetest=false;validation.phase="ARMED";
+    }
 
     const locationManaged=validation.stableThesis||(o.tradePlan!=null&&o.tradePlan!=="OBSERVE_ONLY");
     if(locationManaged){
