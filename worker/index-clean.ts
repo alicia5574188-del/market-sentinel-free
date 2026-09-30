@@ -4042,6 +4042,13 @@ async function ownerPaperAction(request: Request, env: CloudflareEnv, action: "R
 const worker = {
   async fetch(request: Request, env: CloudflareEnv, ctx: ExecutionContext) {
     const url = new URL(request.url);
+    // /forward is the long-lived bookmark from the previous route layout.
+    // The current app is a single page at "/", so resolve the alias before the
+    // vinext/RSC router can throw on a route that no longer exists.
+    if(request.method==="GET"&&(url.pathname==="/forward"||url.pathname==="/forward/")){
+      const target=new URL(request.url);target.pathname="/";
+      return Response.redirect(target.toString(),307);
+    }
     if (isAsset(url.pathname)) return env.ASSETS.fetch(request);
     const memberResponse=await memberRoutes(request,env);
     if(memberResponse)return memberResponse;
@@ -4081,7 +4088,20 @@ const worker = {
     if (url.pathname === "/api/paper/reset" && request.method === "POST") return ownerPaperAction(request, env, "RESET");
     if (url.pathname === "/api/paper/history/clear" && request.method === "POST") return ownerPaperAction(request, env, "CLEAR_HISTORY");
     if (url.pathname.startsWith("/api/")) return json({ error: "not found" }, 404);
-    const pageResponse=await handler.fetch(request, env, ctx);
+    let pageResponse:Response;
+    try{pageResponse=await handler.fetch(request, env, ctx);}
+    catch(error){
+      console.error("page-handler-failure",error);
+      if(request.method==="GET"){
+        const asset=await env.ASSETS.fetch(request);
+        if(asset.ok)return asset;
+        return new Response(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>哨兵恢复中</title><style>body{font-family:system-ui;background:#0b0f14;color:#e8edf2;display:grid;place-items:center;height:100vh;margin:0}main{max-width:520px;padding:28px}p{color:#9aa6b2}</style>
+<main><h2>页面正在自动恢复</h2><p>交易后台与页面渲染相互隔离；本页将在几秒后重新连接。</p><script>setTimeout(()=>location.reload(),3000)</script></main>`,
+          {status:503,headers:{"content-type":"text/html; charset=utf-8","cache-control":"no-store"}});
+      }
+      return json({error:"page handler unavailable"},503);
+    }
     if(request.method!=="GET")return pageResponse;
     const contentType=pageResponse.headers.get("content-type")??"";
     if(!contentType.toLowerCase().includes("text/html"))return pageResponse;
