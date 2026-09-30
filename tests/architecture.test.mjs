@@ -138,6 +138,19 @@ test("Market Intelligence keeps Position Intelligence authority while liquidity 
   assert.doesNotMatch(advance,/rotateIfNeeded\(/);
 });
 
+test("liquidity runner lifecycle keeps hypothesis stops coherent across family-turn and later migration legs",async()=>{
+  const core=await read("lib/forward-relations.ts");
+  const open=core.slice(core.indexOf("function openIntelligenceTrade"),core.indexOf("export function extremeResidualConfirmationProfile"));
+  const manage=core.slice(core.indexOf("function manageIntelligenceTrades"),core.indexOf("function markAndManage"));
+  assert.match(open,/LIQUIDITY_MIGRATION\"\|\|o\.tradePlan===\"LIQUIDITY_REJECTION\"\|\|o\.tradePlan===\"FAMILY_TURN\"/);
+  assert.match(manage,/流动性迁移续接到下一段，不平仓重开/);
+  assert.match(manage,/activeLiquidityPlan===\"LIQUIDITY_MIGRATION\"\|\|activeLiquidityPlan===\"LIQUIDITY_REJECTION\"\|\|activeLiquidityPlan===\"FAMILY_TURN\"/);
+  assert.match(manage,/profitStop==null\?hypothesisStop/);
+  assert.match(manage,/Math\.max\(hypothesisStop,profitStop\)/);
+  assert.match(manage,/LIQUIDITY_HYPOTHESIS_INVALIDATED/);
+  assert.match(manage,/entryInvalidationValid/);
+});
+
 test("Market Intelligence active exits are evidence-family gated directly by Position Intelligence",async()=>{
   const [core,position,engine,execution]=await Promise.all([
     read("lib/forward-relations.ts"),read("lib/position-intelligence-engine.ts"),
