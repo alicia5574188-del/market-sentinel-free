@@ -21,7 +21,7 @@ import { advanceMarketHypothesisResearch, entryHypothesisGuidance, initialMarket
   normalizeMarketHypothesisResearch,
   type EntryHypothesisGuidance, type MarketHypothesisResearchState } from "./market-intelligence-hypothesis-research.ts";
 import { ENVIRONMENT_OUTLOOK_VERSION, ENVIRONMENT_ROUTER_VERSION, classifyMarketEnvironment, deriveEnvironmentOutlook,
-  environmentModeFit, routeEnvironmentOpportunity,
+  deriveFastEnvironmentSignal, environmentModeFit, routeEnvironmentOpportunity,
   initialEnvironmentPerformanceState, normalizeEnvironmentPerformanceState, recordEnvironmentOutcome,
   type EnvironmentOutlook, type EnvironmentPerformanceState, type EnvironmentPlaybook, type MarketEnvironment, type RouteAlignment
 } from "./market-intelligence-environment-router.ts";
@@ -475,8 +475,8 @@ export function environmentDecayProfitFloor(input:{
 }
 
 function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now:number,minutePaths:Record<string,Candle[]>|undefined,
-  marketEvolution:MarketEvolutionState){
-  const environmentOutlook=deriveEnvironmentOutlook(s.extremumRegime,marketEvolution),closed=new Set<string>();
+  marketEvolution:MarketEvolutionState,environmentOutlook:EnvironmentOutlook){
+  const closed=new Set<string>();
   for(const t of s.positions){
     if(t.entryContext?.strategyVersion!==MARKET_INTELLIGENCE_VERSION)continue;
     const q=quotes[t.symbol];if(!freshQuote(q,now))continue;
@@ -647,14 +647,14 @@ const riskCharge=(t:Trade)=>Math.max(t.plannedRisk,t.entryContext?.portfolioRisk
 function existingRisk(s:ForwardState,side?:"LONG"|"SHORT"){return s.positions.filter(t=>!side||t.side===side).reduce((n,t)=>n+riskCharge(t),0);}
 function cycleRiskAdded(s:ForwardState,since:number){return[...s.positions,...s.history].filter(t=>t.openedAt>=since).reduce((n,t)=>n+riskCharge(t),0);}
 function isIntelligenceOpportunity(o:Opportunity){return o.strategyVersion===MARKET_INTELLIGENCE_VERSION;}
-function annotateLifecycleOpportunities(s:ForwardState,market:MarketEvolutionState){
+function annotateLifecycleOpportunities(s:ForwardState,market:MarketEvolutionState,outlook:EnvironmentOutlook){
   for(const o of s.opportunities){
     if(!isIntelligenceOpportunity(o))continue;
     const symbol=s.extremumRegime.symbols[o.symbol];if(!symbol)continue;
     const lifecycle=deriveOpportunityLifecycle({side:o.side,symbol,thesisBars:o.thesisBars??symbol.signalBars,market}),
       future=entryHypothesisGuidance(s.hypothesisResearch,{side:o.side,score:o.score,residualZ:symbol.residualZ,
         residualPersistence:symbol.residualPersistence,sourceCount:symbol.sourceCount,dataConfidence:symbol.dataConfidence}),
-      route=routeEnvironmentOpportunity({market:s.extremumRegime,evolution:market,symbol,opportunity:o});
+      route=routeEnvironmentOpportunity({market:s.extremumRegime,evolution:market,symbol,opportunity:o,outlook});
     o.marketEvolutionPhase=market.phase;o.opportunityLifecyclePhase=lifecycle.phase;o.lifecycleReason=lifecycle.reason;
     o.futureResearchAction=future.action;o.futureResearchReason=future.reason;o.futureHypothesisIds=future.hypothesisIds;
     o.extendedConfirmation=false;o.environment=route.environment;o.playbook=route.playbook;o.routeAlignment=route.alignment;
@@ -1062,11 +1062,17 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
   if(marketReady&&dataDue)s.hypothesisResearch=advanceMarketHypothesisResearch(s.hypothesisResearch,s.extremumRegime,input.now);
   const marketEvolution=deriveMarketEvolution(s.extremumRegime,input.research),
     currentEnvironment=classifyMarketEnvironment(s.extremumRegime,marketEvolution),
-    environmentOutlook=deriveEnvironmentOutlook(s.extremumRegime,marketEvolution);
+    priorOutlook=s.environmentContext.outlook,
+    outlookDue=!priorOutlook||dataDue||input.now-s.environmentContext.updatedAt>=60_000,
+    fastEnvironment=deriveFastEnvironmentSignal(Object.values(input.quotes).filter(q=>freshQuote(q,input.now))),
+    environmentOutlook=outlookDue
+      ?deriveEnvironmentOutlook(s.extremumRegime,marketEvolution,{fast:fastEnvironment,previous:priorOutlook})
+      :priorOutlook;
   s.environmentContext={version:ENVIRONMENT_ROUTER_VERSION,environment:currentEnvironment,phase:marketEvolution.phase,
-    trendSide:marketEvolution.trendSide,updatedAt:input.now,reason:environmentOutlook.reason,outlook:environmentOutlook};
-  if(marketReady)annotateLifecycleOpportunities(s,marketEvolution);
-  manageIntelligenceTrades(s,input.quotes,input.now,input.minutePaths,marketEvolution);
+    trendSide:marketEvolution.trendSide,updatedAt:outlookDue?input.now:s.environmentContext.updatedAt,
+    reason:environmentOutlook.reason,outlook:environmentOutlook};
+  if(marketReady)annotateLifecycleOpportunities(s,marketEvolution,environmentOutlook);
+  manageIntelligenceTrades(s,input.quotes,input.now,input.minutePaths,marketEvolution,environmentOutlook);
   // Positions opened before cutover keep their frozen lifecycle and cannot gain
   // new-entry authority from the retired relation/region/interrupt stack.
   markAndManage(s,input.quotes,input.now);
