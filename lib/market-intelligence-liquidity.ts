@@ -91,7 +91,7 @@ function buildZones(rows:LiquidityCandle[],tier:LiquidityZoneTier,now:number,atr
     return{id:`${tier.toLowerCase()}-${idx}-${Math.round(center*1e6)}`,tier,lower,upper,center,
       widthRate:(upper-lower)/Math.max(center,1e-12),strength,touches,pivotScore:clip(pivot/6),absorptionScore:clip(absorption/4),
       revisits:0,firstTouchedAt:first,lastTouchedAt:lastAt} satisfies LiquidityZone;
-  }).filter(z=>z.strength>=.30&&z.touches>=2).sort((a,b)=>a.center-b.center);
+  }).filter(z=>z.strength>=.30&&z.touches>=2&&(z.pivotScore>=.08||z.absorptionScore>=.06)).sort((a,b)=>a.center-b.center);
   const merged:LiquidityZone[]=[];
   for(const z of zones){
     const prev=merged.at(-1);
