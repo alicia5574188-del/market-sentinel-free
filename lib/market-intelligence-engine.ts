@@ -122,6 +122,73 @@ function addEvidence(rows:MarketEvidence[],row:MarketEvidence){
   same.expiresAt=row.expiresAt;same.family=family;
 }
 
+type FamilyTurnSignal={side:"LONG"|"SHORT";confidence:number;confirmed:number;members:number;reason:string};
+
+function familyTurnSignals(clusters:MarketCluster[],states:Record<string,MarketSymbolState>,liquidity:MarketLiquidityResearch,majorScore:number,shortScore:number){
+  const base=Math.abs(majorScore)>=.08?Math.sign(majorScore):Math.abs(shortScore)>=.14?Math.sign(shortScore):0,
+    out=new Map<string,FamilyTurnSignal>();
+  if(!base)return out;
+  const turnSign=-base,side:FamilyTurnSignal["side"]=turnSign>0?"LONG":"SHORT";
+  for(const cluster of clusters){
+    if(cluster.members.length<2)continue;
+    const evidence=cluster.members.flatMap(symbol=>{
+      const s=states[symbol],l=liquidity.symbols[symbol];if(!s||!l?.ready)return[];
+      const signal=(s.signalSide==="LONG"?1:-1),residualAligned=turnSign*s.residualZ>=.30,
+        accepted=l.departure.state==="ACCEPTED"&&((l.departure.side==="UP"?1:-1)===turnSign)&&l.departure.confidence>=.58,
+        rejectedOld=l.departure.state==="REJECTED"&&((l.departure.side==="UP"?1:-1)===base)&&l.departure.confidence>=.60,
+        depletion=turnSign>0?l.upperDepletion:l.lowerDepletion,oldDepletion=turnSign>0?l.lowerDepletion:l.upperDepletion,
+        loaded=l.accumulation>=.52&&depletion>=.58&&depletion-oldDepletion>=.15,
+        local=accepted?1:rejectedOld?.9:loaded?.7:0;
+      if(local===0||(!(signal===turnSign)||!residualAligned))return[];
+      return[{symbol,score:clip(.45*local+.30*s.residualPersistence+.15*(s.dataConfidence/100)+.10*Math.min(1,Math.abs(s.residualZ)/1.5))}];
+    });
+    const share=evidence.length/cluster.members.length,confidence=clip(.55*share+.45*mean(evidence.map(x=>x.score)));
+    if(evidence.length>=2&&share>=.5&&confidence>=.58)
+      out.set(cluster.id,{side,confidence,confirmed:evidence.length,members:cluster.members.length,
+        reason:`${evidence.length}/${cluster.members.length} 个相关成员已经拒绝原市场方向或接受反向价格，家族转折可信度 ${Math.round(confidence*100)}%。`});
+  }
+  return out;
+}
+
+function liquidityTargetRate(map:SymbolLiquidityMap|undefined,side:"LONG"|"SHORT",price:number){
+  if(!map?.ready||!(price>0))return null;
+  const target=side==="LONG"?map.nextAbove:map.nextBelow;
+  if(!target)return null;
+  return side==="LONG"?Math.max(0,target.lower-price)/price:Math.max(0,price-target.upper)/price;
+}
+
+function liquidityTradePlan(input:{
+  state:MarketSymbolState;map:SymbolLiquidityMap|undefined;family?:FamilyTurnSignal;price:number;
+}):{plan:LiquidityTradePlan;side:"LONG"|"SHORT";confidence:number;targetRate:number|null;reason:string}{
+  const map=input.map,bestSide=input.state.longScore>=input.state.shortScore?"LONG":"SHORT";
+  if(map?.ready&&map.departure.state==="ACCEPTED"&&map.departure.side&&map.activeZone?.strength!=null){
+    const side=map.departure.side==="UP"?"LONG":"SHORT",target=liquidityTargetRate(map,side,input.price),
+      confidence=clip(.62*map.departure.confidence+.23*map.activeZone.strength+.15*(1-Math.min(1,map.accumulation)));
+    if(map.activeZone.strength>=.36&&map.departure.confidence>=.60&&(target!=null||map.openSpace))
+      return{plan:"LIQUIDITY_MIGRATION",side,confidence,targetRate:target,
+        reason:`原流动性区域已经被市场接受性离开，正在向${target!=null?"下一片已知流动性":"开放空间"}迁移。`};
+  }
+  if(input.family){
+    const side=input.family.side,l=map,turnSign=side==="LONG"?1:-1,oldSign=-turnSign,
+      local=!!l?.ready&&(
+        (l.departure.state==="ACCEPTED"&&l.departure.side&&(l.departure.side==="UP"?1:-1)===turnSign&&l.departure.confidence>=.58)
+        ||(l.departure.state==="REJECTED"&&l.departure.side&&(l.departure.side==="UP"?1:-1)===oldSign&&l.departure.confidence>=.60)
+        ||(l.accumulation>=.52&&(turnSign>0?l.upperDepletion:l.lowerDepletion)>=.58));
+    if(local)return{plan:"FAMILY_TURN",side,confidence:input.family.confidence,targetRate:liquidityTargetRate(l,side,input.price),
+      reason:input.family.reason};
+  }
+  if(map?.ready&&map.activeZone&&map.departure.state==="REJECTED"&&map.departure.side&&map.departure.confidence>=.62&&map.activeZone.strength>=.40){
+    const side=map.departure.side==="UP"?"SHORT":"LONG",
+      targetRate=side==="LONG"?Math.max(0,map.activeZone.upper-input.price)/Math.max(input.price,1e-12)
+        :Math.max(0,input.price-map.activeZone.lower)/Math.max(input.price,1e-12),
+      confidence=clip(.55*map.departure.confidence+.25*map.activeZone.strength+.20*map.accumulation);
+    return{plan:"LIQUIDITY_REJECTION",side,confidence,targetRate,
+      reason:`离开尝试失败并重新被原流动性区域吸收，计划先交易回归区域内部/另一侧的过程。`};
+  }
+  return{plan:"OBSERVE_ONLY",side:bestSide,confidence:0,targetRate:null,
+    reason:"相对强弱继续用于选币和家族识别，但没有独立开仓权；等待迁移、离开失败或家族转折。"};
+}
+
 export function initialMarketIntelligenceState(now:number):MarketIntelligenceState{
   const narrative:MarketNarrative={id:`mi-${now.toString(36)}`,updatedAt:now,
     macro:{bias:"NEUTRAL",score:0,confidence:.2,ageMs:0,label:"超大周期",detail:"等待足够的长期市场数据。",phase:"UNCERTAIN"},
