@@ -465,6 +465,15 @@ function catastrophicWinnerInsuranceFloor(t:Trade,originalStopRate:number){
   return Math.max(ROUND_TRIP_COST*1.25,Math.min(originalStopRate*.55,peakNet*.12));
 }
 
+export function environmentDecayProfitFloor(input:{
+  peakFavorableRate:number;originalStopRate:number;modeFit:number;horizonMinutes:15|30|45|60;costRate?:number;
+}){
+  const cost=Math.max(.0005,input.costRate??ROUND_TRIP_COST),peakNet=Math.max(0,input.peakFavorableRate-cost),
+    meaningfulPeak=Math.max(cost*4,input.originalStopRate*.55);
+  if(input.horizonMinutes>30||input.modeFit>=.45||peakNet<meaningfulPeak)return 0;
+  return cost+peakNet*.25;
+}
+
 function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now:number,minutePaths:Record<string,Candle[]>|undefined,
   marketEvolution:MarketEvolutionState){
   const environmentOutlook=deriveEnvironmentOutlook(s.extremumRegime,marketEvolution),closed=new Set<string>();
@@ -521,11 +530,10 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
 
     if(t.entryContext?.environmentOutlookVersion===ENVIRONMENT_OUTLOOK_VERSION&&t.entryContext?.mode){
       const currentFit=environmentModeFit({market:s.extremumRegime,evolution:marketEvolution,outlook:environmentOutlook,
-        side:t.side,mode:t.entryContext.mode}),peakNet=Math.max(0,t.favorable-ROUND_TRIP_COST),
-        meaningfulPeak=Math.max(ROUND_TRIP_COST*4,originalStopRate*.55),
-        environmentDecay=environmentOutlook.horizonMinutes<=30&&currentFit<.45&&peakNet>=meaningfulPeak;
-      if(environmentDecay){
-        const environmentFloor=ROUND_TRIP_COST+peakNet*.25;
+        side:t.side,mode:t.entryContext.mode}),
+        environmentFloor=environmentDecayProfitFloor({peakFavorableRate:t.favorable,originalStopRate,modeFit:currentFit,
+          horizonMinutes:environmentOutlook.horizonMinutes,costRate:ROUND_TRIP_COST});
+      if(environmentFloor>0){
         if(environmentFloor>Math.max(t.profitFloorRate??0,ROUND_TRIP_COST*.8)){
           if(signed<=environmentFloor){
             closeTrade(s,t,px,now,"ENVIRONMENT_PROFIT_DECAY_EXIT");closed.add(t.id);continue;
