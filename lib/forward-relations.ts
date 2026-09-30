@@ -471,6 +471,20 @@ function catastrophicWinnerInsuranceFloor(t:Trade,originalStopRate:number){
   return Math.max(ROUND_TRIP_COST*1.25,Math.min(originalStopRate*.55,peakNet*.12));
 }
 
+export function liquidityTargetProfitFloor(input:{
+  side:"LONG"|"SHORT";currentPrice:number;targetLower:number|null;targetUpper:number|null;
+  peakFavorableRate:number;originalStopRate:number;costRate?:number;
+}){
+  const cost=Math.max(.0005,input.costRate??ROUND_TRIP_COST),peakNet=Math.max(0,input.peakFavorableRate-cost);
+  if(!(input.currentPrice>0)||input.targetLower==null||input.targetUpper==null
+    ||peakNet<Math.max(cost*4,input.originalStopRate*.60))return 0;
+  const reached=input.currentPrice>=input.targetLower&&input.currentPrice<=input.targetUpper,
+    distance=input.side==="LONG"?Math.max(0,input.targetLower-input.currentPrice)/input.currentPrice:
+      Math.max(0,input.currentPrice-input.targetUpper)/input.currentPrice,
+    near=reached||distance<=Math.max(cost*1.5,input.originalStopRate*.25);
+  return near?cost+peakNet*.30:0;
+}
+
 export function environmentDecayProfitFloor(input:{
   peakFavorableRate:number;originalStopRate:number;modeFit:number;horizonMinutes:15|30|45|60;costRate?:number;
 }){
@@ -553,6 +567,25 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
         event(s,now,"PROTECTION",t.id,
           `大赢家最后保险已建立：峰值 ${(t.favorable*100).toFixed(2)}%，只防止已证明的大行情最终完整回吐成亏损。`,
           {floorRate:insurance,peakRate:t.favorable,structuralStopRate:originalStopRate});
+      }
+    }
+
+    if(activeLiquidityPlan==="LIQUIDITY_MIGRATION"){
+      const targetFloor=liquidityTargetProfitFloor({side:t.side,currentPrice:px,
+        targetLower:t.liquidityLifecycle?.targetLower??t.entryContext?.liquidityTargetLower??null,
+        targetUpper:t.liquidityLifecycle?.targetUpper??t.entryContext?.liquidityTargetUpper??null,
+        peakFavorableRate:t.favorable,originalStopRate,costRate:ROUND_TRIP_COST});
+      if(targetFloor>Math.max(t.profitFloorRate??0,ROUND_TRIP_COST*.8)){
+        if(signed<=targetFloor){
+          closeTrade(s,t,px,now,"LIQUIDITY_TARGET_PROTECT_EXIT");closed.add(t.id);continue;
+        }
+        const next=t.entryPrice*(1+d*targetFloor);
+        if(t.side==="LONG"&&next>t.stopPrice||t.side==="SHORT"&&next<t.stopPrice){
+          t.profitFloorRate=targetFloor;t.stopPrice=next;
+          event(s,now,"PROTECTION",t.id,
+            "流动性迁移已经接近/进入下一片主要流动性区域；只锁住30%已证明净利润，等待市场决定是继续迁移还是重新积累。",
+            {floorRate:targetFloor,peakRate:t.favorable});
+        }
       }
     }
 
