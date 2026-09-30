@@ -240,6 +240,8 @@ function normalizeTrade(raw:Trade,now:number):Trade{
   t.exitReason=t.exitReason??null;t.relationFailureBars=Math.max(0,Math.floor(safe(t.relationFailureBars)));t.lastRelationBar=safe(t.lastRelationBar,t.openedAt);
   t.execution="REAL_QUOTE_PAPER_MODEL";t.liveEligible=false;t.firstProfitAt=t.firstProfitAt??null;t.holdScore=safe(t.holdScore,50);
   t.profitFloorRate=Math.max(0,safe(t.profitFloorRate));t.exitPlan=t.exitPlan&&(t.exitPlan.version==="sample-exit-plan-v1"||t.exitPlan.version==="sample-exit-plan-v2")?t.exitPlan:undefined;
+  if(t.liquidityLifecycle)t.liquidityLifecycle.invalidationPrice=Number.isFinite(t.liquidityLifecycle.invalidationPrice)
+    ?t.liquidityLifecycle.invalidationPrice!:Number.isFinite(t.entryContext?.liquidityInvalidationPrice)?t.entryContext!.liquidityInvalidationPrice!:null;
   t.expectedHoldMinutes=Math.max(5,safe(t.exitPlan?.bestHoldMinutes,t.expectedHoldMinutes??t.entryContext?.expectedHoldMinutes??30));
   if(t.entryContext&&!(safe(t.entryContext.portfolioRiskCharge)>0)){
     const sizingEquity=safe(t.forecast?.sizingEquity),floor=sizingEquity*(t.entryContext.reserve===true?.003:.006);
@@ -512,9 +514,7 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
     const q=quotes[t.symbol];if(!freshQuote(q,now))continue;
     const state=s.extremumRegime.symbols[t.symbol],px=t.side==="LONG"?q!.bestBid:q!.bestAsk,d=dir(t.side),
       signed=d*(px/t.entryPrice-1),favorable=Math.max(0,signed),adverse=Math.max(0,-signed),ageMin=(now-t.openedAt)/60_000,
-      originalStopRate=Math.max(.004,t.entryContext?.pullbackRiskRate??Math.abs(t.entryPrice-t.stopPrice)/t.entryPrice),
-      structuralStop=t.entryPrice*(1-d*originalStopRate);
-    if((t.profitFloorRate??0)<=0)t.stopPrice=structuralStop;
+      fallbackStopRate=Math.max(.004,t.entryContext?.pullbackRiskRate??Math.abs(t.entryPrice-t.stopPrice)/t.entryPrice);
     t.lastPrice=px;t.lastQuoteAt=q!.observedAt;t.favorable=Math.max(t.favorable,favorable);t.adverse=Math.max(t.adverse,adverse);
     t.peakPnlRate=Math.max(t.peakPnlRate??0,favorable);
     if(!t.firstProfitAt&&favorable>=ROUND_TRIP_COST*.65){t.firstProfitAt=now;if(t.entryContext)t.entryContext.postEntryState="CONFIRMED";}
@@ -522,18 +522,27 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
       liquidityNow?.departure.side==="DOWN"?"SHORT":null;
     if(t.liquidityLifecycle?.currentPlan==="FAMILY_TURN"&&liquidityNow?.departure.state==="ACCEPTED"
       &&liqSide===t.side&&liquidityNow.departure.confidence>=.60){
-      const target=t.side==="LONG"?liquidityNow.nextAbove:liquidityNow.nextBelow;
+      const target=t.side==="LONG"?liquidityNow.nextAbove:liquidityNow.nextBelow,
+        zone=liquidityNow.activeZone,width=zone?Math.max(0,zone.upper-zone.lower):0,
+        invalidationPrice=zone?(t.side==="LONG"?zone.upper-width*.35:zone.lower+width*.35):t.liquidityLifecycle.invalidationPrice;
       t.liquidityLifecycle={currentPlan:"LIQUIDITY_MIGRATION",upgradedAt:t.liquidityLifecycle.upgradedAt??now,
         reason:"家族提前转折已经发展成同方向、被市场接受的流动性迁移；原仓位直接升级，不重新开单。",
-        originLower:liquidityNow.activeZone?.lower??t.liquidityLifecycle.originLower,
-        originUpper:liquidityNow.activeZone?.upper??t.liquidityLifecycle.originUpper,
-        targetLower:target?.lower??null,targetUpper:target?.upper??null};
+        originLower:zone?.lower??t.liquidityLifecycle.originLower,
+        originUpper:zone?.upper??t.liquidityLifecycle.originUpper,
+        targetLower:target?.lower??null,targetUpper:target?.upper??null,invalidationPrice};
       event(s,now,"ROTATION",t.id,"家族转折持仓升级为流动性迁移持仓",{confidence:liquidityNow.departure.confidence});
     }
     const activeLiquidityPlan=t.liquidityLifecycle?.currentPlan??t.entryContext?.tradePlan,
       activeOrigin=t.liquidityLifecycle?{lower:t.liquidityLifecycle.originLower,upper:t.liquidityLifecycle.originUpper}:null,
       activeTarget=t.liquidityLifecycle?{lower:t.liquidityLifecycle.targetLower,upper:t.liquidityLifecycle.targetUpper}:null,
-      position=evaluatePositionIntelligence({
+      activeInvalidation=Number.isFinite(t.liquidityLifecycle?.invalidationPrice)?t.liquidityLifecycle!.invalidationPrice!
+        :Number.isFinite(t.entryContext?.liquidityInvalidationPrice)?t.entryContext!.liquidityInvalidationPrice!:null,
+      liquidityStopActive=(activeLiquidityPlan==="LIQUIDITY_MIGRATION"||activeLiquidityPlan==="LIQUIDITY_REJECTION")
+        &&activeInvalidation!=null&&((t.side==="LONG"&&activeInvalidation<t.entryPrice)||(t.side==="SHORT"&&activeInvalidation>t.entryPrice)),
+      hypothesisStop=liquidityStopActive?activeInvalidation!:t.entryPrice*(1-d*fallbackStopRate),
+      originalStopRate=Math.max(.004,Math.abs(t.entryPrice-hypothesisStop)/Math.max(t.entryPrice,1e-12));
+    if((t.profitFloorRate??0)<=0)t.stopPrice=hypothesisStop;
+    const position=evaluatePositionIntelligence({
       now,side:t.side,signedRate:signed,peakFavorableRate:t.favorable,ageMin,firstProfit:!!t.firstProfitAt,
       expectedHoldMinutes:t.expectedHoldMinutes??180,stopRate:originalStopRate,entryScore:t.entryContext?.entryScore??50,
       entryResidual:t.entryContext?.entryResidual??0,entryRelativeStrength:t.entryContext?.entryRelativeStrength??.5,
@@ -556,7 +565,10 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
     delete t.profitLifecycle;
 
     const stopped=t.side==="LONG"?px<=t.stopPrice:px>=t.stopPrice;
-    if(stopped){closeTrade(s,t,px,now,(t.profitFloorRate??0)>0?"WINNER_INSURANCE_EXIT":"STRUCTURE_STOP");closed.add(t.id);continue;}
+    if(stopped){
+      const stopReason=(t.profitFloorRate??0)>0?"WINNER_INSURANCE_EXIT":liquidityStopActive?"LIQUIDITY_HYPOTHESIS_INVALIDATED":"STRUCTURE_STOP";
+      closeTrade(s,t,px,now,stopReason);closed.add(t.id);continue;
+    }
 
     // Golden-version authority: the original thesis/position evidence decides
     // active exits. Lifecycle, forward hypotheses and environment labels remain
