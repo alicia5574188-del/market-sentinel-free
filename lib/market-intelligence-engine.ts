@@ -52,6 +52,7 @@ export type IntelligenceOpportunity={
   confirmationStage:"OBSERVE"|"READY";sourceCount:number;disagreementRate:number;clusterId:string;thesisId:string;thesisSummary:string;
   invalidationSummary:string;residual:number;relativeStrength:number;dataConfidence:number;thesisSince:number;thesisBars:number;
   tradePlan:LiquidityTradePlan;liquidityPlanConfidence:number;liquidityReason:string;liquidityTargetRate:number|null;
+  liquidityOriginLower:number|null;liquidityOriginUpper:number|null;liquidityTargetLower:number|null;liquidityTargetUpper:number|null;
 };
 
 const clip=(v:number,a=0,b=1)=>Math.max(a,Math.min(b,v));
@@ -426,7 +427,10 @@ export function buildMarketIntelligence(input:{paths:Record<string,CandleLike[]>
       strategyVersion:MARKET_INTELLIGENCE_VERSION,regime:row.regime,confirmationStage:row.stage,sourceCount:row.sourceCount,
       disagreementRate:q?.disagreementRate??0,clusterId:row.clusterId,thesisId,thesisSummary,invalidationSummary,residual:row.residual,
       relativeStrength:row.relativeStrength,dataConfidence:row.dataConfidence,thesisSince:planSince,thesisBars:planBars,
-      tradePlan:plan.plan,liquidityPlanConfidence:plan.confidence,liquidityReason:map?.reason??plan.reason,liquidityTargetRate:plan.targetRate});}
+      tradePlan:plan.plan,liquidityPlanConfidence:plan.confidence,liquidityReason:map?.reason??plan.reason,liquidityTargetRate:plan.targetRate,
+      liquidityOriginLower:map?.activeZone?.lower??null,liquidityOriginUpper:map?.activeZone?.upper??null,
+      liquidityTargetLower:(bestSide==="LONG"?map?.nextAbove?.lower:map?.nextBelow?.lower)??null,
+      liquidityTargetUpper:(bestSide==="LONG"?map?.nextAbove?.upper:map?.nextBelow?.upper)??null});}
   const groupBest=new Map<string,IntelligenceOpportunity>();for(const o of opportunities.filter(x=>x.eligible)){const key=`${o.clusterId}:${o.side}`,old=groupBest.get(key);if(!old||o.score>old.score)groupBest.set(key,o);}
   for(const o of opportunities){if(!o.eligible)continue;const best=groupBest.get(`${o.clusterId}:${o.side}`);if(best&&best.id!==o.id){o.eligible=false;o.reason+=` 同一高相关组已有更优表达 ${best.symbol.replace("_USDT","")}，本币保持观察。`;}}
   opportunities.sort((a,b)=>Number(b.eligible)-Number(a.eligible)||b.score-a.score);
