@@ -114,3 +114,39 @@ test('trade review is archived without duplicating it in financial account posit
   const packet=Object.entries(result.entries).find(([k])=>k.includes('archive:'))![1] as {trades:Trade[];reviews:unknown[]};
   assert.ok(packet.reviews.length);assert.equal(packet.trades[0].review,undefined);
 });
+
+test('complete settlement counts still load missing archived exit assessments',async()=>{
+  const a=trade(),s=snapshot([a],1);let calls=0;
+  assert.equal(s.coverage.complete,true);assert.equal(s.summary.positionAssessmentMissing,1);
+  const pi={decision:'EXIT'} as Trade['positionIntelligence'];
+  const result=await collectReviewSnapshot((async (url:unknown)=>{calls++;
+    return Response.json(String(url).includes('?')?{accountStartedAt:T,asOf:T+60000,
+      trades:[{...a,positionIntelligence:pi}],recordsRead:1,nextCursor:'unused',exhausted:false}:s);
+  }) as typeof fetch);
+  assert.equal(calls,2);assert.equal(result.trades.length,1);assert.equal(result.coverage.complete,true);
+  assert.deepEqual(result.trades[0].positionIntelligence,pi);assert.equal(result.summary.positionAssessmentMissing,0);
+  assert.equal(result.coverage.exportLimitReached,false);
+});
+test('missing historical evidence stays unknown when the bounded archive is exhausted',async()=>{
+  const s=snapshot([trade()],1);let calls=0;
+  const result=await collectReviewSnapshot((async (url:unknown)=>{calls++;
+    return Response.json(String(url).includes('?')?{accountStartedAt:T,asOf:T+60000,
+      trades:[],recordsRead:0,nextCursor:null,exhausted:true}:s);
+  }) as typeof fetch);
+  assert.equal(calls,2);assert.equal(result.coverage.complete,true);
+  assert.equal(result.summary.positionAssessmentMissing,1);assert.equal(result.summary.exitTraceMissing,1);
+  assert.equal(result.coverage.archiveExhausted,true);assert.equal(result.coverage.exportLimitReached,false);
+});
+test('optional review growth cannot shorten existing hot history or market-memory retention',async()=>{
+  const plain=initialForward(T);plain.storage.persistedAt=T;plain.latestReason='x'.repeat(600*1024);
+  plain.history=Array.from({length:40},(_,i)=>trade('bounded-'+i));plain.resolved=40;
+  const enriched=structuredClone(plain);
+  captureTradeReviews(initialForward(T),enriched,T+60000,'b','p',{AAA_USDT:quote(101,T+60000)});
+  const baseline=await prepareForwardWrite(null,plain,T+60000,{compact:true});
+  const withReview=await prepareForwardWrite(null,enriched,T+60000,{compact:true});
+  assert.equal(baseline.compression.hotHistory,40);
+  assert.equal(withReview.compression.droppedHotReview,true);
+  for(const key of ['hotHistory','fullHistory','hotEvents','narrativeHistory','evidence','rawBytes'] as const)
+    assert.equal(withReview.compression[key],baseline.compression[key],key);
+  assert.equal(enriched.history.length,40);assert.ok(enriched.history[0].review);
+});
