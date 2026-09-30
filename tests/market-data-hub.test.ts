@@ -58,6 +58,18 @@ test("Forward radar keeps Gate execution volume and Gate 24h range separate from
   });
 });
 
+test("Gate-only radar keeps its 15-second short impulse when no external venue lists the symbol",()=>{
+  const hub=new MarketDataHub(),rows=hub.radarRows([{
+    symbol:"GATEONLY_USDT",last:10,volume24hUsd:2_500_000,high24h:10.5,low24h:9.2,change24hRate:.04,
+    fundingRate:0,openInterest:100,shortMoveRate:.0035,directionalAgreement:1,sourceBreadth:1,sourceCount:1
+  }],1_000_001);
+  assert.equal(rows.length,1);
+  assert.equal(rows[0]?.sourceCount,1);
+  assert.equal(rows[0]?.shortMoveRate,.0035);
+  assert.equal(rows[0]?.directionalAgreement,1);
+  assert.equal(rows[0]?.sourceBreadth,1);
+});
+
 test("one healthy venue keeps the market hub alive when the other fails",async()=>{
   await withFetch(url=>{
     if(url.includes("api.bybit.com"))return Response.json(bybitSurface());
