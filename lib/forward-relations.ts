@@ -941,6 +941,7 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
     preserved:Record<string,EntryValidation>={};
   for(const [id,v] of Object.entries(s.entryValidations)){
     const o=v.frozenOpportunity??opportunities.get(v.candidateId);
+    if(v.status==="CANCELLED"&&v.expiresAt<=now)continue;
     if(!o||s.positions.some(t=>t.symbol===v.symbol)||(o.thesisId&&s.consumedTheses[o.thesisId]))continue;
     if(!v.frozenOpportunity)v.frozenOpportunity=structuredClone(o);
     preserved[id]=v;
@@ -992,7 +993,7 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
       price=quoteReady?(o.side==="LONG"?q!.bestAsk:q!.bestBid):o.price,
       armed=stable.stable||!!o.environmentForceRetest,
       expiresAt=armed?Math.min(o.expiresAt,now+20*60_000):Math.min(o.expiresAt,now+BAR_MS),
-      deadlineAt=quoteReady?expiresAt:0;
+      deadlineAt=quoteReady?(armed?Math.min(expiresAt,now+12*60_000):expiresAt):0;
     s.entryValidations[o.id]={id:o.id,candidateId:o.id,symbol:o.symbol,side:o.side,startedAt:now,authorizedAt:now,
       expiresAt,deadlineAt,initialPrice:price,lastPrice:price,lastQuoteAt:quoteReady?q!.observedAt:0,samples:quoteReady?1:0,
       bestAdvanceRate:0,maxAdverseRate:0,supportSamples:0,oppositionSamples:0,extendedConfirmation:extreme.required,
@@ -1048,8 +1049,10 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
           disagreementRate:disagreement,mode:o.mode,fastLaneAllowed:!!o.environmentMainline});
       validation.startedAt=now;validation.initialPrice=price;validation.lastPrice=price;validation.lastQuoteAt=q!.observedAt;
       validation.samples=1;validation.bestAdvanceRate=0;validation.maxAdverseRate=0;
-      validation.supportSamples=0;validation.oppositionSamples=0;validation.deadlineAt=validation.expiresAt;
-      validation.reason=`第一份可执行盘口已到，开始实时响应确认；基础响应窗口约 ${Math.round(profile.windowMs/1000)} 秒，但冻结计划只会在自身失效/到期时解除。`;
+      validation.supportSamples=0;validation.oppositionSamples=0;
+      validation.deadlineAt=validation.stableThesis
+        ?Math.min(validation.expiresAt,(validation.authorizedAt??now)+12*60_000):validation.expiresAt;
+      validation.reason=`第一份可执行盘口已到，开始实时响应确认；基础响应窗口约 ${Math.round(profile.windowMs/1000)} 秒，冻结计划只会在自身失效或授权窗口结束时解除。`;
       reject(validation.reason);continue;
     }
     const 
