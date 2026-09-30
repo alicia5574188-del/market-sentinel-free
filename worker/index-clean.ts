@@ -61,6 +61,11 @@ import { LIVE_TURNOVER_PREFIX, LIVE_TURNOVER_VERSION, initialTurnover, validateT
 import { LIVE_PARITY_VERSION, LIVE_PARITY_PREFIX, buildProportionalMirror, forwardMirrorSources, mirrorPositionRisk,
   sourceLifecycle, mirrorSourceFresh, mirrorCoverage, liveEntryDriftGuard,
   type MirrorSourceTrade, type MirrorReceipt, type MirrorBinding } from "../lib/live-parity.ts";
+import {buildReviewSnapshot, readReviewArchivePage} from "../lib/research-snapshot.ts";
+import {REVIEW_JOURNAL_KEY, appendReviewEvents, captureTradeReviews, initialReviewJournal, normalizeReviewJournal,
+  recordDiscoveryReview, type ReviewEvent} from "../lib/review-trace.ts";
+declare const __STRATEGY_FINGERPRINT__: string;
+const STRATEGY_FINGERPRINT=typeof __STRATEGY_FINGERPRINT__ === "string"?__STRATEGY_FINGERPRINT__:"local-verification";
 declare const __FORWARD_BUILD_SHA__: string;
 const FORWARD_BUILD_SHA = typeof __FORWARD_BUILD_SHA__ === "string" ? __FORWARD_BUILD_SHA__ : "local-verification";
 import { advanceStrategyArena as advancePreviousStrategyArena,
@@ -519,6 +524,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private counterfactualResearchLoaded = false;
   private shadowResearch: ShadowResearchState = initialShadowResearch();
   private shadowResearchLoaded = false;
+  private reviewJournal=initialReviewJournal(0,Date.now());
+  private reviewJournalLoaded=false;
+  private reviewJournalLastWrite=0;
+  private reviewDiagnosticError:string|null=null;
   private forwardBusy = false;
   private forwardLastAttemptAt = 0;
   private forwardProtectionBudget: ProtectionWriteBudget | null = null;
@@ -941,6 +950,16 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.liquidUniverse=universeRows.map(row=>row.symbol);
     this.runtime.radar=successfulRadarRuntime(this.runtime.radar,now,universeRows.length,[]);
     this.runtime.lastRadarAt=now;
+    if(this.forwardState&&this.reviewJournal.accountStartedAt===this.forwardState.startedAt){
+      try{const selected=new Set(universeRows.map(r=>r.symbol));
+        recordDiscoveryReview(this.reviewJournal,{at:now,sourceAt:this.gateRadarAt||null,catalogCount:this.contractCatalog.size,
+          radarInputCount:eligibleRows.length,eligibleCount:executionEligible.length,
+          selected:universeRows.map((r,i)=>({symbol:r.symbol,rank:i+1,source:r.selectionSource,score:r.activityScore})),
+          sampledOutside:eligibleRows.filter(r=>!selected.has(r.symbol)).sort((a,b)=>Math.abs(b.shortMoveRate??0)-Math.abs(a.shortMoveRate??0))
+            .slice(0,6).map(r=>({symbol:r.symbol,shortMoveRate:r.shortMoveRate??0,
+              reason:forwardExecutionUniverseEligible(r)?"OUTSIDE_RANKED_ANALYSIS_POOL":"OUTSIDE_EXECUTION_UNIVERSE"}))});
+      }catch{this.reviewDiagnosticError="DISCOVERY_REVIEW_CAPTURE_FAILED";}
+    }
     // Gate realtime capacity is execution-only: open exposure and candidates
     // that are actually eligible. Analysis-only markets stay on Bybit/OKX/KuCoin.
     const protectedSymbols=[...this.currentAuthorityProtectionSymbols()];
@@ -1110,6 +1129,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       catch{this.shadowResearch=initialShadowResearch(now);}
       this.shadowResearchLoaded=true;
     }
+    if(!this.reviewJournalLoaded||this.reviewJournal.accountStartedAt!==this.forwardState.startedAt){
+      try{this.reviewJournal=normalizeReviewJournal(await this.ctx.storage.get(REVIEW_JOURNAL_KEY),this.forwardState.startedAt,now);}
+      catch{this.reviewJournal=initialReviewJournal(this.forwardState.startedAt,now);this.reviewDiagnosticError="REVIEW_JOURNAL_RESTORE_UNAVAILABLE";}
+      this.reviewJournalLoaded=true;
+    }
     // normalizeForward already upgrades old records in place. Strategy revisions
     // must never close positions, replace startedAt or create a fresh 1000U ledger.
     return false;
@@ -1153,6 +1177,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     catch{reservation.finish(false);}
   }
 
+  private async persistReviewJournal(now:number){
+    if(now-this.reviewJournalLastWrite<300_000||this.reviewJournal.updatedAt<=this.reviewJournal.persistedAt)return;
+    this.reviewJournalLastWrite=now;
+    const reservation=this.reserveNonAlarmWrites(1,512);if(!reservation){this.reviewDiagnosticError="REVIEW_WRITE_BUDGET_DEFERRED";return;}
+    const saved={...this.reviewJournal,persistedAt:now};
+    try{await this.ctx.storage.put(REVIEW_JOURNAL_KEY,saved);this.reviewJournal.persistedAt=now;reservation.finish(true);this.reviewDiagnosticError=null;}
+    catch{reservation.finish(false);this.reviewDiagnosticError="REVIEW_WRITE_FAILED";}
+  }
+
   private async advanceForwardNow(now: number, allowDataCycle = true) {
     if (this.forwardBusy) return;
     this.forwardBusy = true;
@@ -1167,11 +1200,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         this.forwardLastAttemptAt=state.lastQuoteCycleAt;return;
       }
       this.forwardLastAttemptAt=now;
-      const previous = state;
+      const previous = state,reviewEvents:ReviewEvent[]=[],executionQuotes=this.forwardQuotes(now);
       const next = advanceForward({ state: previous, now, paths: this.strategyCandles,minutePaths:this.forwardMinutePaths(),
-        daily:this.turnDailyCandles,quotes:this.forwardQuotes(now),analysisQuotes:this.forwardAnalysisQuotes(now),contracts:this.regimeContracts(),
+        daily:this.turnDailyCandles,quotes:executionQuotes,analysisQuotes:this.forwardAnalysisQuotes(now),contracts:this.regimeContracts(),
         entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue,
-        research:{rolling:this.shadowResearch.market[0]?.rolling??null} });
+        research:{rolling:this.shadowResearch.market[0]?.rolling??null},reviewTrace:event=>{if(reviewEvents.length<128)reviewEvents.push(event);} });
+      try{captureTradeReviews(previous,next.state,now,FORWARD_BUILD_SHA,STRATEGY_FINGERPRINT,executionQuotes);}
+      catch{this.reviewDiagnosticError="TRADE_REVIEW_CAPTURE_FAILED";}
       if (next.changed || !previous.storage.persistedAt) {
         next.state.storage = { persistedAt: now, error: null };
         const prepared = await prepareForwardWrite(previous.storage.persistedAt ? previous : null, next.state, now, {compact:true});
@@ -1212,6 +1247,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // only after its atomic commit. A failed write retains the old authority.
       this.forwardState = next.state;
       this.forwardError = null;
+      try{
+        const known=new Set(this.reviewJournal.candidates.map(r=>r.id));
+        const discovered:ReviewEvent[]=next.state.opportunities.filter(o=>!known.has(o.id)).map(o=>({at:now,id:o.id,symbol:o.symbol,
+          stage:"CANDIDATE_OBSERVED",side:o.side,reason:o.eligible?"STRATEGY_ELIGIBLE":"STRATEGY_NOT_ELIGIBLE",price:o.price,plan:o.tradePlan,expiresAt:o.expiresAt}));
+        appendReviewEvents(this.reviewJournal,[...discovered,...reviewEvents],now);
+      }catch{this.reviewDiagnosticError="CANDIDATE_REVIEW_CAPTURE_FAILED";}
       // Publish only committed lifecycle events. A source born in the candle
       // lane must not wait for the next alarm; a source closed while Gate is
       // awaiting I/O must wake the serialized reconciler as well.
@@ -3352,6 +3393,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // They never feed back into entry, exit, risk or LIVE execution.
       await this.advanceCounterfactualResearchNow(Date.now(),true);
       await this.advanceShadowResearchNow(Date.now());
+      await this.persistReviewJournal(Date.now());
       this.runtime.subrequestCount+=subrequests;
       this.runtime.maxSubrequestsInAlarm=Math.max(this.runtime.maxSubrequestsInAlarm,subrequests);
     })().catch(error=>{this.runtime.strategyLogError=`adaptive: ${safeError(error)}`;});
@@ -3479,43 +3521,36 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       return json({...binding,currentSource:this.currentMirrorSource(id),actual});
     }
     if (path === "/forward-export" && request.method === "GET") {
-      await this.ensureAlarm();
-      const exportedAt=Date.now();await this.ensureAdaptiveAccount(exportedAt);
-      await this.advanceCounterfactualResearchNow(exportedAt,false);
-      await this.advanceShadowResearchNow(exportedAt);
-      const state=this.forwardState;
-      const researchTrades=state?[...state.positions,...state.history].map(trade=>({
-        id:trade.id,symbol:trade.symbol,side:trade.side,status:trade.status,openedAt:trade.openedAt,closedAt:trade.closedAt,
-        durationMs:Math.max(0,(trade.closedAt??exportedAt)-trade.openedAt),
-        leverage:trade.leverage,margin:trade.margin,notional:trade.notional,plannedRisk:trade.plannedRisk,
-        entry:trade.entryContext?{provenance:"RECORDED_AT_ENTRY",...trade.entryContext}:{
-          provenance:"LEGACY_POSITION_WITHOUT_ENTRY_CONTEXT",
-          note:"该持仓早于入场上下文持久化上线；只保留当时已存在的turn/forecast/rule字段，不用当前状态伪造入场原因。",
-          timeframe:trade.turn?.timeframe??null,side:trade.side,signalAt:trade.turn?.signalAt??null,
-          turnProbability:trade.turn?.entryTurnProbability??null,continuationScore:trade.turn?.entryContinuation??null,
-          directionConfidence:trade.turn?.entryDirectionConfidence??null,forecast:trade.forecast??null,ruleReason:trade.rule.reason,
-        },
-        holdAssessment:trade.holdValue??null,profitLifecycle:trade.profitLifecycle??null,
-        path:{maxFavorableRate:trade.favorable,maxAdverseRate:trade.adverse,lastPrice:trade.lastPrice,lastQuoteAt:trade.lastQuoteAt},
-        exit:trade.status==="CLOSED"?{reason:trade.exitReason,closedAt:trade.closedAt,exitPrice:trade.exitPrice,
-          netPnl:trade.netPnl,grossPnl:trade.grossPnl,audit:trade.exitAudit??null}:null,
-      })): [];
-      return json({ exportedAt, forward: this.forwardView(exportedAt),
-        marketData:{transport:this.gateStream.status(exportedAt),feedQuality:this.runtime.feedQuality,
+      if(!this.forwardState||!this.authorityReady)return json({error:"权威账户尚未恢复，不能导出空账户"},503);
+      if(url.searchParams.get("page")==="archive"){
+        const startedAt=Number(url.searchParams.get("accountStartedAt")),asOf=Number(url.searchParams.get("asOf"));
+        if(startedAt!==this.forwardState.startedAt)return json({error:"REVIEW_ACCOUNT_CHANGED"},409);
+        if(asOf>Date.now())return json({error:"INVALID_REVIEW_CUTOFF"},400);
+        try{return json(await readReviewArchivePage(this.ctx.storage,startedAt,asOf,url.searchParams.get("cursor")));}
+        catch{return json({error:"REVIEW_ARCHIVE_UNAVAILABLE_OR_INVALID_CURSOR"},400);}
+      }
+      const exportedAt=Date.now(),view=structuredClone(this.forwardView(exportedAt));
+      const quotes=this.forwardQuotes(exportedAt),minutePaths=this.forwardMinutePaths();
+      // No alarm rearming, account normalization, research advancement, Gate calls or writes on export.
+      return json(buildReviewSnapshot({view,exportedAt,buildSha:FORWARD_BUILD_SHA,strategyFingerprint:STRATEGY_FINGERPRINT,
+        counterfactual:counterfactualResearchView(this.counterfactualResearch),shadow:shadowResearchView(this.shadowResearch),
+        journal:structuredClone(this.reviewJournal),
+        marketData:{sources:this.marketHub.status(exportedAt),transport:this.gateStream.status(exportedAt),feedQuality:this.runtime.feedQuality,
           symbols:this.runtime.symbols.map(symbol=>({symbol,quoteAt:this.runtime.evidence[symbol]?.observedAt??null,
-            entryReady:this.forwardQuotes(exportedAt)[symbol]?.entryReady===true,
-            completedMinuteAt:this.forwardMinutePaths()[symbol]?.at(-1)
-              ?(this.forwardMinutePaths()[symbol]!.at(-1)!.time+60)*1_000:null,
-            failure:this.runtime.feedFailures[symbol]??null}))},
-        measurements: state?.relationEngine?.samples ?? [],
-        retainedLegacyResearch:{version:"forward-path-relation-v3",rules:state?.relationEngine?.rules??[],diagnostics:state?.relationEngine?.diagnostics??null},
-        marketIntelligenceResearch:{version:ADAPTIVE_ENGINE_VERSION,state:state?.extremumRegime??null,
-          purpose:"记录超大周期、大方向、短期变化、证据池、相关组、相对残差、跨交易所共识以及每笔独立交易假设"},
-        research:{version:"market-intelligence-v1-trade-review",purpose:"逐单复盘入场时市场叙事、相关组、相对优势、MFE/MAE、假设失效和利润保护",trades:researchTrades},
-        counterfactualResearch:counterfactualResearchView(this.counterfactualResearch),
-        shadowResearch:shadowResearchView(this.shadowResearch),
-        archiveEndpoint: "/api/forward/archive",
-        completeness: "交易主账本与反事实研究仍隔离；counterfactualResearch只记录平仓后/未执行候选路径。shadowResearch继续保存市场几何、入场位置、响应质量和盈利转化，其中滚动市场几何只作为Lifecycle Research的只读环境输入；真实开平仓仍由Forward主账本提交并由Lifecycle Research输出HOLD/WATCH/PROTECT/EXIT执行契约。" });
+            entryReady:quotes[symbol]?.entryReady===true,completedMinuteAt:minutePaths[symbol]?.at(-1)
+              ?(minutePaths[symbol]!.at(-1)!.time+60)*1000:null,failure:this.runtime.feedFailures[symbol]??null}))},
+        runtime:{reviewError:this.reviewDiagnosticError,lastSuccessAt:this.runtime.lastSuccessAt,lastError:this.runtime.lastError,
+          compression:this.forwardCompression,
+          liveAssessment:this.runtime.live.requestedEnabled?"CHECK_SESSION_EVIDENCE":"OWNER_OFF_NOT_A_COPY_FAILURE",
+          liveSession:{requestedEnabled:this.runtime.live.requestedEnabled,operational:this.runtime.live.operational,
+            changedAt:this.runtime.live.changedAt,lastSyncAt:this.runtime.live.lastSyncAt},
+          liveAudit:this.runtime.live.auditEvents.slice(-100),
+          liveEntries:Object.values(this.runtime.live.entries).filter((e):e is LiveEntry=>!!e).map(e=>({sourceId:e.mirrorSourceId??e.planId,
+            symbol:e.symbol,status:e.status,createdAt:e.createdAt,submittedAt:e.marketSubmittedAt??null,exchangeOrderId:e.exchangeOrderId,
+            stopOrderId:e.stopOrderId,stopSubmittingAt:e.stopSubmittingAt,lastError:e.lastError})),
+          livePositions:Object.values(this.runtime.live.positions).filter((e):e is LivePosition=>!!e).map(e=>({sourceId:e.mirrorSourceId??e.id,
+            symbol:e.symbol,status:e.status,exchangeUpdatedAt:e.exchangeUpdatedAt,exitRequestedAt:e.exitRequestedAt,
+            stopOrderId:e.stopOrderId,stopPrice:e.stopPrice,exitOrderId:e.exitOrderId??null}))}}));
     }
     if (path === "/forward-equity" && request.method === "GET") {
       const s=this.forwardState;
@@ -4022,7 +4057,7 @@ const worker = {
           executionIsolation:true,guestProgramAccess:false},topLevelCpuMs: performance.now() - started }, live ? 200 : 503);
     }
     if (url.pathname === "/api/runtime" && request.method === "GET") return runtimeStatus(env, true, await ownerAuthenticated(request, env));
-    if (url.pathname === "/api/forward/export" && request.method === "GET") return env.MARKET_STREAM.getByName("primary").fetch("https://market-stream/forward-export");
+    if (url.pathname === "/api/forward/export" && request.method === "GET") return env.MARKET_STREAM.getByName("primary").fetch(`https://market-stream/forward-export${url.search}`);
     if (url.pathname === "/api/forward/equity" && request.method === "GET") return env.MARKET_STREAM.getByName("primary").fetch(`https://market-stream/forward-equity${url.search}`);
     if (url.pathname === "/api/forward/archive" && request.method === "GET") return env.MARKET_STREAM.getByName("primary").fetch(`https://market-stream/forward-archive${url.search}`);
     if (url.pathname === "/api/history" && request.method === "GET") return paperHistory(url, env);

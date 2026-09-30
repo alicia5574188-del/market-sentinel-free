@@ -205,7 +205,8 @@ test("counterfactual research is isolated from trading authority and exported fo
   assert.match(optional,/advanceCounterfactualResearchNow\(Date\.now\(\),true\)/);
   assert.ok(optional.indexOf("advanceForwardNow(Date.now(),true)")<optional.indexOf("advanceCounterfactualResearchNow(Date.now(),true)"),
     "research must run only after authoritative PAPER processing");
-  assert.match(worker,/counterfactualResearch:counterfactualResearchView/);
+  assert.match(worker,/counterfactual:counterfactualResearchView/);
+  assert.match(worker,/buildReviewSnapshot/);
   assert.match(research,/RESEARCH_CHECKPOINTS=\[5,15,30,60,120,240\]/);
   assert.match(research,/ACCOUNT_RESET/);
   assert.match(research,/FILTERED_NOT_MATURE/);
