@@ -61,6 +61,11 @@ function compactClosedTrade(t:Trade,keepIntelligence:boolean){
   return row;
 }
 function withoutReview(t:Trade){const row={...t};delete row.review;return row;}
+function archivePositionSummary(t:Trade){
+  return{id:t.id,symbol:t.symbol,side:t.side,status:t.status,openedAt:t.openedAt,entryPrice:t.entryPrice,lastPrice:t.lastPrice,
+    notional:t.notional,margin:t.margin,plannedRisk:t.plannedRisk,stopPrice:t.stopPrice,profitFloorRate:t.profitFloorRate??0,
+    thesisId:t.entryContext?.thesisId??null,tradePlan:t.liquidityLifecycle?.currentPlan??t.entryContext?.tradePlan??null};
+}
 function hotProjection(next:ForwardState,includeSamples=true){
   let full=Math.min(FORWARD_HOT_HISTORY_FULL,next.history.length),
     total=Math.min(FORWARD_HOT_HISTORY_TOTAL,next.history.length),
@@ -354,7 +359,11 @@ export async function prepareForwardWrite(previous:ForwardState|null,next:Forwar
   const trades=[...next.positions,...next.history].filter(t=>subjects.has(t.id));
   const packet={at:now,version:FORWARD_VERSION,engineVersion:next.engineVersion,policyVersion:next.policyVersion,
     startedAt:next.startedAt,revision:next.revision,events,trades:trades.map(withoutReview),
-    account:{balance:next.balance,positions:next.positions.map(withoutReview),fees:next.fees,fundingAllowance:next.fundingAllowance,
+    // The authoritative account state is persisted separately in the paged head/chunks.
+    // Archive packets keep a compact position snapshot and full event-subject trades,
+    // avoiding duplicate rich active-position payloads from exhausting the single-value
+    // ceiling while preserving every trade referenced by an ENTRY/EXIT/PROTECTION event.
+    account:{balance:next.balance,positions:next.positions.map(archivePositionSummary),fees:next.fees,fundingAllowance:next.fundingAllowance,
       turnover:next.turnover,resolved:next.resolved,wins:next.wins,maxDrawdown:next.maxDrawdown},
     daily:next.daily.at(-1)??null,marketPulse:next.marketPulse,
     opportunities:next.opportunities.slice(0,12).map(o=>({symbol:o.symbol,side:o.side,mode:o.mode,score:o.score,eligible:o.eligible,
