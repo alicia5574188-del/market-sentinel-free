@@ -493,12 +493,12 @@ export function liquidityTargetProfitFloor(input:{
 }){
   const cost=Math.max(.0005,input.costRate??ROUND_TRIP_COST),peakNet=Math.max(0,input.peakFavorableRate-cost);
   if(!(input.currentPrice>0)||input.targetLower==null||input.targetUpper==null
-    ||peakNet<Math.max(cost*4,input.originalStopRate*.60))return 0;
+    ||peakNet<Math.max(cost*3,input.originalStopRate*.40))return 0;
   const reached=input.currentPrice>=input.targetLower&&input.currentPrice<=input.targetUpper,
     distance=input.side==="LONG"?Math.max(0,input.targetLower-input.currentPrice)/input.currentPrice:
       Math.max(0,input.currentPrice-input.targetUpper)/input.currentPrice,
     near=reached||distance<=Math.max(cost*1.5,input.originalStopRate*.25);
-  return near?cost+peakNet*.30:0;
+  return near?cost+peakNet*.50:0;
 }
 
 export function environmentDecayProfitFloor(input:{
