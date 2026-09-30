@@ -586,7 +586,7 @@ test("rotation makes relative/reversal logic more suitable than continuation wit
   assert.equal(route.playbook,"ROTATION_RELATIVE");assert.ok(route.riskScale>=.70);
 });
 
-test("historical environment losses shrink risk and require prove-retest-restart instead of stopping trading",()=>{
+test("historical environment PnL stays diagnostic; live routing is driven by current market condition",()=>{
   const perf=initialEnvironmentPerformanceState();
   for(let i=0;i<6;i++)recordEnvironmentOutcome(perf,{environment:"TRANSITION",playbook:"TRANSITION_PROBE",netPnl:-5,plannedRisk:5,now:T+i});
   const factor=environmentPerformanceFactor(perf,"TRANSITION","TRANSITION_PROBE");
@@ -604,9 +604,8 @@ test("historical environment losses shrink risk and require prove-retest-restart
     score:82,premium:true,edgeRatio:2,netRemainingSpaceRate:.025,pullbackRiskRate:.011,thesisBars:3,confirmationStage:"READY"}});
   const b=routeEnvironmentOpportunity({market,evolution,symbol,performanceFactor:factor,opportunity:{side:"LONG",mode:"REVERSAL",
     score:82,premium:true,edgeRatio:2,netRemainingSpaceRate:.025,pullbackRiskRate:.011,thesisBars:3,confirmationStage:"READY"}});
-  assert.ok(b.riskScale<a.riskScale);
-  assert.ok(b.riskScale>=.45,"bad environment history reduces size but cannot reduce risk to zero");
-  assert.equal(b.forceRetest,true,"poor realized playbook performance must demand prove-retest-restart before another entry");
+  assert.equal(a.riskScale,b.riskScale);
+  assert.ok(a.riskScale>=.70,"environment can reduce size but cannot turn trading off");
 });
 
 test("one-minute fast pressure can shorten the future window without flipping the formal market label",()=>{
