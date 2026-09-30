@@ -171,7 +171,7 @@ export function deriveFastEnvironmentSignal(rows:Array<{medianShortMove?:number;
   const usable=rows.filter(x=>(x.sourceCount??0)>=2&&Number.isFinite(x.medianShortMove));
   if(!usable.length)return{breadth:0,agreement:0,samples:0};
   const signed=usable.map(x=>(x.medianShortMove??0)>.00008?1:(x.medianShortMove??0)<-.00008?-1:0),
-    breadth=signed.reduce((a,b)=>a+b,0)/usable.length,
+    breadth=signed.reduce<number>((a,b)=>a+b,0)/usable.length,
     agreement=usable.reduce((a,b)=>a+clip(b.directionalAgreement??0),0)/usable.length;
   return{breadth:clip(breadth,-1,1),agreement:clip(agreement),samples:usable.length};
 }
