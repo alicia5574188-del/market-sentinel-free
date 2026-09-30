@@ -28,9 +28,9 @@ function minuteProgress(rows:CandleLike[]|undefined,side:"LONG"|"SHORT",startedA
     positive=moves.filter(v=>v>0).length,negative=moves.filter(v=>v<0).length;
   return{support:progress>0&&positive>=negative,concern:progress<0&&negative>positive,progress,count:eligible.length};
 }
-export function entryResponseWindowMs(input:{score:number;edgeRatio:number;sourceCount:number;disagreementRate:number;mode?:string}){
+export function entryResponseWindowMs(input:{score:number;edgeRatio:number;sourceCount:number;disagreementRate:number;mode?:string;fastLaneAllowed?:boolean}){
   const qualifiesForFast=input.score>=88&&input.edgeRatio>=1.60&&input.sourceCount>=3&&input.disagreementRate<=.0035,
-    fast=input.mode!=="RELATIVE"&&qualifiesForFast;
+    fast=input.mode!=="RELATIVE"&&input.fastLaneAllowed!==false&&qualifiesForFast;
   // RELATIVE anomalies may still keep the same observation time, but they must
   // earn entry through the ordinary response thresholds instead of the chase lane.
   return{fastLane:fast,windowMs:qualifiesForFast?180_000:150_000};
@@ -38,12 +38,13 @@ export function entryResponseWindowMs(input:{score:number;edgeRatio:number;sourc
 
 export function evaluateEntryResponse(input:{
   now:number;side:"LONG"|"SHORT";score:number;edgeRatio:number;pullbackRiskRate:number;stopRate:number;sourceCount:number;
-  disagreementRate:number;mode?:string;price:number;memory:EntryResponseMemory;state?:MarketSymbolState;quote?:QuoteLike;minutePath?:CandleLike[];
+  disagreementRate:number;mode?:string;fastLaneAllowed?:boolean;price:number;memory:EntryResponseMemory;state?:MarketSymbolState;quote?:QuoteLike;minutePath?:CandleLike[];
   costRate?:number;allowRetest?:boolean;
 }):EntryResponseDecision{
   const d=dir(input.side),cost=Math.max(.0005,input.costRate??DEFAULT_COST),q=input.quote,state=input.state,
     sourceCount=Math.max(input.sourceCount,state?.sourceCount??0,q?.sourceCount??0),disagreement=q?.disagreementRate??input.disagreementRate,
-    profile=entryResponseWindowMs({score:input.score,edgeRatio:input.edgeRatio,sourceCount,disagreementRate:disagreement,mode:input.mode}),
+    profile=entryResponseWindowMs({score:input.score,edgeRatio:input.edgeRatio,sourceCount,disagreementRate:disagreement,mode:input.mode,
+      fastLaneAllowed:input.fastLaneAllowed}),
     currentAdvance=d*(input.price/input.memory.initialPrice-1),
     bestAdvance=Math.max(input.memory.bestAdvanceRate,currentAdvance),
     maxAdverse=Math.max(input.memory.maxAdverseRate,-currentAdvance,0),

@@ -65,7 +65,7 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
     <section className="fr-page-title fr-exec-title">
       <small>MARKET INTELLIGENCE · WINNER CORE</small>
       <h1>执行</h1>
-      <p>先看市场判断和当前仓位，再看系统已经发现什么机会、正在等什么入场位置。研究层只提供证据，不再和主交易逻辑争夺执行权。</p>
+      <p>先看市场判断和当前仓位，再看未来条件还能维持多久、转变压力是否上升，以及当前交易方式与未来窗口是否匹配。</p>
     </section>
 
     <section className="fr-section fr-exec-primary">
@@ -110,16 +110,16 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
     </section>
 
     <section className="fr-section">
-      <div className="fr-section-head"><div><small>RESEARCH CONTEXT</small><h2>市场环境 · 仅作为研究背景</h2>
-        <p>环境标签继续记录市场正在趋势、过渡还是轮动，但不会改变候选资格、评分、仓位或主动平仓。</p></div>
-        <span>{environmentName(environmentRouter?.currentEnvironment)}</span></div>
+      <div className="fr-section-head"><div><small>ENVIRONMENT OUTLOOK</small><h2>未来市场条件</h2>
+        <p>正式环境标签保持稳定；约每分钟只更新持续力、转变压力和未来有效窗口，用来调节交易节奏与仓位，不直接预测价格。</p></div>
+        <span>{environmentRouter?.outlook?.horizonMinutes?environmentRouter.outlook.horizonMinutes+" 分钟窗口":environmentName(environmentRouter?.currentEnvironment)}</span></div>
       <div className="fr-exec-market-grid">
         <span><small>当前环境</small><b>{environmentName(environmentRouter?.currentEnvironment)}</b></span>
-        <span><small>演化阶段</small><b>{evolution(environmentRouter?.phase)}</b></span>
-        <span><small>研究方向</small><b>{environmentRouter?.trendSide?side(environmentRouter.trendSide):"无单边主线"}</b></span>
-        <span><small>交易权</small><b>无 · 只提供背景证据</b></span>
+        <span><small>条件持续力</small><b>{environmentRouter?.outlook?fmt(environmentRouter.outlook.persistenceScore*100,0)+"%":"—"}</b></span>
+        <span><small>转变压力</small><b>{environmentRouter?.outlook?fmt(environmentRouter.outlook.transitionPressure*100,0)+"%":"—"}</b></span>
+        <span><small>利润扩张</small><b>{environmentRouter?.outlook?.profitExpansion==="HIGH"?"高":environmentRouter?.outlook?.profitExpansion==="LOW"?"低":environmentRouter?.outlook?.profitExpansion==="NORMAL"?"正常":"—"}</b></span>
       </div>
-      <p className="fr-exec-judgement"><b>背景判断：</b>{environmentRouter?.reason??"正在建立市场环境背景。"}</p>
+      <p className="fr-exec-judgement"><b>未来条件判断：</b>{environmentRouter?.reason??"正在建立市场条件持续性基线。"}</p>
     </section>
 
     <section className="fr-section fr-hypothesis-section">

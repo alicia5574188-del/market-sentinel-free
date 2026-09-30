@@ -306,22 +306,21 @@ test("execution page always exposes entry execution state independently of top c
 });
 
 
-test("environment classification is research-only and cannot rewrite Market Intelligence orders",async()=>{
-  const [core,execution]=await Promise.all([
-    read("lib/forward-relations.ts"),read("app/market-intelligence-execution.tsx")
+test("environment outlook has bounded execution authority and cannot become a trade veto or risk amplifier",async()=>{
+  const [core,router,execution]=await Promise.all([
+    read("lib/forward-relations.ts"),read("lib/market-intelligence-environment-router.ts"),read("app/market-intelligence-execution.tsx")
   ]);
   const annotate=core.slice(core.indexOf("function annotateLifecycleOpportunities"),core.indexOf("function openIntelligenceTrade"));
-  assert.match(annotate,/classifyMarketEnvironment/);
-  assert.match(annotate,/o\.environmentScore=o\.score/);
-  assert.match(annotate,/o\.environmentRiskScale=1/);
-  assert.match(annotate,/o\.environmentProbe=false/);
-  assert.match(annotate,/o\.environmentForceRetest=false/);
-  assert.doesNotMatch(annotate,/routeEnvironmentOpportunity|environmentPerformanceFactor|o\.eligible=true/);
+  assert.match(annotate,/routeEnvironmentOpportunity/);
+  assert.match(annotate,/o\.environmentRiskScale=route\.riskScale/);
+  assert.doesNotMatch(annotate,/o\.eligible\s*=/,"environment outlook may rank/scale but cannot manufacture or veto eligibility");
   const open=core.slice(core.indexOf("function openIntelligenceTrade"),core.indexOf("export function extremeResidualConfirmationProfile"));
-  assert.match(open,/riskRate=o\.premium\?\.0065:\.0055/);
-  assert.doesNotMatch(open,/environmentRiskScale=clip|environmentProbe\?\.0010/);
-  assert.match(execution,/市场环境 · 仅作为研究背景/);
-  assert.match(execution,/交易权.*无 · 只提供背景证据/);
+  assert.match(open,/Math\.max\(\.70,Math\.min\(1,o\.environmentRiskScale\?\?1\)\)/);
+  assert.doesNotMatch(open,/environmentRiskScale[^;\n]*>1|riskRate\s*\*\s*1\.[1-9]/,"environment outlook cannot amplify risk above the original strategy");
+  assert.match(router,/mainline=fit>=\.75&&outlook\.horizonMinutes>=45/);
+  assert.match(router,/forceRetest=false/,"environment outlook must not revive a second environment-specific entry state machine");
+  assert.match(execution,/未来市场条件/);
+  assert.match(execution,/不直接预测价格/);
 });
 
 test("environment Probe-Prove-Restart no longer has entry authority",async()=>{
@@ -333,15 +332,21 @@ test("environment Probe-Prove-Restart no longer has entry authority",async()=>{
   assert.match(advance,/等待原方向重新推进/);
 });
 
-test("environment memory may persist for research but cannot scale risk or force retests",async()=>{
-  const core=await read("lib/forward-relations.ts");
+test("environment PnL memory remains diagnostic while current causal outlook owns bounded routing",async()=>{
+  const [core,router]=await Promise.all([
+    read("lib/forward-relations.ts"),read("lib/market-intelligence-environment-router.ts")
+  ]);
   assert.match(core,/next\.environmentPerformance=structuredClone\(prior\.environmentPerformance\)/);
   assert.match(core,/next\.environmentContext=structuredClone\(prior\.environmentContext\)/);
   assert.match(core,/recordEnvironmentOutcome\(s\.environmentPerformance/);
   const annotate=core.slice(core.indexOf("function annotateLifecycleOpportunities"),core.indexOf("function openIntelligenceTrade"));
-  assert.doesNotMatch(annotate,/routeEnvironmentOpportunity|environmentPerformanceFactor/);
+  assert.match(annotate,/routeEnvironmentOpportunity/);
+  assert.doesNotMatch(annotate,/environmentPerformanceFactor/,"historical wins/losses cannot decide the current market condition");
+  const route=router.slice(router.indexOf("export function routeEnvironmentOpportunity"));
+  assert.match(route,/void input\.performanceFactor/);
+  assert.match(route,/riskScale=clip\(\.70\+\.30\*fit,\.70,1\)/);
   const advance=core.slice(core.indexOf("function advanceEntryResponses"),core.indexOf("export function fillForwardPortfolio"));
-  assert.doesNotMatch(advance,/requiresProbeRetest\).*environment|environmentProbeRetestDecision/);
+  assert.doesNotMatch(advance,/environmentProbeRetestDecision/,"outlook must reuse the normal entry response path");
 });
 
 test("LIVE mirror readiness uses fresh executable BBO, not PAPER entryReady admission state",async()=>{

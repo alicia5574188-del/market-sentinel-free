@@ -20,9 +20,10 @@ import { deriveMarketEvolution, deriveOpportunityLifecycle, extendedEntryConfirm
 import { advanceMarketHypothesisResearch, entryHypothesisGuidance, initialMarketHypothesisResearch,
   normalizeMarketHypothesisResearch,
   type EntryHypothesisGuidance, type MarketHypothesisResearchState } from "./market-intelligence-hypothesis-research.ts";
-import { ENVIRONMENT_ROUTER_VERSION, classifyMarketEnvironment,
+import { ENVIRONMENT_OUTLOOK_VERSION, ENVIRONMENT_ROUTER_VERSION, classifyMarketEnvironment, deriveEnvironmentOutlook,
+  deriveFastEnvironmentSignal, environmentModeFit, routeEnvironmentOpportunity,
   initialEnvironmentPerformanceState, normalizeEnvironmentPerformanceState, recordEnvironmentOutcome,
-  type EnvironmentPerformanceState, type EnvironmentPlaybook, type MarketEnvironment, type RouteAlignment
+  type EnvironmentOutlook, type EnvironmentPerformanceState, type EnvironmentPlaybook, type MarketEnvironment, type RouteAlignment
 } from "./market-intelligence-environment-router.ts";
 
 /**
@@ -91,7 +92,7 @@ export type Opportunity={
   extendedConfirmation?:boolean;lifecycleReason?:string;
   environment?:MarketEnvironment;playbook?:EnvironmentPlaybook;routeAlignment?:RouteAlignment;
   environmentPriority?:number;environmentScore?:number;environmentRiskScale?:number;environmentProbe?:boolean;
-  environmentForceRetest?:boolean;environmentMainline?:boolean;environmentReason?:string;
+  environmentForceRetest?:boolean;environmentMainline?:boolean;environmentModeFit?:number;environmentOutlook?:EnvironmentOutlook;environmentReason?:string;
   probeImpulseMin?:number;probePullbackMin?:number;probeRestartMin?:number;
   futureResearchAction?:EntryHypothesisGuidance["action"];futureResearchReason?:string;futureHypothesisIds?:string[];
 };
@@ -114,6 +115,8 @@ export type EntryContext={
   marketEvolutionPhase?:MarketEvolutionState["phase"];opportunityLifecyclePhase?:OpportunityLifecyclePhase;
   extendedConfirmation?:boolean;environment?:MarketEnvironment;playbook?:EnvironmentPlaybook;routeAlignment?:RouteAlignment;
   environmentRiskScale?:number;environmentProbe?:boolean;environmentReason?:string;
+  environmentOutlookVersion?:typeof ENVIRONMENT_OUTLOOK_VERSION;environmentModeFit?:number;environmentHorizonMinutes?:15|30|45|60;
+  environmentPersistenceScore?:number;environmentTransitionPressure?:number;environmentProfitExpansion?:EnvironmentOutlook["profitExpansion"];
   baseEntryScore?:number;environmentScore?:number;
   futureResearchAction?:EntryHypothesisGuidance["action"];futureResearchReason?:string;futureHypothesisIds?:string[];
 };
@@ -157,7 +160,7 @@ export type ForwardState={
   familyExperiment:FamilyExperimentState;structuralInterrupt:StructuralInterruptState;
   hypothesisResearch:MarketHypothesisResearchState;environmentPerformance:EnvironmentPerformanceState;
   environmentContext:{version:typeof ENVIRONMENT_ROUTER_VERSION;environment:MarketEnvironment;phase:MarketEvolutionState["phase"];
-    trendSide:"LONG"|"SHORT"|null;updatedAt:number;reason:string};
+    trendSide:"LONG"|"SHORT"|null;updatedAt:number;reason:string;outlook?:EnvironmentOutlook};
   entryValidations:Record<string,EntryValidation>;
   marketPulse:MarketPulse;lastEntryAt:Record<string,number>;lastExitAt:Record<string,number>;lastSide:Record<string,"LONG"|"SHORT">;
   consumedTheses:Record<string,number>;
@@ -462,9 +465,17 @@ function catastrophicWinnerInsuranceFloor(t:Trade,originalStopRate:number){
   return Math.max(ROUND_TRIP_COST*1.25,Math.min(originalStopRate*.55,peakNet*.12));
 }
 
+export function environmentDecayProfitFloor(input:{
+  peakFavorableRate:number;originalStopRate:number;modeFit:number;horizonMinutes:15|30|45|60;costRate?:number;
+}){
+  const cost=Math.max(.0005,input.costRate??ROUND_TRIP_COST),peakNet=Math.max(0,input.peakFavorableRate-cost),
+    meaningfulPeak=Math.max(cost*4,input.originalStopRate*.55);
+  if(input.horizonMinutes>30||input.modeFit>=.45||peakNet<meaningfulPeak)return 0;
+  return cost+peakNet*.25;
+}
+
 function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now:number,minutePaths:Record<string,Candle[]>|undefined,
-  marketEvolution:MarketEvolutionState){
-  void marketEvolution;
+  marketEvolution:MarketEvolutionState,environmentOutlook:EnvironmentOutlook){
   const closed=new Set<string>();
   for(const t of s.positions){
     if(t.entryContext?.strategyVersion!==MARKET_INTELLIGENCE_VERSION)continue;
@@ -514,6 +525,27 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
         event(s,now,"PROTECTION",t.id,
           `大赢家最后保险已建立：峰值 ${(t.favorable*100).toFixed(2)}%，只防止已证明的大行情最终完整回吐成亏损。`,
           {floorRate:insurance,peakRate:t.favorable,structuralStopRate:originalStopRate});
+      }
+    }
+
+    if(t.entryContext?.environmentOutlookVersion===ENVIRONMENT_OUTLOOK_VERSION&&t.entryContext?.mode){
+      const currentFit=environmentModeFit({market:s.extremumRegime,evolution:marketEvolution,outlook:environmentOutlook,
+        side:t.side,mode:t.entryContext.mode}),
+        environmentFloor=environmentDecayProfitFloor({peakFavorableRate:t.favorable,originalStopRate,modeFit:currentFit,
+          horizonMinutes:environmentOutlook.horizonMinutes,costRate:ROUND_TRIP_COST});
+      if(environmentFloor>0){
+        if(environmentFloor>Math.max(t.profitFloorRate??0,ROUND_TRIP_COST*.8)){
+          if(signed<=environmentFloor){
+            closeTrade(s,t,px,now,"ENVIRONMENT_PROFIT_DECAY_EXIT");closed.add(t.id);continue;
+          }
+          const next=t.entryPrice*(1+d*environmentFloor);
+          if(t.side==="LONG"&&next>t.stopPrice||t.side==="SHORT"&&next<t.stopPrice){
+            t.profitFloorRate=environmentFloor;t.stopPrice=next;
+            event(s,now,"PROTECTION",t.id,
+              `未来市场有效窗口已缩短到约 ${environmentOutlook.horizonMinutes} 分钟，当前交易逻辑适配度仅 ${(currentFit*100).toFixed(0)}%；只锁住已证明净利润的25%，其余空间继续留给行情。`,
+              {floorRate:environmentFloor,peakRate:t.favorable,modeFit:currentFit});
+          }
+        }
       }
     }
   }
@@ -615,20 +647,22 @@ const riskCharge=(t:Trade)=>Math.max(t.plannedRisk,t.entryContext?.portfolioRisk
 function existingRisk(s:ForwardState,side?:"LONG"|"SHORT"){return s.positions.filter(t=>!side||t.side===side).reduce((n,t)=>n+riskCharge(t),0);}
 function cycleRiskAdded(s:ForwardState,since:number){return[...s.positions,...s.history].filter(t=>t.openedAt>=since).reduce((n,t)=>n+riskCharge(t),0);}
 function isIntelligenceOpportunity(o:Opportunity){return o.strategyVersion===MARKET_INTELLIGENCE_VERSION;}
-function annotateLifecycleOpportunities(s:ForwardState,market:MarketEvolutionState){
-  const researchEnvironment=classifyMarketEnvironment(s.extremumRegime,market);
+function annotateLifecycleOpportunities(s:ForwardState,market:MarketEvolutionState,outlook:EnvironmentOutlook){
   for(const o of s.opportunities){
     if(!isIntelligenceOpportunity(o))continue;
     const symbol=s.extremumRegime.symbols[o.symbol];if(!symbol)continue;
     const lifecycle=deriveOpportunityLifecycle({side:o.side,symbol,thesisBars:o.thesisBars??symbol.signalBars,market}),
       future=entryHypothesisGuidance(s.hypothesisResearch,{side:o.side,score:o.score,residualZ:symbol.residualZ,
-        residualPersistence:symbol.residualPersistence,sourceCount:symbol.sourceCount,dataConfidence:symbol.dataConfidence});
+        residualPersistence:symbol.residualPersistence,sourceCount:symbol.sourceCount,dataConfidence:symbol.dataConfidence}),
+      route=routeEnvironmentOpportunity({market:s.extremumRegime,evolution:market,symbol,opportunity:o,outlook});
     o.marketEvolutionPhase=market.phase;o.opportunityLifecyclePhase=lifecycle.phase;o.lifecycleReason=lifecycle.reason;
     o.futureResearchAction=future.action;o.futureResearchReason=future.reason;o.futureHypothesisIds=future.hypothesisIds;
-    // Research describes the market; it does not rewrite the golden opportunity.
-    o.extendedConfirmation=false;o.environment=researchEnvironment;o.environmentScore=o.score;o.environmentRiskScale=1;
-    o.environmentProbe=false;o.environmentForceRetest=false;o.environmentMainline=false;
-    o.environmentReason=`研究背景：${researchEnvironment}；不改变原 Market Intelligence 入场资格、评分、仓位或方向。`;
+    o.extendedConfirmation=false;o.environment=route.environment;o.playbook=route.playbook;o.routeAlignment=route.alignment;
+    o.environmentPriority=route.priority;o.environmentScore=Math.max(0,Math.min(100,o.score+route.scoreDelta));
+    o.environmentRiskScale=route.riskScale;o.environmentProbe=route.probe;o.environmentForceRetest=route.forceRetest;
+    o.environmentMainline=route.mainline;o.environmentModeFit=route.modeFit;o.environmentOutlook=route.outlook;
+    o.probeImpulseMin=route.probeImpulseMin;o.probePullbackMin=route.probePullbackMin;o.probeRestartMin=route.probeRestartMin;
+    o.environmentReason=route.reason;
   }
 }
 
@@ -643,8 +677,8 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
     sideHeadroom=equity*(SIDE_RISK_RATE-.0005)-existingRisk(s,side),
     cycleHeadroom=equity*FIVE_MINUTE_NEW_RISK_RATE-cycleRiskAdded(s,s.lastCandleAt),
     headroom=Math.min(totalHeadroom,sideHeadroom,cycleHeadroom),
-    riskRate=o.premium?.0065:.0055,
-    wantedRisk=equity*riskRate,riskBudget=Math.min(wantedRisk,headroom);
+    riskRate=o.premium?.0065:.0055,environmentRiskScale=Math.max(.70,Math.min(1,o.environmentRiskScale??1)),
+    wantedRisk=equity*riskRate*environmentRiskScale,riskBudget=Math.min(wantedRisk,headroom);
   if(riskBudget<equity*.0035)return"剩余风险预算不足以形成有效仓位";
   const rawNotional=riskBudget/(stopRate+ROUND_TRIP_COST),targetNotional=Math.min(rawNotional,equity*.70),
     leverage=Math.max(1,Math.min(10,Math.floor(contract.leverageMax||10))),mult=Math.max(contract.quantoMultiplier,1e-12),
@@ -683,7 +717,11 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
         invalidationSummary:o.invalidationSummary,entryResidual:o.residual,entryRelativeStrength:o.relativeStrength,
         thesisSince:o.thesisSince,thesisBars:o.thesisBars,marketEvolutionPhase:o.marketEvolutionPhase,
         opportunityLifecyclePhase:o.opportunityLifecyclePhase,extendedConfirmation:o.extendedConfirmation,
-        environment:o.environment,environmentReason:o.environmentReason,
+        environment:o.environment,playbook:o.playbook,routeAlignment:o.routeAlignment,environmentRiskScale:o.environmentRiskScale,
+        environmentProbe:o.environmentProbe,environmentReason:o.environmentReason,
+        environmentOutlookVersion:o.environmentOutlook?.version,environmentModeFit:o.environmentModeFit,
+        environmentHorizonMinutes:o.environmentOutlook?.horizonMinutes,environmentPersistenceScore:o.environmentOutlook?.persistenceScore,
+        environmentTransitionPressure:o.environmentOutlook?.transitionPressure,environmentProfitExpansion:o.environmentOutlook?.profitExpansion,
         futureResearchAction:o.futureResearchAction,futureResearchReason:o.futureResearchReason,futureHypothesisIds:o.futureHypothesisIds},
       forecast:{remainingNetRate:remainingNet,quality:o.score/100,sizingEquity:equity}};
   s.positions.push(t);s.balance-=entryFee;s.fees+=entryFee;s.turnover+=notional;s.lastEntryAt[o.symbol]=now;s.lastSide[o.symbol]=side;
@@ -824,7 +862,8 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
       extreme=extremeResidualConfirmationProfile({residual:o.residual??0,sourceCount,
         dataConfidence:o.dataConfidence??state?.dataConfidence??0,disagreementRate:disagreement,recentExtremeLosses}),
       routedScore=o.environmentScore??o.score,
-      profile=entryResponseWindowMs({score:routedScore,edgeRatio:o.edgeRatio,sourceCount,disagreementRate:disagreement,mode:o.mode}),
+      profile=entryResponseWindowMs({score:routedScore,edgeRatio:o.edgeRatio,sourceCount,disagreementRate:disagreement,mode:o.mode,
+        fastLaneAllowed:!!o.environmentMainline}),
       stable=stableEntryThesisProfile({score:routedScore,premium:!!o.premium,thesisBars:o.thesisBars??state?.signalBars??0,
         stage:o.confirmationStage??state?.stage??"OBSERVE",edgeRatio:o.edgeRatio,sourceCount,
         dataConfidence:o.dataConfidence??state?.dataConfidence??0,netRemainingSpaceRate:o.netRemainingSpaceRate,
@@ -876,7 +915,8 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
     const q=quotes[validation.symbol];if(!freshQuote(q,now)||q!.entryReady!==true){reject("等待实时盘口");continue;}
     const price=validation.side==="LONG"?q!.bestAsk:q!.bestBid,state=s.extremumRegime.symbols[validation.symbol],
       decision=evaluateEntryResponse({now,side:validation.side,score:o.environmentScore??o.score,edgeRatio:o.edgeRatio,pullbackRiskRate:o.pullbackRiskRate,
-        stopRate:o.stopRate,sourceCount:o.sourceCount??0,disagreementRate:o.disagreementRate??0,mode:o.mode,price,
+        stopRate:o.stopRate,sourceCount:o.sourceCount??0,disagreementRate:o.disagreementRate??0,mode:o.mode,
+        fastLaneAllowed:!!o.environmentMainline,price,
         memory:{startedAt:validation.startedAt,deadlineAt:validation.deadlineAt,initialPrice:validation.initialPrice,samples:validation.samples,
           bestAdvanceRate:validation.bestAdvanceRate,maxAdverseRate:validation.maxAdverseRate,
           supportSamples:validation.supportSamples,oppositionSamples:validation.oppositionSamples},
@@ -1021,11 +1061,18 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
 
   if(marketReady&&dataDue)s.hypothesisResearch=advanceMarketHypothesisResearch(s.hypothesisResearch,s.extremumRegime,input.now);
   const marketEvolution=deriveMarketEvolution(s.extremumRegime,input.research),
-    currentEnvironment=classifyMarketEnvironment(s.extremumRegime,marketEvolution);
+    currentEnvironment=classifyMarketEnvironment(s.extremumRegime,marketEvolution),
+    priorOutlook=s.environmentContext.outlook,
+    outlookDue=!priorOutlook||dataDue||input.now-s.environmentContext.updatedAt>=60_000,
+    fastEnvironment=deriveFastEnvironmentSignal(Object.values(input.quotes).filter(q=>freshQuote(q,input.now))),
+    environmentOutlook=outlookDue
+      ?deriveEnvironmentOutlook(s.extremumRegime,marketEvolution,{fast:fastEnvironment,previous:priorOutlook})
+      :priorOutlook;
   s.environmentContext={version:ENVIRONMENT_ROUTER_VERSION,environment:currentEnvironment,phase:marketEvolution.phase,
-    trendSide:marketEvolution.trendSide,updatedAt:input.now,reason:marketEvolution.reason};
-  if(marketReady)annotateLifecycleOpportunities(s,marketEvolution);
-  manageIntelligenceTrades(s,input.quotes,input.now,input.minutePaths,marketEvolution);
+    trendSide:marketEvolution.trendSide,updatedAt:outlookDue?input.now:s.environmentContext.updatedAt,
+    reason:environmentOutlook.reason,outlook:environmentOutlook};
+  if(marketReady)annotateLifecycleOpportunities(s,marketEvolution,environmentOutlook);
+  manageIntelligenceTrades(s,input.quotes,input.now,input.minutePaths,marketEvolution,environmentOutlook);
   // Positions opened before cutover keep their frozen lifecycle and cannot gain
   // new-entry authority from the retired relation/region/interrupt stack.
   markAndManage(s,input.quotes,input.now);

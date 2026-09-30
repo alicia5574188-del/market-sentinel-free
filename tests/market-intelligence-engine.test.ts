@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import {buildMarketIntelligence,initialMarketIntelligenceState,MARKET_INTELLIGENCE_VERSION} from "../lib/market-intelligence-engine.ts";
 import {evaluatePositionIntelligence} from "../lib/position-intelligence-engine.ts";
 import {entryResponseWindowMs,evaluateEntryResponse} from "../lib/market-intelligence-entry-response.ts";
-import {advanceForward,extremeResidualConfirmationProfile,fillForwardPortfolio,initialForward,normalizeForward,
+import {advanceForward,environmentDecayProfitFloor,extremeResidualConfirmationProfile,fillForwardPortfolio,initialForward,normalizeForward,
   entryLocationDecision,resetForwardAccountPreservingLearning,stableEntryLocationDecision,stableEntryThesisProfile} from "../lib/forward-relations.ts";
-import {environmentPerformanceFactor,environmentProbeRetestDecision,initialEnvironmentPerformanceState,
+import {deriveEnvironmentOutlook,deriveFastEnvironmentSignal,environmentModeFit,environmentPerformanceFactor,environmentProbeRetestDecision,initialEnvironmentPerformanceState,
   normalizeEnvironmentPerformanceState,recordEnvironmentOutcome,routeEnvironmentOpportunity} from "../lib/market-intelligence-environment-router.ts";
 
 const T=2_000_000_000_000;
@@ -472,38 +472,41 @@ test("armed thesis fields survive forward normalization instead of silently losi
 });
 
 
-test("environment router preserves full trend capture but converts countertrend reversal into a live Probe path",()=>{
+test("environment outlook preserves a strong aligned continuation lane while uncertain countertrend logic stays smaller",()=>{
   const market=initialMarketIntelligenceState(T);
-  market.narrative.short={...market.narrative.short,bias:"BEARISH",score:-.46,phase:"DECLINING"};
-  market.narrative.major={...market.narrative.major,bias:"BEARISH",score:-.38};
-  market.internals={...market.internals!,breadth3:-.35,synchrony:.48,venuePressure:-.22};
-  const symbol={symbol:"ENA_USDT",watchScore:85,regime:"DIVERGENT" as const,stage:"READY" as const,clusterId:"corr:ADA_USDT",
-    correlation:.75,beta:1,volatility:.004,dataConfidence:96,actualMove:.007,expectedMove:-.002,residual:.009,residualZ:1.1,
-    residualPersistence:1,relativeStrength:.68,longScore:86,shortScore:25,pathLong:.7,pathShort:.3,roomLong:.03,roomShort:.01,
-    sourceCount:5,venueAgreement:.9,venuePressure:.25,reasons:[],signalSide:"LONG" as const,signalSince:T-600_000,signalBars:3,signalLastBar:T-300_000};
-  const transition={version:"market-intelligence-lifecycle-v1" as const,phase:"TRANSITIONAL" as const,trendSide:"SHORT" as const,
-    expansionScore:.43,rotationRisk:.58,reason:"transition",decisionStable:false,stabilityScore:.35};
-  const probe=routeEnvironmentOpportunity({market,evolution:transition,symbol,opportunity:{side:"LONG",mode:"REVERSAL",score:85,premium:true,
-    edgeRatio:2.2,netRemainingSpaceRate:.03,pullbackRiskRate:.012,thesisBars:3,confirmationStage:"READY"}});
-  assert.equal(probe.environment,"TRANSITION");assert.equal(probe.playbook,"TRANSITION_PROBE");
-  assert.equal(probe.alignment,"COUNTER");assert.equal(probe.forceRetest,true);assert.equal(probe.probe,true);
-  assert.ok(probe.riskScale>0&&probe.riskScale<=.40,"countertrend trade keeps trading authority but at Probe risk");
-
   market.narrative.short={...market.narrative.short,bias:"BULLISH",score:.48,phase:"ADVANCING"};
   market.narrative.major={...market.narrative.major,bias:"BULLISH",score:.42};
-  market.internals={...market.internals!,breadth3:.32,synchrony:.50,venuePressure:.20};
-  const trend={...transition,phase:"STABLE_TREND" as const,trendSide:"LONG" as const,expansionScore:.62,rotationRisk:.30,decisionStable:true};
-  const capture=routeEnvironmentOpportunity({market,evolution:trend,symbol,opportunity:{side:"LONG",mode:"CONTINUATION",score:85,premium:true,
-    edgeRatio:2.2,netRemainingSpaceRate:.03,pullbackRiskRate:.012,thesisBars:3,confirmationStage:"READY"}});
-  assert.equal(capture.environment,"TREND");assert.equal(capture.playbook,"TREND_CAPTURE");
-  assert.equal(capture.alignment,"ALIGNED");assert.equal(capture.forceRetest,false);assert.ok(capture.riskScale>=.99);
+  market.narrative.transition={...market.narrative.transition,direction:"NEUTRAL",pressure:8,stage:"STABLE"};
+  market.internals={...market.internals!,breadth3:.33,synchrony:.64,dispersion:.50,venuePressure:-.12,leaderPersistence:1};
+  const symbol={symbol:"GRASS_USDT",watchScore:95,regime:"DIVERGENT" as const,stage:"READY" as const,clusterId:"corr:GRASS_USDT",
+    correlation:.75,beta:1,volatility:.004,dataConfidence:96,actualMove:.04,expectedMove:.002,residual:.038,residualZ:2.1,
+    residualPersistence:1,relativeStrength:.85,longScore:96,shortScore:20,pathLong:.78,pathShort:.22,roomLong:.05,roomShort:.01,
+    sourceCount:5,venueAgreement:.9,venuePressure:.25,reasons:[],signalSide:"LONG" as const,signalSince:T-600_000,signalBars:2,signalLastBar:T-300_000};
+  const trend={version:"market-intelligence-lifecycle-v1" as const,phase:"TRANSITIONAL" as const,trendSide:"LONG" as const,
+    expansionScore:.58,rotationRisk:.37,reason:"",decisionStable:false,stabilityScore:.63};
+  const outlook=deriveEnvironmentOutlook(market,trend);
+  assert.equal(outlook.horizonMinutes,60);
+  assert.ok(outlook.persistenceScore>.80);
+  const capture=routeEnvironmentOpportunity({market,evolution:trend,symbol,opportunity:{side:"LONG",mode:"CONTINUATION",score:95,premium:true,
+    edgeRatio:2.2,netRemainingSpaceRate:.04,pullbackRiskRate:.018,thesisBars:2,confirmationStage:"READY"}});
+  assert.equal(capture.playbook,"TREND_CAPTURE");assert.equal(capture.mainline,true);
+  assert.ok(capture.riskScale>.95);assert.ok(capture.modeFit>.80);
+
+  market.narrative.major={...market.narrative.major,bias:"BEARISH",score:-.35};
+  market.internals={...market.internals!,leaderPersistence:.2};
+  const mixed={...trend,trendSide:"LONG" as const,rotationRisk:.46,stabilityScore:.54};
+  const cautious=routeEnvironmentOpportunity({market,evolution:mixed,symbol,opportunity:{side:"LONG",mode:"CONTINUATION",score:97,premium:true,
+    edgeRatio:2.3,netRemainingSpaceRate:.03,pullbackRiskRate:.012,thesisBars:2,confirmationStage:"READY"}});
+  assert.equal(cautious.mainline,false);
+  assert.ok(cautious.riskScale>=.70&&cautious.riskScale<capture.riskScale);
 });
 
-test("synchronized market expansion activates mainline participation instead of requiring an abnormal residual",()=>{
+test("synchronized market expansion keeps a 60m mainline continuation path",()=>{
   const market=initialMarketIntelligenceState(T);
   market.narrative.short={...market.narrative.short,bias:"BULLISH",score:.58,phase:"ADVANCING"};
   market.narrative.major={...market.narrative.major,bias:"BULLISH",score:.52};
-  market.internals={...market.internals!,breadth3:.82,breadth12:.70,synchrony:.84,venuePressure:.55,leaderPersistence:.78};
+  market.narrative.transition={...market.narrative.transition,direction:"NEUTRAL",pressure:6,stage:"STABLE"};
+  market.internals={...market.internals!,breadth3:.82,breadth12:.70,synchrony:.84,venuePressure:.55,leaderPersistence:.78,dispersion:.25};
   const evolution={version:"market-intelligence-lifecycle-v1" as const,phase:"EXPANDING" as const,trendSide:"LONG" as const,
     expansionScore:.82,rotationRisk:.18,reason:"expanding",decisionStable:true,stabilityScore:.78};
   const symbol={symbol:"BTC_USDT",watchScore:76,regime:"MARKET_TREND" as const,stage:"OBSERVE" as const,clusterId:"corr:BTC_USDT",
@@ -513,29 +516,31 @@ test("synchronized market expansion activates mainline participation instead of 
   const route=routeEnvironmentOpportunity({market,evolution,symbol,opportunity:{side:"LONG",mode:"CONTINUATION",score:76,premium:false,
     edgeRatio:1.8,netRemainingSpaceRate:.018,pullbackRiskRate:.008,thesisBars:1,confirmationStage:"OBSERVE"}});
   assert.equal(route.environment,"SHOCK");assert.equal(route.playbook,"SHOCK_PARTICIPATION");
-  assert.equal(route.mainline,true);assert.equal(route.priority,5);assert.equal(route.forceRetest,false);
+  assert.equal(route.outlook.horizonMinutes,60);assert.equal(route.mainline,true);assert.equal(route.forceRetest,false);
 });
 
-test("rotation routes capital toward relative-strength balance rather than a one-way market bet",()=>{
+test("rotation makes relative/reversal logic more suitable than continuation without banning any mode",()=>{
   const market=initialMarketIntelligenceState(T);
   market.narrative.short={...market.narrative.short,bias:"NEUTRAL",score:.02,phase:"DIVERGING"};
-  market.internals={...market.internals!,breadth3:.05,synchrony:.35,venuePressure:0,dispersion:.9};
+  market.narrative.major={...market.narrative.major,bias:"NEUTRAL",score:.01};
+  market.narrative.transition={...market.narrative.transition,direction:"NEUTRAL",pressure:12,stage:"STABLE"};
+  market.internals={...market.internals!,breadth3:.05,synchrony:.35,venuePressure:0,dispersion:.9,leaderPersistence:.35};
   const evolution={version:"market-intelligence-lifecycle-v1" as const,phase:"ROTATIONAL" as const,trendSide:null,
-    expansionScore:.30,rotationRisk:.82,reason:"rotation",decisionStable:false,stabilityScore:.25};
+    expansionScore:.30,rotationRisk:.82,reason:"rotation",decisionStable:false,stabilityScore:.18};
   const symbol={symbol:"XLM_USDT",watchScore:82,regime:"DIVERGENT" as const,stage:"READY" as const,clusterId:"corr:XLM_USDT",
     correlation:.4,beta:.7,volatility:.004,dataConfidence:96,actualMove:-.008,expectedMove:-.001,residual:-.007,residualZ:-1.1,
     residualPersistence:1,relativeStrength:.3,longScore:25,shortScore:84,pathLong:.3,pathShort:.7,roomLong:.008,roomShort:.022,
     sourceCount:5,venueAgreement:.9,venuePressure:-.3,reasons:[],signalSide:"SHORT" as const,signalSince:T-600_000,signalBars:3,signalLastBar:T-300_000};
-  const balancing=routeEnvironmentOpportunity({market,evolution,symbol,portfolioLongRisk:18,portfolioShortRisk:4,
-    opportunity:{side:"SHORT",mode:"RELATIVE",score:82,premium:true,edgeRatio:2,netRemainingSpaceRate:.022,pullbackRiskRate:.01,thesisBars:3,confirmationStage:"READY"}});
-  const adding=routeEnvironmentOpportunity({market,evolution,symbol:{...symbol,signalSide:"LONG",residualZ:1.1},
-    portfolioLongRisk:18,portfolioShortRisk:4,
-    opportunity:{side:"LONG",mode:"RELATIVE",score:82,premium:true,edgeRatio:2,netRemainingSpaceRate:.022,pullbackRiskRate:.01,thesisBars:3,confirmationStage:"READY"}});
-  assert.equal(balancing.playbook,"ROTATION_RELATIVE");assert.ok(balancing.scoreDelta>adding.scoreDelta);
-  assert.ok(balancing.riskScale>0,"rotation still trades rather than pausing the book");
+  const outlook=deriveEnvironmentOutlook(market,evolution),
+    rel=environmentModeFit({market,evolution,outlook,side:"SHORT",mode:"RELATIVE"}),
+    cont=environmentModeFit({market,evolution,outlook,side:"SHORT",mode:"CONTINUATION"});
+  assert.ok(rel>cont);
+  const route=routeEnvironmentOpportunity({market,evolution,symbol,opportunity:{side:"SHORT",mode:"RELATIVE",score:82,premium:true,
+    edgeRatio:2,netRemainingSpaceRate:.022,pullbackRiskRate:.01,thesisBars:3,confirmationStage:"READY"}});
+  assert.equal(route.playbook,"ROTATION_RELATIVE");assert.ok(route.riskScale>=.70);
 });
 
-test("losing environment adapts by shrinking risk, never by switching trading off",()=>{
+test("historical environment PnL stays diagnostic; live routing is driven by current market condition",()=>{
   const perf=initialEnvironmentPerformanceState();
   for(let i=0;i<6;i++)recordEnvironmentOutcome(perf,{environment:"TRANSITION",playbook:"TRANSITION_PROBE",netPnl:-5,plannedRisk:5,now:T+i});
   const factor=environmentPerformanceFactor(perf,"TRANSITION","TRANSITION_PROBE");
@@ -545,12 +550,48 @@ test("losing environment adapts by shrinking risk, never by switching trading of
     residualZ:1,residualPersistence:1,relativeStrength:.7,longScore:84,shortScore:25,pathLong:.7,pathShort:.3,roomLong:.02,roomShort:.008,
     sourceCount:5,venueAgreement:.9,venuePressure:.3,reasons:[],signalSide:"LONG" as const,signalSince:T-600_000,signalBars:3,signalLastBar:T-300_000};
   market.narrative.short={...market.narrative.short,bias:"BEARISH",score:-.4,phase:"DECLINING"};
+  market.narrative.major={...market.narrative.major,bias:"BULLISH",score:.25};
+  market.internals={...market.internals!,leaderPersistence:.4,dispersion:.7,synchrony:.5};
   const evolution={version:"market-intelligence-lifecycle-v1" as const,phase:"TRANSITIONAL" as const,trendSide:"SHORT" as const,
     expansionScore:.4,rotationRisk:.6,reason:"",decisionStable:false,stabilityScore:.3};
-  const route=routeEnvironmentOpportunity({market,evolution,symbol,performanceFactor:factor,opportunity:{side:"LONG",mode:"REVERSAL",
+  const a=routeEnvironmentOpportunity({market,evolution,symbol,performanceFactor:1,opportunity:{side:"LONG",mode:"REVERSAL",
     score:82,premium:true,edgeRatio:2,netRemainingSpaceRate:.025,pullbackRiskRate:.011,thesisBars:3,confirmationStage:"READY"}});
-  assert.ok(route.riskScale>=.20&&route.riskScale<.40);
-  assert.equal(route.forceRetest,true);
+  const b=routeEnvironmentOpportunity({market,evolution,symbol,performanceFactor:factor,opportunity:{side:"LONG",mode:"REVERSAL",
+    score:82,premium:true,edgeRatio:2,netRemainingSpaceRate:.025,pullbackRiskRate:.011,thesisBars:3,confirmationStage:"READY"}});
+  assert.equal(a.riskScale,b.riskScale);
+  assert.ok(a.riskScale>=.70,"environment can reduce size but cannot turn trading off");
+});
+
+test("one-minute fast pressure can shorten the future window without flipping the formal market label",()=>{
+  const market=initialMarketIntelligenceState(T);
+  market.narrative.short={...market.narrative.short,bias:"BULLISH",score:.50,phase:"ADVANCING"};
+  market.narrative.major={...market.narrative.major,bias:"BULLISH",score:.44};
+  market.narrative.transition={...market.narrative.transition,direction:"NEUTRAL",pressure:8,stage:"STABLE"};
+  market.internals={...market.internals!,leaderPersistence:.85,synchrony:.72,dispersion:.32};
+  const evolution={version:"market-intelligence-lifecycle-v1" as const,phase:"STABLE_TREND" as const,trendSide:"LONG" as const,
+    expansionScore:.72,rotationRisk:.22,reason:"",decisionStable:true,stabilityScore:.78};
+  const prior=deriveEnvironmentOutlook(market,evolution);
+  assert.equal(prior.horizonMinutes,60);
+  const fast=deriveFastEnvironmentSignal(Array.from({length:10},()=>({medianShortMove:-.002,directionalAgreement:.92,sourceCount:4}))),
+    stressed=deriveEnvironmentOutlook(market,evolution,{fast,previous:prior});
+  assert.ok(stressed.transitionPressure>prior.transitionPressure);
+  assert.ok(stressed.persistenceScore<prior.persistenceScore);
+  assert.ok(stressed.horizonMinutes<=45);
+  assert.equal(stressed.pressureTarget,prior.pressureTarget,"fast pressure changes the usable window, not the formal environment family");
+});
+
+test("future environment support can remove fastLane without shortening the ordinary confirmation window",()=>{
+  const normal=entryResponseWindowMs({score:96,edgeRatio:2.5,sourceCount:5,disagreementRate:.0004,mode:"CONTINUATION",fastLaneAllowed:false});
+  const mainline=entryResponseWindowMs({score:96,edgeRatio:2.5,sourceCount:5,disagreementRate:.0004,mode:"CONTINUATION",fastLaneAllowed:true});
+  assert.equal(normal.fastLane,false);assert.equal(normal.windowMs,180_000);
+  assert.equal(mainline.fastLane,true);assert.equal(mainline.windowMs,180_000);
+});
+
+test("environment decay profit floor is wide, profit-only and inactive in long future windows",()=>{
+  const protectedFloor=environmentDecayProfitFloor({peakFavorableRate:.032,originalStopRate:.012,modeFit:.30,horizonMinutes:15,costRate:.0019});
+  assert.ok(protectedFloor>.0019&&protectedFloor<.012,"environment protection keeps only a minority of proven profit");
+  assert.equal(environmentDecayProfitFloor({peakFavorableRate:.032,originalStopRate:.012,modeFit:.30,horizonMinutes:60,costRate:.0019}),0);
+  assert.equal(environmentDecayProfitFloor({peakFavorableRate:.004,originalStopRate:.012,modeFit:.20,horizonMinutes:15,costRate:.0019}),0);
 });
 
 test("Probe-Prove-Expand entry path requires impulse, pullback and restart in that order",()=>{
