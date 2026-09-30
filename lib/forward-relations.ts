@@ -509,6 +509,15 @@ export function environmentDecayProfitFloor(input:{
   if(input.horizonMinutes>30||input.modeFit>=.45||peakNet<meaningfulPeak)return 0;
   return cost+peakNet*.25;
 }
+export function positionDecayProfitFloor(input:{
+  peakFavorableRate:number;originalStopRate:number;holdValueScore:number;decision:"HOLD"|"REVIEW"|"EXIT";concernCount:number;costRate?:number;
+}){
+  const cost=Math.max(.0005,input.costRate??ROUND_TRIP_COST),peakNet=Math.max(0,input.peakFavorableRate-cost),
+    meaningfulPeak=Math.max(cost*3,input.originalStopRate*.45);
+  if(input.decision!=="REVIEW"||peakNet<meaningfulPeak)return 0;
+  const retention=input.concernCount>=2||input.holdValueScore<45?.70:input.holdValueScore<60?.58:0;
+  return retention>0?cost+peakNet*retention:0;
+}
 
 function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now:number,minutePaths:Record<string,Candle[]>|undefined,
   marketEvolution:MarketEvolutionState,environmentOutlook:EnvironmentOutlook){
@@ -594,9 +603,19 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
 
     const stopped=t.side==="LONG"?px<=t.stopPrice:px>=t.stopPrice,
       liquidityOwnsStop=liquidityStopActive&&(profitStop==null||(t.side==="LONG"?hypothesisStop>=profitStop:hypothesisStop<=profitStop));
+    if(!stopped&&liquidityOwnsStop&&t.exitControl?.armedAt!=null){t.exitControl.armedAt=null;t.exitControl.armedQuoteAt=null;}
     if(stopped){
+      if(liquidityOwnsStop&&t.exitControl){
+        const breachRate=t.side==="LONG"?Math.max(0,(t.stopPrice-px)/t.entryPrice):Math.max(0,(px-t.stopPrice)/t.entryPrice),
+          severeBreach=breachRate>=Math.max(ROUND_TRIP_COST*1.5,originalStopRate*.35),
+          gap=t.exitControl.armedQuoteAt==null?0:q!.observedAt-t.exitControl.armedQuoteAt;
+        if(t.exitControl.armedAt==null||gap>t.exitControl.maxObservationGapMs){t.exitControl.armedAt=now;t.exitControl.armedQuoteAt=q!.observedAt;}
+        else t.exitControl.armedQuoteAt=q!.observedAt;
+        const acceptedFailure=severeBreach||position.decision==="EXIT"||now-(t.exitControl.armedAt??now)>=45_000;
+        if(!acceptedFailure)continue;
+      }
       const stopReason=liquidityOwnsStop?"LIQUIDITY_HYPOTHESIS_INVALIDATED":(t.profitFloorRate??0)>0?"WINNER_INSURANCE_EXIT":"STRUCTURE_STOP";
-      closeTrade(s,t,px,now,stopReason,{authority:"PRICE_STOP",stopPrice:t.stopPrice,hypothesisStop,profitStop,liquidityOwnsStop,quoteAt:q!.observedAt});closed.add(t.id);continue;
+      closeTrade(s,t,px,now,stopReason,{authority:liquidityOwnsStop?"CONFIRMED_LIQUIDITY_STOP":"PRICE_STOP",stopPrice:t.stopPrice,hypothesisStop,profitStop,liquidityOwnsStop,quoteAt:q!.observedAt});closed.add(t.id);continue;
     }
 
     // Golden-version authority: the original thesis/position evidence decides
@@ -605,6 +624,22 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
     if(position.decision==="EXIT"){
       if(t.entryContext)t.entryContext.postEntryState=signed>0?"CONFIRMED":"FAILED";
       closeTrade(s,t,px,now,"POSITION_VALUE_EXIT",{authority:"POSITION_INTELLIGENCE",decision:position.decision,quoteAt:q!.observedAt,reviewBars:position.reviewBars,barAt:position.lastCompletedBar});closed.add(t.id);continue;
+    }
+
+    const valueFloor=positionDecayProfitFloor({peakFavorableRate:t.favorable,originalStopRate,holdValueScore:position.holdValueScore,
+      decision:position.decision,concernCount:position.concernFamilies.length,costRate:ROUND_TRIP_COST});
+    if(valueFloor>Math.max(t.profitFloorRate??0,ROUND_TRIP_COST*.8)){
+      if(signed<=valueFloor){
+        closeTrade(s,t,px,now,"POSITION_DECAY_PROTECT_EXIT",{authority:"PROFIT_FLOOR",thresholdRate:valueFloor,signedRate:signed,
+          holdValueScore:position.holdValueScore,concernCount:position.concernFamilies.length,quoteAt:q!.observedAt});closed.add(t.id);continue;
+      }
+      const next=t.entryPrice*(1+d*valueFloor);
+      if(t.side==="LONG"&&next>t.stopPrice||t.side==="SHORT"&&next<t.stopPrice){
+        t.profitFloorRate=valueFloor;t.stopPrice=next;
+        event(s,now,"PROTECTION",t.id,
+          `持仓价值开始衰减，已按当前证据保护约 ${((valueFloor-ROUND_TRIP_COST)/Math.max(1e-9,t.favorable-ROUND_TRIP_COST)*100).toFixed(0)}% 已证明净利润；健康恢复后仍保留继续扩张空间。`,
+          {floorRate:valueFloor,peakRate:t.favorable,holdValueScore:position.holdValueScore});
+      }
     }
 
     const insurance=catastrophicWinnerInsuranceFloor(t,originalStopRate);
