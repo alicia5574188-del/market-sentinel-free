@@ -149,8 +149,11 @@ export async function collectReviewSnapshot(fetcher:typeof fetch,progress?:(n:nu
   const data=await response.json() as ReviewSnapshot;
   if(data.version!==REVIEW_SNAPSHOT_VERSION)return data;
   const seen=new Set<string>();let totalBytes=0;
+  // Complete ledger counts do not imply complete exit evidence. Hot compaction
+  // can remove assessments while retaining every settlement row.
+  const needsArchive=()=>!data.coverage.complete||Number(data.summary.positionAssessmentMissing)>0;
   // 768 archive packets maximum per click, no background polling.
-  for(let page=0;page<64&&!data.coverage.complete&&!data.coverage.archiveExhausted;page++){
+  for(let page=0;page<64&&needsArchive()&&!data.coverage.archiveExhausted;page++){
     const cursor=data.coverage.archiveNextCursor;
     if(cursor&&seen.has(cursor)){data.coverage.archiveError='REPEATED_CURSOR';break;}
     if(cursor)seen.add(cursor);
@@ -159,11 +162,11 @@ export async function collectReviewSnapshot(fetcher:typeof fetch,progress?:(n:nu
     try{
       const r=await fetcher('/api/forward/export?'+q,{cache:'no-store',credentials:'same-origin'});
       if(!r.ok)throw new Error(`ARCHIVE_HTTP_${r.status}`);
-      const text=await r.text();totalBytes+=text.length;
+      const text=await r.text();totalBytes+=new TextEncoder().encode(text).length;
       if(totalBytes>12*1024*1024){data.coverage.exportLimitReached=true;break;}
       mergeReviewArchive(data,JSON.parse(text) as ArchivePage);progress?.(data.coverage.includedClosed,data.coverage.expectedClosed);
     }catch(e){data.coverage.archiveError=e instanceof Error?e.message:'ARCHIVE_UNAVAILABLE';break;}
   }
-  if(!data.coverage.complete&&!data.coverage.archiveExhausted&&!data.coverage.archiveError)data.coverage.exportLimitReached=true;
+  if(needsArchive()&&!data.coverage.archiveExhausted&&!data.coverage.archiveError)data.coverage.exportLimitReached=true;
   return finalizeReviewSnapshot(data);
 }
