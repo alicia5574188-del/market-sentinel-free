@@ -1,0 +1,31 @@
+name: Validate Residual Pair Mean Reversion
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/research-pair-residual-meanrevert.mjs"
+      - ".github/workflows/validate-pair-residual-meanrevert.yml"
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Check syntax
+        run: node --check scripts/research-pair-residual-meanrevert.mjs
+      - name: Run residual pair research
+        run: node --max-old-space-size=4096 scripts/research-pair-residual-meanrevert.mjs
+      - name: Print focused result
+        run: jq '{decision,goal,target,method,cost,universePolicy,configCount,summary,walkForward,usable}' /tmp/pair-residual-meanrevert-report.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pair-residual-meanrevert-report
+          path: /tmp/pair-residual-meanrevert-report.json
+          retention-days: 7

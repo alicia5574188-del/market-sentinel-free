@@ -1,0 +1,31 @@
+name: Validate Composite Derivatives State Learner
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/research-contract-stats-composite-learner.mjs"
+      - ".github/workflows/validate-contract-stats-composite-learner.yml"
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Check syntax
+        run: node --check scripts/research-contract-stats-composite-learner.mjs
+      - name: Run composite derivatives learner
+        run: node --max-old-space-size=4096 scripts/research-contract-stats-composite-learner.mjs
+      - name: Print focused result
+        run: jq '{decision,authority,goal,data,method,cost,summary,walkForward,promising}' /tmp/contract-stats-composite-learner.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: contract-stats-composite-learner
+          path: /tmp/contract-stats-composite-learner.json
+          retention-days: 7

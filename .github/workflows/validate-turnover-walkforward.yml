@@ -1,0 +1,31 @@
+name: Validate 5x Turnover Walk Forward
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/research-turnover-walkforward.mjs"
+      - ".github/workflows/validate-turnover-walkforward.yml"
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Check syntax
+        run: node --check scripts/research-turnover-walkforward.mjs
+      - name: Run monthly walk-forward turnover research
+        run: node --max-old-space-size=4096 scripts/research-turnover-walkforward.mjs
+      - name: Print focused result
+        run: jq '{decision,target,cost,universePolicy,configCount,walkForward,accepted}' /tmp/turnover-walkforward-report.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: turnover-walkforward-report
+          path: /tmp/turnover-walkforward-report.json
+          retention-days: 7

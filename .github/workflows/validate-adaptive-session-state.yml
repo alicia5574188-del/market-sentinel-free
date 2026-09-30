@@ -1,0 +1,31 @@
+name: Validate Short Memory Session State
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/research-adaptive-session-state.mjs"
+      - ".github/workflows/validate-adaptive-session-state.yml"
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Check syntax
+        run: node --check scripts/research-adaptive-session-state.mjs
+      - name: Run short-memory session state research
+        run: node --max-old-space-size=4096 scripts/research-adaptive-session-state.mjs
+      - name: Print focused result
+        run: jq '{decision,authority,goal,method,cost,selected,summary,walk,usable}' /tmp/adaptive-session-state-report.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: adaptive-session-state-report
+          path: /tmp/adaptive-session-state-report.json
+          retention-days: 7
