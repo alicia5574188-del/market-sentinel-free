@@ -1276,9 +1276,10 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
       v:Object.values(s.entryValidations).filter(x=>x.status==="WAITING").map(x=>x.id).sort()});
   s.lastQuoteCycleAt=input.now;
   const allowed=input.entrySymbols?new Set(input.entrySymbols):undefined,
-    candleAt=nextCandleAt(input.paths,input.now),
+    researchPaths=allowed?Object.fromEntries(Object.entries(input.paths).filter(([symbol])=>allowed.has(symbol))):input.paths,
+    candleAt=nextCandleAt(researchPaths,input.now),
     dataDue=input.allowDataCycle!==false&&candleAt>s.lastCandleAt,
-    readyPaths=Object.values(input.paths).filter(rows=>!!validPath(rows,input.now)).length,
+    readyPaths=Object.values(researchPaths).filter(rows=>!!validPath(rows,input.now)).length,
     expectedMarkets=Math.max(1,allowed?.size??Math.max(Object.keys(input.paths).length,s.selectedSymbols.length)),
     // Do not let two temporarily unavailable contracts freeze a 30-market engine. 80% broad coverage
     // is enough for market breadth/correlation, while the missing symbols simply remain ineligible.
