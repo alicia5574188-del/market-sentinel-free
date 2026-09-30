@@ -338,10 +338,12 @@ test("PAPER balance reset cannot turn the already-processed 5m bar into a fresh 
   const now=T+300_000;
   const quotes=Object.fromEntries(Object.entries(paths).map(([s,v])=>[s,{...q(v.at(-1)!.close,.0003),observedAt:now}]));
   const second=buildMarketIntelligence({paths,quotes,previous:first.state,now});
-  assert.ok(second.opportunities.some(o=>o.eligible),"fixture must contain a mature executable opportunity");
+  const executable={...second.opportunities[0]!,eligible:true,mode:"CONTINUATION" as const,tradePlan:"LIQUIDITY_MIGRATION" as const,
+    thesisId:"reset-liquidity-migration-thesis",thesisSince:now-300_000,thesisBars:2};
+  assert.ok(executable.symbol,"fixture must contain a liquidity-plan opportunity shape");
 
   const prior=initialForward(T-600_000);
-  prior.extremumRegime=second.state;prior.marketPulse=second.pulse;prior.opportunities=second.opportunities;
+  prior.extremumRegime=second.state;prior.marketPulse=second.pulse;prior.opportunities=[executable];
   prior.selectedSymbols=Object.keys(second.state.symbols);
   prior.lastCandleAt=Math.max(...Object.values(paths).map(rows=>(rows.at(-1)!.time+300)*1000));
   prior.lastCycleAt=now;prior.lastQuoteCycleAt=now;
@@ -374,12 +376,13 @@ test("cold-archived history cannot make an already-consumed thesis executable ag
   const shifted=Object.fromEntries(Object.entries(paths).map(([s,rows])=>[s,rows.map(r=>({...r,time:r.time+300}))]));
   const now=T+300_000,shiftQuotes=Object.fromEntries(Object.entries(shifted).map(([s,v])=>[s,{...q(v.at(-1)!.close,.0003),observedAt:now}]));
   const second=buildMarketIntelligence({paths:shifted,quotes:shiftQuotes,previous:first.state,now});
-  const opportunity=second.opportunities.find(o=>o.eligible&&o.thesisId);
-  assert.ok(opportunity?.thesisId,"fixture must produce an executable persistent thesis");
-  const s=initialForward(T-600_000);s.extremumRegime=second.state;s.opportunities=[opportunity!];
-  s.consumedTheses[opportunity!.thesisId!]=now-60_000;
-  const contracts={[opportunity!.symbol]:{quantoMultiplier:.001,leverageMax:10,maintenanceRate:.005,minContracts:1}};
-  const opened=fillForwardPortfolio(s,{[opportunity!.symbol]:shiftQuotes[opportunity!.symbol]!},contracts,now,1000,false);
+  const opportunity={...second.opportunities[0]!,eligible:true,mode:"CONTINUATION" as const,tradePlan:"LIQUIDITY_MIGRATION" as const,
+    thesisId:"consumed-liquidity-migration-thesis",thesisSince:now-300_000,thesisBars:2};
+  assert.ok(opportunity.thesisId,"fixture must contain an executable persistent liquidity thesis shape");
+  const s=initialForward(T-600_000);s.extremumRegime=second.state;s.opportunities=[opportunity];
+  s.consumedTheses[opportunity.thesisId]=now-60_000;
+  const contracts={[opportunity.symbol]:{quantoMultiplier:.001,leverageMax:10,maintenanceRate:.005,minContracts:1}};
+  const opened=fillForwardPortfolio(s,{[opportunity.symbol]:shiftQuotes[opportunity.symbol]!},contracts,now,1000,false);
   assert.equal(opened,0);
   assert.equal(s.positions.length,0,"thesis dedupe must survive even after the full closed trade leaves hot history");
 });
