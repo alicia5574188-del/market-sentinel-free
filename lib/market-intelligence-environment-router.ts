@@ -187,13 +187,16 @@ export function deriveEnvironmentOutlook(market:MarketIntelligenceState,evolutio
     liqAligned=liqReady&&currentSide?clip(currentSide*(liq?.migrationBreadth??0)*2,0,1):0,
     liqOpposed=liqReady&&currentSide?clip(-currentSide*(liq?.migrationBreadth??0)*2,0,1):0,
     liquidityBreakPressure=liqReady?clip((liq?.highAccumulationShare??0)*(liq?.oneSidedDepletionShare??0)*2+(liq?.testingShare??0)*.35):0,
-    trendPersistence=clip(.31*directionAgreement+.22*leader+.17*(1-rotation)+.16*(1-transitionBase)
-      +.08*liqAligned+.06*(liq?.acceptedShare??0)),
-    rotationPersistence=clip(.47*rotation+.20*(1-directionAgreement)+.15*(1-transitionBase)
-      +.10*(liq?.insideShare??0)+.08*(liq?.rejectedShare??0)),
+    trendPersistence=liqReady
+      ?clip(.31*directionAgreement+.22*leader+.17*(1-rotation)+.16*(1-transitionBase)+.08*liqAligned+.06*(liq?.acceptedShare??0))
+      :clip(.35*directionAgreement+.25*leader+.20*(1-rotation)+.20*(1-transitionBase)),
+    rotationPersistence=liqReady
+      ?clip(.47*rotation+.20*(1-directionAgreement)+.15*(1-transitionBase)+.10*(liq?.insideShare??0)+.08*(liq?.rejectedShare??0))
+      :clip(.55*rotation+.25*(1-directionAgreement)+.20*(1-transitionBase)),
     slowPersistence=Math.max(trendPersistence,rotationPersistence),
-    slowTransition=clip(.38*transitionBase+.25*rotation+.12*(1-leader)+.08*(1-directionAgreement)
-      +.09*liquidityBreakPressure+.08*liqOpposed),
+    slowTransition=liqReady
+      ?clip(.38*transitionBase+.25*rotation+.12*(1-leader)+.08*(1-directionAgreement)+.09*liquidityBreakPressure+.08*liqOpposed)
+      :clip(.45*transitionBase+.30*rotation+.15*(1-leader)+.10*(1-directionAgreement)),
     fast=input?.fast,fastReliable=!!fast&&fast.samples>=6,
     fastAligned=fastReliable&&currentSide?clip(currentSide*fast!.breadth*fast!.agreement,0,1):0,
     fastOpposed=fastReliable&&currentSide?clip(-currentSide*fast!.breadth*fast!.agreement,0,1):0,
