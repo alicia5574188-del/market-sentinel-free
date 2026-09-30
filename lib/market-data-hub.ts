@@ -224,14 +224,16 @@ export class MarketDataHub{
     :{sourceCount:0,sources:[] as MarketSource[],disagreementRate:0};}
   supports(symbol:string){return this.bybit.has(symbol)||this.okx.has(symbol)||this.kucoin.has(symbol)||this.mexc.has(symbol)||this.htx.has(symbol);}
   radarRows<T extends {symbol:string;last:number;volume24hUsd:number;fundingRate:number;
-    high24h?:number;low24h?:number;change24hRate?:number;openInterest?:number}>(gate:T[],now=Date.now()){
+    high24h?:number;low24h?:number;change24hRate?:number;openInterest?:number;
+    shortMoveRate?:number;directionalAgreement?:number;sourceBreadth?:number;sourceCount?:number}>(gate:T[],now=Date.now()){
     return gate.map(row=>{const q=this.quote(row.symbol,now),gateHigh=Number(row.high24h),gateLow=Number(row.low24h),gateChange=Number(row.change24hRate);
       const last=q?.mid??row.last,high=Number.isFinite(gateHigh)&&gateHigh>0?gateHigh:last,low=Number.isFinite(gateLow)&&gateLow>0?gateLow:last;
       return{symbol:row.symbol,last,volume24hUsd:Math.max(row.volume24hUsd,q?.volume24hUsd??0),executionVolume24hUsd:Math.max(0,row.volume24hUsd),
         high24h:Math.max(high,low),low24h:Math.min(high,low),change24hRate:Number.isFinite(gateChange)?gateChange:q?.change24hRate??0,
         fundingRate:row.fundingRate,openInterest:Number.isFinite(Number(row.openInterest))?Number(row.openInterest):0,
-        sourceCount:q?.sourceCount??0,sourceDisagreementRate:q?.disagreementRate??0,
-        shortMoveRate:q?.medianShortMove??0,directionalAgreement:q?.directionalAgreement??.5,sourceBreadth:q?.sourceBreadth??0};});
+        sourceCount:q?.sourceCount??row.sourceCount??0,sourceDisagreementRate:q?.disagreementRate??0,
+        shortMoveRate:q?.medianShortMove??row.shortMoveRate??0,directionalAgreement:q?.directionalAgreement??row.directionalAgreement??.5,
+        sourceBreadth:q?.sourceBreadth??row.sourceBreadth??0};});
   }
 
   async candles(symbol:string,interval:"1m"|"5m"|"1d",limit=120):Promise<{source:MarketSource;rows:HubCandle[]}|null>{
