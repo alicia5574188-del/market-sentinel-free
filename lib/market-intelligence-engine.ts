@@ -1,4 +1,5 @@
-import {buildMarketLiquidityResearch,initialMarketLiquidityResearch,type MarketLiquidityResearch,type SymbolLiquidityMap} from "./market-intelligence-liquidity.ts";
+import {buildMarketLiquidityResearch,deriveRapidLiquidityAuthorization,initialMarketLiquidityResearch,
+  type MarketLiquidityResearch,type RapidLiquidityAuthorization,type SymbolLiquidityMap} from "./market-intelligence-liquidity.ts";
 /**
  * Market Intelligence V1
  *
@@ -53,6 +54,8 @@ export type IntelligenceOpportunity={
   invalidationSummary:string;residual:number;relativeStrength:number;dataConfidence:number;thesisSince:number;thesisBars:number;
   tradePlan:LiquidityTradePlan;liquidityPlanConfidence:number;liquidityReason:string;liquidityTargetRate:number|null;
   liquidityOriginLower:number|null;liquidityOriginUpper:number|null;liquidityTargetLower:number|null;liquidityTargetUpper:number|null;
+  liquidityInvalidationPrice:number|null;liquidityInvalidationRate:number|null;
+  rapidLiquidityAuthorization:boolean;rapidLiquidityReason:string|null;
 };
 
 const clip=(v:number,a=0,b=1)=>Math.max(a,Math.min(b,v));
@@ -159,14 +162,21 @@ function liquidityTargetRate(map:SymbolLiquidityMap|undefined,side:"LONG"|"SHORT
 }
 
 function liquidityTradePlan(input:{
-  state:MarketSymbolState;map:SymbolLiquidityMap|undefined;family?:FamilyTurnSignal;price:number;
-}):{plan:LiquidityTradePlan;side:"LONG"|"SHORT";confidence:number;targetRate:number|null;reason:string}{
+  state:MarketSymbolState;map:SymbolLiquidityMap|undefined;family?:FamilyTurnSignal;price:number;rapid?:RapidLiquidityAuthorization;
+}):{plan:LiquidityTradePlan;side:"LONG"|"SHORT";confidence:number;targetRate:number|null;reason:string;rapid:boolean}{
   const map=input.map,bestSide=input.state.longScore>=input.state.shortScore?"LONG":"SHORT";
+  if(map?.ready&&map.activeZone&&input.rapid?.ready&&input.rapid.side){
+    const side=input.rapid.side==="UP"?"LONG":"SHORT",target=liquidityTargetRate(map,side,input.price),
+      confidence=clip(.62*input.rapid.confidence+.23*map.activeZone.strength+.15*(1-Math.min(1,map.accumulation)));
+    if(map.activeZone.strength>=.36&&(target!=null||input.rapid.confidence>=.75))
+      return{plan:"LIQUIDITY_MIGRATION",side,confidence,targetRate:target,rapid:true,
+        reason:`大级别来源流动性区域仍有效；1分钟强离开已完成提前授权。 ${input.rapid.reason}`};
+  }
   if(map?.ready&&map.departure.state==="ACCEPTED"&&map.departure.side&&map.activeZone?.strength!=null){
     const side=map.departure.side==="UP"?"LONG":"SHORT",target=liquidityTargetRate(map,side,input.price),
       confidence=clip(.62*map.departure.confidence+.23*map.activeZone.strength+.15*(1-Math.min(1,map.accumulation)));
     if(map.activeZone.strength>=.36&&map.departure.confidence>=.60&&(target!=null||map.openSpace))
-      return{plan:"LIQUIDITY_MIGRATION",side,confidence,targetRate:target,
+      return{plan:"LIQUIDITY_MIGRATION",side,confidence,targetRate:target,rapid:false,
         reason:`原流动性区域已经被市场接受性离开，正在向${target!=null?"下一片已知流动性":"开放空间"}迁移。`};
   }
   if(input.family){
@@ -175,7 +185,7 @@ function liquidityTradePlan(input:{
         (l.departure.state==="ACCEPTED"&&l.departure.side&&(l.departure.side==="UP"?1:-1)===turnSign&&l.departure.confidence>=.58)
         ||(l.departure.state==="REJECTED"&&l.departure.side&&(l.departure.side==="UP"?1:-1)===oldSign&&l.departure.confidence>=.60)
         ||(l.accumulation>=.52&&(turnSign>0?l.upperDepletion:l.lowerDepletion)>=.58));
-    if(local)return{plan:"FAMILY_TURN",side,confidence:input.family.confidence,targetRate:liquidityTargetRate(l,side,input.price),
+    if(local)return{plan:"FAMILY_TURN",side,confidence:input.family.confidence,targetRate:liquidityTargetRate(l,side,input.price),rapid:false,
       reason:input.family.reason};
   }
   if(map?.ready&&map.activeZone&&map.departure.state==="REJECTED"&&map.departure.side&&map.departure.confidence>=.62&&map.activeZone.strength>=.40){
@@ -183,11 +193,27 @@ function liquidityTradePlan(input:{
       targetRate=side==="LONG"?Math.max(0,map.activeZone.upper-input.price)/Math.max(input.price,1e-12)
         :Math.max(0,input.price-map.activeZone.lower)/Math.max(input.price,1e-12),
       confidence=clip(.55*map.departure.confidence+.25*map.activeZone.strength+.20*map.accumulation);
-    return{plan:"LIQUIDITY_REJECTION",side,confidence,targetRate,
+    return{plan:"LIQUIDITY_REJECTION",side,confidence,targetRate,rapid:false,
       reason:`离开尝试失败并重新被原流动性区域吸收，计划先交易回归区域内部/另一侧的过程。`};
   }
-  return{plan:"OBSERVE_ONLY",side:bestSide,confidence:0,targetRate:null,
+  return{plan:"OBSERVE_ONLY",side:bestSide,confidence:0,targetRate:null,rapid:false,
     reason:"相对强弱继续用于选币和家族识别，但没有独立开仓权；等待迁移、离开失败或家族转折。"};
+}
+
+function liquidityInvalidationPrice(map:SymbolLiquidityMap|undefined,plan:LiquidityTradePlan,side:"LONG"|"SHORT",price:number){
+  const zone=map?.activeZone;if(!zone||!(price>0))return null;
+  const width=Math.max(0,zone.upper-zone.lower);
+  let level:number|null=null;
+  if(plan==="LIQUIDITY_MIGRATION"){
+    level=side==="LONG"?zone.upper-width*.35:zone.lower+width*.35;
+  }else if(plan==="LIQUIDITY_REJECTION"){
+    level=side==="LONG"?zone.lower-width*.18:zone.upper+width*.18;
+  }else if(plan==="FAMILY_TURN"&&map?.departure.state==="ACCEPTED"&&map.departure.side){
+    const aligned=(map.departure.side==="UP"&&side==="LONG")||(map.departure.side==="DOWN"&&side==="SHORT");
+    if(aligned)level=side==="LONG"?zone.upper-width*.35:zone.lower+width*.35;
+  }
+  if(level==null||!(level>0)||(side==="LONG"&&level>=price)||(side==="SHORT"&&level<=price))return null;
+  return level;
 }
 
 export function initialMarketIntelligenceState(now:number):MarketIntelligenceState{
