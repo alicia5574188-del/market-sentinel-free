@@ -5,7 +5,7 @@ import {evaluatePositionIntelligence} from "../lib/position-intelligence-engine.
 import {entryResponseWindowMs,evaluateEntryResponse} from "../lib/market-intelligence-entry-response.ts";
 import {advanceForward,environmentDecayProfitFloor,extremeResidualConfirmationProfile,fillForwardPortfolio,initialForward,normalizeForward,
   entryLocationDecision,resetForwardAccountPreservingLearning,stableEntryLocationDecision,stableEntryThesisProfile} from "../lib/forward-relations.ts";
-import {deriveEnvironmentOutlook,environmentModeFit,environmentPerformanceFactor,environmentProbeRetestDecision,initialEnvironmentPerformanceState,
+import {deriveEnvironmentOutlook,deriveFastEnvironmentSignal,environmentModeFit,environmentPerformanceFactor,environmentProbeRetestDecision,initialEnvironmentPerformanceState,
   normalizeEnvironmentPerformanceState,recordEnvironmentOutcome,routeEnvironmentOpportunity} from "../lib/market-intelligence-environment-router.ts";
 
 const T=2_000_000_000_000;
@@ -560,6 +560,24 @@ test("historical environment PnL stays diagnostic; live routing is driven by cur
     score:82,premium:true,edgeRatio:2,netRemainingSpaceRate:.025,pullbackRiskRate:.011,thesisBars:3,confirmationStage:"READY"}});
   assert.equal(a.riskScale,b.riskScale);
   assert.ok(a.riskScale>=.70,"environment can reduce size but cannot turn trading off");
+});
+
+test("one-minute fast pressure can shorten the future window without flipping the formal market label",()=>{
+  const market=initialMarketIntelligenceState(T);
+  market.narrative.short={...market.narrative.short,bias:"BULLISH",score:.50,phase:"ADVANCING"};
+  market.narrative.major={...market.narrative.major,bias:"BULLISH",score:.44};
+  market.narrative.transition={...market.narrative.transition,direction:"NEUTRAL",pressure:8,stage:"STABLE"};
+  market.internals={...market.internals!,leaderPersistence:.85,synchrony:.72,dispersion:.32};
+  const evolution={version:"market-intelligence-lifecycle-v1" as const,phase:"STABLE_TREND" as const,trendSide:"LONG" as const,
+    expansionScore:.72,rotationRisk:.22,reason:"",decisionStable:true,stabilityScore:.78};
+  const prior=deriveEnvironmentOutlook(market,evolution);
+  assert.equal(prior.horizonMinutes,60);
+  const fast=deriveFastEnvironmentSignal(Array.from({length:10},()=>({medianShortMove:-.002,directionalAgreement:.92,sourceCount:4}))),
+    stressed=deriveEnvironmentOutlook(market,evolution,{fast,previous:prior});
+  assert.ok(stressed.transitionPressure>prior.transitionPressure);
+  assert.ok(stressed.persistenceScore<prior.persistenceScore);
+  assert.ok(stressed.horizonMinutes<=45);
+  assert.equal(stressed.pressureTarget,prior.pressureTarget,"fast pressure changes the usable window, not the formal environment family");
 });
 
 test("future environment support can remove fastLane without shortening the ordinary confirmation window",()=>{
