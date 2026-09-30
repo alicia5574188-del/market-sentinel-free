@@ -487,7 +487,7 @@ test("environment outlook preserves a strong aligned continuation lane while unc
   const outlook=deriveEnvironmentOutlook(market,trend);
   assert.equal(outlook.horizonMinutes,60);
   assert.ok(outlook.persistenceScore>.80);
-  const capture=routeEnvironmentOpportunity({market,evolution:trend,symbol,opportunity:{side:"LONG",mode:"CONTINUATION",score:95,premium:true,
+  const capture=routeEnvironmentOpportunity({market,evolution:trend,symbol,opportunity:{side:"LONG",mode:"CONTINUATION",tradePlan:"LIQUIDITY_MIGRATION",score:95,premium:true,
     edgeRatio:2.2,netRemainingSpaceRate:.04,pullbackRiskRate:.018,thesisBars:2,confirmationStage:"READY"}});
   assert.equal(capture.playbook,"TREND_CAPTURE");assert.equal(capture.mainline,true);
   assert.ok(capture.riskScale>.95);assert.ok(capture.modeFit>.80);
@@ -495,7 +495,7 @@ test("environment outlook preserves a strong aligned continuation lane while unc
   market.narrative.major={...market.narrative.major,bias:"BEARISH",score:-.35};
   market.internals={...market.internals!,leaderPersistence:.2};
   const mixed={...trend,trendSide:"LONG" as const,rotationRisk:.46,stabilityScore:.54};
-  const cautious=routeEnvironmentOpportunity({market,evolution:mixed,symbol,opportunity:{side:"LONG",mode:"CONTINUATION",score:97,premium:true,
+  const cautious=routeEnvironmentOpportunity({market,evolution:mixed,symbol,opportunity:{side:"LONG",mode:"CONTINUATION",tradePlan:"LIQUIDITY_MIGRATION",score:97,premium:true,
     edgeRatio:2.3,netRemainingSpaceRate:.03,pullbackRiskRate:.012,thesisBars:2,confirmationStage:"READY"}});
   assert.equal(cautious.mainline,false);
   assert.ok(cautious.riskScale>=.70&&cautious.riskScale<capture.riskScale);
@@ -513,7 +513,7 @@ test("synchronized market expansion keeps a 60m mainline continuation path",()=>
     correlation:.9,beta:1,volatility:.003,dataConfidence:98,actualMove:.012,expectedMove:.011,residual:.001,residualZ:.12,
     residualPersistence:1,relativeStrength:.53,longScore:78,shortScore:22,pathLong:.75,pathShort:.25,roomLong:.02,roomShort:.006,
     sourceCount:5,venueAgreement:.95,venuePressure:.5,reasons:[],signalSide:"LONG" as const,signalSince:T-300_000,signalBars:1,signalLastBar:T-300_000};
-  const route=routeEnvironmentOpportunity({market,evolution,symbol,opportunity:{side:"LONG",mode:"CONTINUATION",score:76,premium:false,
+  const route=routeEnvironmentOpportunity({market,evolution,symbol,opportunity:{side:"LONG",mode:"CONTINUATION",tradePlan:"LIQUIDITY_MIGRATION",score:76,premium:false,
     edgeRatio:1.8,netRemainingSpaceRate:.018,pullbackRiskRate:.008,thesisBars:1,confirmationStage:"OBSERVE"}});
   assert.equal(route.environment,"SHOCK");assert.equal(route.playbook,"SHOCK_PARTICIPATION");
   assert.equal(route.outlook.horizonMinutes,60);assert.equal(route.mainline,true);assert.equal(route.forceRetest,false);
