@@ -62,7 +62,7 @@ test("pre-entry minute history alone cannot masquerade as post-entry immediate f
 
 test("neutral flicker retains review without granting stale concerns current exit authority",()=>{
   const first=evaluatePositionIntelligence(base);
-  const neutral={...healthy,longScore:50,shortScore:50,residual:0,residualZ:0,relativeStrength:.5,pathLong:.5,pathShort:.5,venuePressure:0};
+  const neutral={...healthy,longScore:50,shortScore:50,residual:.003,residualZ:.1,relativeStrength:.75,pathLong:.5,pathShort:.5,venuePressure:0};
   const quiet={sourceCount:4,disagreementRate:.0002,bookImbalance:0,bidLiquidityChange:0,askLiquidityChange:0,liquiditySourceCount:3};
   const second=evaluatePositionIntelligence({...base,now:SECOND,state:neutral,quote:quiet,minutePath:minutes(B,0),previous:first});
   assert.equal(second.concernFamilies.length,0);assert.equal(second.reviewCandidate,false);assert.equal(second.decision,"REVIEW");
