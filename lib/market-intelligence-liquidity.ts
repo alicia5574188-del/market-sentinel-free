@@ -200,7 +200,8 @@ export function buildSymbolLiquidityMap(rowsIn:LiquidityCandle[],now:number):Sym
     targetDistanceRate=target?(d.side==="UP"?Math.max(0,target.lower-last.close):Math.max(0,last.close-target.upper))/last.close:null,
     openSpace=!target&&d.state==="ACCEPTED",
     reason=`当前主要流动性区 ${activeZone.lower.toFixed(6)}–${activeZone.upper.toFixed(6)}，强度 ${Math.round(activeZone.strength*100)}；积累 ${Math.round(m.accumulation*100)}，上沿消耗 ${Math.round(m.upperDepletion*100)}，下沿消耗 ${Math.round(m.lowerDepletion*100)}。 ${d.reason}`;
-  return{version:LIQUIDITY_MAP_VERSION,ready:true,updatedAt:now,bars:rows.length,atrRate:atr/last.close,globalZones,tradeZones,
+  return{version:LIQUIDITY_MAP_VERSION,ready:true,updatedAt:now,bars:rows.length,atrRate:atr/last.close,
+    globalZones:globalZones.slice(0,5),tradeZones:tradeZones.slice(0,4),
     activeZone,nextAbove:next.above,nextBelow:next.below,accumulation:m.accumulation,upperDepletion:m.upperDepletion,lowerDepletion:m.lowerDepletion,
     departure:d,targetDistanceRate,openSpace,reason};
 }
