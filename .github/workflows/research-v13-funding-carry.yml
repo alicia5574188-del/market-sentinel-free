@@ -1,0 +1,42 @@
+name: Validate V13 Funding Carry Upper Bound
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/research-v13-funding-carry-upper-bound.mjs"
+      - ".github/workflows/research-v13-funding-carry.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Download official Gate 5m candles
+        env:
+          RESEARCH_INTERVAL: 5m
+          RESEARCH_DATASET: /tmp/gate-history-v13-funding.json
+          RESEARCH_MONTHS: 202509,202510,202511,202512,202601,202602,202603,202604,202605,202606,202607,202608
+          RESEARCH_SYMBOLS: BTC_USDT,ETH_USDT,SOL_USDT,XRP_USDT,BNB_USDT,DOGE_USDT,ADA_USDT,LINK_USDT,LTC_USDT,AVAX_USDT,BCH_USDT
+          RESEARCH_MIN_CONTRACTS: "11"
+        run: node scripts/fetch-gate-history.mjs
+      - name: Run oracle funding carry ceiling audit
+        env:
+          RESEARCH_DATASET: /tmp/gate-history-v13-funding.json
+        run: |
+          node scripts/research-v13-funding-carry-upper-bound.mjs | tee /tmp/v13-funding.log
+          grep '^V13_FUNDING_CARRY_JSON=' /tmp/v13-funding.log | tail -1 | sed 's/^V13_FUNDING_CARRY_JSON=//' > /tmp/v13-funding-carry-report.json
+          node -e 'const r=require("/tmp/v13-funding-carry-report.json"); console.log(JSON.stringify({decision:r.decision,passes:r.passes,eligible:r.search.discoveryEligible,selected:r.selected},null,2))'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v13-funding-carry-upper-bound
+          path: /tmp/v13-funding-carry-report.json
+          retention-days: 7
