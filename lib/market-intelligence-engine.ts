@@ -40,7 +40,7 @@ export type MarketInternals={breadth3:number;breadth12:number;breadthSlope:numbe
   bidLiquidityChange?:number;askLiquidityChange?:number;spreadRate?:number};
 export type MarketIntelligenceState={version:string;startedAt:number;updatedAt:number;narrative:MarketNarrative;
   evidence:MarketEvidence[];history:Array<{at:number;macro:MarketBias;major:MarketBias;short:MarketBias;summary:string}>;
-  symbols:Record<string,MarketSymbolState>;clusters:MarketCluster[];liquidity:MarketLiquidityResearch;
+  symbols:Record<string,MarketSymbolState>;clusters:MarketCluster[];liquidity?:MarketLiquidityResearch;
   coverage:{intradayMarkets:number;dailyMarkets:number;quoteMarkets:number;multiVenueMarkets:number};internals?:MarketInternals};
 
 export type IntelligenceOpportunity={
