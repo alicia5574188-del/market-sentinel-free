@@ -388,7 +388,7 @@ test("cold-archived history cannot make an already-consumed thesis executable ag
 });
 
 
-test("new liquidity trades size risk and stop at the frozen hypothesis invalidation boundary",()=>{
+test("new liquidity trades freeze hypothesis invalidation but size to a bounded emergency stop",()=>{
   const paths={BTC_USDT:candles(100,.0010),ETH_USDT:candles(100,.0013),SOL_USDT:candles(100,.0009)};
   const quotes=Object.fromEntries(Object.entries(paths).map(([s,v])=>[s,q(v.at(-1)!.close,.0003)]));
   const built=buildMarketIntelligence({paths,quotes,previous:initialMarketIntelligenceState(T-300_000),now:T});
@@ -403,7 +403,8 @@ test("new liquidity trades size risk and stop at the frozen hypothesis invalidat
   const opened=fillForwardPortfolio(state,{[opportunity.symbol]:quote},contracts,T,1000,false);
   assert.equal(opened,1);
   const trade=state.positions[0]!;
-  assert.ok(Math.abs(trade.stopPrice-invalidation)<entry*1e-9);
+  assert.ok(Math.abs(trade.stopPrice-invalidation)>entry*.001,"native/PAPER hard stop must sit beyond the soft hypothesis boundary");
+  assert.ok(Math.abs(trade.stopPrice-entry)/entry<=.035+1e-9);
   assert.equal(trade.entryContext?.liquidityInvalidationPrice,invalidation);
   assert.equal(trade.liquidityLifecycle?.invalidationPrice,invalidation);
   assert.ok(trade.plannedRisk<=6.5,"position size must be reduced to keep risk budget correct when the liquidity invalidation is wider");
@@ -424,7 +425,8 @@ test("family-turn entries also require and preserve a frozen liquidity invalidat
   const opened=fillForwardPortfolio(state,{[opportunity.symbol]:quote},contracts,T,1000,false);
   assert.equal(opened,1);
   const trade=state.positions[0]!;
-  assert.ok(Math.abs(trade.stopPrice-invalidation)<entry*1e-9);
+  assert.ok(Math.abs(trade.stopPrice-invalidation)>entry*.001);
+  assert.ok(Math.abs(trade.stopPrice-entry)/entry<=.035+1e-9);
   assert.equal(trade.entryContext?.liquidityInvalidationPrice,invalidation);
   assert.equal(trade.liquidityLifecycle?.invalidationPrice,invalidation);
 });
