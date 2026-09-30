@@ -178,7 +178,8 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
       <div className="fr-section-head"><div><small>NEXT OPPORTUNITIES</small><h2>当前交易假设 · 最值得关注的机会</h2>
         <p>先看机会处于哪个阶段，再看评分。过度延伸不会直接被禁止，但会进入加强实时确认。</p></div><span>{actionable.length} 个可参与</span></div>
       {candidateRows.length?<div className="fr-exec-candidate-grid">{candidateRows.map((o,index)=>{
-        const v=validationById.get(o.id),entryState=v?entryExecutionState(v):o.extendedConfirmation?"加强确认":o.eligible?"主候选":"观察";
+        const v=validationById.get(o.id),lm=liquidity?.symbols?.[o.symbol],
+          entryState=v?entryExecutionState(v):o.extendedConfirmation?"加强确认":o.eligible?"主候选":"观察";
         return <details className={`fr-exec-candidate ${o.eligible?"is-eligible":""} ${o.extendedConfirmation?"is-extended":""}`} key={o.id}>
         <summary><span className="fr-exec-candidate-rank">#{index+1}</span><div className="fr-exec-candidate-main"><div><b>{o.symbol.replace("_"," / ")}</b><small>{side(o.side)} · {tradePlanName(o.tradePlan)}</small></div>
           <strong>{opportunityPhase(o.opportunityLifecyclePhase)}</strong></div>
@@ -186,7 +187,8 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
             <span><small>空间/回撤</small><b>{fmt(o.edgeRatio,2)}×</b></span></div>
           <em>{entryState}</em></summary>
         <div className="fr-score-details"><p><b>机会阶段：</b>{opportunityPhase(o.opportunityLifecyclePhase)} · 市场阶段 {evolution(o.marketEvolutionPhase)}</p>
-          <p><b>交易计划：</b>{tradePlanName(o.tradePlan)} · 计划可信度 {fmt((o.liquidityPlanConfidence??0)*100,0)}%</p>
+          <p><b>交易计划：</b>{tradePlanName(o.tradePlan)} · 计划可信度 {fmt((o.liquidityPlanConfidence??0)*100,0)}%
+            {lm?` · 当前 ${liquidityState(lm.departure.state)}`:""}</p>
           {o.liquidityReason&&<p><b>流动性依据：</b>{o.liquidityReason}</p>}
           {(o.liquidityOriginLower!=null&&o.liquidityOriginUpper!=null)&&<p><b>来源区域：</b>{fmt(o.liquidityOriginLower,6)} – {fmt(o.liquidityOriginUpper,6)}
             {(o.liquidityTargetLower!=null&&o.liquidityTargetUpper!=null)?` · 下一目标 ${fmt(o.liquidityTargetLower,6)} – ${fmt(o.liquidityTargetUpper,6)}`:""}</p>}
@@ -246,7 +248,7 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
         <span><small>实时跨所报价</small><b>{mi?.coverage?.quoteMarkets??0}</b></span>
         <span><small>多交易所确认</small><b>{mi?.coverage?.multiVenueMarkets??0}</b></span>
       </div>
-      <p className="fr-note"><b>数据覆盖：</b>5m市场 {mi?.coverage?.intradayMarkets??0} · 日线市场 {mi?.coverage?.dailyMarkets??0} · 实时跨所报价 {mi?.coverage?.quoteMarkets??0} · 多交易所确认 {mi?.coverage?.multiVenueMarkets??0}。超大周期至少需要3个真实日线市场才会开始形成牛熊判断。</p>\n      <p className="fr-note">PAPER→LIVE→Gate 复制链保持原样。实盘运行 {liveOverview?.operational?"正常":"未运行"}，当前 {liveOverview?.positionCount??"—"} 笔；本次页面升级不改变任何交易、研究、账户或实盘逻辑。</p>
+      <p className="fr-note"><b>数据覆盖：</b>5m市场 {mi?.coverage?.intradayMarkets??0} · 日线市场 {mi?.coverage?.dailyMarkets??0} · 实时跨所报价 {mi?.coverage?.quoteMarkets??0} · 多交易所确认 {mi?.coverage?.multiVenueMarkets??0}。流动性地图每币至少需要72根完成5m（约6小时），全局最多使用120根（约10小时）；候选/持仓仍用现有1m与实时多交易所数据完成执行确认。</p>\n      <p className="fr-note">PAPER→LIVE→Gate 复制链保持原样。实盘运行 {liveOverview?.operational?"正常":"未运行"}，当前 {liveOverview?.positionCount??"—"} 笔；流动性研究复用现有数据，不新增请求频率，也不重置账户或学习状态。</p>
     </section>
   </div>;
 }
