@@ -4,7 +4,7 @@ import { PAPER_COST, type Candle, type ForwardState, type Opportunity, type Quot
 export const COUNTERFACTUAL_RESEARCH_VERSION="market-intelligence-counterfactual-v1";
 export const POST_EXIT_RESEARCH_KEY="market-intelligence:research:v1:post-exit";
 export const REJECTED_RESEARCH_KEY="market-intelligence:research:v1:rejected";
-export const RESEARCH_CHECKPOINTS=[5,15,30,45,60] as const;
+export const RESEARCH_CHECKPOINTS=[5,15,30,60,120,240] as const;
 const ROUND_TRIP_COST=2*(PAPER_COST.feeRate+PAPER_COST.slippageRate);
 const MAX_VALUE_BYTES=100*1024;
 const MAX_REJECT_ADMISSIONS_PER_CYCLE=2;
