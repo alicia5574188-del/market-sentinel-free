@@ -21,7 +21,7 @@ import { advanceMarketHypothesisResearch, entryHypothesisGuidance, initialMarket
   normalizeMarketHypothesisResearch,
   type EntryHypothesisGuidance, type MarketHypothesisResearchState } from "./market-intelligence-hypothesis-research.ts";
 import { ENVIRONMENT_OUTLOOK_VERSION, ENVIRONMENT_ROUTER_VERSION, classifyMarketEnvironment, deriveEnvironmentOutlook,
-  deriveFastEnvironmentSignal, environmentModeFit, routeEnvironmentOpportunity,
+  deriveFastEnvironmentSignal, environmentModeFit, environmentPerformanceFactor, routeEnvironmentOpportunity,
   initialEnvironmentPerformanceState, normalizeEnvironmentPerformanceState, recordEnvironmentOutcome,
   type EnvironmentOutlook, type EnvironmentPerformanceState, type EnvironmentPlaybook, type MarketEnvironment, type RouteAlignment
 } from "./market-intelligence-environment-router.ts";
@@ -92,7 +92,7 @@ export type Opportunity={
   marketEvolutionPhase?:MarketEvolutionState["phase"];opportunityLifecyclePhase?:OpportunityLifecyclePhase;
   extendedConfirmation?:boolean;lifecycleReason?:string;
   environment?:MarketEnvironment;playbook?:EnvironmentPlaybook;routeAlignment?:RouteAlignment;
-  environmentPriority?:number;environmentScore?:number;environmentRiskScale?:number;environmentProbe?:boolean;
+  environmentPriority?:number;environmentScore?:number;environmentRiskScale?:number;environmentPerformanceFactor?:number;environmentProbe?:boolean;
   environmentForceRetest?:boolean;environmentMainline?:boolean;environmentModeFit?:number;environmentOutlook?:EnvironmentOutlook;environmentReason?:string;
   probeImpulseMin?:number;probePullbackMin?:number;probeRestartMin?:number;
   tradePlan?:LiquidityTradePlan;liquidityPlanConfidence?:number;liquidityReason?:string;liquidityTargetRate?:number|null;
@@ -119,7 +119,7 @@ export type EntryContext={
   thesisSince?:number;thesisBars?:number;
   marketEvolutionPhase?:MarketEvolutionState["phase"];opportunityLifecyclePhase?:OpportunityLifecyclePhase;
   extendedConfirmation?:boolean;environment?:MarketEnvironment;playbook?:EnvironmentPlaybook;routeAlignment?:RouteAlignment;
-  environmentRiskScale?:number;environmentProbe?:boolean;environmentReason?:string;
+  environmentRiskScale?:number;environmentPerformanceFactor?:number;environmentProbe?:boolean;environmentReason?:string;
   environmentOutlookVersion?:typeof ENVIRONMENT_OUTLOOK_VERSION;environmentModeFit?:number;environmentHorizonMinutes?:15|30|45|60;
   environmentPersistenceScore?:number;environmentTransitionPressure?:number;environmentProfitExpansion?:EnvironmentOutlook["profitExpansion"];
   tradePlan?:LiquidityTradePlan;liquidityPlanConfidence?:number;liquidityReason?:string;liquidityTargetRate?:number|null;
@@ -757,6 +757,8 @@ function markAndManage(s:ForwardState,quotes:Record<string,Quote>,now:number){
 }
 const riskCharge=(t:Trade)=>Math.max(t.plannedRisk,t.entryContext?.portfolioRiskCharge??((t.forecast?.sizingEquity??0)*.006));
 function existingRisk(s:ForwardState,side?:"LONG"|"SHORT"){return s.positions.filter(t=>!side||t.side===side).reduce((n,t)=>n+riskCharge(t),0);}
+function migrationSideRisk(s:ForwardState,side:"LONG"|"SHORT"){return s.positions
+  .filter(t=>t.side===side&&t.entryContext?.tradePlan==="LIQUIDITY_MIGRATION").reduce((n,t)=>n+riskCharge(t),0);}
 function cycleRiskAdded(s:ForwardState,since:number){return[...s.positions,...s.history].filter(t=>t.openedAt>=since).reduce((n,t)=>n+riskCharge(t),0);}
 function isIntelligenceOpportunity(o:Opportunity){return o.strategyVersion===MARKET_INTELLIGENCE_VERSION;}
 function annotateLifecycleOpportunities(s:ForwardState,market:MarketEvolutionState,outlook:EnvironmentOutlook){
@@ -766,12 +768,17 @@ function annotateLifecycleOpportunities(s:ForwardState,market:MarketEvolutionSta
     const lifecycle=deriveOpportunityLifecycle({side:o.side,symbol,thesisBars:o.thesisBars??symbol.signalBars,market}),
       future=entryHypothesisGuidance(s.hypothesisResearch,{side:o.side,score:o.score,residualZ:symbol.residualZ,
         residualPersistence:symbol.residualPersistence,sourceCount:symbol.sourceCount,dataConfidence:symbol.dataConfidence}),
-      route=routeEnvironmentOpportunity({market:s.extremumRegime,evolution:market,symbol,opportunity:o,outlook});
+      equityRef=Math.max(1,s.balance),portfolioLongRisk=existingRisk(s,"LONG")/equityRef,portfolioShortRisk=existingRisk(s,"SHORT")/equityRef,
+      baseRoute=routeEnvironmentOpportunity({market:s.extremumRegime,evolution:market,symbol,opportunity:o,outlook,
+        portfolioLongRisk,portfolioShortRisk}),
+      performance=environmentPerformanceFactor(s.environmentPerformance,baseRoute.environment,baseRoute.playbook),
+      route=routeEnvironmentOpportunity({market:s.extremumRegime,evolution:market,symbol,opportunity:o,outlook,
+        performanceFactor:performance,portfolioLongRisk,portfolioShortRisk});
     o.marketEvolutionPhase=market.phase;o.opportunityLifecyclePhase=lifecycle.phase;o.lifecycleReason=lifecycle.reason;
     o.futureResearchAction=future.action;o.futureResearchReason=future.reason;o.futureHypothesisIds=future.hypothesisIds;
     o.extendedConfirmation=false;o.environment=route.environment;o.playbook=route.playbook;o.routeAlignment=route.alignment;
     o.environmentPriority=route.priority;o.environmentScore=Math.max(0,Math.min(100,o.score+route.scoreDelta));
-    o.environmentRiskScale=route.riskScale;o.environmentProbe=route.probe;o.environmentForceRetest=route.forceRetest;
+    o.environmentRiskScale=route.riskScale;o.environmentPerformanceFactor=performance;o.environmentProbe=route.probe;o.environmentForceRetest=route.forceRetest;
     o.environmentMainline=route.mainline;o.environmentModeFit=route.modeFit;o.environmentOutlook=route.outlook;
     o.probeImpulseMin=route.probeImpulseMin;o.probePullbackMin=route.probePullbackMin;o.probeRestartMin=route.probeRestartMin;
     o.environmentReason=route.reason;
@@ -791,13 +798,20 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
   if(!(stopRate>=.004&&stopRate<=.03))return"流动性/结构失效宽度不合理";
   const sameCluster=s.positions.find(t=>t.side===side&&o.clusterId&&t.entryContext?.clusterId===o.clusterId);
   if(sameCluster)return"同相关组已有同方向主仓";
+  const consumed=Math.max(0,d*(price/Math.max(o.price,1e-9)-1)),remainingNet=o.netRemainingSpaceRate-consumed,
+    liveEdge=remainingNet/Math.max(o.pullbackRiskRate,ROUND_TRIP_COST*1.5);
+  if(remainingNet<=ROUND_TRIP_COST*.25)return"实时入场已消耗剩余空间";
+  if(liveEdge<1.25)return`真实成交价下剩余空间/回调仅 ${liveEdge.toFixed(2)}×，原机会已过价；转入回调/新假设等待`;
   const totalHeadroom=equity*(TOTAL_RISK_RATE-.001)-existingRisk(s),
     sideHeadroom=equity*(SIDE_RISK_RATE-.0005)-existingRisk(s,side),
     cycleHeadroom=equity*FIVE_MINUTE_NEW_RISK_RATE-cycleRiskAdded(s,s.lastCandleAt),
-    headroom=Math.min(totalHeadroom,sideHeadroom,cycleHeadroom),
-    riskRate=o.premium?.0065:.0055,environmentRiskScale=Math.max(.70,Math.min(1,o.environmentRiskScale??1)),
+    migrationCapRate=o.tradePlan==="LIQUIDITY_MIGRATION"?(o.environmentMainline&&o.routeAlignment==="ALIGNED"?.030:.018):Infinity,
+    migrationHeadroom=Number.isFinite(migrationCapRate)?equity*migrationCapRate-migrationSideRisk(s,side):Infinity,
+    headroom=Math.min(totalHeadroom,sideHeadroom,cycleHeadroom,migrationHeadroom),
+    riskRate=o.premium?.0065:.0055,environmentRiskScale=Math.max(.45,Math.min(1,o.environmentRiskScale??1)),
     wantedRisk=equity*riskRate*environmentRiskScale,riskBudget=Math.min(wantedRisk,headroom);
-  if(riskBudget<equity*.0035)return"剩余风险预算不足以形成有效仓位";
+  if(riskBudget<equity*.0035)return o.tradePlan==="LIQUIDITY_MIGRATION"&&migrationHeadroom<=equity*.0035
+    ?"同方向市场延续风险已集中；保留其他独立/回调机会，不继续堆同一市场Beta":"剩余风险预算不足以形成有效仓位";
   const rawNotional=riskBudget/(stopRate+ROUND_TRIP_COST),targetNotional=Math.min(rawNotional,equity*.70),
     leverage=Math.max(1,Math.min(10,Math.floor(contract.leverageMax||10))),mult=Math.max(contract.quantoMultiplier,1e-12),
     minContracts=Math.max(1,Math.ceil(contract.minContracts??(Number(contract.orderSizeMin??1)||1))),
@@ -805,10 +819,8 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
   if(contracts<minContracts)return"低于最小模拟合约数量";
   const quantity=contracts*mult,notional=quantity*price,margin=notional/leverage,totalMargin=s.positions.reduce((n,t)=>n+t.margin,0);
   if(totalMargin+margin>equity*TOTAL_MARGIN_RATE)return"组合保证金已满";
-  const consumed=Math.max(0,d*(price/Math.max(o.price,1e-9)-1)),remainingNet=o.netRemainingSpaceRate-consumed;
-  if(remainingNet<=0)return"实时入场已消耗剩余空间";
   const plannedRisk=notional*(stopRate+ROUND_TRIP_COST),entryFee=notional*PAPER_COST.feeRate,
-    target=price*(1+d*Math.max(.004,o.targetRate-consumed)),horizon=Math.max(60,Math.round(o.expectedHoldMinutes)),
+    target=price*(1+d*Math.max(ROUND_TRIP_COST,o.targetRate-consumed)),horizon=Math.max(60,Math.round(o.expectedHoldMinutes)),
     id=`mi-${now.toString(36)}-${o.symbol.replace(/[^A-Z0-9]/g,"")}-${side[0]}`,
     rule:Rule={id:o.thesisId??o.id,signature:`MARKET_INTELLIGENCE:${o.clusterId??"solo"}:${o.mode}`,parentId:null,version:1,createdAt:now,
       expiresAt:now+Math.max(180,horizon*2.2)*60_000,status:"EXPERIMENTAL",conditions:[],side,horizon,stopRate,
@@ -840,7 +852,7 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
         thesisSince:o.thesisSince,thesisBars:o.thesisBars,marketEvolutionPhase:o.marketEvolutionPhase,
         opportunityLifecyclePhase:o.opportunityLifecyclePhase,extendedConfirmation:o.extendedConfirmation,
         environment:o.environment,playbook:o.playbook,routeAlignment:o.routeAlignment,environmentRiskScale:o.environmentRiskScale,
-        environmentProbe:o.environmentProbe,environmentReason:o.environmentReason,
+        environmentPerformanceFactor:o.environmentPerformanceFactor,environmentProbe:o.environmentProbe,environmentReason:o.environmentReason,
         environmentOutlookVersion:o.environmentOutlook?.version,environmentModeFit:o.environmentModeFit,
         environmentHorizonMinutes:o.environmentOutlook?.horizonMinutes,environmentPersistenceScore:o.environmentOutlook?.persistenceScore,
         environmentTransitionPressure:o.environmentOutlook?.transitionPressure,environmentProfitExpansion:o.environmentOutlook?.profitExpansion,
@@ -1210,7 +1222,9 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
     dataDue=input.allowDataCycle!==false&&candleAt>s.lastCandleAt,
     readyPaths=Object.values(input.paths).filter(rows=>!!validPath(rows,input.now)).length,
     expectedMarkets=Math.max(1,allowed?.size??Math.max(Object.keys(input.paths).length,s.selectedSymbols.length)),
-    requiredPaths=Math.min(expectedMarkets,Math.max(3,Math.ceil(expectedMarkets*.60))),
+    // Do not let two temporarily unavailable contracts freeze a 30-market engine. 80% broad coverage
+    // is enough for market breadth/correlation, while the missing symbols simply remain ineligible.
+    requiredPaths=Math.min(expectedMarkets,Math.max(3,Math.ceil(expectedMarkets*.80))),
     marketReady=readyPaths>=requiredPaths;
   if(marketReady){
     const priorNarrative=structuredClone(s.extremumRegime.narrative),priorHistory=structuredClone(s.extremumRegime.history),
