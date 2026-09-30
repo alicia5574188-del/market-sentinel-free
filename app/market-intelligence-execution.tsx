@@ -25,7 +25,8 @@ const windowText=(v?:number)=>v===60?"未来一段时间仍有较完整的延续
 const profitText=(v?:string)=>v==="HIGH"?"如果方向延续，仍有较好的利润扩张空间":v==="LOW"?"利润扩张空间偏低，更重视确认和保护":
   v==="NORMAL"?"利润扩张空间一般，按市场推进情况处理":"利润扩张能力建立中";
 
-function marketChangeText(liquidity:View["marketIntelligence"] extends infer M?M extends {liquidity?:infer L}?L:never:never){
+type LiquidityView=NonNullable<View["marketIntelligence"]>["liquidity"];
+function marketChangeText(liquidity:LiquidityView|undefined){
   const m=liquidity?.market;if(!m?.ready)return"流动性地图仍在建立；在覆盖完整前，系统继续沿用原研究层判断，不让未准备好的新模块改变市场结论。";
   if(m.acceptedShare>=.35){
     const direction=m.migrationBreadth>.10?"向上":m.migrationBreadth<-.10?"向下":"双向";
