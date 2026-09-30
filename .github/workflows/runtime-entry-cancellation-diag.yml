@@ -14,7 +14,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          URL="https://market-sentinel-free.alicia5574188.workers.dev/api/forward/export"
+          URL="https://market-sentinel-free.alicia5574188.workers.dev/api/runtime"
           prev=""
           echo "DIAG_START $(date -u +%FT%TZ)"
           for i in $(seq 1 150); do
