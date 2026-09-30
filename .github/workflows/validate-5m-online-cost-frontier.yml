@@ -1,0 +1,64 @@
+name: Validate 5m Online Cost Frontier
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/research-5m-online-state-ranker.mjs"
+      - "scripts/research-5m-online-cost-scenario.mjs"
+      - ".github/workflows/validate-5m-online-cost-frontier.yml"
+permissions:
+  contents: read
+jobs:
+  frontier:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: maker4
+            base_bp: 4
+            stress_bp: 8
+          - label: maker5
+            base_bp: 5
+            stress_bp: 9
+          - label: target6
+            base_bp: 6
+            stress_bp: 10
+          - label: mixed7
+            base_bp: 7
+            stress_bp: 11
+          - label: taker10
+            base_bp: 10
+            stress_bp: 14
+          - label: research165
+            base_bp: 16.5
+            stress_bp: 27
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Check scenario patch
+        env:
+          SCENARIO_LABEL: ${{ matrix.label }}
+          BASE_COST_BP: ${{ matrix.base_bp }}
+          STRESS_COST_BP: ${{ matrix.stress_bp }}
+          PATCH_ONLY: 1
+        run: |
+          node --check scripts/research-5m-online-cost-scenario.mjs
+          node scripts/research-5m-online-cost-scenario.mjs
+          node --check /tmp/research-5m-online-cost-${{ matrix.label }}.mjs
+      - name: Run causal cost scenario
+        env:
+          SCENARIO_LABEL: ${{ matrix.label }}
+          BASE_COST_BP: ${{ matrix.base_bp }}
+          STRESS_COST_BP: ${{ matrix.stress_bp }}
+        run: node --max-old-space-size=4096 scripts/research-5m-online-cost-scenario.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 5m-online-cost-${{ matrix.label }}
+          path: /tmp/5m-online-cost-${{ matrix.label }}.json
+          retention-days: 7
