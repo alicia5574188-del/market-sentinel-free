@@ -1,0 +1,35 @@
+name: UI verification diagnostics
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    if: github.head_ref == 'ui/account-first-20260930'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+          cache: npm
+      - run: npm ci
+      - name: Capture concise verification failures
+        shell: bash
+        run: |
+          set +e
+          failed=0
+          for command in 'npm run build' 'npm run typecheck' 'npm run lint' 'node --test tests/architecture.test.mjs tests/migration.test.mjs' 'git diff --check' 'npx wrangler deploy --dry-run --config dist/server/wrangler.json'; do
+            echo "CHECK: $command"
+            bash -c "$command" > /tmp/ui-check.log 2>&1
+            status=$?
+            echo "EXIT: $status"
+            if [ "$status" -ne 0 ]; then
+              failed=1
+              grep -n -E 'error TS| error |not ok|AssertionError|Error:|FAIL|failed|location:|Expected|expression:|operator:' /tmp/ui-check.log | head -40 | cut -c1-320 || true
+              tail -20 /tmp/ui-check.log | cut -c1-320
+            fi
+          done
+          exit "$failed"
