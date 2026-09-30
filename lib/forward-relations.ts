@@ -906,42 +906,30 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
   const opportunities=new Map(s.opportunities.filter(isIntelligenceOpportunity).map(o=>[o.id,o])),
     preserved:Record<string,EntryValidation>={};
   for(const [id,v] of Object.entries(s.entryValidations)){
-    const o=opportunities.get(v.candidateId);
+    const o=v.frozenOpportunity??opportunities.get(v.candidateId);
     if(!o||s.positions.some(t=>t.symbol===v.symbol)||(o.thesisId&&s.consumedTheses[o.thesisId]))continue;
+    if(!v.frozenOpportunity)v.frozenOpportunity=structuredClone(o);
     preserved[id]=v;
-    if(v.status==="WAITING"){
-      const q=quotes[v.symbol],state=s.extremumRegime.symbols[v.symbol],
-        sourceCount=Math.max(o.sourceCount??0,state?.sourceCount??0,q?.sourceCount??0),
-        profile=stableEntryThesisProfile({score:o.score,premium:!!o.premium,thesisBars:o.thesisBars??state?.signalBars??0,
-          stage:o.confirmationStage??state?.stage??"OBSERVE",edgeRatio:o.edgeRatio,sourceCount,
-          dataConfidence:o.dataConfidence??state?.dataConfidence??0,netRemainingSpaceRate:o.netRemainingSpaceRate,
-          pullbackRiskRate:o.pullbackRiskRate});
-      v.environment=o.environment;v.playbook=undefined;v.requiresProbeRetest=false;
-      v.probeImpulseMin=undefined;v.probePullbackMin=undefined;v.probeRestartMin=undefined;
-      if(profile.stable&&!v.stableThesis){
-        v.stableThesis=true;v.phase=v.phase??"ARMED";
-        v.initialExpectedNetRate=v.initialExpectedNetRate??o.netRemainingSpaceRate;
-        v.pullbackRiskRateAtArm=v.pullbackRiskRateAtArm??o.pullbackRiskRate;
-        v.maxChaseRate=v.maxChaseRate??profile.maxChaseRate;v.retestPullbackMin=v.retestPullbackMin??profile.retestPullbackMin;
-        v.restartMin=v.restartMin??profile.restartMin;
-      }
-      if(v.stableThesis){
-        const hardEnd=v.startedAt+20*60_000;
-        v.expiresAt=Math.max(v.expiresAt,Math.min(o.expiresAt,hardEnd));
-        v.deadlineAt=Math.max(v.deadlineAt,Math.min(o.expiresAt,v.startedAt+12*60_000));
-      }
+    if(v.status==="WAITING"&&v.stableThesis){
+      const hardEnd=(v.authorizedAt??v.startedAt)+20*60_000;
+      v.expiresAt=Math.max(v.expiresAt,Math.min(o.expiresAt,hardEnd));
+      v.deadlineAt=Math.max(v.deadlineAt,Math.min(o.expiresAt,(v.authorizedAt??v.startedAt)+12*60_000));
     }
   }
   s.entryValidations=preserved;
-  const eligible=rankedEligible(s,now),reasons:Record<string,number>={};
+  const eligible=rankedEligible(s,now).sort((a,b)=>{
+      const aq=quotes[a.symbol],bq=quotes[b.symbol],
+        ar=freshQuote(aq,now)&&aq!.entryReady===true,br=freshQuote(bq,now)&&bq!.entryReady===true;
+      return Number(br)-Number(ar)||opportunityCompare(a,b);
+    }),reasons:Record<string,number>={};
   let active=Object.values(s.entryValidations).filter(v=>v.status==="WAITING").length;
   const reject=(reason:string)=>{reasons[reason]=(reasons[reason]??0)+1;};
   for(const o of eligible){
     if(active>=3)break;
     if(s.entryValidations[o.id])continue;
-    const q=quotes[o.symbol];if(!freshQuote(q,now)||q!.entryReady!==true){reject("等待实时盘口");continue;}
-    const state=s.extremumRegime.symbols[o.symbol],sourceCount=Math.max(o.sourceCount??0,state?.sourceCount??0,q!.sourceCount??0),
-      disagreement=q!.disagreementRate??o.disagreementRate??0,
+    const q=quotes[o.symbol],quoteReady=freshQuote(q,now)&&q!.entryReady===true,
+      state=s.extremumRegime.symbols[o.symbol],sourceCount=Math.max(o.sourceCount??0,state?.sourceCount??0,q?.sourceCount??0),
+      disagreement=q?.disagreementRate??o.disagreementRate??0,
       recentExtremeLosses=s.history.filter(t=>t.symbol===o.symbol&&t.closedAt!=null&&now-t.closedAt<4*60*60_000
         &&(t.netPnl??0)<0&&Math.abs(t.entryContext?.entryResidual??0)>=.05).length,
       extreme=extremeResidualConfirmationProfile({residual:o.residual??0,sourceCount,
@@ -953,31 +941,35 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
         stage:o.confirmationStage??state?.stage??"OBSERVE",edgeRatio:o.edgeRatio,sourceCount,
         dataConfidence:o.dataConfidence??state?.dataConfidence??0,netRemainingSpaceRate:o.netRemainingSpaceRate,
         pullbackRiskRate:o.pullbackRiskRate}),
-      minimumElapsedMs=extreme.minimumElapsedMs,
-      minimumSupportSamples=extreme.minimumSupportSamples,
+      minimumElapsedMs=extreme.minimumElapsedMs,minimumSupportSamples=extreme.minimumSupportSamples,
       minimumRetainedRate=extreme.minimumRetainedRate,
-      price=o.side==="LONG"?q!.bestAsk:q!.bestBid,
+      price=quoteReady?(o.side==="LONG"?q!.bestAsk:q!.bestBid):o.price,
       armed=stable.stable||!!o.environmentForceRetest,
       expiresAt=armed?Math.min(o.expiresAt,now+20*60_000):Math.min(o.expiresAt,now+BAR_MS),
       deadlineAt=armed?Math.min(expiresAt,now+12*60_000)
         :Math.min(o.expiresAt,now+Math.max(profile.windowMs,minimumElapsedMs+30_000));
-    s.entryValidations[o.id]={id:o.id,candidateId:o.id,symbol:o.symbol,side:o.side,startedAt:now,expiresAt,deadlineAt,
-      initialPrice:price,lastPrice:price,lastQuoteAt:q!.observedAt,samples:1,bestAdvanceRate:0,maxAdverseRate:0,
-      supportSamples:0,oppositionSamples:0,extendedConfirmation:extreme.required,
+    s.entryValidations[o.id]={id:o.id,candidateId:o.id,symbol:o.symbol,side:o.side,startedAt:now,authorizedAt:now,
+      expiresAt,deadlineAt,initialPrice:price,lastPrice:price,lastQuoteAt:quoteReady?q!.observedAt:0,samples:quoteReady?1:0,
+      bestAdvanceRate:0,maxAdverseRate:0,supportSamples:0,oppositionSamples:0,extendedConfirmation:extreme.required,
       extremeResidual:extreme.required,minimumElapsedMs,minimumSupportSamples,minimumRetainedRate,
       stableThesis:armed,phase:"ARMED",initialExpectedNetRate:o.netRemainingSpaceRate,
       pullbackRiskRateAtArm:o.pullbackRiskRate,maxChaseRate:stable.maxChaseRate,retestPullbackMin:stable.retestPullbackMin,
-      restartMin:stable.restartMin,retestBasePrice:null,retestBaseAt:null,
+      restartMin:stable.restartMin,retestBasePrice:null,retestBaseAt:null,frozenOpportunity:structuredClone(o),
       environment:o.environment,playbook:o.playbook,requiresProbeRetest:!!o.environmentForceRetest,
       probeImpulseMin:o.probeImpulseMin,probePullbackMin:o.probePullbackMin,probeRestartMin:o.probeRestartMin,probeRetestSeen:false,
       status:"WAITING",
-      reason:extreme.required?extreme.reason:o.environmentForceRetest
+      reason:!quoteReady
+        ?"交易计划已正式授权并冻结；等待实时执行盘口恢复，研究机会不会因为这一刻缺报价而消失。"
+        :extreme.required?extreme.reason:o.environmentForceRetest
         ?`环境路由 ${o.playbook}：先Probe，必须完成第一段正反馈→可控回调→再次启动后才执行。`
         :stable.stable
         ?"高质量稳定交易假设已武装；短时反向只进入回测等待，不会直接取消，真正结构失效才解除。"
+        :o.rapidLiquidityAuthorization
+        ?"1分钟已提前确认流动性离开，正式计划已冻结；实时层只负责确认位置和价格响应。"
         :o.extendedConfirmation
         ?(o.futureResearchAction==="CONFIRM_MORE"?"前瞻研究发现状态转移风险，进入加强实时延续确认。":"极端轮动延伸机会进入加强实时延续确认。")
         :profile.fastLane?"高质量机会进入快速实时响应确认。":"候选进入实时响应确认。"};
+    if(!quoteReady)reject("正式计划已冻结，等待实时盘口");
     active++;
   }
   s.entryDiagnostics={at:now,matched:eligible.length,opened:0,reasons};
