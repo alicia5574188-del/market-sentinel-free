@@ -259,17 +259,14 @@ export function routeEnvironmentOpportunity(input:{
     probePullbackMin=Math.max(cost*.40,Math.min(pullback*.18,space*.08,.0025)),
     probeRestartMin=Math.max(cost*.35,Math.min(pullback*.12,space*.06,.0018)),
     mainline=o.tradePlan==="LIQUIDITY_MIGRATION"&&fit>=.75&&outlook.horizonMinutes>=45,
-    probe=fit<.50,
-    performance=clip(input.performanceFactor??1,.55,1.10),
-    forceRetest=probe||performance<.80||(o.mode==="CONTINUATION"&&!mainline&&alignment==="COUNTER"&&outlook.horizonMinutes<=30),
-    minimumThesisBars=mainline?1:2,
+    probe=fit<.50,forceRetest=false,minimumThesisBars=mainline?1:2,
     priority=fit>=.75?5:fit>=.60?4:fit>=.45?3:2,
-    scoreDelta=(fit-.50)*8,riskScale=clip((.70+.30*fit)*performance,.45,1),
+    scoreDelta=(fit-.50)*8,riskScale=clip(.70+.30*fit,.70,1),
     playbook:EnvironmentPlaybook=environment==="SHOCK"&&alignment==="ALIGNED"?"SHOCK_PARTICIPATION":
       o.mode==="CONTINUATION"?"TREND_CAPTURE":o.mode==="RELATIVE"?"ROTATION_RELATIVE":"TRANSITION_PROBE",
     reason=`${outlook.reason} ${o.mode} 与未来条件适配度 ${(fit*100).toFixed(0)}%；${mainline?"允许主线快速确认":
       forceRetest?"只保留回调后重启参与":"保留普通实时确认"}，风险按 ${(riskScale*100).toFixed(0)}% 连续缩放，不停止交易。`;
-  void input.portfolioLongRisk;void input.portfolioShortRisk;void input.symbol;void o.premium;void o.edgeRatio;
+  void input.performanceFactor;void input.portfolioLongRisk;void input.portfolioShortRisk;void input.symbol;void o.premium;void o.edgeRatio;
   return{version:ENVIRONMENT_ROUTER_VERSION,environment,playbook,alignment,priority,scoreDelta,riskScale,probe,forceRetest,
     minimumThesisBars,probeImpulseMin,probePullbackMin,probeRestartMin,mainline,modeFit:fit,outlook,reason};
 }
