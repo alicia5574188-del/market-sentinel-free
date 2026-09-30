@@ -47,6 +47,17 @@ test("overview renders account equity before any statistics or research",()=>{
   assert.doesNotMatch(html,/系统正在正常运行|独立交易假设|MARKET STATE|实盘开启参考/);
 });
 
+test("paper floating PnL matches open-position net PnL including entry and estimated exit fees",()=>{
+  const data={...account(),floating:123.45,positions:[{
+    id:"open-long",status:"OPEN",symbol:"WLD_USDT",side:"LONG",entryPrice:100,lastPrice:101,quantity:1,notional:100,entryFee:.07,
+    leverage:10,margin:10,plannedRisk:1,openedAt:1790760000000,closedAt:null,exitPrice:null,netPnl:null,stopPrice:98,
+    favorable:.01,adverse:0,profitFloorRate:0,expectedHoldMinutes:30,entryContext:null,holdScore:80
+  }]};
+  const html=render("app/forward-dashboard.tsx",dashboardProps(data));
+  assert.match(html,/<small>浮动盈亏<\/small><strong>\+0\.86 U<\/strong>/);
+  assert.doesNotMatch(html,/<small>浮动盈亏<\/small><strong>\+123\.45 U<\/strong>/);
+});
+
 test("missing account stays unknown and operational errors remain visible",()=>{
   const html=render("app/forward-dashboard.tsx",{...dashboardProps(null),healthy:false,error:"fixture storage unavailable"});
   const equity=html.match(/<section[^>]*data-testid="overview-equity-first"[\s\S]*?<\/section>/)?.[0];

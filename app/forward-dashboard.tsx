@@ -45,7 +45,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   const positions=data?.positions??[],opportunities=[...(data?.opportunities??[])].sort((a,b)=>Number(b.eligible)-Number(a.eligible)||Number(b.premium)-Number(a.premium)||b.score-a.score);
   const eligible=opportunities.filter(o=>o.eligible&&(!now||o.expiresAt>now));
   const pulse=data?.marketPulse,records=recordWindows(data?.history??[],t=>t.closedAt??0),archive=archivePage(records.archive,paperPage);
-  const paperMargin=positions.reduce((n,t)=>n+t.margin,0),plannedRisk=positions.reduce((n,t)=>n+Math.max(t.plannedRisk,t.entryContext?.portfolioRiskCharge??((t.forecast?.sizingEquity??0)*(t.entryContext?.reserve===true?.003:.006))),0),riskUse=data?.equity?plannedRisk/data.equity:0,elapsed=data&&now?Math.max(0,(now-data.startedAt)/3600000):null;
+  const paperMargin=positions.reduce((n,t)=>n+t.margin,0),paperFloating=positions.reduce((n,t)=>n+(t.status==="OPEN"?openTradeNetPnl(t):0),0),plannedRisk=positions.reduce((n,t)=>n+Math.max(t.plannedRisk,t.entryContext?.portfolioRiskCharge??((t.forecast?.sizingEquity??0)*(t.entryContext?.reserve===true?.003:.006))),0),riskUse=data?.equity?plannedRisk/data.equity:0,elapsed=data&&now?Math.max(0,(now-data.startedAt)/3600000):null;
   const systemStatus=statusLabel==="后台运行中"?"正常":statusLabel?.startsWith("后台运行中 · ")?statusLabel.slice(8):statusLabel??(healthy?"正常":"行情恢复中");
   const nav:[Tab,string,string][]=[["overview","◉","总览"],["execution","⌘","执行"],["paper","⇄","模拟"],["live","◈","实盘"],["journal","≋","记录"],["settings","⊙","系统"]];
   return <main className="fr-app" style={fontVars as CSSProperties} data-ui-version="market-intelligence-v1">
@@ -60,7 +60,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       </section>
       <section className="fr-stats">
         <Stat label="当前持仓" value={data?`${positions.length} 笔`:"—"} note={`保证金 ${fmt(data?paperMargin:null)} U`}/>
-        <Stat label="浮动盈亏" value={`${signed(data?.floating)} U`} note={`计划风险 ${fmt(data?riskUse*100:null,1)}%`}/>
+        <Stat label="浮动盈亏" value={`${signed(data?paperFloating:null)} U`} note={`计划风险 ${fmt(data?riskUse*100:null,1)}%`}/>
         <Stat label="可参与机会" value={data?`${eligible.length} 个`:"—"} note={pulse?.bias==="UP"?"市场偏多":pulse?.bias==="DOWN"?"市场偏空":pulse?"市场分化":"等待行情"}/>
         <Stat label="实盘账户" value={`${fmt(liveOverview?.equity)} U`} note={`${liveOverview?.positionCount??"—"} 笔持仓 · 可用 ${fmt(liveOverview?.available)} U`}/>
       </section>
@@ -75,7 +75,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
     {tab==="paper"&&<>
       <PageTitle title="模拟账户"/>
       <nav className="fr-live-tabs fr-paper-tabs">{([["account","账户"],["positions","持仓"],["history","记录"],["archive","归档"]] as const).map(([id,label])=><button key={id} className={paperTab===id?"selected":""} onClick={()=>setPaperTab(id)}>{label}</button>)}</nav>
-      {paperTab==="account"&&<><section className="fr-stats fr-paper-summary"><Stat label="模拟权益" value={`${fmt(data?.equity)} U`} note={`起始 ${fmt(data?.initialEquity)} U`}/><Stat label="保证金占用" value={`${fmt(paperMargin)} U`} note={`${positions.length} 笔持仓`}/><Stat label="浮动盈亏" value={`${signed(data?.floating)} U`}/><Stat label="累计成交额" value={`${fmt(data?.turnover)} U`} note={`已完成 ${fmt(data?.resolved,0)} 笔`}/></section>
+      {paperTab==="account"&&<><section className="fr-stats fr-paper-summary"><Stat label="模拟权益" value={`${fmt(data?.equity)} U`} note={`起始 ${fmt(data?.initialEquity)} U`}/><Stat label="保证金占用" value={`${fmt(paperMargin)} U`} note={`${positions.length} 笔持仓`}/><Stat label="浮动盈亏" value={`${signed(data?paperFloating:null)} U`}/><Stat label="累计成交额" value={`${fmt(data?.turnover)} U`} note={`已完成 ${fmt(data?.resolved,0)} 笔`}/></section>
         <TradeList trades={positions} now={now} empty="当前没有模拟持仓"/></>}
       {paperTab==="positions"&&<TradeList trades={positions} now={now} empty="当前没有模拟持仓"/>}
       {(paperTab==="history"||paperTab==="archive")&&<section className="fr-section"><div className="fr-section-head"><h2>{paperTab==="history"?"最近记录":"归档记录"}</h2><span>{paperTab==="history"?"最新10条":"更早记录"}</span></div>
@@ -114,9 +114,13 @@ function TradeList({trades,now,empty,compact=false}:{trades:Trade[];now:number;e
   return <section className={compact?"":"fr-section fr-live-holdings"}>{!compact&&<div className="fr-section-head"><h2>当前持仓</h2><span>{trades.length} 笔</span></div>}
     {trades.length?<div className="fr-position-list">{trades.map(t=><TradeCard key={t.id} trade={t} now={now}/>)}</div>:<Empty title={empty}/>}</section>;
 }
+function openTradeNetPnl(t:Trade,px=t.lastPrice){
+  const d=t.side==="LONG"?1:-1,exitFeeRate=t.notional>0&&t.entryFee>=0?t.entryFee/t.notional:0;
+  return d*t.quantity*(px-t.entryPrice)-t.entryFee-t.quantity*px*exitFeeRate;
+}
 function TradeCard({trade:t,now}:{trade:Trade;now:number}){
-  const open=t.status==="OPEN",d=t.side==="LONG"?1:-1,px=open?t.lastPrice:t.exitPrice??t.lastPrice;
-  const pnl=open?d*t.quantity*(px-t.entryPrice)-t.entryFee-t.quantity*px*.0007:t.netPnl??0,rate=t.notional>0?pnl/t.notional:0,ctx=t.entryContext;
+  const open=t.status==="OPEN",px=open?t.lastPrice:t.exitPrice??t.lastPrice;
+  const pnl=open?openTradeNetPnl(t,px):t.netPnl??0,rate=t.notional>0?pnl/t.notional:0,ctx=t.entryContext;
   return <details className="fr-position-row"><summary><span className="fr-position-primary"><b>{t.symbol.replace("_"," / ")}</b><small>{t.side==="LONG"?"多单":"空单"} · {ctx?(ctx.reserve?"低风险 · ":"")+modeName(ctx.mode):"兼容持仓"}{ctx?.strategyVersion==="market-intelligence-v1"?` · ${ctx.regime??"—"}`:ctx?.relationHorizon?` · ${ctx.relationHorizon}m旧关系`:""} · {fmt(t.leverage,0)}×</small>
     <b className={pnl>=0?"fr-positive":"fr-negative"}>{signed(pnl)} U</b><small>{signed(rate*100,3)}% · {duration(t.openedAt,t.closedAt,now)}</small></span>
     <span className="fr-position-entry"><b>{open?`持仓评分 ${fmt(t.holdScore,0)}`:exitName(t.exitReason)}</b><small>MFE {fmt(t.favorable*100,2)}% · MAE {fmt(t.adverse*100,2)}% · 锁利 {fmt((t.profitFloorRate??0)*100,2)}%</small>
