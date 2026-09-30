@@ -508,7 +508,7 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
     t.lastPrice=px;t.lastQuoteAt=q!.observedAt;t.favorable=Math.max(t.favorable,favorable);t.adverse=Math.max(t.adverse,adverse);
     t.peakPnlRate=Math.max(t.peakPnlRate??0,favorable);
     if(!t.firstProfitAt&&favorable>=ROUND_TRIP_COST*.65){t.firstProfitAt=now;if(t.entryContext)t.entryContext.postEntryState="CONFIRMED";}
-    const liquidityNow=s.extremumRegime.liquidity.symbols[t.symbol],liqSide=liquidityNow?.departure.side==="UP"?"LONG":
+    const liquidityNow=s.extremumRegime.liquidity?.symbols[t.symbol],liqSide=liquidityNow?.departure.side==="UP"?"LONG":
       liquidityNow?.departure.side==="DOWN"?"SHORT":null;
     if(t.liquidityLifecycle?.currentPlan==="FAMILY_TURN"&&liquidityNow?.departure.state==="ACCEPTED"
       &&liqSide===t.side&&liquidityNow.departure.confidence>=.60){
