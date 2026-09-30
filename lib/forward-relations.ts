@@ -851,8 +851,12 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
     :`实时成交性价比已降至 ${executionValue.edgeRatio.toFixed(2)}×，低于1.25×，等待回调/新假设`;
   if(requiresLiquidityStop&&(frozenInvalidation==null||(side==="LONG"&&frozenInvalidation>=price)||(side==="SHORT"&&frozenInvalidation<=price)))
     return"流动性失效边界已经不在入场价格外侧，当前位置不再执行";
-  const stopPrice=frozenInvalidation??(price*(1-d*o.stopRate)),stopRate=Math.abs(price-stopPrice)/Math.max(price,1e-12);
-  if(!(stopRate>=.004&&stopRate<=.03))return"流动性/结构失效宽度不合理";
+  const softInvalidationRate=frozenInvalidation!=null?Math.abs(price-frozenInvalidation)/Math.max(price,1e-12):o.stopRate,
+    stopRate=requiresLiquidityStop
+      ?Math.min(.035,Math.max(softInvalidationRate*1.35,softInvalidationRate+Math.max(ROUND_TRIP_COST*1.5,o.pullbackRiskRate*.35)))
+      :Math.max(.004,o.stopRate),
+    stopPrice=price*(1-d*stopRate);
+  if(!(stopRate>=.004&&stopRate<=.035))return"流动性/结构硬风险宽度不合理";
   const sameCluster=s.positions.find(t=>t.side===side&&o.clusterId&&t.entryContext?.clusterId===o.clusterId);
   if(sameCluster)return"同相关组已有同方向主仓";
   const continuation=o.mode==="CONTINUATION"&&o.tradePlan==="LIQUIDITY_MIGRATION",
