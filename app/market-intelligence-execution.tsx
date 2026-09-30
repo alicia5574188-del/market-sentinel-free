@@ -106,7 +106,7 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
         <strong>{environmentName(currentEnvironment)} · {evolution(currentEvolution)}</strong></div>
         <p>大方向{bias(n?.major.bias)}，短期{bias(n?.short.bias)}。{n?.transition.detail??n?.summary??"市场研究层正在建立完整判断。"}</p></div>
 
-      <div className="fr-three">
+      <div className="fr-command-snapshot">
         <div><small>当前市场</small><b>{environmentName(currentEnvironment)}，大方向{bias(n?.major.bias)}，短期{bias(n?.short.bias)}；系统不会因为小周期噪声频繁翻转全局判断。</b></div>
         <div><small>正在发生</small><b>{marketChangeText(liquidity)}</b></div>
         <div><small>接下来可能</small><b>{nextMarketText(data)}</b></div>
