@@ -1,3 +1,4 @@
+import {buildMarketLiquidityResearch,initialMarketLiquidityResearch,type MarketLiquidityResearch,type SymbolLiquidityMap} from "./market-intelligence-liquidity.ts";
 /**
  * Market Intelligence V1
  *
@@ -18,6 +19,7 @@ export type MarketRegime="MARKET_TREND"|"DIVERGENT"|"TRANSITION"|"BALANCED";
 export type EvidenceDirection="BULLISH"|"BEARISH"|"MIXED";
 export type EvidenceFamily="BREADTH"|"LEADERSHIP"|"RELATIVE"|"FLOW"|"CORRELATION";
 export type EvidenceTrend="STRENGTHENING"|"WEAKENING"|"STABLE";
+export type LiquidityTradePlan="LIQUIDITY_MIGRATION"|"LIQUIDITY_REJECTION"|"FAMILY_TURN"|"OBSERVE_ONLY";
 
 export type MarketEvidence={id:string;at:number;type:string;direction:EvidenceDirection;severity:number;summary:string;
   symbols:string[];sourceCount:number;expiresAt:number;family?:EvidenceFamily;firstAt?:number;lastAt?:number;samples?:number;trend?:EvidenceTrend};
@@ -38,7 +40,7 @@ export type MarketInternals={breadth3:number;breadth12:number;breadthSlope:numbe
   bidLiquidityChange?:number;askLiquidityChange?:number;spreadRate?:number};
 export type MarketIntelligenceState={version:string;startedAt:number;updatedAt:number;narrative:MarketNarrative;
   evidence:MarketEvidence[];history:Array<{at:number;macro:MarketBias;major:MarketBias;short:MarketBias;summary:string}>;
-  symbols:Record<string,MarketSymbolState>;clusters:MarketCluster[];
+  symbols:Record<string,MarketSymbolState>;clusters:MarketCluster[];liquidity:MarketLiquidityResearch;
   coverage:{intradayMarkets:number;dailyMarkets:number;quoteMarkets:number;multiVenueMarkets:number};internals?:MarketInternals};
 
 export type IntelligenceOpportunity={
@@ -49,6 +51,7 @@ export type IntelligenceOpportunity={
   expectedHoldMinutes:number;marketFit:number;regionId:null;regionQuality:null;reason:string;strategyVersion:string;regime:MarketRegime;
   confirmationStage:"OBSERVE"|"READY";sourceCount:number;disagreementRate:number;clusterId:string;thesisId:string;thesisSummary:string;
   invalidationSummary:string;residual:number;relativeStrength:number;dataConfidence:number;thesisSince:number;thesisBars:number;
+  tradePlan:LiquidityTradePlan;liquidityPlanConfidence:number;liquidityReason:string;liquidityTargetRate:number|null;
 };
 
 const clip=(v:number,a=0,b=1)=>Math.max(a,Math.min(b,v));
@@ -128,6 +131,7 @@ export function initialMarketIntelligenceState(now:number):MarketIntelligenceSta
     tailRisk:{level:"LOW",score:15,detail:"暂无足够证据显示系统性尾部风险正在抬升。"},
     summary:"市场智能正在建立全市场基线。",plan:"先观察全市场关系，不因单一币或单一交易所变化下结论。",details:[],expectedShortMinutes:[30,120]};
   return{version:MARKET_INTELLIGENCE_VERSION,startedAt:now,updatedAt:now,narrative,evidence:[],history:[],symbols:{},clusters:[],
+    liquidity:initialMarketLiquidityResearch(now),
     coverage:{intradayMarkets:0,dailyMarkets:0,quoteMarkets:0,multiVenueMarkets:0},
     internals:{breadth3:0,breadth12:0,breadthSlope:0,dispersion:0,synchrony:0,venuePressure:0,residualBalance:0,leaderPersistence:1,
       bookImbalance:0,bidLiquidityChange:0,askLiquidityChange:0,spreadRate:0}};}
@@ -136,6 +140,7 @@ export function buildMarketIntelligence(input:{paths:Record<string,CandleLike[]>
   daily?:Record<string,CandleLike[]>;quotes:Record<string,QuoteLike>;previous?:MarketIntelligenceState;now:number;allowed?:Set<string>}){
   const previous=input.previous?.version===MARKET_INTELLIGENCE_VERSION?input.previous:initialMarketIntelligenceState(input.now),paths:Record<string,CandleLike[]>={};
   for(const [symbol,rows] of Object.entries(input.paths)){if(input.allowed&&!input.allowed.has(symbol))continue;const v=valid(rows,input.now,300);if(v.length>=30)paths[symbol]=v;}
+  const liquidity=buildMarketLiquidityResearch(paths,input.now);
   const retSeries:Record<string,number[]>={};for(const [s,r] of Object.entries(paths))retSeries[s]=returns(r,36);
   const factor=marketFactor(retSeries,36),factor6=factor.slice(-6).reduce((p,v)=>p+v,0),factor12=factor.slice(-12).reduce((p,v)=>p+v,0),
     volFactor=Math.max(.00035,stdev(factor));
@@ -340,7 +345,7 @@ export function buildMarketIntelligence(input:{paths:Record<string,CandleLike[]>
     residualBalance,leaderPersistence,bookImbalance:bookImbalanceMarket,bidLiquidityChange:bidLiquidityMarket,
     askLiquidityChange:askLiquidityMarket,spreadRate:spreadMarket};
   const state:MarketIntelligenceState={version:MARKET_INTELLIGENCE_VERSION,startedAt:previous.startedAt||input.now,updatedAt:input.now,narrative,
-    evidence:evidenceRows.slice(0,40),history:history.slice(0,96),symbols:states,clusters,coverage,internals};
+    evidence:evidenceRows.slice(0,40),history:history.slice(0,96),symbols:states,clusters,liquidity,coverage,internals};
   const up=Object.values(states).filter(x=>x.longScore>=62).length,down=Object.values(states).filter(x=>x.shortScore>=62).length,neutral=Math.max(0,Object.keys(states).length-up-down);
   const pulse={at:input.now,up,down,neutral,
     bias:(shortLayer.bias==="BULLISH"?"UP":shortLayer.bias==="BEARISH"?"DOWN":"MIXED") as "UP"|"DOWN"|"MIXED",
