@@ -1,0 +1,41 @@
+name: Runtime Entry Cancellation Diagnostic
+
+on:
+  push:
+    branches:
+      - diag/runtime-entry-cancellations-20260930
+
+jobs:
+  observe-production-entry-state:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Observe production entry validations for five minutes
+        shell: bash
+        run: |
+          set -euo pipefail
+          URL="https://market-sentinel-free.alicia5574188.workers.dev/api/forward/export"
+          prev=""
+          echo "DIAG_START $(date -u +%FT%TZ)"
+          for i in $(seq 1 150); do
+            body="$(curl -fsS --max-time 15 "$URL")"
+            snap="$(printf '%s' "$body" | jq -c '{
+              sampledAt:(now*1000|floor),
+              updatedAt:.forward.updatedAt,
+              positions:[.forward.positions[]? | {symbol,side,openedAt}],
+              waiting:[.forward.entryValidation.records[]? | select(.status=="WAITING") |
+                {id,candidateId,symbol,side,startedAt,deadlineAt,expiresAt,status,phase,stableThesis,reason,samples,supportSamples,oppositionSamples,bestAdvanceRate,maxAdverseRate}],
+              cancelled:[.forward.entryValidation.records[]? | select(.status=="CANCELLED") |
+                {id,candidateId,symbol,side,startedAt,deadlineAt,expiresAt,status,phase,stableThesis,reason,samples,supportSamples,oppositionSamples,bestAdvanceRate,maxAdverseRate}],
+              eligible:[.forward.opportunities[]? | select(.eligible==true) |
+                {id,symbol,side,mode,tradePlan,score,expiresAt,thesisSince,thesisBars,liquidityPlanConfidence,environmentMainline}],
+              entryDiagnostics:.forward.entryDiagnostics
+            }')"
+            sig="$(printf '%s' "$snap" | sha256sum | cut -d' ' -f1)"
+            if [[ "$sig" != "$prev" ]] || (( i % 15 == 0 )); then
+              echo "DIAG_SAMPLE $i $snap"
+              prev="$sig"
+            fi
+            sleep 2
+          done
+          echo "DIAG_END $(date -u +%FT%TZ)"
