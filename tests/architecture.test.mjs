@@ -11,7 +11,7 @@ test("Market Intelligence V1 is the only PAPER new-entry authority",async()=>{
   for(const mode of["RELATIVE","REVERSAL","CONTINUATION"])assert.match(core,new RegExp(`"${mode}"`));
   assert.match(engine,/MarketNarrative/);assert.match(engine,/MarketEvidence/);assert.match(engine,/residualPersistence/);
   assert.match(engine,/clusterId/);assert.match(engine,/tailRisk/);assert.match(engine,/expectedShortMinutes/);
-  assert.match(core,/TOTAL_RISK_RATE=\.10/);assert.match(core,/SIDE_RISK_RATE=\.065/);assert.match(core,/TOTAL_MARGIN_RATE=\.75/);
+  assert.match(core,/TOTAL_RISK_RATE=\.10/);assert.match(core,/SIDE_RISK_RATE=\.05/);assert.match(core,/CONTINUATION_SIDE_RISK_RATE=\.027/);assert.match(core,/TOTAL_MARGIN_RATE=\.75/);
   const advance=core.slice(core.indexOf("export function advanceForward"),core.indexOf("export function closeForwardForReset"));
   assert.match(advance,/s\.opportunities=built\.opportunities/);
   assert.doesNotMatch(advance,/buildExtremumRegime|advanceRelationEngine\(|interruptOpportunities\(|buildOpportunities\(/);
@@ -207,7 +207,8 @@ test("counterfactual research is isolated from trading authority and exported fo
     "research must run only after authoritative PAPER processing");
   assert.match(worker,/counterfactual:counterfactualResearchView/);
   assert.match(worker,/buildReviewSnapshot/);
-  assert.match(research,/RESEARCH_CHECKPOINTS=\[5,15,30,60,120,240\]/);
+  assert.match(research,/RESEARCH_CHECKPOINTS=\[5,15,30,45,60\]/);
+  assert.match(research,/ADMISSION_BUCKET_MS=5\*60_000/);assert.match(research,/MAX_ACTIVE_REJECTED=20/);
   assert.match(research,/ACCOUNT_RESET/);
   assert.match(research,/FILTERED_NOT_MATURE/);
   assert.match(research,/EXECUTABLE_NOT_SELECTED/);
@@ -360,6 +361,22 @@ test("opportunity discovery, frozen authorization and liquidity invalidation for
   assert.match(manage,/LIQUIDITY_HYPOTHESIS_INVALIDATED/);
 });
 
+test("known liquidity targets bound remaining space and final execution rechecks value",async()=>{
+  const [engine,core]=await Promise.all([read("lib/market-intelligence-engine.ts"),read("lib/forward-relations.ts")]);
+  assert.match(engine,/gross=plan\.targetRate!=null\?Math\.max\(0,plan\.targetRate\):Math\.max\(0,openSpaceRoom\)/);
+  assert.match(core,/EXECUTION_EDGE_FLOOR=1\.35/);
+  assert.match(core,/executionEdge<EXECUTION_EDGE_FLOOR/);
+  assert.match(core,/CONTINUATION_SIDE_RISK_RATE=\.027/);
+});
+
+test("legacy forward bookmark and page-render faults cannot surface as an unhandled Worker route",async()=>{
+  const worker=await read("worker/index-clean.ts");
+  assert.match(worker,/url\.pathname==="\/forward"/);
+  assert.match(worker,/Response\.redirect\(target\.toString\(\),307\)/);
+  assert.match(worker,/page-handler-failure/);
+  assert.match(worker,/页面正在自动恢复/);
+});
+
 test("Gate-only discovery uses the same 15-second radar cadence without bypassing multi-source entry safety",async()=>{
   const [worker,hub,engine]=await Promise.all([
     read("worker/index-clean.ts"),read("lib/market-data-hub.ts"),read("lib/market-intelligence-engine.ts")
@@ -396,8 +413,11 @@ test("opportunity capture reserves execution capacity and all formal plans use l
   assert.match(manage,/LIQUIDITY_MIGRATION.*LIQUIDITY_REJECTION.*FAMILY_TURN/s);
   assert.match(manage,/流动性迁移续接到下一段/);
   assert.match(manage,/profitStop/);
-  assert.match(manage,/liquidityOwnsStop/);
-  assert.match(manage,/liquidityOwnsStop\?"LIQUIDITY_HYPOTHESIS_INVALIDATED"/);
+  assert.match(manage,/hypothesisStop/);
+  assert.match(manage,/emergencyStop/);
+  assert.match(manage,/confirmedLiquidityFailure/);
+  assert.match(manage,/hardStopped/);
+  assert.match(manage,/LIQUIDITY_HYPOTHESIS_INVALIDATED/);
   const minute=core.slice(core.indexOf("export function forwardUrgentMinuteSymbols"),core.indexOf("export function forwardWatchSymbols"));
   assert.match(minute,/\.\.\.armed,\.\.\.research,\.\.\.positions/);
   assert.match(worker,/freshImpulse\.slice\(0,3\),\.\.\.fixed/);
@@ -441,31 +461,35 @@ test("execution command center summarizes active entry waits without a separate 
 });
 
 
-test("environment outlook has bounded execution authority and cannot become a trade veto or risk amplifier",async()=>{
+test("environment outlook has bounded execution authority and can require retest without changing directional eligibility",async()=>{
   const [core,router,execution]=await Promise.all([
     read("lib/forward-relations.ts"),read("lib/market-intelligence-environment-router.ts"),read("app/market-intelligence-execution.tsx")
   ]);
   const annotate=core.slice(core.indexOf("function annotateLifecycleOpportunities"),core.indexOf("function openIntelligenceTrade"));
   assert.match(annotate,/routeEnvironmentOpportunity/);
   assert.match(annotate,/o\.environmentRiskScale=route\.riskScale/);
-  assert.doesNotMatch(annotate,/o\.eligible\s*=/,"environment outlook may rank/scale but cannot manufacture or veto eligibility");
+  assert.match(annotate,/o\.environmentForceRetest=route\.forceRetest/);
+  assert.doesNotMatch(annotate,/o\.eligible\s*=/,"environment outlook may change execution form/size but cannot manufacture or veto directional eligibility");
   const open=core.slice(core.indexOf("function openIntelligenceTrade"),core.indexOf("export function extremeResidualConfirmationProfile"));
-  assert.match(open,/Math\.max\(\.70,Math\.min\(1,o\.environmentRiskScale\?\?1\)\)/);
+  assert.match(open,/Math\.max\(\.55,Math\.min\(1,o\.environmentRiskScale\?\?1\)\)/);
   assert.doesNotMatch(open,/environmentRiskScale[^;\n]*>1|riskRate\s*\*\s*1\.[1-9]/,"environment outlook cannot amplify risk above the original strategy");
   assert.match(router,/mainline=o\.tradePlan==="LIQUIDITY_MIGRATION"&&fit>=\.75&&outlook\.horizonMinutes>=45/);
-  assert.match(router,/forceRetest=false/,"environment outlook must not revive a second environment-specific entry state machine");
+  assert.match(router,/forceRetest=!mainline&&\(probe\|\|outlook\.horizonMinutes===15\|\|\(alignment==="COUNTER"&&fit<\.65\)\)/);
   assert.match(execution,/接下来可能/);
   assert.match(execution,/environmentName\(currentEnvironment\).*evolution\(currentEvolution\)/);
   assert.doesNotMatch(execution,/条件持续力.*%|转变压力.*%/);
 });
 
-test("environment Probe-Prove-Restart no longer has entry authority",async()=>{
+test("weak environments use Probe-Pullback-Restart only as an execution-location gate",async()=>{
   const core=await read("lib/forward-relations.ts");
   const advance=core.slice(core.indexOf("function advanceEntryResponses"),core.indexOf("export function fillForwardPortfolio"));
-  assert.doesNotMatch(advance,/environmentProbeRetestDecision|环境Probe尚未证明方向|Probe已完成第一段推动/);
+  assert.match(advance,/validation\.requiresProbeRetest/);
+  assert.match(advance,/environmentProbeRetestDecision/);
+  assert.match(advance,/WAIT_IMPULSE/);assert.match(advance,/WAIT_PULLBACK/);assert.match(advance,/WAIT_RESTART/);
   assert.match(advance,/stableEntryLocationDecision/);
   assert.match(advance,/超过允许追价/);
-  assert.match(advance,/等待原方向重新推进/);
+  assert.match(advance,/等待原方向重新启动|等待原方向重新推进/);
+  assert.doesNotMatch(advance,/o\.eligible\s*=/,"execution retest cannot rewrite research eligibility");
 });
 
 test("environment PnL memory remains diagnostic while current causal outlook owns bounded routing",async()=>{
@@ -480,9 +504,9 @@ test("environment PnL memory remains diagnostic while current causal outlook own
   assert.doesNotMatch(annotate,/environmentPerformanceFactor/,"historical wins/losses cannot decide the current market condition");
   const route=router.slice(router.indexOf("export function routeEnvironmentOpportunity"));
   assert.match(route,/void input\.performanceFactor/);
-  assert.match(route,/riskScale=clip\(\.70\+\.30\*fit,\.70,1\)/);
+  assert.match(route,/riskScale=clip\(\.55\+\.45\*fit,\.55,1\)/);
   const advance=core.slice(core.indexOf("function advanceEntryResponses"),core.indexOf("export function fillForwardPortfolio"));
-  assert.doesNotMatch(advance,/environmentProbeRetestDecision/,"outlook must reuse the normal entry response path");
+  assert.match(advance,/environmentProbeRetestDecision/,"current causal outlook may require a better execution location");
 });
 
 test("LIVE mirror readiness uses fresh executable BBO, not PAPER entryReady admission state",async()=>{
