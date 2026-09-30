@@ -259,7 +259,9 @@ export function routeEnvironmentOpportunity(input:{
     probePullbackMin=Math.max(cost*.40,Math.min(pullback*.18,space*.08,.0025)),
     probeRestartMin=Math.max(cost*.35,Math.min(pullback*.12,space*.06,.0018)),
     mainline=o.tradePlan==="LIQUIDITY_MIGRATION"&&fit>=.75&&outlook.horizonMinutes>=45,
-    probe=fit<.50,forceRetest=false,minimumThesisBars=mainline?1:2,
+    probe=fit<.50,
+    forceRetest=o.mode==="CONTINUATION"&&!mainline&&(fit<.45||(alignment==="COUNTER"&&outlook.horizonMinutes<=30)),
+    minimumThesisBars=mainline?1:2,
     priority=fit>=.75?5:fit>=.60?4:fit>=.45?3:2,
     scoreDelta=(fit-.50)*8,riskScale=clip(.70+.30*fit,.70,1),
     playbook:EnvironmentPlaybook=environment==="SHOCK"&&alignment==="ALIGNED"?"SHOCK_PARTICIPATION":
