@@ -1,0 +1,35 @@
+name: Binance Cross Venue Data Audit
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/research-binance-cross-venue-data-audit.mjs'
+      - '.github/workflows/binance-cross-venue-data-audit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Syntax check
+        run: node --check scripts/research-binance-cross-venue-data-audit.mjs
+      - name: Run Binance cross-venue data audit
+        env:
+          RESEARCH_OUTPUT: /tmp/binance-cross-venue-data-audit.json
+          RESEARCH_DATA_DIR: /tmp/binance-cross-venue-data-audit
+        run: node scripts/research-binance-cross-venue-data-audit.mjs
+      - name: Print result
+        run: jq '{research,objective,decision,protocol,counts,fullMonthlyCoverage,timestampAndDensityPass,coverageBySymbol,sampleResults,missingMonthlyObjects,sha256}' /tmp/binance-cross-venue-data-audit.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binance-cross-venue-data-audit
+          path: /tmp/binance-cross-venue-data-audit.json
+          retention-days: 7
