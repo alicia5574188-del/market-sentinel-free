@@ -730,6 +730,7 @@ function annotateLifecycleOpportunities(s:ForwardState,market:MarketEvolutionSta
 function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:number,equity:number,
   response?:{validation:EntryValidation;decision:EntryResponseDecision}){
   if(!isIntelligenceOpportunity(o))return"新策略身份缺失";
+  if(s.positions.some(t=>t.symbol===o.symbol))return"同币已有持仓，禁止重复开仓";
   const side=o.side,d=dir(side),price=side==="LONG"?q.bestAsk:q.bestBid,stopRate=o.stopRate;
   if(!(stopRate>=.004&&stopRate<=.03))return"结构止损宽度不合理";
   const sameCluster=s.positions.find(t=>t.side===side&&o.clusterId&&t.entryContext?.clusterId===o.clusterId);
@@ -979,6 +980,9 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
     if(!o||!isIntelligenceOpportunity(o)||o.expiresAt<=now){
       validation.status="CANCELLED";validation.reason="交易假设已过期或已被新的完成5m结构替代";reject(validation.reason);continue;
     }
+    if(s.positions.some(t=>t.symbol===validation.symbol)){
+      validation.status="CANCELLED";validation.reason="同币已有持仓，取消重复执行等待";reject(validation.reason);continue;
+    }
     const q=quotes[validation.symbol];if(!freshQuote(q,now)||q!.entryReady!==true){reject("等待实时盘口");continue;}
     const price=validation.side==="LONG"?q!.bestAsk:q!.bestBid,state=s.extremumRegime.symbols[validation.symbol],
       decision=evaluateEntryResponse({now,side:validation.side,score:o.environmentScore??o.score,edgeRatio:o.edgeRatio,pullbackRiskRate:o.pullbackRiskRate,
@@ -988,7 +992,7 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
           bestAdvanceRate:validation.bestAdvanceRate,maxAdverseRate:validation.maxAdverseRate,
           supportSamples:validation.supportSamples,oppositionSamples:validation.oppositionSamples},
         state,quote:q,minutePath:minutePaths?.[validation.symbol],costRate:ROUND_TRIP_COST,
-        allowRetest:!!validation.stableThesis});
+        allowRetest:!!validation.stableThesis||(o.tradePlan!=null&&o.tradePlan!=="OBSERVE_ONLY")});
     validation.lastPrice=price;validation.lastQuoteAt=q!.observedAt;validation.samples++;
     validation.bestAdvanceRate=decision.bestAdvanceRate;validation.maxAdverseRate=decision.maxAdverseRate;
     validation.supportSamples=decision.supportSamples;validation.oppositionSamples=decision.oppositionSamples;validation.reason=decision.reason;
