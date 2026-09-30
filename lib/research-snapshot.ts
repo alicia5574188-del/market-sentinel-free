@@ -136,13 +136,13 @@ export function finalizeReviewSnapshot(s:ReviewSnapshot):ReviewSnapshot{
   if(!s.coverage.complete)s.issues.push({code:'TRADE_HISTORY_INCOMPLETE_OR_CONFLICTING',classification:'CONFIRMED_DATA_ISSUE',count:s.coverage.missingClosed+s.coverage.conflictingTradeIds.length});
   if(traceMissing.length)s.issues.push({code:'CAUSAL_EXIT_TRACE_MISSING',classification:'INSUFFICIENT_EVIDENCE',count:traceMissing.length});
   if(profitLeads.length)s.issues.push({code:'PROFIT_GIVEBACK_REVIEW_NOT_VERDICT',classification:'REVIEW_LEAD',count:profitLeads.length,tradeIds:profitLeads.map(t=>t.id)});
-  if(lowExecutionEdge.length)s.issues.push({code:'EXECUTION_EDGE_DECAY_BELOW_1_25',classification:'CONFIRMED_LOGIC_MISMATCH',
+  if(lowExecutionEdge.length)s.issues.push({code:'EXECUTION_EDGE_DECAY_BELOW_1_25',classification:'REVIEW_LEAD',
     count:lowExecutionEdge.length,tradeIds:lowExecutionEdge.map(t=>t.id)});
   if(liquidityRebounds.length)s.issues.push({code:'LIQUIDITY_STOP_REBOUND_REVIEW_NOT_VERDICT',classification:'REVIEW_LEAD',
     count:liquidityRebounds.length,tradeIds:liquidityRebounds.map(r=>String(r.tradeId))});
   if(Number(sampling.notAdmittedAttempts)>0&&rejected.length===0)s.issues.push({code:'COUNTERFACTUAL_ADMISSION_STARVATION',
-    classification:'CONFIRMED_DIAGNOSTIC_ISSUE',count:Number(sampling.notAdmittedAttempts)});
-  if(open.length>10)s.issues.push({code:'ACTIVE_POSITION_COUNT_ABOVE_TEN',classification:'CONFIRMED_PORTFOLIO_STATE',count:open.length});
+    classification:'CONFIRMED_DATA_ISSUE',count:Number(sampling.notAdmittedAttempts)});
+  if(open.length>10)s.issues.push({code:'ACTIVE_POSITION_COUNT_ABOVE_TEN',classification:'REVIEW_LEAD',count:open.length});
   if(rejected.length&&!rejected.some(r=>obj(r.checkpointCoverage)['60']==='VALID'))s.issues.push({code:'NO_VALID_60M_CANDIDATE_RESULTS',classification:'INSUFFICIENT_EVIDENCE',count:rejected.length});
   return s;
 }
