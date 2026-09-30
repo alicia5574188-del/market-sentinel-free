@@ -1340,6 +1340,6 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
       accounting:"模拟仍使用新鲜买卖价并计入手续费、滑点和资金费占位；每笔新Trade冻结独立交易假设、相关组、失效条件与持仓计划。",
       risk:"总结构风险≤10%、同方向≤6.5%、组合保证金≤75%；同一高相关组正常只允许一个同方向主仓，反方向独立假设可并存。",
       validation:"任何细节都会进入证据池，但单一噪声不能让大方向来回翻转。Environment Router 不用停仓逃避坏环境：趋势用TREND_CAPTURE，过渡用TRANSITION_PROBE，轮动用ROTATION_RELATIVE，同步扩张用SHOCK_PARTICIPATION。逆环境机会仍保留交易权，但必须先完成第一段正反馈→可控回调→再次启动；近期某环境连续亏损只缩放风险，不把风险降为0。高质量稳定交易假设进入ARMED后，2秒级浅反向只能转为RETEST_WAIT。",
-      liquidation:"固定结构止损仍是最后保险；Position Intelligence只提供仓位证据，Lifecycle Research拥有最终主动退出权。单一细节、单一市场转向或连续两根5m都没有独立平仓权。单次前瞻假设或某一轮Position EXIT同样没有独立平仓权。实际发展显著超过入场预期的Runner会动态上调未来空间，并在跨越离散利润台阶后留下宽松Runner平台防止灾难性回吐；普通单形成超过正常噪声的已证明利润后也会建立更低的平台防止浮盈完整转亏。平台不随每个tick追价；只有多轮持续恶化才触发更主动的PROTECT或EXIT。"},
+      liquidation:"新版三类正式流动性计划以开仓时冻结的流动性失效边界作为最后硬保险；只有旧持仓/缺少正式流动性边界的兼容仓位继续使用原结构止损。Position Intelligence负责主动退出证据，单一细节或单一市场转向没有独立平仓权。流动性迁移到达新的成交中心并再次被市场接受时，原仓位直接续接下一段，不平仓重追；已证明利润仍使用宽松保护平台防止灾难性回吐。"},
     cost:PAPER_COST,nextCycleAt:s.lastCandleAt+BAR_MS};
 }
