@@ -1,0 +1,73 @@
+name: Probe Gate 1h History
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/probe-gate-1h-history.yml"
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Probe Gate REST and official 1h archive
+        shell: bash
+        run: |
+          node <<'NODE'
+          const { writeFileSync } = require('node:fs');
+          const { gunzipSync } = require('node:zlib');
+          const BASE='https://api.gateio.ws/api/v4';
+          const ARCHIVE='https://download.gatedata.org/futures_usdt/candlesticks_1h';
+          const H=3600;
+          const cases=[
+            ['2025-05', Date.UTC(2025,4,1)/1000, Date.UTC(2025,4,30)/1000-1],
+            ['2025-12', Date.UTC(2025,11,1)/1000, Date.UTC(2025,11,30)/1000-1],
+            ['2026-01', Date.UTC(2026,0,1)/1000, Date.UTC(2026,0,30)/1000-1],
+            ['2026-08', Date.UTC(2026,7,1)/1000, Date.UTC(2026,7,30)/1000-1],
+            ['recent-700h', Math.floor(Date.now()/1000)-700*H, Math.floor(Date.now()/1000)-1],
+          ];
+          async function restOne(label,from,to){
+            const url=`${BASE}/futures/usdt/candlesticks?contract=BTC_USDT&interval=1h&from=${from}&to=${to}`;
+            try {
+              const r=await fetch(url,{headers:{Accept:'application/json','X-Gate-Size-Decimal':'1'}});
+              const text=await r.text();
+              let body; try{body=JSON.parse(text)}catch{body=text}
+              return {label,from,to,hours:(to-from+1)/H,status:r.status,ok:r.ok,count:Array.isArray(body)?body.length:null,first:Array.isArray(body)&&body.length?(body[0]?.t??body[0]?.[0]??null):null,last:Array.isArray(body)&&body.length?(body.at(-1)?.t??body.at(-1)?.[0]??null):null,error:r.ok?null:body};
+            } catch(e) {
+              return {label,from,to,status:null,ok:false,count:null,error:String(e)};
+            }
+          }
+          async function archiveOne(symbol,ym){
+            const url=`${ARCHIVE}/${ym}/${symbol}-${ym}.csv.gz`;
+            try {
+              const r=await fetch(url);
+              const buf=Buffer.from(await r.arrayBuffer());
+              if(!r.ok) return {symbol,ym,url,status:r.status,ok:false,bytes:buf.length,error:buf.toString('utf8').slice(0,240)};
+              const csv=gunzipSync(buf).toString('utf8');
+              const lines=csv.trim().split(/\r?\n/);
+              return {symbol,ym,url,status:r.status,ok:true,bytes:buf.length,lineCount:lines.length,sample:lines.slice(0,5)};
+            } catch(e) {
+              return {symbol,ym,url,status:null,ok:false,error:String(e)};
+            }
+          }
+          (async()=>{
+            const rest=[];
+            for(const c of cases) rest.push(await restOne(...c));
+            const archive=[];
+            for(const [symbol,ym] of [['BTC_USDT','202505'],['BTC_USDT','202512'],['BTC_USDT','202601'],['BTC_USDT','202608'],['ENA_USDT','202505'],['ENA_USDT','202608']]) archive.push(await archiveOne(symbol,ym));
+            const report={generatedAt:new Date().toISOString(),rest,archive};
+            writeFileSync('/tmp/gate-1h-probe.json',JSON.stringify(report,null,2));
+            console.log(JSON.stringify(report,null,2));
+          })().catch(e=>{console.error(e);process.exitCode=1;});
+          NODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gate-1h-history-probe
+          path: /tmp/gate-1h-probe.json
+          if-no-files-found: error
+          retention-days: 7

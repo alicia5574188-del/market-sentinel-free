@@ -1,0 +1,33 @@
+name: Diagnose Heterogeneous 1h Horizon Surface
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/diagnose-heterogeneous-1h-horizon-surface.mjs"
+      - ".github/workflows/diagnose-heterogeneous-1h-horizon-surface.yml"
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Check syntax
+        run: node --check scripts/diagnose-heterogeneous-1h-horizon-surface.mjs
+      - name: Diagnose entry edge across holding horizons
+        run: node scripts/diagnose-heterogeneous-1h-horizon-surface.mjs
+      - name: Print focused result
+        if: always()
+        run: |
+          test -f /tmp/heterogeneous-1h-horizon-surface.json && node -e "const r=require('/tmp/heterogeneous-1h-horizon-surface.json'); console.log(JSON.stringify({decision:r.decision,activeSymbols:r.data?.activeSymbols?.length,candidateCount:r.candidateCount,frozen:r.frozen?.map(x=>({sleeve:x.sleeve,stratum:x.stratum,h:x.selectedHorizon,calNet:x.calibration?.meanNet,calPositiveMonths:x.calibration?.positiveBaseMonths,blindNet:x.blind?.meanNet,blindPositiveMonths:x.blind?.positiveBaseMonths}))},null,2))" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: heterogeneous-1h-horizon-surface
+          path: /tmp/heterogeneous-1h-horizon-surface.json
+          if-no-files-found: warn
+          retention-days: 7

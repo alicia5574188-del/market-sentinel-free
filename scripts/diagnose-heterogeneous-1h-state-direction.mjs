@@ -1,0 +1,39 @@
+import { readFileSync, writeFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+
+const sourcePath='scripts/research-heterogeneous-1h-sleeve-portfolio.mjs';
+const source=readFileSync(sourcePath,'utf8');
+const importNeedle="import { writeFileSync } from 'node:fs';",candleStartNeedle='async function candles(symbol){',rawNeedle='\n\nconst raw=',addStartNeedle='function addCandidate(',loopNeedle='\nfor(const [t,obs]',outcomeNeedle='\nconst outcomeBySleeve=';
+if(!source.includes(importNeedle)||!source.includes(candleStartNeedle)||!source.includes(addStartNeedle)||!source.includes(outcomeNeedle))throw new Error('Unexpected base research script shape.');
+let patched=source.replace(importNeedle,`${importNeedle}\nimport { gunzipSync } from 'node:zlib';`);
+const candleStart=patched.indexOf(candleStartNeedle),candleEnd=patched.indexOf(rawNeedle,candleStart);
+const archiveAdapter=[
+  "const ARCHIVE_BASE='https://download.gatedata.org/futures_usdt/candlesticks_1h';",
+  'const archiveDiagnostics={};',
+  "function archiveMonths(){const out=[];let d=new Date(START*1000);d=new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),1));while(d.getTime()/1000<END){out.push(d.toISOString().slice(0,7).replace('-',''));d=new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth()+1,1));}return out;}",
+  'function archiveMonthBounds(ym){const y=+ym.slice(0,4),m=+ym.slice(4,6)-1;return [Date.UTC(y,m,1)/1000,Date.UTC(y,m+1,1)/1000];}',
+  "async function archiveMonth(symbol,ym,tries=5){const url=ARCHIVE_BASE+'/'+ym+'/'+symbol+'-'+ym+'.csv.gz';let last;for(let i=0;i<tries;i++){try{const r=await fetch(url);if(r.status===404)return {status:404,rows:[]};const buf=Buffer.from(await r.arrayBuffer());if(r.ok){return {status:r.status,rows:gunzipSync(buf).toString('utf8').split(/\\r?\\n/).filter(Boolean).map(line=>parseCandle(line.split(','))).filter(Boolean)};}last=new Error(String(r.status)+' '+url);if(r.status!==429&&r.status<500)break;}catch(e){last=e;}await sleep(300*(i+1));}throw last??new Error(url);}",
+  "async function candles(symbol){const out=[],missing=[],invalid=[],errors=[];for(const ym of archiveMonths()){try{const got=await archiveMonth(symbol,ym);if(got.status===404){missing.push(ym);continue;}const [lo,hi]=archiveMonthBounds(ym),valid=got.rows.filter(r=>r.time>=lo&&r.time<hi&&r.time>=START&&r.time<END);if(valid.length!==got.rows.length)invalid.push({ym,total:got.rows.length,valid:valid.length});out.push(...valid);}catch(e){errors.push({ym,error:String(e)});}}const rows=[...new Map(out.map(r=>[r.time,r])).values()].sort((a,b)=>a.time-b.time);archiveDiagnostics[symbol]={rows:rows.length,first:rows[0]?.time??null,last:rows.at(-1)?.time??null,missing,invalid,errors};return rows;}"
+].join('\n');
+patched=patched.slice(0,candleStart)+archiveAdapter+patched.slice(candleEnd);
+const addStart=patched.indexOf(addStartNeedle),addEnd=patched.indexOf(loopNeedle,addStart);
+const horizonCandidate=`const DIAG_HORIZONS=[1,2,4,8,12,24,48];\nfunction addCandidate(x,sleeve,dir,score,hold,extra={}){if(!dir||!(score>0)||!Number.isFinite(score))return;const pm=maps.get(x.symbol),entry=pm?.get(x.time+H);if(!entry)return;const grossByHold={};for(const h of DIAG_HORIZONS){const exit=pm?.get(x.time+h*H);if(exit)grossByHold[h]=dir*(exit.close/entry.open-1);}const originalExit=pm?.get(x.time+hold*H);if(!originalExit)return;candidates.push({sleeve,symbol:x.symbol,signalTime:x.time,entryTime:x.time+H,dir,score,originalHold:hold,grossByHold,...extra});}`;
+patched=patched.slice(0,addStart)+horizonCandidate+patched.slice(addEnd);
+const cut=patched.indexOf(outcomeNeedle);
+const diagnostic=String.raw`
+
+const STATES=['TREND','COMPRESSION','RANGE','DISPERSION','MIXED'];
+function stateAt(t){const obs=featuresByTime.get(t)??[],btc=obs.find(x=>x.symbol==='BTC_USDT'),eth=obs.find(x=>x.symbol==='ETH_USDT');if(!btc||!eth||obs.length<10)return {state:'MIXED'};const marketZ=.5*(btc.z24+eth.z24),breadth=Math.abs(mean(obs.map(x=>sign(x.r24)))),eff=median(obs.map(x=>x.eff24)),volRatio=median(obs.map(x=>x.volRatio)),dispersion=stdev(obs.map(x=>x.z24));let state='MIXED';if(Math.abs(marketZ)>=.85&&breadth>=.55&&eff>=.18)state='TREND';else if(volRatio<=.78)state='COMPRESSION';else if(Math.abs(marketZ)<=.55&&eff<=.22)state='RANGE';else if(dispersion>=1.15)state='DISPERSION';return {state,marketZ,breadth,eff,volRatio,dispersion};}
+const stateCache=new Map();for(const c of candidates){if(!stateCache.has(c.signalTime))stateCache.set(c.signalTime,stateAt(c.signalTime));c.marketState=stateCache.get(c.signalTime).state;}
+function stat(rows,h,orientation,months){const vals=rows.filter(x=>months.includes(monthKey(x.entryTime))&&Number.isFinite(x.grossByHold[h])).map(x=>(orientation==='ORIGINAL'?1:-1)*x.grossByHold[h]-BASE_COST),g=vals.filter(x=>x>0).reduce((s,x)=>s+x,0),l=-vals.filter(x=>x<=0).reduce((s,x)=>s+x,0);const monthly=months.map(month=>{const v=rows.filter(x=>monthKey(x.entryTime)===month&&Number.isFinite(x.grossByHold[h])).map(x=>(orientation==='ORIGINAL'?1:-1)*x.grossByHold[h]-BASE_COST);return {month,count:v.length,meanNet:mean(v)};});return {count:vals.length,meanNet:mean(vals),medianNet:median(vals),hit:vals.length?vals.filter(x=>x>0).length/vals.length:0,pf:l?g/l:g?99:0,positiveMonths:monthly.filter(x=>x.meanNet>0).length,monthly};}
+const strata=[{name:'ALL',floor:0},{name:'HIGH_SCORE_1_05',floor:1.05}],surface={},frozen=[],stable=[];
+for(const sleeve of SLEEVES){surface[sleeve]={};for(const state of STATES){surface[sleeve][state]={};for(const stratum of strata){const rows=candidates.filter(x=>x.sleeve===sleeve&&x.marketState===state&&x.score>=stratum.floor),cells=[];for(const h of DIAG_HORIZONS)for(const orientation of ['ORIGINAL','REVERSED']){const calibration=stat(rows,h,orientation,CAL_MONTHS),validation=stat(rows,h,orientation,BLIND_MONTHS);cells.push({h,orientation,calibration,validation});if(calibration.count>=40&&validation.count>=40&&calibration.meanNet>0&&validation.meanNet>0&&calibration.positiveMonths>=4&&validation.positiveMonths>=5)stable.push({sleeve,state,stratum:stratum.name,h,orientation,calibration,validation});}surface[sleeve][state][stratum.name]=cells;const usable=cells.filter(x=>x.calibration.count>=40).sort((a,b)=>b.calibration.meanNet-a.calibration.meanNet),best=usable[0]??null;frozen.push({sleeve,state,stratum:stratum.name,selected:best});}}}
+const stateCounts=Object.fromEntries(STATES.map(s=>[s,candidates.filter(x=>x.marketState===s).length]));
+const report={decision:'STATE_DIRECTION_DIAGNOSTIC',authority:'RESEARCH_ONLY_NO_DEPLOYMENT',method:'Current-hour cross-sectional market structure only: BTC/ETH normalized 24h direction, directional breadth, median 24h efficiency, median 6h/24h volatility ratio, and cross-sectional z24 dispersion. Existing sleeve entries are unchanged. Diagnostic compares original vs reversed direction and holding horizons by state. Jul-Dec 2025 selects cells; Jan-Aug 2026 is validation, not claimed as untouched after prior research exposure.',cost:{base:BASE_COST},data:{activeSymbols,archiveDiagnostics},candidateCount:candidates.length,stateCounts,states:STATES,strata,horizons:DIAG_HORIZONS,stable,frozen,surface};
+writeFileSync('/tmp/heterogeneous-1h-state-direction.json',JSON.stringify(report,null,2));
+console.log(JSON.stringify({decision:report.decision,activeSymbols:activeSymbols.length,candidateCount:report.candidateCount,stateCounts,stableCount:stable.length,stable:stable.map(x=>({sleeve:x.sleeve,state:x.state,stratum:x.stratum,h:x.h,orientation:x.orientation,calNet:x.calibration.meanNet,calMonths:x.calibration.positiveMonths,valNet:x.validation.meanNet,valMonths:x.validation.positiveMonths,calN:x.calibration.count,valN:x.validation.count}))},null,2));
+`;
+patched=patched.slice(0,cut)+diagnostic;
+const out='/tmp/diagnose-heterogeneous-1h-state-direction-generated.mjs';
+writeFileSync(out,patched);
+await import(`${pathToFileURL(out).href}?v=${Date.now()}`);

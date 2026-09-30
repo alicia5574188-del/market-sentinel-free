@@ -1,0 +1,34 @@
+name: Validate Heterogeneous 1h Sleeve Portfolio Fixed
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/research-heterogeneous-1h-sleeve-portfolio.mjs"
+      - "scripts/run-heterogeneous-1h-sleeve-portfolio-fixed.mjs"
+      - ".github/workflows/validate-heterogeneous-1h-sleeve-portfolio-fixed.yml"
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Check syntax
+        run: |
+          node --check scripts/research-heterogeneous-1h-sleeve-portfolio.mjs
+          node --check scripts/run-heterogeneous-1h-sleeve-portfolio-fixed.mjs
+      - name: Run heterogeneous sleeve portfolio with explicit 1h candles
+        run: node --max-old-space-size=4096 scripts/run-heterogeneous-1h-sleeve-portfolio-fixed.mjs
+      - name: Print focused result
+        run: jq '{decision,authority,goal,method,cost,data:{activeSymbols:.data.activeSymbols},candidateCount,sleeveRaw,calibrationMonths,blindMonths,policyCount,feasibleCount,target,bestReturn,bestFrequencyPositive,paretoFrontier}' /tmp/heterogeneous-1h-sleeve-portfolio-report.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: heterogeneous-1h-sleeve-portfolio-fixed-report
+          path: /tmp/heterogeneous-1h-sleeve-portfolio-report.json
+          retention-days: 7

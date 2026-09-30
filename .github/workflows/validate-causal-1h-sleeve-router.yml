@@ -1,0 +1,33 @@
+name: Validate Causal 1h Sleeve Router
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/research-causal-1h-sleeve-router.mjs"
+      - ".github/workflows/validate-causal-1h-sleeve-router.yml"
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Check syntax
+        run: node --check scripts/research-causal-1h-sleeve-router.mjs
+      - name: Run causal cost-aware sleeve router
+        run: node scripts/research-causal-1h-sleeve-router.mjs
+      - name: Print focused result
+        if: always()
+        run: |
+          test -f /tmp/causal-1h-sleeve-router-report.json && node -e "const r=require('/tmp/causal-1h-sleeve-router-report.json'); console.log(JSON.stringify({decision:r.decision,activeSymbols:r.data?.activeSymbols?.length,candidateCount:r.candidateCount,base:r.base&&{avgMonthReturn:r.base.avgMonthReturn,positiveMonths:r.base.positiveMonths,monthsAtLeast5pct:r.base.monthsAtLeast5pct,avgTradesPerDay:r.base.avgTradesPerDay,totalCompounded:r.base.totalCompounded,maxDD:r.base.maxDD},stress:r.stress&&{avgMonthReturn:r.stress.avgMonthReturn,positiveMonths:r.stress.positiveMonths,avgTradesPerDay:r.stress.avgTradesPerDay,totalCompounded:r.stress.totalCompounded,maxDD:r.stress.maxDD}},null,2))" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: causal-1h-sleeve-router-report
+          path: /tmp/causal-1h-sleeve-router-report.json
+          if-no-files-found: warn
+          retention-days: 7
