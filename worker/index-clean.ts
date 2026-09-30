@@ -1167,7 +1167,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.forwardLastAttemptAt=now;
       const previous = state;
       const next = advanceForward({ state: previous, now, paths: this.strategyCandles,minutePaths:this.forwardMinutePaths(),
-        daily:this.turnDailyCandles,quotes: this.forwardQuotes(now), contracts: this.regimeContracts(),
+        daily:this.turnDailyCandles,quotes:this.forwardQuotes(now),analysisQuotes:this.forwardAnalysisQuotes(now),contracts:this.regimeContracts(),
         entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue,
         research:{rolling:this.shadowResearch.market[0]?.rolling??null} });
       if (next.changed || !previous.storage.persistedAt) {
@@ -3057,6 +3057,33 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return forwardUrgentQuoteSymbols(this.forwardState,now,this.runtime.liquidUniverse??[]);
   }
 
+  private forwardAnalysisQuotes(now=Date.now()){
+    if(!this.forwardState)return{};
+    const symbols=[...new Set([...this.runtime.liquidUniverse,...Object.keys(this.runtime.evidence??{})])],
+      out:Record<string,{bestBid:number;bestAsk:number;observedAt:number;fresh:boolean;entryReady?:boolean;sourceCount?:number;disagreementRate?:number;
+        sourceBreadth?:number;directionalAgreement?:number;medianShortMove?:number;spreadRate?:number;bookImbalance?:number;
+        bidLiquidityChange?:number;askLiquidityChange?:number;liquiditySourceCount?:number}>={};
+    for(const symbol of symbols){
+      const external=this.marketHub.quote(symbol,now),row=this.runtime.evidence[symbol];
+      if(external){
+        const half=Math.max(1e-7,Math.min(.02,(external.spreadRate??0)/2));
+        out[symbol]={bestBid:external.mid*(1-half),bestAsk:external.mid*(1+half),observedAt:external.observedAt,fresh:true,entryReady:false,
+          sourceCount:external.sourceCount,disagreementRate:external.disagreementRate,sourceBreadth:external.sourceBreadth,
+          directionalAgreement:external.directionalAgreement,medianShortMove:external.medianShortMove,spreadRate:external.spreadRate,
+          bookImbalance:external.bookImbalance,bidLiquidityChange:external.bidLiquidityChange,askLiquidityChange:external.askLiquidityChange,
+          liquiditySourceCount:external.liquiditySourceCount};
+        continue;
+      }
+      if(row?.fresh&&row.bestBid!=null&&row.bestAsk!=null&&now-row.observedAt<=STALE_AFTER_MS){
+        const mid=(row.bestBid+row.bestAsk)/2;
+        out[symbol]={bestBid:row.bestBid,bestAsk:row.bestAsk,observedAt:row.observedAt,fresh:true,entryReady:false,sourceCount:1,
+          disagreementRate:0,sourceBreadth:0,directionalAgreement:.5,medianShortMove:0,
+          spreadRate:mid>0?(row.bestAsk-row.bestBid)/mid:0,bookImbalance:0,bidLiquidityChange:0,askLiquidityChange:0,liquiditySourceCount:0};
+      }
+    }
+    return out;
+  }
+
   private forwardQuotes(now=Date.now()){
     if(!this.forwardState||!this.runtime.evidence)return this.regimeQuotes(now);
     return Object.fromEntries(Object.entries(this.runtime.evidence).flatMap(([symbol,row])=>{
@@ -3117,8 +3144,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private async refreshForwardUrgentMinutes(now=Date.now()){
     this.forwardMinuteCandles??={};this.forwardMinuteQuoteBars??={};this.forwardMinuteRetryAt??=new Map();
     const targetCompletedAt=Math.floor(now/60_000)*60_000;
-    const urgent=this.forwardState?forwardUrgentMinuteSymbols(this.forwardState,this.runtime.liquidUniverse??[])
-      .slice(0,FORWARD_MINUTE_CONFIRMATION_CAP):[];
+    const fixed=this.forwardState?forwardUrgentMinuteSymbols(this.forwardState,this.runtime.liquidUniverse??[]):[],
+      freshImpulse=(this.runtime.liquidUniverse??[]).flatMap(symbol=>{
+        const q=this.marketHub.quote(symbol,now);
+        return q&&Math.abs(q.medianShortMove)>=.0012&&q.directionalAgreement>=.67
+          ?[{symbol,score:Math.abs(q.medianShortMove)*q.directionalAgreement}]:[];
+      }).sort((a,b)=>b.score-a.score).map(x=>x.symbol),
+      urgent=[...new Set([...fixed.slice(0,FORWARD_MINUTE_CONFIRMATION_CAP),...freshImpulse])]
+        .slice(0,FORWARD_MINUTE_CONFIRMATION_CAP);
     const due=urgent.filter(symbol=>{
       if((this.forwardMinuteRetryAt.get(symbol)??0)>now)return false;
       const last=Math.max(this.forwardMinuteCandles[symbol]?.at(-1)?.time??0,this.gateStream.path(symbol,"1m").at(-1)?.time??0);

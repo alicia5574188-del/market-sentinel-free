@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {buildMarketLiquidityResearch,buildSymbolLiquidityMap} from "../lib/market-intelligence-liquidity.ts";
+import {buildMarketLiquidityResearch,buildSymbolLiquidityMap,deriveRapidLiquidityAuthorization} from "../lib/market-intelligence-liquidity.ts";
 import {buildMarketIntelligence,initialMarketIntelligenceState} from "../lib/market-intelligence-engine.ts";
 
 const T=2_100_000_000_000;
@@ -77,4 +77,41 @@ test("relative strength alone stays observation-only when no liquidity migration
   assert.ok(result.opportunities.length>=3);
   assert.ok(result.opportunities.every(o=>o.tradePlan==="OBSERVE_ONLY"));
   assert.ok(result.opportunities.every(o=>!o.eligible));
+});
+
+
+test("strong 1m departure can authorize migration early without redefining the larger liquidity zone",()=>{
+  const map=buildSymbolLiquidityMap(rangeBase(),T);
+  assert.ok(map.ready&&map.activeZone);
+  const upper=map.activeZone!.upper,rows:C[]=[];
+  const closes=[upper*.9978,upper*.9980,upper*.9982,upper*.9981,upper*.9984,upper*1.0065,upper*1.0082,upper*1.0094];
+  let prior=closes[0]!*0.9998;
+  for(let i=0;i<closes.length;i++){
+    const close=closes[i]!,open=prior;
+    rows.push({time:(T-(closes.length-i)*60_000)/1000,open,close,high:Math.max(open,close)*1.0005,low:Math.min(open,close)*.9995,volume:120+i*15});
+    prior=close;
+  }
+  const rapid=deriveRapidLiquidityAuthorization({map,minuteRows:rows,price:upper*1.0100,now:T});
+  assert.equal(rapid.ready,true);
+  assert.equal(rapid.side,"UP");
+  assert.ok(rapid.outsideMinutes>=2);
+  assert.ok(rapid.confidence>=.62);
+  assert.match(rapid.reason,/提前授权/);
+  assert.equal(map.departure.state,"INSIDE","1m execution evidence must not rewrite the completed-5m liquidity map itself");
+});
+
+test("a one-minute spike that re-enters the origin zone cannot receive rapid migration authority",()=>{
+  const map=buildSymbolLiquidityMap(rangeBase(),T);
+  assert.ok(map.ready&&map.activeZone);
+  const upper=map.activeZone!.upper,rows:C[]=[];
+  const closes=[upper*.9980,upper*.9981,upper*.9982,upper*.9983,upper*1.0070,upper*.9990,upper*1.0010,upper*1.0040];
+  let prior=closes[0]!*0.9999;
+  for(let i=0;i<closes.length;i++){
+    const close=closes[i]!,open=prior;
+    rows.push({time:(T-(closes.length-i)*60_000)/1000,open,close,high:Math.max(open,close)*1.0004,low:Math.min(open,close)*.9996,volume:120+i*10});
+    prior=close;
+  }
+  const rapid=deriveRapidLiquidityAuthorization({map,minuteRows:rows,price:upper*1.0045,now:T});
+  assert.equal(rapid.ready,false);
+  assert.match(rapid.reason,/重新收回|证据还不完整/);
 });

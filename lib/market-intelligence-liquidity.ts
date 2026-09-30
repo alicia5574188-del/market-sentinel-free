@@ -35,6 +35,57 @@ export type MarketLiquidityResearch={
   version:typeof LIQUIDITY_MAP_VERSION;updatedAt:number;market:MarketLiquidityContext;symbols:Record<string,SymbolLiquidityMap>;
 };
 
+export type RapidLiquidityAuthorization={
+  ready:boolean;side:LiquiditySide|null;confidence:number;outsideMinutes:number;impulseRate:number;retainedRate:number;reason:string;
+};
+
+export function deriveRapidLiquidityAuthorization(input:{
+  map:SymbolLiquidityMap|undefined;minuteRows:LiquidityCandle[]|undefined;price:number;now:number;
+}):RapidLiquidityAuthorization{
+  const map=input.map,price=input.price;
+  if(!map?.ready||!map.activeZone||!(price>0))
+    return{ready:false,side:null,confidence:0,outsideMinutes:0,impulseRate:0,retainedRate:0,reason:"缺少已确认的大级别流动性来源区域。"};
+  const zone=map.activeZone,rows=(input.minuteRows??[]).filter(r=>r&&[r.time,r.open,r.high,r.low,r.close].every(Number.isFinite)
+      &&r.time>0&&r.open>0&&r.close>0&&r.high>=Math.max(r.open,r.close)&&r.low<=Math.min(r.open,r.close)
+      &&r.time*1000+60_000<=input.now).sort((a,b)=>a.time-b.time).slice(-10);
+  if(rows.length<5)return{ready:false,side:null,confidence:0,outsideMinutes:0,impulseRate:0,retainedRate:0,reason:"1分钟路径尚不足以提前确认离开。"};
+  const atrRate=Math.max(.0005,map.atrRate),bufferRate=Math.max(.0007,Math.min(.003,atrRate*.18)),
+    side:LiquiditySide|null=price>zone.upper*(1+bufferRate)?"UP":price<zone.lower*(1-bufferRate)?"DOWN":null;
+  if(!side)return{ready:false,side:null,confidence:0,outsideMinutes:0,impulseRate:0,retainedRate:0,reason:"实时价格尚未明确离开来源流动性区域。"};
+  const d=side==="UP"?1:-1,boundary=side==="UP"?zone.upper:zone.lower,
+    outside=(row:LiquidityCandle)=>side==="UP"?row.close>boundary*(1+bufferRate*.30):row.close<boundary*(1-bufferRate*.30),
+    directionalBody=(row:LiquidityCandle)=>d*(row.close/row.open-1),
+    bodies=rows.slice(0,-1).map(r=>Math.abs(r.close/r.open-1)),bodyBaseline=Math.max(.00015,median(bodies)),
+    recent=rows.slice(-6),outsideRows=recent.filter(outside),outsideMinutes=outsideRows.length;
+  let impulseIndex=-1,impulseRate=0;
+  for(let i=Math.max(0,recent.length-4);i<recent.length;i++){
+    const row=recent[i]!,body=directionalBody(row);
+    if(body>=Math.max(bufferRate*.80,bodyBaseline*1.8)&&outside(row)){impulseIndex=i;impulseRate=body;break;}
+  }
+  if(impulseIndex<0)return{ready:false,side,confidence:0,outsideMinutes,impulseRate:0,retainedRate:0,
+    reason:"虽然价格已经离开区域，但1分钟级尚未出现足够强的离开实体。"};
+  const after=recent.slice(impulseIndex),reentered=after.some(r=>side==="UP"?r.close<zone.upper:r.close>zone.lower),
+    excursion=side==="UP"?Math.max(...after.map(r=>Math.max(0,r.high-boundary))):Math.max(...after.map(r=>Math.max(0,boundary-r.low))),
+    currentDistance=Math.max(0,d*(price/boundary-1))*boundary,
+    retainedRate=excursion>0?clip(currentDistance/excursion):0,
+    impulseRow=recent[impulseIndex]!,impulseBodyAbs=Math.abs(impulseRow.close-impulseRow.open),
+    best=side==="UP"?Math.max(...after.map(r=>r.high)):Math.min(...after.map(r=>r.low)),
+    pullback=side==="UP"?Math.max(0,best-price):Math.max(0,price-best),
+    shallowPullback=pullback/Math.max(price,1e-12)<=Math.max(atrRate*.45,(impulseBodyAbs/Math.max(price,1e-12))*.65),
+    later=recent.slice(impulseIndex+1),restart=later.some(r=>directionalBody(r)>Math.max(.00008,bufferRate*.12))
+      ||d*(price/impulseRow.close-1)>=bufferRate*.18,
+    strongImpulse=impulseRate>=Math.max(bufferRate*1.25,bodyBaseline*2.4),
+    enoughOutside=outsideMinutes>=2||(outsideMinutes>=1&&strongImpulse&&restart),
+    confidence=clip(.30*clip(outsideMinutes/3)+.28*clip(impulseRate/Math.max(bufferRate*1.8,bodyBaseline*2.4))
+      +.22*retainedRate+.12*(restart?1:0)+.08*(shallowPullback?1:0)),
+    ready=!reentered&&shallowPullback&&restart&&enoughOutside&&retainedRate>=.42&&confidence>=.62;
+  return{ready,side,confidence,outsideMinutes,impulseRate,retainedRate,
+    reason:ready
+      ?`大级别流动性来源区未改变；1分钟已出现强离开、浅回调/保持并重新沿原方向推进，可提前授权实时执行，不等第二根5分钟K线。`
+      :reentered?"1分钟离开后已经重新收回来源区域，不能提前授权迁移。"
+      :"1分钟正在尝试提前确认迁移，但离开保持/重启证据还不完整。"};
+}
+
 export function initialMarketLiquidityResearch(now:number):MarketLiquidityResearch{
   return{version:LIQUIDITY_MAP_VERSION,updatedAt:now,market:{version:LIQUIDITY_MAP_VERSION,updatedAt:now,ready:false,
     readySymbols:0,totalSymbols:0,insideShare:0,testingShare:0,acceptedShare:0,rejectedShare:0,highAccumulationShare:0,
