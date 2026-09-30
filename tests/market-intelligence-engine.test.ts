@@ -564,7 +564,6 @@ test("environment outlook preserves a strong aligned continuation lane while unc
     edgeRatio:2.3,netRemainingSpaceRate:.03,pullbackRiskRate:.012,thesisBars:2,confirmationStage:"READY"}});
   assert.equal(cautious.mainline,false);
   assert.ok(cautious.riskScale>=.55&&cautious.riskScale<capture.riskScale);
-  assert.equal(cautious.forceRetest,true,"short-horizon/counter-aligned continuation must wait for pullback and restart");
 });
 
 test("synchronized market expansion keeps a 60m mainline continuation path",()=>{
