@@ -359,6 +359,30 @@ test("opportunity discovery, frozen authorization and liquidity invalidation for
   assert.match(manage,/LIQUIDITY_HYPOTHESIS_INVALIDATED/);
 });
 
+test("opportunity capture reserves execution capacity and all formal plans use liquidity invalidation",async()=>{
+  const [core,worker,execution]=await Promise.all([
+    read("lib/forward-relations.ts"),read("worker/index-clean.ts"),read("app/market-intelligence-execution.tsx")
+  ]);
+  assert.match(core,/const ENTRY_VALIDATION_CAP=6/);
+  const seed=core.slice(core.indexOf("function seedEntryResponses"),core.indexOf("function advanceEntryResponses"));
+  assert.match(seed,/if\(active>=ENTRY_VALIDATION_CAP\)break/);
+  const advance=core.slice(core.indexOf("function advanceEntryResponses"),core.indexOf("export function fillForwardPortfolio"));
+  assert.match(advance,/validation\.samples===0\|\|validation\.lastQuoteAt<=0/);
+  assert.match(advance,/实时执行盘口已经恢复/);
+  const open=core.slice(core.indexOf("function openIntelligenceTrade"),core.indexOf("export function extremeResidualConfirmationProfile"));
+  assert.match(open,/LIQUIDITY_MIGRATION.*LIQUIDITY_REJECTION.*FAMILY_TURN/s);
+  const manage=core.slice(core.indexOf("function manageIntelligenceTrades"),core.indexOf("function markAndManage"));
+  assert.match(manage,/LIQUIDITY_MIGRATION.*LIQUIDITY_REJECTION.*FAMILY_TURN/s);
+  assert.match(manage,/流动性迁移续接到下一段/);
+  assert.match(manage,/profitStop/);
+  const minute=core.slice(core.indexOf("export function forwardUrgentMinuteSymbols"),core.indexOf("export function forwardWatchSymbols"));
+  assert.match(minute,/\.\.\.armed,\.\.\.research,\.\.\.positions/);
+  assert.match(worker,/freshImpulse\.slice\(0,3\),\.\.\.fixed/);
+  assert.match(execution,/等待执行 · \{waitingValidations\.length\}/);
+  assert.doesNotMatch(execution,/preparedWithoutValidation/);
+  assert.match(execution,/只有已经正式冻结交易计划的币才显示在这里/);
+});
+
 test("duplicate-symbol execution is blocked at ranking, live validation and final open authority",async()=>{
   const [core,execution]=await Promise.all([
     read("lib/forward-relations.ts"),read("app/market-intelligence-execution.tsx")
