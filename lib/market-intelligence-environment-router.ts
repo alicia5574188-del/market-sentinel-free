@@ -182,12 +182,18 @@ export function deriveEnvironmentOutlook(market:MarketIntelligenceState,evolutio
   const major=biasSign(market.narrative.major.bias),short=biasSign(market.narrative.short.bias),
     directionAgreement=major!==0&&short!==0?(major===short?1:.15):major===0&&short===0?.45:.55,
     leader=clip(market.internals?.leaderPersistence??.5),rotation=clip(evolution.rotationRisk),
-    transitionBase=clip((market.narrative.transition.pressure??0)/100),
-    trendPersistence=clip(.35*directionAgreement+.25*leader+.20*(1-rotation)+.20*(1-transitionBase)),
-    rotationPersistence=clip(.55*rotation+.25*(1-directionAgreement)+.20*(1-transitionBase)),
+    transitionBase=clip((market.narrative.transition.pressure??0)/100),liq=market.liquidity?.market,
+    liqReady=!!liq?.ready,currentSide=short||major||(evolution.trendSide==="LONG"?1:evolution.trendSide==="SHORT"?-1:0),
+    liqAligned=liqReady&&currentSide?clip(currentSide*(liq?.migrationBreadth??0)*2,0,1):0,
+    liqOpposed=liqReady&&currentSide?clip(-currentSide*(liq?.migrationBreadth??0)*2,0,1):0,
+    liquidityBreakPressure=liqReady?clip((liq?.highAccumulationShare??0)*(liq?.oneSidedDepletionShare??0)*2+(liq?.testingShare??0)*.35):0,
+    trendPersistence=clip(.31*directionAgreement+.22*leader+.17*(1-rotation)+.16*(1-transitionBase)
+      +.08*liqAligned+.06*(liq?.acceptedShare??0)),
+    rotationPersistence=clip(.47*rotation+.20*(1-directionAgreement)+.15*(1-transitionBase)
+      +.10*(liq?.insideShare??0)+.08*(liq?.rejectedShare??0)),
     slowPersistence=Math.max(trendPersistence,rotationPersistence),
-    slowTransition=clip(.45*transitionBase+.30*rotation+.15*(1-leader)+.10*(1-directionAgreement)),
-    currentSide=short||major||(evolution.trendSide==="LONG"?1:evolution.trendSide==="SHORT"?-1:0),
+    slowTransition=clip(.38*transitionBase+.25*rotation+.12*(1-leader)+.08*(1-directionAgreement)
+      +.09*liquidityBreakPressure+.08*liqOpposed),
     fast=input?.fast,fastReliable=!!fast&&fast.samples>=6,
     fastAligned=fastReliable&&currentSide?clip(currentSide*fast!.breadth*fast!.agreement,0,1):0,
     fastOpposed=fastReliable&&currentSide?clip(-currentSide*fast!.breadth*fast!.agreement,0,1):0,
@@ -206,46 +212,50 @@ export function deriveEnvironmentOutlook(market:MarketIntelligenceState,evolutio
       rotationPersistence>trendPersistence+.12?"ROTATION":"TRANSITION",
     profitExpansion:EnvironmentOutlook["profitExpansion"]=pressureTarget==="TREND"&&horizonMinutes>=45&&transitionPressure<.40?"HIGH":
       horizonMinutes===15||transitionPressure>=.62?"LOW":"NORMAL",
-    reason=`条件持续力 ${(persistenceScore*100).toFixed(0)}%，转变压力 ${(transitionPressure*100).toFixed(0)}%，预计当前可交易假设有效窗口约 ${horizonMinutes} 分钟；变化压力更偏向 ${pressureTarget==="TREND"?"趋势":pressureTarget==="ROTATION"?"轮动":"过渡"}。`;
+    reason=`条件持续力 ${(persistenceScore*100).toFixed(0)}%，转变压力 ${(transitionPressure*100).toFixed(0)}%，预计当前可交易假设有效窗口约 ${horizonMinutes} 分钟；变化压力更偏向 ${pressureTarget==="TREND"?"趋势":pressureTarget==="ROTATION"?"轮动":"过渡"}。${liqReady?" "+liq!.summary:" 流动性地图尚未达到全市场覆盖门槛。"}`;
   return{version:ENVIRONMENT_OUTLOOK_VERSION,persistenceScore,transitionPressure,horizonMinutes,pressureTarget,profitExpansion,reason};
 }
 
 function layerFit(layer:number,side:number){return layer===0?.5:layer===side?1:0;}
 
 export function environmentModeFit(input:{
-  market:MarketIntelligenceState;evolution:MarketEvolutionState;side:"LONG"|"SHORT";mode:string;outlook?:EnvironmentOutlook;
+  market:MarketIntelligenceState;evolution:MarketEvolutionState;side:"LONG"|"SHORT";mode:string;tradePlan?:string;outlook?:EnvironmentOutlook;
 }){
   const outlook=input.outlook??deriveEnvironmentOutlook(input.market,input.evolution),side=sideSign(input.side),
     major=biasSign(input.market.narrative.major.bias),short=biasSign(input.market.narrative.short.bias),
     directionAlignment=(layerFit(major,side)+layerFit(short,side))/2,
     rotation=clip(input.evolution.rotationRisk),dispersion=clip((input.market.internals?.dispersion??0)/1.2),
-    synchrony=clip(input.market.internals?.synchrony??.5);
-  if(input.mode==="CONTINUATION")
-    return clip(.55*outlook.persistenceScore+.25*directionAlignment+.20*(1-rotation));
-  if(input.mode==="REVERSAL")
-    return clip(.55*rotation+.25*outlook.transitionPressure+.20*(1-outlook.persistenceScore));
-  if(input.mode==="RELATIVE")
-    return clip(.45*rotation+.30*dispersion+.25*(1-synchrony));
+    synchrony=clip(input.market.internals?.synchrony??.5),liq=input.market.liquidity?.market,
+    directionalMigration=liq?.ready?clip(side*(liq.migrationBreadth??0)*2,-1,1):0;
+  if(input.tradePlan==="LIQUIDITY_MIGRATION")
+    return clip(.46*outlook.persistenceScore+.22*directionAlignment+.18*clip((directionalMigration+1)/2)+.14*(1-rotation));
+  if(input.tradePlan==="LIQUIDITY_REJECTION")
+    return clip(.38*(liq?.rejectedShare??0)+.26*rotation+.22*outlook.transitionPressure+.14*(liq?.insideShare??0));
+  if(input.tradePlan==="FAMILY_TURN")
+    return clip(.35*rotation+.30*outlook.transitionPressure+.20*(1-outlook.persistenceScore)+.15*clip((directionalMigration+1)/2));
+  if(input.mode==="CONTINUATION")return clip(.55*outlook.persistenceScore+.25*directionAlignment+.20*(1-rotation));
+  if(input.mode==="REVERSAL")return clip(.55*rotation+.25*outlook.transitionPressure+.20*(1-outlook.persistenceScore));
+  if(input.mode==="RELATIVE")return clip(.45*rotation+.30*dispersion+.25*(1-synchrony));
   return clip(.45*outlook.persistenceScore+.30*(1-outlook.transitionPressure)+.25*directionAlignment);
 }
 
 export function routeEnvironmentOpportunity(input:{
   market:MarketIntelligenceState;evolution:MarketEvolutionState;symbol:MarketSymbolState;
   opportunity:{
-    side:"LONG"|"SHORT";mode:string;score:number;premium:boolean;edgeRatio:number;
+    side:"LONG"|"SHORT";mode:string;tradePlan?:string;score:number;premium:boolean;edgeRatio:number;
     netRemainingSpaceRate:number;pullbackRiskRate:number;thesisBars?:number;confirmationStage?:MarketSymbolState["stage"];
   };
   performanceFactor?:number;portfolioLongRisk?:number;portfolioShortRisk?:number;outlook?:EnvironmentOutlook;
 }):EnvironmentRouteDecision{
   const environment=classifyMarketEnvironment(input.market,input.evolution),o=input.opportunity,
     outlook=input.outlook??deriveEnvironmentOutlook(input.market,input.evolution),fit=environmentModeFit({market:input.market,evolution:input.evolution,
-      side:o.side,mode:o.mode,outlook}),side=sideSign(o.side),marketSide=decisionSide(input.market,input.evolution),
+      side:o.side,mode:o.mode,tradePlan:o.tradePlan,outlook}),side=sideSign(o.side),marketSide=decisionSide(input.market,input.evolution),
     alignment:RouteAlignment=marketSide===0?"NEUTRAL":marketSide===side?"ALIGNED":"COUNTER",
     cost=.0019,pullback=Math.max(cost*1.5,o.pullbackRiskRate),space=Math.max(cost*2,o.netRemainingSpaceRate),
     probeImpulseMin=Math.max(cost*.75,Math.min(pullback*.20,space*.10,.0032)),
     probePullbackMin=Math.max(cost*.40,Math.min(pullback*.18,space*.08,.0025)),
     probeRestartMin=Math.max(cost*.35,Math.min(pullback*.12,space*.06,.0018)),
-    mainline=fit>=.75&&outlook.horizonMinutes>=45,
+    mainline=o.tradePlan==="LIQUIDITY_MIGRATION"&&fit>=.75&&outlook.horizonMinutes>=45,
     probe=fit<.50,forceRetest=false,minimumThesisBars=mainline?1:2,
     priority=fit>=.75?5:fit>=.60?4:fit>=.45?3:2,
     scoreDelta=(fit-.50)*8,riskScale=clip(.70+.30*fit,.70,1),
