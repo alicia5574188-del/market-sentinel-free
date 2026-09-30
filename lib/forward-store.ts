@@ -67,10 +67,11 @@ function hotProjection(next:ForwardState,includeSamples=true){
     eventLimit=Math.min(FORWARD_HOT_EVENT_LIMIT,next.events.length),
     narrativeLimit=Math.min(72,next.extremumRegime.history.length),
     evidenceLimit=Math.min(32,next.extremumRegime.evidence.length);
+  let droppedHotReview=false;
   const samples=includeSamples?next.relationEngine.samples.map(packSample):[],paged=!includeSamples;
   const build=()=>{
-    const history=next.history.slice(0,total).map((t,i)=>compactClosedTrade(t,i<full)),
-      account={...next,history,events:next.events.slice(0,eventLimit),
+    const history=next.history.slice(0,total).map((t,i)=>compactClosedTrade(droppedHotReview?withoutReview(t):t,i<full)),
+      account={...next,positions:droppedHotReview?next.positions.map(withoutReview):next.positions,history,events:next.events.slice(0,eventLimit),
         hypothesisResearch:{...next.hypothesisResearch,
           active:next.hypothesisResearch.active.slice(0,MARKET_HYPOTHESIS_ACTIVE_LIMIT),
           resolved:next.hypothesisResearch.resolved.slice(0,MARKET_HYPOTHESIS_RESOLVED_LIMIT),
@@ -84,6 +85,11 @@ function hotProjection(next:ForwardState,includeSamples=true){
     delete account.__legacySampleRecovery;delete account.__persistedSampleManifest;return account;
   };
   let account=build(),raw=encodeJson(account);
+  // Optional review bytes must yield BEFORE any existing history or market-memory
+  // compaction. Diagnostic load must not shorten the authoritative evidence window.
+  if(raw.length>FORWARD_ACCOUNT_TARGET_BYTES&&[...next.positions,...next.history].some(t=>t.review)){
+    droppedHotReview=true;account=build();raw=encodeJson(account);
+  }
   while(raw.length>FORWARD_ACCOUNT_TARGET_BYTES){
     if(full>8)full=Math.max(8,full-8);
     else if(total>32)total=Math.max(32,total-16);
@@ -92,11 +98,6 @@ function hotProjection(next:ForwardState,includeSamples=true){
     else if(evidenceLimit>16)evidenceLimit=Math.max(16,evidenceLimit-8);
     else break;
     account=build();raw=encodeJson(account);
-  }
-  let droppedHotReview=false;
-  if(raw.length>FORWARD_ACCOUNT_TARGET_BYTES){
-    account={...account,positions:account.positions.map(withoutReview),history:account.history.map(withoutReview)};
-    raw=encodeJson(account);droppedHotReview=true;
   }
   return{account,raw,meta:{droppedHotReview,sourceHistory:next.history.length,hotHistory:total,fullHistory:full,summaryHistory:Math.max(0,total-full),
     sourceEvents:next.events.length,hotEvents:eventLimit,narrativeHistory:narrativeLimit,evidence:evidenceLimit,
@@ -218,7 +219,7 @@ export async function readForwardStore(storage: Reader, now: number) {
         // authenticated raw page hashes. This keeps actual corruption fail-closed.
         if(rawPageDrift){legacyRecovered=true;rawPhysicalDrift=true;}
         else if(authenticatedCompressedRecovery)legacyRecovered=true;
-      }else if(!compressedMatches||!rawLengthMatches)legacyRecovered=true;
+      }else if(!compressedMatches||!rawLengthMatches||!rawHashValid)legacyRecovered=true;
       try{page=JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(pageRaw)) as typeof page;}
       catch{throw new Error(`Forward样本分页JSON失败：${meta.id}`);}
       if(page.version!==FORWARD_PAGED_STATE_VERSION)throw new Error(`Forward样本分页内容异常：${meta.id}:VERSION`);
