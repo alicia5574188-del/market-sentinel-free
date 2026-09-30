@@ -63,7 +63,7 @@ test("post-exit shadow continues measuring the original direction after the trad
     paths:{BTC_USDT:path},quotes:{BTC_USDT:quote(102,T+60*60_000)},observeCandidates:false});
   assert.equal(result.state.postExit.length,1);
   const row=result.state.postExit[0]!;
-  assert.deepEqual(row.checkpoints.map(x=>x.minutes),[5,15,30,45,60]);
+  assert.deepEqual(row.checkpoints.map(x=>x.minutes),[5,15,30,60]);
   const at15=row.checkpoints.find(x=>x.minutes===15)!;
   assert.ok(at15.marketAt<=at15.targetAt,"checkpoint must not use a future candle");
   assert.ok(at15.maxFavorableRate>=.02,"post-exit path should retain extra favorable continuation");
@@ -82,7 +82,7 @@ test("high-quality opportunity that was not executed gets a counterfactual shado
   const later=advanceCounterfactualResearch({state:first.state,forward,now:T+60*60_000,
     paths:{ETH_USDT:path},quotes:{ETH_USDT:quote(102,T+60*60_000)},observeCandidates:false});
   const row=later.state.rejected[0]!;
-  assert.deepEqual(row.checkpoints.map(x=>x.minutes),[5,15,30,45,60]);
+  assert.deepEqual(row.checkpoints.map(x=>x.minutes),[5,15,30,60]);
   assert.ok(row.checkpoints.find(x=>x.minutes===60)!.netAfterCostRate>0,
     "research can prove a filtered candidate would have remained profitable after modeled cost");
 });
@@ -116,7 +116,7 @@ test("old post-exit trades never backfill checkpoints with a many-hours-later cu
     paths:{BTC_USDT:[]},quotes:{BTC_USDT:quote(135,now)},observeCandidates:false});
   const row=result.state.postExit[0]!;
   assert.equal(row.checkpoints.length,0,"no historical market observation means no synthetic checkpoint");
-  assert.deepEqual(row.unavailableCheckpoints,[5,15,30,45,60]);
+  assert.deepEqual(row.unavailableCheckpoints,[5,15,30,60,120,240]);
   assert.equal(row.pathCoverage,"PARTIAL");
   assert.equal(row.completed,true);
 });
