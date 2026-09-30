@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {buildMarketIntelligence,initialMarketIntelligenceState,MARKET_INTELLIGENCE_VERSION} from "../lib/market-intelligence-engine.ts";
 import {evaluatePositionIntelligence} from "../lib/position-intelligence-engine.ts";
 import {entryResponseWindowMs,evaluateEntryResponse} from "../lib/market-intelligence-entry-response.ts";
-import {advanceForward,environmentDecayProfitFloor,extremeResidualConfirmationProfile,fillForwardPortfolio,initialForward,normalizeForward,
+import {advanceForward,environmentDecayProfitFloor,positionDecayProfitFloor,extremeResidualConfirmationProfile,fillForwardPortfolio,initialForward,normalizeForward,
   entryLocationDecision,resetForwardAccountPreservingLearning,stableEntryLocationDecision,stableEntryThesisProfile} from "../lib/forward-relations.ts";
 import {deriveEnvironmentOutlook,deriveFastEnvironmentSignal,environmentModeFit,environmentPerformanceFactor,environmentProbeRetestDecision,initialEnvironmentPerformanceState,
   normalizeEnvironmentPerformanceState,recordEnvironmentOutcome,routeEnvironmentOpportunity} from "../lib/market-intelligence-environment-router.ts";
@@ -273,6 +273,14 @@ test("Worker warm restart keeps the last confirmed market map until broad 5m cov
 });
 
 
+test("28 of 30 complete five-minute markets remain tradable instead of freezing the whole engine",()=>{
+  const symbols=Array.from({length:30},(_,i)=>`S${i}_USDT`),paths=Object.fromEntries(symbols.map((s,i)=>[s,i<28?candles(100+i,.0004):[]]));
+  const quotes=Object.fromEntries(symbols.slice(0,28).map(s=>[s,q((paths[s] as ReturnType<typeof candles>).at(-1)!.close,.0001)]));
+  const next=advanceForward({state:initialForward(T-600_000),now:T,paths,quotes,contracts:{},entrySymbols:symbols}).state;
+  assert.equal(next.extremumRegime.coverage.intradayMarkets,28);
+  assert.doesNotMatch(next.latestReason,/路径正在恢复|覆盖恢复前/);
+});
+
 test("same market anomaly keeps one thesis id across completed bars and matures instead of respawning",()=>{
   const firstPaths={BTC_USDT:candles(100,.0010),ETH_USDT:candles(100,.0018),SOL_USDT:candles(100,.0009)};
   for(let i=56;i<firstPaths.ETH_USDT.length;i++){const k=1+(i-55)*.0008;for(const key of["open","high","low","close"] as const)firstPaths.ETH_USDT[i]![key]*=k;}
@@ -407,6 +415,24 @@ test("new liquidity trades size risk and stop at the frozen hypothesis invalidat
   assert.equal(trade.entryContext?.liquidityInvalidationPrice,invalidation);
   assert.equal(trade.liquidityLifecycle?.invalidationPrice,invalidation);
   assert.ok(trade.plannedRisk<=6.5,"position size must be reduced to keep risk budget correct when the liquidity invalidation is wider");
+});
+
+test("actual fill price is rejected when confirmation has already consumed the original edge",()=>{
+  const paths={BTC_USDT:candles(100,.0010),ETH_USDT:candles(100,.0013),SOL_USDT:candles(100,.0009)};
+  const quotes=Object.fromEntries(Object.entries(paths).map(([s,v])=>[s,q(v.at(-1)!.close,.0003)]));
+  const built=buildMarketIntelligence({paths,quotes,previous:initialMarketIntelligenceState(T-300_000),now:T});
+  const base=built.opportunities[0]!,quote=quotes[base.symbol]!,entry=base.side==="LONG"?quote.bestAsk:quote.bestBid,
+    stalePlanPrice=base.side==="LONG"?entry/1.012:entry*1.012,invalidation=base.side==="LONG"?entry*.99:entry*1.01,
+    opportunity={...base,eligible:true,tradePlan:"LIQUIDITY_MIGRATION" as const,environmentForceRetest:false,environmentMainline:true,
+      routeAlignment:"ALIGNED" as const,environmentRiskScale:1,strategyVersion:MARKET_INTELLIGENCE_VERSION,thesisId:"late-consumed-edge",
+      price:stalePlanPrice,netRemainingSpaceRate:.015,grossRemainingSpaceRate:.017,pullbackRiskRate:.01,edgeRatio:1.5,targetRate:.02,
+      liquidityInvalidationPrice:invalidation,liquidityInvalidationRate:.01,rapidLiquidityAuthorization:true};
+  const state=initialForward(T-600_000);state.extremumRegime=built.state;state.opportunities=[opportunity];
+  const contracts={[opportunity.symbol]:{quantoMultiplier:.001,leverageMax:10,maintenanceRate:.005,minContracts:1}};
+  const opened=fillForwardPortfolio(state,{[opportunity.symbol]:quote},contracts,T,1000,false);
+  assert.equal(opened,0);
+  assert.equal(state.positions.length,0);
+  assert.ok(Object.keys(state.entryDiagnostics.reasons).some(x=>x.includes("真实成交价下剩余空间/回调")));
 });
 
 test("family-turn entries also require and preserve a frozen liquidity invalidation boundary",()=>{
@@ -584,7 +610,7 @@ test("rotation makes relative/reversal logic more suitable than continuation wit
   assert.equal(route.playbook,"ROTATION_RELATIVE");assert.ok(route.riskScale>=.70);
 });
 
-test("historical environment PnL stays diagnostic; live routing is driven by current market condition",()=>{
+test("historical environment losses shrink risk and require better entry shape without turning trading off",()=>{
   const perf=initialEnvironmentPerformanceState();
   for(let i=0;i<6;i++)recordEnvironmentOutcome(perf,{environment:"TRANSITION",playbook:"TRANSITION_PROBE",netPnl:-5,plannedRisk:5,now:T+i});
   const factor=environmentPerformanceFactor(perf,"TRANSITION","TRANSITION_PROBE");
@@ -602,8 +628,9 @@ test("historical environment PnL stays diagnostic; live routing is driven by cur
     score:82,premium:true,edgeRatio:2,netRemainingSpaceRate:.025,pullbackRiskRate:.011,thesisBars:3,confirmationStage:"READY"}});
   const b=routeEnvironmentOpportunity({market,evolution,symbol,performanceFactor:factor,opportunity:{side:"LONG",mode:"REVERSAL",
     score:82,premium:true,edgeRatio:2,netRemainingSpaceRate:.025,pullbackRiskRate:.011,thesisBars:3,confirmationStage:"READY"}});
-  assert.equal(a.riskScale,b.riskScale);
-  assert.ok(a.riskScale>=.70,"environment can reduce size but cannot turn trading off");
+  assert.ok(b.riskScale<a.riskScale,"repeated losses in the same environment/playbook must reduce the next risk allocation");
+  assert.ok(b.riskScale>=.45,"environment adaptation can shrink risk but cannot turn trading off");
+  assert.equal(b.forceRetest,true,"weak historical fit must change execution to impulse→pullback→restart");
 });
 
 test("one-minute fast pressure can shorten the future window without flipping the formal market label",()=>{
@@ -629,6 +656,13 @@ test("future environment support can remove fastLane without shortening the ordi
   const mainline=entryResponseWindowMs({score:96,edgeRatio:2.5,sourceCount:5,disagreementRate:.0004,mode:"CONTINUATION",fastLaneAllowed:true});
   assert.equal(normal.fastLane,false);assert.equal(normal.windowMs,180_000);
   assert.equal(mainline.fastLane,true);assert.equal(mainline.windowMs,180_000);
+});
+
+test("position decay profit floor protects a proven winner only after its own evidence starts decaying",()=>{
+  const floor=positionDecayProfitFloor({peakFavorableRate:.024,originalStopRate:.011,holdValueScore:45,decision:"REVIEW",concernCount:1,costRate:.0019});
+  assert.ok(floor>.012&&floor<.024);
+  assert.equal(positionDecayProfitFloor({peakFavorableRate:.024,originalStopRate:.011,holdValueScore:80,decision:"HOLD",concernCount:0,costRate:.0019}),0);
+  assert.equal(positionDecayProfitFloor({peakFavorableRate:.004,originalStopRate:.011,holdValueScore:40,decision:"REVIEW",concernCount:2,costRate:.0019}),0);
 });
 
 test("environment decay profit floor is wide, profit-only and inactive in long future windows",()=>{
