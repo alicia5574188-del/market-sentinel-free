@@ -533,21 +533,24 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
         targetLower:target?.lower??null,targetUpper:target?.upper??null,invalidationPrice};
       event(s,now,"ROTATION",t.id,"家族转折持仓升级为流动性迁移持仓",{confidence:liquidityNow.departure.confidence});
     }
-    if(t.liquidityLifecycle?.currentPlan==="LIQUIDITY_MIGRATION"&&liquidityNow?.departure.state==="ACCEPTED"
-      &&liqSide===t.side&&liquidityNow.departure.confidence>=.60&&liquidityNow.activeZone?.strength>=.36){
-      const zone=liquidityNow.activeZone,prior=t.liquidityLifecycle,
-        priorCenter=prior.originLower!=null&&prior.originUpper!=null?(prior.originLower+prior.originUpper)/2:null,
-        progressed=priorCenter!=null&&(t.side==="LONG"?zone.center>prior.originUpper!:zone.center<prior.originLower!),
-        targetMatch=prior.targetLower!=null&&prior.targetUpper!=null
-          ?zone.lower<=prior.targetUpper&&zone.upper>=prior.targetLower:true;
-      if(progressed&&targetMatch){
-        const target=t.side==="LONG"?liquidityNow.nextAbove:liquidityNow.nextBelow,width=Math.max(0,zone.upper-zone.lower),
-          invalidationPrice=t.side==="LONG"?zone.upper-width*.35:zone.lower+width*.35;
-        t.liquidityLifecycle={currentPlan:"LIQUIDITY_MIGRATION",upgradedAt:prior.upgradedAt??now,
-          reason:"上一段流动性迁移已经到达新的成交中心，并再次被市场接受地向同方向离开；持仓原地续接下一段迁移。",
-          originLower:zone.lower,originUpper:zone.upper,targetLower:target?.lower??null,targetUpper:target?.upper??null,invalidationPrice};
-        event(s,now,"ROTATION",t.id,"流动性迁移续接到下一段，不平仓重开",
-          {confidence:liquidityNow.departure.confidence,originCenter:zone.center});
+    {
+      const zone=liquidityNow?.activeZone;
+      if(t.liquidityLifecycle?.currentPlan==="LIQUIDITY_MIGRATION"&&liquidityNow?.departure.state==="ACCEPTED"
+        &&liqSide===t.side&&liquidityNow.departure.confidence>=.60&&zone&&zone.strength>=.36){
+        const prior=t.liquidityLifecycle,
+          priorCenter=prior.originLower!=null&&prior.originUpper!=null?(prior.originLower+prior.originUpper)/2:null,
+          progressed=priorCenter!=null&&(t.side==="LONG"?zone.center>prior.originUpper!:zone.center<prior.originLower!),
+          targetMatch=prior.targetLower!=null&&prior.targetUpper!=null
+            ?zone.lower<=prior.targetUpper&&zone.upper>=prior.targetLower:true;
+        if(progressed&&targetMatch){
+          const target=t.side==="LONG"?liquidityNow.nextAbove:liquidityNow.nextBelow,width=Math.max(0,zone.upper-zone.lower),
+            invalidationPrice=t.side==="LONG"?zone.upper-width*.35:zone.lower+width*.35;
+          t.liquidityLifecycle={currentPlan:"LIQUIDITY_MIGRATION",upgradedAt:prior.upgradedAt??now,
+            reason:"上一段流动性迁移已经到达新的成交中心，并再次被市场接受地向同方向离开；持仓原地续接下一段迁移。",
+            originLower:zone.lower,originUpper:zone.upper,targetLower:target?.lower??null,targetUpper:target?.upper??null,invalidationPrice};
+          event(s,now,"ROTATION",t.id,"流动性迁移续接到下一段，不平仓重开",
+            {confidence:liquidityNow.departure.confidence,originCenter:zone.center});
+        }
       }
     }
     const activeLiquidityPlan=t.liquidityLifecycle?.currentPlan??t.entryContext?.tradePlan,
