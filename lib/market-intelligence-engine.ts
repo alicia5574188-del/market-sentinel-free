@@ -423,8 +423,10 @@ export function buildMarketIntelligence(input:{paths:Record<string,CandleLike[]>
       usesLiquidityInvalidation=plan.plan==="LIQUIDITY_MIGRATION"||plan.plan==="LIQUIDITY_REJECTION"||plan.plan==="FAMILY_TURN",
       stopRate=usesLiquidityInvalidation&&invalidationRate!=null?invalidationRate:baseStopRate,
       riskGeometryOk=!usesLiquidityInvalidation||(invalidationRate!=null&&invalidationRate>=.004&&invalidationRate<=.028),
-      planRoom=plan.targetRate??baseRoom,
-      gross=plan.plan==="LIQUIDITY_REJECTION"?Math.max(0,planRoom):Math.max(planRoom,baseRoom+Math.abs(row.residual)*.35),
+      knownTargetRoom=plan.targetRate!=null?Math.max(0,plan.targetRate):null,
+      // A known liquidity target is a hard geometric ceiling. Never replace a nearly-consumed
+      // target with an optimistic structural-room estimate; that was the source of target-reached chase entries.
+      gross=knownTargetRoom!=null?knownTargetRoom:Math.max(0,baseRoom+Math.abs(row.residual)*.35),
       net=Math.max(0,gross-.0019),edge=net/Math.max(pullback,.001),
       marketFit=clip(.5+side*(shortLayer.score*.55+major.score*.30+macro.score*.15)/2),
       mode:"RELATIVE"|"REVERSAL"|"CONTINUATION"=plan.plan==="LIQUIDITY_MIGRATION"?"CONTINUATION":
@@ -453,7 +455,9 @@ export function buildMarketIntelligence(input:{paths:Record<string,CandleLike[]>
     row.watchScore=quality;row.regime=plan.plan==="LIQUIDITY_MIGRATION"?"MARKET_TREND":
       plan.plan==="FAMILY_TURN"?"DIVERGENT":plan.plan==="LIQUIDITY_REJECTION"?"TRANSITION":
       Math.abs(shortLayer.score)>.28?"MARKET_TREND":dispersion>.6?"TRANSITION":"BALANCED";row.stage=eligible?"READY":"OBSERVE";
-    const planSince=map?.activeZone?.firstTouchedAt??map?.departure.startedAt??row.signalSince,
+    const planSince=(plan.plan==="LIQUIDITY_MIGRATION"||plan.plan==="LIQUIDITY_REJECTION")
+        ?(map?.departure.startedAt??map?.activeZone?.firstTouchedAt??row.signalSince)
+        :row.signalSince,
       thesisId=`${MARKET_INTELLIGENCE_VERSION}:${row.symbol}:${bestSide}:${plan.plan}:${planSince}`,
       planZh=plan.plan==="LIQUIDITY_MIGRATION"?"流动性迁移":plan.plan==="LIQUIDITY_REJECTION"?"离开失败回归":
         plan.plan==="FAMILY_TURN"?"家族提前转折":"观察",
