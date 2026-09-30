@@ -96,20 +96,24 @@ test('research retirement affects trade records only, never market geometry or c
   const next=advanceShadowResearch({state:old,forward:s,now:T+1000,quotes:{},paths:{}});
   assert.equal(next.state.trades.length,0);assert.equal(next.state.retiredTrades![0].status,'PRIOR_ACCOUNT_UNVERIFIED');assert.equal(s.positions.length,0);
 });
-test('candidate research stays live under storage pressure and scopes sampling to the active account',()=>{
+test('candidate research is bounded per 5m bucket, preserves unfinished paths and scopes sampling to the active account',()=>{
   const s=initialForward(T);s.opportunities=Array.from({length:80},(_,i)=>({id:'o'+i,thesisId:'o'+i,symbol:'X_USDT',side:'LONG',
     strategyVersion:'market-intelligence-v1',expiresAt:T+600000,score:80,sourceCount:3,dataConfidence:90,price:100,
     mode:'CONTINUATION',stopRate:.02,reason:'fixture',confirmationStage:'READY',eligible:true,edgeRatio:2} as Opportunity));
   const first=advanceCounterfactualResearch({state:initialCounterfactualResearch(T),forward:s,now:T,quotes:{},paths:{},observeCandidates:true});
-  assert.ok(first.state.rejected.length>0);assert.equal(first.state.sampling!.accountStartedAt,T);
-  assert.equal(first.state.sampling!.notAdmittedAttempts,0,"storage pressure must rotate bounded research instead of starving all new candidates");
-  assert.ok(first.state.sampling!.evictedBeforeComplete>0);
+  assert.ok(first.state.rejected.length>0&&first.state.rejected.length<=12);assert.equal(first.state.sampling!.accountStartedAt,T);
+  assert.equal(first.state.sampling!.evictedBeforeComplete,0);
+  const admitted=first.state.sampling!.admitted;
   for(const value of Object.values(counterfactualResearchWrites(first.state)))assert.ok(new TextEncoder().encode(JSON.stringify(value)).length<100*1024);
 
-  const reset=initialForward(T+60_000);reset.opportunities=[...s.opportunities.slice(0,5)];
-  const second=advanceCounterfactualResearch({state:first.state,forward:reset,now:T+60_000,quotes:{},paths:{},observeCandidates:true});
-  assert.equal(second.state.sampling!.accountStartedAt,T+60_000);
-  assert.ok(second.state.rejected.every(r=>r.observedAt>=T+60_000),"a paper-account reset must not keep old candidate shadows in the new review epoch");
+  const sameBucket=advanceCounterfactualResearch({state:first.state,forward:s,now:T+60_000,quotes:{},paths:{},observeCandidates:true});
+  assert.equal(sameBucket.state.sampling!.admitted,admitted,"2s/1m refreshes inside the same 5m bucket must not resample candidates");
+  assert.equal(sameBucket.state.sampling!.evictedBeforeComplete,0);
+
+  const reset=initialForward(T+5*60_000);reset.opportunities=[...s.opportunities.slice(0,5)];
+  const second=advanceCounterfactualResearch({state:sameBucket.state,forward:reset,now:T+5*60_000,quotes:{},paths:{},observeCandidates:true});
+  assert.equal(second.state.sampling!.accountStartedAt,T+5*60_000);
+  assert.ok(second.state.rejected.every(r=>r.observedAt>=T+5*60_000),"a paper-account reset must not keep old candidate shadows in the new review epoch");
 });
 test('trade review is archived without duplicating it in financial account positions',async()=>{
   const previous=initialForward(T);previous.storage.persistedAt=T;const next=structuredClone(previous),t=trade();next.history=[t];next.resolved=1;next.revision=previous.revision+1;
