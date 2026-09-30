@@ -195,6 +195,19 @@ test("formal liquidity map reuses existing causal data and cannot add a market-d
   assert.match(store,/liquidity:\{\.\.\.next\.extremumRegime\.liquidity,symbols:\{\}\}/);
 });
 
+test("persistent external 5m gaps get a bounded Gate history repair without making Gate the normal path",async()=>{
+  const worker=await read("worker/index-clean.ts");
+  const start=worker.indexOf("private async refreshAdaptiveCandles");
+  const end=worker.indexOf("private async refreshDailyCandles",start);
+  const refresh=worker.slice(start,end);
+  assert.match(refresh,/marketHub\.candles\(symbol,"5m",120\)/);
+  assert.match(refresh,/\(priorFailure\?\.count\?\?0\)<2/);
+  assert.match(refresh,/fetchStructureCandles\(symbol,"5m"/);
+  assert.ok(refresh.indexOf('marketHub.candles(symbol,"5m",120)')<refresh.indexOf('fetchStructureCandles(symbol,"5m"'),
+    "independent venues remain the first 5m history source");
+  assert.match(refresh,/strategyCandles\[a\]\?\.length/);
+});
+
 test("counterfactual research is isolated from trading authority and exported for review",async()=>{
   const [worker,forward,research]=await Promise.all([
     read("worker/index-clean.ts"),read("lib/forward-relations.ts"),read("lib/market-intelligence-research.ts")
