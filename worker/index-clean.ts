@@ -1167,7 +1167,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.forwardLastAttemptAt=now;
       const previous = state;
       const next = advanceForward({ state: previous, now, paths: this.strategyCandles,minutePaths:this.forwardMinutePaths(),
-        daily:this.turnDailyCandles,quotes: this.forwardQuotes(now), contracts: this.regimeContracts(),
+        daily:this.turnDailyCandles,quotes:this.forwardQuotes(now),analysisQuotes:this.forwardAnalysisQuotes(now),contracts:this.regimeContracts(),
         entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue,
         research:{rolling:this.shadowResearch.market[0]?.rolling??null} });
       if (next.changed || !previous.storage.persistedAt) {
