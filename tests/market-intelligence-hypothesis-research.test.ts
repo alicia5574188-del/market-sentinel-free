@@ -151,3 +151,20 @@ test("forward research version 2 starts with completed-bar persistence instead o
   assert.equal(state.lastDecisionBucketAt,0);
   assert.match(state.summary,/完成5m证据块/);
 });
+
+
+test("repeated realized pullback hits cannot remain FORMING forever just because raw detector confidence decays",()=>{
+  const state=initialMarketHypothesisResearch(T);
+  state.active=[{
+    id:"persistent-pullback",key:"PULLBACK_AHEAD:SHORT",kind:"PULLBACK_AHEAD",direction:"SHORT",status:"FORMING",
+    confidence:.415,startedAt:T-60*60_000,updatedAt:T-5*60_000,expiresAt:T+45*60_000,confirmedAt:null,
+    observations:467,targetHits:39,targetHitStreak:9,invalidationHitStreak:0,lastTargetAt:T-5*60_000,
+    horizonMinutes:[5,15,30],families:["BREADTH","FLOW"],evidenceTypes:["BREADTH_CONTRACTION"],thesis:"persistent",
+    expectedNext:["x"],invalidation:"x"
+  }];
+  state.lastDecisionBucketAt=T-5*60_000;
+  const m=market();m.narrative.short={...m.narrative.short,bias:"BEARISH",score:-.4,phase:"PULLBACK_BUILDING"};
+  const next=advanceMarketHypothesisResearch(state,m,T);
+  const h=next.active.find(x=>x.id==="persistent-pullback");
+  assert.ok(h?.confirmedAt);assert.equal(h?.status,"CONFIRMED");assert.ok((h?.confidence??0)>=.55);
+});
