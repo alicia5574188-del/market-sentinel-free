@@ -959,8 +959,20 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
   let active=Object.values(s.entryValidations).filter(v=>v.status==="WAITING").length;
   const reject=(reason:string)=>{reasons[reason]=(reasons[reason]??0)+1;};
   for(const o of eligible){
-    if(active>=3)break;
     if(s.entryValidations[o.id])continue;
+    if(active>=3){
+      if(!o.rapidLiquidityAuthorization)continue;
+      const waiting=Object.values(s.entryValidations).filter(v=>v.status==="WAITING"&&v.frozenOpportunity)
+        .sort((a,b)=>(a.frozenOpportunity!.environmentScore??a.frozenOpportunity!.score)
+          -(b.frozenOpportunity!.environmentScore??b.frozenOpportunity!.score));
+      const weakest=waiting[0],weakScore=weakest?(weakest.frozenOpportunity!.environmentScore??weakest.frozenOpportunity!.score):Infinity,
+        newScore=o.environmentScore??o.score,
+        noProof=!!weakest&&weakest.supportSamples===0&&now-(weakest.authorizedAt??weakest.startedAt)>=30_000;
+      if(!weakest||!noProof||newScore<weakScore+4)continue;
+      weakest.status="CANCELLED";
+      weakest.reason=`更强的1分钟流动性迁移机会已出现（新计划评分 ${newScore.toFixed(0)} > 当前等待 ${weakScore.toFixed(0)}）；释放一个无正反馈执行槽，但原研究记录保留。`;
+      active--;
+    }
     const q=quotes[o.symbol],quoteReady=freshQuote(q,now)&&q!.entryReady===true,
       state=s.extremumRegime.symbols[o.symbol],sourceCount=Math.max(o.sourceCount??0,state?.sourceCount??0,q?.sourceCount??0),
       disagreement=q?.disagreementRate??o.disagreementRate??0,
@@ -980,8 +992,7 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
       price=quoteReady?(o.side==="LONG"?q!.bestAsk:q!.bestBid):o.price,
       armed=stable.stable||!!o.environmentForceRetest,
       expiresAt=armed?Math.min(o.expiresAt,now+20*60_000):Math.min(o.expiresAt,now+BAR_MS),
-      deadlineAt=armed?Math.min(expiresAt,now+12*60_000)
-        :Math.min(o.expiresAt,now+Math.max(profile.windowMs,minimumElapsedMs+30_000));
+      deadlineAt=quoteReady?expiresAt:0;
     s.entryValidations[o.id]={id:o.id,candidateId:o.id,symbol:o.symbol,side:o.side,startedAt:now,authorizedAt:now,
       expiresAt,deadlineAt,initialPrice:price,lastPrice:price,lastQuoteAt:quoteReady?q!.observedAt:0,samples:quoteReady?1:0,
       bestAdvanceRate:0,maxAdverseRate:0,supportSamples:0,oppositionSamples:0,extendedConfirmation:extreme.required,
@@ -1029,7 +1040,19 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
     const q=quotes[validation.symbol];if(!freshQuote(q,now)||q!.entryReady!==true){
       validation.reason="交易计划仍然冻结有效，等待实时执行盘口恢复。";reject("等待实时盘口");continue;
     }
-    const price=validation.side==="LONG"?q!.bestAsk:q!.bestBid,state=s.extremumRegime.symbols[validation.symbol],
+    const price=validation.side==="LONG"?q!.bestAsk:q!.bestBid,state=s.extremumRegime.symbols[validation.symbol];
+    if(validation.samples===0){
+      const sourceCount=Math.max(o.sourceCount??0,state?.sourceCount??0,q!.sourceCount??0),
+        disagreement=q!.disagreementRate??o.disagreementRate??0,
+        profile=entryResponseWindowMs({score:o.environmentScore??o.score,edgeRatio:o.edgeRatio,sourceCount,
+          disagreementRate:disagreement,mode:o.mode,fastLaneAllowed:!!o.environmentMainline});
+      validation.startedAt=now;validation.initialPrice=price;validation.lastPrice=price;validation.lastQuoteAt=q!.observedAt;
+      validation.samples=1;validation.bestAdvanceRate=0;validation.maxAdverseRate=0;
+      validation.supportSamples=0;validation.oppositionSamples=0;validation.deadlineAt=validation.expiresAt;
+      validation.reason=`第一份可执行盘口已到，开始实时响应确认；基础响应窗口约 ${Math.round(profile.windowMs/1000)} 秒，但冻结计划只会在自身失效/到期时解除。`;
+      reject(validation.reason);continue;
+    }
+    const 
       frozenInvalidation=Number.isFinite(o.liquidityInvalidationPrice)?o.liquidityInvalidationPrice!:null,
       liquidityInvalidated=frozenInvalidation!=null&&(
         validation.side==="LONG"?price<=frozenInvalidation:price>=frozenInvalidation);
@@ -1051,7 +1074,8 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
 
     if(decision.action==="CANCEL"){validation.status="CANCELLED";reject(decision.reason);continue;}
 
-    if(validation.stableThesis){
+    const locationManaged=validation.stableThesis||(o.tradePlan!=null&&o.tradePlan!=="OBSERVE_ONLY");
+    if(locationManaged){
       const d=dir(validation.side),expected=validation.initialExpectedNetRate??o.netRemainingSpaceRate,
         pullback=validation.pullbackRiskRateAtArm??o.pullbackRiskRate,
         maxChase=validation.maxChaseRate??stableEntryThesisProfile({score:o.score,premium:!!o.premium,
