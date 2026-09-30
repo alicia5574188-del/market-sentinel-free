@@ -35,6 +35,12 @@ export type MarketLiquidityResearch={
   version:typeof LIQUIDITY_MAP_VERSION;updatedAt:number;market:MarketLiquidityContext;symbols:Record<string,SymbolLiquidityMap>;
 };
 
+export function initialMarketLiquidityResearch(now:number):MarketLiquidityResearch{
+  return{version:LIQUIDITY_MAP_VERSION,updatedAt:now,market:{version:LIQUIDITY_MAP_VERSION,updatedAt:now,ready:false,
+    readySymbols:0,totalSymbols:0,insideShare:0,testingShare:0,acceptedShare:0,rejectedShare:0,highAccumulationShare:0,
+    upMigrationShare:0,downMigrationShare:0,oneSidedDepletionShare:0,migrationBreadth:0,summary:"等待足够的全市场5分钟历史建立流动性地图。"},symbols:{}};
+}
+
 type Point={price:number;weight:number;bar:number;pivot:number;absorption:number;at:number};
 const clip=(v:number,a=0,b=1)=>Math.max(a,Math.min(b,v));
 const mean=(xs:number[])=>xs.length?xs.reduce((a,b)=>a+b,0)/xs.length:0;
