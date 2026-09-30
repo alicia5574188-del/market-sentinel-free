@@ -15,6 +15,7 @@ function render(path,props,extra={}){
   }}).outputText;
   const imports={
     react:React,"react/jsx-runtime":jsxRuntime,
+    "../lib/research-snapshot.ts":{collectReviewSnapshot(){throw new Error("render must not export");}},
     "../lib/beijing-time.ts":{BEIJING_TIME_ZONE:"Asia/Shanghai",beijingDayKey:()=>"2026-09-30"},
     "../lib/equity-cache.ts":{EquityHistoryCache:class{cancel(){}}},
     "../lib/record-view.ts":{recordWindows:rows=>({recent:rows.slice(0,10),archive:rows.slice(10)}),archivePage:rows=>({items:rows,page:0,pages:1})},

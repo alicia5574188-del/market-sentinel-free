@@ -128,7 +128,10 @@ export type EntryContext={
   baseEntryScore?:number;environmentScore?:number;
   futureResearchAction?:EntryHypothesisGuidance["action"];futureResearchReason?:string;futureHypothesisIds?:string[];
 };
+import type {ReviewEvent, TradeReview} from "./review-trace.ts";
+
 export type Trade={
+  review?:TradeReview;
   id:string;symbol:string;side:"LONG"|"SHORT";rule:Rule;openedAt:number;closedAt:number|null;status:"OPEN"|"CLOSED";
   entryPrice:number;exitPrice:number|null;quantity:number;contracts:number;quantoMultiplier:number;notional:number;
   leverage:number;margin:number;plannedRisk:number;stopPrice:number;armPrice:number;favorable:number;adverse:number;
@@ -140,7 +143,7 @@ export type Trade={
   profitProtection?:{version:string;reachedR:number;lockedR:number;floorRate:number;retentionRate:number;activationRate:number;
     checkpointBand:number;mode:"STRONG_TREND"|"HEALTHY_TREND"|"NORMAL"|"WEAKENING";peakR:number;updatedAt:number};
   profitProtectionMigration?:{version:string;state:"CURRENT"|"GUARDED"|"DEFERRED";updatedAt:number;baselineFavorable:number};
-  exitAudit?:{trigger:string;at:number;detail?:string};
+  exitAudit?:{trigger:string;at:number;detail?:string;evidence?:Record<string,string|number|boolean|null>};
   holdValue?:{action:"HOLD"|"REVIEW"|"EXIT_PROFIT"|"EXIT_RISK";pullbackRiskRate:number;bestHoldMinutes:number;score:number};
   positionIntelligence?:PositionIntelligenceState;
   liquidityLifecycle?:{currentPlan:LiquidityTradePlan;upgradedAt:number|null;reason:string;
@@ -443,11 +446,11 @@ function updateDaily(s:ForwardState,now:number,equity:number){
   const key=dayKey(now),row=s.daily.at(-1);if(!row||row.day!==key)s.daily.push({day:key,firstAt:now,lastAt:now,startEquity:equity,endEquity:equity,exactBoundary:false});
   else{row.lastAt=now;row.endEquity=equity;}s.daily=s.daily.slice(-45);
 }
-function closeTrade(s:ForwardState,t:Trade,price:number,now:number,reason:string){
+function closeTrade(s:ForwardState,t:Trade,price:number,now:number,reason:string,evidence?:Record<string,string|number|boolean|null>){
   const gross=dir(t.side)*t.quantity*(price-t.entryPrice),exitFee=t.quantity*price*PAPER_COST.feeRate;
   const funding=t.notional*PAPER_COST.fundingAllowancePerDay*Math.max(0,now-t.openedAt)/86_400_000,net=gross-t.entryFee-exitFee-funding;
   t.status="CLOSED";t.closedAt=now;t.exitPrice=price;t.exitFee=exitFee;t.fundingAllowance=funding;t.grossPnl=gross;t.netPnl=net;t.exitReason=reason;
-  t.exitAudit={trigger:reason,at:now};s.balance+=gross-exitFee-funding;s.grossPnl+=gross;s.fees+=exitFee;s.fundingAllowance+=funding;
+  t.exitAudit={trigger:reason,at:now,...(evidence?{evidence}:{})};s.balance+=gross-exitFee-funding;s.grossPnl+=gross;s.fees+=exitFee;s.fundingAllowance+=funding;
   s.resolved++;if(net>0)s.wins++;s.turnover+=t.notional;t.lastQuoteAt=now;t.lastPrice=price;s.lastExitAt[t.symbol]=now;
   const familyId=t.entryContext?.relationFamilyId;
   if(reason!=="ACCOUNT_RESET"&&familyId&&t.entryContext?.mode!=="SHOCK")recordFamilyOutcome({state:s.familyExperiment,familyId,
@@ -593,7 +596,7 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
       liquidityOwnsStop=liquidityStopActive&&(profitStop==null||(t.side==="LONG"?hypothesisStop>=profitStop:hypothesisStop<=profitStop));
     if(stopped){
       const stopReason=liquidityOwnsStop?"LIQUIDITY_HYPOTHESIS_INVALIDATED":(t.profitFloorRate??0)>0?"WINNER_INSURANCE_EXIT":"STRUCTURE_STOP";
-      closeTrade(s,t,px,now,stopReason);closed.add(t.id);continue;
+      closeTrade(s,t,px,now,stopReason,{authority:"PRICE_STOP",stopPrice:t.stopPrice,hypothesisStop,profitStop,liquidityOwnsStop,quoteAt:q!.observedAt});closed.add(t.id);continue;
     }
 
     // Golden-version authority: the original thesis/position evidence decides
@@ -601,13 +604,13 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
     // research context and have no independent order authority.
     if(position.decision==="EXIT"){
       if(t.entryContext)t.entryContext.postEntryState=signed>0?"CONFIRMED":"FAILED";
-      closeTrade(s,t,px,now,"POSITION_VALUE_EXIT");closed.add(t.id);continue;
+      closeTrade(s,t,px,now,"POSITION_VALUE_EXIT",{authority:"POSITION_INTELLIGENCE",decision:position.decision,quoteAt:q!.observedAt,reviewBars:position.reviewBars,barAt:position.lastCompletedBar});closed.add(t.id);continue;
     }
 
     const insurance=catastrophicWinnerInsuranceFloor(t,originalStopRate);
     if(insurance>Math.max(t.profitFloorRate??0,ROUND_TRIP_COST*.8)){
       if(signed<=insurance){
-        closeTrade(s,t,px,now,"WINNER_INSURANCE_EXIT");closed.add(t.id);continue;
+        closeTrade(s,t,px,now,"WINNER_INSURANCE_EXIT",{authority:"PROFIT_FLOOR",thresholdRate:insurance,signedRate:signed,originalStopRate,quoteAt:q!.observedAt});closed.add(t.id);continue;
       }
       const next=t.entryPrice*(1+d*insurance);
       if(t.side==="LONG"&&next>t.stopPrice||t.side==="SHORT"&&next<t.stopPrice){
@@ -625,7 +628,7 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
         peakFavorableRate:t.favorable,originalStopRate,costRate:ROUND_TRIP_COST});
       if(targetFloor>Math.max(t.profitFloorRate??0,ROUND_TRIP_COST*.8)){
         if(signed<=targetFloor){
-          closeTrade(s,t,px,now,"LIQUIDITY_TARGET_PROTECT_EXIT");closed.add(t.id);continue;
+          closeTrade(s,t,px,now,"LIQUIDITY_TARGET_PROTECT_EXIT",{authority:"PROFIT_FLOOR",thresholdRate:targetFloor,signedRate:signed,originalStopRate,quoteAt:q!.observedAt});closed.add(t.id);continue;
         }
         const next=t.entryPrice*(1+d*targetFloor);
         if(t.side==="LONG"&&next>t.stopPrice||t.side==="SHORT"&&next<t.stopPrice){
@@ -645,7 +648,7 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
       if(environmentFloor>0){
         if(environmentFloor>Math.max(t.profitFloorRate??0,ROUND_TRIP_COST*.8)){
           if(signed<=environmentFloor){
-            closeTrade(s,t,px,now,"ENVIRONMENT_PROFIT_DECAY_EXIT");closed.add(t.id);continue;
+            closeTrade(s,t,px,now,"ENVIRONMENT_PROFIT_DECAY_EXIT",{authority:"PROFIT_FLOOR",thresholdRate:environmentFloor,signedRate:signed,currentFit,horizonMinutes:environmentOutlook.horizonMinutes,quoteAt:q!.observedAt});closed.add(t.id);continue;
           }
           const next=t.entryPrice*(1+d*environmentFloor);
           if(t.side==="LONG"&&next>t.stopPrice||t.side==="SHORT"&&next<t.stopPrice){
@@ -940,13 +943,15 @@ function rankedEligible(s:ForwardState,now:number){
     &&!(s.lastSide[o.symbol]===o.side&&(s.lastEntryAt[o.symbol]??0)>=(o.thesisSince??Infinity))).sort(opportunityCompare);
 }
 
-function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:number){
+function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:number,trace?:(event:ReviewEvent)=>void){
   const opportunities=new Map(s.opportunities.filter(isIntelligenceOpportunity).map(o=>[o.id,o])),
     preserved:Record<string,EntryValidation>={};
   for(const [id,v] of Object.entries(s.entryValidations)){
     const o=v.frozenOpportunity??opportunities.get(v.candidateId);
     if(v.status==="CANCELLED"&&v.expiresAt<=now)continue;
-    if(!o||s.positions.some(t=>t.symbol===v.symbol)||(o.thesisId&&s.consumedTheses[o.thesisId]))continue;
+    if(!o||s.positions.some(t=>t.symbol===v.symbol)||(o.thesisId&&s.consumedTheses[o.thesisId])){
+      trace?.({at:now,id:v.id,symbol:v.symbol,stage:"CANCELLED",reason:!o?"PLAN_MISSING":s.positions.some(t=>t.symbol===v.symbol)?"SYMBOL_HELD":"THESIS_CONSUMED"});continue;
+    }
     if(!v.frozenOpportunity)v.frozenOpportunity=structuredClone(o);
     preserved[id]=v;
     if(v.status==="WAITING"&&v.stableThesis){
@@ -966,16 +971,17 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
   for(const o of eligible){
     if(s.entryValidations[o.id])continue;
     if(active>=ENTRY_VALIDATION_CAP){
-      if(!o.rapidLiquidityAuthorization)continue;
+      if(!o.rapidLiquidityAuthorization){trace?.({at:now,id:o.id,symbol:o.symbol,stage:"NOT_AUTHORIZED",reason:"EXECUTION_SLOT_CAPACITY"});continue;}
       const waiting=Object.values(s.entryValidations).filter(v=>v.status==="WAITING"&&v.frozenOpportunity)
         .sort((a,b)=>(a.frozenOpportunity!.environmentScore??a.frozenOpportunity!.score)
           -(b.frozenOpportunity!.environmentScore??b.frozenOpportunity!.score));
       const weakest=waiting[0],weakScore=weakest?(weakest.frozenOpportunity!.environmentScore??weakest.frozenOpportunity!.score):Infinity,
         newScore=o.environmentScore??o.score,
         noProof=!!weakest&&weakest.supportSamples===0&&now-(weakest.authorizedAt??weakest.startedAt)>=30_000;
-      if(!weakest||!noProof||newScore<weakScore+4)continue;
+      if(!weakest||!noProof||newScore<weakScore+4){trace?.({at:now,id:o.id,symbol:o.symbol,stage:"NOT_AUTHORIZED",reason:"NO_REPLACEABLE_EXECUTION_SLOT"});continue;}
       weakest.status="CANCELLED";
       weakest.reason=`更强的1分钟流动性迁移机会已出现（新计划评分 ${newScore.toFixed(0)} > 当前等待 ${weakScore.toFixed(0)}）；释放一个长期无正反馈的执行槽。`;
+      trace?.({at:now,id:weakest.id,symbol:weakest.symbol,stage:"REPLACED",reason:weakest.reason});
       active--;
     }
     const q=quotes[o.symbol],quoteReady=freshQuote(q,now)&&q!.entryReady===true,
@@ -1019,6 +1025,8 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
         :o.extendedConfirmation
         ?(o.futureResearchAction==="CONFIRM_MORE"?"前瞻研究发现状态转移风险，进入加强实时延续确认。":"极端轮动延伸机会进入加强实时延续确认。")
         :profile.fastLane?"高质量机会进入快速实时响应确认。":"候选进入实时响应确认。"};
+    trace?.({at:now,id:o.id,symbol:o.symbol,stage:"AUTHORIZED",side:o.side,reason:s.entryValidations[o.id]!.reason??"",price,
+      quoteAt:quoteReady?q!.observedAt:0,plan:o.tradePlan,expiresAt,invalidationPrice:o.liquidityInvalidationPrice??null});
     if(!quoteReady)reject("正式计划已冻结，等待实时盘口");
     active++;
   }
@@ -1026,15 +1034,19 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
 }
 
 function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<string,Contract>,
-  minutePaths:Record<string,Candle[]>|undefined,paths:Record<string,Candle[]>|undefined,now:number,equity:number){
+  minutePaths:Record<string,Candle[]>|undefined,paths:Record<string,Candle[]>|undefined,now:number,equity:number,trace?:(event:ReviewEvent)=>void){
   const opportunities=new Map(s.opportunities.map(o=>[o.id,o])),waiting=Object.values(s.entryValidations)
     .filter(v=>v.status==="WAITING").sort((a,b)=>{
       const ao=a.frozenOpportunity??opportunities.get(a.candidateId),bo=b.frozenOpportunity??opportunities.get(b.candidateId);
       if(!ao)return bo?1:0;if(!bo)return-1;return opportunityCompare(ao,bo);
     });
   const reasons:Record<string,number>={};let opened=0;
-  const reject=(reason:string)=>{reasons[reason]=(reasons[reason]??0)+1;};
   for(const validation of waiting){
+    const reject=(reason:string)=>{reasons[reason]=(reasons[reason]??0)+1;
+      trace?.({at:now,id:validation.id,symbol:validation.symbol,
+        stage:validation.status==="CANCELLED"?(validation.expiresAt<=now?"EXPIRED":"CANCELLED"):
+          reason==="等待实时盘口"?"WAIT_QUOTE":validation.phase==="RETEST_WAIT"?"WAIT_RETEST":"WAIT_RESPONSE",
+        reason,price:validation.lastPrice,quoteAt:validation.lastQuoteAt});};
     const o=validation.frozenOpportunity??opportunities.get(validation.candidateId);
     if(!o||!isIntelligenceOpportunity(o)||validation.expiresAt<=now){
       validation.status="CANCELLED";validation.reason="冻结交易计划已经超过自身有效期";reject(validation.reason);continue;
@@ -1050,6 +1062,7 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
       validation.startedAt=now;validation.deadlineAt=validation.expiresAt;
       validation.initialPrice=price;validation.lastPrice=price;validation.lastQuoteAt=q!.observedAt;validation.samples=1;
       validation.bestAdvanceRate=0;validation.maxAdverseRate=0;validation.supportSamples=0;validation.oppositionSamples=0;
+      trace?.({at:now,id:validation.id,symbol:validation.symbol,stage:"FIRST_EXECUTABLE_QUOTE",reason:"EXECUTION_CLOCK_STARTED",price,quoteAt:q!.observedAt});
       validation.reason="实时执行盘口已经恢复；以首个可执行价格建立执行基准，冻结交易计划继续有效，之前等待盘口的时间不计入价格响应。";
       reject(validation.reason);continue;
     }
@@ -1154,6 +1167,9 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
     if(now-last<15*60_000&&lastSide===o.side){validation.status="CANCELLED";validation.reason="同币同方向假设尚未重置";reject(validation.reason);continue;}
     const error=openIntelligenceTrade(s,o,q!,meta,now,equity,{validation,decision});
     if(error){validation.status="CANCELLED";validation.reason=error;reject(error);continue;}
+    trace?.({at:now,id:validation.id,symbol:validation.symbol,stage:"FILLED",reason:"PAPER_FILLED",
+      price:s.positions.find(t=>t.symbol===validation.symbol)?.entryPrice,quoteAt:q!.observedAt,
+      tradeId:s.positions.find(t=>t.symbol===validation.symbol)?.id});
     opened=1;delete s.entryValidations[validation.id];break;
   }
   s.entryDiagnostics={at:now,matched:waiting.length,opened,reasons};return opened;
@@ -1182,7 +1198,9 @@ function nextCandleAt(paths:Record<string,Candle[]>,now:number){
 }
 export function advanceForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;minutePaths?:Record<string,Candle[]>;daily?:Record<string,Candle[]>;
   quotes:Record<string,Quote>;analysisQuotes?:Record<string,Quote>;contracts:Record<string,Contract>;entrySymbols?:Iterable<string>;learningSymbols?:Iterable<string>;allowDataCycle?:boolean;
-  legacyDrainOnly?:boolean;research?:MarketLifecycleResearchContext}){
+  legacyDrainOnly?:boolean;research?:MarketLifecycleResearchContext;reviewTrace?:(event:ReviewEvent)=>void}){
+  // An optional observer has no return value or trading authority. A failed logger cannot block a trade.
+  const trace=input.reviewTrace?(event:ReviewEvent)=>{try{input.reviewTrace!(event);}catch{/* diagnostics only */}}:undefined;
   const s=normalizeForward(structuredClone(input.state),input.now),
     before=JSON.stringify({p:s.positions.map(t=>[t.id,t.status,t.stopPrice,t.profitFloorRate]),h:s.history.length,b:s.balance,r:s.revision,
       v:Object.values(s.entryValidations).filter(x=>x.status==="WAITING").map(x=>x.id).sort()});
@@ -1242,8 +1260,8 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
   // may be authorized between 5m closes (including the causal 1m rapid-migration
   // lane). Once authorized, its frozen identity is handed to the critical 2s
   // execution clock; research refreshes can no longer make it disappear.
-  if(marketReady)seedEntryResponses(s,input.quotes,input.now);
-  const opened=marketReady?advanceEntryResponses(s,input.quotes,input.contracts,input.minutePaths,input.paths,input.now,mark.equity):0;
+  if(marketReady)seedEntryResponses(s,input.quotes,input.now,trace);
+  const opened=marketReady?advanceEntryResponses(s,input.quotes,input.contracts,input.minutePaths,input.paths,input.now,mark.equity,trace):0;
 
   const states=Object.values(s.extremumRegime.symbols),longReady=states.filter(x=>x.longScore>=62).length,
     shortReady=states.filter(x=>x.shortScore>=62).length,divergent=states.filter(x=>x.regime==="DIVERGENT").length,

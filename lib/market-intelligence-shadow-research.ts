@@ -74,6 +74,7 @@ export type TradeShadowResearch={
 };
 export type ShadowResearchState={
   version:typeof SHADOW_RESEARCH_VERSION;updatedAt:number;market:MarketGeometrySnapshot[];trades:TradeShadowResearch[];
+  retiredTrades?:{tradeId:string;openedAt:number;lastObservedAt:number;status:"PRIOR_ACCOUNT_UNVERIFIED"}[];
 };
 type Reader={get<T>(key:string):Promise<T|undefined>};
 
@@ -312,11 +313,11 @@ function normalizeTrades(items:TradeShadowResearch[]|undefined){
 export async function readShadowResearch(storage:Reader,now=Date.now()):Promise<ShadowResearchState>{
   const [m,t]=await Promise.all([
     storage.get<{version?:string;updatedAt?:number;items?:MarketGeometrySnapshot[]}>(SHADOW_MARKET_KEY),
-    storage.get<{version?:string;updatedAt?:number;items?:TradeShadowResearch[]}>(SHADOW_TRADE_KEY),
+    storage.get<{version?:string;updatedAt?:number;items?:TradeShadowResearch[];retiredTrades?:ShadowResearchState["retiredTrades"]}>(SHADOW_TRADE_KEY),
   ]);
-  return{version:SHADOW_RESEARCH_VERSION,updatedAt:Math.max(Number(m?.updatedAt)||0,Number(t?.updatedAt)||0,now),
+  return{version:SHADOW_RESEARCH_VERSION,updatedAt:Math.max(Number(m?.updatedAt)||0,Number(t?.updatedAt)||0),
     market:m?.version===SHADOW_RESEARCH_VERSION?normalizeMarket(m.items):[],
-    trades:t?.version===SHADOW_RESEARCH_VERSION?normalizeTrades(t.items):[]};
+    trades:t?.version===SHADOW_RESEARCH_VERSION?normalizeTrades(t.items):[],retiredTrades:t?.retiredTrades??[]};
 }
 export function advanceShadowResearch(input:{state:ShadowResearchState;forward:ForwardState;paths:Record<string,Candle[]>;quotes:Record<string,Quote>;now:number}){
   const next:ShadowResearchState=structuredClone(input.state);let marketChanged=false,tradesChanged=false;
@@ -324,6 +325,13 @@ export function advanceShadowResearch(input:{state:ShadowResearchState;forward:F
     latestBucket=next.market.length?geometryBucket(next.market[0]!.at):-1;
   if(sample.at>0&&sampleBucket>latestBucket){
     next.market.unshift(sample);next.market=normalizeMarket(next.market);marketChanged=true;
+  }
+  const currentIds=new Set([...input.forward.positions,...input.forward.history].map(t=>t.id));
+  const retired=next.trades.filter(t=>t.openedAt<input.forward.startedAt&&!currentIds.has(t.tradeId));
+  if(retired.length){
+    next.retiredTrades=[...(next.retiredTrades??[]),...retired.map(t=>({tradeId:t.tradeId,openedAt:t.openedAt,
+      lastObservedAt:t.updatedAt,status:"PRIOR_ACCOUNT_UNVERIFIED" as const}))].slice(-32);
+    const ids=new Set(retired.map(t=>t.tradeId));next.trades=next.trades.filter(t=>!ids.has(t.tradeId));tradesChanged=true;
   }
   const byId=new Map(next.trades.map(x=>[x.tradeId,x]));
   for(const trade of [...input.forward.positions,...input.forward.history]){
@@ -346,7 +354,7 @@ export function advanceShadowResearch(input:{state:ShadowResearchState;forward:F
 export function shadowResearchWrites(state:ShadowResearchState,marketChanged=true,tradesChanged=true){
   const entries:Record<string,unknown>={};
   if(marketChanged)entries[SHADOW_MARKET_KEY]={version:state.version,updatedAt:state.updatedAt,items:state.market};
-  if(tradesChanged)entries[SHADOW_TRADE_KEY]={version:state.version,updatedAt:state.updatedAt,items:state.trades};
+  if(tradesChanged)entries[SHADOW_TRADE_KEY]={version:state.version,updatedAt:state.updatedAt,items:state.trades,retiredTrades:state.retiredTrades??[]};
   return entries;
 }
 function responseBandSummary(rows:TradeShadowResearch[],band:ResponseQualityV2["band"]){
@@ -380,7 +388,7 @@ export function shadowResearchView(state:ShadowResearchState){
       return first&&t.closedAt!=null?[t.closedAt-first.at]:[];
     });
   const avg=(xs:number[])=>xs.length?xs.reduce((a,b)=>a+b,0)/xs.length:null;
-  return{version:state.version,updatedAt:state.updatedAt,purpose:"只读影子研究：市场几何、入场位置、响应质量、盈利转化；不参与任何交易决策。",
+  return{version:state.version,updatedAt:state.updatedAt,retiredTrades:state.retiredTrades??[],purpose:"只读影子研究：市场几何、入场位置、响应质量、盈利转化；不参与任何交易决策。",
     summary:{marketSnapshots:state.market.length,geometrySampleMinutes:SHADOW_GEOMETRY_SAMPLE_MS/60_000,marketCoverageMinutes:coverage,
       geometryTransitions:transitions,rotationalShare:state.market.length?rotational.length/state.market.length:null,
       trendingShare:state.market.length?trending.length/state.market.length:null,mixedShare:state.market.length?mixed.length/state.market.length:null,

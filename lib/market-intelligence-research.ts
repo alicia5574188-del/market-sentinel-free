@@ -25,11 +25,12 @@ export type RejectedOpportunityResearch={
   id:string;thesisId:string;symbol:string;side:"LONG"|"SHORT";mode:string;observedAt:number;startedAt:number;entryPrice:number;
   stopRate:number;score:number;eligibleAtObservation:boolean;stage:string|null;dataConfidence:number|null;sourceCount:number|null;
   marketNarrativeId:string|null;marketMajor:string|null;marketShort:string|null;transitionStage:string|null;
-  reason:string;executionBlockers:Record<string,number>;lastObservedAt:number;maxFavorableRate:number;maxAdverseRate:number;
+  reason:string;executionBlockers:Record<string,number>;blockerScope?:"CANDIDATE";executedTradeId?:string;executedAt?:number;lastObservedAt:number;maxFavorableRate:number;maxAdverseRate:number;
   checkpoints:ResearchCheckpoint[];unavailableCheckpoints:number[];completed:boolean;
 };
 export type CounterfactualResearchState={
   version:typeof COUNTERFACTUAL_RESEARCH_VERSION;updatedAt:number;postExit:PostExitResearch[];rejected:RejectedOpportunityResearch[];
+  sampling?:{admitted:number;notAdmittedAttempts:number;evictedBeforeComplete:number;lastAdmissionAttemptAt:number};
 };
 type Reader={get<T>(key:string):Promise<T|undefined>};
 const dir=(side:"LONG"|"SHORT")=>side==="LONG"?1:-1;
@@ -72,7 +73,7 @@ function normalizePost(row:PostExitResearch):PostExitResearch|null{
       :normalized.checkpoints.some(p=>p.minutes===5)&&normalized.unavailable.length===0?"FULL":"PARTIAL",
     checkpointFavorable=normalized.checkpoints.reduce((m,p)=>Math.max(m,p.maxFavorableRate),0),
     checkpointAdverse=normalized.checkpoints.reduce((m,p)=>Math.max(m,p.maxAdverseRate),0);
-  return{...row,startedAt:startAt,pathCoverage:normalized.unavailable.length?"PARTIAL":inferredCoverage,
+  return{...row,startedAt:startAt,pathCoverage:unavailable.length?"PARTIAL":inferredCoverage,
     checkpoints:normalized.checkpoints,unavailableCheckpoints:unavailable,
     maxFavorableRate:normalized.unavailable.length?checkpointFavorable:Math.max(checkpointFavorable,Math.max(0,Number(row.maxFavorableRate)||0)),
     maxAdverseRate:normalized.unavailable.length?checkpointAdverse:Math.max(checkpointAdverse,Math.max(0,Number(row.maxAdverseRate)||0)),
@@ -90,16 +91,16 @@ function normalizeRejected(row:RejectedOpportunityResearch):RejectedOpportunityR
 export async function readCounterfactualResearch(storage:Reader,now=Date.now()):Promise<CounterfactualResearchState>{
   const [p,r]=await Promise.all([
     storage.get<{version?:string;updatedAt?:number;items?:PostExitResearch[]}>(POST_EXIT_RESEARCH_KEY),
-    storage.get<{version?:string;updatedAt?:number;items?:RejectedOpportunityResearch[]}>(REJECTED_RESEARCH_KEY),
+    storage.get<{version?:string;updatedAt?:number;items?:RejectedOpportunityResearch[];sampling?:CounterfactualResearchState["sampling"]}>(REJECTED_RESEARCH_KEY),
   ]);
-  return{version:COUNTERFACTUAL_RESEARCH_VERSION,updatedAt:Math.max(Number(p?.updatedAt)||0,Number(r?.updatedAt)||0,now),
+  return{version:COUNTERFACTUAL_RESEARCH_VERSION,updatedAt:Math.max(Number(p?.updatedAt)||0,Number(r?.updatedAt)||0),
     postExit:(p?.version===COUNTERFACTUAL_RESEARCH_VERSION?p.items??[]:[]).map(normalizePost).filter((x):x is PostExitResearch=>!!x),
-    rejected:(r?.version===COUNTERFACTUAL_RESEARCH_VERSION?r.items??[]:[]).map(normalizeRejected).filter((x):x is RejectedOpportunityResearch=>!!x)};
+    sampling:r?.sampling,rejected:(r?.version===COUNTERFACTUAL_RESEARCH_VERSION?r.items??[]:[]).map(normalizeRejected).filter((x):x is RejectedOpportunityResearch=>!!x)};
 }
 function pathExtremes(side:"LONG"|"SHORT",startPrice:number,startAt:number,rows:Candle[]|undefined,now:number,currentPrice:number|null){
   const d=dir(side);let favorable=0,adverse=0;
   for(const bar of rows??[]){
-    const end=bar.time*1000+300_000;if(end<=startAt||end>now)continue;
+    const end=bar.time*1000+300_000;if(bar.time*1000<startAt||end<=startAt||end>now)continue;
     const hi=d>0?bar.high:bar.low,lo=d>0?bar.low:bar.high,
       fav=d*(hi/startPrice-1),adv=-d*(lo/startPrice-1);
     favorable=Math.max(favorable,fav);adverse=Math.max(adverse,adv);
@@ -120,7 +121,7 @@ function checkpointSnapshot(side:"LONG"|"SHORT",startPrice:number,startAt:number
 }
 function updateCheckpoints<T extends {side:"LONG"|"SHORT";startedAt:number;lastObservedAt:number;maxFavorableRate:number;maxAdverseRate:number;
   checkpoints:ResearchCheckpoint[];unavailableCheckpoints:number[];completed:boolean}>(row:T,startPrice:number,stopRate:number,now:number,rows:Candle[]|undefined,q:Quote|undefined){
-  const current=quotePrice(q),ext=pathExtremes(row.side,startPrice,row.startedAt,rows,now,current);
+  const current=q&&q.observedAt<=now&&now-q.observedAt<=10_000?quotePrice(q):null,ext=pathExtremes(row.side,startPrice,row.startedAt,rows,now,current);
   row.maxFavorableRate=Math.max(row.maxFavorableRate,ext.favorable);row.maxAdverseRate=Math.max(row.maxAdverseRate,ext.adverse);
   row.lastObservedAt=now;let changed=false;
   for(const minutes of RESEARCH_CHECKPOINTS){
@@ -133,7 +134,7 @@ function updateCheckpoints<T extends {side:"LONG"|"SHORT";startedAt:number;lastO
         stopHit:snap.maxAdverseRate>=stopRate});
       changed=true;
     }else if(now>=targetAt+CHECKPOINT_UNAVAILABLE_AFTER_MS){
-      row.unavailableCheckpoints.push(minutes);changed=true;
+      row.unavailableCheckpoints.push(minutes);if("pathCoverage" in row)row.pathCoverage="PARTIAL";changed=true;
     }
   }
   row.checkpoints.sort((a,b)=>a.minutes-b.minutes);row.unavailableCheckpoints=[...new Set(row.unavailableCheckpoints)].sort((a,b)=>a-b);
@@ -162,16 +163,17 @@ function rejectedFromOpportunity(o:Opportunity,q:Quote|undefined,s:ForwardState,
   if(o.score<70||(o.sourceCount??0)<2||(o.dataConfidence??0)<55)return null;
   if(s.positions.some(t=>t.entryContext?.thesisId===o.thesisId)||s.history.some(t=>t.entryContext?.thesisId===o.thesisId))return null;
   const mid=quotePrice(q),entryPrice=mid??o.price;if(!(entryPrice>0))return null;
-  const n=s.extremumRegime.narrative;
+  const n=s.extremumRegime.narrative,validation=s.entryValidations[o.id];
+  const ownBlocker=validation?.reason??(!o.eligible?rejectionClass(o):"NOT_SELECTED_REASON_UNRECORDED");
   return{id:`reject:${o.thesisId}`,thesisId:o.thesisId,symbol:o.symbol,side:o.side,mode:o.mode,observedAt:now,startedAt:now,entryPrice,
     stopRate:o.stopRate,score:o.score,eligibleAtObservation:o.eligible,stage:o.confirmationStage??null,dataConfidence:o.dataConfidence??null,
     sourceCount:o.sourceCount??null,marketNarrativeId:n.id??null,marketMajor:n.major.bias??null,marketShort:n.short.bias??null,
-    transitionStage:n.transition.stage??null,reason:`${rejectionClass(o)} | ${o.reason}`,executionBlockers:{...s.entryDiagnostics.reasons},
+    transitionStage:n.transition.stage??null,reason:`${rejectionClass(o)} | ${o.reason}`.slice(0,360),executionBlockers:{[ownBlocker]:1},blockerScope:"CANDIDATE",
     lastObservedAt:now,maxFavorableRate:0,maxAdverseRate:0,checkpoints:[],unavailableCheckpoints:[],completed:false};
 }
 function trimForStorage<T extends {completed:boolean;lastObservedAt:number}>(items:T[]){
   const out=[...items].sort((a,b)=>b.lastObservedAt-a.lastObservedAt).slice(0,220);
-  while(out.length>40&&bytes({version:COUNTERFACTUAL_RESEARCH_VERSION,items:out})>MAX_VALUE_BYTES){
+  while(out.length>1&&bytes({version:COUNTERFACTUAL_RESEARCH_VERSION,items:out})>MAX_VALUE_BYTES){
     const idx=[...out].reverse().findIndex(x=>x.completed),actual=idx<0?out.length-1:out.length-1-idx;out.splice(actual,1);
   }
   return out;
@@ -186,22 +188,40 @@ export function advanceCounterfactualResearch(input:{state:CounterfactualResearc
   }
   if(input.observeCandidates){
     const ids=new Set(next.rejected.map(x=>x.thesisId));
+    const sampling=next.sampling??{admitted:0,notAdmittedAttempts:0,evictedBeforeComplete:0,lastAdmissionAttemptAt:0};
+    const reserved=(rows:RejectedOpportunityResearch[])=>bytes(rows)+rows.reduce((n,r)=>n+Math.max(0,6-r.checkpoints.length-r.unavailableCheckpoints.length)*380,0);
     for(const o of input.forward.opportunities){
       if(ids.has(o.thesisId??""))continue;const row=rejectedFromOpportunity(o,input.quotes[o.symbol],input.forward,input.now);
-      if(row){next.rejected.unshift(row);ids.add(row.thesisId);rejectedChanged=true;}
+      if(!row)continue;
+      // Reserve space for the complete path before admitting it; never evict an unfinished path for a new arrival.
+      while(reserved([...next.rejected,row])>MAX_VALUE_BYTES-2048&&next.rejected.some(x=>x.completed)){
+        const at=next.rejected.map(x=>x.completed).lastIndexOf(true);next.rejected.splice(at,1);rejectedChanged=true;
+      }
+      sampling.lastAdmissionAttemptAt=input.now;
+      if(reserved([...next.rejected,row])>MAX_VALUE_BYTES-2048){sampling.notAdmittedAttempts++;continue;}
+      next.rejected.unshift(row);ids.add(row.thesisId);sampling.admitted++;rejectedChanged=true;
     }
+    next.sampling=sampling;
   }
+  const executed=new Map([...input.forward.positions,...input.forward.history].map(t=>[t.entryContext?.thesisId,t]));
+  for(const row of next.rejected){const trade=executed.get(row.thesisId);if(trade&&!row.executedTradeId){row.executedTradeId=trade.id;row.executedAt=trade.openedAt;rejectedChanged=true;}}
   for(const row of next.postExit.filter(x=>!x.completed))
     if(updateCheckpoints(row,row.exitPrice,Infinity,input.now,input.paths[row.symbol],input.quotes[row.symbol]))postChanged=true;
   for(const row of next.rejected.filter(x=>!x.completed))
     if(updateCheckpoints(row,row.entryPrice,row.stopRate,input.now,input.paths[row.symbol],input.quotes[row.symbol]))rejectedChanged=true;
-  next.postExit=trimForStorage(next.postExit);next.rejected=trimForStorage(next.rejected);next.updatedAt=input.now;
+  const priorRejected=next.rejected;
+  next.postExit=trimForStorage(next.postExit);next.rejected=trimForStorage(next.rejected);
+  const retainedIds=new Set(next.rejected.map(r=>r.id));
+  const evicted=priorRejected.filter(r=>!r.completed&&!retainedIds.has(r.id)).length;
+  if(evicted){next.sampling=next.sampling??{admitted:0,notAdmittedAttempts:0,evictedBeforeComplete:0,lastAdmissionAttemptAt:input.now};
+    next.sampling.evictedBeforeComplete+=evicted;rejectedChanged=true;}
+  if(postChanged||rejectedChanged)next.updatedAt=input.now;
   return{state:next,postChanged,rejectedChanged,changed:postChanged||rejectedChanged};
 }
 export function counterfactualResearchWrites(state:CounterfactualResearchState,postChanged=true,rejectedChanged=true){
   const entries:Record<string,unknown>={};
   if(postChanged)entries[POST_EXIT_RESEARCH_KEY]={version:state.version,updatedAt:state.updatedAt,items:state.postExit};
-  if(rejectedChanged)entries[REJECTED_RESEARCH_KEY]={version:state.version,updatedAt:state.updatedAt,items:state.rejected};
+  if(rejectedChanged)entries[REJECTED_RESEARCH_KEY]={version:state.version,updatedAt:state.updatedAt,items:state.rejected,sampling:state.sampling};
   return entries;
 }
 export function counterfactualResearchView(state:CounterfactualResearchState){
@@ -213,7 +233,7 @@ export function counterfactualResearchView(state:CounterfactualResearchState){
     postUnavailable60=state.postExit.filter(x=>x.unavailableCheckpoints.includes(60)).length,
     rejectUnavailable60=state.rejected.filter(x=>x.unavailableCheckpoints.includes(60)).length;
   const avg=(xs:number[])=>xs.length?xs.reduce((a,b)=>a+b,0)/xs.length:null;
-  return{version:state.version,updatedAt:state.updatedAt,checkpoints:[...RESEARCH_CHECKPOINTS],
+  return{version:state.version,updatedAt:state.updatedAt,sampling:state.sampling??null,checkpoints:[...RESEARCH_CHECKPOINTS],
     summary:{postExitTracked:state.postExit.length,postExitCompleted:postComplete.length,rejectedTracked:state.rejected.length,rejectedCompleted:rejectComplete.length,
       postExitFullCoverage:state.postExit.filter(x=>x.pathCoverage==="FULL").length,
       postExitPartialCoverage:state.postExit.filter(x=>x.pathCoverage==="PARTIAL").length,

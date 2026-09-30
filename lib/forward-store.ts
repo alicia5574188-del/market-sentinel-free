@@ -60,6 +60,7 @@ function compactClosedTrade(t:Trade,keepIntelligence:boolean){
   }
   return row;
 }
+function withoutReview(t:Trade){const row={...t};delete row.review;return row;}
 function hotProjection(next:ForwardState,includeSamples=true){
   let full=Math.min(FORWARD_HOT_HISTORY_FULL,next.history.length),
     total=Math.min(FORWARD_HOT_HISTORY_TOTAL,next.history.length),
@@ -92,7 +93,12 @@ function hotProjection(next:ForwardState,includeSamples=true){
     else break;
     account=build();raw=encodeJson(account);
   }
-  return{account,raw,meta:{sourceHistory:next.history.length,hotHistory:total,fullHistory:full,summaryHistory:Math.max(0,total-full),
+  let droppedHotReview=false;
+  if(raw.length>FORWARD_ACCOUNT_TARGET_BYTES){
+    account={...account,positions:account.positions.map(withoutReview),history:account.history.map(withoutReview)};
+    raw=encodeJson(account);droppedHotReview=true;
+  }
+  return{account,raw,meta:{droppedHotReview,sourceHistory:next.history.length,hotHistory:total,fullHistory:full,summaryHistory:Math.max(0,total-full),
     sourceEvents:next.events.length,hotEvents:eventLimit,narrativeHistory:narrativeLimit,evidence:evidenceLimit,
     targetBytes:FORWARD_ACCOUNT_TARGET_BYTES}};
 }
@@ -346,8 +352,8 @@ export async function prepareForwardWrite(previous:ForwardState|null,next:Forwar
   const subjects=new Set(events.map(e=>e.subject));
   const trades=[...next.positions,...next.history].filter(t=>subjects.has(t.id));
   const packet={at:now,version:FORWARD_VERSION,engineVersion:next.engineVersion,policyVersion:next.policyVersion,
-    startedAt:next.startedAt,revision:next.revision,events,trades,
-    account:{balance:next.balance,positions:next.positions,fees:next.fees,fundingAllowance:next.fundingAllowance,
+    startedAt:next.startedAt,revision:next.revision,events,trades:trades.map(withoutReview),
+    account:{balance:next.balance,positions:next.positions.map(withoutReview),fees:next.fees,fundingAllowance:next.fundingAllowance,
       turnover:next.turnover,resolved:next.resolved,wins:next.wins,maxDrawdown:next.maxDrawdown},
     daily:next.daily.at(-1)??null,marketPulse:next.marketPulse,
     opportunities:next.opportunities.slice(0,12).map(o=>({symbol:o.symbol,side:o.side,mode:o.mode,score:o.score,eligible:o.eligible,
@@ -355,7 +361,17 @@ export async function prepareForwardWrite(previous:ForwardState|null,next:Forwar
   const archiveKey=`${FORWARD_STORAGE}archive:${String(now).padStart(16,"0")}:${next.revision}`;
   const encoded=new TextEncoder().encode(JSON.stringify(packet));
   if(encoded.length>112*1024)throw new Error("Adaptive 10单次归档超过预算；拒绝丢弃交易证据");
-  entries[archiveKey]=packet;
+  // Financial packet remains byte-for-byte in the original shape. Review extensions are optional;
+  // a full diagnostics buffer can never turn an otherwise-valid financial commit into a failure.
+  const reviews:{tradeId:string;review:NonNullable<Trade["review"]>}[]=[];
+  let omittedReviews=0;
+  for(const trade of trades){
+    if(!trade.review)continue;
+    const candidate={tradeId:trade.id,review:trade.review};
+    if(encodeJson({...packet,reviews:[...reviews,candidate],omittedReviews:trades.length}).length<=112*1024)reviews.push(candidate);
+    else omittedReviews++;
+  }
+  entries[archiveKey]=reviews.length?{...packet,reviews,omittedReviews}:packet;
 
   for(const[key,value]of Object.entries(entries)){
     if(value instanceof Uint8Array)continue;
