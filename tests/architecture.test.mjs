@@ -157,7 +157,7 @@ test("Market Intelligence active exits are evidence-family gated directly by Pos
   assert.match(engine,/LEADERSHIP_ROTATION/);
   assert.match(engine,/FLOW_ABSORBED_OR_STALLED/);
   assert.match(execution,/正在持仓/);
-  assert.match(execution,/接下来观察/);
+  assert.match(execution,/\{positionWatch\(t\)\}/);
 });
 
 test("existing multi-source BBO refresh exposes liquidity migration without extra per-symbol REST fanout",async()=>{
@@ -402,7 +402,8 @@ test("opportunity capture reserves execution capacity and all formal plans use l
   assert.match(worker,/freshImpulse\.slice\(0,3\),\.\.\.fixed/);
   assert.match(execution,/等待执行 · \{waitingValidations\.length\}/);
   assert.doesNotMatch(execution,/preparedWithoutValidation/);
-  assert.match(execution,/只有已经正式冻结交易计划的币才显示在这里/);
+  assert.match(execution,/waitingValidations=entryValidations\.filter\(v=>v\.status==="WAITING"&&!heldSymbols\.has\(v\.symbol\)\)/);
+  assert.match(execution,/\?\?v\.frozenOpportunity/);
 });
 
 test("duplicate-symbol execution is blocked at ranking, live validation and final open authority",async()=>{
@@ -431,8 +432,9 @@ test("formal liquidity plans survive shallow realtime conflict as retest instead
 test("execution command center summarizes active entry waits without a separate execution board",async()=>{
   const execution=await read("app/market-intelligence-execution.tsx");
   assert.match(execution,/等待执行/);
-  assert.match(execution,/等待回调结束后重新启动/);
-  assert.match(execution,/等待实时价格与流动性再次证明后执行/);
+  assert.match(execution,/v\.phase==="RETEST_WAIT".*等回调重启/);
+  assert.match(execution,/v\.stableThesis.*已武装/);
+  assert.match(execution,/\{waitingReason\(v,o\)\}/);
   assert.match(execution,/waitingValidations\.map/);
   assert.doesNotMatch(execution,/入场执行状态|候选榜前8名|本假设已取消/);
 });
@@ -452,7 +454,7 @@ test("environment outlook has bounded execution authority and cannot become a tr
   assert.match(router,/mainline=o\.tradePlan==="LIQUIDITY_MIGRATION"&&fit>=\.75&&outlook\.horizonMinutes>=45/);
   assert.match(router,/forceRetest=false/,"environment outlook must not revive a second environment-specific entry state machine");
   assert.match(execution,/接下来可能/);
-  assert.match(execution,/当前全局状态/);
+  assert.match(execution,/environmentName\(currentEnvironment\).*evolution\(currentEvolution\)/);
   assert.doesNotMatch(execution,/条件持续力.*%|转变压力.*%/);
 });
 
@@ -509,12 +511,14 @@ test("LIVE structural stops use create-confirm-cancel replacement and never Gate
   assert.match(block,/两张均为 close-only/);
 });
 
-test("LIVE page describes recoverable copy delay without reviving a fixed realtime-copy window",async()=>{
+test("LIVE page exposes recoverable copy status without a fixed realtime-copy window",async()=>{
   const ui=await read("app/live-console.tsx");
   assert.doesNotMatch(ui,/超过实时复制窗口/);
-  assert.match(ui,/不会因为固定秒数自动失效/);
-  assert.match(ui,/源单仍开放/);
-  assert.match(ui,/追价偏差/);
+  assert.match(ui,/copyPending/);
+  assert.match(ui,/SUBMISSION_UNCONFIRMED/);
+  assert.match(ui,/mirror\?\.rows\.filter/);
+  assert.match(ui,/r\.reason\?\?r\.status/);
+  assert.match(ui,/confirmEnable&&!enabled/);
 });
 
 test("LIVE copy actively refreshes Gate BBO after private reconciliation ages the PAPER quote",async()=>{
