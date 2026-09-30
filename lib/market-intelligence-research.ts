@@ -194,6 +194,11 @@ export function advanceCounterfactualResearch(input:{state:CounterfactualResearc
     const ids=new Set(next.rejected.map(x=>x.thesisId));
     const sampling=next.sampling??{admitted:0,notAdmittedAttempts:0,evictedBeforeComplete:0,lastAdmissionAttemptAt:0},
       bucket=Math.floor(input.now/ADMISSION_BUCKET_MS)*ADMISSION_BUCKET_MS;
+    // Repair the legacy pathological state seen in production: no retained/admitted
+    // sample but thousands of repeated 2s admission failures and phantom evictions.
+    if(next.rejected.length===0&&sampling.admitted===0&&(sampling.notAdmittedAttempts>0||sampling.evictedBeforeComplete>0)){
+      sampling.notAdmittedAttempts=0;sampling.evictedBeforeComplete=0;
+    }
     // Sampling is a 5m research job, not a 2s execution job. Re-attempting the
     // same rejected thesis every quote cycle only burns storage/CPU and inflates diagnostics.
     if(sampling.lastAdmissionAttemptAt<bucket){
