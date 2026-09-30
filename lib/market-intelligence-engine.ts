@@ -453,7 +453,7 @@ export function buildMarketIntelligence(input:{paths:Record<string,CandleLike[]>
     row.watchScore=quality;row.regime=plan.plan==="LIQUIDITY_MIGRATION"?"MARKET_TREND":
       plan.plan==="FAMILY_TURN"?"DIVERGENT":plan.plan==="LIQUIDITY_REJECTION"?"TRANSITION":
       Math.abs(shortLayer.score)>.28?"MARKET_TREND":dispersion>.6?"TRANSITION":"BALANCED";row.stage=eligible?"READY":"OBSERVE";
-    const planSince=map?.activeZone?.firstTouchedAt??map?.departure.startedAt??row.signalSince,
+    const planSince=plan.rapid?(rapid.startedAt??row.signalSince):(map?.departure.startedAt??row.signalSince),
       thesisId=`${MARKET_INTELLIGENCE_VERSION}:${row.symbol}:${bestSide}:${plan.plan}:${planSince}`,
       planZh=plan.plan==="LIQUIDITY_MIGRATION"?"流动性迁移":plan.plan==="LIQUIDITY_REJECTION"?"离开失败回归":
         plan.plan==="FAMILY_TURN"?"家族提前转折":"观察",
