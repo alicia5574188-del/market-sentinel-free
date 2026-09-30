@@ -259,9 +259,13 @@ export function routeEnvironmentOpportunity(input:{
     probePullbackMin=Math.max(cost*.40,Math.min(pullback*.18,space*.08,.0025)),
     probeRestartMin=Math.max(cost*.35,Math.min(pullback*.12,space*.06,.0018)),
     mainline=o.tradePlan==="LIQUIDITY_MIGRATION"&&fit>=.75&&outlook.horizonMinutes>=45,
-    probe=fit<.50,forceRetest=false,minimumThesisBars=mainline?1:2,
+    probe=fit<.50,
+    // A weak/short-lived environment must change *how* we enter, not merely shave a few percent off size.
+    // Keep the tradeable thesis alive, but require impulse -> pullback -> restart before execution.
+    forceRetest=!mainline&&(probe||outlook.horizonMinutes===15||(alignment==="COUNTER"&&fit<.65)),
+    minimumThesisBars=mainline?1:2,
     priority=fit>=.75?5:fit>=.60?4:fit>=.45?3:2,
-    scoreDelta=(fit-.50)*8,riskScale=clip(.70+.30*fit,.70,1),
+    scoreDelta=(fit-.50)*8,riskScale=clip(.55+.45*fit,.55,1),
     playbook:EnvironmentPlaybook=environment==="SHOCK"&&alignment==="ALIGNED"?"SHOCK_PARTICIPATION":
       o.mode==="CONTINUATION"?"TREND_CAPTURE":o.mode==="RELATIVE"?"ROTATION_RELATIVE":"TRANSITION_PROBE",
     reason=`${outlook.reason} ${o.mode} 与未来条件适配度 ${(fit*100).toFixed(0)}%；${mainline?"允许主线快速确认":
