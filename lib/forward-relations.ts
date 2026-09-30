@@ -139,6 +139,8 @@ export type Trade={
   exitAudit?:{trigger:string;at:number;detail?:string};
   holdValue?:{action:"HOLD"|"REVIEW"|"EXIT_PROFIT"|"EXIT_RISK";pullbackRiskRate:number;bestHoldMinutes:number;score:number};
   positionIntelligence?:PositionIntelligenceState;
+  liquidityLifecycle?:{currentPlan:LiquidityTradePlan;upgradedAt:number|null;reason:string;
+    originLower:number|null;originUpper:number|null;targetLower:number|null;targetUpper:number|null};
   profitLifecycle?:ProfitLifecycleState;
   turn?:{version:string;timeframe:"5m";signalAt:number;entryTurnProbability:number;entryContinuation:number;entryDirectionConfidence:number};
 };
@@ -492,16 +494,33 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
     t.lastPrice=px;t.lastQuoteAt=q!.observedAt;t.favorable=Math.max(t.favorable,favorable);t.adverse=Math.max(t.adverse,adverse);
     t.peakPnlRate=Math.max(t.peakPnlRate??0,favorable);
     if(!t.firstProfitAt&&favorable>=ROUND_TRIP_COST*.65){t.firstProfitAt=now;if(t.entryContext)t.entryContext.postEntryState="CONFIRMED";}
-    const position=evaluatePositionIntelligence({
+    const liquidityNow=s.extremumRegime.liquidity.symbols[t.symbol],liqSide=liquidityNow?.departure.side==="UP"?"LONG":
+      liquidityNow?.departure.side==="DOWN"?"SHORT":null;
+    if(t.liquidityLifecycle?.currentPlan==="FAMILY_TURN"&&liquidityNow?.departure.state==="ACCEPTED"
+      &&liqSide===t.side&&liquidityNow.departure.confidence>=.60){
+      const target=t.side==="LONG"?liquidityNow.nextAbove:liquidityNow.nextBelow;
+      t.liquidityLifecycle={currentPlan:"LIQUIDITY_MIGRATION",upgradedAt:t.liquidityLifecycle.upgradedAt??now,
+        reason:"家族提前转折已经发展成同方向、被市场接受的流动性迁移；原仓位直接升级，不重新开单。",
+        originLower:liquidityNow.activeZone?.lower??t.liquidityLifecycle.originLower,
+        originUpper:liquidityNow.activeZone?.upper??t.liquidityLifecycle.originUpper,
+        targetLower:target?.lower??null,targetUpper:target?.upper??null};
+      event(s,now,"ROTATION",t.id,"家族转折持仓升级为流动性迁移持仓",{confidence:liquidityNow.departure.confidence});
+    }
+    const activeLiquidityPlan=t.liquidityLifecycle?.currentPlan??t.entryContext?.tradePlan,
+      activeOrigin=t.liquidityLifecycle?{lower:t.liquidityLifecycle.originLower,upper:t.liquidityLifecycle.originUpper}:null,
+      activeTarget=t.liquidityLifecycle?{lower:t.liquidityLifecycle.targetLower,upper:t.liquidityLifecycle.targetUpper}:null,
+      position=evaluatePositionIntelligence({
       now,side:t.side,signedRate:signed,peakFavorableRate:t.favorable,ageMin,firstProfit:!!t.firstProfitAt,
       expectedHoldMinutes:t.expectedHoldMinutes??180,stopRate:originalStopRate,entryScore:t.entryContext?.entryScore??50,
       entryResidual:t.entryContext?.entryResidual??0,entryRelativeStrength:t.entryContext?.entryRelativeStrength??.5,
       entryRemainingSpaceRate:t.entryContext?.remainingSpaceRate??t.forecast?.remainingNetRate??0,state,
-      currentPrice:px,liquidity:s.extremumRegime.liquidity.symbols[t.symbol],entryTradePlan:t.entryContext?.tradePlan,
-      entryOrigin:t.entryContext?.liquidityOriginLower!=null&&t.entryContext?.liquidityOriginUpper!=null
-        ?{lower:t.entryContext.liquidityOriginLower,upper:t.entryContext.liquidityOriginUpper}:null,
-      entryTarget:t.entryContext?.liquidityTargetLower!=null&&t.entryContext?.liquidityTargetUpper!=null
-        ?{lower:t.entryContext.liquidityTargetLower,upper:t.entryContext.liquidityTargetUpper}:null,
+      currentPrice:px,liquidity:liquidityNow,entryTradePlan:activeLiquidityPlan,
+      entryOrigin:activeOrigin?.lower!=null&&activeOrigin?.upper!=null?{lower:activeOrigin.lower,upper:activeOrigin.upper}:
+        t.entryContext?.liquidityOriginLower!=null&&t.entryContext?.liquidityOriginUpper!=null
+          ?{lower:t.entryContext.liquidityOriginLower,upper:t.entryContext.liquidityOriginUpper}:null,
+      entryTarget:activeTarget?.lower!=null&&activeTarget?.upper!=null?{lower:activeTarget.lower,upper:activeTarget.upper}:
+        t.entryContext?.liquidityTargetLower!=null&&t.entryContext?.liquidityTargetUpper!=null
+          ?{lower:t.entryContext.liquidityTargetLower,upper:t.entryContext.liquidityTargetUpper}:null,
       narrative:s.extremumRegime.narrative,quote:q,minutePath:minutePaths?.[t.symbol],previous:t.positionIntelligence,
       costRate:ROUND_TRIP_COST,marketStateAgeMs:Math.max(0,now-s.extremumRegime.updatedAt),
       entryResponseValidated:!!t.entryContext?.entryResponse,
@@ -539,7 +558,7 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
 
     if(t.entryContext?.environmentOutlookVersion===ENVIRONMENT_OUTLOOK_VERSION&&t.entryContext?.mode){
       const currentFit=environmentModeFit({market:s.extremumRegime,evolution:marketEvolution,outlook:environmentOutlook,
-        side:t.side,mode:t.entryContext.mode,tradePlan:t.entryContext.tradePlan}),
+        side:t.side,mode:t.entryContext.mode,tradePlan:activeLiquidityPlan}),
         environmentFloor=environmentDecayProfitFloor({peakFavorableRate:t.favorable,originalStopRate,modeFit:currentFit,
           horizonMinutes:environmentOutlook.horizonMinutes,costRate:ROUND_TRIP_COST});
       if(environmentFloor>0){
@@ -710,6 +729,9 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
       notional,leverage,margin,plannedRisk,stopPrice,armPrice:target,favorable:0,adverse:0,lastPrice:price,lastQuoteAt:q.observedAt,entryFee,exitFee:0,
       fundingAllowance:0,grossPnl:null,netPnl:null,exitReason:null,relationFailureBars:0,lastRelationBar:now,execution:"REAL_QUOTE_PAPER_MODEL",
       liveEligible:false,firstProfitAt:null,holdScore:o.score,profitFloorRate:0,expectedHoldMinutes:horizon,peakPnlRate:0,
+      liquidityLifecycle:o.tradePlan?{currentPlan:o.tradePlan,upgradedAt:null,reason:o.liquidityReason??o.reason,
+        originLower:o.liquidityOriginLower??null,originUpper:o.liquidityOriginUpper??null,
+        targetLower:o.liquidityTargetLower??null,targetUpper:o.liquidityTargetUpper??null}:undefined,
       exitControl:{policy:MARKET_INTELLIGENCE_VERSION,armedAt:null,armedQuoteAt:null,maxObservationGapMs:30_000,maxQuoteAgeMs:10_000},
       entryContext:{version:"adaptive-ten-entry-v1",capturedAt:now,timeframe:"5m",side,mode:o.mode,reserve:false,reason:o.reason,
         entryScore:o.environmentScore??o.score,baseEntryScore:o.score,environmentScore:o.environmentScore??o.score,
