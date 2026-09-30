@@ -4,9 +4,11 @@ import { PAPER_COST, type Candle, type ForwardState, type Opportunity, type Quot
 export const COUNTERFACTUAL_RESEARCH_VERSION="market-intelligence-counterfactual-v1";
 export const POST_EXIT_RESEARCH_KEY="market-intelligence:research:v1:post-exit";
 export const REJECTED_RESEARCH_KEY="market-intelligence:research:v1:rejected";
-export const RESEARCH_CHECKPOINTS=[5,15,30,60,120,240] as const;
+export const RESEARCH_CHECKPOINTS=[5,15,30,45,60] as const;
 const ROUND_TRIP_COST=2*(PAPER_COST.feeRate+PAPER_COST.slippageRate);
 const MAX_VALUE_BYTES=100*1024;
+const MAX_ACTIVE_REJECTED=20;
+const ADMISSION_BUCKET_MS=5*60_000;
 const CHECKPOINT_QUOTE_TOLERANCE_MS=90_000;
 const CHECKPOINT_CANDLE_LAG_MS=6*60_000;
 const CHECKPOINT_UNAVAILABLE_AFTER_MS=7*60_000;
@@ -174,7 +176,9 @@ function rejectedFromOpportunity(o:Opportunity,q:Quote|undefined,s:ForwardState,
 function trimForStorage<T extends {completed:boolean;lastObservedAt:number}>(items:T[]){
   const out=[...items].sort((a,b)=>b.lastObservedAt-a.lastObservedAt).slice(0,220);
   while(out.length>1&&bytes({version:COUNTERFACTUAL_RESEARCH_VERSION,items:out})>MAX_VALUE_BYTES){
-    const idx=[...out].reverse().findIndex(x=>x.completed),actual=idx<0?out.length-1:out.length-1-idx;out.splice(actual,1);
+    const idx=[...out].reverse().findIndex(x=>x.completed);
+    if(idx<0)break; // never destroy an unfinished causal path to make room for a newer arrival
+    out.splice(out.length-1-idx,1);
   }
   return out;
 }
@@ -188,18 +192,27 @@ export function advanceCounterfactualResearch(input:{state:CounterfactualResearc
   }
   if(input.observeCandidates){
     const ids=new Set(next.rejected.map(x=>x.thesisId));
-    const sampling=next.sampling??{admitted:0,notAdmittedAttempts:0,evictedBeforeComplete:0,lastAdmissionAttemptAt:0};
-    const reserved=(rows:RejectedOpportunityResearch[])=>bytes(rows)+rows.reduce((n,r)=>n+Math.max(0,6-r.checkpoints.length-r.unavailableCheckpoints.length)*380,0);
-    for(const o of input.forward.opportunities){
-      if(ids.has(o.thesisId??""))continue;const row=rejectedFromOpportunity(o,input.quotes[o.symbol],input.forward,input.now);
-      if(!row)continue;
-      // Reserve space for the complete path before admitting it; never evict an unfinished path for a new arrival.
-      while(reserved([...next.rejected,row])>MAX_VALUE_BYTES-2048&&next.rejected.some(x=>x.completed)){
-        const at=next.rejected.map(x=>x.completed).lastIndexOf(true);next.rejected.splice(at,1);rejectedChanged=true;
-      }
+    const sampling=next.sampling??{admitted:0,notAdmittedAttempts:0,evictedBeforeComplete:0,lastAdmissionAttemptAt:0},
+      bucket=Math.floor(input.now/ADMISSION_BUCKET_MS)*ADMISSION_BUCKET_MS;
+    // Sampling is a 5m research job, not a 2s execution job. Re-attempting the
+    // same rejected thesis every quote cycle only burns storage/CPU and inflates diagnostics.
+    if(sampling.lastAdmissionAttemptAt<bucket){
       sampling.lastAdmissionAttemptAt=input.now;
-      if(reserved([...next.rejected,row])>MAX_VALUE_BYTES-2048){sampling.notAdmittedAttempts++;continue;}
-      next.rejected.unshift(row);ids.add(row.thesisId);sampling.admitted++;rejectedChanged=true;
+      const reserved=(rows:RejectedOpportunityResearch[])=>bytes({version:COUNTERFACTUAL_RESEARCH_VERSION,items:rows})
+        +rows.reduce((n,r)=>n+Math.max(0,RESEARCH_CHECKPOINTS.length-r.checkpoints.length-r.unavailableCheckpoints.length)*460,0),
+        candidates=[...input.forward.opportunities].sort((a,b)=>Number(b.eligible)-Number(a.eligible)||b.score-a.score).slice(0,12);
+      for(const o of candidates){
+        if(ids.has(o.thesisId??""))continue;const row=rejectedFromOpportunity(o,input.quotes[o.symbol],input.forward,input.now);
+        if(!row)continue;
+        const active=next.rejected.filter(x=>!x.completed).length;
+        if(active>=MAX_ACTIVE_REJECTED){sampling.notAdmittedAttempts++;continue;}
+        // Completed paths may be retired, but unfinished paths keep their reserved future checkpoints.
+        while(reserved([...next.rejected,row])>MAX_VALUE_BYTES-4096&&next.rejected.some(x=>x.completed)){
+          const at=next.rejected.map(x=>x.completed).lastIndexOf(true);next.rejected.splice(at,1);rejectedChanged=true;
+        }
+        if(reserved([...next.rejected,row])>MAX_VALUE_BYTES-4096){sampling.notAdmittedAttempts++;continue;}
+        next.rejected.unshift(row);ids.add(row.thesisId);sampling.admitted++;rejectedChanged=true;
+      }
     }
     next.sampling=sampling;
   }
