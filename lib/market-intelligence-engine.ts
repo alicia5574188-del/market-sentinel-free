@@ -208,9 +208,10 @@ function liquidityInvalidationPrice(map:SymbolLiquidityMap|undefined,plan:Liquid
     level=side==="LONG"?zone.upper-width*.35:zone.lower+width*.35;
   }else if(plan==="LIQUIDITY_REJECTION"){
     level=side==="LONG"?zone.lower-width*.18:zone.upper+width*.18;
-  }else if(plan==="FAMILY_TURN"&&map?.departure.state==="ACCEPTED"&&map.departure.side){
-    const aligned=(map.departure.side==="UP"&&side==="LONG")||(map.departure.side==="DOWN"&&side==="SHORT");
-    if(aligned)level=side==="LONG"?zone.upper-width*.35:zone.lower+width*.35;
+  }else if(plan==="FAMILY_TURN"){
+    // A family turn is invalid only after price traverses the local liquidity
+    // base in the old-market direction, not after an arbitrary percentage move.
+    level=side==="LONG"?zone.lower-width*.12:zone.upper+width*.12;
   }
   if(level==null||!(level>0)||(side==="LONG"&&level>=price)||(side==="SHORT"&&level<=price))return null;
   return level;
@@ -419,7 +420,7 @@ export function buildMarketIntelligence(input:{paths:Record<string,CandleLike[]>
       baseStopRate=clip(Math.max(.0055,pullback*1.18),.0055,.028),
       invalidationPrice=liquidityInvalidationPrice(map,plan.plan,bestSide,price),
       invalidationRate=invalidationPrice!=null?Math.abs(price-invalidationPrice)/Math.max(price,1e-12):null,
-      usesLiquidityInvalidation=plan.plan==="LIQUIDITY_MIGRATION"||plan.plan==="LIQUIDITY_REJECTION",
+      usesLiquidityInvalidation=plan.plan==="LIQUIDITY_MIGRATION"||plan.plan==="LIQUIDITY_REJECTION"||plan.plan==="FAMILY_TURN",
       stopRate=usesLiquidityInvalidation&&invalidationRate!=null?invalidationRate:baseStopRate,
       riskGeometryOk=!usesLiquidityInvalidation||(invalidationRate!=null&&invalidationRate>=.004&&invalidationRate<=.028),
       planRoom=plan.targetRate??baseRoom,
