@@ -532,16 +532,37 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
         targetLower:target?.lower??null,targetUpper:target?.upper??null,invalidationPrice};
       event(s,now,"ROTATION",t.id,"家族转折持仓升级为流动性迁移持仓",{confidence:liquidityNow.departure.confidence});
     }
+    if(t.liquidityLifecycle?.currentPlan==="LIQUIDITY_MIGRATION"&&liquidityNow?.departure.state==="ACCEPTED"
+      &&liqSide===t.side&&liquidityNow.departure.confidence>=.60&&liquidityNow.activeZone?.strength>=.36){
+      const zone=liquidityNow.activeZone,prior=t.liquidityLifecycle,
+        progressed=prior.originLower!=null&&prior.originUpper!=null
+          &&(t.side==="LONG"?zone.center>prior.originUpper:zone.center<prior.originLower),
+        targetMatch=prior.targetLower!=null&&prior.targetUpper!=null
+          ?zone.lower<=prior.targetUpper&&zone.upper>=prior.targetLower:true;
+      if(progressed&&targetMatch){
+        const target=t.side==="LONG"?liquidityNow.nextAbove:liquidityNow.nextBelow,width=Math.max(0,zone.upper-zone.lower),
+          invalidationPrice=t.side==="LONG"?zone.upper-width*.35:zone.lower+width*.35;
+        t.liquidityLifecycle={currentPlan:"LIQUIDITY_MIGRATION",upgradedAt:prior.upgradedAt??now,
+          reason:"上一段流动性迁移已经到达新的成交中心，并再次被市场接受地向同方向离开；持仓原地续接下一段迁移。",
+          originLower:zone.lower,originUpper:zone.upper,targetLower:target?.lower??null,targetUpper:target?.upper??null,invalidationPrice};
+        event(s,now,"ROTATION",t.id,"流动性迁移续接到下一段，不平仓重开",
+          {confidence:liquidityNow.departure.confidence,originCenter:zone.center});
+      }
+    }
     const activeLiquidityPlan=t.liquidityLifecycle?.currentPlan??t.entryContext?.tradePlan,
       activeOrigin=t.liquidityLifecycle?{lower:t.liquidityLifecycle.originLower,upper:t.liquidityLifecycle.originUpper}:null,
       activeTarget=t.liquidityLifecycle?{lower:t.liquidityLifecycle.targetLower,upper:t.liquidityLifecycle.targetUpper}:null,
       activeInvalidation=Number.isFinite(t.liquidityLifecycle?.invalidationPrice)?t.liquidityLifecycle!.invalidationPrice!
         :Number.isFinite(t.entryContext?.liquidityInvalidationPrice)?t.entryContext!.liquidityInvalidationPrice!:null,
-      liquidityStopActive=(activeLiquidityPlan==="LIQUIDITY_MIGRATION"||activeLiquidityPlan==="LIQUIDITY_REJECTION")
-        &&activeInvalidation!=null&&((t.side==="LONG"&&activeInvalidation<t.entryPrice)||(t.side==="SHORT"&&activeInvalidation>t.entryPrice)),
+      liquidityStopActive=(activeLiquidityPlan==="LIQUIDITY_MIGRATION"||activeLiquidityPlan==="LIQUIDITY_REJECTION"||activeLiquidityPlan==="FAMILY_TURN")
+        &&activeInvalidation!=null,
       hypothesisStop=liquidityStopActive?activeInvalidation!:t.entryPrice*(1-d*fallbackStopRate),
-      originalStopRate=Math.max(.004,Math.abs(t.entryPrice-hypothesisStop)/Math.max(t.entryPrice,1e-12));
-    if((t.profitFloorRate??0)<=0)t.stopPrice=hypothesisStop;
+      entryInvalidation=Number.isFinite(t.entryContext?.liquidityInvalidationPrice)?t.entryContext!.liquidityInvalidationPrice!:null,
+      entryInvalidationValid=entryInvalidation!=null&&((t.side==="LONG"&&entryInvalidation<t.entryPrice)||(t.side==="SHORT"&&entryInvalidation>t.entryPrice)),
+      originalStopRate=Math.max(.004,entryInvalidationValid
+        ?Math.abs(t.entryPrice-entryInvalidation!)/Math.max(t.entryPrice,1e-12):fallbackStopRate),
+      profitStop=(t.profitFloorRate??0)>0?t.entryPrice*(1+d*(t.profitFloorRate??0)):null;
+    t.stopPrice=profitStop==null?hypothesisStop:t.side==="LONG"?Math.max(hypothesisStop,profitStop):Math.min(hypothesisStop,profitStop);
     const position=evaluatePositionIntelligence({
       now,side:t.side,signedRate:signed,peakFavorableRate:t.favorable,ageMin,firstProfit:!!t.firstProfitAt,
       expectedHoldMinutes:t.expectedHoldMinutes??180,stopRate:originalStopRate,entryScore:t.entryContext?.entryScore??50,
@@ -564,9 +585,10 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
       bestHoldMinutes:t.expectedHoldMinutes??180,score:position.holdValueScore};
     delete t.profitLifecycle;
 
-    const stopped=t.side==="LONG"?px<=t.stopPrice:px>=t.stopPrice;
+    const stopped=t.side==="LONG"?px<=t.stopPrice:px>=t.stopPrice,
+      liquidityOwnsStop=liquidityStopActive&&(profitStop==null||(t.side==="LONG"?hypothesisStop>=profitStop:hypothesisStop<=profitStop));
     if(stopped){
-      const stopReason=(t.profitFloorRate??0)>0?"WINNER_INSURANCE_EXIT":liquidityStopActive?"LIQUIDITY_HYPOTHESIS_INVALIDATED":"STRUCTURE_STOP";
+      const stopReason=liquidityOwnsStop?"LIQUIDITY_HYPOTHESIS_INVALIDATED":(t.profitFloorRate??0)>0?"WINNER_INSURANCE_EXIT":"STRUCTURE_STOP";
       closeTrade(s,t,px,now,stopReason);closed.add(t.id);continue;
     }
 
@@ -754,7 +776,7 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
   if(!isIntelligenceOpportunity(o))return"新策略身份缺失";
   if(s.positions.some(t=>t.symbol===o.symbol))return"同币已有持仓，禁止重复开仓";
   const side=o.side,d=dir(side),price=side==="LONG"?q.bestAsk:q.bestBid,
-    requiresLiquidityStop=o.tradePlan==="LIQUIDITY_MIGRATION"||o.tradePlan==="LIQUIDITY_REJECTION",
+    requiresLiquidityStop=o.tradePlan==="LIQUIDITY_MIGRATION"||o.tradePlan==="LIQUIDITY_REJECTION"||o.tradePlan==="FAMILY_TURN",
     frozenInvalidation=Number.isFinite(o.liquidityInvalidationPrice)?o.liquidityInvalidationPrice!:null;
   if(requiresLiquidityStop&&(frozenInvalidation==null||(side==="LONG"&&frozenInvalidation>=price)||(side==="SHORT"&&frozenInvalidation<=price)))
     return"流动性失效边界已经不在入场价格外侧，当前位置不再执行";
