@@ -30,7 +30,7 @@ export type RejectedOpportunityResearch={
 };
 export type CounterfactualResearchState={
   version:typeof COUNTERFACTUAL_RESEARCH_VERSION;updatedAt:number;postExit:PostExitResearch[];rejected:RejectedOpportunityResearch[];
-  sampling?:{admitted:number;notAdmittedAttempts:number;evictedBeforeComplete:number;lastAdmissionAttemptAt:number};
+  sampling?:{accountStartedAt?:number;admitted:number;notAdmittedAttempts:number;evictedBeforeComplete:number;lastAdmissionAttemptAt:number};
 };
 type Reader={get<T>(key:string):Promise<T|undefined>};
 const dir=(side:"LONG"|"SHORT")=>side==="LONG"?1:-1;
@@ -181,6 +181,12 @@ function trimForStorage<T extends {completed:boolean;lastObservedAt:number}>(ite
 export function advanceCounterfactualResearch(input:{state:CounterfactualResearchState;forward:ForwardState;now:number;
   paths:Record<string,Candle[]>;quotes:Record<string,Quote>;observeCandidates:boolean}){
   const next:CounterfactualResearchState=structuredClone(input.state);let postChanged=false,rejectedChanged=false;
+  if(next.sampling?.accountStartedAt!==input.forward.startedAt){
+    next.rejected=next.rejected.filter(x=>x.observedAt>=input.forward.startedAt);
+    next.sampling={accountStartedAt:input.forward.startedAt,admitted:next.rejected.length,notAdmittedAttempts:0,
+      evictedBeforeComplete:0,lastAdmissionAttemptAt:0};
+    rejectedChanged=true;
+  }
   const postIds=new Set(next.postExit.map(x=>x.tradeId));
   for(const t of input.forward.history){
     if(postIds.has(t.id))continue;const row=postFromTrade(t,input.now);
@@ -188,14 +194,18 @@ export function advanceCounterfactualResearch(input:{state:CounterfactualResearc
   }
   if(input.observeCandidates){
     const ids=new Set(next.rejected.map(x=>x.thesisId));
-    const sampling=next.sampling??{admitted:0,notAdmittedAttempts:0,evictedBeforeComplete:0,lastAdmissionAttemptAt:0};
+    const sampling=next.sampling??{accountStartedAt:input.forward.startedAt,admitted:0,notAdmittedAttempts:0,evictedBeforeComplete:0,lastAdmissionAttemptAt:0};
     const reserved=(rows:RejectedOpportunityResearch[])=>bytes(rows)+rows.reduce((n,r)=>n+Math.max(0,6-r.checkpoints.length-r.unavailableCheckpoints.length)*380,0);
     for(const o of input.forward.opportunities){
       if(ids.has(o.thesisId??""))continue;const row=rejectedFromOpportunity(o,input.quotes[o.symbol],input.forward,input.now);
       if(!row)continue;
       // Reserve space for the complete path before admitting it; never evict an unfinished path for a new arrival.
-      while(reserved([...next.rejected,row])>MAX_VALUE_BYTES-2048&&next.rejected.some(x=>x.completed)){
-        const at=next.rejected.map(x=>x.completed).lastIndexOf(true);next.rejected.splice(at,1);rejectedChanged=true;
+      while(reserved([...next.rejected,row])>MAX_VALUE_BYTES-2048&&next.rejected.length){
+        const completedAt=next.rejected.map(x=>x.completed).lastIndexOf(true),
+          at=completedAt>=0?completedAt:next.rejected.length-1,
+          [removed]=next.rejected.splice(at,1);
+        if(removed&&!removed.completed)sampling.evictedBeforeComplete++;
+        rejectedChanged=true;
       }
       sampling.lastAdmissionAttemptAt=input.now;
       if(reserved([...next.rejected,row])>MAX_VALUE_BYTES-2048){sampling.notAdmittedAttempts++;continue;}
@@ -213,7 +223,7 @@ export function advanceCounterfactualResearch(input:{state:CounterfactualResearc
   next.postExit=trimForStorage(next.postExit);next.rejected=trimForStorage(next.rejected);
   const retainedIds=new Set(next.rejected.map(r=>r.id));
   const evicted=priorRejected.filter(r=>!r.completed&&!retainedIds.has(r.id)).length;
-  if(evicted){next.sampling=next.sampling??{admitted:0,notAdmittedAttempts:0,evictedBeforeComplete:0,lastAdmissionAttemptAt:input.now};
+  if(evicted){next.sampling=next.sampling??{accountStartedAt:input.forward.startedAt,admitted:0,notAdmittedAttempts:0,evictedBeforeComplete:0,lastAdmissionAttemptAt:input.now};
     next.sampling.evictedBeforeComplete+=evicted;rejectedChanged=true;}
   if(postChanged||rejectedChanged)next.updatedAt=input.now;
   return{state:next,postChanged,rejectedChanged,changed:postChanged||rejectedChanged};
