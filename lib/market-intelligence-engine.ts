@@ -138,7 +138,7 @@ function familyTurnSignals(clusters:MarketCluster[],states:Record<string,MarketS
         rejectedOld=l.departure.state==="REJECTED"&&((l.departure.side==="UP"?1:-1)===base)&&l.departure.confidence>=.60,
         depletion=turnSign>0?l.upperDepletion:l.lowerDepletion,oldDepletion=turnSign>0?l.lowerDepletion:l.upperDepletion,
         loaded=l.accumulation>=.52&&depletion>=.58&&depletion-oldDepletion>=.15,
-        local=accepted?1:rejectedOld?.9:loaded?.7:0;
+        local=accepted ? 1 : rejectedOld ? .9 : loaded ? .7 : 0;
       if(local===0||(!(signal===turnSign)||!residualAligned))return[];
       return[{symbol,score:clip(.45*local+.30*s.residualPersistence+.15*(s.dataConfidence/100)+.10*Math.min(1,Math.abs(s.residualZ)/1.5))}];
     });
