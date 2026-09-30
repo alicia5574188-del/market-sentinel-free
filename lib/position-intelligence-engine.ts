@@ -1,5 +1,7 @@
 import type {CandleLike,LiquidityTradePlan,MarketNarrative,MarketSymbolState} from "./market-intelligence-engine.ts";
 import type {SymbolLiquidityMap} from "./market-intelligence-liquidity.ts";
+import {advancePositionReview,capturePositionBaseline,positionAdvantage,validPositionBaseline,
+  type PositionBaseline,type PositionReviewMemory} from "./position-evidence-contract.ts";
 
 export const POSITION_INTELLIGENCE_VERSION="position-intelligence-v1";
 export type PositionDecision="HOLD"|"REVIEW"|"EXIT";
@@ -20,6 +22,11 @@ export type PositionIntelligenceState={
   reviewSince:number|null;
   reviewBars:number;
   lastCompletedBar:number;
+  baseline?:PositionBaseline;
+  reviewMemory?:PositionReviewMemory;
+  reviewCandidate?:boolean;
+  entryConflict?:boolean;
+  exitBasis?:"ENTRY_PRICE_FALSIFIED"|"PERSISTENT_ENTRY_FAILURE"|"PERSISTENT_VALUE_LOSS"|null;
   entryAdvantage:number;
   currentAdvantage:number;
   advantageChange:number;
@@ -39,6 +46,7 @@ export type PositionIntelligenceState={
 };
 
 type QuoteDetail={
+  observedAt?:number;
   sourceCount?:number;
   disagreementRate?:number;
   directionalAgreement?:number;
@@ -75,6 +83,7 @@ export function evaluatePositionIntelligence(input:{
   currentPrice?:number;liquidity?:SymbolLiquidityMap;entryTradePlan?:LiquidityTradePlan;
   entryOrigin?:{lower:number;upper:number}|null;entryTarget?:{lower:number;upper:number}|null;
   previous?:PositionIntelligenceState;costRate?:number;marketStateAgeMs?:number;entryResponseValidated?:boolean;
+  openedAt?:number;entryBaseline?:PositionBaseline;
 }):PositionIntelligenceState{
   const d=input.side==="LONG"?1:-1,state=input.state,q=input.quote,cost=Math.max(.0005,input.costRate??.0019),
     alignedResidual=state?d*state.residual:0,alignedZ=state?d*state.residualZ:0,
@@ -202,8 +211,14 @@ export function evaluatePositionIntelligence(input:{
     expectedPullbackRate=Math.max(cost*1.1,stateVol*Math.sqrt(3)*1.05,minutePullback),
     continuationRatio=remainingSpaceRate/Math.max(expectedPullbackRate,1e-9),
     familyNet=support.reduce((n,x)=>n+x.severity,0)-concern.reduce((n,x)=>n+x.severity,0),
-    currentAdvantage=clip((same*.55+(50+alignedZ*14)*.20+pathSide*100*.15+(50+alignedPressure*25)*.10),0,100),
-    entryAdvantage=clip(input.entryScore,0,100),advantageChange=currentAdvantage-entryAdvantage,
+    // Quality/ranking scores are not comparable to the position-advantage scale.
+    // Old positions acquire an explicitly RECOVERED baseline, never a fake entry.
+    openedAt=input.openedAt??input.now-Math.max(0,input.ageMin)*60_000,
+    currentAdvantage=positionAdvantage(input.side,state)??50,
+    baseline=validPositionBaseline(input.entryBaseline,input.now)?input.entryBaseline:
+      validPositionBaseline(input.previous?.baseline,input.now)?input.previous!.baseline:
+      (input.marketStateAgeMs??0)<=8*60_000?capturePositionBaseline(input.side,state,input.now,"RECOVERED"):undefined,
+    entryAdvantage=baseline?.score??currentAdvantage,advantageChange=baseline?currentAdvantage-entryAdvantage:0,
     scoredContinuationRatio=input.entryResponseValidated?Math.min(2.5,continuationRatio):continuationRatio,
     spaceWeight=input.entryResponseValidated&&concernFamilies.length>=2?10:18,
     holdValueScore=clip(50+spaceWeight*(scoredContinuationRatio-1)+12*familyNet+.28*advantageChange,0,100),
@@ -225,22 +240,34 @@ export function evaluatePositionIntelligence(input:{
     proofThreshold=cost*.65,
     entryFalsificationAdverse=Math.max(cost*1.15,Math.min(input.stopRate*.45,expectedPullbackRate*.55)),
     entryNeverProved=!!input.entryResponseValidated&&!input.firstProfit&&input.peakFavorableRate<proofThreshold,
+    // Historical minute context can inform value, but cannot alone masquerade
+    // as a newly observed post-entry failure. Hard price stops remain separate.
+    evidenceAfter=Math.max(openedAt,baseline?.at??input.now),
+    freshFlowFailure=concernFamilies.includes("FLOW")&&typeof q?.observedAt==="number"
+      &&q.observedAt>evidenceAfter&&q.observedAt<=input.now&&input.now-q.observedAt<=10_000,
+    freshPathFailure=concernFamilies.includes("PATH")&&(input.minutePath??[]).some(r=>
+      r.time*1000>=evidenceAfter&&r.time*1000+60_000<=input.now&&r.open>0&&r.close>0&&d*(r.close/r.open-1)<0),
     entryFalsified=entryNeverProved&&entryFailureConcern&&supportFamilies.length===0&&dataConfidence>=70
-      &&input.signedRate<=-entryFalsificationAdverse&&advantageChange<-18,
+      &&(freshFlowFailure||freshPathFailure)&&input.signedRate<=-entryFalsificationAdverse&&advantageChange<-18,
     valueWeak=continuationRatio<.95||holdValueScore<38,
     noFeedbackRisk=!input.firstProfit&&input.ageMin>=Math.min(60,input.expectedHoldMinutes*.40)&&input.signedRate<cost*.25&&concernFamilies.length>=2,
     shouldReview=(concernFamilies.length>=1&&(continuationRatio<1.35||advantageChange<-10))||concernFamilies.length>=2||noFeedbackRisk,
-    prior=input.previous,newCompletedBar=completedBar>0&&completedBar>(prior?.lastCompletedBar??0),
-    continuedReview=shouldReview&&prior&&(prior.decision==="REVIEW"||prior.decision==="EXIT"),
-    reviewBars=shouldReview?(continuedReview?(prior.reviewBars+(newCompletedBar?1:0)):1):0,
-    reviewSince=shouldReview?(continuedReview?prior.reviewSince??input.now:input.now):null,
+    recovering=concernFamilies.length===0&&supportFamilies.length>=2&&holdValueScore>=55&&continuationRatio>=1.35
+      &&supportFamilies.some(f=>f==="RELATIVE"||f==="STRUCTURE"||f==="LIQUIDITY")
+      &&supportFamilies.some(f=>f==="PATH"||f==="FLOW"),
+    reviewMemory=advancePositionReview({now:input.now,openedAt,barAt:completedBar,concern:shouldReview,
+      recovering,dataReady:!!state&&dataConfidence>=60,previous:input.previous?.reviewMemory}),
+    reviewBars=reviewMemory.confirmations,reviewSince=reviewMemory.since,
     unconfirmedFailure=entryNeverProved&&entryFailureConcern&&dataConfidence>=60&&reviewBars>=2
       &&input.signedRate<=-Math.max(cost*.35,entryFalsificationAdverse*.45),
     // Proven trades keep the normal two-family value exit. A still-unproven
     // starter cannot be value-exited while its own STRUCTURE remains neutral.
     hardExit=enoughIndependentConcern&&valueWeak&&dataConfidence>=60&&reviewBars>=2
       &&(!entryNeverProved||structureConcern),
-    decision:PositionDecision=entryFalsified||hardExit||unconfirmedFailure?"EXIT":shouldReview?"REVIEW":"HOLD",
+    entryConflict=enoughIndependentConcern&&valueWeak&&dataConfidence>=60,
+    exitBasis:PositionIntelligenceState["exitBasis"]=entryFalsified?"ENTRY_PRICE_FALSIFIED":
+      unconfirmedFailure?"PERSISTENT_ENTRY_FAILURE":hardExit?"PERSISTENT_VALUE_LOSS":null,
+    decision:PositionDecision=exitBasis?"EXIT":reviewSince!=null?"REVIEW":"HOLD",
     phase:PositionPhase=decision==="EXIT"?"AT_RISK":decision==="REVIEW"?(input.signedRate>cost?"DECAYING":"AT_RISK")
       :input.ageMin<input.expectedHoldMinutes*.20?"BUILDING":continuationRatio>=1.6?"HEALTHY":"MATURE",
     counterfactualNewEntry=remainingSpaceRate>=expectedPullbackRate*1.35&&same>=65&&dataConfidence>=60,
@@ -248,12 +275,17 @@ export function evaluatePositionIntelligence(input:{
     summary=decision==="EXIT"
       ?entryFalsified
         ?`入场尚未形成过有效正向证明，价格已逆向 ${pct(input.signedRate)} 并超过该交易自身的早期证伪幅度 ${pct(entryFalsificationAdverse)}；至少两个独立证据家族同时反对且没有存活支持，判定为入场位置失败。`
-        :`继续等待的剩余空间/正常回撤比已降至 ${continuationRatio.toFixed(2)}×，且至少两个独立仓位证据家族持续恶化；退出通过防误杀闸门。`
+        :unconfirmedFailure
+          ?`入场位置失败：未形成有效正向证明，结构与独立反证在新的完成K线后仍未恢复，逆向幅度超过该交易的证伪条件。`
+          :`持续复核后退出：${continuationRatio<.95?`剩余空间/正常回撤仅 ${continuationRatio.toFixed(2)}×`:`持仓价值评分 ${holdValueScore.toFixed(0)}，低于38`}；原始空间/回撤比 ${continuationRatio.toFixed(2)}×，${concernFamilies.join("、")} 仍提供反证。`
       :decision==="REVIEW"
-      ?`发现矛盾但证据尚未收敛：剩余空间/正常回撤约 ${continuationRatio.toFixed(2)}×，进入复核，不因单一细节平仓。`
+      ?shouldReview
+        ?`发现矛盾但证据尚未收敛：剩余空间/正常回撤约 ${continuationRatio.toFixed(2)}×，继续复核，不因单一细节平仓。`
+        :"短时反证减弱，但尚未形成持续恢复证据；保留复核记录，本次不增加确认也不触发价值退出。"
       :`继续持有价值仍占优：剩余空间/正常回撤约 ${continuationRatio.toFixed(2)}×，${supportFamilies.length}个独立家族支持，${concernFamilies.length}个家族担忧。`;
 
   return{version:POSITION_INTELLIGENCE_VERSION,updatedAt:input.now,decision,phase,reviewSince,reviewBars,lastCompletedBar:completedBar,
+    baseline,reviewMemory,reviewCandidate:shouldReview,entryConflict,exitBasis,
     entryAdvantage,currentAdvantage,advantageChange,remainingSpaceRate,expectedPullbackRate,continuationRatio,holdValueScore,exitValueScore,
     dataConfidence,counterfactualNewEntry,supportFamilies,concernFamilies,assessments,reasons,concerns,summary};
 }
