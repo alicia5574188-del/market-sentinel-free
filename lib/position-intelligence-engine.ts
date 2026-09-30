@@ -1,9 +1,10 @@
-import type {CandleLike,MarketNarrative,MarketSymbolState} from "./market-intelligence-engine.ts";
+import type {CandleLike,LiquidityTradePlan,MarketNarrative,MarketSymbolState} from "./market-intelligence-engine.ts";
+import type {SymbolLiquidityMap} from "./market-intelligence-liquidity.ts";
 
 export const POSITION_INTELLIGENCE_VERSION="position-intelligence-v1";
 export type PositionDecision="HOLD"|"REVIEW"|"EXIT";
 export type PositionPhase="BUILDING"|"HEALTHY"|"MATURE"|"DECAYING"|"AT_RISK";
-export type PositionEvidenceFamily="RELATIVE"|"PATH"|"FLOW"|"STRUCTURE"|"MARKET";
+export type PositionEvidenceFamily="RELATIVE"|"PATH"|"FLOW"|"STRUCTURE"|"LIQUIDITY"|"MARKET";
 export type PositionFamilyAssessment={
   family:PositionEvidenceFamily;
   stance:"SUPPORT"|"CONCERN"|"NEUTRAL";
@@ -71,6 +72,8 @@ export function evaluatePositionIntelligence(input:{
   now:number;side:"LONG"|"SHORT";signedRate:number;peakFavorableRate:number;ageMin:number;firstProfit:boolean;
   expectedHoldMinutes:number;stopRate:number;entryScore:number;entryResidual:number;entryRelativeStrength:number;
   entryRemainingSpaceRate:number;state?:MarketSymbolState;narrative?:MarketNarrative;quote?:QuoteDetail;minutePath?:CandleLike[];
+  currentPrice?:number;liquidity?:SymbolLiquidityMap;entryTradePlan?:LiquidityTradePlan;
+  entryOrigin?:{lower:number;upper:number}|null;entryTarget?:{lower:number;upper:number}|null;
   previous?:PositionIntelligenceState;costRate?:number;marketStateAgeMs?:number;entryResponseValidated?:boolean;
 }):PositionIntelligenceState{
   const d=input.side==="LONG"?1:-1,state=input.state,q=input.quote,cost=Math.max(.0005,input.costRate??.0019),
@@ -146,6 +149,40 @@ export function evaluatePositionIntelligence(input:{
       `结构方向已经反向且相对表现同步恶化，反向适配 ${opposite.toFixed(0)}。`));
   else assessments.push(family("STRUCTURE","NEUTRAL",.20,"结构正在过渡，但尚未形成足够独立的反向确认。"));
 
+  const liq=input.liquidity,plan=input.entryTradePlan,px=input.currentPrice??0,
+    origin=input.entryOrigin,target=input.entryTarget,
+    inOrigin=!!origin&&px>=origin.lower&&px<=origin.upper,
+    inTarget=!!target&&px>=target.lower&&px<=target.upper,
+    liqSide=liq?.departure.side==="UP"?"LONG":liq?.departure.side==="DOWN"?"SHORT":null;
+  if(!liq?.ready||!plan||plan==="OBSERVE_ONLY")
+    assessments.push(family("LIQUIDITY","NEUTRAL",0,"流动性计划信息不足，不允许它单独改变仓位。"));
+  else if(plan==="LIQUIDITY_MIGRATION"){
+    if(inOrigin)assessments.push(family("LIQUIDITY","CONCERN",.75,"价格已经重新被入场来源流动性区域吸收，原迁移假设明显受损。"));
+    else if(liq.departure.state==="ACCEPTED"&&liqSide===input.side)
+      assessments.push(family("LIQUIDITY","SUPPORT",clip(.45+liq.departure.confidence*.45+(liq.targetDistanceRate??0)*4),
+        inTarget?"已经到达下一片流动性区域，迁移完成度提高但后续利润空间需要重新评估。":
+          "价格仍被市场接受在原流动性区外，迁移方向继续成立。"));
+    else if(inTarget)assessments.push(family("LIQUIDITY","NEUTRAL",.30,"已经进入入场时的下一片流动性目标，后续是否继续扩张需要重新建立新区域。"));
+    else assessments.push(family("LIQUIDITY","NEUTRAL",.22,"迁移尚未失效，但当前接受度不足以单独支持继续扩大预期。"));
+  }else if(plan==="LIQUIDITY_REJECTION"){
+    const failedSide=input.side==="LONG"?"SHORT":"LONG";
+    if(liq.departure.state==="ACCEPTED"&&liqSide===failedSide)
+      assessments.push(family("LIQUIDITY","CONCERN",.72,"价格再次向原失败突破方向离开并被市场接受，回归计划失效风险高。"));
+    else if(inOrigin||liq.departure.state==="INSIDE"||liq.departure.state==="REJECTED")
+      assessments.push(family("LIQUIDITY","SUPPORT",clip(.38+liq.accumulation*.28+liq.departure.confidence*.22),
+        "价格仍被原流动性区域吸收，离开失败后的回归逻辑继续成立。"));
+    else assessments.push(family("LIQUIDITY","NEUTRAL",.20,"离开失败回归仍在发展，但尚未出现新的决定性流动性证据。"));
+  }else{
+    const opposite=input.side==="LONG"?"SHORT":"LONG";
+    if((liq.departure.state==="ACCEPTED"&&liqSide===input.side)
+      ||(liq.departure.state==="REJECTED"&&liqSide===opposite))
+      assessments.push(family("LIQUIDITY","SUPPORT",clip(.40+liq.departure.confidence*.40),
+        "个体流动性行为继续支持家族提前转折方向；若市场随后同向迁移，这笔持仓可自然升级为迁移持仓。"));
+    else if(liq.departure.state==="ACCEPTED"&&liqSide===opposite)
+      assessments.push(family("LIQUIDITY","CONCERN",.68,"个体已经重新接受原市场方向，家族提前转折证据正在失效。"));
+    else assessments.push(family("LIQUIDITY","NEUTRAL",.20,"家族转折尚未被个体新的流动性迁移确认或否定。"));
+  }
+
   const mAlign=marketAlignment(input.narrative,input.side);
   if(mAlign>.35)assessments.push(family("MARKET","SUPPORT",clip(mAlign),"整体市场背景仍支持当前仓位，但该信息不能单独决定平仓。",true));
   else if(mAlign<-.35)assessments.push(family("MARKET","CONCERN",clip(Math.abs(mAlign)),"整体市场背景开始不利，但市场变化不能单独平掉独立仓位。",true));
@@ -155,8 +192,11 @@ export function evaluatePositionIntelligence(input:{
     concern=self.filter(x=>x.stance==="CONCERN"&&x.severity>=.35),
     supportFamilies=support.map(x=>x.family),concernFamilies=concern.map(x=>x.family),
     stateVol=Math.max(.0005,state?.volatility??input.stopRate/3),
-    currentRoom=state?(input.side==="LONG"?state.roomLong:state.roomShort):Math.max(0,input.entryRemainingSpaceRate-input.signedRate),
-    remainingSpaceRate=Math.max(0,currentRoom+Math.max(0,alignedResidual)*.30-cost),
+    structuralRoom=state?(input.side==="LONG"?state.roomLong:state.roomShort):Math.max(0,input.entryRemainingSpaceRate-input.signedRate),
+    liquidityRoom=input.entryTarget&&px>0?(input.side==="LONG"?Math.max(0,input.entryTarget.lower-px):Math.max(0,px-input.entryTarget.upper))/px:
+      input.entryOrigin&&px>0&&plan==="LIQUIDITY_REJECTION"?(input.side==="LONG"?Math.max(0,input.entryOrigin.upper-px):Math.max(0,px-input.entryOrigin.lower))/px:0,
+    currentRoom=Math.max(structuralRoom,liquidityRoom),
+    remainingSpaceRate=Math.max(0,currentRoom+Math.max(0,alignedResidual)*.20-cost),
     adverseMinute=minute.filter(v=>d*v<0).map(v=>Math.abs(v)),
     minutePullback=adverseMinute.length?mean(adverseMinute.slice(-5))*2.2:0,
     expectedPullbackRate=Math.max(cost*1.1,stateVol*Math.sqrt(3)*1.05,minutePullback),
@@ -171,7 +211,7 @@ export function evaluatePositionIntelligence(input:{
     stateFreshness=input.marketStateAgeMs==null?1:input.marketStateAgeMs<=8*60_000?1:input.marketStateAgeMs<=15*60_000?.55:0,
     dataConfidence=clip((((state?.dataConfidence??45)*.70+Math.min(4,sourceCount)*6.25+Math.min(3,liquiditySources)*3.5)
       -Math.min(.02,disagreement)*600)*stateFreshness,0,100),
-    coreConcern=concern.some(x=>x.family==="RELATIVE"||x.family==="STRUCTURE"),
+    coreConcern=concern.some(x=>x.family==="RELATIVE"||x.family==="STRUCTURE"||x.family==="LIQUIDITY"),
     structureConcern=concern.some(x=>x.family==="STRUCTURE"),
     independentConfirm=concern.some(x=>x.family==="PATH"||x.family==="FLOW"),
     enoughIndependentConcern=coreConcern&&independentConfirm,
