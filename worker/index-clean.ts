@@ -1009,6 +1009,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       marketIntelligenceCoverage:s?.extremumRegime?.coverage??{intradayMarkets:0,dailyMarkets:0,quoteMarkets:0,multiVenueMarkets:0},
       correlationClusters:s?.extremumRegime?.clusters?.length??0,evidenceCount:s?.extremumRegime?.evidence?.length??0,
       legacyResearchSampleCount:s?.relationEngine?.samples.length??0,entryDiagnostics:s?.entryDiagnostics??null,
+      entryValidationDiagnostics:(()=>{
+        const records=Object.values(s?.entryValidations??{}).sort((x,y)=>y.startedAt-x.startedAt).slice(0,6).map(v=>({
+          id:v.id,candidateId:v.candidateId,symbol:v.symbol,side:v.side,startedAt:v.startedAt,deadlineAt:v.deadlineAt,expiresAt:v.expiresAt,
+          status:v.status,phase:v.phase??null,stableThesis:!!v.stableThesis,reason:v.reason??null,samples:v.samples,
+          supportSamples:v.supportSamples,oppositionSamples:v.oppositionSamples,bestAdvanceRate:v.bestAdvanceRate,maxAdverseRate:v.maxAdverseRate,
+        }));
+        return{waiting:records.filter(v=>v.status==="WAITING").length,cancelled:records.filter(v=>v.status==="CANCELLED").length,records};
+      })(),
       candidateDiagnostics:blocked,storage:{persistedAt:s?.storage.persistedAt??0,layout:s?.storage.layout??null,error:this.forwardError}};
   }
 
