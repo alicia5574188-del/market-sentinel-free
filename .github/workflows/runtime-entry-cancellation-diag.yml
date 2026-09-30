@@ -14,22 +14,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          URL="https://market-sentinel-free.alicia5574188.workers.dev/api/runtime"
+          URL="https://market-sentinel-free.alicia5574188.workers.dev/__health"
           prev=""
           echo "DIAG_START $(date -u +%FT%TZ)"
           for i in $(seq 1 150); do
             body="$(curl -fsS --max-time 15 "$URL")"
             snap="$(printf '%s' "$body" | jq -c '{
               sampledAt:(now*1000|floor),
-              updatedAt:.forward.updatedAt,
-              positions:[.forward.positions[]? | {symbol,side,openedAt}],
-              waiting:[.forward.entryValidation.records[]? | select(.status=="WAITING") |
+              updatedAt:.runtime.forward.lastCycleAt,
+              positions:[],
+              waiting:[.runtime.forward.entryValidationDiagnostics.records[]? | select(.status=="WAITING") |
                 {id,candidateId,symbol,side,startedAt,deadlineAt,expiresAt,status,phase,stableThesis,reason,samples,supportSamples,oppositionSamples,bestAdvanceRate,maxAdverseRate}],
-              cancelled:[.forward.entryValidation.records[]? | select(.status=="CANCELLED") |
+              cancelled:[.runtime.forward.entryValidationDiagnostics.records[]? | select(.status=="CANCELLED") |
                 {id,candidateId,symbol,side,startedAt,deadlineAt,expiresAt,status,phase,stableThesis,reason,samples,supportSamples,oppositionSamples,bestAdvanceRate,maxAdverseRate}],
-              eligible:[.forward.opportunities[]? | select(.eligible==true) |
-                {id,symbol,side,mode,tradePlan,score,expiresAt,thesisSince,thesisBars,liquidityPlanConfidence,environmentMainline}],
-              entryDiagnostics:.forward.entryDiagnostics
+              eligible:[],
+              entryDiagnostics:.runtime.forward.entryDiagnostics
             }')"
             sig="$(printf '%s' "$snap" | sha256sum | cut -d' ' -f1)"
             if [[ "$sig" != "$prev" ]] || (( i % 15 == 0 )); then
