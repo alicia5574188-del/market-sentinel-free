@@ -21,7 +21,7 @@ import { advanceMarketHypothesisResearch, entryHypothesisGuidance, initialMarket
   normalizeMarketHypothesisResearch,
   type EntryHypothesisGuidance, type MarketHypothesisResearchState } from "./market-intelligence-hypothesis-research.ts";
 import { ENVIRONMENT_OUTLOOK_VERSION, ENVIRONMENT_ROUTER_VERSION, classifyMarketEnvironment, deriveEnvironmentOutlook,
-  deriveFastEnvironmentSignal, environmentModeFit, environmentPerformanceFactor, environmentProbeRetestDecision, routeEnvironmentOpportunity,
+  deriveFastEnvironmentSignal, environmentModeFit, routeEnvironmentOpportunity,
   initialEnvironmentPerformanceState, normalizeEnvironmentPerformanceState, recordEnvironmentOutcome,
   type EnvironmentOutlook, type EnvironmentPerformanceState, type EnvironmentPlaybook, type MarketEnvironment, type RouteAlignment
 } from "./market-intelligence-environment-router.ts";
@@ -92,7 +92,7 @@ export type Opportunity={
   marketEvolutionPhase?:MarketEvolutionState["phase"];opportunityLifecyclePhase?:OpportunityLifecyclePhase;
   extendedConfirmation?:boolean;lifecycleReason?:string;
   environment?:MarketEnvironment;playbook?:EnvironmentPlaybook;routeAlignment?:RouteAlignment;
-  environmentPriority?:number;environmentScore?:number;environmentRiskScale?:number;environmentPerformanceFactor?:number;environmentProbe?:boolean;
+  environmentPriority?:number;environmentScore?:number;environmentRiskScale?:number;environmentProbe?:boolean;
   environmentForceRetest?:boolean;environmentMainline?:boolean;environmentModeFit?:number;environmentOutlook?:EnvironmentOutlook;environmentReason?:string;
   probeImpulseMin?:number;probePullbackMin?:number;probeRestartMin?:number;
   tradePlan?:LiquidityTradePlan;liquidityPlanConfidence?:number;liquidityReason?:string;liquidityTargetRate?:number|null;
@@ -119,7 +119,7 @@ export type EntryContext={
   thesisSince?:number;thesisBars?:number;
   marketEvolutionPhase?:MarketEvolutionState["phase"];opportunityLifecyclePhase?:OpportunityLifecyclePhase;
   extendedConfirmation?:boolean;environment?:MarketEnvironment;playbook?:EnvironmentPlaybook;routeAlignment?:RouteAlignment;
-  environmentRiskScale?:number;environmentPerformanceFactor?:number;environmentProbe?:boolean;environmentReason?:string;
+  environmentRiskScale?:number;environmentProbe?:boolean;environmentReason?:string;
   environmentOutlookVersion?:typeof ENVIRONMENT_OUTLOOK_VERSION;environmentModeFit?:number;environmentHorizonMinutes?:15|30|45|60;
   environmentPersistenceScore?:number;environmentTransitionPressure?:number;environmentProfitExpansion?:EnvironmentOutlook["profitExpansion"];
   tradePlan?:LiquidityTradePlan;liquidityPlanConfidence?:number;liquidityReason?:string;liquidityTargetRate?:number|null;
@@ -803,17 +803,12 @@ function annotateLifecycleOpportunities(s:ForwardState,market:MarketEvolutionSta
     const lifecycle=deriveOpportunityLifecycle({side:o.side,symbol,thesisBars:o.thesisBars??symbol.signalBars,market}),
       future=entryHypothesisGuidance(s.hypothesisResearch,{side:o.side,score:o.score,residualZ:symbol.residualZ,
         residualPersistence:symbol.residualPersistence,sourceCount:symbol.sourceCount,dataConfidence:symbol.dataConfidence}),
-      equityRef=Math.max(1,s.balance),portfolioLongRisk=existingRisk(s,"LONG")/equityRef,portfolioShortRisk=existingRisk(s,"SHORT")/equityRef,
-      baseRoute=routeEnvironmentOpportunity({market:s.extremumRegime,evolution:market,symbol,opportunity:o,outlook,
-        portfolioLongRisk,portfolioShortRisk}),
-      performance=environmentPerformanceFactor(s.environmentPerformance,baseRoute.environment,baseRoute.playbook),
-      route=routeEnvironmentOpportunity({market:s.extremumRegime,evolution:market,symbol,opportunity:o,outlook,
-        performanceFactor:performance,portfolioLongRisk,portfolioShortRisk});
+      route=routeEnvironmentOpportunity({market:s.extremumRegime,evolution:market,symbol,opportunity:o,outlook});
     o.marketEvolutionPhase=market.phase;o.opportunityLifecyclePhase=lifecycle.phase;o.lifecycleReason=lifecycle.reason;
     o.futureResearchAction=future.action;o.futureResearchReason=future.reason;o.futureHypothesisIds=future.hypothesisIds;
     o.extendedConfirmation=false;o.environment=route.environment;o.playbook=route.playbook;o.routeAlignment=route.alignment;
     o.environmentPriority=route.priority;o.environmentScore=Math.max(0,Math.min(100,o.score+route.scoreDelta));
-    o.environmentRiskScale=route.riskScale;o.environmentPerformanceFactor=performance;o.environmentProbe=route.probe;o.environmentForceRetest=route.forceRetest;
+    o.environmentRiskScale=route.riskScale;o.environmentProbe=route.probe;o.environmentForceRetest=route.forceRetest;
     o.environmentMainline=route.mainline;o.environmentModeFit=route.modeFit;o.environmentOutlook=route.outlook;
     o.probeImpulseMin=route.probeImpulseMin;o.probePullbackMin=route.probePullbackMin;o.probeRestartMin=route.probeRestartMin;
     o.environmentReason=route.reason;
@@ -843,7 +838,7 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
     migrationCapRate=o.tradePlan==="LIQUIDITY_MIGRATION"?(o.environmentMainline&&o.routeAlignment==="ALIGNED"?.030:.018):Infinity,
     migrationHeadroom=Number.isFinite(migrationCapRate)?equity*migrationCapRate-migrationSideRisk(s,side):Infinity,
     headroom=Math.min(totalHeadroom,sideHeadroom,cycleHeadroom,migrationHeadroom),
-    riskRate=o.premium?.0065:.0055,environmentRiskScale=Math.max(.45,Math.min(1,o.environmentRiskScale??1)),
+    riskRate=o.premium?.0065:.0055,environmentRiskScale=Math.max(.70,Math.min(1,o.environmentRiskScale??1)),
     wantedRisk=equity*riskRate*environmentRiskScale,riskBudget=Math.min(wantedRisk,headroom);
   if(riskBudget<equity*.0035)return o.tradePlan==="LIQUIDITY_MIGRATION"&&migrationHeadroom<=equity*.0035
     ?"同方向市场延续风险已集中；保留其他独立/回调机会，不继续堆同一市场Beta":"剩余风险预算不足以形成有效仓位";
@@ -887,7 +882,7 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
         thesisSince:o.thesisSince,thesisBars:o.thesisBars,marketEvolutionPhase:o.marketEvolutionPhase,
         opportunityLifecyclePhase:o.opportunityLifecyclePhase,extendedConfirmation:o.extendedConfirmation,
         environment:o.environment,playbook:o.playbook,routeAlignment:o.routeAlignment,environmentRiskScale:o.environmentRiskScale,
-        environmentPerformanceFactor:o.environmentPerformanceFactor,environmentProbe:o.environmentProbe,environmentReason:o.environmentReason,
+        environmentProbe:o.environmentProbe,environmentReason:o.environmentReason,
         environmentOutlookVersion:o.environmentOutlook?.version,environmentModeFit:o.environmentModeFit,
         environmentHorizonMinutes:o.environmentOutlook?.horizonMinutes,environmentPersistenceScore:o.environmentOutlook?.persistenceScore,
         environmentTransitionPressure:o.environmentOutlook?.transitionPressure,environmentProfitExpansion:o.environmentOutlook?.profitExpansion,
@@ -1134,29 +1129,6 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
     validation.supportSamples=decision.supportSamples;validation.oppositionSamples=decision.oppositionSamples;validation.reason=decision.reason;
 
     if(decision.action==="CANCEL"){validation.status="CANCELLED";reject(decision.reason);continue;}
-
-    if(validation.requiresProbeRetest){
-      const probe=environmentProbeRetestDecision({side:validation.side,price,currentAdvanceRate:decision.currentAdvanceRate,
-        bestAdvanceRate:decision.bestAdvanceRate,retestBasePrice:validation.retestBasePrice,retestSeen:!!validation.probeRetestSeen,
-        impulseMin:validation.probeImpulseMin??ROUND_TRIP_COST*.75,pullbackMin:validation.probePullbackMin??ROUND_TRIP_COST*.40,
-        restartMin:validation.probeRestartMin??ROUND_TRIP_COST*.35});
-      if(probe.action==="WAIT_IMPULSE"){
-        validation.phase="RETEST_WAIT";validation.reason="当前环境不适合直接追单；先等价格证明第一段方向推进。";reject(validation.reason);continue;
-      }
-      if(probe.action==="WAIT_PULLBACK"){
-        validation.phase="RETEST_WAIT";validation.reason="第一段方向已经出现，但当前环境要求先完成可控回调再参与，避免追在末端。";reject(validation.reason);continue;
-      }
-      if(probe.action==="SET_RETEST_BASE"||probe.action==="UPDATE_RETEST_BASE"){
-        validation.retestBasePrice=price;validation.retestBaseAt=now;validation.probeRetestSeen=true;
-        validation.supportSamples=0;validation.oppositionSamples=0;validation.phase="RETEST_WAIT";
-        validation.reason=probe.action==="SET_RETEST_BASE"?"环境回调已出现，建立重启基准；等待原方向重新启动。":"环境回调仍在延伸，更新重启基准，不提前猜底/顶。";
-        reject(validation.reason);continue;
-      }
-      if(probe.action==="WAIT_RESTART"){
-        validation.phase="RETEST_WAIT";validation.reason="回调已经完成，等待原方向重新推进后才执行。";reject(validation.reason);continue;
-      }
-      validation.requiresProbeRetest=false;validation.phase="ARMED";
-    }
 
     const locationManaged=validation.stableThesis||(o.tradePlan!=null&&o.tradePlan!=="OBSERVE_ONLY");
     if(locationManaged){
