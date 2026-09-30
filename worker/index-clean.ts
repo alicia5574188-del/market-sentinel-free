@@ -3311,8 +3311,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const symbols=this.strategyPathSymbols();if(!symbols.length)return 0;
     const targetCompletedAt=latestCompletedStrategyCandleAt(now);
     const due=symbols.filter(symbol=>{
-      const last=this.strategyCandles[symbol]?.at(-1);
-      return !last||(last.time+300)*1000<targetCompletedAt;
+      const last=this.strategyCandles[symbol]?.at(-1),failure=this.runtime.strategyCandleFailures[symbol];
+      return (!last||(last.time+300)*1000<targetCompletedAt)&&(failure?.retryAt??0)<=now;
+    }).sort((a,b)=>{
+      // Repair missing histories before topping up already-healthy markets so 28/30 cannot
+      // remain stuck indefinitely behind the same two repeatedly failing contracts.
+      const am=(this.strategyCandles[a]?.length??0)<30?1:0,bm=(this.strategyCandles[b]?.length??0)<30?1:0;
+      return bm-am||(this.runtime.strategyCandleFailures[b]?.count??0)-(this.runtime.strategyCandleFailures[a]?.count??0);
     }).slice(0,5);
     const results=await Promise.allSettled(due.map(async symbol=>{
       const coverage=this.marketHub.coverage(symbol,Date.now());
@@ -3320,9 +3325,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         throw new Error(`${symbol} external venue disagreement ${(coverage.disagreementRate*100).toFixed(2)}%`);
       const external=await this.marketHub.candles(symbol,"5m",120);
       if(external)return{symbol,rows:external.rows,replace:true,source:external.source};
-      if(this.marketHub.supports(symbol))throw new Error(`${symbol} external 5m temporarily unavailable`);
-      // True Gate-only contracts retain a low-frequency fallback. A temporary
-      // Bybit/OKX/KuCoin outage never redirects common-market analysis onto Gate.
+      const priorFailure=this.runtime.strategyCandleFailures[symbol];
+      if(this.marketHub.supports(symbol)&&(priorFailure?.count??0)<2)
+        throw new Error(`${symbol} external 5m temporarily unavailable`);
+      // Normal analysis still prefers independent venues. After repeated misses, one bounded
+      // Gate history repair is allowed so a transient external-source hole cannot freeze the
+      // whole 30-market state forever. Gate does not become the normal refresh path.
       const rows=await fetchStructureCandles(symbol,"5m",(this.strategyCandles[symbol]?.length??0)>=120?6:120);
       return{symbol,rows,replace:false,source:"GATE" as const};
     }));
