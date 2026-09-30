@@ -161,6 +161,10 @@ function liquidityTargetRate(map:SymbolLiquidityMap|undefined,side:"LONG"|"SHORT
   return side==="LONG"?Math.max(0,target.lower-price)/price:Math.max(0,price-target.upper)/price;
 }
 
+export function liquidityPlanGrossRoom(input:{targetRate:number|null;baseRoom:number;residual:number}){
+  return input.targetRate!=null?Math.max(0,input.targetRate):Math.max(input.baseRoom,input.baseRoom+Math.abs(input.residual)*.35);
+}
+
 function liquidityTradePlan(input:{
   state:MarketSymbolState;map:SymbolLiquidityMap|undefined;family?:FamilyTurnSignal;price:number;rapid?:RapidLiquidityAuthorization;
 }):{plan:LiquidityTradePlan;side:"LONG"|"SHORT";confidence:number;targetRate:number|null;reason:string;rapid:boolean}{
@@ -424,7 +428,10 @@ export function buildMarketIntelligence(input:{paths:Record<string,CandleLike[]>
       stopRate=usesLiquidityInvalidation&&invalidationRate!=null?invalidationRate:baseStopRate,
       riskGeometryOk=!usesLiquidityInvalidation||(invalidationRate!=null&&invalidationRate>=.004&&invalidationRate<=.028),
       planRoom=plan.targetRate??baseRoom,
-      gross=plan.plan==="LIQUIDITY_REJECTION"?Math.max(0,planRoom):Math.max(planRoom,baseRoom+Math.abs(row.residual)*.35),
+      // A known next liquidity zone is a real target boundary. Do not manufacture
+      // extra "open space" beyond it from generic room/residual estimates; a new
+      // leg must earn a fresh zone/acceptance thesis after reaching that target.
+      gross=liquidityPlanGrossRoom({targetRate:plan.targetRate,baseRoom:planRoom,residual:row.residual}),
       net=Math.max(0,gross-.0019),edge=net/Math.max(pullback,.001),
       marketFit=clip(.5+side*(shortLayer.score*.55+major.score*.30+macro.score*.15)/2),
       mode:"RELATIVE"|"REVERSAL"|"CONTINUATION"=plan.plan==="LIQUIDITY_MIGRATION"?"CONTINUATION":

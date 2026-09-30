@@ -350,3 +350,29 @@ test("a newly closed rich trade is archived in full even when the persisted hot 
   assert.ok(restored.history.length<=FORWARD_HOT_HISTORY_TOTAL);
   assert.ok(restored.history.some(t=>t.id===closed.id),"new close remains in the recent hot window");
 });
+
+
+test("twelve rich active positions cannot overflow the archive or block an authoritative account commit",async()=>{
+  const previous=initialForward(T-60_000);previous.storage={persistedAt:T-1_000,error:null};previous.revision=900;
+  const next=structuredClone(previous);next.revision=901;
+  next.positions=Array.from({length:12},(_,i)=>{
+    const t=richTrade(500+i,"OPEN"),extra="归档压力下仍必须保留交易因果证据".repeat(180);
+    if(t.entryContext){t.entryContext.reason=extra;t.entryContext.thesisSummary=extra;t.entryContext.invalidationSummary=extra;}
+    if(t.positionIntelligence){t.positionIntelligence.summary=extra;t.positionIntelligence.reasons=[extra,extra];t.positionIntelligence.concerns=[extra];}
+    return t;
+  });
+  next.events=next.positions.map((t,i)=>({id:`archive-stress-${i}-${next.revision+i+1}`,at:T+i,kind:"PROTECTION" as const,
+    subject:t.id,reason:"bounded archive stress"}));
+  const write=await prepareForwardWrite(previous,next,T,{compact:true}),
+    archiveKeys=Object.keys(write.entries).filter(k=>k.startsWith(`${FORWARD_STORAGE}archive:`)),
+    archivedIds:string[]=[];
+  assert.ok(archiveKeys.length>=2,"oversized event evidence should be sharded instead of rejecting the whole account commit");
+  for(const key of archiveKeys){
+    const value=write.entries[key] as {trades?:Trade[];account?:{positions?:unknown[]}|null};
+    assert.ok(new TextEncoder().encode(JSON.stringify(value)).length<=120*1024,key);
+    archivedIds.push(...(value.trades??[]).map(t=>t.id));
+    if(value.account?.positions)for(const row of value.account.positions as Array<Record<string,unknown>>)
+      assert.equal("positionIntelligence" in row,false,"archive account snapshots must not duplicate rich active-position diagnostics");
+  }
+  assert.deepEqual(new Set(archivedIds),new Set(next.positions.map(t=>t.id)),"sharding must retain every event-subject trade");
+});

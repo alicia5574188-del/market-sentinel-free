@@ -224,7 +224,9 @@ export function advanceMarketHypothesisResearch(previous:MarketHypothesisResearc
         leadMinutes:old.confirmedAt?Math.max(0,(old.confirmedAt-old.startedAt)/60_000):null};
       resolved.unshift(row);remember(memory,row);continue;
     }
-    const confidence=clip(fresh?old.confidence*.68+fresh.confidence*.32:old.confidence*.94),
+    const evidenceConfidence=clip(fresh?old.confidence*.68+fresh.confidence*.32:old.confidence*.94),
+      outcomeConfidence=targetHitStreak>=3?Math.min(.72,.55+Math.max(0,targetHitStreak-3)*.025):0,
+      confidence=clip(Math.max(evidenceConfidence,outcomeConfidence)),
       canConfirm=!old.confirmedAt&&observations>=3&&targetHits>=2&&targetHitStreak>=2
         &&confidence>=.55&&now-old.startedAt>=8*60_000,
       confirmedAt=old.confirmedAt??(canConfirm?now:null),source=fresh??old;

@@ -61,6 +61,11 @@ function compactClosedTrade(t:Trade,keepIntelligence:boolean){
   return row;
 }
 function withoutReview(t:Trade){const row={...t};delete row.review;return row;}
+function archivePositionSummary(t:Trade){
+  return{id:t.id,symbol:t.symbol,side:t.side,status:t.status,openedAt:t.openedAt,entryPrice:t.entryPrice,lastPrice:t.lastPrice,
+    notional:t.notional,margin:t.margin,plannedRisk:t.plannedRisk,stopPrice:t.stopPrice,profitFloorRate:t.profitFloorRate??0,
+    thesisId:t.entryContext?.thesisId??null,tradePlan:t.liquidityLifecycle?.currentPlan??t.entryContext?.tradePlan??null};
+}
 function hotProjection(next:ForwardState,includeSamples=true){
   let full=Math.min(FORWARD_HOT_HISTORY_FULL,next.history.length),
     total=Math.min(FORWARD_HOT_HISTORY_TOTAL,next.history.length),
@@ -354,25 +359,48 @@ export async function prepareForwardWrite(previous:ForwardState|null,next:Forwar
   const trades=[...next.positions,...next.history].filter(t=>subjects.has(t.id));
   const packet={at:now,version:FORWARD_VERSION,engineVersion:next.engineVersion,policyVersion:next.policyVersion,
     startedAt:next.startedAt,revision:next.revision,events,trades:trades.map(withoutReview),
-    account:{balance:next.balance,positions:next.positions.map(withoutReview),fees:next.fees,fundingAllowance:next.fundingAllowance,
+    // The authoritative account state is persisted separately in the paged head/chunks.
+    // Archive packets keep a compact position snapshot and full event-subject trades,
+    // avoiding duplicate rich active-position payloads from exhausting the single-value
+    // ceiling while preserving every trade referenced by an ENTRY/EXIT/PROTECTION event.
+    account:{balance:next.balance,positions:next.positions.map(archivePositionSummary),fees:next.fees,fundingAllowance:next.fundingAllowance,
       turnover:next.turnover,resolved:next.resolved,wins:next.wins,maxDrawdown:next.maxDrawdown},
     daily:next.daily.at(-1)??null,marketPulse:next.marketPulse,
     opportunities:next.opportunities.slice(0,12).map(o=>({symbol:o.symbol,side:o.side,mode:o.mode,score:o.score,eligible:o.eligible,
       premium:o.premium,netRemainingSpaceRate:o.netRemainingSpaceRate,edgeRatio:o.edgeRatio}))};
-  const archiveKey=`${FORWARD_STORAGE}archive:${String(now).padStart(16,"0")}:${next.revision}`;
-  const encoded=new TextEncoder().encode(JSON.stringify(packet));
-  if(encoded.length>112*1024)throw new Error("Adaptive 10单次归档超过预算；拒绝丢弃交易证据");
-  // Financial packet remains byte-for-byte in the original shape. Review extensions are optional;
-  // a full diagnostics buffer can never turn an otherwise-valid financial commit into a failure.
-  const reviews:{tradeId:string;review:NonNullable<Trade["review"]>}[]=[];
-  let omittedReviews=0;
-  for(const trade of trades){
-    if(!trade.review)continue;
-    const candidate={tradeId:trade.id,review:trade.review};
-    if(encodeJson({...packet,reviews:[...reviews,candidate],omittedReviews:trades.length}).length<=112*1024)reviews.push(candidate);
-    else omittedReviews++;
+  const archivePrefix=`${FORWARD_STORAGE}archive:${String(now).padStart(16,"0")}:`,archiveLimit=112*1024,
+    detailedTrades=trades.map(withoutReview),reviewByTrade=new Map(trades.filter(t=>!!t.review).map(t=>[t.id,t.review!])),
+    firstBase={...packet,trades:[] as Trade[]},continuationBase={at:now,version:FORWARD_VERSION,engineVersion:next.engineVersion,
+      policyVersion:next.policyVersion,startedAt:next.startedAt,revision:next.revision,events:[] as typeof events,trades:[] as Trade[],
+      account:null,daily:null,marketPulse:null,opportunities:[] as typeof packet.opportunities,archiveContinuation:true},
+    shards:Array<{base:typeof firstBase|typeof continuationBase;trades:Trade[]}>=[];
+
+  let base:typeof firstBase|typeof continuationBase=firstBase,current:Trade[]=[];
+  if(encodeJson(base).length>archiveLimit)throw new Error("Adaptive 10归档摘要超过单值预算；拒绝截断交易证据");
+  for(const trade of detailedTrades){
+    if(encodeJson({...base,trades:[...current,trade]}).length<=archiveLimit){current.push(trade);continue;}
+    shards.push({base,trades:current});base=continuationBase;current=[];
+    if(encodeJson({...base,trades:[trade]}).length>archiveLimit)
+      throw new Error(`Adaptive 10单笔交易证据超过单值预算：${trade.symbol}`);
+    current.push(trade);
   }
-  entries[archiveKey]=reviews.length?{...packet,reviews,omittedReviews}:packet;
+  shards.push({base,trades:current});
+
+  const shardCount=shards.length;
+  shards.forEach(({base,trades:rows},part)=>{
+    const financial={...base,trades:rows,...(shardCount>1?{archivePart:part+1,archiveParts:shardCount}:{})},
+      reviews:{tradeId:string;review:NonNullable<Trade["review"]>}[]=[];
+    let omittedReviews=0;
+    for(const trade of rows){
+      const review=reviewByTrade.get(trade.id);if(!review)continue;
+      const candidate={tradeId:trade.id,review};
+      if(encodeJson({...financial,reviews:[...reviews,candidate],omittedReviews}).length<=archiveLimit)reviews.push(candidate);
+      else omittedReviews++;
+    }
+    const value=reviews.length||omittedReviews?{...financial,reviews,omittedReviews}:financial,
+      revisionKey=shardCount===1?String(next.revision):String(next.revision*100+part);
+    entries[`${archivePrefix}${revisionKey}`]=value;
+  });
 
   for(const[key,value]of Object.entries(entries)){
     if(value instanceof Uint8Array)continue;
