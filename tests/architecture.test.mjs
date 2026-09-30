@@ -90,6 +90,16 @@ test("LIVE execution infrastructure stays isolated and serialized after PAPER co
   assert.ok(alarm.indexOf("await this.syncLive(liveStarted)")>alarm.indexOf("await this.advanceForwardNow(Date.now(),false)"));
 });
 
+test("production health exposes bounded read-only entry validation diagnostics",async()=>{
+  const worker=await read("worker/index-clean.ts");
+  const health=worker.slice(worker.indexOf("private forwardHealth()"),worker.indexOf("protected liveMirrorView()"));
+  assert.match(health,/entryValidationDiagnostics/);
+  assert.match(health,/slice\(0,6\)/);
+  assert.match(health,/supportSamples:v\.supportSamples/);
+  assert.match(health,/oppositionSamples:v\.oppositionSamples/);
+  assert.doesNotMatch(health,/openIntelligenceTrade\(|closeTrade\(|setLiveMode\(/);
+});
+
 test("execution page exposes the same narrative used by strategy decisions",async()=>{
   const [dashboard,execution,workflow,wrangler]=await Promise.all([
     read("app/forward-dashboard.tsx"),read("app/market-intelligence-execution.tsx"),read(".github/workflows/sentinel-v2-ci.yml"),read("wrangler.jsonc")
