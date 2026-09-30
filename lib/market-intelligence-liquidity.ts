@@ -50,6 +50,38 @@ const completed=(rows:LiquidityCandle[],now:number)=>rows.filter(r=>r&&[r.time,r
   &&r.time>0&&r.close>0&&r.high>=r.low&&r.volume>=0&&r.time*1000+300_000<=now).sort((a,b)=>a.time-b.time);
 const overlap=(a:{lower:number;upper:number},b:{lower:number;upper:number})=>a.lower<=b.upper&&b.lower<=a.upper;
 
+function aggregate(rows:LiquidityCandle[],bars:number){
+  if(bars<=1)return rows;
+  const out:LiquidityCandle[]=[];let bucket:LiquidityCandle[]=[];
+  for(const row of rows){
+    bucket.push(row);if(bucket.length<bars)continue;
+    out.push({time:bucket[0]!.time,open:bucket[0]!.open,high:Math.max(...bucket.map(x=>x.high)),low:Math.min(...bucket.map(x=>x.low)),
+      close:bucket.at(-1)!.close,volume:bucket.reduce((n,x)=>n+x.volume,0)});bucket=[];
+  }
+  return out;
+}
+
+function multiScaleZones(rows:LiquidityCandle[],now:number,atr:number){
+  const m15=aggregate(rows.slice(-120),3),m30=aggregate(rows.slice(-120),6),
+    fine=buildZones(rows.slice(-48),"TRADE",now,atr),
+    medium=buildZones(m15,"GLOBAL",now,atr*1.25),
+    broad=buildZones(m30,"GLOBAL",now,atr*1.65),
+    weighted=[...broad.map(z=>({...z,strength:clip(z.strength+.14)})),...medium.map(z=>({...z,strength:clip(z.strength+.08)})),...fine],
+    ordered=weighted.sort((a,b)=>a.center-b.center),merged:LiquidityZone[]=[];
+  for(const z of ordered){
+    const prev=merged.at(-1);
+    if(prev&&overlap(prev,z)){
+      const wa=Math.max(.05,prev.strength),wb=Math.max(.05,z.strength),center=(prev.center*wa+z.center*wb)/(wa+wb);
+      prev.lower=Math.min(prev.lower,z.lower);prev.upper=Math.max(prev.upper,z.upper);prev.center=center;
+      prev.widthRate=(prev.upper-prev.lower)/Math.max(center,1e-12);prev.strength=clip(Math.max(prev.strength,z.strength)+.06*Math.min(prev.strength,z.strength));
+      prev.touches+=z.touches;prev.pivotScore=clip((prev.pivotScore+z.pivotScore)/2);prev.absorptionScore=clip((prev.absorptionScore+z.absorptionScore)/2);
+      prev.firstTouchedAt=Math.min(prev.firstTouchedAt,z.firstTouchedAt);prev.lastTouchedAt=Math.max(prev.lastTouchedAt,z.lastTouchedAt);
+      prev.tier="GLOBAL";
+    }else merged.push({...z});
+  }
+  return{global:merged.sort((a,b)=>b.strength-a.strength||b.lastTouchedAt-a.lastTouchedAt).slice(0,8),trade:fine.slice(0,6)};
+}
+
 function pointsFor(rows:LiquidityCandle[],radius:number,atr:number){
   const points:Point[]=[],volMed=Math.max(1e-12,median(rows.slice(-36).map(r=>r.volume)));
   for(let i=radius;i<rows.length-radius;i++){
@@ -181,8 +213,7 @@ export function buildSymbolLiquidityMap(rowsIn:LiquidityCandle[],now:number):Sym
     departure:{state:"INSIDE",side:null,confidence:0,startedAt:null,distanceRate:0,outsideBars:0,reason:"等待至少6小时完整5分钟历史。"},
     targetDistanceRate:null,openSpace:false,reason:"流动性地图数据不足：至少需要72根完成5分钟K线。"};
   const last=rows.at(-1)!,trs=rows.slice(-30).map((r,i,a)=>tr(r,i?a[i-1]:undefined)),atr=Math.max(last.close*.0008,median(trs)),
-    globalRows=rows.slice(-120),tradeRows=rows.slice(-48),globalZones=buildZones(globalRows,"GLOBAL",now,atr),
-    tradeZones=buildZones(tradeRows,"TRADE",now,atr),all=[...tradeZones,...globalZones],
+    scale=multiScaleZones(rows,now,atr),globalZones=scale.global,tradeZones=scale.trade,all=[...tradeZones,...globalZones],
     containing=all.filter(z=>last.close>=z.lower&&last.close<=z.upper).sort((a,b)=>b.strength-a.strength),
     recent=all.filter(z=>now-z.lastTouchedAt<=90*60_000&&Math.min(Math.abs(last.close-z.lower),Math.abs(last.close-z.upper))<=atr*6)
       .sort((a,b)=>b.lastTouchedAt-a.lastTouchedAt||b.strength-a.strength),
@@ -199,7 +230,7 @@ export function buildSymbolLiquidityMap(rowsIn:LiquidityCandle[],now:number):Sym
     next=nearestZones(unique,last.close,activeZone),target=d.side==="UP"?next.above:d.side==="DOWN"?next.below:null,
     targetDistanceRate=target?(d.side==="UP"?Math.max(0,target.lower-last.close):Math.max(0,last.close-target.upper))/last.close:null,
     openSpace=!target&&d.state==="ACCEPTED",
-    reason=`当前主要流动性区 ${activeZone.lower.toFixed(6)}–${activeZone.upper.toFixed(6)}，强度 ${Math.round(activeZone.strength*100)}；积累 ${Math.round(m.accumulation*100)}，上沿消耗 ${Math.round(m.upperDepletion*100)}，下沿消耗 ${Math.round(m.lowerDepletion*100)}。 ${d.reason}`;
+    reason=`当前主要流动性区 ${activeZone.lower.toFixed(6)}–${activeZone.upper.toFixed(6)}，强度 ${Math.round(activeZone.strength*100)}；该骨架由30分钟/15分钟聚合结构优先、5分钟局部结构补充。积累 ${Math.round(m.accumulation*100)}，上沿消耗 ${Math.round(m.upperDepletion*100)}，下沿消耗 ${Math.round(m.lowerDepletion*100)}。 ${d.reason}`;
   return{version:LIQUIDITY_MAP_VERSION,ready:true,updatedAt:now,bars:rows.length,atrRate:atr/last.close,
     globalZones:globalZones.slice(0,5),tradeZones:tradeZones.slice(0,4),
     activeZone,nextAbove:next.above,nextBelow:next.below,accumulation:m.accumulation,upperDepletion:m.upperDepletion,lowerDepletion:m.lowerDepletion,
