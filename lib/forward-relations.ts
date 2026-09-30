@@ -275,7 +275,7 @@ function normalizeEntryValidations(value:unknown,now:number){
     out[id]={id,candidateId:r.candidateId,symbol:r.symbol,side:r.side,startedAt,expiresAt,
       deadlineAt:safe(r.deadlineAt,Math.min(expiresAt,startedAt+24_000)),
       initialPrice:Math.max(1e-12,safe(r.initialPrice,1)),lastPrice:Math.max(1e-12,safe(r.lastPrice,r.initialPrice??1)),
-      lastQuoteAt:safe(r.lastQuoteAt,startedAt),samples:Math.max(1,Math.floor(safe(r.samples,1))),
+      lastQuoteAt:Math.max(0,safe(r.lastQuoteAt)),samples:Math.max(0,Math.floor(safe(r.samples))),
       bestAdvanceRate:Math.max(0,safe(r.bestAdvanceRate)),maxAdverseRate:Math.max(0,safe(r.maxAdverseRate)),
       supportSamples:Math.max(0,Math.floor(safe(r.supportSamples))),oppositionSamples:Math.max(0,Math.floor(safe(r.oppositionSamples))),
       extendedConfirmation:!!r.extendedConfirmation,extremeResidual:!!r.extremeResidual,
@@ -1125,7 +1125,8 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
   quotes:Record<string,Quote>;contracts:Record<string,Contract>;entrySymbols?:Iterable<string>;learningSymbols?:Iterable<string>;allowDataCycle?:boolean;
   legacyDrainOnly?:boolean;research?:MarketLifecycleResearchContext}){
   const s=normalizeForward(structuredClone(input.state),input.now),
-    before=JSON.stringify({p:s.positions.map(t=>[t.id,t.status,t.stopPrice,t.profitFloorRate]),h:s.history.length,b:s.balance,r:s.revision});
+    before=JSON.stringify({p:s.positions.map(t=>[t.id,t.status,t.stopPrice,t.profitFloorRate]),h:s.history.length,b:s.balance,r:s.revision,
+      v:Object.values(s.entryValidations).filter(x=>x.status==="WAITING").map(x=>x.id).sort()});
   s.lastQuoteCycleAt=input.now;
   const allowed=input.entrySymbols?new Set(input.entrySymbols):undefined,
     candleAt=nextCandleAt(input.paths,input.now),
@@ -1177,9 +1178,11 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
 
   const mark=equityMark(s,input.quotes,input.now);s.peakEquity=Math.max(s.peakEquity,mark.equity);
   s.maxDrawdown=Math.max(s.maxDrawdown,1-mark.equity/Math.max(s.peakEquity,1));updateDaily(s,input.now,mark.equity);
-  // A completed 5m step chooses a bounded set of hypotheses; the critical 2s
-  // quote clock then waits for real price/flow response and may open at most one.
-  if(marketReady&&dataDue)seedEntryResponses(s,input.quotes,input.now);
+  // Whole-market 5m/15m/30m structure defines the plan, but a qualified plan
+  // may be authorized between 5m closes (including the causal 1m rapid-migration
+  // lane). Once authorized, its frozen identity is handed to the critical 2s
+  // execution clock; research refreshes can no longer make it disappear.
+  if(marketReady)seedEntryResponses(s,input.quotes,input.now);
   const opened=marketReady?advanceEntryResponses(s,input.quotes,input.contracts,input.minutePaths,input.paths,input.now,mark.equity):0;
 
   const states=Object.values(s.extremumRegime.symbols),longReady=states.filter(x=>x.longScore>=62).length,
@@ -1192,7 +1195,8 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
     +` 当前${s.positions.length}笔持仓，${s.opportunities.filter(o=>o.eligible).length}个可参与机会，计划风险已用${riskUse.toFixed(1)}%。 研究背景=${currentEnvironment}，${marketEvolution.reason} ${s.extremumRegime.narrative.plan} 前瞻研究仅记录：${s.hypothesisResearch.summary}`;
   if(divergent)s.latestReason+=` 当前发现${divergent}个明显分化资产。`;
   if(opened)s.latestReason+=` 本轮新开${opened}笔。`;
-  const after=JSON.stringify({p:s.positions.map(t=>[t.id,t.status,t.stopPrice,t.profitFloorRate]),h:s.history.length,b:s.balance,r:s.revision});
+  const after=JSON.stringify({p:s.positions.map(t=>[t.id,t.status,t.stopPrice,t.profitFloorRate]),h:s.history.length,b:s.balance,r:s.revision,
+    v:Object.values(s.entryValidations).filter(x=>x.status==="WAITING").map(x=>x.id).sort()});
   return{state:s,changed:before!==after||dataDue,protectionChanged:input.state.positions.some(t=>s.positions.find(n=>n.id===t.id)?.stopPrice!==t.stopPrice)};
 }
 export function closeForwardForReset(state:ForwardState,quotes:Record<string,Quote>,now:number){
