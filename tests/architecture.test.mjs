@@ -322,6 +322,29 @@ test("high-quality entries keep stable thesis authority through shallow realtime
 });
 
 
+test("duplicate-symbol execution is blocked at ranking, live validation and final open authority",async()=>{
+  const [core,execution]=await Promise.all([
+    read("lib/forward-relations.ts"),read("app/market-intelligence-execution.tsx")
+  ]);
+  const ranked=core.slice(core.indexOf("function rankedEligible"),core.indexOf("function seedEntryResponses"));
+  const advance=core.slice(core.indexOf("function advanceEntryResponses"),core.indexOf("export function fillForwardPortfolio"));
+  const open=core.slice(core.indexOf("function openIntelligenceTrade"),core.indexOf("export function extremeResidualConfirmationProfile"));
+  assert.match(ranked,/!s\.positions\.some\(t=>t\.symbol===o\.symbol\)/);
+  assert.match(advance,/同币已有持仓，取消重复执行等待/);
+  assert.match(open,/同币已有持仓，禁止重复开仓/);
+  assert.match(execution,/heldSymbols=new Set\(positions\.map\(t=>t\.symbol\)\)/);
+  assert.match(execution,/!heldSymbols\.has\(v\.symbol\)/);
+  assert.match(execution,/!heldSymbols\.has\(o\.symbol\)/);
+});
+
+test("formal liquidity plans survive shallow realtime conflict as retest instead of instant cancellation",async()=>{
+  const core=await read("lib/forward-relations.ts");
+  const advance=core.slice(core.indexOf("function advanceEntryResponses"),core.indexOf("export function fillForwardPortfolio"));
+  assert.match(advance,/allowRetest:!!validation\.stableThesis\|\|\(o\.tradePlan!=null&&o\.tradePlan!==\"OBSERVE_ONLY\"\)/);
+  assert.match(advance,/decision\.action===\"RETEST\"/);
+  assert.match(advance,/validation\.phase=\"RETEST_WAIT\"/);
+});
+
 test("execution command center summarizes active entry waits without a separate execution board",async()=>{
   const execution=await read("app/market-intelligence-execution.tsx");
   assert.match(execution,/等待执行/);
