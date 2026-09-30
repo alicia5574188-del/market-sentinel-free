@@ -69,7 +69,7 @@ function grouped(rows:Trade[],key:(t:Trade)=>string){
 }
 export function checkpointCoverage(row:ObjectRow,at:number){
   const start=Number(row.startedAt),checkpoints=arr<ObjectRow>(row.checkpoints),unavailable=arr<number>(row.unavailableCheckpoints);
-  return Object.fromEntries([5,15,30,60,120,240].map(m=>{
+  return Object.fromEntries([5,15,30,45,60].map(m=>{
     const target=start+m*60_000,cp=checkpoints.find(x=>x.minutes===m);
     const valid=cp&&finite(cp.marketAt)&&finite(cp.price)&&cp.price>0&&finite(cp.targetAt)&&Math.abs(cp.targetAt-target)<=1000
       &&cp.marketAt>=start&&cp.marketAt<=target+90_000&&cp.marketAt>=target-6*60_000;
