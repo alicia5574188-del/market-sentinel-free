@@ -610,7 +610,9 @@ test("rotation makes relative/reversal logic more suitable than continuation wit
   assert.equal(route.playbook,"ROTATION_RELATIVE");assert.ok(route.riskScale>=.70);
 });
 
-test("historical environment losses shrink risk and require better entry shape without turning trading off",()=>{
+});
+
+test("historical environment PnL stays diagnostic; live routing is driven by current market condition",()=>{
   const perf=initialEnvironmentPerformanceState();
   for(let i=0;i<6;i++)recordEnvironmentOutcome(perf,{environment:"TRANSITION",playbook:"TRANSITION_PROBE",netPnl:-5,plannedRisk:5,now:T+i});
   const factor=environmentPerformanceFactor(perf,"TRANSITION","TRANSITION_PROBE");
@@ -628,11 +630,11 @@ test("historical environment losses shrink risk and require better entry shape w
     score:82,premium:true,edgeRatio:2,netRemainingSpaceRate:.025,pullbackRiskRate:.011,thesisBars:3,confirmationStage:"READY"}});
   const b=routeEnvironmentOpportunity({market,evolution,symbol,performanceFactor:factor,opportunity:{side:"LONG",mode:"REVERSAL",
     score:82,premium:true,edgeRatio:2,netRemainingSpaceRate:.025,pullbackRiskRate:.011,thesisBars:3,confirmationStage:"READY"}});
-  assert.ok(b.riskScale<a.riskScale,"repeated losses in the same environment/playbook must reduce the next risk allocation");
-  assert.ok(b.riskScale>=.45,"environment adaptation can shrink risk but cannot turn trading off");
-  assert.equal(b.forceRetest,true,"weak historical fit must change execution to impulse→pullback→restart");
+  assert.equal(a.riskScale,b.riskScale);
+  assert.ok(a.riskScale>=.70,"environment can reduce size but cannot turn trading off");
 });
 
+test("one-minute fast pressure can shorten the future window without flipping the formal market label",()=>{
 test("one-minute fast pressure can shorten the future window without flipping the formal market label",()=>{
   const market=initialMarketIntelligenceState(T);
   market.narrative.short={...market.narrative.short,bias:"BULLISH",score:.50,phase:"ADVANCING"};
