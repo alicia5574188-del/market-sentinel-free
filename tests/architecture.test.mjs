@@ -332,6 +332,33 @@ test("high-quality entries keep stable thesis authority through shallow realtime
 });
 
 
+test("opportunity discovery, frozen authorization and liquidity invalidation form one continuous execution chain",async()=>{
+  const [core,engine,liquidity]=await Promise.all([
+    read("lib/forward-relations.ts"),read("lib/market-intelligence-engine.ts"),read("lib/market-intelligence-liquidity.ts")
+  ]);
+  assert.match(liquidity,/deriveRapidLiquidityAuthorization/);
+  assert.match(liquidity,/1分钟已出现强离开/);
+  assert.match(engine,/rapid=deriveRapidLiquidityAuthorization/);
+  assert.match(engine,/plan\.rapid&&rapid\.ready/);
+  assert.match(engine,/liquidityInvalidationPrice/);
+  const advanceForward=core.slice(core.indexOf("export function advanceForward"),core.indexOf("export function closeForwardForReset"));
+  assert.match(advanceForward,/if\(marketReady\)seedEntryResponses/);
+  assert.doesNotMatch(advanceForward,/if\(marketReady&&dataDue\)seedEntryResponses/);
+  const seed=core.slice(core.indexOf("function seedEntryResponses"),core.indexOf("function advanceEntryResponses"));
+  assert.match(seed,/frozenOpportunity:structuredClone\(o\)/);
+  assert.match(seed,/正式授权并冻结/);
+  const advance=core.slice(core.indexOf("function advanceEntryResponses"),core.indexOf("export function fillForwardPortfolio"));
+  assert.match(advance,/validation\.frozenOpportunity\?\?/);
+  assert.match(advance,/冻结计划不取消，也不追价/);
+  assert.doesNotMatch(advance,/已被新的完成5m结构替代/);
+  const open=core.slice(core.indexOf("function openIntelligenceTrade"),core.indexOf("export function extremeResidualConfirmationProfile"));
+  assert.match(open,/frozenInvalidation/);
+  assert.match(open,/流动性\/结构失效宽度不合理/);
+  const manage=core.slice(core.indexOf("function manageIntelligenceTrades"),core.indexOf("function markAndManage"));
+  assert.match(manage,/hypothesisStop/);
+  assert.match(manage,/LIQUIDITY_HYPOTHESIS_INVALIDATED/);
+});
+
 test("duplicate-symbol execution is blocked at ranking, live validation and final open authority",async()=>{
   const [core,execution]=await Promise.all([
     read("lib/forward-relations.ts"),read("app/market-intelligence-execution.tsx")
