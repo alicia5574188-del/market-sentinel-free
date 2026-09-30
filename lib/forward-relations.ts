@@ -8,7 +8,7 @@ import { STRUCTURAL_INTERRUPT_VERSION, initialStructuralInterruptState, normaliz
   type StructuralInterruptState } from "./forward-structural-interrupt.ts";
 import { MARKET_INTELLIGENCE_VERSION, buildMarketIntelligence,
   urgentMinuteSymbols as intelligenceUrgentMinuteSymbols, initialMarketIntelligenceState,
-  type MarketIntelligenceState, type MarketSymbolState } from "./market-intelligence-engine.ts";
+  type LiquidityTradePlan, type MarketIntelligenceState, type MarketSymbolState } from "./market-intelligence-engine.ts";
 import { evaluatePositionIntelligence, POSITION_INTELLIGENCE_VERSION,
   type PositionIntelligenceState } from "./position-intelligence-engine.ts";
 import { beijingDayKey } from "./beijing-time.ts";
@@ -94,6 +94,8 @@ export type Opportunity={
   environmentPriority?:number;environmentScore?:number;environmentRiskScale?:number;environmentProbe?:boolean;
   environmentForceRetest?:boolean;environmentMainline?:boolean;environmentModeFit?:number;environmentOutlook?:EnvironmentOutlook;environmentReason?:string;
   probeImpulseMin?:number;probePullbackMin?:number;probeRestartMin?:number;
+  tradePlan?:LiquidityTradePlan;liquidityPlanConfidence?:number;liquidityReason?:string;liquidityTargetRate?:number|null;
+  liquidityOriginLower?:number|null;liquidityOriginUpper?:number|null;liquidityTargetLower?:number|null;liquidityTargetUpper?:number|null;
   futureResearchAction?:EntryHypothesisGuidance["action"];futureResearchReason?:string;futureHypothesisIds?:string[];
 };
 export type MarketPulse={at:number;up:number;down:number;neutral:number;bias:"UP"|"DOWN"|"MIXED";strength:number;expansion:number};
@@ -117,6 +119,8 @@ export type EntryContext={
   environmentRiskScale?:number;environmentProbe?:boolean;environmentReason?:string;
   environmentOutlookVersion?:typeof ENVIRONMENT_OUTLOOK_VERSION;environmentModeFit?:number;environmentHorizonMinutes?:15|30|45|60;
   environmentPersistenceScore?:number;environmentTransitionPressure?:number;environmentProfitExpansion?:EnvironmentOutlook["profitExpansion"];
+  tradePlan?:LiquidityTradePlan;liquidityPlanConfidence?:number;liquidityReason?:string;liquidityTargetRate?:number|null;
+  liquidityOriginLower?:number|null;liquidityOriginUpper?:number|null;liquidityTargetLower?:number|null;liquidityTargetUpper?:number|null;
   baseEntryScore?:number;environmentScore?:number;
   futureResearchAction?:EntryHypothesisGuidance["action"];futureResearchReason?:string;futureHypothesisIds?:string[];
 };
@@ -135,6 +139,8 @@ export type Trade={
   exitAudit?:{trigger:string;at:number;detail?:string};
   holdValue?:{action:"HOLD"|"REVIEW"|"EXIT_PROFIT"|"EXIT_RISK";pullbackRiskRate:number;bestHoldMinutes:number;score:number};
   positionIntelligence?:PositionIntelligenceState;
+  liquidityLifecycle?:{currentPlan:LiquidityTradePlan;upgradedAt:number|null;reason:string;
+    originLower:number|null;originUpper:number|null;targetLower:number|null;targetUpper:number|null};
   profitLifecycle?:ProfitLifecycleState;
   turn?:{version:string;timeframe:"5m";signalAt:number;entryTurnProbability:number;entryContinuation:number;entryDirectionConfidence:number};
 };
@@ -465,6 +471,20 @@ function catastrophicWinnerInsuranceFloor(t:Trade,originalStopRate:number){
   return Math.max(ROUND_TRIP_COST*1.25,Math.min(originalStopRate*.55,peakNet*.12));
 }
 
+export function liquidityTargetProfitFloor(input:{
+  side:"LONG"|"SHORT";currentPrice:number;targetLower:number|null;targetUpper:number|null;
+  peakFavorableRate:number;originalStopRate:number;costRate?:number;
+}){
+  const cost=Math.max(.0005,input.costRate??ROUND_TRIP_COST),peakNet=Math.max(0,input.peakFavorableRate-cost);
+  if(!(input.currentPrice>0)||input.targetLower==null||input.targetUpper==null
+    ||peakNet<Math.max(cost*4,input.originalStopRate*.60))return 0;
+  const reached=input.currentPrice>=input.targetLower&&input.currentPrice<=input.targetUpper,
+    distance=input.side==="LONG"?Math.max(0,input.targetLower-input.currentPrice)/input.currentPrice:
+      Math.max(0,input.currentPrice-input.targetUpper)/input.currentPrice,
+    near=reached||distance<=Math.max(cost*1.5,input.originalStopRate*.25);
+  return near?cost+peakNet*.30:0;
+}
+
 export function environmentDecayProfitFloor(input:{
   peakFavorableRate:number;originalStopRate:number;modeFit:number;horizonMinutes:15|30|45|60;costRate?:number;
 }){
@@ -488,11 +508,33 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
     t.lastPrice=px;t.lastQuoteAt=q!.observedAt;t.favorable=Math.max(t.favorable,favorable);t.adverse=Math.max(t.adverse,adverse);
     t.peakPnlRate=Math.max(t.peakPnlRate??0,favorable);
     if(!t.firstProfitAt&&favorable>=ROUND_TRIP_COST*.65){t.firstProfitAt=now;if(t.entryContext)t.entryContext.postEntryState="CONFIRMED";}
-    const position=evaluatePositionIntelligence({
+    const liquidityNow=s.extremumRegime.liquidity?.symbols[t.symbol],liqSide=liquidityNow?.departure.side==="UP"?"LONG":
+      liquidityNow?.departure.side==="DOWN"?"SHORT":null;
+    if(t.liquidityLifecycle?.currentPlan==="FAMILY_TURN"&&liquidityNow?.departure.state==="ACCEPTED"
+      &&liqSide===t.side&&liquidityNow.departure.confidence>=.60){
+      const target=t.side==="LONG"?liquidityNow.nextAbove:liquidityNow.nextBelow;
+      t.liquidityLifecycle={currentPlan:"LIQUIDITY_MIGRATION",upgradedAt:t.liquidityLifecycle.upgradedAt??now,
+        reason:"家族提前转折已经发展成同方向、被市场接受的流动性迁移；原仓位直接升级，不重新开单。",
+        originLower:liquidityNow.activeZone?.lower??t.liquidityLifecycle.originLower,
+        originUpper:liquidityNow.activeZone?.upper??t.liquidityLifecycle.originUpper,
+        targetLower:target?.lower??null,targetUpper:target?.upper??null};
+      event(s,now,"ROTATION",t.id,"家族转折持仓升级为流动性迁移持仓",{confidence:liquidityNow.departure.confidence});
+    }
+    const activeLiquidityPlan=t.liquidityLifecycle?.currentPlan??t.entryContext?.tradePlan,
+      activeOrigin=t.liquidityLifecycle?{lower:t.liquidityLifecycle.originLower,upper:t.liquidityLifecycle.originUpper}:null,
+      activeTarget=t.liquidityLifecycle?{lower:t.liquidityLifecycle.targetLower,upper:t.liquidityLifecycle.targetUpper}:null,
+      position=evaluatePositionIntelligence({
       now,side:t.side,signedRate:signed,peakFavorableRate:t.favorable,ageMin,firstProfit:!!t.firstProfitAt,
       expectedHoldMinutes:t.expectedHoldMinutes??180,stopRate:originalStopRate,entryScore:t.entryContext?.entryScore??50,
       entryResidual:t.entryContext?.entryResidual??0,entryRelativeStrength:t.entryContext?.entryRelativeStrength??.5,
       entryRemainingSpaceRate:t.entryContext?.remainingSpaceRate??t.forecast?.remainingNetRate??0,state,
+      currentPrice:px,liquidity:liquidityNow,entryTradePlan:activeLiquidityPlan,
+      entryOrigin:activeOrigin?.lower!=null&&activeOrigin?.upper!=null?{lower:activeOrigin.lower,upper:activeOrigin.upper}:
+        t.entryContext?.liquidityOriginLower!=null&&t.entryContext?.liquidityOriginUpper!=null
+          ?{lower:t.entryContext.liquidityOriginLower,upper:t.entryContext.liquidityOriginUpper}:null,
+      entryTarget:activeTarget?.lower!=null&&activeTarget?.upper!=null?{lower:activeTarget.lower,upper:activeTarget.upper}:
+        t.entryContext?.liquidityTargetLower!=null&&t.entryContext?.liquidityTargetUpper!=null
+          ?{lower:t.entryContext.liquidityTargetLower,upper:t.entryContext.liquidityTargetUpper}:null,
       narrative:s.extremumRegime.narrative,quote:q,minutePath:minutePaths?.[t.symbol],previous:t.positionIntelligence,
       costRate:ROUND_TRIP_COST,marketStateAgeMs:Math.max(0,now-s.extremumRegime.updatedAt),
       entryResponseValidated:!!t.entryContext?.entryResponse,
@@ -528,9 +570,28 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
       }
     }
 
+    if(activeLiquidityPlan==="LIQUIDITY_MIGRATION"){
+      const targetFloor=liquidityTargetProfitFloor({side:t.side,currentPrice:px,
+        targetLower:t.liquidityLifecycle?.targetLower??t.entryContext?.liquidityTargetLower??null,
+        targetUpper:t.liquidityLifecycle?.targetUpper??t.entryContext?.liquidityTargetUpper??null,
+        peakFavorableRate:t.favorable,originalStopRate,costRate:ROUND_TRIP_COST});
+      if(targetFloor>Math.max(t.profitFloorRate??0,ROUND_TRIP_COST*.8)){
+        if(signed<=targetFloor){
+          closeTrade(s,t,px,now,"LIQUIDITY_TARGET_PROTECT_EXIT");closed.add(t.id);continue;
+        }
+        const next=t.entryPrice*(1+d*targetFloor);
+        if(t.side==="LONG"&&next>t.stopPrice||t.side==="SHORT"&&next<t.stopPrice){
+          t.profitFloorRate=targetFloor;t.stopPrice=next;
+          event(s,now,"PROTECTION",t.id,
+            "流动性迁移已经接近/进入下一片主要流动性区域；只锁住30%已证明净利润，等待市场决定是继续迁移还是重新积累。",
+            {floorRate:targetFloor,peakRate:t.favorable});
+        }
+      }
+    }
+
     if(t.entryContext?.environmentOutlookVersion===ENVIRONMENT_OUTLOOK_VERSION&&t.entryContext?.mode){
       const currentFit=environmentModeFit({market:s.extremumRegime,evolution:marketEvolution,outlook:environmentOutlook,
-        side:t.side,mode:t.entryContext.mode}),
+        side:t.side,mode:t.entryContext.mode,tradePlan:activeLiquidityPlan}),
         environmentFloor=environmentDecayProfitFloor({peakFavorableRate:t.favorable,originalStopRate,modeFit:currentFit,
           horizonMinutes:environmentOutlook.horizonMinutes,costRate:ROUND_TRIP_COST});
       if(environmentFloor>0){
@@ -701,6 +762,9 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
       notional,leverage,margin,plannedRisk,stopPrice,armPrice:target,favorable:0,adverse:0,lastPrice:price,lastQuoteAt:q.observedAt,entryFee,exitFee:0,
       fundingAllowance:0,grossPnl:null,netPnl:null,exitReason:null,relationFailureBars:0,lastRelationBar:now,execution:"REAL_QUOTE_PAPER_MODEL",
       liveEligible:false,firstProfitAt:null,holdScore:o.score,profitFloorRate:0,expectedHoldMinutes:horizon,peakPnlRate:0,
+      liquidityLifecycle:o.tradePlan?{currentPlan:o.tradePlan,upgradedAt:null,reason:o.liquidityReason??o.reason,
+        originLower:o.liquidityOriginLower??null,originUpper:o.liquidityOriginUpper??null,
+        targetLower:o.liquidityTargetLower??null,targetUpper:o.liquidityTargetUpper??null}:undefined,
       exitControl:{policy:MARKET_INTELLIGENCE_VERSION,armedAt:null,armedQuoteAt:null,maxObservationGapMs:30_000,maxQuoteAgeMs:10_000},
       entryContext:{version:"adaptive-ten-entry-v1",capturedAt:now,timeframe:"5m",side,mode:o.mode,reserve:false,reason:o.reason,
         entryScore:o.environmentScore??o.score,baseEntryScore:o.score,environmentScore:o.environmentScore??o.score,
@@ -722,6 +786,9 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
         environmentOutlookVersion:o.environmentOutlook?.version,environmentModeFit:o.environmentModeFit,
         environmentHorizonMinutes:o.environmentOutlook?.horizonMinutes,environmentPersistenceScore:o.environmentOutlook?.persistenceScore,
         environmentTransitionPressure:o.environmentOutlook?.transitionPressure,environmentProfitExpansion:o.environmentOutlook?.profitExpansion,
+        tradePlan:o.tradePlan,liquidityPlanConfidence:o.liquidityPlanConfidence,liquidityReason:o.liquidityReason,liquidityTargetRate:o.liquidityTargetRate,
+        liquidityOriginLower:o.liquidityOriginLower,liquidityOriginUpper:o.liquidityOriginUpper,
+        liquidityTargetLower:o.liquidityTargetLower,liquidityTargetUpper:o.liquidityTargetUpper,
         futureResearchAction:o.futureResearchAction,futureResearchReason:o.futureResearchReason,futureHypothesisIds:o.futureHypothesisIds},
       forecast:{remainingNetRate:remainingNet,quality:o.score/100,sizingEquity:equity}};
   s.positions.push(t);s.balance-=entryFee;s.fees+=entryFee;s.turnover+=notional;s.lastEntryAt[o.symbol]=now;s.lastSide[o.symbol]=side;

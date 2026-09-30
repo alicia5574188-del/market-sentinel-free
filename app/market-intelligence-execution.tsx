@@ -28,13 +28,17 @@ const hypothesisKind=(v?:string)=>({
 const hypothesisStatus=(v?:string)=>v==="CONFIRMED"?"已被后续市场确认":v==="WEAKENING"?"确认后正在减弱":v==="CONFIRMING"?"正在加强":"正在形成";
 const researchAction=(v?:string)=>v==="CONFIRM_MORE"?"加强实时确认":v==="SUPPORTED"?"前瞻研究支持":"沿用原确认";
 const environmentName=(v?:string)=>({TREND:"趋势环境",TRANSITION:"过渡环境",ROTATION:"轮动/震荡",SHOCK:"同步爆发行情"}[v??""]??v??"建立中");
+const tradePlanName=(v?:string)=>({
+  LIQUIDITY_MIGRATION:"流动性迁移",LIQUIDITY_REJECTION:"离开失败回归",FAMILY_TURN:"家族提前转折",OBSERVE_ONLY:"只观察"
+}[v??""]??v??"旧版计划");
+const liquidityState=(v?:string)=>({INSIDE:"区域内积累",TESTING:"尝试离开",ACCEPTED:"离开已被接受",REJECTED:"离开失败回归"}[v??""]??v??"—");
 const entryExecutionState=(v?:{status?:string;phase?:string;stableThesis?:boolean})=>v?.status==="WAITING"
   ?(v.phase==="RETEST_WAIT"?"等回调重启":v.stableThesis?"已武装":"实时确认")
   :v?.status==="CANCELLED"?"本假设已取消":"未进入执行";
 const side=(v:string)=>v==="LONG"?"做多":"做空";
 const family=(v?:string)=>({
   BREADTH:"市场广度",LEADERSHIP:"领导结构",RELATIVE:"相对强弱",FLOW:"跨所/盘口响应",CORRELATION:"相关性",
-  PATH:"价格路径",STRUCTURE:"结构",MARKET:"市场背景"
+  PATH:"价格路径",STRUCTURE:"结构",LIQUIDITY:"流动性计划",MARKET:"市场背景"
 }[v??""]??v??"市场细节");
 const trend=(v?:string)=>v==="STRENGTHENING"?"增强":v==="WEAKENING"?"减弱":"稳定";
 const clock=(v?:number)=>v?new Date(v).toLocaleTimeString("zh-CN",{timeZone:BEIJING_TIME_ZONE,hour12:false}):"—";
@@ -53,7 +57,7 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
     }),
     currentEvolution=data?.environmentRouter?.phase??opportunities.find(o=>o.marketEvolutionPhase)?.marketEvolutionPhase,
     hypothesisResearch=data?.hypothesisResearch,hypotheses=hypothesisResearch?.active??[],
-    environmentRouter=data?.environmentRouter,
+    environmentRouter=data?.environmentRouter,liquidity=mi?.liquidity,
     entryValidations=data?.entryValidation?.records??[],
     validationById=new Map(entryValidations.map(v=>[v.candidateId,v])),
     waitingValidations=entryValidations.filter(v=>v.status==="WAITING"),
@@ -79,6 +83,7 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
           <header className="fr-exec-position-head"><div><small>{side(t.side)}</small><h3>{t.symbol.replace("_"," / ")}</h3></div>
             <span className={`fr-exec-action ${actionClass(currentAction)}`}><b>{action(currentAction)}</b><small>Position Intelligence</small></span></header>
           <div className="fr-exec-metrics">
+            <span><small>交易计划</small><b>{tradePlanName(t.liquidityLifecycle?.currentPlan??t.entryContext?.tradePlan)}</b></span>
             <span><small>最高浮盈</small><b>{pct(peak)}</b></span>
             <span><small>当前幅度</small><b>{pct(signed)}</b></span>
             <span><small>峰值回吐</small><b>{giveback==null?"—":fmt(giveback*100,0)+"%"}</b></span>
@@ -87,6 +92,7 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
           <p className="fr-exec-judgement"><b>当前判断：</b>{p?.summary??"Position Intelligence 正在建立这笔仓位自己的连续观察基线。"}</p>
           <details className="fr-exec-research-details"><summary>查看这笔仓位的研究依据</summary>
             <p><b>入场假设：</b>{t.entryContext?.thesisSummary??t.entryContext?.reason??"历史兼容持仓"}</p>
+            {t.liquidityLifecycle?.reason&&<p><b>当前流动性计划：</b>{tradePlanName(t.liquidityLifecycle.currentPlan)} · {t.liquidityLifecycle.reason}</p>}
             {t.entryContext?.futureResearchReason&&<p><b>入场时前瞻研究：</b>{researchAction(t.entryContext.futureResearchAction)} · {t.entryContext.futureResearchReason}</p>}
             {p&&<><p><b>持有价值：</b>{fmt(p.holdValueScore,0)} · 剩余空间 {pct(p.remainingSpaceRate)} · 正常回撤 {pct(p.expectedPullbackRate)} · 空间/回撤 {fmt(p.continuationRatio,2)}×</p>
               <p><b>优势变化：</b>{fmt(p.entryAdvantage,0)} → {fmt(p.currentAdvantage,0)}（{p.advantageChange>=0?"+":""}{fmt(p.advantageChange,0)}）</p>
@@ -120,6 +126,19 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
         <span><small>利润扩张</small><b>{environmentRouter?.outlook?.profitExpansion==="HIGH"?"高":environmentRouter?.outlook?.profitExpansion==="LOW"?"低":environmentRouter?.outlook?.profitExpansion==="NORMAL"?"正常":"—"}</b></span>
       </div>
       <p className="fr-exec-judgement"><b>未来条件判断：</b>{environmentRouter?.reason??"正在建立市场条件持续性基线。"}</p>
+    </section>
+
+    <section className="fr-section">
+      <div className="fr-section-head"><div><small>LIQUIDITY MAP</small><h2>全市场流动性地图</h2>
+        <p>大视角先找真正反复交换的区域，再判断积累、离开、接受或回归；1分钟只负责最后执行，不参与定义全局环境。</p></div>
+        <span>{liquidity?.market?.ready?`覆盖 ${liquidity.market.readySymbols}/${liquidity.market.totalSymbols}`:"建立中"}</span></div>
+      <div className="fr-exec-market-grid">
+        <span><small>仍在区域内</small><b>{liquidity?.market?fmt(liquidity.market.insideShare*100,0)+"%":"—"}</b></span>
+        <span><small>已接受迁移</small><b>{liquidity?.market?fmt(liquidity.market.acceptedShare*100,0)+"%":"—"}</b></span>
+        <span><small>离开失败</small><b>{liquidity?.market?fmt(liquidity.market.rejectedShare*100,0)+"%":"—"}</b></span>
+        <span><small>高积累</small><b>{liquidity?.market?fmt(liquidity.market.highAccumulationShare*100,0)+"%":"—"}</b></span>
+      </div>
+      <p className="fr-exec-judgement"><b>流动性判断：</b>{liquidity?.market?.summary??"等待至少6小时完整5分钟路径建立全局盘中流动性地图。"}</p>
     </section>
 
     <section className="fr-section fr-hypothesis-section">
@@ -159,14 +178,20 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
       <div className="fr-section-head"><div><small>NEXT OPPORTUNITIES</small><h2>当前交易假设 · 最值得关注的机会</h2>
         <p>先看机会处于哪个阶段，再看评分。过度延伸不会直接被禁止，但会进入加强实时确认。</p></div><span>{actionable.length} 个可参与</span></div>
       {candidateRows.length?<div className="fr-exec-candidate-grid">{candidateRows.map((o,index)=>{
-        const v=validationById.get(o.id),entryState=v?entryExecutionState(v):o.extendedConfirmation?"加强确认":o.eligible?"主候选":"观察";
+        const v=validationById.get(o.id),lm=liquidity?.symbols?.[o.symbol],
+          entryState=v?entryExecutionState(v):o.extendedConfirmation?"加强确认":o.eligible?"主候选":"观察";
         return <details className={`fr-exec-candidate ${o.eligible?"is-eligible":""} ${o.extendedConfirmation?"is-extended":""}`} key={o.id}>
-        <summary><span className="fr-exec-candidate-rank">#{index+1}</span><div className="fr-exec-candidate-main"><div><b>{o.symbol.replace("_"," / ")}</b><small>{side(o.side)} · {o.mode}</small></div>
+        <summary><span className="fr-exec-candidate-rank">#{index+1}</span><div className="fr-exec-candidate-main"><div><b>{o.symbol.replace("_"," / ")}</b><small>{side(o.side)} · {tradePlanName(o.tradePlan)}</small></div>
           <strong>{opportunityPhase(o.opportunityLifecyclePhase)}</strong></div>
           <div className="fr-exec-candidate-metrics"><span><small>原始评分</small><b>{fmt(o.score,0)}</b></span><span><small>净空间</small><b>{pct(o.netRemainingSpaceRate)}</b></span>
             <span><small>空间/回撤</small><b>{fmt(o.edgeRatio,2)}×</b></span></div>
           <em>{entryState}</em></summary>
         <div className="fr-score-details"><p><b>机会阶段：</b>{opportunityPhase(o.opportunityLifecyclePhase)} · 市场阶段 {evolution(o.marketEvolutionPhase)}</p>
+          <p><b>交易计划：</b>{tradePlanName(o.tradePlan)} · 计划可信度 {fmt((o.liquidityPlanConfidence??0)*100,0)}%
+            {lm?` · 当前 ${liquidityState(lm.departure.state)}`:""}</p>
+          {o.liquidityReason&&<p><b>流动性依据：</b>{o.liquidityReason}</p>}
+          {(o.liquidityOriginLower!=null&&o.liquidityOriginUpper!=null)&&<p><b>来源区域：</b>{fmt(o.liquidityOriginLower,6)} – {fmt(o.liquidityOriginUpper,6)}
+            {(o.liquidityTargetLower!=null&&o.liquidityTargetUpper!=null)?` · 下一目标 ${fmt(o.liquidityTargetLower,6)} – ${fmt(o.liquidityTargetUpper,6)}`:""}</p>}
           {o.environmentReason&&<p><b>研究背景：</b>{o.environmentReason}</p>}
           {v&&<p><b>入场执行：</b>{entryState} · {v.reason??"等待实时响应。"}</p>}
           {o.lifecycleReason&&<p><b>机会研究：</b>{o.lifecycleReason}（不直接控制交易）</p>}
@@ -223,7 +248,7 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
         <span><small>实时跨所报价</small><b>{mi?.coverage?.quoteMarkets??0}</b></span>
         <span><small>多交易所确认</small><b>{mi?.coverage?.multiVenueMarkets??0}</b></span>
       </div>
-      <p className="fr-note"><b>数据覆盖：</b>5m市场 {mi?.coverage?.intradayMarkets??0} · 日线市场 {mi?.coverage?.dailyMarkets??0} · 实时跨所报价 {mi?.coverage?.quoteMarkets??0} · 多交易所确认 {mi?.coverage?.multiVenueMarkets??0}。超大周期至少需要3个真实日线市场才会开始形成牛熊判断。</p>\n      <p className="fr-note">PAPER→LIVE→Gate 复制链保持原样。实盘运行 {liveOverview?.operational?"正常":"未运行"}，当前 {liveOverview?.positionCount??"—"} 笔；本次页面升级不改变任何交易、研究、账户或实盘逻辑。</p>
+      <p className="fr-note"><b>数据覆盖：</b>5m市场 {mi?.coverage?.intradayMarkets??0} · 日线市场 {mi?.coverage?.dailyMarkets??0} · 实时跨所报价 {mi?.coverage?.quoteMarkets??0} · 多交易所确认 {mi?.coverage?.multiVenueMarkets??0}。流动性地图每币至少需要72根完成5m（约6小时），全局最多使用120根（约10小时）；候选/持仓仍用现有1m与实时多交易所数据完成执行确认。</p>\n      <p className="fr-note">PAPER→LIVE→Gate 复制链保持原样。实盘运行 {liveOverview?.operational?"正常":"未运行"}，当前 {liveOverview?.positionCount??"—"} 笔；流动性研究复用现有数据，不新增请求频率，也不重置账户或学习状态。</p>
     </section>
   </div>;
 }

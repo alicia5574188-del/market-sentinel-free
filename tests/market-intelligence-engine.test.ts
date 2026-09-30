@@ -338,10 +338,12 @@ test("PAPER balance reset cannot turn the already-processed 5m bar into a fresh 
   const now=T+300_000;
   const quotes=Object.fromEntries(Object.entries(paths).map(([s,v])=>[s,{...q(v.at(-1)!.close,.0003),observedAt:now}]));
   const second=buildMarketIntelligence({paths,quotes,previous:first.state,now});
-  assert.ok(second.opportunities.some(o=>o.eligible),"fixture must contain a mature executable opportunity");
+  const executable={...second.opportunities[0]!,eligible:true,mode:"CONTINUATION" as const,tradePlan:"LIQUIDITY_MIGRATION" as const,
+    thesisId:"reset-liquidity-migration-thesis",thesisSince:now-300_000,thesisBars:2};
+  assert.ok(executable.symbol,"fixture must contain a liquidity-plan opportunity shape");
 
   const prior=initialForward(T-600_000);
-  prior.extremumRegime=second.state;prior.marketPulse=second.pulse;prior.opportunities=second.opportunities;
+  prior.extremumRegime=second.state;prior.marketPulse=second.pulse;prior.opportunities=[executable];
   prior.selectedSymbols=Object.keys(second.state.symbols);
   prior.lastCandleAt=Math.max(...Object.values(paths).map(rows=>(rows.at(-1)!.time+300)*1000));
   prior.lastCycleAt=now;prior.lastQuoteCycleAt=now;
@@ -374,12 +376,13 @@ test("cold-archived history cannot make an already-consumed thesis executable ag
   const shifted=Object.fromEntries(Object.entries(paths).map(([s,rows])=>[s,rows.map(r=>({...r,time:r.time+300}))]));
   const now=T+300_000,shiftQuotes=Object.fromEntries(Object.entries(shifted).map(([s,v])=>[s,{...q(v.at(-1)!.close,.0003),observedAt:now}]));
   const second=buildMarketIntelligence({paths:shifted,quotes:shiftQuotes,previous:first.state,now});
-  const opportunity=second.opportunities.find(o=>o.eligible&&o.thesisId);
-  assert.ok(opportunity?.thesisId,"fixture must produce an executable persistent thesis");
-  const s=initialForward(T-600_000);s.extremumRegime=second.state;s.opportunities=[opportunity!];
-  s.consumedTheses[opportunity!.thesisId!]=now-60_000;
-  const contracts={[opportunity!.symbol]:{quantoMultiplier:.001,leverageMax:10,maintenanceRate:.005,minContracts:1}};
-  const opened=fillForwardPortfolio(s,{[opportunity!.symbol]:shiftQuotes[opportunity!.symbol]!},contracts,now,1000,false);
+  const opportunity={...second.opportunities[0]!,eligible:true,mode:"CONTINUATION" as const,tradePlan:"LIQUIDITY_MIGRATION" as const,
+    thesisId:"consumed-liquidity-migration-thesis",thesisSince:now-300_000,thesisBars:2};
+  assert.ok(opportunity.thesisId,"fixture must contain an executable persistent liquidity thesis shape");
+  const s=initialForward(T-600_000);s.extremumRegime=second.state;s.opportunities=[opportunity];
+  s.consumedTheses[opportunity.thesisId]=now-60_000;
+  const contracts={[opportunity.symbol]:{quantoMultiplier:.001,leverageMax:10,maintenanceRate:.005,minContracts:1}};
+  const opened=fillForwardPortfolio(s,{[opportunity.symbol]:shiftQuotes[opportunity.symbol]!},contracts,now,1000,false);
   assert.equal(opened,0);
   assert.equal(s.positions.length,0,"thesis dedupe must survive even after the full closed trade leaves hot history");
 });
@@ -487,7 +490,7 @@ test("environment outlook preserves a strong aligned continuation lane while unc
   const outlook=deriveEnvironmentOutlook(market,trend);
   assert.equal(outlook.horizonMinutes,60);
   assert.ok(outlook.persistenceScore>.80);
-  const capture=routeEnvironmentOpportunity({market,evolution:trend,symbol,opportunity:{side:"LONG",mode:"CONTINUATION",score:95,premium:true,
+  const capture=routeEnvironmentOpportunity({market,evolution:trend,symbol,opportunity:{side:"LONG",mode:"CONTINUATION",tradePlan:"LIQUIDITY_MIGRATION",score:95,premium:true,
     edgeRatio:2.2,netRemainingSpaceRate:.04,pullbackRiskRate:.018,thesisBars:2,confirmationStage:"READY"}});
   assert.equal(capture.playbook,"TREND_CAPTURE");assert.equal(capture.mainline,true);
   assert.ok(capture.riskScale>.95);assert.ok(capture.modeFit>.80);
@@ -495,7 +498,7 @@ test("environment outlook preserves a strong aligned continuation lane while unc
   market.narrative.major={...market.narrative.major,bias:"BEARISH",score:-.35};
   market.internals={...market.internals!,leaderPersistence:.2};
   const mixed={...trend,trendSide:"LONG" as const,rotationRisk:.46,stabilityScore:.54};
-  const cautious=routeEnvironmentOpportunity({market,evolution:mixed,symbol,opportunity:{side:"LONG",mode:"CONTINUATION",score:97,premium:true,
+  const cautious=routeEnvironmentOpportunity({market,evolution:mixed,symbol,opportunity:{side:"LONG",mode:"CONTINUATION",tradePlan:"LIQUIDITY_MIGRATION",score:97,premium:true,
     edgeRatio:2.3,netRemainingSpaceRate:.03,pullbackRiskRate:.012,thesisBars:2,confirmationStage:"READY"}});
   assert.equal(cautious.mainline,false);
   assert.ok(cautious.riskScale>=.70&&cautious.riskScale<capture.riskScale);
@@ -513,7 +516,7 @@ test("synchronized market expansion keeps a 60m mainline continuation path",()=>
     correlation:.9,beta:1,volatility:.003,dataConfidence:98,actualMove:.012,expectedMove:.011,residual:.001,residualZ:.12,
     residualPersistence:1,relativeStrength:.53,longScore:78,shortScore:22,pathLong:.75,pathShort:.25,roomLong:.02,roomShort:.006,
     sourceCount:5,venueAgreement:.95,venuePressure:.5,reasons:[],signalSide:"LONG" as const,signalSince:T-300_000,signalBars:1,signalLastBar:T-300_000};
-  const route=routeEnvironmentOpportunity({market,evolution,symbol,opportunity:{side:"LONG",mode:"CONTINUATION",score:76,premium:false,
+  const route=routeEnvironmentOpportunity({market,evolution,symbol,opportunity:{side:"LONG",mode:"CONTINUATION",tradePlan:"LIQUIDITY_MIGRATION",score:76,premium:false,
     edgeRatio:1.8,netRemainingSpaceRate:.018,pullbackRiskRate:.008,thesisBars:1,confirmationStage:"OBSERVE"}});
   assert.equal(route.environment,"SHOCK");assert.equal(route.playbook,"SHOCK_PARTICIPATION");
   assert.equal(route.outlook.horizonMinutes,60);assert.equal(route.mainline,true);assert.equal(route.forceRetest,false);
