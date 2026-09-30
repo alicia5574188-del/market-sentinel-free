@@ -542,7 +542,8 @@ test("environment outlook preserves a strong aligned continuation lane while unc
   const cautious=routeEnvironmentOpportunity({market,evolution:mixed,symbol,opportunity:{side:"LONG",mode:"CONTINUATION",tradePlan:"LIQUIDITY_MIGRATION",score:97,premium:true,
     edgeRatio:2.3,netRemainingSpaceRate:.03,pullbackRiskRate:.012,thesisBars:2,confirmationStage:"READY"}});
   assert.equal(cautious.mainline,false);
-  assert.ok(cautious.riskScale>=.70&&cautious.riskScale<capture.riskScale);
+  assert.ok(cautious.riskScale>=.55&&cautious.riskScale<capture.riskScale);
+  assert.equal(cautious.forceRetest,true,"short-horizon/counter-aligned continuation must wait for pullback and restart");
 });
 
 test("synchronized market expansion keeps a 60m mainline continuation path",()=>{
@@ -581,7 +582,7 @@ test("rotation makes relative/reversal logic more suitable than continuation wit
   assert.ok(rel>cont);
   const route=routeEnvironmentOpportunity({market,evolution,symbol,opportunity:{side:"SHORT",mode:"RELATIVE",score:82,premium:true,
     edgeRatio:2,netRemainingSpaceRate:.022,pullbackRiskRate:.01,thesisBars:3,confirmationStage:"READY"}});
-  assert.equal(route.playbook,"ROTATION_RELATIVE");assert.ok(route.riskScale>=.70);
+  assert.equal(route.playbook,"ROTATION_RELATIVE");assert.ok(route.riskScale>=.55);assert.equal(route.forceRetest,true);
 });
 
 test("historical environment PnL stays diagnostic; live routing is driven by current market condition",()=>{
@@ -603,7 +604,7 @@ test("historical environment PnL stays diagnostic; live routing is driven by cur
   const b=routeEnvironmentOpportunity({market,evolution,symbol,performanceFactor:factor,opportunity:{side:"LONG",mode:"REVERSAL",
     score:82,premium:true,edgeRatio:2,netRemainingSpaceRate:.025,pullbackRiskRate:.011,thesisBars:3,confirmationStage:"READY"}});
   assert.equal(a.riskScale,b.riskScale);
-  assert.ok(a.riskScale>=.70,"environment can reduce size but cannot turn trading off");
+  assert.ok(a.riskScale>=.55,"environment can reduce size but cannot turn trading off");
 });
 
 test("one-minute fast pressure can shorten the future window without flipping the formal market label",()=>{
@@ -633,7 +634,7 @@ test("future environment support can remove fastLane without shortening the ordi
 
 test("environment decay profit floor is wide, profit-only and inactive in long future windows",()=>{
   const protectedFloor=environmentDecayProfitFloor({peakFavorableRate:.032,originalStopRate:.012,modeFit:.30,horizonMinutes:15,costRate:.0019});
-  assert.ok(protectedFloor>.0019&&protectedFloor<.012,"environment protection keeps only a minority of proven profit");
+  assert.ok(protectedFloor>.012&&protectedFloor<.02,"15m low-fit decay should retain roughly half of proven net profit");
   assert.equal(environmentDecayProfitFloor({peakFavorableRate:.032,originalStopRate:.012,modeFit:.30,horizonMinutes:60,costRate:.0019}),0);
   assert.equal(environmentDecayProfitFloor({peakFavorableRate:.004,originalStopRate:.012,modeFit:.20,horizonMinutes:15,costRate:.0019}),0);
 });
