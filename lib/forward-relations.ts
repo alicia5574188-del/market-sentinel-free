@@ -979,21 +979,30 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
   minutePaths:Record<string,Candle[]>|undefined,paths:Record<string,Candle[]>|undefined,now:number,equity:number){
   const opportunities=new Map(s.opportunities.map(o=>[o.id,o])),waiting=Object.values(s.entryValidations)
     .filter(v=>v.status==="WAITING").sort((a,b)=>{
-      const ao=opportunities.get(a.candidateId),bo=opportunities.get(b.candidateId);
+      const ao=a.frozenOpportunity??opportunities.get(a.candidateId),bo=b.frozenOpportunity??opportunities.get(b.candidateId);
       if(!ao)return bo?1:0;if(!bo)return-1;return opportunityCompare(ao,bo);
     });
   const reasons:Record<string,number>={};let opened=0;
   const reject=(reason:string)=>{reasons[reason]=(reasons[reason]??0)+1;};
   for(const validation of waiting){
-    const o=opportunities.get(validation.candidateId);
-    if(!o||!isIntelligenceOpportunity(o)||o.expiresAt<=now){
-      validation.status="CANCELLED";validation.reason="交易假设已过期或已被新的完成5m结构替代";reject(validation.reason);continue;
+    const o=validation.frozenOpportunity??opportunities.get(validation.candidateId);
+    if(!o||!isIntelligenceOpportunity(o)||validation.expiresAt<=now){
+      validation.status="CANCELLED";validation.reason="冻结交易计划已经超过自身有效期";reject(validation.reason);continue;
     }
     if(s.positions.some(t=>t.symbol===validation.symbol)){
       validation.status="CANCELLED";validation.reason="同币已有持仓，取消重复执行等待";reject(validation.reason);continue;
     }
-    const q=quotes[validation.symbol];if(!freshQuote(q,now)||q!.entryReady!==true){reject("等待实时盘口");continue;}
+    const q=quotes[validation.symbol];if(!freshQuote(q,now)||q!.entryReady!==true){
+      validation.reason="交易计划仍然冻结有效，等待实时执行盘口恢复。";reject("等待实时盘口");continue;
+    }
     const price=validation.side==="LONG"?q!.bestAsk:q!.bestBid,state=s.extremumRegime.symbols[validation.symbol],
+      frozenInvalidation=Number.isFinite(o.liquidityInvalidationPrice)?o.liquidityInvalidationPrice!:null,
+      liquidityInvalidated=frozenInvalidation!=null&&(
+        validation.side==="LONG"?price<=frozenInvalidation:price>=frozenInvalidation);
+    if(liquidityInvalidated&&(o.tradePlan==="LIQUIDITY_MIGRATION"||o.tradePlan==="LIQUIDITY_REJECTION")){
+      validation.status="CANCELLED";validation.reason="价格已经触及冻结交易计划的流动性失效边界，原假设真正失效。";
+      reject(validation.reason);continue;
+    }
       decision=evaluateEntryResponse({now,side:validation.side,score:o.environmentScore??o.score,edgeRatio:o.edgeRatio,pullbackRiskRate:o.pullbackRiskRate,
         stopRate:o.stopRate,sourceCount:o.sourceCount??0,disagreementRate:o.disagreementRate??0,mode:o.mode,
         fastLaneAllowed:!!o.environmentMainline,price,
@@ -1066,9 +1075,18 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
       locationDecision=entryLocationDecision({sidePosition30:recentLocation?.sidePosition30??null,
         breakoutRate30:recentLocation?.breakoutRate30??null,confirmationAdvanceRate:decision.bestAdvanceRate,costRate:ROUND_TRIP_COST});
     if(locationDecision.action==="WAIT_RETEST"){
-      validation.status="CANCELLED";
-      validation.reason=`方向假设未否定，但当前价格已经严重越过最近30分钟有利边界：位置 ${(locationDecision.sidePosition30!*100).toFixed(0)}%，
-已追出 ${((locationDecision.breakoutRate30??0)*100).toFixed(2)}%，而武装后的新增确认只有 ${(decision.bestAdvanceRate*100).toFixed(2)}%。当前位置作废，等待回调或新的完成5m结构重新武装。`.replace("\n","");
+      const stable=stableEntryThesisProfile({score:o.environmentScore??o.score,premium:!!o.premium,
+        thesisBars:o.thesisBars??state?.signalBars??0,stage:o.confirmationStage??state?.stage??"OBSERVE",edgeRatio:o.edgeRatio,
+        sourceCount:o.sourceCount??state?.sourceCount??0,dataConfidence:o.dataConfidence??state?.dataConfidence??0,
+        netRemainingSpaceRate:o.netRemainingSpaceRate,pullbackRiskRate:o.pullbackRiskRate});
+      validation.stableThesis=true;validation.phase="RETEST_WAIT";
+      validation.initialExpectedNetRate=validation.initialExpectedNetRate??o.netRemainingSpaceRate;
+      validation.pullbackRiskRateAtArm=validation.pullbackRiskRateAtArm??o.pullbackRiskRate;
+      validation.maxChaseRate=validation.maxChaseRate??stable.maxChaseRate;
+      validation.retestPullbackMin=validation.retestPullbackMin??stable.retestPullbackMin;
+      validation.restartMin=validation.restartMin??stable.restartMin;
+      validation.deadlineAt=Math.max(validation.deadlineAt,Math.min(validation.expiresAt,(validation.authorizedAt??validation.startedAt)+12*60_000));
+      validation.reason=`方向和流动性计划仍有效，但当前位置已经明显走远：已越过最近30分钟有利边界 ${((locationDecision.breakoutRate30??0)*100).toFixed(2)}%。冻结计划不取消，也不追价；转入回调/重新启动等待。`;
       reject(validation.reason);continue;
     }
 
