@@ -262,15 +262,18 @@ export function buildMarketIntelligence(input:{paths:Record<string,CandleLike[]>
     syncDelta=synchrony-previousInternals.synchrony,dispersionDelta=dispersion-previousInternals.dispersion,
     marketProgress=factor6/(volFactor*Math.sqrt(6)+1e-9),
     flowResponse=venuePressureMarket===0?0:clip(marketProgress/(Math.abs(venuePressureMarket)+.15),-1,1),
-    rawTransition=clip((short.score-major.score)*.30+breadthDelta*.20+residualDelta*.18+venuePressureMarket*.09
-      +bookImbalanceMarket*.07+liquidityDirectional*.08
-      -Math.sign(major.score||1)*Math.max(0,dispersionDelta)*.06+syncDelta*.05,-1,1),
+    liqCtx=liquidity.market,liqMigration=liqCtx.ready?liqCtx.migrationBreadth:0,
+    liqBreakPressure=liqCtx.ready?clip(liqCtx.highAccumulationShare*liqCtx.oneSidedDepletionShare*2+liqCtx.testingShare*.35):0,
+    rawTransition=clip((short.score-major.score)*.27+breadthDelta*.18+residualDelta*.15+venuePressureMarket*.08
+      +bookImbalanceMarket*.06+liquidityDirectional*.07+liqMigration*.12
+      -Math.sign(major.score||1)*Math.max(0,dispersionDelta)*.05+syncDelta*.05,-1,1),
     priorTransition=(prevN.transition as MarketNarrative["transition"]&{score?:number}).score??0,
     transitionScore=clip(priorTransition*.72+rawTransition*.28,-1,1),
     transitionDirection=stableBias(transitionScore,prevN.transition.direction,.18,.06,.38),
-    transitionPressure=Math.abs(transitionScore)*100,
-    transitionStage:NonNullable<MarketNarrative["transition"]["stage"]>=transitionDirection==="NEUTRAL"||transitionPressure<18?"STABLE"
-      :transitionPressure<34?"EARLY":transitionPressure<55?"BUILDING":"CONFIRMED",
+    transitionPressure=clip(Math.abs(transitionScore)+liqBreakPressure*.28,0,1)*100,
+    transitionStage:NonNullable<MarketNarrative["transition"]["stage"]>=transitionPressure<18?"STABLE":
+      transitionDirection==="NEUTRAL"?(liqBreakPressure>=.35?"EARLY":"STABLE"):
+      transitionPressure<34?"EARLY":transitionPressure<55?"BUILDING":"CONFIRMED",
     twoSidedWithdrawal=bidLiquidityMarket<-.18&&askLiquidityMarket<-.18,
     tailScore=clip(18+Math.max(0,-macro.score)*30+Math.max(0,-major.score)*18+dispersion*18+Math.max(0,-venuePressureMarket)*12
       +(synchrony>.72&&short.score<-.2?15:0)+(twoSidedWithdrawal?8:0),0,100),
@@ -356,16 +359,21 @@ export function buildMarketIntelligence(input:{paths:Record<string,CandleLike[]>
       detailedQuotes.length>=3&&Math.abs(bookImbalanceMarket)>.18?`跨所盘口${bookImbalanceMarket>0?"偏买":"偏卖"}`:"",
       detailedQuotes.length>=3&&Math.abs(liquidityDirectional)>.15?`跨所流动性${liquidityDirectional>0?"向买方改善":"向卖方改善"}`:"",
       twoSidedWithdrawal?"双边流动性变薄":"",
+      liqCtx.ready&&liqCtx.acceptedShare>=.18?"流动性迁移开始扩散":"",
+      liqCtx.ready&&liqCtx.rejectedShare>=.18?"多市场离开失败后重新被原区域吸收":"",
+      liqCtx.ready&&liqBreakPressure>=.30?"流动性积累充分且单边边界正在被消耗":"",
     ].filter(Boolean),
     transitionDetail=transitionDirection==="NEUTRAL"?"市场内部变化仍处于观察阶段，尚未形成足够一致的状态迁移。"
       :`市场正在向${biasZh(transitionDirection)}状态迁移，阶段 ${transitionStage}；当前驱动：${transitionDrivers.join("、")||"内部结构持续变化"}。`,
     evidenceTop=evidenceRows.slice(0,6).map(x=>x.summary),shortRange:[number,number]=shortLayer.confidence>.7?[30,120]:dispersion>.7?[20,90]:[45,180],
-    summary=`超大周期${biasZh(macro.bias)}（${phase}），大方向${biasZh(major.bias)}，短期${biasZh(shortLayer.bias)}；${transitionDetail}`,
-    plan=shortLayer.bias==="BEARISH"&&major.bias==="BULLISH"?"优先寻找回调中持续弱于相关组的空头；保留抗跌资产，等待回调结束后的多头表达。"
-      :shortLayer.bias==="BULLISH"&&major.bias==="BEARISH"?"优先寻找反弹中持续强于相关组的多头；同时保留弱势币作为反弹结束后的空头候选。"
-      :shortLayer.bias==="BULLISH"?"优先做相对强势、回撤浅且相关组中性价比最高的多头，不重复堆同一相关风险。"
-      :shortLayer.bias==="BEARISH"?"优先做相对弱势、反弹弱且相关组中性价比最高的空头，不重复堆同一相关风险。"
-      :"不强行押注统一方向，继续寻找与全市场路径明显分离且持续的异类。";
+    summary=`超大周期${biasZh(macro.bias)}（${phase}），大方向${biasZh(major.bias)}，短期${biasZh(shortLayer.bias)}；${transitionDetail}`+" "+liqCtx.summary,
+    plan=liqCtx.ready&&Math.abs(liqCtx.migrationBreadth)>=.12&&liqCtx.acceptedShare>=.16
+      ?"优先跟随已经被市场接受的流动性迁移；离下一片流动性越远，越允许利润充分扩张。"
+      :liqCtx.ready&&liqCtx.rejectedShare>=.18
+      ?"多市场离开失败，优先观察回归原流动性区域的机会；不把一次刺破误判成趋势。"
+      :liqCtx.ready&&liqBreakPressure>=.30
+      ?"当前仍在积累，但一侧边界消耗正在提高；提前降低原环境寿命预期，等待真正被接受的离开。"
+      :"继续维护流动性地图；相对强弱只用于选币/家族识别，只有迁移、离开失败回归或家族提前转折才拥有独立交易权。";
   const narrative:MarketNarrative={id:previous.narrative.id||`mi-${input.now.toString(36)}`,updatedAt:input.now,macro,major,short:shortLayer,
     transition:{direction:transitionDirection,pressure:transitionPressure,confidence:clip(.25+Math.abs(transitionScore)*.7),detail:transitionDetail,
       score:transitionScore,stage:transitionStage,drivers:transitionDrivers},
