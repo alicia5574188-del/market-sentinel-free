@@ -1134,7 +1134,7 @@ function nextCandleAt(paths:Record<string,Candle[]>,now:number){
   let latest=0;for(const p of Object.values(paths)){const a=validPath(p,now);if(a)latest=Math.max(latest,(a.at(-1)!.time+300)*1000);}return latest;
 }
 export function advanceForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;minutePaths?:Record<string,Candle[]>;daily?:Record<string,Candle[]>;
-  quotes:Record<string,Quote>;contracts:Record<string,Contract>;entrySymbols?:Iterable<string>;learningSymbols?:Iterable<string>;allowDataCycle?:boolean;
+  quotes:Record<string,Quote>;analysisQuotes?:Record<string,Quote>;contracts:Record<string,Contract>;entrySymbols?:Iterable<string>;learningSymbols?:Iterable<string>;allowDataCycle?:boolean;
   legacyDrainOnly?:boolean;research?:MarketLifecycleResearchContext}){
   const s=normalizeForward(structuredClone(input.state),input.now),
     before=JSON.stringify({p:s.positions.map(t=>[t.id,t.status,t.stopPrice,t.profitFloorRate]),h:s.history.length,b:s.balance,r:s.revision,
@@ -1150,7 +1150,8 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
   if(marketReady){
     const priorNarrative=structuredClone(s.extremumRegime.narrative),priorHistory=structuredClone(s.extremumRegime.history),
       priorInternals=s.extremumRegime.internals?structuredClone(s.extremumRegime.internals):undefined,
-      built=buildMarketIntelligence({paths:input.paths,minutePaths:input.minutePaths,daily:input.daily,quotes:input.quotes,
+      researchQuotes=input.analysisQuotes??input.quotes,
+      built=buildMarketIntelligence({paths:input.paths,minutePaths:input.minutePaths,daily:input.daily,quotes:researchQuotes,
         previous:s.extremumRegime,now:input.now,allowed});
     if(!dataDue){
       built.state.narrative=priorNarrative;
@@ -1175,7 +1176,7 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
     currentEnvironment=classifyMarketEnvironment(s.extremumRegime,marketEvolution),
     priorOutlook=s.environmentContext.outlook,
     outlookDue=!priorOutlook||dataDue||input.now-s.environmentContext.updatedAt>=60_000,
-    fastEnvironment=deriveFastEnvironmentSignal(Object.values(input.quotes).filter(q=>freshQuote(q,input.now))),
+    fastEnvironment=deriveFastEnvironmentSignal(Object.values(input.analysisQuotes??input.quotes).filter(q=>freshQuote(q,input.now))),
     environmentOutlook=outlookDue
       ?deriveEnvironmentOutlook(s.extremumRegime,marketEvolution,{fast:fastEnvironment,previous:priorOutlook})
       :priorOutlook;
