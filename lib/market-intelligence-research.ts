@@ -4,9 +4,10 @@ import { PAPER_COST, type Candle, type ForwardState, type Opportunity, type Quot
 export const COUNTERFACTUAL_RESEARCH_VERSION="market-intelligence-counterfactual-v1";
 export const POST_EXIT_RESEARCH_KEY="market-intelligence:research:v1:post-exit";
 export const REJECTED_RESEARCH_KEY="market-intelligence:research:v1:rejected";
-export const RESEARCH_CHECKPOINTS=[5,15,30,60,120,240] as const;
+export const RESEARCH_CHECKPOINTS=[5,15,30,45,60] as const;
 const ROUND_TRIP_COST=2*(PAPER_COST.feeRate+PAPER_COST.slippageRate);
 const MAX_VALUE_BYTES=100*1024;
+const MAX_REJECT_ADMISSIONS_PER_CYCLE=2;
 const CHECKPOINT_QUOTE_TOLERANCE_MS=90_000;
 const CHECKPOINT_CANDLE_LAG_MS=6*60_000;
 const CHECKPOINT_UNAVAILABLE_AFTER_MS=7*60_000;
@@ -164,11 +165,11 @@ function rejectedFromOpportunity(o:Opportunity,q:Quote|undefined,s:ForwardState,
   if(s.positions.some(t=>t.entryContext?.thesisId===o.thesisId)||s.history.some(t=>t.entryContext?.thesisId===o.thesisId))return null;
   const mid=quotePrice(q),entryPrice=mid??o.price;if(!(entryPrice>0))return null;
   const n=s.extremumRegime.narrative,validation=s.entryValidations[o.id];
-  const ownBlocker=validation?.reason??(!o.eligible?rejectionClass(o):"NOT_SELECTED_REASON_UNRECORDED");
+  const ownBlocker=(validation?.reason??(!o.eligible?rejectionClass(o):"NOT_SELECTED_REASON_UNRECORDED")).slice(0,96);
   return{id:`reject:${o.thesisId}`,thesisId:o.thesisId,symbol:o.symbol,side:o.side,mode:o.mode,observedAt:now,startedAt:now,entryPrice,
     stopRate:o.stopRate,score:o.score,eligibleAtObservation:o.eligible,stage:o.confirmationStage??null,dataConfidence:o.dataConfidence??null,
     sourceCount:o.sourceCount??null,marketNarrativeId:n.id??null,marketMajor:n.major.bias??null,marketShort:n.short.bias??null,
-    transitionStage:n.transition.stage??null,reason:`${rejectionClass(o)} | ${o.reason}`.slice(0,360),executionBlockers:{[ownBlocker]:1},blockerScope:"CANDIDATE",
+    transitionStage:n.transition.stage??null,reason:`${rejectionClass(o)} | ${o.reason}`.slice(0,220),executionBlockers:{[ownBlocker]:1},blockerScope:"CANDIDATE",
     lastObservedAt:now,maxFavorableRate:0,maxAdverseRate:0,checkpoints:[],unavailableCheckpoints:[],completed:false};
 }
 function trimForStorage<T extends {completed:boolean;lastObservedAt:number}>(items:T[]){
@@ -189,16 +190,20 @@ export function advanceCounterfactualResearch(input:{state:CounterfactualResearc
   if(input.observeCandidates){
     const ids=new Set(next.rejected.map(x=>x.thesisId));
     const sampling=next.sampling??{admitted:0,notAdmittedAttempts:0,evictedBeforeComplete:0,lastAdmissionAttemptAt:0};
-    const reserved=(rows:RejectedOpportunityResearch[])=>bytes(rows)+rows.reduce((n,r)=>n+Math.max(0,6-r.checkpoints.length-r.unavailableCheckpoints.length)*380,0);
-    for(const o of input.forward.opportunities){
-      if(ids.has(o.thesisId??""))continue;const row=rejectedFromOpportunity(o,input.quotes[o.symbol],input.forward,input.now);
-      if(!row)continue;
-      // Reserve space for the complete path before admitting it; never evict an unfinished path for a new arrival.
-      while(reserved([...next.rejected,row])>MAX_VALUE_BYTES-2048&&next.rejected.some(x=>x.completed)){
+    const reserved=(rows:RejectedOpportunityResearch[])=>bytes(rows)+rows.reduce((n,r)=>
+      n+Math.max(0,RESEARCH_CHECKPOINTS.length-r.checkpoints.length-r.unavailableCheckpoints.length)*380,0);
+    const candidates=input.forward.opportunities.filter(o=>!ids.has(o.thesisId??""))
+      .sort((a,b)=>Number(b.eligible)-Number(a.eligible)||b.score-a.score)
+      .slice(0,MAX_REJECT_ADMISSIONS_PER_CYCLE);
+    for(const o of candidates){
+      const row=rejectedFromOpportunity(o,input.quotes[o.symbol],input.forward,input.now);if(!row)continue;
+      // The rejected-shadow store is a bounded sample, not a mirror of every 2s candidate. Keep the best few new
+      // theses from each cycle and reserve their whole 5–60m path before admission so diagnostics never starve itself.
+      while(reserved([...next.rejected,row])>MAX_VALUE_BYTES-4096&&next.rejected.some(x=>x.completed)){
         const at=next.rejected.map(x=>x.completed).lastIndexOf(true);next.rejected.splice(at,1);rejectedChanged=true;
       }
       sampling.lastAdmissionAttemptAt=input.now;
-      if(reserved([...next.rejected,row])>MAX_VALUE_BYTES-2048){sampling.notAdmittedAttempts++;continue;}
+      if(reserved([...next.rejected,row])>MAX_VALUE_BYTES-4096){sampling.notAdmittedAttempts++;continue;}
       next.rejected.unshift(row);ids.add(row.thesisId);sampling.admitted++;rejectedChanged=true;
     }
     next.sampling=sampling;
