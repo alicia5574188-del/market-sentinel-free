@@ -129,7 +129,7 @@ test("response-gated unconfirmed trades cannot use a huge Remaining Space estima
   assert.equal(first.decision,"REVIEW");assert.ok(first.continuationRatio>2.5);
   const second=evaluatePositionIntelligence({now:T+300_000,side:"LONG",signedRate:-.0015,peakFavorableRate:0,ageMin:13,firstProfit:false,
     expectedHoldMinutes:240,stopRate:.012,entryScore:92,entryResidual:.012,entryRelativeStrength:.8,entryRemainingSpaceRate:.04,
-    state:{...broken,signalLastBar:T},quote,minutePath:minute,marketStateAgeMs:20_000,entryResponseValidated:true,previous:first});
+    state:{...broken,signalLastBar:T+300_000},quote,minutePath:minute,marketStateAgeMs:20_000,entryResponseValidated:true,previous:first});
   assert.equal(second.reviewBars,2);assert.equal(second.decision,"EXIT");
 });
 
@@ -150,9 +150,10 @@ test("fresh entry can exit immediately only when its own evidence fully falsifie
   const quote={sourceCount:4,directionalAgreement:1,sourceBreadth:-1,medianShortMove:-.0015,bookImbalance:-.4,
     bidLiquidityChange:-.20,askLiquidityChange:.18,liquiditySourceCount:3,disagreementRate:.0002};
   const minute=candles(100,-.0010).slice(-10);
-  const failed=evaluatePositionIntelligence({now:T,side:"LONG",signedRate:-.006,peakFavorableRate:.0002,ageMin:.4,firstProfit:false,
+  const failed=evaluatePositionIntelligence({now:T,openedAt:T-24_000,
+    entryBaseline:{version:"position-evidence-v2",source:"ENTRY",at:T-24_000,score:93},side:"LONG",signedRate:-.006,peakFavorableRate:.0002,ageMin:.4,firstProfit:false,
     expectedHoldMinutes:240,stopRate:.012,entryScore:93,entryResidual:.012,entryRelativeStrength:.82,entryRemainingSpaceRate:.04,
-    state:broken,quote,minutePath:minute,marketStateAgeMs:20_000,entryResponseValidated:true});
+    state:broken,quote:{...quote,observedAt:T},minutePath:minute,marketStateAgeMs:20_000,entryResponseValidated:true});
   assert.equal(failed.reviewBars,1,"fast falsification must not depend on waiting for two completed 5m bars");
   assert.equal(failed.decision,"EXIT");
   assert.match(failed.summary,/入场位置失败/);
@@ -189,11 +190,11 @@ test("an unproven starter stays in REVIEW until its own STRUCTURE also turns aga
 
   const second=evaluatePositionIntelligence({now:T+300_000,side:"LONG",signedRate:-.0015,peakFavorableRate:0,ageMin:13,firstProfit:false,
     expectedHoldMinutes:240,stopRate:.012,entryScore:92,entryResidual:.012,entryRelativeStrength:.8,entryRemainingSpaceRate:.04,
-    state:{...neutralStructure,signalLastBar:T},quote,minutePath:minute,marketStateAgeMs:20_000,entryResponseValidated:true,previous:first});
+    state:{...neutralStructure,signalLastBar:T+300_000},quote,minutePath:minute,marketStateAgeMs:20_000,entryResponseValidated:true,previous:first});
   assert.equal(second.reviewBars,2);
   assert.equal(second.decision,"REVIEW","relative/path/flow deterioration alone must not kill a slow starter while structure is neutral");
 
-  const structureBroken={...neutralStructure,shortScore:82,signalSide:"SHORT" as const,signalLastBar:T+300_000};
+  const structureBroken={...neutralStructure,shortScore:82,signalSide:"SHORT" as const,signalLastBar:T+600_000};
   const third=evaluatePositionIntelligence({now:T+600_000,side:"LONG",signedRate:-.006,peakFavorableRate:0,ageMin:18,firstProfit:false,
     expectedHoldMinutes:240,stopRate:.012,entryScore:92,entryResidual:.012,entryRelativeStrength:.8,entryRemainingSpaceRate:.04,
     state:structureBroken,quote,minutePath:minute,marketStateAgeMs:20_000,entryResponseValidated:true,previous:second});
@@ -214,7 +215,7 @@ test("Position Intelligence requires independent concerns and two completed 5m r
       medianShortMove:-.001,bookImbalance:-.35,disagreementRate:.0002},minutePath:minute,marketStateAgeMs:20_000});
   assert.equal(first.decision,"REVIEW");
   assert.ok(first.concernFamilies.length>=2);
-  const secondState={...broken,signalLastBar:T};
+  const secondState={...broken,signalLastBar:T+300_000};
   const second=evaluatePositionIntelligence({now:T+300_000,side:"LONG",signedRate:.002,peakFavorableRate:.018,ageMin:85,firstProfit:true,
     expectedHoldMinutes:220,stopRate:.009,entryScore:88,entryResidual:.007,entryRelativeStrength:.75,entryRemainingSpaceRate:.022,
     state:secondState,narrative:initialMarketIntelligenceState(T).narrative,quote:{sourceCount:3,directionalAgreement:1,sourceBreadth:-1,
