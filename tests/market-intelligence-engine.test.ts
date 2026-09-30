@@ -431,6 +431,25 @@ test("family-turn entries also require and preserve a frozen liquidity invalidat
   assert.equal(trade.liquidityLifecycle?.invalidationPrice,invalidation);
 });
 
+test("final executable price must still have enough remaining space versus pullback risk",()=>{
+  const paths={BTC_USDT:candles(100,.0010),ETH_USDT:candles(100,.0013),SOL_USDT:candles(100,.0009)};
+  const initialQuotes=Object.fromEntries(Object.entries(paths).map(([s,v])=>[s,q(v.at(-1)!.close,.0003)]));
+  const built=buildMarketIntelligence({paths,quotes:initialQuotes,previous:initialMarketIntelligenceState(T-300_000),now:T});
+  const base=built.opportunities[0]!,shifted=base.side==="LONG"?base.price*1.02:base.price*.98,
+    quote={...q(shifted,.0003),bestBid:shifted*.99995,bestAsk:shifted*1.00005},
+    entry=base.side==="LONG"?quote.bestAsk:quote.bestBid,
+    invalidation=base.side==="LONG"?entry*.99:entry*1.01,
+    opportunity={...base,eligible:true,environmentForceRetest:false,tradePlan:"LIQUIDITY_MIGRATION" as const,
+      strategyVersion:MARKET_INTELLIGENCE_VERSION,thesisId:"consumed-at-execution",price:base.price,
+      netRemainingSpaceRate:.02,grossRemainingSpaceRate:.022,pullbackRiskRate:.012,edgeRatio:1.67,targetRate:.022,
+      liquidityInvalidationPrice:invalidation,liquidityInvalidationRate:.01,rapidLiquidityAuthorization:true};
+  const state=initialForward(T-600_000);state.extremumRegime=built.state;state.opportunities=[opportunity];
+  const contracts={[opportunity.symbol]:{quantoMultiplier:.001,leverageMax:10,maintenanceRate:.005,minContracts:1}};
+  const opened=fillForwardPortfolio(state,{[opportunity.symbol]:quote},contracts,T,1000,false);
+  assert.equal(opened,0);assert.equal(state.positions.length,0);
+  assert.ok(Object.keys(state.entryDiagnostics.reasons).some(x=>x.includes("真实成交价剩余空间/回调")));
+});
+
 test("stable market narrative advances only on a new completed five-minute step",()=>{
   const paths={BTC_USDT:candles(100,.0011),ETH_USDT:candles(100,.0013),SOL_USDT:candles(100,.0010)};
   const quotes1=Object.fromEntries(Object.entries(paths).map(([sym,rows])=>[sym,{...q(rows.at(-1)!.close,.0004),observedAt:T}]));
