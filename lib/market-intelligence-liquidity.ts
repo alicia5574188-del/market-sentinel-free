@@ -55,7 +55,7 @@ function aggregate(rows:LiquidityCandle[],bars:number){
   const out:LiquidityCandle[]=[];let bucket:LiquidityCandle[]=[];
   for(const row of rows){
     bucket.push(row);if(bucket.length<bars)continue;
-    out.push({time:bucket[0]!.time,open:bucket[0]!.open,high:Math.max(...bucket.map(x=>x.high)),low:Math.min(...bucket.map(x=>x.low)),
+    out.push({time:bucket.at(-1)!.time,open:bucket[0]!.open,high:Math.max(...bucket.map(x=>x.high)),low:Math.min(...bucket.map(x=>x.low)),
       close:bucket.at(-1)!.close,volume:bucket.reduce((n,x)=>n+x.volume,0)});bucket=[];
   }
   return out;
@@ -103,7 +103,7 @@ function pointsFor(rows:LiquidityCandle[],radius:number,atr:number){
 }
 
 function buildZones(rows:LiquidityCandle[],tier:LiquidityZoneTier,now:number,atr:number){
-  if(rows.length<24)return[];
+  if(rows.length<(tier==="GLOBAL"?10:18))return[];
   const last=rows.at(-1)!.close,width=Math.max(atr*(tier==="GLOBAL"?.95:.70),last*(tier==="GLOBAL"?.0018:.0012)),
     pts=pointsFor(rows,tier==="GLOBAL"?3:2,atr).sort((a,b)=>a.price-b.price),groups:Point[][]=[];
   for(const p of pts){
