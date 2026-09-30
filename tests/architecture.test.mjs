@@ -359,6 +359,20 @@ test("opportunity discovery, frozen authorization and liquidity invalidation for
   assert.match(manage,/LIQUIDITY_HYPOTHESIS_INVALIDATED/);
 });
 
+test("Gate-only discovery uses the same 15-second radar cadence without bypassing multi-source entry safety",async()=>{
+  const [worker,hub,engine]=await Promise.all([
+    read("worker/index-clean.ts"),read("lib/market-data-hub.ts"),read("lib/market-intelligence-engine.ts")
+  ]);
+  assert.match(worker,/const GATE_RADAR_MS = RADAR_MS/);
+  assert.match(worker,/gateRadarShortMoves=new Map<string,number>\(\)/);
+  assert.match(worker,/row\.last\/prior-1/);
+  assert.match(worker,/shortMoveRate:this\.gateRadarShortMoves\.get\(row\.symbol\)\?\?0/);
+  assert.match(hub,/shortMoveRate:q\?\.medianShortMove\?\?row\.shortMoveRate\?\?0/);
+  assert.match(hub,/sourceCount:q\?\.sourceCount\?\?row\.sourceCount\?\?0/);
+  assert.match(engine,/row\.sourceCount>=2/,
+    "Gate-only impulse may enter discovery but one venue alone must not gain order authority");
+});
+
 test("opportunity capture reserves execution capacity and all formal plans use liquidity invalidation",async()=>{
   const [core,worker,execution]=await Promise.all([
     read("lib/forward-relations.ts"),read("worker/index-clean.ts"),read("app/market-intelligence-execution.tsx")
