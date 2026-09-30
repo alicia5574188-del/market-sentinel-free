@@ -282,6 +282,12 @@ function normalizeEntryValidations(value:unknown,now:number){
       minimumElapsedMs:Math.max(0,safe(r.minimumElapsedMs)),minimumSupportSamples:Math.max(0,Math.floor(safe(r.minimumSupportSamples))),
       minimumRetainedRate:Math.max(0,safe(r.minimumRetainedRate)),stableThesis:!!r.stableThesis,
       phase:r.phase==="RETEST_WAIT"?"RETEST_WAIT":"ARMED",
+      frozenOpportunity:r.frozenOpportunity&&typeof r.frozenOpportunity==="object"
+        &&typeof (r.frozenOpportunity as Opportunity).id==="string"
+        &&typeof (r.frozenOpportunity as Opportunity).symbol==="string"
+        &&(((r.frozenOpportunity as Opportunity).side==="LONG")||((r.frozenOpportunity as Opportunity).side==="SHORT"))
+          ?structuredClone(r.frozenOpportunity as Opportunity):undefined,
+      authorizedAt:Math.max(0,safe(r.authorizedAt,startedAt)),
       initialExpectedNetRate:Math.max(0,safe(r.initialExpectedNetRate)),pullbackRiskRateAtArm:Math.max(0,safe(r.pullbackRiskRateAtArm)),
       maxChaseRate:Math.max(0,safe(r.maxChaseRate)),retestPullbackMin:Math.max(0,safe(r.retestPullbackMin)),
       restartMin:Math.max(0,safe(r.restartMin)),
