@@ -404,10 +404,11 @@ test("new liquidity trades size risk and stop at the frozen hypothesis invalidat
   const opened=fillForwardPortfolio(state,{[opportunity.symbol]:quote},contracts,T,1000,false);
   assert.equal(opened,1);
   const trade=state.positions[0]!;
-  assert.ok(Math.abs(trade.stopPrice-invalidation)<entry*1e-9);
   assert.equal(trade.entryContext?.liquidityInvalidationPrice,invalidation);
   assert.equal(trade.liquidityLifecycle?.invalidationPrice,invalidation);
-  assert.ok(trade.plannedRisk<=6.5,"position size must be reduced to keep risk budget correct when the liquidity invalidation is wider");
+  assert.ok(base.side==="LONG"?trade.stopPrice<invalidation:trade.stopPrice>invalidation,
+    "the soft liquidity invalidation is a review boundary; the sized price stop must be the wider hard-risk boundary");
+  assert.ok(trade.plannedRisk<=6.5,"position size must be reduced to keep risk budget correct at the hard-risk boundary");
 });
 
 test("family-turn entries also require and preserve a frozen liquidity invalidation boundary",()=>{
@@ -425,9 +426,9 @@ test("family-turn entries also require and preserve a frozen liquidity invalidat
   const opened=fillForwardPortfolio(state,{[opportunity.symbol]:quote},contracts,T,1000,false);
   assert.equal(opened,1);
   const trade=state.positions[0]!;
-  assert.ok(Math.abs(trade.stopPrice-invalidation)<entry*1e-9);
   assert.equal(trade.entryContext?.liquidityInvalidationPrice,invalidation);
   assert.equal(trade.liquidityLifecycle?.invalidationPrice,invalidation);
+  assert.ok(base.side==="LONG"?trade.stopPrice<invalidation:trade.stopPrice>invalidation);
 });
 
 test("stable market narrative advances only on a new completed five-minute step",()=>{
