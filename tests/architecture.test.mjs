@@ -172,8 +172,10 @@ test("formal liquidity map reuses existing causal data and cannot add a market-d
   ]);
   assert.match(engine,/buildMarketLiquidityResearch\(paths,input\.now\)/);
   assert.match(liquidity,/rows\.length<72/);
-  assert.match(liquidity,/globalRows=rows\.slice\(-120\)/);
-  assert.match(liquidity,/tradeRows=rows\.slice\(-48\)/);
+  assert.match(liquidity,/m15=aggregate\(rows\.slice\(-120\),3\)/);
+  assert.match(liquidity,/m30=aggregate\(rows\.slice\(-120\),6\)/);
+  assert.match(liquidity,/fine=buildZones\(rows\.slice\(-48\),"TRADE"/);
+  assert.match(liquidity,/30分钟\/15分钟聚合结构优先、5分钟局部结构补充/);
   assert.match(liquidity,/departure\.state==="ACCEPTED"/);
   assert.match(liquidity,/departure\.state==="REJECTED"/);
   assert.doesNotMatch(liquidity,/fetch\(|marketHub|GateLiveClient|createEntry\(/);
