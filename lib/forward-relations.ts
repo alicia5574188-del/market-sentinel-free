@@ -805,12 +805,17 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
     frozenInvalidation=Number.isFinite(o.liquidityInvalidationPrice)?o.liquidityInvalidationPrice!:null;
   if(requiresLiquidityStop&&(frozenInvalidation==null||(side==="LONG"&&frozenInvalidation>=price)||(side==="SHORT"&&frozenInvalidation<=price)))
     return"流动性失效边界已经不在入场价格外侧，当前位置不再执行";
-  const stopPrice=frozenInvalidation??(price*(1-d*o.stopRate)),stopRate=Math.abs(price-stopPrice)/Math.max(price,1e-12),
+  const hypothesisStopPrice=frozenInvalidation??(price*(1-d*o.stopRate)),
+    hypothesisStopRate=Math.abs(price-hypothesisStopPrice)/Math.max(price,1e-12),
+    stopRate=requiresLiquidityStop
+      ?Math.min(.035,Math.max(hypothesisStopRate*1.20,hypothesisStopRate+ROUND_TRIP_COST*1.5))
+      :hypothesisStopRate,
+    stopPrice=price*(1-d*stopRate),
     consumed=Math.max(0,d*(price/Math.max(o.price,1e-9)-1)),
     remainingNet=o.netRemainingSpaceRate-consumed,
     executionPullback=Math.max(ROUND_TRIP_COST*1.5,o.pullbackRiskRate),
     executionEdge=remainingNet/Math.max(executionPullback,1e-9);
-  if(!(stopRate>=.004&&stopRate<=.03))return"流动性/结构失效宽度不合理";
+  if(!(hypothesisStopRate>=.004&&hypothesisStopRate<=.03)||!(stopRate>=.004&&stopRate<=.035))return"流动性/结构失效宽度不合理";
   if(remainingNet<=ROUND_TRIP_COST||executionEdge<EXECUTION_EDGE_FLOOR)
     return`真实成交价剩余空间/回调仅 ${executionEdge.toFixed(2)}×，当前位置价值不足，等待新的回调/结构位置`;
   const sameCluster=s.positions.find(t=>t.side===side&&o.clusterId&&t.entryContext?.clusterId===o.clusterId);
