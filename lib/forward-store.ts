@@ -75,7 +75,8 @@ function hotProjection(next:ForwardState,includeSamples=true){
           resolved:next.hypothesisResearch.resolved.slice(0,MARKET_HYPOTHESIS_RESOLVED_LIMIT),
           memory:next.hypothesisResearch.memory.slice(0,MARKET_HYPOTHESIS_MEMORY_LIMIT)},
         extremumRegime:{...next.extremumRegime,history:next.extremumRegime.history.slice(0,narrativeLimit),
-          evidence:next.extremumRegime.evidence.slice(0,evidenceLimit)},
+          evidence:next.extremumRegime.evidence.slice(0,evidenceLimit),
+          ...(next.extremumRegime.liquidity?{liquidity:{...next.extremumRegime.liquidity,symbols:{}}}: {})},
         storage:{...next.storage,layout:paged?FORWARD_PAGED_STATE_VERSION:next.storage.layout,
           ...(paged?{sampleIntegrity:"raw-sha256" as const}:{})},
         relationEngine:{...next.relationEngine,samples}} as unknown as ForwardStateWithRecovery;
