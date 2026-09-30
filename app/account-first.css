@@ -1,0 +1,9 @@
+/* Account-first layout; trading panels retain their existing shared styles. */
+.fr-compact-header{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px 16px;margin-bottom:16px;font-size:var(--fr-fs14,14px);color:var(--fr-muted)}
+.fr-compact-header>b{color:var(--fr-ink);font-size:var(--fr-fs16,16px)}
+.fr-overview-equity{margin-bottom:16px}
+.fr-equity.fr-overview-equity>strong{font-size:clamp(var(--fr-fs44,44px),5vw,var(--fr-fs64,64px));line-height:1.2;margin:12px 0}
+.fr-overview-equity>footer{margin-top:16px}
+.fr-compact-title{padding:0 0 18px}
+.fr-compact-title>h1{font-size:var(--fr-fs28,28px);line-height:1.4}
+@media(max-width:640px){.fr-compact-header{gap:4px 12px;margin-bottom:12px}.fr-compact-header>b{flex-basis:100%}.fr-equity.fr-overview-equity{padding:20px}}

@@ -1,7 +1,7 @@
 "use client";
 import {useEffect,useMemo,useRef,useState,useSyncExternalStore,type PointerEvent} from "react";
 import {BEIJING_TIME_ZONE} from "../lib/beijing-time.ts";
-import {DAY_MS,EQUITY_CURVE_VERSION,curveSegments,equityReference,mergeEquity,nearestPoint,smoothPath,
+import {DAY_MS,EQUITY_CURVE_VERSION,curveSegments,mergeEquity,nearestPoint,smoothPath,
   type CurveContext,type EquityPoint} from "../lib/equity-curve.ts";
 import type {forwardSummary} from "../lib/forward-relations.ts";
 import {EquityHistoryCache,EQUITY_CACHE_VERSION} from "../lib/equity-cache.ts";
@@ -74,8 +74,6 @@ export default function EquityCurve({data,healthy,fixture,cache,cacheScope="owne
   const visible=chartPoints.filter(p=>p.at>=visibleStart&&p.at<=visibleEnd);
   const peak=visible.reduce<EquityPoint|null>((a,b)=>!a||b.equity>a.equity?b:a,null),trough=visible.reduce<EquityPoint|null>((a,b)=>!a||b.equity<a.equity?b:a,null);
   const shown=(selected&&chartPoints.find(p=>p.at===selected.at))||chartPoints.at(-1);
-  const covered=fixture?.complete??(history.done||(history.coveredTo!=null&&history.coveredTo<=Math.max(account,liveNow-7*DAY_MS)));
-  const reference=useMemo(()=>equityReference(all,context,Math.max(liveNow,clock),healthy&&!data?.storage.error&&!error&&!history.catchingUp,covered),[all,context,liveNow,clock,healthy,data?.storage.error,error,history.catchingUp,covered]);
   const needsMore=!fixture&&!history.done&&(range==="all"||history.coveredTo==null||history.coveredTo>Math.max(account,Math.min(liveNow-7*DAY_MS,visibleStart)));
   const pick=(e:PointerEvent<SVGSVGElement>)=>{
     const r=e.currentTarget.getBoundingClientRect(),px=(e.clientX-r.left)*canvasWidth/r.width;
@@ -84,7 +82,7 @@ export default function EquityCurve({data,healthy,fixture,cache,cacheScope="owne
   const jump=(left:number)=>{setSelected(left===0?chartPoints[0]??null:null);const node=scroll.current;if(node){node.scrollTo({left,behavior:"smooth"});atLatest.current=left>=canvasWidth-width-2;}};
   const switchRange=(r:Range)=>{atLatest.current=true;setSelected(null);setRange(r);};
   const ticks=Math.min(50,Math.max(2,Math.floor(canvasWidth/100)));
-  if(!data)return <div className="eq-empty">等待真实净值记录。</div>;
+  if(!data)return <div className="eq-empty">等待净值记录。</div>;
   return <div className="eq-module" data-equity-version={EQUITY_CURVE_VERSION} data-equity-cache={EQUITY_CACHE_VERSION}>
     <div className="eq-toolbar"><div><span className="eq-label">账户净值 · USDT</span><span className="eq-start">起始 {number(context.initialEquity)} U</span></div>
       <div className="eq-ranges" role="group" aria-label="净值时间范围">{([["24h","24小时"],["7d","7天"],["all","全部"]] as const).map(([id,label])=><button key={id} aria-pressed={range===id} onClick={()=>switchRange(id)}>{label}</button>)}</div>
@@ -103,10 +101,8 @@ export default function EquityCurve({data,healthy,fixture,cache,cacheScope="owne
       </div>
     </div>
     <div className="eq-controls"><button onClick={()=>jump(0)}>起点</button><button disabled={offset<2} onClick={()=>jump(Math.max(0,offset-width*.8))}>‹ 较早</button><button disabled={offset>=canvasWidth-width-2} onClick={()=>jump(Math.min(canvasWidth-width,offset+width*.8))}>较新 ›</button><button onClick={()=>jump(canvasWidth-width)}>最新</button></div>
-    <p className="eq-hint">历史保存在本机，重新打开只补新增记录。左右滑动查看，轻触曲线读取原始记录。{range==="all"?"显示已加载全程。":end-account<span?"运行时间不足所选周期，显示已有记录。":canvasWidth>=20000?"长历史已压缩显示。":range==="7d"?"每屏7天。":"每屏24小时。"}空白处不补造；含陈旧报价的已保存估值只用于补全真实历史曲线，不参与实盘开启参考。曲线仅作平滑连接，数字和建议均用原始值。</p>
     {history.cacheNotice&&<p className="eq-load" role="status">{history.cacheNotice}</p>}
     <div className="eq-extremes"><span>窗口记录高点 <b>{peak?number(peak.equity):"—"} U</b></span><span>窗口记录低点 <b>{trough?number(trough.equity):"—"} U</b></span></div>
     {(loading||error||needsMore)&&<div className="eq-load" role="status"><span>{error??(loading?(history.catchingUp?"正在补充新增净值，历史曲线已保留…":"正在补充尚未读取的历史…"):"当前窗口历史尚未读取完整")}</span>{!loading&&<button onClick={()=>{setOldestRequest(old=>Math.min(old??Infinity,Math.max(account,visibleStart-DAY_MS)));setLoadBatch(n=>n+1);}}>继续加载</button>}</div>}
-    <aside className="eq-reference" data-reference-state={reference.state}><div><span className="eq-label">实盘开启参考</span><small>仅供手动判断</small></div><p>{reference.sentence}</p><details><summary>依据与限制</summary><p>{reference.detail}</p><p>观察条件：从记录高点回撤至少1%，随后30分钟净值回升至少0.2%、收回至少四分之一跌幅；同一次回撤不重复计数，未完成后续观察的不算成功。图表平滑不参与判断。</p><p>此提示不能操作实盘开关，不阻止开单，也不更改当前持仓。</p></details></aside>
   </div>;
 }

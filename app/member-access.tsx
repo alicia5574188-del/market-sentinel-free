@@ -42,15 +42,12 @@ export function LoginGate({auth,onSession}:{auth:AuthSession|null;onSession:(s:A
   };
   const title=mode==="owner"?"主账户登录":mode==="register"?"注册会员账户":"会员登录";
   return <main className="fr-app fr-access" data-access="login">
-    <header className="fr-header"><div className="fr-brand"><span className="fr-emblem">↗</span><div><b>哨兵 · Adaptive 10</b><small>PRIVATE ACCESS</small></div></div></header>
+    <header className="fr-header"><div className="fr-brand"><span className="fr-emblem">↗</span><b>哨兵</b></div></header>
     <section className="fr-section">
-      <div className="fr-section-head"><div><small>独立账户 · 同一策略源</small><h1>{title}</h1></div></div>
-      <p className="fr-note">{auth===null?"正在检查已有登录状态…":
-        mode==="register"?"填写主账户提供的一次性邀请码，再自行设置用户名和密码。注册成功后该邀请码立即失效。":
-        mode==="login"?"使用注册时设置的用户名和密码登录。":
-        "沿用你的原主账户密码，登录不会改变实盘开关。"}</p>
+      <div className="fr-section-head"><h1>{title}</h1></div>
+      {auth===null&&<p className="fr-note">正在检查登录状态…</p>}
       <form className="fr-form" onSubmit={submit}>
-        {mode==="register"&&<label>邀请码<input value={invite} onChange={e=>setInvite(e.target.value)} placeholder="INV-…" autoComplete="off" spellCheck={false} disabled={busy||auth===null}/></label>}
+        {mode==="register"&&<label>一次性邀请码<input value={invite} onChange={e=>setInvite(e.target.value)} placeholder="INV-…" autoComplete="off" spellCheck={false} disabled={busy||auth===null}/></label>}
         {(mode==="login"||mode==="register")&&<label>用户名<input value={username} onChange={e=>setUsername(e.target.value)} placeholder="2–32位用户名" autoComplete="username" spellCheck={false} disabled={busy||auth===null}/></label>}
         <label>{mode==="owner"?"主账户密码":"密码"}<input type="password" value={password} onChange={e=>setPassword(e.target.value)}
           placeholder={mode==="register"?"至少8位":"输入密码"} autoComplete={mode==="register"?"new-password":"current-password"} disabled={busy||auth===null}/></label>
@@ -68,7 +65,6 @@ export function LoginGate({auth,onSession}:{auth:AuthSession|null;onSession:(s:A
         {mode!=="register"&&<button className="fr-text-button" type="button" onClick={()=>changeMode("register")} disabled={busy}>使用邀请码注册</button>}
         {mode!=="owner"&&<button className="fr-text-button" type="button" onClick={()=>changeMode("owner")} disabled={busy}>我是主账户所有者</button>}
       </div>
-      {mode!=="owner"&&<p className="fr-note">每个邀请码只能成功注册一个账户。用户名不可重复；以后只需要用户名和密码登录。</p>}
       {error&&<p className="fr-error" role="status">{error}</p>}
     </section>
   </main>;
@@ -104,14 +100,9 @@ export function MemberAccess({auth}:{auth:AuthSession}) {
     }catch(e){await refresh().catch(()=>undefined);setError(e instanceof Error?e.message:"操作未完成");}
     finally{setConfirmAction(null);lock.current=false;setBusy(false);}
   };
-  if(!isOwner)return <section className="fr-section">
-    <h2>我的使用资格</h2>
-    <p className="fr-note">账户：{auth.username}。新注册账户以后使用用户名和密码登录。</p>
-    <p className="fr-note">共享同一模拟订单源。实盘由你自己配置和开启；如果主账户停止你的跟随权限，系统不会再复制新单，但已经成交的实盘持仓仍继续保护并按原模拟源正常退出。</p>
-  </section>;
+  if(!isOwner)return <section className="fr-section"><h2>我的账户</h2><p className="fr-note">{auth.username}</p></section>;
   return <section className="fr-section" data-testid="member-admin">
-    <div className="fr-section-head"><div><small>仅主账户可见</small><h2>会员与邀请码</h2></div><span>{overview?.members.length??"—"} 位</span></div>
-    <p className="fr-note">把当前邀请码发给下一位用户。对方使用邀请码、用户名和密码自行注册；注册成功后该邀请码立即失效，后台自动生成下一枚邀请码。</p>
+    <div className="fr-section-head"><h2>会员与邀请码</h2><span>{overview?.members.length??"—"} 位</span></div>
     {overview?.invite&&<div className="fr-form">
       <label>当前一次性邀请码<input type="text" readOnly value={overview.invite.code} spellCheck={false} aria-label="当前邀请码"/></label>
       <div className="fr-action-row">
@@ -121,7 +112,7 @@ export function MemberAccess({auth}:{auth:AuthSession}) {
         <button className="fr-text-button danger" type="button" disabled={busy} onClick={rotate}>手动重置邀请码</button>
       </div>
     </div>}
-    <p className="fr-note">当前最多{overview?.memberLimit??50}个注册会员；同时最多{overview?.activeLimit??2}个会员实盘执行账户（不包括你），当前占用{overview?.activeCount??"—"}个。注册本身不会启动后台交易任务。</p>
+    <p className="fr-note">注册名额 {overview?.members.length??"—"} / {overview?.memberLimit??"—"} · 会员实盘 {overview?.activeCount??"—"} / {overview?.activeLimit??"—"}</p>
     <button className="fr-text-button" type="button" disabled={busy} onClick={async()=>{
       if(lock.current)return;lock.current=true;setBusy(true);setError(null);
       try{await refresh();}catch(e){setError(e instanceof Error?e.message:"读取失败");}
@@ -132,7 +123,7 @@ export function MemberAccess({auth}:{auth:AuthSession}) {
     <div className="fr-member-list">
       {overview?.members.length?overview.members.map(m=><article className="fr-rule" key={m.id}>
         <header><h3>{m.username??m.label}</h3><span>{m.revokedAt?"删除处理中":m.followBlockedAt?"禁止开启实盘":m.username?"已激活":"旧账户不可登录"}</span></header>
-        <p className="fr-note">{m.username?`用户名：${m.username}`:"旧密钥账户已停用登录，请删除后用邀请码重新注册。"}</p>
+        {!m.username&&<p className="fr-note">旧账户已停用，请删除后用邀请码重新注册。</p>}
         <div className="fr-three">
           <div><small>本程序实盘成交额</small><b>{numberText(m.usage?.notional)} U</b></div>
           <div><small>统计截至</small><b>{operatorTime(m.usage?.through)}</b></div>
@@ -161,7 +152,7 @@ export function MemberAccess({auth}:{auth:AuthSession}) {
             <button className="fr-button secondary" type="button" disabled={busy} onClick={()=>setConfirmAction(null)}>取消</button>
           </div>
         </div>}
-      </article>):<p className="fr-note">尚无会员。把上方邀请码发给下一位用户即可。</p>}
+      </article>):<p className="fr-note">暂无会员。</p>}
     </div>
   </section>;
 }

@@ -8,6 +8,7 @@ import {ArchivePagination} from "./record-controls.tsx";
 import EquityCurve from "./equity-curve.tsx";
 import {EquityHistoryCache} from "../lib/equity-cache.ts";
 import MarketIntelligenceExecution from "./market-intelligence-execution.tsx";
+import "./account-first.css";
 
 type View=ReturnType<typeof forwardSummary>;
 type Tab="overview"|"execution"|"paper"|"live"|"journal"|"settings";
@@ -41,47 +42,39 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   }catch{setExportStatus("导出失败，请重试。");}finally{setExporting(false);}};
 
   const positions=data?.positions??[],opportunities=[...(data?.opportunities??[])].sort((a,b)=>Number(b.eligible)-Number(a.eligible)||Number(b.premium)-Number(a.premium)||b.score-a.score);
-  const eligible=opportunities.filter(o=>o.eligible&&(!now||o.expiresAt>now)),premium=eligible.filter(o=>o.premium),
-    reserve=eligible.filter(o=>o.reserve),ordinary=eligible.filter(o=>!o.premium&&!o.reserve);
+  const eligible=opportunities.filter(o=>o.eligible&&(!now||o.expiresAt>now));
   const pulse=data?.marketPulse,records=recordWindows(data?.history??[],t=>t.closedAt??0),archive=archivePage(records.archive,paperPage);
   const paperMargin=positions.reduce((n,t)=>n+t.margin,0),plannedRisk=positions.reduce((n,t)=>n+Math.max(t.plannedRisk,t.entryContext?.portfolioRiskCharge??((t.forecast?.sizingEquity??0)*(t.entryContext?.reserve===true?.003:.006))),0),riskUse=data?.equity?plannedRisk/data.equity:0,elapsed=data&&now?Math.max(0,(now-data.startedAt)/3600000):null;
   const systemStatus=statusLabel==="后台运行中"?"正常":statusLabel?.startsWith("后台运行中 · ")?statusLabel.slice(8):statusLabel??(healthy?"正常":"行情恢复中");
   const nav:[Tab,string,string][]=[["overview","◉","总览"],["execution","⌘","执行"],["paper","⇄","模拟"],["live","◈","实盘"],["journal","≋","记录"],["settings","⊙","系统"]];
   return <main className="fr-app" style={fontVars as CSSProperties} data-ui-version="market-intelligence-v1">
-    <header className="fr-header"><div className="fr-brand"><span className="fr-emblem">↗</span><div><b>哨兵 · 市场智能系统</b><small>MARKET STATE · RELATIVE EDGE · LIVE PARITY</small></div></div><span className={`fr-status ${healthy?"is-on":""}`}><i/>{healthy?"真实行情在线":"连接中"}</span></header>
-    <div className="fr-subhead"><span>Gate USDT 永续 · 30市场扫描 · 无席位数量上限 · 30执行BBO</span><span>实盘{liveEnabled?"已请求开启":"关闭"} · 所有者控制</span></div>
-    {memberName&&<p className="fr-note">{memberName} · 共用同一策略事件源，实盘账户与API完全独立。</p>}
+    <header className="fr-compact-header"><b>哨兵 · 市场智能系统</b><span className={healthy?"fr-positive":""} role="status">{systemStatus}</span><span>实盘{liveEnabled?liveOverview?.operational?"运行中":"核对中":"关闭"}{memberName?` · ${memberName}`:""}</span></header>
 
     {tab==="overview"&&<>
-      <section className="fr-hero"><div className="fr-hero-copy"><span className="fr-kicker">MARKET INTELLIGENCE V1</span><h1>{systemStatus==="正常"?"系统正在正常运行":`系统状态：${systemStatus}`}</h1>
-        <p>{data?.latestReason??"正在读取交易核心。"}</p>
-        <div className="fr-hero-tags"><span>连续运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>四层周期</span><span>全市场关系</span><span>多源一致性</span><span>异类交易</span><span>独立交易假设</span></div></div>
-        <div className="fr-equity"><small>模拟账户权益 · USDT</small><strong>{fmt(data?.equity)}</strong><div className={(data?.netPnl??0)>=0?"fr-positive":"fr-negative"}>{signed(data?.netPnl)} <span>U · {signed(data?data.netPnl/data.initialEquity*100:null)}%</span></div>
-          <footer><span>起点 {fmt(data?.initialEquity,0)}</span><span>最大回撤 {fmt(data?data.maxDrawdown*100:null)}%</span></footer></div></section>
+      <section className="fr-equity fr-overview-equity" data-testid="overview-equity-first" aria-label="模拟账户权益">
+        <small>模拟账户权益 · USDT</small><strong>{fmt(data?.equity)}</strong>
+        <div className={(data?.netPnl??0)>=0?"fr-positive":"fr-negative"}>{signed(data?.netPnl)} <span>U · {signed(data?data.netPnl/data.initialEquity*100:null)}%</span></div>
+        <footer><span>起点 {fmt(data?.initialEquity,0)}</span><span>最大回撤 {fmt(data?data.maxDrawdown*100:null)}%</span></footer>
+        <p>更新 {time(data?.updatedAt)}{data?.stalePositions?" · 持仓估值待更新":""}</p>
+      </section>
       <section className="fr-stats">
-        <Stat label="当前持仓" value={data?`${positions.length} 笔`:"—"} note={`组合风险预算已用 ${fmt(riskUse*100,1)}% · 不设固定席位`}/>
-        <Stat label="可参与机会" value={data?`${eligible.length} 个`:"—"} note={`主机会 ${ordinary.length} · 补位 ${reserve.length} · 高级 ${premium.length}`}/>
-        <Stat label="市场状态" value={pulse?.bias==="UP"?"偏多":pulse?.bias==="DOWN"?"偏空":pulse?"分化":"—"} note={pulse?`上涨 ${pulse.up} · 下跌 ${pulse.down} · 中性 ${pulse.neutral}`:"等待5m数据"}/>
+        <Stat label="当前持仓" value={data?`${positions.length} 笔`:"—"} note={`保证金 ${fmt(data?paperMargin:null)} U`}/>
+        <Stat label="浮动盈亏" value={`${signed(data?.floating)} U`} note={`计划风险 ${fmt(data?riskUse*100:null,1)}%`}/>
+        <Stat label="可参与机会" value={data?`${eligible.length} 个`:"—"} note={pulse?.bias==="UP"?"市场偏多":pulse?.bias==="DOWN"?"市场偏空":pulse?"市场分化":"等待行情"}/>
         <Stat label="实盘账户" value={`${fmt(liveOverview?.equity)} U`} note={`${liveOverview?.positionCount??"—"} 笔持仓 · 可用 ${fmt(liveOverview?.available)} U`}/>
       </section>
-      <div className="fr-two">
-        <section className="fr-section"><div className="fr-section-head"><div><small>模拟账户</small><h2>净值变化</h2></div><span>含模型成本</span></div><EquityCurve data={data} healthy={healthy} cache={equityCache} cacheScope={cacheScope}/>
-          <div className="fr-three"><div><small>累计成交额</small><b>{fmt(data?.turnover)} U</b></div><div><small>已扣费用</small><b>{fmt(data?.fees)} U</b></div><div><small>完成订单</small><b>{fmt(data?.resolved,0)}</b></div></div></section>
-        <section className="fr-section fr-now-card"><div className="fr-section-head"><div><small>现在</small><h2>系统正在做什么</h2></div><span>{time(data?.updatedAt)}</span></div>
-          <div className="fr-three"><div><small>持仓</small><b>{positions.length} 笔</b></div><div><small>候选</small><b>{eligible.length}</b></div><div><small>组合风险</small><b>{fmt(riskUse*100,1)}%</b></div></div>
-          <div className="fr-insight"><span className="fr-dot"/><p>{data?.latestReason??"等待运行状态。"}</p></div>
-          <button className="fr-button" onClick={()=>select("execution")}>查看实时执行 →</button></section>
-      </div>
-      <section className="fr-section"><div className="fr-section-head"><div><small>TOP OPPORTUNITIES</small><h2>当前最优机会</h2></div><span>{eligible.length} 个可参与</span></div>
+      <section className="fr-section"><div className="fr-section-head"><h2>净值变化</h2><button className="fr-text-button" onClick={()=>select("execution")}>查看执行 →</button></div><EquityCurve data={data} healthy={healthy} cache={equityCache} cacheScope={cacheScope}/>
+        <div className="fr-three"><div><small>累计成交额</small><b>{fmt(data?.turnover)} U</b></div><div><small>已扣费用</small><b>{fmt(data?.fees)} U</b></div><div><small>完成订单</small><b>{fmt(data?.resolved,0)}</b></div></div></section>
+      <section className="fr-section"><div className="fr-section-head"><h2>当前最优机会</h2><span>{eligible.length} 个可参与</span></div>
         <OpportunityGrid rows={opportunities.slice(0,6)}/></section>
     </>}
 
-    {tab==="execution"&&<MarketIntelligenceExecution data={data} now={now} liveEnabled={liveEnabled} liveOverview={liveOverview}/>} 
+    {tab==="execution"&&<MarketIntelligenceExecution data={data} now={now} liveEnabled={liveEnabled} liveOverview={liveOverview}/>}
 
     {tab==="paper"&&<>
-      <PageTitle eyebrow="REAL-FEED PAPER" title="模拟账户" text="模拟和实盘读取同一个持久化交易事件；模拟成交计入手续费、滑点和资金费占位，实盘仍以Gate真实成交为准。"/>
+      <PageTitle title="模拟账户"/>
       <nav className="fr-live-tabs fr-paper-tabs">{([["account","账户"],["positions","持仓"],["history","记录"],["archive","归档"]] as const).map(([id,label])=><button key={id} className={paperTab===id?"selected":""} onClick={()=>setPaperTab(id)}>{label}</button>)}</nav>
-      {paperTab==="account"&&<><section className="fr-stats fr-paper-summary"><Stat label="模拟权益" value={`${fmt(data?.equity)} U`} note={`起始 ${fmt(data?.initialEquity)} U`}/><Stat label="保证金占用" value={`${fmt(paperMargin)} U`} note={`${positions.length} 笔持仓 · 无席位数量上限`}/><Stat label="浮动盈亏" value={`${signed(data?.floating)} U`} note="按当前可执行价估值"/><Stat label="累计成交额" value={`${fmt(data?.turnover)} U`} note={`已完成 ${fmt(data?.resolved,0)} 笔`}/></section>
+      {paperTab==="account"&&<><section className="fr-stats fr-paper-summary"><Stat label="模拟权益" value={`${fmt(data?.equity)} U`} note={`起始 ${fmt(data?.initialEquity)} U`}/><Stat label="保证金占用" value={`${fmt(paperMargin)} U`} note={`${positions.length} 笔持仓`}/><Stat label="浮动盈亏" value={`${signed(data?.floating)} U`}/><Stat label="累计成交额" value={`${fmt(data?.turnover)} U`} note={`已完成 ${fmt(data?.resolved,0)} 笔`}/></section>
         <TradeList trades={positions} now={now} empty="当前没有模拟持仓"/></>}
       {paperTab==="positions"&&<TradeList trades={positions} now={now} empty="当前没有模拟持仓"/>}
       {(paperTab==="history"||paperTab==="archive")&&<section className="fr-section"><div className="fr-section-head"><h2>{paperTab==="history"?"最近记录":"归档记录"}</h2><span>{paperTab==="history"?"最新10条":"更早记录"}</span></div>
@@ -89,36 +82,26 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
         {paperTab==="archive"&&<ArchivePagination page={archive.page} pages={archive.pages} onPage={setPaperPage}/>}</section>}
     </>}
 
-    {tab==="journal"&&<><section className="fr-section"><h2>研究快照</h2><p className="fr-note">导出每笔入场原因、MFE/MAE、持仓反馈、退出原因、当前候选和账户状态。</p>
-      <button className="fr-button" onClick={exportSnapshot} disabled={exporting}>{exporting?"正在导出…":"导出当前研究快照 ↗"}</button>{exportStatus&&<p className="fr-note">{exportStatus}</p>}</section>
+    {tab==="journal"&&<><section className="fr-section"><div className="fr-section-head"><h2>研究快照</h2></div>
+      <button className="fr-button" onClick={exportSnapshot} disabled={exporting}>{exporting?"正在导出…":"导出研究快照 ↗"}</button>{exportStatus&&<p className="fr-note">{exportStatus}</p>}</section>
       <section className="fr-section"><div className="fr-section-head"><h2>运行记录</h2><span>{data?.events.length??0} 条</span></div>
-        {(data?.events.length??0)>0?<div className="fr-journal">{data!.events.slice(0,80).map(e=><article key={e.id}><time>{time(e.at)}</time><div><b>{e.kind}</b><p>{e.reason}</p></div></article>)}</div>:<Empty title="暂无运行记录" text="成交、退出、换仓和保护更新会显示在这里。"/>}</section></>}
+        {(data?.events.length??0)>0?<div className="fr-journal">{data!.events.slice(0,80).map(e=><article key={e.id}><time>{time(e.at)}</time><div><b>{e.kind}</b><p>{e.reason}</p></div></article>)}</div>:<Empty title="暂无运行记录"/>}</section></>}
 
-    {tab==="settings"&&<><PageTitle eyebrow="SYSTEM & ACCESS" title="系统" text="Market Intelligence 是唯一新单策略权威；账户、实盘API和显示设置保持独立。"/>
+    {tab==="settings"&&<><PageTitle title="系统"/>
       {accountPanel}{liveSystemPanel}
-      <section ref={fontControl} className="fr-section fr-font-control"><div className="fr-section-head"><div><small>界面显示</small><h2>界面字号</h2></div><b>{fontScale}%</b></div>
+      <section ref={fontControl} className="fr-section fr-font-control"><div className="fr-section-head"><h2>界面字号</h2><b>{fontScale}%</b></div>
         <div className="fr-font-options">{[70,80,90,100,110].map(value=><button key={value} className={fontScale===value?"selected":""} onClick={()=>{setFontScale(value);try{localStorage.setItem("sentinel-ui-font-scale-v1",String(value));}catch{}}}>{value}%</button>)}</div></section>
-      <section className="fr-section"><div className="fr-section-head"><h2>当前系统边界</h2><span>market-intelligence-v1</span></div>
-        <Setting title="观察视角" value="全市场优先" text="系统先理解整个市场的共同方向、广度、分化和相关组，再寻找偏离正常关系的资产；不再先挑某个币后机械判断。"/>
-        <Setting title="周期结构" value="L0 → L1 → L2 → L3" text="超大周期负责牛熊与尾部风险，大方向负责数小时至数日背景，短期层持续感受内部变化，交易层选择最好的币种×方向×位置表达。"/>
-        <Setting title="相关风险" value="动态分组" text="高度相关资产互相竞争，同组正常只保留一个同方向主仓；不同方向、不同独立理由可以并存。"/>
-        <Setting title="市场记忆" value="证据累积" text="所有有意义的细微变化都会进入证据池，但单个噪声不会让大方向来回翻转；页面解释和后台决策使用同一份市场叙事。"/>
-        <Setting title="数据" value="多交易所非阻塞" text="Bybit、OKX、KuCoin、Bitget、Binance共同参与分析；单一路数据失败只降低置信度，不允许阻塞市场分析。Gate保留执行与关键校验职责。"/>
-        <Setting title="退出" value="独立交易假设" text="每笔仓位保存自己的相关组、相对优势、失效条件和预计持有时间。新市场观点不会自动平旧仓，只有该笔假设自身失效才退出。"/>
-        <Setting title="风险" value="10%组合 / 6.5%同向" text={data?.boundaries.risk??"读取中"}/>
-        <Setting title="实盘" value="沿用稳定串行复制" text="Market Intelligence 只生成标准PAPER源单；现有PAPER→LIVE→Gate串行复制、比例仓位、源ID和实时复制窗口保持不变。"/>
-        <Setting title="账户连续性" value="策略换代不重置" text="升级不自动清空模拟账户和历史；旧仓按冻结生命周期退出，新仓只由Market Intelligence产生。"/>
-      </section></>}
+    </>}
 
     {liveMounted&&<div className="fr-live-panel-host" hidden={tab!=="live"}>{livePanel}</div>}
-    {(error||data?.storage.error)&&<aside className="fr-error"><b>运行提示</b><p>{data?.storage.error??error}</p><small>提示不会伪装成交；已有保护继续独立运行。</small></aside>}
-    <footer className="fr-footer"><span>行情心跳 {time(feedAt)}</span><span>{data?.engineVersion??data?.version??"ADAPTIVE"} · 北京时间 UTC+8</span></footer>
+    {(error||data?.storage.error)&&<aside className="fr-error" role="alert"><b>运行提示</b><p>{data?.storage.error??error}</p></aside>}
+    <footer className="fr-footer"><span>行情更新 {time(feedAt)} · 运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>{data?.engineVersion??data?.version??"—"} · 北京时间</span></footer>
     <nav className="fr-nav">{nav.map(([id,icon,label])=><button key={id} className={id===tab?"selected":""} onClick={()=>select(id)}><span>{icon}</span><b>{label}</b>{id==="paper"&&positions.length>0&&<i>{positions.length}</i>}</button>)}</nav>
   </main>;
 }
 
 function OpportunityGrid({rows,details=false}:{rows:NonNullable<View["opportunities"]>;details?:boolean}){
-  if(!rows.length)return <Empty title="当前没有完成确认的机会" text="系统继续扫描30个市场；已有持仓保护不会停止。"/>;
+  if(!rows.length)return <Empty title="暂无已确认机会"/>;
   return <div className="fr-scoreboard">{rows.map((o,index)=><details className={`fr-score-row ${o.eligible?"is-eligible":""}`} key={o.id} open={false}>
     <summary><span className="fr-score-rank">#{index+1}</span><span className="fr-score-value">{fmt(o.score,0)}</span><span className="fr-score-symbol"><b>{o.symbol.replace("_"," / ")}</b><small>{o.side==="LONG"?"做多":"做空"} · {modeName(o.mode)}</small></span>
       <span><small>方向</small><b>{fmt(o.directionStrength,0)}</b></span><span><small>净空间</small><b>{fmt(o.netRemainingSpaceRate*100,2)}%</b></span><span><small>空间/回调</small><b>{fmt(o.edgeRatio,2)}×</b></span><em>{o.eligible?(o.premium?"高级":o.reserve?"补位":"主机会"):"观察"}</em></summary>
@@ -128,7 +111,7 @@ function OpportunityGrid({rows,details=false}:{rows:NonNullable<View["opportunit
 }
 function TradeList({trades,now,empty,compact=false}:{trades:Trade[];now:number;empty:string;compact?:boolean}){
   return <section className={compact?"":"fr-section fr-live-holdings"}>{!compact&&<div className="fr-section-head"><h2>当前持仓</h2><span>{trades.length} 笔</span></div>}
-    {trades.length?<div className="fr-position-list">{trades.map(t=><TradeCard key={t.id} trade={t} now={now}/>)}</div>:<Empty title={empty} text="系统会继续扫描并实时更新候选。"/>}</section>;
+    {trades.length?<div className="fr-position-list">{trades.map(t=><TradeCard key={t.id} trade={t} now={now}/>)}</div>:<Empty title={empty}/>}</section>;
 }
 function TradeCard({trade:t,now}:{trade:Trade;now:number}){
   const open=t.status==="OPEN",d=t.side==="LONG"?1:-1,px=open?t.lastPrice:t.exitPrice??t.lastPrice;
@@ -143,7 +126,6 @@ function TradeCard({trade:t,now}:{trade:Trade;now:number}){
       {ctx&&<p className="fr-trade-reason">入场依据：{ctx.reason}</p>}{t.exitReason&&<p className="fr-trade-reason">退出依据：{exitName(t.exitReason)}</p>}</article></details>;
 }
 function Metric({label,value}:{label:string;value:string}){return <span><small>{label}</small><b>{value}</b></span>;}
-function Stat({label,value,note}:{label:string;value:string;note:string}){return <article><small>{label}</small><strong>{value}</strong><p>{note}</p></article>;}
-function Empty({title,text}:{title:string;text:string}){return <div className="fr-empty"><span>◎</span><h3>{title}</h3><p>{text}</p></div>;}
-function PageTitle({eyebrow,title,text}:{eyebrow:string;title:string;text:string}){return <section className="fr-page-title"><small>{eyebrow}</small><h1>{title}</h1><p>{text}</p></section>;}
-function Setting({title,value,text}:{title:string;value:string;text:string}){return <div className="fr-setting"><div><h3>{title}</h3><p>{text}</p></div><b>{value}</b></div>;}
+function Stat({label,value,note}:{label:string;value:string;note?:string}){return <article><small>{label}</small><strong>{value}</strong>{note&&<p>{note}</p>}</article>;}
+function Empty({title}:{title:string}){return <div className="fr-empty"><h3>{title}</h3></div>;}
+function PageTitle({title}:{title:string}){return <section className="fr-compact-title"><h1>{title}</h1></section>;}
