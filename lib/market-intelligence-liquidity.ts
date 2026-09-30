@@ -36,7 +36,7 @@ export type MarketLiquidityResearch={
 };
 
 export type RapidLiquidityAuthorization={
-  ready:boolean;side:LiquiditySide|null;confidence:number;outsideMinutes:number;impulseRate:number;retainedRate:number;reason:string;
+  ready:boolean;side:LiquiditySide|null;confidence:number;outsideMinutes:number;impulseRate:number;retainedRate:number;startedAt:number|null;reason:string;
 };
 
 export function deriveRapidLiquidityAuthorization(input:{
@@ -44,14 +44,14 @@ export function deriveRapidLiquidityAuthorization(input:{
 }):RapidLiquidityAuthorization{
   const map=input.map,price=input.price;
   if(!map?.ready||!map.activeZone||!(price>0))
-    return{ready:false,side:null,confidence:0,outsideMinutes:0,impulseRate:0,retainedRate:0,reason:"缺少已确认的大级别流动性来源区域。"};
+    return{ready:false,side:null,confidence:0,outsideMinutes:0,impulseRate:0,retainedRate:0,startedAt:null,reason:"缺少已确认的大级别流动性来源区域。"};
   const zone=map.activeZone,rows=(input.minuteRows??[]).filter(r=>r&&[r.time,r.open,r.high,r.low,r.close].every(Number.isFinite)
       &&r.time>0&&r.open>0&&r.close>0&&r.high>=Math.max(r.open,r.close)&&r.low<=Math.min(r.open,r.close)
       &&r.time*1000+60_000<=input.now).sort((a,b)=>a.time-b.time).slice(-10);
-  if(rows.length<5)return{ready:false,side:null,confidence:0,outsideMinutes:0,impulseRate:0,retainedRate:0,reason:"1分钟路径尚不足以提前确认离开。"};
+  if(rows.length<5)return{ready:false,side:null,confidence:0,outsideMinutes:0,impulseRate:0,retainedRate:0,startedAt:null,reason:"1分钟路径尚不足以提前确认离开。"};
   const atrRate=Math.max(.0005,map.atrRate),bufferRate=Math.max(.0007,Math.min(.003,atrRate*.18)),
     side:LiquiditySide|null=price>zone.upper*(1+bufferRate)?"UP":price<zone.lower*(1-bufferRate)?"DOWN":null;
-  if(!side)return{ready:false,side:null,confidence:0,outsideMinutes:0,impulseRate:0,retainedRate:0,reason:"实时价格尚未明确离开来源流动性区域。"};
+  if(!side)return{ready:false,side:null,confidence:0,outsideMinutes:0,impulseRate:0,retainedRate:0,startedAt:null,reason:"实时价格尚未明确离开来源流动性区域。"};
   const d=side==="UP"?1:-1,boundary=side==="UP"?zone.upper:zone.lower,
     outside=(row:LiquidityCandle)=>side==="UP"?row.close>boundary*(1+bufferRate*.30):row.close<boundary*(1-bufferRate*.30),
     directionalBody=(row:LiquidityCandle)=>d*(row.close/row.open-1),
@@ -62,7 +62,7 @@ export function deriveRapidLiquidityAuthorization(input:{
     const row=recent[i]!,body=directionalBody(row);
     if(body>=Math.max(bufferRate*.80,bodyBaseline*1.8)&&outside(row)){impulseIndex=i;impulseRate=body;break;}
   }
-  if(impulseIndex<0)return{ready:false,side,confidence:0,outsideMinutes,impulseRate:0,retainedRate:0,
+  if(impulseIndex<0)return{ready:false,side,confidence:0,outsideMinutes,impulseRate:0,retainedRate:0,startedAt:null,
     reason:"虽然价格已经离开区域，但1分钟级尚未出现足够强的离开实体。"};
   const after=recent.slice(impulseIndex),reentered=after.some(r=>side==="UP"?r.close<zone.upper:r.close>zone.lower),
     excursion=side==="UP"?Math.max(...after.map(r=>Math.max(0,r.high-boundary))):Math.max(...after.map(r=>Math.max(0,boundary-r.low))),
@@ -79,7 +79,7 @@ export function deriveRapidLiquidityAuthorization(input:{
     confidence=clip(.30*clip(outsideMinutes/3)+.28*clip(impulseRate/Math.max(bufferRate*1.8,bodyBaseline*2.4))
       +.22*retainedRate+.12*(restart?1:0)+.08*(shallowPullback?1:0)),
     ready=!reentered&&shallowPullback&&restart&&enoughOutside&&retainedRate>=.42&&confidence>=.62;
-  return{ready,side,confidence,outsideMinutes,impulseRate,retainedRate,
+  return{ready,side,confidence,outsideMinutes,impulseRate,retainedRate,startedAt:impulseRow.time*1000,
     reason:ready
       ?`大级别流动性来源区未改变；1分钟已出现强离开、浅回调/保持并重新沿原方向推进，可提前授权实时执行，不等第二根5分钟K线。`
       :reentered?"1分钟离开后已经重新收回来源区域，不能提前授权迁移。"
