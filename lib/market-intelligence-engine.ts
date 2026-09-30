@@ -424,7 +424,10 @@ export function buildMarketIntelligence(input:{paths:Record<string,CandleLike[]>
       stopRate=usesLiquidityInvalidation&&invalidationRate!=null?invalidationRate:baseStopRate,
       riskGeometryOk=!usesLiquidityInvalidation||(invalidationRate!=null&&invalidationRate>=.004&&invalidationRate<=.028),
       planRoom=plan.targetRate??baseRoom,
-      gross=plan.plan==="LIQUIDITY_REJECTION"?Math.max(0,planRoom):Math.max(planRoom,baseRoom+Math.abs(row.residual)*.35),
+      // A known next liquidity zone is a real target boundary. Do not manufacture
+      // extra "open space" beyond it from generic room/residual estimates; a new
+      // leg must earn a fresh zone/acceptance thesis after reaching that target.
+      gross=plan.targetRate!=null?Math.max(0,planRoom):Math.max(planRoom,baseRoom+Math.abs(row.residual)*.35),
       net=Math.max(0,gross-.0019),edge=net/Math.max(pullback,.001),
       marketFit=clip(.5+side*(shortLayer.score*.55+major.score*.30+macro.score*.15)/2),
       mode:"RELATIVE"|"REVERSAL"|"CONTINUATION"=plan.plan==="LIQUIDITY_MIGRATION"?"CONTINUATION":
