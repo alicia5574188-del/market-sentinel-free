@@ -98,23 +98,29 @@ test("execution page exposes the same narrative used by strategy decisions",asyn
   for(const text of["超大周期","大方向","短期优势","系统刚刚发现的细节","当前交易假设","持仓自己的理由"])assert.match(execution,new RegExp(text));
   assert.match(workflow,/market-intelligence-v1/);
   assert.match(workflow,/marketIntelligenceTracked >= 20/);assert.match(workflow,/marketIntelligenceCoverage\.dailyMarkets >= 3/);
-  assert.match(execution,/数据覆盖/);assert.match(execution,/超大周期至少需要3个真实日线市场/);
+  assert.match(execution,/数据覆盖/);assert.match(execution,/流动性地图每币至少需要72根完成5m/);
   assert.match(wrangler,/MarketStream/);assert.match(wrangler,/MemberExecutor/);assert.match(wrangler,/MemberDirectory/);
 });
 
 
-test("Market Intelligence restores golden Position Intelligence authority and keeps only catastrophic winner insurance",async()=>{
+test("Market Intelligence keeps Position Intelligence authority while liquidity adds only bounded plan-aware protection",async()=>{
   const core=await read("lib/forward-relations.ts"),engine=await read("lib/market-intelligence-engine.ts");
   const manage=core.slice(core.indexOf("function catastrophicWinnerInsuranceFloor"),core.indexOf("function markAndManage"));
   assert.match(manage,/evaluatePositionIntelligence/);
   assert.match(manage,/if\(position\.decision==="EXIT"\)/);
   assert.match(manage,/POSITION_VALUE_EXIT/);
   assert.match(manage,/catastrophicWinnerInsuranceFloor/);
-  assert.match(manage,/WINNER_INSURANCE_EXIT/);
+  assert.match(manage,/liquidityTargetProfitFloor/);
+  assert.match(manage,/environmentDecayProfitFloor/);
+  assert.match(manage,/LIQUIDITY_TARGET_PROTECT_EXIT/);
   assert.match(manage,/provenThreshold=Math\.max\(\.04,originalStopRate\*3\)/);
   assert.doesNotMatch(manage,/deriveProfitLifecycle|RESEARCH_LIFECYCLE_EXIT|PROFIT_PLATFORM_BREACH|Runner利润平台|研究层进入利润保护/);
-  assert.match(engine,/thesisId=.*row\.signalSince/);
-  assert.match(engine,/signalBars>=2/);
+  assert.match(engine,/LIQUIDITY_MIGRATION/);
+  assert.match(engine,/LIQUIDITY_REJECTION/);
+  assert.match(engine,/FAMILY_TURN/);
+  assert.match(engine,/OBSERVE_ONLY/);
+  assert.match(engine,/planHard=migrationHard\|\|rejectionHard\|\|familyHard/);
+  assert.match(engine,/thesisId=.*plan\.plan/);
   const advance=core.slice(core.indexOf("export function advanceForward"),core.indexOf("export function closeForwardForReset"));
   assert.match(advance,/seedEntryResponses/);
   assert.match(advance,/advanceEntryResponses/);
@@ -132,6 +138,8 @@ test("Market Intelligence active exits are evidence-family gated directly by Pos
   assert.match(manage,/POSITION_VALUE_EXIT/);
   assert.doesNotMatch(manage,/lifecycle\.action|RESEARCH_LIFECYCLE_EXIT|positionHypothesisGuidance/);
   assert.match(position,/coreConcern&&independentConfirm/);
+  assert.match(position,/family\("LIQUIDITY"/);
+  assert.match(position,/x\.family==="LIQUIDITY"/);
   assert.match(position,/reviewBars>=2/);
   assert.match(position,/contextOnly:true/);
   assert.match(position,/dataConfidence>=60/);
@@ -156,6 +164,22 @@ test("existing multi-source BBO refresh exposes liquidity migration without extr
   assert.match(execution,/跨所流动性/);
 });
 
+
+test("formal liquidity map reuses existing causal data and cannot add a market-data request loop",async()=>{
+  const [liquidity,engine,worker,store]=await Promise.all([
+    read("lib/market-intelligence-liquidity.ts"),read("lib/market-intelligence-engine.ts"),
+    read("worker/index-clean.ts"),read("lib/forward-store.ts")
+  ]);
+  assert.match(engine,/buildMarketLiquidityResearch\(paths,input\.now\)/);
+  assert.match(liquidity,/rows\.length<72/);
+  assert.match(liquidity,/globalRows=rows\.slice\(-120\)/);
+  assert.match(liquidity,/tradeRows=rows\.slice\(-48\)/);
+  assert.match(liquidity,/departure\.state==="ACCEPTED"/);
+  assert.match(liquidity,/departure\.state==="REJECTED"/);
+  assert.doesNotMatch(liquidity,/fetch\(|marketHub|GateLiveClient|createEntry\(/);
+  assert.match(worker,/marketHub\.candles\(symbol,"5m",120\)/);
+  assert.match(store,/liquidity:\{\.\.\.next\.extremumRegime\.liquidity,symbols:\{\}\}/);
+});
 
 test("counterfactual research is isolated from trading authority and exported for review",async()=>{
   const [worker,forward,research]=await Promise.all([
@@ -317,7 +341,7 @@ test("environment outlook has bounded execution authority and cannot become a tr
   const open=core.slice(core.indexOf("function openIntelligenceTrade"),core.indexOf("export function extremeResidualConfirmationProfile"));
   assert.match(open,/Math\.max\(\.70,Math\.min\(1,o\.environmentRiskScale\?\?1\)\)/);
   assert.doesNotMatch(open,/environmentRiskScale[^;\n]*>1|riskRate\s*\*\s*1\.[1-9]/,"environment outlook cannot amplify risk above the original strategy");
-  assert.match(router,/mainline=fit>=\.75&&outlook\.horizonMinutes>=45/);
+  assert.match(router,/mainline=o\.tradePlan==="LIQUIDITY_MIGRATION"&&fit>=\.75&&outlook\.horizonMinutes>=45/);
   assert.match(router,/forceRetest=false/,"environment outlook must not revive a second environment-specific entry state machine");
   assert.match(execution,/未来市场条件/);
   assert.match(execution,/不直接预测价格/);
