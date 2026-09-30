@@ -1,0 +1,36 @@
+name: Slow Maker Feasibility Audit
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'scripts/research-slow-maker-feasibility.mjs'
+      - '.github/workflows/slow-maker-feasibility.yml'
+      - 'worker/index-clean.ts'
+      - 'lib/gate-market.ts'
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Syntax check
+        run: node --check scripts/research-slow-maker-feasibility.mjs
+      - name: Run slow maker feasibility audit
+        env:
+          RESEARCH_OUTPUT: /tmp/slow-maker-feasibility.json
+        run: node scripts/research-slow-maker-feasibility.mjs
+      - name: Print result
+        run: jq '{research,objective,protocol,runtime,reconstructionPass,reconstructionCoverage,archiveQualityDecision,validHours,invalidHours,atTouchPortabilityRejected,latencyMatchedWideEvidence,atTouchDecision,widePassiveDecision,symbolPortability,sha256,summary:(.records|map(if .ok then {era,symbol,qualityPass:((.validBookSeconds>=3000) and (.crossedGroupRatio<=0.005) and (.outOfOrder==0) and (.sequenceGapCount==0) and (.sequenceBackwards==0)),p50SpreadBps:.spreadBps.p50,p90SpreadBps:.spreadBps.p90,p50BestStateMs:.bestQuoteStateMs.p50,stableWide4SixPct:(.stableWide["4bp_6000ms"].timeFraction*100),stableWide8SixPct:(.stableWide["8bp_6000ms"].timeFraction*100),crossedGroupRatio,validBookSeconds,sequenceGapCount,sequenceBackwards} else {era,symbol,error} end))}' /tmp/slow-maker-feasibility.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: slow-maker-feasibility
+          path: /tmp/slow-maker-feasibility.json
+          retention-days: 7
