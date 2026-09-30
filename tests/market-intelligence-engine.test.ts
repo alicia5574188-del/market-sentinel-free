@@ -1,9 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {buildMarketIntelligence,initialMarketIntelligenceState,MARKET_INTELLIGENCE_VERSION} from "../lib/market-intelligence-engine.ts";
+import {buildMarketIntelligence,initialMarketIntelligenceState,liquidityPlanGrossRoom,MARKET_INTELLIGENCE_VERSION} from "../lib/market-intelligence-engine.ts";
 import {evaluatePositionIntelligence} from "../lib/position-intelligence-engine.ts";
 import {entryResponseWindowMs,evaluateEntryResponse} from "../lib/market-intelligence-entry-response.ts";
-import {advanceForward,environmentDecayProfitFloor,extremeResidualConfirmationProfile,fillForwardPortfolio,initialForward,normalizeForward,
+import {advanceForward,environmentDecayProfitFloor,evidenceDecayProfitFloor,executionValueAtQuote,extremeResidualConfirmationProfile,
+  fillForwardPortfolio,initialForward,liquidityInvalidationDecision,liquidityTargetProfitFloor,normalizeForward,
   entryLocationDecision,resetForwardAccountPreservingLearning,stableEntryLocationDecision,stableEntryThesisProfile} from "../lib/forward-relations.ts";
 import {deriveEnvironmentOutlook,deriveFastEnvironmentSignal,environmentModeFit,environmentPerformanceFactor,environmentProbeRetestDecision,initialEnvironmentPerformanceState,
   normalizeEnvironmentPerformanceState,recordEnvironmentOutcome,routeEnvironmentOpportunity} from "../lib/market-intelligence-environment-router.ts";
@@ -584,7 +585,7 @@ test("rotation makes relative/reversal logic more suitable than continuation wit
   assert.equal(route.playbook,"ROTATION_RELATIVE");assert.ok(route.riskScale>=.70);
 });
 
-test("historical environment PnL stays diagnostic; live routing is driven by current market condition",()=>{
+test("historical environment losses shrink risk and require prove-retest-restart instead of stopping trading",()=>{
   const perf=initialEnvironmentPerformanceState();
   for(let i=0;i<6;i++)recordEnvironmentOutcome(perf,{environment:"TRANSITION",playbook:"TRANSITION_PROBE",netPnl:-5,plannedRisk:5,now:T+i});
   const factor=environmentPerformanceFactor(perf,"TRANSITION","TRANSITION_PROBE");
@@ -602,8 +603,9 @@ test("historical environment PnL stays diagnostic; live routing is driven by cur
     score:82,premium:true,edgeRatio:2,netRemainingSpaceRate:.025,pullbackRiskRate:.011,thesisBars:3,confirmationStage:"READY"}});
   const b=routeEnvironmentOpportunity({market,evolution,symbol,performanceFactor:factor,opportunity:{side:"LONG",mode:"REVERSAL",
     score:82,premium:true,edgeRatio:2,netRemainingSpaceRate:.025,pullbackRiskRate:.011,thesisBars:3,confirmationStage:"READY"}});
-  assert.equal(a.riskScale,b.riskScale);
-  assert.ok(a.riskScale>=.70,"environment can reduce size but cannot turn trading off");
+  assert.ok(b.riskScale<a.riskScale);
+  assert.ok(b.riskScale>=.45,"bad environment history reduces size but cannot reduce risk to zero");
+  assert.equal(b.forceRetest,true,"poor realized playbook performance must demand prove-retest-restart before another entry");
 });
 
 test("one-minute fast pressure can shorten the future window without flipping the formal market label",()=>{
@@ -657,4 +659,41 @@ test("environment performance memory bootstraps from historical losses and survi
   const state=initialForward(T);state.environmentPerformance=memory;
   const reset=resetForwardAccountPreservingLearning(state,T+1_000);
   assert.deepEqual(reset.environmentPerformance,memory);
+});
+
+
+test("known liquidity target is the remaining room; generic residual room cannot inflate it",()=>{
+  assert.equal(liquidityPlanGrossRoom({targetRate:0,baseRoom:.03,residual:.04}),0);
+  assert.equal(liquidityPlanGrossRoom({targetRate:.0013,baseRoom:.03,residual:.04}),.0013);
+  assert.ok(liquidityPlanGrossRoom({targetRate:null,baseRoom:.03,residual:.04})>.03);
+});
+
+test("live fill rechecks remaining edge instead of using a stale candidate score",()=>{
+  const weak=executionValueAtQuote({remainingNetRate:.008,pullbackRiskRate:.008});
+  assert.equal(weak.executable,false);assert.ok(weak.edgeRatio<1.25);
+  const good=executionValueAtQuote({remainingNetRate:.018,pullbackRiskRate:.01});
+  assert.equal(good.executable,true);assert.ok(good.edgeRatio>=1.25);
+});
+
+test("liquidity invalidation is a review boundary until evidence or a bounded hard loss confirms exit",()=>{
+  const review=liquidityInvalidationDecision({breached:true,signedRate:-.011,invalidationRate:.01,expectedPullbackRate:.008,
+    positionDecision:"REVIEW",costRate:.0019});
+  assert.equal(review.action,"REVIEW");
+  const confirmed=liquidityInvalidationDecision({breached:true,signedRate:-.011,invalidationRate:.01,expectedPullbackRate:.008,
+    positionDecision:"EXIT",costRate:.0019});
+  assert.equal(confirmed.action,"CONFIRMED_EXIT");
+  const hard=liquidityInvalidationDecision({breached:true,signedRate:-.02,invalidationRate:.01,expectedPullbackRate:.008,
+    positionDecision:"HOLD",costRate:.0019});
+  assert.equal(hard.action,"HARD_EXIT");
+});
+
+test("winner decay and known-target protection keep meaningful profit without trailing every small move",()=>{
+  const target=liquidityTargetProfitFloor({side:"LONG",currentPrice:100.2,targetLower:100,targetUpper:101,
+    peakFavorableRate:.0167,originalStopRate:.0253,costRate:.0019});
+  assert.ok(target>.008,"ZAMA-like target arrival should protect a meaningful share of proven profit");
+  const decay=evidenceDecayProfitFloor({peakFavorableRate:.024,originalStopRate:.012,decision:"REVIEW",reviewBars:2,
+    holdValueScore:45,counterfactualNewEntry:false,costRate:.0019});
+  assert.ok(decay>.01);
+  assert.equal(evidenceDecayProfitFloor({peakFavorableRate:.024,originalStopRate:.012,decision:"HOLD",reviewBars:0,
+    holdValueScore:70,counterfactualNewEntry:false,costRate:.0019}),0);
 });
