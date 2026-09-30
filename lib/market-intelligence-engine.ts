@@ -298,6 +298,7 @@ export function buildMarketIntelligence(input:{paths:Record<string,CandleLike[]>
       if(r>bestCorr){chosen=c;bestCorr=r;}}if(!chosen){chosen={id:`corr:${row.symbol}`,leader:row.symbol,members:[],averageCorrelation:1};clusters.push(chosen);}
     chosen.members.push(row.symbol);row.clusterId=chosen.id;}
   for(const c of clusters)c.averageCorrelation=mean(c.members.map(s=>corr(retSeries[s]??[],retSeries[c.leader]??[])));
+  const familyTurns=familyTurnSignals(clusters,states,liquidity,major.score,short.score);
 
   const evidenceRows=(previous.evidence??[]).filter(x=>x.expiresAt>input.now).slice(0,40);
   if(breadthSlope<-.22)addEvidence(evidenceRows,mkEvidence("breadth-down-"+input.now,input.now,"BREADTH_CONTRACTION","BEARISH",Math.abs(breadthSlope),
@@ -373,32 +374,59 @@ export function buildMarketIntelligence(input:{paths:Record<string,CandleLike[]>
 
   const opportunities:IntelligenceOpportunity[]=[];
   for(const row of Object.values(states)){
-    const bestSide=row.longScore>=row.shortScore?"LONG":"SHORT",side=bestSide==="LONG"?1:-1,score=Math.max(row.longScore,row.shortScore),
-      room=bestSide==="LONG"?row.roomLong:row.roomShort,path=bestSide==="LONG"?row.pathLong:row.pathShort,
+    const q=input.quotes[row.symbol],price=q&&q.bestBid>0&&q.bestAsk>=q.bestBid?(q.bestBid+q.bestAsk)/2:paths[row.symbol]!.at(-1)!.close,
+      map=liquidity.symbols[row.symbol],family=familyTurns.get(row.clusterId),
+      plan=liquidityTradePlan({state:row,map,family,price}),bestSide=plan.side,side=bestSide==="LONG"?1:-1,
+      score=bestSide==="LONG"?row.longScore:row.shortScore,
+      baseRoom=bestSide==="LONG"?row.roomLong:row.roomShort,path=bestSide==="LONG"?row.pathLong:row.pathShort,
       pullback=Math.max(.0035,row.volatility*Math.sqrt(4)*1.25),stopRate=clip(Math.max(.0055,pullback*1.18),.0055,.028),
-      gross=Math.max(stopRate*1.55,room+Math.abs(row.residual)*.65),net=Math.max(0,gross-.0019),edge=net/Math.max(pullback,.001),
-      marketFit=clip(.5+side*(shortLayer.score*.55+major.score*.30+macro.score*.15)/2),residualAligned=side*row.residualZ>0,
-      mode:"RELATIVE"|"REVERSAL"|"CONTINUATION"=residualAligned&&side*major.score<-.08?"REVERSAL":side*shortLayer.score>.10?"CONTINUATION":"RELATIVE",
-      hold=Math.round(clip(80+90*Math.abs(major.score)+120*row.residualPersistence+80*marketFit,60,360)),
-      q=input.quotes[row.symbol],price=q&&q.bestBid>0&&q.bestAsk>=q.bestBid?(q.bestBid+q.bestAsk)/2:paths[row.symbol]!.at(-1)!.close,
+      planRoom=plan.targetRate??baseRoom,
+      gross=plan.plan==="LIQUIDITY_REJECTION"?Math.max(0,planRoom):Math.max(planRoom,baseRoom+Math.abs(row.residual)*.35),
+      net=Math.max(0,gross-.0019),edge=net/Math.max(pullback,.001),
+      marketFit=clip(.5+side*(shortLayer.score*.55+major.score*.30+macro.score*.15)/2),
+      mode:"RELATIVE"|"REVERSAL"|"CONTINUATION"=plan.plan==="LIQUIDITY_MIGRATION"?"CONTINUATION":
+        plan.plan==="FAMILY_TURN"?"REVERSAL":"RELATIVE",
+      hold=Math.round(clip(plan.plan==="LIQUIDITY_MIGRATION"?100+120*Math.abs(major.score)+120*plan.confidence:
+        plan.plan==="FAMILY_TURN"?70+80*plan.confidence+60*marketFit:
+        plan.plan==="LIQUIDITY_REJECTION"?45+70*plan.confidence:60,45,360)),
       exec=clip(55+10*Math.min(4,row.sourceCount)+20*row.venueAgreement-20*Math.min(.01,q?.disagreementRate??0)/.01,0,100),
-      quality=score*.62+Math.min(100,edge*35)*.18+row.dataConfidence*.12+exec*.08,
-      rawEligible=quality>=72&&edge>=1.30&&row.dataConfidence>=65&&row.sourceCount>=2&&row.residualPersistence>=.66&&Math.abs(row.residualZ)>=.25,
-      exceptional=quality>=88&&edge>=1.60&&row.residualPersistence>=.99&&Math.abs(row.residualZ)>=1.10&&row.sourceCount>=3,
-      mature=row.signalBars>=2,
+      quality=score*.50+plan.confidence*100*.22+Math.min(100,edge*35)*.13+row.dataConfidence*.10+exec*.05,
+      migrationHard=plan.plan==="LIQUIDITY_MIGRATION"&&map?.departure.state==="ACCEPTED"&&map.departure.confidence>=.60
+        &&!!map.activeZone&&map.activeZone.strength>=.36&&(plan.targetRate!=null||map.openSpace),
+      rejectionHard=plan.plan==="LIQUIDITY_REJECTION"&&map?.departure.state==="REJECTED"&&map.departure.confidence>=.62
+        &&!!map.activeZone&&map.activeZone.strength>=.40&&plan.targetRate!=null&&plan.targetRate>=Math.max(.0038,pullback*1.05),
+      familyHard=plan.plan==="FAMILY_TURN"&&!!family&&family.confirmed>=2&&family.confidence>=.58
+        &&side*row.residualZ>=.30&&row.residualPersistence>=.55,
+      planHard=migrationHard||rejectionHard||familyHard,
+      directionFloor=plan.plan==="LIQUIDITY_REJECTION"?55:plan.plan==="FAMILY_TURN"?58:62,
+      rawEligible=planHard&&quality>=72&&edge>=1.25&&score>=directionFloor&&row.dataConfidence>=65&&row.sourceCount>=2,
+      exceptional=migrationHard&&quality>=88&&edge>=1.55&&plan.confidence>=.75&&row.sourceCount>=3,
+      planBars=plan.plan==="LIQUIDITY_MIGRATION"?Math.max(1,map?.departure.outsideBars??1):
+        plan.plan==="FAMILY_TURN"?Math.max(2,row.signalBars):plan.plan==="LIQUIDITY_REJECTION"?2:0,
+      mature=plan.plan==="LIQUIDITY_MIGRATION"?planBars>=2:plan.plan==="FAMILY_TURN"?familyHard:rejectionHard,
       eligible=rawEligible&&(mature||exceptional);
-    row.watchScore=quality;row.regime=Math.abs(row.residualZ)>=.8&&row.residualPersistence>=.55?"DIVERGENT":Math.abs(shortLayer.score)>.28?"MARKET_TREND":dispersion>.6?"TRANSITION":"BALANCED";row.stage=eligible?"READY":"OBSERVE";
-    const thesisId=`${MARKET_INTELLIGENCE_VERSION}:${row.symbol}:${bestSide}:${row.signalSince}`,
-      thesisSummary=`${row.symbol.replace("_USDT","")} ${bestSide==="LONG"?"做多":"做空"}：相对市场残差 ${fmtPct(row.residual)}，持续性 ${(row.residualPersistence*100).toFixed(0)}%，同方向已连续 ${row.signalBars} 根完成5m观察，相关组 ${row.clusterId.replace("corr:","")}。`,
-      invalidationSummary=bestSide==="LONG"?"若相对强势消失并持续弱于相关组，或结构止损被击穿，则原多头假设失效。":"若相对弱势消失并持续强于相关组，或结构止损被击穿，则原空头假设失效。";
+    row.watchScore=quality;row.regime=plan.plan==="LIQUIDITY_MIGRATION"?"MARKET_TREND":
+      plan.plan==="FAMILY_TURN"?"DIVERGENT":plan.plan==="LIQUIDITY_REJECTION"?"TRANSITION":
+      Math.abs(shortLayer.score)>.28?"MARKET_TREND":dispersion>.6?"TRANSITION":"BALANCED";row.stage=eligible?"READY":"OBSERVE";
+    const planSince=map?.departure.startedAt??row.signalSince,
+      thesisId=`${MARKET_INTELLIGENCE_VERSION}:${row.symbol}:${bestSide}:${plan.plan}:${planSince}`,
+      planZh=plan.plan==="LIQUIDITY_MIGRATION"?"流动性迁移":plan.plan==="LIQUIDITY_REJECTION"?"离开失败回归":
+        plan.plan==="FAMILY_TURN"?"家族提前转折":"观察",
+      targetZh=plan.targetRate!=null?`，到下一目标约 ${fmtPct(plan.targetRate)}`:map?.openSpace?"，上方/下方进入已知开放空间":"",
+      thesisSummary=`${row.symbol.replace("_USDT","")} ${bestSide==="LONG"?"做多":"做空"} · ${planZh}：${plan.reason}${targetZh}`,
+      invalidationSummary=plan.plan==="LIQUIDITY_MIGRATION"?"若价格重新被原流动性区域完整吸收，迁移假设失效。":
+        plan.plan==="LIQUIDITY_REJECTION"?"若价格再次向原突破方向离开并被市场接受，回归假设失效。":
+        plan.plan==="FAMILY_TURN"?"若相关家族反向结构消失并重新跟随原市场方向，转折假设失效。":
+        "当前没有独立交易计划，相对强弱只继续用于观察和选币。";
     opportunities.push({id:thesisId,symbol:row.symbol,side:bestSide,mode,premium:quality>=82,score:quality,eligible,completedAt:input.now,
-      expiresAt:input.now+20*60_000,price,stopPrice:price*(1-side*stopRate),targetPrice:price*(1+side*gross),stopRate,targetRate:gross,
+      expiresAt:input.now+20*60_000,price,stopPrice:price*(1-side*stopRate),targetPrice:price*(1+side*Math.max(.003,gross)),stopRate,targetRate:Math.max(.003,gross),
       directionStrength:score,pathEfficiency:path*100,momentumPersistence:row.residualPersistence*100,positionScore:Math.min(100,55+Math.abs(row.residualZ)*15),
       spaceScore:Math.min(100,edge*38),executionScore:exec,grossRemainingSpaceRate:gross,netRemainingSpaceRate:net,pullbackRiskRate:pullback,
       edgeRatio:edge,expectedHoldMinutes:hold,marketFit:marketFit*100,regionId:null,regionQuality:null,reason:`${thesisSummary} ${narrative.plan}`,
       strategyVersion:MARKET_INTELLIGENCE_VERSION,regime:row.regime,confirmationStage:row.stage,sourceCount:row.sourceCount,
       disagreementRate:q?.disagreementRate??0,clusterId:row.clusterId,thesisId,thesisSummary,invalidationSummary,residual:row.residual,
-      relativeStrength:row.relativeStrength,dataConfidence:row.dataConfidence,thesisSince:row.signalSince,thesisBars:row.signalBars});}
+      relativeStrength:row.relativeStrength,dataConfidence:row.dataConfidence,thesisSince:planSince,thesisBars:planBars,
+      tradePlan:plan.plan,liquidityPlanConfidence:plan.confidence,liquidityReason:map?.reason??plan.reason,liquidityTargetRate:plan.targetRate});}
   const groupBest=new Map<string,IntelligenceOpportunity>();for(const o of opportunities.filter(x=>x.eligible)){const key=`${o.clusterId}:${o.side}`,old=groupBest.get(key);if(!old||o.score>old.score)groupBest.set(key,o);}
   for(const o of opportunities){if(!o.eligible)continue;const best=groupBest.get(`${o.clusterId}:${o.side}`);if(best&&best.id!==o.id){o.eligible=false;o.reason+=` 同一高相关组已有更优表达 ${best.symbol.replace("_USDT","")}，本币保持观察。`;}}
   opportunities.sort((a,b)=>Number(b.eligible)-Number(a.eligible)||b.score-a.score);
