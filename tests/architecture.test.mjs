@@ -396,8 +396,9 @@ test("opportunity capture reserves execution capacity and all formal plans use l
   assert.match(manage,/LIQUIDITY_MIGRATION.*LIQUIDITY_REJECTION.*FAMILY_TURN/s);
   assert.match(manage,/流动性迁移续接到下一段/);
   assert.match(manage,/profitStop/);
-  assert.match(manage,/liquidityOwnsStop/);
-  assert.match(manage,/liquidityOwnsStop\?"LIQUIDITY_HYPOTHESIS_INVALIDATED"/);
+  assert.match(manage,/liquidityInvalidationDecision/);
+  assert.match(manage,/HARD_RISK_BOUNDARY/);
+  assert.match(manage,/POSITION_INTELLIGENCE_CONFIRMED/);
   const minute=core.slice(core.indexOf("export function forwardUrgentMinuteSymbols"),core.indexOf("export function forwardWatchSymbols"));
   assert.match(minute,/\.\.\.armed,\.\.\.research,\.\.\.positions/);
   assert.match(worker,/freshImpulse\.slice\(0,3\),\.\.\.fixed/);
