@@ -3150,7 +3150,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         return q&&Math.abs(q.medianShortMove)>=.0012&&q.directionalAgreement>=.67
           ?[{symbol,score:Math.abs(q.medianShortMove)*q.directionalAgreement}]:[];
       }).sort((a,b)=>b.score-a.score).map(x=>x.symbol),
-      urgent=[...new Set([...fixed.slice(0,FORWARD_MINUTE_CONFIRMATION_CAP),...freshImpulse])]
+      // Reserve a few of the existing 11 minute-confirmation seats for brand-new
+      // impulses. This does not increase requests/capacity; it prevents ten open
+      // positions from monopolising all 1m discovery data.
+      urgent=[...new Set([...freshImpulse.slice(0,3),...fixed])]
         .slice(0,FORWARD_MINUTE_CONFIRMATION_CAP);
     const due=urgent.filter(symbol=>{
       if((this.forwardMinuteRetryAt.get(symbol)??0)>now)return false;

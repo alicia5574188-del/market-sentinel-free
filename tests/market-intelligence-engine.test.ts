@@ -409,6 +409,26 @@ test("new liquidity trades size risk and stop at the frozen hypothesis invalidat
   assert.ok(trade.plannedRisk<=6.5,"position size must be reduced to keep risk budget correct when the liquidity invalidation is wider");
 });
 
+test("family-turn entries also require and preserve a frozen liquidity invalidation boundary",()=>{
+  const paths={BTC_USDT:candles(100,.0010),ETH_USDT:candles(100,.0013),SOL_USDT:candles(100,.0009)};
+  const quotes=Object.fromEntries(Object.entries(paths).map(([s,v])=>[s,q(v.at(-1)!.close,.0003)]));
+  const built=buildMarketIntelligence({paths,quotes,previous:initialMarketIntelligenceState(T-300_000),now:T});
+  const base=built.opportunities[0]!,quote=quotes[base.symbol]!,entry=base.side==="LONG"?quote.bestAsk:quote.bestBid,
+    invalidation=base.side==="LONG"?entry*.989:entry*1.011,
+    opportunity={...base,eligible:true,tradePlan:"FAMILY_TURN" as const,environmentForceRetest:false,
+      strategyVersion:MARKET_INTELLIGENCE_VERSION,thesisId:"family-turn-liquidity-stop",thesisSince:T-300_000,
+      netRemainingSpaceRate:.04,grossRemainingSpaceRate:.045,edgeRatio:4,targetRate:.04,
+      liquidityInvalidationPrice:invalidation,liquidityInvalidationRate:.011,rapidLiquidityAuthorization:false};
+  const state=initialForward(T-600_000);state.extremumRegime=built.state;state.opportunities=[opportunity];
+  const contracts={[opportunity.symbol]:{quantoMultiplier:.001,leverageMax:10,maintenanceRate:.005,minContracts:1}};
+  const opened=fillForwardPortfolio(state,{[opportunity.symbol]:quote},contracts,T,1000,false);
+  assert.equal(opened,1);
+  const trade=state.positions[0]!;
+  assert.ok(Math.abs(trade.stopPrice-invalidation)<entry*1e-9);
+  assert.equal(trade.entryContext?.liquidityInvalidationPrice,invalidation);
+  assert.equal(trade.liquidityLifecycle?.invalidationPrice,invalidation);
+});
+
 test("stable market narrative advances only on a new completed five-minute step",()=>{
   const paths={BTC_USDT:candles(100,.0011),ETH_USDT:candles(100,.0013),SOL_USDT:candles(100,.0010)};
   const quotes1=Object.fromEntries(Object.entries(paths).map(([sym,rows])=>[sym,{...q(rows.at(-1)!.close,.0004),observedAt:T}]));

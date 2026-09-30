@@ -91,8 +91,8 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
     entryValidations=data?.entryValidation?.records??[],
     waitingValidations=entryValidations.filter(v=>v.status==="WAITING"&&!heldSymbols.has(v.symbol)),
     waitingByCandidate=new Map(waitingValidations.map(v=>[v.candidateId,v])),
-    preparedWithoutValidation=opportunities.filter(o=>o.eligible&&!heldSymbols.has(o.symbol)&&!waitingByCandidate.has(o.id)).slice(0,6),
-    observed=opportunities.filter(o=>!o.eligible&&!heldSymbols.has(o.symbol)&&!waitingByCandidate.has(o.id)).slice(0,6),
+    queuedForAuthorization=opportunities.filter(o=>o.eligible&&!heldSymbols.has(o.symbol)&&!waitingByCandidate.has(o.id)),
+    observed=[...queuedForAuthorization,...opportunities.filter(o=>!o.eligible&&!heldSymbols.has(o.symbol)&&!waitingByCandidate.has(o.id))].slice(0,8),
     currentEvolution=data?.environmentRouter?.phase??opportunities.find(o=>o.marketEvolutionPhase)?.marketEvolutionPhase,
     currentEnvironment=data?.environmentRouter?.currentEnvironment,
     systemPlan=n?.plan??"继续观察市场变化，只有交易计划和实时执行条件同时成立时才参与。";
@@ -117,16 +117,16 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
       <div className="fr-journal">
         <article><time>正在观察 · {observed.length}</time><div><b>系统正在研究哪些币，以及具体在等什么</b>
           {observed.length?observed.map(o=><p key={o.id}><b>{o.symbol.replace("_"," / ")} · {side(o.side)} · {tradePlanName(o.tradePlan)}</b><br/>
-            {observeReason(o,liquidity?.symbols?.[o.symbol])}</p>)
+            {o.eligible&&!waitingByCandidate.has(o.id)
+              ?"研究条件已经成立，正在等待正式执行队列席位；席位空出会立即武装，不再等待下一根5分钟K线。"
+              :observeReason(o,liquidity?.symbols?.[o.symbol])}</p>)
             :<p>当前没有需要单独列出的重点观察币；系统仍在全市场扫描新的流动性变化。</p>}
         </div></article>
 
-        <article><time>等待执行 · {waitingValidations.length+preparedWithoutValidation.length}</time><div><b>已经接近执行条件的币，只显示还缺什么</b>
-          {waitingValidations.map(v=>{const o=opportunities.find(x=>x.id===v.candidateId);return <p key={v.id}><b>{v.symbol.replace("_"," / ")} · {side(v.side)} · {tradePlanName(o?.tradePlan)}</b><br/>
+        <article><time>等待执行 · {waitingValidations.length}</time><div><b>只有已经正式冻结交易计划的币才显示在这里</b>
+          {waitingValidations.map(v=>{const o=opportunities.find(x=>x.id===v.candidateId)??v.frozenOpportunity;return <p key={v.id}><b>{v.symbol.replace("_"," / ")} · {side(v.side)} · {tradePlanName(o?.tradePlan)}</b><br/>
             {waitingReason(v,o)}</p>})}
-          {preparedWithoutValidation.map(o=><p key={o.id}><b>{o.symbol.replace("_"," / ")} · {side(o.side)} · {tradePlanName(o.tradePlan)}</b><br/>
-            研究条件已经成立，等待进入实时价格响应确认；如果位置已经走远，系统会等回调/重新启动而不是追价。</p>)}
-          {!waitingValidations.length&&!preparedWithoutValidation.length&&<p>当前没有进入执行等待的币；系统还在研究和筛选阶段。</p>}
+          {!waitingValidations.length&&<p>当前没有已经正式武装的执行计划；研究层仍在全市场寻找下一批机会。</p>}
         </div></article>
 
         <article><time>正在持仓 · {positions.length}</time><div><b>每笔持仓只显示下一步该观察什么、准备做什么</b>
