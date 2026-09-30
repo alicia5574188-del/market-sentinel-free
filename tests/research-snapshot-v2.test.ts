@@ -101,7 +101,8 @@ test('candidate admission reserves checkpoint capacity rather than evicting inco
     strategyVersion:'market-intelligence-v1',expiresAt:T+600000,score:80,sourceCount:3,dataConfidence:90,price:100,
     mode:'CONTINUATION',stopRate:.02,reason:'fixture',confirmationStage:'READY',eligible:true,edgeRatio:2} as Opportunity));
   const first=advanceCounterfactualResearch({state:initialCounterfactualResearch(T),forward:s,now:T,quotes:{},paths:{},observeCandidates:true});
-  const ids=first.state.rejected.map(r=>r.id);assert.ok(first.state.sampling!.notAdmittedAttempts>0);assert.ok(ids.length>0);
+  const ids=first.state.rejected.map(r=>r.id);assert.equal(ids.length,2);assert.equal(first.state.sampling!.admitted,2);
+  assert.equal(first.state.sampling!.notAdmittedAttempts,0,"per-cycle sampling must stop the 2s candidate flood before the byte limit");
   const second=advanceCounterfactualResearch({state:first.state,forward:s,now:T+60000,quotes:{},paths:{},observeCandidates:true});
   assert.ok(ids.every(id=>second.state.rejected.some(r=>r.id===id)));assert.equal(second.state.sampling!.evictedBeforeComplete,0);
   for(const value of Object.values(counterfactualResearchWrites(second.state)))assert.ok(new TextEncoder().encode(JSON.stringify(value)).length<100*1024);
