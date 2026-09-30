@@ -21,7 +21,7 @@ import { advanceMarketHypothesisResearch, entryHypothesisGuidance, initialMarket
   normalizeMarketHypothesisResearch,
   type EntryHypothesisGuidance, type MarketHypothesisResearchState } from "./market-intelligence-hypothesis-research.ts";
 import { ENVIRONMENT_OUTLOOK_VERSION, ENVIRONMENT_ROUTER_VERSION, classifyMarketEnvironment, deriveEnvironmentOutlook,
-  deriveFastEnvironmentSignal, environmentModeFit, routeEnvironmentOpportunity,
+  deriveFastEnvironmentSignal, environmentModeFit, environmentPerformanceFactor, environmentProbeRetestDecision, routeEnvironmentOpportunity,
   initialEnvironmentPerformanceState, normalizeEnvironmentPerformanceState, recordEnvironmentOutcome,
   type EnvironmentOutlook, type EnvironmentPerformanceState, type EnvironmentPlaybook, type MarketEnvironment, type RouteAlignment
 } from "./market-intelligence-environment-router.ts";
@@ -822,7 +822,9 @@ function annotateLifecycleOpportunities(s:ForwardState,market:MarketEvolutionSta
     const lifecycle=deriveOpportunityLifecycle({side:o.side,symbol,thesisBars:o.thesisBars??symbol.signalBars,market}),
       future=entryHypothesisGuidance(s.hypothesisResearch,{side:o.side,score:o.score,residualZ:symbol.residualZ,
         residualPersistence:symbol.residualPersistence,sourceCount:symbol.sourceCount,dataConfidence:symbol.dataConfidence}),
-      route=routeEnvironmentOpportunity({market:s.extremumRegime,evolution:market,symbol,opportunity:o,outlook});
+      baseRoute=routeEnvironmentOpportunity({market:s.extremumRegime,evolution:market,symbol,opportunity:o,outlook}),
+      performanceFactor=environmentPerformanceFactor(s.environmentPerformance,baseRoute.environment,baseRoute.playbook),
+      route=routeEnvironmentOpportunity({market:s.extremumRegime,evolution:market,symbol,opportunity:o,outlook,performanceFactor});
     o.marketEvolutionPhase=market.phase;o.opportunityLifecyclePhase=lifecycle.phase;o.lifecycleReason=lifecycle.reason;
     o.futureResearchAction=future.action;o.futureResearchReason=future.reason;o.futureHypothesisIds=future.hypothesisIds;
     o.extendedConfirmation=future.extendedConfirmation;o.environment=route.environment;o.playbook=route.playbook;o.routeAlignment=route.alignment;
@@ -859,9 +861,9 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
     cycleHeadroom=equity*FIVE_MINUTE_NEW_RISK_RATE-cycleRiskAdded(s,s.lastCandleAt),
     continuationHeadroom=continuation?equity*CONTINUATION_SIDE_RISK_RATE-continuationRisk(s,side):Infinity,
     headroom=Math.min(totalHeadroom,sideHeadroom,cycleHeadroom,continuationHeadroom),
-    riskRate=o.premium?.0065:.0055,environmentRiskScale=Math.max(.70,Math.min(1,o.environmentRiskScale??1)),
+    riskRate=o.premium?.0065:.0055,environmentRiskScale=Math.max(.45,Math.min(1,o.environmentRiskScale??1)),
     wantedRisk=equity*riskRate*environmentRiskScale,riskBudget=Math.min(wantedRisk,headroom);
-  if(riskBudget<equity*.0035)return"剩余风险预算不足以形成有效仓位";
+  if(riskBudget<equity*.0018)return"剩余风险预算不足以形成有效仓位";
   const rawNotional=riskBudget/(stopRate+ROUND_TRIP_COST),targetNotional=Math.min(rawNotional,equity*.70),
     leverage=Math.max(1,Math.min(10,Math.floor(contract.leverageMax||10))),mult=Math.max(contract.quantoMultiplier,1e-12),
     minContracts=Math.max(1,Math.ceil(contract.minContracts??(Number(contract.orderSizeMin??1)||1))),
@@ -1153,6 +1155,27 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
     validation.supportSamples=decision.supportSamples;validation.oppositionSamples=decision.oppositionSamples;validation.reason=decision.reason;
 
     if(decision.action==="CANCEL"){validation.status="CANCELLED";reject(decision.reason);continue;}
+
+    if(validation.requiresProbeRetest){
+      const probe=environmentProbeRetestDecision({side:validation.side,price,currentAdvanceRate:decision.currentAdvanceRate,
+        bestAdvanceRate:decision.bestAdvanceRate,retestBasePrice:validation.retestBasePrice,retestSeen:!!validation.probeRetestSeen,
+        impulseMin:validation.probeImpulseMin??ROUND_TRIP_COST*.75,pullbackMin:validation.probePullbackMin??ROUND_TRIP_COST*.40,
+        restartMin:validation.probeRestartMin??ROUND_TRIP_COST*.35});
+      if(probe.action==="WAIT_IMPULSE"){validation.reason="环境适配偏弱，先等第一段真实正反馈，不直接猜方向。";reject(validation.reason);continue;}
+      if(probe.action==="WAIT_PULLBACK"){validation.phase="RETEST_WAIT";validation.reason="第一段正反馈已经出现，但环境适配偏弱；等待可控回调，不在延伸段追入。";reject(validation.reason);continue;}
+      if(probe.action==="SET_RETEST_BASE"){
+        validation.phase="RETEST_WAIT";validation.probeRetestSeen=true;validation.retestBasePrice=price;validation.retestBaseAt=now;
+        validation.supportSamples=0;validation.oppositionSamples=0;validation.reason="已完成正反馈和必要回调；记录回调基准，等待原方向重新启动。";
+        reject(validation.reason);continue;
+      }
+      if(probe.action==="UPDATE_RETEST_BASE"){
+        validation.phase="RETEST_WAIT";validation.probeRetestSeen=true;validation.retestBasePrice=price;validation.retestBaseAt=now;
+        validation.supportSamples=0;validation.oppositionSamples=0;validation.reason="回调仍在延伸，继续更新重启基准，不提前接刀。";
+        reject(validation.reason);continue;
+      }
+      if(probe.action==="WAIT_RESTART"){validation.phase="RETEST_WAIT";validation.reason="回调已经完成，等待原方向重新启动后再成交。";reject(validation.reason);continue;}
+      validation.phase="ARMED";
+    }
 
     const locationManaged=validation.stableThesis||(o.tradePlan!=null&&o.tradePlan!=="OBSERVE_ONLY");
     if(locationManaged){
