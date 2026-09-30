@@ -409,6 +409,66 @@ test("new liquidity trades size risk and stop at the frozen hypothesis invalidat
   assert.ok(trade.plannedRisk<=6.5,"position size must be reduced to keep risk budget correct when the liquidity invalidation is wider");
 });
 
+test("family-turn entries also require and use a frozen liquidity invalidation boundary",()=>{
+  const paths={BTC_USDT:candles(100,.0010),ETH_USDT:candles(100,.0013),SOL_USDT:candles(100,.0009)};
+  const quotes=Object.fromEntries(Object.entries(paths).map(([s,v])=>[s,q(v.at(-1)!.close,.0003)]));
+  const built=buildMarketIntelligence({paths,quotes,previous:initialMarketIntelligenceState(T-300_000),now:T});
+  const base=built.opportunities[0]!,quote=quotes[base.symbol]!,entry=quote.bestAsk,
+    invalidation=entry*.990,
+    opportunity={...base,side:"LONG" as const,mode:"REVERSAL" as const,eligible:true,tradePlan:"FAMILY_TURN" as const,
+      environmentForceRetest:false,strategyVersion:MARKET_INTELLIGENCE_VERSION,thesisId:"family-turn-liquidity-stop",
+      thesisSince:T-300_000,netRemainingSpaceRate:.04,grossRemainingSpaceRate:.045,edgeRatio:4,targetRate:.04,
+      liquidityInvalidationPrice:invalidation,liquidityInvalidationRate:.01};
+  const state=initialForward(T-600_000);state.extremumRegime=built.state;state.opportunities=[opportunity];
+  const contracts={[opportunity.symbol]:{quantoMultiplier:.001,leverageMax:10,maintenanceRate:.005,minContracts:1}};
+  const opened=fillForwardPortfolio(state,{[opportunity.symbol]:quote},contracts,T,1000,false);
+  assert.equal(opened,1);
+  assert.ok(Math.abs(state.positions[0]!.stopPrice-invalidation)<entry*1e-9);
+  assert.equal(state.positions[0]!.liquidityLifecycle?.currentPlan,"FAMILY_TURN");
+  assert.equal(state.positions[0]!.liquidityLifecycle?.invalidationPrice,invalidation);
+});
+
+test("a migration runner rolls into the next accepted liquidity center and keeps the tighter live boundary",()=>{
+  const paths={BTC_USDT:candles(100,.0010),ETH_USDT:candles(100,.0013),SOL_USDT:candles(100,.0009)};
+  const quotes=Object.fromEntries(Object.entries(paths).map(([s,v])=>[s,q(v.at(-1)!.close,.0003)]));
+  const built=buildMarketIntelligence({paths,quotes,previous:initialMarketIntelligenceState(T-300_000),now:T});
+  const base=built.opportunities[0]!,symbol=base.symbol,quote=quotes[symbol]!,entry=quote.bestAsk,
+    initialInvalidation=entry*.990,
+    opportunity={...base,side:"LONG" as const,mode:"CONTINUATION" as const,eligible:true,tradePlan:"LIQUIDITY_MIGRATION" as const,
+      environmentForceRetest:false,strategyVersion:MARKET_INTELLIGENCE_VERSION,thesisId:"runner-roll-forward",
+      thesisSince:T-300_000,netRemainingSpaceRate:.12,grossRemainingSpaceRate:.13,edgeRatio:6,targetRate:.12,
+      liquidityInvalidationPrice:initialInvalidation,liquidityInvalidationRate:.01,
+      liquidityOriginLower:entry*.98,liquidityOriginUpper:entry*.99,
+      liquidityTargetLower:entry*1.05,liquidityTargetUpper:entry*1.06};
+  const state=initialForward(T-600_000);state.extremumRegime=built.state;state.opportunities=[opportunity];
+  const contracts={[symbol]:{quantoMultiplier:.001,leverageMax:10,maintenanceRate:.005,minContracts:1}};
+  assert.equal(fillForwardPortfolio(state,{[symbol]:quote},contracts,T,1000,false),1);
+  const trade=state.positions[0]!;
+  trade.liquidityLifecycle={currentPlan:"LIQUIDITY_MIGRATION",upgradedAt:null,reason:"first leg",
+    originLower:entry*.98,originUpper:entry*.99,targetLower:entry*1.05,targetUpper:entry*1.06,invalidationPrice:initialInvalidation};
+  trade.profitFloorRate=.02;
+  const priorMap=state.extremumRegime.liquidity!.symbols[symbol]!,
+    zone={id:"next-center",tier:"GLOBAL" as const,lower:entry*1.05,upper:entry*1.06,center:entry*1.055,widthRate:.01/1.055,
+      strength:.82,touches:6,pivotScore:.6,absorptionScore:.55,revisits:2,firstTouchedAt:T-1_800_000,lastTouchedAt:T},
+    nextAbove={...zone,id:"next-target",lower:entry*1.12,upper:entry*1.13,center:entry*1.125,lastTouchedAt:T};
+  state.extremumRegime.symbols[symbol]={...state.extremumRegime.symbols[symbol]!,signalSide:"LONG",longScore:86,shortScore:18,
+    residualZ:1.1,residualPersistence:1,relativeStrength:.78,pathLong:.80,pathShort:.20,roomLong:.10,roomShort:.01,
+    sourceCount:4,venueAgreement:.95,venuePressure:.55,dataConfidence:95};
+  state.extremumRegime.liquidity!.symbols[symbol]={...priorMap,ready:true,activeZone:zone,nextAbove,nextBelow:null,
+    accumulation:.35,upperDepletion:.75,lowerDepletion:.15,targetDistanceRate:.055,openSpace:false,
+    departure:{state:"ACCEPTED",side:"UP",confidence:.82,startedAt:T-120_000,distanceRate:.01,outsideBars:2,reason:"accepted next leg"}};
+  const liveQuote={...q(entry*1.07,.001),observedAt:T+2_000};
+  const next=advanceForward({state,now:T+2_000,paths:{},quotes:{[symbol]:liveQuote},contracts,
+    entrySymbols:[symbol],allowDataCycle:false}).state;
+  assert.equal(next.positions.length,1);
+  const runner=next.positions[0]!,expectedInvalidation=zone.upper-(zone.upper-zone.lower)*.35;
+  assert.equal(runner.liquidityLifecycle?.originLower,zone.lower);
+  assert.equal(runner.liquidityLifecycle?.targetLower,nextAbove.lower);
+  assert.ok(Math.abs((runner.liquidityLifecycle?.invalidationPrice??0)-expectedInvalidation)<entry*1e-9);
+  assert.ok(Math.abs(runner.stopPrice-expectedInvalidation)<entry*1e-9,
+    "new liquidity invalidation is tighter than the existing 2% profit floor and must own the live stop");
+});
+
 test("stable market narrative advances only on a new completed five-minute step",()=>{
   const paths={BTC_USDT:candles(100,.0011),ETH_USDT:candles(100,.0013),SOL_USDT:candles(100,.0010)};
   const quotes1=Object.fromEntries(Object.entries(paths).map(([sym,rows])=>[sym,{...q(rows.at(-1)!.close,.0004),observedAt:T}]));
