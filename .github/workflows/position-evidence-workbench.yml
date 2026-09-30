@@ -1,0 +1,60 @@
+name: Isolated Position Evidence Workbench
+on:
+  push:
+    branches: [fix/20261001-position-evidence]
+permissions:
+  contents: write
+jobs:
+  build-review-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: github.event.head_commit.message != 'Apply scoped position evidence repair'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/20261001-position-evidence
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+          cache: npm
+      - name: Apply exact-source scoped edit on review branch only
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = 'fix/20261001-position-evidence'
+          python3 scripts/apply-position-evidence-fix.py
+          git diff --check
+          git diff --exit-code origin/main -- worker lib/gate-live.ts lib/live-parity.ts lib/live-session.ts lib/forward-store.ts lib/forward-protection-checkpoint.ts wrangler.jsonc package-lock.json
+          git add lib/position-intelligence-engine.ts lib/forward-relations.ts tests/market-intelligence-engine.test.ts package.json
+          git -c user.name='alicia5574188-del' -c user.email='alicia5574188@gmail.com' commit -m 'Apply scoped position evidence repair'
+          git push origin HEAD:refs/heads/fix/20261001-position-evidence
+          git diff origin/main -- lib tests package.json > /tmp/position-evidence.patch
+          git archive HEAD -o /tmp/position-source.tar
+      - name: Focused regression tests
+        run: node --experimental-strip-types --test tests/position-evidence-contract.test.ts tests/position-evidence-integration.test.ts tests/market-intelligence-engine.test.ts
+      - run: npm ci
+      - name: Existing release tests and product gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run test:direct
+          npm run test:live-parity
+          npm run test:members
+          npm run test:equity
+          npm run test:feed:workerd
+          npm run typecheck
+          npm run build
+          npm run lint
+          node --test tests/architecture.test.mjs tests/migration.test.mjs
+          git diff --check
+          npx wrangler deploy --dry-run --config dist/server/wrangler.json
+      - name: Keep candidate and patch for exact-source review
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: position-evidence-candidate
+          path: |
+            /tmp/position-evidence.patch
+            /tmp/position-source.tar
+          retention-days: 2
