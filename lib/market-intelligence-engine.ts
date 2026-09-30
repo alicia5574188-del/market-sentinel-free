@@ -423,8 +423,10 @@ export function buildMarketIntelligence(input:{paths:Record<string,CandleLike[]>
       usesLiquidityInvalidation=plan.plan==="LIQUIDITY_MIGRATION"||plan.plan==="LIQUIDITY_REJECTION"||plan.plan==="FAMILY_TURN",
       stopRate=usesLiquidityInvalidation&&invalidationRate!=null?invalidationRate:baseStopRate,
       riskGeometryOk=!usesLiquidityInvalidation||(invalidationRate!=null&&invalidationRate>=.004&&invalidationRate<=.028),
-      planRoom=plan.targetRate??baseRoom,
-      gross=plan.plan==="LIQUIDITY_REJECTION"?Math.max(0,planRoom):Math.max(planRoom,baseRoom+Math.abs(row.residual)*.35),
+      openSpaceRoom=baseRoom+Math.abs(row.residual)*.35,
+      // A known next liquidity zone is the actual remaining destination for this leg.
+      // Never manufacture extra "room" beyond an already-reached/nearby target from generic structural estimates.
+      gross=plan.targetRate!=null?Math.max(0,plan.targetRate):Math.max(0,openSpaceRoom),
       net=Math.max(0,gross-.0019),edge=net/Math.max(pullback,.001),
       marketFit=clip(.5+side*(shortLayer.score*.55+major.score*.30+macro.score*.15)/2),
       mode:"RELATIVE"|"REVERSAL"|"CONTINUATION"=plan.plan==="LIQUIDITY_MIGRATION"?"CONTINUATION":
