@@ -589,9 +589,10 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
       bestHoldMinutes:t.expectedHoldMinutes??180,score:position.holdValueScore};
     delete t.profitLifecycle;
 
-    const stopped=t.side==="LONG"?px<=t.stopPrice:px>=t.stopPrice;
+    const stopped=t.side==="LONG"?px<=t.stopPrice:px>=t.stopPrice,
+      liquidityOwnsStop=liquidityStopActive&&(profitStop==null||(t.side==="LONG"?hypothesisStop>=profitStop:hypothesisStop<=profitStop));
     if(stopped){
-      const stopReason=(t.profitFloorRate??0)>0?"WINNER_INSURANCE_EXIT":liquidityStopActive?"LIQUIDITY_HYPOTHESIS_INVALIDATED":"STRUCTURE_STOP";
+      const stopReason=liquidityOwnsStop?"LIQUIDITY_HYPOTHESIS_INVALIDATED":(t.profitFloorRate??0)>0?"WINNER_INSURANCE_EXIT":"STRUCTURE_STOP";
       closeTrade(s,t,px,now,stopReason);closed.add(t.id);continue;
     }
 
@@ -944,13 +945,14 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
     preserved:Record<string,EntryValidation>={};
   for(const [id,v] of Object.entries(s.entryValidations)){
     const o=v.frozenOpportunity??opportunities.get(v.candidateId);
+    if(v.status==="CANCELLED"&&v.expiresAt<=now)continue;
     if(!o||s.positions.some(t=>t.symbol===v.symbol)||(o.thesisId&&s.consumedTheses[o.thesisId]))continue;
     if(!v.frozenOpportunity)v.frozenOpportunity=structuredClone(o);
     preserved[id]=v;
     if(v.status==="WAITING"&&v.stableThesis){
-      const hardEnd=(v.authorizedAt??v.startedAt)+20*60_000;
+      const hardEnd=(v.authorizedAt??v.startedAt)+12*60_000;
       v.expiresAt=Math.max(v.expiresAt,Math.min(o.expiresAt,hardEnd));
-      v.deadlineAt=Math.max(v.deadlineAt,Math.min(o.expiresAt,(v.authorizedAt??v.startedAt)+12*60_000));
+      if(v.deadlineAt>0)v.deadlineAt=Math.min(v.expiresAt,hardEnd);
     }
   }
   s.entryValidations=preserved;
@@ -962,8 +964,20 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
   let active=Object.values(s.entryValidations).filter(v=>v.status==="WAITING").length;
   const reject=(reason:string)=>{reasons[reason]=(reasons[reason]??0)+1;};
   for(const o of eligible){
-    if(active>=ENTRY_VALIDATION_CAP)break;
     if(s.entryValidations[o.id])continue;
+    if(active>=ENTRY_VALIDATION_CAP){
+      if(!o.rapidLiquidityAuthorization)continue;
+      const waiting=Object.values(s.entryValidations).filter(v=>v.status==="WAITING"&&v.frozenOpportunity)
+        .sort((a,b)=>(a.frozenOpportunity!.environmentScore??a.frozenOpportunity!.score)
+          -(b.frozenOpportunity!.environmentScore??b.frozenOpportunity!.score));
+      const weakest=waiting[0],weakScore=weakest?(weakest.frozenOpportunity!.environmentScore??weakest.frozenOpportunity!.score):Infinity,
+        newScore=o.environmentScore??o.score,
+        noProof=!!weakest&&weakest.supportSamples===0&&now-(weakest.authorizedAt??weakest.startedAt)>=30_000;
+      if(!weakest||!noProof||newScore<weakScore+4)continue;
+      weakest.status="CANCELLED";
+      weakest.reason=`更强的1分钟流动性迁移机会已出现（新计划评分 ${newScore.toFixed(0)} > 当前等待 ${weakScore.toFixed(0)}）；释放一个长期无正反馈的执行槽。`;
+      active--;
+    }
     const q=quotes[o.symbol],quoteReady=freshQuote(q,now)&&q!.entryReady===true,
       state=s.extremumRegime.symbols[o.symbol],sourceCount=Math.max(o.sourceCount??0,state?.sourceCount??0,q?.sourceCount??0),
       disagreement=q?.disagreementRate??o.disagreementRate??0,
@@ -982,9 +996,8 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
       minimumRetainedRate=extreme.minimumRetainedRate,
       price=quoteReady?(o.side==="LONG"?q!.bestAsk:q!.bestBid):o.price,
       armed=stable.stable||!!o.environmentForceRetest,
-      expiresAt=armed?Math.min(o.expiresAt,now+20*60_000):Math.min(o.expiresAt,now+BAR_MS),
-      deadlineAt=armed?Math.min(expiresAt,now+12*60_000)
-        :Math.min(o.expiresAt,now+Math.max(profile.windowMs,minimumElapsedMs+30_000));
+      expiresAt=armed?Math.min(o.expiresAt,now+12*60_000):Math.min(o.expiresAt,now+BAR_MS),
+      deadlineAt=quoteReady?expiresAt:0;
     s.entryValidations[o.id]={id:o.id,candidateId:o.id,symbol:o.symbol,side:o.side,startedAt:now,authorizedAt:now,
       expiresAt,deadlineAt,initialPrice:price,lastPrice:price,lastQuoteAt:quoteReady?q!.observedAt:0,samples:quoteReady?1:0,
       bestAdvanceRate:0,maxAdverseRate:0,supportSamples:0,oppositionSamples:0,extendedConfirmation:extreme.required,
@@ -1034,10 +1047,10 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
     }
     const price=validation.side==="LONG"?q!.bestAsk:q!.bestBid;
     if(validation.samples===0||validation.lastQuoteAt<=0){
-      const waited=Math.max(0,now-validation.startedAt);
-      validation.startedAt=now;validation.deadlineAt=Math.min(validation.expiresAt,validation.deadlineAt+waited);
+      validation.startedAt=now;validation.deadlineAt=validation.expiresAt;
       validation.initialPrice=price;validation.lastPrice=price;validation.lastQuoteAt=q!.observedAt;validation.samples=1;
-      validation.reason="实时执行盘口已经恢复；以首个可执行价格建立执行基准，冻结交易计划继续有效。";
+      validation.bestAdvanceRate=0;validation.maxAdverseRate=0;validation.supportSamples=0;validation.oppositionSamples=0;
+      validation.reason="实时执行盘口已经恢复；以首个可执行价格建立执行基准，冻结交易计划继续有效，之前等待盘口的时间不计入价格响应。";
       reject(validation.reason);continue;
     }
     const state=s.extremumRegime.symbols[validation.symbol],
@@ -1062,7 +1075,8 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
 
     if(decision.action==="CANCEL"){validation.status="CANCELLED";reject(decision.reason);continue;}
 
-    if(validation.stableThesis){
+    const locationManaged=validation.stableThesis||(o.tradePlan!=null&&o.tradePlan!=="OBSERVE_ONLY");
+    if(locationManaged){
       const d=dir(validation.side),expected=validation.initialExpectedNetRate??o.netRemainingSpaceRate,
         pullback=validation.pullbackRiskRateAtArm??o.pullbackRiskRate,
         maxChase=validation.maxChaseRate??stableEntryThesisProfile({score:o.score,premium:!!o.premium,
