@@ -207,7 +207,8 @@ test("counterfactual research is isolated from trading authority and exported fo
     "research must run only after authoritative PAPER processing");
   assert.match(worker,/counterfactual:counterfactualResearchView/);
   assert.match(worker,/buildReviewSnapshot/);
-  assert.match(research,/RESEARCH_CHECKPOINTS=\[5,15,30,60,120,240\]/);
+  assert.match(research,/RESEARCH_CHECKPOINTS=\[5,15,30,45,60\]/);
+  assert.match(research,/MAX_ACTIVE_REJECTED=20/);assert.match(research,/ADMISSION_BUCKET_MS=5\*60_000/);
   assert.match(research,/ACCOUNT_RESET/);
   assert.match(research,/FILTERED_NOT_MATURE/);
   assert.match(research,/EXECUTABLE_NOT_SELECTED/);
@@ -484,6 +485,14 @@ test("environment PnL memory remains diagnostic while current causal outlook own
   assert.match(route,/riskScale=clip\(\.70\+\.30\*fit,\.70,1\)/);
   const advance=core.slice(core.indexOf("function advanceEntryResponses"),core.indexOf("export function fillForwardPortfolio"));
   assert.doesNotMatch(advance,/environmentProbeRetestDecision/,"outlook must reuse the normal entry response path");
+});
+
+test("legacy /forward bookmark resolves before the page router and render faults are contained",async()=>{
+  const worker=await read("worker/index-clean.ts");
+  assert.match(worker,/url\.pathname==="\/forward"/);
+  assert.match(worker,/Response\.redirect\(target\.toString\(\),307\)/);
+  assert.match(worker,/page-handler-failure/);
+  assert.match(worker,/页面正在自动恢复/);
 });
 
 test("LIVE mirror readiness uses fresh executable BBO, not PAPER entryReady admission state",async()=>{

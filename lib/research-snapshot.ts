@@ -121,7 +121,7 @@ export function finalizeReviewSnapshot(s:ReviewSnapshot):ReviewSnapshot{
   const rejected=arr<ObjectRow>(s.research.rejectedOpportunities),sampling=obj(s.research.sampling),
     postExit=arr<ObjectRow>(s.research.postExit),liquidityRebounds=postExit.filter(r=>r.exitReason==='LIQUIDITY_HYPOTHESIS_INVALIDATED'
       &&arr<ObjectRow>(r.checkpoints).some(p=>[5,15,30].includes(Number(p.minutes))&&Number(p.netAfterCostRate)>.002)).slice(0,8),
-    maturity=Object.fromEntries([5,15,30,60,120,240].map(m=>{
+    maturity=Object.fromEntries([5,15,30,45,60].map(m=>{
     const statuses=rejected.map(r=>obj(r.checkpointCoverage)[m]);return[m,{tracked:statuses.length,
       valid:statuses.filter(v=>v==='VALID').length,pending:statuses.filter(v=>v==='PENDING').length,
       unavailable:statuses.filter(v=>v==='UNAVAILABLE').length,dueNotObserved:statuses.filter(v=>v==='DUE_NOT_OBSERVED').length}];}));
