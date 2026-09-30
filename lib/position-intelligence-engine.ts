@@ -234,7 +234,7 @@ export function evaluatePositionIntelligence(input:{
     continuedReview=shouldReview&&prior&&(prior.decision==="REVIEW"||prior.decision==="EXIT"),
     reviewBars=shouldReview?(continuedReview?(prior.reviewBars+(newCompletedBar?1:0)):1):0,
     reviewSince=shouldReview?(continuedReview?prior.reviewSince??input.now:input.now):null,
-    unconfirmedFailure=entryNeverProved&&entryFailureConcern&&dataConfidence>=60&&reviewBars>=2
+    unconfirmedFailure=entryNeverProved&&entryFailureConcern&&supportFamilies.length===0&&dataConfidence>=60&&reviewBars>=2
       &&(advantageChange<-18||input.signedRate<-cost*.25),
     // Proven trades keep the normal two-family value exit. A still-unproven
     // starter cannot be value-exited while its own STRUCTURE remains neutral.
