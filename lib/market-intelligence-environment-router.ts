@@ -2,10 +2,21 @@ import type { MarketIntelligenceState, MarketSymbolState } from "./market-intell
 import type { MarketEvolutionPhase, MarketEvolutionState } from "./market-intelligence-lifecycle.ts";
 
 export const ENVIRONMENT_ROUTER_VERSION="market-environment-router-v1";
+export const ENVIRONMENT_OUTLOOK_VERSION="market-environment-outlook-v1";
 
 export type MarketEnvironment="TREND"|"TRANSITION"|"ROTATION"|"SHOCK";
 export type EnvironmentPlaybook="TREND_CAPTURE"|"TRANSITION_PROBE"|"ROTATION_RELATIVE"|"SHOCK_PARTICIPATION";
 export type RouteAlignment="ALIGNED"|"COUNTER"|"NEUTRAL";
+
+export type EnvironmentOutlook={
+  version:typeof ENVIRONMENT_OUTLOOK_VERSION;
+  persistenceScore:number;
+  transitionPressure:number;
+  horizonMinutes:15|30|45|60;
+  pressureTarget:"TREND"|"ROTATION"|"TRANSITION";
+  profitExpansion:"LOW"|"NORMAL"|"HIGH";
+  reason:string;
+};
 
 export type EnvironmentRouteDecision={
   version:typeof ENVIRONMENT_ROUTER_VERSION;
@@ -22,6 +33,8 @@ export type EnvironmentRouteDecision={
   probePullbackMin:number;
   probeRestartMin:number;
   mainline:boolean;
+  modeFit:number;
+  outlook:EnvironmentOutlook;
   reason:string;
 };
 
@@ -153,6 +166,44 @@ export function environmentProbeRetestDecision(input:{
   return{action:"READY" as const,best,current,retrace,restart};
 }
 
+export function deriveEnvironmentOutlook(market:MarketIntelligenceState,evolution:MarketEvolutionState):EnvironmentOutlook{
+  const major=biasSign(market.narrative.major.bias),short=biasSign(market.narrative.short.bias),
+    directionAgreement=major!==0&&short!==0?(major===short?1:.15):major===0&&short===0?.45:.55,
+    leader=clip(market.internals?.leaderPersistence??.5),rotation=clip(evolution.rotationRisk),
+    transitionBase=clip((market.narrative.transition.pressure??0)/100),
+    trendPersistence=clip(.35*directionAgreement+.25*leader+.20*(1-rotation)+.20*(1-transitionBase)),
+    rotationPersistence=clip(.55*rotation+.25*(1-directionAgreement)+.20*(1-transitionBase)),
+    persistenceScore=Math.max(trendPersistence,rotationPersistence),
+    transitionPressure=clip(.45*transitionBase+.30*rotation+.15*(1-leader)+.10*(1-directionAgreement)),
+    effectivePersistence=clip(persistenceScore*(1-.35*transitionPressure)),
+    horizonMinutes:EnvironmentOutlook["horizonMinutes"]=effectivePersistence>=.78?60:effectivePersistence>=.64?45:effectivePersistence>=.50?30:15,
+    pressureTarget:EnvironmentOutlook["pressureTarget"]=trendPersistence>rotationPersistence+.12?"TREND":
+      rotationPersistence>trendPersistence+.12?"ROTATION":"TRANSITION",
+    profitExpansion:EnvironmentOutlook["profitExpansion"]=pressureTarget==="TREND"&&horizonMinutes>=45&&transitionPressure<.40?"HIGH":
+      horizonMinutes===15||transitionPressure>=.62?"LOW":"NORMAL",
+    reason=`条件持续力 ${(persistenceScore*100).toFixed(0)}%，转变压力 ${(transitionPressure*100).toFixed(0)}%，预计当前可交易假设有效窗口约 ${horizonMinutes} 分钟；变化压力更偏向 ${pressureTarget==="TREND"?"趋势":pressureTarget==="ROTATION"?"轮动":"过渡"}。`;
+  return{version:ENVIRONMENT_OUTLOOK_VERSION,persistenceScore,transitionPressure,horizonMinutes,pressureTarget,profitExpansion,reason};
+}
+
+function layerFit(layer:number,side:number){return layer===0?.5:layer===side?1:0;}
+
+export function environmentModeFit(input:{
+  market:MarketIntelligenceState;evolution:MarketEvolutionState;side:"LONG"|"SHORT";mode:string;outlook?:EnvironmentOutlook;
+}){
+  const outlook=input.outlook??deriveEnvironmentOutlook(input.market,input.evolution),side=sideSign(input.side),
+    major=biasSign(input.market.narrative.major.bias),short=biasSign(input.market.narrative.short.bias),
+    directionAlignment=(layerFit(major,side)+layerFit(short,side))/2,
+    rotation=clip(input.evolution.rotationRisk),dispersion=clip((input.market.internals?.dispersion??0)/1.2),
+    synchrony=clip(input.market.internals?.synchrony??.5);
+  if(input.mode==="CONTINUATION")
+    return clip(.55*outlook.persistenceScore+.25*directionAlignment+.20*(1-rotation));
+  if(input.mode==="REVERSAL")
+    return clip(.55*rotation+.25*outlook.transitionPressure+.20*(1-outlook.persistenceScore));
+  if(input.mode==="RELATIVE")
+    return clip(.45*rotation+.30*dispersion+.25*(1-synchrony));
+  return clip(.45*outlook.persistenceScore+.30*(1-outlook.transitionPressure)+.25*directionAlignment);
+}
+
 export function routeEnvironmentOpportunity(input:{
   market:MarketIntelligenceState;evolution:MarketEvolutionState;symbol:MarketSymbolState;
   opportunity:{
@@ -162,59 +213,22 @@ export function routeEnvironmentOpportunity(input:{
   performanceFactor?:number;portfolioLongRisk?:number;portfolioShortRisk?:number;
 }):EnvironmentRouteDecision{
   const environment=classifyMarketEnvironment(input.market,input.evolution),o=input.opportunity,
-    side=sideSign(o.side),marketSide=decisionSide(input.market,input.evolution),
+    outlook=deriveEnvironmentOutlook(input.market,input.evolution),fit=environmentModeFit({market:input.market,evolution:input.evolution,
+      side:o.side,mode:o.mode,outlook}),side=sideSign(o.side),marketSide=decisionSide(input.market,input.evolution),
     alignment:RouteAlignment=marketSide===0?"NEUTRAL":marketSide===side?"ALIGNED":"COUNTER",
-    perf=clip(input.performanceFactor??1,.55,1.10),extension=Math.abs(input.symbol.residualZ),
-    bars=o.thesisBars??input.symbol.signalBars,stage=o.confirmationStage??input.symbol.stage,
     cost=.0019,pullback=Math.max(cost*1.5,o.pullbackRiskRate),space=Math.max(cost*2,o.netRemainingSpaceRate),
     probeImpulseMin=Math.max(cost*.75,Math.min(pullback*.20,space*.10,.0032)),
     probePullbackMin=Math.max(cost*.40,Math.min(pullback*.18,space*.08,.0025)),
-    probeRestartMin=Math.max(cost*.35,Math.min(pullback*.12,space*.06,.0018));
-
-  let playbook:EnvironmentPlaybook="TRANSITION_PROBE",priority=2,scoreDelta=0,riskScale=.55,probe=true,forceRetest=false,
-    minimumThesisBars=2,mainline=false,reason="过渡环境使用小风险验证，方向必须由价格反馈证明。";
-
-  if(environment==="SHOCK"&&alignment==="ALIGNED"){
-    playbook="SHOCK_PARTICIPATION";priority=5;scoreDelta=12+Math.min(5,extension*1.8);riskScale=1.0;probe=false;
-    minimumThesisBars=1;mainline=true;
-    reason="全市场同步扩张且方向一致，启用主线参与通道，优先用最强/最弱代表表达市场主线。";
-  }else if(environment==="SHOCK"){
-    playbook="TRANSITION_PROBE";priority=1;scoreDelta=-14;riskScale=.35;probe=true;forceRetest=true;minimumThesisBars=2;
-    reason="全市场正在同步扩张，逆主线机会仍可交易，但只能以Probe→回调→再启动方式参与，避免逆势连续亏损。";
-  }else if(environment==="TREND"&&alignment==="ALIGNED"){
-    playbook="TREND_CAPTURE";priority=4;scoreDelta=o.mode==="CONTINUATION"?8:o.mode==="RELATIVE"?5:2;
-    riskScale=1;probe=false;minimumThesisBars=1;
-    reason="稳定/形成中的趋势与候选方向一致，保留原大赢家捕获链并优先让利润扩张。";
-  }else if(environment==="TREND"){
-    playbook="TRANSITION_PROBE";priority=1;scoreDelta=-10;riskScale=.38;probe=true;forceRetest=true;minimumThesisBars=2;
-    reason="候选逆稳定趋势，不禁止交易，但降为小风险反转探针；必须完成第一段推动、回调与重新启动。";
-  }else if(environment==="ROTATION"){
-    playbook="ROTATION_RELATIVE";priority=o.mode==="RELATIVE"?4:3;
-    scoreDelta=(o.mode==="RELATIVE"?6:o.mode==="REVERSAL"?2:-1)+Math.min(4,extension*1.4);
-    riskScale=.68;probe=false;minimumThesisBars=2;
-    const longRisk=input.portfolioLongRisk??0,shortRisk=input.portfolioShortRisk??0,
-      balancing=(o.side==="LONG"&&shortRisk>longRisk)||(o.side==="SHORT"&&longRisk>shortRisk);
-    if(balancing){scoreDelta+=4;priority+=1;}else if(Math.abs(longRisk-shortRisk)>2){scoreDelta-=2;}
-    reason="轮动/震荡环境优先赚相对强弱差，并偏向补足组合另一侧，而不是押单一市场方向。";
-  }else{
-    const counter=alignment==="COUNTER",reversal=o.mode==="REVERSAL";
-    playbook="TRANSITION_PROBE";priority=counter?1:alignment==="ALIGNED"?3:2;
-    scoreDelta=alignment==="ALIGNED"?4:counter?-8:0;
-    if(reversal)scoreDelta-=counter?4:2;
-    riskScale=counter?.40:alignment==="ALIGNED"?.68:.55;
-    probe=true;forceRetest=counter||reversal;minimumThesisBars=forceRetest?2:1;
-    reason=forceRetest
-      ?"过渡环境不再提前猜底/顶：先让候选产生第一段正反馈，再经历可控回调并重新启动后才放大执行。"
-      :"过渡环境沿当前短期方向做小风险参与，先证明再扩张，不因环境不稳定而停止交易。";
-  }
-
-  if(!mainline&&(bars<minimumThesisBars||stage!=="READY")){
-    probe=true;forceRetest=true;riskScale*=.82;scoreDelta-=3;
-    reason+=" 当前交易假设尚未达到本环境的完整成熟度，继续观察并保留Probe执行权，不直接扩大风险。";
-  }
-  const finalRisk=clip(riskScale*perf,.20,1.10);
-  return{version:ENVIRONMENT_ROUTER_VERSION,environment,playbook,alignment,priority,
-    scoreDelta,riskScale:finalRisk,probe,forceRetest,minimumThesisBars,
-    probeImpulseMin,probePullbackMin,probeRestartMin,mainline,
-    reason:perf<.8?reason+` 该环境近期实际交易表现偏弱，继续交易但风险缩放至 ${(finalRisk*100).toFixed(0)}%。`:reason};
+    probeRestartMin=Math.max(cost*.35,Math.min(pullback*.12,space*.06,.0018)),
+    mainline=fit>=.75&&outlook.horizonMinutes>=45,
+    probe=fit<.50,forceRetest=fit<.28,minimumThesisBars=mainline?1:2,
+    priority=fit>=.75?5:fit>=.60?4:fit>=.45?3:2,
+    scoreDelta=(fit-.50)*8,riskScale=clip(.70+.30*fit,.70,1),
+    playbook:EnvironmentPlaybook=environment==="SHOCK"&&alignment==="ALIGNED"?"SHOCK_PARTICIPATION":
+      o.mode==="CONTINUATION"?"TREND_CAPTURE":o.mode==="RELATIVE"?"ROTATION_RELATIVE":"TRANSITION_PROBE",
+    reason=`${outlook.reason} ${o.mode} 与未来条件适配度 ${(fit*100).toFixed(0)}%；${mainline?"允许主线快速确认":
+      forceRetest?"只保留回调后重启参与":"保留普通实时确认"}，风险按 ${(riskScale*100).toFixed(0)}% 连续缩放，不停止交易。`;
+  void input.performanceFactor;void input.portfolioLongRisk;void input.portfolioShortRisk;void input.symbol;void o.premium;void o.edgeRatio;
+  return{version:ENVIRONMENT_ROUTER_VERSION,environment,playbook,alignment,priority,scoreDelta,riskScale,probe,forceRetest,
+    minimumThesisBars,probeImpulseMin,probePullbackMin,probeRestartMin,mainline,modeFit:fit,outlook,reason};
 }
