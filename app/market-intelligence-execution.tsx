@@ -4,251 +4,140 @@ import {BEIJING_TIME_ZONE} from "../lib/beijing-time.ts";
 import {type forwardSummary} from "../lib/forward-relations.ts";
 
 type View=ReturnType<typeof forwardSummary>;
-const fmt=(v:number|null|undefined,d=1)=>typeof v==="number"&&Number.isFinite(v)?v.toLocaleString("en-US",{minimumFractionDigits:d,maximumFractionDigits:d}):"—";
-const pct=(v:number|null|undefined,d=2)=>typeof v==="number"&&Number.isFinite(v)?`${v>=0?"+":""}${fmt(v*100,d)}%`:"—";
 const bias=(v?:string)=>v==="BULLISH"?"偏多":v==="BEARISH"?"偏空":"中性";
-const phase=(v?:string)=>({
-  BULL_EXPANSION:"扩张阶段",BEAR_CONTRACTION:"收缩阶段",RECOVERY_UNCONFIRMED:"修复中·底部未确认",
-  DISTRIBUTION_RISK:"分化/分配风险",BASE_BUILDING:"筑底修复",UNCERTAIN:"周期未确认",
-  ADVANCING:"短期推进",PULLBACK_BUILDING:"回调正在形成",DECLINING:"短期下行",
-  REBOUND_BUILDING:"反弹正在形成",DIVERGING:"市场分化",BALANCED:"均衡"
-}[v??""]??v??"—");
 const evolution=(v?:string)=>({
-  ROTATIONAL:"轮动",TREND_FORMING:"趋势形成",EXPANDING:"方向扩张",STABLE_TREND:"稳定趋势",
-  DECAYING:"趋势衰退",TRANSITIONAL:"状态过渡"
-}[v??""]??v??"状态建立中");
-const opportunityPhase=(v?:string)=>({
-  EMERGING:"萌芽",CONFIRMED:"已确认",EXPANDING:"正在扩张",MATURE:"成熟",OVEREXTENDED:"过度延伸"
-}[v??""]??v??"—");
-const action=(v?:string)=>v==="EXIT"?"退出":v==="PROTECT"?"保护利润":v==="WATCH"?"观察":v==="HOLD"?"继续持有":"观察";
-const hypothesisKind=(v?:string)=>({
-  PULLBACK_AHEAD:"回调正在酝酿",REBOUND_AHEAD:"反弹正在酝酿",ROTATION_AHEAD:"轮动/震荡正在形成",
-  TREND_EXPANSION_AHEAD:"趋势扩张正在形成",REVERSAL_AHEAD:"真正转向正在形成"
-}[v??""]??v??"未来状态研究");
-const hypothesisStatus=(v?:string)=>v==="CONFIRMED"?"已被后续市场确认":v==="WEAKENING"?"确认后正在减弱":v==="CONFIRMING"?"正在加强":"正在形成";
-const researchAction=(v?:string)=>v==="CONFIRM_MORE"?"加强实时确认":v==="SUPPORTED"?"前瞻研究支持":"沿用原确认";
-const environmentName=(v?:string)=>({TREND:"趋势环境",TRANSITION:"过渡环境",ROTATION:"轮动/震荡",SHOCK:"同步爆发行情"}[v??""]??v??"建立中");
+  ROTATIONAL:"轮动/震荡",TREND_FORMING:"趋势正在形成",EXPANDING:"方向正在扩张",STABLE_TREND:"稳定趋势",
+  DECAYING:"趋势正在衰退",TRANSITIONAL:"状态正在切换"
+}[v??""]??"状态建立中");
+const environmentName=(v?:string)=>({TREND:"趋势环境",TRANSITION:"过渡环境",ROTATION:"轮动/震荡",SHOCK:"同步爆发行情"}[v??""]??"环境建立中");
 const tradePlanName=(v?:string)=>({
   LIQUIDITY_MIGRATION:"流动性迁移",LIQUIDITY_REJECTION:"离开失败回归",FAMILY_TURN:"家族提前转折",OBSERVE_ONLY:"只观察"
-}[v??""]??v??"旧版计划");
-const liquidityState=(v?:string)=>({INSIDE:"区域内积累",TESTING:"尝试离开",ACCEPTED:"离开已被接受",REJECTED:"离开失败回归"}[v??""]??v??"—");
-const entryExecutionState=(v?:{status?:string;phase?:string;stableThesis?:boolean})=>v?.status==="WAITING"
-  ?(v.phase==="RETEST_WAIT"?"等回调重启":v.stableThesis?"已武装":"实时确认")
-  :v?.status==="CANCELLED"?"本假设已取消":"未进入执行";
-const side=(v:string)=>v==="LONG"?"做多":"做空";
-const family=(v?:string)=>({
-  BREADTH:"市场广度",LEADERSHIP:"领导结构",RELATIVE:"相对强弱",FLOW:"跨所/盘口响应",CORRELATION:"相关性",
-  PATH:"价格路径",STRUCTURE:"结构",LIQUIDITY:"流动性计划",MARKET:"市场背景"
-}[v??""]??v??"市场细节");
-const trend=(v?:string)=>v==="STRENGTHENING"?"增强":v==="WEAKENING"?"减弱":"稳定";
+}[v??""]??"历史计划");
+const liquidityState=(v?:string)=>({
+  INSIDE:"仍在原区域积累",TESTING:"正在尝试离开",ACCEPTED:"离开已被市场接受",REJECTED:"离开失败并回归"
+}[v??""]??"流动性状态建立中");
+const side=(v?:string)=>v==="LONG"?"做多":v==="SHORT"?"做空":"方向观察";
 const clock=(v?:number)=>v?new Date(v).toLocaleTimeString("zh-CN",{timeZone:BEIJING_TIME_ZONE,hour12:false}):"—";
-const actionRank=(v?:string)=>v==="EXIT"?4:v==="PROTECT"?3:v==="WATCH"?2:1;
-const actionClass=(v?:string)=>v==="EXIT"?"is-exit":v==="PROTECT"?"is-protect":v==="WATCH"?"is-watch":"is-hold";
+const persistenceText=(v?:number)=>typeof v!=="number"?"持续性建立中":v>=.72?"当前状态较稳定":v>=.52?"当前状态还能维持，但已经需要防变化":"当前状态容易发生变化";
+const transitionText=(v?:number)=>typeof v!=="number"?"转变压力建立中":v>=.65?"状态转变压力很高":v>=.45?"状态转变压力正在上升":"暂时没有很强的转变压力";
+const windowText=(v?:number)=>v===60?"未来一段时间仍有较完整的延续空间":v===45?"未来一段时间仍可沿用当前判断，但要持续检查变化":
+  v===30?"当前判断的有效时间正在缩短":v===15?"当前环境接近变化窗口，需要快速确认后续":"未来窗口建立中";
+const profitText=(v?:string)=>v==="HIGH"?"如果方向延续，仍有较好的利润扩张空间":v==="LOW"?"利润扩张空间偏低，更重视确认和保护":
+  v==="NORMAL"?"利润扩张空间一般，按市场推进情况处理":"利润扩张能力建立中";
+
+type LiquidityView=NonNullable<View["marketIntelligence"]>["liquidity"];
+function marketChangeText(liquidity:LiquidityView|undefined){
+  const m=liquidity?.market;if(!m?.ready)return"流动性地图仍在建立；在覆盖完整前，系统继续沿用原研究层判断，不让未准备好的新模块改变市场结论。";
+  if(m.acceptedShare>=.35){
+    const direction=m.migrationBreadth>.10?"向上":m.migrationBreadth<-.10?"向下":"双向";
+    return`越来越多市场已经离开原流动性区域并被接受，流动性正在${direction}迁移；系统重点确认这种迁移能否继续扩散。`;
+  }
+  if(m.highAccumulationShare>=.35&&m.oneSidedDepletionShare>=.25)
+    return"不少市场已经积累较充分，而且同一侧边界开始持续被消耗；当前环境虽然还没完全改变，但转变条件正在形成。";
+  if(m.insideShare>=.55&&m.rejectedShare>=.12)
+    return"多数市场仍被原流动性区域吸住，离开尝试又经常失败，说明当前更像继续积累和轮动，而不是已经进入稳定趋势。";
+  if(m.testingShare>=.25)return"不少市场正在试图离开原流动性区域，但市场是否接受新价格还没有形成一致答案；系统正在等这一步确认。";
+  return"市场仍处在积累、试探和局部迁移并存的阶段，还没有出现足够统一的流动性变化。";
+}
+
+function nextMarketText(data:View|null){
+  const n=data?.marketIntelligence?.narrative,o=data?.environmentRouter?.outlook,liq=data?.marketIntelligence?.liquidity?.market;
+  const base=`${persistenceText(o?.persistenceScore)}，${transitionText(o?.transitionPressure)}；${windowText(o?.horizonMinutes)}。`;
+  if(liq?.ready&&liq.highAccumulationShare>=.35&&liq.oneSidedDepletionShare>=.25)
+    return base+" 如果被持续消耗的一侧真正离开并被市场接受，市场可能从积累/震荡转入流动性迁移；如果再次被吸回，则继续震荡。";
+  if(liq?.ready&&liq.acceptedShare>=.35)
+    return base+" 如果当前迁移继续被更多市场接受，趋势有机会延续；当价格接近下一片主要流动性区域时，系统会降低扩张预期并重新评估。";
+  return base+" "+profitText(o?.profitExpansion)+(n?.plan?" 当前系统计划："+n.plan:"");
+}
+
+function observeReason(o:View["opportunities"][number],state?:{departure?:{state?:string}}){
+  const current=liquidityState(state?.departure?.state);
+  if(o.tradePlan==="LIQUIDITY_MIGRATION")return`当前${current}；观察离开能否继续被市场接受，以及到下一片流动性是否仍有足够空间。`;
+  if(o.tradePlan==="LIQUIDITY_REJECTION")return`当前${current}；观察价格是否继续被原区域重新吸收，并确认回归区域内部/另一侧的空间。`;
+  if(o.tradePlan==="FAMILY_TURN")return`当前${current}；观察同家族是否继续共同反向，以及这个币自己的流动性结构是否继续配合。`;
+  return`当前${current}；继续观察是否形成“流动性迁移、离开失败回归、家族提前转折”之一，纯相对强弱不会单独开仓。`;
+}
+
+function waitingReason(v:NonNullable<View["entryValidation"]>["records"][number],o?:View["opportunities"][number]){
+  if(v.phase==="RETEST_WAIT")return"已经发现机会，但当前位置不追价；等待回调结束后重新启动。";
+  if(v.stableThesis)return"方向和交易计划仍然有效，等待实时价格与流动性再次证明后执行。";
+  return v.reason??(o?.tradePlan==="LIQUIDITY_MIGRATION"?"等待迁移继续被接受后执行。":"等待实时执行条件完成。");
+}
+
+function positionAction(t:View["positions"][number]){
+  const d=t.positionIntelligence?.decision;
+  return d==="EXIT"?"准备退出":d==="REVIEW"?"重点复核":"继续持有";
+}
+
+function positionWatch(t:View["positions"][number]){
+  const plan=t.liquidityLifecycle?.currentPlan??t.entryContext?.tradePlan,concern=t.positionIntelligence?.concerns?.[0];
+  if(t.positionIntelligence?.decision==="EXIT")return concern??t.positionIntelligence?.summary??"原交易假设已经失效，按退出计划处理。";
+  if(plan==="LIQUIDITY_MIGRATION")
+    return (concern?concern+"；":"")+"观察价格是否继续留在原区域之外并向下一片流动性迁移；接近目标或重新被原区域吸收时重新评估/保护利润。";
+  if(plan==="LIQUIDITY_REJECTION")
+    return (concern?concern+"；":"")+"观察价格是否继续回到原流动性区域；如果再次向原突破方向离开并被接受，回归计划失效。";
+  if(plan==="FAMILY_TURN")
+    return (concern?concern+"；":"")+"观察相关家族是否继续共同反向；如果同方向迁移被市场接受，原仓位可升级为流动性迁移，反之进入复核。";
+  return concern??t.positionIntelligence?.summary??"继续观察原入场理由是否仍然成立。";
+}
 
 export default function MarketIntelligenceExecution({data,now:_,liveEnabled,liveOverview}:{
   data:View|null;now:number;liveEnabled:boolean;liveOverview?:{operational:boolean;lastSyncAt:number|null;positionCount:number};
 }){
-  const mi=data?.marketIntelligence,n=mi?.narrative,evidence=mi?.evidence??[],symbols=mi?.symbols??[],
+  const mi=data?.marketIntelligence,n=mi?.narrative,liquidity=mi?.liquidity,
     opportunities=[...(data?.opportunities??[])].sort((a,b)=>Number(b.eligible)-Number(a.eligible)||b.score-a.score),
-    positions=[...(data?.positions??[])].sort((a,b)=>{
-      const aa=a.positionIntelligence?.decision==="EXIT"?"EXIT":a.positionIntelligence?.decision==="REVIEW"?"WATCH":"HOLD",
-        ba=b.positionIntelligence?.decision==="EXIT"?"EXIT":b.positionIntelligence?.decision==="REVIEW"?"WATCH":"HOLD";
-      return actionRank(ba)-actionRank(aa);
-    }),
-    currentEvolution=data?.environmentRouter?.phase??opportunities.find(o=>o.marketEvolutionPhase)?.marketEvolutionPhase,
-    hypothesisResearch=data?.hypothesisResearch,hypotheses=hypothesisResearch?.active??[],
-    environmentRouter=data?.environmentRouter,liquidity=mi?.liquidity,
+    positions=[...(data?.positions??[])],
     entryValidations=data?.entryValidation?.records??[],
-    validationById=new Map(entryValidations.map(v=>[v.candidateId,v])),
     waitingValidations=entryValidations.filter(v=>v.status==="WAITING"),
-    cancelledValidations=entryValidations.filter(v=>v.status==="CANCELLED"),
-    actionable=opportunities.filter(o=>o.eligible),
-    candidateRows=(actionable.length?actionable:opportunities).slice(0,8);
+    waitingByCandidate=new Map(waitingValidations.map(v=>[v.candidateId,v])),
+    preparedWithoutValidation=opportunities.filter(o=>o.eligible&&!waitingByCandidate.has(o.id)).slice(0,6),
+    observed=opportunities.filter(o=>!o.eligible&&!waitingByCandidate.has(o.id)).slice(0,6),
+    currentEvolution=data?.environmentRouter?.phase??opportunities.find(o=>o.marketEvolutionPhase)?.marketEvolutionPhase,
+    currentEnvironment=data?.environmentRouter?.currentEnvironment,
+    systemPlan=n?.plan??"继续观察市场变化，只有交易计划和实时执行条件同时成立时才参与。";
 
   return <div className="fr-execution-page">
-    <section className="fr-page-title fr-exec-title">
-      <small>MARKET INTELLIGENCE · WINNER CORE</small>
-      <h1>执行</h1>
-      <p>先看市场判断和当前仓位，再看未来条件还能维持多久、转变压力是否上升，以及当前交易方式与未来窗口是否匹配。</p>
-    </section>
-
     <section className="fr-section fr-exec-primary">
-      <div className="fr-section-head"><div><small>NOW · 持仓自己的理由</small><h2>当前持仓与系统动作</h2>
-        <p>打开页面第一眼只回答：现在持有什么，系统准备怎么处理。</p></div><span>{positions.length} 笔持仓</span></div>
-      {positions.length?<div className="fr-exec-position-grid">{positions.map(t=>{
-        const p=t.positionIntelligence,currentAction=p?.decision==="EXIT"?"EXIT":p?.decision==="REVIEW"?"WATCH":"HOLD",
-          signed=(t.side==="LONG"?1:-1)*(t.lastPrice/Math.max(t.entryPrice,1e-12)-1),
-          peak=t.favorable??t.peakPnlRate??0,giveback=peak>0?Math.max(0,(peak-signed)/peak):null;
-        return <article className={`fr-exec-position-card ${actionClass(currentAction)}`} key={t.id}>
-          <header className="fr-exec-position-head"><div><small>{side(t.side)}</small><h3>{t.symbol.replace("_"," / ")}</h3></div>
-            <span className={`fr-exec-action ${actionClass(currentAction)}`}><b>{action(currentAction)}</b><small>Position Intelligence</small></span></header>
-          <div className="fr-exec-metrics">
-            <span><small>交易计划</small><b>{tradePlanName(t.liquidityLifecycle?.currentPlan??t.entryContext?.tradePlan)}</b></span>
-            <span><small>最高浮盈</small><b>{pct(peak)}</b></span>
-            <span><small>当前幅度</small><b>{pct(signed)}</b></span>
-            <span><small>峰值回吐</small><b>{giveback==null?"—":fmt(giveback*100,0)+"%"}</b></span>
-            <span><small>大赢家最后保险</small><b>{(t.profitFloorRate??0)>0?pct(t.profitFloorRate):"未触发"}</b></span>
-          </div>
-          <p className="fr-exec-judgement"><b>当前判断：</b>{p?.summary??"Position Intelligence 正在建立这笔仓位自己的连续观察基线。"}</p>
-          <details className="fr-exec-research-details"><summary>查看这笔仓位的研究依据</summary>
-            <p><b>入场假设：</b>{t.entryContext?.thesisSummary??t.entryContext?.reason??"历史兼容持仓"}</p>
-            {t.liquidityLifecycle?.reason&&<p><b>当前流动性计划：</b>{tradePlanName(t.liquidityLifecycle.currentPlan)} · {t.liquidityLifecycle.reason}</p>}
-            {t.entryContext?.futureResearchReason&&<p><b>入场时前瞻研究：</b>{researchAction(t.entryContext.futureResearchAction)} · {t.entryContext.futureResearchReason}</p>}
-            {p&&<><p><b>持有价值：</b>{fmt(p.holdValueScore,0)} · 剩余空间 {pct(p.remainingSpaceRate)} · 正常回撤 {pct(p.expectedPullbackRate)} · 空间/回撤 {fmt(p.continuationRatio,2)}×</p>
-              <p><b>优势变化：</b>{fmt(p.entryAdvantage,0)} → {fmt(p.currentAdvantage,0)}（{p.advantageChange>=0?"+":""}{fmt(p.advantageChange,0)}）</p>
-              <p><b>独立证据：</b>支持 {p.supportFamilies?.map(family).join(" / ")||"无"} · 担忧 {p.concernFamilies?.map(family).join(" / ")||"无"} · 复核已持续 {p.reviewBars??0} 根完成5m</p>
-              {!!p.concerns?.length&&<p><b>当前担忧：</b>{p.concerns.join("；")}</p>}</>}
-          </details>
-        </article>})}</div>:<div className="fr-empty"><span>0</span><h3>当前没有持仓</h3><p>系统仍在持续更新市场演化和候选生命周期，出现可执行机会后会显示在下方。</p></div>}
-    </section>
+      <div className="fr-section-head"><div><small>MARKET COMMAND CENTER</small><h2>市场作战总览</h2>
+        <p>一个板块只回答四件事：市场现在是什么、正在发生什么、接下来可能发生什么、系统此刻在干什么。</p></div>
+        <span>研究更新 {clock(mi?.updatedAt)}</span></div>
 
-    <section className="fr-section fr-exec-market">
-      <div className="fr-section-head"><div><small>MARKET EVOLUTION</small><h2>市场现在正在变成什么</h2></div><span>{clock(mi?.updatedAt)}</span></div>
-      <div className="fr-exec-market-hero"><div><small>当前演化阶段</small><strong>{evolution(currentEvolution)}</strong></div><p>{n?.summary??"持续更新市场状态；细节变化不会单独翻转主判断。"}</p></div>
-      <div className="fr-exec-market-grid">
-        <span><small>数小时大方向</small><b>{bias(n?.major.bias)}</b></span>
-        <span><small>短期优势</small><b>{bias(n?.short.bias)} · {phase(n?.short.phase)}</b></span>
-        <span><small>状态迁移</small><b>{n?.transition.stage??"STABLE"} · {fmt(n?.transition.pressure,0)}/100</b></span>
-        <span><small>尾部风险</small><b>{n?.tailRisk.level==="HIGH"?"高":n?.tailRisk.level==="MEDIUM"?"中":"低"}</b></span>
-      </div>
-      <p className="fr-exec-judgement"><b>当前市场判断：</b>{n?.transition.detail??n?.summary??"正在建立市场基线。"}</p>
-      <p className="fr-trade-reason"><b>当前计划：</b>{n?.plan??"继续观察。"}</p>
-    </section>
+      <div className="fr-exec-market-hero"><div><small>当前全局状态</small>
+        <strong>{environmentName(currentEnvironment)} · {evolution(currentEvolution)}</strong></div>
+        <p>大方向{bias(n?.major.bias)}，短期{bias(n?.short.bias)}。{n?.transition.detail??n?.summary??"市场研究层正在建立完整判断。"}</p></div>
 
-    <section className="fr-section">
-      <div className="fr-section-head"><div><small>ENVIRONMENT OUTLOOK</small><h2>未来市场条件</h2>
-        <p>正式环境标签保持稳定；约每分钟只更新持续力、转变压力和未来有效窗口，用来调节交易节奏与仓位，不直接预测价格。</p></div>
-        <span>{environmentRouter?.outlook?.horizonMinutes?environmentRouter.outlook.horizonMinutes+" 分钟窗口":environmentName(environmentRouter?.currentEnvironment)}</span></div>
-      <div className="fr-exec-market-grid">
-        <span><small>当前环境</small><b>{environmentName(environmentRouter?.currentEnvironment)}</b></span>
-        <span><small>条件持续力</small><b>{environmentRouter?.outlook?fmt(environmentRouter.outlook.persistenceScore*100,0)+"%":"—"}</b></span>
-        <span><small>转变压力</small><b>{environmentRouter?.outlook?fmt(environmentRouter.outlook.transitionPressure*100,0)+"%":"—"}</b></span>
-        <span><small>利润扩张</small><b>{environmentRouter?.outlook?.profitExpansion==="HIGH"?"高":environmentRouter?.outlook?.profitExpansion==="LOW"?"低":environmentRouter?.outlook?.profitExpansion==="NORMAL"?"正常":"—"}</b></span>
-      </div>
-      <p className="fr-exec-judgement"><b>未来条件判断：</b>{environmentRouter?.reason??"正在建立市场条件持续性基线。"}</p>
-    </section>
-
-    <section className="fr-section">
-      <div className="fr-section-head"><div><small>LIQUIDITY MAP</small><h2>全市场流动性地图</h2>
-        <p>大视角先找真正反复交换的区域，再判断积累、离开、接受或回归；1分钟只负责最后执行，不参与定义全局环境。</p></div>
-        <span>{liquidity?.market?.ready?`覆盖 ${liquidity.market.readySymbols}/${liquidity.market.totalSymbols}`:"建立中"}</span></div>
-      <div className="fr-exec-market-grid">
-        <span><small>仍在区域内</small><b>{liquidity?.market?fmt(liquidity.market.insideShare*100,0)+"%":"—"}</b></span>
-        <span><small>已接受迁移</small><b>{liquidity?.market?fmt(liquidity.market.acceptedShare*100,0)+"%":"—"}</b></span>
-        <span><small>离开失败</small><b>{liquidity?.market?fmt(liquidity.market.rejectedShare*100,0)+"%":"—"}</b></span>
-        <span><small>高积累</small><b>{liquidity?.market?fmt(liquidity.market.highAccumulationShare*100,0)+"%":"—"}</b></span>
-      </div>
-      <p className="fr-exec-judgement"><b>流动性判断：</b>{liquidity?.market?.summary??"等待至少6小时完整5分钟路径建立全局盘中流动性地图。"}</p>
-    </section>
-
-    <section className="fr-section fr-hypothesis-section">
-      <div className="fr-section-head"><div><small>FORWARD RESEARCH</small><h2>研究层正在提前推演什么</h2>
-        <p>重要细节继续形成5 / 15 / 30分钟可验证的未来状态假设，但这里只做研究记录，不直接挡开仓、不改仓位、不触发平仓。</p></div>
-        <span>{hypotheses.length} 个活跃假设</span></div>
-      <div className="fr-hypothesis-summary">{hypothesisResearch?.summary??"前瞻研究正在建立市场状态转移基线。"}</div>
-      {hypotheses.length?<div className="fr-hypothesis-grid">{hypotheses.slice(0,5).map(h=>{
-        const memory=hypothesisResearch?.memory?.find(m=>m.key===h.key);
-        return <article className={"fr-hypothesis-card is-"+h.direction.toLowerCase()} key={h.id}>
-          <header><div><small>{h.direction==="LONG"?"偏多未来":h.direction==="SHORT"?"偏空未来":"双向 / 轮动"}</small>
-            <h3>{hypothesisKind(h.kind)}</h3></div><span><b>{fmt(h.confidence*100,0)}%</b><small>{hypothesisStatus(h.status)}</small></span></header>
-          <p className="fr-hypothesis-thesis">{h.thesis}</p>
-          <div className="fr-hypothesis-evidence"><small>当前证据家族</small><b>{h.families.join(" / ")||"正在积累"}</b></div>
-          <div className="fr-hypothesis-next"><small>如果判断正确，接下来应该看到</small>{h.expectedNext.map(x=><p key={x}>• {x}</p>)}</div>
-          <p className="fr-hypothesis-invalidation"><b>否定条件：</b>{h.invalidation}</p>
-          <footer><span>观察窗口 5 / 15 / 30 分钟</span><span>{memory?("历史 "+memory.observations+" 次 · 确认 "+memory.confirmed):"首次 / 样本积累中"}</span></footer>
-        </article>})}</div>:<p className="fr-note">当前还没有足够集中的特殊变化形成未来状态假设；这不是停止交易，只代表继续沿用原市场智能与实时响应链。</p>}
-    </section>
-    <section className="fr-section">
-      <div className="fr-section-head"><div><small>ENTRY EXECUTION</small><h2>入场执行状态</h2>
-        <p>这里独立显示系统已经发现并正在处理的入场假设，不受候选榜前8名限制。</p></div>
-        <span>{waitingValidations.length} 个进行中 · {cancelledValidations.length} 个最近取消</span></div>
-      {entryValidations.length?<div className="fr-journal">{entryValidations.map(v=><article key={v.id}>
-        <time>{clock(v.startedAt)}</time>
-        <div><b>{v.symbol.replace("_"," / ")} · {side(v.side)} · {entryExecutionState(v)}</b>
-          <p>{v.reason??"等待实时执行证据。"}</p>
-          <p>{v.stableThesis?"稳定 thesis 已保留执行权":"普通实时确认"}
-            {v.phase==="RETEST_WAIT"?" · 当前不追价，等待回调结束后重新启动":""}
-            {v.status==="CANCELLED"?" · 已解除本轮执行权":""}</p>
-        </div>
-      </article>)}</div>
-        :<p className="fr-note">当前没有已武装或等待回调的入场假设；系统仍在研究候选，但尚未进入实时执行状态。</p>}
-    </section>
-
-    <section className="fr-section">
-      <div className="fr-section-head"><div><small>NEXT OPPORTUNITIES</small><h2>当前交易假设 · 最值得关注的机会</h2>
-        <p>先看机会处于哪个阶段，再看评分。过度延伸不会直接被禁止，但会进入加强实时确认。</p></div><span>{actionable.length} 个可参与</span></div>
-      {candidateRows.length?<div className="fr-exec-candidate-grid">{candidateRows.map((o,index)=>{
-        const v=validationById.get(o.id),lm=liquidity?.symbols?.[o.symbol],
-          entryState=v?entryExecutionState(v):o.extendedConfirmation?"加强确认":o.eligible?"主候选":"观察";
-        return <details className={`fr-exec-candidate ${o.eligible?"is-eligible":""} ${o.extendedConfirmation?"is-extended":""}`} key={o.id}>
-        <summary><span className="fr-exec-candidate-rank">#{index+1}</span><div className="fr-exec-candidate-main"><div><b>{o.symbol.replace("_"," / ")}</b><small>{side(o.side)} · {tradePlanName(o.tradePlan)}</small></div>
-          <strong>{opportunityPhase(o.opportunityLifecyclePhase)}</strong></div>
-          <div className="fr-exec-candidate-metrics"><span><small>原始评分</small><b>{fmt(o.score,0)}</b></span><span><small>净空间</small><b>{pct(o.netRemainingSpaceRate)}</b></span>
-            <span><small>空间/回撤</small><b>{fmt(o.edgeRatio,2)}×</b></span></div>
-          <em>{entryState}</em></summary>
-        <div className="fr-score-details"><p><b>机会阶段：</b>{opportunityPhase(o.opportunityLifecyclePhase)} · 市场阶段 {evolution(o.marketEvolutionPhase)}</p>
-          <p><b>交易计划：</b>{tradePlanName(o.tradePlan)} · 计划可信度 {fmt((o.liquidityPlanConfidence??0)*100,0)}%
-            {lm?` · 当前 ${liquidityState(lm.departure.state)}`:""}</p>
-          {o.liquidityReason&&<p><b>流动性依据：</b>{o.liquidityReason}</p>}
-          {(o.liquidityOriginLower!=null&&o.liquidityOriginUpper!=null)&&<p><b>来源区域：</b>{fmt(o.liquidityOriginLower,6)} – {fmt(o.liquidityOriginUpper,6)}
-            {(o.liquidityTargetLower!=null&&o.liquidityTargetUpper!=null)?` · 下一目标 ${fmt(o.liquidityTargetLower,6)} – ${fmt(o.liquidityTargetUpper,6)}`:""}</p>}
-          {o.environmentReason&&<p><b>研究背景：</b>{o.environmentReason}</p>}
-          {v&&<p><b>入场执行：</b>{entryState} · {v.reason??"等待实时响应。"}</p>}
-          {o.lifecycleReason&&<p><b>机会研究：</b>{o.lifecycleReason}（不直接控制交易）</p>}
-          {o.futureResearchReason&&<p><b>前瞻研究：</b>{researchAction(o.futureResearchAction)} · {o.futureResearchReason}（仅参考）</p>}
-          <p>{o.thesisSummary??o.reason}</p><p><b>失效条件：</b>{o.invalidationSummary??"按独立交易假设与结构止损退出。"}</p></div>
-      </details>})}</div>:<p className="fr-note">当前没有形成值得优先展示的交易假设。</p>}
-    </section>
-
-    <section className="fr-section">
-      <div className="fr-section-head"><div><small>IMPORTANT EVIDENCE</small><h2>系统刚刚发现的细节</h2>
-        <p>这里只优先展示最近仍有效、可能改变研究结论的市场证据。</p></div><span>{evidence.length} 条有效证据</span></div>
-      {evidence.length?<div className="fr-journal">{evidence.slice(0,8).map(e=><article key={e.id}><time>{clock(e.lastAt??e.at)}</time>
-        <div><b>{family(e.family)} · {trend(e.trend)} · 强度 {fmt(e.severity*100,0)}</b><p>{e.summary}</p>
-          <p>同一事件已观察 {e.samples??1} 次 · 开始 {clock(e.firstAt??e.at)}</p></div></article>)}</div>
-        :<p className="fr-note">当前没有足够持续的新细节改变市场理解。</p>}
-    </section>
-
-    <details className="fr-section fr-exec-secondary">
-      <summary className="fr-expand"><div><small>RELATIVE MAP</small><h2>全市场异类与相关组</h2><p>需要检查选币和相对强弱时再展开。</p></div><span>{symbols.length} 个市场</span></summary>
-      {symbols.length?<div className="fr-scoreboard fr-exec-secondary-body">{symbols.slice(0,16).map((s,index)=><details className="fr-score-row" key={s.symbol}>
-        <summary><span className="fr-score-rank">#{index+1}</span><span className="fr-score-value">{fmt(s.watchScore,0)}</span>
-          <span className="fr-score-symbol"><b>{s.symbol.replace("_"," / ")}</b><small>{s.regime} · {s.clusterId.replace("corr:","组 ")}</small></span>
-          <span><small>多头适配</small><b>{fmt(s.longScore,0)}</b></span><span><small>空头适配</small><b>{fmt(s.shortScore,0)}</b></span>
-          <em>{s.residual>=0?"强于理论 +"+fmt(s.residual*100,2)+"%":"弱于理论 "+fmt(s.residual*100,2)+"%"}</em></summary>
-        <div className="fr-score-details"><div><h3>相对关系</h3><div className="fr-score-detail-grid">
-          <span><small>与市场相关</small><b>{fmt(s.correlation*100,0)}%</b></span><span><small>残差持续</small><b>{fmt(s.residualPersistence*100,0)}%</b></span>
-          <span><small>跨所数据</small><b>{s.sourceCount} 路</b></span><span><small>数据可信</small><b>{fmt(s.dataConfidence,0)}</b></span>
-        </div></div></div></details>)}</div>:<p className="fr-note">等待足够的全市场完成K线建立相对关系。</p>}
-    </details>
-
-    <details className="fr-section fr-exec-secondary">
-      <summary className="fr-expand"><div><small>MARKET BACKGROUND</small><h2>大周期与研究背景</h2><p>作为组合风险背景，不抢占当前执行信息的位置。</p></div><span>{bias(n?.macro.bias)}</span></summary>
-      <div className="fr-stats fr-exec-secondary-body">
-        <article><small>超大周期</small><strong>{bias(n?.macro.bias)}</strong><p>{phase(n?.macro.phase)} · 已维持 {typeof n?.macro.ageMs==="number"?fmt(n.macro.ageMs/3600000,1)+" 小时":"—"}</p></article>
-        <article><small>大方向</small><strong>{bias(n?.major.bias)}</strong><p>置信 {fmt((n?.major.confidence??0)*100,0)}%</p></article>
-        <article><small>短期优势</small><strong>{bias(n?.short.bias)}</strong><p>{phase(n?.short.phase)}</p></article>
-        <article><small>尾部风险</small><strong>{n?.tailRisk.level==="HIGH"?"高":n?.tailRisk.level==="MEDIUM"?"中":"低"}</strong><p>{fmt(n?.tailRisk.score,0)} / 100</p></article>
-      </div>
       <div className="fr-three">
-        <div><small>超大周期解释</small><b>{n?.macro.detail??"—"}</b></div>
-        <div><small>大方向解释</small><b>{n?.major.detail??"—"}</b></div>
-        <div><small>短期解释</small><b>{n?.short.detail??"—"}</b></div>
+        <div><small>当前市场</small><b>{environmentName(currentEnvironment)}，大方向{bias(n?.major.bias)}，短期{bias(n?.short.bias)}；系统不会因为小周期噪声频繁翻转全局判断。</b></div>
+        <div><small>正在发生</small><b>{marketChangeText(liquidity)}</b></div>
+        <div><small>接下来可能</small><b>{nextMarketText(data)}</b></div>
       </div>
-      {!!n?.transition.drivers?.length&&<p className="fr-note"><b>当前迁移驱动：</b>{n.transition.drivers.join(" · ")}</p>}
-      <p className="fr-note"><b>风险背景：</b>{n?.tailRisk.detail??"—"}</p>
-      <p className="fr-note"><b>跨所流动性：</b>盘口失衡 {fmt((mi?.internals?.bookImbalance??0)*100,0)}% · 买方流动性变化 {fmt((mi?.internals?.bidLiquidityChange??0)*100,0)}% · 卖方流动性变化 {fmt((mi?.internals?.askLiquidityChange??0)*100,0)}%</p>
-    </details>
+      <p className="fr-trade-reason"><b>系统当前计划：</b>{systemPlan}</p>
 
-    <section className="fr-section fr-exec-system">
-      <div className="fr-section-head"><div><small>SYSTEM STATUS</small><h2>数据与执行链</h2></div><span>{liveEnabled?"实盘已请求开启":"实盘关闭"}</span></div>
-      <div className="fr-exec-market-grid">
-        <span><small>5m市场</small><b>{mi?.coverage?.intradayMarkets??0}</b></span>
-        <span><small>日线市场</small><b>{mi?.coverage?.dailyMarkets??0}</b></span>
-        <span><small>实时跨所报价</small><b>{mi?.coverage?.quoteMarkets??0}</b></span>
-        <span><small>多交易所确认</small><b>{mi?.coverage?.multiVenueMarkets??0}</b></span>
+      <div className="fr-journal">
+        <article><time>正在观察 · {observed.length}</time><div><b>系统正在研究哪些币，以及具体在等什么</b>
+          {observed.length?observed.map(o=><p key={o.id}><b>{o.symbol.replace("_"," / ")} · {side(o.side)} · {tradePlanName(o.tradePlan)}</b><br/>
+            {observeReason(o,liquidity?.symbols?.[o.symbol])}</p>)
+            :<p>当前没有需要单独列出的重点观察币；系统仍在全市场扫描新的流动性变化。</p>}
+        </div></article>
+
+        <article><time>等待执行 · {waitingValidations.length+preparedWithoutValidation.length}</time><div><b>已经接近执行条件的币，只显示还缺什么</b>
+          {waitingValidations.map(v=>{const o=opportunities.find(x=>x.id===v.candidateId);return <p key={v.id}><b>{v.symbol.replace("_"," / ")} · {side(v.side)} · {tradePlanName(o?.tradePlan)}</b><br/>
+            {waitingReason(v,o)}</p>})}
+          {preparedWithoutValidation.map(o=><p key={o.id}><b>{o.symbol.replace("_"," / ")} · {side(o.side)} · {tradePlanName(o.tradePlan)}</b><br/>
+            研究条件已经成立，等待进入实时价格响应确认；如果位置已经走远，系统会等回调/重新启动而不是追价。</p>)}
+          {!waitingValidations.length&&!preparedWithoutValidation.length&&<p>当前没有进入执行等待的币；系统还在研究和筛选阶段。</p>}
+        </div></article>
+
+        <article><time>正在持仓 · {positions.length}</time><div><b>每笔持仓只显示下一步该观察什么、准备做什么</b>
+          {positions.length?positions.map(t=><p key={t.id}><b>{t.symbol.replace("_"," / ")} · {side(t.side)} · {tradePlanName(t.liquidityLifecycle?.currentPlan??t.entryContext?.tradePlan)} · {positionAction(t)}</b><br/>
+            接下来观察：{positionWatch(t)}</p>)
+            :<p>当前没有持仓；系统只在研究和等待执行，不会为了保持仓位数量而强行开单。</p>}
+        </div></article>
       </div>
-      <p className="fr-note"><b>数据覆盖：</b>5m市场 {mi?.coverage?.intradayMarkets??0} · 日线市场 {mi?.coverage?.dailyMarkets??0} · 实时跨所报价 {mi?.coverage?.quoteMarkets??0} · 多交易所确认 {mi?.coverage?.multiVenueMarkets??0}。流动性地图每币至少需要72根完成5m（约6小时），全局最多使用120根（约10小时）；候选/持仓仍用现有1m与实时多交易所数据完成执行确认。</p>\n      <p className="fr-note">PAPER→LIVE→Gate 复制链保持原样。实盘运行 {liveOverview?.operational?"正常":"未运行"}，当前 {liveOverview?.positionCount??"—"} 笔；流动性研究复用现有数据，不新增请求频率，也不重置账户或学习状态。</p>
+
+      <p className="fr-note">系统状态：流动性地图 {liquidity?.market?.ready?"已进入正式研究":"仍在建立"} ·
+        实盘 {liveEnabled?(liveOverview?.operational?"正常运行":"已请求开启，等待执行链就绪"):"关闭"} ·
+        PAPER→LIVE 复制逻辑和交易策略本身没有因为这次页面精简而改变。</p>
     </section>
   </div>;
 }

@@ -95,10 +95,11 @@ test("execution page exposes the same narrative used by strategy decisions",asyn
     read("app/forward-dashboard.tsx"),read("app/market-intelligence-execution.tsx"),read(".github/workflows/sentinel-v2-ci.yml"),read("wrangler.jsonc")
   ]);
   assert.match(dashboard,/哨兵 · 市场智能系统/);assert.match(dashboard,/MarketIntelligenceExecution/);assert.match(dashboard,/market-intelligence-v1/);
-  for(const text of["超大周期","大方向","短期优势","系统刚刚发现的细节","当前交易假设","持仓自己的理由"])assert.match(execution,new RegExp(text));
+  for(const text of["市场作战总览","当前市场","正在发生","接下来可能","正在观察","等待执行","正在持仓"])assert.match(execution,new RegExp(text));
   assert.match(workflow,/market-intelligence-v1/);
   assert.match(workflow,/marketIntelligenceTracked >= 20/);assert.match(workflow,/marketIntelligenceCoverage\.dailyMarkets >= 3/);
-  assert.match(execution,/数据覆盖/);assert.match(execution,/流动性地图每币至少需要72根完成5m/);
+  assert.match(execution,/流动性地图/);
+  assert.doesNotMatch(execution,/系统刚刚发现的细节|当前交易假设 · 最值得关注的机会|全市场异类与相关组|跨所流动性/);
   assert.match(wrangler,/MarketStream/);assert.match(wrangler,/MemberExecutor/);assert.match(wrangler,/MemberDirectory/);
 });
 
@@ -145,8 +146,8 @@ test("Market Intelligence active exits are evidence-family gated directly by Pos
   assert.match(position,/dataConfidence>=60/);
   assert.match(engine,/LEADERSHIP_ROTATION/);
   assert.match(engine,/FLOW_ABSORBED_OR_STALLED/);
-  assert.match(execution,/复核已持续/);
-  assert.match(execution,/剩余空间/);
+  assert.match(execution,/正在持仓/);
+  assert.match(execution,/接下来观察/);
 });
 
 test("existing multi-source BBO refresh exposes liquidity migration without extra per-symbol REST fanout",async()=>{
@@ -161,7 +162,8 @@ test("existing multi-source BBO refresh exposes liquidity migration without extr
   assert.match(engine,/BID_LIQUIDITY_WITHDRAWAL/);
   assert.match(engine,/ASK_LIQUIDITY_WITHDRAWAL/);
   assert.match(position,/alignedLiquidity/);
-  assert.match(execution,/跨所流动性/);
+  assert.match(execution,/正在发生/);
+  assert.doesNotMatch(execution,/盘口失衡|买方流动性变化|卖方流动性变化/);
 });
 
 
@@ -222,8 +224,8 @@ test("forward hypothesis research is bounded, causal, and cannot hard-veto big-w
   assert.doesNotMatch(research,/eligible=false|closeTrade\(|openIntelligenceTrade\(/);
   assert.match(store,/hypothesisResearch:\{\.\.\.next\.hypothesisResearch/);
   assert.match(store,/MARKET_HYPOTHESIS_ACTIVE_LIMIT/);
-  assert.match(execution,/研究层正在提前推演什么/);
-  assert.match(execution,/5 \/ 15 \/ 30 分钟/);
+  assert.match(execution,/接下来可能/);
+  assert.doesNotMatch(execution,/研究层正在提前推演什么|活跃假设|5 \/ 15 \/ 30 分钟/);
 });
 
 test("Forward long-run storage is hot/cold bounded and keeps thesis dedupe outside hot history",async()=>{
@@ -320,15 +322,13 @@ test("high-quality entries keep stable thesis authority through shallow realtime
 });
 
 
-test("execution page always exposes entry execution state independently of top candidate ranking",async()=>{
+test("execution command center summarizes active entry waits without a separate execution board",async()=>{
   const execution=await read("app/market-intelligence-execution.tsx");
-  assert.match(execution,/入场执行状态/);
-  assert.match(execution,/不受候选榜前8名限制/);
-  assert.match(execution,/等回调重启/);
-  assert.match(execution,/已武装/);
-  assert.match(execution,/本假设已取消/);
-  assert.match(execution,/当前没有已武装或等待回调的入场假设/);
-  assert.match(execution,/entryValidations\.map/);
+  assert.match(execution,/等待执行/);
+  assert.match(execution,/等待回调结束后重新启动/);
+  assert.match(execution,/等待实时价格与流动性再次证明后执行/);
+  assert.match(execution,/waitingValidations\.map/);
+  assert.doesNotMatch(execution,/入场执行状态|候选榜前8名|本假设已取消/);
 });
 
 
@@ -345,8 +345,9 @@ test("environment outlook has bounded execution authority and cannot become a tr
   assert.doesNotMatch(open,/environmentRiskScale[^;\n]*>1|riskRate\s*\*\s*1\.[1-9]/,"environment outlook cannot amplify risk above the original strategy");
   assert.match(router,/mainline=o\.tradePlan==="LIQUIDITY_MIGRATION"&&fit>=\.75&&outlook\.horizonMinutes>=45/);
   assert.match(router,/forceRetest=false/,"environment outlook must not revive a second environment-specific entry state machine");
-  assert.match(execution,/未来市场条件/);
-  assert.match(execution,/不直接预测价格/);
+  assert.match(execution,/接下来可能/);
+  assert.match(execution,/当前全局状态/);
+  assert.doesNotMatch(execution,/条件持续力.*%|转变压力.*%/);
 });
 
 test("environment Probe-Prove-Restart no longer has entry authority",async()=>{
