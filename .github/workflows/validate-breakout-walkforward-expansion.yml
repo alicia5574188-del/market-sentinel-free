@@ -1,0 +1,37 @@
+name: Validate Breakout Walkforward Expansion
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/research-breakout-walkforward-expansion.mjs"
+      - ".github/workflows/validate-breakout-walkforward-expansion.yml"
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Check syntax
+        run: node --check scripts/research-breakout-walkforward-expansion.mjs
+      - name: Run causal breakout walk-forward expansion
+        run: node --max-old-space-size=6144 scripts/research-breakout-walkforward-expansion.mjs
+      - name: Print focused result
+        if: always()
+        run: |
+          if [ -f /tmp/breakout-walkforward-expansion-report.json ]; then
+            jq '{decision,authority,evaluationNote,goal,method,cost,data:{activeSymbols:.data.activeSymbols},variantCount,exitProfileCount,modelCount,eventCount,recordCount,selector,developmentMonths,evaluationMonths,policyCount,feasibleCount,target,bestReturn,bestFrequencyPositive,paretoFrontier}' /tmp/breakout-walkforward-expansion-report.json
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: breakout-walkforward-expansion-report
+          path: /tmp/breakout-walkforward-expansion-report.json
+          if-no-files-found: warn
+          retention-days: 7
