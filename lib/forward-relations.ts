@@ -45,7 +45,7 @@ export const PAPER_COST={feeRate:.0007,slippageRate:.00025,fundingAllowancePerDa
 const ROUND_TRIP_COST=2*(PAPER_COST.feeRate+PAPER_COST.slippageRate);
 const TOTAL_RISK_RATE=.10,SIDE_RISK_RATE=.065,TOTAL_MARGIN_RATE=.75;
 const FIVE_MINUTE_NEW_RISK_RATE=.025;
-const ENTRY_VALIDATION_CAP=6;
+const ENTRY_VALIDATION_CAP=6,PORTFOLIO_POSITION_CAP=10,CONTINUATION_SIDE_RISK_RATE=.025,EXECUTION_EDGE_FLOOR=1.25;
 const ROTATION_GAP=10,ROTATION_COOLDOWN_MS=2*60_000;
 const HISTORY_LIMIT=240,EVENT_LIMIT=160,CONSUMED_THESIS_LIMIT=512,CONSUMED_THESIS_TTL_MS=7*24*60*60_000;
 const clip=(v:number,a=0,b=1)=>Math.max(a,Math.min(b,v));
@@ -757,7 +757,14 @@ function markAndManage(s:ForwardState,quotes:Record<string,Quote>,now:number){
 }
 const riskCharge=(t:Trade)=>Math.max(t.plannedRisk,t.entryContext?.portfolioRiskCharge??((t.forecast?.sizingEquity??0)*.006));
 function existingRisk(s:ForwardState,side?:"LONG"|"SHORT"){return s.positions.filter(t=>!side||t.side===side).reduce((n,t)=>n+riskCharge(t),0);}
+function continuationRisk(s:ForwardState,side:"LONG"|"SHORT"){return s.positions.filter(t=>t.side===side&&t.entryContext?.mode==="CONTINUATION"
+  &&(t.liquidityLifecycle?.currentPlan??t.entryContext?.tradePlan)==="LIQUIDITY_MIGRATION").reduce((n,t)=>n+riskCharge(t),0);}
 function cycleRiskAdded(s:ForwardState,since:number){return[...s.positions,...s.history].filter(t=>t.openedAt>=since).reduce((n,t)=>n+riskCharge(t),0);}
+export function executionValueAtQuote(input:{remainingNetRate:number;pullbackRiskRate:number;costRate?:number}){
+  const cost=Math.max(.0005,input.costRate??ROUND_TRIP_COST),remaining=Math.max(0,input.remainingNetRate),
+    pullback=Math.max(cost*1.5,input.pullbackRiskRate),edgeRatio=remaining/Math.max(pullback,1e-9);
+  return{remainingNetRate:remaining,edgeRatio,executable:remaining>cost*1.4&&edgeRatio>=EXECUTION_EDGE_FLOOR};
+}
 function isIntelligenceOpportunity(o:Opportunity){return o.strategyVersion===MARKET_INTELLIGENCE_VERSION;}
 function annotateLifecycleOpportunities(s:ForwardState,market:MarketEvolutionState,outlook:EnvironmentOutlook){
   for(const o of s.opportunities){
@@ -769,7 +776,7 @@ function annotateLifecycleOpportunities(s:ForwardState,market:MarketEvolutionSta
       route=routeEnvironmentOpportunity({market:s.extremumRegime,evolution:market,symbol,opportunity:o,outlook});
     o.marketEvolutionPhase=market.phase;o.opportunityLifecyclePhase=lifecycle.phase;o.lifecycleReason=lifecycle.reason;
     o.futureResearchAction=future.action;o.futureResearchReason=future.reason;o.futureHypothesisIds=future.hypothesisIds;
-    o.extendedConfirmation=false;o.environment=route.environment;o.playbook=route.playbook;o.routeAlignment=route.alignment;
+    o.extendedConfirmation=future.extendedConfirmation;o.environment=route.environment;o.playbook=route.playbook;o.routeAlignment=route.alignment;
     o.environmentPriority=route.priority;o.environmentScore=Math.max(0,Math.min(100,o.score+route.scoreDelta));
     o.environmentRiskScale=route.riskScale;o.environmentProbe=route.probe;o.environmentForceRetest=route.forceRetest;
     o.environmentMainline=route.mainline;o.environmentModeFit=route.modeFit;o.environmentOutlook=route.outlook;
@@ -782,19 +789,27 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
   response?:{validation:EntryValidation;decision:EntryResponseDecision}){
   if(!isIntelligenceOpportunity(o))return"新策略身份缺失";
   if(s.positions.some(t=>t.symbol===o.symbol))return"同币已有持仓，禁止重复开仓";
+  if(s.positions.length>=PORTFOLIO_POSITION_CAP)return"组合持仓已达10笔上限";
   const side=o.side,d=dir(side),price=side==="LONG"?q.bestAsk:q.bestBid,
+    consumed=Math.max(0,d*(price/Math.max(o.price,1e-9)-1)),remainingNet=o.netRemainingSpaceRate-consumed,
+    executionValue=executionValueAtQuote({remainingNetRate:remainingNet,pullbackRiskRate:o.pullbackRiskRate}),
     requiresLiquidityStop=o.tradePlan==="LIQUIDITY_MIGRATION"||o.tradePlan==="LIQUIDITY_REJECTION"||o.tradePlan==="FAMILY_TURN",
     frozenInvalidation=Number.isFinite(o.liquidityInvalidationPrice)?o.liquidityInvalidationPrice!:null;
+  if(!executionValue.executable)return remainingNet<=ROUND_TRIP_COST*1.4
+    ?"实时入场已消耗剩余空间，等待回调/新假设"
+    :`实时成交性价比已降至 ${executionValue.edgeRatio.toFixed(2)}×，低于1.25×，等待回调/新假设`;
   if(requiresLiquidityStop&&(frozenInvalidation==null||(side==="LONG"&&frozenInvalidation>=price)||(side==="SHORT"&&frozenInvalidation<=price)))
     return"流动性失效边界已经不在入场价格外侧，当前位置不再执行";
   const stopPrice=frozenInvalidation??(price*(1-d*o.stopRate)),stopRate=Math.abs(price-stopPrice)/Math.max(price,1e-12);
   if(!(stopRate>=.004&&stopRate<=.03))return"流动性/结构失效宽度不合理";
   const sameCluster=s.positions.find(t=>t.side===side&&o.clusterId&&t.entryContext?.clusterId===o.clusterId);
   if(sameCluster)return"同相关组已有同方向主仓";
-  const totalHeadroom=equity*(TOTAL_RISK_RATE-.001)-existingRisk(s),
+  const continuation=o.mode==="CONTINUATION"&&o.tradePlan==="LIQUIDITY_MIGRATION",
+    totalHeadroom=equity*(TOTAL_RISK_RATE-.001)-existingRisk(s),
     sideHeadroom=equity*(SIDE_RISK_RATE-.0005)-existingRisk(s,side),
     cycleHeadroom=equity*FIVE_MINUTE_NEW_RISK_RATE-cycleRiskAdded(s,s.lastCandleAt),
-    headroom=Math.min(totalHeadroom,sideHeadroom,cycleHeadroom),
+    continuationHeadroom=continuation?equity*CONTINUATION_SIDE_RISK_RATE-continuationRisk(s,side):Infinity,
+    headroom=Math.min(totalHeadroom,sideHeadroom,cycleHeadroom,continuationHeadroom),
     riskRate=o.premium?.0065:.0055,environmentRiskScale=Math.max(.70,Math.min(1,o.environmentRiskScale??1)),
     wantedRisk=equity*riskRate*environmentRiskScale,riskBudget=Math.min(wantedRisk,headroom);
   if(riskBudget<equity*.0035)return"剩余风险预算不足以形成有效仓位";
@@ -805,8 +820,6 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
   if(contracts<minContracts)return"低于最小模拟合约数量";
   const quantity=contracts*mult,notional=quantity*price,margin=notional/leverage,totalMargin=s.positions.reduce((n,t)=>n+t.margin,0);
   if(totalMargin+margin>equity*TOTAL_MARGIN_RATE)return"组合保证金已满";
-  const consumed=Math.max(0,d*(price/Math.max(o.price,1e-9)-1)),remainingNet=o.netRemainingSpaceRate-consumed;
-  if(remainingNet<=0)return"实时入场已消耗剩余空间";
   const plannedRisk=notional*(stopRate+ROUND_TRIP_COST),entryFee=notional*PAPER_COST.feeRate,
     target=price*(1+d*Math.max(.004,o.targetRate-consumed)),horizon=Math.max(60,Math.round(o.expectedHoldMinutes)),
     id=`mi-${now.toString(36)}-${o.symbol.replace(/[^A-Z0-9]/g,"")}-${side[0]}`,
@@ -827,7 +840,7 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
       entryContext:{version:"adaptive-ten-entry-v1",capturedAt:now,timeframe:"5m",side,mode:o.mode,reserve:false,reason:o.reason,
         entryScore:o.environmentScore??o.score,baseEntryScore:o.score,environmentScore:o.environmentScore??o.score,
         directionStrength:o.directionStrength,spaceScore:o.spaceScore,positionScore:o.positionScore,executionScore:o.executionScore,
-        remainingSpaceRate:remainingNet,pullbackRiskRate:o.pullbackRiskRate,edgeRatio:remainingNet/Math.max(o.pullbackRiskRate,1e-9),
+        remainingSpaceRate:remainingNet,pullbackRiskRate:o.pullbackRiskRate,edgeRatio:executionValue.edgeRatio,
         expectedHoldMinutes:horizon,marketFit:o.marketFit,regionId:null,portfolioRiskCharge:riskBudget,strategyVersion:MARKET_INTELLIGENCE_VERSION,
         regime:o.regime,confirmationStage:o.confirmationStage,sourceCount:o.sourceCount,disagreementRate:o.disagreementRate,postEntryState:"PENDING",
         entryResponse:response?{version:ENTRY_RESPONSE_VERSION,startedAt:response.validation.startedAt,confirmedAt:now,
@@ -998,15 +1011,17 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
         stage:o.confirmationStage??state?.stage??"OBSERVE",edgeRatio:o.edgeRatio,sourceCount,
         dataConfidence:o.dataConfidence??state?.dataConfidence??0,netRemainingSpaceRate:o.netRemainingSpaceRate,
         pullbackRiskRate:o.pullbackRiskRate}),
-      minimumElapsedMs=extreme.minimumElapsedMs,minimumSupportSamples=extreme.minimumSupportSamples,
-      minimumRetainedRate=extreme.minimumRetainedRate,
+      researchExtended=!!o.extendedConfirmation,
+      minimumElapsedMs=Math.max(extreme.minimumElapsedMs,researchExtended?30_000:0),
+      minimumSupportSamples=Math.max(extreme.minimumSupportSamples,researchExtended?4:0),
+      minimumRetainedRate=Math.max(extreme.minimumRetainedRate,researchExtended?.72:0),
       price=quoteReady?(o.side==="LONG"?q!.bestAsk:q!.bestBid):o.price,
       armed=stable.stable||!!o.environmentForceRetest,
       expiresAt=armed?Math.min(o.expiresAt,now+12*60_000):Math.min(o.expiresAt,now+BAR_MS),
       deadlineAt=quoteReady?expiresAt:0;
     s.entryValidations[o.id]={id:o.id,candidateId:o.id,symbol:o.symbol,side:o.side,startedAt:now,authorizedAt:now,
       expiresAt,deadlineAt,initialPrice:price,lastPrice:price,lastQuoteAt:quoteReady?q!.observedAt:0,samples:quoteReady?1:0,
-      bestAdvanceRate:0,maxAdverseRate:0,supportSamples:0,oppositionSamples:0,extendedConfirmation:extreme.required,
+      bestAdvanceRate:0,maxAdverseRate:0,supportSamples:0,oppositionSamples:0,extendedConfirmation:extreme.required||researchExtended,
       extremeResidual:extreme.required,minimumElapsedMs,minimumSupportSamples,minimumRetainedRate,
       stableThesis:armed,phase:"ARMED",initialExpectedNetRate:o.netRemainingSpaceRate,
       pullbackRiskRateAtArm:o.pullbackRiskRate,maxChaseRate:stable.maxChaseRate,retestPullbackMin:stable.retestPullbackMin,
@@ -1016,7 +1031,9 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
       status:"WAITING",
       reason:!quoteReady
         ?"交易计划已正式授权并冻结；等待实时执行盘口恢复，研究机会不会因为这一刻缺报价而消失。"
-        :extreme.required?extreme.reason:o.environmentForceRetest
+        :extreme.required?extreme.reason:researchExtended
+        ?"前瞻研究已形成持续反向状态假设；保留交易权，但要求更完整的实时延续证明。"
+        :o.environmentForceRetest
         ?`环境路由 ${o.playbook}：先Probe，必须完成第一段正反馈→可控回调→再次启动后才执行。`
         :stable.stable
         ?"高质量稳定交易假设已武装；短时反向只进入回测等待，不会直接取消，真正结构失效才解除。"
@@ -1166,7 +1183,12 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
     const last=s.lastExitAt[o.symbol]??0,lastSide=s.lastSide[o.symbol];
     if(now-last<15*60_000&&lastSide===o.side){validation.status="CANCELLED";validation.reason="同币同方向假设尚未重置";reject(validation.reason);continue;}
     const error=openIntelligenceTrade(s,o,q!,meta,now,equity,{validation,decision});
-    if(error){validation.status="CANCELLED";validation.reason=error;reject(error);continue;}
+    if(error){
+      if(error.startsWith("实时成交性价比")||error.startsWith("实时入场已消耗剩余空间")){
+        validation.phase="RETEST_WAIT";validation.reason=error;reject(error);continue;
+      }
+      validation.status="CANCELLED";validation.reason=error;reject(error);continue;
+    }
     trace?.({at:now,id:validation.id,symbol:validation.symbol,stage:"FILLED",reason:"PAPER_FILLED",
       price:s.positions.find(t=>t.symbol===validation.symbol)?.entryPrice,quoteAt:q!.observedAt,
       tradeId:s.positions.find(t=>t.symbol===validation.symbol)?.id});
