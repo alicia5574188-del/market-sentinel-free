@@ -741,8 +741,13 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
   response?:{validation:EntryValidation;decision:EntryResponseDecision}){
   if(!isIntelligenceOpportunity(o))return"新策略身份缺失";
   if(s.positions.some(t=>t.symbol===o.symbol))return"同币已有持仓，禁止重复开仓";
-  const side=o.side,d=dir(side),price=side==="LONG"?q.bestAsk:q.bestBid,stopRate=o.stopRate;
-  if(!(stopRate>=.004&&stopRate<=.03))return"结构止损宽度不合理";
+  const side=o.side,d=dir(side),price=side==="LONG"?q.bestAsk:q.bestBid,
+    requiresLiquidityStop=o.tradePlan==="LIQUIDITY_MIGRATION"||o.tradePlan==="LIQUIDITY_REJECTION",
+    frozenInvalidation=Number.isFinite(o.liquidityInvalidationPrice)?o.liquidityInvalidationPrice!:null;
+  if(requiresLiquidityStop&&(frozenInvalidation==null||(side==="LONG"&&frozenInvalidation>=price)||(side==="SHORT"&&frozenInvalidation<=price)))
+    return"流动性失效边界已经不在入场价格外侧，当前位置不再执行";
+  const stopPrice=frozenInvalidation??(price*(1-d*o.stopRate)),stopRate=Math.abs(price-stopPrice)/Math.max(price,1e-12);
+  if(!(stopRate>=.004&&stopRate<=.03))return"流动性/结构失效宽度不合理";
   const sameCluster=s.positions.find(t=>t.side===side&&o.clusterId&&t.entryContext?.clusterId===o.clusterId);
   if(sameCluster)return"同相关组已有同方向主仓";
   const totalHeadroom=equity*(TOTAL_RISK_RATE-.001)-existingRisk(s),
@@ -761,7 +766,7 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
   if(totalMargin+margin>equity*TOTAL_MARGIN_RATE)return"组合保证金已满";
   const consumed=Math.max(0,d*(price/Math.max(o.price,1e-9)-1)),remainingNet=o.netRemainingSpaceRate-consumed;
   if(remainingNet<=0)return"实时入场已消耗剩余空间";
-  const plannedRisk=notional*(stopRate+ROUND_TRIP_COST),entryFee=notional*PAPER_COST.feeRate,stopPrice=price*(1-d*stopRate),
+  const plannedRisk=notional*(stopRate+ROUND_TRIP_COST),entryFee=notional*PAPER_COST.feeRate,
     target=price*(1+d*Math.max(.004,o.targetRate-consumed)),horizon=Math.max(60,Math.round(o.expectedHoldMinutes)),
     id=`mi-${now.toString(36)}-${o.symbol.replace(/[^A-Z0-9]/g,"")}-${side[0]}`,
     rule:Rule={id:o.thesisId??o.id,signature:`MARKET_INTELLIGENCE:${o.clusterId??"solo"}:${o.mode}`,parentId:null,version:1,createdAt:now,
@@ -775,7 +780,8 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
       liveEligible:false,firstProfitAt:null,holdScore:o.score,profitFloorRate:0,expectedHoldMinutes:horizon,peakPnlRate:0,
       liquidityLifecycle:o.tradePlan?{currentPlan:o.tradePlan,upgradedAt:null,reason:o.liquidityReason??o.reason,
         originLower:o.liquidityOriginLower??null,originUpper:o.liquidityOriginUpper??null,
-        targetLower:o.liquidityTargetLower??null,targetUpper:o.liquidityTargetUpper??null}:undefined,
+        targetLower:o.liquidityTargetLower??null,targetUpper:o.liquidityTargetUpper??null,
+        invalidationPrice:frozenInvalidation}:undefined,
       exitControl:{policy:MARKET_INTELLIGENCE_VERSION,armedAt:null,armedQuoteAt:null,maxObservationGapMs:30_000,maxQuoteAgeMs:10_000},
       entryContext:{version:"adaptive-ten-entry-v1",capturedAt:now,timeframe:"5m",side,mode:o.mode,reserve:false,reason:o.reason,
         entryScore:o.environmentScore??o.score,baseEntryScore:o.score,environmentScore:o.environmentScore??o.score,
@@ -800,6 +806,7 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
         tradePlan:o.tradePlan,liquidityPlanConfidence:o.liquidityPlanConfidence,liquidityReason:o.liquidityReason,liquidityTargetRate:o.liquidityTargetRate,
         liquidityOriginLower:o.liquidityOriginLower,liquidityOriginUpper:o.liquidityOriginUpper,
         liquidityTargetLower:o.liquidityTargetLower,liquidityTargetUpper:o.liquidityTargetUpper,
+        liquidityInvalidationPrice:frozenInvalidation,rapidLiquidityAuthorization:!!o.rapidLiquidityAuthorization,
         futureResearchAction:o.futureResearchAction,futureResearchReason:o.futureResearchReason,futureHypothesisIds:o.futureHypothesisIds},
       forecast:{remainingNetRate:remainingNet,quality:o.score/100,sizingEquity:equity}};
   s.positions.push(t);s.balance-=entryFee;s.fees+=entryFee;s.turnover+=notional;s.lastEntryAt[o.symbol]=now;s.lastSide[o.symbol]=side;
