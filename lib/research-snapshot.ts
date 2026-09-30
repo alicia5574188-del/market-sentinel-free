@@ -38,7 +38,9 @@ export type ReviewSnapshot={
     archiveRecordsRead:number;archivePagesRead:number;archiveExhausted:boolean;archiveNextCursor:string|null;
     exportLimitReached:boolean;archiveError:string|null;conflictingTradeIds:string[]};
   account:ObjectRow;trades:Trade[];opportunities:unknown[];market:ObjectRow;research:ObjectRow;runtime:ObjectRow;
-  decisionJournal:ReviewJournal|null;issues:{code:string;classification:'CONFIRMED_DATA_ISSUE'|'REVIEW_LEAD'|'INSUFFICIENT_EVIDENCE';count:number;tradeIds?:string[]}[];
+  decisionJournal:ReviewJournal|null;issues:{code:string;classification:
+    'CONFIRMED_DATA_ISSUE'|'CONFIRMED_LOGIC_MISMATCH'|'CONFIRMED_DIAGNOSTIC_ISSUE'|'CONFIRMED_PORTFOLIO_STATE'|'REVIEW_LEAD'|'INSUFFICIENT_EVIDENCE';
+    count:number;tradeIds?:string[]}[];
 };
 function mergeTradeRows(current:Trade[],incoming:Trade[],conflicts:string[]){
   const byId=new Map(current.map(t=>[t.id,t]));
@@ -69,7 +71,7 @@ function grouped(rows:Trade[],key:(t:Trade)=>string){
 }
 export function checkpointCoverage(row:ObjectRow,at:number){
   const start=Number(row.startedAt),checkpoints=arr<ObjectRow>(row.checkpoints),unavailable=arr<number>(row.unavailableCheckpoints);
-  return Object.fromEntries([5,15,30,45,60].map(m=>{
+  return Object.fromEntries([5,15,30,60,120,240].map(m=>{
     const target=start+m*60_000,cp=checkpoints.find(x=>x.minutes===m);
     const valid=cp&&finite(cp.marketAt)&&finite(cp.price)&&cp.price>0&&finite(cp.targetAt)&&Math.abs(cp.targetAt-target)<=1000
       &&cp.marketAt>=start&&cp.marketAt<=target+90_000&&cp.marketAt>=target-6*60_000;
@@ -114,8 +116,12 @@ export function finalizeReviewSnapshot(s:ReviewSnapshot):ReviewSnapshot{
   s.coverage.complete=s.coverage.missingClosed===0&&closed.length===s.coverage.expectedClosed&&s.coverage.conflictingTradeIds.length===0;
   const traceMissing=closed.filter(t=>!t.review?.terminal),piMissing=closed.filter(t=>!t.positionIntelligence&&!t.review?.terminal?.assessments.length);
   const profitLeads=closed.filter(t=>t.favorable*t.notional>Math.max(2,(t.entryFee+t.exitFee)*4)
-    &&(t.netPnl??0)<t.favorable*t.notional*.4).sort((a,b)=>b.favorable*b.notional-a.favorable*a.notional).slice(0,5);
-  const rejected=arr<ObjectRow>(s.research.rejectedOpportunities),maturity=Object.fromEntries([5,15,30,45,60].map(m=>{
+    &&(t.netPnl??0)<t.favorable*t.notional*.4).sort((a,b)=>b.favorable*b.notional-a.favorable*a.notional).slice(0,5),
+    lowExecutionEdge=closed.filter(t=>Number(t.entryContext?.edgeRatio)<1.25).sort((a,b)=>(a.netPnl??0)-(b.netPnl??0)).slice(0,8);
+  const rejected=arr<ObjectRow>(s.research.rejectedOpportunities),sampling=obj(s.research.sampling),
+    postExit=arr<ObjectRow>(s.research.postExit),liquidityRebounds=postExit.filter(r=>r.exitReason==='LIQUIDITY_HYPOTHESIS_INVALIDATED'
+      &&arr<ObjectRow>(r.checkpoints).some(p=>[5,15,30].includes(Number(p.minutes))&&Number(p.netAfterCostRate)>.002)).slice(0,8),
+    maturity=Object.fromEntries([5,15,30,60,120,240].map(m=>{
     const statuses=rejected.map(r=>obj(r.checkpointCoverage)[m]);return[m,{tracked:statuses.length,
       valid:statuses.filter(v=>v==='VALID').length,pending:statuses.filter(v=>v==='PENDING').length,
       unavailable:statuses.filter(v=>v==='UNAVAILABLE').length,dueNotObserved:statuses.filter(v=>v==='DUE_NOT_OBSERVED').length}];}));
@@ -132,6 +138,13 @@ export function finalizeReviewSnapshot(s:ReviewSnapshot):ReviewSnapshot{
   if(!s.coverage.complete)s.issues.push({code:'TRADE_HISTORY_INCOMPLETE_OR_CONFLICTING',classification:'CONFIRMED_DATA_ISSUE',count:s.coverage.missingClosed+s.coverage.conflictingTradeIds.length});
   if(traceMissing.length)s.issues.push({code:'CAUSAL_EXIT_TRACE_MISSING',classification:'INSUFFICIENT_EVIDENCE',count:traceMissing.length});
   if(profitLeads.length)s.issues.push({code:'PROFIT_GIVEBACK_REVIEW_NOT_VERDICT',classification:'REVIEW_LEAD',count:profitLeads.length,tradeIds:profitLeads.map(t=>t.id)});
+  if(lowExecutionEdge.length)s.issues.push({code:'EXECUTION_EDGE_DECAY_BELOW_1_25',classification:'CONFIRMED_LOGIC_MISMATCH',
+    count:lowExecutionEdge.length,tradeIds:lowExecutionEdge.map(t=>t.id)});
+  if(liquidityRebounds.length)s.issues.push({code:'LIQUIDITY_STOP_REBOUND_REVIEW_NOT_VERDICT',classification:'REVIEW_LEAD',
+    count:liquidityRebounds.length,tradeIds:liquidityRebounds.map(r=>String(r.tradeId))});
+  if(Number(sampling.notAdmittedAttempts)>0&&rejected.length===0)s.issues.push({code:'COUNTERFACTUAL_ADMISSION_STARVATION',
+    classification:'CONFIRMED_DIAGNOSTIC_ISSUE',count:Number(sampling.notAdmittedAttempts)});
+  if(open.length>10)s.issues.push({code:'ACTIVE_POSITION_COUNT_ABOVE_TEN',classification:'CONFIRMED_PORTFOLIO_STATE',count:open.length});
   if(rejected.length&&!rejected.some(r=>obj(r.checkpointCoverage)['60']==='VALID'))s.issues.push({code:'NO_VALID_60M_CANDIDATE_RESULTS',classification:'INSUFFICIENT_EVIDENCE',count:rejected.length});
   return s;
 }
