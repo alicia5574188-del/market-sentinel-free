@@ -115,7 +115,7 @@ export function finalizeReviewSnapshot(s:ReviewSnapshot):ReviewSnapshot{
   const traceMissing=closed.filter(t=>!t.review?.terminal),piMissing=closed.filter(t=>!t.positionIntelligence&&!t.review?.terminal?.assessments.length);
   const profitLeads=closed.filter(t=>t.favorable*t.notional>Math.max(2,(t.entryFee+t.exitFee)*4)
     &&(t.netPnl??0)<t.favorable*t.notional*.4).sort((a,b)=>b.favorable*b.notional-a.favorable*a.notional).slice(0,5);
-  const rejected=arr<ObjectRow>(s.research.rejectedOpportunities),maturity=Object.fromEntries([5,15,30,60,120,240].map(m=>{
+  const rejected=arr<ObjectRow>(s.research.rejectedOpportunities),maturity=Object.fromEntries([5,15,30,45,60].map(m=>{
     const statuses=rejected.map(r=>obj(r.checkpointCoverage)[m]);return[m,{tracked:statuses.length,
       valid:statuses.filter(v=>v==='VALID').length,pending:statuses.filter(v=>v==='PENDING').length,
       unavailable:statuses.filter(v=>v==='UNAVAILABLE').length,dueNotObserved:statuses.filter(v=>v==='DUE_NOT_OBSERVED').length}];}));
