@@ -510,6 +510,29 @@ export function environmentDecayProfitFloor(input:{
   return cost+peakNet*.25;
 }
 
+export function evidenceDecayProfitFloor(input:{
+  peakFavorableRate:number;originalStopRate:number;decision:"HOLD"|"REVIEW"|"EXIT";reviewBars:number;
+  holdValueScore:number;counterfactualNewEntry:boolean;costRate?:number;
+}){
+  const cost=Math.max(.0005,input.costRate??ROUND_TRIP_COST),peakNet=Math.max(0,input.peakFavorableRate-cost),
+    meaningfulPeak=Math.max(cost*3,input.originalStopRate*.35);
+  if(input.decision!=="REVIEW"||input.reviewBars<1||input.counterfactualNewEntry||peakNet<meaningfulPeak)return 0;
+  const retention=input.holdValueScore<40?.72:input.holdValueScore<55?.62:.50;
+  return cost+peakNet*retention;
+}
+
+export function liquidityInvalidationDecision(input:{
+  breached:boolean;signedRate:number;invalidationRate:number;expectedPullbackRate:number;positionDecision:"HOLD"|"REVIEW"|"EXIT";costRate?:number;
+}){
+  const cost=Math.max(.0005,input.costRate??ROUND_TRIP_COST),invalidationRate=Math.max(.004,input.invalidationRate),
+    hardLossRate=Math.min(.035,Math.max(invalidationRate*1.35,invalidationRate+Math.max(cost*1.5,input.expectedPullbackRate*.35))),
+    adverseRate=Math.max(0,-input.signedRate);
+  if(!input.breached)return{action:"NONE" as const,hardLossRate};
+  if(adverseRate>=hardLossRate)return{action:"HARD_EXIT" as const,hardLossRate};
+  if(input.positionDecision==="EXIT")return{action:"CONFIRMED_EXIT" as const,hardLossRate};
+  return{action:"REVIEW" as const,hardLossRate};
+}
+
 function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now:number,minutePaths:Record<string,Candle[]>|undefined,
   marketEvolution:MarketEvolutionState,environmentOutlook:EnvironmentOutlook){
   const closed=new Set<string>();
@@ -567,9 +590,7 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
       entryInvalidation=Number.isFinite(t.entryContext?.liquidityInvalidationPrice)?t.entryContext!.liquidityInvalidationPrice!:null,
       entryInvalidationValid=entryInvalidation!=null&&((t.side==="LONG"&&entryInvalidation<t.entryPrice)||(t.side==="SHORT"&&entryInvalidation>t.entryPrice)),
       originalStopRate=Math.max(.004,entryInvalidationValid
-        ?Math.abs(t.entryPrice-entryInvalidation!)/Math.max(t.entryPrice,1e-12):fallbackStopRate),
-      profitStop=(t.profitFloorRate??0)>0?t.entryPrice*(1+d*(t.profitFloorRate??0)):null;
-    t.stopPrice=profitStop==null?hypothesisStop:t.side==="LONG"?Math.max(hypothesisStop,profitStop):Math.min(hypothesisStop,profitStop);
+        ?Math.abs(t.entryPrice-entryInvalidation!)/Math.max(t.entryPrice,1e-12):fallbackStopRate);
     const position=evaluatePositionIntelligence({
       now,side:t.side,signedRate:signed,peakFavorableRate:t.favorable,ageMin,firstProfit:!!t.firstProfitAt,
       expectedHoldMinutes:t.expectedHoldMinutes??180,stopRate:originalStopRate,entryScore:t.entryContext?.entryScore??50,
@@ -589,19 +610,47 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
     t.positionIntelligence=position;t.holdScore=position.holdValueScore;
     t.holdValue={action:position.decision==="HOLD"?"HOLD":position.decision==="REVIEW"?"REVIEW":
       (signed>ROUND_TRIP_COST?"EXIT_PROFIT":"EXIT_RISK"),pullbackRiskRate:position.expectedPullbackRate,
-      bestHoldMinutes:t.expectedHoldMinutes??180,score:position.holdValueScore};
+      bestHoldMinutes:t.expectedHoldMinutes??180,score:t.holdScore};
     delete t.profitLifecycle;
 
-    const stopped=t.side==="LONG"?px<=t.stopPrice:px>=t.stopPrice,
-      liquidityOwnsStop=liquidityStopActive&&(profitStop==null||(t.side==="LONG"?hypothesisStop>=profitStop:hypothesisStop<=profitStop));
-    if(stopped){
-      const stopReason=liquidityOwnsStop?"LIQUIDITY_HYPOTHESIS_INVALIDATED":(t.profitFloorRate??0)>0?"WINNER_INSURANCE_EXIT":"STRUCTURE_STOP";
-      closeTrade(s,t,px,now,stopReason,{authority:"PRICE_STOP",stopPrice:t.stopPrice,hypothesisStop,profitStop,liquidityOwnsStop,quoteAt:q!.observedAt});closed.add(t.id);continue;
+    const decayFloor=evidenceDecayProfitFloor({peakFavorableRate:t.favorable,originalStopRate,decision:position.decision,
+      reviewBars:position.reviewBars,holdValueScore:position.holdValueScore,counterfactualNewEntry:position.counterfactualNewEntry,costRate:ROUND_TRIP_COST});
+    if(decayFloor>Math.max(t.profitFloorRate??0,ROUND_TRIP_COST*.8)){
+      t.profitFloorRate=decayFloor;
+      event(s,now,"PROTECTION",t.id,
+        `持仓价值已进入复核且当前价格已不值得重新入场；保护已证明净利润的 ${(decayFloor>ROUND_TRIP_COST?(decayFloor-ROUND_TRIP_COST)/Math.max(1e-9,t.favorable-ROUND_TRIP_COST):0)*100|0}% 左右，其余空间继续留给行情。`,
+        {floorRate:decayFloor,peakRate:t.favorable,holdScore:position.holdValueScore});
     }
 
-    // Golden-version authority: the original thesis/position evidence decides
-    // active exits. Lifecycle, forward hypotheses and environment labels remain
-    // research context and have no independent order authority.
+    const profitStop=(t.profitFloorRate??0)>0?t.entryPrice*(1+d*(t.profitFloorRate??0)):null,
+      activeInvalidationRate=liquidityStopActive&&activeInvalidation!=null
+        ?Math.abs(t.entryPrice-activeInvalidation)/Math.max(t.entryPrice,1e-12):originalStopRate,
+      hypothesisBreached=liquidityStopActive&&activeInvalidation!=null
+        &&(t.side==="LONG"?px<=activeInvalidation:px>=activeInvalidation),
+      invalidation=liquidityInvalidationDecision({breached:hypothesisBreached,signedRate:signed,invalidationRate:activeInvalidationRate,
+        expectedPullbackRate:position.expectedPullbackRate,positionDecision:position.decision,costRate:ROUND_TRIP_COST}),
+      hardHypothesisStop=t.entryPrice*(1-d*invalidation.hardLossRate),
+      structuralStop=liquidityStopActive?hardHypothesisStop:hypothesisStop;
+    t.stopPrice=profitStop==null?structuralStop:t.side==="LONG"?Math.max(structuralStop,profitStop):Math.min(structuralStop,profitStop);
+    const profitStopped=profitStop!=null&&(t.side==="LONG"?px<=profitStop:px>=profitStop),
+      structuralStopped=!liquidityStopActive&&(t.side==="LONG"?px<=structuralStop:px>=structuralStop);
+    if(profitStopped){
+      closeTrade(s,t,px,now,"WINNER_INSURANCE_EXIT",{authority:"PROFIT_FLOOR",stopPrice:t.stopPrice,hypothesisStop,profitStop,
+        liquidityOwnsStop:false,quoteAt:q!.observedAt});closed.add(t.id);continue;
+    }
+    if(liquidityStopActive&&(invalidation.action==="HARD_EXIT"||invalidation.action==="CONFIRMED_EXIT")){
+      closeTrade(s,t,px,now,"LIQUIDITY_HYPOTHESIS_INVALIDATED",{authority:invalidation.action==="HARD_EXIT"?"HARD_RISK_BOUNDARY":"POSITION_INTELLIGENCE_CONFIRMED",
+        stopPrice:t.stopPrice,hypothesisStop,profitStop,liquidityOwnsStop:true,softInvalidationPrice:activeInvalidation!,
+        hardLossRate:invalidation.hardLossRate,quoteAt:q!.observedAt});closed.add(t.id);continue;
+    }
+    if(structuralStopped){
+      closeTrade(s,t,px,now,"STRUCTURE_STOP",{authority:"PRICE_STOP",stopPrice:t.stopPrice,hypothesisStop,profitStop,
+        liquidityOwnsStop:false,quoteAt:q!.observedAt});closed.add(t.id);continue;
+    }
+
+    // The liquidity invalidation line is a thesis review boundary, not a one-tick
+    // liquidation trigger. Multi-family position evidence can confirm the exit;
+    // a bounded hard-risk line still prevents open-ended loss.
     if(position.decision==="EXIT"){
       if(t.entryContext)t.entryContext.postEntryState=signed>0?"CONFIRMED":"FAILED";
       closeTrade(s,t,px,now,"POSITION_VALUE_EXIT",{authority:"POSITION_INTELLIGENCE",decision:position.decision,quoteAt:q!.observedAt,reviewBars:position.reviewBars,barAt:position.lastCompletedBar});closed.add(t.id);continue;
