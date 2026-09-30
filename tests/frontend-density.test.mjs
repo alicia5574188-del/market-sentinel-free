@@ -23,13 +23,13 @@ function render(path,props,extra={}){
     "./market-intelligence-execution.tsx":{default:()=>null},
     ...extra
   };
-  const module={exports:{}};
+  const fixtureModule={exports:{}};
   runInNewContext(`(function(require,module,exports){${source}\n})`,{}, {filename:path})(name=>{
     if(name.endsWith(".css"))return {};
     assert.ok(Object.hasOwn(imports,name),`unexpected runtime dependency: ${name}`);
     return imports[name];
-  },module,module.exports);
-  return renderToStaticMarkup(React.createElement(module.exports.default,props));
+  },fixtureModule,fixtureModule.exports);
+  return renderToStaticMarkup(React.createElement(fixtureModule.exports.default,props));
 }
 const account=()=>({startedAt:1790670000000,updatedAt:1790761200000,initialEquity:1000,equity:922.82,
   netPnl:-77.18,maxDrawdown:.141,floating:3.2,turnover:800,fees:4,resolved:5,
