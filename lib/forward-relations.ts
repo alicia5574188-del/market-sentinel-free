@@ -45,6 +45,7 @@ export const PAPER_COST={feeRate:.0007,slippageRate:.00025,fundingAllowancePerDa
 const ROUND_TRIP_COST=2*(PAPER_COST.feeRate+PAPER_COST.slippageRate);
 const TOTAL_RISK_RATE=.10,SIDE_RISK_RATE=.065,TOTAL_MARGIN_RATE=.75;
 const FIVE_MINUTE_NEW_RISK_RATE=.025;
+const ENTRY_VALIDATION_CAP=6;
 const ROTATION_GAP=10,ROTATION_COOLDOWN_MS=2*60_000;
 const HISTORY_LIMIT=240,EVENT_LIMIT=160,CONSUMED_THESIS_LIMIT=512,CONSUMED_THESIS_TTL_MS=7*24*60*60_000;
 const clip=(v:number,a=0,b=1)=>Math.max(a,Math.min(b,v));
@@ -532,16 +533,37 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
         targetLower:target?.lower??null,targetUpper:target?.upper??null,invalidationPrice};
       event(s,now,"ROTATION",t.id,"家族转折持仓升级为流动性迁移持仓",{confidence:liquidityNow.departure.confidence});
     }
+    if(t.liquidityLifecycle?.currentPlan==="LIQUIDITY_MIGRATION"&&liquidityNow?.departure.state==="ACCEPTED"
+      &&liqSide===t.side&&liquidityNow.departure.confidence>=.60&&liquidityNow.activeZone?.strength>=.36){
+      const zone=liquidityNow.activeZone,prior=t.liquidityLifecycle,
+        priorCenter=prior.originLower!=null&&prior.originUpper!=null?(prior.originLower+prior.originUpper)/2:null,
+        progressed=priorCenter!=null&&(t.side==="LONG"?zone.center>prior.originUpper!:zone.center<prior.originLower!),
+        targetMatch=prior.targetLower!=null&&prior.targetUpper!=null
+          ?zone.lower<=prior.targetUpper&&zone.upper>=prior.targetLower:true;
+      if(progressed&&targetMatch){
+        const target=t.side==="LONG"?liquidityNow.nextAbove:liquidityNow.nextBelow,width=Math.max(0,zone.upper-zone.lower),
+          invalidationPrice=t.side==="LONG"?zone.upper-width*.35:zone.lower+width*.35;
+        t.liquidityLifecycle={currentPlan:"LIQUIDITY_MIGRATION",upgradedAt:prior.upgradedAt??now,
+          reason:"上一段流动性迁移已经到达新的成交中心，并再次被市场接受地向同方向离开；持仓原地续接下一段迁移。",
+          originLower:zone.lower,originUpper:zone.upper,targetLower:target?.lower??null,targetUpper:target?.upper??null,invalidationPrice};
+        event(s,now,"ROTATION",t.id,"流动性迁移续接到下一段，不平仓重开",
+          {confidence:liquidityNow.departure.confidence,originCenter:zone.center});
+      }
+    }
     const activeLiquidityPlan=t.liquidityLifecycle?.currentPlan??t.entryContext?.tradePlan,
       activeOrigin=t.liquidityLifecycle?{lower:t.liquidityLifecycle.originLower,upper:t.liquidityLifecycle.originUpper}:null,
       activeTarget=t.liquidityLifecycle?{lower:t.liquidityLifecycle.targetLower,upper:t.liquidityLifecycle.targetUpper}:null,
       activeInvalidation=Number.isFinite(t.liquidityLifecycle?.invalidationPrice)?t.liquidityLifecycle!.invalidationPrice!
         :Number.isFinite(t.entryContext?.liquidityInvalidationPrice)?t.entryContext!.liquidityInvalidationPrice!:null,
-      liquidityStopActive=(activeLiquidityPlan==="LIQUIDITY_MIGRATION"||activeLiquidityPlan==="LIQUIDITY_REJECTION")
-        &&activeInvalidation!=null&&((t.side==="LONG"&&activeInvalidation<t.entryPrice)||(t.side==="SHORT"&&activeInvalidation>t.entryPrice)),
+      liquidityStopActive=(activeLiquidityPlan==="LIQUIDITY_MIGRATION"||activeLiquidityPlan==="LIQUIDITY_REJECTION"||activeLiquidityPlan==="FAMILY_TURN")
+        &&activeInvalidation!=null,
       hypothesisStop=liquidityStopActive?activeInvalidation!:t.entryPrice*(1-d*fallbackStopRate),
-      originalStopRate=Math.max(.004,Math.abs(t.entryPrice-hypothesisStop)/Math.max(t.entryPrice,1e-12));
-    if((t.profitFloorRate??0)<=0)t.stopPrice=hypothesisStop;
+      entryInvalidation=Number.isFinite(t.entryContext?.liquidityInvalidationPrice)?t.entryContext!.liquidityInvalidationPrice!:null,
+      entryInvalidationValid=entryInvalidation!=null&&((t.side==="LONG"&&entryInvalidation<t.entryPrice)||(t.side==="SHORT"&&entryInvalidation>t.entryPrice)),
+      originalStopRate=Math.max(.004,entryInvalidationValid
+        ?Math.abs(t.entryPrice-entryInvalidation!)/Math.max(t.entryPrice,1e-12):fallbackStopRate),
+      profitStop=(t.profitFloorRate??0)>0?t.entryPrice*(1+d*(t.profitFloorRate??0)):null;
+    t.stopPrice=profitStop==null?hypothesisStop:t.side==="LONG"?Math.max(hypothesisStop,profitStop):Math.min(hypothesisStop,profitStop);
     const position=evaluatePositionIntelligence({
       now,side:t.side,signedRate:signed,peakFavorableRate:t.favorable,ageMin,firstProfit:!!t.firstProfitAt,
       expectedHoldMinutes:t.expectedHoldMinutes??180,stopRate:originalStopRate,entryScore:t.entryContext?.entryScore??50,
@@ -754,7 +776,7 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
   if(!isIntelligenceOpportunity(o))return"新策略身份缺失";
   if(s.positions.some(t=>t.symbol===o.symbol))return"同币已有持仓，禁止重复开仓";
   const side=o.side,d=dir(side),price=side==="LONG"?q.bestAsk:q.bestBid,
-    requiresLiquidityStop=o.tradePlan==="LIQUIDITY_MIGRATION"||o.tradePlan==="LIQUIDITY_REJECTION",
+    requiresLiquidityStop=o.tradePlan==="LIQUIDITY_MIGRATION"||o.tradePlan==="LIQUIDITY_REJECTION"||o.tradePlan==="FAMILY_TURN",
     frozenInvalidation=Number.isFinite(o.liquidityInvalidationPrice)?o.liquidityInvalidationPrice!:null;
   if(requiresLiquidityStop&&(frozenInvalidation==null||(side==="LONG"&&frozenInvalidation>=price)||(side==="SHORT"&&frozenInvalidation<=price)))
     return"流动性失效边界已经不在入场价格外侧，当前位置不再执行";
@@ -937,7 +959,7 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
   let active=Object.values(s.entryValidations).filter(v=>v.status==="WAITING").length;
   const reject=(reason:string)=>{reasons[reason]=(reasons[reason]??0)+1;};
   for(const o of eligible){
-    if(active>=3)break;
+    if(active>=ENTRY_VALIDATION_CAP)break;
     if(s.entryValidations[o.id])continue;
     const q=quotes[o.symbol],quoteReady=freshQuote(q,now)&&q!.entryReady===true,
       state=s.extremumRegime.symbols[o.symbol],sourceCount=Math.max(o.sourceCount??0,state?.sourceCount??0,q?.sourceCount??0),
@@ -1007,7 +1029,15 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
     const q=quotes[validation.symbol];if(!freshQuote(q,now)||q!.entryReady!==true){
       validation.reason="交易计划仍然冻结有效，等待实时执行盘口恢复。";reject("等待实时盘口");continue;
     }
-    const price=validation.side==="LONG"?q!.bestAsk:q!.bestBid,state=s.extremumRegime.symbols[validation.symbol],
+    const price=validation.side==="LONG"?q!.bestAsk:q!.bestBid;
+    if(validation.samples===0||validation.lastQuoteAt<=0){
+      const waited=Math.max(0,now-validation.startedAt);
+      validation.startedAt=now;validation.deadlineAt=Math.min(validation.expiresAt,validation.deadlineAt+waited);
+      validation.initialPrice=price;validation.lastPrice=price;validation.lastQuoteAt=q!.observedAt;validation.samples=1;
+      validation.reason="实时执行盘口已经恢复；以首个可执行价格建立执行基准，冻结交易计划继续有效。";
+      reject(validation.reason);continue;
+    }
+    const state=s.extremumRegime.symbols[validation.symbol],
       frozenInvalidation=Number.isFinite(o.liquidityInvalidationPrice)?o.liquidityInvalidationPrice!:null,
       liquidityInvalidated=frozenInvalidation!=null&&(
         validation.side==="LONG"?price<=frozenInvalidation:price>=frozenInvalidation);
@@ -1259,9 +1289,14 @@ export function forwardUrgentQuoteSymbols(s:ForwardState,now:number,entrySymbols
 }
 export function forwardUrgentMinuteSymbols(s:ForwardState,entrySymbols?:Iterable<string>){
   const allowed=entrySymbols?new Set(entrySymbols):undefined,keep=(x:string)=>!allowed||allowed.has(x),
-    fixed=[...s.positions.map(t=>t.symbol),...Object.values(s.entryValidations).filter(v=>v.status==="WAITING").map(v=>v.symbol)].filter(keep),
-    research=intelligenceUrgentMinuteSymbols(s.extremumRegime,allowed);
-  return[...new Set([...fixed,...research])].slice(0,FORWARD_MINUTE_CONFIRMATION_CAP);
+    armed=Object.values(s.entryValidations).filter(v=>v.status==="WAITING"&&keep(v.symbol))
+      .sort((a,b)=>a.startedAt-b.startedAt).map(v=>v.symbol),
+    research=intelligenceUrgentMinuteSymbols(s.extremumRegime,allowed),
+    positions=s.positions.map(t=>t.symbol).filter(keep);
+  // Entry discovery/authorization is the time-sensitive use of 1m data.
+  // Existing positions still retain realtime price/flow and 5m structure even
+  // when their 1m refresh rotates behind active entry work.
+  return[...new Set([...armed,...research,...positions])].slice(0,FORWARD_MINUTE_CONFIRMATION_CAP);
 }
 export function forwardWatchSymbols(s:ForwardState,now:number,entrySymbols?:Iterable<string>){
   return forwardUrgentQuoteSymbols(s,now,entrySymbols).slice(0,FORWARD_EXECUTION_BBO_CAP);
