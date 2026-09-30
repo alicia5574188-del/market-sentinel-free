@@ -230,11 +230,11 @@ export function environmentModeFit(input:{
     rotation=clip(input.evolution.rotationRisk),dispersion=clip((input.market.internals?.dispersion??0)/1.2),
     synchrony=clip(input.market.internals?.synchrony??.5),liq=input.market.liquidity?.market,
     directionalMigration=liq?.ready?clip(side*(liq.migrationBreadth??0)*2,-1,1):0;
-  if(input.tradePlan==="LIQUIDITY_MIGRATION")
+  if(liq?.ready&&input.tradePlan==="LIQUIDITY_MIGRATION")
     return clip(.46*outlook.persistenceScore+.22*directionAlignment+.18*clip((directionalMigration+1)/2)+.14*(1-rotation));
-  if(input.tradePlan==="LIQUIDITY_REJECTION")
-    return clip(.38*(liq?.rejectedShare??0)+.26*rotation+.22*outlook.transitionPressure+.14*(liq?.insideShare??0));
-  if(input.tradePlan==="FAMILY_TURN")
+  if(liq?.ready&&input.tradePlan==="LIQUIDITY_REJECTION")
+    return clip(.38*(liq.rejectedShare??0)+.26*rotation+.22*outlook.transitionPressure+.14*(liq.insideShare??0));
+  if(liq?.ready&&input.tradePlan==="FAMILY_TURN")
     return clip(.35*rotation+.30*outlook.transitionPressure+.20*(1-outlook.persistenceScore)+.15*clip((directionalMigration+1)/2));
   if(input.mode==="CONTINUATION")return clip(.55*outlook.persistenceScore+.25*directionAlignment+.20*(1-rotation));
   if(input.mode==="REVERSAL")return clip(.55*rotation+.25*outlook.transitionPressure+.20*(1-outlook.persistenceScore));
