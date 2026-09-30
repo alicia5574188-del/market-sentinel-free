@@ -1011,11 +1011,11 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
       frozenInvalidation=Number.isFinite(o.liquidityInvalidationPrice)?o.liquidityInvalidationPrice!:null,
       liquidityInvalidated=frozenInvalidation!=null&&(
         validation.side==="LONG"?price<=frozenInvalidation:price>=frozenInvalidation);
-    if(liquidityInvalidated&&(o.tradePlan==="LIQUIDITY_MIGRATION"||o.tradePlan==="LIQUIDITY_REJECTION")){
+    if(liquidityInvalidated&&(o.tradePlan==="LIQUIDITY_MIGRATION"||o.tradePlan==="LIQUIDITY_REJECTION"||o.tradePlan==="FAMILY_TURN")){
       validation.status="CANCELLED";validation.reason="价格已经触及冻结交易计划的流动性失效边界，原假设真正失效。";
       reject(validation.reason);continue;
     }
-      decision=evaluateEntryResponse({now,side:validation.side,score:o.environmentScore??o.score,edgeRatio:o.edgeRatio,pullbackRiskRate:o.pullbackRiskRate,
+    const decision=evaluateEntryResponse({now,side:validation.side,score:o.environmentScore??o.score,edgeRatio:o.edgeRatio,pullbackRiskRate:o.pullbackRiskRate,
         stopRate:o.stopRate,sourceCount:o.sourceCount??0,disagreementRate:o.disagreementRate??0,mode:o.mode,
         fastLaneAllowed:!!o.environmentMainline,price,
         memory:{startedAt:validation.startedAt,deadlineAt:validation.deadlineAt,initialPrice:validation.initialPrice,samples:validation.samples,
