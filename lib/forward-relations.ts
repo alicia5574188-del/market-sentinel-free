@@ -96,6 +96,8 @@ export type Opportunity={
   probeImpulseMin?:number;probePullbackMin?:number;probeRestartMin?:number;
   tradePlan?:LiquidityTradePlan;liquidityPlanConfidence?:number;liquidityReason?:string;liquidityTargetRate?:number|null;
   liquidityOriginLower?:number|null;liquidityOriginUpper?:number|null;liquidityTargetLower?:number|null;liquidityTargetUpper?:number|null;
+  liquidityInvalidationPrice?:number|null;liquidityInvalidationRate?:number|null;
+  rapidLiquidityAuthorization?:boolean;rapidLiquidityReason?:string|null;
   futureResearchAction?:EntryHypothesisGuidance["action"];futureResearchReason?:string;futureHypothesisIds?:string[];
 };
 export type MarketPulse={at:number;up:number;down:number;neutral:number;bias:"UP"|"DOWN"|"MIXED";strength:number;expansion:number};
@@ -121,6 +123,7 @@ export type EntryContext={
   environmentPersistenceScore?:number;environmentTransitionPressure?:number;environmentProfitExpansion?:EnvironmentOutlook["profitExpansion"];
   tradePlan?:LiquidityTradePlan;liquidityPlanConfidence?:number;liquidityReason?:string;liquidityTargetRate?:number|null;
   liquidityOriginLower?:number|null;liquidityOriginUpper?:number|null;liquidityTargetLower?:number|null;liquidityTargetUpper?:number|null;
+  liquidityInvalidationPrice?:number|null;rapidLiquidityAuthorization?:boolean;
   baseEntryScore?:number;environmentScore?:number;
   futureResearchAction?:EntryHypothesisGuidance["action"];futureResearchReason?:string;futureHypothesisIds?:string[];
 };
@@ -140,7 +143,7 @@ export type Trade={
   holdValue?:{action:"HOLD"|"REVIEW"|"EXIT_PROFIT"|"EXIT_RISK";pullbackRiskRate:number;bestHoldMinutes:number;score:number};
   positionIntelligence?:PositionIntelligenceState;
   liquidityLifecycle?:{currentPlan:LiquidityTradePlan;upgradedAt:number|null;reason:string;
-    originLower:number|null;originUpper:number|null;targetLower:number|null;targetUpper:number|null};
+    originLower:number|null;originUpper:number|null;targetLower:number|null;targetUpper:number|null;invalidationPrice:number|null};
   profitLifecycle?:ProfitLifecycleState;
   turn?:{version:string;timeframe:"5m";signalAt:number;entryTurnProbability:number;entryContinuation:number;entryDirectionConfidence:number};
 };
@@ -154,6 +157,7 @@ export type EntryValidation={id:string;candidateId:string;symbol:string;side:"LO
   supportSamples:number;oppositionSamples:number;extendedConfirmation?:boolean;extremeResidual?:boolean;
   minimumElapsedMs?:number;minimumSupportSamples?:number;minimumRetainedRate?:number;
   stableThesis?:boolean;phase?:"ARMED"|"RETEST_WAIT";initialExpectedNetRate?:number;pullbackRiskRateAtArm?:number;
+  frozenOpportunity?:Opportunity;authorizedAt?:number;
   maxChaseRate?:number;retestPullbackMin?:number;restartMin?:number;retestBasePrice?:number|null;retestBaseAt?:number|null;
   environment?:MarketEnvironment;playbook?:EnvironmentPlaybook;requiresProbeRetest?:boolean;probeImpulseMin?:number;
   probePullbackMin?:number;probeRestartMin?:number;probeRetestSeen?:boolean;
