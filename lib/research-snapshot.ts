@@ -38,7 +38,9 @@ export type ReviewSnapshot={
     archiveRecordsRead:number;archivePagesRead:number;archiveExhausted:boolean;archiveNextCursor:string|null;
     exportLimitReached:boolean;archiveError:string|null;conflictingTradeIds:string[]};
   account:ObjectRow;trades:Trade[];opportunities:unknown[];market:ObjectRow;research:ObjectRow;runtime:ObjectRow;
-  decisionJournal:ReviewJournal|null;issues:{code:string;classification:'CONFIRMED_DATA_ISSUE'|'REVIEW_LEAD'|'INSUFFICIENT_EVIDENCE';count:number;tradeIds?:string[]}[];
+  decisionJournal:ReviewJournal|null;issues:{code:string;classification:
+    'CONFIRMED_DATA_ISSUE'|'CONFIRMED_LOGIC_MISMATCH'|'CONFIRMED_DIAGNOSTIC_ISSUE'|'CONFIRMED_PORTFOLIO_STATE'|'REVIEW_LEAD'|'INSUFFICIENT_EVIDENCE';
+    count:number;tradeIds?:string[]}[];
 };
 function mergeTradeRows(current:Trade[],incoming:Trade[],conflicts:string[]){
   const byId=new Map(current.map(t=>[t.id,t]));
