@@ -2,7 +2,7 @@ name: Snapshot diagnostics workspace
 on:
   push:
     branches: [diagnostics/snapshot-v2-20260930]
-    paths: [.snapshot-edits.2.txt]
+    paths: [.github/workflows/snapshot-workspace.yml]
 permissions:
   contents: write
 jobs:
@@ -21,7 +21,15 @@ jobs:
           test "$GITHUB_REF" = 'refs/heads/diagnostics/snapshot-v2-20260930'
           python3 - <<'PY'
           import base64,gzip,json,hashlib,pathlib
-          data=pathlib.Path('.snapshot-edits.1.txt').read_text().strip()+pathlib.Path('.snapshot-edits.2.txt').read_text().strip()
+          parts=[pathlib.Path('.snapshot-edits.'+name+'.txt').read_text().strip() for name in ['1a','1b','2a','2b']]
+          # Remove one duplicated transport segment; the full bundle hash is mandatory.
+          c=parts[2]
+          if 'X9zyIRuO7' in c:
+              c=c[:c.index('X9zyIRuO7')+6]+c[c.index('X9zyIRGb')+6:]
+          parts[2]=c
+          data=''.join(parts)
+          print('Chunk lengths:',[len(p) for p in parts])
+          print('Bundle SHA256:',hashlib.sha256(data.encode()).hexdigest())
           assert hashlib.sha256(data.encode()).hexdigest()=='ce52738b52f44b03263188662da309ac15cd4a0a7f3d7bdb12f261bcfedc1145'
           edits=json.loads(gzip.decompress(base64.b64decode(data)))
           allowed={'app/forward-dashboard.tsx','lib/forward-relations.ts','lib/forward-store.ts','lib/market-intelligence-research.ts','lib/market-intelligence-shadow-research.ts','lib/research-snapshot.ts','lib/review-trace.ts','package.json','tests/architecture.test.mjs','tests/frontend-density.test.mjs','tests/research-snapshot-v2.test.ts','vite.config.ts','worker/index-clean.ts'}
