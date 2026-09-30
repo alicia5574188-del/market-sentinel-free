@@ -63,6 +63,7 @@ function compactClosedTrade(t:Trade,keepIntelligence:boolean){
 function withoutReview(t:Trade){const row={...t};delete row.review;return row;}
 function archivePositionSummary(t:Trade){
   return{id:t.id,symbol:t.symbol,side:t.side,status:t.status,openedAt:t.openedAt,entryPrice:t.entryPrice,lastPrice:t.lastPrice,
+    lastQuoteAt:t.lastQuoteAt,exitControl:t.exitControl?{policy:t.exitControl.policy}:undefined,
     notional:t.notional,margin:t.margin,plannedRisk:t.plannedRisk,stopPrice:t.stopPrice,profitFloorRate:t.profitFloorRate??0,
     thesisId:t.entryContext?.thesisId??null,tradePlan:t.liquidityLifecycle?.currentPlan??t.entryContext?.tradePlan??null};
 }
