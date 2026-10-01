@@ -3,6 +3,8 @@
 import type {Trade} from './forward-relations.ts';
 export const INVERSE_LIVE_POLICY='inverse-paper-live-v1';
 export const INVERSE_LIVE_EXIT_POLICY='shadow-events-only-v1';
+export const INVERSE_LIVE_LEVERAGE_POLICY='half-source-isolated-v1';
+export const inverseLiveLeverage=(sourceLeverage:number)=>sourceLeverage/2;
 export const isInverseLiveReceipt=(receipt?:{sourceRole?:string})=>receipt?.sourceRole==='INVERSE_PAPER';
 export function liveProtectionPrice(t:Trade) {
   if(!t.inverseCopy)return t.stopPrice;

@@ -9,7 +9,7 @@ import { LiveEntrySizingError, liveEntryTag, type LiveEntryIntent } from "./gate
 import { quantizeMirrorNotional, type GateSizeRules, type SizeDiagnostic } from "./gate-quantity.ts";
 import { LIVE_SESSION_VERSION, sourceAfterEnable, type LiveSession } from "./live-session.ts";
 import { PORTFOLIO_RISK_CAP, CORRELATED_DIRECTION_RISK_CAP } from "./liquidity-core.ts";
-import {liveProtectionPrice,INVERSE_LIVE_POLICY,INVERSE_LIVE_EXIT_POLICY,isInverseLiveReceipt} from './live-source-policy.ts';
+import {liveProtectionPrice,INVERSE_LIVE_POLICY,INVERSE_LIVE_EXIT_POLICY,isInverseLiveReceipt,INVERSE_LIVE_LEVERAGE_POLICY,inverseLiveLeverage} from './live-source-policy.ts';
 
 export const LIVE_PARITY_VERSION = "current-paper-live-parity-v1";
 export const LIVE_PARITY_SOURCE = "CURRENT_FORWARD_ACCOUNT";
@@ -19,6 +19,8 @@ export const LIVE_MIN_CONTRACT_UPLIFT_MAX_RISK_RATE = .0075;
 const LIVE_MIN_CONTRACT_UPLIFT_RISK_MULTIPLE=4,LIVE_MIN_CONTRACT_UPLIFT_RISK_FLOOR_RATE=.004;
 export type MirrorSourceTrade = ArenaTrade & { forwardSource?: Trade };
 export type MirrorReceipt = {
+  executionLeverage?:number;leveragePolicy?:typeof INVERSE_LIVE_LEVERAGE_POLICY;
+  leverageAdjustAt?:number;leverageAdjustError?:string|null;
   version: typeof LIVE_PARITY_VERSION; sourceId: string; sourceRuleId: string;
   sourcePolicy: string; sourceOpenedAt: number; sourceDeadline: number;
   sourceEntryPrice: number; sourceStopPrice: number; sourceArmPrice: number;
@@ -181,7 +183,8 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
     || ![input.available,input.openRisk,input.sameDirectionRisk,input.openMargin,input.openNotional,input.maintenanceRate].every(v=>Number.isFinite(v)&&v>=0))
     fail("ECONOMICS","实时账户/合约规格不完整");
   if (Math.abs(input.quantoMultiplier-t.quantoMultiplier)>t.quantoMultiplier*1e-9)fail("ECONOMICS","合约乘数与源单不一致");
-  if (t.leverage>input.leverageMax)fail("MARGIN","交易所不支持源单杠杆，不擅自改杠杆");
+  const leverage=t.inverseCopy?inverseLiveLeverage(t.leverage):t.leverage;
+  if(leverage<1||leverage>input.leverageMax)fail("MARGIN","交易所不支持请求的实盘杠杆，不静默改变仓位或保证金");
   const direction=t.side==="LONG"?1:-1;
   const protection=liveProtectionPrice(t);
   if (protection!=null&&direction*(input.entryPrice-protection)<=0)fail("ECONOMICS","当前价已越过源单止损，不开即平");
@@ -189,7 +192,8 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
   if(!t.inverseCopy&&drift.adverse>drift.allowed+1e-9)fail("ECONOMICS",
     `当前实盘盘口相对模拟入场出现不利偏差${(drift.adverse*100).toFixed(3)}%，超过动态上限${(drift.allowed*100).toFixed(3)}%，不追价`);
   const ratio=input.mirrorRatio&&positive(input.mirrorRatio)?input.mirrorRatio:input.equity/input.sourceEquity;
-  const mirrorEquity=input.sourceEquity*ratio,targetNotional=t.notional*ratio,targetMargin=t.margin*ratio;
+  const mirrorEquity=input.sourceEquity*ratio,targetNotional=t.notional*ratio,
+    targetMargin=t.inverseCopy?targetNotional/leverage:t.margin*ratio;
   const one=input.entryPrice*input.quantoMultiplier,requestedContracts=targetNotional/one,
     cost=2*(PAPER_COST.feeRate+PAPER_COST.slippageRate)+PAPER_COST.fundingAllowancePerDay*sourceHoldMinutes(t)/1440,
     sourceScaledRisk=t.plannedRisk*ratio,stopAndCost=protection==null?t.plannedRisk/t.notional
@@ -201,7 +205,7 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
   if (!(contracts>0)){
     const diagnostic={targetContracts:requestedContracts,minimumContracts:sized.minimum,quantityQuantum:sized.quantum,
       supportsDecimals:sized.supportsDecimals,targetNotional,minimumNotional:sized.minimumNotional,
-      minimumMargin:sized.minimumNotional/t.leverage,requiredLiveEquity:input.sourceEquity*sized.minimumNotional/t.notional};
+      minimumMargin:sized.minimumNotional/leverage,requiredLiveEquity:input.sourceEquity*sized.minimumNotional/t.notional};
     const minimumRisk=sized.minimumNotional*stopAndCost,
       riskCeiling=Math.min(input.equity*LIVE_MIN_CONTRACT_UPLIFT_MAX_RISK_RATE,
         Math.max(sourceScaledRisk*LIVE_MIN_CONTRACT_UPLIFT_RISK_MULTIPLE,input.equity*LIVE_MIN_CONTRACT_UPLIFT_RISK_FLOOR_RATE));
@@ -209,7 +213,7 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
       fail("MIN_CONTRACT",`按比例低于真实最小数量；最低一张需要${diagnostic.minimumNotional.toFixed(4)}U名义价值、计划风险${(minimumRisk/input.equity*100).toFixed(2)}%，超出小账户最小张风险边界`,diagnostic);
     contracts=sized.minimum;quantityText=sized.quantum;minimumUplift=true;minimumUpliftRiskRate=minimumRisk/input.equity;
   }
-  const notional=contracts*one,leverage=t.leverage,margin=notional/leverage,plannedRisk=notional*stopAndCost;
+  const notional=contracts*one,margin=notional/leverage,plannedRisk=notional*stopAndCost;
   // Gate is the execution authority for actual fees and available margin. Do not
   // double-reserve PAPER's model fee and turn a valid source order into a skip.
   if (margin>input.available+1e-8)fail("MARGIN","可用保证金不足，保留比例，不静默缩单");
@@ -244,6 +248,7 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
     copyQuotePrice:input.entryPrice,copyDelayMs:Math.max(0,input.now-t.openedAt),
     allowedAdverseEntryDriftRate:drift.allowed,adverseEntryDriftRate:drift.adverse};
   if(t.inverseCopy)Object.assign(receipt,{sourceRole:'INVERSE_PAPER',nativeProtectionPolicy:INVERSE_LIVE_EXIT_POLICY,
+    executionLeverage:leverage,leveragePolicy:INVERSE_LIVE_LEVERAGE_POLICY,
     exitPolicy:INVERSE_LIVE_EXIT_POLICY,nativeProtectionPrice:null,shadowSourceId:t.inverseCopy.sourceId,
     sourceAllocationRiskRate:t.plannedRisk/t.notional});
   return {intent:{kind:"MARKET",tag,size,contracts,notional,plannedRisk,leverage,margin,
@@ -252,7 +257,7 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
 }
 
 export function mirrorCoverage(state:ForwardState|null,live:{requestedEnabled:boolean;activation?:LiveSession|null;
-  accountMark?:{sessionAt:number;at:number;startedAt:number}|null;positions:Record<string,{id:string;status:string;parity?:MirrorReceipt;exchangeUnrealisedPnl?:number|null;exchangePnlAt?:number|null}|null>;
+  accountMark?:{sessionAt:number;at:number;startedAt:number}|null;positions:Record<string,{id:string;status:string;leverage?:number;parity?:MirrorReceipt;exchangeUnrealisedPnl?:number|null;exchangePnlAt?:number|null}|null>;
   entries:Record<string,{planId:string;status:string;parity?:MirrorReceipt}|null>;entrySkips:Record<string,{planId:string;reason:string;code?:string}|null>},error:string|null) {
   const sources=state?.positions??[];
   let sourceError=error;
@@ -269,16 +274,21 @@ export function mirrorCoverage(state:ForwardState|null,live:{requestedEnabled:bo
     const status=copied?(p?.parity?.discrepancy?"DEVIATION":"COPIED"):endedEarly?"SOURCE_ENDED_EARLY":pending?"PENDING":!currentSource?"LEGACY_DRAIN":
       !live.requestedEnabled?"OWNER_OFF":!eligible?"EXCLUDED_BEFORE_ENABLE":skipStatus??"WAITING";
     return {sourceId:t.id,symbol:t.symbol,eligible,status,
-      reason:copied?p?.parity?.discrepancy??null:status==="LEGACY_DRAIN"?"旧源单仅管理已绑定实盘，不新增复制":status==="EXCLUDED_BEFORE_ENABLE"?"开启前或本次接入前已有的模拟持仓，不补开"
+      reason:copied?p?.parity?.leverageAdjustError??p?.parity?.discrepancy??null:status==="LEGACY_DRAIN"?"旧源单仅管理已绑定实盘，不新增复制":status==="EXCLUDED_BEFORE_ENABLE"?"开启前或本次接入前已有的模拟持仓，不补开"
         :endedEarly?"该模拟源单仍开放，但对应实盘仓位已经在 Gate 归零；同一源单不重复开仓"
         :skip?.planId===t.id?skip.reason:sourceError??(!live.requestedEnabled?"等待所有者开启；此前持仓不会补开"
           :"实盘核对已运行，但该源单尚未形成明确执行状态；下一轮会继续核对")};
   });
   const actual=Object.values(live.positions).filter(p=>p?.status==="OPEN");
   const valued=actual.filter(p=>typeof p?.exchangeUnrealisedPnl==="number"&&Number.isFinite(p.exchangeUnrealisedPnl)&&!!p.exchangePnlAt);
+  const inverseHeld=actual.filter(p=>isInverseLiveReceipt(p?.parity));
   return {version:LIVE_PARITY_VERSION,source:LIVE_PARITY_SOURCE,connected:!!state&&!sourceError,ownerControlled:true,
     accountRole:state?.inverseTrial?'INVERSE_PAPER':'CURRENT_PAPER',
     nativeProtectionPolicy:state?.inverseTrial?INVERSE_LIVE_EXIT_POLICY:null,
+    leveragePolicy:state?.inverseTrial?INVERSE_LIVE_LEVERAGE_POLICY:null,
+    leverageAdjustment:{managed:inverseHeld.length,
+      atOrBelowTarget:inverseHeld.filter(p=>p?.leverage!=null&&p.leverage>0&&p.leverage<=inverseLiveLeverage(p.parity!.sourceLeverage)).length,
+      pending:inverseHeld.filter(p=>p?.leverage!=null&&p.leverage>inverseLiveLeverage(p.parity!.sourceLeverage)).length},
     entryPricePolicy:state?.inverseTrial?'fresh-market-v1':LIVE_ENTRY_DRIFT_POLICY,
     accountViewPolicy:'gate-authoritative-v1',
     accountViewAt:live.accountMark?.sessionAt===(live.activation?.enabledAt??0)?live.accountMark.at:null,

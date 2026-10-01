@@ -61,6 +61,7 @@ import { EquityReader } from "../lib/equity-reader.ts";
 import { EQUITY_CURVE_VERSION } from "../lib/equity-curve.ts";
 import {LIVE_EQUITY_VERSION,LiveEquityReader,prepareLiveEquity,type LiveEquityHead} from "../lib/live-equity.ts";
 import {buildLiveReview,readLiveReviewPage} from '../lib/live-review.ts';
+import {adjustInverseLeverage} from '../lib/live-leverage.ts';
 import { resourceDay, rollResourceDay, RESOURCE_DAY_POLICY, type ResourceCounters } from "../lib/resource-day.ts";
 import {isTransientLiveReadErrorText,liveReadTimeoutDecision} from "../lib/live-read-resilience.ts";
 import { LIVE_TURNOVER_PREFIX, LIVE_TURNOVER_VERSION, initialTurnover, validateTurnover, nextFillWindow,
@@ -2732,7 +2733,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         position.leverage=Math.max(1,Number(actual.leverage)||receipt.sourceLeverage);
         const reportedMargin=position.exchangeMargin??position.exchangeInitialMargin;
         position.margin=reportedMargin!=null&&reportedMargin>0?reportedMargin:position.notional/position.leverage;
-        if(position.leverage!==receipt.sourceLeverage)receipt.discrepancy=`交易所杠杆${position.leverage}×与源单${receipt.sourceLeverage}×不同`;
+        const expectedLeverage=receipt.executionLeverage??receipt.sourceLeverage;
+        if(position.leverage!==expectedLeverage)receipt.discrepancy=`交易所杠杆${position.leverage}×与请求${expectedLeverage}×不同`;
       }
       const selectedTrade = desiredPortfolio[symbol] ?? null;
       const lifecycle=position.parity?this.currentMirrorSource(position.id):null;
@@ -2868,6 +2870,30 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     // that margin locally; once Gate exposes the position, it leaves this
     // pending bucket and the exchange's available balance becomes authoritative.
     let availableForNewEntries = Math.max(0,available-unresolvedEntryMargin);
+    // Existing inverse holdings receive the same owner-authorized half-leverage
+    // policy. Source exits already ran; one adjustment per complete pass only.
+    for(const actual of actualPositions){
+      const position=this.runtime.live.positions[actual.contract??''];
+      if(!position||!isInverseLiveReceipt(position.parity))continue;
+      const result=await adjustInverseLeverage({position,actual,available:availableForNewEntries,now:Date.now(),
+        enabled:this.runtime.live.requestedEnabled,sourceOpen:this.currentMirrorSource(position.id).status==='OPEN',
+        stillAllowed:()=>this.runtime.live.requestedEnabled&&position.status==='OPEN'&&position.exitRequestedAt==null
+          &&this.currentMirrorSource(position.id).status==='OPEN'&&Date.now()-snapshot.checkedAt<=30_000,
+        setLeverage:(symbol,target)=>client.setLeverage(symbol,target),
+        persist:async()=>{
+          const key=`${LIVE_PARITY_PREFIX}binding:${position.id}`,
+            binding=(this.liveJournal.get(key) as MirrorBinding|undefined)??await this.ctx.storage.get<MirrorBinding>(key);
+          if(!binding)throw new Error('实盘原始绑定尚未恢复，不发送杠杆调整');
+          this.liveJournal.set(key,{...binding,receipt:structuredClone(position.parity!),actual:structuredClone(position)});
+          await this.saveCheckpoint(Date.now(),true);
+        }});
+      if(result.attempted){
+        availableForNewEntries=Math.max(0,availableForNewEntries-result.reservedMargin);
+        this.recordLiveAudit({observedAt:Date.now(),symbol:position.symbol,planId:position.id,stage:'LEVERAGE',
+          level:result.error?'RECOVERING':'INFO',reason:result.error??`原持仓杠杆已确认降至${position.leverage}×；数量与名义仓位保持不变`});
+        break;
+      }
+    }
     let riskForNewEntries = this.liveOpenRisk();
     const directionRiskForNewEntries: Record<Side, number> = {
       LONG: this.liveDirectionalRisk("LONG"),

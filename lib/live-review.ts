@@ -18,6 +18,8 @@ export function liveReviewPosition(value:unknown,cached:unknown[]=[]){
     sourceOpenedAt:parity.sourceOpenedAt??null,sourceEntryPrice:parity.sourceEntryPrice??null,
     sourceContracts:parity.sourceContractsAtCopy??null,sourceNotional:parity.sourceNotional??null,
     requestedRatio:parity.ratio??null,targetNotional:parity.targetNotional??null,
+    leveragePolicy:parity.leveragePolicy??null,executionLeverage:parity.executionLeverage??null,
+    leverageAdjustAt:parity.leverageAdjustAt??null,leverageAdjustError:parity.leverageAdjustError??null,
     originalContracts:obj(p.sourceExit).initialContracts??parity.filledContracts??p.exchangeSize??null,
     hasReductions:!!obj(p.sourceReduction).version,
     submittedAt:parity.submittedAt??null,submitDelayMs:parity.submitDelayMs??null,

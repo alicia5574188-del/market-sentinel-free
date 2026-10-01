@@ -302,7 +302,7 @@ export class GateLiveClient {
 
   async setLeverage(symbol: string, leverage: number) {
     const query = `leverage=${encodeURIComponent(String(leverage))}`;
-    await this.request("POST", `/futures/usdt/positions/${encodeURIComponent(symbol)}/leverage`, query);
+    return (await this.request<GateLivePosition>("POST", `/futures/usdt/positions/${encodeURIComponent(symbol)}/leverage`, query)).data;
   }
   async ensureLeverage(symbol:string,leverage:number){
     await this.setLeverage(symbol,leverage);

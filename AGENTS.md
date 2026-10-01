@@ -1,3 +1,16 @@
+# Owner correction: half LIVE leverage / doubled margin — 2026-10-02
+
+The owner explicitly requests halving leverage and doubling isolated margin to
+reduce premature liquidation. Apply to inverse LIVE copies only: preserve the
+same proportional target notional/quantized contracts, frozen source/PAPER,
+decisions and lifecycle. New copies use half source leverage; migrate existing
+program-owned inverse holdings with native confirmation and sufficient available
+margin, no close/reopen or cross-margin switch. Prior same-leverage wording is
+superseded for inverse execution only. Idempotent absolute leverage target from
+original source receipt, bounded retry and one adjustment per existing complete
+sync; no new alarm/data cadence or automatic LIVE control. Source exits retain
+priority. Tests, reviewed-main release and advancing-state receipts required.
+
 # Owner correction: overview-only PAPER/LIVE curves — 2026-10-02
 
 The owner now wants both curves on overview only; remove PAPER's curve from the

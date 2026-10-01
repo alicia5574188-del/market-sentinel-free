@@ -1,3 +1,20 @@
+# 2026-10-02 — half inverse LIVE leverage, in progress
+
+Base main5725df7e681e799001320903fc1d204d4b1778f8. Owner explicitly authorizes
+same nominal exposure, doubled isolated margin and halved leverage. New sizing
+and existing-native migration implemented; no shadow/PAPER changes. Source exits
+precede one idempotent adjustment per existing sync, sufficient free margin and
+durable cooldown required. Real Worker migration/unknown/restart tests pass.
+Local direct331, Forward78+compat4, equity73, members67, LIVE197,
+architecture/migration43, full npm test/build, typecheck, lint (15 existing
+warnings) and diff check pass. Native feed/storage and final sequential compiled
+member workerd smokes pass; initial emulator session request timed out and its
+unmodified rerun succeeds. Local dry-run log ends at --dry-run exit with original
+bindings; automatic review rejected status polling on speculative upload risk,
+so no retry or bypass; read-only log inspection confirms local completion.
+Existing CI dry-run/reviewed-main deployment and advancing receipts pending.
+No real test trades, private production reads, reset or switch action.
+
 # 2026-10-02 — overview-only PAPER/LIVE curves, done
 
 PR600 merged and exact mainb71a9ff8c2aed7bf27be9ffe36cde15ba56da18e deployed.
@@ -969,7 +986,7 @@ private Gate action occurred.
 - Restored the previously omitted real-Worker LIVE parity suite to the default release command and updated only its synthetic timing fixtures to the current 30-second copy contract.
 - Removed compiler-confirmed unused production helpers/imports and stale test fixtures; lint is now zero warnings without changing strategy thresholds or persisted schemas.
 - Acceptance: Forward 60/60, direct 128/128, LIVE/Gate parity 129/129, members 49/49, equity 61/61, architecture/migration 19/19; full npm test, build, typecheck, lint, diff check and Wrangler dry-run pass. Storage stress still preserves 2200 mature samples, 240 history rows, 160 events, pending roots, rules, regions and positions across restart.
-# 2026-10-02 — bounded LIVE review exports, in progress
+# 2026-10-02 — bounded LIVE review exports, done
 
 Base main/production b71a9ff8c2aed7bf27be9ffe36cde15ba56da18e.
 Owner authorizes proposed snapshot upgrade and prioritizes uninterrupted trading.
@@ -979,4 +996,12 @@ equity73/member61/LIVE196/architecture43/full npm test pass. Final typecheck,
 focused27, lint(0errors/15existing warnings), build, dry-run and local storage/
 member workerd smokes pass; initial member smoke timed out during concurrent
 bundle rebuild, sequential final rerun passes. Prior curve receipt remains valid.
-Next: exact-tree PR CI, reviewed-main release and advancing public receipts.
+PR601 CI36933864518 succeeds; main5725df7e681e799001320903fc1d204d4b1778f8
+same tested tree2d28a50cfc1fe7b69ca39ca4905d313a2432c284 deployed by successful
+main release36934018789 verify/deploy. Three public reads retain account and
+activation/ON intent, frozen shadow source, storage/runtime errors null.
+Post-deploy persistedAt1790893059274→1790893247506, heartbeat1790893116576→
+1790893271166 and lastSuccess1790893135072→1790893277981 advance; native curve
+save1790892957798→1790893271166. Page/new asset200, native guest GET401; asset
+contains new export route/hint. No private production read, test trade, reset,
+switch or browser visual QA. Durable completion receipt is in PR601 description.
