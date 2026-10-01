@@ -16,7 +16,8 @@ import { buildBankruptcyReport, diagnoseClosedPosition, paperCycleSummary, recor
   PAPER_INITIAL_EQUITY, type BankruptcyReport, type PaperCycle } from "../lib/paper-cycle.ts";
 import { runtimeReady, type RuntimeHealthShape } from "../lib/runtime-health.ts";
 import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, gateMarkedEquity, gatePositionValuation, isGateReadTimeoutError, isGateTransportTimeoutError, LiveEntrySizingError, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveOrder, type GateLiveOrderSnapshot, type GateLiveSnapshot, type LiveEntrySizingCode } from "../lib/gate-live.ts";
-import { LIVE_SESSION_VERSION, establishLiveScale, reconcileLiveScale, startLiveSession, sourceAfterEnable, sameLiveSession, type LiveSession } from "../lib/live-session.ts";
+import { LIVE_SESSION_VERSION, establishLiveScale, reconcileLiveScale, startLiveSession, sourceAfterEnable, sameLiveSession, fenceLiveSourcePolicy, type LiveSession } from "../lib/live-session.ts";
+import {liveProtectionPrice} from '../lib/live-source-policy.ts';
 import type { GateSizeRules, SizeDiagnostic } from "../lib/gate-quantity.ts";
 import { encryptGateCredentials, gateKeyHint, normalizeGateCredentials, type GateCredentials } from "../lib/credential-vault.ts";
 import { credentialMetadata } from "../lib/gate-readonly.ts";
@@ -546,6 +547,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   protected nonAlarmPendingWrites = 0;
   protected criticalPendingWrites = 0;
   protected liveSyncWork: Promise<void> | null = null;
+  private liveSourceDispatch:Promise<void>|null=null;
+  private liveSourceQueued=false;
   private liveSnapshotCache:GateLiveSnapshot|null=null;
   private liveOrderSnapshotCache:GateLiveOrderSnapshot|null=null;
   private liveOrderAuditAt=0;
@@ -1059,6 +1062,28 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return current.status==="UNKNOWN"&&closed?{status:"CLOSED" as const,trade:closed}:current;
   }
 
+  private dispatchCommittedLiveSource() {
+    if(!this.liveNeedsSync())return;
+    this.liveSourceQueued=true;this.liveExecution.sourceWakeups++;
+    if(this.liveSourceDispatch)return;
+    const work=(async()=>{
+      while(this.liveSourceQueued&&this.liveNeedsSync()){
+        this.liveSourceQueued=false;
+        // A lifecycle received during a private read must get its own pass
+        // after that reader, rather than merely joining its old snapshot.
+        if(this.liveSyncWork)await this.liveSyncWork.catch(()=>undefined);
+        const started=Date.now();this.liveExecution.startedAt=started;this.liveExecution.cycles++;
+        try{await this.syncLive(started);}
+        catch(error){this.runtime.live.operational=false;this.runtime.live.lastError=safeError(error);
+          this.recordLiveAudit({observedAt:Date.now(),symbol:null,planId:null,stage:'LIVE_CONTROL',level:'RECOVERING',
+            reason:'源单事件同步暂待恢复，保留所有者开关与唯一订单身份：'+safeError(error),error});}
+        finally{this.liveExecution.finishedAt=Date.now();this.liveExecution.lastDurationMs=Date.now()-started;}
+      }
+    })();
+    this.liveSourceDispatch=work;
+    this.ctx.waitUntil(work.finally(()=>{if(this.liveSourceDispatch===work)this.liveSourceDispatch=null;}));
+  }
+
   private mirrorQuoteReady(symbol:string,now=Date.now()) {
     const q=this.runtime.evidence[symbol];
     // PAPER entryReady answers whether a NEW simulated order may be created.
@@ -1260,11 +1285,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           ...(next.state.inverseTrial?{decisionBuildSha:SHADOW_BASELINE_BUILD,accountRole:'SHADOW_SOURCE' as const,
             pairedTradeId:e.tradeId?inverseId(e.tradeId):undefined}:{})})),now);
       }catch{this.reviewDiagnosticError="CANDIDATE_REVIEW_CAPTURE_FAILED";}
-      // Publish only committed lifecycle events. A source born in the candle
-      // lane must not wait for the next alarm; a source closed while Gate is
-      // awaiting I/O must wake the serialized reconciler as well.
-      // LIVE is reconciled synchronously by the primary alarm immediately after
-      // this durable PAPER commit, matching the proven 2026-09-20 execution path.
+      // Both realtime and candle lanes dispatch the SAME committed source.
+      // Mark-only observations do not schedule more private reads.
+      const lifecycle=(s:ForwardState)=>JSON.stringify(s.positions.map(t=>[t.id,t.contracts,t.inverseCopy?null:t.stopPrice]).sort());
+      if(lifecycle(previous)!==lifecycle(next.state))this.dispatchCommittedLiveSource();
     } catch (error) { this.forwardError = safeError(error); }
     finally { this.forwardBusy = false; }
   }
@@ -1980,6 +2004,30 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private async ensureLiveActivationSourceFence(now:number) {
     const activation=this.runtime.live.activation,state=this.forwardState;
+    if(this.runtime.live.requestedEnabled&&activation&&state){
+      const fenced=fenceLiveSourcePolicy(activation,state,now);
+      if(fenced!==activation){
+        if(fenced.sourceStartedAt==null)fenced.sourceStartedAt=state.startedAt;
+        const reservation=this.reserveCriticalWrites(1);
+        let committed=false;
+        try{await this.ctx.storage.transaction(async tx=>{
+          const saved=await tx.get<{enabled:boolean;activation:LiveSession|null}>(LIVE_PARITY_PREFIX+'owner-intent');
+          if(!this.runtime.live.requestedEnabled||!sameLiveSession(activation,this.runtime.live.activation)
+            ||(saved&&(!saved.enabled||!sameLiveSession(saved.activation,activation))))return;
+          await tx.put(LIVE_PARITY_PREFIX+'owner-intent',{
+            enabled:true,changedAt:this.runtime.live.changedAt,activation:fenced});committed=true;
+        });reservation.finish(committed);}
+        finally{reservation.finish(false);}
+        if(!committed&&this.runtime.live.requestedEnabled&&sameLiveSession(activation,this.runtime.live.activation))
+          throw new Error('实盘源会话与持久化所有者意图未对齐，保留原意图并等待下轮核对');
+        if(!committed||!this.runtime.live.requestedEnabled||!sameLiveSession(activation,this.runtime.live.activation))
+          return this.runtime.live.activation;
+        this.runtime.live.activation=fenced;
+        this.recordLiveAudit({observedAt:now,symbol:null,planId:null,stage:'LIVE_CONTROL',level:'INFO',
+          reason:'实盘复制源已接入当前反向模拟；已有源单不补开，已绑定实盘继续原生命周期，所有者开关保持不变'});
+        return fenced;
+      }
+    }
     if(!this.runtime.live.requestedEnabled||!activation||activation.version!==LIVE_SESSION_VERSION
       ||activation.sourceStartedAt!=null||!state)return activation;
     const repaired:LiveSession={...activation,sourceStartedAt:state.startedAt,
@@ -2535,7 +2583,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         await this.saveCheckpoint(Date.now(),true);
         position.exitOrderId=await client.closePosition(symbol, liveExitTag(position.id));
       } else if (!position.exitRequestedAt && (position.parity?lifecycle?.status==="OPEN":selectedTrade)) {
-        position.currentStop = position.parity?lifecycle!.trade!.stopPrice:arenaProtectionStop(selectedTrade!);
+        position.currentStop = position.parity?liveProtectionPrice(lifecycle!.trade!):arenaProtectionStop(selectedTrade!);
         position.currentTarget = position.parity?lifecycle!.trade!.armPrice:selectedTrade!.targetPrice;
         position.targetScore = selectedTrade?.context.candidateScore??0;
         position.targetIdentity = position.parity?`forward:${position.id}`:`arena:${selectedTrade!.id}`;
@@ -3511,7 +3559,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if(path === "/member-feed" && request.method === "GET") {
       const s=this.forwardState,now=Date.now();
       const sourceState=s?{version:s.version,startedAt:s.startedAt,initialEquity:s.initialEquity,balance:s.balance,
-        positions:s.positions,history:s.history,policyVersion:s.policyVersion,storage:s.storage} as ForwardState:null;
+        positions:s.positions,history:s.history,policyVersion:s.policyVersion,storage:s.storage,
+        // Only the marks required by strict inverse PAPER equity. No second
+        // source engine, wallet or source history is published to members.
+        ...(s.inverseTrial?{inverseTrial:{source:{positions:s.inverseTrial.source.positions.map(t=>({
+          id:t.id,lastPrice:t.lastPrice,lastQuoteAt:t.lastQuoteAt}))}}}:{})} as ForwardState:null;
       const view=s?forwardSummary(s,this.regimeQuotes(now),now):null;
       const feed:MemberFeed={version:MEMBERS_VERSION,at:now,healthy:!this.forwardError&&this.authorityReady
         &&this.runtime.lastSuccessAt!=null&&now-this.runtime.lastSuccessAt<=SYSTEM_HEALTH_STALE_AFTER_MS,
@@ -3635,7 +3687,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         symbols: this.runtime.symbols,
         realtimeReadiness: this.realtimeReadiness(),
         liveMode: { requestedEnabled: this.runtime.live.requestedEnabled, operational: this.runtime.live.operational },
-        liveExecution:{...this.liveExecution,inFlight:!!this.liveSyncWork,queued:false,
+        liveExecution:{...this.liveExecution,inFlight:!!this.liveSyncWork,queued:this.liveSourceQueued,
           timeoutStreak:this.liveReadTimeoutStreak,lastAccountAt:this.runtime.live.lastSyncAt,
           lastOrderAuditAt:(this.liveOrderSnapshotCache?.checkedAt??this.liveOrderAuditAt)||null,
           readTransport:this.liveClient?.readTransport??null,writeTransport:this.liveClient?.writeTransport??null},

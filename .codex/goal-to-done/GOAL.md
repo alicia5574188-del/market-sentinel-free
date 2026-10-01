@@ -1,3 +1,12 @@
+# 2026-10-01 — finish current inverse LIVE follow
+
+Complete the owner's requested inverse PAPER → LIVE follow on deployed main
+f7e7c432, using committed source open/reduce/close events and shared fresh Gate
+BBO. Preserve frozen source decisions, strict PAPER accounting, account/history,
+manual switches, actual-risk caps, new-only fencing and unknown-order identity.
+Validate actual Worker with a fake Gate, all release gates, then reviewed main
+deployment and read-only production continuity. No real-money verification order.
+
 # 2026-09-26 — lossless legacy sample-superset recovery
 
 Recover the production Forward account whose authenticated legacy manifest says

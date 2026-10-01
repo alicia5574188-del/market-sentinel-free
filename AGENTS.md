@@ -1,3 +1,18 @@
+# Owner-authorized inverse LIVE bridge — 2026-10-01
+
+The owner's latest request completes the previously requested LIVE follow of
+the current inverse PAPER account, including shared fresh BBO and committed
+open/reduce/close events. This supersedes the older PAPER-only publication
+exclusion below, not either PAPER decision/accounting policy. Preserve manual
+owner/member intent, new-only activation, proportional capital, leverage,
+exactly-once reservations and existing actual-account risk caps. The source's
+moving stop is a source reference, never an inverse loss-side native stop.
+Use the saved original source risk width for the adverse native LIVE guard;
+native protection, fills and API faults can diverge from PAPER and are recorded.
+Do not enable LIVE, reset accounts or make real exchange verification orders.
+Read research/INVERSE_LIVE_BRIDGE_2026-10-01.md. Run the full reviewed-main
+release and read-only advancing production receipt.
+
 # Frozen shadow / passive inverse PAPER trial — 2026-10-01
 
 The owner explicitly approved freezing the complete pre-integration `2b4fd60f77c9b78526bd5087940945fe7e86fab8` decision policy as a shadow and passively reversing its NEW PAPER lifecycle. Read `research/SHADOW_INVERSE_2026-10-01.md`. This supersedes new-entry research integration for this trial. The source, including its endogenous wallet/history/risk, decides everything; inverse results cannot feed back. Same contracts, opposite direction, same open/reduce/close event. No independent inverse stop, target, filter, resizing or winner selection. Source winners become inverse losers too. Current holdings drain under their existing policy; no historical PnL inversion, account reset or replay.

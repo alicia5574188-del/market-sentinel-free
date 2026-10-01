@@ -148,10 +148,11 @@ test('financial tampering, lost source counterpart and duplicate lifecycle fail 
     (x:ForwardState)=>{x.inverseTrial!.source.balance=NaN;}]){
     const c=structuredClone(s);mutate(c);assert.throws(()=>normalizeForward(c,T+1));}
 });
-test('inverse PAPER never becomes a LIVE source, while unrelated legacy source eligibility remains unchanged',()=>{
-  const {s}=fixture();assert.deepEqual(forwardMirrorSources(s,1000),{});
+test('owner-authorized inverse PAPER is the new LIVE source; legacy rows drain without new exposure',()=>{
+  const {s}=fixture();assert.equal(forwardMirrorSources(s,1000).TEST_USDT!.id,'iv-source-1');
   const old=trade('legacy','LONG',T-60000);s.positions.push(old);const exported=forwardMirrorSources(s,1000);
-  assert.ok(Object.keys(exported).every(k=>!k.startsWith('iv-')));assert.equal(s.positions[0]!.inverseCopy!.liveExecution,'PAPER_ONLY');
+  assert.equal(exported.TEST_USDT!.id,'iv-source-1');assert.equal(exported.TEST_USDT!.side,'SHORT');
+  assert.equal(s.positions[0]!.inverseCopy!.liveExecution,'PAPER_ONLY','PAPER receipts are not fabricated exchange fills');
 });
 test('review snapshot pairs actual/source receipts, excludes old account results and needs no fictional PI assessment',()=>{
   const {s,source,t}=fixture();sourceClose(source,t,97,T+60000);applyInverseSourceTrade(s,t,quote(97,97,T+60000),T+60000);retainSource(s,source);
