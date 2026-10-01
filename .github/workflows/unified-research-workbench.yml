@@ -17,7 +17,7 @@ jobs:
         with:
           ref: fix/20261001-unified-research-plan
           fetch-depth: 0
-      - name: Apply preimage and postimage checked source edits
+      - name: Apply preimage and postimage checked refinement
         id: apply
         shell: bash
         run: |
@@ -26,34 +26,34 @@ jobs:
           import base64,hashlib,json,lzma,pathlib,subprocess
           root=pathlib.Path('.')
           sha=lambda b:hashlib.sha256(b).hexdigest()
-          payload=''.join(''.join((root/f'scripts/unified-research-edits-{i}.b64').read_text().split()) for i in (1,2,3))
-          assert sha(payload.encode())=='9eb3e6439aab7162f4d25703e4cdc3f230dc4e5b3e3ecddb0b933c01b7bda5cf','Transport digest mismatch'
+          payload=''.join((root/'scripts/unified-research-refinement.b64').read_text().split())
+          assert sha(payload.encode())=='4969e11dc1334a49e36a18259b92d8263779cbf645a8c735ae87471bdbed22bc','Transport digest mismatch'
           raw=lzma.decompress(base64.b64decode(payload,validate=True))
-          assert sha(raw)=='2a1594e45bcbb8a40526d9ea00bebe2986cf2d1711b4acb95a69041d80d3295f','Edit digest mismatch'
+          assert sha(raw)=='74e484f950ac6434f2ec045aa2ba5a5e7c8ac799252fe3ffcc87b67d7a8c66b4','Edit digest mismatch'
           edits=json.loads(raw)
-          allowed=set('AGENTS.md app/market-intelligence-execution.tsx lib/forward-protection-checkpoint.ts lib/forward-relations.ts lib/research-plan.ts lib/research-snapshot.ts lib/review-trace.ts lib/winner-policy.ts package.json research/UNIFIED_PLAN_2026-10-01.md tests/architecture.test.mjs tests/frontend-density.test.mjs tests/research-plan.test.ts tests/research-snapshot-v2.test.ts vite.config.ts worker/index-clean.ts'.split())
-          assert len(edits)==16 and {e['path'] for e in edits}==allowed
+          allowed={'lib/forward-relations.ts','lib/review-trace.ts'}
+          assert len(edits)==2 and {e['path'] for e in edits}==allowed
           ready=[]
           for e in edits:
-              p=root/e['path']; prior=p.read_bytes() if p.exists() else None
-              if prior is not None and sha(prior)==e['after']:continue
-              assert (sha(prior) if prior is not None else None)==e['before'],f"Preimage mismatch: {p}"
-              lines=(prior or b'').decode().splitlines(keepends=True)
+              p=root/e['path']; prior=p.read_bytes()
+              if sha(prior)==e['after']:continue
+              assert sha(prior)==e['before'],f"Preimage mismatch: {p}"
+              lines=prior.decode().splitlines(keepends=True)
               for i,j,text in reversed(e['edits']):
                   assert 0<=i<=j<=len(lines)
                   lines[i:j]=text.splitlines(keepends=True)
               new=''.join(lines).encode()
               assert sha(new)==e['after'],f"Postimage mismatch: {p}"
               ready.append((p,new))
-          for p,new in ready:p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(new)
+          for p,new in ready:p.write_bytes(new)
           subprocess.run(['git','diff','--check'],check=True)
           subprocess.run(['git','add','--',*sorted(allowed)],check=True)
-          print(f'All {len(edits)} source images verified; {len(ready)} source files staged.')
+          print(f'All source images verified; {len(ready)} typed refinements staged.')
           PY
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           if ! git diff --cached --quiet; then
-            git commit -m 'Integrate graded research into frozen winner plans and version-accurate causal review'
+            git commit -m 'Keep full research exit receipt typed and preserve stable narrative boundary contract'
             git push origin HEAD:refs/heads/fix/20261001-unified-research-plan
           fi
           mkdir -p "$RUNNER_TEMP/unified-checks"
