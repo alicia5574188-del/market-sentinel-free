@@ -1020,7 +1020,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         relativeStrength:row.relativeStrength??null,dataConfidence:row.dataConfidence??null,sourceCount:row.sourceCount??null,
         disagreementRate:row.disagreementRate??null,reason:row.reason,
       }));
-    return {shadowInverse:s?(()=>{const v=inverseTrialSummary(s,this.regimeQuotes(now),now);if(!v)return null;const {curve:_,...summary}=v;return summary;})():null,
+    return {shadowInverse:s?(()=>{const v=inverseTrialSummary(s,this.regimeQuotes(now),now);if(!v)return null;const {curve:_,...summary}=v;return{...summary,paidCost:summary.paidCost?{...summary.paidCost,rows:undefined}:null};})():null,
       version:FORWARD_VERSION,engineVersion:ADAPTIVE_ENGINE_VERSION,policyVersion:s?.policyVersion??null,
       strategyAuthorityVersion:s?.strategyAuthorityVersion??null,executionVersion:s?.executionVersion??null,
       regionVersion:s?.regionVersion??null,regionLaunchVersion:s?.regionLaunchVersion??null,liveEligible:false,

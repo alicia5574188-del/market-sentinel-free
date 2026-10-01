@@ -12,14 +12,18 @@ const read=path=>readFileSync(new URL(`../${path}`,import.meta.url),"utf8");
 const realizationModule={exports:{}};
 const realizationSource=ts.transpileModule(read("lib/trade-realization.ts"),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
 runInNewContext(`(function(require,module,exports){${realizationSource}\n})`,{})(name=>{throw new Error(`pure accounting imported ${name}`);},realizationModule,realizationModule.exports);
+const paidModule={exports:{}};
+const paidSource=ts.transpileModule(read("lib/paid-fee-view.ts"),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
+runInNewContext(`(function(require,module,exports){${paidSource}\n})`,{})(name=>{throw new Error(`pure view imported ${name}`);},paidModule,paidModule.exports);
 // Render the real presentation modules; network/cache boundaries are inert fixtures.
-function render(path,props,extra={}){
+function render(path,props,extra={},component="default"){
   const source=ts.transpileModule(read(path),{fileName:path,compilerOptions:{
     module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX
   }}).outputText;
   const imports={
     react:React,"react/jsx-runtime":jsxRuntime,
     "../lib/trade-realization.ts":realizationModule.exports,
+    "../lib/paid-fee-view.ts":paidModule.exports,
     "../lib/research-snapshot.ts":{collectReviewSnapshot(){throw new Error("render must not export");}},
     "../lib/beijing-time.ts":{BEIJING_TIME_ZONE:"Asia/Shanghai",beijingDayKey:()=>"2026-09-30"},
     "../lib/equity-cache.ts":{EquityHistoryCache:class{cancel(){}}},
@@ -35,7 +39,7 @@ function render(path,props,extra={}){
     assert.ok(Object.hasOwn(imports,name),`unexpected runtime dependency: ${name}`);
     return imports[name];
   },fixtureModule,fixtureModule.exports);
-  return renderToStaticMarkup(React.createElement(fixtureModule.exports.default,props));
+  return renderToStaticMarkup(React.createElement(fixtureModule.exports[component],props));
 }
 const account=()=>({startedAt:1790670000000,updatedAt:1790761200000,initialEquity:1000,equity:922.82,
   netPnl:-77.18,maxDrawdown:.141,floating:3.2,turnover:800,fees:4,resolved:5,
@@ -52,14 +56,14 @@ test("overview renders account equity before any statistics or research",()=>{
   assert.doesNotMatch(html,/系统正在正常运行|独立交易假设|MARKET STATE|实盘开启参考/);
 });
 
-test("paper floating PnL matches open-position net PnL including entry and estimated exit fees",()=>{
+test("paper floating display deducts paid entry fees only and leaves future exit fees out",()=>{
   const data={...account(),floating:123.45,positions:[{
     id:"open-long",status:"OPEN",symbol:"WLD_USDT",side:"LONG",entryPrice:100,lastPrice:101,quantity:1,notional:100,entryFee:.07,
     leverage:10,margin:10,plannedRisk:1,openedAt:1790760000000,closedAt:null,exitPrice:null,netPnl:null,stopPrice:98,
     favorable:.01,adverse:0,profitFloorRate:0,expectedHoldMinutes:30,entryContext:null,holdScore:80
   }]};
   const html=render("app/forward-dashboard.tsx",dashboardProps(data));
-  assert.match(html,/<small>浮动盈亏<\/small><strong>\+0\.86 U<\/strong>/);
+  assert.match(html,/<small>浮动盈亏<\/small><strong>\+0\.93 U<\/strong>/);
   assert.doesNotMatch(html,/<small>浮动盈亏<\/small><strong>\+123\.45 U<\/strong>/);
 });
 
@@ -82,7 +86,7 @@ test("partial realizations are not counted as floating and entry fees are alloca
   assert.ok(Math.abs(accounting.realizedNetPnl(t)-31.4176)<1e-10);
   assert.ok(Math.abs(accounting.remainingOpenNetPnl(t)+accounting.realizedNetPnl(t)-90.5356)<1e-10);
   const html=render("app/forward-dashboard.tsx",dashboardProps({...account(),floating:123.45,positions:[t]}));
-  assert.match(html,/<small>浮动盈亏<\/small><strong>\+59\.12 U<\/strong>/);
+  assert.match(html,/<small>浮动盈亏<\/small><strong>\+59\.58 U<\/strong>/);
   assert.doesNotMatch(html,/<small>浮动盈亏<\/small><strong>\+90\.54 U<\/strong>/);
 });
 
@@ -129,4 +133,31 @@ test("waiting and holding views use the frozen order area, not a newer conflicti
       frozenOpportunity:{tradePlan:"WINNER_TREND",winnerPlan:frozen}}]}};
   const html=render("app/market-intelligence-execution.tsx",{data,now:1790761200000,liveEnabled:false});
   assert.match(html,/本单参考区 100–104/);assert.doesNotMatch(html,/本单参考区 200–204/);
+});
+
+test("order cards expose both paid-cost legs before expanding, without an unfilled close charge",()=>{
+  const t={id:"iv-source",status:"OPEN",symbol:"AAVE_USDT",side:"LONG",entryPrice:100.1,lastPrice:101.9,quantity:2,contracts:2,
+    notional:200.2,entryFee:.14014,leverage:10,margin:20.02,plannedRisk:2,openedAt:1790760000000,closedAt:null,
+    stopPrice:98,expectedHoldMinutes:40,favorable:.02,adverse:0,entryContext:null,
+    inverseCopy:{sourceId:"source",sourceSide:"SHORT",sourceEntryPrice:99.9,fills:[{sequence:0,kind:"OPEN",quantity:2,contracts:2,
+      sourcePrice:99.9,price:100.1,sourceFee:.13986,fee:.14014,sourceGross:0,gross:0,sourceFunding:0,funding:0}]}};
+  const pair=paidModule.exports.pairedPaidView(t,{bestBid:101.9,bestAsk:102.1,observedAt:1790761200000,fresh:true},1790761200000);
+  const html=render("app/forward-dashboard.tsx",{trade:t,now:1790761200000,paid:pair},{},"TradeCard");
+  const summary=html.match(/<summary>[\s\S]*?<\/summary>/)?.[0];assert.ok(summary);
+  assert.match(summary,/原策略影子 · 空/);assert.match(summary,/反向模拟 · 多/);
+  assert.match(summary,/净额 -4\.54 U/);assert.match(summary,/净额 \+3\.46 U/);
+  assert.match(summary,/已扣手续费 0\.1399 U/);assert.match(summary,/已扣手续费 0\.1401 U/);
+  assert.doesNotMatch(summary,/平仓 [0-9]|已减仓 [0-9]/);assert.match(summary,/报价毛额差 0\.8000 U/);
+});
+test("comparison shows paid-fee nets, keeps legacy curve visibly separate, and overview fee never adds estimates",()=>{
+  const data=account();data.fees=3.25;
+  data.shadowInverse={sourceNet:-999,inverseNet:888,sourceFees:1.2,inverseFees:1.3,pairedOpened:7,pairedClosed:2,legacyOpen:0,
+    initialEquity:1000,cutoverAt:1790760000000,sourceEquity:998,inverseEquity:1001,theoreticalSamePriceEquity:1002,curve:[],realizedSpreadDrag:1,
+    paidCost:{source:{netPnl:-5},inverse:{netPnl:1.4},rows:[],stalePairs:0,
+      reconciliation:{netGap:3.6,paidFees:2.5,openGrossGap:.1,realizedGrossGap:1,bookedFunding:0},estimatedExitFees:{source:66,inverse:77}}};
+  const html=render("app/forward-dashboard.tsx",dashboardProps(data));
+  assert.match(html,/原策略影子净额/);assert.match(html,/-5\.00 U/);assert.match(html,/\+1\.40 U/);
+  assert.doesNotMatch(html,/-999\.00|\+888\.00/);
+  assert.match(html,/<small>已扣手续费<\/small><b>3\.25 U<\/b>/);
+  assert.match(html,/估算清仓曲线（含预估平仓费）/);
 });
