@@ -14,16 +14,15 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import json,time,urllib.request
+          import json,time,subprocess
           from datetime import datetime,timezone
           url='https://market-sentinel-free.alicia5574188.workers.dev/__health'
           expected='2b4fd60f77c9b78526bd5087940945fe7e86fab8'
           receipts=[]
           for i in range(3):
               if i:time.sleep(15)
-              req=urllib.request.Request(url,headers={'Accept':'application/json','Cache-Control':'no-cache'})
-              with urllib.request.urlopen(req,timeout=20) as response:
-                  data=json.load(response)
+              raw=subprocess.check_output(['curl','--fail','--silent','--show-error','--max-time','20',url],text=True)
+              data=json.loads(raw)
               r=data['runtime']; f=r['forward']; ready=r['realtimeReadiness']; multi=r['multiSourceMarket']
               receipt={'sample':i+1,'observedAt':datetime.now(timezone.utc).isoformat(),'ok':data.get('ok'),
                   'buildSha':r.get('buildSha'),'authorityReady':r.get('authorityReady'),'stale':r.get('stale'),
