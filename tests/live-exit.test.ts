@@ -80,16 +80,17 @@ test('exit limits have correct direction and exact ticks for both long and short
 test('real Gate adapter prioritizes confirmed positions before a delayed account, and drains the exit callback on error',async()=>{
   const old=globalThis.fetch;let release!:()=>void,exitRelease!:()=>void,positionSeen=false,callbackFinished=false;
   const account=new Promise<void>(r=>{release=r;}),exit=new Promise<void>(r=>{exitRelease=r;});
-  let requests=0;
-  globalThis.fetch=async(input)=>{requests++;const path=new URL(String(input)).pathname;
+  let requests=0,allStarted!:()=>void,positionReady!:()=>void;
+  const allRequests=new Promise<void>(r=>{allStarted=r;}),position=new Promise<void>(r=>{positionReady=r;});
+  globalThis.fetch=async(input)=>{requests++;if(requests===4)allStarted();const path=new URL(String(input)).pathname;
     if(path.endsWith('/accounts')){await account;return new Response('error',{status:500});}
     return new Response(path.endsWith('/positions')?'[{"contract":"TEST_USDT","size":"10"}]':'[]');};
   try{
     const client=new GateLiveClient({apiKey:'fake',apiSecret:'fake',environment:'testnet'});
-    const task=client.snapshot(async positions=>{assert.equal(positions[0]!.size,'10');positionSeen=true;await exit;callbackFinished=true;});
+    const task=client.snapshot(async positions=>{assert.equal(positions[0]!.size,'10');positionSeen=true;positionReady();await exit;callbackFinished=true;});
     const rejection=assert.rejects(task,/Gate 500/);
-    while(!positionSeen)await new Promise<void>(r=>setTimeout(r,0));
-    assert.equal(requests,4);assert.equal(callbackFinished,false);release();
+    await Promise.all([position,allRequests]);
+    assert.equal(positionSeen,true);assert.equal(requests,4);assert.equal(callbackFinished,false);release();
     await new Promise<void>(r=>setTimeout(r,0));assert.equal(callbackFinished,false);
     exitRelease();await rejection;assert.equal(callbackFinished,true);
   }finally{globalThis.fetch=old;}
