@@ -1,3 +1,18 @@
+# 2026-10-02 — lower isolated leverage without enlarging exposure
+
+- Original source/PAPER leverage stays frozen. New inverse LIVE intent uses half
+  source leverage and the identical proportional quantized notional; actual
+  margin and minimum-lot admission use the lower execution leverage.
+- Existing inverse program holdings get the absolute half-original target; never
+  halve observed leverage on successive passes, never switch cross holdings or
+  increase an already lower leverage. A fresh native size/side and free-margin
+  check precedes a durable target/cooldown and idempotent POST. Gate response or
+  subsequent native snapshot confirms; unknown is not fabricated success.
+- One adjustment per ordinary full sync, after source close processing; no extra
+  timer/Gate GET. Reserve extra margin from the same pass's addition capacity.
+- Mirror receipt distinguishes source and execution leverage. Legacy copies,
+  manual positions, sessions, credentials and real-money verification are unchanged.
+
 # 2026-10-02 — overview-only charts and native LIVE session history
 
 - Owner supersedes previous simulated-page curve placement: both curves belong

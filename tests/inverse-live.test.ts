@@ -45,6 +45,8 @@ for(const side of ['LONG','SHORT'] as const)test(`inverse of ${side} keeps exact
   assert.equal(Math.sign(r.intent.size),side==='LONG'?-1:1);assert.equal(r.binding.receipt.sourceRole,'INVERSE_PAPER');
   assert.equal(r.binding.receipt.nativeProtectionPrice,null);assert.equal(r.binding.receipt.exitPolicy,'shadow-events-only-v1');assert.equal(r.binding.receipt.shadowSourceId,t.id);
   assert.deepEqual(r.binding.sourceAtCopy,inverse);
+  assert.equal(r.intent.leverage,5);assert.equal(r.intent.notional,100);assert.equal(r.intent.margin,20);
+  assert.equal(r.binding.receipt.sourceLeverage,10);assert.equal(r.binding.receipt.executionLeverage,5);
 });
 test('inverse copying does not require fabricated native geometry but still validates inverse identity',()=>{
   const {inverse}=pair('LONG',T);inverse.inverseCopy!.sourceEntryPlan=undefined;
@@ -78,11 +80,13 @@ async function harness(side:'LONG'|'SHORT') {
   const calls={entries:0,stops:[] as any[],reductions:[] as string[],closes:0,leverage:0,cancels:[] as string[]},positions:any[]=[],priceOrders:any[]=[],orders=new Map<string,any>();
   const gate={snapshot:async()=>({account:{total:'100',available:'90',unrealised_pnl:'0',margin_mode:0},
     positions:structuredClone(positions),orders:[],priceOrders:structuredClone(priceOrders),checkedAt:Date.now()}),
-    setLeverage:async()=>{calls.leverage++;},
+    setLeverage:async(_symbol?:string,leverage=5)=>{calls.leverage++;if(positions[0]){
+      positions[0].margin=String(Number(positions[0].margin)*Number(positions[0].leverage)/leverage);
+      positions[0].leverage=String(leverage);return structuredClone(positions[0]);}},
     createEntry:async(intent:any,guard:()=>boolean)=>{assert.ok(guard());calls.entries++;
       assert.equal(intent.kind,'MARKET');assert.equal(intent.body.price,'0');assert.equal(intent.body.tif,'ioc');
       const price=String(inverse.side==='LONG'?stream.runtime.evidence.TEST_USDT.bestAsk:stream.runtime.evidence.TEST_USDT.bestBid);
-      positions.push({contract:'TEST_USDT',size:String(intent.size),entry_price:price,leverage:'10',margin:'10',unrealised_pnl:'0',mark_price:price});
+      positions.push({contract:'TEST_USDT',size:String(intent.size),entry_price:price,leverage:String(intent.leverage),margin:String(intent.margin),unrealised_pnl:'0',mark_price:price});
       orders.set('entry',{id_string:'entry',status:'finished',finish_as:'filled',fill_price:price,size:String(intent.size),left:'0'});return'entry';},
     inspectEntry:async(_kind:string,_symbol:string,_tag:string,id:string)=>orders.get(id)??null,
     createStop:async(intent:any)=>{calls.stops.push(intent);const id='stop'+calls.stops.length;
@@ -118,6 +122,18 @@ test('committed close executes before slow account reads, including owner OFF, w
   assert.equal(h.calls.closes,1);assert.equal(h.positions.length,0);assert.deepEqual(h.state,original);
   const overlapping=h.stream.syncLive(Date.now()); // joins the serialized work
   release();await Promise.all([running,overlapping]);assert.equal(h.stream.runtime.live.requestedEnabled,false);
+});
+test('real Worker migrates an existing inverse holding once without adding or closing a contract',async()=>{
+  const h=await harness('LONG');await h.stream.syncLive(Date.now());await h.stream.syncLive(Date.now());
+  const position=h.stream.runtime.live.positions.TEST_USDT,before=structuredClone(position),source=structuredClone(h.state);
+  h.positions[0].leverage='10';h.positions[0].margin=String(position.notional/10);
+  delete position.parity.executionLeverage;delete position.parity.leveragePolicy;
+  const counts={...h.calls};await h.stream.syncLive(Date.now());
+  assert.equal(h.calls.leverage,counts.leverage+1);assert.equal(h.calls.entries,counts.entries);assert.equal(h.calls.closes,counts.closes);
+  assert.equal(h.positions[0].leverage,'5');assert.equal(position.exchangeSize,before.exchangeSize);
+  assert.equal(position.notional,before.notional);assert.deepEqual(h.state,source);
+  await h.stream.syncLive(Date.now());assert.equal(h.calls.leverage,counts.leverage+1);assert.equal(position.leverage,5);
+  assert.equal(position.parity.discrepancy,null);assert.equal(position.parity.leverageAdjustError,null);
 });
 test('committed reduction uses the early exposure callback without duplicate submission',async()=>{
   const h=await harness('SHORT');await h.stream.syncLive(Date.now());await h.stream.syncLive(Date.now());

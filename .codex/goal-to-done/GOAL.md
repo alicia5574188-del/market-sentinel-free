@@ -1,3 +1,11 @@
+# 2026-10-02 — halve inverse LIVE leverage, double margin
+
+Same proportional target notional/contracts; halve source leverage for inverse
+LIVE only. Adjust existing isolated program holdings without close/reopen after
+native funds/identity checks; unknown results reconcile against native snapshots
+and never repeatedly halve. Keep frozen source/PAPER, sessions/history, source
+close priority and cadence. Owner/member tests and reviewed main deployment.
+
 # 2026-10-02 — overview-only independent PAPER/LIVE curves
 
 Show original PAPER history only on overview alongside a separate native Gate
