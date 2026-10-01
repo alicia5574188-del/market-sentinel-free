@@ -1,4 +1,28 @@
-# 2026-10-01 — inverse LIVE candidate
+# 2026-10-01 — inverse LIVE protection removal / verification
+
+Base main 40f314f69ddc71779534fd43719ed2b81dadae83. Owner shelves redesign and
+requests source-event-only inverse execution. Production read: owner OFF and
+actual holding count zero; no account reset or real test order. Removes inverse
+native stop creation/maintenance and entry stop-side checks, retains source
+allocation admission charge, removes independent source-horizon expiry, safely
+cancels tracked old guards/replacements with retired identities. Legacy regular
+protections/manual intent retained. Actual Worker focused 19/19 passes, including
+both directions beyond old guards, reductions/close, cancellation fault, OFF,
+restoration and late protection. Local direct 308, LIVE/Gate 168 (19 inverse Worker cases), members 49, equity
+65, feed workerd, full npm test/build and architecture/migration 43 pass;
+typecheck and lint pass (15 existing warnings). Storage workerd and Wrangler
+dry-run pass. Final reviewed PR/main deployment and production receipt pending.
+
+# 2026-10-01 — inverse LIVE released / done
+
+PR593 merged and exact main 40f314f69ddc71779534fd43719ed2b81dadae83 is
+deployed. PR CI36830865220 and main release36831118532 both completed success.
+Two independent production reads confirm INVERSE_PAPER / connected, same account
+1790830695038, owner requested/operational OFF preserved, no runtime/storage error,
+protected books ready and continuing financial saves 1790840248895 →
+1790840290648. Heartbeat also advances. No account reset or real verification trade.
+Gate fills are still an owner-enabled execution fact, not proven by fake tests.
+Durable public receipt is in PR593's final description.
 
 Base f7e7c432 / production healthy; owner requested/operational OFF, no live open
 holdings. Root causes: inverse source publication excluded; candle lane lacks
@@ -9,7 +33,7 @@ minimal member mark projection and current UI label. Owner controls unchanged.
 Verified locally: direct 308, LIVE/Gate 160 (11 new real-Worker inverse tests),
 members 49, equity 65, Forward 78; build/typecheck pass; lint 0 errors with 15
 existing warnings. Full npm test, architecture/migration 43, Gate-feed workerd,
-storage workerd and Wrangler dry-run pass. Reviewed-main release pending.
+storage workerd and Wrangler dry-run pass. Reviewed-main release passed above.
 The extra retired runtime-faults harness calls processBooks, which is already
 absent from base f7e7c432, and is outside the current release command; it was
 stopped, not represented as passed. New fault cases use the actual current Worker.
@@ -799,7 +823,7 @@ private Gate action occurred.
 - Structural Interrupt now separates the two-second old-direction veto from reverse-entry authority, uses WAIT_RETEST for extended moves, clusters same-window same-side tracks into one event, and defaults the event to one selected symbol (maximum two only for an explicitly independent restart).
 - Ordinary marginal/Reserve candidates use 12–24 second BBO entry validation. Strong mature relations remain immediate; actual closed fills calibrate predicted net edge against realized net, fee/funding cost and target capture without lowering the 19bp historical model.
 - Snapshot replay classifies SUI/XLM as WAIT_RETEST and LINK as CONTINUATION_DELAY. The strict extended-move lower bound removes only 2/76 trades, improves net from -6.9362U to -3.4959U and fees from 22.9027U to 22.1222U; the historical +17.0349U SUI winner remains immediate.
-- Local acceptance passes: Forward/storage/replay 59/59, direct 127/127, LIVE/Gate parity 38/38, full npm test, typecheck, build, lint (zero errors; 19 pre-existing warnings), architecture/migration 18/18, and clean diff check. PR/release is next; production and LIVE intent remain unchanged so far.
+- Local acceptance passes: Forward/storage/replay 59/59, direct 127/127, LIVE/Gate parity 38/38, full npm test, typecheck, build, lint (zero errors; 19 pre-existing warnings), architecture/migration 19/19, and clean diff check. PR/release is next; production and LIVE intent remain unchanged so far.
 
 # 2026-09-25 — participation/LIVE regression diagnosis
 
@@ -814,4 +838,4 @@ private Gate action occurred.
 - A first typed Gate read timeout after a saved owner enable is pending/fail-closed and recovers on a later fresh snapshot without a second toggle or activation-fence change. Hard/non-read failures and forced OFF cleanup remain strict.
 - Restored the previously omitted real-Worker LIVE parity suite to the default release command and updated only its synthetic timing fixtures to the current 30-second copy contract.
 - Removed compiler-confirmed unused production helpers/imports and stale test fixtures; lint is now zero warnings without changing strategy thresholds or persisted schemas.
-- Acceptance: Forward 60/60, direct 128/128, LIVE/Gate parity 129/129, members 49/49, equity 61/61, architecture/migration 18/18; full npm test, build, typecheck, lint, diff check and Wrangler dry-run pass. Storage stress still preserves 2200 mature samples, 240 history rows, 160 events, pending roots, rules, regions and positions across restart.
+- Acceptance: Forward 60/60, direct 128/128, LIVE/Gate parity 129/129, members 49/49, equity 61/61, architecture/migration 19/19; full npm test, build, typecheck, lint, diff check and Wrangler dry-run pass. Storage stress still preserves 2200 mature samples, 240 history rows, 160 events, pending roots, rules, regions and positions across restart.

@@ -1,3 +1,18 @@
+# 2026-10-01 — owner removes inverse independent exits
+
+- The previous reflected adverse guard was contrary to source lifecycle parity.
+  Owner explicitly requests removal; the dangerous-entry redesign is shelved.
+- No inverse native stop or protection-failure market exit. Stored source prices
+  remain references. Only committed source reductions/closures drive exits; an
+  estimated hold horizon cannot end source validity while the source stays OPEN.
+- Keep legacy noninverse protection and account/exchange admission controls.
+  Inverse planned risk is a proportional source allocation charge plus observed
+  downside for additions, never a maximum possible loss or an exit boundary.
+- Cancel recorded inverse guards/replacements with snapshot confirmation and
+  durable retired tags; cancellation errors preserve identity and source exits.
+  Do not change the activation policy marker: this is execution correction,
+  not a new source/account, and existing eligible sources must not be re-fenced.
+
 # 2026-10-01 — inverse execution projection
 
 - Current user request supersedes the previous PAPER-only LIVE exclusion; it

@@ -1,3 +1,18 @@
+# Owner correction: inverse LIVE follows shadow events only — 2026-10-01
+
+The owner explicitly shelved the proposed dangerous-entry redesign and asked to
+remove the current inverse LIVE protection prices. This supersedes the adverse
+native guard instruction below. Do not alter the frozen shadow or either PAPER
+ledger. Inverse LIVE must have no independent stop, target, timer, protection
+failure exit or source-horizon exit. Follow committed source OPEN/REDUCE/CLOSE,
+with the opposite shadow side and proportional capital/requested leverage.
+Cancel only tracked inverse native guards (including replacements/late responses),
+confirm their absence and retain identity on failures; never force a market exit
+because cancellation failed. Preserve legacy noninverse native protection,
+manual switches, new-only activation, exactly-once reservations, actual margin,
+exchange constraints and account history. Admission risk is an allocation charge,
+not a claimed loss bound. No real-money verification trade or automatic LIVE ON.
+
 # Owner-authorized inverse LIVE bridge — 2026-10-01
 
 The owner's latest request completes the previously requested LIVE follow of

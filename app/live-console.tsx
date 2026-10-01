@@ -206,7 +206,7 @@ function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade
         !positions.length&&!entries.length?<LiveEmpty title="当前没有实盘持仓或待执行订单"/>:
         <div className="fr-rule-grid">{positions.map(p=><LivePositionCard key={p.id} position={p} runtime={runtime} now={clock}/>)}
           {entries.map(e=>e&&<article className="fr-trade" key={e.planId}><header><div><small>待执行 · {e.side==="LONG"?"多单":"空单"}</small><h3>{e.symbol.replace("_"," / ")}</h3></div><strong>等待Gate</strong></header>
-            <dl><Pair label="模拟入场价" value={num(e.parity?.sourceEntryPrice,5)}/><Pair label="当前复制盘口" value={num(e.parity?.copyQuotePrice??e.trigger,5)}/><Pair label="保护止损" value={num(e.invalidation,5)}/><Pair label="名义金额" value={`${num(e.notional)} U`}/>
+            <dl><Pair label="模拟入场价" value={num(e.parity?.sourceEntryPrice,5)}/><Pair label="当前复制盘口" value={num(e.parity?.copyQuotePrice??e.trigger,5)}/><Pair label={e.parity?.sourceRole==='INVERSE_PAPER'?"退出方式":"保护止损"} value={e.parity?.sourceRole==='INVERSE_PAPER'?"跟随影子订单":num(e.invalidation,5)}/><Pair label="名义金额" value={`${num(e.notional)} U`}/>
               <Pair label="保证金 / 杠杆" value={`${num(e.margin)} U / ${num(e.leverage,0)}×`}/><Pair label="复制延迟" value={latency(e.parity?.copyDelayMs)}/></dl>
             <p className="fr-note">{e.lastError??`服务器状态：${e.status}`}</p></article>)}</div>}
     </section>}
@@ -282,7 +282,7 @@ function LivePositionCard({position:p,runtime,now}:{position:LivePosition;runtim
     <strong className={pnl==null?"":pnl>=0?"fr-positive":"fr-negative"}>{pnl==null?open?"待更新":"待结算":`${signed(pnl)} U`}<small>{pnlRate==null?"":` · ${signed(pnlRate*100,3)}%`}</small></strong></header>
     <CompareBlock position={p} runtime={runtime} now={now}/>
     <dl><Pair label="入场价" value={num(p.entryPrice,5)}/><Pair label={open?"当前价格":"出场价"} value={num(open?mark.price:p.exitPrice,5)}/>
-      <Pair label="保护止损" value={num(p.stopPrice??p.currentStop,5)}/><Pair label="名义金额" value={`${num(p.notional)} U`}/>
+      <Pair label={p.parity?.sourceRole==='INVERSE_PAPER'?"退出方式":"保护止损"} value={p.parity?.sourceRole==='INVERSE_PAPER'?"跟随影子订单":num(p.stopPrice??p.currentStop,5)}/><Pair label="名义金额" value={`${num(p.notional)} U`}/>
       <Pair label="保证金 / 杠杆" value={`${num(open?mark.margin:p.margin)} U / ${num(p.leverage,0)}×`}/><Pair label="合约数量" value={contractText(Math.abs(p.exchangeSize))}/>
       <Pair label="进场时间" value={time(p.entryAt)}/><Pair label="出场时间" value={open?"持仓中":time(p.exitAt)}/>
       <Pair label="持仓时长" value={holdingTime(p.entryAt,open?now:p.exitAt??0)}/></dl>
