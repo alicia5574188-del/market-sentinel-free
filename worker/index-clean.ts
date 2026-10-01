@@ -17,7 +17,7 @@ import { buildBankruptcyReport, diagnoseClosedPosition, paperCycleSummary, recor
 import { runtimeReady, type RuntimeHealthShape } from "../lib/runtime-health.ts";
 import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, gateMarkedEquity, gatePositionValuation, isGateReadTimeoutError, isGateTransportTimeoutError, LiveEntrySizingError, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveOrder, type GateLiveOrderSnapshot, type GateLiveSnapshot, type LiveEntrySizingCode } from "../lib/gate-live.ts";
 import { LIVE_SESSION_VERSION, establishLiveScale, reconcileLiveScale, startLiveSession, sourceAfterEnable, sameLiveSession, fenceLiveSourcePolicy, type LiveSession } from "../lib/live-session.ts";
-import {liveProtectionPrice} from '../lib/live-source-policy.ts';
+import {liveProtectionPrice,isInverseLiveReceipt,INVERSE_LIVE_EXIT_POLICY} from '../lib/live-source-policy.ts';
 import type { GateSizeRules, SizeDiagnostic } from "../lib/gate-quantity.ts";
 import { encryptGateCredentials, gateKeyHint, normalizeGateCredentials, type GateCredentials } from "../lib/credential-vault.ts";
 import { credentialMetadata } from "../lib/gate-readonly.ts";
@@ -2060,7 +2060,75 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return this.runtime.live.requestedEnabled
       || Object.values(this.runtime.live.entries).some(entry => entry &&
         (!["FILLED","CANCELLED"].includes(entry.status) || this.liveEntryAwaitingReconcile(entry)))
-      || Object.values(this.runtime.live.positions).some(position => position?.status === "OPEN");
+      || Object.values(this.runtime.live.positions).some(position => position?.status === "OPEN")
+      || this.inverseProtectionPending();
+  }
+
+  private inverseProtectionPending() {
+    return [...Object.values(this.runtime.live.entries),...Object.values(this.runtime.live.positions)].some(record=>record
+      &&isInverseLiveReceipt(record.parity)&&(record.stopTag||record.stopOrderId||record.stopSubmittingAt
+        ||('replacementStopTag' in record&&(record.replacementStopTag||record.replacementStopOrderId))));
+  }
+
+  private async cancelInverseProtection(client:GateLiveClient,snapshot:GateLiveSnapshot) {
+    const records=[...Object.values(this.runtime.live.entries),...Object.values(this.runtime.live.positions)]
+      .filter((record):record is LiveEntry|LivePosition=>!!record&&isInverseLiveReceipt(record.parity));
+    const refs=new Map<string,Set<string>>(),attemptedIds=new Set<string>();let changed=false,error:string|null=null;
+    for(const record of records){
+      const receipt=record.parity!,identity='planId' in record?record.planId:record.id,
+        tags=new Set([...(refs.get(identity)??[]),...(receipt.retiredProtectionTags??[])]),ids=new Set<string>();
+      if(record.stopTag)tags.add(record.stopTag);
+      if(record.stopOrderId)ids.add(record.stopOrderId);
+      if('replacementStopTag' in record){
+        if(record.replacementStopTag)tags.add(record.replacementStopTag);
+        if(record.replacementStopOrderId)ids.add(record.replacementStopOrderId);
+      }
+      // Retain retired identities to cancel an old ambiguous stop that appears
+      // late. Do not touch unrelated manual or legacy-source protection.
+      if(tags.size&&!receipt.retiredProtectionTags?.every(tag=>tags.has(tag)))changed=true;
+      if(tags.size!==(receipt.retiredProtectionTags?.length??0))changed=true;
+      receipt.retiredProtectionTags=[...tags];
+      if(receipt.exitPolicy!==INVERSE_LIVE_EXIT_POLICY)changed=true;
+      receipt.exitPolicy=INVERSE_LIVE_EXIT_POLICY;
+      refs.set(identity,tags);
+      for(const order of snapshot.priceOrders){
+        if(!tags.has(liveOrderTag(order)??'')&&!ids.has(liveOrderId(order)??''))continue;
+        const id=liveOrderId(order);
+        if(!id){error='反向实盘旧保护单缺少交易所编号，继续核对';continue;}
+        if(attemptedIds.has(id))continue;
+        attemptedIds.add(id);
+        try{await client.cancelOrder('PRICE_TRIGGER',id);}
+        catch(e){error=`反向实盘旧保护撤销尚未确认：${safeError(e)}`;}
+      }
+    }
+    const hadOrders=snapshot.priceOrders.some(order=>records.some(record=>
+      refs.get('planId' in record?record.planId:record.id)?.has(liveOrderTag(order)??'')
+      ||!!record.stopOrderId&&record.stopOrderId===liveOrderId(order)
+      ||('replacementStopOrderId' in record&&!!record.replacementStopOrderId&&record.replacementStopOrderId===liveOrderId(order))));
+    if(hadOrders){
+      try{snapshot=await client.snapshot();}catch(e){
+        if(changed)await this.saveCheckpoint(Date.now(),true);
+        throw e;
+      }
+    }
+    for(const record of records){
+      const tags=refs.get('planId' in record?record.planId:record.id)!;
+      const remaining=snapshot.priceOrders.some(order=>tags.has(liveOrderTag(order)??'')
+        ||!!record.stopOrderId&&record.stopOrderId===liveOrderId(order)
+        ||('replacementStopOrderId' in record&&!!record.replacementStopOrderId&&record.replacementStopOrderId===liveOrderId(order)));
+      if(remaining){error??='Gate 尚未确认反向实盘旧保护撤销，下一轮继续核对';continue;}
+      if(record.stopSubmittingAt&&Date.now()-record.stopSubmittingAt<6_000){
+        error??='反向实盘旧保护提交仍待交易所核对';continue;
+      }
+      if(record.stopOrderId||record.stopTag||record.stopPrice||record.stopSubmittingAt
+        ||('replacementStopTag' in record&&(record.replacementStopTag||record.replacementStopOrderId))){
+        record.stopOrderId=null;record.stopTag=null;record.stopPrice=null;record.stopSubmittingAt=null;
+        if('replacementStopTag' in record)this.clearLiveStopReplacement(record);
+        record.parity!.protectionRemovedAt=Date.now();changed=true;
+      }
+    }
+    if(changed)await this.saveCheckpoint(Date.now(),true);
+    return{snapshot,error};
   }
 
   private liveOpenRisk() {
@@ -2118,6 +2186,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private async createImmediateLiveStop(client: GateLiveClient, entry: LiveEntry) {
+    if(isInverseLiveReceipt(entry.parity))return;
     const stop = this.liveEntryStopIntent(entry);
     entry.stopTag = stop.tag;
     entry.stopPrice = stop.price;
@@ -2164,6 +2233,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private async ensureLiveStop(client: GateLiveClient, position: LivePosition, openPriceOrders: Awaited<ReturnType<GateLiveClient["snapshot"]>>["priceOrders"]) {
+    if(isInverseLiveReceipt(position.parity))return;
     const byIdentity=(tag:string|null|undefined,id:string|null|undefined)=>openPriceOrders.find(order=>
       (!!tag&&liveOrderTag(order)===tag)|| (!!id&&liveOrderId(order)===id))??null;
     const existing=byIdentity(position.stopTag,position.stopOrderId);
@@ -2372,9 +2442,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const activePositions = Object.values(this.runtime.live.positions).some((position) => position?.status === "OPEN");
     const activeEntries = Object.values(this.runtime.live.entries).some((entry) => entry &&
       (!["FILLED", "CANCELLED"].includes(entry.status) || this.liveEntryAwaitingReconcile(entry)));
-    if (!this.runtime.live.requestedEnabled && !activePositions && !activeEntries && !initialEnable && !forceEntryCleanup) return;
+    if (!this.runtime.live.requestedEnabled && !activePositions && !activeEntries && !initialEnable && !forceEntryCleanup&&!this.inverseProtectionPending()) return;
     const client = await this.gateLive();
     let snapshot=await client.snapshot();
+    const protectionCleanup=await this.cancelInverseProtection(client,snapshot);
+    snapshot=protectionCleanup.snapshot;
     this.liveOrderSnapshotCache={orders:structuredClone(snapshot.orders),priceOrders:structuredClone(snapshot.priceOrders),checkedAt:snapshot.checkedAt};
     this.liveOrderAuditAt=snapshot.checkedAt;
     this.liveSnapshotCache=structuredClone(snapshot);
@@ -2387,9 +2459,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const knownTags = new Set([
       ...Object.values(this.runtime.live.entries).flatMap((entry) => entry
         &&(!["FILLED","CANCELLED"].includes(entry.status)||this.liveEntryAwaitingReconcile(entry))
-        ? [entry.tag, entry.stopTag ?? this.liveEntryStopIntent(entry).tag] : []),
+        ? [entry.tag,...(isInverseLiveReceipt(entry.parity)?entry.parity?.retiredProtectionTags??[]
+          :[entry.stopTag ?? this.liveEntryStopIntent(entry).tag])] : []),
       ...Object.values(this.runtime.live.positions).flatMap((position) => position?.status === "OPEN"
-        ? [position.stopTag,position.replacementStopTag].filter((tag):tag is string=>!!tag) : []),
+        ? [position.stopTag,position.replacementStopTag,...(position.parity?.retiredProtectionTags??[])].filter((tag):tag is string=>!!tag) : []),
     ]);
     const trackedEntryIds = new Set(Object.values(this.runtime.live.entries)
       .flatMap((entry) => entry?.exchangeOrderId ? [entry.exchangeOrderId] : []));
@@ -2513,12 +2586,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         const multiplier = this.runtime.contractMeta[symbol]?.quantoMultiplier ?? 1;
         const notional = Math.abs(exchangeSize) * entryPrice * multiplier;
         const leverage = Math.max(1, Number(actual.leverage ?? entry.leverage) || entry.leverage);
-        const expectedStop = this.liveEntryStopIntent(entry);
-        const recoveredStop = snapshot.priceOrders.find((order) => liveOrderTag(order) === (entry.stopTag ?? expectedStop.tag));
+        const inverse=isInverseLiveReceipt(entry.parity),expectedStop = inverse?null:this.liveEntryStopIntent(entry);
+        const recoveredStop = expectedStop?snapshot.priceOrders.find((order) => liveOrderTag(order) === (entry.stopTag ?? expectedStop.tag)):null;
         position = {
           id: entry.planId, symbol, side, scenario: entry.scenario, entryAt: now, entryPrice,
           initialStop: entry.invalidation, currentStop: entry.invalidation, currentTarget: entry.target,
-          plannedRisk: notional * (Math.abs(entryPrice - entry.invalidation) / Math.max(entryPrice, 1e-9) + (selectedTrade?.context.modeledCostRate ?? 0.0018)),
+          plannedRisk: inverse?notional*(entry.parity?.sourceAllocationRiskRate??entry.plannedRisk/entry.notional)
+            :notional * (Math.abs(entryPrice - entry.invalidation) / Math.max(entryPrice, 1e-9) + (selectedTrade?.context.modeledCostRate ?? 0.0018)),
           notional, targetScore: entry.targetScore ?? selectedTrade?.context.candidateScore ?? 0,
           targetIdentity: entry.targetIdentity ?? `arena:${entry.planId}`,
           routeId: entry.routeId, routeKind: entry.routeKind, targetTimeframe: entry.targetTimeframe,
@@ -2526,7 +2600,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           reclaimSource: entry.reclaimSource, reclaimStrength: entry.reclaimStrength,
           status: "OPEN", exchangeSize: Math.abs(exchangeSize), leverage, margin: notional / leverage,
           stopOrderId: entry.stopOrderId ?? (recoveredStop ? liveOrderId(recoveredStop) : null),
-          stopTag: entry.stopTag ?? expectedStop.tag, stopPrice: entry.stopPrice ?? expectedStop.price,
+          stopTag: entry.stopTag ?? expectedStop?.tag??null, stopPrice: entry.stopPrice ?? expectedStop?.price??null,
           stopSubmittingAt: entry.stopSubmittingAt ?? null, exitRequestedAt: entry.protectionExitRequestedAt ?? null,
           exchangeUpdatedAt: now,
           ...(entry.parity?{parity:structuredClone(entry.parity),mirrorSourceId:entry.planId}:{}),
@@ -2583,7 +2657,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         await this.saveCheckpoint(Date.now(),true);
         position.exitOrderId=await client.closePosition(symbol, liveExitTag(position.id));
       } else if (!position.exitRequestedAt && (position.parity?lifecycle?.status==="OPEN":selectedTrade)) {
-        position.currentStop = position.parity?liveProtectionPrice(lifecycle!.trade!):arenaProtectionStop(selectedTrade!);
+        position.currentStop = position.parity?liveProtectionPrice(lifecycle!.trade!)??lifecycle!.trade!.stopPrice:arenaProtectionStop(selectedTrade!);
+        if(isInverseLiveReceipt(position.parity))position.parity!.sourceAllocationRiskRate=lifecycle!.trade!.plannedRisk/lifecycle!.trade!.notional;
         position.currentTarget = position.parity?lifecycle!.trade!.armPrice:selectedTrade!.targetPrice;
         position.targetScore = selectedTrade?.context.candidateScore??0;
         position.targetIdentity = position.parity?`forward:${position.id}`:`arena:${selectedTrade!.id}`;
@@ -2670,11 +2745,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
     if (!this.runtime.live.requestedEnabled) {
       this.runtime.live.operational = false;
-      this.runtime.live.lastError = null;
+      this.runtime.live.lastError = protectionCleanup.error;
       this.runtime.live.entrySkips = {};
       return;
     }
     if (unknownOrders.length) throw new Error("Gate 存在未纳管挂单；已停止新开仓");
+    if(protectionCleanup.error)throw new Error(protectionCleanup.error);
     if(unmanagedPositions.length)throw new Error("Gate 存在未纳管仓位；停止新增复制，保留已纳管保护");
     if(sourceError)throw new Error(`当前模拟复制源尚待恢复：${sourceError}`);
     if(accountError)throw new Error(accountError);
@@ -2895,7 +2971,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             await this.saveCheckpoint(Date.now(),true);continue;
           }
           const price=entry.side==="LONG"?submitQuote.bestAsk:submitQuote.bestBid;
-          if(!price||(entry.side==="LONG"?price<=entry.invalidation:price>=entry.invalidation)){
+          if(!price||(!isInverseLiveReceipt(entry.parity)&&(entry.side==="LONG"?price<=entry.invalidation:price>=entry.invalidation))){
             entry.status="CANCELLED";entry.submissionResolved=true;entry.lastError="最终 Gate 盘口已越过源单止损，未追补旧成交";
             this.runtime.live.entrySkips[symbol]={planId:entry.planId,symbol,code:"ECONOMICS",reason:entry.lastError,observedAt:Date.now()};
             await this.saveCheckpoint(Date.now(),true);continue;
@@ -2928,7 +3004,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             const latest=this.runtime.evidence[symbol],
               latestPrice=entry.side==="LONG"?latest?.bestAsk:latest?.bestBid;
             if(latestPrice){
-              if(entry.side==="LONG"?latestPrice<=entry.invalidation:latestPrice>=entry.invalidation)return false;
+              if(!isInverseLiveReceipt(entry.parity)&&(entry.side==="LONG"?latestPrice<=entry.invalidation:latestPrice>=entry.invalidation))return false;
               const latestDrift=liveEntryDriftGuard(source,latestPrice);
               if(latestDrift.adverse>latestDrift.allowed+1e-9)return false;
             }
@@ -2954,7 +3030,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           }
           await this.saveCheckpoint(Date.now(),true);
           await this.createImmediateLiveStop(client, entry);
-          if (!entry.stopOrderId) {
+          if (!isInverseLiveReceipt(entry.parity)&&!entry.stopOrderId) {
             if (entry.protectionExitRequestedAt) recoveringSubmission = entry;
             else recoveringEntryStop = entry;
             break;

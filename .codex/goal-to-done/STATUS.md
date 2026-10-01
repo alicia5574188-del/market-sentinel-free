@@ -1,4 +1,28 @@
-# 2026-10-01 — inverse LIVE candidate
+# 2026-10-01 — inverse LIVE protection removal / verification
+
+Base main 40f314f69ddc71779534fd43719ed2b81dadae83. Owner shelves redesign and
+requests source-event-only inverse execution. Production read: owner OFF and
+actual holding count zero; no account reset or real test order. Removes inverse
+native stop creation/maintenance and entry stop-side checks, retains source
+allocation admission charge, removes independent source-horizon expiry, safely
+cancels tracked old guards/replacements with retired identities. Legacy regular
+protections/manual intent retained. Actual Worker focused 18/18 passes, including
+both directions beyond old guards, reductions/close, cancellation fault, OFF,
+restoration and late protection. Local direct 308, LIVE/Gate 167 (18 inverse Worker cases), members 49, equity
+65, feed workerd, full npm test/build and architecture/migration 43 pass;
+typecheck and lint pass (15 existing warnings). Storage workerd and Wrangler
+dry-run pass. Final reviewed PR/main deployment and production receipt pending.
+
+# 2026-10-01 — inverse LIVE released / done
+
+PR593 merged and exact main 40f314f69ddc71779534fd43719ed2b81dadae83 is
+deployed. PR CI36830865220 and main release36831118532 both completed success.
+Two independent production reads confirm INVERSE_PAPER / connected, same account
+1790830695038, owner requested/operational OFF preserved, no runtime/storage error,
+protected books ready and continuing financial saves 1790840248895 →
+1790840290648. Heartbeat also advances. No account reset or real verification trade.
+Gate fills are still an owner-enabled execution fact, not proven by fake tests.
+Durable public receipt is in PR593's final description.
 
 Base f7e7c432 / production healthy; owner requested/operational OFF, no live open
 holdings. Root causes: inverse source publication excluded; candle lane lacks
@@ -9,7 +33,7 @@ minimal member mark projection and current UI label. Owner controls unchanged.
 Verified locally: direct 308, LIVE/Gate 160 (11 new real-Worker inverse tests),
 members 49, equity 65, Forward 78; build/typecheck pass; lint 0 errors with 15
 existing warnings. Full npm test, architecture/migration 43, Gate-feed workerd,
-storage workerd and Wrangler dry-run pass. Reviewed-main release pending.
+storage workerd and Wrangler dry-run pass. Reviewed-main release passed above.
 The extra retired runtime-faults harness calls processBooks, which is already
 absent from base f7e7c432, and is outside the current release command; it was
 stopped, not represented as passed. New fault cases use the actual current Worker.

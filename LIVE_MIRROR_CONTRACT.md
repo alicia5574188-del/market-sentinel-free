@@ -1,3 +1,24 @@
+# Inverse LIVE source-events-only correction — 2026-10-01
+
+The owner removed the independently reflected native guard. This supersedes
+inverse native protection in the earlier addendum and regular-stop requirements
+below ONLY for inverse-source receipts. New inverse receipts identify
+`shadow-events-only-v1`, with no native protection price. Source reference
+stops/targets are never inverse exit commands. Inverse OPEN sources remain valid
+beyond estimated hold horizons until the source itself closes. Actual open,
+reduce and close requests follow the frozen shadow via the strict inverse PAPER
+ledger. Prices, exchange fills, fees, funding, liquidation and manual actions
+remain exchange facts and can diverge; event following is not an identical-price
+promise. Source allocation risk is not a bounded adverse price risk.
+
+The reconciler cancels only recorded inverse stop/replacement identities, checks
+a fresh snapshot after cancellation and saves retired tags for late responses.
+Unconfirmed cancellations retain tracked identities and block new submissions,
+while committed source exits remain executable. OFF and restart still clean
+tracked inverse guards without flattening positions. Existing legacy noninverse
+stops and their failure handling remain intact. No source policy fence, owner
+activation, account reset or quantity change is added by this correction.
+
 # Current inverse source addendum — 2026-10-01
 
 The owner explicitly requested LIVE follow the visible inverse PAPER account.

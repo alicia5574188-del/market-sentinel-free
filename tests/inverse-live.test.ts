@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {registerHooks} from 'node:module';
 import {initialForward,type Trade} from '../lib/forward-relations.ts';
-import {forwardMirrorSources,buildProportionalMirror,mirrorCoverage,sourceLifecycle} from '../lib/live-parity.ts';
+import {forwardMirrorSources,buildProportionalMirror,mirrorCoverage,sourceLifecycle,mirrorPositionRisk,mirrorSourceFresh} from '../lib/live-parity.ts';
 import {liveProtectionPrice} from '../lib/live-source-policy.ts';
 import {startLiveSession,fenceLiveSourcePolicy,sourceAfterEnable,sameLiveSession} from '../lib/live-session.ts';
 import {newInverseTrial,sourceDecisionState,shadowCapsule,applyInverseSourceTrade} from '../lib/shadow-inverse-ledger.ts';
@@ -31,22 +31,23 @@ function pair(side:'LONG'|'SHORT',now:number){
   applyInverseSourceTrade(state,t,undefined,now);state.inverseTrial.source=shadowCapsule(source);
   return{state,t,inverse:state.positions[0]!};
 }
-for(const side of ['LONG','SHORT'] as const)test(`inverse of ${side} keeps exact source identity and valid opposite native risk geometry`,()=>{
+for(const side of ['LONG','SHORT'] as const)test(`inverse of ${side} keeps exact source identity and has no independent native stop`,()=>{
   const {state,t,inverse}=pair(side,T),before=structuredClone(state),row=forwardMirrorSources(state,1000).TEST_USDT!;
   assert.equal(row.side,side==='LONG'?'SHORT':'LONG');assert.equal(row.id,inverse.id);assert.deepEqual(row.forwardSource,inverse);
-  assert.equal(row.activeStopPrice,side==='LONG'?102:98);assert.deepEqual(state,before);
+  assert.equal(row.activeStopPrice,t.stopPrice);assert.equal(liveProtectionPrice(inverse),null);assert.deepEqual(state,before);
   t.stopPrice=side==='LONG'?120:80;inverse.stopPrice=t.stopPrice;inverse.inverseCopy!.sourceStopPrice=t.stopPrice;
-  assert.equal(liveProtectionPrice(inverse),side==='LONG'?102:98,'source profit reference never trails the inverse guard');
+  assert.equal(liveProtectionPrice(inverse),null,'moving source references never become an inverse stop');
   const r=buildProportionalMirror({source:inverse,sourceEquity:1000,equity:100,available:100,entryPrice:100,
     quantoMultiplier:.1,leverageMax:20,maintenanceRate:.005,openRisk:0,sameDirectionRisk:0,openMargin:0,openNotional:0,
     now:T+200,policy:'inverse',sourceRiskAuthority:true,quoteObservedAt:T,sizeRules:{enableDecimal:false,orderSizeMin:'1'}});
   assert.equal(Math.sign(r.intent.size),side==='LONG'?-1:1);assert.equal(r.binding.receipt.sourceRole,'INVERSE_PAPER');
-  assert.equal(r.binding.receipt.nativeProtectionPrice,row.activeStopPrice);assert.equal(r.binding.receipt.shadowSourceId,t.id);
+  assert.equal(r.binding.receipt.nativeProtectionPrice,null);assert.equal(r.binding.receipt.exitPolicy,'shadow-events-only-v1');assert.equal(r.binding.receipt.shadowSourceId,t.id);
   assert.deepEqual(r.binding.sourceAtCopy,inverse);
 });
-test('missing initial geometry fails closed and never uses the moving source price',()=>{
+test('inverse copying does not require fabricated native geometry but still validates inverse identity',()=>{
   const {inverse}=pair('LONG',T);inverse.inverseCopy!.sourceEntryPlan=undefined;
-  assert.throws(()=>liveProtectionPrice(inverse),/原始风险/);
+  assert.equal(liveProtectionPrice(inverse),null);
+  inverse.inverseCopy!.sourceSide=inverse.side;assert.throws(()=>liveProtectionPrice(inverse),/方向无效/);
 });
 test('source policy migration excludes old inverse rows, preserves enable/scale, and fences in-flight intents',()=>{
   const {state,inverse}=pair('LONG',T),old={...startLiveSession(T-2000,initialForward(T-100000)),scaleRatio:.1};
@@ -71,7 +72,7 @@ async function harness(side:'LONG'|'SHORT') {
   stream.runtime.contractMeta.TEST_USDT={quantoMultiplier:.1,leverageMax:20,maintenanceRate:.005,enableDecimal:false,orderSizeMin:'1',orderSizeMax:'100000'};
   stream.runtime.evidence.TEST_USDT={bestBid:100,bestAsk:100,midpoint:100,observedAt:now,fresh:true};
   stream.saveCheckpoint=async()=>{for(const [key,value]of stream.liveJournal)data.set(key,structuredClone(value));stream.liveJournal.clear();};
-  const calls={entries:0,stops:[] as any[],reductions:[] as string[],closes:0,leverage:0},positions:any[]=[],priceOrders:any[]=[],orders=new Map<string,any>();
+  const calls={entries:0,stops:[] as any[],reductions:[] as string[],closes:0,leverage:0,cancels:[] as string[]},positions:any[]=[],priceOrders:any[]=[],orders=new Map<string,any>();
   const gate={snapshot:async()=>({account:{total:'100',available:'90',unrealised_pnl:'0',margin_mode:0},
     positions:structuredClone(positions),orders:[],priceOrders:structuredClone(priceOrders),checkedAt:Date.now()}),
     setLeverage:async()=>{calls.leverage++;},
@@ -84,17 +85,16 @@ async function harness(side:'LONG'|'SHORT') {
     closePosition:async()=>{calls.closes++;positions.length=0;return'exit';},
     reducePosition:async(_symbol:string,direction:string,text:string)=>{calls.reductions.push(text);
       positions[0]!.size=String((direction==='LONG'?1:-1)*(Math.abs(Number(positions[0]!.size))-Number(text)));return'reduce';},
-    cancelOrder:async(_kind:string,id:string)=>{const i=priceOrders.findIndex(p=>p.id_string===id);if(i>=0)priceOrders.splice(i,1);},requestCount:0};
+    cancelOrder:async(_kind:string,id:string)=>{calls.cancels.push(id);const i=priceOrders.findIndex(p=>p.id_string===id);if(i>=0)priceOrders.splice(i,1);},requestCount:0};
   stream.gateLive=async()=>gate;
-  return{stream,state,t,inverse,calls,gate,jobs,data};
+  return{stream,state,t,inverse,calls,gate,jobs,data,positions,priceOrders};
 }
 for(const side of ['LONG','SHORT'] as const)test(`real Worker copies inverse ${side} open/reduce/close using one resident quote and unique reservation`,async()=>{
   const h=await harness(side),priorFetch=globalThis.fetch;let network=0;
   globalThis.fetch=async()=>{network++;throw new Error('network forbidden');};
   try{
     await h.stream.syncLive(Date.now());assert.equal(h.calls.entries,1);assert.equal(network,0);
-    assert.equal(h.calls.stops.length,1);assert.equal(Number(h.calls.stops[0]!.body.trigger.price),side==='LONG'?102:98);
-    assert.equal(h.calls.stops[0]!.body.trigger.rule,side==='LONG'?1:2);
+    assert.equal(h.calls.stops.length,0);
     await h.stream.syncLive(Date.now());assert.equal(h.calls.entries,1);
     const initial=h.inverse.contracts;h.inverse.contracts*=.6;h.inverse.quantity*=.6;h.inverse.notional*=.6;h.inverse.margin*=.6;h.inverse.plannedRisk*=.6;
     h.inverse.realization={sequence:1,initialContracts:initial} as Trade['realization'];
@@ -123,7 +123,7 @@ test('a durable OFF wins over source-policy adoption and cannot be overwritten o
   await assert.rejects(h.stream.syncLive(Date.now()),/所有者意图未对齐/);
   assert.equal((h.data.get('live-parity:v1:owner-intent') as {enabled:boolean}).enabled,false);assert.equal(h.calls.entries,0);
 });
-test('exchange protective closure stays an early deviation and the same inverse parent never reopens',async()=>{
+test('external exchange closure stays an early deviation and the same inverse parent never reopens',async()=>{
   const h=await harness('LONG');await h.stream.syncLive(Date.now());await h.stream.syncLive(Date.now());
   const original=h.gate.snapshot;h.gate.snapshot=async()=>({...await original(),positions:[]});
   await h.stream.syncLive(Date.now());assert.equal(h.calls.entries,1);
@@ -136,4 +136,64 @@ test('member feed carries only strict source marks, values the same inverse acco
   const response=await h.stream.fetch(new Request('https://primary/member-feed')),feed=await response.json() as any;
   assert.ok(feed.state.inverseTrial.source.positions.length===1);assert.equal(feed.state.inverseTrial.source.balance,undefined);
   assert.equal(feed.state.inverseTrial.source.history,undefined);assert.deepEqual(h.state,before);assert.equal(h.calls.entries,0);
+});
+
+for(const side of ['LONG','SHORT'] as const)test(`inverse ${side} remains open beyond the removed guard and source reference moves`,async()=>{
+  const h=await harness(side);h.gate.createStop=async()=>{throw new Error('independent stop forbidden');};
+  await h.stream.syncLive(Date.now());await h.stream.syncLive(Date.now());
+  const price=side==='LONG'?104:96;
+  h.positions[0].mark_price=String(price);h.positions[0].unrealised_pnl='-4';
+  Object.assign(h.stream.runtime.evidence.TEST_USDT,{bestBid:price,bestAsk:price,midpoint:price,observedAt:Date.now()});
+  h.inverse.stopPrice=side==='LONG'?120:80;h.inverse.inverseCopy!.sourceStopPrice=h.inverse.stopPrice;
+  await h.stream.syncLive(Date.now());
+  assert.equal(h.calls.closes,0);assert.equal(h.calls.stops.length,0);
+  const p=h.stream.runtime.live.positions.TEST_USDT;assert.equal(p.status,'OPEN');assert.equal(p.stopTag,null);assert.equal(p.stopPrice,null);
+  assert.ok(Number.isFinite(mirrorPositionRisk(p,price)));
+  assert.equal(mirrorSourceFresh(h.inverse,h.inverse.id,h.inverse.openedAt+24*60*60*1000),true,'source alone ends a trend holding');
+});
+
+async function oldGuardHarness(){
+  const h=await harness('LONG');await h.stream.syncLive(Date.now());await h.stream.syncLive(Date.now());
+  const p=h.stream.runtime.live.positions.TEST_USDT,e=h.stream.runtime.live.entries.TEST_USDT;
+  Object.assign(p,{stopOrderId:'old',stopTag:'old-tag',stopPrice:102,
+    replacementStopOrderId:'replacement',replacementStopTag:'replacement-tag',replacementStopPrice:103});
+  Object.assign(e,{stopOrderId:'old',stopTag:'old-tag',stopPrice:102});
+  h.priceOrders.push({id_string:'old',text:'old-tag'},{id_string:'replacement',text:'replacement-tag'},
+    {id_string:'manual',text:'manual-tag'},{id_string:'legacy',text:'legacy-tag'});
+  return h;
+}
+test('migration cancels existing inverse stops once, confirms absence, and preserves manual/legacy orders',async()=>{
+  const h=await oldGuardHarness();
+  await assert.rejects(h.stream.syncLive(Date.now()),/未纳管挂单/);
+  assert.deepEqual(h.calls.cancels,['old','replacement']);assert.deepEqual(h.priceOrders.map(p=>p.id_string),['manual','legacy']);
+  const p=h.stream.runtime.live.positions.TEST_USDT;assert.equal(p.stopOrderId,null);assert.equal(p.replacementStopOrderId,null);
+  assert.equal(h.stream.runtime.live.entries.TEST_USDT.stopOrderId,null);assert.equal(h.calls.closes,0);
+  assert.equal(p.parity.exitPolicy,'shadow-events-only-v1');assert.ok(p.parity.protectionRemovedAt);
+  assert.equal(h.calls.stops.length,0);assert.equal(h.stream.runtime.live.requestedEnabled,true);
+});
+test('old-stop cancellation failure never forces a close, preserves reconciliation identity, and source close still wins',async()=>{
+  const h=await oldGuardHarness();h.priceOrders.splice(2);h.gate.cancelOrder=async()=>{throw new Error('cancel timeout');};
+  await assert.rejects(h.stream.syncLive(Date.now()),/旧保护/);
+  assert.equal(h.calls.closes,0);assert.equal(h.stream.runtime.live.positions.TEST_USDT.stopOrderId,'old');
+  h.inverse.status='CLOSED';h.inverse.closedAt=Date.now();h.inverse.exitReason='SHADOW_SOURCE_EXIT';h.state.positions=[];h.state.history=[h.inverse];
+  await assert.rejects(h.stream.syncLive(Date.now()),/旧保护/);
+  assert.equal(h.calls.closes,1);assert.equal(h.stream.runtime.live.requestedEnabled,true);
+});
+test('OFF and a restored position still remove inverse protection without flattening or submitting',async()=>{
+  const h=await oldGuardHarness();h.priceOrders.splice(2);h.stream.runtime.live.requestedEnabled=false;
+  h.stream.runtime.live.positions=structuredClone(h.stream.runtime.live.positions);
+  h.stream.runtime.live.entries=structuredClone(h.stream.runtime.live.entries);
+  await h.stream.syncLive(Date.now());assert.deepEqual(h.calls.cancels,['old','replacement']);
+  assert.equal(h.calls.closes,0);assert.equal(h.calls.entries,1);assert.equal(h.stream.runtime.live.requestedEnabled,false);
+});
+test('a late old stop is removed by its retired identity after the first cleanup',async()=>{
+  const h=await oldGuardHarness();h.priceOrders.splice(2);await h.stream.syncLive(Date.now());
+  h.priceOrders.push({id_string:'late',text:'old-tag'});await h.stream.syncLive(Date.now());
+  assert.deepEqual(h.calls.cancels,['old','replacement','late']);assert.equal(h.priceOrders.length,0);assert.equal(h.calls.closes,0);
+});
+
+test('noninverse legacy native stop creation remains intact',async()=>{
+  const h=await harness('LONG');
+  await h.stream.createImmediateLiveStop(h.gate,{planId:'legacy-source',symbol:'TEST_USDT',side:'LONG',invalidation:98});
+  assert.equal(h.calls.stops.length,1);assert.equal(h.calls.stops[0].price,98);assert.equal(h.calls.closes,0);
 });

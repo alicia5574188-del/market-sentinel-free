@@ -1,3 +1,11 @@
+# 2026-10-01 — remove independent inverse LIVE protection
+
+Owner shelves dangerous-entry research. Keep the current frozen shadow; remove
+independent inverse LIVE guards and follow source open/reduce/close events only.
+Safely retire tracked old guards, preserve legacy regular protections, manual
+intent/new-only sessions, exact order identity, proportional capital/leverage,
+fees/history and release/resource gates. Deploy verified main; no real test trade.
+
 # 2026-10-01 — finish current inverse LIVE follow
 
 Complete the owner's requested inverse PAPER → LIVE follow on deployed main
