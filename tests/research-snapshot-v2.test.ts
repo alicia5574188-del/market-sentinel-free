@@ -130,10 +130,11 @@ test('complete settlement counts still load missing archived exit assessments',a
   const pi={decision:'EXIT'} as Trade['positionIntelligence'];
   const result=await collectReviewSnapshot((async (url:unknown)=>{calls++;
     return Response.json(String(url).includes('?')?{accountStartedAt:T,asOf:T+60000,
-      trades:[{...a,positionIntelligence:pi}],recordsRead:1,nextCursor:'unused',exhausted:false}:s);
+      trades:[{...a,positionIntelligence:pi}],recordsRead:1,nextCursor:null,exhausted:true}:s);
   }) as typeof fetch);
   assert.equal(calls,2);assert.equal(result.trades.length,1);assert.equal(result.coverage.complete,true);
   assert.deepEqual(result.trades[0].positionIntelligence,pi);assert.equal(result.summary.positionAssessmentMissing,0);
+  assert.equal(result.summary.exitTraceMissing,1,'an assessment alone cannot invent a missing causal exit receipt');
   assert.equal(result.coverage.exportLimitReached,false);
 });
 test('missing historical evidence stays unknown when the bounded archive is exhausted',async()=>{

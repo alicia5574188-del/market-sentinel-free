@@ -108,7 +108,8 @@ test("execution page exposes the same narrative used by strategy decisions",asyn
   for(const text of["市场作战总览","当前市场","正在发生","接下来可能","正在观察","等待执行","正在持仓"])assert.match(execution,new RegExp(text));
   assert.match(workflow,/market-intelligence-v1/);
   assert.match(workflow,/marketIntelligenceTracked >= 20/);assert.match(workflow,/marketIntelligenceCoverage\.dailyMarkets >= 3/);
-  assert.match(execution,/流动性地图/);
+  assert.match(execution,/hypothesisResearch\?\.active/);
+  assert.match(execution,/planText\(t\.entryContext\.winnerPlan,t\.stopPrice\)/,"holding display must use its actual frozen plan");
   assert.doesNotMatch(execution,/系统刚刚发现的细节|当前交易假设 · 最值得关注的机会|全市场异类与相关组|跨所流动性/);
   assert.match(wrangler,/MarketStream/);assert.match(wrangler,/MemberExecutor/);assert.match(wrangler,/MemberDirectory/);
 });
@@ -340,7 +341,8 @@ test("high-quality entries keep stable thesis authority through shallow realtime
   assert.match(advance,/stableEntryLocationDecision/);
   assert.match(advance,/delete s\.entryValidations\[validation\.id\]/);
   assert.doesNotMatch(advance,/opened=1;s\.entryValidations=\{\}/);
-  assert.match(core,/2秒级浅反向只能转为RETEST_WAIT/);
+  assert.match(core,/validation\.phase="RETEST_WAIT"/);
+  assert.match(core,/decision\.action==="RETEST"/);
 });
 
 
@@ -420,7 +422,7 @@ test("opportunity capture reserves execution capacity and all formal plans use l
   assert.match(execution,/等待执行 · \{waitingValidations\.length\}/);
   assert.doesNotMatch(execution,/preparedWithoutValidation/);
   assert.match(execution,/waitingValidations=entryValidations\.filter\(v=>v\.status==="WAITING"&&!heldSymbols\.has\(v\.symbol\)\)/);
-  assert.match(execution,/\?\?v\.frozenOpportunity/);
+  assert.match(execution,/v\.frozenOpportunity\?\?opportunities\.find/,"frozen execution geometry takes precedence over current research maps");
 });
 
 test("duplicate-symbol execution is blocked at ranking, live validation and final open authority",async()=>{

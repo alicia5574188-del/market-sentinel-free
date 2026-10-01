@@ -1252,7 +1252,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         const known=new Set(this.reviewJournal.candidates.map(r=>r.id));
         const discovered:ReviewEvent[]=next.state.opportunities.filter(o=>!known.has(o.id)).map(o=>({at:now,id:o.id,symbol:o.symbol,
           stage:"CANDIDATE_OBSERVED",side:o.side,reason:o.eligible?"STRATEGY_ELIGIBLE":"STRATEGY_NOT_ELIGIBLE",price:o.price,plan:o.tradePlan,expiresAt:o.expiresAt}));
-        appendReviewEvents(this.reviewJournal,[...discovered,...reviewEvents],now);
+        appendReviewEvents(this.reviewJournal,[...discovered,...reviewEvents].map(e=>({...e,
+          buildSha:FORWARD_BUILD_SHA,strategyFingerprint:STRATEGY_FINGERPRINT})),now);
       }catch{this.reviewDiagnosticError="CANDIDATE_REVIEW_CAPTURE_FAILED";}
       // Publish only committed lifecycle events. A source born in the candle
       // lane must not wait for the next alarm; a source closed while Gate is

@@ -2,15 +2,17 @@
  * Candle areas are price-reaction proxies, never observed resting liquidity.
  * Pure and bounded: no requests, account resets, clocks or exchange mutations.
  */
+import {RESEARCH_PLAN_VERSION,evaluatePlanResearch,type PlanResearchContext,type PlanResearchDecision} from './research-plan.ts';
 import type {CandleLike, MarketSymbolState, QuoteLike} from './market-intelligence-engine.ts';
 export const WINNER_POLICY_VERSION='winner-preservation-v1';
 export type WinnerIntent='TREND'|'RANGE';
 export type ReactionArea={lower:number;upper:number;center:number;formedAt:number;balanced:boolean;basis:'OHLCV_PROXY'};
 export type WinnerPlan={version:typeof WINNER_POLICY_VERSION;intent:WinnerIntent;eventAt:number;
-  initialStop:number;target:number|null;targetArea:ReactionArea|null;origin:ReactionArea|null;
+  researchVersion?:typeof RESEARCH_PLAN_VERSION;entryResearch?:PlanResearchContext;initialStop:number;target:number|null;targetArea:ReactionArea|null;origin:ReactionArea|null;
   riskGroup:string;source:'RELATIVE_CORE'|'EDGE_REJECTION';};
 export type WinnerManagement={version:typeof WINNER_POLICY_VERSION;protectedStop:number;peakNetRate:number;
   lastBarAt:number;obstacleSince:number|null;obstacleBars:number;lastTrimEvent:number|null;trimCount:number;
+  research?:PlanResearchDecision;requestedAction?:'HOLD'|'REDUCE'|'EXIT';appliedAction?:'HOLD'|'REDUCE'|'EXIT';actionReason?:string;reductionResult?:string;
   promotedAt:number|null;targetLevel?:number|null;targetEstablishedAt?:number;phase:'BUILDING'|'EXPANDING'|'OBSTACLE'|'PROTECTED'|'EXIT';reason:string;};
 const clamp=(v:number,a=0,b=1)=>Math.max(a,Math.min(b,v));
 const average=(xs:number[])=>xs.length?xs.reduce((a,b)=>a+b,0)/xs.length:0;
@@ -78,7 +80,7 @@ export function selectWinnerOpportunity(input:{state:MarketSymbolState;price:num
     gross=hardObstacle==null?core.gross:Math.max(0,d*(hardObstacle/input.price-1)),net=Math.max(0,gross-cost),
     stop=input.price*(1-d*core.stopRate),edge=net/core.pullback,
     ownEntryValid=core.eligible&&directional&&net>cost*1.4&&edge>=1.25,
-    trend:WinnerPlan={version:WINNER_POLICY_VERSION,intent:'TREND',eventAt:s.signalSince,initialStop:stop,
+    trend:WinnerPlan={version:WINNER_POLICY_VERSION,researchVersion:RESEARCH_PLAN_VERSION,intent:'TREND',eventAt:s.signalSince,initialStop:stop,
       target:hardObstacle,targetArea:hardObstacle==null?null:a,origin:a,riskGroup:`${s.clusterId}:${side}:TREND`,source:'RELATIVE_CORE'};
   if(ownEntryValid)return{side,plan:trend,...core,eligible:true,gross,net,edge,quality:core.quality,stopRate:core.stopRate,
     reason:'持续相对优势与标的自身推进成立；价格反应区辅助位置，不再要求突破整个大区域。'};
@@ -90,7 +92,7 @@ export function selectWinnerOpportunity(input:{state:MarketSymbolState;price:num
       score=rejected.side==='LONG'?s.longScore:s.shortScore,
       valid=input.price>a.lower&&input.price<a.upper&&rd*(input.price/a.center-1)<0&&stopRate>=.004&&stopRate<=.028
         &&netRate>=cost*2&&rr>=1.25&&s.dataConfidence>=65&&s.sourceCount>=2&&score>=55,
-      plan:WinnerPlan={version:WINNER_POLICY_VERSION,intent:'RANGE',eventAt:rejected.at,initialStop:stopPrice,target:a.center,targetArea:a,
+      plan:WinnerPlan={version:WINNER_POLICY_VERSION,researchVersion:RESEARCH_PLAN_VERSION,intent:'RANGE',eventAt:rejected.at,initialStop:stopPrice,target:a.center,targetArea:a,
         origin:a,riskGroup:`${s.clusterId}:${rejected.side}:RANGE`,source:'EDGE_REJECTION'};
     return{side:rejected.side,plan,eligible:valid,score,pullback:stopRate,stopRate,gross:Math.max(0,targetRate),net:Math.max(0,netRate),
       edge:rr,execution:core.execution,quality:clamp(score*.6+30+Math.min(10,rr*3),0,100),mode:'RELATIVE' as const,exceptional:false,
@@ -101,7 +103,8 @@ export function selectWinnerOpportunity(input:{state:MarketSymbolState;price:num
 }
 export function advanceWinnerManagement(input:{side:'LONG'|'SHORT';price:number;entryPrice:number;openedAt:number;now:number;
   plan:WinnerPlan;previous?:WinnerManagement;currentStop?:number;rows:CandleLike[]|undefined;cost:number;remainingFraction:number;
-  concernFamilies:string[];supportFamilies:string[];positionExit:boolean;trendEligible:boolean}){
+  concernFamilies:string[];supportFamilies:string[];positionExit:boolean;trendEligible:boolean;
+  researchContext?:PlanResearchContext;quote?:QuoteLike;exitBasis?:string|null}){
   const d=sign(input.side),p=input.plan,cost=input.cost,signed=d*(input.price/input.entryPrice-1),
     originalRisk=Math.abs(p.initialStop/input.entryPrice-1),rows=closedFiveMinutes(input.rows,input.now),
     barAt=rows.length?(rows.at(-1)!.time*1000)+300000:0,
@@ -109,6 +112,9 @@ export function advanceWinnerManagement(input:{side:'LONG'|'SHORT';price:number;
     m:WinnerManagement=prev?{...prev}:{version:WINNER_POLICY_VERSION,protectedStop:p.initialStop,peakNetRate:0,lastBarAt:0,
       obstacleSince:null,obstacleBars:0,lastTrimEvent:null,trimCount:0,promotedAt:null,targetLevel:p.target,targetEstablishedAt:input.openedAt,phase:'BUILDING',reason:''};
   m.peakNetRate=peak;
+  const integrated=p.researchVersion===RESEARCH_PLAN_VERSION&&input.researchContext?.version===RESEARCH_PLAN_VERSION;
+  if(!integrated)delete m.research;
+  if(integrated)m.research=evaluatePlanResearch({...input,context:input.researchContext!,rows,originalRisk,peakNetRate:peak,concerns:input.concernFamilies});
   // A newer compact stop checkpoint must never be loosened on restoration.
   if(input.currentStop!=null&&Number.isFinite(input.currentStop)&&input.currentStop>0&&d*(input.currentStop-m.protectedStop)>0)
     m.protectedStop=input.currentStop;
@@ -119,7 +125,7 @@ export function advanceWinnerManagement(input:{side:'LONG'|'SHORT';price:number;
     if(input.trendEligible){m.promotedAt=input.now;m.targetLevel=null;m.phase='EXPANDING';m.reason='回归到达重心后自身持续推进，原仓位升级为趋势；风险不放大';}
     else{m.phase='EXIT';m.reason='有限回归目标已经到达，未出现新的持续推进';return{state:m,action:'EXIT' as const,fraction:0,reason:'RANGE_CENTER_EXIT'};}
   }
-  if(input.positionExit){m.phase='EXIT';m.reason='持仓原始依据与新的持续反证确认失效';
+  if(integrated?m.research!.allowExit:input.positionExit){m.phase='EXIT';m.reason='持仓原始依据与新的持续反证确认失效';
     return{state:m,action:'EXIT' as const,fraction:0,reason:'WINNER_THESIS_EXIT'};}
   // A later balanced reaction area may become the next obstacle; it never
   // rewrites the immutable entry geometry. Clear an accepted former obstacle.
@@ -138,7 +144,7 @@ export function advanceWinnerManagement(input:{side:'LONG'|'SHORT';price:number;
     stalled=!!last&&!!prior&&(d*(last.close/prior.close-1)<=0)&&
       (input.side==='LONG'?last.high<=prior.high*(1+cost*.15):last.low>=prior.low*(1-cost*.15)),
     weakening=stalled&&(input.concernFamilies.includes('PATH')||input.concernFamilies.includes('RELATIVE')||input.concernFamilies.includes('STRUCTURE')),
-    obstacle=meaningful&&nearTarget&&weakening;
+    obstacle=meaningful&&((nearTarget&&weakening)||(m.research?.protect===true&&stalled));
   if(barAt>m.lastBarAt&&barAt<=input.now){
     if(obstacle){if(m.obstacleSince==null){m.obstacleSince=input.now;m.obstacleBars=0;}
       else if(barAt>m.obstacleSince&&last!.time*1000>=input.openedAt)m.obstacleBars++;}
@@ -165,11 +171,11 @@ export function advanceWinnerManagement(input:{side:'LONG'|'SHORT';price:number;
     permittedGiveback=peak*.35,keep=clamp(permittedGiveback/structuralGiveback,0,1),
     minKeep=Math.min(1,.35/Math.max(input.remainingFraction,1e-9)),fraction=1-Math.max(minKeep,keep);
   if(obstacle&&m.obstacleBars>=1&&m.obstacleSince!==m.lastTrimEvent&&m.trimCount<2&&signed>cost*3&&fraction>=.15){
-    m.phase='OBSTACLE';m.reason='目标附近新完成K线仍显示受阻：兑现部分利润，保留有效结构与趋势仓';
+    m.phase='OBSTACLE';m.reason=m.research?.protect?'研究预警与本币持续受阻一致：兑现部分利润，保留原结构和趋势仓':'目标附近新完成K线仍显示受阻：兑现部分利润，保留有效结构与趋势仓';
     // Mutation occurs only AFTER a real PAPER reduction passes lot/accounting checks.
     return{state:m,action:'REDUCE' as const,fraction:Math.min(.65,fraction),reason:'WINNER_OBSTACLE_REDUCTION'};
   }
   m.phase=obstacle?'OBSTACLE':d*(m.protectedStop/input.entryPrice-1)>cost?'PROTECTED':meaningful?'EXPANDING':'BUILDING';
-  m.reason=obstacle?'目标附近推进受阻，等待新的有效价格确认':'保留趋势持仓；已有成本优势不由重新入场评分否决';
+  m.reason=obstacle?'本币推进受阻，等待新的有效价格确认':m.research?.reason??'保留趋势持仓；已有成本优势不由重新入场评分否决';
   return{state:m,action:'HOLD' as const,fraction:0,reason:m.reason};
 }
