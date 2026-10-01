@@ -14,7 +14,7 @@ export function remainingPaidNetPnl(t:Trade,price=t.lastPrice){
 export function tradePaidNetPnl(t:Trade,price=t.lastPrice){
   if(t.status==='CLOSED')return t.netPnl;
   const r=t.realization;
-  return (r?.gross??0)+direction(t.side)*t.quantity*(price-t.entryPrice)-t.entryFee-(r?.fees??0);
+  return (r?.gross??0)+direction(t.side)*t.quantity*(price-t.entryPrice)-t.entryFee-(r?.fees??0)-(r?.funding??0);
 }
 export type PaidLeg={side:Trade['side'];entryPrice:number;price:number|null;quoteAt:number|null;realizedGross:number;
   floatingGross:number|null;grossPnl:number|null;entryFees:number;exitFees:number;fees:number;netPnl:number|null;estimatedExitFee:number|null};
