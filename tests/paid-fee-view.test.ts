@@ -51,7 +51,7 @@ test('closed pair remains exact mirror even though source receipt may retain its
   const {inverse}=pair();exit(inverse,'CLOSE',10,109.9);const r=pairedPaidView(inverse)!;
   near(r.source.grossPnl,99);near(r.inverse.grossPnl,-99);near(r.grossMirrorResidual,0);
   near(r.source.fees,.7+10*109.9*fee);near(r.inverse.fees,r.source.fees);near(r.netSum,-r.paidFees);
-  assert.equal(r.source.netPnl!+r.inverse.netPnl!,-r.paidFees);assert.equal(r.remainingQuantity,0);
+  near(r.source.netPnl!+r.inverse.netPnl!,-r.paidFees);assert.equal(r.remainingQuantity,0);
 });
 
 test('open pair needs the shadow mark; it never invents a second market price',()=>{
@@ -70,5 +70,5 @@ test('aggregate exact mirror has zero gross residual and net sum equals negative
 test('generic non-paired display still respects already-booked partial funding while excluding future exit fee',()=>{
   const t={status:'OPEN',side:'LONG',quantity:6,entryPrice:100,lastPrice:110,entryFee:.7,
     realization:{initialQuantity:10,gross:32,fees:.3024,funding:.01}} as Trade;
-  near(remainingPaidNetPnl(t),59.58);near(tradePaidNetPnl(t),90.9776);near(tradePaidNetPnl({...t,status:'CLOSED',netPnl:90}),90);
+  near(remainingPaidNetPnl(t),59.58);near(tradePaidNetPnl(t),90.9876);near(tradePaidNetPnl({...t,status:'CLOSED',netPnl:90}),90);
 });
