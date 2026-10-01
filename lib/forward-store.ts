@@ -61,6 +61,17 @@ function compactClosedTrade(t:Trade,keepIntelligence:boolean){
   return row;
 }
 function withoutReview(t:Trade){const row={...t};delete row.review;return row;}
+function compactShadowClosedTrade(t:Trade){
+  // Closed-source PI is a duplicated narrative, never an input to the frozen
+  // history-dependent rules. Preserve every numeric/identity/outcome field;
+  // full paired entry/terminal receipts are already on the inverse parent.
+  const row=compactClosedTrade(withoutReview(t),false);
+  if(row.entryContext)for(const key of ['reason','thesisSummary','invalidationSummary','environmentReason','liquidityReason','futureResearchReason','lifecycleReason'] as const){
+    const context=row.entryContext as unknown as Record<string,unknown>;
+    if(typeof context[key]==='string')context[key]=context[key].slice(0,120);
+  }
+  return row;
+}
 function archivePositionSummary(t:Trade){
   return{id:t.id,symbol:t.symbol,side:t.side,status:t.status,openedAt:t.openedAt,entryPrice:t.entryPrice,lastPrice:t.lastPrice,
     lastQuoteAt:t.lastQuoteAt,exitControl:t.exitControl?{policy:t.exitControl.policy}:undefined,
@@ -80,7 +91,7 @@ function hotProjection(next:ForwardState,includeSamples=true){
       account={...next,positions:droppedHotReview?next.positions.map(withoutReview):next.positions,history,events:next.events.slice(0,eventLimit),
         ...(next.inverseTrial?{inverseTrial:{...next.inverseTrial,source:{...next.inverseTrial.source,
           positions:next.inverseTrial.source.positions.map(withoutReview),
-          history:next.inverseTrial.source.history.slice(0,Math.max(32,total)).map((t,i)=>compactClosedTrade(withoutReview(t),i<full)),
+          history:next.inverseTrial.source.history.slice(0,Math.max(32,total)).map(compactShadowClosedTrade),
           events:next.inverseTrial.source.events.slice(0,FORWARD_HOT_EVENT_LIMIT)}}}:{}),
         hypothesisResearch:{...next.hypothesisResearch,
           active:next.hypothesisResearch.active.slice(0,MARKET_HYPOTHESIS_ACTIVE_LIMIT),
@@ -102,6 +113,7 @@ function hotProjection(next:ForwardState,includeSamples=true){
   }
   while(raw.length>FORWARD_ACCOUNT_TARGET_BYTES){
     if(full>8)full=Math.max(8,full-8);
+    else if(next.inverseTrial&&full>0)full=0; // cold archives retain closed PI; both active books take priority
     else if(total>32)total=Math.max(32,total-16);
     else if(eventLimit>48)eventLimit=Math.max(48,eventLimit-16);
     else if(narrativeLimit>36)narrativeLimit=Math.max(36,narrativeLimit-12);

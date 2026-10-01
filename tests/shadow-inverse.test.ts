@@ -173,3 +173,47 @@ test('each new entry has one deterministic pairing ID, no historical reconstruct
   assert.equal(inverseId('a'),'iv-a');assert.equal(SHADOW_INVERSE_VERSION,'shadow-inverse-v1');
   const {s,t}=fixture();const before=s.balance;applyInverseSourceTrade(s,t,undefined,T);near(s.balance,before);assert.equal(s.positions.length,1);
 });
+test('full frozen discovery and realtime response pipeline creates one inverse, with no wallet feedback',()=>{
+  const candles=(step:number)=>{let p=100;return Array.from({length:72},(_,i)=>{const o=p;p*=1+step+Math.sin(i/5)*.00003;
+    return{time:(T-(72-i)*B)/1000,open:o,close:p,low:Math.min(o,p)*.9995,high:Math.max(o,p)*1.0005,volume:1000+i};});};
+  const paths={BTC_USDT:candles(.0010),ETH_USDT:candles(.0018),SOL_USDT:candles(.0009)};
+  for(let i=56;i<72;i++)for(const k of ['open','close','high','low'] as const)paths.ETH_USDT[i]![k]*=1+(i-55)*.0008;
+  const contracts=Object.fromEntries(Object.keys(paths).map(k=>[k,{quantoMultiplier:.01,minContracts:1,leverageMax:10,maintenanceRate:.005}]));
+  let s=initialForward(T-2*B);
+  for(let n=0;n<40;n++){
+    const now=T+n*2000,quotes=Object.fromEntries(Object.entries(paths).map(([k,r])=>{const p=r.at(-1)!.close*(1+n*.00009);
+      return[k,{...quote(p*.99995,p*1.00005,now),disagreementRate:.00008,sourceBreadth:.75,directionalAgreement:.9,
+        medianShortMove:.0005,bookImbalance:.4,bidLiquidityChange:.2,askLiquidityChange:-.2,liquiditySourceCount:3}];}));
+    const input={state:s,now,paths,quotes,contracts,entrySymbols:Object.keys(paths),allowDataCycle:n===0};
+    const expected=frozenAdvance({...input,state:sourceDecisionState(s)});s=advanceShadowInverse(input).state;
+    near(s.inverseTrial!.source.balance,expected.state.balance);assert.equal(s.inverseTrial!.source.resolved,expected.state.resolved);
+    assert.deepEqual(s.inverseTrial!.source.positions.map(t=>[t.id,t.side,t.quantity,t.stopPrice]),expected.state.positions.map(t=>[t.id,t.side,t.quantity,t.stopPrice]));
+    if(n===3)s.balance+=50000; // Test-only perturbation; must not resize source entries.
+    if(s.inverseTrial!.totals.opened){const source=s.inverseTrial!.source.positions[0]!,actual=s.positions[0]!;
+      assert.equal(actual.inverseCopy!.sourceId,source.id);assert.notEqual(actual.side,source.side);near(actual.quantity,source.quantity);
+      assert.equal(actual.openedAt,source.openedAt);assertInverseTrial(s);return;}
+  }
+  assert.fail('synthetic confirmed source opportunity never produced a paired inverse');
+});
+
+test('rich dual-ledger drain fits storage without losing active evidence or source outcome inputs',async()=>{
+  const rich=(id:string,at:number)=>{const t=trade(id,'LONG',at),text='持仓优势变化与跨所流动性细节'.repeat(35);
+    Object.assign(t.entryContext!,{reason:text,thesisSummary:text,invalidationSummary:text,entryResidual:.08,thesisId:id});
+    t.positionIntelligence={version:'position-intelligence-v1',updatedAt:T,decision:'REVIEW',phase:'DECAYING',reviewSince:T-B,
+      reviewBars:2,lastCompletedBar:T,entryAdvantage:88,currentAdvantage:67,advantageChange:-21,remainingSpaceRate:.012,
+      expectedPullbackRate:.009,continuationRatio:1.33,holdValueScore:49,exitValueScore:51,dataConfidence:91,counterfactualNewEntry:false,
+      supportFamilies:['RELATIVE','FLOW'],concernFamilies:['PATH','STRUCTURE'],assessments:['RELATIVE','PATH','FLOW','STRUCTURE','MARKET'].map(f=>({
+        family:f as 'PATH',stance:'CONCERN' as const,severity:.6,summary:text})),reasons:[text,text],concerns:[text,text],summary:text};return t;};
+  const s=initialForward(T-100*B);s.positions=Array.from({length:10},(_,i)=>rich('old'+i,T-B));
+  s.history=Array.from({length:240},(_,i)=>({...rich('history'+i,T-2*B-i*1000),status:'CLOSED' as const,closedAt:T-B-i*1000,
+    exitPrice:99,grossPnl:-10,netPnl:-11.393,exitFee:.693,exitReason:'WINNER_THESIS_EXIT'}));s.resolved=240;
+  s.inverseTrial=newInverseTrial(s,T,1000);const source=structuredClone(sourceDecisionState(s));source.positions=[];
+  for(let i=0;i<10;i++){const t=rich('new'+i,T);t.symbol='NEW'+i+'_USDT';sourceOpen(source,t);applyInverseSourceTrade(s,t,quote(),T);}
+  retainSource(s,source);s.storage.persistedAt=T;const write=await prepareForwardWrite(null,s,T,{compact:true});
+  assert.ok(write.compression.rawBytes<1024*1024);const db=new Map(Object.entries(write.entries));
+  const restored=await readForwardStore({get:async<V>(k:string)=>structuredClone(db.get(k)) as V|undefined},T+1);
+  assertInverseTrial(restored);near(restored.inverseTrial!.source.balance,source.balance);assert.equal(restored.positions.length,20);
+  assert.equal(restored.inverseTrial!.source.positions[0]!.positionIntelligence!.summary,source.positions[0]!.positionIntelligence!.summary);
+  assert.equal(restored.inverseTrial!.source.history[0]!.entryContext!.entryResidual,.08);assert.equal(restored.inverseTrial!.source.history[0]!.netPnl,-11.393);
+  assert.ok(Buffer.byteLength(JSON.stringify(prepareForwardProtectionWrite(s)))<112*1024);
+});
