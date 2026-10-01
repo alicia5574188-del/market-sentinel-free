@@ -1,0 +1,46 @@
+name: Inverse paired fill cost audit
+on:
+  push:
+    branches: [verify/20261001-inverse-cutover]
+    paths: [.github/workflows/inverse-pair-cost-audit.yml]
+permissions: {}
+jobs:
+  receipt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Read existing public export once and summarize paired costs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,subprocess,os,pathlib
+          from datetime import datetime,timezone
+          url='https://market-sentinel-free.alicia5574188.workers.dev/api/forward/export'
+          raw=subprocess.check_output(['curl','--silent','--show-error','--max-time','40','--write-out','\n%{http_code}',url],text=True)
+          body,status=raw.rsplit('\n',1)
+          print('EXPORT_HTTP '+status,flush=True)
+          if status!='200':
+              print(body[:1500],flush=True);raise SystemExit(1)
+          d=json.loads(body);x=d.get('inverseExperiment') or {};rows=[t for t in d.get('trades',[]) if t.get('inverseCopy')]
+          target=int(datetime(2026,10,1,4,51,19,tzinfo=timezone.utc).timestamp()*1000)
+          fills=[f for t in rows for f in t['inverseCopy']['fills'] if f['appliedAt']<=target]
+          paired_at=[t for t in rows if t['openedAt']<=target]
+          out={'meta':d.get('meta'),'account':d.get('account'),'coverage':d.get('coverage'),
+            'paired':{k:v for k,v in x.items() if k not in ['curve','pairs']},
+            'screenTimeFillTotals':{'cutoff':target,'entries':sum(f['kind']=='OPEN' for f in fills),'closes':sum(f['kind']=='CLOSE' for f in fills),
+              'sourceFees':sum(f['sourceFee'] for f in fills),'inverseFees':sum(f['fee'] for f in fills),
+              'sourceFunding':sum(f['sourceFunding'] for f in fills),'inverseFunding':sum(f['funding'] for f in fills),
+              'settledSpreadDrag':sum(f['spreadDrag'] for f in fills)},
+            'curveNearScreenshot':sorted(x.get('curve',[]),key=lambda p:abs(p['at']-target))[:4],
+            'trades':[{'id':t['id'],'symbol':t['symbol'],'status':t['status'],'side':t['side'],'openedAt':t['openedAt'],'closedAt':t['closedAt'],'quantity':t['quantity'],
+              'notional':t['notional'],'entryPrice':t['entryPrice'],'lastPrice':t['lastPrice'],'lastQuoteAt':t['lastQuoteAt'],'netPnl':t.get('netPnl'),
+              'inverseCopy':{k:v for k,v in t['inverseCopy'].items() if k not in ['sourceEntryPlan','sourceExitAudit']}} for t in rows]}
+          p=pathlib.Path(os.environ['RUNNER_TEMP'])/'inverse-cost-audit.json';p.write_text(json.dumps(out,ensure_ascii=False,indent=2))
+          print('PAIR_AUDIT '+json.dumps(out,ensure_ascii=False),flush=True)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: inverse-cost-audit
+          path: ${{ runner.temp }}/inverse-cost-audit.json
+          retention-days: 1
