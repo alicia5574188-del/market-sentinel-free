@@ -1,5 +1,5 @@
 import {RESEARCH_PLAN_VERSION,researchPlanContext,type PlanResearchDecision} from './research-plan.ts';
-import {assertInverseTrade,assertInverseTrial,inverseTrialSummary,sourceDecisionState,shadowCapsule,applyInverseSourceTrade,type InverseCopy,type InverseTrial} from './shadow-inverse-ledger.ts';
+import {assertInverseTrade,assertInverseTrial,inverseTrialSummary,sourceDecisionState,shadowCapsule,applyInverseSourceTrade,migrateInverseSamePrice,type InverseCopy,type InverseTrial} from './shadow-inverse-ledger.ts';
 import {advanceWinnerManagement, trendCore, WINNER_POLICY_VERSION, type WinnerPlan, type WinnerManagement} from "./winner-policy.ts";
 import {realizeTradeSlice, realizedContribution, remainingTradeFraction, assertTradeRealization, type TradeRealization} from "./trade-realization.ts";
 import {winnerEventHeadroom, recordWinnerRiskLoss, type WinnerRiskLedger} from "./winner-risk.ts";
@@ -322,7 +322,7 @@ function normalizeEntryValidations(value:unknown,now:number){
 }
 export function normalizeForward(v:ForwardState|null|undefined,now:number):ForwardState{
   if(!v)return initialForward(now);
-  assertInverseTrial(v);
+  migrateInverseSamePrice(v,now);assertInverseTrial(v);
   if(v.version!==FORWARD_VERSION||!Number.isFinite(v.balance)||!Array.isArray(v.positions)||!Array.isArray(v.history)||v.liveEligible!==false)
     throw new Error("前向账户存储格式异常；保留原数据，禁止自动重置");
   const base=initialForward(v.startedAt>0?v.startedAt:now);
@@ -452,8 +452,18 @@ function opportunityCompare(a:Opportunity,b:Opportunity){
     ||b.score-a.score;
 }
 function equityMark(s:ForwardState,quotes:Record<string,Quote>,now:number){
-  let floating=0,stale=0;for(const t of s.positions){const q=quotes[t.symbol],px=freshQuote(q,now)?midpoint(q):t.lastPrice;if(!freshQuote(q,now))stale++;
-    floating+=dir(t.side)*t.quantity*(px-t.entryPrice)-t.quantity*px*PAPER_COST.feeRate;}
+  let floating=0,stale=0;
+  for(const t of s.positions){
+    if(t.inverseCopy){
+      const source=s.inverseTrial?.source.positions.find(x=>x.id===t.inverseCopy!.sourceId),
+        valid=!!source&&Number.isFinite(source.lastPrice)&&source.lastPrice>0&&Number.isFinite(source.lastQuoteAt)&&source.lastQuoteAt<=now;
+      const px=valid?source!.lastPrice:t.lastPrice;if(!valid||now-source!.lastQuoteAt>10000)stale++;
+      // Entry fee has already been debited from balance; future close fee is not paid yet.
+      floating+=dir(t.side)*t.quantity*(px-t.entryPrice);continue;
+    }
+    const q=quotes[t.symbol],fresh=freshQuote(q,now),px=fresh?midpoint(q):t.lastPrice;if(!fresh)stale++;
+    floating+=dir(t.side)*t.quantity*(px-t.entryPrice)-t.quantity*px*PAPER_COST.feeRate;
+  }
   return{equity:s.balance+floating,floating,stalePositions:stale};
 }
 export function forwardEquity(s:ForwardState,quotes:Record<string,Quote>,now:number){return equityMark(s,quotes,now);}
