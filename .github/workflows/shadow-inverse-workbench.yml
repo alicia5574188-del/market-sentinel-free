@@ -1,0 +1,29 @@
+name: Shadow inverse isolated workbench
+on:
+  push:
+    branches: [feat/20261001-shadow-inverse]
+    paths: [.github/workflows/shadow-inverse-workbench.yml]
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 9b8b31532aa01589b7c797388f6c3d5fcac88164
+          fetch-depth: 0
+      - name: Exact source and public baseline only
+        run: |
+          mkdir -p /tmp/shadow-source
+          git archive 9b8b31532aa01589b7c797388f6c3d5fcac88164 > /tmp/shadow-source/current.tar
+          git archive 2b4fd60f77c9b78526bd5087940945fe7e86fab8 > /tmp/shadow-source/baseline.tar
+          git ls-tree -r 9b8b31532aa01589b7c797388f6c3d5fcac88164 > /tmp/shadow-source/current-tree.txt
+          curl --fail --silent --show-error --max-time 20 https://market-sentinel-free.alicia5574188.workers.dev/__health > /tmp/shadow-source/before-health.json
+          jq '{ok,runtime:{buildSha:.runtime.buildSha,liveMode:.runtime.liveMode,forward:{startedAt:.runtime.forward.startedAt,initialEquity:.runtime.forward.initialEquity,resolved:.runtime.forward.resolved,openCount:.runtime.forward.openCount,storage:.runtime.forward.storage}}}' /tmp/shadow-source/before-health.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shadow-exact-source
+          path: /tmp/shadow-source
+          retention-days: 3
