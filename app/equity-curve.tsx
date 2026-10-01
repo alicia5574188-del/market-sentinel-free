@@ -84,13 +84,13 @@ export default function EquityCurve({data,healthy,fixture,cache,cacheScope="owne
   const ticks=Math.min(50,Math.max(2,Math.floor(canvasWidth/100)));
   if(!data)return <div className="eq-empty">等待净值记录。</div>;
   return <div className="eq-module" data-equity-version={EQUITY_CURVE_VERSION} data-equity-cache={EQUITY_CACHE_VERSION}>
-    <div className="eq-toolbar"><div><span className="eq-label">账户净值 · USDT</span><span className="eq-start">起始 {number(context.initialEquity)} U</span></div>
+    <div className="eq-toolbar"><div><span className="eq-label">模拟账户净值 · USDT</span><span className="eq-start">起始 {number(context.initialEquity)} U</span></div>
       <div className="eq-ranges" role="group" aria-label="净值时间范围">{([["24h","24小时"],["7d","7天"],["all","全部"]] as const).map(([id,label])=><button key={id} aria-pressed={range===id} onClick={()=>switchRange(id)}>{label}</button>)}</div>
     </div>
     <div className="eq-selection" aria-live="polite"><strong>{shown?number(shown.equity):"—"}<small> U</small></strong><div>{shown&&<><b className={shown.equity>=context.initialEquity?"fr-positive":"fr-negative"}>{shown.equity>=context.initialEquity?"+":""}{number(shown.equity-context.initialEquity)} U · {((shown.equity/context.initialEquity-1)*100).toFixed(2)}%</b><span>{stamp(shown.at)} · {shown.kind==="origin"?"初始本金":shown.kind==="preview"?"当前估值":shown.stale?"已保存净值 · 含陈旧报价":"已保存净值"}</span></>}</div></div>
     <div className="eq-plot"><svg className="eq-axis" width="54" height="248" aria-hidden="true">{[min,(min+max)/2,max].filter(v=>Math.abs(y(v)-y(context.initialEquity))>16).map(v=><text key={v} x="48" y={y(v)+4} textAnchor="end">{v.toFixed(0)}</text>)}<text className="eq-base-label" x="48" y={y(context.initialEquity)+4} textAnchor="end">{context.initialEquity.toFixed(0)}</text></svg>
       <div className="eq-scroll" ref={scroll} tabIndex={0} role="region" aria-label="净值曲线，可左右滑动或使用方向键" onScroll={e=>{const n=e.currentTarget;setOffset(n.scrollLeft);atLatest.current=n.scrollLeft>=n.scrollWidth-n.clientWidth-8;}}>
-        <svg width={canvasWidth} height="248" viewBox={`0 0 ${canvasWidth} 248`} onPointerDown={pick} onPointerMove={e=>{if(e.buttons===1)pick(e);}} role="img" aria-label="含模拟成本的真实净值曲线；空白处缺少连续记录">
+        <svg width={canvasWidth} height="248" viewBox={`0 0 ${canvasWidth} 248`} onPointerDown={pick} onPointerMove={e=>{if(e.buttons===1)pick(e);}} role="img" aria-label="模拟账户净值曲线；空白处缺少连续记录">
           {[min,(min+max)/2,max].map(v=><line key={v} x1="0" x2={canvasWidth} y1={y(v)} y2={y(v)} className="eq-grid"/>)}
           <line x1="0" x2={canvasWidth} y1={y(context.initialEquity)} y2={y(context.initialEquity)} className="eq-baseline"/>
           {curveSegments(chartPoints).map((segment,i)=><g key={i}><path d={smoothPath(segment.map(p=>({x:x(p.at),y:y(p.equity)})))} className="eq-curve"/>{segment.length===1&&<circle cx={x(segment[0].at)} cy={y(segment[0].equity)} r="3" className="eq-dot"/>}</g>)}

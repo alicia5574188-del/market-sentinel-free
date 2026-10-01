@@ -1,3 +1,14 @@
+# Owner correction: keep original PAPER curve visible during LIVE — 2026-10-02
+
+The owner requests keeping the original simulated equity curve visible when
+LIVE is enabled. Render the original PAPER curve as a clearly separate reference
+on overview and the LIVE-mirrored simulated page. Preserve the existing account
+identity, archive/cache scope and history; never splice Gate marks into PAPER.
+LIVE ON headline equity, floating, order rows and settlements remain Gate facts.
+This is presentation only: no strategy, trade, stop, sizing, owner/member switch,
+account reset, archive write or new polling/alarm cadence. Verify scoped rendering
+and the existing reviewed-main release; no private verification order.
+
 # Owner correction: execution participation / LIVE authority — 2026-10-01
 
 Owner explicitly abandons favorable-entry waiting and winner-filter research.
