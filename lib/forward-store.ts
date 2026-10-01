@@ -15,11 +15,16 @@ export const FORWARD_SAMPLE_RECOVERY_PREFIX=`${FORWARD_STORAGE}sample-recovery:`
 // serialization and metadata. No base64 conversion or state-field omission.
 export const FORWARD_COMPACT_BYTES = 112*1024;
 export const FORWARD_ACCOUNT_TARGET_BYTES = 640*1024;
+// A paired trial owns both source and inverse wallets plus draining
+// legacy positions. Its logical JSON envelope is not one old account.
+// Keep the existing compressed-byte, chunk-count and per-value limits;
+// the explicit head mode is checked again against the decoded ledger.
+export const FORWARD_PAIRED_ACCOUNT_MAX_BYTES = 4*1024*1024;
 export const FORWARD_HOT_HISTORY_FULL = 32;
 export const FORWARD_HOT_HISTORY_TOTAL = 96;
 export const FORWARD_HOT_EVENT_LIMIT = 96;
 type Head = { version: string; count: number; length: number; sha256: string; encoding?: "gzip"; rawLength?: number;
-  inline?: Uint8Array; sampleManifestSha256?:string };
+  inline?: Uint8Array; sampleManifestSha256?:string; accountMode?:"shadow-inverse-v1" };
 type SamplePageMeta={id:string;key:string;count:number;firstAt:number;lastAt:number;length:number;rawLength:number;
   sha256:string;rawSha256?:string;encoding:"gzip"|"utf8"};
 export type ForwardSampleManifest={version:typeof FORWARD_PAGED_STATE_VERSION;count:number;pages:SamplePageMeta[]};
@@ -188,6 +193,9 @@ function packedPageIssue(samples:unknown[],meta:SamplePageMeta,allowLegacyDrift=
 export async function readForwardStore(storage: Reader, now: number) {
   const head=await storage.get<Head>(`${FORWARD_STORAGE}head`);
   if(!head)return normalizeForward(null,now);
+  const accountLimit=head.accountMode==="shadow-inverse-v1"?FORWARD_PAIRED_ACCOUNT_MAX_BYTES:FORWARD_ACCOUNT_MAX_BYTES;
+  if(head.accountMode!==undefined&&(head.accountMode!=="shadow-inverse-v1"||head.version!==FORWARD_PAGED_STATE_VERSION))
+    throw new Error("前向账户存储模式异常；保留原账户");
   if((head.version!==FORWARD_VERSION&&head.version!==FORWARD_STORAGE_STATE_VERSION&&head.version!==FORWARD_PAGED_STATE_VERSION)
     ||!Number.isSafeInteger(head.count)||head.count<0||head.count>32
     ||!Number.isSafeInteger(head.length)||head.length<1||head.length>MAX_STATE_BYTES
@@ -201,10 +209,12 @@ export async function readForwardStore(storage: Reader, now: number) {
   const bytes=new Uint8Array(head.length);let offset=0;
   for(const chunk of chunks){if(!chunk||offset+chunk.byteLength>bytes.length)throw new Error("前向存储分片缺失");bytes.set(chunk,offset);offset+=chunk.byteLength;}
   if(offset!==bytes.length||await digest(bytes)!==head.sha256)throw new Error("前向存储校验失败，原账户不会被覆盖");
-  const raw=head.encoding==="gzip"?await gunzip(bytes,head.version===FORWARD_PAGED_STATE_VERSION?FORWARD_ACCOUNT_MAX_BYTES:MAX_STATE_BYTES):bytes;
+  const raw=head.encoding==="gzip"?await gunzip(bytes,head.version===FORWARD_PAGED_STATE_VERSION?accountLimit:MAX_STATE_BYTES):bytes;
   if(head.encoding==="gzip"&&raw.length!==head.rawLength)throw new Error("前向解压长度校验失败");
-  if(head.version===FORWARD_PAGED_STATE_VERSION&&raw.length>FORWARD_ACCOUNT_MAX_BYTES)throw new Error("前向账户主状态超过预算；拒绝截断账户");
+  if(head.version===FORWARD_PAGED_STATE_VERSION&&raw.length>accountLimit)throw new Error("前向账户主状态超过预算；拒绝截断账户");
   const decoded=JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(raw)) as ForwardState;
+  if(head.accountMode!==undefined&&decoded.inverseTrial?.version!==head.accountMode)
+    throw new Error("前向双账户存储头与配对账本不一致；保留原账户");
   if(head.version===FORWARD_PAGED_STATE_VERSION){
     const manifest=await storage.get<ForwardSampleManifest>(FORWARD_SAMPLE_MANIFEST_STORAGE);
     if(!manifest||manifest.version!==FORWARD_PAGED_STATE_VERSION||!Number.isSafeInteger(manifest.count)||manifest.count<0
@@ -337,10 +347,13 @@ export async function prepareForwardWrite(previous:ForwardState|null,next:Forwar
   delete recoveryState.__legacySampleRecovery;delete recoveryState.__persistedSampleManifest;
   const pages=await encodeSamplePages(next.relationEngine.samples),manifest:ForwardSampleManifest={version:FORWARD_PAGED_STATE_VERSION,
     count:next.relationEngine.samples.length,pages:pages.map(page=>page.meta)},manifestSha256=await digest(encodeJson(manifest));
-  const hot=hotProjection(next,false),raw=hot.raw;
-  if(raw.length>FORWARD_ACCOUNT_MAX_BYTES)
-    throw new Error("Forward活跃金融状态本身超过硬上限；历史已自动冷分层，拒绝截断当前持仓或资金状态");
+  const hot=hotProjection(next,false),raw=hot.raw,
+    accountBudgetBytes=next.inverseTrial?FORWARD_PAIRED_ACCOUNT_MAX_BYTES:FORWARD_ACCOUNT_MAX_BYTES;
+  if(raw.length>accountBudgetBytes)
+    throw new Error(`Forward活跃金融状态超过已声明账户预算（${raw.length}/${accountBudgetBytes}字节）；拒绝截断当前持仓或资金状态`);
   const compressed=await gzip(raw),useGzip=compressed.length<raw.length,bytes=useGzip?compressed:raw;
+  if(bytes.length>MAX_STATE_BYTES)
+    throw new Error("Forward压缩账户超过分片总预算；拒绝写入不能恢复的金融状态");
   const entries:Record<string,unknown>={};let count=0;
   for(const recovery of legacySampleRecovery){
     if(recovery.bytes.length!==recovery.meta.length||await digest(recovery.bytes)!==recovery.meta.sha256)
@@ -367,6 +380,7 @@ export async function prepareForwardWrite(previous:ForwardState|null,next:Forwar
   if(!priorManifest||previous?.storage.sampleIntegrity!=="raw-sha256"||JSON.stringify(priorManifest)!==JSON.stringify(manifest))
     entries[FORWARD_SAMPLE_MANIFEST_STORAGE]=manifest;
   entries[`${FORWARD_STORAGE}head`]={version:FORWARD_PAGED_STATE_VERSION,count,length:bytes.length,sha256:await digest(bytes),sampleManifestSha256:manifestSha256,
+    ...(next.inverseTrial?{accountMode:"shadow-inverse-v1" as const}:{}),
     ...(useGzip?{encoding:"gzip" as const,rawLength:raw.length}:{}),...(inline?{inline:bytes.slice(0,FORWARD_COMPACT_BYTES)}:{})} satisfies Head;
 
   const priorRevision=previous?.revision??0,events=next.events.filter(e=>{
@@ -431,8 +445,8 @@ export async function prepareForwardWrite(previous:ForwardState|null,next:Forwar
   recoveryState.__persistedSampleManifest=structuredClone(manifest);
   return{entries,writes:Object.keys(entries).length,compression:{encoding:useGzip?"gzip":"utf8",rawBytes:raw.length,
     storedBytes:bytes.length,chunks:count,sampleCount:manifest.count,samplePages:manifest.pages.length,changedSamplePages,
-    accountBudgetBytes:FORWARD_ACCOUNT_MAX_BYTES,
-    utilization:raw.length/FORWARD_ACCOUNT_MAX_BYTES,...hot.meta,
+    accountBudgetBytes,
+    utilization:raw.length/accountBudgetBytes,...hot.meta,
     ...(options.compact?{inlineHead:inline,chunkBytes}:{})}};
 }
 
