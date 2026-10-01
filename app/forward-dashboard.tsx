@@ -148,15 +148,15 @@ function InversePanel({data}:{data:View|null}){
     <div className="fr-paid-summary" data-testid="paired-paid-summary"><div><small>原策略影子净额</small><b className={(v.paidCost?.source.netPnl??0)>=0?"fr-positive":"fr-negative"}>{signed(v.paidCost?.source.netPnl)} U</b><small>已扣手续费 {fmt(v.sourceFees,4)} U</small></div>
       <div><small>反向模拟净额</small><b className={(v.paidCost?.inverse.netPnl??0)>=0?"fr-positive":"fr-negative"}>{signed(v.paidCost?.inverse.netPnl)} U</b><small>已扣手续费 {fmt(v.inverseFees,4)} U</small></div></div>
     <p className="fr-paid-note">净额只扣已发生费用，未平仓部分含浮动盈亏；已配对 / 已完成 {v.pairedOpened} / {v.pairedClosed}。</p>
-    {v.paidCost&&<p className="fr-paid-note">两边净额差 {fmt(v.paidCost.reconciliation.netGap,4)} U ＝ 已扣手续费 {fmt(v.paidCost.reconciliation.paidFees,4)} U ＋ 报价毛额差 {fmt(v.paidCost.reconciliation.openGrossGap===null?null:v.paidCost.reconciliation.realizedGrossGap+v.paidCost.reconciliation.openGrossGap,4)} U ＋ 已记资金费占位 {fmt(v.paidCost.reconciliation.bookedFunding,6)} U</p>}
+    {v.paidCost&&<p className="fr-paid-note">毛盈亏镜像校验 {fmt(v.paidCost.reconciliation.grossMirrorResidual,6)} U（应为 0） · 两边净额合计 {fmt(v.paidCost.reconciliation.netSum,4)} U ＝ −已扣手续费合计 {fmt(v.paidCost.reconciliation.paidFees,4)} U</p>}
     {!!v.paidCost?.stalePairs&&<p className="fr-paid-note">{v.paidCost.stalePairs} 组报价待更新，净额使用各自最后记录；缺失价格显示 —。</p>}
     <p>切换 {time(v.cutoverAt)} · 旧持仓 {v.legacyOpen} 笔单独收尾 · 实盘未接入此试验</p>
-    <details><summary>估算清仓曲线（含预估平仓费）</summary><p>历史曲线保留原估值口径，不等于上方已扣费净额。虚线：影子 · 实线：反向模拟 · 同一起点 {fmt(v.initialEquity)} U</p>
+    <details><summary>同价镜像对照曲线</summary><p>虚线：影子 · 实线：反向模拟 · 同一成交价、同一当前价，只反方向；净额只扣已发生手续费。共同起点 {fmt(v.initialEquity)} U</p>
       <svg viewBox="0 0 400 185" width="100%" role="img" aria-label="切换后配对订单的影子与反向模拟对照，缺失处断开">
         {segments.map((rows,k)=><g key={k}><polyline fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray="5 4" points={rows.map(p=>`${x(p.at)},${y(p.source)}`).join(' ')}/>
           <polyline fill="none" className="eq-curve" points={rows.map(p=>`${x(p.at)},${y(p.inverse)}`).join(' ')}/></g>)}
         <text x="12" y="14" fill="currentColor" fontSize="10">{fmt(hi)} U</text><text x="12" y="180" fill="currentColor" fontSize="10">{fmt(lo)} U</text>
-      </svg><p>各自已扣手续费：影子 {fmt(v.sourceFees)} U / 反向 {fmt(v.inverseFees)} U · 已实现价差损耗 {fmt(v.realizedSpreadDrag)} U</p>
+      </svg><p>各自已扣手续费：影子 {fmt(v.sourceFees)} U / 反向 {fmt(v.inverseFees)} U</p>
       <p>仅统计新配对订单；原账户总曲线保留在下方。{v.stalePositions?"当前报价不齐，估值待更新。":""}</p>
     </details></section>;
 }
@@ -168,9 +168,8 @@ export function PairedOrderCosts({pair}:{pair:PaidPair}){
       <small>毛额 {signed(leg.grossPnl,4)} U</small>
       <small>已扣手续费 {fmt(leg.fees,4)} U</small>
       <small>开仓 {fmt(leg.entryFees,4)} U{pair.exitFills>0?` · ${pair.status==="CLOSED"?"平仓":"已减仓"} ${fmt(leg.exitFees,4)} U`:""}</small>
-      {leg.bookedFunding>0&&<small>已记资金费占位 {fmt(leg.bookedFunding,6)} U</small>}
     </span>;})}
-    <small className="fr-pair-foot">报价毛额差 {fmt(pair.grossGap,4)} U（非手续费）{!pair.quoteFresh?" · 报价待更新":""}{pair.administrative?" · 重置结算":""}</small>
+    <small className="fr-pair-foot">毛盈亏镜像校验 {fmt(pair.grossMirrorResidual,6)} U（应为 0）{!pair.quoteFresh?" · 影子价格待更新":""}{pair.administrative?" · 重置结算":""}</small>
   </span>;
 }
 function Metric({label,value}:{label:string;value:string}){return <span><small>{label}</small><b>{value}</b></span>;}
