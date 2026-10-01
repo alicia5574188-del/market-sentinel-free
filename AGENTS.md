@@ -1,3 +1,16 @@
+# Owner correction: PAPER fees match current LIVE rate — 2026-10-02
+
+Owner requests matching simulated fee calculation to LIVE. Screenshot totals
+imply current taker reference0.05%, versus PAPER0.07%. Change only prospective
+passive inverse PAPER fills: own fill notional ×0.0005, once per OPEN/REDUCE/CLOSE.
+Keep frozen source decision/accounting0.0007, nominal quantity, prices, lifecycle,
+history, already-booked fees/curves, LIVE5× and manual sessions untouched. Stamp
+new fills with their fee policy/rate, accept old7bp receipts without rewriting,
+and report each ledger's own fees consistently in balances/views/review exports.
+This is the owner's current reference rate, not an unqueried VIP/discount feed.
+No new Gate read, timer, storage row, test trade/reset or LIVE control. Full
+reviewed-main release and advancing production/account continuity required.
+
 # Owner correction: half LIVE leverage / doubled margin — 2026-10-02
 
 The owner explicitly requests halving leverage and doubling isolated margin to

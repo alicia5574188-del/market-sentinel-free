@@ -1,4 +1,25 @@
-# 2026-10-02 — half inverse LIVE leverage, in progress
+# 2026-10-02 — prospective PAPER fee parity, in progress
+
+Base main/production c080a3a5b66a8038b69651e408df9b0ee6ae2cee. Screenshot
+PAPER67.54/96486.29≈0.07%, LIVE7.22/14435.74≈0.05%; difference is fixed rate,
+not margin/leverage or twice-counting. Scope: new inverse fill fees0.05%, preserve
+old fees/history/curve and frozen source0.07% decisions. Implement per-fill
+policy/rate and own-leg projection with mixed-legacy restoration tests; no
+new request/row/cadence, real trade, reset or switch. Local gates pass:
+direct336, focused36, Forward78+compat4, equity73, members67, LIVE197,
+architecture/migration43, full npm test/build, typecheck, lint0errors/14existing
+warnings, diff check, native feed/storage and final compiled-member smoke.
+Initial UI test VM loader rejected the new real pure fee module; fixture now
+loads only that exact real module, rerun passes. Initial local member session
+request timeout resolves on the unmodified sequential rerun. No production fix
+or test weakening for emulator timing. Bindings/cadence/requests unchanged;
+mandatory CI dry-run and exact reviewed-main release pending. Latest public
+before receipt has account1790843524083, source2b4fd60f77c9b78526bd5087940945fe7e86fab8,
+activation1790860857522, user LIVE OFF and9managed5× holdings (no switch action
+performed here); ready/non-stale, errors null, persisted1790896719156 and
+heartbeat1790896731375. Preserve latest manual intent.
+
+# 2026-10-02 — half inverse LIVE leverage, done
 
 Base main5725df7e681e799001320903fc1d204d4b1778f8. Owner explicitly authorizes
 same nominal exposure, doubled isolated margin and halved leverage. New sizing
@@ -12,8 +33,17 @@ member workerd smokes pass; initial emulator session request timed out and its
 unmodified rerun succeeds. Local dry-run log ends at --dry-run exit with original
 bindings; automatic review rejected status polling on speculative upload risk,
 so no retry or bypass; read-only log inspection confirms local completion.
-Existing CI dry-run/reviewed-main deployment and advancing receipts pending.
-No real test trades, private production reads, reset or switch action.
+PR602 exact-head CI36937014352 succeeds. Main c080a3a5b66a8038b69651e408df9b0ee6ae2cee
+matches tested treec7bd7522aaa5dc57584c776dc57167373f2da7e6; release36937197231
+verify/deploy succeeds. Final local build/architecture43 also passes unchanged tree.
+Native-backed public receipts show10/10 inverse holdings at/below half-source
+target,0pending/deviations/blocks and nine confirmed existing-holding adjustments.
+Account1790843524083, activation1790860857522, frozen source2b4fd60f77c9b78526bd5087940945fe7e86fab8
+and owner/operational ON intact; authority ready/non-stale, errors null.
+Two post-deploy receipts advance saves1790895023549→1790895090514,
+heartbeat1790895024978→1790895086500 and success1790895034091→1790895103999.
+No real test trades, private production reads, reset or switch action. Durable
+completion receipt saved in merged PR602 description; no extra receipt-only deploy.
 
 # 2026-10-02 — overview-only PAPER/LIVE curves, done
 

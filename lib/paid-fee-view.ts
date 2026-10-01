@@ -1,7 +1,8 @@
 /** Read-only presentation for the exact same-price mirror experiment. Never feeds decisions. */
 import type {ForwardState,Quote,Trade} from './forward-relations.ts';
+import {INVERSE_COST} from './inverse-fee.ts';
 
-export const PAID_FEE_VIEW_VERSION='paid-fee-view-v2-same-price';
+export const PAID_FEE_VIEW_VERSION='paid-fee-view-v3-own-fees';
 const finite=(n:unknown):n is number=>typeof n==='number'&&Number.isFinite(n);
 const positive=(n:unknown):n is number=>finite(n)&&n>0;
 const direction=(side:Trade['side'])=>side==='LONG'?1:-1;
@@ -35,10 +36,13 @@ export function pairedPaidView(t:Trade,_q?:Quote,now=t.lastQuoteAt,source?:Trade
     sourceExitFees=exits.reduce((n,f)=>n+f.sourceFee,0),sourceRealized=exits.reduce((n,f)=>n+f.sourceGross,0),
     sourceFloating=closed?0:sharedPrice===null?null:direction(copy.sourceSide)*t.quantity*(sharedPrice-sourceEntry);
   function leg(isSource:boolean):PaidLeg{
-    const side=isSource?copy.sourceSide:t.side,entryPrice=sourceEntry,entryFees=sourceEntryFees,exitFees=sourceExitFees,
+    const side=isSource?copy.sourceSide:t.side,entryPrice=sourceEntry,
+      entryFees=isSource?sourceEntryFees:copy.fills.filter(f=>f.kind==='OPEN').reduce((n,f)=>n+f.fee,0),
+      exitFees=isSource?sourceExitFees:exits.reduce((n,f)=>n+f.fee,0),
       realizedGross=isSource?sourceRealized:-sourceRealized,floatingGross=sourceFloating===null?null:isSource?sourceFloating:-sourceFloating,
       grossPnl=floatingGross===null?null:realizedGross+floatingGross,fees=entryFees+exitFees,
-      estimatedExitFee=closed?0:sharedPrice===null?null:t.quantity*sharedPrice*(sourceEntry>0?sourceEntryFees/(first.quantity*sourceEntry):0);
+      estimatedExitFee=closed?0:sharedPrice===null?null:t.quantity*sharedPrice*(isSource
+        ?sourceEntry>0?sourceEntryFees/(first.quantity*sourceEntry):0:INVERSE_COST.feeRate);
     return{side,entryPrice,price:sharedPrice,quoteAt:sharedQuoteAt,realizedGross,floatingGross,grossPnl,entryFees,exitFees,fees,
       netPnl:grossPnl===null?null:grossPnl-fees,estimatedExitFee};
   }
@@ -61,12 +65,12 @@ export function inversePaidFeeView(state:ForwardState,_quotes:Record<string,Quot
     inverseGross=sourceGross===null?null:-sourceGross,
     source={realizedGross:a.sourceGross,floatingGross:sourceFloating,grossPnl:sourceGross,fees:a.sourceFees,
       netPnl:sourceGross===null?null:sourceGross-a.sourceFees},
-    inverse={realizedGross:-a.sourceGross,floatingGross:sourceFloating===null?null:-sourceFloating,grossPnl:inverseGross,fees:a.sourceFees,
-      netPnl:inverseGross===null?null:inverseGross-a.sourceFees},
+    inverse={realizedGross:-a.sourceGross,floatingGross:sourceFloating===null?null:-sourceFloating,grossPnl:inverseGross,fees:a.fees,
+      netPnl:inverseGross===null?null:inverseGross-a.fees},
     netSum=sumKnown([source.netPnl,inverse.netPnl]);
   return{version:PAID_FEE_VIEW_VERSION,asOf:now,scope:'POST_CUTOVER_PAIRED_ONLY_EXACT_PRICE',source,inverse,rows,
     stalePairs:rows.filter(r=>!r.quoteFresh).length,missingSourceMarks:rows.filter(r=>r.source.price===null).length,
     estimatedExitFees:{source:sumKnown(rows.map(r=>r.source.estimatedExitFee)),inverse:sumKnown(rows.map(r=>r.inverse.estimatedExitFee)),includedInNet:false},
-    reconciliation:{paidFees:a.sourceFees*2,grossMirrorResidual:sourceGross===null?null:sourceGross+inverseGross!,netSum},
+    reconciliation:{paidFees:a.sourceFees+a.fees,grossMirrorResidual:sourceGross===null?null:sourceGross+inverseGross!,netSum},
     accountingBasis:'Exact same source event/current price on both PAPER legs; gross PnL mirrors exactly; net deducts filled fees only.'};
 }

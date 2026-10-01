@@ -8,6 +8,7 @@ import {renderToStaticMarkup} from "react-dom/server";
 import ts from "typescript";
 import * as liveEquity from '../lib/live-equity.ts';
 import * as equityGeometry from '../lib/equity-curve.ts';
+import * as inverseFee from '../lib/inverse-fee.ts';
 import {EquityHistoryCache,EQUITY_CACHE_VERSION} from '../lib/equity-cache.ts';
 
 const read=path=>readFileSync(new URL(`../${path}`,import.meta.url),"utf8");
@@ -17,7 +18,10 @@ const realizationSource=ts.transpileModule(read("lib/trade-realization.ts"),{com
 runInNewContext(`(function(require,module,exports){${realizationSource}\n})`,{})(name=>{throw new Error(`pure accounting imported ${name}`);},realizationModule,realizationModule.exports);
 const paidModule={exports:{}};
 const paidSource=ts.transpileModule(read("lib/paid-fee-view.ts"),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
-runInNewContext(`(function(require,module,exports){${paidSource}\n})`,{})(name=>{throw new Error(`pure view imported ${name}`);},paidModule,paidModule.exports);
+runInNewContext(`(function(require,module,exports){${paidSource}\n})`,{})(name=>{
+  if(name==='./inverse-fee.ts')return inverseFee;
+  throw new Error(`pure view imported ${name}`);
+},paidModule,paidModule.exports);
 // Render the real presentation modules; network/cache boundaries are inert fixtures.
 function render(path,props,extra={},component="default"){
   const source=ts.transpileModule(read(path),{fileName:path,compilerOptions:{
