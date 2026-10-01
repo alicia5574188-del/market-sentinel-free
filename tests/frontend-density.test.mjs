@@ -42,7 +42,7 @@ function render(path,props,extra={},component="default"){
     ...extra
   };
   const fixtureModule={exports:{}};
-  runInNewContext(`(function(require,module,exports){${source}\n})`,{}, {filename:path})(name=>{
+  runInNewContext(`(function(require,module,exports){${source}\n})`,{window:{scrollY:0,scrollTo(){}}}, {filename:path})(name=>{
     if(name.endsWith(".css"))return {};
     assert.ok(Object.hasOwn(imports,name),`unexpected runtime dependency: ${name}`);
     return imports[name];
@@ -228,7 +228,7 @@ test("waiting and holding views use the frozen order area, not a newer conflicti
   assert.match(html,/本单参考区 100–104/);assert.doesNotMatch(html,/本单参考区 200–204/);
 });
 
-test("order cards expose exact-price shadow/inverse nets before expanding, without an unfilled close charge",()=>{
+test("inverse cards show only their own exact-price net and paid fees without an unfilled close charge",()=>{
   const t={id:"iv-source",status:"OPEN",symbol:"AAVE_USDT",side:"LONG",entryPrice:100,lastPrice:102,quantity:2,contracts:2,
     notional:200,entryFee:.14,leverage:10,margin:20,plannedRisk:2,openedAt:1790760000000,closedAt:null,
     stopPrice:98,expectedHoldMinutes:40,favorable:.02,adverse:0,entryContext:null,
@@ -239,10 +239,10 @@ test("order cards expose exact-price shadow/inverse nets before expanding, witho
   const pair=paidModule.exports.pairedPaidView(t,undefined,1790761200000,source);
   const html=render("app/forward-dashboard.tsx",{trade:t,now:1790761200000,paid:pair},{},"TradeCard");
   const summary=html.match(/<summary>[\s\S]*?<\/summary>/)?.[0];assert.ok(summary);
-  assert.match(summary,/原策略影子 · 空/);assert.match(summary,/反向模拟 · 多/);
-  assert.match(summary,/净额 -4\.14 U/);assert.match(summary,/净额 \+3\.86 U/);
+  assert.doesNotMatch(summary,/原策略影子|影子空单|-4\.14|paired-order-costs/);
+  assert.match(summary,/\+3\.86 U/);
   assert.match(summary,/已扣手续费 0\.1400 U/);assert.doesNotMatch(summary,/平仓 [0-9]|已减仓 [0-9]/);
-  assert.match(summary,/毛盈亏镜像校验 0\.000000 U/);assert.doesNotMatch(summary,/报价毛额差/);
+  assert.doesNotMatch(summary,/毛盈亏镜像校验|报价毛额差/);
 });
 test("comparison shows exact-mirror paid-fee nets and overview fee never adds estimates",()=>{
   const data=account();data.fees=3.25;
@@ -252,7 +252,48 @@ test("comparison shows exact-mirror paid-fee nets and overview fee never adds es
       reconciliation:{grossMirrorResidual:0,paidFees:2.5,netSum:-2.5},estimatedExitFees:{source:66,inverse:66}}};
   const html=render("app/forward-dashboard.tsx",dashboardProps(data));
   assert.match(html,/原策略影子净额/);assert.match(html,/-5\.00 U/);assert.match(html,/\+2\.50 U/);
+  assert.ok(html.indexOf('反向模拟净额')<html.indexOf('原策略影子净额'));
   assert.doesNotMatch(html,/-999\.00|\+888\.00|报价毛额差|资金费占位/);
   assert.match(html,/<small>模拟已扣手续费<\/small><b>3\.25 U<\/b>/);
   assert.match(html,/同价镜像对照曲线/);assert.match(html,/毛盈亏镜像校验 0\.000000 U/);
+});
+
+test('LIVE OFF hides saved native curve and cached native statistics while preserving PAPER history',()=>{
+  const html=render('app/forward-dashboard.tsx',{...dashboardProps(account()),liveOverview:{equity:4321.09,available:6543.21,positionCount:99,equityCurve:{lastEquity:4321.09}}},
+    {'./live-equity-curve.tsx':{default:()=>{throw new Error('OFF must not mount native history');}}});
+  assert.match(html,/paper-equity-curve/);assert.doesNotMatch(html,/4,321\.09|6,543\.21|99 笔|live-curve-fixture/);
+  const T=1790760000000;
+  assert.equal(render('app/live-equity-curve.tsx',{enabled:false,sessionAt:T,cacheScope:'owner',now:T,
+    head:{version:liveEquity.LIVE_EQUITY_VERSION,sessionAt:T,accountUser:'gate',startedAt:T,initialEquity:100,lastAt:T,lastEquity:101}},
+    {'../lib/live-equity.ts':liveEquity,'./equity-curve.tsx':{default:()=>{throw new Error('OFF must not fetch chart history');}}}), '');
+});
+
+test('one account click reveals all shadow orders and switches native account facts back together',()=>{
+  const data=account(),T=data.updatedAt;
+  const trade=(id,symbol,closed=false)=>({id:`iv-${id}`,status:closed?'CLOSED':'OPEN',symbol,side:'LONG',entryPrice:100,lastPrice:102,lastQuoteAt:T,
+    quantity:closed?0:2,contracts:2,notional:200,entryFee:.1,leverage:10,margin:20,plannedRisk:2,openedAt:T-60000,closedAt:closed?T:null,exitPrice:closed?102:null,netPnl:closed?3.796:null,
+    inverseCopy:{sourceId:id,sourceSide:'SHORT',fills:[{sequence:0,kind:'OPEN',quantity:2,contracts:2,sourcePrice:100,price:100,sourceFee:.14,fee:.1,sourceGross:0,gross:0,sourceFunding:0,funding:0,sourceAt:T-60000,appliedAt:T-60000,sourceQuoteAt:T-60000,quoteAt:T-60000},
+      ...(closed?[{sequence:1,kind:'CLOSE',quantity:2,contracts:2,sourcePrice:102,price:102,sourceFee:.1428,fee:.102,sourceGross:-4,gross:4,sourceFunding:0,funding:0,sourceAt:T,appliedAt:T,sourceQuoteAt:T,quoteAt:T}]:[])]}});
+  data.positions=[trade('a','AAVE_USDT'),trade('b','SUI_USDT')];data.history=[trade('c','WLD_USDT',true)];
+  const rows=data.positions.map(t=>paidModule.exports.pairedPaidView(t,undefined,T,{lastPrice:102,lastQuoteAt:T}));
+  data.shadowInverse={pairedOpened:3,pairedClosed:1,sourceFees:.5628,paidCost:{source:{netPnl:-12.5628},rows}};
+  const states=[],refs=[],buttons=[];let cursor=0,refCursor=0;
+  const hooks={...React,useState(initial){const i=cursor++;if(!(i in states))states[i]=typeof initial==='function'?initial():initial;return[states[i],value=>{states[i]=typeof value==='function'?value(states[i]):value;}];},
+    useRef(initial){const i=refCursor++;return refs[i]??(refs[i]={current:initial});},useEffect(){},useLayoutEffect(){}};
+  const capture=fn=>(type,props,...rest)=>{if(type==='button')buttons.push(props);return fn(type,props,...rest);};
+  const draw=()=>{cursor=0;refCursor=0;buttons.length=0;return render('app/forward-dashboard.tsx',{...dashboardProps(data),liveEnabled:true,livePanel:'NATIVE_ORDER_PANEL',liveOverview:{equity:321.09,positionCount:1}},
+    {react:hooks,'react/jsx-runtime':{...jsxRuntime,jsx:capture(jsxRuntime.jsx),jsxs:capture(jsxRuntime.jsxs)}});};
+  let html=draw();buttons.find(b=>b.children==='查看全部影子订单 →').onClick();html=draw();
+  assert.ok(html.indexOf('反向模拟')<html.indexOf('影子订单</button>'));
+  assert.match(html,/shadow-orders-panel/);for(const symbol of ['AAVE / USDT','SUI / USDT','WLD / USDT'])assert.ok(html.includes(symbol));
+  assert.match(html,/-12\.56 U/);assert.match(html,/-4\.14 U/);assert.match(html,/0\.2828 U/);assert.match(html,/当前已平仓记录 1/);
+  assert.doesNotMatch(html,/NATIVE_ORDER_PANEL|paper-live-mirror|live-curve-fixture|paired-order-costs/);
+  const panel=html.match(/data-testid="shadow-orders-panel"[\s\S]*?<\/section>/)?.[0];assert.doesNotMatch(panel,/<details|<summary/);
+  buttons.find(b=>Array.isArray(b.children)&&b.children[0]==='反向模拟').onClick();html=draw();
+  assert.match(html,/NATIVE_ORDER_PANEL|paper-live-mirror/);assert.doesNotMatch(html,/shadow-orders-panel|-12\.56 U/);
+  buttons.find(b=>b.children==='影子订单').onClick();html=draw();
+  assert.match(html,/shadow-orders-panel/);assert.match(html,/<div class="fr-live-panel-host" hidden="">NATIVE_ORDER_PANEL<\/div>/);
+  buttons.find(b=>Array.isArray(b.children)&&b.children[1]?.props?.children==='总览').onClick();html=draw();
+  assert.match(html,/321\.09/);buttons.find(b=>b.children==='查看同步账户 →').onClick();html=draw();
+  assert.match(html,/paper-live-mirror/);assert.doesNotMatch(html,/shadow-orders-panel/);
 });

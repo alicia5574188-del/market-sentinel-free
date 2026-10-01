@@ -1,4 +1,24 @@
-# 2026-10-02 — prospective PAPER fee parity, in progress
+# 2026-10-02 — final account-matched page, in progress
+
+Base main6ee4c1d623f844f460972e19dd2c7b4161b9ace5. Frontend-only account
+selector inverse-first/shadow-second and all current shadow paired rows,
+including retained closed receipts; each uses source prices/fees/own net and
+honest bounded scope. LIVE ON default inverse view stays native; shadow view
+does not mount it. OFF removes native curve/cached stats while retaining PAPER
+history. Compact inverse cards now show own net/fee only, diagnostics folded.
+Focused19 including actual click transitions pass. Direct338+compat4,
+Forward78+compat4, equity73, members67, LIVE197, architecture/migration43,
+full npm test, final build/typecheck/lint0errors14existing warnings and diff
+check pass. Final compiled SQLite member smoke passes with no real Gate or
+primary reads; initial emulator session timeout resolves on unmodified rerun.
+Initial strict null-price and effect-state lint findings fixed without weakening
+checks. Lib/Worker/config/workflow/package sources byte-identical to base.
+Local SQLite storage round-trip/atomic archive rollback smoke also passes.
+Reviewed-main release/advancing receipts pending. Public before account
+1790843524083/source2b4fd60f77c9b78526bd5087940945fe7e86fab8,
+activation1790860857522, owner OFF, ready/non-stale/errors null.
+
+# 2026-10-02 — prospective PAPER fee parity, done
 
 Base main/production c080a3a5b66a8038b69651e408df9b0ee6ae2cee. Screenshot
 PAPER67.54/96486.29≈0.07%, LIVE7.22/14435.74≈0.05%; difference is fixed rate,
@@ -18,6 +38,18 @@ before receipt has account1790843524083, source2b4fd60f77c9b78526bd5087940945fe7
 activation1790860857522, user LIVE OFF and9managed5× holdings (no switch action
 performed here); ready/non-stale, errors null, persisted1790896719156 and
 heartbeat1790896731375. Preserve latest manual intent.
+PR603 exact-head CI36940459707 including dry-run succeeds; main6ee4c1d623f844f460972e19dd2c7b4161b9ace5
+same tested treead3dc028029396cec6875f2a71fdee7487b9d3c0 deployed by successful
+release36940620087 verify/deploy. Public confirms feePolicygate-taker-5bp-v1,
+inverse0.0005/source0.0007 and own-fees viewv3, zero fee/gross/net residual.
+Old paid fees68.5344223004 remain unchanged; no natural PAPER fill in the short
+post-deploy window, so no new production debit or real test trade is claimed.
+Source/account/session and owner OFF intact; initial7managed holdings at/below
+5×, final ordinary native observation0managed/0pending. No LIVE code/control
+change or assistant trade. Post-deploy saves1790897202275→1790897270013,
+heartbeat1790897188804→1790897284013 and success1790897204609→1790897302959
+advance; ready/non-stale, errors null. Durable final receipt saved in PR603;
+no receipt-only extra deployment. Future VIP/discount changes are not automatic.
 
 # 2026-10-02 — half inverse LIVE leverage, done
 

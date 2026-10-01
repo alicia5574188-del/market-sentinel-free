@@ -1,3 +1,16 @@
+# Owner correction: final account-matched UI — 2026-10-02
+
+Owner requests inverse PAPER first/left and shadow second/right, one account
+switch for all shadow order rows, account-matched valuations/statistics and
+LIVE curve visible only while enabled. Supersede earlier OFF-visible-curve
+presentation only: retain durable history and existing OFF-to-ON session reset.
+Use current paired open marks and retained closed receipts read-only, label
+their bounded post-cutover scope, never substitute them for native LIVE facts.
+Preserve original PAPER overview curve, all backend/strategy/fees/leverage,
+accounts/sessions/history/control and cadence. No extra request/write, private
+verification trade or switch. Verify click transitions, OFF/ON and reviewed
+main deployment with advancing production receipts.
+
 # Owner correction: PAPER fees match current LIVE rate — 2026-10-02
 
 Owner requests matching simulated fee calculation to LIVE. Screenshot totals
