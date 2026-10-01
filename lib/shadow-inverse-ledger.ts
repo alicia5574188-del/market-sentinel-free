@@ -60,7 +60,7 @@ function addFill(state:ForwardState,t:Trade,source:Trade,kind:InverseFill['kind'
   if(sourceAt!==now)throw new Error('反向复制禁止用当前事件伪造历史成交');
   if(!finite(sourcePrice)||sourcePrice<=0||!finite(sourceQuoteAt)||sourceQuoteAt>sourceAt)throw new Error('影子成交回执无效');
   const i=t.inverseCopy!,isOpen=kind==='OPEN',price=sourcePrice,
-    sourceGross=isOpen?0:dir(source.side)*quantity*(sourcePrice-source.entryPrice),gross=-sourceGross,
+    sourceGross=isOpen?0:dir(source.side)*quantity*(sourcePrice-source.entryPrice),gross=sourceGross===0?0:-sourceGross,
     sourceFee=quantity*sourcePrice*INVERSE_COST.feeRate,fee=sourceFee,
     days=Math.max(0,sourceAt-source.openedAt)/86_400_000,
     sourceFunding=isOpen?0:quantity*source.entryPrice*SOURCE_FUNDING_ALLOWANCE_PER_DAY*days,
@@ -197,7 +197,7 @@ export function migrateInverseSamePrice(state:ForwardState,now:number){
     oldWins=rows.filter(t=>t.status==='CLOSED'&&(t.netPnl??0)>0).length;
   for(const t of rows){
     const i=t.inverseCopy!,first=i.fills[0]!,sourceOpen=trial.source.positions.find(s=>s.id===i.sourceId);
-    for(const f of i.fills){f.price=f.sourcePrice;f.gross=-f.sourceGross;f.fee=f.sourceFee;f.funding=0;f.spreadDrag=0;f.quoteAt=f.sourceQuoteAt;}
+    for(const f of i.fills){f.price=f.sourcePrice;f.gross=f.sourceGross===0?0:-f.sourceGross;f.fee=f.sourceFee;f.funding=0;f.spreadDrag=0;f.quoteAt=f.sourceQuoteAt;}
     t.entryPrice=first.sourcePrice;t.entryFee=first.sourceFee;t.fundingAllowance=0;
     const exits=i.fills.slice(1),reductions=exits.filter(f=>f.kind==='REDUCE');
     if(reductions.length){
@@ -276,5 +276,10 @@ export function assertInverseTrial(state:ForwardState){
     if(!mirror||!same(mirror.contracts,source.contracts)||!same(mirror.entryPrice,mirror.inverseCopy!.sourceEntryPrice))
       throw new Error('已提交影子与反向持仓配对缺失');
   }
-  for(const mirror of [...state.positions,...state.history])if(mirror.inverseCopy)assertInverseTrade(mirror);
+  for(const mirror of state.positions){if(!mirror.inverseCopy)continue;
+    const source=t.source.positions.find(s=>s.id===mirror.inverseCopy!.sourceId);
+    if(!source||source.side===mirror.side||!same(source.quantity,mirror.quantity))throw new Error('反向持仓失去对应影子来源');
+    assertInverseTrade(mirror);
+  }
+  for(const mirror of state.history)if(mirror.inverseCopy)assertInverseTrade(mirror);
 }
