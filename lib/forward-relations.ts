@@ -1,4 +1,4 @@
-import {RESEARCH_PLAN_VERSION,researchPlanContext} from './research-plan.ts';
+import {RESEARCH_PLAN_VERSION,researchPlanContext,type PlanResearchDecision} from './research-plan.ts';
 import {advanceWinnerManagement, trendCore, WINNER_POLICY_VERSION, type WinnerPlan, type WinnerManagement} from "./winner-policy.ts";
 import {realizeTradeSlice, realizedContribution, remainingTradeFraction, assertTradeRealization, type TradeRealization} from "./trade-realization.ts";
 import {winnerEventHeadroom, recordWinnerRiskLoss, type WinnerRiskLedger} from "./winner-risk.ts";
@@ -151,7 +151,7 @@ export type Trade={
   profitProtection?:{version:string;reachedR:number;lockedR:number;floorRate:number;retentionRate:number;activationRate:number;
     checkpointBand:number;mode:"STRONG_TREND"|"HEALTHY_TREND"|"NORMAL"|"WEAKENING";peakR:number;updatedAt:number};
   profitProtectionMigration?:{version:string;state:"CURRENT"|"GUARDED"|"DEFERRED";updatedAt:number;baselineFavorable:number};
-  exitAudit?:{trigger:string;at:number;detail?:string;evidence?:Record<string,string|number|boolean|null>};
+  exitAudit?:{trigger:string;at:number;detail?:string;evidence?:Record<string,string|number|boolean|null>;research?:PlanResearchDecision};
   holdValue?:{action:"HOLD"|"REVIEW"|"EXIT_PROFIT"|"EXIT_RISK";pullbackRiskRate:number;bestHoldMinutes:number;score:number};
   positionIntelligence?:PositionIntelligenceState;
   liquidityLifecycle?:{currentPlan:LiquidityTradePlan;upgradedAt:number|null;reason:string;
@@ -587,8 +587,10 @@ export function manageWinnerTrade(s:ForwardState,t:Trade,q:Quote,now:number,path
     score:t.holdScore,pullbackRiskRate:position.expectedPullbackRate,bestHoldMinutes:t.expectedHoldMinutes??180};
   if(outcome.action==="EXIT"){
     closeTrade(s,t,px,now,outcome.reason,{authority:"WINNER_PLAN",quoteAt:q.observedAt,protectedStop:t.stopPrice,
-      originalStop:plan.initialStop,trimCount:t.realization?.sequence??0,research:outcome.state.research??null,
-      requestedAction:outcome.action,appliedAction:"EXIT"});return true;
+      originalStop:plan.initialStop,trimCount:t.realization?.sequence??0,
+      requestedAction:outcome.action,appliedAction:"EXIT"});
+    if(t.exitAudit&&outcome.state.research)t.exitAudit.research=structuredClone(outcome.state.research);
+    return true;
   }
   if(outcome.action==="REDUCE"){
     const minContracts=contract?.minContracts??Number(contract?.orderSizeMin??0),
@@ -1597,7 +1599,7 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
       sampleMeaning:"不依赖旧策略样本训练；只使用当前已完成K线、多交易所实时共识和持续市场记忆做因果判断。",
       accounting:"模拟仍使用新鲜买卖价并计入手续费、滑点和资金费占位；每笔新Trade冻结独立交易假设、相关组、失效条件与持仓计划。",
       risk:"总结构风险≤10%、同方向≤6.5%、组合保证金≤75%；同一高相关组正常只允许一个同方向主仓，反方向独立假设可并存。",
-      validation:"新版计划保留独立趋势核心；稳定市场预警只调整新增风险与普通机会确认，健康持仓不能被市场预警单独平掉。研究、订单与执行页共用订单冻结区域；旧多尺度地图仅作背景。",
+      validation:"单一噪声不能让大方向来回翻转。新版计划保留独立趋势核心；稳定市场预警只调整新增风险与普通机会确认，健康持仓不能被市场预警单独平掉。研究、订单与执行页共用订单冻结区域；旧多尺度地图仅作背景。",
       liquidation:"先执行既定硬风险与保护线；主动退出需要本币新的价格失败依据。盈利后的部分兑现统一由同一计划管理，不把同源价格分数当成多项独立证据。"},
     cost:PAPER_COST,nextCycleAt:s.lastCandleAt+BAR_MS};
 }

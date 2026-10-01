@@ -93,7 +93,7 @@ export function captureTradeReviews(previous:ForwardState,next:ForwardState,now:
     review.lastBuildSha=buildSha;
     if(t.status==='CLOSED'){
       review.exitBuildSha=buildSha;review.exitStrategyFingerprint=strategyFingerprint;
-      review.terminal={trigger:t.exitReason,evidence:integrated&&t.exitAudit?{...t.exitAudit,evidence:{authority:t.exitAudit.evidence?.authority,fullEvidencePath:'trade.exitAudit'}}:t.exitAudit,assessment:point,
+      review.terminal={trigger:t.exitReason,evidence:integrated&&t.exitAudit?{trigger:t.exitAudit.trigger,at:t.exitAudit.at,evidence:{authority:t.exitAudit.evidence?.authority??null,fullEvidencePath:'trade.exitAudit'}}:t.exitAudit,assessment:point,
         reviewSince:pi?.reviewSince??null,reviewBars:pi?.reviewBars??null,dataConfidence:pi?.dataConfidence??null,
         assessments:(pi?.assessments??[]).map(a=>({family:a.family,stance:a.stance,severity:a.severity,contextOnly:a.contextOnly===true}))};
     }
