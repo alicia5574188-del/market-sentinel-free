@@ -3,7 +3,7 @@ on:
   push:
     branches: [feat/20261001-shadow-inverse]
     paths:
-      - scripts/shadow-inverse-edits-*.b64
+      - scripts/shadow-inverse-refinements.b64
       - .github/workflows/shadow-inverse-workbench.yml
   workflow_dispatch:
 permissions:
@@ -20,49 +20,43 @@ jobs:
         with:
           ref: feat/20261001-shadow-inverse
           fetch-depth: 0
-      - name: Validate original and edited source hashes
+      - name: Validate exact storage refinement and test sources
         id: apply
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import base64,hashlib,json,lzma,pathlib,re,subprocess
+          import base64,hashlib,json,lzma,pathlib,subprocess
           root=pathlib.Path('.')
           sha=lambda b:hashlib.sha256(b).hexdigest()
-          payload=''.join(''.join((root/f'scripts/shadow-inverse-edits-{i}.b64').read_text().split()) for i in (1,2))
-          assert sha(payload.encode())=='c8f036ff05889ec5a264afe9c8b2961cc93a49b2368c1ea1d110329265958cb0','Transport digest mismatch'
+          payload=''.join((root/'scripts/shadow-inverse-refinements.b64').read_text().split())
+          assert sha(payload.encode())=='16c9582e78ffd6273c3365b94262375833ff1e382a22da34912927f4d23ffd63','Transport digest mismatch'
           raw=lzma.decompress(base64.b64decode(payload,validate=True))
-          assert sha(raw)=='cf3d9934d068ee184adcb4a4c322206964b69ce5cb057e8599863c7aad9fdc4f','Edit digest mismatch'
+          assert sha(raw)=='44568810a02b01e367e93675038412246dd3fce47b3daaf6cd5362bd1d03a0b8','Edit digest mismatch'
           edits=json.loads(raw)
-          allowed=set('lib/shadow-baseline/forward-relations.ts lib/shadow-baseline/manifest.json lib/shadow-baseline/market-intelligence-engine.ts lib/shadow-baseline/winner-policy.ts lib/shadow-inverse-ledger.ts lib/shadow-inverse.ts research/SHADOW_INVERSE_2026-10-01.md tests/shadow-inverse.test.ts AGENTS.md app/forward-dashboard.tsx app/market-intelligence-execution.tsx lib/forward-protection-checkpoint.ts lib/forward-relations.ts lib/forward-store.ts lib/live-parity.ts lib/research-snapshot.ts lib/review-trace.ts package.json vite.config.ts worker/index-clean.ts'.split())
-          assert len(edits)==20 and {e['path'] for e in edits}==allowed
-          ready=[];frozen={'forward-relations.ts','market-intelligence-engine.ts','winner-policy.ts'}
+          allowed=set('lib/forward-store.ts tests/shadow-inverse.test.ts research/SHADOW_INVERSE_2026-10-01.md'.split())
+          assert len(edits)==3 and {e['path'] for e in edits}==allowed
+          ready=[]
           for e in edits:
-              p=root/e['path']; prior=p.read_bytes() if p.exists() else None
-              if prior is not None and sha(prior)==e['after']:continue
-              assert (sha(prior) if prior is not None else None)==e['before'],f"Preimage mismatch: {p}"
-              if 'frozenPath' in e:
-                  assert e['frozenPath']=='lib/'+p.name and p.name in frozen
-                  original=subprocess.check_output(['git','show','2b4fd60f77c9b78526bd5087940945fe7e86fab8:'+e['frozenPath']])
-                  assert sha(original)==e['frozenHash'],f"Frozen source mismatch: {p}"
-                  new=re.sub(r'''(from\s+["'])\./([^"']+)(["'])''',lambda m:m[1]+('./' if m[2] in frozen else '../')+m[2]+m[3],original.decode()).encode()
-              else:
-                  lines=(prior or b'').decode().splitlines(keepends=True)
-                  for i,j,text in reversed(e['edits']):
-                      assert 0<=i<=j<=len(lines)
-                      lines[i:j]=text.splitlines(keepends=True)
-                  new=''.join(lines).encode()
+              p=root/e['path']; prior=p.read_bytes()
+              if sha(prior)==e['after']:continue
+              assert sha(prior)==e['before'],f"Preimage mismatch: {p}"
+              lines=prior.decode().splitlines(keepends=True)
+              for i,j,text in reversed(e['edits']):
+                  assert 0<=i<=j<=len(lines)
+                  lines[i:j]=text.splitlines(keepends=True)
+              new=''.join(lines).encode()
               assert sha(new)==e['after'],f"Postimage mismatch: {p}"
               ready.append((p,new))
-          for p,new in ready:p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(new)
+          for p,new in ready:p.write_bytes(new)
           subprocess.run(['git','diff','--check'],check=True)
           subprocess.run(['git','add','--',*sorted(allowed)],check=True)
-          print(f'All exact source digests verified; {len(ready)} source files staged.')
+          print(f'All refinement digests verified; {len(ready)} files staged.')
           PY
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           if ! git diff --cached --quiet; then
-            git commit -m 'Freeze 2b4fd60f shadow decisions and add atomic passive inverse PAPER ledger'
+            git commit -m 'Keep dual-ledger active financial state ahead of duplicate closed narratives; verify full source pipeline'
             git push origin HEAD:refs/heads/feat/20261001-shadow-inverse
           fi
           mkdir -p "$RUNNER_TEMP/inverse-checks"
