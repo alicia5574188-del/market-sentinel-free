@@ -48,7 +48,14 @@ export async function reconcileSourceClose(input:{id:string;sourceClosedAt:numbe
     sourceExitPrice:input.sourceExitPrice,observedAt:input.now,initialContracts:remaining,knownFilled:0,knownValue:0}),
     attempt,last:{tag:attempt===1?liveExitTag(input.id):liveExitTag(`${input.id}:exit:${attempt}`),
       kind:limit?'LIMIT':'MARKET',price:limit?.price??'0',submittedAt:input.now,orderId:null,terminal:false,accounted:false}};
-  await input.persist(state); // reservation survives unknown send/results
+  try{await input.persist(state);}catch(error){
+    // No exchange call was made. Keep a known-unsent terminal reservation in
+    // memory (and durably if storage recovers), so this fault cannot deadlock
+    // a later source close as an ambiguous network submission.
+    state.last.terminal=true;state.lastError='exit reservation failed before submission';
+    try{await input.persist(state);}catch{/* original critical storage error wins */}
+    throw error;
+  }
   if(!input.stillClosed()){state.last.terminal=true;await input.persist(state);return state;}
   try{
     const response=await input.submit(state.last.tag,limit,input.stillClosed);

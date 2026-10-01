@@ -59,6 +59,15 @@ test('durable failure or missing committed source prevents sending; stale quote 
   assert.equal(h.sent.length,0);await reconcileSourceClose({...h.input,stillClosed:()=>false});assert.equal(h.sent.length,0);
   await reconcileSourceClose({...h.input,limit:null});assert.deepEqual(h.sent,['MARKET']);
 });
+test('failed pre-send persistence keeps a known-unsent reservation and can recover without a false unknown hold',async()=>{
+  const h=fixture(),persist=h.input.persist;let failed=true;
+  await assert.rejects(reconcileSourceClose({...h.input,persist:async state=>{
+    await persist(state);if(failed)throw new Error('storage failed');
+  }}));
+  assert.equal(h.state?.last.terminal,true);assert.equal(h.sent.length,0);failed=false;
+  await reconcileSourceClose({...h.input,prior:h.state,now:T+10,observedAt:T+10});
+  assert.deepEqual(h.sent,['MARKET']);
+});
 test('only a definitive unsent rejection can release the prior close reservation',async()=>{
   const h=fixture();h.input.submit=async()=>{throw new GateEntryCancelledError();};
   await assert.rejects(reconcileSourceClose(h.input));assert.equal(h.state?.last.terminal,true);
