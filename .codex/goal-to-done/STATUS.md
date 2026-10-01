@@ -6,9 +6,9 @@ actual holding count zero; no account reset or real test order. Removes inverse
 native stop creation/maintenance and entry stop-side checks, retains source
 allocation admission charge, removes independent source-horizon expiry, safely
 cancels tracked old guards/replacements with retired identities. Legacy regular
-protections/manual intent retained. Actual Worker focused 18/18 passes, including
+protections/manual intent retained. Actual Worker focused 19/19 passes, including
 both directions beyond old guards, reductions/close, cancellation fault, OFF,
-restoration and late protection. Local direct 308, LIVE/Gate 167 (18 inverse Worker cases), members 49, equity
+restoration and late protection. Local direct 308, LIVE/Gate 168 (19 inverse Worker cases), members 49, equity
 65, feed workerd, full npm test/build and architecture/migration 43 pass;
 typecheck and lint pass (15 existing warnings). Storage workerd and Wrangler
 dry-run pass. Final reviewed PR/main deployment and production receipt pending.
@@ -823,7 +823,7 @@ private Gate action occurred.
 - Structural Interrupt now separates the two-second old-direction veto from reverse-entry authority, uses WAIT_RETEST for extended moves, clusters same-window same-side tracks into one event, and defaults the event to one selected symbol (maximum two only for an explicitly independent restart).
 - Ordinary marginal/Reserve candidates use 12–24 second BBO entry validation. Strong mature relations remain immediate; actual closed fills calibrate predicted net edge against realized net, fee/funding cost and target capture without lowering the 19bp historical model.
 - Snapshot replay classifies SUI/XLM as WAIT_RETEST and LINK as CONTINUATION_DELAY. The strict extended-move lower bound removes only 2/76 trades, improves net from -6.9362U to -3.4959U and fees from 22.9027U to 22.1222U; the historical +17.0349U SUI winner remains immediate.
-- Local acceptance passes: Forward/storage/replay 59/59, direct 127/127, LIVE/Gate parity 38/38, full npm test, typecheck, build, lint (zero errors; 19 pre-existing warnings), architecture/migration 18/18, and clean diff check. PR/release is next; production and LIVE intent remain unchanged so far.
+- Local acceptance passes: Forward/storage/replay 59/59, direct 127/127, LIVE/Gate parity 38/38, full npm test, typecheck, build, lint (zero errors; 19 pre-existing warnings), architecture/migration 19/19, and clean diff check. PR/release is next; production and LIVE intent remain unchanged so far.
 
 # 2026-09-25 — participation/LIVE regression diagnosis
 
@@ -838,4 +838,4 @@ private Gate action occurred.
 - A first typed Gate read timeout after a saved owner enable is pending/fail-closed and recovers on a later fresh snapshot without a second toggle or activation-fence change. Hard/non-read failures and forced OFF cleanup remain strict.
 - Restored the previously omitted real-Worker LIVE parity suite to the default release command and updated only its synthetic timing fixtures to the current 30-second copy contract.
 - Removed compiler-confirmed unused production helpers/imports and stale test fixtures; lint is now zero warnings without changing strategy thresholds or persisted schemas.
-- Acceptance: Forward 60/60, direct 128/128, LIVE/Gate parity 129/129, members 49/49, equity 61/61, architecture/migration 18/18; full npm test, build, typecheck, lint, diff check and Wrangler dry-run pass. Storage stress still preserves 2200 mature samples, 240 history rows, 160 events, pending roots, rules, regions and positions across restart.
+- Acceptance: Forward 60/60, direct 128/128, LIVE/Gate parity 129/129, members 49/49, equity 61/61, architecture/migration 19/19; full npm test, build, typecheck, lint, diff check and Wrangler dry-run pass. Storage stress still preserves 2200 mature samples, 240 history rows, 160 events, pending roots, rules, regions and positions across restart.

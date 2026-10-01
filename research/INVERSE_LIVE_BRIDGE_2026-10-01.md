@@ -47,7 +47,7 @@ Prior bridge acceptance: 308 direct, 160 LIVE/Gate (11 inverse tests),
 test, typecheck, build, native feed/storage workerd and deployment dry-run passed.
 Lint has zero errors and the 15 existing warnings. Review/publication follows.
 
-Protection-removal acceptance: 18 injected real-Worker inverse cases, 167
+Protection-removal acceptance: 19 injected real-Worker inverse cases, 168
 LIVE/Gate and 308 direct tests pass. Full npm test, members/equity, build,
 typecheck, lint (15 existing warnings), architecture/migration, native feed
 and storage smoke and dry-run pass. No real order or switch used for testing.

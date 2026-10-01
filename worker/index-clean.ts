@@ -2067,6 +2067,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private inverseProtectionPending() {
     return [...Object.values(this.runtime.live.entries),...Object.values(this.runtime.live.positions)].some(record=>record
       &&isInverseLiveReceipt(record.parity)&&(record.stopTag||record.stopOrderId||record.stopSubmittingAt
+        ||(record.parity?.nativeProtectionPrice&&record.parity.exitPolicy!==INVERSE_LIVE_EXIT_POLICY)
         ||('replacementStopTag' in record&&(record.replacementStopTag||record.replacementStopOrderId))));
   }
 
@@ -2079,6 +2080,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         tags=new Set([...(refs.get(identity)??[]),...(receipt.retiredProtectionTags??[])]),ids=new Set<string>();
       if(record.stopTag)tags.add(record.stopTag);
       if(record.stopOrderId)ids.add(record.stopOrderId);
+      if(receipt.nativeProtectionPrice&&receipt.nativeProtectionPrice>0){
+        // The old immediate create could reach Gate before its response/stop
+        // fields were checkpointed. Recover that exact deterministic identity
+        // from the pre-submit receipt, rather than leaving an orphan guard.
+        const tick=this.runtime.tickSize[record.symbol]??receipt.nativeProtectionPrice*1e-8;
+        tags.add(buildLiveStopIntent({id:identity,symbol:record.symbol,side:record.side,
+          currentStop:receipt.nativeProtectionPrice},tick).tag);
+      }
       if('replacementStopTag' in record){
         if(record.replacementStopTag)tags.add(record.replacementStopTag);
         if(record.replacementStopOrderId)ids.add(record.replacementStopOrderId);

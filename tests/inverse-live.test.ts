@@ -5,6 +5,7 @@ import {registerHooks} from 'node:module';
 import {initialForward,type Trade} from '../lib/forward-relations.ts';
 import {forwardMirrorSources,buildProportionalMirror,mirrorCoverage,sourceLifecycle,mirrorPositionRisk,mirrorSourceFresh} from '../lib/live-parity.ts';
 import {liveProtectionPrice} from '../lib/live-source-policy.ts';
+import {buildLiveStopIntent} from '../lib/gate-live.ts';
 import {startLiveSession,fenceLiveSourcePolicy,sourceAfterEnable,sameLiveSession} from '../lib/live-session.ts';
 import {newInverseTrial,sourceDecisionState,shadowCapsule,applyInverseSourceTrade} from '../lib/shadow-inverse-ledger.ts';
 registerHooks({resolve(specifier,context,next){
@@ -190,6 +191,16 @@ test('a late old stop is removed by its retired identity after the first cleanup
   const h=await oldGuardHarness();h.priceOrders.splice(2);await h.stream.syncLive(Date.now());
   h.priceOrders.push({id_string:'late',text:'old-tag'});await h.stream.syncLive(Date.now());
   assert.deepEqual(h.calls.cancels,['old','replacement','late']);assert.equal(h.priceOrders.length,0);assert.equal(h.calls.closes,0);
+});
+
+test('restart recovers an old immediate stop identity even when its response was never checkpointed',async()=>{
+  const h=await harness('LONG');await h.stream.syncLive(Date.now());await h.stream.syncLive(Date.now());
+  const e=h.stream.runtime.live.entries.TEST_USDT,p=h.stream.runtime.live.positions.TEST_USDT;
+  for(const record of [e,p]){record.parity.nativeProtectionPrice=102;record.parity.nativeProtectionPolicy='inverse-paper-live-v1';delete record.parity.exitPolicy;}
+  const old=buildLiveStopIntent({id:e.planId,symbol:e.symbol,side:e.side,currentStop:102},.01);
+  h.priceOrders.push({id_string:'orphan',initial:{text:old.tag}});h.stream.runtime.live.requestedEnabled=false;
+  await h.stream.syncLive(Date.now());assert.deepEqual(h.calls.cancels,['orphan']);assert.equal(h.calls.closes,0);
+  assert.ok(p.parity.retiredProtectionTags.includes(old.tag));assert.equal(h.priceOrders.length,0);
 });
 
 test('noninverse legacy native stop creation remains intact',async()=>{
