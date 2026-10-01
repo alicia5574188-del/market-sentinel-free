@@ -61,6 +61,17 @@ function compactClosedTrade(t:Trade,keepIntelligence:boolean){
   return row;
 }
 function withoutReview(t:Trade){const row={...t};delete row.review;return row;}
+function compactShadowClosedTrade(t:Trade){
+  // Closed-source PI is a duplicated narrative, never an input to the frozen
+  // history-dependent rules. Preserve every numeric/identity/outcome field;
+  // full paired entry/terminal receipts are already on the inverse parent.
+  const row=compactClosedTrade(withoutReview(t),false);
+  if(row.entryContext)for(const key of ['reason','thesisSummary','invalidationSummary','environmentReason','liquidityReason','futureResearchReason','lifecycleReason'] as const){
+    const context=row.entryContext as unknown as Record<string,unknown>;
+    if(typeof context[key]==='string')context[key]=context[key].slice(0,120);
+  }
+  return row;
+}
 function archivePositionSummary(t:Trade){
   return{id:t.id,symbol:t.symbol,side:t.side,status:t.status,openedAt:t.openedAt,entryPrice:t.entryPrice,lastPrice:t.lastPrice,
     lastQuoteAt:t.lastQuoteAt,exitControl:t.exitControl?{policy:t.exitControl.policy}:undefined,
@@ -78,6 +89,10 @@ function hotProjection(next:ForwardState,includeSamples=true){
   const build=()=>{
     const history=next.history.slice(0,total).map((t,i)=>compactClosedTrade(droppedHotReview?withoutReview(t):t,i<full)),
       account={...next,positions:droppedHotReview?next.positions.map(withoutReview):next.positions,history,events:next.events.slice(0,eventLimit),
+        ...(next.inverseTrial?{inverseTrial:{...next.inverseTrial,source:{...next.inverseTrial.source,
+          positions:next.inverseTrial.source.positions.map(withoutReview),
+          history:next.inverseTrial.source.history.slice(0,Math.max(32,total)).map(compactShadowClosedTrade),
+          events:next.inverseTrial.source.events.slice(0,FORWARD_HOT_EVENT_LIMIT)}}}:{}),
         hypothesisResearch:{...next.hypothesisResearch,
           active:next.hypothesisResearch.active.slice(0,MARKET_HYPOTHESIS_ACTIVE_LIMIT),
           resolved:next.hypothesisResearch.resolved.slice(0,MARKET_HYPOTHESIS_RESOLVED_LIMIT),
@@ -98,6 +113,7 @@ function hotProjection(next:ForwardState,includeSamples=true){
   }
   while(raw.length>FORWARD_ACCOUNT_TARGET_BYTES){
     if(full>8)full=Math.max(8,full-8);
+    else if(next.inverseTrial&&full>0)full=0; // cold archives retain closed PI; both active books take priority
     else if(total>32)total=Math.max(32,total-16);
     else if(eventLimit>48)eventLimit=Math.max(48,eventLimit-16);
     else if(narrativeLimit>36)narrativeLimit=Math.max(36,narrativeLimit-12);
@@ -358,7 +374,9 @@ export async function prepareForwardWrite(previous:ForwardState|null,next:Forwar
   });
   const subjects=new Set(events.map(e=>e.subject));
   const trades=[...next.positions,...next.history].filter(t=>subjects.has(t.id));
-  const packet={at:now,version:FORWARD_VERSION,engineVersion:next.engineVersion,policyVersion:next.policyVersion,
+  const packet={inverseComparison:next.inverseTrial?{version:next.inverseTrial.version,sourceBuild:next.inverseTrial.sourceBuild,
+      cutoverAt:next.inverseTrial.cutoverAt,totals:next.inverseTrial.totals,lastPoint:next.inverseTrial.curve.at(-1)}:undefined,
+    at:now,version:FORWARD_VERSION,engineVersion:next.engineVersion,policyVersion:next.policyVersion,
     startedAt:next.startedAt,revision:next.revision,events,trades:trades.map(withoutReview),
     // The authoritative account state is persisted separately in the paged head/chunks.
     // Archive packets keep a compact position snapshot and full event-subject trades,

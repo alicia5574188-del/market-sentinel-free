@@ -40,7 +40,9 @@ import { evaluateRegimePortfolio, initialRegimePortfolio, normalizeRegimePortfol
   REGIME_EXECUTION_UNIVERSE, REGIME_HOURLY_REQUIRED_CANDLES, REGIME_PORTFOLIO_VERSION, REGIME_STRATEGIES, REGIME_SYSTEMS, REGIME_UNIVERSE,
   type RegimePortfolioState } from "../lib/regime-portfolio.ts";
 import type { PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
-import { ADAPTIVE_ENGINE_VERSION, FORWARD_EXECUTION_BBO_CAP, FORWARD_MINUTE_CONFIRMATION_CAP, advanceForward, closeForwardForReset,
+import {advanceShadowInverse} from '../lib/shadow-inverse.ts';
+import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
+import { ADAPTIVE_ENGINE_VERSION, FORWARD_EXECUTION_BBO_CAP, FORWARD_MINUTE_CONFIRMATION_CAP, closeForwardForReset,
   forwardSummary, forwardEquity, freshQuote, forwardUrgentMinuteSymbols, forwardUrgentQuoteSymbols, forwardWatchSymbols,
   resetForwardAccountPreservingLearning, BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
 import { FORWARD_EXECUTION_VOLUME_FLOOR_USD, forwardExecutionUniverseEligible, selectAnchorOpportunityUniverse } from "../lib/multi-turn-universe.ts";
@@ -942,7 +944,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const eligibleRows=this.marketHub.radarRows(known,now);
     if(!eligibleRows.length)throw new Error("no Gate-tradable extremum-regime markets");
     const executionEligible=eligibleRows.filter(forwardExecutionUniverseEligible),
-      held=this.forwardState?.positions.map(p=>p.symbol)??[],
+      held=[...new Set([...(this.forwardState?.inverseTrial?.source.positions.map(p=>p.symbol)??[]),...(this.forwardState?.positions.map(p=>p.symbol)??[])])],
       armed=Object.values(this.forwardState?.entryValidations??{}).filter(v=>v.status==="WAITING").map(v=>v.symbol),
       locked=[...new Set([...held,...armed])];
     const universeRows=selectAnchorOpportunityUniverse({rows:eligibleRows,limit:SCAN_UNIVERSE_SIZE,
@@ -1018,7 +1020,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         relativeStrength:row.relativeStrength??null,dataConfidence:row.dataConfidence??null,sourceCount:row.sourceCount??null,
         disagreementRate:row.disagreementRate??null,reason:row.reason,
       }));
-    return {version:FORWARD_VERSION,engineVersion:ADAPTIVE_ENGINE_VERSION,policyVersion:s?.policyVersion??null,
+    return {shadowInverse:s?(()=>{const v=inverseTrialSummary(s,this.regimeQuotes(now),now);if(!v)return null;const {curve:_,...summary}=v;return summary;})():null,
+      version:FORWARD_VERSION,engineVersion:ADAPTIVE_ENGINE_VERSION,policyVersion:s?.policyVersion??null,
       strategyAuthorityVersion:s?.strategyAuthorityVersion??null,executionVersion:s?.executionVersion??null,
       regionVersion:s?.regionVersion??null,regionLaunchVersion:s?.regionLaunchVersion??null,liveEligible:false,
       startedAt:s?.startedAt??null,initialEquity:s?.initialEquity??null,balance:s?.balance??null,lastCycleAt:s?.lastCycleAt??null,
@@ -1147,7 +1150,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       catch{this.counterfactualResearch=initialCounterfactualResearch(now);}
       this.counterfactualResearchLoaded=true;
     }
-    const next=advanceCounterfactualResearch({state:this.counterfactualResearch,forward:this.forwardState,now,
+    const next=advanceCounterfactualResearch({state:this.counterfactualResearch,forward:sourceDecisionState(this.forwardState),now,
       paths:this.strategyCandles,quotes:this.forwardQuotes(now),observeCandidates});
     this.counterfactualResearch=next.state;
     if(!next.changed)return;
@@ -1166,7 +1169,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       catch{this.shadowResearch=initialShadowResearch(now);}
       this.shadowResearchLoaded=true;
     }
-    const next=advanceShadowResearch({state:this.shadowResearch,forward:this.forwardState,now,
+    const next=advanceShadowResearch({state:this.shadowResearch,forward:sourceDecisionState(this.forwardState),now,
       paths:this.strategyCandles,quotes:this.forwardQuotes(now)});
     this.shadowResearch=next.state;
     if(!next.changed)return;
@@ -1202,7 +1205,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }
       this.forwardLastAttemptAt=now;
       const previous = state,reviewEvents:ReviewEvent[]=[],executionQuotes=this.forwardQuotes(now);
-      const next = advanceForward({ state: previous, now, paths: this.strategyCandles,minutePaths:this.forwardMinutePaths(),
+      const next = advanceShadowInverse({ state: previous, now, paths: this.strategyCandles,minutePaths:this.forwardMinutePaths(),
         daily:this.turnDailyCandles,quotes:executionQuotes,analysisQuotes:this.forwardAnalysisQuotes(now),contracts:this.regimeContracts(),
         entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue,
         research:{rolling:this.shadowResearch.market[0]?.rolling??null},reviewTrace:event=>{if(reviewEvents.length<128)reviewEvents.push(event);} });
@@ -1253,7 +1256,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         const discovered:ReviewEvent[]=next.state.opportunities.filter(o=>!known.has(o.id)).map(o=>({at:now,id:o.id,symbol:o.symbol,
           stage:"CANDIDATE_OBSERVED",side:o.side,reason:o.eligible?"STRATEGY_ELIGIBLE":"STRATEGY_NOT_ELIGIBLE",price:o.price,plan:o.tradePlan,expiresAt:o.expiresAt}));
         appendReviewEvents(this.reviewJournal,[...discovered,...reviewEvents].map(e=>({...e,
-          buildSha:FORWARD_BUILD_SHA,strategyFingerprint:STRATEGY_FINGERPRINT})),now);
+          buildSha:FORWARD_BUILD_SHA,strategyFingerprint:STRATEGY_FINGERPRINT,
+          ...(next.state.inverseTrial?{decisionBuildSha:SHADOW_BASELINE_BUILD,accountRole:'SHADOW_SOURCE' as const,
+            pairedTradeId:e.tradeId?inverseId(e.tradeId):undefined}:{})})),now);
       }catch{this.reviewDiagnosticError="CANDIDATE_REVIEW_CAPTURE_FAILED";}
       // Publish only committed lifecycle events. A source born in the candle
       // lane must not wait for the next alarm; a source closed while Gate is
@@ -3079,6 +3084,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       ...Object.values(this.runtime.live.positions).flatMap((position) => position?.status === "OPEN" ? [position.symbol] : []),
       ...Object.values(this.runtime.live.entries).flatMap((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status) ? [entry.symbol] : []),
       ...(this.forwardState?.positions.map((position) => position.symbol) ?? []),
+      ...(this.forwardState?.inverseTrial?.source.positions.map((position) => position.symbol) ?? []),
     ]);
   }
 
