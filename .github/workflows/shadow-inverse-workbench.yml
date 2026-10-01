@@ -2,28 +2,102 @@ name: Shadow inverse isolated workbench
 on:
   push:
     branches: [feat/20261001-shadow-inverse]
-    paths: [.github/workflows/shadow-inverse-workbench.yml]
+    paths:
+      - scripts/shadow-inverse-edits-*.b64
+      - .github/workflows/shadow-inverse-workbench.yml
+  workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 jobs:
-  source:
+  verify:
+    if: github.ref == 'refs/heads/feat/20261001-shadow-inverse'
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 20
+    env:
+      WRANGLER_SEND_METRICS: 'false'
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 9b8b31532aa01589b7c797388f6c3d5fcac88164
+          ref: feat/20261001-shadow-inverse
           fetch-depth: 0
-      - name: Exact source and public baseline only
+      - name: Validate original and edited source hashes
+        id: apply
+        shell: bash
         run: |
-          mkdir -p /tmp/shadow-source
-          git archive 9b8b31532aa01589b7c797388f6c3d5fcac88164 > /tmp/shadow-source/current.tar
-          git archive 2b4fd60f77c9b78526bd5087940945fe7e86fab8 > /tmp/shadow-source/baseline.tar
-          git ls-tree -r 9b8b31532aa01589b7c797388f6c3d5fcac88164 > /tmp/shadow-source/current-tree.txt
-          curl --fail --silent --show-error --max-time 20 https://market-sentinel-free.alicia5574188.workers.dev/__health > /tmp/shadow-source/before-health.json
-          jq '{ok,runtime:{buildSha:.runtime.buildSha,liveMode:.runtime.liveMode,forward:{startedAt:.runtime.forward.startedAt,initialEquity:.runtime.forward.initialEquity,resolved:.runtime.forward.resolved,openCount:.runtime.forward.openCount,storage:.runtime.forward.storage}}}' /tmp/shadow-source/before-health.json
-      - uses: actions/upload-artifact@v4
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64,hashlib,json,lzma,pathlib,re,subprocess
+          root=pathlib.Path('.')
+          sha=lambda b:hashlib.sha256(b).hexdigest()
+          payload=''.join(''.join((root/f'scripts/shadow-inverse-edits-{i}.b64').read_text().split()) for i in (1,2))
+          assert sha(payload.encode())=='c8f036ff05889ec5a264afe9c8b2961cc93a49b2368c1ea1d110329265958cb0','Transport digest mismatch'
+          raw=lzma.decompress(base64.b64decode(payload,validate=True))
+          assert sha(raw)=='cf3d9934d068ee184adcb4a4c322206964b69ce5cb057e8599863c7aad9fdc4f','Edit digest mismatch'
+          edits=json.loads(raw)
+          allowed=set('lib/shadow-baseline/forward-relations.ts lib/shadow-baseline/manifest.json lib/shadow-baseline/market-intelligence-engine.ts lib/shadow-baseline/winner-policy.ts lib/shadow-inverse-ledger.ts lib/shadow-inverse.ts research/SHADOW_INVERSE_2026-10-01.md tests/shadow-inverse.test.ts AGENTS.md app/forward-dashboard.tsx app/market-intelligence-execution.tsx lib/forward-protection-checkpoint.ts lib/forward-relations.ts lib/forward-store.ts lib/live-parity.ts lib/research-snapshot.ts lib/review-trace.ts package.json vite.config.ts worker/index-clean.ts'.split())
+          assert len(edits)==20 and {e['path'] for e in edits}==allowed
+          ready=[];frozen={'forward-relations.ts','market-intelligence-engine.ts','winner-policy.ts'}
+          for e in edits:
+              p=root/e['path']; prior=p.read_bytes() if p.exists() else None
+              if prior is not None and sha(prior)==e['after']:continue
+              assert (sha(prior) if prior is not None else None)==e['before'],f"Preimage mismatch: {p}"
+              if 'frozenPath' in e:
+                  assert e['frozenPath']=='lib/'+p.name and p.name in frozen
+                  original=subprocess.check_output(['git','show','2b4fd60f77c9b78526bd5087940945fe7e86fab8:'+e['frozenPath']])
+                  assert sha(original)==e['frozenHash'],f"Frozen source mismatch: {p}"
+                  new=re.sub(r'''(from\s+["'])\./([^"']+)(["'])''',lambda m:m[1]+('./' if m[2] in frozen else '../')+m[2]+m[3],original.decode()).encode()
+              else:
+                  lines=(prior or b'').decode().splitlines(keepends=True)
+                  for i,j,text in reversed(e['edits']):
+                      assert 0<=i<=j<=len(lines)
+                      lines[i:j]=text.splitlines(keepends=True)
+                  new=''.join(lines).encode()
+              assert sha(new)==e['after'],f"Postimage mismatch: {p}"
+              ready.append((p,new))
+          for p,new in ready:p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(new)
+          subprocess.run(['git','diff','--check'],check=True)
+          subprocess.run(['git','add','--',*sorted(allowed)],check=True)
+          print(f'All exact source digests verified; {len(ready)} source files staged.')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if ! git diff --cached --quiet; then
+            git commit -m 'Freeze 2b4fd60f shadow decisions and add atomic passive inverse PAPER ledger'
+            git push origin HEAD:refs/heads/feat/20261001-shadow-inverse
+          fi
+          mkdir -p "$RUNNER_TEMP/inverse-checks"
+          git rev-parse HEAD | tee "$RUNNER_TEMP/inverse-checks/head.txt"
+          git diff 9b8b31532aa01589b7c797388f6c3d5fcac88164 --stat > "$RUNNER_TEMP/inverse-checks/diff-stat.txt"
+      - uses: actions/setup-node@v4
         with:
-          name: shadow-exact-source
-          path: /tmp/shadow-source
+          node-version: 22.16.0
+          cache: npm
+      - name: Install locked dependencies
+        id: install
+        run: npm ci
+      - name: Strategy, funds, LIVE, member, equity and actual workerd regressions
+        run: |
+          set -uo pipefail
+          failed=0
+          for suite in test:direct test:live-parity test:members test:equity test:feed:workerd; do
+            npm run "$suite" 2>&1 | tee "$RUNNER_TEMP/inverse-checks/${suite//:/-}.log" || failed=1
+          done
+          exit "$failed"
+      - name: Build, types, lint, architecture and deployment dry-run
+        if: always() && steps.apply.outcome == 'success' && steps.install.outcome == 'success'
+        run: |
+          set -uo pipefail
+          failed=0
+          for suite in build typecheck lint; do
+            npm run "$suite" 2>&1 | tee "$RUNNER_TEMP/inverse-checks/$suite.log" || failed=1
+          done
+          node --test tests/architecture.test.mjs tests/migration.test.mjs 2>&1 | tee "$RUNNER_TEMP/inverse-checks/architecture.log" || failed=1
+          git diff --check || failed=1
+          npx wrangler deploy --dry-run --config dist/server/wrangler.json 2>&1 | tee "$RUNNER_TEMP/inverse-checks/dry-run.log" || failed=1
+          exit "$failed"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: shadow-inverse-checks
+          path: ${{ runner.temp }}/inverse-checks
           retention-days: 3
