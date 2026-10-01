@@ -1,0 +1,63 @@
+name: Inverse PAPER public cutover receipt
+on:
+  push:
+    branches: [verify/20261001-inverse-cutover]
+    paths: [.github/workflows/inverse-cutover-receipt.yml]
+permissions: {}
+jobs:
+  receipt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - name: Public GET baseline and advancing post-release state
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,subprocess,time
+          from datetime import datetime,timezone
+          url='https://market-sentinel-free.alicia5574188.workers.dev/__health'
+          old='9b8b31532aa01589b7c797388f6c3d5fcac88164'
+          source='2b4fd60f77c9b78526bd5087940945fe7e86fab8'
+          def read():
+              data=json.loads(subprocess.check_output(['curl','--fail','--silent','--show-error','--retry','2','--max-time','20',url],text=True))
+              r=data['runtime'];f=r['forward'];multi=r['multiSourceMarket'];si=f.get('shadowInverse')
+              return {'observedAt':datetime.now(timezone.utc).isoformat(),'ok':data.get('ok'),'buildSha':r.get('buildSha'),
+                  'authorityReady':r.get('authorityReady'),'stale':r.get('stale'),'lastError':r.get('lastError'),
+                  'runtimeAt':r.get('lastSuccessAt'),'feedAt':multi.get('lastSuccessAt'),'healthySources':multi.get('healthySources'),
+                  'accountStartedAt':f.get('startedAt'),'initialEquity':f.get('initialEquity'),'resolved':f.get('resolved'),
+                  'openCount':f.get('openCount'),'storage':f.get('storage'),'researchAt':f.get('lastCycleAt'),
+                  'entryEvaluatedAt':(f.get('entryDiagnostics') or {}).get('at'),'liveMode':r.get('liveMode'),
+                  'readiness':r.get('realtimeReadiness'),'scanned':(r.get('radar') or {}).get('scanned'),
+                  'shadowInverse':{k:v for k,v in si.items() if k!='curve'} if isinstance(si,dict) else si,
+                  'forwardKeys':list(f.keys()) if si is None else None}
+          baseline=read();print('PRE_RELEASE '+json.dumps(baseline,ensure_ascii=False),flush=True)
+          assert baseline['ok'] and baseline['buildSha']==old,'Expected to capture the actual old deployment before authorized merge'
+          observed=None
+          for n in range(28):
+              time.sleep(15);observed=read()
+              print('RELEASE_WAIT '+json.dumps({'n':n,'buildSha':observed['buildSha'],'lastError':observed['lastError'],
+                  'sourceReady':bool(observed['shadowInverse'])}),flush=True)
+              if observed['buildSha']!=old and observed['shadowInverse']:break
+          else:raise AssertionError('No new inverse production state observed in the bounded audit window')
+          receipts=[observed]
+          for _ in range(2):time.sleep(15);receipts.append(read())
+          for r in receipts:
+              print('POST_RELEASE '+json.dumps(r,ensure_ascii=False),flush=True)
+              assert r['ok'] and r['authorityReady'] is True and r['stale'] is False and r['lastError'] is None
+              assert r['storage']['error'] is None and r['accountStartedAt']==baseline['accountStartedAt'] and r['initialEquity']==baseline['initialEquity']
+              assert r['resolved']>=baseline['resolved'] and r['liveMode']==baseline['liveMode']
+              assert r['readiness']['protectedMarketsReady'] is True and r['healthySources']>=3
+              x=r['shadowInverse'];assert x['sourceBuild']==source and x['version']=='shadow-inverse-v1'
+              assert x['independentDecisions'] is False and x['liveExecution']=='PAPER_ONLY'
+              assert x['pairedOpened']-x['pairedClosed']==x['pairedOpen'] and abs(x['settledAttributionResidual'])<1e-7
+          a,b=receipts[0],receipts[-1]
+          assert a['buildSha']==b['buildSha'] and b['runtimeAt']>a['runtimeAt'] and b['feedAt']>a['feedAt']
+          assert b['shadowInverse']['cutoverAt']==a['shadowInverse']['cutoverAt']
+          assert b['shadowInverse']['pairedOpened']>=a['shadowInverse']['pairedOpened']
+          print('CONTINUITY_PASS '+json.dumps({'buildSha':b['buildSha'],'baselineSourceBuild':source,'accountEpochPreserved':True,
+              'runtimeAdvanceMs':b['runtimeAt']-a['runtimeAt'],'feedAdvanceMs':b['feedAt']-a['feedAt'],
+              'pairedOpened':b['shadowInverse']['pairedOpened'],'pairedClosed':b['shadowInverse']['pairedClosed'],
+              'legacyOpen':b['shadowInverse']['legacyOpen'],'sourceCalls':'PUBLIC_HEALTH_GET_ONLY',
+              'privateGateRequests':0,'productionWrites':0,'liveIntentUnchanged':True}),flush=True)
+          PY
