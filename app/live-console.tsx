@@ -206,8 +206,8 @@ function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade
         !positions.length&&!entries.length?<LiveEmpty title="当前没有实盘持仓或待执行订单"/>:
         <div className="fr-rule-grid">{positions.map(p=><LivePositionCard key={p.id} position={p} runtime={runtime} now={clock}/>)}
           {entries.map(e=>e&&<article className="fr-trade" key={e.planId}><header><div><small>待执行 · {e.side==="LONG"?"多单":"空单"}</small><h3>{e.symbol.replace("_"," / ")}</h3></div><strong>等待Gate</strong></header>
-            <dl><Pair label="模拟入场价" value={num(e.parity?.sourceEntryPrice,5)}/><Pair label="当前复制盘口" value={num(e.parity?.copyQuotePrice??e.trigger,5)}/><Pair label={e.parity?.sourceRole==='INVERSE_PAPER'?"退出方式":"保护止损"} value={e.parity?.sourceRole==='INVERSE_PAPER'?"跟随影子订单":num(e.invalidation,5)}/><Pair label="名义金额" value={`${num(e.notional)} U`}/>
-              <Pair label="保证金 / 杠杆" value={`${num(e.margin)} U / ${num(e.leverage,0)}×`}/><Pair label="复制延迟" value={latency(e.parity?.copyDelayMs)}/></dl>
+            <dl><Pair label="源单入场价" value={num(e.parity?.sourceEntryPrice,5)}/><Pair label="入场限价" value={num(e.parity?.entryLimitPrice??e.parity?.copyQuotePrice??e.trigger,5)}/>
+              <Pair label="保证金 / 杠杆" value={`${num(e.margin)} U / ${num(e.leverage,0)}×`}/></dl>
             <p className="fr-note">{e.lastError??`服务器状态：${e.status}`}</p></article>)}</div>}
     </section>}
 
@@ -275,22 +275,25 @@ function CompareBlock({position,runtime,now}:{position:LivePosition;runtime:Oper
       <span>复制延迟 <b>{latency(p?.submitDelayMs??p?.copyDelayMs)}</b></span></div>
   </div>;
 }
-function LivePositionCard({position:p,runtime,now}:{position:LivePosition;runtime:OperatorRuntime|null;now:number}){
+export function LivePositionCard({position:p,runtime,now}:{position:LivePosition;runtime:OperatorRuntime|null;now:number}){
   const open=p.status==="OPEN",mark=livePositionMark(p,runtime,now),settlement=p.settlement,pnl=open?mark.pnl:settlement?.pnl??p.realizedPnl;
   const pnlRate=!open&&pnl!=null&&p.notional>0?pnl/p.notional:null;
   return <article className="fr-trade fr-trade-unified"><header><div><small>{open?"持仓中":"已平仓"} · {p.side==="LONG"?"多单":"空单"}</small><h3>{p.symbol.replace("_"," / ")}</h3></div>
     <strong className={pnl==null?"":pnl>=0?"fr-positive":"fr-negative"}>{pnl==null?open?"待更新":"待结算":`${signed(pnl)} U`}<small>{pnlRate==null?"":` · ${signed(pnlRate*100,3)}%`}</small></strong></header>
-    <CompareBlock position={p} runtime={runtime} now={now}/>
     <dl><Pair label="入场价" value={num(p.entryPrice,5)}/><Pair label={open?"当前价格":"出场价"} value={num(open?mark.price:p.exitPrice,5)}/>
-      <Pair label={p.parity?.sourceRole==='INVERSE_PAPER'?"退出方式":"保护止损"} value={p.parity?.sourceRole==='INVERSE_PAPER'?"跟随影子订单":num(p.stopPrice??p.currentStop,5)}/><Pair label="名义金额" value={`${num(p.notional)} U`}/>
-      <Pair label="保证金 / 杠杆" value={`${num(open?mark.margin:p.margin)} U / ${num(p.leverage,0)}×`}/><Pair label="合约数量" value={contractText(Math.abs(p.exchangeSize))}/>
+      <Pair label="保证金 / 杠杆" value={`${num(open?mark.margin:p.margin)} U / ${num(p.leverage,0)}×`}/><Pair label="入场对比" value={entryDeltaText(p)}/>
       <Pair label="进场时间" value={time(p.entryAt)}/><Pair label="出场时间" value={open?"持仓中":time(p.exitAt)}/>
-      <Pair label="持仓时长" value={holdingTime(p.entryAt,open?now:p.exitAt??0)}/></dl>
-    {!open&&settlement&&<details className="fr-details"><summary>Gate结算明细</summary><dl><Pair label="仓位盈亏" value={`${signed(settlement.pricePnl)} U`}/><Pair label="手续费收支" value={`${signed(settlement.fees)} U`}/><Pair label="资金费收支" value={`${signed(settlement.funding)} U`}/><Pair label="交易所平仓时间" value={time(settlement.closedAt)}/></dl></details>}
-    {p.exitReason&&<p className="fr-trade-reason">退出原因：{p.exitReason}</p>}
-    {p.parity&&<details className="fr-details"><summary>执行与复制详情</summary><p className="fr-note">源单 {p.parity.sourceId} · 规则 {p.parity.sourceRuleId}<br/>固定比例 {num(p.parity.ratio,6)} · 目标名义额 {num(p.parity.targetNotional)} U · 源单杠杆 {num(p.parity.sourceLeverage,0)}×<br/>
+      </dl>
+    <details className="fr-details"><summary>详情</summary>
+      <dl><Pair label="持仓时长" value={holdingTime(p.entryAt,open?now:p.exitAt??0)}/><Pair label="名义金额" value={`${num(p.notional)} U`}/>
+        <Pair label="合约数量" value={contractText(Math.abs(p.exchangeSize))}/><Pair label={p.parity?.sourceRole==='INVERSE_PAPER'?"退出方式":"保护止损"} value={p.parity?.sourceRole==='INVERSE_PAPER'?"跟随影子订单":num(p.stopPrice??p.currentStop,5)}/></dl>
+      <CompareBlock position={p} runtime={runtime} now={now}/>
+      {!open&&settlement&&<dl><Pair label="仓位盈亏" value={`${signed(settlement.pricePnl)} U`}/><Pair label="手续费收支" value={`${signed(settlement.fees)} U`}/><Pair label="资金费收支" value={`${signed(settlement.funding)} U`}/><Pair label="交易所平仓时间" value={time(settlement.closedAt)}/></dl>}
+      {p.exitReason&&<p className="fr-trade-reason">退出原因：{p.exitReason}</p>}
+      {p.parity&&<><p className="fr-note">源单 {p.parity.sourceId} · 规则 {p.parity.sourceRuleId}<br/>固定比例 {num(p.parity.ratio,6)} · 目标名义额 {num(p.parity.targetNotional)} U · 源单杠杆 {num(p.parity.sourceLeverage,0)}×<br/>
       首次复制盘口 {num(p.parity.copyQuotePrice,5)} · 提交盘口 {num(p.parity.submitQuotePrice,5)} · Gate成交 {num(p.parity.exchangeEntryPrice??p.entryPrice,5)}<br/>
       首次识别 {latency(p.parity.copyDelayMs)} · 提交 {latency(p.parity.submitDelayMs)}{p.parity.discrepancy?` · ${p.parity.discrepancy}`:""}</p>
-      <a className="fr-text-button" href={`/api/live/source?id=${encodeURIComponent(p.parity.sourceId)}`} target="_blank" rel="noreferrer">查看完整模拟源单映射 ↗</a></details>}
+      <a className="fr-text-button" href={`/api/live/source?id=${encodeURIComponent(p.parity.sourceId)}`} target="_blank" rel="noreferrer">查看完整模拟源单映射 ↗</a></>}
+    </details>
   </article>;
 }

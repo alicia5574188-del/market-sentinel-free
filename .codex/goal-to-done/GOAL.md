@@ -1,3 +1,13 @@
+# 2026-10-01 — compact LIVE display / favorable copy
+
+Finish the interrupted task on c3e7ac8. Compact holdings/history/archive cards;
+keep real PnL and six essential fields, fold complete source/settlement details.
+NEW inverse entries wait for a better Gate quote and submit exactly once with an
+IOC price limit at least one tick better than shadow. Preserve source decisions,
+ledgers, existing exposure, same proportional capital/leverage, owner/member
+intent, unknown fills and source reductions/closes. No market fallback/refill,
+new cadence, account reset or real test order. Verify and deploy reviewed main.
+
 # 2026-10-01 — remove independent inverse LIVE protection
 
 Owner shelves dangerous-entry research. Keep the current frozen shadow; remove

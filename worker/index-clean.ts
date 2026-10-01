@@ -66,6 +66,7 @@ import { LIVE_PARITY_VERSION, LIVE_PARITY_PREFIX, buildProportionalMirror, forwa
   sourceLifecycle, mirrorSourceFresh, mirrorCoverage, liveEntryDriftGuard,
   type MirrorSourceTrade, type MirrorReceipt, type MirrorBinding } from "../lib/live-parity.ts";
 import {buildReviewSnapshot, readReviewArchivePage} from "../lib/research-snapshot.ts";
+import {inverseEntryPriceLimit,entryPriceFits} from '../lib/live-entry-price.ts';
 import {REVIEW_JOURNAL_KEY, appendReviewEvents, captureTradeReviews, initialReviewJournal, normalizeReviewJournal,
   recordDiscoveryReview, type ReviewEvent} from "../lib/review-trace.ts";
 declare const __STRATEGY_FINGERPRINT__: string;
@@ -2884,15 +2885,28 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         if(liveEquityDrift<.85)throw new LiveEntrySizingError("ECONOMICS",symbol,
           `实盘权益已低于固定模拟比例预期的${(liveEquityDrift*100).toFixed(1)}%，暂停新增复制并保留已有保护`);
         const quote=this.runtime.evidence[symbol];
+        let inverseLimit:ReturnType<typeof inverseEntryPriceLimit>|null=null;
+        if(trade.forwardSource.inverseCopy){
+          try{inverseLimit=inverseEntryPriceLimit(trade.forwardSource,this.runtime.tickSize[symbol]);}
+          catch(error){throw new LiveEntrySizingError('CONTRACT_SPEC',symbol,safeError(error));}
+        }
+        const executablePrice=plan.side==='LONG'?quote?.bestAsk??0:quote?.bestBid??0;
+        if(inverseLimit&&!entryPriceFits(plan.side,executablePrice,inverseLimit.price))
+          throw new LiveEntrySizingError('ECONOMICS',symbol,
+            `等待有利入场价：${plan.side==='LONG'?'不高于':'不低于'} ${inverseLimit.text}，当前 ${executablePrice}；影子结束前继续观察`);
         const result=buildProportionalMirror({source:trade.forwardSource,sourceEquity:paperMark.equity,equity,
           available:availableForNewEntries,openRisk:riskForNewEntries,sameDirectionRisk:directionRiskForNewEntries[plan.side],
-          entryPrice:plan.side==="LONG"?quote?.bestAsk??0:quote?.bestBid??0,
+          entryPrice:inverseLimit?.price??executablePrice,
           quantoMultiplier:this.runtime.contractMeta[symbol]?.quantoMultiplier??0,
           leverageMax:this.runtime.contractMeta[symbol]?.leverageMax??0,maintenanceRate:this.runtime.contractMeta[symbol]?.maintenanceRate??0.005,
           openMargin:marginForNewEntries,openNotional:notionalForNewEntries,now:Date.now(),policy:this.forwardState!.policyVersion??this.forwardState!.version,
           sizeRules:this.runtime.contractMeta[symbol],activationAt:this.runtime.live.activation?.enabledAt,
           mirrorRatio,sourceRiskAuthority:true,quoteObservedAt:quote?.observedAt});
         intent=result.intent;binding=result.binding;
+        if(inverseLimit){
+          intent.kind='LIMIT';intent.body={...intent.body,price:inverseLimit.text,tif:'ioc'};
+          Object.assign(binding.receipt,{entryPricePolicy:inverseLimit.policy,entryLimitPrice:inverseLimit.price,copyQuotePrice:executablePrice});
+        }
       } catch (error) {
         if (!(error instanceof LiveEntrySizingError)) throw error;
         this.runtime.live.entrySkips[symbol] = { planId: plan.id, symbol, code: error.code, reason: error.message, observedAt: now,sizing:error.sizing };
@@ -2980,6 +2994,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             await this.saveCheckpoint(Date.now(),true);continue;
           }
           const price=entry.side==="LONG"?submitQuote.bestAsk:submitQuote.bestBid;
+          if(entry.parity?.entryPricePolicy==='favorable-ioc-v1'
+            &&!entryPriceFits(entry.side,price,entry.parity.entryLimitPrice??NaN)){
+            entry.status='CANCELLED';entry.submissionResolved=true;
+            entry.lastError=`等待有利入场价 ${entry.parity.entryLimitPrice}；最新盘口 ${price}，未发送订单`;
+            this.runtime.live.entrySkips[symbol]={planId:entry.planId,symbol,code:'ECONOMICS',reason:entry.lastError,observedAt:Date.now()};
+            await this.saveCheckpoint(Date.now(),true);continue;
+          }
           if(!price||(!isInverseLiveReceipt(entry.parity)&&(entry.side==="LONG"?price<=entry.invalidation:price>=entry.invalidation))){
             entry.status="CANCELLED";entry.submissionResolved=true;entry.lastError="最终 Gate 盘口已越过源单止损，未追补旧成交";
             this.runtime.live.entrySkips[symbol]={planId:entry.planId,symbol,code:"ECONOMICS",reason:entry.lastError,observedAt:Date.now()};
@@ -3013,6 +3034,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             const latest=this.runtime.evidence[symbol],
               latestPrice=entry.side==="LONG"?latest?.bestAsk:latest?.bestBid;
             if(latestPrice){
+              if(entry.parity?.entryPricePolicy==='favorable-ioc-v1'
+                &&!entryPriceFits(entry.side,latestPrice,entry.parity.entryLimitPrice??NaN))return false;
               if(!isInverseLiveReceipt(entry.parity)&&(entry.side==="LONG"?latestPrice<=entry.invalidation:latestPrice>=entry.invalidation))return false;
               const latestDrift=liveEntryDriftGuard(source,latestPrice);
               if(latestDrift.adverse>latestDrift.allowed+1e-9)return false;
@@ -3025,14 +3048,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           // signing and immediately before the one network submission.
           entry.exchangeOrderId = await client.createEntry(intent,submissionStillAllowed);
           entry.status = "OPEN";
-          const filled=await client.inspectEntry("MARKET",symbol,entry.tag,entry.exchangeOrderId);
+          const filled=await client.inspectEntry(entry.kind,symbol,entry.tag,entry.exchangeOrderId);
           const fillPrice=Number(filled?.fill_price);
           if(entry.parity&&Number.isFinite(fillPrice)&&fillPrice>0){
             const actualDrift=liveEntryDriftGuard(source,fillPrice);
             Object.assign(entry.parity,{exchangeEntryPrice:fillPrice,exchangeEntryAt:Date.now(),
               exchangeEntryDriftRate:actualDrift.adverse});
           }
-          if(filled&&liveEntryDisposition(filled,"MARKET")==="CANCELLED"){
+          if(filled&&liveEntryDisposition(filled,entry.kind)==="CANCELLED"){
             entry.status="CANCELLED";entry.submissionResolved=true;entry.lastError="Gate IOC零成交；未完成复制，不冒充成功";
             this.runtime.live.entrySkips[symbol]={planId:entry.planId,symbol,code:"ENTRY_REJECTED",reason:entry.lastError,observedAt:Date.now()};
             await this.saveCheckpoint(Date.now(),true);continue;

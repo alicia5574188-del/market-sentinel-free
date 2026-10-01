@@ -1,3 +1,15 @@
+# Owner correction: compact LIVE cards and favorable entry prices — 2026-10-01
+
+Owner requests continuing the interrupted LIVE display / unfavorable-copy fix.
+NEW inverse LIVE entries may wait for an executable price at least one Gate tick
+better than the strict same-price shadow/inverse entry. Use a decimal-exact,
+exchange-enforced IOC limit; no unbounded market fallback, extra alarm, repeated
+post-submission identity or refill after partial execution. Reserve size/margin
+at the worst permitted limit. Preserve unknown-outcome reconciliation and source
+close, existing holdings, frozen shadow/PAPER accounting, manual sessions, current
+switches and resources. Show six primary order fields and fold full attribution.
+No test trades or switch changes; reviewed-main release and advancing receipt.
+
 # Owner correction: inverse LIVE follows shadow events only — 2026-10-01
 
 The owner explicitly shelved the proposed dangerous-entry redesign and asked to

@@ -113,6 +113,23 @@ test("live account remains equity-first and rendering cannot enable trading",()=
   assert.ok(html.indexOf("live-equity-first")<html.indexOf("live-control"));
   assert.match(html,/123\.45/);assert.match(html,/aria-checked="false"/);
 });
+test('LIVE open and archived cards keep six primary fields and fold execution attribution',()=>{
+  const number=value=>typeof value==='number'?value.toFixed(2):'—';
+  for(const status of ['OPEN','CLOSED']){
+    const position={id:'fixture',symbol:'LONGSYMBOL_USDT',side:'SHORT',status,entryPrice:100.01,exitPrice:99,
+      entryAt:1790760000000,exitAt:1790761200000,notional:1000,margin:100,leverage:10,exchangeSize:10,realizedPnl:9,
+      parity:{sourceEntryPrice:100,sourceId:'fixture',sourceRole:'INVERSE_PAPER'},exitReason:'SOURCE_CLOSED'};
+    const html=render('app/live-console.tsx',{position,runtime:null,now:1790761200000},
+      {'../lib/operator-ui.ts':{numberText:number,signedText:number,operatorTime:()=> '2026/10/01 17:21:23',contractText:number,
+        holdingTime:()=> '20分钟',livePositionMark:()=>({pnl:1,margin:100,price:99}),operatorRequest(){throw new Error('network forbidden');}}},'LivePositionCard');
+    const primary=html.slice(0,html.indexOf('<details'));
+    assert.equal((primary.match(/<dt>/g)??[]).length,6);
+    assert.match(primary,/入场对比/);assert.match(primary,/更优/);assert.match(primary,/进场时间/);assert.match(primary,/出场时间/);
+    assert.doesNotMatch(primary,/模拟 ↔ 实盘|名义金额|合约数量|SOURCE_CLOSED/);
+    assert.match(html,/<details class="fr-details"><summary>详情<\/summary>/);assert.doesNotMatch(html,/<details[^>]* open/);
+    assert.match(html,/SOURCE_CLOSED/);assert.match(html,/模拟 ↔ 实盘/);
+  }
+});
 
 test("reference card and static manuals are removed, not hidden; cache and controls stay",()=>{
   const chart=read("app/equity-curve.tsx"),dashboard=read("app/forward-dashboard.tsx"),live=read("app/live-console.tsx");

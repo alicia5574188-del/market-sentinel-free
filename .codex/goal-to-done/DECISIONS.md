@@ -836,3 +836,17 @@ Repair only reproduced implementation faults under the user's explicit no-strate
 - A quote-only pass may continue the exact ordinary candidate whose validation is already WAITING; it may not start a different ordinary candidate. This repairs the intended seconds-scale confirmation without raising trade authority or changing thresholds.
 - Once owner intent and its activation fence are durably saved, a genuine Gate read timeout means pending/fail-closed activation, not rejected intent. Background reconciliation reuses the same fence; three consecutive timeouts still escalate, and non-timeout conflicts remain visible failures.
 - Do not perform a wholesale rewrite of the large worker in this incident. Limit slimming to shared predicates or duplicate error-state handling that can be proven behavior-equivalent by focused and full-suite tests.
+# 2026-10-01 — favorable inverse execution without source feedback
+
+Owner prioritizes avoiding adverse inverse LIVE entry. Old path used unbounded
+market IOC with 15–50bp pre-submit drift allowance; quote checks cannot bound a
+subsequent exchange fill. New inverse only: wait on existing reconciler cadence,
+then submit IOC limit at least one full tick better than the same-price source.
+Decimal integer tick rounding and limit-price sizing bound price/margin; the
+current source must still be OPEN and owner-enabled at the send boundary. No
+resting orders, extra request cadence, market fallback or identity retry after
+zero/partial/unknown submission. A missed opportunity is an explicit tradeoff;
+better price is not evidence of better direction or future net profit. Existing
+holdings/regular LIVE guards and complete PAPER/shadow state remain unchanged.
+Gate official contract: https://www.gate.com/docs/developers/apiv4/en/futures/ .
+Card defaults expose six core fields; full comparison/settlement remains folded.
