@@ -7,9 +7,9 @@ permissions: {}
 jobs:
   receipt:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 7
     steps:
-      - name: Public GET health diagnostics and continuity
+      - name: Public GET repaired health and paired continuity
         shell: bash
         run: |
           set -euo pipefail
@@ -17,43 +17,52 @@ jobs:
           import json,subprocess,time
           from datetime import datetime,timezone
           url='https://market-sentinel-free.alicia5574188.workers.dev/__health'
-          expected='bb439660877ae311fc5c82174d3f416258aaaf03'
+          expected='027018534a6383ec061bc98917e14fa05cf9d41a'
           source='2b4fd60f77c9b78526bd5087940945fe7e86fab8'
-          # Actual PRE_RELEASE from run 36813145157/job 110212367710, 04:01:36 UTC.
+          # Baselines are actual public samples from jobs 110212367710 and 110213325145.
           baselineEpoch=1790816669059;baselineResolved=31
-          receipts=[]
-          for n in range(3):
-              if n:time.sleep(15)
+          committedCutover=1790827424336;committedComparison=914.3304032644269
+          stuckPersistedAt=1790827431475
+          def read():
               raw=subprocess.check_output(['curl','--silent','--show-error','--max-time','20','--write-out','\n%{http_code}',url],text=True)
               body,status=raw.rsplit('\n',1)
               try:data=json.loads(body)
               except json.JSONDecodeError:
-                  print('NON_JSON_HEALTH '+json.dumps({'http':status,'body':body[:4000]}),flush=True);raise
+                  print('NON_JSON_HEALTH '+json.dumps({'http':status,'body':body[:2000]}),flush=True);raise
               r=data.get('runtime') or {};f=r.get('forward') or {};multi=r.get('multiSourceMarket') or {};si=f.get('shadowInverse')
-              receipt={'sample':n+1,'observedAt':datetime.now(timezone.utc).isoformat(),'http':int(status),
-                  'topLevel':{k:v for k,v in data.items() if k!='runtime'},'ok':data.get('ok'),'buildSha':r.get('buildSha'),
+              return {'observedAt':datetime.now(timezone.utc).isoformat(),'http':int(status),'ok':data.get('ok'),'buildSha':r.get('buildSha'),
                   'authorityReady':r.get('authorityReady'),'stale':r.get('stale'),'lastError':r.get('lastError'),
                   'runtimeAt':r.get('lastSuccessAt'),'feedAt':multi.get('lastSuccessAt'),'healthySources':multi.get('healthySources'),
                   'accountStartedAt':f.get('startedAt'),'initialEquity':f.get('initialEquity'),'resolved':f.get('resolved'),
                   'openCount':f.get('openCount'),'storage':f.get('storage'),'researchAt':f.get('lastCycleAt'),
                   'entryEvaluatedAt':(f.get('entryDiagnostics') or {}).get('at'),'liveMode':r.get('liveMode'),
                   'readiness':r.get('realtimeReadiness'),'scanned':(r.get('radar') or {}).get('scanned'),
-                  'shadowInverse':{k:v for k,v in si.items() if k!='curve'} if isinstance(si,dict) else si,
-                  'runtimeDiagnostics':{k:v for k,v in r.items() if any(s in k.lower() for s in ['error','health','budget','blocked','storage'])}}
-              print('PUBLIC_RECEIPT '+json.dumps(receipt,ensure_ascii=False),flush=True);receipts.append(receipt)
+                  'shadowInverse':{k:v for k,v in si.items() if k!='curve'} if isinstance(si,dict) else si}
+          for n in range(22):
+              r=read();print('REPAIR_WAIT '+json.dumps(r,ensure_ascii=False),flush=True)
+              if r['buildSha']==expected and r['http']==200 and r['ok'] and r['storage']['persistedAt']>stuckPersistedAt:break
+              time.sleep(15)
+          else:raise AssertionError('Repaired production did not establish healthy financial persistence')
+          receipts=[r]
+          for _ in range(2):time.sleep(15);receipts.append(read())
           for r in receipts:
+              print('PUBLIC_RECEIPT '+json.dumps(r,ensure_ascii=False),flush=True)
               assert r['http']==200 and r['ok'] and r['buildSha']==expected and r['authorityReady'] is True and r['stale'] is False and r['lastError'] is None
-              assert r['storage']['error'] is None and r['accountStartedAt']==baselineEpoch and r['initialEquity']==1000 and r['resolved']>=baselineResolved
+              assert r['storage']['error'] is None and r['storage']['persistedAt']>stuckPersistedAt
+              assert r['accountStartedAt']==baselineEpoch and r['initialEquity']==1000 and r['resolved']>=baselineResolved
               assert r['liveMode']=={'requestedEnabled':False,'operational':False}
               assert r['readiness']['protectedMarketsReady'] is True and r['healthySources']>=3
               x=r['shadowInverse'];assert x['sourceBuild']==source and x['version']=='shadow-inverse-v1'
+              assert x['cutoverAt']==committedCutover and abs(x['initialEquity']-committedComparison)<1e-7,'Repair must not restart either trial book'
               assert x['independentDecisions'] is False and x['liveExecution']=='PAPER_ONLY'
               assert x['pairedOpened']-x['pairedClosed']==x['pairedOpen'] and abs(x['settledAttributionResidual'])<1e-7
           a,b=receipts[0],receipts[-1]
           assert b['runtimeAt']>a['runtimeAt'] and b['feedAt']>a['feedAt']
-          assert b['shadowInverse']['cutoverAt']==a['shadowInverse']['cutoverAt']
-          print('CONTINUITY_PASS '+json.dumps({'buildSha':expected,'sourceBuild':source,'accountEpochPreserved':True,
+          assert b['entryEvaluatedAt']>a['entryEvaluatedAt'],'Strategy execution did not advance'
+          assert b['shadowInverse']['pairedOpened']>=a['shadowInverse']['pairedOpened']
+          print('CONTINUITY_PASS '+json.dumps({'buildSha':expected,'sourceBuild':source,'accountEpochPreserved':True,'cutoverPreserved':True,
               'runtimeAdvanceMs':b['runtimeAt']-a['runtimeAt'],'feedAdvanceMs':b['feedAt']-a['feedAt'],
+              'executionAdvanceMs':b['entryEvaluatedAt']-a['entryEvaluatedAt'],'persistedAt':b['storage']['persistedAt'],
               'pairedOpened':b['shadowInverse']['pairedOpened'],'pairedClosed':b['shadowInverse']['pairedClosed'],
               'legacyOpen':b['shadowInverse']['legacyOpen'],'sourceCalls':'PUBLIC_HEALTH_GET_ONLY',
               'privateGateRequests':0,'productionWrites':0,'liveIntentUnchanged':True}),flush=True)
