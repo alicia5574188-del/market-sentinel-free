@@ -1,3 +1,16 @@
+# Owner correction: overview-only PAPER/LIVE curves — 2026-10-02
+
+The owner now wants both curves on overview only; remove PAPER's curve from the
+simulated page. Add the same chart controls/cache for Gate-native account equity,
+isolated by owner/member and the existing manual activation enabledAt. OFF keeps
+the last saved session for viewing; the next OFF-to-ON hides old points immediately
+and starts a new native baseline, without resetting the account, trades, source,
+PAPER history or execution fence. Repeated ON and process/browser restart retain
+the session. Save at most one fresh native mark per five minutes through existing
+checkpoint transactions, charged to optional write capacity; no new Gate read,
+alarm or trade. Keep rows outside bounded hot checkpoints and protect private
+owner/member GETs. Existing reviewed-main release/continuity gates still apply.
+
 # Owner correction: keep original PAPER curve visible during LIVE — 2026-10-02
 
 The owner requests keeping the original simulated equity curve visible when

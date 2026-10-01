@@ -1,3 +1,22 @@
+# 2026-10-02 — overview-only charts and native LIVE session history
+
+- Owner supersedes previous simulated-page curve placement: both curves belong
+  on overview. Existing PAPER archive/cache identity stays unchanged.
+- LIVE uses existing native Gate account marks, including fees/floating/manual
+  holdings/capital movements; it is actual account equity, not PAPER PnL or a
+  reconstructed trading-profit curve. No extra exchange/account snapshot.
+- Existing activation.enabledAt scopes each observation/cache/GET. OFF leaves
+  the last saved session visible; next OFF-to-ON immediately hides its projection
+  and first native observation supplies the new baseline. No account/ledger reset,
+  repeated-ON restart or historical backfill from simulated/order-derived values.
+- Sample once per five minutes within existing checkpoint transactions. One tiny
+  optional row per mark; reserve optional capacity separately from critical
+  execution journals. Only constant-sized head remains in owner/member checkpoint.
+- Reuse chart controls and existing persistent/incremental projection cache with
+  configurable endpoint/cursor validation; default PAPER behavior unchanged.
+  Native GET is owner-authenticated/member-local and reads at most65 rows. Captured
+  head bounds its watermark so concurrent commits cannot be skipped permanently.
+
 # 2026-10-02 — independent PAPER chart alongside native LIVE display
 
 - Owner explicitly restores original simulated curve visibility during LIVE.

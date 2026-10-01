@@ -7,6 +7,7 @@ import {type Trade,type forwardSummary} from "../lib/forward-relations.ts";
 import {recordWindows,archivePage} from "../lib/record-view.ts";
 import {ArchivePagination} from "./record-controls.tsx";
 import EquityCurve from "./equity-curve.tsx";
+import LiveEquityCurve from "./live-equity-curve.tsx";
 import {EquityHistoryCache} from "../lib/equity-cache.ts";
 import MarketIntelligenceExecution from "./market-intelligence-execution.tsx";
 import "./account-first.css";
@@ -25,7 +26,8 @@ const exitName=(reason:string|null)=>reason?({SHADOW_SOURCE_EXIT:"跟随影子�
 
 export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,livePanel,liveSystemPanel,liveEnabled,liveOverview,accountPanel,memberName,cacheScope="owner"}:{
   data:View|null;healthy:boolean;statusLabel?:string;feedAt:number|null;error:string|null;livePanel:ReactNode;liveSystemPanel?:ReactNode;
-  liveEnabled:boolean;liveOverview?:{equity:number|null;available:number|null;positionCount:number;operational:boolean;lastSyncAt:number|null;copied:number|null;eligible:number|null;missing:number|null;accountMark?:import('../lib/live-account-view.ts').LiveAccountMark|null};
+  liveEnabled:boolean;liveOverview?:{equity:number|null;available:number|null;positionCount:number;operational:boolean;lastSyncAt:number|null;copied:number|null;eligible:number|null;missing:number|null;accountMark?:import('../lib/live-account-view.ts').LiveAccountMark|null;
+    equityCurve?:import('../lib/live-equity.ts').LiveEquityHead|null;sessionAt?:number};
   accountPanel?:ReactNode;memberName?:string;cacheScope?:string;
 }){
   const [equityCache]=useState(()=>new EquityHistoryCache());
@@ -75,14 +77,14 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       {liveEnabled?<section className="fr-section"><div className="fr-section-head"><h2>实盘复制</h2><button className="fr-text-button" onClick={()=>select("paper")}>查看同步账户 →</button></div>
         <p>已复制 {liveOverview?.copied??"—"} / 应复制 {liveOverview?.eligible??"—"} · 未跟上 {liveOverview?.missing??"—"}。模拟页与实盘页共用真实成交、持仓和结算记录；未成交不产生模拟利润。</p></section>:<InversePanel data={data}/>}
       <PaperEquitySection data={data} healthy={healthy} cache={equityCache} cacheScope={cacheScope}/>
+      <LiveEquityCurve head={liveOverview?.equityCurve} mark={actual} enabled={liveEnabled} sessionAt={liveOverview?.sessionAt??0} cacheScope={cacheScope} now={now}/>
       <section className="fr-section"><div className="fr-section-head"><h2>{data?.shadowInverse?"影子机会 · 模拟反向":"当前最优机会"}</h2><span>{eligible.length} 个可参与</span></div>
         <OpportunityGrid rows={opportunities.slice(0,6)} inverse={!!data?.shadowInverse}/></section>
     </>}
 
     {tab==="execution"&&<MarketIntelligenceExecution data={data} now={now} liveEnabled={liveEnabled} liveOverview={liveOverview}/>}
 
-    {tab==="paper"&&liveEnabled&&<><section className="fr-section" data-testid="paper-live-mirror"><h2>模拟账户 · 同步实盘</h2><p>订单与盈亏使用本账户实盘数据；原模拟曲线保留供对照。</p></section>
-      <PaperEquitySection data={data} healthy={healthy} cache={equityCache} cacheScope={cacheScope}/></>}
+    {tab==="paper"&&liveEnabled&&<section className="fr-section" data-testid="paper-live-mirror"><h2>模拟账户 · 同步实盘</h2><p>订单与盈亏使用本账户实盘数据。</p></section>}
     {tab==="paper"&&!liveEnabled&&<>
       <PageTitle title="模拟账户"/><InversePanel data={data}/>
       <nav className="fr-live-tabs fr-paper-tabs">{([["account","账户"],["positions","持仓"],["history","记录"],["archive","归档"]] as const).map(([id,label])=><button key={id} className={paperTab===id?"selected":""} onClick={()=>setPaperTab(id)}>{label}</button>)}</nav>
