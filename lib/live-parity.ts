@@ -23,6 +23,7 @@ export type MirrorReceipt = {
   sourceEntryPrice: number; sourceStopPrice: number; sourceArmPrice: number;
   sourceExitMode: Trade["rule"]["exitMode"]; sourceGivebackRate: number;
   sourceExitPlanVersion?: string; sourceBestHoldMinutes?: number; sourceMaxHoldMinutes?: number;
+  sourceContractsAtCopy?:number;
   sourceNotional: number; sourceMargin: number; sourceLeverage: number;
   copiedAt: number; sourceEquity: number; liveEquity: number; ratio: number;
   targetNotional: number; targetMargin: number; requestedContracts: number;
@@ -206,7 +207,7 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
     sourceEntryPrice:t.entryPrice,sourceStopPrice:t.stopPrice,sourceArmPrice:t.armPrice,
     sourceExitMode:t.rule.exitMode,sourceGivebackRate:t.rule.givebackRate,
     sourceExitPlanVersion:t.exitPlan?.version,sourceBestHoldMinutes:t.exitPlan?.bestHoldMinutes,sourceMaxHoldMinutes:t.exitPlan?.maxHoldMinutes,
-    sourceNotional:t.notional,sourceMargin:t.margin,sourceLeverage:t.leverage,
+    sourceContractsAtCopy:t.contracts,sourceNotional:t.notional,sourceMargin:t.margin,sourceLeverage:t.leverage,
     copiedAt:input.now,sourceEquity:input.sourceEquity,liveEquity:input.equity,ratio,targetNotional,targetMargin,
     requestedContracts,roundedContracts:contracts,roundingNotional:Math.max(0,targetNotional-notional),discrepancy:null,
     quantityText,minimumContracts:sized.minimum,quantityQuantum:sized.quantum,

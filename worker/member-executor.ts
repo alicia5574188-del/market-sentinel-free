@@ -110,7 +110,7 @@ export function memberExecutionClass(Base:typeof MarketStream) {
       const journal=new Map(this.liveJournal),newTags:string[]=[];
       const potential=new Set<string>();
       for(const e of Object.values(this.runtime.live.entries))if(e){potential.add(e.tag);potential.add(liveExitTag(e.planId));potential.add(buildLiveStopIntent({id:e.planId,symbol:e.symbol,side:e.side,currentStop:e.invalidation},this.runtime.tickSize[e.symbol]).tag);if(e.stopTag)potential.add(e.stopTag);}
-      for(const p of Object.values(this.runtime.live.positions))if(p){potential.add(liveExitTag(p.id));potential.add(buildLiveStopIntent(p,this.runtime.tickSize[p.symbol]).tag);if(p.stopTag)potential.add(p.stopTag);}
+      for(const p of Object.values(this.runtime.live.positions))if(p){potential.add(liveExitTag(p.id));potential.add(buildLiveStopIntent(p,this.runtime.tickSize[p.symbol]).tag);if(p.stopTag)potential.add(p.stopTag);if(p.sourceReduction?.tag)potential.add(p.sourceReduction.tag);}
       for(const tag of potential)if(!this.knownProgramTags.has(tag)){
         if(await this.ctx.storage.get<boolean>(`member-program-tag:${tag}`))this.knownProgramTags.add(tag);
         else {journal.set(`member-program-tag:${tag}`,true);newTags.push(tag);}
