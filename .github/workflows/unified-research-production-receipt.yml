@@ -18,9 +18,12 @@ jobs:
           from datetime import datetime,timezone
           url='https://market-sentinel-free.alicia5574188.workers.dev/__health'
           expected='9b8b31532aa01589b7c797388f6c3d5fcac88164'
+          # Pre-release job 110183946837 at 2026-10-01T02:02:51Z already showed
+          # this account epoch on old build 2b4fd60f. The first auxiliary check
+          # incorrectly compared against an obsolete batch. No production write.
+          baselineEpoch=1790816669059
+          baselineResolved=8
           receipts=[]
-          # Allow the already-running normal release to finish, without deploying here.
-          time.sleep(20)
           for i in range(3):
               if i:time.sleep(15)
               raw=subprocess.check_output(['curl','--fail','--silent','--show-error','--max-time','20',url],text=True)
@@ -39,8 +42,8 @@ jobs:
               print('PUBLIC_RECEIPT '+json.dumps(receipt,ensure_ascii=False),flush=True)
               assert receipt['ok'] and receipt['buildSha']==expected and receipt['authorityReady'] is True
               assert receipt['stale'] is False and receipt['lastError'] is None and receipt['storage']['error'] is None
-              assert receipt['accountStartedAt']==1790783624414 and receipt['initialEquity']==1000,'Account epoch changed'
-              assert receipt['resolved']>=77,'Settled history regressed from pre-release read'
+              assert receipt['accountStartedAt']==baselineEpoch and receipt['initialEquity']==1000,'Account epoch differs from verified pre-release read'
+              assert receipt['resolved']>=baselineResolved,'Settled history regressed from verified pre-release read'
               assert ready.get('protectedMarketsReady') is True and multi.get('healthySources',0)>=3
               receipts.append(receipt)
           a,b=receipts[0],receipts[-1]
@@ -49,6 +52,7 @@ jobs:
           assert b['storage']['persistedAt']>=a['storage']['persistedAt']
           assert b['resolved']>=a['resolved']
           print('CONTINUITY_PASS '+json.dumps({'buildSha':expected,'accountEpochPreserved':True,'settledCountPreserved':True,
+              'baselineSource':'pre-release job 110183946837 / 2026-10-01T02:02:51Z',
               'runtimeAdvanceMs':b['lastSuccessAt']-a['lastSuccessAt'],'feedAdvanceMs':b['marketUpdatedAt']-a['marketUpdatedAt'],
               'sourceCalls':'PUBLIC_HEALTH_GET_ONLY','privateGateRequests':0,'deploymentsFromThisJob':0,
               'liveIntentStableDuringReceipt':a['liveMode']==b['liveMode'],
