@@ -25,7 +25,7 @@ export type PaidPair={version:typeof PAID_FEE_VIEW_VERSION;tradeId:string;source
 /** Both sides use the exact source event price and the exact same current source mark.
  * Therefore gross PnL must be equal and opposite; only each side's filled fees may differ net PnL. */
 export function pairedPaidView(t:Trade,_q?:Quote,now=t.lastQuoteAt,source?:Trade):PaidPair|null{
-  const i=t.inverseCopy;if(!i||!copy.fills.length)return null;const copy=i;
+  const i=t.inverseCopy;if(!i||!i.fills.length)return null;const copy=i;
   const closed=t.status==='CLOSED',first=copy.fills[0]!,last=copy.fills.at(-1)!,exits=copy.fills.filter(f=>f.kind!=='OPEN');
   const sourceValid=!!source&&positive(source.lastPrice)&&finite(source.lastQuoteAt)&&source.lastQuoteAt<=now;
   const sharedPrice=closed?last.sourcePrice:sourceValid?source!.lastPrice:null;
