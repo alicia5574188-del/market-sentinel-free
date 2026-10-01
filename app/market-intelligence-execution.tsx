@@ -113,12 +113,12 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
             {waitingReason(v,o)}{o?.winnerPlan&&<><br/><small>{planText(o.winnerPlan)}</small></>}</p>})}
           {!waitingValidations.length&&<p>暂无已武装计划。</p>}
         </div></article>
-        <article><time>正在持仓 · {positions.length}</time><div>
+        <article><time>{liveEnabled?'影子信号持仓':'正在持仓'} · {positions.length}</time><div>
           {positions.length?positions.map(t=><p key={t.id}><b>{t.symbol.replace("_"," / ")} · {side(t.side)} · {tradePlanName(t.liquidityLifecycle?.currentPlan??t.entryContext?.tradePlan)} · {positionAction(t)}</b><br/>
             {positionWatch(t)}{t.entryContext?.winnerPlan&&<><br/><small>{planText(t.entryContext.winnerPlan,t.stopPrice)}</small></>}</p>):<p>暂无持仓。</p>}
         </div></article>
       </div>
-      <p className="fr-note">实盘 {liveEnabled?(liveOverview?.operational?"运行中":"等待核对"):"关闭"}</p>
+      <p className="fr-note">实盘 {liveEnabled?(liveOverview?.operational?"运行中":"等待核对"):"关闭"}{liveEnabled?' · 成交、实际持仓及盈亏以同步账户为准':''}</p>
     </section>
   </div>;
 }

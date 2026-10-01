@@ -75,6 +75,7 @@ export default function Home() {
     healthy={runtimeBackendOperational(runtime)} statusLabel={runtimeStatusLabel(runtime)} feedAt={runtime?.lastSuccessAt??null}
     error={runtime?.forward?.storage?.error??error} liveEnabled={runtime?.liveMode?.requestedEnabled??false}
     liveOverview={{equity:runtime?.live?.equity??null,available:runtime?.live?.available??null,
+      accountMark:runtime?.live?.accountMark?.sessionAt===(runtime?.live?.activation?.enabledAt??0)?runtime.live.accountMark:null,
       positionCount:Object.values(runtime?.live?.positions??{}).filter(p=>p?.status==="OPEN").length,
       operational:runtime?.liveMode?.operational??false,lastSyncAt:runtime?.live?.lastSyncAt??null,
       copied:runtime?.live?.mirror?.eligibleCopiedCount??runtime?.liveMirror?.eligibleCopiedCount??null,

@@ -14,6 +14,10 @@ export type GateLiveAccount = {
   order_margin?: string | number;
   position_margin?: string | number;
   unrealised_pnl?: string | number;
+  history_pnl?: string | number;
+  history_fee?: string | number;
+  history_fund?: string | number;
+  history?:{pnl?:string|number;fee?:string|number;fund?:string|number};
   in_dual_mode?: boolean;
   position_mode?: string;
   margin_mode?: number;

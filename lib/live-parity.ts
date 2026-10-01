@@ -43,7 +43,7 @@ export type MirrorReceipt = {
   nativeProtectionPrice?:number|null; shadowSourceId?:string;
   sourceAllocationRiskRate?:number; exitPolicy?:typeof INVERSE_LIVE_EXIT_POLICY;
   retiredProtectionTags?:string[]; protectionRemovedAt?:number;
-  entryPricePolicy?:'favorable-ioc-v1'; entryLimitPrice?:number;
+  entryPricePolicy?:'favorable-ioc-v1'|'fresh-market-v1'; entryLimitPrice?:number;
   exitExecutionPolicy?:'priority-bounded-exit-v1';sourceExitPrice?:number|null;exitObservedAt?:number;
   exitSubmittedAt?:number;exitDelayMs?:number;exitLimitPrice?:number|null;
 };
@@ -186,7 +186,7 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
   const protection=liveProtectionPrice(t);
   if (protection!=null&&direction*(input.entryPrice-protection)<=0)fail("ECONOMICS","当前价已越过源单止损，不开即平");
   const drift=liveEntryDriftGuard(t,input.entryPrice);
-  if(drift.adverse>drift.allowed+1e-9)fail("ECONOMICS",
+  if(!t.inverseCopy&&drift.adverse>drift.allowed+1e-9)fail("ECONOMICS",
     `当前实盘盘口相对模拟入场出现不利偏差${(drift.adverse*100).toFixed(3)}%，超过动态上限${(drift.allowed*100).toFixed(3)}%，不追价`);
   const ratio=input.mirrorRatio&&positive(input.mirrorRatio)?input.mirrorRatio:input.equity/input.sourceEquity;
   const mirrorEquity=input.sourceEquity*ratio,targetNotional=t.notional*ratio,targetMargin=t.margin*ratio;
@@ -251,7 +251,8 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
     binding:{version:LIVE_PARITY_VERSION,sourceAtCopy:structuredClone(t),receipt}};
 }
 
-export function mirrorCoverage(state:ForwardState|null,live:{requestedEnabled:boolean;activation?:LiveSession|null;positions:Record<string,{id:string;status:string;parity?:MirrorReceipt;exchangeUnrealisedPnl?:number|null;exchangePnlAt?:number|null}|null>;
+export function mirrorCoverage(state:ForwardState|null,live:{requestedEnabled:boolean;activation?:LiveSession|null;
+  accountMark?:{sessionAt:number;at:number;startedAt:number}|null;positions:Record<string,{id:string;status:string;parity?:MirrorReceipt;exchangeUnrealisedPnl?:number|null;exchangePnlAt?:number|null}|null>;
   entries:Record<string,{planId:string;status:string;parity?:MirrorReceipt}|null>;entrySkips:Record<string,{planId:string;reason:string;code?:string}|null>},error:string|null) {
   const sources=state?.positions??[];
   let sourceError=error;
@@ -278,7 +279,9 @@ export function mirrorCoverage(state:ForwardState|null,live:{requestedEnabled:bo
   return {version:LIVE_PARITY_VERSION,source:LIVE_PARITY_SOURCE,connected:!!state&&!sourceError,ownerControlled:true,
     accountRole:state?.inverseTrial?'INVERSE_PAPER':'CURRENT_PAPER',
     nativeProtectionPolicy:state?.inverseTrial?INVERSE_LIVE_EXIT_POLICY:null,
-    entryPricePolicy:state?.inverseTrial?'favorable-ioc-v1':LIVE_ENTRY_DRIFT_POLICY,
+    entryPricePolicy:state?.inverseTrial?'fresh-market-v1':LIVE_ENTRY_DRIFT_POLICY,
+    accountViewPolicy:'gate-authoritative-v1',
+    accountViewAt:live.accountMark?.sessionAt===(live.activation?.enabledAt??0)?live.accountMark.at:null,
     exitExecutionPolicy:state?.inverseTrial?'priority-bounded-exit-v1':null,
     instructionParity:!sourceError,exactFillsGuaranteed:false,sourceCount:sources.length,copiedCount:rows.filter(r=>["COPIED","DEVIATION"].includes(r.status)).length,
     pendingCount:rows.filter(r=>r.status==="PENDING").length,rows,error:sourceError,

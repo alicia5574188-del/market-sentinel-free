@@ -1,3 +1,18 @@
+# Owner correction: execution participation / LIVE authority — 2026-10-01
+
+Owner explicitly abandons favorable-entry waiting and winner-filter research.
+Use the same fresh Gate response for inverse execution sizing/dispatch, execute
+market IOC promptly, minimize and record source/fill gaps instead of vetoing
+adverse prices. LIVE ON overview and simulated account must reflect actual Gate
+equity, native floating, confirmed fills and native settlements. Keep the frozen
+shadow/source ledgers independent as signal/research authority, never pretend
+uncopied PAPER profits are LIVE results. Size NEW inverse copies from CURRENT
+LIVE capital, preserve real-account risk/margin/minimum-lot gates, unique sends,
+unknown reconciliation, partial-fill honesty, existing positions/history and
+manual owner/member sessions. No old-source replay, test order, switch action or
+new data/alarm cadence. This supersedes favorable IOC and fixed-scale divergence
+veto for inverse additions. Reviewed main deployment and advancing receipt.
+
 # Owner correction: optimize LIVE exits too — 2026-10-01
 
 Owner explicitly asks to optimize exits because actual PAPER profits exceed

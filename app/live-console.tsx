@@ -103,7 +103,8 @@ function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade
       setCredential(result.credential);setVerification(null);setConfirmDelete(false);setNotice("API已删除，实盘保持关闭。");});
   };
   const marks=positions.map(p=>livePositionMark(p,runtime,clock));
-  const floating=live&&marks.every(m=>m.pnl!==null)?marks.reduce((sum,m)=>sum+(m.pnl??0),0):null;
+  const accountMark=live?.accountMark?.sessionAt===(live?.activation?.enabledAt??0)?live.accountMark:null;
+  const floating=accountMark?.floating??(live&&marks.every(m=>m.pnl!==null)?marks.reduce((sum,m)=>sum+(m.pnl??0),0):null);
   const audits=[...(live?.auditEvents??[])].sort((a,b)=>b.observedAt-a.observedAt);
   const tabs:[Section,string][]=[["account","账户"],["positions","持仓"],["history","记录"],["archive","归档"]];
   const copied=mirror?.eligibleCopiedCount??0,eligible=mirror?.eligibleSourceCount??0,missing=mirror?.eligibleMissingCount??0;
@@ -165,8 +166,9 @@ function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade
     <div className="fr-live-heading"><h1>实盘账户</h1><span>{liveStatus}</span></div>
     <section className="fr-stats fr-live-summary" data-testid="live-equity-first"><LiveStat title="实盘账户权益" value={`${num(live?.equity)} U`}/>
       <LiveStat title="可用保证金" value={`${num(live?.available)} U`}/>
-      <LiveStat title="持仓浮动盈亏" value={`${signed(floating)} U`}/>
+      <LiveStat title={accountMark?"全账户浮动盈亏":"程序持仓浮动盈亏"} value={`${signed(floating)} U`}/>
       <LiveStat title="当前持仓" value={live?`${positions.length} 笔`:"—"} detail={entries.length?`待执行 ${entries.length} 笔`:undefined}/></section>
+    {accountMark&&<p className="fr-note">全账户权益及浮盈含手工持仓；下方只列程序绑定订单。数据核对 {time(accountMark.at)}{clock-accountMark.at>30000?' · 待更新，保留上次真实数据':''}</p>}
     <div className="fr-account-line"><span>实盘成交额 {num(live?.turnover?.sessionSystemTagged)} U · 已扣费用 {num(live?.turnover?.sessionSystemTaggedFees)} U</span><b className={copyHealthy?"fr-positive":missing||mirror?.error?"fr-negative":""}>复制一致性 {copyLabel}</b></div>
     <p className="fr-note">Gate成交核对至 {time(live?.turnover?.checkedThrough)}{live?.turnover?.catchingUp?" · 正在补齐":""} · 账户核对 {time(live?.lastSyncAt)}</p>
     {(enabled||positions.length>0||entries.length>0)&&live?.lastError&&!isTransientLiveReadError(live.lastError)
@@ -259,20 +261,20 @@ function CompareBlock({position,runtime,now}:{position:LivePosition;runtime:Oper
   if(!c.source&&!p)return null;
   const cls=(v:number|null,adversePositive=false)=>v==null?"":(adversePositive?v<=0:v>=0)?"fr-positive":"fr-negative";
   return <div className="fr-compare">
-    <div className="fr-compare-head"><b>模拟 ↔ 实盘</b><span>{closed?"已平仓标准化对照":"当前价格对照"}</span></div>
+    <div className="fr-compare-head"><b>源信号参考 ↔ 实盘</b><span>{closed?"已平仓标准化对照":"当前价格对照"}</span></div>
     {closed&&c.paperRate!=null&&c.liveRate!=null?<div className="fr-compare-grid">
-      <Metric label="模拟净收益率" value={`${signed(c.paperRate*100,3)}%`}/><Metric label="实盘净收益率" value={`${signed(c.liveRate*100,3)}%`}/>
+      <Metric label="源信号参考收益率" value={`${signed(c.paperRate*100,3)}%`}/><Metric label="实盘净收益率" value={`${signed(c.liveRate*100,3)}%`}/>
       <div><small>收益率偏差</small><b className={cls(c.rateGap)}>{c.rateGap==null?"—":`${signed(c.rateGap*100,3)}个百分点`}</b></div>
-      <Metric label="按实盘名义额折算应得" value={c.expected==null?"—":`${signed(c.expected)} U`}/>
+      <Metric label="参考折算（非实际利润）" value={c.expected==null?"—":`${signed(c.expected)} U`}/>
       <Metric label="Gate实际结算" value={c.actual==null?"待结算":`${signed(c.actual)} U`}/>
       <div><small>执行损耗 / 改善</small><b className={cls(c.loss)}>{c.loss==null?"—":`${signed(c.loss)} U`}</b></div>
     </div>:c.paperRate!=null?<div className="fr-compare-grid">
-      <Metric label="模拟价格收益" value={`${signed(c.paperRate*100,3)}%`}/><Metric label="实盘价格收益" value={c.liveRate==null?"待更新":`${signed(c.liveRate*100,3)}%`}/>
+      <Metric label="源信号价格收益" value={`${signed(c.paperRate*100,3)}%`}/><Metric label="实盘价格收益" value={c.liveRate==null?"待更新":`${signed(c.liveRate*100,3)}%`}/>
       <div><small>价格表现偏差</small><b className={cls(c.rateGap)}>{c.rateGap==null?"—":`${signed(c.rateGap*100,3)}个百分点`}</b></div>
     </div>:null}
-    <div className="fr-compare-prices"><span>模拟入场 <b>{num(p?.sourceEntryPrice??c.source?.entryPrice,5)}</b></span><span>实盘入场 <b>{num(position.entryPrice,5)}</b></span>
+    <div className="fr-compare-prices"><span>源信号入场 <b>{num(p?.sourceEntryPrice??c.source?.entryPrice,5)}</b></span><span>实盘入场 <b>{num(position.entryPrice,5)}</b></span>
       <span className={cls(c.entryAdverse,true)}>入场偏差 <b>{c.entryAdverse==null?"—":`${signed(c.entryAdverse*100,3)}%`}</b></span>
-      {closed&&c.source?.exitPrice&&<><span>模拟出场 <b>{num(c.source.exitPrice,5)}</b></span><span>实盘出场 <b>{num(position.exitPrice??position.settlement?.exitPrice,5)}</b></span><span className={cls(c.exitAdverse,true)}>出场偏差 <b>{c.exitAdverse==null?"—":`${signed(c.exitAdverse*100,3)}%`}</b></span></>}
+      {closed&&c.source?.exitPrice&&<><span>源信号出场 <b>{num(c.source.exitPrice,5)}</b></span><span>实盘出场 <b>{num(position.exitPrice??position.settlement?.exitPrice,5)}</b></span><span className={cls(c.exitAdverse,true)}>出场偏差 <b>{c.exitAdverse==null?"—":`${signed(c.exitAdverse*100,3)}%`}</b></span></>}
       <span>复制延迟 <b>{latency(p?.submitDelayMs??p?.copyDelayMs)}</b></span></div>
   </div>;
 }
