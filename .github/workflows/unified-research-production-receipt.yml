@@ -1,0 +1,56 @@
+name: Unified research production continuity receipt
+on:
+  push:
+    branches: [verify/20261001-unified-research-production]
+    paths: [.github/workflows/unified-research-production-receipt.yml]
+permissions: {}
+jobs:
+  public-receipt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Read public production health and account continuity
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,time,subprocess
+          from datetime import datetime,timezone
+          url='https://market-sentinel-free.alicia5574188.workers.dev/__health'
+          expected='9b8b31532aa01589b7c797388f6c3d5fcac88164'
+          receipts=[]
+          # Allow the already-running normal release to finish, without deploying here.
+          time.sleep(20)
+          for i in range(3):
+              if i:time.sleep(15)
+              raw=subprocess.check_output(['curl','--fail','--silent','--show-error','--max-time','20',url],text=True)
+              data=json.loads(raw)
+              r=data['runtime']; f=r['forward']; ready=r['realtimeReadiness']; multi=r['multiSourceMarket']
+              receipt={'sample':i+1,'observedAt':datetime.now(timezone.utc).isoformat(),'ok':data.get('ok'),
+                  'buildSha':r.get('buildSha'),'authorityReady':r.get('authorityReady'),'stale':r.get('stale'),
+                  'lastError':r.get('lastError'),'lastSuccessAt':r.get('lastSuccessAt'),'lastHeartbeatAt':r.get('lastHeartbeatAt'),
+                  'accountStartedAt':f.get('startedAt'),'initialEquity':f.get('initialEquity'),'resolved':f.get('resolved'),
+                  'openCount':f.get('openCount'),'lastCycleAt':f.get('lastCycleAt'),'storage':f.get('storage'),
+                  'researchUpdatedAt':(f.get('marketNarrative') or {}).get('updatedAt'),
+                  'tracked':f.get('marketIntelligenceTracked'),'eligible':f.get('participationEligibleCount'),
+                  'entryEvaluatedAt':(f.get('entryDiagnostics') or {}).get('at'),
+                  'realtimeReadiness':ready,'healthySources':multi.get('healthySources'),'marketUpdatedAt':multi.get('lastSuccessAt'),
+                  'liveMode':r.get('liveMode'),'scanned':(r.get('radar') or {}).get('scanned')}
+              print('PUBLIC_RECEIPT '+json.dumps(receipt,ensure_ascii=False),flush=True)
+              assert receipt['ok'] and receipt['buildSha']==expected and receipt['authorityReady'] is True
+              assert receipt['stale'] is False and receipt['lastError'] is None and receipt['storage']['error'] is None
+              assert receipt['accountStartedAt']==1790783624414 and receipt['initialEquity']==1000,'Account epoch changed'
+              assert receipt['resolved']>=77,'Settled history regressed from pre-release read'
+              assert ready.get('protectedMarketsReady') is True and multi.get('healthySources',0)>=3
+              receipts.append(receipt)
+          a,b=receipts[0],receipts[-1]
+          assert b['lastSuccessAt']>a['lastSuccessAt'],'Fast runtime did not advance'
+          assert b['marketUpdatedAt']>a['marketUpdatedAt'],'Feed did not advance'
+          assert b['storage']['persistedAt']>=a['storage']['persistedAt']
+          assert b['resolved']>=a['resolved']
+          print('CONTINUITY_PASS '+json.dumps({'buildSha':expected,'accountEpochPreserved':True,'settledCountPreserved':True,
+              'runtimeAdvanceMs':b['lastSuccessAt']-a['lastSuccessAt'],'feedAdvanceMs':b['marketUpdatedAt']-a['marketUpdatedAt'],
+              'sourceCalls':'PUBLIC_HEALTH_GET_ONLY','privateGateRequests':0,'deploymentsFromThisJob':0,
+              'liveIntentStableDuringReceipt':a['liveMode']==b['liveMode'],
+              'coarseResearchCycleAdvanced':b['lastCycleAt']>a['lastCycleAt']}),flush=True)
+          PY
