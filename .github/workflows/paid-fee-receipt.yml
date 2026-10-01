@@ -1,0 +1,75 @@
+name: Paid fee production receipt
+on:
+  push:
+    branches: [verify/20261001-paid-fee-receipt]
+    paths: [.github/workflows/paid-fee-receipt.yml]
+permissions: {}
+jobs:
+  receipt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Verify public aggregate paid-fee basis and advancing runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,subprocess,time,math
+          from datetime import datetime,timezone
+          expected='6c0cbf7685248be9303d917e311c9f01033b083e'
+          baseline='2b4fd60f77c9b78526bd5087940945fe7e86fab8'
+          url='https://market-sentinel-free.alicia5574188.workers.dev/__health'
+          def read():
+              raw=subprocess.check_output(['curl','--silent','--show-error','--max-time','20','--write-out','\n%{http_code}',url],text=True)
+              body,status=raw.rsplit('\n',1)
+              d=json.loads(body);r=d.get('runtime') or {};f=r.get('forward') or {};v=f.get('shadowInverse') or {}
+              return {'at':datetime.now(timezone.utc).isoformat(),'http':int(status),'ok':d.get('ok'),'build':r.get('buildSha'),
+                'stale':r.get('stale'),'error':r.get('lastError'),'authority':r.get('authorityReady'),
+                'runtimeAt':r.get('lastSuccessAt'),'feedAt':(r.get('multiSourceMarket') or {}).get('lastSuccessAt'),
+                'sources':(r.get('multiSourceMarket') or {}).get('healthySources'),'accountEpoch':f.get('startedAt'),
+                'initialEquity':f.get('initialEquity'),'resolved':f.get('resolved'),'entryAt':(f.get('entryDiagnostics') or {}).get('at'),
+                'storage':f.get('storage'),'liveMode':r.get('liveMode'),
+                'sourceBuild':v.get('sourceBuild'),'cutoverAt':v.get('cutoverAt'),'pairedOpened':v.get('pairedOpened'),
+                'pairedClosed':v.get('pairedClosed'),'pairedOpen':v.get('pairedOpen'),
+                'sourceFees':v.get('sourceFees'),'inverseFees':v.get('inverseFees'),
+                'estimatedSourceNet':v.get('sourceNet'),'estimatedInverseNet':v.get('inverseNet'),
+                'paidCost':v.get('paidCost')}
+          def close(a,b):assert math.isfinite(a) and math.isfinite(b) and abs(a-b)<1e-7,(a,b)
+          for attempt in range(18):
+              sample=read()
+              print('WAIT '+json.dumps({k:sample[k] for k in ['at','http','ok','build','error']},ensure_ascii=False),flush=True)
+              if sample['build']==expected and sample['http']==200 and sample['ok'] and sample['paidCost']:break
+              time.sleep(15)
+          else:raise AssertionError('Expected paid-fee production build unavailable')
+          receipts=[sample]
+          for _ in range(2):time.sleep(15);receipts.append(read())
+          for s in receipts:
+              p=s['paidCost'];assert s['http']==200 and s['ok'] and s['build']==expected and s['authority'] is True
+              assert s['error'] is None and s['storage']['error'] is None and s['stale'] is False
+              assert s['sourceBuild']==baseline and p['version']=='paid-fee-view-v1'
+              assert 'rows' not in p,'Public health must not expose authenticated per-order rows'
+              assert p['estimatedExitFees']['includedInNet'] is False
+              close(p['source']['fees'],s['sourceFees']);close(p['inverse']['fees'],s['inverseFees'])
+              for leg in ['source','inverse']:
+                  a=p[leg]
+                  if a['netPnl'] is not None:
+                      close(a['netPnl'],a['realizedGross']+a['floatingGross']-a['fees']-a['bookedFunding'])
+              c=p['reconciliation']
+              if c['netGap'] is not None:
+                  close(c['netGap'],c['paidFees']+c['bookedFunding']+c['realizedGrossGap']+c['openGrossGap'])
+              if not p['stalePairs'] and not p['missingSourceMarks']:
+                  close(p['source']['netPnl']-s['estimatedSourceNet'],p['estimatedExitFees']['source'])
+                  close(p['inverse']['netPnl']-s['estimatedInverseNet'],p['estimatedExitFees']['inverse'])
+              assert s['pairedOpened']-s['pairedClosed']==s['pairedOpen']
+              print('PAID_FEE_RECEIPT '+json.dumps(s,ensure_ascii=False),flush=True)
+          a,b=receipts[0],receipts[-1]
+          assert a['accountEpoch']==b['accountEpoch'] and a['initialEquity']==b['initialEquity'] and a['cutoverAt']==b['cutoverAt']
+          assert a['liveMode']==b['liveMode']
+          assert b['resolved']>=a['resolved'] and b['pairedOpened']>=a['pairedOpened']
+          assert b['runtimeAt']>a['runtimeAt'] and b['feedAt']>a['feedAt']
+          assert b['storage']['persistedAt']>=a['storage']['persistedAt']
+          print('PAID_FEE_PASS '+json.dumps({'build':expected,'sourceBuild':baseline,'accountEpoch':b['accountEpoch'],
+              'cutoverAt':b['cutoverAt'],'pairedOpened':b['pairedOpened'],'pairedClosed':b['pairedClosed'],
+              'runtimeAdvanceMs':b['runtimeAt']-a['runtimeAt'],'feedAdvanceMs':b['feedAt']-a['feedAt'],
+              'paidCostReconciles':True,'detailedRowsPublic':False,'privateGateRequests':0,'productionWrites':0}),flush=True)
+          PY
