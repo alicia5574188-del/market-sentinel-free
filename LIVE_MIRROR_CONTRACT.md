@@ -1,3 +1,18 @@
+# Current inverse source addendum — 2026-10-01
+
+The owner explicitly requested LIVE follow the visible inverse PAPER account.
+Only new inverse rows after the activation/source-policy fence create entries;
+legacy bound holdings drain their original lifecycle. Same fresh Gate quote data
+is reused; actual fills are never claimed equal to the PAPER same-price model.
+Committed source reductions/closures wake the one serialized executor.
+The original source adverse risk width is reflected to the inverse loss side for
+the native LIVE guard, with existing actual-account caps. This guard can exit
+earlier than PAPER; the deviation is reported and that parent is not reopened.
+PAPER source moving stops/targets remain references, not inverse native orders.
+Manual switches, accounts, credentials, sizing and frozen PAPER decisions stay
+unchanged. Full source/receipt bindings retain both original reference prices and
+native execution protection. Details: research/INVERSE_LIVE_BRIDGE_2026-10-01.md.
+
 # Protection timing addendum — 2026-09-18
 
 Every new source order includes its immutable `exitControl.policy`. Owner/member adapters must retain that full field and follow the same persisted source close; no separate live timer or take-profit shortcut. Inherited unmarked orders keep legacy timing. Only source exit timing changed; source identity, leverage, proportional size, owner activation and original exchange-native hard stops did not. See `research/TIMELY_PROTECTION.md`. A future native trailing amendment requires independent reconciliation and resource tests; this release does not pretend an off-exchange quote-driven trail is exchange-hosted.

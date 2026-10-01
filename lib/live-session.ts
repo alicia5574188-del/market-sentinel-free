@@ -2,19 +2,28 @@
 export const LIVE_SESSION_VERSION = "new-orders-decimal-pnl-v1";
 export type LiveSession = { version: typeof LIVE_SESSION_VERSION; enabledAt: number;
   sourceStartedAt: number | null; excludedSourceIds: string[]; migration: boolean;
+  sourcePolicy?:string;sourcePolicyAt?:number;
   scaleRatio?: number; scaleSourceEquity?: number; scaleLiveEquity?: number; scaleAt?: number;
   scaleRebasedAt?: number; scaleRebaseFrom?: number; scaleRebaseReason?:"ANCHOR_MISMATCH"|"LIVE_CAPITAL_INCREASE" };
-type SourceAccount = { startedAt: number; positions: { id: string; openedAt: number }[] };
+type SourceAccount = { startedAt: number; positions: { id: string; openedAt: number }[];inverseTrial?:unknown };
+export const liveSourcePolicy=(s:SourceAccount|null)=>s?.inverseTrial?'inverse-paper-live-v1':'current-paper-live-v1';
 export function startLiveSession(now: number, source: SourceAccount | null, migration = false): LiveSession {
   return { version: LIVE_SESSION_VERSION, enabledAt: now, sourceStartedAt: source?.startedAt ?? null,
-    excludedSourceIds: source?.positions.map(t => t.id) ?? [], migration };
+    excludedSourceIds: source?.positions.map(t => t.id) ?? [], migration,sourcePolicy:liveSourcePolicy(source),sourcePolicyAt:now };
+}
+export function fenceLiveSourcePolicy(session:LiveSession,source:SourceAccount,now:number):LiveSession {
+  const policy=liveSourcePolicy(source);
+  if(session.sourcePolicy===policy||(!session.sourcePolicy&&policy==='current-paper-live-v1'))return session;
+  return {...session,sourcePolicy:policy,sourcePolicyAt:now,
+    excludedSourceIds:[...new Set([...session.excludedSourceIds,...source.positions.map(t=>t.id)])]};
 }
 export function sourceAfterEnable(t: { id: string; openedAt: number }, session: LiveSession | null | undefined, sourceStartedAt: number) {
   return !!session && session.version === LIVE_SESSION_VERSION && session.sourceStartedAt === sourceStartedAt
-    && t.openedAt > session.enabledAt && !session.excludedSourceIds.includes(t.id);
+    && t.openedAt > Math.max(session.enabledAt,session.sourcePolicyAt??0) && !session.excludedSourceIds.includes(t.id);
 }
 export function sameLiveSession(a: LiveSession | null | undefined, b: LiveSession | null | undefined) {
-  return !!a && !!b && a.version === b.version && a.enabledAt === b.enabledAt && a.sourceStartedAt === b.sourceStartedAt;
+  return !!a && !!b && a.version === b.version && a.enabledAt === b.enabledAt && a.sourceStartedAt === b.sourceStartedAt
+    &&a.sourcePolicy===b.sourcePolicy&&a.sourcePolicyAt===b.sourcePolicyAt;
 }
 const positive=(v:number|undefined)=>typeof v==="number"&&Number.isFinite(v)&&v>0;
 const ratioGap=(a:number,b:number)=>a>b?a/b:b/a;

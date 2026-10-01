@@ -1,3 +1,20 @@
+# 2026-10-01 — inverse LIVE candidate
+
+Base f7e7c432 / production healthy; owner requested/operational OFF, no live open
+holdings. Root causes: inverse source publication excluded; candle lane lacks
+immediate post-commit wake; source reference stops are not inverse native stops.
+Candidate wires current inverse source, serialized committed-event dispatch,
+native adverse guard at original source risk width, durable source-policy fence,
+minimal member mark projection and current UI label. Owner controls unchanged.
+Verified locally: direct 308, LIVE/Gate 160 (11 new real-Worker inverse tests),
+members 49, equity 65, Forward 78; build/typecheck pass; lint 0 errors with 15
+existing warnings. Full npm test, architecture/migration 43, Gate-feed workerd,
+storage workerd and Wrangler dry-run pass. Reviewed-main release pending.
+The extra retired runtime-faults harness calls processBooks, which is already
+absent from base f7e7c432, and is outside the current release command; it was
+stopped, not represented as passed. New fault cases use the actual current Worker.
+Exact scope: research/INVERSE_LIVE_BRIDGE_2026-10-01.md. No Gate real test/switch.
+
 # 2026-09-26 — production 24/23 legacy page recovery candidate
 
 Production main `4c1aa94` is intentionally fail-closed with

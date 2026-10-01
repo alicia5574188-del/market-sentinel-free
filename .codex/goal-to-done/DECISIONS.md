@@ -1,3 +1,15 @@
+# 2026-10-01 — inverse execution projection
+
+- Current user request supersedes the previous PAPER-only LIVE exclusion; it
+  does not alter frozen shadow decisions or either PAPER ledger.
+- Preserve actual-account risk and native protection. Reflect only the saved
+  original source risk width to the inverse adverse side. Moving source stop
+  references never alter that guard. Report early exchange exits as deviations;
+  no false promise of identical PAPER/Gate lifecycle or fill prices.
+- Fence source-policy adoption durably, preserve manual intent and earlier
+  bound positions, and publish only committed events through one serialized
+  executor. Shared fresh BBO needs no second market request.
+
 # Lossless strict-superset recovery — 2026-09-26
 
 - Production diagnostics proved the retained legacy page has 24 valid rows

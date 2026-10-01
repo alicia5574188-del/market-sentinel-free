@@ -150,7 +150,7 @@ function InversePanel({data}:{data:View|null}){
     <p className="fr-paid-note">净额只扣已发生费用，未平仓部分含浮动盈亏；已配对 / 已完成 {v.pairedOpened} / {v.pairedClosed}。</p>
     {v.paidCost&&<p className="fr-paid-note">毛盈亏镜像校验 {fmt(v.paidCost.reconciliation.grossMirrorResidual,6)} U（应为 0） · 两边净额合计 {fmt(v.paidCost.reconciliation.netSum,4)} U ＝ −已扣手续费合计 {fmt(v.paidCost.reconciliation.paidFees,4)} U</p>}
     {!!v.paidCost?.stalePairs&&<p className="fr-paid-note">{v.paidCost.stalePairs} 组报价待更新，净额使用各自最后记录；缺失价格显示 —。</p>}
-    <p>切换 {time(v.cutoverAt)} · 旧持仓 {v.legacyOpen} 笔单独收尾 · 实盘未接入此试验</p>
+    <p>切换 {time(v.cutoverAt)} · 旧持仓 {v.legacyOpen} 笔单独收尾 · 实盘由开关控制，跟随反向模拟新单</p>
     <details><summary>同价镜像对照曲线</summary><p>虚线：影子 · 实线：反向模拟 · 同一成交价、同一当前价，只反方向；净额只扣已发生手续费。共同起点 {fmt(v.initialEquity)} U</p>
       <svg viewBox="0 0 400 185" width="100%" role="img" aria-label="切换后配对订单的影子与反向模拟对照，缺失处断开">
         {segments.map((rows,k)=><g key={k}><polyline fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray="5 4" points={rows.map(p=>`${x(p.at)},${y(p.source)}`).join(' ')}/>

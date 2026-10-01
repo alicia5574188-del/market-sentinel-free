@@ -9,6 +9,7 @@ import { LiveEntrySizingError, liveEntryTag, type LiveEntryIntent } from "./gate
 import { quantizeMirrorNotional, type GateSizeRules, type SizeDiagnostic } from "./gate-quantity.ts";
 import { LIVE_SESSION_VERSION, sourceAfterEnable, type LiveSession } from "./live-session.ts";
 import { PORTFOLIO_RISK_CAP, CORRELATED_DIRECTION_RISK_CAP } from "./liquidity-core.ts";
+import {liveProtectionPrice,INVERSE_LIVE_POLICY} from './live-source-policy.ts';
 
 export const LIVE_PARITY_VERSION = "current-paper-live-parity-v1";
 export const LIVE_PARITY_SOURCE = "CURRENT_FORWARD_ACCOUNT";
@@ -38,6 +39,8 @@ export type MirrorReceipt = {
   allowedAdverseEntryDriftRate?: number; adverseEntryDriftRate?: number;
   submitQuoteAt?: number; submitQuotePrice?: number; submittedAt?: number; submitDelayMs?: number;
   exchangeEntryPrice?: number; exchangeEntryAt?: number; exchangeEntryDriftRate?: number;
+  sourceRole?: 'INVERSE_PAPER'; nativeProtectionPolicy?:typeof INVERSE_LIVE_POLICY;
+  nativeProtectionPrice?:number; shadowSourceId?:string;
 };
 export type MirrorBinding = { version: typeof LIVE_PARITY_VERSION; sourceAtCopy: Trade;
   receipt: MirrorReceipt; sourceAtClose?: Trade; actual?: unknown };
@@ -62,10 +65,11 @@ export function forwardMirrorSources(state: ForwardState, sourceEquity: number):
     throw new Error("当前模拟账户不可用，实盘复制等待恢复，不回退到旧策略");
   const out: Record<string, MirrorSourceTrade> = {};
   for (const t of state.positions) {
-    // This owner request is an inverse PAPER experiment, not authorization for
-    // a new real-money strategy. Never dispatch a shadow or inverse test leg.
-    if(t.inverseCopy)continue;
+    // The current visible inverse account is the NEW source. Existing legacy
+    // LIVE positions still use sourceLifecycle; drain rows cannot add exposure.
+    if(state.inverseTrial&&!t.inverseCopy)continue;
     validateMirrorSource(t);
+    const protection=liveProtectionPrice(t);
     if (out[t.symbol]) throw new Error(`${t.symbol} 出现多条逻辑持仓；禁止静默净额合并，须先升级逐腿执行适配器`);
     const cost = 2*(PAPER_COST.feeRate+PAPER_COST.slippageRate)+PAPER_COST.fundingAllowancePerDay*sourceHoldMinutes(t)/1440,
       mode=t.entryContext?.mode,swing=mode==="SWING",impulse=mode==="IMPULSE",
@@ -78,7 +82,7 @@ export function forwardMirrorSources(state: ForwardState, sourceEquity: number):
       strategyName:t.entryContext?.strategyVersion?`峰谷状态 · ${mode??"TRADE"}`:`兼容策略 ${t.rule.id} v${t.rule.version}`,
       family, lane:"PORTFOLIO", eventId:t.id, symbol:t.symbol, side:t.side,
       status:t.status, openedAt:t.openedAt, closedAt:null, entryPrice:t.entryPrice,
-      stopPrice:t.stopPrice, activeStopPrice:t.stopPrice, targetPrice:t.armPrice,
+      stopPrice:protection, activeStopPrice:protection, targetPrice:t.armPrice,
       exitPrice:null, outcome:null, grossReturnRate:null, netReturnRate:null, netPnl:null,
       notional:t.notional, maxFavorableRate:t.favorable, maxAdverseRate:t.adverse,
       lastPrice:t.lastPrice, selectedForPortfolio:true, reason:t.rule.reason,
@@ -114,7 +118,7 @@ export function mirrorSourceFresh(t: Trade | undefined, id: string, now: number)
 export function liveEntryDriftGuard(source:Trade,currentPrice:number) {
   const direction=source.side==="LONG"?1:-1;
   const adverse=Math.max(0,direction*(currentPrice/source.entryPrice-1));
-  const stopWidth=Math.abs(source.entryPrice-source.stopPrice)/source.entryPrice;
+  const stopWidth=Math.abs(source.entryPrice-liveProtectionPrice(source))/source.entryPrice;
   const stopBound=Math.max(.0015,Math.min(.005,stopWidth*.25));
   const remaining=Math.max(0,source.forecast?.remainingNetRate??0);
   const edgeBound=remaining>0?Math.max(.0015,Math.min(.005,remaining*.5)):.005;
@@ -160,7 +164,9 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
   if (Math.abs(input.quantoMultiplier-t.quantoMultiplier)>t.quantoMultiplier*1e-9)fail("ECONOMICS","合约乘数与源单不一致");
   if (t.leverage>input.leverageMax)fail("MARGIN","交易所不支持源单杠杆，不擅自改杠杆");
   const direction=t.side==="LONG"?1:-1;
-  if (direction*(input.entryPrice-t.stopPrice)<=0)fail("ECONOMICS","当前价已越过源单止损，不开即平");
+  const protection=liveProtectionPrice(t);
+  if (direction*(input.entryPrice-protection)<=0)fail("ECONOMICS",t.inverseCopy
+    ?"当前价已越过实盘止损保护边界，不开即平":"当前价已越过源单止损，不开即平");
   const drift=liveEntryDriftGuard(t,input.entryPrice);
   if(drift.adverse>drift.allowed+1e-9)fail("ECONOMICS",
     `当前实盘盘口相对模拟入场出现不利偏差${(drift.adverse*100).toFixed(3)}%，超过动态上限${(drift.allowed*100).toFixed(3)}%，不追价`);
@@ -168,7 +174,7 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
   const mirrorEquity=input.sourceEquity*ratio,targetNotional=t.notional*ratio,targetMargin=t.margin*ratio;
   const one=input.entryPrice*input.quantoMultiplier,requestedContracts=targetNotional/one,
     cost=2*(PAPER_COST.feeRate+PAPER_COST.slippageRate)+PAPER_COST.fundingAllowancePerDay*sourceHoldMinutes(t)/1440,
-    sourceScaledRisk=t.plannedRisk*ratio,stopAndCost=Math.abs(input.entryPrice-t.stopPrice)/input.entryPrice+cost;
+    sourceScaledRisk=t.plannedRisk*ratio,stopAndCost=Math.abs(input.entryPrice-protection)/input.entryPrice+cost;
   let sized: ReturnType<typeof quantizeMirrorNotional>;
   try { sized=quantizeMirrorNotional(targetNotional,input.entryPrice,input.quantoMultiplier,input.sizeRules??{}); }
   catch(error){return fail("CONTRACT_SPEC",error instanceof Error?error.message:"数量规格无效");}
@@ -202,7 +208,7 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
   } else if (!minimumUplift&&plannedRisk>sourceScaledRisk*1.25+mirrorEquity*.001) {
     fail("ECONOMICS","实盘成交价偏离使单笔风险明显高于模拟比例，等待下一笔新源单而不追价");
   }
-  if (1/leverage <= Math.abs(input.entryPrice-t.stopPrice)/input.entryPrice+input.maintenanceRate+cost)
+  if (1/leverage <= Math.abs(input.entryPrice-protection)/input.entryPrice+input.maintenanceRate+cost)
     fail("RISK_CAP","源单杠杆与实际入场价无法保留止损前的保证金余量");
   const size=direction*contracts,tag=liveEntryTag(t.id);
   const receipt:MirrorReceipt={version:LIVE_PARITY_VERSION,sourceId:t.id,sourceRuleId:t.rule.id,sourcePolicy:input.policy,
@@ -218,6 +224,8 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
     entryDriftPolicy:LIVE_ENTRY_DRIFT_POLICY,sourceQuoteAt:t.lastQuoteAt,copyQuoteAt:input.quoteObservedAt,
     copyQuotePrice:input.entryPrice,copyDelayMs:Math.max(0,input.now-t.openedAt),
     allowedAdverseEntryDriftRate:drift.allowed,adverseEntryDriftRate:drift.adverse};
+  if(t.inverseCopy)Object.assign(receipt,{sourceRole:'INVERSE_PAPER',nativeProtectionPolicy:INVERSE_LIVE_POLICY,
+    nativeProtectionPrice:protection,shadowSourceId:t.inverseCopy.sourceId});
   return {intent:{kind:"MARKET",tag,size,contracts,notional,plannedRisk,leverage,margin,
     body:{contract:t.symbol,size:`${direction<0?"-":""}${quantityText}`,price:"0",tif:"ioc",text:tag,reduce_only:false}},
     binding:{version:LIVE_PARITY_VERSION,sourceAtCopy:structuredClone(t),receipt}};
@@ -233,13 +241,14 @@ export function mirrorCoverage(state:ForwardState|null,live:{requestedEnabled:bo
     const p=live.positions[t.symbol],e=live.entries[t.symbol],skip=live.entrySkips[t.symbol];
     const copied=p?.status==="OPEN"&&p.id===t.id,endedEarly=p?.status==="CLOSED"&&p.id===t.id;
     const pending=e?.planId===t.id&&["SUBMITTING","OPEN","ERROR"].includes(e.status);
-    const eligible=!t.inverseCopy&&live.requestedEnabled&&sourceAfterEnable(t,live.activation,state!.startedAt);
+    const currentSource=!state?.inverseTrial||!!t.inverseCopy;
+    const eligible=currentSource&&live.requestedEnabled&&sourceAfterEnable(t,live.activation,state!.startedAt);
     const skipStatus=skip?.planId!==t.id?null:skip.code==="MIN_CONTRACT"?"BLOCKED_MIN_SIZE"
       :skip.code==="RETRYING"?"RETRYING":skip.code==="SOURCE_ENDED_EARLY"?"SOURCE_ENDED_EARLY":"BLOCKED";
-    const status=t.inverseCopy?"INVERSE_PAPER_ONLY":copied?(p?.parity?.discrepancy?"DEVIATION":"COPIED"):endedEarly?"SOURCE_ENDED_EARLY":pending?"PENDING":
+    const status=copied?(p?.parity?.discrepancy?"DEVIATION":"COPIED"):endedEarly?"SOURCE_ENDED_EARLY":pending?"PENDING":!currentSource?"LEGACY_DRAIN":
       !live.requestedEnabled?"OWNER_OFF":!eligible?"EXCLUDED_BEFORE_ENABLE":skipStatus??"WAITING";
     return {sourceId:t.id,symbol:t.symbol,eligible,status,
-      reason:t.inverseCopy?"影子反向模拟试验；尚未授权接入实盘":copied?p?.parity?.discrepancy??null:status==="EXCLUDED_BEFORE_ENABLE"?"开启前或本次接入前已有的模拟持仓，不补开"
+      reason:copied?p?.parity?.discrepancy??null:status==="LEGACY_DRAIN"?"旧源单仅管理已绑定实盘，不新增复制":status==="EXCLUDED_BEFORE_ENABLE"?"开启前或本次接入前已有的模拟持仓，不补开"
         :endedEarly?"该模拟源单仍开放，但对应实盘仓位已经在 Gate 归零；同一源单不重复开仓"
         :skip?.planId===t.id?skip.reason:sourceError??(!live.requestedEnabled?"等待所有者开启；此前持仓不会补开"
           :"实盘核对已运行，但该源单尚未形成明确执行状态；下一轮会继续核对")};
@@ -247,6 +256,8 @@ export function mirrorCoverage(state:ForwardState|null,live:{requestedEnabled:bo
   const actual=Object.values(live.positions).filter(p=>p?.status==="OPEN");
   const valued=actual.filter(p=>typeof p?.exchangeUnrealisedPnl==="number"&&Number.isFinite(p.exchangeUnrealisedPnl)&&!!p.exchangePnlAt);
   return {version:LIVE_PARITY_VERSION,source:LIVE_PARITY_SOURCE,connected:!!state&&!sourceError,ownerControlled:true,
+    accountRole:state?.inverseTrial?'INVERSE_PAPER':'CURRENT_PAPER',
+    nativeProtectionPolicy:state?.inverseTrial?INVERSE_LIVE_POLICY:null,
     instructionParity:!sourceError,exactFillsGuaranteed:false,sourceCount:sources.length,copiedCount:rows.filter(r=>["COPIED","DEVIATION"].includes(r.status)).length,
     pendingCount:rows.filter(r=>r.status==="PENDING").length,rows,error:sourceError,
     executionPolicy:LIVE_SESSION_VERSION,newOrdersOnly:true,enabledAt:live.activation?.enabledAt??null,
