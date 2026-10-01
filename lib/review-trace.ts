@@ -1,3 +1,4 @@
+import {realizedContribution} from "./trade-realization.ts";
 import {PAPER_COST, type ForwardState, type Trade, type Quote} from './forward-relations.ts';
 
 export const REVIEW_TRACE_VERSION = 'decision-review-v2';
@@ -40,7 +41,7 @@ export function captureTradeReviews(previous:ForwardState,next:ForwardState,now:
     const q=quotes[t.symbol],quoteAt=q?.observedAt??null;
     // Do not label a stale mark as a new observation or first profitable quote.
     const fresh=!!q&&q.fresh&&q.observedAt<=now&&now-q.observedAt<=10_000;
-    const gross=(t.side==='LONG'?1:-1)*t.quantity*(t.lastPrice-t.entryPrice);
+    const gross=realizedContribution(t)+(t.side==='LONG'?1:-1)*t.quantity*(t.lastPrice-t.entryPrice);
     const modeledNet=gross-t.entryFee-t.quantity*t.lastPrice*PAPER_COST.feeRate-t.notional*PAPER_COST.fundingAllowancePerDay*Math.max(0,now-t.openedAt)/86_400_000;
     const net=t.status==='CLOSED'?(t.netPnl??modeledNet):modeledNet;
     const pi=t.positionIntelligence;
@@ -50,7 +51,7 @@ export function captureTradeReviews(previous:ForwardState,next:ForwardState,now:
       if(net>0&&review.firstNetPositiveAt===null)review.firstNetPositiveAt=now;
       if(point.concerns.length&&review.firstConcernAt===null)review.firstConcernAt=now;
       if(review.peakNetPnl===null||net>review.peakNetPnl){review.peakNetPnl=net;review.peakNetAt=now;review.peakAssessment=point;}
-      const peak=t.favorable*t.notional;
+      const peak=t.status==='CLOSED'?(t.grossPnl??0):t.realization?(t.realization.gross+(t.side==="LONG"?1:-1)*t.quantity*(t.lastPrice-t.entryPrice)):t.favorable*t.notional;
       if(peak>review.peakGrossPnl){review.peakGrossPnl=peak;review.peakGrossAt=quoteAt;}
     }
     const last=review.timeline.at(-1);

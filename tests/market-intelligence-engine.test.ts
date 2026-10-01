@@ -396,7 +396,7 @@ test("new liquidity trades size risk and stop at the frozen hypothesis invalidat
   const built=buildMarketIntelligence({paths,quotes,previous:initialMarketIntelligenceState(T-300_000),now:T});
   const base=built.opportunities[0]!,quote=quotes[base.symbol]!,entry=base.side==="LONG"?quote.bestAsk:quote.bestBid,
     invalidation=base.side==="LONG"?entry*.990:entry*1.010,
-    opportunity={...base,eligible:true,tradePlan:"LIQUIDITY_MIGRATION" as const,environmentForceRetest:false,
+    opportunity={...base,winnerPlan:undefined,eligible:true,tradePlan:"LIQUIDITY_MIGRATION" as const,environmentForceRetest:false,
       strategyVersion:MARKET_INTELLIGENCE_VERSION,thesisId:"frozen-liquidity-stop",thesisSince:T-300_000,
       netRemainingSpaceRate:.04,grossRemainingSpaceRate:.045,edgeRatio:4,targetRate:.04,
       liquidityInvalidationPrice:invalidation,liquidityInvalidationRate:.01,rapidLiquidityAuthorization:true};
@@ -418,7 +418,7 @@ test("family-turn entries also require and preserve a frozen liquidity invalidat
   const built=buildMarketIntelligence({paths,quotes,previous:initialMarketIntelligenceState(T-300_000),now:T});
   const base=built.opportunities[0]!,quote=quotes[base.symbol]!,entry=base.side==="LONG"?quote.bestAsk:quote.bestBid,
     invalidation=base.side==="LONG"?entry*.989:entry*1.011,
-    opportunity={...base,eligible:true,tradePlan:"FAMILY_TURN" as const,environmentForceRetest:false,
+    opportunity={...base,winnerPlan:undefined,eligible:true,tradePlan:"FAMILY_TURN" as const,environmentForceRetest:false,
       strategyVersion:MARKET_INTELLIGENCE_VERSION,thesisId:"family-turn-liquidity-stop",thesisSince:T-300_000,
       netRemainingSpaceRate:.04,grossRemainingSpaceRate:.045,edgeRatio:4,targetRate:.04,
       liquidityInvalidationPrice:invalidation,liquidityInvalidationRate:.011,rapidLiquidityAuthorization:false};

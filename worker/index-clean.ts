@@ -1,3 +1,4 @@
+import {reconcileSourceReduction,sourceReductionTarget,type SourceReduction} from "../lib/live-reduction.ts";
 import { LiveHistoryReader } from "../lib/live-history-reader.ts";
 /// <reference types="@cloudflare/workers-types" />
 
@@ -199,7 +200,7 @@ type LiveEntry = {
   mirrorSourceId?: string;
 };
 
-export type LivePosition = PaperPosition & Partial<ReturnType<typeof gatePositionValuation>> & {
+export type LivePosition = {sourceReduction?:SourceReduction} & PaperPosition & Partial<ReturnType<typeof gatePositionValuation>> & {
   exchangeSize: number;
   leverage: number;
   margin: number;
@@ -2491,8 +2492,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(position.parity){
         const receipt=position.parity;
         receipt.filledContracts=Math.abs(exchangeSize);
-        receipt.discrepancy=Math.abs(exchangeSize)!==receipt.roundedContracts
-          ?`交易所实际${Math.abs(exchangeSize)}张，源单比例目标${receipt.roundedContracts}张；未声称完整复制`:null;
+        const sourceForSize=this.currentMirrorSource(position.id),sizeTarget=sourceForSize.status==="OPEN"
+          ?sourceReductionTarget(sourceForSize.trade,receipt,receipt.roundedContracts,this.runtime.contractMeta[symbol])?.targetContracts??receipt.roundedContracts
+          :receipt.roundedContracts;
+        receipt.discrepancy=Math.abs(Math.abs(exchangeSize)-sizeTarget)>1e-8
+          ?`交易所实际${Math.abs(exchangeSize)}张，源单剩余比例目标${sizeTarget}张；未声称完整复制`:null;
         const px=Number(actual.entry_price);
         if(Number.isFinite(px)&&px>0){
           position.entryPrice=px;
@@ -2533,6 +2537,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }
       if (!position.exitRequestedAt) {
         await this.ensureLiveStop(client, position, snapshot.priceOrders);
+        const reducingSource=position.parity?this.currentMirrorSource(position.id):null;
+        if(!position.exitRequestedAt&&position.parity&&reducingSource?.status==="OPEN"&&reducingSource.trade.realization){
+          await reconcileSourceReduction({source:reducingSource.trade,receipt:position.parity,actualContracts:Math.abs(exchangeSize),
+            observedAt:snapshot.checkedAt,now:Date.now(),spec:this.runtime.contractMeta[symbol],prior:position.sourceReduction,
+            stillOpen:()=>!position!.exitRequestedAt&&this.currentMirrorSource(position!.id).status==="OPEN",
+            inspect:(tag,id)=>client.inspectEntry("MARKET",symbol,tag,id),
+            persist:async reduction=>{position!.sourceReduction=reduction;this.runtime.live.positions[symbol]=position;await this.saveCheckpoint(Date.now(),true);},
+            submit:(text,tag,guard)=>client.reducePosition(symbol,position!.side,text,tag,guard)});
+        }
         if (!position.parity && !accountError && (this.liveOpenRisk() > equity * PORTFOLIO_RISK_CAP + 1e-8
           || this.liveDirectionalRisk(position.side) > equity * CORRELATED_DIRECTION_RISK_CAP + 1e-8)) {
           position.exitRequestedAt = now;

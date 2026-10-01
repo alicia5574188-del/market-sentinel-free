@@ -114,8 +114,8 @@ test("execution page exposes the same narrative used by strategy decisions",asyn
 });
 
 
-test("Market Intelligence keeps Position Intelligence authority while liquidity adds only bounded plan-aware protection",async()=>{
-  const core=await read("lib/forward-relations.ts"),engine=await read("lib/market-intelligence-engine.ts");
+test("legacy positions retain liquidity protection while new winners use one bounded plan authority",async()=>{
+  const core=await read("lib/forward-relations.ts"),engine=await read("lib/market-intelligence-engine.ts"),winner=await read("lib/winner-policy.ts");
   const manage=core.slice(core.indexOf("function catastrophicWinnerInsuranceFloor"),core.indexOf("function markAndManage"));
   assert.match(manage,/evaluatePositionIntelligence/);
   assert.match(manage,/if\(position\.decision==="EXIT"\)/);
@@ -130,8 +130,18 @@ test("Market Intelligence keeps Position Intelligence authority while liquidity 
   assert.match(engine,/LIQUIDITY_REJECTION/);
   assert.match(engine,/FAMILY_TURN/);
   assert.match(engine,/OBSERVE_ONLY/);
-  assert.match(engine,/planHard=migrationHard\|\|rejectionHard\|\|familyHard/);
-  assert.match(engine,/thesisId=.*plan\.plan/);
+  // The owner-authorized replacement restores relative core authority; the old
+  // planHard gate must not accidentally become a second veto in that path.
+  assert.match(engine,/chosen=selectWinnerOpportunity/);
+  assert.doesNotMatch(engine,/planHard=migrationHard\|\|rejectionHard\|\|familyHard/);
+  assert.match(engine,/thesisId=.*wp\.intent.*wp\.eventAt/);
+  assert.match(winner,/source:'RELATIVE_CORE'/);assert.match(winner,/source:'EDGE_REJECTION'/);
+  assert.match(winner,/trimCount<2/);assert.match(winner,/lastTrimEvent/);
+  const newManage=core.slice(core.indexOf("export function manageWinnerTrade"),core.indexOf("function manageIntelligenceTrades"));
+  assert.match(newManage,/advanceWinnerManagement/);assert.match(newManage,/realizeTradeSlice/);
+  assert.doesNotMatch(newManage,/catastrophicWinnerInsuranceFloor\(|liquidityTargetProfitFloor\(|environmentDecayProfitFloor\(/);
+  const dispatch=core.slice(core.indexOf("function manageIntelligenceTrades"),core.indexOf("function markAndManage"));
+  assert.match(dispatch,/winnerPlan\?\.version===WINNER_POLICY_VERSION[\s\S]*?manageWinnerTrade[\s\S]*?continue;/);
   const advance=core.slice(core.indexOf("export function advanceForward"),core.indexOf("export function closeForwardForReset"));
   assert.match(advance,/seedEntryResponses/);
   assert.match(advance,/advanceEntryResponses/);
@@ -334,14 +344,17 @@ test("high-quality entries keep stable thesis authority through shallow realtime
 });
 
 
-test("opportunity discovery, frozen authorization and liquidity invalidation form one continuous execution chain",async()=>{
-  const [core,engine,liquidity]=await Promise.all([
-    read("lib/forward-relations.ts"),read("lib/market-intelligence-engine.ts"),read("lib/market-intelligence-liquidity.ts")
+test("independent discovery, frozen authorization and plan invalidation form one continuous execution chain",async()=>{
+  const [core,engine,liquidity,winner]=await Promise.all([
+    read("lib/forward-relations.ts"),read("lib/market-intelligence-engine.ts"),read("lib/market-intelligence-liquidity.ts"),read("lib/winner-policy.ts")
   ]);
   assert.match(liquidity,/deriveRapidLiquidityAuthorization/);
   assert.match(liquidity,/1分钟已出现强离开/);
-  assert.match(engine,/rapid=deriveRapidLiquidityAuthorization/);
-  assert.match(engine,/plan\.rapid&&rapid\.ready/);
+  assert.match(engine,/chosen=selectWinnerOpportunity/);
+  assert.match(engine,/winnerPlan:wp/);
+  assert.match(winner,/if\(ownEntryValid\)return/);
+  assert.match(winner,/eventAt:s\.signalSince/);
+  assert.doesNotMatch(winner,/fetch\(|GateLiveClient|Date\.now\(/);
   assert.match(engine,/liquidityInvalidationPrice/);
   const advanceForward=core.slice(core.indexOf("export function advanceForward"),core.indexOf("export function closeForwardForReset"));
   assert.match(advanceForward,/if\(marketReady\)seedEntryResponses/);
@@ -362,8 +375,8 @@ test("opportunity discovery, frozen authorization and liquidity invalidation for
 });
 
 test("Gate-only discovery uses the same 15-second radar cadence without bypassing multi-source entry safety",async()=>{
-  const [worker,hub,engine]=await Promise.all([
-    read("worker/index-clean.ts"),read("lib/market-data-hub.ts"),read("lib/market-intelligence-engine.ts")
+  const [worker,hub,engine,winner]=await Promise.all([
+    read("worker/index-clean.ts"),read("lib/market-data-hub.ts"),read("lib/market-intelligence-engine.ts"),read("lib/winner-policy.ts")
   ]);
   assert.match(worker,/const GATE_RADAR_MS = RADAR_MS/);
   assert.match(worker,/gateRadarShortMoves=new Map<string,number>\(\)/);
@@ -371,7 +384,8 @@ test("Gate-only discovery uses the same 15-second radar cadence without bypassin
   assert.match(worker,/shortMoveRate:this\.gateRadarShortMoves\.get\(row\.symbol\)\?\?0/);
   assert.match(hub,/shortMoveRate:q\?\.medianShortMove\?\?row\.shortMoveRate\?\?0/);
   assert.match(hub,/sourceCount:q\?\.sourceCount\?\?row\.sourceCount\?\?0/);
-  assert.match(engine,/row\.sourceCount>=2/,
+  assert.match(engine,/chosen=selectWinnerOpportunity/);
+  assert.equal((winner.match(/s\.sourceCount>=2/g)??[]).length,2,
     "Gate-only impulse may enter discovery but one venue alone must not gain order authority");
 });
 

@@ -1,4 +1,5 @@
 import test from "node:test";
+import {realizeTradeSlice} from "../lib/trade-realization.ts";
 import assert from "node:assert/strict";
 import { register } from "node:module";
 import { LIVE_PARITY_PREFIX, LIVE_PARITY_VERSION, forwardMirrorSources, buildProportionalMirror,
@@ -239,6 +240,10 @@ class FakeGate {
   account:GateLiveAccount={total:100,available:100,unrealised_pnl:0,in_dual_mode:false};
   requestCount=0;placed:LiveEntryIntent[]=[];leverages:number[]=[];stops:GateLiveOrder[]=[];stopCreates:LiveStopIntent[]=[];
   orders=new Map<string,GateLiveOrder>();holdings:Record<string,GateLivePosition>={};
+  reductions:{symbol:string;side:string;size:string;tag:string}[]=[];
+  async reducePosition(symbol:string,side:"LONG"|"SHORT",size:string,tag:string,guard:()=>boolean){if(!guard())throw new GateEntryCancelledError();
+    this.reductions.push({symbol,side,size,tag});const p=this.holdings[symbol];if(p)p.size=(side==="LONG"?1:-1)*Math.max(0,Math.abs(Number(p.size))-Number(size));
+    const id=String(this.counter++);this.orders.set(id,{id_string:id,contract:symbol,text:tag,status:"finished",finish_time:Date.now()/1000,fill_price:104});return id;}
   closeTags:string[]=[];onLeverage:(()=>Promise<void>)|null=null;onCreate:(()=>Promise<void>)|null=null;
   failSnapshot=false;readTimeout=false;partial=false;zero=false;ambiguous=false;omitExit=false;inspectFailures=0;counter=1;
   leverageError:Error|null=null;stopCreateError:Error|null=null;stopCreateErrorContract:string|null=null;stopCreateAmbiguous=false;cancelFailures=0;
@@ -1072,4 +1077,20 @@ test("risk falls back only to a fresh public quote; absent current Gate and publ
   Object.assign(quote,{fresh:false,observedAt:T-60_000});
   assert.ok(Number.isNaN(r.liveOpenRisk()));assert.ok(Number.isNaN(r.liveDirectionalRisk("LONG")));
   assert.equal(r.liveDirectionalRisk("SHORT"),0);assert.equal(live(h).requestedEnabled,true);
+}));
+
+
+test("real Worker follows one committed source reduction while OFF, persists it, and never reopens reduced size",()=>clock(async()=>{
+  const {h,gate}=await harness();await enableNew(h);await h.syncLive(T);
+  assert.equal(gate.placed.length,1);const entrySize=Math.abs(Number(gate.holdings.BTC_USDT.size));
+  const source=h.forwardState.positions[0]!;
+  assert.ok(realizeTradeSlice({trade:source,price:104,now:T,quoteAt:T,fraction:.4,feeRate:.0007,fundingPerDay:.0002,minContracts:1,reason:"fixture"}));
+  await h.setLiveMode(false);await h.syncLive(T);
+  assert.equal(gate.reductions.length,1);assert.equal(Number(gate.reductions[0].size),entrySize*.4);
+  const serialized=JSON.stringify(h.runtime.live);assert.match(serialized,/source-reduction-v1/);
+  h.runtime.live=JSON.parse(serialized);const prior=Date.now;Date.now=()=>T+10000;
+  try{await h.syncLive(T+10000);await h.syncLive(T+10000);}finally{Date.now=prior;}
+  assert.equal(gate.reductions.length,1);assert.equal(gate.placed.length,1);assert.equal(live(h).positions.BTC_USDT.parity?.discrepancy,null);
+  source.status="CLOSED";source.closedAt=T;source.exitReason="WINNER_STRUCTURE_EXIT";h.forwardState.history=[source];h.forwardState.positions=[];
+  await h.syncLive(T);await h.syncLive(T);assert.equal(gate.closeTags.length,1);assert.equal(gate.reductions.length,1);
 }));

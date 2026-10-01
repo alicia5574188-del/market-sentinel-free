@@ -353,6 +353,15 @@ export class GateLiveClient {
     }
   }
 
+  async reducePosition(symbol:string,side:"LONG"|"SHORT",contractsText:string,tag:string,beforeSend:()=>boolean){
+    if(!/^(?:[0-9]+)(?:\.[0-9]+)?$/.test(contractsText)||!Number.isFinite(Number(contractsText))||Number(contractsText)<=0)
+      throw new Error("减仓数量必须是可核对的正数，禁止用零数量误触全平");
+    const response=await this.request<GateLiveOrder>("POST","/futures/usdt/orders","",{
+      contract:symbol,size:`${side==="LONG"?"-":""}${contractsText}`,price:"0",tif:"ioc",close:false,reduce_only:true,text:tag,
+    },beforeSend);
+    return responseId(response.raw,response.data);
+  }
+
   async closePosition(symbol: string, tag: string) {
     const response = await this.request<GateLiveOrder>("POST", "/futures/usdt/orders", "", {
       contract: symbol, size: 0, price: "0", tif: "ioc", close: true, reduce_only: true, text: tag,

@@ -11,7 +11,7 @@ const evolution=(v?:string)=>({
 }[v??""]??"状态建立中");
 const environmentName=(v?:string)=>({TREND:"趋势环境",TRANSITION:"过渡环境",ROTATION:"轮动/震荡",SHOCK:"同步爆发行情"}[v??""]??"环境建立中");
 const tradePlanName=(v?:string)=>({
-  LIQUIDITY_MIGRATION:"流动性迁移",LIQUIDITY_REJECTION:"离开失败回归",FAMILY_TURN:"家族提前转折",OBSERVE_ONLY:"只观察"
+  WINNER_TREND:"独立趋势",RANGE_REVERSION:"边缘回归",LIQUIDITY_MIGRATION:"流动性迁移",LIQUIDITY_REJECTION:"离开失败回归",FAMILY_TURN:"家族提前转折",OBSERVE_ONLY:"只观察"
 }[v??""]??"历史计划");
 const liquidityState=(v?:string)=>({
   INSIDE:"仍在原区域",TESTING:"正在尝试离开",ACCEPTED:"离开已被接受",REJECTED:"离开失败并回归"
@@ -47,6 +47,7 @@ function nextMarketText(data:View|null){
 
 function observeReason(o:View["opportunities"][number],state?:{departure?:{state?:string}}){
   const current=liquidityState(state?.departure?.state);
+  if(o.winnerPlan)return o.winnerPlan.intent==="TREND"?"观察独立推进与回调承接；区域只辅助位置，不必等待整体突破。":"观察边缘拒绝后的回归；目标为原量价重心，不默认横穿区域。";
   if(o.tradePlan==="LIQUIDITY_MIGRATION")return`${current}；等待持续站稳及足够目标空间。`;
   if(o.tradePlan==="LIQUIDITY_REJECTION")return`${current}；等待重新回到区域内及足够回归空间。`;
   if(o.tradePlan==="FAMILY_TURN")return`${current}；等待相关币共同转向与本币结构确认。`;
@@ -65,6 +66,7 @@ function positionAction(t:View["positions"][number]){
 }
 
 function positionWatch(t:View["positions"][number]){
+  if(t.winnerManagement)return t.winnerManagement.reason;
   const plan=t.liquidityLifecycle?.currentPlan??t.entryContext?.tradePlan,concern=t.positionIntelligence?.concerns?.[0];
   if(concern)return concern;
   if(t.positionIntelligence?.decision==="EXIT")return t.positionIntelligence?.summary??"原交易假设失效，准备退出。";
@@ -116,7 +118,7 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
             {positionWatch(t)}</p>):<p>暂无持仓。</p>}
         </div></article>
       </div>
-      <p className="fr-note">流动性地图 {liquidity?.market?.ready?"已就绪":"建立中"} · 实盘 {liveEnabled?(liveOverview?.operational?"运行中":"等待核对"):"关闭"}</p>
+      <p className="fr-note">量价区域参考 {liquidity?.market?.ready?"已就绪":"建立中"} · 实盘 {liveEnabled?(liveOverview?.operational?"运行中":"等待核对"):"关闭"}</p>
     </section>
   </div>;
 }

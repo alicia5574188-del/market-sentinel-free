@@ -8,6 +8,10 @@ import {renderToStaticMarkup} from "react-dom/server";
 import ts from "typescript";
 
 const read=path=>readFileSync(new URL(`../${path}`,import.meta.url),"utf8");
+// Load the real pure accounting helper, not a favorable mocked PnL formula.
+const realizationModule={exports:{}};
+const realizationSource=ts.transpileModule(read("lib/trade-realization.ts"),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
+runInNewContext(`(function(require,module,exports){${realizationSource}\n})`,{})(name=>{throw new Error(`pure accounting imported ${name}`);},realizationModule,realizationModule.exports);
 // Render the real presentation modules; network/cache boundaries are inert fixtures.
 function render(path,props,extra={}){
   const source=ts.transpileModule(read(path),{fileName:path,compilerOptions:{
@@ -15,6 +19,7 @@ function render(path,props,extra={}){
   }}).outputText;
   const imports={
     react:React,"react/jsx-runtime":jsxRuntime,
+    "../lib/trade-realization.ts":realizationModule.exports,
     "../lib/research-snapshot.ts":{collectReviewSnapshot(){throw new Error("render must not export");}},
     "../lib/beijing-time.ts":{BEIJING_TIME_ZONE:"Asia/Shanghai",beijingDayKey:()=>"2026-09-30"},
     "../lib/equity-cache.ts":{EquityHistoryCache:class{cancel(){}}},
@@ -63,6 +68,22 @@ test("missing account stays unknown and operational errors remain visible",()=>{
   const equity=html.match(/<section[^>]*data-testid="overview-equity-first"[\s\S]*?<\/section>/)?.[0];
   assert.ok(equity);assert.match(equity,/<strong>—<\/strong>/);assert.doesNotMatch(equity,/0\.00/);
   assert.match(html,/role="alert"/);assert.match(html,/fixture storage unavailable/);
+});
+
+test("partial realizations are not counted as floating and entry fees are allocated only once",()=>{
+  const t={id:"partial",status:"OPEN",symbol:"WLD_USDT",side:"LONG",entryPrice:100,lastPrice:110,quantity:6,contracts:6,
+    notional:600,entryFee:.7,leverage:10,margin:60,plannedRisk:6,openedAt:1790760000000,closedAt:null,exitPrice:null,
+    netPnl:null,stopPrice:103,favorable:.1,adverse:0,profitFloorRate:.03,expectedHoldMinutes:180,entryContext:null,holdScore:80,
+    realization:{version:"partial-realization-v1",initialQuantity:10,initialContracts:10,initialNotional:1000,initialMargin:100,
+      initialRisk:10,initialEntryFee:.7,gross:32,fees:.3024,funding:0,sequence:1,
+      fills:[{sequence:1,at:1790760300000,quoteAt:1790760300000,price:108,contracts:4,quantity:4,gross:32,fee:.3024,funding:0,reason:"fixture"}]}};
+  const accounting=realizationModule.exports;
+  assert.ok(Math.abs(accounting.remainingOpenNetPnl(t)-59.118)<1e-10);
+  assert.ok(Math.abs(accounting.realizedNetPnl(t)-31.4176)<1e-10);
+  assert.ok(Math.abs(accounting.remainingOpenNetPnl(t)+accounting.realizedNetPnl(t)-90.5356)<1e-10);
+  const html=render("app/forward-dashboard.tsx",dashboardProps({...account(),floating:123.45,positions:[t]}));
+  assert.match(html,/<small>浮动盈亏<\/small><strong>\+59\.12 U<\/strong>/);
+  assert.doesNotMatch(html,/<small>浮动盈亏<\/small><strong>\+90\.54 U<\/strong>/);
 });
 
 test("execution retains actionable waiting and position reasons without repeated philosophy",()=>{

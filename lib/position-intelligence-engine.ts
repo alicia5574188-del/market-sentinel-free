@@ -163,7 +163,7 @@ export function evaluatePositionIntelligence(input:{
     inOrigin=!!origin&&px>=origin.lower&&px<=origin.upper,
     inTarget=!!target&&px>=target.lower&&px<=target.upper,
     liqSide=liq?.departure.side==="UP"?"LONG":liq?.departure.side==="DOWN"?"SHORT":null;
-  if(!liq?.ready||!plan||plan==="OBSERVE_ONLY")
+  if(!liq?.ready||!plan||plan==="OBSERVE_ONLY"||plan==="WINNER_TREND"||plan==="RANGE_REVERSION")
     assessments.push(family("LIQUIDITY","NEUTRAL",0,"流动性计划信息不足，不允许它单独改变仓位。"));
   else if(plan==="LIQUIDITY_MIGRATION"){
     if(inOrigin)assessments.push(family("LIQUIDITY","CONCERN",.75,"价格已经重新被入场来源流动性区域吸收，原迁移假设明显受损。"));
@@ -177,7 +177,7 @@ export function evaluatePositionIntelligence(input:{
     const failedSide=input.side==="LONG"?"SHORT":"LONG";
     if(liq.departure.state==="ACCEPTED"&&liqSide===failedSide)
       assessments.push(family("LIQUIDITY","CONCERN",.72,"价格再次向原失败突破方向离开并被市场接受，回归计划失效风险高。"));
-    else if(inOrigin||liq.departure.state==="INSIDE"||liq.departure.state==="REJECTED")
+    else if(inOrigin)
       assessments.push(family("LIQUIDITY","SUPPORT",clip(.38+liq.accumulation*.28+liq.departure.confidence*.22),
         "价格仍被原流动性区域吸收，离开失败后的回归逻辑继续成立。"));
     else assessments.push(family("LIQUIDITY","NEUTRAL",.20,"离开失败回归仍在发展，但尚未出现新的决定性流动性证据。"));
@@ -204,8 +204,9 @@ export function evaluatePositionIntelligence(input:{
     structuralRoom=state?(input.side==="LONG"?state.roomLong:state.roomShort):Math.max(0,input.entryRemainingSpaceRate-input.signedRate),
     liquidityRoom=input.entryTarget&&px>0?(input.side==="LONG"?Math.max(0,input.entryTarget.lower-px):Math.max(0,px-input.entryTarget.upper))/px:
       input.entryOrigin&&px>0&&plan==="LIQUIDITY_REJECTION"?(input.side==="LONG"?Math.max(0,input.entryOrigin.upper-px):Math.max(0,px-input.entryOrigin.lower))/px:0,
-    currentRoom=Math.max(structuralRoom,liquidityRoom),
-    remainingSpaceRate=Math.max(0,currentRoom+Math.max(0,alignedResidual)*.20-cost),
+    finiteTarget=!!input.entryTarget&&px>0||!!input.entryOrigin&&px>0&&plan==="LIQUIDITY_REJECTION",
+    currentRoom=finiteTarget?liquidityRoom:structuralRoom,
+    remainingSpaceRate=Math.max(0,currentRoom+(finiteTarget?0:Math.max(0,alignedResidual)*.20)-cost),
     adverseMinute=minute.filter(v=>d*v<0).map(v=>Math.abs(v)),
     minutePullback=adverseMinute.length?mean(adverseMinute.slice(-5))*2.2:0,
     expectedPullbackRate=Math.max(cost*1.1,stateVol*Math.sqrt(3)*1.05,minutePullback),
