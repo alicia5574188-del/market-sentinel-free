@@ -5,7 +5,7 @@ import {readFileSync} from 'node:fs';
 import {initialForward,normalizeForward,closeForwardForReset,resetForwardAccountPreservingLearning,forwardSummary,type Trade,type ForwardState,type Quote} from '../lib/forward-relations.ts';
 import {advanceForward as frozenAdvance} from '../lib/shadow-baseline/forward-relations.ts';
 import {SHADOW_BASELINE_BUILD,SHADOW_INVERSE_VERSION,newInverseTrial,sourceDecisionState,shadowCapsule,
-  applyInverseSourceTrade,inverseTrialSummary,markInversePositions,assertInverseTrade,assertInverseTrial,inverseId} from '../lib/shadow-inverse-ledger.ts';
+  applyInverseSourceTrade,inverseTrialSummary,markInversePositions,assertInverseTrade,assertInverseTrial,inverseId,migrateInverseSamePrice,MIRROR_ACCOUNTING_MODE} from '../lib/shadow-inverse-ledger.ts';
 import {advanceShadowInverse} from '../lib/shadow-inverse.ts';
 import {realizeTradeSlice,assertTradeRealization} from '../lib/trade-realization.ts';
 import {prepareForwardWrite,readForwardStore,prepareForwardProtectionWrite} from '../lib/forward-store.ts';
@@ -51,6 +51,19 @@ function sourceClose(s:ForwardState,t:Trade,price:number,now:number){
   if(r)Object.assign(t,{quantity:r.initialQuantity,contracts:r.initialContracts,notional:r.initialNotional,margin:r.initialMargin,plannedRisk:r.initialRisk});
 }
 function retainSource(s:ForwardState,source:ForwardState){s.inverseTrial!.source=shadowCapsule(source);s.inverseTrial!.lastSourceRevision=source.revision;}
+
+
+test('legacy opposite-BBO pair is reconciled once to the exact shadow entry price without resetting the account',()=>{
+  const {s}=fixture('LONG',0),m=s.positions[0]!,trial=s.inverseTrial!,f=m.inverseCopy!.fills[0]!;
+  // Recreate the old implementation artifact: source entered 100 while inverse used 99.9.
+  trial.accountingMode=undefined;trial.reconciledAt=undefined;f.price=99.9;f.fee=99.9*10*.0007;m.entryPrice=99.9;m.entryFee=f.fee;
+  trial.totals.fees=f.fee;trial.totals.gross=0;trial.totals.funding=0;trial.totals.spreadDrag=0;
+  s.balance+=.7-f.fee;s.fees+=f.fee-.7;s.turnover+=10*(99.9-100);
+  const beforeStarted=s.startedAt;assert.equal(migrateInverseSamePrice(s,T+1),true);assert.equal(migrateInverseSamePrice(s,T+2),false);
+  assert.equal(s.startedAt,beforeStarted);assert.equal(trial.accountingMode,MIRROR_ACCOUNTING_MODE);near(m.entryPrice,100);near(m.entryFee,.7);
+  near(trial.totals.fees,trial.totals.sourceFees);near(trial.totals.gross,-trial.totals.sourceGross);near(trial.totals.funding,0);
+  assertInverseTrial(s);
+});
 
 test('source is exact published 2b4fd60f, with import paths as the only transformation',()=>{
   const manifest=JSON.parse(readFileSync(new URL('../lib/shadow-baseline/manifest.json',import.meta.url),'utf8'));
