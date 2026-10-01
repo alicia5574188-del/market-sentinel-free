@@ -5,7 +5,7 @@ import {readFileSync} from 'node:fs';
 import {initialForward,normalizeForward,closeForwardForReset,resetForwardAccountPreservingLearning,forwardSummary,type Trade,type ForwardState,type Quote} from '../lib/forward-relations.ts';
 import {advanceForward as frozenAdvance} from '../lib/shadow-baseline/forward-relations.ts';
 import {SHADOW_BASELINE_BUILD,SHADOW_INVERSE_VERSION,newInverseTrial,sourceDecisionState,shadowCapsule,
-  applyInverseSourceTrade,inverseTrialSummary,markInversePositions,assertInverseTrade,assertInverseTrial,inverseId} from '../lib/shadow-inverse-ledger.ts';
+  applyInverseSourceTrade,inverseTrialSummary,markInversePositions,assertInverseTrade,assertInverseTrial,inverseId,migrateInverseSamePrice,MIRROR_ACCOUNTING_MODE} from '../lib/shadow-inverse-ledger.ts';
 import {advanceShadowInverse} from '../lib/shadow-inverse.ts';
 import {realizeTradeSlice,assertTradeRealization} from '../lib/trade-realization.ts';
 import {prepareForwardWrite,readForwardStore,prepareForwardProtectionWrite} from '../lib/forward-store.ts';
@@ -52,6 +52,19 @@ function sourceClose(s:ForwardState,t:Trade,price:number,now:number){
 }
 function retainSource(s:ForwardState,source:ForwardState){s.inverseTrial!.source=shadowCapsule(source);s.inverseTrial!.lastSourceRevision=source.revision;}
 
+
+test('legacy opposite-BBO pair is reconciled once to the exact shadow entry price without resetting the account',()=>{
+  const {s}=fixture('LONG',0),m=s.positions[0]!,trial=s.inverseTrial!,f=m.inverseCopy!.fills[0]!;
+  // Recreate the old implementation artifact: source entered 100 while inverse used 99.9.
+  trial.accountingMode=undefined;trial.reconciledAt=undefined;f.price=99.9;f.fee=99.9*10*.0007;m.entryPrice=99.9;m.entryFee=f.fee;
+  trial.totals.fees=f.fee;trial.totals.gross=0;trial.totals.funding=0;trial.totals.spreadDrag=0;
+  s.balance+=.7-f.fee;s.fees+=f.fee-.7;s.turnover+=10*(99.9-100);
+  const beforeStarted=s.startedAt;assert.equal(migrateInverseSamePrice(s,T+1),true);assert.equal(migrateInverseSamePrice(s,T+2),false);
+  assert.equal(s.startedAt,beforeStarted);assert.equal(trial.accountingMode,MIRROR_ACCOUNTING_MODE);near(m.entryPrice,100);near(m.entryFee,.7);
+  near(trial.totals.fees,trial.totals.sourceFees);near(trial.totals.gross,-trial.totals.sourceGross);near(trial.totals.funding,0);
+  assertInverseTrial(s);
+});
+
 test('source is exact published 2b4fd60f, with import paths as the only transformation',()=>{
   const manifest=JSON.parse(readFileSync(new URL('../lib/shadow-baseline/manifest.json',import.meta.url),'utf8'));
   const hash=(s:string)=>createHash('sha256').update(s).digest('hex');assert.equal(manifest.sourceBuild,SHADOW_BASELINE_BUILD);
@@ -64,20 +77,23 @@ test('cutover preserves original account and history, excludes old positions fro
   const v=newInverseTrial(s,T,921);assert.equal(JSON.stringify(s),before);assert.equal(v.source.balance,921);assert.equal(v.source.resolved,23);
   s.inverseTrial=v;applyInverseSourceTrade(s,s.positions[0],undefined,T);assert.equal(s.positions.length,1);assert.equal(v.totals.opened,0);
 });
-for(const side of ['LONG','SHORT'] as const)test(side+' opens opposite BBO, uses same size and closes once, paying only own fees',()=>{
+for(const side of ['LONG','SHORT'] as const)test(side+' uses the exact shadow price, same size and opposite direction, paying only own filled fees',()=>{
   const {s,source,t}=fixture(side,.1),m=s.positions[0]!,at=T+60000,q=quote(97,97.1,at);
-  assert.notEqual(m.side,t.side);near(m.quantity,t.quantity);near(m.entryPrice,side==='LONG'?100:100.1);
+  assert.notEqual(m.side,t.side);near(m.quantity,t.quantity);near(m.entryPrice,t.entryPrice);near(m.entryFee,t.entryFee);
   near(s.balance,1000-m.entryFee);sourceClose(source,t,side==='LONG'?q.bestBid:q.bestAsk,at);
   applyInverseSourceTrade(s,t,q,at);retainSource(s,source);assertInverseTrial(s);const closed=s.history[0]!;
-  near(closed.grossPnl!+t.grossPnl!,-2);near(closed.netPnl!,closed.grossPnl!-closed.entryFee-closed.exitFee-closed.fundingAllowance);
+  near(closed.exitPrice!,t.exitPrice!);near(closed.grossPnl!,-t.grossPnl!);near(closed.fundingAllowance,0);
+  near(closed.netPnl!,closed.grossPnl!-closed.entryFee-closed.exitFee);
   near(s.balance,1000+closed.netPnl!);assert.equal(s.resolved,1);assert.equal(s.inverseTrial!.totals.closed,1);
   const unchanged=JSON.stringify(s);applyInverseSourceTrade(s,t,q,at);assert.equal(JSON.stringify(s),unchanged);
   near(inverseTrialSummary(s,{},at)!.settledAttributionResidual,0);
 });
-test('same-price net inversion subtracts each wallet cost once; source winner becomes inverse loser too',()=>{
+test('same-price gross inversion is exact and comparison net is changed only by each side fee',()=>{
   for(const price of [90,105,100]){const {s,source,t}=fixture();sourceClose(source,t,price,T+60000);applyInverseSourceTrade(s,t,quote(price,price,T+60000),T+60000);retainSource(s,source);
-    const m=s.history[0]!,cost=t.entryFee+t.exitFee+t.fundingAllowance;near(m.grossPnl!,-t.grossPnl!);near(m.netPnl!,-t.netPnl!-2*cost);
-    const summary=inverseTrialSummary(s,{},T+60000)!;near(summary.theoreticalSamePriceEquity,summary.inverseEquity);}
+    const m=s.history[0]!;near(m.grossPnl!,-t.grossPnl!);near(m.entryFee,t.entryFee);near(m.exitFee,t.exitFee);near(m.fundingAllowance,0);
+    near(m.netPnl!,m.grossPnl!-m.entryFee-m.exitFee);
+    const summary=inverseTrialSummary(s,{},T+60000)!;near(summary.theoreticalSamePriceEquity,summary.inverseEquity);
+    near(summary.paidCost!.reconciliation.grossMirrorResidual!,0);near(summary.paidCost!.reconciliation.netSum!,-summary.paidCost!.reconciliation.paidFees);}
 });
 test('source profitable partial exits are mirrored even when the inverse loses; parent counts once',()=>{
   const {s,source,t}=fixture('LONG',.1);
@@ -110,11 +126,12 @@ test('frozen source and isolated wrapper produce identical next source lifecycle
   assert.equal(actual.state.history[0]!.inverseCopy!.sourceId,'source-1');assert.equal(actual.state.history[0]!.side,'SHORT');
   assert.equal(s.positions.length,1,'original committed object untouched');assertInverseTrial(actual.state);
 });
-test('stale or future quotes and retrospective fills cannot be manufactured',()=>{
-  for(const q of [undefined,{...quote(),fresh:false},quote(100,100,T-10001),quote(100,100,T+1)]){
-    const s=initialForward(T-B);s.inverseTrial=newInverseTrial(s,T,1000);assert.throws(()=>applyInverseSourceTrade(s,trade(),q,T));assert.equal(s.positions.length,0);
+test('inverse creation needs only the committed shadow fill price; market BBO cannot alter it and retrospective fills remain forbidden',()=>{
+  for(const q of [undefined,{...quote(90,120),fresh:false},quote(80,130,T-10001),quote(70,140,T+1)]){
+    const s=initialForward(T-B);s.inverseTrial=newInverseTrial(s,T,1000);const t=trade();
+    applyInverseSourceTrade(s,t,q as Quote|undefined,T);assert.equal(s.positions.length,1);near(s.positions[0]!.entryPrice,t.entryPrice);
   }
-  const s=initialForward(T-B);s.inverseTrial=newInverseTrial(s,T,1000);assert.throws(()=>applyInverseSourceTrade(s,trade(),quote(100,100,T+1),T+1),/历史成交/);
+  const s=initialForward(T-B);s.inverseTrial=newInverseTrial(s,T,1000);assert.throws(()=>applyInverseSourceTrade(s,trade(),undefined,T+1),/历史成交/);
 });
 test('reset explicitly closes both books administratively, including saved-mark offline maintenance',()=>{
   for(const quotes of [{TEST_USDT:quote(101,101.1,T+60000)},{}]){const {s}=fixture();
