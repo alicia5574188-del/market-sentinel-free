@@ -1,5 +1,6 @@
 /** Passive inverse PAPER accounting. No signal, independent exit or size choice. */
 import type {ForwardState,Trade,Quote,AuditEvent} from './forward-relations.ts';
+import {inversePaidFeeView} from './paid-fee-view.ts';
 
 export const SHADOW_INVERSE_VERSION='shadow-inverse-v1';
 export const SHADOW_BASELINE_BUILD='2b4fd60f77c9b78526bd5087940945fe7e86fab8';
@@ -177,7 +178,7 @@ export function inverseTrialSummary(state:ForwardState,quotes:Record<string,Quot
     theoretical=-sourceNet-2*(a.sourceFees+a.sourceFunding+openSourceFees),
     expected=-(a.sourceFees+a.fees+a.sourceFunding+a.funding+a.spreadDrag),
     residual=(a.sourceGross-a.sourceFees-a.sourceFunding)+(a.gross-a.fees-a.funding)-expected;
-  return{version:v.version,sourceBuild:v.sourceBuild,cutoverAt:v.cutoverAt,initialEquity:v.initialComparisonEquity,
+  return{paidCost:inversePaidFeeView(state,quotes,now),version:v.version,sourceBuild:v.sourceBuild,cutoverAt:v.cutoverAt,initialEquity:v.initialComparisonEquity,
     sourceEquity:v.initialComparisonEquity+sourceNet,inverseEquity:v.initialComparisonEquity+inverseNet,
     theoreticalSamePriceEquity:v.initialComparisonEquity+theoretical,sourceNet,inverseNet,
     sourceFees:a.sourceFees,inverseFees:a.fees,sourceFunding:a.sourceFunding,inverseFunding:a.funding,
