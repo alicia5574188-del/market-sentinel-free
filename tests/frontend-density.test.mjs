@@ -120,3 +120,13 @@ test("reference card and static manuals are removed, not hidden; cache and contr
   assert.match(live,/confirmEnable&&!enabled/);assert.match(live,/disabled=\{!canEnable\}/);assert.match(live,/confirmDelete&&/);
   assert.match(read("app/paper-account-reset.tsx"),/该操作不能撤销/);
 });
+
+test("waiting and holding views use the frozen order area, not a newer conflicting map",()=>{
+  const frozen={version:"winner-preservation-v1",researchVersion:"research-plan-v1",intent:"TREND",initialStop:99,
+    origin:{lower:100,upper:104,center:102},target:null},current={...frozen,origin:{lower:200,upper:204,center:202}};
+  const data={...account(),opportunities:[{id:"same",symbol:"SUI_USDT",side:"LONG",eligible:true,score:88,tradePlan:"WINNER_TREND",winnerPlan:current}],
+    entryValidation:{records:[{id:"same",candidateId:"same",symbol:"SUI_USDT",side:"LONG",status:"WAITING",phase:"ARMED",stableThesis:true,
+      frozenOpportunity:{tradePlan:"WINNER_TREND",winnerPlan:frozen}}]}};
+  const html=render("app/market-intelligence-execution.tsx",{data,now:1790761200000,liveEnabled:false});
+  assert.match(html,/本单参考区 100–104/);assert.doesNotMatch(html,/本单参考区 200–204/);
+});

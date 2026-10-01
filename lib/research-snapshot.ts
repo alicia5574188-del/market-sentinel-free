@@ -1,3 +1,4 @@
+import {RESEARCH_PLAN_VERSION} from './research-plan.ts';
 import type {Trade} from './forward-relations.ts';
 import type {ReviewJournal, TradeReview} from './review-trace.ts';
 
@@ -32,8 +33,10 @@ export async function readReviewArchivePage(storage:ArchiveReader,accountStarted
 }
 export type ReviewSnapshot={
   version:typeof REVIEW_SNAPSHOT_VERSION;
+  versionDiagnostics?:ObjectRow;
   meta:{exportedAt:number;exportedAtBeijing:string;buildSha:string|null;strategyFingerprint:string|null;policyVersion:unknown;
-    accountStartedAt:number;accountStartedAtBeijing:string;sourceUpdatedAt:unknown;marketUpdatedAt:unknown;readOnly:true};
+    accountStartedAt:number;accountStartedAtBeijing:string;sourceUpdatedAt:unknown;marketUpdatedAt:unknown;readOnly:true;
+    diagnosticVersion?:'research-plan-audit-v1';fingerprintScope?:string};
   summary:ObjectRow;coverage:{expectedClosed:number;includedClosed:number;openCount:number;missingClosed:number;complete:boolean;
     archiveRecordsRead:number;archivePagesRead:number;archiveExhausted:boolean;archiveNextCursor:string|null;
     exportLimitReached:boolean;archiveError:string|null;conflictingTradeIds:string[]};
@@ -42,6 +45,14 @@ export type ReviewSnapshot={
     'CONFIRMED_DATA_ISSUE'|'CONFIRMED_LOGIC_MISMATCH'|'CONFIRMED_DIAGNOSTIC_ISSUE'|'CONFIRMED_PORTFOLIO_STATE'|'REVIEW_LEAD'|'INSUFFICIENT_EVIDENCE';
     count:number;tradeIds?:string[]}[];
 };
+function preferReview(a:TradeReview|undefined,b:TradeReview|undefined){
+  const quality=(r:TradeReview|undefined)=>!r?0:Number(r.fromEntry)*4+Number(!!r.entryStrategyFingerprint)*4
+    +Number(!!r.terminal)*4+Number(!!r.diagnosticVersion)*2+(r.milestones?.reductions.length??0);
+  return quality(b)>quality(a)?b:a;
+}
+export function tradePlanVersion(t:Trade){return t.entryContext?.winnerPlan?.researchVersion??t.entryContext?.winnerPlan?.version
+  ??t.entryContext?.strategyVersion??'UNKNOWN_LEGACY';}
+
 function mergeTradeRows(current:Trade[],incoming:Trade[],conflicts:string[]){
   const byId=new Map(current.map(t=>[t.id,t]));
   for(const t of incoming){
@@ -52,7 +63,7 @@ function mergeTradeRows(current:Trade[],incoming:Trade[],conflicts:string[]){
     if(old.status==='CLOSED'&&t.status!=='CLOSED')continue;
     if(t.status==='CLOSED'&&old.status!=='CLOSED'){byId.set(t.id,{...old,...t});continue;}
     const newer=(old.lastQuoteAt??0)>=(t.lastQuoteAt??0)?old:t,older=newer===old?t:old;
-    byId.set(t.id,{...older,...newer,review:newer.review??older.review,positionIntelligence:newer.positionIntelligence??older.positionIntelligence});
+    byId.set(t.id,{...older,...newer,review:preferReview(newer.review,older.review),positionIntelligence:newer.positionIntelligence??older.positionIntelligence});
   }
   return[...byId.values()].sort((a,b)=>b.openedAt-a.openedAt||a.id.localeCompare(b.id));
 }
@@ -71,10 +82,11 @@ function grouped(rows:Trade[],key:(t:Trade)=>string){
 }
 export function checkpointCoverage(row:ObjectRow,at:number){
   const start=Number(row.startedAt),checkpoints=arr<ObjectRow>(row.checkpoints),unavailable=arr<number>(row.unavailableCheckpoints);
-  return Object.fromEntries([5,15,30,60,120,240].map(m=>{
+  return Object.fromEntries([5,15,30,45,60].map(m=>{
     const target=start+m*60_000,cp=checkpoints.find(x=>x.minutes===m);
     const valid=cp&&finite(cp.marketAt)&&finite(cp.price)&&cp.price>0&&finite(cp.targetAt)&&Math.abs(cp.targetAt-target)<=1000
-      &&cp.marketAt>=start&&cp.marketAt<=target+90_000&&cp.marketAt>=target-6*60_000;
+      &&cp.marketAt>=start&&cp.marketAt<=at&&cp.marketAt<=target+90_000&&cp.marketAt>=target-6*60_000
+      &&(!finite(cp.observedAt)||cp.observedAt<=at);
     return[m,valid?'VALID':unavailable.includes(m)?'UNAVAILABLE':at<target?'PENDING':'DUE_NOT_OBSERVED'];
   }));
 }
@@ -90,7 +102,8 @@ export function buildReviewSnapshot(input:{view:ObjectRow;buildSha:string|null;s
   const snapshot:ReviewSnapshot={version:REVIEW_SNAPSHOT_VERSION,
     meta:{exportedAt:input.exportedAt,exportedAtBeijing:beijing(input.exportedAt),buildSha:input.buildSha,strategyFingerprint:input.strategyFingerprint,
       policyVersion:v.policyVersion??null,accountStartedAt:startedAt,accountStartedAtBeijing:beijing(startedAt),sourceUpdatedAt:v.updatedAt??null,
-      marketUpdatedAt:obj(v.marketIntelligence).updatedAt??null,readOnly:true},summary:{},
+      marketUpdatedAt:obj(v.marketIntelligence).updatedAt??null,readOnly:true,
+      diagnosticVersion:'research-plan-audit-v1',fingerprintScope:'core+winner+research+risk+realization'},summary:{},
     coverage:{expectedClosed:Number(v.resolved)||0,includedClosed:0,openCount:arr(v.positions).length,missingClosed:0,complete:false,
       archiveRecordsRead:0,archivePagesRead:0,archiveExhausted:false,archiveNextCursor:null,exportLimitReached:false,archiveError:null,conflictingTradeIds:[]},
     account:pick(['initialEquity','balance','equity','floating','netPnl','grossPnl','fees','fundingAllowance','maxDrawdown','turnover','resolved','wins','daily','cost','storage','stalePositions']),
@@ -110,6 +123,42 @@ export function buildReviewSnapshot(input:{view:ObjectRow;buildSha:string|null;s
       entryDiagnostics:v.entryDiagnostics??null,events:arr(v.events)},decisionJournal:input.journal??null,issues:[]};
   return finalizeReviewSnapshot(snapshot);
 }
+export function reviewVersionDiagnostics(s:ReviewSnapshot){
+  const known=(t:Trade)=>!!t.review?.entryStrategyFingerprint;
+  const current=(t:Trade)=>known(t)&&!!s.meta.strategyFingerprint&&t.review!.entryStrategyFingerprint===s.meta.strategyFingerprint;
+  const cohort=(rows:Trade[])=>({entries:rows.length,open:rows.filter(t=>t.status==='OPEN').length,
+    closed:performance(rows.filter(t=>t.status==='CLOSED')),tradeIds:rows.map(t=>t.id)});
+  const integrated=s.trades.filter(t=>tradePlanVersion(t)===RESEARCH_PLAN_VERSION);
+  const missing=integrated.filter(t=>!t.review?.fromEntry||!t.review.entryBuildSha||!t.entryContext?.winnerPlan?.entryResearch
+    ||(t.status==='CLOSED'&&(!t.review.terminal||!t.winnerManagement?.appliedAction)));
+  const spans=s.trades.filter(t=>t.status==='CLOSED'&&t.review?.entryStrategyFingerprint&&t.review.exitStrategyFingerprint
+    &&(t.review.entryStrategyFingerprint!==t.review.exitStrategyFingerprint||new Set(t.review.policySpans?.map(p=>p.strategyFingerprint)).size>1));
+  const journal=s.decisionJournal,records=journal?.candidates??[];
+  return{version:'research-plan-audit-v1',comparisonAvailable:!!s.meta.strategyFingerprint,exportBuild:s.meta.buildSha,exportStrategy:s.meta.strategyFingerprint,
+    currentEntry:cohort(s.trades.filter(current)),olderEntry:cohort(s.trades.filter(t=>known(t)&&!current(t))),
+    unknownEntry:cohort(s.trades.filter(t=>!known(t))),
+    closedUnderCurrentStrategy:cohort(s.trades.filter(t=>t.status==='CLOSED'&&!!s.meta.strategyFingerprint&&t.review?.exitStrategyFingerprint===s.meta.strategyFingerprint)),
+    changedStrategyWhileOpen:cohort(spans),byEntryPlanVersion:grouped(s.trades.filter(t=>t.status==='CLOSED'),tradePlanVersion),
+    integratedEvidence:{tracked:integrated.length,missing:missing.length,missingTradeIds:missing.map(t=>t.id),
+      complete:missing.length===0&&integrated.length>0,meaning:'Entry receipts and decisive exits, not every tick or proof of profit.'},
+    decisionRows:integrated.map(t=>({tradeId:t.id,planId:t.entryContext?.thesisId??null,planVersion:tradePlanVersion(t),
+      entryBuild:t.review?.entryBuildSha??null,exitBuild:t.review?.exitBuildSha??null,
+      entryAction:t.entryContext?.winnerPlan?.entryResearch?.entryAction??null,
+      entryRiskScale:t.entryContext?.winnerPlan?.entryResearch?.riskScale??null,
+      requestedAction:t.winnerManagement?.requestedAction??null,appliedAction:t.status==='CLOSED'?'EXIT':t.winnerManagement?.appliedAction??null,
+      reductionResult:t.winnerManagement?.reductionResult??null,researchLevel:t.winnerManagement?.research?.level??null,
+      reason:t.exitReason??t.winnerManagement?.actionReason??null,
+      realizedParts:t.realization?.sequence??0,parentNetPnl:t.netPnl,peakObservedNet:t.review?.peakNetPnl??null,
+      evidencePresent:!missing.includes(t)})),
+    retainedCandidateCoverage:{records:records.length,firstAt:records.length?Math.min(...records.map(r=>r.firstObservedAt)):null,
+      lastAt:records.length?Math.max(...records.map(r=>r.lastObservedAt)):null,
+      droppedCandidates:journal?.droppedCandidates??null,droppedEvents:journal?.droppedEvents??null,
+      scope:'BOUNDED_OBSERVED_WINDOW_NOT_ALL_MARKET_OPPORTUNITIES'},
+    limits:['Historical peaks are observed marks, not guaranteed achievable fills.',
+      'A current export build is not the entry build of all contained orders.',
+      'Missing causal records are unknown, not proof of a correct decision.']};
+}
+
 export function finalizeReviewSnapshot(s:ReviewSnapshot):ReviewSnapshot{
   const closed=s.trades.filter(t=>t.status==='CLOSED'&&t.openedAt>=s.meta.accountStartedAt),open=s.trades.filter(t=>t.status==='OPEN');
   s.coverage.includedClosed=closed.length;s.coverage.missingClosed=Math.max(0,s.coverage.expectedClosed-closed.length);
@@ -131,10 +180,18 @@ export function finalizeReviewSnapshot(s:ReviewSnapshot):ReviewSnapshot{
     includedClosedPerformance:performance(closed),byEntryPlan:grouped(closed,t=>t.entryContext?.tradePlan??'LEGACY_UNCLASSIFIED'),
     byEntryEnvironment:grouped(closed,t=>t.entryContext?.environment??'UNKNOWN'),byExit:grouped(closed,t=>t.exitReason??'UNKNOWN'),
     byEntryStrategyFingerprint:grouped(closed,t=>t.review?.entryStrategyFingerprint??'UNKNOWN_LEGACY'),
+    byEntryBuild:grouped(closed,t=>t.review?.entryBuildSha??'UNKNOWN_LEGACY'),
+    byExitBuild:grouped(closed,t=>t.review?.exitBuildSha??'UNKNOWN_LEGACY'),
     activeCount:open.length,exitTraceMissing:traceMissing.length,positionAssessmentMissing:piMissing.length,
     counterfactualMaturity:maturity,liveAssessment:ownerOff?'OWNER_OFF_NOT_A_COPY_FAILURE':(s.runtime.liveAssessment??'SEE_SCOPED_LIVE_EVIDENCE'),
     observedOrderWindow:{from:timestamp(closed.length?Math.min(...closed.map(t=>t.openedAt)):null),to:timestamp(closed.length?Math.max(...closed.map(t=>t.closedAt??0)):null)}};
+  s.versionDiagnostics=reviewVersionDiagnostics(s);
   s.issues=[];
+  const evidence=obj(s.versionDiagnostics.integratedEvidence);
+  if(Number(evidence.missing)>0)s.issues.push({code:'INTEGRATED_PLAN_EVIDENCE_MISSING',classification:'INSUFFICIENT_EVIDENCE',
+    count:Number(evidence.missing),tradeIds:arr<string>(evidence.missingTradeIds)});
+  if((s.decisionJournal?.droppedCandidates??0)>0)s.issues.push({code:'CANDIDATE_HISTORY_IS_BOUNDED',classification:'INSUFFICIENT_EVIDENCE',
+    count:s.decisionJournal!.droppedCandidates});
   if(!s.coverage.complete)s.issues.push({code:'TRADE_HISTORY_INCOMPLETE_OR_CONFLICTING',classification:'CONFIRMED_DATA_ISSUE',count:s.coverage.missingClosed+s.coverage.conflictingTradeIds.length});
   if(traceMissing.length)s.issues.push({code:'CAUSAL_EXIT_TRACE_MISSING',classification:'INSUFFICIENT_EVIDENCE',count:traceMissing.length});
   if(profitLeads.length)s.issues.push({code:'PROFIT_GIVEBACK_REVIEW_NOT_VERDICT',classification:'REVIEW_LEAD',count:profitLeads.length,tradeIds:profitLeads.map(t=>t.id)});
@@ -164,7 +221,7 @@ export async function collectReviewSnapshot(fetcher:typeof fetch,progress?:(n:nu
   const seen=new Set<string>();let totalBytes=0;
   // Complete ledger counts do not imply complete exit evidence. Hot compaction
   // can remove assessments while retaining every settlement row.
-  const needsArchive=()=>!data.coverage.complete||Number(data.summary.positionAssessmentMissing)>0;
+  const needsArchive=()=>!data.coverage.complete||Number(data.summary.positionAssessmentMissing)>0||Number(data.summary.exitTraceMissing)>0;
   // 768 archive packets maximum per click, no background polling.
   for(let page=0;page<64&&needsArchive()&&!data.coverage.archiveExhausted;page++){
     const cursor=data.coverage.archiveNextCursor;

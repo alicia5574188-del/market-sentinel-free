@@ -22,7 +22,9 @@ export default defineConfig(async () => {
       __FORWARD_BUILD_SHA__: JSON.stringify(process.env.GITHUB_SHA ?? "local-verification"),
       __STRATEGY_FINGERPRINT__: JSON.stringify(createHash("sha256").update([
         "lib/forward-relations.ts","lib/market-intelligence-engine.ts","lib/position-intelligence-engine.ts","lib/position-evidence-contract.ts",
-        "lib/market-intelligence-entry-response.ts","lib/market-intelligence-environment-router.ts","lib/multi-turn-universe.ts"
+        "lib/market-intelligence-entry-response.ts","lib/market-intelligence-environment-router.ts","lib/multi-turn-universe.ts",
+        "lib/winner-policy.ts","lib/winner-risk.ts","lib/research-plan.ts","lib/market-intelligence-hypothesis-research.ts",
+        "lib/market-intelligence-liquidity.ts","lib/market-intelligence-lifecycle.ts","lib/trade-realization.ts"
       ].map(path=>path+"\n"+readFileSync(path,"utf8")).join("\n")).digest("hex")),
     },
     server: {
