@@ -5,7 +5,8 @@ export type GatePositionClose={contract?:string;side?:string;time?:number|string
   pnl_pnl?:number|string;pnl_fee?:number|string;pnl_fund?:number|string;text?:string;
   max_size?:number|string;accum_size?:number|string;first_open_time?:number|string;long_price?:number|string;short_price?:number|string};
 export type SettlementPosition={id:string;symbol:string;side:"LONG"|"SHORT";status:string;entryAt?:number;exitAt?:number;
-  entryPrice:number;exchangeSize:number;parity?:{sourceId:string;copiedAt:number;roundedContracts:number};sourceReduction?:{version:string}};
+  entryPrice:number;exchangeSize:number;parity?:{sourceId:string;copiedAt:number;roundedContracts:number};sourceReduction?:{version:string};
+  sourceExit?:{version:string;initialContracts:number;last:{tag:string}}};
 export type Settlement={version:typeof SETTLEMENT_VERSION;checkedAt:number;closedAt:number;openedAt:number;
   pnl:number;pricePnl:number|null;fees:number|null;funding:number|null;entryPrice:number;exitPrice:number;
   nativeKey:string;match:"TAG_AND_LIFECYCLE"|"UNIQUE_LIFECYCLE"};
@@ -25,10 +26,10 @@ function candidate(p:SettlementPosition,r:GatePositionClose,now:number) {
   // A verified program reduction belongs to the SAME exchange position cycle.
   // Native max/accumulated opening size must still match the original receipt;
   // additional manual adds remain unassignable, never inferred from price PnL.
-  const cycleSize=p.sourceReduction?.version==="source-reduction-v1"?p.parity.roundedContracts:p.exchangeSize;
+  const cycleSize=p.sourceReduction?.version==="source-reduction-v1"?p.parity.roundedContracts:p.sourceExit?.initialContracts??p.exchangeSize;
   if(!(cycleSize>0)||!near(Math.abs(max),cycleSize)||!near(Math.abs(acc),cycleSize)||!near(ep,p.entryPrice))return false;
-  if(r.text&&r.text.startsWith("t-ms-")&&r.text!==liveExitTag(p.id)&&!r.text.startsWith("t-ms-s-"))return false;
-  return r.text===liveExitTag(p.id)||Math.abs(p.exitAt-end)<=120000;
+  if(r.text&&r.text.startsWith("t-ms-")&&r.text!==liveExitTag(p.id)&&r.text!==p.sourceExit?.last.tag&&!r.text.startsWith("t-ms-s-"))return false;
+  return r.text===liveExitTag(p.id)||r.text===p.sourceExit?.last.tag||Math.abs(p.exitAt-end)<=120000;
 }
 export function matchSettlements(positions:readonly SettlementPosition[],rows:readonly GatePositionClose[],now:number) {
   const result:Record<string,Settlement>={};

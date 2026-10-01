@@ -1,3 +1,13 @@
+# 2026-10-01 — optimize actual LIVE exits too
+
+Reduce execution losses behind PAPER/LIVE divergence. Committed source closes
+and reductions use verified Gate exposure before unrelated account reads; no
+strategy/ledger/account/switch change or independent inverse exit. One bounded
+reduce-only IOC at fresh BBO, verified terminal/residual close completion,
+durable unknown identities, truthful weighted/native settlement display.
+Keep additions fail-closed, owner/member isolation and resource/release gates.
+No new market/alarm cadence or real verification trade. Deploy reviewed main.
+
 # 2026-10-01 — compact LIVE display / favorable copy
 
 Finish the interrupted task on c3e7ac8. Compact holdings/history/archive cards;

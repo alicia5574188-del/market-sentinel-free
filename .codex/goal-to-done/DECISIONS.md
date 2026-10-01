@@ -1,3 +1,23 @@
+# 2026-10-01 — source exit priority and bounded first execution
+
+- Owner requests exit optimization as well as entries. Preserve committed
+  shadow event authority and frozen PAPER; timing changes are execution only.
+- Existing parallel four reads retain addition authority. Position response
+  runs exit callback immediately; drain it even if another read fails before
+  releasing the account serialization lock. No extra periodic request/alarm.
+- Fresh shared BBO gives first IOC a 2bp bound with exact outward tick rounding.
+  No resting order or waiting for the simulated exit price. A known terminal
+  full-close IOC gets one fresh residual read and same-pass market completion;
+  this fallback prioritizes completion and does not guarantee bounded price.
+- Journal before network; unknown outcomes use exact tag/ID, never blind replay.
+  Older in-flight closes retain legacy identity. Source reductions keep their
+  original terminal/snapshot and retry rules. Member registers final exit tags.
+- Only terminal cumulative fills can be aggregated once. Missing full-cycle
+  execution prices stay unknown until exact native lifecycle/size attribution.
+- This adds event-driven close journals and private residual/terminal reads,
+  not market-data cadence or topology; existing paid-resource gates apply.
+  Tests prove execution mechanism, not improved realized future profit.
+
 # 2026-10-01 — owner removes inverse independent exits
 
 - The previous reflected adverse guard was contrary to source lifecycle parity.

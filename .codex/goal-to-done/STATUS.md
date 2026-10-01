@@ -1,4 +1,23 @@
-# 2026-10-01 — compact LIVE / favorable copying, candidate
+# 2026-10-01 — LIVE exit optimization, release verification
+
+Base main 0088599a9d03698258fdd138c5fdac37f7c69d74. Owner explicitly requests
+exit optimization too. Positions-first committed source close/reduction callback,
+bounded first IOC, known terminal/fresh residual market completion, durable
+unknown-send identity and complete-fill/native settlement projection implemented.
+Before public receipt: same account 1790843524083, owner ON/operational ON,
+eight actual holdings, favorable-ioc-v1 and shadow-events-only-v1, no error.
+Frozen source/PAPER/history/switches retained; no private Gate test trade.
+Focused and standard regressions pass; final release checks in progress.
+
+# 2026-10-01 — compact LIVE / favorable copying, done
+
+PR595 merged and exact main 0088599a9d03698258fdd138c5fdac37f7c69d74 deployed.
+PR CI36843905521 and main release36844095307 both succeed. Two public reads
+confirm favorable-ioc-v1 and shadow-events-only-v1, same account 1790843524083,
+owner/operational ON preserved, eight existing actual holdings retained, no
+runtime/storage/LIVE error or timeout streak. Financial saves advance
+1790847662933 → 1790847693014, heartbeat 1790847657452 → 1790847688841.
+No reset, switch change or real verification order. Durable receipt is in PR595.
 
 Base c3e7ac8. Default holdings/history/archive cards now show six essential
 fields with full attribution folded. New inverse entries wait for an executable
@@ -10,8 +29,8 @@ refill, reset, extra cadence or real verification order. Public before receipt:
 account startedAt 1790843524083, owner ON/operational ON, no runtime/storage error.
 Local direct 309, Forward 78, LIVE 175 (26 real-Worker inverse cases), members 49,
 equity 65, architecture/migration 43 pass. Build/feed/storage workerd pass;
-typecheck and lint pass (15 existing warnings). Final dry-run, reviewed PR/main
-release and public advancing-state continuity receipt remain.
+typecheck and lint pass (15 existing warnings). Dry-run and reviewed PR/main
+release plus public advancing-state continuity receipt completed above.
 
 # 2026-10-01 — inverse protection removed / done
 

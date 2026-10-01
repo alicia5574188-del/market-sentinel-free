@@ -249,7 +249,8 @@ function comparison(position:LivePosition,runtime:OperatorRuntime|null,now:numbe
   const paperRate=source.netPnl!=null&&source.notional>0?source.netPnl/source.notional:null;
   const liveRate=actual!=null&&position.notional>0?actual/position.notional:null;
   const expected=paperRate!=null?paperRate*position.notional:null;
-  const exitAdverse=source.exitPrice&&position.exitPrice?(position.side==="LONG"?-1:1)*(position.exitPrice/source.exitPrice-1):null;
+  const exitPrice=position.exitPrice??position.settlement?.exitPrice;
+  const exitAdverse=source.exitPrice&&exitPrice?(position.side==="LONG"?-1:1)*(exitPrice/source.exitPrice-1):null;
   return {source,entryAdverse,paperRate,liveRate,rateGap:paperRate!=null&&liveRate!=null?liveRate-paperRate:null,
     expected,actual,loss:expected!=null&&actual!=null?actual-expected:null,exitAdverse};
 }
@@ -271,7 +272,7 @@ function CompareBlock({position,runtime,now}:{position:LivePosition;runtime:Oper
     </div>:null}
     <div className="fr-compare-prices"><span>模拟入场 <b>{num(p?.sourceEntryPrice??c.source?.entryPrice,5)}</b></span><span>实盘入场 <b>{num(position.entryPrice,5)}</b></span>
       <span className={cls(c.entryAdverse,true)}>入场偏差 <b>{c.entryAdverse==null?"—":`${signed(c.entryAdverse*100,3)}%`}</b></span>
-      {closed&&c.source?.exitPrice&&<><span>模拟出场 <b>{num(c.source.exitPrice,5)}</b></span><span>实盘出场 <b>{num(position.exitPrice,5)}</b></span><span className={cls(c.exitAdverse,true)}>出场偏差 <b>{c.exitAdverse==null?"—":`${signed(c.exitAdverse*100,3)}%`}</b></span></>}
+      {closed&&c.source?.exitPrice&&<><span>模拟出场 <b>{num(c.source.exitPrice,5)}</b></span><span>实盘出场 <b>{num(position.exitPrice??position.settlement?.exitPrice,5)}</b></span><span className={cls(c.exitAdverse,true)}>出场偏差 <b>{c.exitAdverse==null?"—":`${signed(c.exitAdverse*100,3)}%`}</b></span></>}
       <span>复制延迟 <b>{latency(p?.submitDelayMs??p?.copyDelayMs)}</b></span></div>
   </div>;
 }
@@ -280,7 +281,7 @@ export function LivePositionCard({position:p,runtime,now}:{position:LivePosition
   const pnlRate=!open&&pnl!=null&&p.notional>0?pnl/p.notional:null;
   return <article className="fr-trade fr-trade-unified"><header><div><small>{open?"持仓中":"已平仓"} · {p.side==="LONG"?"多单":"空单"}</small><h3>{p.symbol.replace("_"," / ")}</h3></div>
     <strong className={pnl==null?"":pnl>=0?"fr-positive":"fr-negative"}>{pnl==null?open?"待更新":"待结算":`${signed(pnl)} U`}<small>{pnlRate==null?"":` · ${signed(pnlRate*100,3)}%`}</small></strong></header>
-    <dl><Pair label="入场价" value={num(p.entryPrice,5)}/><Pair label={open?"当前价格":"出场价"} value={num(open?mark.price:p.exitPrice,5)}/>
+    <dl><Pair label="入场价" value={num(p.entryPrice,5)}/><Pair label={open?"当前价格":"出场价"} value={num(open?mark.price:p.exitPrice??settlement?.exitPrice,5)}/>
       <Pair label="保证金 / 杠杆" value={`${num(open?mark.margin:p.margin)} U / ${num(p.leverage,0)}×`}/><Pair label="入场对比" value={entryDeltaText(p)}/>
       <Pair label="进场时间" value={time(p.entryAt)}/><Pair label="出场时间" value={open?"持仓中":time(p.exitAt)}/>
       </dl>
@@ -292,7 +293,8 @@ export function LivePositionCard({position:p,runtime,now}:{position:LivePosition
       {p.exitReason&&<p className="fr-trade-reason">退出原因：{p.exitReason}</p>}
       {p.parity&&<><p className="fr-note">源单 {p.parity.sourceId} · 规则 {p.parity.sourceRuleId}<br/>固定比例 {num(p.parity.ratio,6)} · 目标名义额 {num(p.parity.targetNotional)} U · 源单杠杆 {num(p.parity.sourceLeverage,0)}×<br/>
       首次复制盘口 {num(p.parity.copyQuotePrice,5)} · 提交盘口 {num(p.parity.submitQuotePrice,5)} · Gate成交 {num(p.parity.exchangeEntryPrice??p.entryPrice,5)}<br/>
-      首次识别 {latency(p.parity.copyDelayMs)} · 提交 {latency(p.parity.submitDelayMs)}{p.parity.discrepancy?` · ${p.parity.discrepancy}`:""}</p>
+      首次识别 {latency(p.parity.copyDelayMs)} · 提交 {latency(p.parity.submitDelayMs)}{p.parity.discrepancy?` · ${p.parity.discrepancy}`:""}
+      {p.parity.exitExecutionPolicy&&<><br/>影子出场 {num(p.parity.sourceExitPrice,5)} · 出场提交延迟 {latency(p.parity.exitDelayMs)}</>}</p>
       <a className="fr-text-button" href={`/api/live/source?id=${encodeURIComponent(p.parity.sourceId)}`} target="_blank" rel="noreferrer">查看完整模拟源单映射 ↗</a></>}
     </details>
   </article>;

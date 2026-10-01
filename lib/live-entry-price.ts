@@ -22,3 +22,14 @@ export function inverseEntryPriceLimit(source:{side:'LONG'|'SHORT';entryPrice:nu
 export function entryPriceFits(side:'LONG'|'SHORT',price:number,limit:number){
   return Number.isFinite(price)&&price>0&&(side==='LONG'?price<=limit:price>=limit);
 }
+/** Two basis points beyond the executable quote, rounded towards execution.
+ * This bounds the first IOC, never promises the source's modeled exit price. */
+export function liveExitPriceLimit(side:'LONG'|'SHORT',bid:number,ask:number,tick:number){
+  const quote=side==='LONG'?bid:ask,p=decimal(quote),t=decimal(tick),scale=Math.max(p.scale,t.scale);
+  const price=p.n*TEN**BigInt(scale-p.scale),unit=t.n*TEN**BigInt(scale-t.scale),den=BigInt(10000)*unit;
+  const rawPrice=price*BigInt(side==='LONG'?9998:10002);
+  const units=side==='LONG'?rawPrice/den:(rawPrice+den-ONE)/den;
+  if(units<=ZERO)throw new Error('退出限价小于最小价格单位');
+  const raw=(units*unit).toString().padStart(scale+1,'0');
+  return scale?`${raw.slice(0,-scale)}.${raw.slice(-scale)}`:raw;
+}

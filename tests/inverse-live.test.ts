@@ -92,9 +92,56 @@ async function harness(side:'LONG'|'SHORT') {
     reducePosition:async(_symbol:string,direction:string,text:string)=>{calls.reductions.push(text);
       positions[0]!.size=String((direction==='LONG'?1:-1)*(Math.abs(Number(positions[0]!.size))-Number(text)));return'reduce';},
     cancelOrder:async(_kind:string,id:string)=>{calls.cancels.push(id);const i=priceOrders.findIndex(p=>p.id_string===id);if(i>=0)priceOrders.splice(i,1);},requestCount:0};
+  Object.assign(gate,{
+    sourceExit:async(_symbol:string,side:'LONG'|'SHORT',tag:string,limit:any,guard:()=>boolean)=>{
+      assert.ok(guard());calls.closes++;
+      const qty=Math.abs(Number(positions[0]?.size??0)),price=limit?.price??'100';positions.length=0;
+      const order={id_string:'exit',status:'finished',finish_as:'filled',fill_price:price,
+        size:String((side==='LONG'?-1:1)*qty),left:'0'};orders.set('exit',order);return{orderId:'exit',order};
+    },
+    position:async()=>structuredClone(positions[0]??{contract:'TEST_USDT',size:'0'}),
+  });
   stream.gateLive=async()=>gate;
   return{stream,state,t,inverse,calls,gate,jobs,data,positions,priceOrders};
 }
+test('committed close executes before slow account reads, including owner OFF, without source mutation',async()=>{
+  const h=await harness('LONG');await h.stream.syncLive(Date.now());await h.stream.syncLive(Date.now());
+  h.inverse.status='CLOSED';h.inverse.closedAt=Date.now();h.inverse.exitPrice=101;
+  h.state.positions=[];h.state.history=[h.inverse];h.stream.runtime.live.requestedEnabled=false;
+  const original=structuredClone(h.state),snapshot=h.gate.snapshot;
+  let release!:()=>void,entered!:()=>void;
+  const wait=new Promise<void>(r=>{release=r;}),ready=new Promise<void>(r=>{entered=r;});
+  (h.gate as any).snapshot=async(callback:any)=>{
+    const result:any=await snapshot();result.positionsCheckedAt=Date.now();
+    await callback(result.positions,result.positionsCheckedAt);entered();await wait;return result;
+  };
+  const running=h.stream.syncLive(Date.now());await ready;
+  assert.equal(h.calls.closes,1);assert.equal(h.positions.length,0);assert.deepEqual(h.state,original);
+  const overlapping=h.stream.syncLive(Date.now()); // joins the serialized work
+  release();await Promise.all([running,overlapping]);assert.equal(h.stream.runtime.live.requestedEnabled,false);
+});
+test('committed reduction uses the early exposure callback without duplicate submission',async()=>{
+  const h=await harness('SHORT');await h.stream.syncLive(Date.now());await h.stream.syncLive(Date.now());
+  const initial=h.inverse.contracts;h.inverse.contracts*=.6;h.inverse.quantity*=.6;
+  h.inverse.notional*=.6;h.inverse.margin*=.6;h.inverse.plannedRisk*=.6;
+  h.inverse.realization={sequence:1,initialContracts:initial} as Trade['realization'];
+  const original=h.gate.snapshot;
+  (h.gate as any).snapshot=async(callback:any)=>{
+    const result:any=await original();result.positionsCheckedAt=Date.now();
+    await callback(result.positions,result.positionsCheckedAt);
+    assert.deepEqual(h.calls.reductions,['4']);return result;
+  };
+  await h.stream.syncLive(Date.now());assert.deepEqual(h.calls.reductions,['4']);assert.equal(h.calls.stops.length,0);
+});
+test('real Worker keeps an unknown exit identity across reconciliation and never sends a fallback blindly',async()=>{
+  const h=await harness('LONG');await h.stream.syncLive(Date.now());await h.stream.syncLive(Date.now());
+  h.inverse.status='CLOSED';h.inverse.closedAt=Date.now();h.state.positions=[];h.state.history=[h.inverse];
+  (h.gate as any).sourceExit=async()=>{h.calls.closes++;throw new Error('unknown exit timeout');};
+  await assert.rejects(h.stream.syncLive(Date.now()),/unknown exit/);
+  const p=h.stream.runtime.live.positions.TEST_USDT,tag=p.sourceExit.last.tag;
+  p.sourceExit=JSON.parse(JSON.stringify(p.sourceExit));await h.stream.syncLive(Date.now());
+  assert.equal(h.calls.closes,1);assert.equal(p.sourceExit.last.tag,tag);assert.equal(p.sourceExit.last.terminal,false);
+});
 for(const side of ['LONG','SHORT'] as const)test(`real Worker copies inverse ${side} open/reduce/close using one resident quote and unique reservation`,async()=>{
   const h=await harness(side),priorFetch=globalThis.fetch;let network=0;
   globalThis.fetch=async()=>{network++;throw new Error('network forbidden');};

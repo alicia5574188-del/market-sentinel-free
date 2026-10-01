@@ -64,6 +64,7 @@ export type GateLiveCoreSnapshot = {
   account: GateLiveAccount;
   positions: GateLivePosition[];
   checkedAt: number;
+  positionsCheckedAt?:number;
 };
 export type GateLiveOrderSnapshot = {
   orders: GateLiveOrder[];
@@ -256,14 +257,23 @@ export class GateLiveClient {
     }
   }
 
-  async snapshot(): Promise<GateLiveSnapshot> {
-    const [account, positions, orders, priceOrders] = await Promise.all([
+  async snapshot(onPositions?:(positions:GateLivePosition[],observedAt:number)=>Promise<void>): Promise<GateLiveSnapshot> {
+    let positionsCheckedAt=0;
+    const results = await Promise.allSettled([
       this.request<GateLiveAccount>("GET", "/futures/usdt/accounts"),
-      this.request<GateLivePosition[]>("GET", "/futures/usdt/positions", "holding=true"),
+      this.request<GateLivePosition[]>("GET", "/futures/usdt/positions", "holding=true").then(async response=>{
+        // Source exits need only confirmed exposure. Slow balance/order reads
+        // cannot delay them; still drain the callback before releasing the lock.
+        positionsCheckedAt=Date.now();if(onPositions)await onPositions(response.data,positionsCheckedAt);return response;
+      }),
       this.request<GateLiveOrder[]>("GET", "/futures/usdt/orders", "status=open"),
       this.request<GateLiveOrder[]>("GET", "/futures/usdt/price_orders", "status=open"),
-    ]);
-    return { account: account.data, positions: positions.data, orders: orders.data, priceOrders: priceOrders.data, checkedAt: Date.now() };
+    ] as const);
+    const [a,p,o,c]=results;
+    if(a.status==='rejected')throw a.reason;if(p.status==='rejected')throw p.reason;
+    if(o.status==='rejected')throw o.reason;if(c.status==='rejected')throw c.reason;
+    const account=a.value,positions=p.value,orders=o.value,priceOrders=c.value;
+    return { account: account.data, positions: positions.data, orders: orders.data, priceOrders: priceOrders.data, positionsCheckedAt,checkedAt: Date.now() };
   }
 
   // Compatibility readers for member/tests. Primary LIVE uses the full snapshot,
@@ -353,13 +363,24 @@ export class GateLiveClient {
     }
   }
 
-  async reducePosition(symbol:string,side:"LONG"|"SHORT",contractsText:string,tag:string,beforeSend:()=>boolean){
+  async reducePosition(symbol:string,side:"LONG"|"SHORT",contractsText:string,tag:string,beforeSend:()=>boolean,price='0'){
     if(!/^(?:[0-9]+)(?:\.[0-9]+)?$/.test(contractsText)||!Number.isFinite(Number(contractsText))||Number(contractsText)<=0)
       throw new Error("减仓数量必须是可核对的正数，禁止用零数量误触全平");
     const response=await this.request<GateLiveOrder>("POST","/futures/usdt/orders","",{
-      contract:symbol,size:`${side==="LONG"?"-":""}${contractsText}`,price:"0",tif:"ioc",close:false,reduce_only:true,text:tag,
+      contract:symbol,size:`${side==="LONG"?"-":""}${contractsText}`,price,tif:"ioc",close:false,reduce_only:true,text:tag,
     },beforeSend);
     return responseId(response.raw,response.data);
+  }
+
+  async sourceExit(symbol:string,side:'LONG'|'SHORT',tag:string,
+    limit:{price:string;contractsText:string}|null,beforeSend:()=>boolean){
+    if(limit&&(!/^[0-9]+(?:\.[0-9]+)?$/.test(limit.contractsText)||Number(limit.contractsText)<=0
+      ||!Number.isFinite(Number(limit.price))||Number(limit.price)<=0))throw new Error('退出限价或数量无效');
+    const response=await this.request<GateLiveOrder>('POST','/futures/usdt/orders','',{
+      contract:symbol,size:limit?`${side==='LONG'?'-':''}${limit.contractsText}`:0,
+      price:limit?.price??'0',tif:'ioc',close:!limit,reduce_only:true,text:tag,
+    },beforeSend);
+    return{orderId:responseId(response.raw,response.data),order:response.data};
   }
 
   async closePosition(symbol: string, tag: string) {
