@@ -8,6 +8,15 @@ export type TradeRealization={version:'partial-realization-v1';initialQuantity:n
 export function realizedContribution(t:Pick<Trade,'realization'>){const r=t.realization;return r?r.gross-r.fees-r.funding:0;}
 export function initialTradeNotional(t:Pick<Trade,'notional'|'realization'>){return t.realization?.initialNotional??t.notional;}
 export function remainingTradeFraction(t:Pick<Trade,'contracts'|'realization'>){return t.realization?t.contracts/t.realization.initialContracts:1;}
+/** Presentation split: paid entry fees are allocated once, not charged again
+ * to the smaller remainder. Realized profit is not floating profit. */
+export function realizedNetPnl(t:Pick<Trade,'realization'|'entryFee'>){const r=t.realization;
+  return r?realizedContribution(t)-t.entryFee*r.fills.reduce((n,f)=>n+f.quantity,0)/r.initialQuantity:0;}
+export function remainingOpenNetPnl(t:Pick<Trade,'side'|'quantity'|'lastPrice'|'entryPrice'|'notional'|'entryFee'|'realization'>,price=t.lastPrice){
+  const original=initialTradeNotional(t),feeRate=original>0?t.entryFee/original:0,
+    entryShare=t.realization?t.quantity/t.realization.initialQuantity:1;
+  return (t.side==='LONG'?1:-1)*t.quantity*(price-t.entryPrice)-t.entryFee*entryShare-t.quantity*price*feeRate;
+}
 export function realizeTradeSlice(input:{trade:Trade;price:number;now:number;quoteAt:number;fraction:number;feeRate:number;fundingPerDay:number;minContracts:number;reason:string}){
   const t=input.trade;
   if(t.status!=='OPEN'||![input.price,input.fraction,input.now,input.quoteAt,t.quantity,t.contracts,t.notional,input.minContracts].every(Number.isFinite)

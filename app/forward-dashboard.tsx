@@ -1,5 +1,5 @@
 "use client";
-import {realizedContribution,initialTradeNotional,remainingTradeFraction} from "../lib/trade-realization.ts";
+import {realizedNetPnl,remainingOpenNetPnl,initialTradeNotional,remainingTradeFraction} from "../lib/trade-realization.ts";
 
 import {useEffect,useLayoutEffect,useRef,useState,type CSSProperties,type ReactNode} from "react";
 import {BEIJING_TIME_ZONE,beijingDayKey} from "../lib/beijing-time.ts";
@@ -46,7 +46,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   const positions=data?.positions??[],opportunities=[...(data?.opportunities??[])].sort((a,b)=>Number(b.eligible)-Number(a.eligible)||Number(b.premium)-Number(a.premium)||b.score-a.score);
   const eligible=opportunities.filter(o=>o.eligible&&(!now||o.expiresAt>now));
   const pulse=data?.marketPulse,records=recordWindows(data?.history??[],t=>t.closedAt??0),archive=archivePage(records.archive,paperPage);
-  const paperMargin=positions.reduce((n,t)=>n+t.margin,0),paperFloating=data?.floating??0,plannedRisk=positions.reduce((n,t)=>n+Math.max(t.plannedRisk,(t.entryContext?.portfolioRiskCharge??((t.forecast?.sizingEquity??0)*(t.entryContext?.reserve===true?.003:.006)))*remainingTradeFraction(t)),0),riskUse=data?.equity?plannedRisk/data.equity:0,elapsed=data&&now?Math.max(0,(now-data.startedAt)/3600000):null;
+  const paperMargin=positions.reduce((n,t)=>n+t.margin,0),paperFloating=positions.reduce((n,t)=>n+(t.status==="OPEN"?remainingOpenNetPnl(t):0),0),plannedRisk=positions.reduce((n,t)=>n+Math.max(t.plannedRisk,(t.entryContext?.portfolioRiskCharge??((t.forecast?.sizingEquity??0)*(t.entryContext?.reserve===true?.003:.006)))*remainingTradeFraction(t)),0),riskUse=data?.equity?plannedRisk/data.equity:0,elapsed=data&&now?Math.max(0,(now-data.startedAt)/3600000):null;
   const systemStatus=statusLabel==="后台运行中"?"正常":statusLabel?.startsWith("后台运行中 · ")?statusLabel.slice(8):statusLabel??(healthy?"正常":"行情恢复中");
   const nav:[Tab,string,string][]=[["overview","◉","总览"],["execution","⌘","执行"],["paper","⇄","模拟"],["live","◈","实盘"],["journal","≋","记录"],["settings","⊙","系统"]];
   return <main className="fr-app" style={fontVars as CSSProperties} data-ui-version="market-intelligence-v1">
@@ -116,8 +116,7 @@ function TradeList({trades,now,empty,compact=false}:{trades:Trade[];now:number;e
     {trades.length?<div className="fr-position-list">{trades.map(t=><TradeCard key={t.id} trade={t} now={now}/>)}</div>:<Empty title={empty}/>}</section>;
 }
 function openTradeNetPnl(t:Trade,px=t.lastPrice){
-  const d=t.side==="LONG"?1:-1,exitFeeRate=t.notional>0&&t.entryFee>=0?t.entryFee/initialTradeNotional(t):0;
-  return realizedContribution(t)+d*t.quantity*(px-t.entryPrice)-t.entryFee-t.quantity*px*exitFeeRate;
+  return realizedNetPnl(t)+remainingOpenNetPnl(t,px);
 }
 function TradeCard({trade:t,now}:{trade:Trade;now:number}){
   const open=t.status==="OPEN",px=open?t.lastPrice:t.exitPrice??t.lastPrice;
@@ -129,7 +128,7 @@ function TradeCard({trade:t,now}:{trade:Trade;now:number}){
     <article className="fr-trade fr-trade-unified"><dl><div><dt>入场价</dt><dd>{fmt(t.entryPrice,6)}</dd></div><div><dt>{open?"当前价":"出场价"}</dt><dd>{fmt(px,6)}</dd></div><div><dt>当前防守</dt><dd>{fmt(t.stopPrice,6)}</dd></div>
       <div><dt>名义金额</dt><dd>{fmt(t.notional)} U</dd></div><div><dt>保证金 / 杠杆</dt><dd>{fmt(t.margin)} U / {fmt(t.leverage,0)}×</dd></div><div><dt>计划风险</dt><dd>{fmt(t.plannedRisk)} U</dd></div>
       <div><dt>进场时间</dt><dd>{time(t.openedAt)}</dd></div><div><dt>平仓时间</dt><dd>{open?"尚未平仓":time(t.closedAt)}</dd></div><div><dt>持仓时长</dt><dd>{duration(t.openedAt,t.closedAt,now)}</dd></div><div><dt>预计持有</dt><dd>{fmt(t.expectedHoldMinutes,0)} 分钟</dd></div></dl>
-      {t.realization&&<p className="fr-trade-reason">已部分兑现 {t.realization.sequence} 次 · 已实现净额 {signed(realizedContribution(t)-t.entryFee*t.realization.fills.reduce((n,f)=>n+f.quantity,0)/t.realization.initialQuantity)} U · 剩余 {fmt(open?remainingTradeFraction(t)*100:0,0)}%</p>}
+      {t.realization&&<p className="fr-trade-reason">已部分兑现 {t.realization.sequence} 次 · 已实现净额 {signed(realizedNetPnl(t))} U · 剩余 {fmt(open?remainingTradeFraction(t)*100:0,0)}%</p>}
       {t.winnerManagement&&<p className="fr-trade-reason">持仓计划：{t.winnerManagement.reason}</p>}
       {ctx&&<p className="fr-trade-reason">入场依据：{ctx.reason}</p>}{t.exitReason&&<p className="fr-trade-reason">退出依据：{exitName(t.exitReason)}</p>}</article></details>;
 }
