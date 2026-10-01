@@ -80,9 +80,8 @@ async function harness(side:'LONG'|'SHORT') {
     positions:structuredClone(positions),orders:[],priceOrders:structuredClone(priceOrders),checkedAt:Date.now()}),
     setLeverage:async()=>{calls.leverage++;},
     createEntry:async(intent:any,guard:()=>boolean)=>{assert.ok(guard());calls.entries++;
-      const price=String(intent.body.price);
-      assert.equal(intent.kind,'LIMIT');assert.equal(intent.body.tif,'ioc');
-      assert.ok(inverse.side==='LONG'?Number(price)<inverse.entryPrice:Number(price)>inverse.entryPrice);
+      assert.equal(intent.kind,'MARKET');assert.equal(intent.body.price,'0');assert.equal(intent.body.tif,'ioc');
+      const price=String(inverse.side==='LONG'?stream.runtime.evidence.TEST_USDT.bestAsk:stream.runtime.evidence.TEST_USDT.bestBid);
       positions.push({contract:'TEST_USDT',size:String(intent.size),entry_price:price,leverage:'10',margin:'10',unrealised_pnl:'0',mark_price:price});
       orders.set('entry',{id_string:'entry',status:'finished',finish_as:'filled',fill_price:price,size:String(intent.size),left:'0'});return'entry';},
     inspectEntry:async(_kind:string,_symbol:string,_tag:string,id:string)=>orders.get(id)??null,
@@ -174,31 +173,48 @@ test('favorable price ticks are exact, including off-grid and exponent prices',(
   assert.throws(()=>inverseEntryPriceLimit({side:'LONG',entryPrice:100},NaN));
   assert.throws(()=>inverseEntryPriceLimit({side:'LONG',entryPrice:.01},.01));
 });
-for(const side of ['LONG','SHORT']as const)test(`inverse ${side} waits for favorable price, then copies once without source mutation`,async()=>{
+for(const side of ['LONG','SHORT']as const)test(`inverse ${side} copies an adverse fresh quote once without source mutation`,async()=>{
   const h=await harness(side),before=structuredClone(h.state);
-  Object.assign(h.stream.runtime.evidence.TEST_USDT,{bestBid:100,bestAsk:100,midpoint:100});
-  await h.stream.syncLive(Date.now());assert.equal(h.calls.entries,0);assert.equal(h.calls.leverage,0);
-  assert.match(h.stream.runtime.live.entrySkips.TEST_USDT.reason,/等待有利入场价/);
+  const price=h.inverse.side==='LONG'?101:99;
+  Object.assign(h.stream.runtime.evidence.TEST_USDT,{bestBid:price,bestAsk:price,midpoint:price});
+  await h.stream.syncLive(Date.now());assert.equal(h.calls.entries,1);assert.equal(h.calls.leverage,1);
   assert.deepEqual(h.state,before);
-  const price=side==='LONG'?100.02:99.98;
-  Object.assign(h.stream.runtime.evidence.TEST_USDT,{bestBid:price,bestAsk:price,midpoint:price,observedAt:Date.now()});
-  await h.stream.syncLive(Date.now());assert.equal(h.calls.entries,1);
   await h.stream.syncLive(Date.now());assert.equal(h.calls.entries,1);
 });
-test('price deterioration during leverage await returns to waiting without submitting',async()=>{
+test('price deterioration during leverage await submits the fresh quote without a favorable wait',async()=>{
   const h=await harness('LONG');h.gate.setLeverage=async()=>{
     Object.assign(h.stream.runtime.evidence.TEST_USDT,{bestBid:99.9,bestAsk:99.9,midpoint:99.9,observedAt:Date.now()});};
-  await h.stream.syncLive(Date.now());assert.equal(h.calls.entries,0);
-  assert.match(h.stream.runtime.live.entrySkips.TEST_USDT.reason,/等待有利入场价/);
+  await h.stream.syncLive(Date.now());assert.equal(h.calls.entries,1);
+  assert.equal(h.stream.runtime.live.entries.TEST_USDT.parity.submitQuotePrice,99.9);
 });
-test('a favorable IOC with zero fills is final and never replayed',async()=>{
+test('theoretical profit cannot suspend new copies; sizing uses current LIVE equity and preserves the session',async()=>{
+  const h=await harness('LONG'),activation=h.stream.runtime.live.activation;
+  Object.assign(activation,{scaleRatio:1,scaleSourceEquity:1000,scaleLiveEquity:1000,scaleAt:Date.now()-1000});
+  const before=structuredClone(activation);await h.stream.syncLive(Date.now());
+  assert.equal(h.calls.entries,1);assert.deepEqual(h.stream.runtime.live.activation,before);
+  const entry=h.stream.runtime.live.entries.TEST_USDT;
+  assert.equal(entry.parity.liveEquity,100);
+  assert.ok(entry.parity.ratio<=100/entry.parity.sourceEquity+1e-10);
+  assert.ok(entry.notional<=entry.parity.targetNotional+1e-8);assert.ok(entry.notional<110);
+  await h.stream.syncLive(Date.now());assert.equal(h.calls.entries,1);
+});
+test('final shared quote reprices within reserved capital and never increases staged contract count',async()=>{
+  const h=await harness('SHORT');let staged:any;
+  h.gate.setLeverage=async()=>{staged=structuredClone(h.stream.runtime.live.entries.TEST_USDT);
+    Object.assign(h.stream.runtime.evidence.TEST_USDT,{bestBid:103,bestAsk:103,midpoint:103,observedAt:Date.now()});};
+  await h.stream.syncLive(Date.now());const entry=h.stream.runtime.live.entries.TEST_USDT;
+  assert.equal(h.calls.entries,1);assert.ok(entry.contracts<=staged.contracts);
+  assert.ok(entry.notional<=entry.parity.targetNotional+1e-8);
+  assert.equal(entry.parity.submitQuotePrice,103);assert.equal(entry.parity.copyQuotePrice,103);
+});
+test('a market IOC with zero fills is final and never replayed',async()=>{
   const h=await harness('LONG');h.gate.createEntry=async()=>{h.calls.entries++;return'zero';};
   h.gate.inspectEntry=async()=>({id_string:'zero',status:'finished',finish_as:'ioc',size:'-10',left:'-10'});
   await h.stream.syncLive(Date.now());assert.equal(h.calls.entries,1);
   assert.equal(h.stream.runtime.live.entries.TEST_USDT.status,'CANCELLED');assert.equal(h.calls.closes,0);
   await h.stream.syncLive(Date.now());assert.equal(h.calls.entries,1);assert.equal(h.positions.length,0);
 });
-test('favorable IOC partial fill owns actual exposure, receives source close and is never topped up',async()=>{
+test('market IOC partial fill owns actual exposure, receives source close and is never topped up',async()=>{
   const h=await harness('LONG'),create=h.gate.createEntry;
   h.gate.createEntry=async(intent:any,guard:()=>boolean)=>{
     const id=await create(intent,guard);h.positions[0].size='-4';return id;};
@@ -209,7 +225,7 @@ test('favorable IOC partial fill owns actual exposure, receives source close and
   h.inverse.status='CLOSED';h.inverse.closedAt=Date.now();h.state.positions=[];h.state.history=[h.inverse];
   await h.stream.syncLive(Date.now());assert.equal(h.calls.closes,1);assert.equal(h.calls.entries,1);
 });
-test('unknown favorable IOC result retains its identity and risk instead of resubmitting',async()=>{
+test('unknown market IOC result retains its identity and risk instead of resubmitting',async()=>{
   const h=await harness('LONG');h.gate.createEntry=async()=>{h.calls.entries++;throw new Error('timeout after send');};
   await h.stream.syncLive(Date.now());await h.stream.syncLive(Date.now());
   assert.equal(h.calls.entries,1);assert.ok(h.stream.runtime.live.entries.TEST_USDT.marketSubmittedAt);

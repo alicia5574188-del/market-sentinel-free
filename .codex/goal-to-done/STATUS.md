@@ -1,4 +1,35 @@
-# 2026-10-01 — LIVE exit optimization, release verification
+# 2026-10-01 — LIVE-authoritative execution/display, release pending
+
+Owner replaced favorable-entry/winner research with immediate shared-response
+copying and actual LIVE account authority. Fresh market inverse entries, current
+LIVE-capital sizing, final quote repricing within reservations, compact native
+account observation and LIVE ON overview/simulated-page real order projection
+implemented. Frozen shadow/source/PAPER ledgers, owner/member intent, original
+enable fence, source exits and unknown-send identities remain intact. Focused
+49 synthetic/render cases pass. Direct328, LIVE196, members50, equity65,
+Forward78+compat4, architecture/migration43, UI14, build/typecheck/lint
+(15 existing warnings), feed/storage workerd and dry-run pass. Reviewed-main
+release and advancing production receipt pending. No visual-browser QA claimed.
+Before production: main5b2e4eb, source1790843524083, enable1790843529202,
+owner ON/operational ON,8 eligible sources/5 copied/3 blocked. No error/reset,
+new cadence, switch action or real verification order.
+
+# 2026-10-01 — LIVE exit optimization, done
+
+PR596 and test-race follow-up PR597 merged. Exact final main
+5b2e4eb20ce95b37619c8b4f1fca9c6f6f21d88f release36849383429 verify/deploy succeeds;
+PR CI36848603920 and36849144247 pass. Earlier main36848802914 stopped before
+deployment on a signing-order test assertion race, corrected with explicit
+four-request/position-callback barriers, without a production-code change.
+Public receipts show favorable-ioc-v1 / priority-bounded-exit-v1 and unchanged
+shadow-events-only-v1, account1790843524083, enable fence1790843529202,
+owner ON/operational ON. Financial saves1790850653451 → 1790850692892;
+heartbeats1790850653746 → 1790850734430. Runtime/storage/source/LIVE errors null,
+timeout streak0, protected markets ready, page200. Normal owner-enabled holdings
+advance8 before →9/10 after. No reset, switch action or real verification order.
+Direct321, LIVE190, members50, equity65, Forward78, architecture/migration43,
+build/typecheck/lint (15 existing warnings), feed/storage workerd and dry-run pass.
+Durable completion receipts are in PR596/597; profit improvement remains unproven.
 
 Base main 0088599a9d03698258fdd138c5fdac37f7c69d74. Owner explicitly requests
 exit optimization too. Positions-first committed source close/reduction callback,
@@ -7,7 +38,7 @@ unknown-send identity and complete-fill/native settlement projection implemented
 Before public receipt: same account 1790843524083, owner ON/operational ON,
 eight actual holdings, favorable-ioc-v1 and shadow-events-only-v1, no error.
 Frozen source/PAPER/history/switches retained; no private Gate test trade.
-Focused and standard regressions pass; final release checks in progress.
+Focused and standard regressions and exact-main release completed above.
 
 # 2026-10-01 — compact LIVE / favorable copying, done
 

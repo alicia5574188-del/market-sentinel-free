@@ -74,6 +74,26 @@ test("missing account stays unknown and operational errors remain visible",()=>{
   assert.match(html,/role="alert"/);assert.match(html,/fixture storage unavailable/);
 });
 
+test('LIVE ON overview uses exchange equity and floating; theoretical profit and curve cannot leak into the account',()=>{
+  const html=render('app/forward-dashboard.tsx',{...dashboardProps({...account(),equity:9876.54,netPnl:8876.54}),liveEnabled:true,
+    liveOverview:{equity:101.23,available:80,positionCount:1,accountMark:{initialEquity:110,tradingPnl:-8.77,
+      capitalChange:-8.77,floating:-3.21,margin:20,positionCount:1,startedAt:1790760000000,maxDrawdown:.08},copied:1,eligible:3,missing:2}});
+  assert.match(html,/101\.23/);assert.match(html,/-3\.21 U/);assert.match(html,/-8\.77/);
+  assert.doesNotMatch(html,/9,876\.54|8,876\.54|curve-fixture/);
+  assert.match(html,/未跟上 2/);assert.match(html,/含出入金/);
+});
+test('LIVE ON without account confirmation does not substitute simulated equity or zero PnL',()=>{
+  const html=render('app/forward-dashboard.tsx',{...dashboardProps(account()),liveEnabled:true});
+  const equity=html.match(/<section[^>]*data-testid="overview-equity-first"[\s\S]*?<\/section>/)?.[0];
+  assert.match(equity,/<strong>—<\/strong>/);assert.doesNotMatch(equity,/922\.82|-77\.18|\+0\.00/);
+});
+test('LIVE ON simulated account mounts the very same native order panel and never renders theoretical trades',()=>{
+  const html=render('app/forward-dashboard.tsx',{...dashboardProps(account()),liveEnabled:true,livePanel:'REAL_ORDER_PANEL'},
+    {react:{...React,useState:value=>React.useState(value==='overview'?'paper':value)}});
+  assert.match(html,/paper-live-mirror/);assert.match(html,/REAL_ORDER_PANEL/);
+  assert.doesNotMatch(html,/模拟权益|暂无已平仓记录|当前没有模拟持仓|shadow-inverse-comparison/);
+});
+
 test("partial realizations are not counted as floating and entry fees are allocated only once",()=>{
   const t={id:"partial",status:"OPEN",symbol:"WLD_USDT",side:"LONG",entryPrice:100,lastPrice:110,quantity:6,contracts:6,
     notional:600,entryFee:.7,leverage:10,margin:60,plannedRisk:6,openedAt:1790760000000,closedAt:null,exitPrice:null,
@@ -125,9 +145,9 @@ test('LIVE open and archived cards keep six primary fields and fold execution at
     const primary=html.slice(0,html.indexOf('<details'));
     assert.equal((primary.match(/<dt>/g)??[]).length,6);
     assert.match(primary,/入场对比/);assert.match(primary,/更优/);assert.match(primary,/进场时间/);assert.match(primary,/出场时间/);
-    assert.doesNotMatch(primary,/模拟 ↔ 实盘|名义金额|合约数量|SOURCE_CLOSED/);
+    assert.doesNotMatch(primary,/源信号参考 ↔ 实盘|名义金额|合约数量|SOURCE_CLOSED/);
     assert.match(html,/<details class="fr-details"><summary>详情<\/summary>/);assert.doesNotMatch(html,/<details[^>]* open/);
-    assert.match(html,/SOURCE_CLOSED/);assert.match(html,/模拟 ↔ 实盘/);
+    assert.match(html,/SOURCE_CLOSED/);assert.match(html,/源信号参考 ↔ 实盘/);
   }
 });
 

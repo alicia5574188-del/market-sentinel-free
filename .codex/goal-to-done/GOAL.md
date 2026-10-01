@@ -1,3 +1,12 @@
+# 2026-10-01 — actual LIVE execution and mirrored display
+
+Remove favorable-price waiting for inverse entries; dispatch one market IOC
+from shared fresh Gate BBO and current LIVE capital. Preserve real-account risk,
+source events, durable identity/unknowns, fees/history and owner/member sessions.
+LIVE ON overview and simulated account share native Gate valuations/order rows;
+uncopied trades cannot contribute simulated profits. Source/shadow remains a
+frozen independent signal ledger. Verify and deploy reviewed main, no real test.
+
 # 2026-10-01 — optimize actual LIVE exits too
 
 Reduce execution losses behind PAPER/LIVE divergence. Committed source closes

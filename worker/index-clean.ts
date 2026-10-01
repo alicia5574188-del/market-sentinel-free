@@ -67,7 +67,8 @@ import { LIVE_PARITY_VERSION, LIVE_PARITY_PREFIX, buildProportionalMirror, forwa
   sourceLifecycle, mirrorSourceFresh, mirrorCoverage, liveEntryDriftGuard,
   type MirrorSourceTrade, type MirrorReceipt, type MirrorBinding } from "../lib/live-parity.ts";
 import {buildReviewSnapshot, readReviewArchivePage} from "../lib/research-snapshot.ts";
-import {inverseEntryPriceLimit,entryPriceFits,liveExitPriceLimit} from '../lib/live-entry-price.ts';
+import {liveExitPriceLimit} from '../lib/live-entry-price.ts';
+import {observeLiveAccount,type LiveAccountMark} from '../lib/live-account-view.ts';
 import {REVIEW_JOURNAL_KEY, appendReviewEvents, captureTradeReviews, initialReviewJournal, normalizeReviewJournal,
   recordDiscoveryReview, type ReviewEvent} from "../lib/review-trace.ts";
 declare const __STRATEGY_FINGERPRINT__: string;
@@ -239,6 +240,7 @@ type LiveAuditEvent = {
 };
 
 type LiveRuntime = {
+  accountMark?:LiveAccountMark|null;
   turnoverAccountKey?: string;
   recordEpochVersion?: string | null;
   recordEpochAt: number | null;
@@ -2563,16 +2565,18 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         entry.lastError = null;
       }
     }
-    let accountError:string|null=null,equity=0;
-    try { equity=gateMarkedEquity(snapshot); }catch(error){accountError=safeError(error);}
+    let accountError:string|null=null,equity=0,markedEquity:number|null=null;
+    try { markedEquity=equity=gateMarkedEquity(snapshot); }catch(error){accountError=safeError(error);}
     const available = Number(snapshot.account.available ?? 0);
     if (!(equity > 0) || !(available >= 0)||!Number.isFinite(available))accountError??="Gate 合约账户权益不可用";
     if (snapshot.account.in_dual_mode === true || ["dual", "dual_plus"].includes(String(snapshot.account.position_mode ?? "").toLowerCase())) {
       throw new Error("Gate 当前不是单向持仓模式");
     }
-    this.runtime.live.equity = accountError?null:equity;
-    this.runtime.live.available = available;
+    this.runtime.live.equity = markedEquity;
+    this.runtime.live.available = Number.isFinite(available)&&available>=0?available:null;
     this.runtime.live.lastSyncAt = snapshot.checkedAt;
+    if(markedEquity!==null)this.runtime.live.accountMark=observeLiveAccount(snapshot,
+      this.runtime.live.activation?.enabledAt??0,this.runtime.live.accountMark);
 
     const exchangeOrders = [...snapshot.orders, ...snapshot.priceOrders];
     const unknownOrders = exchangeOrders.filter((order) => !knownTags.has(liveOrderTag(order) ?? ""));
@@ -2880,7 +2884,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     await this.refreshMirrorExecutableQuotes(this.forwardState!.positions.map(t=>t.symbol),Date.now());
     const paperMark=forwardEquity(this.forwardState!,this.regimeQuotes(Date.now()),Date.now());
     let mirrorRatio=this.runtime.live.activation?.scaleRatio??null;
-    const staged: Array<{ symbol: string; plan: PaperPlan; intent: ReturnType<typeof buildLiveEntryIntent>;binding?:MirrorBinding;activation:LiveSession|null }> = [];
+    const staged: Array<{ symbol: string; plan: PaperPlan; intent: ReturnType<typeof buildLiveEntryIntent>;binding?:MirrorBinding;activation:LiveSession|null;
+      sizing:Parameters<typeof buildProportionalMirror>[0] }> = [];
     for (const [symbol, skip] of Object.entries(this.runtime.live.entrySkips)) {
       const trade = desiredPortfolio[symbol] ?? null;
       if (!skip || !trade || trade.id !== skip.planId || now >= trade.openedAt + 45 * 60_000) delete this.runtime.live.entrySkips[symbol];
@@ -2949,37 +2954,31 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if (prior && !["FILLED", "CANCELLED"].includes(prior.status)) await this.cancelLiveEntry(client, prior);
       let intent: ReturnType<typeof buildLiveEntryIntent>;
       let binding:MirrorBinding|undefined;
+      let sizing:Parameters<typeof buildProportionalMirror>[0];
       try {
         if(paperMark.stalePositions)throw new LiveEntrySizingError("ECONOMICS",symbol,"模拟账户当前估值不完整，不能确定复制比例");
-        const scaled=await this.ensureLiveSessionScale(paperMark.equity,equity,Date.now());
-        mirrorRatio=scaled?.scaleRatio??equity/paperMark.equity;
+        const inverse=!!trade.forwardSource.inverseCopy;
+        const scaled=inverse?this.runtime.live.activation:await this.ensureLiveSessionScale(paperMark.equity,equity,Date.now());
+        // Current LIVE capital is authority for inverse additions. A profitable
+        // theoretical ledger must neither enlarge exposure nor veto valid copies.
+        mirrorRatio=inverse?equity/paperMark.equity:scaled?.scaleRatio??equity/paperMark.equity;
         const expectedLiveEquity=paperMark.equity*mirrorRatio;
         const liveEquityDrift=expectedLiveEquity>0?equity/expectedLiveEquity:0;
-        if(liveEquityDrift<.85)throw new LiveEntrySizingError("ECONOMICS",symbol,
+        if(!inverse&&liveEquityDrift<.85)throw new LiveEntrySizingError("ECONOMICS",symbol,
           `实盘权益已低于固定模拟比例预期的${(liveEquityDrift*100).toFixed(1)}%，暂停新增复制并保留已有保护`);
         const quote=this.runtime.evidence[symbol];
-        let inverseLimit:ReturnType<typeof inverseEntryPriceLimit>|null=null;
-        if(trade.forwardSource.inverseCopy){
-          try{inverseLimit=inverseEntryPriceLimit(trade.forwardSource,this.runtime.tickSize[symbol]);}
-          catch(error){throw new LiveEntrySizingError('CONTRACT_SPEC',symbol,safeError(error));}
-        }
         const executablePrice=plan.side==='LONG'?quote?.bestAsk??0:quote?.bestBid??0;
-        if(inverseLimit&&!entryPriceFits(plan.side,executablePrice,inverseLimit.price))
-          throw new LiveEntrySizingError('ECONOMICS',symbol,
-            `等待有利入场价：${plan.side==='LONG'?'不高于':'不低于'} ${inverseLimit.text}，当前 ${executablePrice}；影子结束前继续观察`);
-        const result=buildProportionalMirror({source:trade.forwardSource,sourceEquity:paperMark.equity,equity,
+        sizing={source:trade.forwardSource,sourceEquity:paperMark.equity,equity,
           available:availableForNewEntries,openRisk:riskForNewEntries,sameDirectionRisk:directionRiskForNewEntries[plan.side],
-          entryPrice:inverseLimit?.price??executablePrice,
+          entryPrice:executablePrice,
           quantoMultiplier:this.runtime.contractMeta[symbol]?.quantoMultiplier??0,
           leverageMax:this.runtime.contractMeta[symbol]?.leverageMax??0,maintenanceRate:this.runtime.contractMeta[symbol]?.maintenanceRate??0.005,
           openMargin:marginForNewEntries,openNotional:notionalForNewEntries,now:Date.now(),policy:this.forwardState!.policyVersion??this.forwardState!.version,
           sizeRules:this.runtime.contractMeta[symbol],activationAt:this.runtime.live.activation?.enabledAt,
-          mirrorRatio,sourceRiskAuthority:true,quoteObservedAt:quote?.observedAt});
+          mirrorRatio,sourceRiskAuthority:true,quoteObservedAt:quote?.observedAt};
+        const result=buildProportionalMirror(sizing);
         intent=result.intent;binding=result.binding;
-        if(inverseLimit){
-          intent.kind='LIMIT';intent.body={...intent.body,price:inverseLimit.text,tif:'ioc'};
-          Object.assign(binding.receipt,{entryPricePolicy:inverseLimit.policy,entryLimitPrice:inverseLimit.price,copyQuotePrice:executablePrice});
-        }
+        if(inverse){binding.receipt.entryPricePolicy='fresh-market-v1';delete binding.receipt.allowedAdverseEntryDriftRate;}
       } catch (error) {
         if (!(error instanceof LiveEntrySizingError)) throw error;
         this.runtime.live.entrySkips[symbol] = { planId: plan.id, symbol, code: error.code, reason: error.message, observedAt: now,sizing:error.sizing };
@@ -2991,9 +2990,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       directionRiskForNewEntries[plan.side] += intent.plannedRisk;
       marginForNewEntries += intent.margin;
       notionalForNewEntries += intent.notional;
-      staged.push({ symbol, plan, intent, binding,activation:structuredClone(this.runtime.live.activation??null) });
+      staged.push({ symbol, plan, intent, binding,sizing,activation:structuredClone(this.runtime.live.activation??null) });
     }
-    for (const { symbol, plan, intent, binding,activation } of staged) {
+    for (const { symbol, plan, intent, binding,activation,sizing } of staged) {
       const stagedSource=this.currentMirrorSource(plan.id).trade,
         preflightFailure=!this.runtime.live.requestedEnabled?"所有者已关闭实盘复制"
           :!sameLiveSession(activation,this.runtime.live.activation)?"实盘开启会话在提交前发生变化"
@@ -3067,12 +3066,20 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             await this.saveCheckpoint(Date.now(),true);continue;
           }
           const price=entry.side==="LONG"?submitQuote.bestAsk:submitQuote.bestBid;
-          if(entry.parity?.entryPricePolicy==='favorable-ioc-v1'
-            &&!entryPriceFits(entry.side,price,entry.parity.entryLimitPrice??NaN)){
-            entry.status='CANCELLED';entry.submissionResolved=true;
-            entry.lastError=`等待有利入场价 ${entry.parity.entryLimitPrice}；最新盘口 ${price}，未发送订单`;
-            this.runtime.live.entrySkips[symbol]={planId:entry.planId,symbol,code:'ECONOMICS',reason:entry.lastError,observedAt:Date.now()};
-            await this.saveCheckpoint(Date.now(),true);continue;
+          if(isInverseLiveReceipt(entry.parity)){
+            // Re-price against the SAME final Gate response used for dispatch.
+            // Never increase the staged contracts or capital reservation when
+            // the book moves while setting leverage/checkpointing.
+            const ratio=Math.min(sizing.mirrorRatio!,intent.contracts*source.quantoMultiplier*price/source.notional);
+            const repriced=buildProportionalMirror({...sizing,entryPrice:price,mirrorRatio:ratio,
+              quoteObservedAt:submitQuote.observedAt,now:Date.now()});
+            Object.assign(intent,repriced.intent);
+            Object.assign(entry,{size:intent.size,contracts:intent.contracts,notional:intent.notional,
+              plannedRisk:intent.plannedRisk,leverage:intent.leverage,margin:intent.margin});
+            Object.assign(binding!.receipt,repriced.binding.receipt,{entryPricePolicy:'fresh-market-v1'});
+            delete binding!.receipt.allowedAdverseEntryDriftRate;
+            entry.parity=structuredClone(binding!.receipt);
+            this.liveJournal.set(`${LIVE_PARITY_PREFIX}binding:${plan.id}`,binding!);
           }
           if(!price||(!isInverseLiveReceipt(entry.parity)&&(entry.side==="LONG"?price<=entry.invalidation:price>=entry.invalidation))){
             entry.status="CANCELLED";entry.submissionResolved=true;entry.lastError="最终 Gate 盘口已越过源单止损，未追补旧成交";
@@ -3080,7 +3087,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             await this.saveCheckpoint(Date.now(),true);continue;
           }
           const drift=liveEntryDriftGuard(source,price);
-          if(drift.adverse>drift.allowed+1e-9){
+          if(!isInverseLiveReceipt(entry.parity)&&drift.adverse>drift.allowed+1e-9){
             entry.status="CANCELLED";entry.submissionResolved=true;
             entry.lastError=`最终 Gate 盘口相对模拟入场不利偏差${(drift.adverse*100).toFixed(3)}%，超过动态上限${(drift.allowed*100).toFixed(3)}%，不追价`;
             this.runtime.live.entrySkips[symbol]={planId:entry.planId,symbol,code:"ECONOMICS",reason:entry.lastError,observedAt:Date.now()};
@@ -3088,7 +3095,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           }
           const submittedAt=Date.now();
           if(entry.parity)Object.assign(entry.parity,{submitQuoteAt:submitQuote.observedAt,submitQuotePrice:price,submittedAt,
-            submitDelayMs:Math.max(0,submittedAt-source.openedAt),allowedAdverseEntryDriftRate:drift.allowed,
+            submitDelayMs:Math.max(0,submittedAt-source.openedAt),
+            ...(!isInverseLiveReceipt(entry.parity)?{allowedAdverseEntryDriftRate:drift.allowed}:{}),
             adverseEntryDriftRate:drift.adverse});
           entry.marketSubmittedAt=submittedAt;
           await this.saveCheckpoint(submittedAt,true);
@@ -3107,11 +3115,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             const latest=this.runtime.evidence[symbol],
               latestPrice=entry.side==="LONG"?latest?.bestAsk:latest?.bestBid;
             if(latestPrice){
-              if(entry.parity?.entryPricePolicy==='favorable-ioc-v1'
-                &&!entryPriceFits(entry.side,latestPrice,entry.parity.entryLimitPrice??NaN))return false;
               if(!isInverseLiveReceipt(entry.parity)&&(entry.side==="LONG"?latestPrice<=entry.invalidation:latestPrice>=entry.invalidation))return false;
               const latestDrift=liveEntryDriftGuard(source,latestPrice);
-              if(latestDrift.adverse>latestDrift.allowed+1e-9)return false;
+              if(!isInverseLiveReceipt(entry.parity)&&latestDrift.adverse>latestDrift.allowed+1e-9)return false;
             }
             return true;
           };
