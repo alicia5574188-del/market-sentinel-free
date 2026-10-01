@@ -10,6 +10,7 @@ export default function LiveEquityCurve({head,mark,enabled,sessionAt,cacheScope,
   const cache=useMemo(()=>new EquityHistoryCache({endpoint:`/api/live/equity?session=${sessionAt}`,
     validCursor:validLiveEquityCursor}),[sessionAt]);
   useEffect(()=>()=>cache.cancel(),[cache]);
+  if(!enabled)return null;
   const view=liveEquityView(head,mark,enabled,sessionAt,now);
   return <section className="fr-section" data-testid="live-equity-curve" aria-label="实盘账户净值">
     <div className="fr-section-head"><h2>实盘净值</h2><span>{enabled?'本次开启':'已关闭'}</span></div>

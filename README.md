@@ -1,3 +1,11 @@
+# 账户页面整理 — 2026-10-02
+
+反向模拟在左、影子订单在右，一次切换显示整组影子订单及对应净额、
+费用和价格。影子范围为切换后配对单，已平仓行限当前账本保留记录。
+实盘开启时默认显示本账户原生成交和结算；关闭时不显示实盘曲线或旧
+实盘统计，原模拟曲线仍在总览。仅改变界面，历史、开关、交易策略、
+手续费、杠杆、后台请求和写入频率不变。
+
 # 模拟手续费与当前实盘对齐 — 2026-10-02
 
 反向模拟后续开仓、减仓、平仓各按本次成交额×0.05%扣一次，采用用户当前
@@ -306,7 +314,7 @@ npx wrangler deploy --dry-run --config dist/server/wrangler.json
 
 Overview shows the original PAPER curve and a separate Gate-native LIVE equity
 curve with the same history controls. The simulated page shows no curve. LIVE
-history uses the existing manual activation: OFF retains its last saved curve;
+history uses the existing manual activation: OFF hides its saved curve while retaining history;
 the next OFF-to-ON starts a new native baseline. Browser/process restart or
 repeated ON retains the session. Fresh native marks save at most once per five
 minutes through existing checkpoints, with optional row accounting and private

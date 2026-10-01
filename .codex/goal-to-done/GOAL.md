@@ -1,3 +1,12 @@
+# 2026-10-02 — final account-matched page
+
+Inverse left, shadow right; a single account switch shows all current retained
+shadow paired orders without per-row expansion. Selected account money and
+orders stay together, native LIVE curve hidden when OFF, original PAPER curve
+retained on overview. UI-only; retain backend authority/history/session reset,
+fees/leverage and manual intent. Verify transitions and full reviewed-main
+release plus advancing public continuity; no private read/test trade/control.
+
 # 2026-10-02 — PAPER fee rate parity with current LIVE
 
 Use current owner LIVE taker reference0.05% for new passive inverse PAPER fill

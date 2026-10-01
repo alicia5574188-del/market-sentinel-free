@@ -1,3 +1,17 @@
+# 2026-10-02 — frontend account selection and OFF visibility
+
+- Reuse existing paid open pairs plus read-only retained closed receipts; no new
+  backend field/read or fabricated full-history/source-account equity. Label
+  paired post-cutover scope and retained record count explicitly.
+- Inverse-first/source-second shared selector; one click changes the entire
+  shadow list and its totals, never per-row toggles. Native LIVE facts remain
+  the default simulated-account view while enabled.
+- Hide the native chart entirely while OFF, retain storage/session semantics.
+  Supersedes earlier OFF viewing requirement for presentation only. Keep the
+  original PAPER overview chart and independent labeled statistics.
+- Remove OFF cached native statistics and repeat paired costs on inverse cards;
+  preserve runtime/financial/strategy sources byte-for-byte.
+
 # 2026-10-02 — current LIVE taker reference, future PAPER fees only
 
 - Owner screenshot directly supports0.05% current LIVE vs0.07% PAPER; use
