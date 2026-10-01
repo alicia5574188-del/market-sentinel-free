@@ -900,3 +900,17 @@ better price is not evidence of better direction or future net profit. Existing
 holdings/regular LIVE guards and complete PAPER/shadow state remain unchanged.
 Gate official contract: https://www.gate.com/docs/developers/apiv4/en/futures/ .
 Card defaults expose six core fields; full comparison/settlement remains folded.
+# 2026-10-02 — review export remains outside trading persistence
+
+- Add no runtime fields, baseline backfill, writes, Gate query or periodic work.
+  Actor-local native review GET reads existing account mark, retained receipts,
+  cached settlements and immutable closes only. Native cost components are
+  lifetime totals; unavailable session component deltas remain unknown.
+- Bound PAPER archive reads to48 packets per page/64 pages and deduplicate
+  repeated trades without hiding conflicts. Native closes:48 rows/16 pages.
+  Client caps incoming and assembled output at12MiB with60s loop budget and15s
+  per-page abort. A limit preserves explicit missing scope rather than history loss.
+- Pair monetary differences only for same-source account and unreduced cycles
+  with native settlement plus quantity evidence; missing receipts are not a
+  verdict of execution failure. Account results include manual/capital movements.
+- Owner/member auth and actor routing protect new native financial projections.

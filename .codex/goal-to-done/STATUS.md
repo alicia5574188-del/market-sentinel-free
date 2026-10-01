@@ -1,4 +1,12 @@
-# 2026-10-02 — overview-only PAPER/LIVE curves, verification
+# 2026-10-02 — overview-only PAPER/LIVE curves, done
+
+PR600 merged and exact mainb71a9ff8c2aed7bf27be9ffe36cde15ba56da18e deployed.
+Exact-head PR CI36930746610 and main release36930974317 verify/deploy succeed.
+Page/client asset200 with both labels; guest native-history GET401. Two public
+reads retain account1790843524083 and owner/operational ON, runtime/storage errors
+null. Financial saves1790891239864 →1790891423738, heartbeat1790891385740
+→1790891417963; native curve available with first saved mark1790891385740.
+No private test trade/switch/reset; durable final receipt is in PR600 description.
 
 Base main99b9e44. Removed chart from simulated page; overview has original PAPER
 and separate native LIVE curves, same controls/projection cache. Fresh existing
@@ -14,7 +22,7 @@ direct331, Forward78+compat4, equity73, members50, LIVE196, feed workerd, build,
 typecheck, architecture/migration43, lint (15 existing warnings) and dry-run.
 Before: account1790843524083, owner/operational ON, financial save1790890937881,
 heartbeat1790890942079, build99b9e44, runtime/storage errors null. Reviewed PR/main
-release and two production receipts pending. Public curve status reveals only
+release and two production receipts pass. Public curve status reveals only
 capability/readiness/save time, never private equity or account identity.
 No private test trade or switch action; no browser visual QA claimed.
 
@@ -961,3 +969,14 @@ private Gate action occurred.
 - Restored the previously omitted real-Worker LIVE parity suite to the default release command and updated only its synthetic timing fixtures to the current 30-second copy contract.
 - Removed compiler-confirmed unused production helpers/imports and stale test fixtures; lint is now zero warnings without changing strategy thresholds or persisted schemas.
 - Acceptance: Forward 60/60, direct 128/128, LIVE/Gate parity 129/129, members 49/49, equity 61/61, architecture/migration 19/19; full npm test, build, typecheck, lint, diff check and Wrangler dry-run pass. Storage stress still preserves 2200 mature samples, 240 history rows, 160 events, pending roots, rules, regions and positions across restart.
+# 2026-10-02 — bounded LIVE review exports, in progress
+
+Base main/production b71a9ff8c2aed7bf27be9ffe36cde15ba56da18e.
+Owner authorizes proposed snapshot upgrade and prioritizes uninterrupted trading.
+Implemented read-only projections, private native GET and bounded paging with
+no runtime persistence or execution changes. Direct331, Forward78+compat4,
+equity73/member61/LIVE196/architecture43/full npm test pass. Final typecheck,
+focused27, lint(0errors/15existing warnings), build, dry-run and local storage/
+member workerd smokes pass; initial member smoke timed out during concurrent
+bundle rebuild, sequential final rerun passes. Prior curve receipt remains valid.
+Next: exact-tree PR CI, reviewed-main release and advancing public receipts.

@@ -125,6 +125,7 @@ export async function memberRoutes(request:Request,env:CloudflareEnv):Promise<Re
     if(path==="/api/runtime"&&request.method==="GET")return get("/status");
     if(path==="/api/live/status"&&request.method==="GET")return get("/live-status");
     if(path==="/api/live/history"&&request.method==="GET")return get("/live-history");
+    if(path==="/api/live/review"&&request.method==="GET")return get(`/live-review${u.search}`);
     if(path==="/api/live/equity"&&request.method==="GET")return get(`/live-equity${u.search}`);
     if(path==="/api/live/source"&&request.method==="GET")return get(`/source?id=${encodeURIComponent(u.searchParams.get("id")??"")}`);
     if(path==="/api/live/credentials"&&request.method==="GET")return get("/credential-status");
@@ -136,7 +137,7 @@ export async function memberRoutes(request:Request,env:CloudflareEnv):Promise<Re
     }
     if(path==="/api/forward/export"&&request.method==="GET") {
       const r=await get("/status");if(!r.ok)return r;const s=await r.json<{forward:unknown}>();
-      return json({exportedAt:Date.now(),forward:s.forward,scope:"共享模拟策略；不包含主账户或其他会员的实盘数据"});
+      return json({exportedAt:Date.now(),forward:s.forward,liveReviewAvailable:true,scope:"共享模拟策略；不包含主账户或其他会员的实盘数据"});
     }
     if(path==="/api/forward/archive"&&request.method==="GET")return env.MARKET_STREAM.getByName("primary").fetch(`https://market-stream/forward-archive${u.search}`);
     return json({error:"会员不能修改共享模拟账户、发放密钥或读取其他人的账户"},403);

@@ -44,7 +44,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   const exportSnapshot=async()=>{if(exporting)return;setExporting(true);setExportStatus(null);try{
     const snapshot=await collectReviewSnapshot(fetch,(n,total)=>setExportStatus(`正在读取订单 ${n}/${total}`));
     const blob=new Blob([JSON.stringify(snapshot)],{type:"application/json"}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`market-intelligence-review-${beijingDayKey()}.json`;
-    document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);setExportStatus(snapshot.version==="market-intelligence-review-v2"&&!snapshot.coverage.complete?"已导出；部分归档未读完，缺口已在快照中标明。":"已开始下载。");
+    document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);setExportStatus(snapshot.version==="market-intelligence-review-v2"&&(!snapshot.coverage.complete||snapshot.liveReview?.coverage.error||snapshot.liveReview?.coverage.limitReached||snapshot.runtime.liveReviewError)?"已导出；缺失或未核对的数据已在快照中标明。":"已开始下载。");
   }catch{setExportStatus("导出失败，请重试。");}finally{setExporting(false);}};
 
   const positions=data?.positions??[],opportunities=[...(data?.opportunities??[])].sort((a,b)=>Number(b.eligible)-Number(a.eligible)||Number(b.premium)-Number(a.premium)||b.score-a.score);

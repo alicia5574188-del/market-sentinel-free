@@ -680,3 +680,11 @@ as pending activation; hard account/order conflicts must still fail visibly.
 Audit the complete affected execution boundary and slim only proven duplication
 whose behavior is locked by tests; do not broadly rewrite the worker during an
 incident repair.
+# 2026-10-02 — bounded, private LIVE review exports
+
+Improve research snapshots to compare post-enable PAPER and actual LIVE facts.
+Read existing native account marks, durable closes and cached settlements only;
+add no trading decisions, Gate calls, writes, cadence or checkpoint growth.
+Keep bounded archive pages/file size, honest missing-evidence flags and private
+owner/member isolation. Verify full release checks and advancing production
+state without reset, switch changes or real test trades.

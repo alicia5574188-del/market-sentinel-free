@@ -60,6 +60,7 @@ import { nextProtectionWriteBudget, readProtectionWriteBudget, protectionWriteBu
 import { EquityReader } from "../lib/equity-reader.ts";
 import { EQUITY_CURVE_VERSION } from "../lib/equity-curve.ts";
 import {LIVE_EQUITY_VERSION,LiveEquityReader,prepareLiveEquity,type LiveEquityHead} from "../lib/live-equity.ts";
+import {buildLiveReview,readLiveReviewPage} from '../lib/live-review.ts';
 import { resourceDay, rollResourceDay, RESOURCE_DAY_POLICY, type ResourceCounters } from "../lib/resource-day.ts";
 import {isTransientLiveReadErrorText,liveReadTimeoutDecision} from "../lib/live-read-resilience.ts";
 import { LIVE_TURNOVER_PREFIX, LIVE_TURNOVER_VERSION, initialTurnover, validateTurnover, nextFillWindow,
@@ -3557,6 +3558,23 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       return json({error:message==='INVALID_CURSOR'?'净值游标无效':'实盘净值暂不可用'},message==='INVALID_CURSOR'?400:message==='CURVE_BUSY'?429:503);}
   }
 
+  protected async privateLiveReview(url:URL) {
+    const now=Date.now(),live=this.runtime.live,sessionAt=live.activation?.enabledAt??0;
+    // Export uses existing state/cache only. Never launch the Gate history reader.
+    const cached=this.historyReader.view(this.liveSettlementCurrent(),this.liveRecordEpochAt()).history;
+    const review=buildLiveReview({live,account:this.liveSnapshotCache?.account,
+      accountAt:this.liveSnapshotCache?.checkedAt,cached,at:now});
+    if(url.searchParams.get('page')==='closed'){
+      const asOf=Number(url.searchParams.get('asOf'));
+      if(url.searchParams.get('session')!==String(sessionAt)
+        ||url.searchParams.get('account')!==String(review.context.accountUser??''))return json({error:'LIVE_REVIEW_ACCOUNT_OR_SESSION_CHANGED'},409);
+      if(asOf>now)return json({error:'INVALID_LIVE_REVIEW_CUTOFF'},400);
+      try{return json(await readLiveReviewPage(this.ctx.storage,{...review.context,asOf},url.searchParams.get('cursor'),cached));}
+      catch{return json({error:'LIVE_REVIEW_PAGE_UNAVAILABLE_OR_INVALID_CURSOR'},400);}
+    }
+    return json(review);
+  }
+
   protected async saveCheckpoint(now: number, force = false) {
     this.resetDailyCounters(now);
     if (!force && this.runtime.lastHeartbeatAt != null && now - this.runtime.lastHeartbeatAt < HEARTBEAT_MS) return;
@@ -3825,6 +3843,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             entryReady:quotes[symbol]?.entryReady===true,completedMinuteAt:minutePaths[symbol]?.at(-1)
               ?(minutePaths[symbol]!.at(-1)!.time+60)*1000:null,failure:this.runtime.feedFailures[symbol]??null}))},
         runtime:{reviewError:this.reviewDiagnosticError,lastSuccessAt:this.runtime.lastSuccessAt,lastError:this.runtime.lastError,
+          privateLiveReviewAvailable:true,
           compression:this.forwardCompression,
           liveAssessment:this.runtime.live.requestedEnabled?"CHECK_SESSION_EVIDENCE":"OWNER_OFF_NOT_A_COPY_FAILURE",
           liveSession:{requestedEnabled:this.runtime.live.requestedEnabled,operational:this.runtime.live.operational,
@@ -4082,6 +4101,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           maxOpenPositions: null, realtimeCapacity: FORWARD_EXECUTION_BBO_CAP, minuteConfirmationCapacity: FORWARD_MINUTE_CONFIRMATION_CAP, plannedMaxD1BilledWritesPerDay: 4_800 } });
     }
     if (path === "/live-history" && request.method === "GET") return json(await this.privateLiveHistory());
+    if (path === "/live-review" && request.method === "GET") return this.privateLiveReview(url);
     if (path === "/live-equity" && request.method === "GET") return this.privateLiveEquity(url);
     if (path === "/owner-status" && request.method === "GET") {
       await this.ensureAlarm();
@@ -4369,6 +4389,10 @@ const worker = {
     if (url.pathname === "/api/live/history" && request.method === "GET") {
       if(!await ownerAuthenticated(request,env))return json({error:"请先登录"},401);
       return env.MARKET_STREAM.getByName("primary").fetch("https://market-stream/live-history");
+    }
+    if (url.pathname === "/api/live/review" && request.method === "GET") {
+      if(!await ownerAuthenticated(request,env))return json({error:"请先登录"},401);
+      return env.MARKET_STREAM.getByName("primary").fetch(`https://market-stream/live-review${url.search}`);
     }
     if (url.pathname === "/api/live/equity" && request.method === "GET") {
       if(!await ownerAuthenticated(request,env))return json({error:"请先登录"},401);
