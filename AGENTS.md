@@ -1,3 +1,17 @@
+# Owner correction: optimize LIVE exits too — 2026-10-01
+
+Owner explicitly asks to optimize exits because actual PAPER profits exceed
+LIVE. Prioritize committed inverse source CLOSE/REDUCE when Gate exposure is
+confirmed, without waiting for balance/all-order reads. Keep complete snapshot
+authority for additions. Use existing fresh BBO for a bounded reduce-only IOC;
+after a known terminal close result, confirm actual residual and complete it
+immediately by reduce-only market. Never wait for PAPER exit price or add an
+independent inverse stop/target/timer. Durable identities survive unknown sends;
+no blind retries. Preserve frozen source/PAPER, manual sessions/switches and
+history. Event-driven residual reads/journals only; no extra market/alarm cadence.
+Include owner/member isolation, settlement honesty and existing resource gates.
+Reviewed-main deployment and advancing public receipt; no real test trades.
+
 # Owner correction: compact LIVE cards and favorable entry prices — 2026-10-01
 
 Owner requests continuing the interrupted LIVE display / unfavorable-copy fix.

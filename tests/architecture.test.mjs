@@ -82,7 +82,7 @@ test("LIVE execution infrastructure stays isolated and serialized after PAPER co
   assert.match(live,/throw new GateReadTimeoutError\(path\)/);
   const sync=worker.slice(worker.indexOf("protected async syncLive"),worker.indexOf("private suspendSymbol"));
   assert.match(sync,/desiredTrades=Object\.values\(desiredPortfolio\)\.sort/);
-  assert.match(sync,/let snapshot=await client\.snapshot\(\)/);
+  assert.match(sync,/let snapshot=await client\.snapshot\(\(positions,at\)=>this\.prioritizeCommittedSourceCloses\(client,positions,at\)\)/);
   assert.match(sync,/entry\.exchangeOrderId = await client\.createEntry\(intent,submissionStillAllowed\)/);
   assert.doesNotMatch(sync,/staged\.length>=2/);
   const alarm=worker.slice(worker.indexOf("  async alarm(info?"),worker.indexOf("  async fetch(request:",worker.indexOf("  async alarm(info?")));

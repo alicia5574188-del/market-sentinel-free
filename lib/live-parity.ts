@@ -44,6 +44,8 @@ export type MirrorReceipt = {
   sourceAllocationRiskRate?:number; exitPolicy?:typeof INVERSE_LIVE_EXIT_POLICY;
   retiredProtectionTags?:string[]; protectionRemovedAt?:number;
   entryPricePolicy?:'favorable-ioc-v1'; entryLimitPrice?:number;
+  exitExecutionPolicy?:'priority-bounded-exit-v1';sourceExitPrice?:number|null;exitObservedAt?:number;
+  exitSubmittedAt?:number;exitDelayMs?:number;exitLimitPrice?:number|null;
 };
 export type MirrorBinding = { version: typeof LIVE_PARITY_VERSION; sourceAtCopy: Trade;
   receipt: MirrorReceipt; sourceAtClose?: Trade; actual?: unknown };
@@ -277,6 +279,7 @@ export function mirrorCoverage(state:ForwardState|null,live:{requestedEnabled:bo
     accountRole:state?.inverseTrial?'INVERSE_PAPER':'CURRENT_PAPER',
     nativeProtectionPolicy:state?.inverseTrial?INVERSE_LIVE_EXIT_POLICY:null,
     entryPricePolicy:state?.inverseTrial?'favorable-ioc-v1':LIVE_ENTRY_DRIFT_POLICY,
+    exitExecutionPolicy:state?.inverseTrial?'priority-bounded-exit-v1':null,
     instructionParity:!sourceError,exactFillsGuaranteed:false,sourceCount:sources.length,copiedCount:rows.filter(r=>["COPIED","DEVIATION"].includes(r.status)).length,
     pendingCount:rows.filter(r=>r.status==="PENDING").length,rows,error:sourceError,
     executionPolicy:LIVE_SESSION_VERSION,newOrdersOnly:true,enabledAt:live.activation?.enabledAt??null,

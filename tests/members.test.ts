@@ -357,6 +357,16 @@ test("program-volume attribution excludes another program/manual tag even when r
   const rows=await aa.engine.turnoverRows([{id:"1",text:liveEntryTag("mine")},{id:"2",text:liveExitTag("not-mine")},{id:"3",text:"manual"}]);
   assert.equal(rows[0].text,liveEntryTag("mine"));assert.equal(rows[1].text,"");assert.equal(rows[2].text,"");
 }));
+test("member residual exit tags persist only within their own account attribution",()=>clock(async()=>{
+  const h=await harness(),a=await h.issue(),b=await h.issue(),aa=await h.member(a.id),bb=await h.member(b.id);
+  const p={...trade('my-exit'),currentStop:98,sourceExit:{last:{tag:liveExitTag('my-exit:exit:2')}}};
+  aa.engine.runtime.live.positions[p.symbol]=p;await aa.engine.saveCheckpoint(now,true);
+  const tag=p.sourceExit.last.tag;
+  assert.equal(aa.storage.data.get(`member-program-tag:${tag}`),true);
+  assert.equal(bb.storage.data.has(`member-program-tag:${tag}`),false);
+  const own=await aa.engine.turnoverRows([{id:'1',text:tag}]),other=await bb.engine.turnoverRows([{id:'1',text:tag}]);
+  assert.equal(own[0].text,tag);assert.equal(other[0].text,'');
+}));
 test("corrupt execution checkpoint fails closed without resetting a member identity",()=>clock(async()=>{
   const h=await harness(),a=await h.issue(),aa=await h.member(a.id);await aa.engine.saveCheckpoint(now,true);
   const saved=aa.storage.data.get("member-execution:v1:checkpoint") as any;saved.bytes[0]^=1;

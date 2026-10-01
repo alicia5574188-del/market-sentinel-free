@@ -1,4 +1,5 @@
 import {reconcileSourceReduction,sourceReductionTarget,type SourceReduction} from "../lib/live-reduction.ts";
+import {reconcileSourceClose,sourceExitFillPrice,type SourceExit} from '../lib/live-exit.ts';
 import { LiveHistoryReader } from "../lib/live-history-reader.ts";
 /// <reference types="@cloudflare/workers-types" />
 
@@ -18,7 +19,7 @@ import { runtimeReady, type RuntimeHealthShape } from "../lib/runtime-health.ts"
 import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, gateMarkedEquity, gatePositionValuation, isGateReadTimeoutError, isGateTransportTimeoutError, LiveEntrySizingError, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveOrder, type GateLiveOrderSnapshot, type GateLiveSnapshot, type LiveEntrySizingCode } from "../lib/gate-live.ts";
 import { LIVE_SESSION_VERSION, establishLiveScale, reconcileLiveScale, startLiveSession, sourceAfterEnable, sameLiveSession, fenceLiveSourcePolicy, type LiveSession } from "../lib/live-session.ts";
 import {liveProtectionPrice,isInverseLiveReceipt,INVERSE_LIVE_EXIT_POLICY} from '../lib/live-source-policy.ts';
-import type { GateSizeRules, SizeDiagnostic } from "../lib/gate-quantity.ts";
+import {quantizeMirrorNotional,type GateSizeRules,type SizeDiagnostic} from "../lib/gate-quantity.ts";
 import { encryptGateCredentials, gateKeyHint, normalizeGateCredentials, type GateCredentials } from "../lib/credential-vault.ts";
 import { credentialMetadata } from "../lib/gate-readonly.ts";
 import { MEMBERS_VERSION, digestMember, clearMemberCookie } from "../lib/member-auth.ts";
@@ -66,7 +67,7 @@ import { LIVE_PARITY_VERSION, LIVE_PARITY_PREFIX, buildProportionalMirror, forwa
   sourceLifecycle, mirrorSourceFresh, mirrorCoverage, liveEntryDriftGuard,
   type MirrorSourceTrade, type MirrorReceipt, type MirrorBinding } from "../lib/live-parity.ts";
 import {buildReviewSnapshot, readReviewArchivePage} from "../lib/research-snapshot.ts";
-import {inverseEntryPriceLimit,entryPriceFits} from '../lib/live-entry-price.ts';
+import {inverseEntryPriceLimit,entryPriceFits,liveExitPriceLimit} from '../lib/live-entry-price.ts';
 import {REVIEW_JOURNAL_KEY, appendReviewEvents, captureTradeReviews, initialReviewJournal, normalizeReviewJournal,
   recordDiscoveryReview, type ReviewEvent} from "../lib/review-trace.ts";
 declare const __STRATEGY_FINGERPRINT__: string;
@@ -204,7 +205,7 @@ type LiveEntry = {
   mirrorSourceId?: string;
 };
 
-export type LivePosition = {sourceReduction?:SourceReduction} & PaperPosition & Partial<ReturnType<typeof gatePositionValuation>> & {
+export type LivePosition = {sourceReduction?:SourceReduction;sourceExit?:SourceExit} & PaperPosition & Partial<ReturnType<typeof gatePositionValuation>> & {
   exchangeSize: number;
   leverage: number;
   margin: number;
@@ -2444,9 +2445,81 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     } finally { if(this.liveSyncWork===work)this.liveSyncWork=null; }
   }
 
+  private async executeCommittedSourceClose(client:GateLiveClient,position:LivePosition,contracts:number,observedAt:number){
+    const lifecycle=this.currentMirrorSource(position.id);
+    if(!isInverseLiveReceipt(position.parity)||lifecycle.status!=='CLOSED')return;
+    if(position.exitRequestedAt&&!position.sourceExit)return; // retain an older in-flight close identity
+    const source=lifecycle.trade,started=Date.now();
+    let limit:{price:string;contractsText:string}|null=null;
+    if(!position.sourceExit&&contracts>0&&this.mirrorQuoteReady(position.symbol,started)){
+      try{
+        const q=this.runtime.evidence[position.symbol],size=quantizeMirrorNotional(contracts,1,1,this.runtime.contractMeta[position.symbol]);
+        if(size.quantity>0&&Math.abs(size.quantity-contracts)<=Math.max(1e-9,contracts*1e-8))
+          limit={price:liveExitPriceLimit(position.side,q.bestBid??0,q.bestAsk??0,this.runtime.tickSize[position.symbol]),contractsText:size.quantityText};
+      }catch{/* Missing/stale price metadata cannot delay a committed exit. */}
+    }
+    const stillClosed=()=>this.runtime.live.positions[position.symbol]?.id===position.id&&this.currentMirrorSource(position.id).status==='CLOSED';
+    await reconcileSourceClose({id:position.id,sourceClosedAt:source.closedAt??started,sourceExitPrice:source.exitPrice,
+      actualContracts:contracts,observedAt,now:started,limit,prior:position.sourceExit,stillClosed,definitiveRejection:definitiveGateRejection,
+      persist:async state=>{
+        position.sourceExit=state;position.exitRequestedAt??=state.observedAt;
+        position.exitReason=source.exitReason??'PAPER_SOURCE_EXIT';position.exitOrderId=state.last.orderId;
+        Object.assign(position.parity!,{sourceClosedAt:source.closedAt,sourceExitReason:source.exitReason,
+          exitExecutionPolicy:state.version,sourceExitPrice:source.exitPrice,exitObservedAt:state.observedAt,
+          exitSubmittedAt:state.last.submittedAt,exitDelayMs:Math.max(0,state.last.submittedAt-state.sourceClosedAt),
+          exitLimitPrice:state.last.kind==='LIMIT'?Number(state.last.price):null});
+        this.runtime.live.positions[position.symbol]=position;await this.saveCheckpoint(Date.now(),true);
+      },
+      inspect:(tag,id)=>client.inspectEntry('LIMIT',position.symbol,tag,id),
+      remaining:async()=>{
+        const actual=await client.position(position.symbol),signed=Number(actual.size);
+        if(!Number.isFinite(signed)||(signed!==0&&Math.sign(signed)!==(position.side==='LONG'?1:-1)))
+          throw new Error(`${position.symbol} 退出仓位方向/数量未确认，保留订单身份`);
+        return{contracts:Math.abs(signed),observedAt:Date.now()};
+      },
+      submit:(tag,price,guard)=>client.sourceExit(position.symbol,position.side,tag,price,guard),
+    });
+  }
+
+  private async executeCommittedSourceReduction(client:GateLiveClient,position:LivePosition,contracts:number,observedAt:number){
+    const source=this.currentMirrorSource(position.id);
+    if(position.exitRequestedAt||!position.parity||source.status!=='OPEN'||!source.trade.realization)return;
+    let price='0';
+    const first=!position.sourceReduction||position.sourceReduction.sourceSequence!==source.trade.realization.sequence;
+    if(first&&isInverseLiveReceipt(position.parity)&&this.mirrorQuoteReady(position.symbol)){
+      try{const q=this.runtime.evidence[position.symbol];price=liveExitPriceLimit(position.side,q.bestBid??0,q.bestAsk??0,this.runtime.tickSize[position.symbol]);}catch{/* immediate market fallback */}
+    }
+    await reconcileSourceReduction({source:source.trade,receipt:position.parity,actualContracts:contracts,
+      observedAt,now:Date.now(),spec:this.runtime.contractMeta[position.symbol],prior:position.sourceReduction,
+      stillOpen:()=>!position.exitRequestedAt&&this.currentMirrorSource(position.id).status==='OPEN',
+      inspect:(tag,id)=>client.inspectEntry('LIMIT',position.symbol,tag,id),
+      persist:async reduction=>{position.sourceReduction=reduction;this.runtime.live.positions[position.symbol]=position;await this.saveCheckpoint(Date.now(),true);},
+      submit:(text,tag,guard)=>client.reducePosition(position.symbol,position.side,text,tag,guard,price)});
+  }
+
+  private async prioritizeCommittedSourceCloses(client:GateLiveClient,positions:import('../lib/gate-live.ts').GateLivePosition[],observedAt:number){
+    const pending=positions.flatMap(actual=>{
+      const p=this.runtime.live.positions[actual.contract??''],signed=Number(actual.size);
+      const source=p?this.currentMirrorSource(p.id):null;
+      return p?.status==='OPEN'&&isInverseLiveReceipt(p.parity)&&source?.status==='CLOSED'
+        &&Number.isFinite(signed)&&signed!==0&&Math.sign(signed)===(p.side==='LONG'?1:-1)
+        &&(!p.exitRequestedAt||p.sourceExit)?[{p,contracts:Math.abs(signed),at:source.trade.closedAt??0}]:[];
+    }).sort((a,b)=>a.at-b.at);
+    // A fault in one symbol cannot hide independent committed exits.
+    const errors:unknown[]=[];
+    for(const item of pending)try{await this.executeCommittedSourceClose(client,item.p,item.contracts,observedAt);}catch(error){errors.push(error);}
+    for(const actual of positions){
+      const p=this.runtime.live.positions[actual.contract??''],signed=Number(actual.size);
+      if(!p||p.status!=='OPEN'||!isInverseLiveReceipt(p.parity)||!Number.isFinite(signed)||signed===0
+        ||Math.sign(signed)!==(p.side==='LONG'?1:-1))continue;
+      try{await this.executeCommittedSourceReduction(client,p,Math.abs(signed),observedAt);}catch(error){errors.push(error);}
+    }
+    if(errors.length)throw errors[0];
+  }
+
   private async syncLiveOnce(now: number, initialEnable = false, forceEntryCleanup = false) {
-    // Restore the 2026-09-20 primary LIVE path: one complete Gate snapshot is
-    // the execution authority for account, positions, orders and protection.
+    // Full account/order authority remains mandatory for additions. Committed
+    // source exits can use verified exposure before unrelated reads finish.
     this.reconcileCanonicalMirror(now);
     await this.ensureLiveActivationSourceFence(now);
     const activePositions = Object.values(this.runtime.live.positions).some((position) => position?.status === "OPEN");
@@ -2454,7 +2527,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       (!["FILLED", "CANCELLED"].includes(entry.status) || this.liveEntryAwaitingReconcile(entry)));
     if (!this.runtime.live.requestedEnabled && !activePositions && !activeEntries && !initialEnable && !forceEntryCleanup&&!this.inverseProtectionPending()) return;
     const client = await this.gateLive();
-    let snapshot=await client.snapshot();
+    let snapshot=await client.snapshot((positions,at)=>this.prioritizeCommittedSourceCloses(client,positions,at));
     const protectionCleanup=await this.cancelInverseProtection(client,snapshot);
     snapshot=protectionCleanup.snapshot;
     this.liveOrderSnapshotCache={orders:structuredClone(snapshot.orders),priceOrders:structuredClone(snapshot.priceOrders),checkedAt:snapshot.checkedAt};
@@ -2659,6 +2732,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         position.parity.sourceClosedAt=lifecycle.trade.closedAt;
         position.parity.sourceExitReason=lifecycle.trade.exitReason;
       }
+      if(isInverseLiveReceipt(position.parity)&&sourceClosed&&(!position.exitRequestedAt||position.sourceExit)){
+        await this.executeCommittedSourceClose(client,position,Math.abs(exchangeSize),snapshot.positionsCheckedAt??snapshot.checkedAt);
+        continue; // the journal owns this close, including partial/unknown results
+      }
       if (!position.exitRequestedAt && (position.parity?sourceClosed:liveMirrorExitRequired(position.id, selectedTrade))) {
         position.exitRequestedAt = now;
         position.exitReason = sourceClosed?lifecycle!.trade!.exitReason??"PAPER_SOURCE_EXIT":"PAPER_PORTFOLIO_EXIT";
@@ -2678,12 +2755,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         await this.ensureLiveStop(client, position, snapshot.priceOrders);
         const reducingSource=position.parity?this.currentMirrorSource(position.id):null;
         if(!position.exitRequestedAt&&position.parity&&reducingSource?.status==="OPEN"&&reducingSource.trade.realization){
-          await reconcileSourceReduction({source:reducingSource.trade,receipt:position.parity,actualContracts:Math.abs(exchangeSize),
-            observedAt:snapshot.checkedAt,now:Date.now(),spec:this.runtime.contractMeta[symbol],prior:position.sourceReduction,
-            stillOpen:()=>!position!.exitRequestedAt&&this.currentMirrorSource(position!.id).status==="OPEN",
-            inspect:(tag,id)=>client.inspectEntry("MARKET",symbol,tag,id),
-            persist:async reduction=>{position!.sourceReduction=reduction;this.runtime.live.positions[symbol]=position;await this.saveCheckpoint(Date.now(),true);},
-            submit:(text,tag,guard)=>client.reducePosition(symbol,position!.side,text,tag,guard)});
+          await this.executeCommittedSourceReduction(client,position,Math.abs(exchangeSize),snapshot.positionsCheckedAt??snapshot.checkedAt);
         }
         if (!position.parity && !accountError && (this.liveOpenRisk() > equity * PORTFOLIO_RISK_CAP + 1e-8
           || this.liveDirectionalRisk(position.side) > equity * CORRELATED_DIRECTION_RISK_CAP + 1e-8)) {
@@ -2708,7 +2780,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       let verifiedExit:GateLiveOrder|null=null;
       if(position.parity){
         try {
-          verifiedExit=await client.inspectEntry("MARKET",symbol,liveExitTag(position.id),position.exitOrderId??null);
+          verifiedExit=await client.inspectEntry("MARKET",symbol,position.sourceExit?.last.tag??liveExitTag(position.id),position.exitOrderId??null);
           for(const stopRef of [
             {id:position.stopOrderId,tag:position.stopTag},
             {id:position.replacementStopOrderId,tag:position.replacementStopTag},
@@ -2730,7 +2802,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         position.replacementStopTag?liveOrderId(snapshot.priceOrders.find(order=>liveOrderTag(order)===position.replacementStopTag)??{}):null,
       ].filter((id):id is string=>!!id))];
       for(const stopId of stopIds)await client.cancelOrder("PRICE_TRIGGER",stopId);
-      const verifiedPrice=Number(verifiedExit?.fill_price),verified=Number.isFinite(verifiedPrice)&&verifiedPrice>0;
+      const verifiedPrice=position.sourceExit?sourceExitFillPrice(position.sourceExit)??NaN:Number(verifiedExit?.fill_price),
+        verified=Number.isFinite(verifiedPrice)&&verifiedPrice>0;
       const closed:LivePosition = { ...position, status: "CLOSED", exitAt: now,
         exitPrice: position.parity?(verified?verifiedPrice:undefined):this.runtime.evidence[symbol]?.midpoint??position.entryPrice,
         actualExitPriceVerified:position.parity?verified:undefined,
