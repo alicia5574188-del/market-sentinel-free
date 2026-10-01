@@ -1,4 +1,32 @@
-# 2026-10-02 — PAPER curve visibility, release pending
+# 2026-10-02 — overview-only PAPER/LIVE curves, verification
+
+Base main99b9e44. Removed chart from simulated page; overview has original PAPER
+and separate native LIVE curves, same controls/projection cache. Fresh existing
+Gate account marks sampled at most once per five minutes and committed atomically
+with the existing owner/member checkpoint; separate tiny rows and optional write
+reservation keep history out of hot checkpoints and execution admission. LIVE
+activation/session and account-scoped cache isolate reset-on-reenable; OFF freezes
+the last saved session. GET is private, member-local, bounded and read-only.
+Focused25 cases pass (UI17, native-curve8), including native amount/restoration,
+OFF/ON, incremental/disk cache, owner/member checkpoint atomic failures, optional
+budget, concurrent read watermark and HTTP identity. Full local gates pass:
+direct331, Forward78+compat4, equity73, members50, LIVE196, feed workerd, build,
+typecheck, architecture/migration43, lint (15 existing warnings) and dry-run.
+Before: account1790843524083, owner/operational ON, financial save1790890937881,
+heartbeat1790890942079, build99b9e44, runtime/storage errors null. Reviewed PR/main
+release and two production receipts pending. Public curve status reveals only
+capability/readiness/save time, never private equity or account identity.
+No private test trade or switch action; no browser visual QA claimed.
+
+# 2026-10-02 — PAPER curve visibility, done
+
+PR599 merged; exact main99b9e4402eda1c76362841b146218a4586887ab1 deployed.
+PR CI36928520154 and main release36928745397 verify/deploy succeed. Public
+page and updated client asset return200 with the PAPER labels. Two production
+reads retain account1790843524083 and owner/operational ON, with runtime/storage
+errors null. Financial saves advance1790890167220 →1790890213220 and heartbeat
+1790890138288 →1790890201803. No reset, switch action or real test order.
+Durable completion receipt is in PR599. No browser visual QA claimed.
 
 Base main e4e01d5. LIVE ON previously hid the original PAPER equity chart through
 the dashboard's OFF-only branch. The original ledger/archive remains intact.
@@ -12,8 +40,8 @@ Locked dependency install and local verification pass: UI14, direct328,
 Forward78+compat4, equity65, members50, LIVE196, feed workerd, build/typecheck,
 architecture/migration43, lint (15 existing warnings), dry-run and diff check.
 Before receipt: deployed e4e01d5, same account1790843524083, owner requested and
-operational ON, no runtime error; financial save1790889613987. Next: reviewed
-PR CI, exact-main release and two public advancing-state receipts. No reset,
+operational ON, no runtime error; financial save1790889613987. Reviewed
+PR CI, exact-main release and two public advancing-state receipts pass. No reset,
 switch action or test trade. No browser visual QA claimed.
 
 # 2026-10-01 — LIVE-authoritative execution/display, release pending

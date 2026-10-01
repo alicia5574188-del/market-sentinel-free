@@ -15,7 +15,7 @@
     "test:live-parity": "node --experimental-strip-types --test tests/adaptive-ten-live.test.ts tests/live-parity.test.ts tests/gate-live.test.ts tests/live-read-resilience.test.ts tests/live-reduction.test.ts tests/live-exit.test.ts tests/live-account-view.test.ts tests/inverse-live.test.ts",
     "test:members": "node --experimental-strip-types --test tests/members.test.ts",
     "test:members:workerd": "node tests/member-workerd-smoke.mjs",
-    "test:equity": "node --experimental-strip-types --test tests/equity-curve.test.ts tests/equity-cache.test.ts tests/archive-equity-contract.test.ts",
+    "test:equity": "node --experimental-strip-types --test tests/equity-curve.test.ts tests/equity-cache.test.ts tests/archive-equity-contract.test.ts tests/live-equity.test.ts",
     "test:feed:workerd": "node tests/gate-stream-workerd-smoke.mjs",
     "test": "npm run test:equity && npm run test:members && npm run test:live-parity && npm run test:feed:workerd && npm run build && node --test tests/architecture.test.mjs tests/migration.test.mjs",
     "test:forward": "npm run test:forward-compat && node --experimental-strip-types --test tests/market-intelligence-engine.test.ts tests/forward-family-experiment.test.ts tests/forward-structural-interrupt.test.ts tests/forward-compact-store.test.ts tests/forward-snapshot-replay.test.mjs",

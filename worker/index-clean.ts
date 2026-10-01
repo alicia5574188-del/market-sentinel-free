@@ -59,6 +59,7 @@ import { nextProtectionWriteBudget, readProtectionWriteBudget, protectionWriteBu
   PRIMARY_PLANNED_DO_ROWS, TWO_MEMBER_PLANNED_DO_ROWS, type ProtectionWriteBudget } from "../lib/forward-write-budget.ts";
 import { EquityReader } from "../lib/equity-reader.ts";
 import { EQUITY_CURVE_VERSION } from "../lib/equity-curve.ts";
+import {LIVE_EQUITY_VERSION,LiveEquityReader,prepareLiveEquity,type LiveEquityHead} from "../lib/live-equity.ts";
 import { resourceDay, rollResourceDay, RESOURCE_DAY_POLICY, type ResourceCounters } from "../lib/resource-day.ts";
 import {isTransientLiveReadErrorText,liveReadTimeoutDecision} from "../lib/live-read-resilience.ts";
 import { LIVE_TURNOVER_PREFIX, LIVE_TURNOVER_VERSION, initialTurnover, validateTurnover, nextFillWindow,
@@ -241,6 +242,7 @@ type LiveAuditEvent = {
 
 type LiveRuntime = {
   accountMark?:LiveAccountMark|null;
+  equityCurve?:LiveEquityHead|null;
   turnoverAccountKey?: string;
   recordEpochVersion?: string | null;
   recordEpochAt: number | null;
@@ -541,6 +543,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private forwardProtectionBudget: ProtectionWriteBudget | null = null;
   private forwardCompression: Awaited<ReturnType<typeof prepareForwardWrite>>["compression"] | null = null;
   private equityReader = new EquityReader();
+  private liveEquityReader = new LiveEquityReader();
+  private liveEquityWritePending=false;
   protected turnoverState: TurnoverState | null = null;
   protected turnoverError: string | null = null;
   protected turnoverAccountKey: string | null = null;
@@ -3533,14 +3537,35 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return{successes,requests:due.length,criticalChanged:false};
   }
 
+  protected prepareLiveEquityWrite(now:number) {
+    if(this.liveEquityWritePending)return null;
+    const live=this.runtime.live,prepared=prepareLiveEquity(live.accountMark,live.requestedEnabled,
+      live.activation?.enabledAt??0,live.equityCurve,now);
+    if(!prepared)return null;
+    const reservation=this.reserveNonAlarmWrites(1,256);
+    if(!reservation)return null;
+    this.liveEquityWritePending=true;
+    return {...prepared,reservation:{finish:(committed:boolean)=>{reservation.finish(committed);this.liveEquityWritePending=false;}}};
+  }
+
+  protected async privateLiveEquity(url:URL) {
+    const sessionAt=this.runtime.live.activation?.enabledAt??0,head=this.runtime.live.equityCurve;
+    if(url.searchParams.get('session')!==String(sessionAt))return json({error:'LIVE_SESSION_CHANGED'},409);
+    if(!head||head.sessionAt!==sessionAt)return json({error:'实盘净值尚未记录'},503);
+    try{return json(await this.liveEquityReader.read(this.ctx.storage,head,url.searchParams.get('cursor'),Date.now(),url.searchParams.get('after')));}
+    catch(error){const message=error instanceof Error?error.message:'';
+      return json({error:message==='INVALID_CURSOR'?'净值游标无效':'实盘净值暂不可用'},message==='INVALID_CURSOR'?400:message==='CURVE_BUSY'?429:503);}
+  }
+
   protected async saveCheckpoint(now: number, force = false) {
     this.resetDailyCounters(now);
     if (!force && this.runtime.lastHeartbeatAt != null && now - this.runtime.lastHeartbeatAt < HEARTBEAT_MS) return;
     const openCount = Object.values(this.runtime.positions).filter((position) => position?.status === "OPEN").length;
     const journal=new Map(this.liveJournal);
+    const curve=this.prepareLiveEquityWrite(now);
     const writes=1+journal.size,critical=force||journal.size>0;
     const reservation=critical?this.reserveCriticalWrites(writes):this.reserveNonAlarmWrites(writes,openCount);
-    if (!reservation) return;
+    if (!reservation) {curve?.reservation.finish(false);return;}
     try {
       // Full immutable source snapshots live outside the bounded hot checkpoint.
       // A binding and its entry reservation commit atomically BEFORE a Gate call.
@@ -3548,18 +3573,19 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         if(!value)return value;
         const {parity,...rest}=value;void parity;return rest;
       };
-      const checkpoint = { ...this.runtime, live:{...this.runtime.live,
+      const checkpoint = { ...this.runtime, live:{...this.runtime.live,...(curve?{equityCurve:curve.head}:{}),
         entries:Object.fromEntries(Object.entries(this.runtime.live.entries).map(([k,e])=>[k,compact(e)])),
         positions:Object.fromEntries(Object.entries(this.runtime.live.positions).map(([k,p])=>[k,compact(p)]))},
         analysisMs: [], nonAlarmWrites: this.runtime.nonAlarmWrites + this.nonAlarmPendingWrites,
         criticalWrites: this.runtime.criticalWrites + this.criticalPendingWrites, lastHeartbeatAt: now };
       await this.ctx.storage.transaction(async transaction=>{
-        await transaction.put({checkpoint,...Object.fromEntries(journal)});
+        await transaction.put({checkpoint,...Object.fromEntries(journal),...(curve?{[curve.key]:curve.value}:{})});
       });
       for(const[key,value]of journal)if(this.liveJournal.get(key)===value)this.liveJournal.delete(key);
       reservation.finish(true);
+      if(curve){this.runtime.live.equityCurve=curve.head;curve.reservation.finish(true);}
       this.runtime.lastHeartbeatAt = now;
-    } finally {reservation.finish(false);}
+    } finally {reservation.finish(false);curve?.reservation.finish(false);}
   }
 
   private async refreshAdaptiveCandles(now=Date.now()){
@@ -3857,6 +3883,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         buildSha: FORWARD_BUILD_SHA,
         liveMirror: {...this.liveMirrorView(),rows:undefined},
         liveTurnover:this.turnoverStatus(),
+        liveEquityCurve:{version:LIVE_EQUITY_VERSION,sampleMs:300_000,
+          available:!!this.runtime.live.equityCurve&&this.runtime.live.equityCurve.sessionAt===this.runtime.live.activation?.enabledAt,
+          lastSavedAt:this.runtime.live.equityCurve?.sessionAt===this.runtime.live.activation?.enabledAt?this.runtime.live.equityCurve?.lastAt??null:null},
         resourceAccounting:{policy:RESOURCE_DAY_POLICY,day:this.runtime.utcDay,nonAlarmWrites:this.runtime.nonAlarmWrites,
           cap:NON_ALARM_WRITE_CAP,pendingWrites:this.nonAlarmPendingWrites??0,criticalWrites:this.runtime.criticalWrites,
           criticalPendingWrites:this.criticalPendingWrites??0,financialAdmission:"independent-of-optional-cap",
@@ -4053,6 +4082,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           maxOpenPositions: null, realtimeCapacity: FORWARD_EXECUTION_BBO_CAP, minuteConfirmationCapacity: FORWARD_MINUTE_CONFIRMATION_CAP, plannedMaxD1BilledWritesPerDay: 4_800 } });
     }
     if (path === "/live-history" && request.method === "GET") return json(await this.privateLiveHistory());
+    if (path === "/live-equity" && request.method === "GET") return this.privateLiveEquity(url);
     if (path === "/owner-status" && request.method === "GET") {
       await this.ensureAlarm();
       this.launchTurnoverWork(Date.now());
@@ -4339,6 +4369,10 @@ const worker = {
     if (url.pathname === "/api/live/history" && request.method === "GET") {
       if(!await ownerAuthenticated(request,env))return json({error:"请先登录"},401);
       return env.MARKET_STREAM.getByName("primary").fetch("https://market-stream/live-history");
+    }
+    if (url.pathname === "/api/live/equity" && request.method === "GET") {
+      if(!await ownerAuthenticated(request,env))return json({error:"请先登录"},401);
+      return env.MARKET_STREAM.getByName("primary").fetch(`https://market-stream/live-equity${url.search}`);
     }
     if (url.pathname === "/api/live/status" && request.method === "GET") return ownerLiveStatus(request, env);
     if (url.pathname === "/api/live/source" && request.method === "GET") return ownerLiveSource(request, env);

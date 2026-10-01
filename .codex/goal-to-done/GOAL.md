@@ -1,3 +1,14 @@
+# 2026-10-02 — overview-only independent PAPER/LIVE curves
+
+Show original PAPER history only on overview alongside a separate native Gate
+equity curve with the same chart controls and persistent/incremental cache.
+LIVE OFF preserves the last saved curve for viewing; the next OFF-to-ON establishes
+a new session/baseline, immediately hiding prior-session data. Use existing
+activation and checkpoint cadence, no Gate query/alarm/trade/strategy/account
+reset. Bounded private history rows, optional write guard and owner/member
+isolation; test restoration, invalid marks, reset, no-gap fabrication and actual
+checkpoint/HTTP behavior, then reviewed-main deployment/continuity receipts.
+
 # 2026-10-02 — original PAPER curve visible while LIVE is enabled
 
 Keep the original simulated equity/history curve visible on overview and the

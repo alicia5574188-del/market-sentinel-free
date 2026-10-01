@@ -23,6 +23,7 @@ export type LiveEntry = { planId: string; symbol: string; side: "LONG" | "SHORT"
   leverage: number; margin: number; lastError: string | null; parity?:MirrorReceipt };
 export type LiveRuntime = { requestedEnabled: boolean; operational: boolean; changedAt: number | null;
   accountMark?:import('./live-account-view.ts').LiveAccountMark|null;
+  equityCurve?:import('./live-equity.ts').LiveEquityHead|null;
   turnover?:ReturnType<typeof turnoverView>;
   activation?: LiveSession | null;
   lastSyncAt: number | null; lastError: string | null; equity: number | null; available: number | null;

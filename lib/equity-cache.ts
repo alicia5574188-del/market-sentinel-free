@@ -3,7 +3,8 @@ import {EQUITY_CURVE_VERSION,type CurveContext,type CurvePage,type EquityPoint} 
 /** Browser-only projection cache. Never imports the Worker, trading or credentials.
  * A Dashboard owns one instance; destroying a chart tab does not destroy history.
  * localStorage retains the projection across app/browser restarts. Authentication
- * is still required before configure; no session, API key or LIVE state is stored. */
+ * is still required before configure; only curve projections are stored, never
+ * authentication, API keys, orders or executable LIVE state. */
 export const EQUITY_CACHE_VERSION="incremental-persistent-v2";
 const PERSISTENT_V1="incremental-persistent-v1";
 const LEGACY_VERSION="incremental-session-v1";
@@ -12,7 +13,8 @@ const PREFIX="sentinel:equity-cache:v1:";
 // A failed/quota-exceeded write retains the last good snapshot and its cursors.
 const LIMIT=8_000_000;
 type BrowserStorage=Pick<Storage,"getItem"|"setItem"|"removeItem"|"key"|"length">;
-type Options={fetch?:typeof fetch;now?:()=>number;pause?:()=>Promise<void>;storage?:()=>BrowserStorage|null;legacyStorage?:()=>BrowserStorage|null};
+type Options={fetch?:typeof fetch;now?:()=>number;pause?:()=>Promise<void>;storage?:()=>BrowserStorage|null;legacyStorage?:()=>BrowserStorage|null;
+  endpoint?:string;validCursor?:(s:string)=>boolean};
 export type EquityHistory={account:number;points:EquityPoint[];cursor:string|null;done:boolean;
   coveredTo:number|null;loaded:boolean;newestCursor:string|null;checkedCycle:number;
   latestAt:number;catchingUp:boolean;loading:boolean;error:string|null;cacheNotice:string|null};
@@ -31,10 +33,13 @@ export class EquityHistoryCache {
   private listeners=new Set<()=>void>();private flight:Promise<void>|null=null;private controller:AbortController|null=null;
   private lastAttempt=-Infinity;private blocked=false;
   private request:typeof fetch;private now:()=>number;private pause:()=>Promise<void>;private storage:()=>BrowserStorage|null;private legacyStorage:()=>BrowserStorage|null;
+  private endpoint:string;private cursorOK:(s:unknown)=>s is string;
   constructor(options:Options={}){
     this.request=options.fetch??((...args)=>fetch(...args));this.now=options.now??Date.now;
     this.pause=options.pause??(()=>new Promise(r=>setTimeout(r,700)));this.storage=options.storage??browserStorage;
     this.legacyStorage=options.legacyStorage??legacyBrowserStorage;
+    this.endpoint=options.endpoint??'/api/forward/equity';
+    this.cursorOK=(s:unknown):s is string=>typeof s==='string'&&(options.validCursor??cursorOK)(s);
   }
   getSnapshot=()=>this.state;
   subscribe=(listener:()=>void)=>{this.listeners.add(listener);return()=>{this.listeners.delete(listener);};};
@@ -54,7 +59,7 @@ export class EquityHistoryCache {
         const raw=source()?.getItem(key);
         if(raw&&raw.length<=LIMIT){
           const s=JSON.parse(raw);
-          const validCursor=(v:unknown)=>v===null||(cursorOK(v)&&Number(v.split(":")[3])>=context.startedAt);
+          const validCursor=(v:unknown)=>v===null||(this.cursorOK(v)&&Number(v.split(":")[3])>=context.startedAt);
           if((s.version===EQUITY_CACHE_VERSION||s.version===PERSISTENT_V1||s.version===LEGACY_VERSION)
             &&s.account===context.startedAt&&s.initialEquity===context.initialEquity
             &&Array.isArray(s.points)&&validCursor(s.cursor)&&validCursor(s.newestCursor)
@@ -139,7 +144,7 @@ export class EquityHistoryCache {
         const timeout=setTimeout(()=>controller.abort(),12_000);
         let page:CurvePage;
         try{
-          const response=await this.request(`/api/forward/equity${query}`,{credentials:"same-origin",cache:"no-store",signal:controller.signal});
+          const response=await this.request(`${this.endpoint}${this.endpoint.includes('?')?query.replace('?','&'):query}`,{credentials:"same-origin",cache:"no-store",signal:controller.signal});
           if(epoch!==this.epoch)return;
           if(response.status===401||response.status===403){
             // Expired login hides the projection and stops requests, but does not
@@ -166,12 +171,12 @@ export class EquityHistoryCache {
           const old=points.get(p.at);if(old&&old.equity!==p.equity)throw new Error("历史净值核对不一致；保留原记录，暂不更新建议。");
           if(!old)points.set(p.at,p);
         }
-        const validCursor=(v:unknown)=>v===null||(cursorOK(v)&&Number(v.split(":")[3])>=ctx.startedAt);
+        const validCursor=(v:unknown)=>v===null||(this.cursorOK(v)&&Number(v.split(":")[3])>=ctx.startedAt);
         if(!validCursor(page.nextCursor)||!validCursor(page.newestCursor??null)
           ||(page.scannedTo!==null&&(!finite(page.scannedTo)||page.scannedTo<ctx.startedAt)))throw new Error("净值分页无效。");
         const change:Partial<EquityHistory>={points:[...points.values()].sort((a,b)=>a.at-b.at),loaded:true};
         if(mode==="after"){
-          if(!cursorOK(page.afterCursor)||page.afterCursor<cursor!||(page.moreAfter&&page.afterCursor===cursor))throw new Error("新增净值游标未推进。");
+          if(!this.cursorOK(page.afterCursor)||page.afterCursor<cursor!||(page.moreAfter&&page.afterCursor===cursor))throw new Error("新增净值游标未推进。");
           change.newestCursor=page.afterCursor;change.catchingUp=!!page.moreAfter;
           if(!page.moreAfter){change.latestAt=this.now();change.checkedCycle=cycle;}
         }else if(mode==="older"){

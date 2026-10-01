@@ -273,3 +273,12 @@ npx wrangler deploy --dry-run --config dist/server/wrangler.json
 原账户、历史归档与账户隔离缓存保持；实盘权益、浮盈、订单及结算继续
 使用Gate真实数据，不把模拟曲线拼接为实盘历史。仅调整显示，无新增
 后台轮询、归档写入、交易策略、账户重置或实盘开关操作。
+# Overview curves
+
+Overview shows the original PAPER curve and a separate Gate-native LIVE equity
+curve with the same history controls. The simulated page shows no curve. LIVE
+history uses the existing manual activation: OFF retains its last saved curve;
+the next OFF-to-ON starts a new native baseline. Browser/process restart or
+repeated ON retains the session. Fresh native marks save at most once per five
+minutes through existing checkpoints, with optional row accounting and private
+owner/member-local reads; there is no extra Gate polling or account reset.

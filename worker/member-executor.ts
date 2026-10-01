@@ -115,21 +115,22 @@ export function memberExecutionClass(Base:typeof MarketStream) {
         if(await this.ctx.storage.get<boolean>(`member-program-tag:${tag}`))this.knownProgramTags.add(tag);
         else {journal.set(`member-program-tag:${tag}`,true);newTags.push(tag);}
       }
+      const curve=this.prepareLiveEquityWrite(now);
       const writes=1+journal.size,critical=force||journal.size>0;
       const reservation=critical?this.reserveCriticalWrites(writes):this.reserveNonAlarmWrites(writes);
-      if(!reservation)return;
+      if(!reservation){curve?.reservation.finish(false);return;}
       try {
-        const bytes=await gzip(new TextEncoder().encode(JSON.stringify({version:MEMBERS_VERSION,id:this.identity.id,live:this.runtime.live,
+        const bytes=await gzip(new TextEncoder().encode(JSON.stringify({version:MEMBERS_VERSION,id:this.identity.id,live:{...this.runtime.live,...(curve?{equityCurve:curve.head}:{})},
           utcDay:this.runtime.utcDay,nonAlarmWrites:this.runtime.nonAlarmWrites+this.nonAlarmPendingWrites,
           criticalWrites:this.runtime.criticalWrites+this.criticalPendingWrites})));
         if(bytes.length>112*1024)throw new Error("会员检查点超过预算，拒绝丢弃已有仓位");
         const sha=await digestMember([...bytes].join(","));
         if(this.deleted||this.deleting)throw new Error("会员账户正在删除");
-        await this.ctx.storage.transaction(async tx=>{await tx.put({[CHECKPOINT]:{bytes,sha},...Object.fromEntries(journal)});});
+        await this.ctx.storage.transaction(async tx=>{await tx.put({[CHECKPOINT]:{bytes,sha},...Object.fromEntries(journal),...(curve?{[curve.key]:curve.value}:{})});});
         for(const[k,v]of journal)if(this.liveJournal.get(k)===v)this.liveJournal.delete(k);
         for(const tag of newTags)this.knownProgramTags.add(tag);
-        reservation.finish(true);this.runtime.lastHeartbeatAt=now;
-      } finally {reservation.finish(false);}
+        reservation.finish(true);if(curve){this.runtime.live.equityCurve=curve.head;curve.reservation.finish(true);}this.runtime.lastHeartbeatAt=now;
+      } finally {reservation.finish(false);curve?.reservation.finish(false);}
     }
     private async directory(path:string,body?:unknown) {
       if(!this.env.MEMBERS||!this.identity)throw new Error("会员服务尚未就绪");
@@ -339,6 +340,7 @@ export function memberExecutionClass(Base:typeof MarketStream) {
         }
         if(path==="/live-status")return json({live:await this.liveView(),generatedAt:Date.now()});
         if(path==="/live-history"&&request.method==="GET")return json(await this.privateLiveHistory());
+        if(path==="/live-equity"&&request.method==="GET")return this.privateLiveEquity(url);
         if(path==="/credential-status")return json({credential:this.credentialView()});
         if(path==="/credentials"&&request.method==="PUT") {
           if(this.credentialBusy)throw new Error("API验证正在进行，请勿重复提交");
