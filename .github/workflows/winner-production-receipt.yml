@@ -1,0 +1,55 @@
+name: Winner production continuity receipt
+on:
+  push:
+    branches: [verify/20261001-winner-production]
+    paths: [.github/workflows/winner-production-receipt.yml]
+permissions: {}
+jobs:
+  public-receipt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Read public production health three times
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,time,urllib.request
+          from datetime import datetime,timezone
+          url='https://market-sentinel-free.alicia5574188.workers.dev/__health'
+          expected='2b4fd60f77c9b78526bd5087940945fe7e86fab8'
+          receipts=[]
+          for i in range(3):
+              if i:time.sleep(15)
+              req=urllib.request.Request(url,headers={'Accept':'application/json','Cache-Control':'no-cache'})
+              with urllib.request.urlopen(req,timeout=20) as response:
+                  data=json.load(response)
+              r=data['runtime']; f=r['forward']; ready=r['realtimeReadiness']; multi=r['multiSourceMarket']
+              receipt={'sample':i+1,'observedAt':datetime.now(timezone.utc).isoformat(),'ok':data.get('ok'),
+                  'buildSha':r.get('buildSha'),'authorityReady':r.get('authorityReady'),'stale':r.get('stale'),
+                  'lastError':r.get('lastError'),'lastSuccessAt':r.get('lastSuccessAt'),'lastHeartbeatAt':r.get('lastHeartbeatAt'),
+                  'accountStartedAt':f.get('startedAt'),'initialEquity':f.get('initialEquity'),'resolved':f.get('resolved'),
+                  'openCount':f.get('openCount'),'lastCycleAt':f.get('lastCycleAt'),'storage':f.get('storage'),
+                  'researchUpdatedAt':(f.get('marketNarrative') or {}).get('updatedAt'),
+                  'tracked':f.get('marketIntelligenceTracked'),'eligible':f.get('participationEligibleCount'),
+                  'entryEvaluatedAt':(f.get('entryDiagnostics') or {}).get('at'),
+                  'newPlanValidations':[v.get('id') for v in (f.get('entryValidationDiagnostics') or {}).get('records',[]) if str(v.get('id','')).startswith('winner-preservation-v1:')],
+                  'realtimeReadiness':ready,'healthySources':multi.get('healthySources'),'marketUpdatedAt':multi.get('lastSuccessAt'),
+                  'liveMode':r.get('liveMode'),'scanned':(r.get('radar') or {}).get('scanned')}
+              print('PUBLIC_RECEIPT '+json.dumps(receipt,ensure_ascii=False),flush=True)
+              assert receipt['ok'] and receipt['buildSha']==expected and receipt['authorityReady'] is True
+              assert receipt['stale'] is False and receipt['lastError'] is None and receipt['storage']['error'] is None
+              assert receipt['accountStartedAt']==1790783624414 and receipt['initialEquity']==1000,'Account continuity changed'
+              assert receipt['resolved']>=67,'Settled history regressed'
+              assert ready.get('protectedMarketsReady') is True and multi.get('healthySources',0)>=3
+              receipts.append(receipt)
+          a,b=receipts[0],receipts[-1]
+          assert b['lastSuccessAt']>a['lastSuccessAt'],'Market runtime did not advance'
+          assert b['marketUpdatedAt']>a['marketUpdatedAt'],'External feed did not advance'
+          assert b['storage']['persistedAt']>=a['storage']['persistedAt']
+          assert b['resolved']>=a['resolved']
+          print('CONTINUITY_PASS '+json.dumps({'buildSha':expected,'accountPreserved':True,'historyPreserved':True,
+              'runtimeAdvanceMs':b['lastSuccessAt']-a['lastSuccessAt'],'feedAdvanceMs':b['marketUpdatedAt']-a['marketUpdatedAt'],
+              'sourceCalls':'PUBLIC_HEALTH_GET_ONLY','privateGateRequests':0,'deploymentsFromThisJob':0,
+              'liveIntentUnchangedDuringReceipt':a['liveMode']==b['liveMode']}),flush=True)
+          PY
