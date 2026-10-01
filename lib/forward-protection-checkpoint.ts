@@ -3,7 +3,8 @@ import type {ForwardState,Trade} from "./forward-relations.ts";
 export const FORWARD_PROTECTION_CHECKPOINT_VERSION="adaptive-ten-protection-v1";
 type Row=Pick<Trade,"id"|"openedAt"|"favorable"|"adverse"|"lastPrice"|"lastQuoteAt"|"stopPrice"|"firstProfitAt"|"holdScore"|"profitFloorRate"|"peakPnlRate"|"winnerManagement"|"review">;
 export type ForwardProtectionCheckpoint={version:typeof FORWARD_PROTECTION_CHECKPOINT_VERSION;startedAt:number;baseRevision:number;
-  basePersistedAt:number;quoteCycleAt:number;peakEquity:number;maxDrawdown:number;positions:Row[]};
+  basePersistedAt:number;quoteCycleAt:number;peakEquity:number;maxDrawdown:number;positions:Row[];
+  shadow?:{cutoverAt:number;peakEquity:number;maxDrawdown:number;positions:Row[]}};
 type LegacyProtectionRow=Partial<Row>&{id?:string;openedAt?:number;favorable?:number;adverse?:number;lastPrice?:number;lastQuoteAt?:number;
   stopPrice?:number;profitProtection?:{floorRate?:number}|null};
 type LegacyProtectionCheckpoint={version:"forward-protection-checkpoint-v1";startedAt:number;baseRevision:number;basePersistedAt:number;
@@ -34,11 +35,14 @@ export function forwardProtectionChanged(previous:ForwardState,next:ForwardState
       ||t.holdScore!==p.holdScore||t.profitFloorRate!==p.profitFloorRate||t.peakPnlRate!==p.peakPnlRate;});
 }
 export function buildForwardProtectionCheckpoint(s:ForwardState):ForwardProtectionCheckpoint{
-  return{version:FORWARD_PROTECTION_CHECKPOINT_VERSION,startedAt:s.startedAt,baseRevision:s.revision,basePersistedAt:s.storage.persistedAt,
-    quoteCycleAt:s.lastQuoteCycleAt,peakEquity:s.peakEquity,maxDrawdown:s.maxDrawdown,positions:s.positions.map(t=>({
+  const rows=(positions:Trade[],review:boolean)=>positions.map(t=>({
       id:t.id,openedAt:t.openedAt,favorable:t.favorable,adverse:t.adverse,lastPrice:t.lastPrice,lastQuoteAt:t.lastQuoteAt,stopPrice:t.stopPrice,
       firstProfitAt:t.firstProfitAt??null,holdScore:t.holdScore??50,profitFloorRate:t.profitFloorRate??0,peakPnlRate:t.peakPnlRate??t.favorable,winnerManagement:t.winnerManagement?structuredClone(t.winnerManagement):undefined,
-      review:t.review?.diagnosticVersion?structuredClone(t.review):undefined}))};
+      review:review&&t.review?.diagnosticVersion?structuredClone(t.review):undefined}));
+  return{version:FORWARD_PROTECTION_CHECKPOINT_VERSION,startedAt:s.startedAt,baseRevision:s.revision,basePersistedAt:s.storage.persistedAt,
+    quoteCycleAt:s.lastQuoteCycleAt,peakEquity:s.peakEquity,maxDrawdown:s.maxDrawdown,positions:rows(s.positions,true),
+    ...(s.inverseTrial?{shadow:{cutoverAt:s.inverseTrial.cutoverAt,peakEquity:s.inverseTrial.source.peakEquity,
+      maxDrawdown:s.inverseTrial.source.maxDrawdown,positions:rows(s.inverseTrial.source.positions,false)}}:{})};
 }
 export function restoreForwardProtectionCheckpoint(s:ForwardState,value:unknown):ForwardState{
   if(value==null)return s;
@@ -53,11 +57,28 @@ export function restoreForwardProtectionCheckpoint(s:ForwardState,value:unknown)
   const next=structuredClone(s);
   for(const t of next.positions){const r=rows.get(t.id);if(!r||r.openedAt!==t.openedAt||![r.favorable,r.adverse,r.lastPrice,r.lastQuoteAt,r.stopPrice,r.holdScore,r.profitFloorRate,r.peakPnlRate].every(finite)
       ||r.lastPrice<=0||r.stopPrice<=0||r.favorable<t.favorable||r.adverse<t.adverse||r.lastQuoteAt<t.lastQuoteAt
-      ||(t.side==="LONG"&&r.stopPrice+1e-12<t.stopPrice)||(t.side==="SHORT"&&r.stopPrice-1e-12>t.stopPrice))
+      ||(!t.inverseCopy&&((t.side==="LONG"&&r.stopPrice+1e-12<t.stopPrice)||(t.side==="SHORT"&&r.stopPrice-1e-12>t.stopPrice))))
       throw new Error("前向保护检查点异常；保留账户");
     t.favorable=r.favorable;t.adverse=r.adverse;t.lastPrice=r.lastPrice;t.lastQuoteAt=r.lastQuoteAt;t.stopPrice=r.stopPrice;
     t.firstProfitAt=r.firstProfitAt??null;t.holdScore=r.holdScore;t.profitFloorRate=r.profitFloorRate;t.peakPnlRate=r.peakPnlRate;if(r.winnerManagement)t.winnerManagement=structuredClone(r.winnerManagement);
     if(r.review?.diagnosticVersion)t.review=structuredClone(r.review);}
+  if(next.inverseTrial){
+    const shadow=c.shadow,source=next.inverseTrial.source;
+    if(!shadow||shadow.cutoverAt!==next.inverseTrial.cutoverAt||![shadow.peakEquity,shadow.maxDrawdown].every(finite)
+      ||!Array.isArray(shadow.positions)||shadow.positions.length!==source.positions.length)
+      throw new Error('影子保护检查点缺失；保留原配对账户');
+    const byId=new Map(shadow.positions.map(t=>[t.id,t]));
+    if(byId.size!==shadow.positions.length)throw new Error('影子保护检查点重复');
+    for(const t of source.positions){const r=byId.get(t.id);
+      if(!r||r.openedAt!==t.openedAt||![r.favorable,r.adverse,r.lastPrice,r.lastQuoteAt,r.stopPrice,r.holdScore,r.profitFloorRate,r.peakPnlRate].every(finite)||r.lastPrice<=0
+        ||r.lastQuoteAt<t.lastQuoteAt||r.favorable<t.favorable||r.adverse<t.adverse||r.stopPrice<=0
+        ||(t.side==='LONG'?r.stopPrice+1e-12<t.stopPrice:r.stopPrice-1e-12>t.stopPrice))throw new Error('影子保护恢复不一致');
+      Object.assign(t,r);
+      const inverse=next.positions.find(p=>p.inverseCopy?.sourceId===t.id);
+      if(inverse)inverse.inverseCopy!.sourceStopPrice=t.stopPrice;
+    }
+    source.peakEquity=Math.max(source.peakEquity,shadow.peakEquity);source.maxDrawdown=Math.max(source.maxDrawdown,shadow.maxDrawdown);
+  }
   next.lastQuoteCycleAt=Math.max(next.lastQuoteCycleAt,c.quoteCycleAt);next.peakEquity=Math.max(next.peakEquity,c.peakEquity);
   next.maxDrawdown=Math.max(next.maxDrawdown,c.maxDrawdown);return next;
 }

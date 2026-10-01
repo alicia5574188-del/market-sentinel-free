@@ -62,6 +62,9 @@ export function forwardMirrorSources(state: ForwardState, sourceEquity: number):
     throw new Error("当前模拟账户不可用，实盘复制等待恢复，不回退到旧策略");
   const out: Record<string, MirrorSourceTrade> = {};
   for (const t of state.positions) {
+    // This owner request is an inverse PAPER experiment, not authorization for
+    // a new real-money strategy. Never dispatch a shadow or inverse test leg.
+    if(t.inverseCopy)continue;
     validateMirrorSource(t);
     if (out[t.symbol]) throw new Error(`${t.symbol} 出现多条逻辑持仓；禁止静默净额合并，须先升级逐腿执行适配器`);
     const cost = 2*(PAPER_COST.feeRate+PAPER_COST.slippageRate)+PAPER_COST.fundingAllowancePerDay*sourceHoldMinutes(t)/1440,
@@ -230,13 +233,13 @@ export function mirrorCoverage(state:ForwardState|null,live:{requestedEnabled:bo
     const p=live.positions[t.symbol],e=live.entries[t.symbol],skip=live.entrySkips[t.symbol];
     const copied=p?.status==="OPEN"&&p.id===t.id,endedEarly=p?.status==="CLOSED"&&p.id===t.id;
     const pending=e?.planId===t.id&&["SUBMITTING","OPEN","ERROR"].includes(e.status);
-    const eligible=live.requestedEnabled&&sourceAfterEnable(t,live.activation,state!.startedAt);
+    const eligible=!t.inverseCopy&&live.requestedEnabled&&sourceAfterEnable(t,live.activation,state!.startedAt);
     const skipStatus=skip?.planId!==t.id?null:skip.code==="MIN_CONTRACT"?"BLOCKED_MIN_SIZE"
       :skip.code==="RETRYING"?"RETRYING":skip.code==="SOURCE_ENDED_EARLY"?"SOURCE_ENDED_EARLY":"BLOCKED";
-    const status=copied?(p?.parity?.discrepancy?"DEVIATION":"COPIED"):endedEarly?"SOURCE_ENDED_EARLY":pending?"PENDING":
+    const status=t.inverseCopy?"INVERSE_PAPER_ONLY":copied?(p?.parity?.discrepancy?"DEVIATION":"COPIED"):endedEarly?"SOURCE_ENDED_EARLY":pending?"PENDING":
       !live.requestedEnabled?"OWNER_OFF":!eligible?"EXCLUDED_BEFORE_ENABLE":skipStatus??"WAITING";
     return {sourceId:t.id,symbol:t.symbol,eligible,status,
-      reason:copied?p?.parity?.discrepancy??null:status==="EXCLUDED_BEFORE_ENABLE"?"开启前或本次接入前已有的模拟持仓，不补开"
+      reason:t.inverseCopy?"影子反向模拟试验；尚未授权接入实盘":copied?p?.parity?.discrepancy??null:status==="EXCLUDED_BEFORE_ENABLE"?"开启前或本次接入前已有的模拟持仓，不补开"
         :endedEarly?"该模拟源单仍开放，但对应实盘仓位已经在 Gate 归零；同一源单不重复开仓"
         :skip?.planId===t.id?skip.reason:sourceError??(!live.requestedEnabled?"等待所有者开启；此前持仓不会补开"
           :"实盘核对已运行，但该源单尚未形成明确执行状态；下一轮会继续核对")};

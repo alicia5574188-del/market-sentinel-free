@@ -6,6 +6,7 @@ export const REVIEW_TRACE_VERSION = 'decision-review-v2';
 export const REVIEW_JOURNAL_KEY = 'market-intelligence:review:v2:journal';
 export const REVIEW_JOURNAL_BYTES = 80 * 1024;
 export type ReviewEvent = {
+  decisionBuildSha?:string;accountRole?:'SHADOW_SOURCE'|'PAPER';pairedTradeId?:string;
   at:number; id:string; symbol:string; stage:string; reason:string; price?:number;
   buildSha?:string;strategyFingerprint?:string;planVersion?:string;
   research?:{level:string;entryAction:string;riskScale:number;sourceAt:number|null;hypothesisIds:string[]};

@@ -55,6 +55,7 @@ function waitingReason(v:NonNullable<View["entryValidation"]>["records"][number]
 }
 
 function positionAction(t:View["positions"][number]){
+  if(t.inverseCopy)return"仅跟随影子";
   if(t.winnerManagement?.research){
     const m=t.winnerManagement;
     return m.appliedAction==="EXIT"?"准备退出":m.appliedAction==="REDUCE"?"已部分兑现":m.research!.level==="MARKET_CAUTION"?"预警但继续持有":m.research!.level==="LOCAL_REVIEW"||m.research!.level==="PROTECT"?"复核本币变化":"继续持有";
@@ -64,6 +65,7 @@ function positionAction(t:View["positions"][number]){
 }
 
 function positionWatch(t:View["positions"][number]){
+  if(t.inverseCopy)return `影子${t.inverseCopy.sourceSide==="LONG"?"做多":"做空"}，模拟反向；源单退出参考 ${t.inverseCopy.sourceStopPrice}。`;
   if(t.winnerManagement)return t.winnerManagement.reason;
   const plan=t.liquidityLifecycle?.currentPlan??t.entryContext?.tradePlan,concern=t.positionIntelligence?.concerns?.[0];
   if(concern)return concern;
@@ -106,7 +108,7 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
           {observed.length?observed.map(o=><p key={o.id}><b>{o.symbol.replace("_"," / ")} · {side(o.side)} · {tradePlanName(o.tradePlan)}</b><br/>
             {o.eligible&&!waitingByCandidate.has(o.id)?"条件已成立，等待执行队列。":observeReason(o,liquidity?.symbols?.[o.symbol])}</p>):<p>暂无重点观察标的。</p>}
         </div></article>
-        <article><time>等待执行 · {waitingValidations.length}</time><div>
+        <article><time>等待执行 · {waitingValidations.length}{data?.shadowInverse?" · 影子决策，模拟反向":""}</time><div>
           {waitingValidations.map(v=>{const o=v.frozenOpportunity??opportunities.find(x=>x.id===v.candidateId);return <p key={v.id}><b>{v.symbol.replace("_"," / ")} · {side(v.side)} · {tradePlanName(o?.tradePlan)}</b><br/>
             {waitingReason(v,o)}{o?.winnerPlan&&<><br/><small>{planText(o.winnerPlan)}</small></>}</p>})}
           {!waitingValidations.length&&<p>暂无已武装计划。</p>}

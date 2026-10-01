@@ -78,6 +78,10 @@ function hotProjection(next:ForwardState,includeSamples=true){
   const build=()=>{
     const history=next.history.slice(0,total).map((t,i)=>compactClosedTrade(droppedHotReview?withoutReview(t):t,i<full)),
       account={...next,positions:droppedHotReview?next.positions.map(withoutReview):next.positions,history,events:next.events.slice(0,eventLimit),
+        ...(next.inverseTrial?{inverseTrial:{...next.inverseTrial,source:{...next.inverseTrial.source,
+          positions:next.inverseTrial.source.positions.map(withoutReview),
+          history:next.inverseTrial.source.history.slice(0,Math.max(32,total)).map((t,i)=>compactClosedTrade(withoutReview(t),i<full)),
+          events:next.inverseTrial.source.events.slice(0,FORWARD_HOT_EVENT_LIMIT)}}}:{}),
         hypothesisResearch:{...next.hypothesisResearch,
           active:next.hypothesisResearch.active.slice(0,MARKET_HYPOTHESIS_ACTIVE_LIMIT),
           resolved:next.hypothesisResearch.resolved.slice(0,MARKET_HYPOTHESIS_RESOLVED_LIMIT),
@@ -358,7 +362,9 @@ export async function prepareForwardWrite(previous:ForwardState|null,next:Forwar
   });
   const subjects=new Set(events.map(e=>e.subject));
   const trades=[...next.positions,...next.history].filter(t=>subjects.has(t.id));
-  const packet={at:now,version:FORWARD_VERSION,engineVersion:next.engineVersion,policyVersion:next.policyVersion,
+  const packet={inverseComparison:next.inverseTrial?{version:next.inverseTrial.version,sourceBuild:next.inverseTrial.sourceBuild,
+      cutoverAt:next.inverseTrial.cutoverAt,totals:next.inverseTrial.totals,lastPoint:next.inverseTrial.curve.at(-1)}:undefined,
+    at:now,version:FORWARD_VERSION,engineVersion:next.engineVersion,policyVersion:next.policyVersion,
     startedAt:next.startedAt,revision:next.revision,events,trades:trades.map(withoutReview),
     // The authoritative account state is persisted separately in the paged head/chunks.
     // Archive packets keep a compact position snapshot and full event-subject trades,

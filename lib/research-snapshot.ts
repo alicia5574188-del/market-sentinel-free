@@ -32,6 +32,7 @@ export async function readReviewArchivePage(storage:ArchiveReader,accountStarted
   return{accountStartedAt,asOf,trades,recordsRead:rows.size,nextCursor:rows.size===12?[...rows.keys()].at(-1)!:null,exhausted:rows.size<12};
 }
 export type ReviewSnapshot={
+  inverseExperiment?:ObjectRow|null;
   version:typeof REVIEW_SNAPSHOT_VERSION;
   versionDiagnostics?:ObjectRow;
   meta:{exportedAt:number;exportedAtBeijing:string;buildSha:string|null;strategyFingerprint:string|null;policyVersion:unknown;
@@ -50,7 +51,7 @@ function preferReview(a:TradeReview|undefined,b:TradeReview|undefined){
     +Number(!!r.terminal)*4+Number(!!r.diagnosticVersion)*2+(r.milestones?.reductions.length??0);
   return quality(b)>quality(a)?b:a;
 }
-export function tradePlanVersion(t:Trade){return t.entryContext?.winnerPlan?.researchVersion??t.entryContext?.winnerPlan?.version
+export function tradePlanVersion(t:Trade){return t.inverseCopy?.version??t.entryContext?.winnerPlan?.researchVersion??t.entryContext?.winnerPlan?.version
   ??t.entryContext?.strategyVersion??'UNKNOWN_LEGACY';}
 
 function mergeTradeRows(current:Trade[],incoming:Trade[],conflicts:string[]){
@@ -99,7 +100,7 @@ export function buildReviewSnapshot(input:{view:ObjectRow;buildSha:string|null;s
   const rejected=arr<ObjectRow>(rawCounter.rejectedOpportunities).filter(t=>Number(t.observedAt)>=startedAt);
   const pick=(keys:string[])=>Object.fromEntries(keys.map(k=>[k,v[k]??null]));
   const trades=mergeTradeRows(arr<Trade>(v.positions),arr<Trade>(v.history),[]);
-  const snapshot:ReviewSnapshot={version:REVIEW_SNAPSHOT_VERSION,
+  const snapshot:ReviewSnapshot={version:REVIEW_SNAPSHOT_VERSION,inverseExperiment:obj(v.shadowInverse).version?obj(v.shadowInverse):null,
     meta:{exportedAt:input.exportedAt,exportedAtBeijing:beijing(input.exportedAt),buildSha:input.buildSha,strategyFingerprint:input.strategyFingerprint,
       policyVersion:v.policyVersion??null,accountStartedAt:startedAt,accountStartedAtBeijing:beijing(startedAt),sourceUpdatedAt:v.updatedAt??null,
       marketUpdatedAt:obj(v.marketIntelligence).updatedAt??null,readOnly:true,
@@ -111,6 +112,7 @@ export function buildReviewSnapshot(input:{view:ObjectRow;buildSha:string|null;s
     market:{intelligence:v.marketIntelligence??null,environmentRouter:v.environmentRouter??null,hypothesisResearch:v.hypothesisResearch??null,
       marketPulse:v.marketPulse??null,geometry:rawShadow.marketGeometry??[],geometrySummary:rawShadow.summary?obj(rawShadow.summary).rollingGeometry:null},
     research:{shadowUpdatedAt:rawShadow.updatedAt??null,counterfactualUpdatedAt:rawCounter.updatedAt??null,
+      decisionAccount:v.shadowInverse?'FROZEN_SHADOW_SOURCE':'PAPER',sourceToInverse:trades.filter(t=>t.inverseCopy).map(t=>({sourceId:t.inverseCopy!.sourceId,inverseId:t.id})),
       tradeQuality:currentShadow,retiredTrades:arr(rawShadow.retiredTrades),priorAccount:{excludedShadowCount:olderShadow.length+arr(rawShadow.retiredTrades).length,excludedShadowTradeIds:olderShadow.map(t=>t.tradeId),
         excludedOpenRecords:olderShadow.filter(t=>t.status==='OPEN').length,status:'ISOLATED_NOT_ASSUMED_CLOSED'},
       postExit:post.map(r=>({...r,checkpointCoverage:checkpointCoverage(r,input.exportedAt)})),
@@ -163,7 +165,8 @@ export function finalizeReviewSnapshot(s:ReviewSnapshot):ReviewSnapshot{
   const closed=s.trades.filter(t=>t.status==='CLOSED'&&t.openedAt>=s.meta.accountStartedAt),open=s.trades.filter(t=>t.status==='OPEN');
   s.coverage.includedClosed=closed.length;s.coverage.missingClosed=Math.max(0,s.coverage.expectedClosed-closed.length);
   s.coverage.complete=s.coverage.missingClosed===0&&closed.length===s.coverage.expectedClosed&&s.coverage.conflictingTradeIds.length===0;
-  const traceMissing=closed.filter(t=>!t.review?.terminal),piMissing=closed.filter(t=>!t.positionIntelligence&&!t.review?.terminal?.assessments.length);
+  const traceMissing=closed.filter(t=>!t.review?.terminal&&!t.inverseCopy?.sourceClosedAt),
+    piMissing=closed.filter(t=>!t.inverseCopy&&!t.positionIntelligence&&!t.review?.terminal?.assessments.length);
   const profitLeads=closed.filter(t=>t.favorable*t.notional>Math.max(2,(t.entryFee+t.exitFee)*4)
     &&(t.netPnl??0)<t.favorable*t.notional*.4).sort((a,b)=>b.favorable*b.notional-a.favorable*a.notional).slice(0,5),
     lowExecutionEdge=closed.filter(t=>Number(t.entryContext?.edgeRatio)<1.25).sort((a,b)=>(a.netPnl??0)-(b.netPnl??0)).slice(0,8);
@@ -186,6 +189,17 @@ export function finalizeReviewSnapshot(s:ReviewSnapshot):ReviewSnapshot{
     counterfactualMaturity:maturity,liveAssessment:ownerOff?'OWNER_OFF_NOT_A_COPY_FAILURE':(s.runtime.liveAssessment??'SEE_SCOPED_LIVE_EVIDENCE'),
     observedOrderWindow:{from:timestamp(closed.length?Math.min(...closed.map(t=>t.openedAt)):null),to:timestamp(closed.length?Math.max(...closed.map(t=>t.closedAt??0)):null)}};
   s.versionDiagnostics=reviewVersionDiagnostics(s);
+  if(s.inverseExperiment){
+    const paired=s.trades.filter(t=>t.inverseCopy),sourceId=(t:Trade)=>t.inverseCopy!.sourceId;
+    s.inverseExperiment={...s.inverseExperiment,pairs:paired.map(t=>({tradeId:t.id,sourceId:sourceId(t),sourceBuild:t.inverseCopy!.sourceBuild,
+      openedAt:t.openedAt,closedAt:t.closedAt,side:t.side,sourceSide:t.inverseCopy!.sourceSide,status:t.status,
+      sourceEntry:t.inverseCopy!.sourceEntryPrice,entry:t.entryPrice,exit:t.exitPrice,remainingContracts:t.status==='OPEN'?t.contracts:0,
+      sourceRemainingContracts:t.inverseCopy!.sourceRemainingContracts,sourceReason:t.inverseCopy!.sourceExitReason,
+      netPnl:t.netPnl,fills:t.inverseCopy!.fills,sourceEntryPlan:t.inverseCopy!.sourceEntryPlan,sourceExitAudit:t.inverseCopy!.sourceExitAudit})),
+      coverage:{expected:Number(s.inverseExperiment.pairedOpened),included:paired.length,
+        complete:paired.length===Number(s.inverseExperiment.pairedOpened)},
+      costs:'Each ledger pays its own fees once. Spread drag is attribution, not an extra debit. Funding is an adverse allowance, not actual exchange funding.'};
+  }
   s.issues=[];
   const evidence=obj(s.versionDiagnostics.integratedEvidence);
   if(Number(evidence.missing)>0)s.issues.push({code:'INTEGRATED_PLAN_EVIDENCE_MISSING',classification:'INSUFFICIENT_EVIDENCE',

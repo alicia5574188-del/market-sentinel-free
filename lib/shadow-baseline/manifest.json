@@ -1,0 +1,39 @@
+{
+  "sourceBuild": "2b4fd60f77c9b78526bd5087940945fe7e86fab8",
+  "transformation": "Relative import paths only; no decision/price/cost edits",
+  "files": [
+    {
+      "path": "lib/shadow-baseline/forward-relations.ts",
+      "originalPath": "lib/forward-relations.ts",
+      "originalSha256": "d6408f8a49e14f3fa434c5d05806ae9f07309a9824fdb2be238c8cf6079a8143",
+      "vendoredSha256": "dfec49788614e70c162f77880f6b4f271a61f7343c12b608e57fe6f0be841ecb"
+    },
+    {
+      "path": "lib/shadow-baseline/market-intelligence-engine.ts",
+      "originalPath": "lib/market-intelligence-engine.ts",
+      "originalSha256": "71d38b0cbab2d4f405a4f4074f3cf37703d030d62fb992f794ec03a9a0dd589a",
+      "vendoredSha256": "279b4d6667e62a0bb6a29ef1efa320f23b230219c865dcd6eaaac20021fac503"
+    },
+    {
+      "path": "lib/shadow-baseline/winner-policy.ts",
+      "originalPath": "lib/winner-policy.ts",
+      "originalSha256": "c769b55a7d8af58030edf787eb7cae5ffc2177b67a3cbe87785ba157634ba4e1",
+      "vendoredSha256": "c769b55a7d8af58030edf787eb7cae5ffc2177b67a3cbe87785ba157634ba4e1"
+    }
+  ],
+  "shared": {
+    "lib/market-intelligence-entry-response.ts": "e3f2c64da8c3f1cfd95b1404d26a50131ae3cb45e95d3273b841e9a9cde0bfff",
+    "lib/forward-family-experiment.ts": "6c8cc5c5c3decb7e8163c56f15ec625a02f9c463252502f08ebb9f7b6e775590",
+    "lib/winner-risk.ts": "c89ee68135176f6b4428deda5b24a460a737493e1bfa3541a03f62a040a3d505",
+    "lib/position-evidence-contract.ts": "5ab62a92e826524a2bd32f1ff864d0fc999a4d649ec8f4833efd2f53c9d74858",
+    "lib/market-intelligence-environment-router.ts": "9858d99ae9abe04abd93d72c29698ecfcc4395804a1f22a5581f2da2755f8f5e",
+    "lib/market-intelligence-liquidity.ts": "b9bbdfd16610fe01ded8eac4e07e1dc3bda31ec6d13063765fef00f663aa7ac7",
+    "lib/beijing-time.ts": "33ee2f9666438fa0a5a292b50990c6f55f60cd32df78eec7cd5e67d0ed1a3978",
+    "lib/position-intelligence-engine.ts": "b23aa3dbcd2a465ceffd5554fef08d55ad8f98422a4d8be1d382b0a81e2a890b",
+    "lib/trade-realization.ts": "9ac98980d6e9c13877c11acbf63895ff38ec0df7e4a0e7750655066dda566307",
+    "lib/forward-relation-v2.ts": "af85aca1a6965dd382366b3ea9c8b52b2d810bc98cea48adeeed8ce27fbe8aa4",
+    "lib/market-intelligence-hypothesis-research.ts": "04489e02ff9dce45a13a89be9f417d3e83582d6989d9d6156582dc3b19afd2ce",
+    "lib/market-intelligence-lifecycle.ts": "fe9e565accac2e47a37e41e9759bcbf2fb316a717b758f6dddc0c0a305392274",
+    "lib/forward-structural-interrupt.ts": "39846733b9f5051188f4227f1dec22f8b155cf3b5f2da9f83abc749be85c2523"
+  }
+}

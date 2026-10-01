@@ -1,36 +1,34 @@
-import {RESEARCH_PLAN_VERSION,researchPlanContext,type PlanResearchDecision} from './research-plan.ts';
-import {assertInverseTrade,assertInverseTrial,inverseTrialSummary,sourceDecisionState,shadowCapsule,applyInverseSourceTrade,type InverseCopy,type InverseTrial} from './shadow-inverse-ledger.ts';
 import {advanceWinnerManagement, trendCore, WINNER_POLICY_VERSION, type WinnerPlan, type WinnerManagement} from "./winner-policy.ts";
-import {realizeTradeSlice, realizedContribution, remainingTradeFraction, assertTradeRealization, type TradeRealization} from "./trade-realization.ts";
-import {winnerEventHeadroom, recordWinnerRiskLoss, type WinnerRiskLedger} from "./winner-risk.ts";
+import {realizeTradeSlice, realizedContribution, remainingTradeFraction, assertTradeRealization, type TradeRealization} from "../trade-realization.ts";
+import {winnerEventHeadroom, recordWinnerRiskLoss, type WinnerRiskLedger} from "../winner-risk.ts";
 import { familyExperimentSummary, initialFamilyExperimentState, isFamilyFailure,
   normalizeFamilyExperimentState, recordFamilyFailure, recordFamilyOutcome,
   relationFamilyId, reserveExperimentValueBlock,
-  type FamilyExperimentState } from "./forward-family-experiment.ts";
+  type FamilyExperimentState } from "../forward-family-experiment.ts";
 import { initialRelationEngine, normalizeRelationEngine,
-  type RelationCandidate, type RelationEngineState, type RelationExitProfile, type RelationStatus } from "./forward-relation-v2.ts";
+  type RelationCandidate, type RelationEngineState, type RelationExitProfile, type RelationStatus } from "../forward-relation-v2.ts";
 import { STRUCTURAL_INTERRUPT_VERSION, initialStructuralInterruptState, normalizeStructuralInterruptState,
-  type StructuralInterruptState } from "./forward-structural-interrupt.ts";
+  type StructuralInterruptState } from "../forward-structural-interrupt.ts";
 import { MARKET_INTELLIGENCE_VERSION, buildMarketIntelligence,
   urgentMinuteSymbols as intelligenceUrgentMinuteSymbols, initialMarketIntelligenceState,
   type LiquidityTradePlan, type MarketIntelligenceState, type MarketSymbolState } from "./market-intelligence-engine.ts";
 import { evaluatePositionIntelligence, POSITION_INTELLIGENCE_VERSION,
-  type PositionIntelligenceState } from "./position-intelligence-engine.ts";
-import {capturePositionBaseline} from "./position-evidence-contract.ts";
-import { beijingDayKey } from "./beijing-time.ts";
+  type PositionIntelligenceState } from "../position-intelligence-engine.ts";
+import {capturePositionBaseline} from "../position-evidence-contract.ts";
+import { beijingDayKey } from "../beijing-time.ts";
 import { ENTRY_RESPONSE_VERSION, entryResponseWindowMs, evaluateEntryResponse,
-  type EntryResponseDecision } from "./market-intelligence-entry-response.ts";
+  type EntryResponseDecision } from "../market-intelligence-entry-response.ts";
 import { deriveMarketEvolution, deriveOpportunityLifecycle, extendedEntryConfirmationReady,
   type MarketEvolutionState, type MarketLifecycleResearchContext,
-  type OpportunityLifecyclePhase, type ProfitLifecycleState } from "./market-intelligence-lifecycle.ts";
+  type OpportunityLifecyclePhase, type ProfitLifecycleState } from "../market-intelligence-lifecycle.ts";
 import { advanceMarketHypothesisResearch, entryHypothesisGuidance, initialMarketHypothesisResearch,
   normalizeMarketHypothesisResearch,
-  type EntryHypothesisGuidance, type MarketHypothesisResearchState } from "./market-intelligence-hypothesis-research.ts";
+  type EntryHypothesisGuidance, type MarketHypothesisResearchState } from "../market-intelligence-hypothesis-research.ts";
 import { ENVIRONMENT_OUTLOOK_VERSION, ENVIRONMENT_ROUTER_VERSION, classifyMarketEnvironment, deriveEnvironmentOutlook,
   deriveFastEnvironmentSignal, environmentModeFit, routeEnvironmentOpportunity,
   initialEnvironmentPerformanceState, normalizeEnvironmentPerformanceState, recordEnvironmentOutcome,
   type EnvironmentOutlook, type EnvironmentPerformanceState, type EnvironmentPlaybook, type MarketEnvironment, type RouteAlignment
-} from "./market-intelligence-environment-router.ts";
+} from "../market-intelligence-environment-router.ts";
 
 /**
  * Forward Path Relation 3.0 — PAPER authority.
@@ -136,10 +134,9 @@ export type EntryContext={
   baseEntryScore?:number;environmentScore?:number;
   futureResearchAction?:EntryHypothesisGuidance["action"];futureResearchReason?:string;futureHypothesisIds?:string[];
 };
-import type {ReviewEvent, TradeReview} from "./review-trace.ts";
+import type {ReviewEvent, TradeReview} from "../review-trace.ts";
 
 export type Trade={
-  inverseCopy?:InverseCopy;
   winnerManagement?:WinnerManagement;realization?:TradeRealization;
   review?:TradeReview;
   id:string;symbol:string;side:"LONG"|"SHORT";rule:Rule;openedAt:number;closedAt:number|null;status:"OPEN"|"CLOSED";
@@ -153,7 +150,7 @@ export type Trade={
   profitProtection?:{version:string;reachedR:number;lockedR:number;floorRate:number;retentionRate:number;activationRate:number;
     checkpointBand:number;mode:"STRONG_TREND"|"HEALTHY_TREND"|"NORMAL"|"WEAKENING";peakR:number;updatedAt:number};
   profitProtectionMigration?:{version:string;state:"CURRENT"|"GUARDED"|"DEFERRED";updatedAt:number;baselineFavorable:number};
-  exitAudit?:{trigger:string;at:number;detail?:string;evidence?:Record<string,string|number|boolean|null>;research?:PlanResearchDecision};
+  exitAudit?:{trigger:string;at:number;detail?:string;evidence?:Record<string,string|number|boolean|null>};
   holdValue?:{action:"HOLD"|"REVIEW"|"EXIT_PROFIT"|"EXIT_RISK";pullbackRiskRate:number;bestHoldMinutes:number;score:number};
   positionIntelligence?:PositionIntelligenceState;
   liquidityLifecycle?:{currentPlan:LiquidityTradePlan;upgradedAt:number|null;reason:string;
@@ -177,7 +174,6 @@ export type EntryValidation={id:string;candidateId:string;symbol:string;side:"LO
   probePullbackMin?:number;probeRestartMin?:number;probeRetestSeen?:boolean;
   status:"WAITING"|"CANCELLED";reason:string|null};
 export type ForwardState={
-  inverseTrial?:InverseTrial;
   winnerRisk?:WinnerRiskLedger;
   version:string;engineVersion:string;startedAt:number;revision:number;lastCycleAt:number;lastQuoteCycleAt:number;lastCandleAt:number;
   balance:number;initialEquity:number;peakEquity:number;maxDrawdown:number;resolved:number;wins:number;grossPnl:number;fees:number;
@@ -242,7 +238,6 @@ function normalizeRule(t:Partial<Trade>,now:number):Rule{
 }
 function normalizeTrade(raw:Trade,now:number):Trade{
   const t=structuredClone(raw) as Trade,tick=Math.max(1e-9,safe(t.entryPrice,1)),side=t.side==="SHORT"?"SHORT":"LONG";
-  assertInverseTrade(t);
   assertTradeRealization(t);
   t.side=side;t.rule=normalizeRule(t,now);t.status=t.status==="CLOSED"?"CLOSED":"OPEN";
   t.openedAt=safe(t.openedAt,now);t.closedAt=t.status==="CLOSED"?safe(t.closedAt,now):null;
@@ -322,7 +317,6 @@ function normalizeEntryValidations(value:unknown,now:number){
 }
 export function normalizeForward(v:ForwardState|null|undefined,now:number):ForwardState{
   if(!v)return initialForward(now);
-  assertInverseTrial(v);
   if(v.version!==FORWARD_VERSION||!Number.isFinite(v.balance)||!Array.isArray(v.positions)||!Array.isArray(v.history)||v.liveEligible!==false)
     throw new Error("前向账户存储格式异常；保留原数据，禁止自动重置");
   const base=initialForward(v.startedAt>0?v.startedAt:now);
@@ -570,8 +564,6 @@ export function manageWinnerTrade(s:ForwardState,t:Trade,q:Quote,now:number,path
     entryTradePlan:plan.intent==="TREND"?"WINNER_TREND":"RANGE_REVERSION",previous:t.positionIntelligence,
     entryBaseline:t.positionIntelligence?.baseline,costRate:ROUND_TRIP_COST,marketStateAgeMs:Math.max(0,now-s.extremumRegime.updatedAt),
     entryResponseValidated:!!t.entryContext?.entryResponse});
-  const researchContext=plan.researchVersion===RESEARCH_PLAN_VERSION?researchPlanContext({now,side:t.side,state:symbol,
-    score:symbol?.watchScore??0,research:s.hypothesisResearch}):undefined;
   const trend=!!symbol&&trendCore({state:symbol,side:t.side,price:px,cost:ROUND_TRIP_COST,
     majorScore:s.extremumRegime.narrative.major.score,shortScore:s.extremumRegime.narrative.short.score,quote:q}).eligible,
     // New-entry value/nearby target is not a holding veto. Actual converging
@@ -579,10 +571,7 @@ export function manageWinnerTrade(s:ForwardState,t:Trade,q:Quote,now:number,path
     priceFailure=position.concernFamilies.includes("PATH")||position.concernFamilies.includes("STRUCTURE"),
     outcome=advanceWinnerManagement({side:t.side,price:px,entryPrice:t.entryPrice,openedAt:t.openedAt,now,plan,previous:t.winnerManagement,currentStop:t.stopPrice,
       rows:paths?.[t.symbol],cost:ROUND_TRIP_COST,remainingFraction:remainingTradeFraction(t),concernFamilies:position.concernFamilies,
-      supportFamilies:position.supportFamilies,positionExit:position.decision==="EXIT"&&(researchContext!=null||priceFailure),trendEligible:trend,
-      researchContext,quote:q,exitBasis:position.exitBasis});
-  outcome.state.requestedAction=outcome.action;outcome.state.appliedAction=outcome.action==="REDUCE"?"HOLD":outcome.action;
-  outcome.state.actionReason=outcome.reason;outcome.state.reductionResult=undefined;
+      supportFamilies:position.supportFamilies,positionExit:position.decision==="EXIT"&&priceFailure,trendEligible:trend});
   t.winnerManagement=outcome.state;t.positionIntelligence=position;t.holdScore=position.holdValueScore;
   if(outcome.action!=="EXIT"&&position.decision==="EXIT"){
     position.decision="REVIEW";position.exitBasis=null;position.summary="旧成本优势仍在，未形成足够的价格路径/承接破坏；只复核，不用新开仓性价比全平。";
@@ -592,10 +581,7 @@ export function manageWinnerTrade(s:ForwardState,t:Trade,q:Quote,now:number,path
     score:t.holdScore,pullbackRiskRate:position.expectedPullbackRate,bestHoldMinutes:t.expectedHoldMinutes??180};
   if(outcome.action==="EXIT"){
     closeTrade(s,t,px,now,outcome.reason,{authority:"WINNER_PLAN",quoteAt:q.observedAt,protectedStop:t.stopPrice,
-      originalStop:plan.initialStop,trimCount:t.realization?.sequence??0,
-      requestedAction:outcome.action,appliedAction:"EXIT"});
-    if(t.exitAudit&&outcome.state.research)t.exitAudit.research=structuredClone(outcome.state.research);
-    return true;
+      originalStop:plan.initialStop,trimCount:t.realization?.sequence??0});return true;
   }
   if(outcome.action==="REDUCE"){
     const minContracts=contract?.minContracts??Number(contract?.orderSizeMin??0),
@@ -603,10 +589,9 @@ export function manageWinnerTrade(s:ForwardState,t:Trade,q:Quote,now:number,path
         feeRate:PAPER_COST.feeRate,fundingPerDay:PAPER_COST.fundingAllowancePerDay,minContracts,reason:outcome.reason});
     if(result){s.balance+=result.credit;s.grossPnl+=result.gross;s.fees+=result.fee;s.fundingAllowance+=result.funding;s.turnover+=result.notional;
       outcome.state.trimCount++;outcome.state.lastTrimEvent=outcome.state.obstacleSince;
-      outcome.state.appliedAction="REDUCE";outcome.state.reductionResult="EXECUTED";
       event(s,now,"PROTECTION",t.id,"受阻后部分兑现；保留原父单与趋势仓",{action:"PARTIAL_EXIT",contracts:result.contracts,
         remainingContracts:t.contracts,sequence:t.realization!.sequence,quoteAt:q.observedAt,realizedGross:result.gross});
-    }else outcome.state.reductionResult="NOT_EXECUTED_SIZE_OR_NET_COST";
+    }
   }
   return false;
 }
@@ -615,7 +600,6 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
   marketEvolution:MarketEvolutionState,environmentOutlook:EnvironmentOutlook,paths?:Record<string,Candle[]>,contracts?:Record<string,Contract>){
   const closed=new Set<string>();
   for(const t of s.positions){
-    if(t.inverseCopy)continue;
     if(t.entryContext?.strategyVersion!==MARKET_INTELLIGENCE_VERSION)continue;
     const q=quotes[t.symbol];if(!freshQuote(q,now))continue;
     if(t.entryContext?.winnerPlan?.version===WINNER_POLICY_VERSION){
@@ -801,7 +785,7 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
 
 function markAndManage(s:ForwardState,quotes:Record<string,Quote>,now:number){
   const candidates=new Map(s.opportunities.filter(o=>!isIntelligenceOpportunity(o)).map(o=>[o.symbol,o])),relationById=new Map(s.relationEngine.rules.map(r=>[r.id,r])),closed=new Set<string>();
-  for(const t of s.positions){if(t.inverseCopy||t.entryContext?.strategyVersion===MARKET_INTELLIGENCE_VERSION)continue;const q=quotes[t.symbol];if(!freshQuote(q,now))continue;const px=t.side==="LONG"?q!.bestBid:q!.bestAsk,d=dir(t.side);
+  for(const t of s.positions){if(t.entryContext?.strategyVersion===MARKET_INTELLIGENCE_VERSION)continue;const q=quotes[t.symbol];if(!freshQuote(q,now))continue;const px=t.side==="LONG"?q!.bestBid:q!.bestAsk,d=dir(t.side);
     t.lastPrice=px;t.lastQuoteAt=q!.observedAt;const signed=d*(px/t.entryPrice-1),favorable=Math.max(0,signed),adverse=Math.max(0,-signed);
     t.favorable=Math.max(t.favorable,favorable);t.adverse=Math.max(t.adverse,adverse);t.peakPnlRate=Math.max(t.peakPnlRate??0,favorable);
     if(!t.firstProfitAt&&favorable>=ROUND_TRIP_COST*.6)t.firstProfitAt=now;
@@ -925,31 +909,12 @@ function annotateLifecycleOpportunities(s:ForwardState,market:MarketEvolutionSta
       o.environmentPriority=2;o.environmentScore=o.score;o.environmentForceRetest=false;o.extendedConfirmation=false;
       o.environmentRiskScale=.70;
     }
-    applyOpportunityResearch(s,o,s.extremumRegime.updatedAt);
   }
-}
-
-/** One advice receipt travels with the frozen plan. Only advice/risk changes;
- * side, event identity, entry area, initial stop and target never get redrawn. */
-export function applyOpportunityResearch(s:ForwardState,o:Opportunity,now:number){
-  const p=o.winnerPlan;if(p?.researchVersion!==RESEARCH_PLAN_VERSION)return;
-  const context=researchPlanContext({now,side:o.side,state:s.extremumRegime.symbols[o.symbol],score:o.score,
-    research:s.hypothesisResearch,baseRiskScale:p.entryResearch?.baseRiskScale??o.environmentRiskScale??1});
-  p.entryResearch=context;o.environmentRiskScale=context.riskScale;
-  o.extendedConfirmation=context.entryAction==="CONFIRM_MORE";
-  o.environmentMainline=p.intent==="TREND"&&!o.extendedConfirmation;
-  o.environmentPriority=p.intent==="TREND"&&(!o.extendedConfirmation)?3:2;
-  o.futureResearchAction=o.extendedConfirmation?"CONFIRM_MORE":"NORMAL";
-  o.futureResearchReason=context.reason;o.futureHypothesisIds=context.hypothesisIds;
-  o.environmentReason=context.reason;
-  return context;
 }
 
 function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:number,equity:number,
   response?:{validation:EntryValidation;decision:EntryResponseDecision},minutePath?:Candle[]){
   if(!isIntelligenceOpportunity(o))return"新策略身份缺失";
-  const appliedResearch=applyOpportunityResearch(s,o,now);
-  if(appliedResearch?.entryAction==="CONFIRM_MORE"&&!response)return "研究要求本币实时响应确认，不能由兼容入口跳过";
   if(s.positions.some(t=>t.symbol===o.symbol))return"同币已有持仓，禁止重复开仓";
   if(s.positions.length>=PORTFOLIO_POSITION_CAP)return"组合持仓已达10笔上限";
   const side=o.side,d=dir(side),price=side==="LONG"?q.bestAsk:q.bestBid,
@@ -1234,8 +1199,7 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
         ?(o.futureResearchAction==="CONFIRM_MORE"?"前瞻研究发现状态转移风险，进入加强实时延续确认。":"极端轮动延伸机会进入加强实时延续确认。")
         :profile.fastLane?"高质量机会进入快速实时响应确认。":"候选进入实时响应确认。"};
     trace?.({at:now,id:o.id,symbol:o.symbol,stage:"AUTHORIZED",side:o.side,reason:s.entryValidations[o.id]!.reason??"",price,
-      quoteAt:quoteReady?q!.observedAt:0,plan:o.tradePlan,planVersion:o.winnerPlan?.researchVersion??o.winnerPlan?.version,
-      research:o.winnerPlan?.entryResearch,expiresAt,invalidationPrice:o.liquidityInvalidationPrice??null});
+      quoteAt:quoteReady?q!.observedAt:0,plan:o.tradePlan,expiresAt,invalidationPrice:o.liquidityInvalidationPrice??null});
     if(!quoteReady)reject("正式计划已冻结，等待实时盘口");
     active++;
   }
@@ -1255,9 +1219,7 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
       trace?.({at:now,id:validation.id,symbol:validation.symbol,
         stage:validation.status==="CANCELLED"?(validation.expiresAt<=now?"EXPIRED":"CANCELLED"):
           reason==="等待实时盘口"?"WAIT_QUOTE":validation.phase==="RETEST_WAIT"?"WAIT_RETEST":"WAIT_RESPONSE",
-        reason,price:validation.lastPrice,quoteAt:validation.lastQuoteAt,
-        planVersion:validation.frozenOpportunity?.winnerPlan?.researchVersion??validation.frozenOpportunity?.winnerPlan?.version,
-        research:validation.frozenOpportunity?.winnerPlan?.entryResearch});};
+        reason,price:validation.lastPrice,quoteAt:validation.lastQuoteAt});};
     const o=validation.frozenOpportunity??opportunities.get(validation.candidateId);
     if(!o||!isIntelligenceOpportunity(o)||validation.expiresAt<=now){
       validation.status="CANCELLED";validation.reason="冻结交易计划已经超过自身有效期";reject(validation.reason);continue;
@@ -1268,15 +1230,6 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
     const q=quotes[validation.symbol];if(!freshQuote(q,now)||q!.entryReady!==true){
       validation.reason="交易计划仍然冻结有效，等待实时执行盘口恢复。";reject("等待实时盘口");continue;
     }
-    const currentResearch=applyOpportunityResearch(s,o,now);
-    if(currentResearch){
-      validation.extendedConfirmation=!!validation.extremeResidual||currentResearch.entryAction==="CONFIRM_MORE";
-      if(currentResearch.entryAction==="CONFIRM_MORE"){
-        validation.minimumElapsedMs=Math.max(validation.minimumElapsedMs??0,30_000);
-        validation.minimumSupportSamples=Math.max(validation.minimumSupportSamples??0,4);
-        validation.minimumRetainedRate=Math.max(validation.minimumRetainedRate??0,.72);
-      }
-    }
     const price=validation.side==="LONG"?q!.bestAsk:q!.bestBid;
     if(validation.samples===0||validation.lastQuoteAt<=0){
       validation.startedAt=now;validation.deadlineAt=validation.expiresAt;
@@ -1286,12 +1239,11 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
       validation.reason="实时执行盘口已经恢复；以首个可执行价格建立执行基准，冻结交易计划继续有效，之前等待盘口的时间不计入价格响应。";
       reject(validation.reason);continue;
     }
-    if(q!.observedAt<=validation.lastQuoteAt){reject("等待新的实时盘口样本，不重复计算旧报价");continue;}
     const state=s.extremumRegime.symbols[validation.symbol],
       frozenInvalidation=Number.isFinite(o.liquidityInvalidationPrice)?o.liquidityInvalidationPrice!:null,
       liquidityInvalidated=frozenInvalidation!=null&&(
         validation.side==="LONG"?price<=frozenInvalidation:price>=frozenInvalidation);
-    if(liquidityInvalidated&&(!!o.winnerPlan||o.tradePlan==="LIQUIDITY_MIGRATION"||o.tradePlan==="LIQUIDITY_REJECTION"||o.tradePlan==="FAMILY_TURN")){
+    if(liquidityInvalidated&&(o.tradePlan==="LIQUIDITY_MIGRATION"||o.tradePlan==="LIQUIDITY_REJECTION"||o.tradePlan==="FAMILY_TURN")){
       validation.status="CANCELLED";validation.reason="价格已经触及冻结交易计划的流动性失效边界，原假设真正失效。";
       reject(validation.reason);continue;
     }
@@ -1396,8 +1348,7 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
     }
     trace?.({at:now,id:validation.id,symbol:validation.symbol,stage:"FILLED",reason:"PAPER_FILLED",
       price:s.positions.find(t=>t.symbol===validation.symbol)?.entryPrice,quoteAt:q!.observedAt,
-      tradeId:s.positions.find(t=>t.symbol===validation.symbol)?.id,planVersion:o.winnerPlan?.researchVersion??o.winnerPlan?.version,
-      research:o.winnerPlan?.entryResearch});
+      tradeId:s.positions.find(t=>t.symbol===validation.symbol)?.id});
     opened=1;delete s.entryValidations[validation.id];break;
   }
   s.entryDiagnostics={at:now,matched:waiting.length,opened,reasons};return opened;
@@ -1501,7 +1452,7 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
     checkGroups:s.extremumRegime.evidence.length,latestAt:input.now,rapidQualified:ready,activeLong:longReady,activeShort:shortReady};
   s.latestReason=(marketReady?s.extremumRegime.narrative.summary
     :`全市场5m路径正在恢复 ${readyPaths}/${requiredPaths}；沿用上一份市场叙事保护已有仓位，覆盖恢复前不生成新单。`)
-    +` 当前${s.positions.length}笔持仓，${s.opportunities.filter(o=>o.eligible).length}个可参与机会，计划风险已用${riskUse.toFixed(1)}%。 研究背景=${currentEnvironment}，${marketEvolution.reason} ${s.extremumRegime.narrative.plan} 前瞻研究分级作用于新版计划：${s.hypothesisResearch.summary}`;
+    +` 当前${s.positions.length}笔持仓，${s.opportunities.filter(o=>o.eligible).length}个可参与机会，计划风险已用${riskUse.toFixed(1)}%。 研究背景=${currentEnvironment}，${marketEvolution.reason} ${s.extremumRegime.narrative.plan} 前瞻研究仅记录：${s.hypothesisResearch.summary}`;
   if(divergent)s.latestReason+=` 当前发现${divergent}个明显分化资产。`;
   if(opened)s.latestReason+=` 本轮新开${opened}笔。`;
   const after=JSON.stringify({p:s.positions.map(t=>[t.id,t.status,t.stopPrice,t.profitFloorRate,t.contracts,t.realization?.sequence]),h:s.history.length,b:s.balance,r:s.revision,
@@ -1509,29 +1460,11 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
   return{state:s,changed:before!==after||dataDue,protectionChanged:input.state.positions.some(t=>s.positions.find(n=>n.id===t.id)?.stopPrice!==t.stopPrice)};
 }
 export function closeForwardForReset(state:ForwardState,quotes:Record<string,Quote>,now:number){
-  const s=normalizeForward(structuredClone(state),now);
-  if(s.inverseTrial){
-    const source=structuredClone(sourceDecisionState(s));
-    for(const t of [...source.positions]){const q=quotes[t.symbol],px=freshQuote(q,now)?(t.side==='LONG'?q!.bestBid:q!.bestAsk):t.lastPrice;
-      closeTrade(source,t,px,now,'ACCOUNT_RESET',{quoteAt:q?.observedAt??t.lastQuoteAt});
-      applyInverseSourceTrade(s,t,q,now,true);
-    }
-    source.positions=[];s.inverseTrial.source=shadowCapsule(source);s.inverseTrial.lastSourceRevision=source.revision;
-  }
-  for(const t of [...s.positions]){const q=quotes[t.symbol],px=freshQuote(q,now)?(t.side==="LONG"?q!.bestBid:q!.bestAsk):t.lastPrice;closeTrade(s,t,px,now,"ACCOUNT_RESET");}
+  const s=normalizeForward(structuredClone(state),now);for(const t of [...s.positions]){const q=quotes[t.symbol],px=freshQuote(q,now)?(t.side==="LONG"?q!.bestBid:q!.bestAsk):t.lastPrice;closeTrade(s,t,px,now,"ACCOUNT_RESET");}
   s.positions=[];return s;
 }
-/** Close-only migration lane. Existing holdings retain the pre-cutover policy;
- * inverse positions are explicitly excluded from both strategy managers. */
-export function drainLegacyForwardPositions(s:ForwardState,input:{now:number;quotes:Record<string,Quote>;paths:Record<string,Candle[]>;
-  minutePaths?:Record<string,Candle[]>;contracts:Record<string,Contract>;research?:MarketLifecycleResearchContext}){
-  const evolution=deriveMarketEvolution(s.extremumRegime,input.research),outlook=s.environmentContext.outlook
-    ??deriveEnvironmentOutlook(s.extremumRegime,evolution);
-  manageIntelligenceTrades(s,input.quotes,input.now,input.minutePaths,evolution,outlook,input.paths,input.contracts);
-  markAndManage(s,input.quotes,input.now);
-}
 export function resetForwardAccountPreservingLearning(previous:ForwardState,now:number){
-  const prior=normalizeForward(structuredClone(sourceDecisionState(previous)),now),next=initialForward(now);
+  const prior=normalizeForward(structuredClone(previous),now),next=initialForward(now);
   // Reset the PAPER wallet/ledger only. Market Intelligence is an independent
   // continuously-running observer and must not lose its narrative, evidence,
   // correlation map or per-symbol signal episode when the user resets funds.
@@ -1569,14 +1502,14 @@ export function forwardUrgentQuoteSymbols(s:ForwardState,now:number,entrySymbols
   const premium=s.opportunities.filter(o=>o.premium&&o.eligible&&o.expiresAt>now&&keep(o.symbol)).sort(opportunityCompare);
   const normal=s.opportunities.filter(o=>!o.premium&&o.eligible&&o.expiresAt>now&&keep(o.symbol)).sort(opportunityCompare);
   const watched=Object.values(s.extremumRegime.symbols).filter(r=>keep(r.symbol)&&r.watchScore>=58).sort((a,b)=>b.watchScore-a.watchScore);
-  return[...new Set([...(s.inverseTrial?.source.positions.map(t=>t.symbol)??[]),...s.positions.map(t=>t.symbol),...armed.map(v=>v.symbol),...premium.map(o=>o.symbol),...normal.map(o=>o.symbol),...watched.map(r=>r.symbol)])];
+  return[...new Set([...s.positions.map(t=>t.symbol),...armed.map(v=>v.symbol),...premium.map(o=>o.symbol),...normal.map(o=>o.symbol),...watched.map(r=>r.symbol)])];
 }
 export function forwardUrgentMinuteSymbols(s:ForwardState,entrySymbols?:Iterable<string>){
   const allowed=entrySymbols?new Set(entrySymbols):undefined,keep=(x:string)=>!allowed||allowed.has(x),
     armed=Object.values(s.entryValidations).filter(v=>v.status==="WAITING"&&keep(v.symbol))
       .sort((a,b)=>a.startedAt-b.startedAt).map(v=>v.symbol),
     research=intelligenceUrgentMinuteSymbols(s.extremumRegime,allowed),
-    positions=[...new Set([...(s.inverseTrial?.source.positions.map(t=>t.symbol)??[]),...s.positions.map(t=>t.symbol)])].filter(keep);
+    positions=s.positions.map(t=>t.symbol).filter(keep);
   // Entry discovery/authorization is the time-sensitive use of 1m data.
   // Existing positions still retain realtime price/flow and 5m structure even
   // when their 1m refresh rotates behind active entry work.
@@ -1595,7 +1528,7 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
   const routed=s.opportunities.filter(isIntelligenceOpportunity),
     activePlaybooks=[...new Set(routed.filter(o=>o.eligible).map(o=>o.playbook).filter((x):x is EnvironmentPlaybook=>!!x))],
     performanceCells=Object.values(s.environmentPerformance.cells).sort((a,b)=>b.updatedAt-a.updatedAt);
-  return{shadowInverse:inverseTrialSummary(s,quotes,now),version:s.version,engineVersion:ADAPTIVE_ENGINE_VERSION,grammar:ADAPTIVE_ENGINE_VERSION,positionIntelligenceVersion:POSITION_INTELLIGENCE_VERSION,mode:"REAL_FEED_PAPER",liveEligible:false,
+  return{version:s.version,engineVersion:ADAPTIVE_ENGINE_VERSION,grammar:ADAPTIVE_ENGINE_VERSION,positionIntelligenceVersion:POSITION_INTELLIGENCE_VERSION,mode:"REAL_FEED_PAPER",liveEligible:false,
     strategyAuthorityVersion:ADAPTIVE_ENGINE_VERSION,executionVersion:ADAPTIVE_ENGINE_VERSION,regionVersion:MARKET_INTELLIGENCE_VERSION,
     regionLaunchVersion:MARKET_INTELLIGENCE_VERSION,policyVersion:ADAPTIVE_ENGINE_VERSION,exitPolicyVersion:ADAPTIVE_ENGINE_VERSION,
     policyUpgrade:null,exitPolicyUpgrade:null,startedAt:s.startedAt,cutoverAt:s.cutoverAt,updatedAt:s.lastQuoteCycleAt,
@@ -1603,7 +1536,7 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
     netPnl:mark.equity-s.initialEquity,maxDrawdown:s.maxDrawdown,resolved:s.resolved,wins:s.wins,grossPnl:s.grossPnl,fees:s.fees,
     fundingAllowance:s.fundingAllowance,turnover:s.turnover,positions:s.positions,history:s.history,events:s.events,daily:s.daily,
     opportunities:s.opportunities,entryOpportunities:s.opportunities,regions:[],marketPulse:s.marketPulse,
-    hypothesisResearch:s.hypothesisResearch,researchPlanVersion:RESEARCH_PLAN_VERSION,
+    hypothesisResearch:s.hypothesisResearch,
     environmentRouter:{...s.environmentContext,currentEnvironment:s.environmentContext.environment,activePlaybooks,
       performance:performanceCells.slice(0,8)},
     marketIntelligence:{...s.extremumRegime,counts,symbols:rows.slice(0,30)},
@@ -1623,7 +1556,7 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
       sampleMeaning:"不依赖旧策略样本训练；只使用当前已完成K线、多交易所实时共识和持续市场记忆做因果判断。",
       accounting:"模拟仍使用新鲜买卖价并计入手续费、滑点和资金费占位；每笔新Trade冻结独立交易假设、相关组、失效条件与持仓计划。",
       risk:"总结构风险≤10%、同方向≤6.5%、组合保证金≤75%；同一高相关组正常只允许一个同方向主仓，反方向独立假设可并存。",
-      validation:"单一噪声不能让大方向来回翻转。新版计划保留独立趋势核心；稳定市场预警只调整新增风险与普通机会确认，健康持仓不能被市场预警单独平掉。研究、订单与执行页共用订单冻结区域；旧多尺度地图仅作背景。",
-      liquidation:"先执行既定硬风险与保护线；主动退出需要本币新的价格失败依据。盈利后的部分兑现统一由同一计划管理，不把同源价格分数当成多项独立证据。"},
+      validation:"任何细节都会进入证据池，但单一噪声不能让大方向来回翻转。Environment Router 不用停仓逃避坏环境：趋势用TREND_CAPTURE，过渡用TRANSITION_PROBE，轮动用ROTATION_RELATIVE，同步扩张用SHOCK_PARTICIPATION。逆环境机会仍保留交易权，但必须先完成第一段正反馈→可控回调→再次启动；近期某环境连续亏损只缩放风险，不把风险降为0。高质量稳定交易假设进入ARMED后，2秒级浅反向只能转为RETEST_WAIT。",
+      liquidation:"新版三类正式流动性计划以开仓时冻结的流动性失效边界作为最后硬保险；只有旧持仓/缺少正式流动性边界的兼容仓位继续使用原结构止损。Position Intelligence负责主动退出证据，单一细节或单一市场转向没有独立平仓权。流动性迁移到达新的成交中心并再次被市场接受时，原仓位直接续接下一段，不平仓重追；已证明利润仍使用宽松保护平台防止灾难性回吐。"},
     cost:PAPER_COST,nextCycleAt:s.lastCandleAt+BAR_MS};
 }
