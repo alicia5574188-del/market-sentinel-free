@@ -25,17 +25,17 @@ export type PaidPair={version:typeof PAID_FEE_VIEW_VERSION;tradeId:string;source
 /** Both sides use the exact source event price and the exact same current source mark.
  * Therefore gross PnL must be equal and opposite; only each side's filled fees may differ net PnL. */
 export function pairedPaidView(t:Trade,_q?:Quote,now=t.lastQuoteAt,source?:Trade):PaidPair|null{
-  const i=t.inverseCopy;if(!i||!i.fills.length)return null;
-  const closed=t.status==='CLOSED',first=i.fills[0]!,last=i.fills.at(-1)!,exits=i.fills.filter(f=>f.kind!=='OPEN');
+  const i=t.inverseCopy;if(!i||!copy.fills.length)return null;const copy=i;
+  const closed=t.status==='CLOSED',first=copy.fills[0]!,last=copy.fills.at(-1)!,exits=copy.fills.filter(f=>f.kind!=='OPEN');
   const sourceValid=!!source&&positive(source.lastPrice)&&finite(source.lastQuoteAt)&&source.lastQuoteAt<=now;
   const sharedPrice=closed?last.sourcePrice:sourceValid?source!.lastPrice:null;
   const sharedQuoteAt=closed?last.sourceQuoteAt:sourceValid?source!.lastQuoteAt:null;
   const fresh=closed||!!(sourceValid&&now-source!.lastQuoteAt<=10000);
-  const sourceEntry=first.sourcePrice,sourceEntryFees=i.fills.filter(f=>f.kind==='OPEN').reduce((n,f)=>n+f.sourceFee,0),
+  const sourceEntry=first.sourcePrice,sourceEntryFees=copy.fills.filter(f=>f.kind==='OPEN').reduce((n,f)=>n+f.sourceFee,0),
     sourceExitFees=exits.reduce((n,f)=>n+f.sourceFee,0),sourceRealized=exits.reduce((n,f)=>n+f.sourceGross,0),
-    sourceFloating=closed?0:sharedPrice===null?null:direction(i.sourceSide)*t.quantity*(sharedPrice-sourceEntry);
+    sourceFloating=closed?0:sharedPrice===null?null:direction(copy.sourceSide)*t.quantity*(sharedPrice-sourceEntry);
   function leg(isSource:boolean):PaidLeg{
-    const side=isSource?i.sourceSide:t.side,entryPrice=sourceEntry,entryFees=sourceEntryFees,exitFees=sourceExitFees,
+    const side=isSource?copy.sourceSide:t.side,entryPrice=sourceEntry,entryFees=sourceEntryFees,exitFees=sourceExitFees,
       realizedGross=isSource?sourceRealized:-sourceRealized,floatingGross=sourceFloating===null?null:isSource?sourceFloating:-sourceFloating,
       grossPnl=floatingGross===null?null:realizedGross+floatingGross,fees=entryFees+exitFees,
       estimatedExitFee=closed?0:sharedPrice===null?null:t.quantity*sharedPrice*(sourceEntry>0?sourceEntryFees/(first.quantity*sourceEntry):0);
@@ -43,8 +43,8 @@ export function pairedPaidView(t:Trade,_q?:Quote,now=t.lastQuoteAt,source?:Trade
       netPnl:grossPnl===null?null:grossPnl-fees,estimatedExitFee};
   }
   const s=leg(true),v=leg(false),gross=sumKnown([s.grossPnl,v.grossPnl]),net=sumKnown([s.netPnl,v.netPnl]);
-  return{version:PAID_FEE_VIEW_VERSION,tradeId:t.id,sourceId:i.sourceId,status:t.status,asOf:now,quoteFresh:fresh,
-    remainingQuantity:closed?0:t.quantity,exitFills:exits.length,administrative:i.fills.some(f=>!!f.administrative),source:s,inverse:v,
+  return{version:PAID_FEE_VIEW_VERSION,tradeId:t.id,sourceId:copy.sourceId,status:t.status,asOf:now,quoteFresh:fresh,
+    remainingQuantity:closed?0:t.quantity,exitFills:exits.length,administrative:copy.fills.some(f=>!!f.administrative),source:s,inverse:v,
     grossMirrorResidual:gross,paidFees:s.fees+v.fees,netSum:net};
 }
 
