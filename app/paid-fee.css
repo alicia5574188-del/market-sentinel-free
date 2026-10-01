@@ -1,7 +1,7 @@
 .fr-paid-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-block:14px}
 .fr-paid-summary>div,.fr-paid-summary>button{display:grid;gap:6px;min-width:0;text-align:left}
 .fr-paid-summary>button{border:1px solid var(--fr-line);border-radius:12px;padding:14px;background:transparent;color:inherit;cursor:pointer;font:inherit}
-.fr-paid-summary>button:hover,.fr-paid-summary>button:focus-visible{background:var(--fr-bg);outline:2px solid var(--fr-positive)}
+.fr-paid-summary>button:hover,.fr-paid-summary>button:focus-visible{background:var(--fr-raised);outline:2px solid var(--fr-green)}
 .fr-live-tabs.fr-ledger-tabs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));margin-block:16px}
 .fr-ledger-tabs>button{min-width:0;white-space:normal}
 .fr-shadow-order{padding-block:18px;border-bottom:1px solid var(--fr-line)}

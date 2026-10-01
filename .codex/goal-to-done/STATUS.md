@@ -14,7 +14,14 @@ primary reads; initial emulator session timeout resolves on unmodified rerun.
 Initial strict null-price and effect-state lint findings fixed without weakening
 checks. Lib/Worker/config/workflow/package sources byte-identical to base.
 Local SQLite storage round-trip/atomic archive rollback smoke also passes.
-Reviewed-main release/advancing receipts pending. Public before account
+PR604 exact-head CI36942934160 and main release36943060769 pass. Main
+f4d9c566d0b05253d5c04d5cd5bded94057c55a0 matches tested tree
+d05b4f5fb67146378f87db8008b15d43b6f04147, deployed asset200 contains selector
+and complete retained shadow rows; guest native equity401. Public ready,
+authority ready/non-stale/errors null and account/source/session/OFF preserved.
+Final CSS token audit found undefined hover/focus variables; use actual theme
+raised/green variables, no functional change. Small reviewed follow-up pending
+before final receipt. Public before account
 1790843524083/source2b4fd60f77c9b78526bd5087940945fe7e86fab8,
 activation1790860857522, owner OFF, ready/non-stale/errors null.
 
