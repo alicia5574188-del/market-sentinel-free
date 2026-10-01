@@ -217,3 +217,44 @@ test('rich dual-ledger drain fits storage without losing active evidence or sour
   assert.equal(restored.inverseTrial!.source.history[0]!.entryContext!.entryResidual,.08);assert.equal(restored.inverseTrial!.source.history[0]!.netPnl,-11.393);
   assert.ok(Buffer.byteLength(JSON.stringify(prepareForwardProtectionWrite(s)))<112*1024);
 });
+
+test('paired logical JSON above the old single-account cap roundtrips through bounded compressed chunks',async()=>{
+  const {s}=fixture();s.storage.persistedAt=T;
+  // Deterministic high-entropy active text exercises real external
+  // chunks, not a tiny compressed run of repeated padding. No user data.
+  const payload=Array.from({length:18000},(_,i)=>createHash('sha256').update('active-evidence-'+i).digest('hex')).join('');
+  s.positions[0]!.rule.reason=payload;
+  s.inverseTrial!.source.positions[0]!.rule.reason=payload;
+  const before=structuredClone(s),write=await prepareForwardWrite(before,s,T,{compact:true});
+  assert.ok(write.compression.rawBytes>2*1024*1024);
+  assert.equal(write.compression.accountBudgetBytes,4*1024*1024);
+  assert.ok(write.compression.storedBytes<=2*1024*1024);
+  assert.ok(write.compression.chunks>0);
+  const headKey='forward-relations:v1:head',head=write.entries[headKey] as {accountMode?:string;inline?:Uint8Array};
+  assert.equal(head.accountMode,'shadow-inverse-v1');
+  for(const value of Object.values(write.entries))if(value instanceof Uint8Array)assert.ok(value.byteLength<=112*1024);
+  const db=new Map(Object.entries(write.entries)),reader={get:async<T>(k:string)=>structuredClone(db.get(k)) as T|undefined};
+  const restored=await readForwardStore(reader,T+1);
+  near(restored.balance,s.balance);near(restored.inverseTrial!.source.balance,s.inverseTrial!.source.balance);
+  assert.equal(restored.positions[0]!.quantity,s.positions[0]!.quantity);
+  assert.equal(restored.inverseTrial!.source.positions[0]!.quantity,s.inverseTrial!.source.positions[0]!.quantity);
+  assert.deepEqual(restored.positions[0]!.inverseCopy,s.positions[0]!.inverseCopy);
+  assert.equal(restored.positions[0]!.rule.reason,payload);
+  assert.equal(restored.inverseTrial!.source.positions[0]!.rule.reason,payload);
+  assertInverseTrial(restored);
+  // Old or unknown heads may not silently obtain the larger envelope.
+  const valid=structuredClone(db.get(headKey)) as Record<string,unknown>;
+  db.set(headKey,{...valid,accountMode:undefined});await assert.rejects(()=>readForwardStore(reader,T+1),/预算/);
+  db.set(headKey,{...valid,accountMode:'arbitrary'});await assert.rejects(()=>readForwardStore(reader,T+1),/模式/);
+});
+test('a single account retains its old raw limit and oversized paired accounts fail before publication',async()=>{
+  const single=initialForward(T-B);single.latestReason='x'.repeat(1100*1024);
+  await assert.rejects(()=>prepareForwardWrite(structuredClone(single),single,T,{compact:true}),/账户预算/);
+  const {s}=fixture();s.positions[0]!.rule.reason='x'.repeat(4200*1024);
+  await assert.rejects(()=>prepareForwardWrite(structuredClone(s),s,T,{compact:true}),/账户预算/);
+});
+test('declared paired storage requires an actual matching dual ledger after verified decoding',async()=>{
+  const s=initialForward(T-B),write=await prepareForwardWrite(null,s,T,{compact:true}),key='forward-relations:v1:head';
+  const db=new Map(Object.entries(write.entries));db.set(key,{...(db.get(key) as object),accountMode:'shadow-inverse-v1'});
+  await assert.rejects(()=>readForwardStore({get:async<T>(k:string)=>structuredClone(db.get(k)) as T|undefined},T+1),/配对账本不一致/);
+});
