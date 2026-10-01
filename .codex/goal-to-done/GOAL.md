@@ -1,3 +1,13 @@
+# 2026-10-02 — PAPER fee rate parity with current LIVE
+
+Use current owner LIVE taker reference0.05% for new passive inverse PAPER fill
+debits, once per actual event notional. Preserve frozen source0.07% decisions,
+old7bp fees/curves and account/history, quantity/lifecycle, LIVE5× and sessions.
+Version per-fill fee receipts, keep legacy restoration and paired independent
+fee totals/views honest. No new request/cadence/row or financial control. Verify
+old/new mixed fees, partial exits, restart/dedup, source invariance and release
+reviewed main with advancing production continuity.
+
 # 2026-10-02 — halve inverse LIVE leverage, double margin
 
 Same proportional target notional/contracts; halve source leverage for inverse

@@ -1,3 +1,15 @@
+# 2026-10-02 — current LIVE taker reference, future PAPER fees only
+
+- Owner screenshot directly supports0.05% current LIVE vs0.07% PAPER; use
+  notional ×0.0005 for future passive inverse events, charged once per fill.
+  Do not infer VIP or change a user's native exchange fee receipt.
+- Frozen source keeps0.0007 and its wallet/outcomes, so new fee savings cannot
+  feed back into decisions. Quantity, shared price, events and LIVE5× unchanged.
+- Already-booked fees/curves remain7bp; per-fill policy/rate distinguishes new
+  receipts, including old-entry/new-exit pairs. Cumulative gap is explicitly
+  reconciled; each view uses its own leg's fees. No historical rebate/reset,
+  extra Gate read, polling, row or timer.
+
 # 2026-10-02 — lower isolated leverage without enlarging exposure
 
 - Original source/PAPER leverage stays frozen. New inverse LIVE intent uses half

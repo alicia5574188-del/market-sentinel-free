@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import type {ForwardState,Trade} from '../lib/forward-relations.ts';
 import type {InverseFill} from '../lib/shadow-inverse-ledger.ts';
 import {pairedPaidView,inversePaidFeeView,tradePaidNetPnl,remainingPaidNetPnl,PAID_FEE_VIEW_VERSION} from '../lib/paid-fee-view.ts';
+import {INVERSE_FEE_POLICY} from '../lib/inverse-fee.ts';
 
 const now=1_790_830_000_000,fee=.0007;
 const near=(a:number|null|undefined,b:number)=>{assert.equal(typeof a,'number');assert.ok(Math.abs(a!-b)<1e-8,`${a} != ${b}`);};
@@ -67,6 +68,25 @@ test('aggregate exact mirror has zero gross residual and net sum equals negative
   assert.equal(r.estimatedExitFees.includedInNet,false);
 });
 
+test('new 5bp inverse fee is independent of the frozen 7bp source in pair and aggregate net',()=>{
+  const {inverse,source}=pair(),first=inverse.inverseCopy!.fills[0]!;
+  first.fee=.5;first.feeRate=.0005;first.feePolicy=INVERSE_FEE_POLICY;inverse.entryFee=.5;
+  const row=pairedPaidView(inverse,undefined,now,source)!;near(row.source.fees,.7);near(row.inverse.fees,.5);
+  near(row.paidFees,1.2);near(row.netSum,-1.2);near(row.inverse.netPnl,tradePaidNetPnl(inverse));
+  near(row.inverse.estimatedExitFee,.55);near(row.source.estimatedExitFee,.77);
+  const aggregate=inversePaidFeeView(state(inverse),{},now)!;near(aggregate.inverse.fees,.5);
+  near(aggregate.source.fees,.7);near(aggregate.reconciliation.paidFees,1.2);near(aggregate.reconciliation.netSum,-1.2);
+});
+test('old 7bp entry remains booked while the current future exit estimate is 5bp',()=>{
+  const {inverse,source}=pair(),row=pairedPaidView(inverse,undefined,now,source)!;
+  near(row.inverse.entryFees,.7);near(row.inverse.estimatedExitFee,.55);near(row.inverse.netPnl,-100.7);
+  const f=exit(inverse,'CLOSE',10,109.9);f.fee=10*109.9*.0005;f.feeRate=.0005;f.feePolicy=INVERSE_FEE_POLICY;
+  inverse.netPnl=inverse.inverseCopy!.fills.reduce((n,f)=>n+f.gross-f.fee,0);
+  const closed=pairedPaidView(inverse)!,summary=inversePaidFeeView(state(inverse),{},now)!;
+  near(closed.inverse.fees,.7+10*109.9*.0005);near(closed.source.fees,.7+10*109.9*.0007);
+  near(closed.inverse.netPnl,inverse.netPnl);near(summary.inverse.netPnl,inverse.netPnl);
+  near(closed.netSum,-closed.paidFees);near(summary.reconciliation.netSum,-summary.reconciliation.paidFees);
+});
 test('generic non-paired display still respects already-booked partial funding while excluding future exit fee',()=>{
   const t={status:'OPEN',side:'LONG',quantity:6,entryPrice:100,lastPrice:110,entryFee:.7,
     realization:{initialQuantity:10,gross:32,fees:.3024,funding:.01}} as Trade;

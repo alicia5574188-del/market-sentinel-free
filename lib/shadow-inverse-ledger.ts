@@ -1,13 +1,14 @@
 /** Passive inverse PAPER accounting. No signal, independent exit or size choice. */
 import type {ForwardState,Trade,Quote,AuditEvent} from './forward-relations.ts';
 import {inversePaidFeeView} from './paid-fee-view.ts';
+import {SHADOW_FEE_RATE,INVERSE_COST,INVERSE_FEE_POLICY,recordedInverseFeeRate,type InverseFeeStamp} from './inverse-fee.ts';
+export {INVERSE_COST} from './inverse-fee.ts';
 
 export const SHADOW_INVERSE_VERSION='shadow-inverse-v1';
 export const SHADOW_BASELINE_BUILD='2b4fd60f77c9b78526bd5087940945fe7e86fab8';
-export const INVERSE_COST={feeRate:.0007};
 export const MIRROR_ACCOUNTING_MODE='same-source-price-fee-only-v1' as const;
 const SOURCE_FUNDING_ALLOWANCE_PER_DAY=.0002;
-export type InverseFill={sequence:number;kind:'OPEN'|'REDUCE'|'CLOSE';sourceAt:number;appliedAt:number;
+export type InverseFill=InverseFeeStamp & {sequence:number;kind:'OPEN'|'REDUCE'|'CLOSE';sourceAt:number;appliedAt:number;
   administrative?:'ACCOUNT_RESET_QUOTE'|'ACCOUNT_RESET_SAVED_MARK';
   sourceQuoteAt:number;quoteAt:number;sourcePrice:number;price:number;quantity:number;contracts:number;
   sourceGross:number;gross:number;sourceFee:number;fee:number;sourceFunding:number;funding:number;spreadDrag:number};
@@ -21,7 +22,7 @@ export type InverseCopy={version:typeof SHADOW_INVERSE_VERSION;sourceBuild:typeo
 export const SHARED_MARKET_KEYS=['extremumRegime','hypothesisResearch','environmentContext','marketPulse','selectedSymbols',
   'opportunities','entryValidations','entryDiagnostics','relationEngine','lastCycleAt','lastQuoteCycleAt','lastCandleAt','fitDiagnostics'] as const;
 export type ShadowCapsule=Omit<ForwardState,typeof SHARED_MARKET_KEYS[number]|'inverseTrial'>;
-export type InverseTotals={sourceGross:number;sourceFees:number;sourceFunding:number;gross:number;fees:number;funding:number;
+export type InverseTotals={sourceGross:number;sourceFees:number;sourceFunding:number;gross:number;fees:number;funding:number;feeSavings?:number;
   spreadDrag:number;opened:number;closed:number;reductions:number};
 export type InverseTrial={version:typeof SHADOW_INVERSE_VERSION;sourceBuild:typeof SHADOW_BASELINE_BUILD;cutoverAt:number;
   accountingMode?:typeof MIRROR_ACCOUNTING_MODE;reconciledAt?:number;
@@ -47,7 +48,7 @@ export function newInverseTrial(state:ForwardState,now:number,equity:number):Inv
   if(!finite(equity)||equity<=0)throw new Error('反向试验初始权益无效；保留原账户');
   return{version:SHADOW_INVERSE_VERSION,sourceBuild:SHADOW_BASELINE_BUILD,cutoverAt:now,accountingMode:MIRROR_ACCOUNTING_MODE,reconciledAt:now,
     initialComparisonEquity:equity,legacyIds:state.positions.map(t=>t.id),source:shadowCapsule(state),lastSourceRevision:state.revision,
-    totals:{sourceGross:0,sourceFees:0,sourceFunding:0,gross:0,fees:0,funding:0,spreadDrag:0,opened:0,closed:0,reductions:0},
+    totals:{sourceGross:0,sourceFees:0,sourceFunding:0,gross:0,fees:0,funding:0,feeSavings:0,spreadDrag:0,opened:0,closed:0,reductions:0},
     curve:[{at:now,source:equity,inverse:equity,theoretical:equity}],droppedCurvePoints:0};
 }
 function event(state:ForwardState,now:number,kind:AuditEvent['kind'],trade:Trade,reason:string){
@@ -61,16 +62,17 @@ function addFill(state:ForwardState,t:Trade,source:Trade,kind:InverseFill['kind'
   if(!finite(sourcePrice)||sourcePrice<=0||!finite(sourceQuoteAt)||sourceQuoteAt>sourceAt)throw new Error('影子成交回执无效');
   const i=t.inverseCopy!,isOpen=kind==='OPEN',price=sourcePrice,
     sourceGross=isOpen?0:dir(source.side)*quantity*(sourcePrice-source.entryPrice),gross=sourceGross===0?0:-sourceGross,
-    sourceFee=quantity*sourcePrice*INVERSE_COST.feeRate,fee=sourceFee,
+    sourceFee=quantity*sourcePrice*SHADOW_FEE_RATE,fee=quantity*price*INVERSE_COST.feeRate,
     days=Math.max(0,sourceAt-source.openedAt)/86_400_000,
     sourceFunding=isOpen?0:quantity*source.entryPrice*SOURCE_FUNDING_ALLOWANCE_PER_DAY*days,
     funding=0,spreadDrag=0,
     fill:InverseFill={sequence:i.fills.length,kind,sourceAt,appliedAt:now,sourceQuoteAt,quoteAt:sourceQuoteAt,
       sourcePrice,price,quantity,contracts,sourceGross,gross,sourceFee,fee,sourceFunding,funding,spreadDrag,
+      feePolicy:INVERSE_FEE_POLICY,feeRate:INVERSE_COST.feeRate,
       ...(administrative?{administrative}:{})};
   i.fills.push(fill);const a=state.inverseTrial!.totals;
   a.sourceGross+=sourceGross;a.sourceFees+=sourceFee;a.sourceFunding+=sourceFunding;
-  a.gross+=gross;a.fees+=fee;a.funding+=funding;a.spreadDrag+=spreadDrag;
+  a.gross+=gross;a.fees+=fee;a.funding+=funding;a.spreadDrag+=spreadDrag;a.feeSavings=(a.feeSavings??0)+sourceFee-fee;
   state.balance+=gross-fee;state.grossPnl+=gross;state.fees+=fee;
   state.turnover+=quantity*price;return fill;
 }
@@ -157,13 +159,14 @@ export function markInversePositions(state:ForwardState,_quotes:Record<string,Qu
     if(!source||!finite(source.lastPrice)||source.lastPrice<=0||!finite(source.lastQuoteAt)||source.lastQuoteAt>now)continue;
     t.lastPrice=source.lastPrice;t.lastQuoteAt=source.lastQuoteAt;
     const signed=dir(t.side)*(t.lastPrice/t.entryPrice-1);t.favorable=Math.max(t.favorable,signed);t.adverse=Math.max(t.adverse,-signed);
-    t.peakPnlRate=t.favorable;if(!t.firstProfitAt&&signed>INVERSE_COST.feeRate*2)t.firstProfitAt=now;
+    t.peakPnlRate=t.favorable;if(!t.firstProfitAt&&signed>SHADOW_FEE_RATE*2)t.firstProfitAt=now;
   }
 }
 export function inverseTrialSummary(state:ForwardState,quotes:Record<string,Quote>,now:number){
   const v=state.inverseTrial;if(!v)return null;const a=v.totals,paid=inversePaidFeeView(state,quotes,now)!;
   const sourceNet=paid.source.netPnl??0,inverseNet=paid.inverse.netPnl??0;
   return{paidCost:paid,version:v.version,sourceBuild:v.sourceBuild,cutoverAt:v.cutoverAt,accountingMode:v.accountingMode??null,
+    feePolicy:INVERSE_FEE_POLICY,feeRate:INVERSE_COST.feeRate,sourceFeeRate:SHADOW_FEE_RATE,
     reconciledAt:v.reconciledAt??null,initialEquity:v.initialComparisonEquity,
     sourceEquity:v.initialComparisonEquity+sourceNet,inverseEquity:v.initialComparisonEquity+inverseNet,
     theoreticalSamePriceEquity:v.initialComparisonEquity+inverseNet,sourceNet,inverseNet,
@@ -173,7 +176,7 @@ export function inverseTrialSummary(state:ForwardState,quotes:Record<string,Quot
     legacyOpen:state.positions.filter(t=>!t.inverseCopy).length,stalePositions:paid.stalePairs,
     sourceDecisionBalance:v.source.balance,sourceDecisionResolved:v.source.resolved,
     curve:v.curve,droppedCurvePoints:v.droppedCurvePoints,independentDecisions:false,liveExecution:'PAPER_ONLY' as const,
-    costModel:'Both PAPER legs use the exact source event price; gross PnL mirrors exactly and each leg pays only its own filled 7bp fees.',
+    costModel:'Exact source prices and gross inversion; source stays 7bp. New inverse fills use the current LIVE 5bp taker reference; already-booked fees stay unchanged.',
     scope:'Paired trades born after cutover only. Existing account curve and legacy holdings remain separate.'};
 }
 export function recordInverseCurve(state:ForwardState,quotes:Record<string,Quote>,now:number){
@@ -186,6 +189,8 @@ export function migrateInverseSamePrice(state:ForwardState,now:number){
   const trial=state.inverseTrial;if(!trial||trial.accountingMode===MIRROR_ACCOUNTING_MODE)return false;
   const rows=[...state.positions,...state.history].filter(t=>!!t.inverseCopy);
   const fills=rows.flatMap(t=>t.inverseCopy!.fills);
+  if(fills.some(f=>f.feeRate!==undefined||f.feePolicy!==undefined))
+    throw new Error('已有新版费率回执，禁止按旧同价迁移改写已扣手续费');
   const sum=(key:keyof InverseFill)=>fills.reduce((n,f)=>n+Number(f[key]),0);
   const a=trial.totals;
   if(rows.length!==a.opened||rows.filter(t=>t.status==='CLOSED').length!==a.closed
@@ -223,7 +228,7 @@ export function migrateInverseSamePrice(state:ForwardState,now:number){
     newWins=rows.filter(t=>t.status==='CLOSED'&&(t.netPnl??0)>0).length;
   state.balance+=newCash-oldCash;state.grossPnl+=newGross-oldGross;state.fees+=newFees-oldFees;
   state.fundingAllowance=Math.max(0,state.fundingAllowance-oldFunding);state.turnover+=newTurnover-oldTurnover;state.wins+=newWins-oldWins;
-  a.gross=newGross;a.fees=newFees;a.funding=newFunding;a.spreadDrag=0;trial.accountingMode=MIRROR_ACCOUNTING_MODE;trial.reconciledAt=now;
+  a.gross=newGross;a.fees=newFees;a.funding=newFunding;a.spreadDrag=0;a.feeSavings=0;trial.accountingMode=MIRROR_ACCOUNTING_MODE;trial.reconciledAt=now;
   let sourceFloating=0;
   for(const t of state.positions){if(!t.inverseCopy)continue;const source=trial.source.positions.find(s=>s.id===t.inverseCopy!.sourceId);
     if(!source)throw new Error('同价迁移缺少影子持仓');sourceFloating+=dir(t.inverseCopy.sourceSide)*t.quantity*(source.lastPrice-t.inverseCopy.sourceEntryPrice);}
@@ -239,7 +244,7 @@ export function assertInverseTrade(t:Trade){
     ||i.independentDecisions!==false||i.liveExecution!=='PAPER_ONLY'||!Array.isArray(i.fills)||i.fills.length<1||i.fills.length>4
     ||i.fills.some((f,n)=>f.sequence!==n||![f.sourceAt,f.appliedAt,f.quoteAt,f.sourcePrice,f.price,f.quantity,f.contracts,f.sourceGross,f.gross,f.fee,f.sourceFee,f.funding,f.sourceFunding,f.spreadDrag].every(finite)
       ||f.price<=0||f.sourcePrice<=0||f.quantity<=0||f.contracts<=0||f.fee<0||f.funding!==0||f.appliedAt<f.sourceAt||f.quoteAt>f.appliedAt
-      ||!same(f.price,f.sourcePrice)||!same(f.fee,f.sourceFee)||!same(f.gross,-f.sourceGross)||!same(f.spreadDrag,0)))
+      ||!same(f.price,f.sourcePrice)||!same(f.gross,-f.sourceGross)||!same(f.spreadDrag,0)))
     throw new Error('反向配对账本格式错误；必须同价、反方向、仅实际手续费');
   const first=i.fills[0]!,exits=i.fills.slice(1),initial=t.realization?.initialQuantity??t.quantity;
   if(first.kind!=='OPEN'||!same(first.quantity,initial)||!same(first.fee,t.entryFee)||!same(first.price,t.entryPrice)
@@ -247,7 +252,7 @@ export function assertInverseTrade(t:Trade){
     ||exits.some((f,n)=>f.kind!==(t.status==='CLOSED'&&n===exits.length-1?'CLOSE':'REDUCE')
       ||f.sourceAt<i.fills[n]!.sourceAt||!same(f.gross,dir(t.side)*f.quantity*(f.price-t.entryPrice))
       ||!same(f.sourceGross,dir(i.sourceSide)*f.quantity*(f.sourcePrice-i.sourceEntryPrice)))
-    ||i.fills.some(f=>!same(f.fee,f.price*f.quantity*INVERSE_COST.feeRate)||!same(f.sourceFee,f.sourcePrice*f.quantity*INVERSE_COST.feeRate)
+    ||i.fills.some(f=>!same(f.fee,f.price*f.quantity*recordedInverseFeeRate(f))||!same(f.sourceFee,f.sourcePrice*f.quantity*SHADOW_FEE_RATE)
       ||!same(f.contracts*t.quantoMultiplier,f.quantity)))throw new Error('反向成交与影子事件不一致');
   if(t.status==='OPEN'&&(!same(t.quantity+exits.reduce((n,f)=>n+f.quantity,0),first.quantity)
     ||!same(t.contracts+exits.reduce((n,f)=>n+f.contracts,0),first.contracts)||!same(t.contracts,i.sourceRemainingContracts)))
@@ -268,7 +273,8 @@ export function assertInverseTrial(state:ForwardState){
     ||['initialEquity','peakEquity','maxDrawdown','resolved','wins','grossPnl','fees','fundingAllowance','turnover'].some(k=>!finite((t.source as unknown as Record<string,unknown>)[k]))
     ||t.curve.some((p,n)=>![p.at,p.source,p.inverse,p.theoretical].every(finite)||p.at<t.cutoverAt||(n>0&&p.at<=t.curve[n-1]!.at))
     ||t.totals.closed>t.totals.opened||t.totals.opened-t.totals.closed!==state.positions.filter(p=>p.inverseCopy).length
-    ||!same(t.totals.gross,-t.totals.sourceGross)||!same(t.totals.fees,t.totals.sourceFees)||t.totals.funding!==0||t.totals.spreadDrag!==0)
+    ||!same(t.totals.gross,-t.totals.sourceGross)||t.totals.fees<0||t.totals.sourceFees<0||(t.totals.feeSavings??0)<0
+    ||!same(t.totals.fees+(t.totals.feeSavings??0),t.totals.sourceFees)||t.totals.funding!==0||t.totals.spreadDrag!==0)
     throw new Error('影子金融状态损坏；保留原账户，不重置试验');
   for(const source of t.source.positions){
     if(source.openedAt<t.cutoverAt||t.legacyIds.includes(source.id))continue;

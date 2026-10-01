@@ -1,5 +1,5 @@
 import {RESEARCH_PLAN_VERSION,researchPlanContext,type PlanResearchDecision} from './research-plan.ts';
-import {assertInverseTrade,assertInverseTrial,inverseTrialSummary,sourceDecisionState,shadowCapsule,applyInverseSourceTrade,migrateInverseSamePrice,type InverseCopy,type InverseTrial} from './shadow-inverse-ledger.ts';
+import {assertInverseTrade,assertInverseTrial,inverseTrialSummary,sourceDecisionState,shadowCapsule,applyInverseSourceTrade,migrateInverseSamePrice,INVERSE_COST,type InverseCopy,type InverseTrial} from './shadow-inverse-ledger.ts';
 import {advanceWinnerManagement, trendCore, WINNER_POLICY_VERSION, type WinnerPlan, type WinnerManagement} from "./winner-policy.ts";
 import {realizeTradeSlice, realizedContribution, remainingTradeFraction, assertTradeRealization, type TradeRealization} from "./trade-realization.ts";
 import {winnerEventHeadroom, recordWinnerRiskLoss, type WinnerRiskLedger} from "./winner-risk.ts";
@@ -1631,9 +1631,12 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
       grammar:"四层市场智能：超大周期→大方向→短期变化→相对机会。系统先理解整个市场，再选择同相关组中性价比最高的交易表达。",
       historyBackfill:false,
       sampleMeaning:"不依赖旧策略样本训练；只使用当前已完成K线、多交易所实时共识和持续市场记忆做因果判断。",
-      accounting:"模拟仍使用新鲜买卖价并计入手续费、滑点和资金费占位；每笔新Trade冻结独立交易假设、相关组、失效条件与持仓计划。",
+      accounting:s.inverseTrial?"反向模拟沿用影子成交价；新成交各扣0.05%手续费，历史费用保留；影子仍按冻结口径独立决策。"
+        :"模拟仍使用新鲜买卖价并计入手续费、滑点和资金费占位；每笔新Trade冻结独立交易假设、相关组、失效条件与持仓计划。",
       risk:"总结构风险≤10%、同方向≤6.5%、组合保证金≤75%；同一高相关组正常只允许一个同方向主仓，反方向独立假设可并存。",
       validation:"单一噪声不能让大方向来回翻转。新版计划保留独立趋势核心；稳定市场预警只调整新增风险与普通机会确认，健康持仓不能被市场预警单独平掉。研究、订单与执行页共用订单冻结区域；旧多尺度地图仅作背景。",
       liquidation:"先执行既定硬风险与保护线；主动退出需要本币新的价格失败依据。盈利后的部分兑现统一由同一计划管理，不把同源价格分数当成多项独立证据。"},
-    cost:PAPER_COST,nextCycleAt:s.lastCandleAt+BAR_MS};
+    cost:s.inverseTrial?{feeRate:INVERSE_COST.feeRate,slippageRate:0,fundingAllowancePerDay:0,
+      assumption:"后续成交按当前实盘taker参考0.05%各扣一次；历史已扣费用保留，未自动同步VIP/优惠变动"}:PAPER_COST,
+    nextCycleAt:s.lastCandleAt+BAR_MS};
 }
