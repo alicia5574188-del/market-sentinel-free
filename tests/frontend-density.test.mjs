@@ -135,29 +135,31 @@ test("waiting and holding views use the frozen order area, not a newer conflicti
   assert.match(html,/本单参考区 100–104/);assert.doesNotMatch(html,/本单参考区 200–204/);
 });
 
-test("order cards expose both paid-cost legs before expanding, without an unfilled close charge",()=>{
-  const t={id:"iv-source",status:"OPEN",symbol:"AAVE_USDT",side:"LONG",entryPrice:100.1,lastPrice:101.9,quantity:2,contracts:2,
-    notional:200.2,entryFee:.14014,leverage:10,margin:20.02,plannedRisk:2,openedAt:1790760000000,closedAt:null,
+test("order cards expose exact-price shadow/inverse nets before expanding, without an unfilled close charge",()=>{
+  const t={id:"iv-source",status:"OPEN",symbol:"AAVE_USDT",side:"LONG",entryPrice:100,lastPrice:102,quantity:2,contracts:2,
+    notional:200,entryFee:.14,leverage:10,margin:20,plannedRisk:2,openedAt:1790760000000,closedAt:null,
     stopPrice:98,expectedHoldMinutes:40,favorable:.02,adverse:0,entryContext:null,
-    inverseCopy:{sourceId:"source",sourceSide:"SHORT",sourceEntryPrice:99.9,fills:[{sequence:0,kind:"OPEN",quantity:2,contracts:2,
-      sourcePrice:99.9,price:100.1,sourceFee:.13986,fee:.14014,sourceGross:0,gross:0,sourceFunding:0,funding:0}]}};
-  const pair=paidModule.exports.pairedPaidView(t,{bestBid:101.9,bestAsk:102.1,observedAt:1790761200000,fresh:true},1790761200000);
+    inverseCopy:{sourceId:"source",sourceSide:"SHORT",sourceEntryPrice:100,fills:[{sequence:0,kind:"OPEN",quantity:2,contracts:2,
+      sourcePrice:100,price:100,sourceFee:.14,fee:.14,sourceGross:0,gross:0,sourceFunding:0,funding:0,spreadDrag:0,
+      sourceAt:1790760000000,appliedAt:1790760000000,sourceQuoteAt:1790760000000,quoteAt:1790760000000}]}};
+  const source={id:"source",status:"OPEN",symbol:"AAVE_USDT",side:"SHORT",entryPrice:100,lastPrice:102,lastQuoteAt:1790761200000};
+  const pair=paidModule.exports.pairedPaidView(t,undefined,1790761200000,source);
   const html=render("app/forward-dashboard.tsx",{trade:t,now:1790761200000,paid:pair},{},"TradeCard");
   const summary=html.match(/<summary>[\s\S]*?<\/summary>/)?.[0];assert.ok(summary);
   assert.match(summary,/原策略影子 · 空/);assert.match(summary,/反向模拟 · 多/);
-  assert.match(summary,/净额 -4\.54 U/);assert.match(summary,/净额 \+3\.46 U/);
-  assert.match(summary,/已扣手续费 0\.1399 U/);assert.match(summary,/已扣手续费 0\.1401 U/);
-  assert.doesNotMatch(summary,/平仓 [0-9]|已减仓 [0-9]/);assert.match(summary,/报价毛额差 0\.8000 U/);
+  assert.match(summary,/净额 -4\.14 U/);assert.match(summary,/净额 \+3\.86 U/);
+  assert.match(summary,/已扣手续费 0\.1400 U/);assert.doesNotMatch(summary,/平仓 [0-9]|已减仓 [0-9]/);
+  assert.match(summary,/毛盈亏镜像校验 0\.000000 U/);assert.doesNotMatch(summary,/报价毛额差/);
 });
-test("comparison shows paid-fee nets, keeps legacy curve visibly separate, and overview fee never adds estimates",()=>{
+test("comparison shows exact-mirror paid-fee nets and overview fee never adds estimates",()=>{
   const data=account();data.fees=3.25;
-  data.shadowInverse={sourceNet:-999,inverseNet:888,sourceFees:1.2,inverseFees:1.3,pairedOpened:7,pairedClosed:2,legacyOpen:0,
-    initialEquity:1000,cutoverAt:1790760000000,sourceEquity:998,inverseEquity:1001,theoreticalSamePriceEquity:1002,curve:[],realizedSpreadDrag:1,
-    paidCost:{source:{netPnl:-5},inverse:{netPnl:1.4},rows:[],stalePairs:0,
-      reconciliation:{netGap:3.6,paidFees:2.5,openGrossGap:.1,realizedGrossGap:1,bookedFunding:0},estimatedExitFees:{source:66,inverse:77}}};
+  data.shadowInverse={sourceNet:-999,inverseNet:888,sourceFees:1.25,inverseFees:1.25,pairedOpened:7,pairedClosed:2,legacyOpen:0,
+    initialEquity:1000,cutoverAt:1790760000000,sourceEquity:998,inverseEquity:1001,theoreticalSamePriceEquity:1001,curve:[],realizedSpreadDrag:0,
+    paidCost:{source:{netPnl:-5},inverse:{netPnl:2.5},rows:[],stalePairs:0,
+      reconciliation:{grossMirrorResidual:0,paidFees:2.5,netSum:-2.5},estimatedExitFees:{source:66,inverse:66}}};
   const html=render("app/forward-dashboard.tsx",dashboardProps(data));
-  assert.match(html,/原策略影子净额/);assert.match(html,/-5\.00 U/);assert.match(html,/\+1\.40 U/);
-  assert.doesNotMatch(html,/-999\.00|\+888\.00/);
+  assert.match(html,/原策略影子净额/);assert.match(html,/-5\.00 U/);assert.match(html,/\+2\.50 U/);
+  assert.doesNotMatch(html,/-999\.00|\+888\.00|报价毛额差|资金费占位/);
   assert.match(html,/<small>已扣手续费<\/small><b>3\.25 U<\/b>/);
-  assert.match(html,/估算清仓曲线（含预估平仓费）/);
+  assert.match(html,/同价镜像对照曲线/);assert.match(html,/毛盈亏镜像校验 0\.000000 U/);
 });
