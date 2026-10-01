@@ -1,9 +1,11 @@
 import {RESEARCH_PLAN_VERSION} from './research-plan.ts';
 import type {Trade} from './forward-relations.ts';
 import type {ReviewJournal, TradeReview} from './review-trace.ts';
+import {LIVE_REVIEW_VERSION,compareLiveReview,type LiveReview} from './live-review.ts';
 
 export const REVIEW_SNAPSHOT_VERSION='market-intelligence-review-v2';
 const ARCHIVE_PREFIX='forward-relations:v1:archive:';
+export const REVIEW_ARCHIVE_PAGE_ROWS=48,REVIEW_MAX_BYTES=12*1024*1024;
 const finite=(v:unknown):v is number=>typeof v==='number'&&Number.isFinite(v);
 const arr=<T>(v:unknown):T[]=>Array.isArray(v)?v:[];
 type ObjectRow=Record<string,unknown>;
@@ -11,15 +13,15 @@ const obj=(v:unknown):ObjectRow=>v&&typeof v==='object'&&!Array.isArray(v)?v as 
 const sum=(rows:Trade[],key:keyof Trade)=>rows.reduce((n,t)=>n+(finite(t[key])?t[key] as number:0),0);
 const timestamp=(v:unknown)=>finite(v)?new Date(v).toISOString():null;
 const beijing=(at:number)=>new Date(at+8*3600_000).toISOString().replace('Z','+08:00');
-export type ArchivePage={accountStartedAt:number;asOf:number;trades:Trade[];recordsRead:number;nextCursor:string|null;exhausted:boolean};
+export type ArchivePage={accountStartedAt:number;asOf:number;trades:Trade[];recordsRead:number;nextCursor:string|null;exhausted:boolean;conflictingTradeIds?:string[]};
 type ArchiveReader={list<T>(options:{prefix:string;start:string;end:string;reverse:boolean;limit:number}):Promise<Map<string,T>>};
 /** Bounded, strictly read-only page. No remote market data and no account mutation. */
 export async function readReviewArchivePage(storage:ArchiveReader,accountStartedAt:number,asOf:number,cursor:string|null):Promise<ArchivePage>{
   if(!Number.isSafeInteger(accountStartedAt)||accountStartedAt<=0||!Number.isSafeInteger(asOf)||asOf<accountStartedAt)throw new Error('INVALID_REVIEW_RANGE');
   const start=ARCHIVE_PREFIX+String(accountStartedAt).padStart(16,'0');
   const end=ARCHIVE_PREFIX+String(asOf+1).padStart(16,'0');
-  if(cursor&&(!/^forward-relations:v1:archive:\d{16}:\d+$/.test(cursor)||cursor<start||cursor>=end))throw new Error('INVALID_REVIEW_CURSOR');
-  const rows=await storage.list<{startedAt?:number;trades?:Trade[];reviews?:{tradeId:string;review:TradeReview}[]}>({prefix:ARCHIVE_PREFIX,start,end:cursor??end,reverse:true,limit:12});
+  if(cursor&&(!/^forward-relations:v1:archive:\d{16}:(?:\d+|reset:\d+)$/.test(cursor)||cursor<start||cursor>=end))throw new Error('INVALID_REVIEW_CURSOR');
+  const rows=await storage.list<{startedAt?:number;trades?:Trade[];reviews?:{tradeId:string;review:TradeReview}[]}>({prefix:ARCHIVE_PREFIX,start,end:cursor??end,reverse:true,limit:REVIEW_ARCHIVE_PAGE_ROWS});
   const trades:Trade[]=[];
   for(const packet of rows.values()){
     if(packet.startedAt!==accountStartedAt)continue;
@@ -29,9 +31,12 @@ export async function readReviewArchivePage(storage:ArchiveReader,accountStarted
         trades.push(reviews.has(t.id)?{...t,review:reviews.get(t.id)}:t);
     }
   }
-  return{accountStartedAt,asOf,trades,recordsRead:rows.size,nextCursor:rows.size===12?[...rows.keys()].at(-1)!:null,exhausted:rows.size<12};
+  const conflictingTradeIds:string[]=[];
+  return{accountStartedAt,asOf,trades:mergeTradeRows([],trades,conflictingTradeIds),conflictingTradeIds,recordsRead:rows.size,
+    nextCursor:rows.size===REVIEW_ARCHIVE_PAGE_ROWS?[...rows.keys()].at(-1)!:null,exhausted:rows.size<REVIEW_ARCHIVE_PAGE_ROWS};
 }
 export type ReviewSnapshot={
+  liveReview?:LiveReview|null;
   inverseExperiment?:ObjectRow|null;
   version:typeof REVIEW_SNAPSHOT_VERSION;
   versionDiagnostics?:ObjectRow;
@@ -189,9 +194,20 @@ export function finalizeReviewSnapshot(s:ReviewSnapshot):ReviewSnapshot{
     counterfactualMaturity:maturity,liveAssessment:ownerOff?'OWNER_OFF_NOT_A_COPY_FAILURE':(s.runtime.liveAssessment??'SEE_SCOPED_LIVE_EVIDENCE'),
     observedOrderWindow:{from:timestamp(closed.length?Math.min(...closed.map(t=>t.openedAt)):null),to:timestamp(closed.length?Math.max(...closed.map(t=>t.closedAt??0)):null)}};
   s.versionDiagnostics=reviewVersionDiagnostics(s);
+  if(s.liveReview){
+    const comparison=compareLiveReview(s.liveReview,s.trades,s.coverage.complete,s.meta.accountStartedAt),
+      enabledAt=s.liveReview.context.sessionAt,curve=arr<ObjectRow>(s.inverseExperiment?.curve),
+      prior=curve.filter(p=>finite(p.at)&&p.at<=enabledAt&&finite(p.inverse)).sort((a,b)=>Number(b.at)-Number(a.at))[0],
+      observed=prior&&enabledAt-Number(prior.at)<=120_000?prior:null;
+    s.summary.liveComparison={...comparison,paperAccountWindow:{enabledAt,
+      baselineAt:observed?.at??null,baselineEquity:observed?.inverse??null,currentEquity:s.account.equity,
+      observedEquityChange:observed&&finite(s.account.equity)?s.account.equity-Number(observed.inverse):null,
+      scope:'NEAREST_RETAINED_PRE_ENABLE_MARK_WITHIN_2M; INCLUDES_PRE_ENABLE_HOLDINGS; NOT_EXACT_ENABLE_EQUITY'}};
+  }
   if(s.inverseExperiment){
     const paired=s.trades.filter(t=>t.inverseCopy),sourceId=(t:Trade)=>t.inverseCopy!.sourceId;
-    s.inverseExperiment={...s.inverseExperiment,pairs:paired.map(t=>({tradeId:t.id,sourceId:sourceId(t),sourceBuild:t.inverseCopy!.sourceBuild,
+    s.inverseExperiment={...s.inverseExperiment,accountingScope:'FROZEN_SHADOW_AND_PASSIVE_INVERSE_PAPER',
+      actualLiveDiagnostics:s.liveReview?'liveReview':null,pairs:paired.map(t=>({tradeId:t.id,sourceId:sourceId(t),sourceBuild:t.inverseCopy!.sourceBuild,
       openedAt:t.openedAt,closedAt:t.closedAt,side:t.side,sourceSide:t.inverseCopy!.sourceSide,status:t.status,
       sourceEntry:t.inverseCopy!.sourceEntryPrice,entry:t.entryPrice,exit:t.exitPrice,remainingContracts:t.status==='OPEN'?t.contracts:0,
       sourceRemainingContracts:t.inverseCopy!.sourceRemainingContracts,sourceReason:t.inverseCopy!.sourceExitReason,
@@ -201,6 +217,9 @@ export function finalizeReviewSnapshot(s:ReviewSnapshot):ReviewSnapshot{
       costs:'Each ledger pays its own fees once. Spread drag is attribution, not an extra debit. Funding is an adverse allowance, not actual exchange funding.'};
   }
   s.issues=[];
+  if(s.liveReview&&(s.liveReview.coverage.error||s.liveReview.coverage.limitReached))s.issues.push({
+    code:'LIVE_REVIEW_HISTORY_INCOMPLETE',classification:'INSUFFICIENT_EVIDENCE',count:1});
+  if(s.runtime.liveReviewError)s.issues.push({code:'LIVE_REVIEW_UNAVAILABLE',classification:'INSUFFICIENT_EVIDENCE',count:1});
   const evidence=obj(s.versionDiagnostics.integratedEvidence);
   if(Number(evidence.missing)>0)s.issues.push({code:'INTEGRATED_PLAN_EVIDENCE_MISSING',classification:'INSUFFICIENT_EVIDENCE',
     count:Number(evidence.missing),tradeIds:arr<string>(evidence.missingTradeIds)});
@@ -222,6 +241,7 @@ export function finalizeReviewSnapshot(s:ReviewSnapshot):ReviewSnapshot{
 export function mergeReviewArchive(s:ReviewSnapshot,page:ArchivePage){
   if(page.accountStartedAt!==s.meta.accountStartedAt||page.asOf!==s.meta.exportedAt)throw new Error('REVIEW_ACCOUNT_OR_CUTOFF_CHANGED');
   s.trades=mergeTradeRows(s.trades,page.trades.filter(t=>t.openedAt>=s.meta.accountStartedAt&&t.openedAt<=s.meta.exportedAt),s.coverage.conflictingTradeIds);
+  s.coverage.conflictingTradeIds=[...new Set([...s.coverage.conflictingTradeIds,...(page.conflictingTradeIds??[])])];
   s.coverage.archiveRecordsRead+=page.recordsRead;s.coverage.archivePagesRead++;s.coverage.archiveNextCursor=page.nextCursor;s.coverage.archiveExhausted=page.exhausted;
   return finalizeReviewSnapshot(s);
 }
@@ -230,25 +250,74 @@ export function mergeReviewArchive(s:ReviewSnapshot,page:ArchivePage){
 export async function collectReviewSnapshot(fetcher:typeof fetch,progress?:(n:number,total:number)=>void){
   const response=await fetcher('/api/forward/export',{cache:'no-store',credentials:'same-origin'});
   if(!response.ok)throw new Error('SNAPSHOT_EXPORT_FAILED');
-  const data=await response.json() as ReviewSnapshot;
+  const initial=await response.text(),size=(s:string)=>new TextEncoder().encode(s).length;
+  if(size(initial)>REVIEW_MAX_BYTES)throw new Error('REVIEW_INITIAL_SIZE_LIMIT');
+  const data=JSON.parse(initial) as ReviewSnapshot;
+  let totalBytes=size(initial);const deadline=Date.now()+60_000;
+  // Native diagnostics are a separate, authenticated actor-local read. A failure
+  // never prevents exporting PAPER and never invokes account sync or Gate reads.
+  if(data.runtime?.privateLiveReviewAvailable===true||obj(data).liveReviewAvailable===true){
+    try{
+      const r=await fetcher('/api/live/review',{cache:'no-store',credentials:'same-origin',signal:AbortSignal.timeout(15_000)});
+      if(!r.ok)throw new Error(`LIVE_REVIEW_HTTP_${r.status}`);
+      const raw=await r.text();totalBytes+=size(raw);
+      if(totalBytes>REVIEW_MAX_BYTES)throw new Error('LIVE_REVIEW_SIZE_LIMIT');
+      const live=JSON.parse(raw) as LiveReview;
+      if(live.version!==LIVE_REVIEW_VERSION)throw new Error('LIVE_REVIEW_VERSION_MISMATCH');
+      data.liveReview=live;
+      const seen=new Set<string>();
+      if(live.context.sessionAt>0)for(let i=0;i<16&&!live.coverage.exhausted;i++){
+        if(Date.now()>=deadline){live.coverage.limitReached=true;break;}
+        const cursor=live.coverage.nextCursor;if(cursor&&seen.has(cursor))throw new Error('LIVE_REVIEW_REPEATED_CURSOR');
+        if(cursor)seen.add(cursor);
+        const q=new URLSearchParams({page:'closed',session:String(live.context.sessionAt),asOf:String(live.context.asOf),account:String(live.context.accountUser??'')});
+        if(cursor)q.set('cursor',cursor);
+        const pageResponse=await fetcher('/api/live/review?'+q,{cache:'no-store',credentials:'same-origin',signal:AbortSignal.timeout(15_000)});
+        if(!pageResponse.ok)throw new Error(`LIVE_REVIEW_PAGE_HTTP_${pageResponse.status}`);
+        const rawPage=await pageResponse.text();totalBytes+=size(rawPage);
+        if(totalBytes>REVIEW_MAX_BYTES){live.coverage.limitReached=true;break;}
+        const page=JSON.parse(rawPage) as {context:LiveReview['context'];positions:LiveReview['positions'];recordsRead:number;nextCursor:string|null;exhausted:boolean};
+        if(JSON.stringify(page.context)!==JSON.stringify(live.context))throw new Error('LIVE_REVIEW_CONTEXT_CHANGED');
+        const previousPositions=live.positions,combined=new Map(live.positions.map(p=>[p.id,p]));
+        for(const p of page.positions){const old=combined.get(p.id);combined.set(p.id,old?.settlement?old:p);}
+        live.positions=[...combined.values()];
+        if(size(JSON.stringify(data))>REVIEW_MAX_BYTES){live.positions=previousPositions;live.coverage.limitReached=true;break;}
+        live.coverage.pagesRead++;live.coverage.recordsRead+=page.recordsRead;
+        live.coverage.nextCursor=page.nextCursor;live.coverage.exhausted=page.exhausted;
+      }
+      if(!live.coverage.exhausted&&live.context.sessionAt>0)live.coverage.limitReached=true;
+    }catch(e){
+      const error=e instanceof Error?e.message:'LIVE_REVIEW_UNAVAILABLE';
+      if(data.liveReview)data.liveReview.coverage.error=error;
+      else if(data.runtime)data.runtime.liveReviewError=error;
+      else obj(data).liveReviewError=error;
+    }
+  }
   if(data.version!==REVIEW_SNAPSHOT_VERSION)return data;
-  const seen=new Set<string>();let totalBytes=0;
+  finalizeReviewSnapshot(data);
+  if(size(JSON.stringify(data))>REVIEW_MAX_BYTES){delete data.liveReview;data.runtime.liveReviewError='LIVE_REVIEW_FILE_SIZE_LIMIT';finalizeReviewSnapshot(data);}
+  const seen=new Set<string>();
   // Complete ledger counts do not imply complete exit evidence. Hot compaction
   // can remove assessments while retaining every settlement row.
   const needsArchive=()=>!data.coverage.complete||Number(data.summary.positionAssessmentMissing)>0||Number(data.summary.exitTraceMissing)>0;
-  // 768 archive packets maximum per click, no background polling.
+  // 3072 archive packets maximum per click, no background polling or writes.
   for(let page=0;page<64&&needsArchive()&&!data.coverage.archiveExhausted;page++){
+    if(Date.now()>=deadline){data.coverage.exportLimitReached=true;break;}
     const cursor=data.coverage.archiveNextCursor;
     if(cursor&&seen.has(cursor)){data.coverage.archiveError='REPEATED_CURSOR';break;}
     if(cursor)seen.add(cursor);
     const q=new URLSearchParams({page:'archive',accountStartedAt:String(data.meta.accountStartedAt),asOf:String(data.meta.exportedAt)});
     if(cursor)q.set('cursor',cursor);
     try{
-      const r=await fetcher('/api/forward/export?'+q,{cache:'no-store',credentials:'same-origin'});
+      const r=await fetcher('/api/forward/export?'+q,{cache:'no-store',credentials:'same-origin',signal:AbortSignal.timeout(15_000)});
       if(!r.ok)throw new Error(`ARCHIVE_HTTP_${r.status}`);
-      const text=await r.text();totalBytes+=new TextEncoder().encode(text).length;
-      if(totalBytes>12*1024*1024){data.coverage.exportLimitReached=true;break;}
-      mergeReviewArchive(data,JSON.parse(text) as ArchivePage);progress?.(data.coverage.includedClosed,data.coverage.expectedClosed);
+      const text=await r.text();totalBytes+=size(text);
+      if(totalBytes>REVIEW_MAX_BYTES){data.coverage.exportLimitReached=true;break;}
+      const previousTrades=data.trades,previousCoverage=structuredClone(data.coverage);
+      mergeReviewArchive(data,JSON.parse(text) as ArchivePage);
+      if(size(JSON.stringify(data))>REVIEW_MAX_BYTES){data.trades=previousTrades;data.coverage=previousCoverage;
+        data.coverage.exportLimitReached=true;finalizeReviewSnapshot(data);break;}
+      progress?.(data.coverage.includedClosed,data.coverage.expectedClosed);
     }catch(e){data.coverage.archiveError=e instanceof Error?e.message:'ARCHIVE_UNAVAILABLE';break;}
   }
   if(needsArchive()&&!data.coverage.archiveExhausted&&!data.coverage.archiveError)data.coverage.exportLimitReached=true;

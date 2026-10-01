@@ -340,6 +340,7 @@ export function memberExecutionClass(Base:typeof MarketStream) {
         }
         if(path==="/live-status")return json({live:await this.liveView(),generatedAt:Date.now()});
         if(path==="/live-history"&&request.method==="GET")return json(await this.privateLiveHistory());
+        if(path==="/live-review"&&request.method==="GET")return this.privateLiveReview(url);
         if(path==="/live-equity"&&request.method==="GET")return this.privateLiveEquity(url);
         if(path==="/credential-status")return json({credential:this.credentialView()});
         if(path==="/credentials"&&request.method==="PUT") {
