@@ -6,6 +6,7 @@ import {initialForward,type Trade} from '../lib/forward-relations.ts';
 import {forwardMirrorSources,buildProportionalMirror,mirrorCoverage,sourceLifecycle,mirrorPositionRisk,mirrorSourceFresh} from '../lib/live-parity.ts';
 import {liveProtectionPrice} from '../lib/live-source-policy.ts';
 import {buildLiveStopIntent} from '../lib/gate-live.ts';
+import {inverseEntryPriceLimit,entryPriceFits} from '../lib/live-entry-price.ts';
 import {startLiveSession,fenceLiveSourcePolicy,sourceAfterEnable,sameLiveSession} from '../lib/live-session.ts';
 import {newInverseTrial,sourceDecisionState,shadowCapsule,applyInverseSourceTrade} from '../lib/shadow-inverse-ledger.ts';
 registerHooks({resolve(specifier,context,next){
@@ -71,15 +72,19 @@ async function harness(side:'LONG'|'SHORT') {
   stream.runtime.live.requestedEnabled=true;stream.runtime.live.activation=startLiveSession(now-500,{...state,positions:[]});
   stream.runtime.tickSize.TEST_USDT=.01;
   stream.runtime.contractMeta.TEST_USDT={quantoMultiplier:.1,leverageMax:20,maintenanceRate:.005,enableDecimal:false,orderSizeMin:'1',orderSizeMax:'100000'};
-  stream.runtime.evidence.TEST_USDT={bestBid:100,bestAsk:100,midpoint:100,observedAt:now,fresh:true};
+  const quote=side==='LONG'?100.02:99.98;
+  stream.runtime.evidence.TEST_USDT={bestBid:quote,bestAsk:quote,midpoint:quote,observedAt:now,fresh:true};
   stream.saveCheckpoint=async()=>{for(const [key,value]of stream.liveJournal)data.set(key,structuredClone(value));stream.liveJournal.clear();};
   const calls={entries:0,stops:[] as any[],reductions:[] as string[],closes:0,leverage:0,cancels:[] as string[]},positions:any[]=[],priceOrders:any[]=[],orders=new Map<string,any>();
   const gate={snapshot:async()=>({account:{total:'100',available:'90',unrealised_pnl:'0',margin_mode:0},
     positions:structuredClone(positions),orders:[],priceOrders:structuredClone(priceOrders),checkedAt:Date.now()}),
     setLeverage:async()=>{calls.leverage++;},
     createEntry:async(intent:any,guard:()=>boolean)=>{assert.ok(guard());calls.entries++;
-      positions.push({contract:'TEST_USDT',size:String(intent.size),entry_price:'100',leverage:'10',margin:'10',unrealised_pnl:'0',mark_price:'100'});
-      orders.set('entry',{id_string:'entry',status:'finished',finish_as:'filled',fill_price:'100',size:String(intent.size),left:'0'});return'entry';},
+      const price=String(intent.body.price);
+      assert.equal(intent.kind,'LIMIT');assert.equal(intent.body.tif,'ioc');
+      assert.ok(inverse.side==='LONG'?Number(price)<inverse.entryPrice:Number(price)>inverse.entryPrice);
+      positions.push({contract:'TEST_USDT',size:String(intent.size),entry_price:price,leverage:'10',margin:'10',unrealised_pnl:'0',mark_price:price});
+      orders.set('entry',{id_string:'entry',status:'finished',finish_as:'filled',fill_price:price,size:String(intent.size),left:'0'});return'entry';},
     inspectEntry:async(_kind:string,_symbol:string,_tag:string,id:string)=>orders.get(id)??null,
     createStop:async(intent:any)=>{calls.stops.push(intent);const id='stop'+calls.stops.length;
       priceOrders.push({id_string:id,text:intent.tag,initial:intent.body.initial});return id;},
@@ -110,6 +115,57 @@ test('source close during leverage await cancels before the single market networ
   const h=await harness('LONG');h.gate.setLeverage=async()=>{
     h.inverse.status='CLOSED';h.inverse.closedAt=Date.now();h.state.positions=[];h.state.history=[h.inverse];};
   await h.stream.syncLive(Date.now());assert.equal(h.calls.entries,0);assert.equal(h.calls.stops.length,0);
+});
+test('favorable price ticks are exact, including off-grid and exponent prices',()=>{
+  for(const [entry,tick,long,short]of [[100,.01,99.99,100.01],[100.005,.01,99.99,100.02],
+    [.0000001,.00000001,.00000009,.00000011],[.3,.1,.2,.4]]){
+    assert.equal(inverseEntryPriceLimit({side:'LONG',entryPrice:entry},tick).price,long);
+    assert.equal(inverseEntryPriceLimit({side:'SHORT',entryPrice:entry},tick).price,short);
+    assert.ok(entryPriceFits('LONG',long,long));assert.ok(!entryPriceFits('LONG',entry,long));
+    assert.ok(entryPriceFits('SHORT',short,short));assert.ok(!entryPriceFits('SHORT',entry,short));
+  }
+  assert.throws(()=>inverseEntryPriceLimit({side:'LONG',entryPrice:100},NaN));
+  assert.throws(()=>inverseEntryPriceLimit({side:'LONG',entryPrice:.01},.01));
+});
+for(const side of ['LONG','SHORT']as const)test(`inverse ${side} waits for favorable price, then copies once without source mutation`,async()=>{
+  const h=await harness(side),before=structuredClone(h.state);
+  Object.assign(h.stream.runtime.evidence.TEST_USDT,{bestBid:100,bestAsk:100,midpoint:100});
+  await h.stream.syncLive(Date.now());assert.equal(h.calls.entries,0);assert.equal(h.calls.leverage,0);
+  assert.match(h.stream.runtime.live.entrySkips.TEST_USDT.reason,/等待有利入场价/);
+  assert.deepEqual(h.state,before);
+  const price=side==='LONG'?100.02:99.98;
+  Object.assign(h.stream.runtime.evidence.TEST_USDT,{bestBid:price,bestAsk:price,midpoint:price,observedAt:Date.now()});
+  await h.stream.syncLive(Date.now());assert.equal(h.calls.entries,1);
+  await h.stream.syncLive(Date.now());assert.equal(h.calls.entries,1);
+});
+test('price deterioration during leverage await returns to waiting without submitting',async()=>{
+  const h=await harness('LONG');h.gate.setLeverage=async()=>{
+    Object.assign(h.stream.runtime.evidence.TEST_USDT,{bestBid:99.9,bestAsk:99.9,midpoint:99.9,observedAt:Date.now()});};
+  await h.stream.syncLive(Date.now());assert.equal(h.calls.entries,0);
+  assert.match(h.stream.runtime.live.entrySkips.TEST_USDT.reason,/等待有利入场价/);
+});
+test('a favorable IOC with zero fills is final and never replayed',async()=>{
+  const h=await harness('LONG');h.gate.createEntry=async()=>{h.calls.entries++;return'zero';};
+  h.gate.inspectEntry=async()=>({id_string:'zero',status:'finished',finish_as:'ioc',size:'-10',left:'-10'});
+  await h.stream.syncLive(Date.now());assert.equal(h.calls.entries,1);
+  assert.equal(h.stream.runtime.live.entries.TEST_USDT.status,'CANCELLED');assert.equal(h.calls.closes,0);
+  await h.stream.syncLive(Date.now());assert.equal(h.calls.entries,1);assert.equal(h.positions.length,0);
+});
+test('favorable IOC partial fill owns actual exposure, receives source close and is never topped up',async()=>{
+  const h=await harness('LONG'),create=h.gate.createEntry;
+  h.gate.createEntry=async(intent:any,guard:()=>boolean)=>{
+    const id=await create(intent,guard);h.positions[0].size='-4';return id;};
+  h.gate.inspectEntry=async()=>({id_string:'entry',status:'finished',finish_as:'ioc',fill_price:'100.01',size:'-10',left:'-6'});
+  await h.stream.syncLive(Date.now());await h.stream.syncLive(Date.now());
+  assert.equal(h.calls.entries,1);assert.equal(h.stream.runtime.live.positions.TEST_USDT.exchangeSize,4);
+  assert.equal(h.stream.runtime.live.positions.TEST_USDT.side,'SHORT');
+  h.inverse.status='CLOSED';h.inverse.closedAt=Date.now();h.state.positions=[];h.state.history=[h.inverse];
+  await h.stream.syncLive(Date.now());assert.equal(h.calls.closes,1);assert.equal(h.calls.entries,1);
+});
+test('unknown favorable IOC result retains its identity and risk instead of resubmitting',async()=>{
+  const h=await harness('LONG');h.gate.createEntry=async()=>{h.calls.entries++;throw new Error('timeout after send');};
+  await h.stream.syncLive(Date.now());await h.stream.syncLive(Date.now());
+  assert.equal(h.calls.entries,1);assert.ok(h.stream.runtime.live.entries.TEST_USDT.marketSubmittedAt);
 });
 test('source dispatch coalesces concurrent events and runs a later pass after the first private await',async()=>{
   const h=await harness('LONG');let calls=0,release!:()=>void;

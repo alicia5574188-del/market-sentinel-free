@@ -43,6 +43,7 @@ export type MirrorReceipt = {
   nativeProtectionPrice?:number|null; shadowSourceId?:string;
   sourceAllocationRiskRate?:number; exitPolicy?:typeof INVERSE_LIVE_EXIT_POLICY;
   retiredProtectionTags?:string[]; protectionRemovedAt?:number;
+  entryPricePolicy?:'favorable-ioc-v1'; entryLimitPrice?:number;
 };
 export type MirrorBinding = { version: typeof LIVE_PARITY_VERSION; sourceAtCopy: Trade;
   receipt: MirrorReceipt; sourceAtClose?: Trade; actual?: unknown };
@@ -127,7 +128,8 @@ export function liveEntryDriftGuard(source:Trade,currentPrice:number) {
   const remaining=Math.max(0,source.forecast?.remainingNetRate??0);
   const edgeBound=remaining>0?Math.max(.0015,Math.min(.005,remaining*.5)):.005;
   const allowed=Math.min(stopBound,edgeBound);
-  return {policy:LIVE_ENTRY_DRIFT_POLICY,adverse,allowed,stopWidth,remaining};
+  return {policy:LIVE_ENTRY_DRIFT_POLICY,adverse,
+    allowed:source.inverseCopy?0:allowed,stopWidth,remaining};
 }
 
 /** Remaining quantity is reconciled from Gate before entry admission. A close
@@ -274,6 +276,7 @@ export function mirrorCoverage(state:ForwardState|null,live:{requestedEnabled:bo
   return {version:LIVE_PARITY_VERSION,source:LIVE_PARITY_SOURCE,connected:!!state&&!sourceError,ownerControlled:true,
     accountRole:state?.inverseTrial?'INVERSE_PAPER':'CURRENT_PAPER',
     nativeProtectionPolicy:state?.inverseTrial?INVERSE_LIVE_EXIT_POLICY:null,
+    entryPricePolicy:state?.inverseTrial?'favorable-ioc-v1':LIVE_ENTRY_DRIFT_POLICY,
     instructionParity:!sourceError,exactFillsGuaranteed:false,sourceCount:sources.length,copiedCount:rows.filter(r=>["COPIED","DEVIATION"].includes(r.status)).length,
     pendingCount:rows.filter(r=>r.status==="PENDING").length,rows,error:sourceError,
     executionPolicy:LIVE_SESSION_VERSION,newOrdersOnly:true,enabledAt:live.activation?.enabledAt??null,

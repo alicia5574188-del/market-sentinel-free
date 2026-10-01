@@ -1,3 +1,29 @@
+# 2026-10-01 — compact LIVE / favorable copying, candidate
+
+Base c3e7ac8. Default holdings/history/archive cards now show six essential
+fields with full attribution folded. New inverse entries wait for an executable
+one-tick-better price; a decimal-exact IOC limit bounds exchange matching.
+Size/margin reserved at the worst allowed limit; final post-leverage and
+pre-network price fences, single-submit identity, zero/partial/unknown fill
+reconciliation, source reduce/close and manual controls remain. No market retry,
+refill, reset, extra cadence or real verification order. Public before receipt:
+account startedAt 1790843524083, owner ON/operational ON, no runtime/storage error.
+Local direct 309, Forward 78, LIVE 175 (26 real-Worker inverse cases), members 49,
+equity 65, architecture/migration 43 pass. Build/feed/storage workerd pass;
+typecheck and lint pass (15 existing warnings). Final dry-run, reviewed PR/main
+release and public advancing-state continuity receipt remain.
+
+# 2026-10-01 — inverse protection removed / done
+
+PR594 merged; main c3e7ac8a5332053dedffed8eac4556b1de2a3f8a deployed.
+Exact-head PR CI36835970821 and main release36836159068 succeed. Production
+reads confirm shadow-events-only-v1, same account 1790830695038, owner OFF,
+zero actual holdings, protected markets ready and no runtime/storage error.
+Financial saves advance 1790843242318 → 1790843310318; heartbeat advances as well. 19 actual-Worker
+inverse tests/168 LIVE-Gate and required gates pass. No shadow/PAPER/account
+change or real order/switch. Dangerous-entry redesign remains shelved.
+Durable release receipt is in PR594 description.
+
 # 2026-10-01 — inverse LIVE protection removal / verification
 
 Base main 40f314f69ddc71779534fd43719ed2b81dadae83. Owner shelves redesign and
