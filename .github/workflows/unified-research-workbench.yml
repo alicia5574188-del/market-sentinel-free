@@ -1,0 +1,25 @@
+name: Unified research isolated workbench
+on:
+  push:
+    branches: [fix/20261001-unified-research-plan]
+    paths: [.github/workflows/unified-research-workbench.yml]
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 2b4fd60f77c9b78526bd5087940945fe7e86fab8
+      - run: |
+          mkdir -p /tmp/unified-source
+          git archive --format=tar HEAD > /tmp/unified-source/source.tar
+          git rev-parse HEAD > /tmp/unified-source/head.txt
+          git ls-tree -r HEAD > /tmp/unified-source/tree.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unified-source
+          path: /tmp/unified-source
+          retention-days: 2
