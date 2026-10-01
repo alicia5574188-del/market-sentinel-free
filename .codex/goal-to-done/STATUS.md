@@ -1,3 +1,21 @@
+# 2026-10-02 — PAPER curve visibility, release pending
+
+Base main e4e01d5. LIVE ON previously hid the original PAPER equity chart through
+the dashboard's OFF-only branch. The original ledger/archive remains intact.
+One shared chart section now appears on overview regardless of LIVE mode and on
+the LIVE-mirrored simulated page, using the unchanged PAPER data/cache/account
+scope. Explicit PAPER labels distinguish its curve and totals from actual Gate
+headline equity, floating, orders and settlements. Existing rendered tests now
+assert both curve data identity and native LIVE authority, including unknown
+Gate values/member cache scope. No financial/strategy/backend files changed.
+Locked dependency install and local verification pass: UI14, direct328,
+Forward78+compat4, equity65, members50, LIVE196, feed workerd, build/typecheck,
+architecture/migration43, lint (15 existing warnings), dry-run and diff check.
+Before receipt: deployed e4e01d5, same account1790843524083, owner requested and
+operational ON, no runtime error; financial save1790889613987. Next: reviewed
+PR CI, exact-main release and two public advancing-state receipts. No reset,
+switch action or test trade. No browser visual QA claimed.
+
 # 2026-10-01 — LIVE-authoritative execution/display, release pending
 
 Owner replaced favorable-entry/winner research with immediate shared-response

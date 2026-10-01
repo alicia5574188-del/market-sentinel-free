@@ -73,15 +73,16 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
         <Stat label="实盘账户" value={`${fmt(liveOverview?.equity)} U`} note={`${liveOverview?.positionCount??"—"} 笔持仓 · 可用 ${fmt(liveOverview?.available)} U`}/>
       </section>
       {liveEnabled?<section className="fr-section"><div className="fr-section-head"><h2>实盘复制</h2><button className="fr-text-button" onClick={()=>select("paper")}>查看同步账户 →</button></div>
-        <p>已复制 {liveOverview?.copied??"—"} / 应复制 {liveOverview?.eligible??"—"} · 未跟上 {liveOverview?.missing??"—"}。模拟页与实盘页共用真实成交、持仓和结算记录；未成交不产生模拟利润。</p></section>:<><InversePanel data={data}/><section className="fr-section"><div className="fr-section-head"><h2>净值变化</h2><button className="fr-text-button" onClick={()=>select("execution")}>查看执行 →</button></div><EquityCurve data={data} healthy={healthy} cache={equityCache} cacheScope={cacheScope}/>
-        <div className="fr-three"><div><small>累计成交额</small><b>{fmt(data?.turnover)} U</b></div><div><small>已扣手续费</small><b>{fmt(data?.fees)} U</b></div><div><small>完成订单</small><b>{fmt(data?.resolved,0)}</b></div></div></section></>}
+        <p>已复制 {liveOverview?.copied??"—"} / 应复制 {liveOverview?.eligible??"—"} · 未跟上 {liveOverview?.missing??"—"}。模拟页与实盘页共用真实成交、持仓和结算记录；未成交不产生模拟利润。</p></section>:<InversePanel data={data}/>}
+      <PaperEquitySection data={data} healthy={healthy} cache={equityCache} cacheScope={cacheScope}/>
       <section className="fr-section"><div className="fr-section-head"><h2>{data?.shadowInverse?"影子机会 · 模拟反向":"当前最优机会"}</h2><span>{eligible.length} 个可参与</span></div>
         <OpportunityGrid rows={opportunities.slice(0,6)} inverse={!!data?.shadowInverse}/></section>
     </>}
 
     {tab==="execution"&&<MarketIntelligenceExecution data={data} now={now} liveEnabled={liveEnabled} liveOverview={liveOverview}/>}
 
-    {tab==="paper"&&liveEnabled&&<section className="fr-section" data-testid="paper-live-mirror"><h2>模拟账户 · 同步实盘</h2><p>以下直接使用本账户实盘成交与盈亏；影子仅提供开平仓信号。未成交、待确认及未核实结算保留实际状态。</p></section>}
+    {tab==="paper"&&liveEnabled&&<><section className="fr-section" data-testid="paper-live-mirror"><h2>模拟账户 · 同步实盘</h2><p>订单与盈亏使用本账户实盘数据；原模拟曲线保留供对照。</p></section>
+      <PaperEquitySection data={data} healthy={healthy} cache={equityCache} cacheScope={cacheScope}/></>}
     {tab==="paper"&&!liveEnabled&&<>
       <PageTitle title="模拟账户"/><InversePanel data={data}/>
       <nav className="fr-live-tabs fr-paper-tabs">{([["account","账户"],["positions","持仓"],["history","记录"],["archive","归档"]] as const).map(([id,label])=><button key={id} className={paperTab===id?"selected":""} onClick={()=>setPaperTab(id)}>{label}</button>)}</nav>
@@ -109,6 +110,14 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
     <footer className="fr-footer"><span>行情更新 {time(feedAt)} · 运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>{data?.engineVersion??data?.version??"—"} · 北京时间</span></footer>
     <nav className="fr-nav">{nav.map(([id,icon,label])=><button key={id} className={id===tab?"selected":""} onClick={()=>select(id)}><span>{icon}</span><b>{label}</b>{id==="paper"&&(liveEnabled?(liveOverview?.positionCount??0):positions.length)>0&&<i>{liveEnabled?liveOverview?.positionCount:positions.length}</i>}</button>)}</nav>
   </main>;
+}
+
+function PaperEquitySection({data,healthy,cache,cacheScope}:{data:View|null;healthy:boolean;cache:EquityHistoryCache;cacheScope:string}){
+  return <section className="fr-section" data-testid="paper-equity-curve" aria-label="原模拟账户净值">
+    <div className="fr-section-head"><h2>模拟净值</h2><span>原模拟账本</span></div>
+    <EquityCurve data={data} healthy={healthy} cache={cache} cacheScope={cacheScope}/>
+    <div className="fr-three"><div><small>模拟累计成交额</small><b>{fmt(data?.turnover)} U</b></div><div><small>模拟已扣手续费</small><b>{fmt(data?.fees)} U</b></div><div><small>模拟完成订单</small><b>{fmt(data?.resolved,0)}</b></div></div>
+  </section>;
 }
 
 function OpportunityGrid({rows,details=false,inverse=false}:{rows:NonNullable<View["opportunities"]>;details?:boolean;inverse?:boolean}){

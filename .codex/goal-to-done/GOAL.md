@@ -1,3 +1,11 @@
+# 2026-10-02 — original PAPER curve visible while LIVE is enabled
+
+Keep the original simulated equity/history curve visible on overview and the
+LIVE-mirrored simulated page. Label it as PAPER; preserve account-scoped cache,
+archive continuity and LIVE-native headline equity/orders/settlements. No source,
+execution, sizing, history/reset, session or cadence changes. Run existing gates,
+release reviewed main and verify public continuity without a private test trade.
+
 # 2026-10-01 — actual LIVE execution and mirrored display
 
 Remove favorable-price waiting for inverse entries; dispatch one market IOC

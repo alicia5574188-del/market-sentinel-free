@@ -1,3 +1,14 @@
+# 2026-10-02 — independent PAPER chart alongside native LIVE display
+
+- Owner explicitly restores original simulated curve visibility during LIVE.
+  Original PAPER history remains a separate reference, never Gate equity.
+- Reuse one dashboard-scoped EquityHistoryCache and the existing owner/member
+  cacheScope. Only the active overview or simulated tab mounts the chart; no
+  parallel chart reader, new endpoint, alarm or archive-write cadence.
+- LIVE headline account and the reused native order panel retain actual data;
+  unknown Gate values remain unknown even while the PAPER curve is visible.
+- No source ledger, strategy, execution/exit, sizing, reset or session changes.
+
 # 2026-10-01 — source exit priority and bounded first execution
 
 - Owner requests exit optimization as well as entries. Preserve committed

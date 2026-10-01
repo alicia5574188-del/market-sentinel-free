@@ -74,23 +74,36 @@ test("missing account stays unknown and operational errors remain visible",()=>{
   assert.match(html,/role="alert"/);assert.match(html,/fixture storage unavailable/);
 });
 
-test('LIVE ON overview uses exchange equity and floating; theoretical profit and curve cannot leak into the account',()=>{
-  const html=render('app/forward-dashboard.tsx',{...dashboardProps({...account(),equity:9876.54,netPnl:8876.54}),liveEnabled:true,
+test('LIVE ON uses exchange equity and floating while preserving the separate original PAPER curve',()=>{
+  const data={...account(),equity:9876.54,netPnl:8876.54};
+  const html=render('app/forward-dashboard.tsx',{...dashboardProps(data),cacheScope:'member:curve-owner',liveEnabled:true,
     liveOverview:{equity:101.23,available:80,positionCount:1,accountMark:{initialEquity:110,tradingPnl:-8.77,
-      capitalChange:-8.77,floating:-3.21,margin:20,positionCount:1,startedAt:1790760000000,maxDrawdown:.08},copied:1,eligible:3,missing:2}});
+      capitalChange:-8.77,floating:-3.21,margin:20,positionCount:1,startedAt:1790760000000,maxDrawdown:.08},copied:1,eligible:3,missing:2}},
+    {'./equity-curve.tsx':{default:props=>{
+      assert.strictEqual(props.data,data);assert.equal(props.cacheScope,'member:curve-owner');assert.ok(props.cache);
+      return jsxRuntime.jsx('div',{'data-testid':'curve-fixture',children:'PAPER_CURVE_9876.54'});
+    }}});
   assert.match(html,/101\.23/);assert.match(html,/-3\.21 U/);assert.match(html,/-8\.77/);
-  assert.doesNotMatch(html,/9,876\.54|8,876\.54|curve-fixture/);
+  const equity=html.match(/<section[^>]*data-testid="overview-equity-first"[\s\S]*?<\/section>/)?.[0];
+  assert.doesNotMatch(equity,/9,876\.54|8,876\.54|PAPER_CURVE/);
+  assert.match(html,/data-testid="paper-equity-curve"[\s\S]*模拟净值[\s\S]*PAPER_CURVE_9876\.54/);
+  assert.equal(html.split('data-testid="curve-fixture"').length-1,1);
   assert.match(html,/未跟上 2/);assert.match(html,/含出入金/);
 });
 test('LIVE ON without account confirmation does not substitute simulated equity or zero PnL',()=>{
   const html=render('app/forward-dashboard.tsx',{...dashboardProps(account()),liveEnabled:true});
   const equity=html.match(/<section[^>]*data-testid="overview-equity-first"[\s\S]*?<\/section>/)?.[0];
   assert.match(equity,/<strong>—<\/strong>/);assert.doesNotMatch(equity,/922\.82|-77\.18|\+0\.00/);
+  assert.match(html,/paper-equity-curve/);assert.match(html,/curve-fixture/);
 });
-test('LIVE ON simulated account mounts the very same native order panel and never renders theoretical trades',()=>{
-  const html=render('app/forward-dashboard.tsx',{...dashboardProps(account()),liveEnabled:true,livePanel:'REAL_ORDER_PANEL'},
-    {react:{...React,useState:value=>React.useState(value==='overview'?'paper':value)}});
+test('LIVE ON simulated page keeps the original curve alongside the same native order panel',()=>{
+  const data=account();
+  const html=render('app/forward-dashboard.tsx',{...dashboardProps(data),liveEnabled:true,livePanel:'REAL_ORDER_PANEL'},
+    {react:{...React,useState:value=>React.useState(value==='overview'?'paper':value)},
+      './equity-curve.tsx':{default:props=>{assert.strictEqual(props.data,data);return jsxRuntime.jsx('div',{'data-testid':'curve-fixture'});}}});
   assert.match(html,/paper-live-mirror/);assert.match(html,/REAL_ORDER_PANEL/);
+  assert.match(html,/paper-equity-curve/);assert.match(html,/模拟净值/);assert.match(html,/curve-fixture/);
+  assert.equal(html.split('data-testid="curve-fixture"').length-1,1);
   assert.doesNotMatch(html,/模拟权益|暂无已平仓记录|当前没有模拟持仓|shadow-inverse-comparison/);
 });
 
@@ -197,6 +210,6 @@ test("comparison shows exact-mirror paid-fee nets and overview fee never adds es
   const html=render("app/forward-dashboard.tsx",dashboardProps(data));
   assert.match(html,/原策略影子净额/);assert.match(html,/-5\.00 U/);assert.match(html,/\+2\.50 U/);
   assert.doesNotMatch(html,/-999\.00|\+888\.00|报价毛额差|资金费占位/);
-  assert.match(html,/<small>已扣手续费<\/small><b>3\.25 U<\/b>/);
+  assert.match(html,/<small>模拟已扣手续费<\/small><b>3\.25 U<\/b>/);
   assert.match(html,/同价镜像对照曲线/);assert.match(html,/毛盈亏镜像校验 0\.000000 U/);
 });
