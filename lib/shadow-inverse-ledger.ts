@@ -25,7 +25,7 @@ export type InverseCopy={version:typeof SHADOW_INVERSE_VERSION;sourceBuild:typeo
  * instead supplied by the source's own capsule, never the inverse wallet. */
 export const SHARED_MARKET_KEYS=['extremumRegime','hypothesisResearch','environmentContext','marketPulse','selectedSymbols',
   'opportunities','entryValidations','entryDiagnostics','relationEngine','lastCycleAt','lastQuoteCycleAt','lastCandleAt','fitDiagnostics'] as const;
-export type ShadowCapsule=Omit<ForwardState,typeof SHARED_MARKET_KEYS[number]|'inverseTrial'|'unifiedExecution'>;
+export type ShadowCapsule=Omit<ForwardState,typeof SHARED_MARKET_KEYS[number]|'inverseTrial'|'unifiedExecution'|'directStrategy'>;
 export type InverseTotals={sourceGross:number;sourceFees:number;sourceFunding:number;gross:number;fees:number;funding:number;feeSavings?:number;
   spreadDrag:number;opened:number;closed:number;reductions:number};
 export type InverseTrial={version:typeof SHADOW_INVERSE_VERSION;sourceBuild:typeof SHADOW_BASELINE_BUILD;cutoverAt:number;
@@ -39,6 +39,7 @@ export const inverseId=(sourceId:string)=>`iv-${sourceId}`;
 export function shadowCapsule(state:ForwardState):ShadowCapsule{
   const row={...state} as Record<string,unknown>;delete row.inverseTrial;
   delete row.unifiedExecution;
+  delete row.directStrategy;
   for(const k of SHARED_MARKET_KEYS)delete row[k];
   for(const k of Object.keys(row))if(k.startsWith('__'))delete row[k];
   return structuredClone(row) as ShadowCapsule;
@@ -269,6 +270,40 @@ export function assertInverseTrade(t:Trade){
     throw new Error('反向父单结算不一致');
 }
 export function assertInverseTrial(state:ForwardState){
+  if(state.directStrategy){
+    const ds=state.directStrategy;
+    if(ds.version!=='dual-thesis-v2'||!finite(ds.cutoverAt)||ds.cutoverAt<state.startedAt||!ds.plans||Object.keys(ds.plans).length>30
+      ||!finite(ds.completedConversions)||ds.completedConversions<0||!finite(ds.retiredAt)||!ds.summary)
+      throw new Error('独立策略状态损坏；保留账户，禁止重置');
+    if(ds.memory&&(Object.keys(ds.memory).length>30||Object.values(ds.memory).some(r=>!r||typeof r.id!=='string'||!r.id
+      ||typeof r.continuationSeen!=='boolean'||(r.region&&(![r.region.lower,r.region.upper,r.region.center,r.region.formedAt].every(finite)
+        ||r.region.lower<=0||r.region.upper<=r.region.lower)))))throw new Error('独立策略冻结事件记忆损坏');
+    for(const [symbol,p] of Object.entries(ds.plans))if(!p||p.symbol!==symbol||p.candidate?.symbol!==symbol||p.id!==p.candidate.id
+      ||!['RETURN','CONTINUATION'].includes(p.branch)||!['LONG','SHORT'].includes(p.side)||!finite(p.at)||!finite(p.quoteAt)
+      ||!['OBSERVE','VALIDATING','READY','HOLDING','WAIT_LOCATION'].includes(p.phase)||!p.reason||!p.holdReason||!p.exitCondition)
+      throw new Error('独立研究计划损坏；禁止重新生成掩盖原始依据');
+    const ids=new Set<string>();
+    for(const t of [...state.positions,...state.history])if(t.unified?.version==='dual-thesis-v2'){
+      const u=t.unified;
+      if(!['RETURN','CONTINUATION'].includes(u.branch)||!u.sourceId||!u.entryReason||!u.holdReason||!u.exitCondition
+        ||![t.entryPrice,t.quantity,t.contracts,t.quantoMultiplier,t.notional,t.leverage,t.margin,t.entryFee,t.exitFee,t.plannedRisk].every(finite)
+        ||t.entryPrice<=0||t.quantity<=0||t.contracts<=0||t.leverage<1||t.entryFee<0||t.exitFee<0||t.plannedRisk<0
+        ||!same(t.quantity,t.contracts*t.quantoMultiplier)||!same(t.notional,t.quantity*t.entryPrice)||!same(t.margin,t.notional/t.leverage)
+        ||!Array.isArray(u.explanationEvents)||u.explanationEvents.length>8
+        ||u.explanationEvents.some(e=>![e.at,e.quoteAt,e.price].every(finite)||e.price<=0||e.quoteAt>e.at)
+        ||(!u.migratedAt&&!same(t.entryFee,(t.realization?.initialNotional??t.notional)*.0005))
+        ||(u.branch==='RETURN'&&(!u.returnLogic||!['LONG','SHORT'].includes(u.returnLogic.moveSide)||u.returnLogic.moveSide===t.side
+          ||!u.returnLogic.plan||![u.returnLogic.entryPrice,u.returnLogic.openedAt,u.returnLogic.peakAdvance,u.returnLogic.plan.initialStop,
+            u.returnLogic.entryResidual,u.returnLogic.entryRelativeStrength,u.returnLogic.entryRemainingSpaceRate,u.returnLogic.entryScore].every(finite)
+          ||u.returnLogic.entryPrice<=0||u.returnLogic.plan.initialStop<=0||u.returnLogic.peakAdvance<0))
+        ||(u.branch==='CONTINUATION'&&(!u.region?.balanced||!u.confirmation||!finite(u.initialStop)||u.initialStop!<=0||!t.entryContext?.winnerPlan)))
+        throw new Error('独立策略订单依据或资金不完整');
+      if(t.status==='OPEN'){if(ids.has(t.symbol))throw new Error('独立策略同币重复持仓');ids.add(t.symbol);}
+      else if(!finite(t.netPnl)||!finite(t.grossPnl)||!same(t.netPnl,t.grossPnl-t.entryFee-t.exitFee-t.fundingAllowance))
+        throw new Error('独立策略结算不一致');
+    }
+    return; // Retired ledgers are provenance only; never an active pair invariant.
+  }
   if(state.unifiedExecution){
     const u=state.unifiedExecution;
     if(u.version!=='return-continuation-v1'||!finite(u.cutoverAt)||u.cutoverAt<state.startedAt

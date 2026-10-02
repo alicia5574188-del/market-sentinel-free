@@ -310,3 +310,16 @@ test('unified execution renders each actual branch entry/holding/exit instead of
   assert.match(html,/回退.*延续/);assert.match(html,/MOVR \/ USDT · 做空/);assert.match(html,/-12\.50 U/);
   assert.doesNotMatch(html,/OBSOLETE_SOURCE_REASON|影子信号持仓/);
 });
+
+test('independent strategy renders actual research, entry, holding and exit without an active companion account',()=>{
+  const data=account();data.directStrategy={version:'dual-thesis-v2',summary:'逐币比较回退与持续趋势',plans:[{id:'p1',symbol:'MOVR_USDT',branch:'CONTINUATION',side:'SHORT',phase:'READY',
+    reason:'DIRECT_ENTRY',holdReason:'DIRECT_HOLD',exitCondition:'DIRECT_EXIT',confirmation:null}],returnOpen:0,continuationOpen:1};
+  data.positions=[{id:'actual',symbol:'MOVR_USDT',side:'SHORT',status:'OPEN',openedAt:data.updatedAt-60000,
+    unified:{version:'dual-thesis-v2',branch:'CONTINUATION',decision:'HOLD',entryReason:'DIRECT_ENTRY',holdReason:'DIRECT_HOLD',exitCondition:'DIRECT_EXIT',lastDecisionAt:data.updatedAt}}];
+  const overview=render('app/forward-dashboard.tsx',dashboardProps({...data,positions:[],opportunities:[{id:'p1',symbol:'MOVR_USDT',side:'SHORT',reason:'OLD_PUSH_REASON',netRemainingSpaceRate:.9}]}));
+  assert.match(overview,/回退与趋势延续|固定 1,000 U/);assert.doesNotMatch(overview,/影子|反向|shadow-orders|shadow-inverse-comparison/);
+  for(const text of ['DIRECT_ENTRY','DIRECT_HOLD','DIRECT_EXIT'])assert.ok(overview.includes(text));assert.doesNotMatch(overview,/OLD_PUSH_REASON|90\.00%/);
+  const execution=render('app/market-intelligence-execution.tsx',{data,now:data.updatedAt,liveEnabled:false});
+  for(const text of ['DIRECT_ENTRY','DIRECT_HOLD','DIRECT_EXIT','MOVR / USDT · 趋势延续 · 做空'])assert.ok(execution.includes(text));
+  assert.doesNotMatch(execution,/影子|反向|参考机会|原追随/);
+});

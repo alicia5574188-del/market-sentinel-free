@@ -43,7 +43,8 @@ import { evaluateRegimePortfolio, initialRegimePortfolio, normalizeRegimePortfol
   REGIME_EXECUTION_UNIVERSE, REGIME_HOURLY_REQUIRED_CANDLES, REGIME_PORTFOLIO_VERSION, REGIME_STRATEGIES, REGIME_SYSTEMS, REGIME_UNIVERSE,
   type RegimePortfolioState } from "../lib/regime-portfolio.ts";
 import type { PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
-import {advanceUnifiedExecution as advanceShadowInverse,unifiedReferenceState,unifiedExecutionSummary} from '../lib/unified-execution.ts';
+import {unifiedReferenceState,unifiedExecutionSummary} from '../lib/unified-execution.ts';
+import {advanceDirectStrategy as advanceShadowInverse,directStrategySummary,directOpportunityView} from '../lib/direct-strategy.ts';
 import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
 import { ADAPTIVE_ENGINE_VERSION, FORWARD_EXECUTION_BBO_CAP, FORWARD_MINUTE_CONFIRMATION_CAP, closeForwardForReset,
   forwardSummary, forwardEquity, freshQuote, forwardUrgentMinuteSymbols, forwardUrgentQuoteSymbols, forwardWatchSymbols,
@@ -959,7 +960,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const eligibleRows=this.marketHub.radarRows(known,now);
     if(!eligibleRows.length)throw new Error("no Gate-tradable extremum-regime markets");
     const executionEligible=eligibleRows.filter(forwardExecutionUniverseEligible),
-      held=[...new Set([...(this.forwardState?.inverseTrial?.source.positions.map(p=>p.symbol)??[]),...(this.forwardState?.positions.map(p=>p.symbol)??[])])],
+      held=[...new Set([...(this.forwardState?.directStrategy?[]:this.forwardState?.inverseTrial?.source.positions.map(p=>p.symbol)??[]),...(this.forwardState?.positions.map(p=>p.symbol)??[])])],
       armed=Object.values(this.forwardState?.entryValidations??{}).filter(v=>v.status==="WAITING").map(v=>v.symbol),
       locked=[...new Set([...held,...armed])];
     const universeRows=selectAnchorOpportunityUniverse({rows:eligibleRows,limit:SCAN_UNIVERSE_SIZE,
@@ -1023,7 +1024,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private forwardHealth() {
-    const s=this.forwardState,now=Date.now(),opportunities=s?.opportunities??[],
+    const s=this.forwardState,now=Date.now(),opportunities=s?(s.directStrategy?s.opportunities.map(o=>directOpportunityView(s,o)):s.opportunities):[],
       eligible=opportunities.filter(row=>row.eligible&&row.expiresAt>now),
       states=Object.values(s?.extremumRegime?.symbols??{}),
       counts={bullish:states.filter(row=>row.longScore>=62).length,bearish:states.filter(row=>row.shortScore>=62).length,
@@ -1035,9 +1036,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         relativeStrength:row.relativeStrength??null,dataConfidence:row.dataConfidence??null,sourceCount:row.sourceCount??null,
         disagreementRate:row.disagreementRate??null,reason:row.reason,
       }));
-    return {unifiedExecution:s?(()=>{const u=unifiedExecutionSummary(s,this.regimeQuotes(now),now);return u?{version:u.version,cutoverAt:u.cutoverAt,
+    return {directStrategy:s?directStrategySummary(s):null,unifiedExecution:s&&!s.directStrategy?(()=>{const u=unifiedExecutionSummary(s,this.regimeQuotes(now),now);return u?{version:u.version,cutoverAt:u.cutoverAt,
       returnOpen:u.returnOpen,continuationOpen:u.continuationOpen,completedConversions:u.completedConversions,legacyOpen:u.legacyOpen}:null;})():null,
-      shadowInverse:s?(()=>{const v=inverseTrialSummary(unifiedReferenceState(s),this.regimeQuotes(now),now);if(!v)return null;const {curve:_,...summary}=v;return{...summary,paidCost:summary.paidCost?{...summary.paidCost,rows:undefined}:null};})():null,
+      shadowInverse:s&&!s.directStrategy?(()=>{const v=inverseTrialSummary(unifiedReferenceState(s),this.regimeQuotes(now),now);if(!v)return null;const {curve:_,...summary}=v;return{...summary,paidCost:summary.paidCost?{...summary.paidCost,rows:undefined}:null};})():null,
       version:FORWARD_VERSION,engineVersion:ADAPTIVE_ENGINE_VERSION,policyVersion:s?.policyVersion??null,
       strategyAuthorityVersion:s?.strategyAuthorityVersion??null,executionVersion:s?.executionVersion??null,
       regionVersion:s?.regionVersion??null,regionLaunchVersion:s?.regionLaunchVersion??null,liveEligible:false,
@@ -1191,7 +1192,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       catch{this.counterfactualResearch=initialCounterfactualResearch(now);}
       this.counterfactualResearchLoaded=true;
     }
-    const next=advanceCounterfactualResearch({state:this.counterfactualResearch,forward:sourceDecisionState(this.forwardState),now,
+    const next=advanceCounterfactualResearch({state:this.counterfactualResearch,forward:this.forwardState.directStrategy?this.forwardState:sourceDecisionState(this.forwardState),now,
       paths:this.strategyCandles,quotes:this.forwardQuotes(now),observeCandidates});
     this.counterfactualResearch=next.state;
     if(!next.changed)return;
@@ -1210,7 +1211,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       catch{this.shadowResearch=initialShadowResearch(now);}
       this.shadowResearchLoaded=true;
     }
-    const next=advanceShadowResearch({state:this.shadowResearch,forward:sourceDecisionState(this.forwardState),now,
+    const next=advanceShadowResearch({state:this.shadowResearch,forward:this.forwardState.directStrategy?this.forwardState:sourceDecisionState(this.forwardState),now,
       paths:this.strategyCandles,quotes:this.forwardQuotes(now)});
     this.shadowResearch=next.state;
     if(!next.changed)return;
@@ -1294,16 +1295,17 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.forwardError = null;
       try{
         const known=new Set(this.reviewJournal.candidates.map(r=>r.id));
-        const discovered:ReviewEvent[]=next.state.opportunities.filter(o=>!known.has(o.id)).map(o=>({at:now,id:o.id,symbol:o.symbol,
+        const discovered:ReviewEvent[]=next.state.opportunities.filter(o=>!known.has(o.id)).map(o=>directOpportunityView(next.state,o)).map(o=>({at:now,id:o.id,symbol:o.symbol,
           stage:"CANDIDATE_OBSERVED",side:o.side,reason:o.eligible?"STRATEGY_ELIGIBLE":"STRATEGY_NOT_ELIGIBLE",price:o.price,plan:o.tradePlan,expiresAt:o.expiresAt}));
         appendReviewEvents(this.reviewJournal,[...discovered,...reviewEvents].map(e=>({...e,
+          ...(next.state.directStrategy?{side:next.state.positions.find(t=>t.id===e.tradeId)?.side??next.state.directStrategy.plans[e.symbol]?.side??e.side}:{}),
           buildSha:FORWARD_BUILD_SHA,strategyFingerprint:STRATEGY_FINGERPRINT,
-          ...(next.state.inverseTrial?{decisionBuildSha:SHADOW_BASELINE_BUILD,accountRole:'SHADOW_SOURCE' as const,
+          ...(next.state.inverseTrial&&!next.state.directStrategy?{decisionBuildSha:SHADOW_BASELINE_BUILD,accountRole:'SHADOW_SOURCE' as const,
             pairedTradeId:e.tradeId?inverseId(e.tradeId):undefined}:{})})),now);
       }catch{this.reviewDiagnosticError="CANDIDATE_REVIEW_CAPTURE_FAILED";}
       // Both realtime and candle lanes dispatch the SAME committed source.
       // Mark-only observations do not schedule more private reads.
-      const lifecycle=(s:ForwardState)=>JSON.stringify(s.positions.map(t=>[t.id,t.contracts,t.inverseCopy?null:t.stopPrice]).sort());
+      const lifecycle=(s:ForwardState)=>JSON.stringify(s.positions.map(t=>[t.id,t.contracts,t.inverseCopy||t.unified?.branch==='RETURN'?null:t.stopPrice]).sort());
       if(lifecycle(previous)!==lifecycle(next.state))this.dispatchCommittedLiveSource();
     } catch (error) { this.forwardError = safeError(error); }
     finally { this.forwardBusy = false; }
@@ -3363,7 +3365,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       ...Object.values(this.runtime.live.positions).flatMap((position) => position?.status === "OPEN" ? [position.symbol] : []),
       ...Object.values(this.runtime.live.entries).flatMap((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status) ? [entry.symbol] : []),
       ...(this.forwardState?.positions.map((position) => position.symbol) ?? []),
-      ...(this.forwardState?.inverseTrial?.source.positions.map((position) => position.symbol) ?? []),
+      ...(this.forwardState?.directStrategy?[]:this.forwardState?.inverseTrial?.source.positions.map((position) => position.symbol) ?? []),
     ]);
   }
 
@@ -3830,10 +3832,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const s=this.forwardState,now=Date.now();
       const sourceState=s?{version:s.version,startedAt:s.startedAt,initialEquity:s.initialEquity,balance:s.balance,
         positions:s.positions,history:s.history,policyVersion:s.policyVersion,storage:s.storage,
-        ...(s.unifiedExecution?{unifiedExecution:{version:s.unifiedExecution.version,cutoverAt:s.unifiedExecution.cutoverAt}}:{}),
+        ...(s.directStrategy?{directStrategy:{version:s.directStrategy.version,cutoverAt:s.directStrategy.cutoverAt}}:
+          s.unifiedExecution?{unifiedExecution:{version:s.unifiedExecution.version,cutoverAt:s.unifiedExecution.cutoverAt}}:{}),
         // Only the marks required by strict inverse PAPER equity. No second
         // source engine, wallet or source history is published to members.
-        ...(s.inverseTrial?{inverseTrial:{source:{positions:s.inverseTrial.source.positions.map(t=>({
+        ...(s.inverseTrial&&!s.directStrategy?{inverseTrial:{source:{positions:s.inverseTrial.source.positions.map(t=>({
           id:t.id,lastPrice:t.lastPrice,lastQuoteAt:t.lastQuoteAt}))}}}:{})} as ForwardState:null;
       const view=s?forwardSummary(s,this.regimeQuotes(now),now):null;
       const feed:MemberFeed={version:MEMBERS_VERSION,at:now,healthy:!this.forwardError&&this.authorityReady
