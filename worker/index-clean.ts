@@ -19,7 +19,7 @@ import { buildBankruptcyReport, diagnoseClosedPosition, paperCycleSummary, recor
 import { runtimeReady, type RuntimeHealthShape } from "../lib/runtime-health.ts";
 import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, gateMarkedEquity, gatePositionValuation, isGateReadTimeoutError, isGateTransportTimeoutError, LiveEntrySizingError, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveOrder, type GateLiveOrderSnapshot, type GateLiveSnapshot, type LiveEntrySizingCode } from "../lib/gate-live.ts";
 import { LIVE_SESSION_VERSION, establishLiveScale, reconcileLiveScale, startLiveSession, sourceAfterEnable, sameLiveSession, fenceLiveSourcePolicy, type LiveSession } from "../lib/live-session.ts";
-import {liveProtectionPrice,isInverseLiveReceipt,INVERSE_LIVE_EXIT_POLICY} from '../lib/live-source-policy.ts';
+import {liveProtectionPrice,isInverseLiveReceipt,isCommittedLiveReceipt,INVERSE_LIVE_EXIT_POLICY} from '../lib/live-source-policy.ts';
 import {quantizeMirrorNotional,type GateSizeRules,type SizeDiagnostic} from "../lib/gate-quantity.ts";
 import { encryptGateCredentials, gateKeyHint, normalizeGateCredentials, type GateCredentials } from "../lib/credential-vault.ts";
 import { credentialMetadata } from "../lib/gate-readonly.ts";
@@ -43,7 +43,7 @@ import { evaluateRegimePortfolio, initialRegimePortfolio, normalizeRegimePortfol
   REGIME_EXECUTION_UNIVERSE, REGIME_HOURLY_REQUIRED_CANDLES, REGIME_PORTFOLIO_VERSION, REGIME_STRATEGIES, REGIME_SYSTEMS, REGIME_UNIVERSE,
   type RegimePortfolioState } from "../lib/regime-portfolio.ts";
 import type { PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
-import {advanceShadowInverse} from '../lib/shadow-inverse.ts';
+import {advanceUnifiedExecution as advanceShadowInverse,unifiedReferenceState,unifiedExecutionSummary} from '../lib/unified-execution.ts';
 import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
 import { ADAPTIVE_ENGINE_VERSION, FORWARD_EXECUTION_BBO_CAP, FORWARD_MINUTE_CONFIRMATION_CAP, closeForwardForReset,
   forwardSummary, forwardEquity, freshQuote, forwardUrgentMinuteSymbols, forwardUrgentQuoteSymbols, forwardWatchSymbols,
@@ -998,7 +998,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private regimeContracts() {
     return Object.fromEntries(Object.entries(this.runtime.contractMeta).map(([symbol, row]) => [symbol, {
-      ...row, volume24hUsd: this.contractCatalog.get(symbol)?.volume24hUsd ?? 0,
+      ...row,tickSize:this.runtime.tickSize[symbol],volume24hUsd: this.contractCatalog.get(symbol)?.volume24hUsd ?? 0,
     }]));
   }
 
@@ -1035,7 +1035,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         relativeStrength:row.relativeStrength??null,dataConfidence:row.dataConfidence??null,sourceCount:row.sourceCount??null,
         disagreementRate:row.disagreementRate??null,reason:row.reason,
       }));
-    return {shadowInverse:s?(()=>{const v=inverseTrialSummary(s,this.regimeQuotes(now),now);if(!v)return null;const {curve:_,...summary}=v;return{...summary,paidCost:summary.paidCost?{...summary.paidCost,rows:undefined}:null};})():null,
+    return {unifiedExecution:s?(()=>{const u=unifiedExecutionSummary(s,this.regimeQuotes(now),now);return u?{version:u.version,cutoverAt:u.cutoverAt,
+      returnOpen:u.returnOpen,continuationOpen:u.continuationOpen,completedConversions:u.completedConversions,legacyOpen:u.legacyOpen}:null;})():null,
+      shadowInverse:s?(()=>{const v=inverseTrialSummary(unifiedReferenceState(s),this.regimeQuotes(now),now);if(!v)return null;const {curve:_,...summary}=v;return{...summary,paidCost:summary.paidCost?{...summary.paidCost,rows:undefined}:null};})():null,
       version:FORWARD_VERSION,engineVersion:ADAPTIVE_ENGINE_VERSION,policyVersion:s?.policyVersion??null,
       strategyAuthorityVersion:s?.strategyAuthorityVersion??null,executionVersion:s?.executionVersion??null,
       regionVersion:s?.regionVersion??null,regionLaunchVersion:s?.regionLaunchVersion??null,liveEligible:false,
@@ -2459,7 +2461,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private async executeCommittedSourceClose(client:GateLiveClient,position:LivePosition,contracts:number,observedAt:number){
     const lifecycle=this.currentMirrorSource(position.id);
-    if(!isInverseLiveReceipt(position.parity)||lifecycle.status!=='CLOSED')return;
+    if(!isCommittedLiveReceipt(position.parity)||lifecycle.status!=='CLOSED')return;
     if(position.exitRequestedAt&&!position.sourceExit)return; // retain an older in-flight close identity
     const source=lifecycle.trade,started=Date.now();
     let limit:{price:string;contractsText:string}|null=null;
@@ -2498,7 +2500,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if(position.exitRequestedAt||!position.parity||source.status!=='OPEN'||!source.trade.realization)return;
     let price='0';
     const first=!position.sourceReduction||position.sourceReduction.sourceSequence!==source.trade.realization.sequence;
-    if(first&&isInverseLiveReceipt(position.parity)&&this.mirrorQuoteReady(position.symbol)){
+    if(first&&isCommittedLiveReceipt(position.parity)&&this.mirrorQuoteReady(position.symbol)){
       try{const q=this.runtime.evidence[position.symbol];price=liveExitPriceLimit(position.side,q.bestBid??0,q.bestAsk??0,this.runtime.tickSize[position.symbol]);}catch{/* immediate market fallback */}
     }
     await reconcileSourceReduction({source:source.trade,receipt:position.parity,actualContracts:contracts,
@@ -2513,7 +2515,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const pending=positions.flatMap(actual=>{
       const p=this.runtime.live.positions[actual.contract??''],signed=Number(actual.size);
       const source=p?this.currentMirrorSource(p.id):null;
-      return p?.status==='OPEN'&&isInverseLiveReceipt(p.parity)&&source?.status==='CLOSED'
+      return p?.status==='OPEN'&&isCommittedLiveReceipt(p.parity)&&source?.status==='CLOSED'
         &&Number.isFinite(signed)&&signed!==0&&Math.sign(signed)===(p.side==='LONG'?1:-1)
         &&(!p.exitRequestedAt||p.sourceExit)?[{p,contracts:Math.abs(signed),at:source.trade.closedAt??0}]:[];
     }).sort((a,b)=>a.at-b.at);
@@ -2522,7 +2524,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     for(const item of pending)try{await this.executeCommittedSourceClose(client,item.p,item.contracts,observedAt);}catch(error){errors.push(error);}
     for(const actual of positions){
       const p=this.runtime.live.positions[actual.contract??''],signed=Number(actual.size);
-      if(!p||p.status!=='OPEN'||!isInverseLiveReceipt(p.parity)||!Number.isFinite(signed)||signed===0
+      if(!p||p.status!=='OPEN'||!isCommittedLiveReceipt(p.parity)||!Number.isFinite(signed)||signed===0
         ||Math.sign(signed)!==(p.side==='LONG'?1:-1))continue;
       try{await this.executeCommittedSourceReduction(client,p,Math.abs(signed),observedAt);}catch(error){errors.push(error);}
     }
@@ -2747,7 +2749,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         position.parity.sourceClosedAt=lifecycle.trade.closedAt;
         position.parity.sourceExitReason=lifecycle.trade.exitReason;
       }
-      if(isInverseLiveReceipt(position.parity)&&sourceClosed&&(!position.exitRequestedAt||position.sourceExit)){
+      if(isCommittedLiveReceipt(position.parity)&&sourceClosed&&(!position.exitRequestedAt||position.sourceExit)){
         await this.executeCommittedSourceClose(client,position,Math.abs(exchangeSize),snapshot.positionsCheckedAt??snapshot.checkedAt);
         continue; // the journal owns this close, including partial/unknown results
       }
@@ -2992,7 +2994,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       let sizing:Parameters<typeof buildProportionalMirror>[0];
       try {
         if(paperMark.stalePositions)throw new LiveEntrySizingError("ECONOMICS",symbol,"模拟账户当前估值不完整，不能确定复制比例");
-        const inverse=!!trade.forwardSource.inverseCopy;
+        const inverse=!!trade.forwardSource.inverseCopy||!!trade.forwardSource.unified;
         const scaled=inverse?this.runtime.live.activation:await this.ensureLiveSessionScale(paperMark.equity,equity,Date.now());
         // Freeze the native account capital anchor once. Profits and ordinary
         // OFF/ON never compound future copies; actual-equity gates still apply.
@@ -3108,7 +3110,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             await this.saveCheckpoint(Date.now(),true);continue;
           }
           const price=entry.side==="LONG"?submitQuote.bestAsk:submitQuote.bestBid;
-          if(isInverseLiveReceipt(entry.parity)){
+          if(isCommittedLiveReceipt(entry.parity)){
             // Re-price against the SAME final Gate response used for dispatch.
             // Never increase the staged contracts or capital reservation when
             // the book moves while setting leverage/checkpointing.
@@ -3828,6 +3830,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const s=this.forwardState,now=Date.now();
       const sourceState=s?{version:s.version,startedAt:s.startedAt,initialEquity:s.initialEquity,balance:s.balance,
         positions:s.positions,history:s.history,policyVersion:s.policyVersion,storage:s.storage,
+        ...(s.unifiedExecution?{unifiedExecution:{version:s.unifiedExecution.version,cutoverAt:s.unifiedExecution.cutoverAt}}:{}),
         // Only the marks required by strict inverse PAPER equity. No second
         // source engine, wallet or source history is published to members.
         ...(s.inverseTrial?{inverseTrial:{source:{positions:s.inverseTrial.source.positions.map(t=>({
@@ -3843,7 +3846,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
     if(path === "/member-closed" && request.method === "GET") {
       const id=url.searchParams.get("id")??"",openedAt=Number(url.searchParams.get("openedAt"));
-      if(!/^ft-[a-zA-Z0-9_-]{1,100}$/.test(id)||!Number.isSafeInteger(openedAt)||openedAt<=0)return json({error:"invalid source"},400);
+      if(!/^(?:ft-|iv-|ue-)[a-zA-Z0-9_-]{1,160}$/.test(id)||!Number.isSafeInteger(openedAt)||openedAt<=0)return json({error:"invalid source"},400);
       const current=sourceLifecycle(this.forwardState,id);if(current.status!=="UNKNOWN")return json({trade:current.status==="CLOSED"?current.trade:null,nextCursor:null});
       const prefix=`${FORWARD_STORAGE}archive:`,cursor=url.searchParams.get("cursor");
       if(cursor&&(!cursor.startsWith(prefix)||cursor.length>150))return json({error:"invalid cursor"},400);

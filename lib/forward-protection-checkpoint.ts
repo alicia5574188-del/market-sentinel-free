@@ -1,10 +1,11 @@
 /** Compact restart overlay for Adaptive Ten open-position protection only. */
 import type {ForwardState,Trade} from "./forward-relations.ts";
 export const FORWARD_PROTECTION_CHECKPOINT_VERSION="adaptive-ten-protection-v1";
-type Row=Pick<Trade,"id"|"openedAt"|"favorable"|"adverse"|"lastPrice"|"lastQuoteAt"|"stopPrice"|"firstProfitAt"|"holdScore"|"profitFloorRate"|"peakPnlRate"|"winnerManagement"|"review">;
+type Row=Pick<Trade,"id"|"openedAt"|"favorable"|"adverse"|"lastPrice"|"lastQuoteAt"|"stopPrice"|"firstProfitAt"|"holdScore"|"profitFloorRate"|"peakPnlRate"|"winnerManagement"|"review"|"unified"|"positionIntelligence">;
 export type ForwardProtectionCheckpoint={version:typeof FORWARD_PROTECTION_CHECKPOINT_VERSION;startedAt:number;baseRevision:number;
   basePersistedAt:number;quoteCycleAt:number;peakEquity:number;maxDrawdown:number;positions:Row[];
-  shadow?:{cutoverAt:number;peakEquity:number;maxDrawdown:number;positions:Row[]}};
+  shadow?:{cutoverAt:number;peakEquity:number;maxDrawdown:number;positions:Row[]};
+  unifiedReference?:{cutoverAt:number;peakEquity:number;maxDrawdown:number;positions:Row[]}};
 type LegacyProtectionRow=Partial<Row>&{id?:string;openedAt?:number;favorable?:number;adverse?:number;lastPrice?:number;lastQuoteAt?:number;
   stopPrice?:number;profitProtection?:{floorRate?:number}|null};
 type LegacyProtectionCheckpoint={version:"forward-protection-checkpoint-v1";startedAt:number;baseRevision:number;basePersistedAt:number;
@@ -38,11 +39,14 @@ export function buildForwardProtectionCheckpoint(s:ForwardState):ForwardProtecti
   const rows=(positions:Trade[],review:boolean)=>positions.map(t=>({
       id:t.id,openedAt:t.openedAt,favorable:t.favorable,adverse:t.adverse,lastPrice:t.lastPrice,lastQuoteAt:t.lastQuoteAt,stopPrice:t.stopPrice,
       firstProfitAt:t.firstProfitAt??null,holdScore:t.holdScore??50,profitFloorRate:t.profitFloorRate??0,peakPnlRate:t.peakPnlRate??t.favorable,winnerManagement:t.winnerManagement?structuredClone(t.winnerManagement):undefined,
+      unified:t.unified?structuredClone(t.unified):undefined,positionIntelligence:t.unified&&t.positionIntelligence?structuredClone(t.positionIntelligence):undefined,
       review:review&&t.review?.diagnosticVersion?structuredClone(t.review):undefined}));
   return{version:FORWARD_PROTECTION_CHECKPOINT_VERSION,startedAt:s.startedAt,baseRevision:s.revision,basePersistedAt:s.storage.persistedAt,
     quoteCycleAt:s.lastQuoteCycleAt,peakEquity:s.peakEquity,maxDrawdown:s.maxDrawdown,positions:rows(s.positions,true),
     ...(s.inverseTrial?{shadow:{cutoverAt:s.inverseTrial.cutoverAt,peakEquity:s.inverseTrial.source.peakEquity,
-      maxDrawdown:s.inverseTrial.source.maxDrawdown,positions:rows(s.inverseTrial.source.positions,false)}}:{})};
+      maxDrawdown:s.inverseTrial.source.maxDrawdown,positions:rows(s.inverseTrial.source.positions,false)}}:{}),
+    ...(s.unifiedExecution?{unifiedReference:{cutoverAt:s.unifiedExecution.cutoverAt,peakEquity:s.unifiedExecution.reference.peakEquity,
+      maxDrawdown:s.unifiedExecution.reference.maxDrawdown,positions:rows(s.unifiedExecution.reference.positions,false)}}:{})};
 }
 export function restoreForwardProtectionCheckpoint(s:ForwardState,value:unknown):ForwardState{
   if(value==null)return s;
@@ -57,11 +61,27 @@ export function restoreForwardProtectionCheckpoint(s:ForwardState,value:unknown)
   const next=structuredClone(s);
   for(const t of next.positions){const r=rows.get(t.id);if(!r||r.openedAt!==t.openedAt||![r.favorable,r.adverse,r.lastPrice,r.lastQuoteAt,r.stopPrice,r.holdScore,r.profitFloorRate,r.peakPnlRate].every(finite)
       ||r.lastPrice<=0||r.stopPrice<=0||r.favorable<t.favorable||r.adverse<t.adverse||r.lastQuoteAt<t.lastQuoteAt
-      ||(!t.inverseCopy&&((t.side==="LONG"&&r.stopPrice+1e-12<t.stopPrice)||(t.side==="SHORT"&&r.stopPrice-1e-12>t.stopPrice))))
+      ||(!t.inverseCopy&&t.unified?.branch!=='RETURN'&&((t.side==="LONG"&&r.stopPrice+1e-12<t.stopPrice)||(t.side==="SHORT"&&r.stopPrice-1e-12>t.stopPrice))))
       throw new Error("前向保护检查点异常；保留账户");
     t.favorable=r.favorable;t.adverse=r.adverse;t.lastPrice=r.lastPrice;t.lastQuoteAt=r.lastQuoteAt;t.stopPrice=r.stopPrice;
     t.firstProfitAt=r.firstProfitAt??null;t.holdScore=r.holdScore;t.profitFloorRate=r.profitFloorRate;t.peakPnlRate=r.peakPnlRate;if(r.winnerManagement)t.winnerManagement=structuredClone(r.winnerManagement);
     if(r.review?.diagnosticVersion)t.review=structuredClone(r.review);}
+  for(const t of next.positions){const r=rows.get(t.id)!;
+    if(t.unified){if(!r.unified||r.unified.branch!==t.unified.branch||r.unified.sourceId!==t.unified.sourceId||r.unified.referenceId!==t.unified.referenceId||r.unified.initialStop!==t.unified.initialStop)
+      throw new Error('统一策略保护身份不一致');t.unified=structuredClone(r.unified);
+      if(r.positionIntelligence)t.positionIntelligence=structuredClone(r.positionIntelligence);}}
+  if(next.unifiedExecution){
+    const cRef=c.unifiedReference,ref=next.unifiedExecution.reference;
+    if(!cRef||cRef.cutoverAt!==next.unifiedExecution.cutoverAt||![cRef.peakEquity,cRef.maxDrawdown].every(finite)
+      ||!Array.isArray(cRef.positions)||cRef.positions.length!==ref.positions.length)
+      throw new Error('统一策略原反向对照保护缺失');
+    const byId=new Map(cRef.positions.map(t=>[t.id,t]));if(byId.size!==ref.positions.length)throw new Error('原反向对照保护重复');
+    for(const t of ref.positions){const r=byId.get(t.id);
+      if(!r||r.openedAt!==t.openedAt||![r.favorable,r.adverse,r.lastPrice,r.lastQuoteAt,r.stopPrice].every(finite)
+        ||r.favorable<t.favorable||r.adverse<t.adverse||r.lastQuoteAt<t.lastQuoteAt||r.lastPrice<=0||r.stopPrice<=0)
+        throw new Error('原反向对照保护不一致');Object.assign(t,r);}
+    ref.peakEquity=Math.max(ref.peakEquity,cRef.peakEquity);ref.maxDrawdown=Math.max(ref.maxDrawdown,cRef.maxDrawdown);
+  }
   if(next.inverseTrial){
     const shadow=c.shadow,source=next.inverseTrial.source;
     if(!shadow||shadow.cutoverAt!==next.inverseTrial.cutoverAt||![shadow.peakEquity,shadow.maxDrawdown].every(finite)
@@ -76,6 +96,8 @@ export function restoreForwardProtectionCheckpoint(s:ForwardState,value:unknown)
       Object.assign(t,r);
       const inverse=next.positions.find(p=>p.inverseCopy?.sourceId===t.id);
       if(inverse)inverse.inverseCopy!.sourceStopPrice=t.stopPrice;
+      const referenceInverse=next.unifiedExecution?.reference.positions.find(p=>p.inverseCopy?.sourceId===t.id);
+      if(referenceInverse)referenceInverse.inverseCopy!.sourceStopPrice=t.stopPrice;
     }
     source.peakEquity=Math.max(source.peakEquity,shadow.peakEquity);source.maxDrawdown=Math.max(source.maxDrawdown,shadow.maxDrawdown);
   }

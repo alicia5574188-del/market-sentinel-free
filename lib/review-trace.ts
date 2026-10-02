@@ -55,11 +55,13 @@ export function captureTradeReviews(previous:ForwardState,next:ForwardState,now:
     // Do not label a stale mark as a new observation or first profitable quote.
     const fresh=!!q&&q.fresh&&q.observedAt<=now&&now-q.observedAt<=10_000;
     const gross=realizedContribution(t)+(t.side==='LONG'?1:-1)*t.quantity*(t.lastPrice-t.entryPrice);
-    const modeledNet=gross-t.entryFee-t.quantity*t.lastPrice*PAPER_COST.feeRate-t.notional*PAPER_COST.fundingAllowancePerDay*Math.max(0,now-t.openedAt)/86_400_000;
+    const modeledNet=gross-t.entryFee-t.quantity*t.lastPrice*(t.unified ? .0005 : PAPER_COST.feeRate)
+      -(t.unified?0:t.notional*PAPER_COST.fundingAllowancePerDay*Math.max(0,now-t.openedAt)/86_400_000);
     const net=t.status==='CLOSED'?(t.netPnl??modeledNet):modeledNet;
     const pi=t.positionIntelligence,wm=t.winnerManagement,integrated=t.entryContext?.winnerPlan?.researchVersion===RESEARCH_PLAN_VERSION;
-    const point:TradeReviewPoint={at:now,quoteAt,barAt:pi?.lastCompletedBar??null,decision:pi?.decision??'UNASSESSED',
-      netPnl:net,stopPrice:t.stopPrice,floorRate:t.profitFloorRate??0,concerns:pi?.concernFamilies??[],support:pi?.supportFamilies??[],...(integrated?{
+    const point:TradeReviewPoint={at:now,quoteAt,barAt:t.unified?.lastBarAt??pi?.lastCompletedBar??null,decision:t.unified?.decision??pi?.decision??'UNASSESSED',
+      netPnl:net,stopPrice:t.stopPrice,floorRate:t.profitFloorRate??0,concerns:pi?.concernFamilies??[],support:pi?.supportFamilies??[],...(t.unified?{action:fromEntry?'ENTRY':t.status==='CLOSED'?'EXIT':t.unified.decision,reasonCode:t.exitReason??t.unified.holdReason,
+        evidenceBars:t.unified.confirmation?.bars,price:t.lastPrice,remainingContracts:t.status==='OPEN'?t.contracts:0,partialRealizedNetPnl:realizedNetPnl(t)}:{}),...(integrated?{
         action:fromEntry?'ENTRY':t.status==='CLOSED'?'EXIT':wm?.appliedAction??'HOLD',requestedAction:wm?.requestedAction,
         reasonCode:t.status==='CLOSED'?t.exitReason??'UNKNOWN':wm?.actionReason,
         researchLevel:wm?.research?.level,marketLevel:wm?.research?.context.level,

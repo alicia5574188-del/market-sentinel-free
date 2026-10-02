@@ -5,6 +5,7 @@ import { OperatorRequestError, operatorRequest, isTransientLiveReadError, number
   holdingTime, livePositionMark, type AuthSession, type CredentialStatus, type CredentialVerification,
   type LivePosition, type LiveRuntime, type OperatorRuntime } from "../lib/operator-ui.ts";
 
+import {isInverseLiveReceipt} from '../lib/live-source-policy.ts';
 import {recordWindows,archivePage} from "../lib/record-view.ts";
 import {ArchivePagination} from "./record-controls.tsx";
 type HistoryView={history:LivePosition[];checkedAt:number|null;error:string|null;pending:number;updating:boolean};
@@ -289,7 +290,7 @@ export function LivePositionCard({position:p,runtime,now}:{position:LivePosition
       </dl>
     <details className="fr-details"><summary>详情</summary>
       <dl><Pair label="持仓时长" value={holdingTime(p.entryAt,open?now:p.exitAt??0)}/><Pair label="名义金额" value={`${num(p.notional)} U`}/>
-        <Pair label="合约数量" value={contractText(Math.abs(p.exchangeSize))}/><Pair label={p.parity?.sourceRole==='INVERSE_PAPER'?"退出方式":"保护止损"} value={p.parity?.sourceRole==='INVERSE_PAPER'?"跟随影子订单":num(p.stopPrice??p.currentStop,5)}/></dl>
+        <Pair label="合约数量" value={contractText(Math.abs(p.exchangeSize))}/><Pair label={isInverseLiveReceipt(p.parity)?"退出方式":"保护止损"} value={isInverseLiveReceipt(p.parity)?(p.parity?.sourceRole==='UNIFIED_PAPER'?'回退分支退出事件':'跟随影子订单'):num(p.stopPrice??p.currentStop,5)}/></dl>
       <CompareBlock position={p} runtime={runtime} now={now}/>
       {!open&&settlement&&<dl><Pair label="仓位盈亏" value={`${signed(settlement.pricePnl)} U`}/><Pair label="手续费收支" value={`${signed(settlement.fees)} U`}/><Pair label="资金费收支" value={`${signed(settlement.funding)} U`}/><Pair label="交易所平仓时间" value={time(settlement.closedAt)}/></dl>}
       {p.exitReason&&<p className="fr-trade-reason">退出原因：{p.exitReason}</p>}

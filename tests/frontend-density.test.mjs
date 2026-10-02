@@ -9,6 +9,7 @@ import ts from "typescript";
 import * as liveEquity from '../lib/live-equity.ts';
 import * as equityGeometry from '../lib/equity-curve.ts';
 import * as inverseFee from '../lib/inverse-fee.ts';
+import * as liveSourcePolicy from '../lib/live-source-policy.ts';
 import {EquityHistoryCache,EQUITY_CACHE_VERSION} from '../lib/equity-cache.ts';
 
 const read=path=>readFileSync(new URL(`../${path}`,import.meta.url),"utf8");
@@ -31,6 +32,7 @@ function render(path,props,extra={},component="default"){
     react:React,"react/jsx-runtime":jsxRuntime,
     "../lib/trade-realization.ts":realizationModule.exports,
     "../lib/paid-fee-view.ts":paidModule.exports,
+    "../lib/live-source-policy.ts":liveSourcePolicy,
     "../lib/research-snapshot.ts":{collectReviewSnapshot(){throw new Error("render must not export");}},
     "../lib/beijing-time.ts":{BEIJING_TIME_ZONE:"Asia/Shanghai",beijingDayKey:()=>"2026-09-30"},
     "../lib/equity-cache.ts":{EquityHistoryCache:class{cancel(){}}},
@@ -296,4 +298,15 @@ test('one account click reveals all shadow orders and switches native account fa
   buttons.find(b=>Array.isArray(b.children)&&b.children[1]?.props?.children==='总览').onClick();html=draw();
   assert.match(html,/321\.09/);buttons.find(b=>b.children==='查看同步账户 →').onClick();html=draw();
   assert.match(html,/paper-live-mirror/);assert.doesNotMatch(html,/shadow-orders-panel/);
+});
+
+test('unified execution renders each actual branch entry/holding/exit instead of a source-side plan explanation',()=>{
+  const data=account();data.unifiedExecution={episodes:[]};
+  data.positions=['RETURN','CONTINUATION'].map((branch,i)=>({id:'u'+i,symbol:i?'MOVR_USDT':'BTC_USDT',side:i?'SHORT':'LONG',
+    status:'OPEN',unified:{branch,decision:'HOLD',entryReason:'ACTUAL_ENTRY_'+i,holdReason:'ACTUAL_HOLD_'+i,exitCondition:'ACTUAL_EXIT_'+i,lastDecisionAt:data.updatedAt,
+      ...(i?{predecessorId:'old-return',predecessorNet:-12.5}:{})},entryContext:{reason:'OBSOLETE_SOURCE_REASON'}}));
+  const html=render('app/market-intelligence-execution.tsx',{data,now:data.updatedAt,liveEnabled:true,liveOverview:{operational:true}});
+  for(let i=0;i<2;i++)for(const text of ['ACTUAL_ENTRY_','ACTUAL_HOLD_','ACTUAL_EXIT_'])assert.ok(html.includes(text+i));
+  assert.match(html,/回退.*延续/);assert.match(html,/MOVR \/ USDT · 做空/);assert.match(html,/-12\.50 U/);
+  assert.doesNotMatch(html,/OBSOLETE_SOURCE_REASON|影子信号持仓/);
 });

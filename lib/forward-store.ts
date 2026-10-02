@@ -104,6 +104,10 @@ function hotProjection(next:ForwardState,includeSamples=true){
           positions:next.inverseTrial.source.positions.map(withoutReview),
           history:next.inverseTrial.source.history.slice(0,Math.max(32,total)).map(compactShadowClosedTrade),
           events:next.inverseTrial.source.events.slice(0,FORWARD_HOT_EVENT_LIMIT)}}}:{}),
+        ...(next.unifiedExecution?{unifiedExecution:{...next.unifiedExecution,reference:{...next.unifiedExecution.reference,
+          positions:next.unifiedExecution.reference.positions.map(t=>withoutLossResearch(withoutReview(t))),
+          history:next.unifiedExecution.reference.history.slice(0,total).map(t=>compactShadowClosedTrade(withoutLossResearch(t))),
+          events:next.unifiedExecution.reference.events.slice(0,eventLimit)}}}:{}),
         hypothesisResearch:{...next.hypothesisResearch,
           active:next.hypothesisResearch.active.slice(0,MARKET_HYPOTHESIS_ACTIVE_LIMIT),
           resolved:next.hypothesisResearch.resolved.slice(0,MARKET_HYPOTHESIS_RESOLVED_LIMIT),
@@ -397,8 +401,14 @@ export async function prepareForwardWrite(previous:ForwardState|null,next:Forwar
   });
   const subjects=new Set(events.map(e=>e.subject));
   const trades=[...next.positions,...next.history].filter(t=>subjects.has(t.id));
-  const packet={inverseComparison:next.inverseTrial?{version:next.inverseTrial.version,sourceBuild:next.inverseTrial.sourceBuild,
+  const ref=next.unifiedExecution?.reference,priorRefRevision=previous?.unifiedExecution?.reference.revision??0,
+    refSubjects=new Set((ref?.events??[]).filter(e=>!previous?.unifiedExecution||Number(e.id.split('-').at(-1))>priorRefRevision).map(e=>e.subject)),
+    referenceTrades=[...(ref?.positions??[]),...(ref?.history??[])].filter(t=>t.inverseCopy&&t.openedAt>=next.unifiedExecution!.cutoverAt&&refSubjects.has(t.id)).map(withoutReview);
+  const packet={referenceTrades:[] as Trade[],inverseComparison:next.inverseTrial?{version:next.inverseTrial.version,sourceBuild:next.inverseTrial.sourceBuild,
       cutoverAt:next.inverseTrial.cutoverAt,totals:next.inverseTrial.totals,lastPoint:next.inverseTrial.curve.at(-1)}:undefined,
+    unifiedComparison:next.unifiedExecution?{version:next.unifiedExecution.version,cutoverAt:next.unifiedExecution.cutoverAt,
+      referenceBalance:next.unifiedExecution.reference.balance,referenceResolved:next.unifiedExecution.reference.resolved,
+      referenceFees:next.unifiedExecution.reference.fees,completedConversions:next.unifiedExecution.completedConversions}:undefined,
     at:now,version:FORWARD_VERSION,engineVersion:next.engineVersion,policyVersion:next.policyVersion,
     startedAt:next.startedAt,revision:next.revision,events,trades:trades.map(withoutReview),
     // The authoritative account state is persisted separately in the paged head/chunks.
@@ -414,8 +424,8 @@ export async function prepareForwardWrite(previous:ForwardState|null,next:Forwar
     detailedTrades=trades.map(withoutReview),reviewByTrade=new Map(trades.filter(t=>!!t.review).map(t=>[t.id,t.review!])),
     firstBase={...packet,trades:[] as Trade[]},continuationBase={at:now,version:FORWARD_VERSION,engineVersion:next.engineVersion,
       policyVersion:next.policyVersion,startedAt:next.startedAt,revision:next.revision,events:[] as typeof events,trades:[] as Trade[],
-      account:null,daily:null,marketPulse:null,opportunities:[] as typeof packet.opportunities,archiveContinuation:true},
-    shards:Array<{base:typeof firstBase|typeof continuationBase;trades:Trade[]}>=[];
+      referenceTrades:[] as Trade[],account:null,daily:null,marketPulse:null,opportunities:[] as typeof packet.opportunities,archiveContinuation:true},
+    shards:Array<{base:typeof firstBase|typeof continuationBase;trades:Trade[];referenceTrades:Trade[]}>=[];
 
   let base:typeof firstBase|typeof continuationBase=firstBase,current:Trade[]=[];
   if(encodeJson(base).length>archiveLimit)throw new Error("Adaptive 10归档摘要超过单值预算；拒绝截断交易证据");
@@ -425,16 +435,23 @@ export async function prepareForwardWrite(previous:ForwardState|null,next:Forwar
     const trade=original.inverseCopy?.lossResearch&&encodeJson({...continuationBase,trades:[original]}).length>archiveLimit
       ?withoutLossResearch(original):original;
     if(encodeJson({...base,trades:[...current,trade]}).length<=archiveLimit){current.push(trade);continue;}
-    shards.push({base,trades:current});base=continuationBase;current=[];
+    shards.push({base,trades:current,referenceTrades:[]});base=continuationBase;current=[];
     if(encodeJson({...base,trades:[trade]}).length>archiveLimit)
       throw new Error(`Adaptive 10单笔交易证据超过单值预算：${trade.symbol}`);
     current.push(trade);
   }
-  shards.push({base,trades:current});
+  let currentReference:Trade[]=[];
+  for(const trade of referenceTrades){
+    if(encodeJson({...base,trades:current,referenceTrades:[...currentReference,trade]}).length<=archiveLimit){currentReference.push(trade);continue;}
+    shards.push({base,trades:current,referenceTrades:currentReference});base=continuationBase;current=[];currentReference=[];
+    if(encodeJson({...base,referenceTrades:[trade]}).length>archiveLimit)throw new Error(`原反向对照单笔证据超过预算：${trade.symbol}`);
+    currentReference.push(trade);
+  }
+  shards.push({base,trades:current,referenceTrades:currentReference});
 
   const shardCount=shards.length;
-  shards.forEach(({base,trades:rows},part)=>{
-    const financial={...base,trades:rows,...(shardCount>1?{archivePart:part+1,archiveParts:shardCount}:{})},
+  shards.forEach(({base,trades:rows,referenceTrades:refs},part)=>{
+    const financial={...base,trades:rows,referenceTrades:refs,...(shardCount>1?{archivePart:part+1,archiveParts:shardCount}:{})},
       reviews:{tradeId:string;review:NonNullable<Trade["review"]>}[]=[];
     let omittedReviews=0;
     for(const trade of rows){

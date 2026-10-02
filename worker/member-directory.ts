@@ -199,7 +199,7 @@ export class MemberDirectory extends DurableObject<CloudflareEnv> {
         // Every lookup is bounded and only uses already-closed primary records.
         // Members can never submit a replacement source or change a close.
         const b=await request.json<{id:string;openedAt:number}>();
-        if(!/^ft-[a-zA-Z0-9_-]{1,100}$/.test(b.id)||!Number.isFinite(b.openedAt)||b.openedAt<1||b.openedAt>now)return json({error:"源单标识无效"},400);
+        if(!/^(?:ft-|iv-|ue-)[a-zA-Z0-9_-]{1,160}$/.test(b.id)||!Number.isFinite(b.openedAt)||b.openedAt<1||b.openedAt>now)return json({error:"源单标识无效"},400);
         const cached=await this.ctx.storage.get<Trade>(`close:${b.id}`);if(cached)return json({trade:cached});
         const cursor=await this.ctx.storage.get<string>(`lookup:${b.id}`);
         const res=await this.env.MARKET_STREAM.getByName("primary").fetch(`https://market-stream/member-closed?id=${encodeURIComponent(b.id)}&openedAt=${b.openedAt}${cursor?`&cursor=${encodeURIComponent(cursor)}`:""}`);
