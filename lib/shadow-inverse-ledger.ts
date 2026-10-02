@@ -280,7 +280,7 @@ export function assertInverseTrial(state:ForwardState){
         ||r.region.lower<=0||r.region.upper<=r.region.lower)))))throw new Error('独立策略冻结事件记忆损坏');
     for(const [symbol,p] of Object.entries(ds.plans))if(!p||p.symbol!==symbol||p.candidate?.symbol!==symbol||p.id!==p.candidate.id
       ||!['RETURN','CONTINUATION'].includes(p.branch)||!['LONG','SHORT'].includes(p.side)||!finite(p.at)||!finite(p.quoteAt)
-      ||!['OBSERVE','VALIDATING','READY','HOLDING','WAIT_LOCATION'].includes(p.phase)||!p.reason||!p.holdReason||!p.exitCondition)
+      ||!['OBSERVE','VALIDATING','READY','HOLDING','WAIT_LOCATION','EXECUTING'].includes(p.phase)||!p.reason||!p.holdReason||!p.exitCondition)
       throw new Error('独立研究计划损坏；禁止重新生成掩盖原始依据');
     const ids=new Set<string>();
     for(const t of [...state.positions,...state.history])if(t.unified?.version==='dual-thesis-v2'){

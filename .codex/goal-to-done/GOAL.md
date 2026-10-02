@@ -1,3 +1,16 @@
+# 2026-10-03 — current task: PAPER executes through LIVE steps
+
+Complete the owner's request for simulated entry/reduction/exit to follow the
+native execution workflow. Share committed signal identity and LIVE admission
+checks; separate submission from later fresh own-side Gate-book matching.
+No signal-price instantaneous financial fill or completed close before matching.
+Preserve account/history, current strategy, fixed1000 sizing, manual LIVE,
+activation fence, credentials, members, source provenance and resource bounds.
+Verify pending/partial money, restart dedup, same-instruction native dispatch,
+original regression gates and exact original reviewed-main deployment.
+Record model limits; do not promise identical native prices or rewrite past PnL.
+No reset, private trade, new request, timer or capacity enlargement.
+
 # 2026-10-02 — current scoped task: improve native curve recording density
 
 Owner asks whether LIVE can match PAPER's curve presentation without resource

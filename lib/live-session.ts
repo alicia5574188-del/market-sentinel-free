@@ -23,9 +23,9 @@ export function fenceLiveSourcePolicy(session:LiveSession,source:SourceAccount,n
   return {...session,sourcePolicy:policy,sourcePolicyAt:now,
     excludedSourceIds:[...new Set([...session.excludedSourceIds,...source.positions.map(t=>t.id)])]};
 }
-export function sourceAfterEnable(t: { id: string; openedAt: number }, session: LiveSession | null | undefined, sourceStartedAt: number) {
+export function sourceAfterEnable(t: { id: string; openedAt: number;paperOrder?:{signalAt:number} }, session: LiveSession | null | undefined, sourceStartedAt: number) {
   return !!session && session.version === LIVE_SESSION_VERSION && session.sourceStartedAt === sourceStartedAt
-    && t.openedAt > Math.max(session.enabledAt,session.sourcePolicyAt??0) && !session.excludedSourceIds.includes(t.id);
+    && (t.paperOrder?.signalAt??t.openedAt) > Math.max(session.enabledAt,session.sourcePolicyAt??0) && !session.excludedSourceIds.includes(t.id);
 }
 export function sameLiveSession(a: LiveSession | null | undefined, b: LiveSession | null | undefined) {
   return !!a && !!b && a.version === b.version && a.enabledAt === b.enabledAt && a.sourceStartedAt === b.sourceStartedAt

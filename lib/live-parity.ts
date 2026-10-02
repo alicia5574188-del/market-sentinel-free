@@ -10,6 +10,7 @@ import { quantizeMirrorNotional, type GateSizeRules, type SizeDiagnostic } from 
 import { LIVE_SESSION_VERSION, sourceAfterEnable, type LiveSession } from "./live-session.ts";
 import { PORTFOLIO_RISK_CAP, CORRELATED_DIRECTION_RISK_CAP } from "./liquidity-core.ts";
 import {liveProtectionPrice,INVERSE_LIVE_POLICY,INVERSE_LIVE_EXIT_POLICY,isInverseLiveReceipt,INVERSE_LIVE_LEVERAGE_POLICY,inverseLiveLeverage} from './live-source-policy.ts';
+import {paperSourceTrade} from './paper-execution.ts';
 
 export const LIVE_PARITY_VERSION = "current-paper-live-parity-v1";
 export const LIVE_PARITY_SOURCE = "CURRENT_FORWARD_ACCOUNT";
@@ -72,7 +73,8 @@ export function forwardMirrorSources(state: ForwardState, sourceEquity: number):
   if (!state || !Array.isArray(state.positions) || !Array.isArray(state.history) || !positive(sourceEquity))
     throw new Error("当前模拟账户不可用，实盘复制等待恢复，不回退到旧策略");
   const out: Record<string, MirrorSourceTrade> = {};
-  for (const t of state.positions) {
+  for (const row of state.positions) {
+    const t=paperSourceTrade(row);if(t.status!=='OPEN')continue;
     // The current visible inverse account is the NEW source. Existing legacy
     // LIVE positions still use sourceLifecycle; drain rows cannot add exposure.
     if(state.inverseTrial&&!t.inverseCopy&&!t.unified)continue;
@@ -114,8 +116,8 @@ export function forwardMirrorSources(state: ForwardState, sourceEquity: number):
 
 export function sourceLifecycle(state: ForwardState | null, id: string) {
   const open = state?.positions.find(t=>t.id===id);
-  if (open) return { status:"OPEN" as const, trade:open };
-  const closed=state?.history.find(t=>t.id===id&&t.status==="CLOSED");
+  if (open){const trade=paperSourceTrade(open);return{status:trade.status,trade};}
+  const closed=state?.history.find(t=>t.id===id&&t.status==="CLOSED")??state?.paperExecution?.cancelled.find(t=>t.id===id);
   return closed ? { status:"CLOSED" as const, trade:closed } : { status:"UNKNOWN" as const, trade:null };
 }
 

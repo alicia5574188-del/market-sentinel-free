@@ -8,7 +8,8 @@ import {quantizeMirrorNotional,type GateSizeRules} from './gate-quantity.ts';
 export type SourceReduction={version:'source-reduction-v1';sourceSequence:number;targetContracts:number;contractsText:string;
   tag:string;attempt:number;submittedAt:number;orderId:string|null;state:'SUBMITTED'|'CONFIRMED'|'UNRESOLVED'|'SHORTFALL';};
 export function sourceReductionTarget(source:Trade,receipt:MirrorReceipt,actualContracts:number,spec:GateSizeRules){
-  if(source.status!=='OPEN'||source.id!==receipt.sourceId||!source.realization||source.realization.sequence<1)return null;
+  const sequence=source.sourceReductionIntent?.sequence??source.realization?.sequence??0;
+  if(source.status!=='OPEN'||source.id!==receipt.sourceId||sequence<1)return null;
   const sourceAtCopy=receipt.sourceContractsAtCopy;
   if(!sourceAtCopy||!Number.isFinite(sourceAtCopy)||sourceAtCopy<=0||source.contracts>sourceAtCopy+1e-9)return null;
   const desired=receipt.roundedContracts*Math.min(1,source.contracts/sourceAtCopy),
@@ -16,7 +17,7 @@ export function sourceReductionTarget(source:Trade,receipt:MirrorReceipt,actualC
     // this avoids taking extra live risk away solely because of lot rounding.
     delta=Math.max(0,actualContracts-desired),quantity=quantizeMirrorNotional(delta,1,1,spec);
   if(quantity.quantity<quantity.minimum)return null;
-  return{targetContracts:actualContracts-quantity.quantity,contractsText:quantity.quantityText,sequence:source.realization.sequence};
+  return{targetContracts:actualContracts-quantity.quantity,contractsText:quantity.quantityText,sequence};
 }
 export async function reconcileSourceReduction(input:{source:Trade;receipt:MirrorReceipt;actualContracts:number;observedAt:number;
   now:number;spec:GateSizeRules;prior?:SourceReduction;stillOpen:()=>boolean;

@@ -7,7 +7,7 @@ import {prepareForwardWrite,readForwardStore,prepareForwardProtectionWrite,FORWA
 import {restoreForwardProtectionCheckpoint} from '../lib/forward-protection-checkpoint.ts';
 import {applyInverseSourceTrade,newInverseTrial,sourceDecisionState,shadowCapsule,assertInverseTrial} from '../lib/shadow-inverse-ledger.ts';
 import {startLiveSession,fenceLiveSourcePolicy,sourceAfterEnable} from '../lib/live-session.ts';
-import {buildProportionalMirror} from '../lib/live-parity.ts';
+import {buildProportionalMirror,sourceLifecycle} from '../lib/live-parity.ts';
 import {buildReviewSnapshot} from '../lib/research-snapshot.ts';
 import {registerHooks} from 'node:module';
 import {nextProtectionWriteBudget} from '../lib/forward-write-budget.ts';
@@ -153,7 +153,9 @@ test('manual account reset retains the direct policy and market observer; public
   assert.deepEqual(next.extremumRegime,f.s.extremumRegime);assert.deepEqual(next.directStrategy!.plans,{});near(next.balance,1000);assert.equal(next.inverseTrial,undefined);
 });
 async function checkpointWorker(){
-  const f=fixture();openDirectPlan(f.s,f.p,q(),c,T,{TEST_USDT:q()});f.s.storage={persistedAt:T,error:null};f.s.lastQuoteCycleAt=T;
+  const f=fixture();openDirectPlan(f.s,f.p,q(),c,T,{TEST_USDT:q()});
+  f.s.paperExecution={version:'live-steps-paper-v1',cutoverAt:T,cancelled:[]};
+  f.s.storage={persistedAt:T,error:null};f.s.lastQuoteCycleAt=T;
   const data=new Map<string,unknown>(Object.entries((await prepareForwardWrite(null,f.s,T,{compact:true})).entries)),writes:string[][]=[];
   const storage={get:async<V>(k:string)=>structuredClone(data.get(k)) as V|undefined,put:async(entries:Record<string,unknown>)=>{
     writes.push(Object.keys(entries));for(const [k,v]of Object.entries(entries))data.set(k,structuredClone(v));
@@ -163,8 +165,9 @@ async function checkpointWorker(){
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const h=new MarketStream({storage,waitUntil(){}} as never,{} as never,true) as any;
   h.forwardState=f.s;h.ensureAdaptiveAccount=async()=>{};h.strategyCandles={};h.turnDailyCandles={};
-  h.forwardMinutePaths=()=>({});h.regimeContracts=()=>({TEST_USDT:c});h.dispatchCommittedLiveSource=()=>{};
-  let price=101;h.forwardQuotes=(now:number)=>({TEST_USDT:q(price,now)});h.forwardAnalysisQuotes=h.forwardQuotes;
+  h.forwardMinutePaths=()=>({});h.regimeContracts=()=>({TEST_USDT:{...c,enableDecimal:false,orderSizeMin:'1'}});
+  h.dispatched=[];h.dispatchCommittedLiveSource=()=>{h.dispatched.push(h.forwardState.positions.map((t:typeof f.s.positions[number])=>sourceLifecycle(h.forwardState,t.id).status));};
+  let price=101;h.forwardQuotes=(now:number)=>({TEST_USDT:{...q(price,now),bids:[{price,size:100000}],asks:[{price:price+.02,size:100000}]}});h.forwardAnalysisQuotes=h.forwardQuotes;
   return{h,data,writes,storage,setPrice:(p:number)=>{price=p;}};
 }
 test('real2s Worker coalesces transient protection until the durable10s slot without errors or unsaved publication',async()=>{
@@ -186,9 +189,15 @@ test('a financial exit bypasses a pending10s overlay, while restart retains the 
   const {h,data,writes,setPrice}=await checkpointWorker();await h.advanceForwardNow(T+2000,false);
   setPrice(101.2);await h.advanceForwardNow(T+4000,false);assert.ok(h.forwardPendingProtection);
   setPrice(97.8);await h.advanceForwardNow(T+6000,false);assert.equal(h.forwardError,null);
+  assert.equal(h.forwardState.positions.length,1);assert.equal(h.forwardState.history.length,0);
+  assert.equal(h.forwardState.positions[0].paperOrder.action.kind,'CLOSE');assert.equal(h.forwardPendingProtection,null);
+  assert.equal(sourceLifecycle(h.forwardState,h.forwardState.positions[0].id).status,'CLOSED');
+  assert.deepEqual(h.dispatched,[['CLOSED']], 'LIVE is dispatched at committed exit intent, before PAPER fills');
+  await h.advanceForwardNow(T+8000,false);assert.equal(h.forwardState.positions[0].paperOrder.action.phase,'SUBMITTED');
+  await h.advanceForwardNow(T+10000,false);assert.equal(h.forwardError,null);
   assert.equal(h.forwardState.positions.length,0);assert.equal(h.forwardState.history.length,1);assert.equal(h.forwardPendingProtection,null);
   assert.equal(h.forwardProtectionBudget.writes,1);assert.ok(writes.at(-1)!.some(k=>k.endsWith('head')));
-  const r=await readForwardStore({get:async<V>(k:string)=>structuredClone(data.get(k)) as V|undefined},T+7000);
+  const r=await readForwardStore({get:async<V>(k:string)=>structuredClone(data.get(k)) as V|undefined},T+11000);
   near(r.balance,h.forwardState.balance);near(r.history[0]!.adverse,.0122);
   assert.equal(r.history[0]!.directExitResearch!.finalNet,r.history[0]!.netPnl);
   const fresh=await checkpointWorker();fresh.h.forwardProtectionBudget=nextProtectionWriteBudget(null,T+2000);
@@ -198,6 +207,14 @@ test('a financial exit bypasses a pending10s overlay, while restart retains the 
   assert.equal(fresh.h.forwardError,null);assert.equal(fresh.writes.length,0);assert.deepEqual(fresh.h.forwardState,unchanged);
   await fresh.h.advanceForwardNow(T+12000,false);assert.equal(fresh.h.forwardError,null);assert.equal(fresh.writes.length,1);
   assert.equal(fresh.h.forwardProtectionBudget.writes,2);
+});
+test('failed intent commit retains financial and LIVE source authority; retry dispatches exactly once before matching',async()=>{
+  const {h,storage,setPrice}=await checkpointWorker(),before=structuredClone(h.forwardState),put=storage.put;
+  setPrice(97.8);storage.put=async()=>{throw new Error('synthetic failed durable commit');};
+  await h.advanceForwardNow(T+2000,false);assert.match(h.forwardError,/failed durable commit/);
+  assert.deepEqual(h.forwardState,before);assert.deepEqual(h.dispatched,[]);
+  storage.put=put;await h.advanceForwardNow(T+4000,false);assert.equal(h.forwardError,null);
+  assert.deepEqual(h.dispatched,[['CLOSED']]);assert.equal(h.forwardState.history.length,0);
 });
 test('new-only LIVE fence and native sizing use actual direct intent and fixed leverage',()=>{
   const f=fixture();const session=startLiveSession(T-1,f.s),fenced=fenceLiveSourcePolicy({...session,sourcePolicy:'unified-paper-live-v1'},f.s,T);
