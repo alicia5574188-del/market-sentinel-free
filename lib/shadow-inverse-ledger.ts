@@ -25,7 +25,7 @@ export type InverseCopy={version:typeof SHADOW_INVERSE_VERSION;sourceBuild:typeo
  * instead supplied by the source's own capsule, never the inverse wallet. */
 export const SHARED_MARKET_KEYS=['extremumRegime','hypothesisResearch','environmentContext','marketPulse','selectedSymbols',
   'opportunities','entryValidations','entryDiagnostics','relationEngine','lastCycleAt','lastQuoteCycleAt','lastCandleAt','fitDiagnostics'] as const;
-export type ShadowCapsule=Omit<ForwardState,typeof SHARED_MARKET_KEYS[number]|'inverseTrial'>;
+export type ShadowCapsule=Omit<ForwardState,typeof SHARED_MARKET_KEYS[number]|'inverseTrial'|'unifiedExecution'>;
 export type InverseTotals={sourceGross:number;sourceFees:number;sourceFunding:number;gross:number;fees:number;funding:number;feeSavings?:number;
   spreadDrag:number;opened:number;closed:number;reductions:number};
 export type InverseTrial={version:typeof SHADOW_INVERSE_VERSION;sourceBuild:typeof SHADOW_BASELINE_BUILD;cutoverAt:number;
@@ -38,6 +38,7 @@ const same=(a:number,b:number)=>finite(a)&&finite(b)&&Math.abs(a-b)<=1e-7*Math.m
 export const inverseId=(sourceId:string)=>`iv-${sourceId}`;
 export function shadowCapsule(state:ForwardState):ShadowCapsule{
   const row={...state} as Record<string,unknown>;delete row.inverseTrial;
+  delete row.unifiedExecution;
   for(const k of SHARED_MARKET_KEYS)delete row[k];
   for(const k of Object.keys(row))if(k.startsWith('__'))delete row[k];
   return structuredClone(row) as ShadowCapsule;
@@ -268,6 +269,34 @@ export function assertInverseTrade(t:Trade){
     throw new Error('反向父单结算不一致');
 }
 export function assertInverseTrial(state:ForwardState){
+  if(state.unifiedExecution){
+    const u=state.unifiedExecution;
+    if(u.version!=='return-continuation-v1'||!finite(u.cutoverAt)||u.cutoverAt<state.startedAt
+      ||!u.reference||u.reference.startedAt!==state.startedAt||!Array.isArray(u.legacyIds)||!u.episodes
+      ||Object.keys(u.episodes).length>300||u.reference.initialEquity!==state.initialEquity)
+      throw new Error('统一策略或原反向对照损坏；保留账户，禁止重置');
+    const activeIds=new Set<string>();
+    for(const [id,e]of Object.entries(u.episodes))if(id!==e.sourceId||!e.symbol||!finite(e.createdAt)||!finite(e.epsilon)||e.epsilon<0
+      ||typeof e.handled!=='boolean'||typeof e.ended!=='boolean')throw new Error('统一策略事件身份损坏');
+    for(const t of [...state.positions,...state.history])if(t.unified){
+      const m=t.unified;
+      if(m.version!==u.version||!['RETURN','CONTINUATION'].includes(m.branch)||t.inverseCopy||!m.sourceId||!m.referenceId
+        ||t.id!==`ue-${m.sourceId}-${m.branch==='RETURN'?'r':'c'}`||t.openedAt<u.cutoverAt
+        ||![t.entryPrice,t.quantity,t.contracts,t.quantoMultiplier,t.notional,t.leverage,t.margin,t.plannedRisk,t.entryFee,t.exitFee,m.referenceContracts].every(finite)
+        ||t.entryPrice<=0||t.quantity<=0||t.contracts<=0||t.leverage<1||t.plannedRisk<0||t.entryFee<0||t.exitFee<0
+        ||!same(t.quantity,t.contracts*t.quantoMultiplier)||!same(t.notional,t.quantity*t.entryPrice)||!same(t.margin,t.notional/t.leverage)
+        ||!same(t.entryFee,(t.realization?.initialNotional??t.notional)*.0005)
+        ||!Array.isArray(m.explanationEvents)||m.explanationEvents.length<1||m.explanationEvents.length>8
+        ||m.explanationEvents.some(e=>![e.at,e.quoteAt,e.price].every(finite)||e.price<=0||e.quoteAt>e.at)
+        ||(m.branch==='CONTINUATION'&&(!m.region?.balanced||!m.confirmation||!finite(m.initialStop)||m.initialStop! <= 0||!t.entryContext?.winnerPlan)))
+        throw new Error('统一策略订单决策或资金证据不完整');
+      if(t.status==='OPEN'){
+        if(!u.episodes[m.sourceId]||activeIds.has(m.sourceId))throw new Error('统一策略活动事件缺失或重复');activeIds.add(m.sourceId);
+      }else if(!finite(t.grossPnl)||!finite(t.netPnl)||!finite(t.exitPrice)||!same(t.netPnl,t.grossPnl-t.entryFee-t.exitFee-t.fundingAllowance))
+        throw new Error('统一策略退出资金不一致');
+    }
+    return assertInverseTrial({...state,...u.reference,unifiedExecution:undefined});
+  }
   const t=state.inverseTrial;if(!t)return;
   if(t.version!==SHADOW_INVERSE_VERSION||t.sourceBuild!==SHADOW_BASELINE_BUILD||t.accountingMode!==MIRROR_ACCOUNTING_MODE
     ||!finite(t.reconciledAt)||!finite(t.cutoverAt)||t.cutoverAt<state.startedAt

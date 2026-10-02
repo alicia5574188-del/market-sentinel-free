@@ -380,3 +380,56 @@ test('noninverse legacy native stop creation remains intact',async()=>{
   await h.stream.createImmediateLiveStop(h.gate,{planId:'legacy-source',symbol:'TEST_USDT',side:'LONG',invalidation:98});
   assert.equal(h.calls.stops.length,1);assert.equal(h.calls.stops[0].price,98);assert.equal(h.calls.closes,0);
 });
+
+function unifiedFixture(h:Awaited<ReturnType<typeof harness>>,branch:'RETURN'|'CONTINUATION',openedAt=Date.now()-100){
+  const t=h.inverse,sourceId=t.inverseCopy!.sourceId,referenceId=t.id;
+  delete t.inverseCopy;t.id=`ue-${sourceId}-${branch==='RETURN'?'r':'c'}`;t.openedAt=openedAt;t.leverage=5;t.margin=t.notional/5;
+  if(branch==='CONTINUATION'){t.side='LONG';t.stopPrice=98;t.rule.side='LONG';t.entryContext!.side='LONG';t.entryContext!.winnerPlan={...h.t.entryContext!.winnerPlan!,initialStop:98,target:110};}
+  t.unified={version:'return-continuation-v1',branch,sourceId,referenceId,region:{lower:98,upper:102,center:100,formedAt:openedAt-600000,balanced:true,basis:'OHLCV_PROXY'},
+    epsilon:.01,confirmation:null,initialStop:branch==='CONTINUATION'?98:null,referenceContracts:t.contracts,
+    entryReason:'test',holdReason:'test',exitCondition:'test',lastDecisionAt:openedAt,lastBarAt:0,decision:'HOLD',explanationEvents:[]};
+  return t;
+}
+for(const branch of ['RETURN','CONTINUATION'] as const)test(`real Worker executes unified ${branch} at 5x, honors committed reduction/close and deduplicates`,async()=>{
+  const h=await harness('LONG'),t=unifiedFixture(h,branch);await h.stream.syncLive(Date.now());await h.stream.syncLive(Date.now());
+  assert.equal(h.calls.entries,1);assert.equal(h.positions[0].leverage,'5');
+  const p=h.stream.runtime.live.positions.TEST_USDT;assert.equal(p.parity.sourceRole,'UNIFIED_PAPER');assert.equal(p.parity.unifiedBranch,branch);
+  assert.equal(h.calls.stops.length,branch==='RETURN'?0:1);
+  t.contracts*=.6;t.quantity*=.6;t.notional*=.6;t.margin*=.6;t.plannedRisk*=.6;t.realization={sequence:1,initialContracts:100} as Trade['realization'];
+  await h.stream.syncLive(Date.now());assert.deepEqual(h.calls.reductions,['4']);
+  await h.stream.syncLive(Date.now());assert.deepEqual(h.calls.reductions,['4']);
+  t.status='CLOSED';t.closedAt=Date.now();t.exitReason='CONTINUATION_STRUCTURE_EXIT';h.state.positions=[];h.state.history=[t];
+  await h.stream.syncLive(Date.now());assert.equal(h.calls.closes,1);assert.equal(h.calls.entries,1);
+  assert.equal(h.stream.runtime.live.requestedEnabled,true);
+});
+test('unified conversion cannot open its opposite exposure while an old close remains unknown',async()=>{
+  const h=await harness('LONG'),old=unifiedFixture(h,'RETURN');await h.stream.syncLive(Date.now());await h.stream.syncLive(Date.now());
+  const newer=structuredClone(old);newer.id=newer.id.slice(0,-1)+'c';newer.side='LONG';newer.unified!.branch='CONTINUATION';newer.openedAt=Date.now();newer.stopPrice=98;
+  old.status='CLOSED';old.closedAt=Date.now();h.state.positions=[newer];h.state.history=[old];
+  (h.gate as any).sourceExit=async()=>{h.calls.closes++;throw new Error('unknown conversion close');};
+  await assert.rejects(h.stream.syncLive(Date.now()),/unknown conversion close/);
+  await h.stream.syncLive(Date.now());assert.equal(h.calls.entries,1);assert.equal(h.calls.closes,1);
+  assert.equal(h.stream.runtime.live.positions.TEST_USDT.sourceExit.last.terminal,false);
+});
+
+test('unified policy migration preserves the manual session and scale; first cutover intent remains eligible without old replay',async()=>{
+  const h=await harness('LONG'),enabled=h.stream.runtime.live.activation.enabledAt,oldId=h.inverse.id;
+  h.state.unifiedExecution={version:'return-continuation-v1',cutoverAt:Date.now()-120,reference:shadowCapsule(h.state),episodes:{},legacyIds:[oldId],completedConversions:0,droppedEpisodes:0};
+  const t=unifiedFixture(h,'RETURN',h.state.unifiedExecution.cutoverAt);
+  h.stream.runtime.live.activation.scaleRatio=.1;await h.stream.syncLive(Date.now());await h.stream.syncLive(Date.now());
+  assert.equal(h.stream.runtime.live.activation.enabledAt,enabled);assert.equal(h.stream.runtime.live.activation.scaleRatio,.1);
+  assert.equal(h.stream.runtime.live.activation.sourcePolicy,'unified-paper-live-v1');assert.equal(h.calls.entries,1);
+  assert.equal(sourceAfterEnable({...t,id:oldId,openedAt:h.state.unifiedExecution.cutoverAt-1},h.stream.runtime.live.activation,h.state.startedAt),false);
+});
+
+test('member feed carries unified cutover identity and actual branch but no reference wallet; archive close accepts unified IDs',async()=>{
+  const h=await harness('LONG');
+  h.state.unifiedExecution={version:'return-continuation-v1',cutoverAt:Date.now()-120,reference:shadowCapsule(h.state),episodes:{},legacyIds:[],completedConversions:0,droppedEpisodes:0};
+  const t=unifiedFixture(h,'RETURN'),before=structuredClone(h.state);
+  const response=await h.stream.fetch(new Request('https://primary/member-feed')),feed=await response.json() as any;
+  assert.equal(feed.state.unifiedExecution.version,'return-continuation-v1');assert.equal(feed.state.unifiedExecution.reference,undefined);
+  assert.equal(feed.state.positions[0].unified.branch,'RETURN');assert.deepEqual(h.state,before);
+  t.status='CLOSED';t.closedAt=Date.now();h.state.positions=[];h.state.history=[t];
+  const res=await h.stream.fetch(new Request(`https://primary/member-closed?id=${t.id}&openedAt=${t.openedAt}`));
+  assert.equal(res.status,200);assert.equal((await res.json() as any).trade.id,t.id);
+});

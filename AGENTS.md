@@ -1,3 +1,21 @@
+# 2026-10-02 — owner-authorized unified execution implementation
+
+Owner now asks to complete RETURN / CONTINUATION implementation and its actual
+entry, holding and exit explanations. This supersedes the earlier proposal-only
+and passive-inverse restriction for NEW post-cutover intents. Preserve fixed1000
+allocation/native capital anchor, current account identities, existing holdings
+under their original policy, history, manual LIVE intent, unknown-send fences,
+owner/member isolation, source baseline provenance and resource/cadence contracts.
+One frozen source evaluation also maintains the exact old inverse reference;
+new actual intents use executable own-side BBO and their own fee receipts.
+Continuation requires causal completed per-symbol structure, fresh flow, new
+stop, current cost-adjusted room and existing risk/margin constraints. It owns
+its subsequent holding/exit decisions. Book sunk return loss and all fees.
+No shadow-profit threshold, market-wide direction flip, automatic LIVE toggle,
+reset, new data request/timer or real-money verification order. Full checks and
+reviewed-main release with read-only advancing production receipts required.
+Tests establish mechanics and compatibility; they cannot establish profitability.
+
 # 2026-10-02 — native equity curve density parity
 
 Owner asks to keep LIVE and PAPER curves alike without excessive data pressure.

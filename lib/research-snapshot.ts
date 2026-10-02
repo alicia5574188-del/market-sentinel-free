@@ -14,7 +14,7 @@ const obj=(v:unknown):ObjectRow=>v&&typeof v==='object'&&!Array.isArray(v)?v as 
 const sum=(rows:Trade[],key:keyof Trade)=>rows.reduce((n,t)=>n+(finite(t[key])?t[key] as number:0),0);
 const timestamp=(v:unknown)=>finite(v)?new Date(v).toISOString():null;
 const beijing=(at:number)=>new Date(at+8*3600_000).toISOString().replace('Z','+08:00');
-export type ArchivePage={accountStartedAt:number;asOf:number;trades:Trade[];recordsRead:number;nextCursor:string|null;exhausted:boolean;conflictingTradeIds?:string[]};
+export type ArchivePage={accountStartedAt:number;asOf:number;trades:Trade[];referenceTrades?:Trade[];recordsRead:number;nextCursor:string|null;exhausted:boolean;conflictingTradeIds?:string[]};
 type ArchiveReader={list<T>(options:{prefix:string;start:string;end:string;reverse:boolean;limit:number}):Promise<Map<string,T>>};
 /** Bounded, strictly read-only page. No remote market data and no account mutation. */
 export async function readReviewArchivePage(storage:ArchiveReader,accountStartedAt:number,asOf:number,cursor:string|null):Promise<ArchivePage>{
@@ -22,10 +22,11 @@ export async function readReviewArchivePage(storage:ArchiveReader,accountStarted
   const start=ARCHIVE_PREFIX+String(accountStartedAt).padStart(16,'0');
   const end=ARCHIVE_PREFIX+String(asOf+1).padStart(16,'0');
   if(cursor&&(!/^forward-relations:v1:archive:\d{16}:(?:\d+|reset:\d+)$/.test(cursor)||cursor<start||cursor>=end))throw new Error('INVALID_REVIEW_CURSOR');
-  const rows=await storage.list<{startedAt?:number;trades?:Trade[];reviews?:{tradeId:string;review:TradeReview}[]}>({prefix:ARCHIVE_PREFIX,start,end:cursor??end,reverse:true,limit:REVIEW_ARCHIVE_PAGE_ROWS});
-  const trades:Trade[]=[];
+  const rows=await storage.list<{startedAt?:number;trades?:Trade[];referenceTrades?:Trade[];reviews?:{tradeId:string;review:TradeReview}[]}>({prefix:ARCHIVE_PREFIX,start,end:cursor??end,reverse:true,limit:REVIEW_ARCHIVE_PAGE_ROWS});
+  const trades:Trade[]=[],referenceTrades:Trade[]=[];
   for(const packet of rows.values()){
     if(packet.startedAt!==accountStartedAt)continue;
+    for(const t of packet.referenceTrades??[])if(t?.id&&t.openedAt>=accountStartedAt&&t.openedAt<=asOf)referenceTrades.push(t);
     const reviews=new Map((packet.reviews??[]).map(r=>[r.tradeId,r.review]));
     for(const t of packet.trades??[]){
       if(t?.id&&t.status==='CLOSED'&&t.openedAt>=accountStartedAt&&t.openedAt<=asOf&&(t.closedAt===null||t.closedAt<=asOf))
@@ -33,7 +34,7 @@ export async function readReviewArchivePage(storage:ArchiveReader,accountStarted
     }
   }
   const conflictingTradeIds:string[]=[];
-  return{accountStartedAt,asOf,trades:mergeTradeRows([],trades,conflictingTradeIds),conflictingTradeIds,recordsRead:rows.size,
+  return{accountStartedAt,asOf,trades:mergeTradeRows([],trades,conflictingTradeIds),referenceTrades:mergeTradeRows([],referenceTrades,[]),conflictingTradeIds,recordsRead:rows.size,
     nextCursor:rows.size===REVIEW_ARCHIVE_PAGE_ROWS?[...rows.keys()].at(-1)!:null,exhausted:rows.size<REVIEW_ARCHIVE_PAGE_ROWS};
 }
 export type ReviewSnapshot={
@@ -57,7 +58,7 @@ function preferReview(a:TradeReview|undefined,b:TradeReview|undefined){
     +Number(!!r.terminal)*4+Number(!!r.diagnosticVersion)*2+(r.milestones?.reductions.length??0);
   return quality(b)>quality(a)?b:a;
 }
-export function tradePlanVersion(t:Trade){return t.inverseCopy?.version??t.entryContext?.winnerPlan?.researchVersion??t.entryContext?.winnerPlan?.version
+export function tradePlanVersion(t:Trade){return t.unified?.version??t.inverseCopy?.version??t.entryContext?.winnerPlan?.researchVersion??t.entryContext?.winnerPlan?.version
   ??t.entryContext?.strategyVersion??'UNKNOWN_LEGACY';}
 
 function mergeTradeRows(current:Trade[],incoming:Trade[],conflicts:string[]){
@@ -120,7 +121,8 @@ export function buildReviewSnapshot(input:{view:ObjectRow;buildSha:string|null;s
     market:{intelligence:v.marketIntelligence??null,environmentRouter:v.environmentRouter??null,hypothesisResearch:v.hypothesisResearch??null,
       marketPulse:v.marketPulse??null,geometry:rawShadow.marketGeometry??[],geometrySummary:rawShadow.summary?obj(rawShadow.summary).rollingGeometry:null},
     research:{shadowUpdatedAt:rawShadow.updatedAt??null,counterfactualUpdatedAt:rawCounter.updatedAt??null,
-      decisionAccount:v.shadowInverse?'FROZEN_SHADOW_SOURCE':'PAPER',sourceToInverse:trades.filter(t=>t.inverseCopy).map(t=>({sourceId:t.inverseCopy!.sourceId,inverseId:t.id})),
+      decisionAccount:v.unifiedExecution?'UNIFIED_EXECUTION':v.shadowInverse?'FROZEN_SHADOW_SOURCE':'PAPER',
+      unifiedExecution:v.unifiedExecution??null,referenceTrades:obj(obj(v.unifiedExecution).baseline).retainedTrades??[],sourceToInverse:trades.filter(t=>t.inverseCopy).map(t=>({sourceId:t.inverseCopy!.sourceId,inverseId:t.id})),
       tradeQuality:currentShadow,retiredTrades:arr(rawShadow.retiredTrades),priorAccount:{excludedShadowCount:olderShadow.length+arr(rawShadow.retiredTrades).length,excludedShadowTradeIds:olderShadow.map(t=>t.tradeId),
         excludedOpenRecords:olderShadow.filter(t=>t.status==='OPEN').length,status:'ISOLATED_NOT_ASSUMED_CLOSED'},
       postExit:post.map(r=>({...r,checkpointCoverage:checkpointCoverage(r,input.exportedAt)})),
@@ -175,7 +177,7 @@ export function finalizeReviewSnapshot(s:ReviewSnapshot):ReviewSnapshot{
   s.coverage.includedClosed=closed.length;s.coverage.missingClosed=Math.max(0,s.coverage.expectedClosed-closed.length);
   s.coverage.complete=s.coverage.missingClosed===0&&closed.length===s.coverage.expectedClosed&&s.coverage.conflictingTradeIds.length===0;
   const traceMissing=closed.filter(t=>!t.review?.terminal&&!t.inverseCopy?.sourceClosedAt),
-    piMissing=closed.filter(t=>!t.inverseCopy&&!t.positionIntelligence&&!t.review?.terminal?.assessments.length);
+    piMissing=closed.filter(t=>!t.inverseCopy&&!t.unified&&!t.positionIntelligence&&!t.review?.terminal?.assessments.length);
   const profitLeads=closed.filter(t=>t.favorable*t.notional>Math.max(2,(t.entryFee+t.exitFee)*4)
     &&(t.netPnl??0)<t.favorable*t.notional*.4).sort((a,b)=>b.favorable*b.notional-a.favorable*a.notional).slice(0,5),
     lowExecutionEdge=closed.filter(t=>Number(t.entryContext?.edgeRatio)<1.25).sort((a,b)=>(a.netPnl??0)-(b.netPnl??0)).slice(0,8);
@@ -187,7 +189,7 @@ export function finalizeReviewSnapshot(s:ReviewSnapshot):ReviewSnapshot{
       valid:statuses.filter(v=>v==='VALID').length,pending:statuses.filter(v=>v==='PENDING').length,
       unavailable:statuses.filter(v=>v==='UNAVAILABLE').length,dueNotObserved:statuses.filter(v=>v==='DUE_NOT_OBSERVED').length}];}));
   const mirror=obj(s.runtime.liveMirror),rows=arr<ObjectRow>(mirror.rows),ownerOff=rows.length>0&&rows.every(r=>r.status==='OWNER_OFF');
-  s.summary={accountCumulative:{equity:s.account.equity,netEquityChange:s.account.netPnl,realizedGross:s.account.grossPnl,
+  s.summary={unifiedBranches:grouped(closed,t=>t.unified?.branch??'LEGACY'),accountCumulative:{equity:s.account.equity,netEquityChange:s.account.netPnl,realizedGross:s.account.grossPnl,
       fees:s.account.fees,fundingAllowance:s.account.fundingAllowance,floating:s.account.floating,closedCount:s.coverage.expectedClosed},
     includedClosedPerformance:performance(closed),byEntryPlan:grouped(closed,t=>t.entryContext?.tradePlan??'LEGACY_UNCLASSIFIED'),
     byEntryEnvironment:grouped(closed,t=>t.entryContext?.environment??'UNKNOWN'),byExit:grouped(closed,t=>t.exitReason??'UNKNOWN'),
@@ -203,15 +205,15 @@ export function finalizeReviewSnapshot(s:ReviewSnapshot):ReviewSnapshot{
     const comparison=compareLiveReview(s.liveReview,s.trades,s.coverage.complete,s.meta.accountStartedAt),
       enabledAt=s.liveReview.context.sessionAt,curve=arr<ObjectRow>(s.inverseExperiment?.curve),
       prior=curve.filter(p=>finite(p.at)&&p.at<=enabledAt&&finite(p.inverse)).sort((a,b)=>Number(b.at)-Number(a.at))[0],
-      observed=prior&&enabledAt-Number(prior.at)<=120_000?prior:null;
+      observed=!s.research.unifiedExecution&&prior&&enabledAt-Number(prior.at)<=120_000?prior:null;
     s.summary.liveComparison={...comparison,paperAccountWindow:{enabledAt,
       baselineAt:observed?.at??null,baselineEquity:observed?.inverse??null,currentEquity:s.account.equity,
       observedEquityChange:observed&&finite(s.account.equity)?s.account.equity-Number(observed.inverse):null,
-      scope:'NEAREST_RETAINED_PRE_ENABLE_MARK_WITHIN_2M; INCLUDES_PRE_ENABLE_HOLDINGS; NOT_EXACT_ENABLE_EQUITY'}};
+      scope:s.research.unifiedExecution?'UNIFIED_ACCOUNT_ENABLE_BASELINE_UNAVAILABLE; REFERENCE_CURVE_IS_A_DIFFERENT_LEDGER':'NEAREST_RETAINED_PRE_ENABLE_MARK_WITHIN_2M; INCLUDES_PRE_ENABLE_HOLDINGS; NOT_EXACT_ENABLE_EQUITY'}};
   }
   if(s.inverseExperiment){
-    const paired=s.trades.filter(t=>t.inverseCopy),sourceId=(t:Trade)=>t.inverseCopy!.sourceId;
-    s.inverseExperiment={...s.inverseExperiment,accountingScope:'FROZEN_SHADOW_AND_PASSIVE_INVERSE_PAPER',
+    const paired=s.research.unifiedExecution?mergeTradeRows(s.trades.filter(t=>t.inverseCopy),arr<Trade>(s.research.referenceTrades),[]):s.trades.filter(t=>t.inverseCopy),sourceId=(t:Trade)=>t.inverseCopy!.sourceId;
+    s.inverseExperiment={...s.inverseExperiment,accountingScope:s.research.unifiedExecution?'FROZEN_SHADOW_AND_SEPARATE_INVERSE_REFERENCE':'FROZEN_SHADOW_AND_PASSIVE_INVERSE_PAPER',
       actualLiveDiagnostics:s.liveReview?'liveReview':null,pairs:paired.map(t=>({tradeId:t.id,sourceId:sourceId(t),sourceBuild:t.inverseCopy!.sourceBuild,
       openedAt:t.openedAt,closedAt:t.closedAt,side:t.side,sourceSide:t.inverseCopy!.sourceSide,status:t.status,
       sourceEntry:t.inverseCopy!.sourceEntryPrice,entry:t.entryPrice,exit:t.exitPrice,remainingContracts:t.status==='OPEN'?t.contracts:0,
@@ -247,6 +249,7 @@ export function finalizeReviewSnapshot(s:ReviewSnapshot):ReviewSnapshot{
 export function mergeReviewArchive(s:ReviewSnapshot,page:ArchivePage){
   if(page.accountStartedAt!==s.meta.accountStartedAt||page.asOf!==s.meta.exportedAt)throw new Error('REVIEW_ACCOUNT_OR_CUTOFF_CHANGED');
   s.trades=mergeTradeRows(s.trades,page.trades.filter(t=>t.openedAt>=s.meta.accountStartedAt&&t.openedAt<=s.meta.exportedAt),s.coverage.conflictingTradeIds);
+  if(s.research.unifiedExecution)s.research.referenceTrades=mergeTradeRows(arr<Trade>(s.research.referenceTrades),page.referenceTrades??[],[]);
   s.coverage.conflictingTradeIds=[...new Set([...s.coverage.conflictingTradeIds,...(page.conflictingTradeIds??[])])];
   s.coverage.archiveRecordsRead+=page.recordsRead;s.coverage.archivePagesRead++;s.coverage.archiveNextCursor=page.nextCursor;s.coverage.archiveExhausted=page.exhausted;
   return finalizeReviewSnapshot(s);

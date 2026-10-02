@@ -19,7 +19,7 @@ export const LIVE_MIN_CONTRACT_UPLIFT_MAX_RISK_RATE = .0075;
 const LIVE_MIN_CONTRACT_UPLIFT_RISK_MULTIPLE=4,LIVE_MIN_CONTRACT_UPLIFT_RISK_FLOOR_RATE=.004;
 export type MirrorSourceTrade = ArenaTrade & { forwardSource?: Trade };
 export type MirrorReceipt = {
-  executionLeverage?:number;leveragePolicy?:typeof INVERSE_LIVE_LEVERAGE_POLICY;
+  executionLeverage?:number;leveragePolicy?:typeof INVERSE_LIVE_LEVERAGE_POLICY|'actual-intent-isolated-v1';
   leverageAdjustAt?:number;leverageAdjustError?:string|null;
   version: typeof LIVE_PARITY_VERSION; sourceId: string; sourceRuleId: string;
   sourcePolicy: string; sourceOpenedAt: number; sourceDeadline: number;
@@ -41,7 +41,7 @@ export type MirrorReceipt = {
   allowedAdverseEntryDriftRate?: number; adverseEntryDriftRate?: number;
   submitQuoteAt?: number; submitQuotePrice?: number; submittedAt?: number; submitDelayMs?: number;
   exchangeEntryPrice?: number; exchangeEntryAt?: number; exchangeEntryDriftRate?: number;
-  sourceRole?: 'INVERSE_PAPER'; nativeProtectionPolicy?:typeof INVERSE_LIVE_POLICY|typeof INVERSE_LIVE_EXIT_POLICY;
+  sourceRole?: 'INVERSE_PAPER'|'UNIFIED_PAPER';unifiedBranch?:'RETURN'|'CONTINUATION'; nativeProtectionPolicy?:typeof INVERSE_LIVE_POLICY|typeof INVERSE_LIVE_EXIT_POLICY;
   nativeProtectionPrice?:number|null; shadowSourceId?:string;
   sourceAllocationRiskRate?:number; exitPolicy?:typeof INVERSE_LIVE_EXIT_POLICY;
   fixedAllocationPolicy?:'fixed-1000-v1';fixedLiveEquity?:number;
@@ -75,7 +75,7 @@ export function forwardMirrorSources(state: ForwardState, sourceEquity: number):
   for (const t of state.positions) {
     // The current visible inverse account is the NEW source. Existing legacy
     // LIVE positions still use sourceLifecycle; drain rows cannot add exposure.
-    if(state.inverseTrial&&!t.inverseCopy)continue;
+    if(state.inverseTrial&&!t.inverseCopy&&!t.unified)continue;
     validateMirrorSource(t);
     const protection=liveProtectionPrice(t);
     if (out[t.symbol]) throw new Error(`${t.symbol} 出现多条逻辑持仓；禁止静默净额合并，须先升级逐腿执行适配器`);
@@ -121,7 +121,7 @@ export function sourceLifecycle(state: ForwardState | null, id: string) {
 
 export function mirrorSourceFresh(t: Trade | undefined, id: string, now: number) {
   return !!t && t.id===id && t.status==="OPEN" && now>=t.openedAt
-    && (!!t.inverseCopy||now<t.openedAt+sourceHoldMinutes(t)*60_000);
+    && (!!t.inverseCopy||!!t.unified||now<t.openedAt+sourceHoldMinutes(t)*60_000);
 }
 
 export function liveEntryDriftGuard(source:Trade,currentPrice:number) {
@@ -134,7 +134,7 @@ export function liveEntryDriftGuard(source:Trade,currentPrice:number) {
   const edgeBound=remaining>0?Math.max(.0015,Math.min(.005,remaining*.5)):.005;
   const allowed=Math.min(stopBound,edgeBound);
   return {policy:LIVE_ENTRY_DRIFT_POLICY,adverse,
-    allowed:source.inverseCopy?0:allowed,stopWidth,remaining};
+    allowed:source.inverseCopy?0:source.unified?1:allowed,stopWidth,remaining};
 }
 
 /** Remaining quantity is reconciled from Gate before entry admission. A close
@@ -146,7 +146,7 @@ export function liveEntryDriftGuard(source:Trade,currentPrice:number) {
  * unknown exposure blocks only additions, never protection or owner intent. */
 export function mirrorPositionRisk(position:{status:string;side:"LONG"|"SHORT";entryPrice:number;
   currentStop:number;notional:number;plannedRisk?:number;
-  parity?:Pick<MirrorReceipt,"sourceOpenedAt"|"sourceDeadline"|"sourceRole"|"sourceAllocationRiskRate">},markPrice=position.entryPrice) {
+  parity?:Pick<MirrorReceipt,"sourceOpenedAt"|"sourceDeadline"|"sourceRole"|"unifiedBranch"|"sourceAllocationRiskRate">},markPrice=position.entryPrice) {
   if(position.status!=="OPEN")return 0;
   const horizonMs=position.parity ? position.parity.sourceDeadline-position.parity.sourceOpenedAt : NaN;
   if(isInverseLiveReceipt(position.parity)){
@@ -189,12 +189,17 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
   const direction=t.side==="LONG"?1:-1;
   const protection=liveProtectionPrice(t);
   if (protection!=null&&direction*(input.entryPrice-protection)<=0)fail("ECONOMICS","当前价已越过源单止损，不开即平");
+  if(t.unified?.branch==='CONTINUATION'){
+    const target=t.entryContext?.winnerPlan?.target,risk=direction*(input.entryPrice-protection!)+(input.entryPrice+protection!)*.0005,
+      remaining=target==null?0:direction*(target-input.entryPrice)-(input.entryPrice+target)*.0005;
+    if(target==null||risk<=0||remaining/risk<1.35)fail('ECONOMICS','实盘当前成交价到已知障碍的扣费空间不足以覆盖新结构风险，不把延迟复制当作原成交');
+  }
   const drift=liveEntryDriftGuard(t,input.entryPrice);
-  if(!t.inverseCopy&&drift.adverse>drift.allowed+1e-9)fail("ECONOMICS",
+  if(!t.inverseCopy&&!t.unified&&drift.adverse>drift.allowed+1e-9)fail("ECONOMICS",
     `当前实盘盘口相对模拟入场出现不利偏差${(drift.adverse*100).toFixed(3)}%，超过动态上限${(drift.allowed*100).toFixed(3)}%，不追价`);
   const ratio=input.mirrorRatio&&positive(input.mirrorRatio)?input.mirrorRatio:input.equity/input.sourceEquity;
-  const mirrorEquity=input.sourceEquity*ratio,targetNotional=t.notional*ratio,
-    targetMargin=t.inverseCopy?targetNotional/leverage:t.margin*ratio;
+  const mirrorEquity=input.sourceEquity*ratio,targetNotional=t.unified?t.quantity*input.entryPrice*ratio:t.notional*ratio,
+    targetMargin=t.inverseCopy||t.unified?targetNotional/leverage:t.margin*ratio;
   const one=input.entryPrice*input.quantoMultiplier,requestedContracts=targetNotional/one,
     cost=2*(PAPER_COST.feeRate+PAPER_COST.slippageRate)+PAPER_COST.fundingAllowancePerDay*sourceHoldMinutes(t)/1440,
     sourceScaledRisk=t.plannedRisk*ratio,stopAndCost=protection==null?t.plannedRisk/t.notional
@@ -252,6 +257,10 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
     executionLeverage:leverage,leveragePolicy:INVERSE_LIVE_LEVERAGE_POLICY,
     exitPolicy:INVERSE_LIVE_EXIT_POLICY,nativeProtectionPrice:null,shadowSourceId:t.inverseCopy.sourceId,
     sourceAllocationRiskRate:t.plannedRisk/t.notional});
+  if(t.unified)Object.assign(receipt,{sourceRole:'UNIFIED_PAPER',unifiedBranch:t.unified.branch,executionLeverage:leverage,leveragePolicy:'actual-intent-isolated-v1',
+    nativeProtectionPolicy:t.unified.branch==='RETURN'?INVERSE_LIVE_EXIT_POLICY:undefined,
+    nativeProtectionPrice:protection,shadowSourceId:t.unified.sourceId,sourceAllocationRiskRate:t.plannedRisk/t.notional,
+    entryPricePolicy:'fresh-market-v1'});
   return {intent:{kind:"MARKET",tag,size,contracts,notional,plannedRisk,leverage,margin,
     body:{contract:t.symbol,size:`${direction<0?"-":""}${quantityText}`,price:"0",tif:"ioc",text:tag,reduce_only:false}},
     binding:{version:LIVE_PARITY_VERSION,sourceAtCopy:structuredClone(t),receipt}};
@@ -268,7 +277,7 @@ export function mirrorCoverage(state:ForwardState|null,live:{requestedEnabled:bo
     const p=live.positions[t.symbol],e=live.entries[t.symbol],skip=live.entrySkips[t.symbol];
     const copied=p?.status==="OPEN"&&p.id===t.id,endedEarly=p?.status==="CLOSED"&&p.id===t.id;
     const pending=e?.planId===t.id&&["SUBMITTING","OPEN","ERROR"].includes(e.status);
-    const currentSource=!state?.inverseTrial||!!t.inverseCopy;
+    const currentSource=!state?.inverseTrial||!!t.inverseCopy||!!t.unified;
     const eligible=currentSource&&live.requestedEnabled&&sourceAfterEnable(t,live.activation,state!.startedAt);
     const skipStatus=skip?.planId!==t.id?null:skip.code==="MIN_CONTRACT"?"BLOCKED_MIN_SIZE"
       :skip.code==="RETRYING"?"RETRYING":skip.code==="SOURCE_ENDED_EARLY"?"SOURCE_ENDED_EARLY":"BLOCKED";
@@ -284,9 +293,9 @@ export function mirrorCoverage(state:ForwardState|null,live:{requestedEnabled:bo
   const valued=actual.filter(p=>typeof p?.exchangeUnrealisedPnl==="number"&&Number.isFinite(p.exchangeUnrealisedPnl)&&!!p.exchangePnlAt);
   const inverseHeld=actual.filter(p=>isInverseLiveReceipt(p?.parity));
   return {version:LIVE_PARITY_VERSION,source:LIVE_PARITY_SOURCE,connected:!!state&&!sourceError,ownerControlled:true,
-    accountRole:state?.inverseTrial?'INVERSE_PAPER':'CURRENT_PAPER',
-    nativeProtectionPolicy:state?.inverseTrial?INVERSE_LIVE_EXIT_POLICY:null,
-    leveragePolicy:state?.inverseTrial?INVERSE_LIVE_LEVERAGE_POLICY:null,
+    accountRole:state?.unifiedExecution?'UNIFIED_PAPER':state?.inverseTrial?'INVERSE_PAPER':'CURRENT_PAPER',
+    nativeProtectionPolicy:state?.unifiedExecution?'own-branch-evidence-v1':state?.inverseTrial?INVERSE_LIVE_EXIT_POLICY:null,
+    leveragePolicy:state?.unifiedExecution?'actual-intent-isolated-v1':state?.inverseTrial?INVERSE_LIVE_LEVERAGE_POLICY:null,
     leverageAdjustment:{managed:inverseHeld.length,
       atOrBelowTarget:inverseHeld.filter(p=>p?.leverage!=null&&p.leverage>0&&p.leverage<=inverseLiveLeverage(p.parity!.sourceLeverage)).length,
       pending:inverseHeld.filter(p=>p?.leverage!=null&&p.leverage>inverseLiveLeverage(p.parity!.sourceLeverage)).length},

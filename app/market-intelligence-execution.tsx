@@ -55,6 +55,7 @@ function waitingReason(v:NonNullable<View["entryValidation"]>["records"][number]
 }
 
 function positionAction(t:View["positions"][number]){
+  if(t.unified)return `${t.unified.branch==='RETURN'?'回退':'延续'} · ${t.unified.decision==='EXIT'?'准备退出':t.unified.decision==='REVIEW'?'正在复核':'继续持有'}`;
   if(t.inverseCopy)return"仅跟随影子";
   if(t.winnerManagement?.research){
     const m=t.winnerManagement;
@@ -65,6 +66,7 @@ function positionAction(t:View["positions"][number]){
 }
 
 function positionWatch(t:View["positions"][number]){
+  if(t.unified)return t.unified.holdReason;
   if(t.inverseCopy)return `影子${t.inverseCopy.sourceSide==="LONG"?"做多":"做空"}，模拟反向；源单退出参考 ${t.inverseCopy.sourceStopPrice}。`;
   if(t.winnerManagement)return t.winnerManagement.reason;
   const plan=t.liquidityLifecycle?.currentPlan??t.entryContext?.tradePlan,concern=t.positionIntelligence?.concerns?.[0];
@@ -94,7 +96,7 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
 
   return <div className="fr-execution-page">
     <section className="fr-section fr-exec-primary">
-      <div className="fr-section-head"><h2>市场作战总览</h2><span>研究更新 {clock(mi?.updatedAt)}</span></div>
+      <div className="fr-section-head"><h2>{data?.unifiedExecution?'回退与延续执行':'市场作战总览'}</h2><span>研究更新 {clock(mi?.updatedAt)}</span></div>
       <div className="fr-exec-market-hero"><div><small>当前市场</small>
         <strong>{environmentName(currentEnvironment)} · {evolution(currentEvolution)}</strong></div>
         <p>大方向{bias(n?.major.bias)} · 短期{bias(n?.short.bias)}</p></div>
@@ -103,19 +105,23 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
         <div><small>接下来可能</small><b>{nextMarketText(data)}</b></div>
         <div><small>转变压力</small><b>{pressure(outlook?.transitionPressure)}{outlook?.horizonMinutes?` · 观察窗口 ${outlook.horizonMinutes} 分钟`:""}</b></div>
       </div>
+      {data?.unifiedExecution&&<p className="fr-note">尚未确认延续时保留回退逻辑；本币突破后保持在区域外推进，或回踩后再次推进，才评估延续仓。每笔使用自己的判断，市场同步上涨不代表所有币都应做多。</p>}
       <div className="fr-journal">
         <article><time>正在观察 · {observed.length}</time><div>
-          {observed.length?observed.map(o=><p key={o.id}><b>{o.symbol.replace("_"," / ")} · {side(o.side)} · {tradePlanName(o.tradePlan)}</b><br/>
+          {observed.length?observed.map(o=><p key={o.id}><b>{o.symbol.replace("_"," / ")} · {data?.unifiedExecution?'参考':''}{side(o.side)} · {tradePlanName(o.tradePlan)}</b><br/>
             {o.eligible&&!waitingByCandidate.has(o.id)?"条件已成立，等待执行队列。":observeReason(o,liquidity?.symbols?.[o.symbol])}</p>):<p>暂无重点观察标的。</p>}
         </div></article>
-        <article><time>等待执行 · {waitingValidations.length}{data?.shadowInverse?" · 影子决策，模拟反向":""}</time><div>
-          {waitingValidations.map(v=>{const o=v.frozenOpportunity??opportunities.find(x=>x.id===v.candidateId);return <p key={v.id}><b>{v.symbol.replace("_"," / ")} · {side(v.side)} · {tradePlanName(o?.tradePlan)}</b><br/>
+        <article><time>等待执行 · {waitingValidations.length}{data?.unifiedExecution?' · 待选择实际分支':data?.shadowInverse?" · 影子决策，模拟反向":""}</time><div>
+          {waitingValidations.map(v=>{const o=v.frozenOpportunity??opportunities.find(x=>x.id===v.candidateId);return <p key={v.id}><b>{v.symbol.replace("_"," / ")} · {data?.unifiedExecution?'参考':''}{side(v.side)} · {tradePlanName(o?.tradePlan)}</b><br/>
             {waitingReason(v,o)}{o?.winnerPlan&&<><br/><small>{planText(o.winnerPlan)}</small></>}</p>})}
+          {data?.unifiedExecution?.episodes.filter(e=>!e.handled&&!e.ended).slice(0,8).map(e=><p key={e.sourceId}><b>{e.symbol.replace('_',' / ')} · 分支评估</b><br/>{e.reason}</p>)}
           {!waitingValidations.length&&<p>暂无已武装计划。</p>}
         </div></article>
-        <article><time>{liveEnabled?'影子信号持仓':'正在持仓'} · {positions.length}</time><div>
+        <article><time>{data?.unifiedExecution?'策略指令持仓':liveEnabled?'影子信号持仓':'正在持仓'} · {positions.length}</time><div>
           {positions.length?positions.map(t=><p key={t.id}><b>{t.symbol.replace("_"," / ")} · {side(t.side)} · {tradePlanName(t.liquidityLifecycle?.currentPlan??t.entryContext?.tradePlan)} · {positionAction(t)}</b><br/>
-            {positionWatch(t)}{t.entryContext?.winnerPlan&&<><br/><small>{planText(t.entryContext.winnerPlan,t.stopPrice)}</small></>}</p>):<p>暂无持仓。</p>}
+            {t.unified?<><small>进场：{t.unified.entryReason}</small><br/>持仓：{positionWatch(t)}<br/><small>退出：{t.unified.exitCondition}</small>
+              {t.unified.predecessorId&&<><br/><small>前段已实现 {t.unified.predecessorNet?.toFixed(2)} U，计入本次账户结果</small></>}
+              <br/><small>判断 {clock(t.unified.lastDecisionAt)}</small></>:<>{positionWatch(t)}{t.entryContext?.winnerPlan&&<><br/><small>{planText(t.entryContext.winnerPlan,t.stopPrice)}</small></>}</>}</p>):<p>暂无持仓。</p>}
         </div></article>
       </div>
       <p className="fr-note">实盘 {liveEnabled?(liveOverview?.operational?"运行中":"等待核对"):"关闭"}{liveEnabled?' · 成交、实际持仓及盈亏以同步账户为准':''}</p>

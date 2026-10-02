@@ -5,8 +5,12 @@ export const INVERSE_LIVE_POLICY='inverse-paper-live-v1';
 export const INVERSE_LIVE_EXIT_POLICY='shadow-events-only-v1';
 export const INVERSE_LIVE_LEVERAGE_POLICY='half-source-isolated-v1';
 export const inverseLiveLeverage=(sourceLeverage:number)=>sourceLeverage/2;
-export const isInverseLiveReceipt=(receipt?:{sourceRole?:string})=>receipt?.sourceRole==='INVERSE_PAPER';
+/** Compatibility predicate for event-only return holdings, including v1 inverse. */
+export const isInverseLiveReceipt=(receipt?:{sourceRole?:string;unifiedBranch?:string})=>receipt?.sourceRole==='INVERSE_PAPER'
+  ||receipt?.sourceRole==='UNIFIED_PAPER'&&receipt.unifiedBranch==='RETURN';
+export const isCommittedLiveReceipt=(receipt?:{sourceRole?:string})=>receipt?.sourceRole==='INVERSE_PAPER'||receipt?.sourceRole==='UNIFIED_PAPER';
 export function liveProtectionPrice(t:Trade) {
+  if(t.unified?.branch==='RETURN')return null;
   if(!t.inverseCopy)return t.stopPrice;
   const i=t.inverseCopy;
   if(i.sourceSide===t.side||i.sourceEntryPrice!==t.entryPrice)

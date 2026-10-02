@@ -80,14 +80,14 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
         <p>已复制 {liveOverview?.copied??"—"} / 应复制 {liveOverview?.eligible??"—"} · 未跟上 {liveOverview?.missing??"—"}。模拟页与实盘页共用真实成交、持仓和结算记录；未成交不产生模拟利润。</p><button className="fr-text-button" onClick={()=>selectLedger("source")}>查看全部影子订单 →</button></section>:<InversePanel data={data} onSelect={selectLedger}/>}
       <PaperEquitySection data={data} healthy={healthy} cache={equityCache} cacheScope={cacheScope}/>
       {liveEnabled&&<LiveEquityCurve head={liveOverview?.equityCurve} mark={actual} enabled={liveEnabled} sessionAt={liveOverview?.sessionAt??0} cacheScope={cacheScope} now={now}/>}
-      <section className="fr-section"><div className="fr-section-head"><h2>{data?.shadowInverse?"影子机会 · 模拟反向":"当前最优机会"}</h2><span>{eligible.length} 个可参与</span></div>
-        <OpportunityGrid rows={opportunities.slice(0,6)} inverse={!!data?.shadowInverse}/></section>
+      <section className="fr-section"><div className="fr-section-head"><h2>{data?.unifiedExecution?"参考机会 · 实际分支待确认":data?.shadowInverse?"影子机会 · 模拟反向":"当前最优机会"}</h2><span>{eligible.length} 个可参与</span></div>
+        <OpportunityGrid rows={opportunities.slice(0,6)} inverse={!!data?.shadowInverse&&!data?.unifiedExecution}/></section>
     </>}
 
     {tab==="execution"&&<MarketIntelligenceExecution data={data} now={now} liveEnabled={liveEnabled} liveOverview={liveOverview}/>}
 
-    {tab==="paper"&&<><PageTitle title={paperLedger==="source"?"影子订单":liveEnabled?"模拟账户 · 同步实盘":"反向模拟账户"}/>
-      {data?.shadowInverse&&<nav className="fr-live-tabs fr-ledger-tabs" aria-label="订单账户"><button aria-pressed={paperLedger==="inverse"} className={paperLedger==="inverse"?"selected":""} onClick={()=>selectLedger("inverse")}>反向模拟{liveEnabled?" · 同步实盘":""}</button><button aria-pressed={paperLedger==="source"} className={paperLedger==="source"?"selected":""} onClick={()=>selectLedger("source")}>影子订单</button></nav>}
+    {tab==="paper"&&<><PageTitle title={paperLedger==="source"?"影子订单":liveEnabled?"模拟账户 · 同步实盘":data?.unifiedExecution?"策略模拟账户":"反向模拟账户"}/>
+      {data?.shadowInverse&&<nav className="fr-live-tabs fr-ledger-tabs" aria-label="订单账户"><button aria-pressed={paperLedger==="inverse"} className={paperLedger==="inverse"?"selected":""} onClick={()=>selectLedger("inverse")}>{data?.unifiedExecution?'策略模拟':'反向模拟'}{liveEnabled?" · 同步实盘":""}</button><button aria-pressed={paperLedger==="source"} className={paperLedger==="source"?"selected":""} onClick={()=>selectLedger("source")}>影子订单</button></nav>}
     </>}
     {tab==="paper"&&paperLedger==="source"&&<ShadowOrdersPanel data={data}/>}
     {tab==="paper"&&paperLedger==="inverse"&&liveEnabled&&<section className="fr-section" data-testid="paper-live-mirror"><p>本账户实盘成交、持仓和结算记录。</p></section>}
@@ -148,20 +148,21 @@ export function TradeCard({trade:t,now,paid}:{trade:Trade;now:number;paid?:PaidP
   const pair=t.inverseCopy?(paid?.status===t.status?paid:pairedPaidView(t,undefined,now||t.lastQuoteAt)):null;
   const px=pair?pair.inverse.price:open?t.lastPrice:t.exitPrice??t.lastPrice;
   const pnl=pair?pair.inverse.netPnl:open?openTradeNetPnl(t,px??t.lastPrice):t.netPnl,rate=pnl!==null&&initialTradeNotional(t)>0?pnl/initialTradeNotional(t):null,ctx=t.entryContext;
-  return <details className={`fr-position-row${t.inverseCopy?" fr-inverse-row":""}`}><summary><span className="fr-position-primary"><b>{t.symbol.replace("_"," / ")}</b><small>{t.side==="LONG"?"多单":"空单"} · {t.inverseCopy?"影子反向":ctx?.winnerPlan?(ctx.winnerPlan.intent==="TREND"?"独立趋势":"边缘回归"):ctx?(ctx.reserve?"低风险 · ":"")+modeName(ctx.mode):"兼容持仓"}{ctx?.strategyVersion==="market-intelligence-v1"?` · ${ctx.regime??"—"}`:ctx?.relationHorizon?` · ${ctx.relationHorizon}m旧关系`:""} · {fmt(t.leverage,0)}×</small>
+  return <details className={`fr-position-row${t.inverseCopy?" fr-inverse-row":""}`}><summary><span className="fr-position-primary"><b>{t.symbol.replace("_"," / ")}</b><small>{t.side==="LONG"?"多单":"空单"} · {t.unified?(t.unified.branch==='RETURN'?'回退':'延续'):t.inverseCopy?"影子反向":ctx?.winnerPlan?(ctx.winnerPlan.intent==="TREND"?"独立趋势":"边缘回归"):ctx?(ctx.reserve?"低风险 · ":"")+modeName(ctx.mode):"兼容持仓"}{ctx?.strategyVersion==="market-intelligence-v1"?` · ${ctx.regime??"—"}`:ctx?.relationHorizon?` · ${ctx.relationHorizon}m旧关系`:""} · {fmt(t.leverage,0)}×</small>
     <b className={(pnl??0)>=0?"fr-positive":"fr-negative"}>{signed(pnl)} U</b><small>{signed(rate===null?null:rate*100,3)}% · {duration(t.openedAt,t.closedAt,now)}</small>{pair&&<small>已扣手续费 {fmt(pair.inverse.fees,4)} U{!pair.quoteFresh?" · 估值待更新":""}</small>}</span>
-    <span className="fr-position-entry"><b>{t.inverseCopy?(open?"仅跟随影子":"跟随影子退出"):open?`持仓评分 ${fmt(t.holdScore,0)}`:exitName(t.exitReason)}</b><small>MFE {fmt(t.favorable*100,2)}% · MAE {fmt(t.adverse*100,2)}% · 锁利 {fmt((t.profitFloorRate??0)*100,2)}%</small>
+    <span className="fr-position-entry"><b>{t.unified?`${t.unified.branch==='RETURN'?'回退':'延续'} · ${open?'持仓中':'已退出'}`:t.inverseCopy?(open?"仅跟随影子":"跟随影子退出"):open?`持仓评分 ${fmt(t.holdScore,0)}`:exitName(t.exitReason)}</b><small>MFE {fmt(t.favorable*100,2)}% · MAE {fmt(t.adverse*100,2)}% · 锁利 {fmt((t.profitFloorRate??0)*100,2)}%</small>
       <small>{t.inverseCopy?"反向模拟 · 仅扣已发生费用":ctx?(ctx.strategyVersion==="market-intelligence-v1"?`入场评分 ${fmt(ctx.entryScore,0)} · 相关组 ${ctx.clusterId?.replace("corr:","")??"—"} · 假设 ${ctx.postEntryState??"PENDING"}`:`入场评分 ${fmt(ctx.entryScore,0)} · 旧关系 ${ctx.relationStatus??"—"} ${fmt((ctx.relationHealth??0)*100,0)} · 首次浮赢 ${t.firstProfitAt?time(t.firstProfitAt):"尚未"}`):"历史兼容持仓"}</small></span></summary>
-    <article className="fr-trade fr-trade-unified"><dl><div><dt>入场价</dt><dd>{fmt(t.entryPrice,6)}</dd></div><div><dt>{open?"当前价":"出场价"}</dt><dd>{fmt(px,6)}</dd></div><div><dt>{t.inverseCopy?"源单退出参考":"当前防守"}</dt><dd>{fmt(t.inverseCopy?.sourceStopPrice??t.stopPrice,6)}</dd></div>
+    <article className="fr-trade fr-trade-unified"><dl><div><dt>入场价</dt><dd>{fmt(t.entryPrice,6)}</dd></div><div><dt>{open?"当前价":"出场价"}</dt><dd>{fmt(px,6)}</dd></div><div><dt>{t.unified?.branch==='RETURN'?"原退出事件参考":t.inverseCopy?"源单退出参考":"当前防守"}</dt><dd>{fmt(t.inverseCopy?.sourceStopPrice??t.stopPrice,6)}</dd></div>
       <div><dt>名义金额</dt><dd>{fmt(t.notional)} U</dd></div><div><dt>保证金 / 杠杆</dt><dd>{fmt(t.margin)} U / {fmt(t.leverage,0)}×</dd></div><div><dt>{t.inverseCopy?"源单风险参考":"计划风险"}</dt><dd>{fmt(t.plannedRisk)} U</dd></div>
       <div><dt>进场时间</dt><dd>{time(t.openedAt)}</dd></div><div><dt>平仓时间</dt><dd>{open?"尚未平仓":time(t.closedAt)}</dd></div><div><dt>持仓时长</dt><dd>{duration(t.openedAt,t.closedAt,now)}</dd></div><div><dt>预计持有</dt><dd>{fmt(t.expectedHoldMinutes,0)} 分钟</dd></div></dl>
       {t.realization&&<p className="fr-trade-reason">{t.inverseCopy?"已跟随减仓":"已部分兑现"} {t.realization.sequence} 次 · 已实现净额 {signed(realizedNetPnl(t))} U · 剩余 {fmt(open?remainingTradeFraction(t)*100:0,0)}%</p>}
+      {t.unified&&<p className="fr-trade-reason">进场：{t.unified.entryReason}<br/>持仓：{t.unified.holdReason}<br/>退出：{open?t.unified.exitCondition:t.exitAudit?.detail??t.exitReason}</p>}
       {t.inverseCopy&&<p className="fr-trade-reason">影子单 {t.inverseCopy.sourceId} · {t.inverseCopy.fills.length} 次成交配对 · {t.inverseCopy.sourceExitReason??"影子尚未退出"}</p>}{t.winnerManagement&&<p className="fr-trade-reason">持仓计划：{t.winnerManagement.reason}</p>}
       {ctx&&<p className="fr-trade-reason">入场依据：{ctx.reason}</p>}{t.exitReason&&<p className="fr-trade-reason">退出依据：{exitName(t.exitReason)}</p>}</article></details>;
 }
 export function ShadowOrdersPanel({data}:{data:View|null}){
-  const v=data?.shadowInverse,paid=v?.paidCost,trades=[...(data?.positions??[]),...(data?.history??[])],
-    rows=[...(paid?.rows??[]),...(data?.history??[]).flatMap(t=>{const pair=t.inverseCopy?pairedPaidView(t,undefined,data?.updatedAt):null;return pair?[pair]:[];})];
+  const v=data?.shadowInverse,paid=v?.paidCost,trades=data?.unifiedExecution?data.unifiedExecution.baseline.retainedTrades:[...(data?.positions??[]),...(data?.history??[])],
+    rows=[...(paid?.rows??[]),...trades.filter(t=>t.status==='CLOSED').flatMap(t=>{const pair=t.inverseCopy?pairedPaidView(t,undefined,data?.updatedAt):null;return pair?[pair]:[];})];
   const tradeById=new Map(trades.map(t=>[t.id,t]));
   return <section className="fr-section" data-testid="shadow-orders-panel" aria-label="全部影子配对订单">
     <div className="fr-section-head"><h2>原策略影子</h2><span>持仓 {rows.filter(r=>r.status==="OPEN").length} · 当前已平仓记录 {rows.filter(r=>r.status==="CLOSED").length}</span></div>
@@ -180,15 +181,17 @@ export function ShadowOrdersPanel({data}:{data:View|null}){
 }
 function InversePanel({data,onSelect}:{data:View|null;onSelect:(ledger:"inverse"|"source")=>void}){
   const v=data?.shadowInverse;if(!v)return null;
+  const actual=data?.unifiedExecution?data.netPnl:v.paidCost?.inverse.netPnl,actualFees=data?.unifiedExecution?data.fees:v.inverseFees;
   const points=[...v.curve,{at:data!.updatedAt,source:v.sourceEquity,inverse:v.inverseEquity,theoretical:v.theoreticalSamePriceEquity}],
     lo=Math.min(v.initialEquity,...points.flatMap(p=>[p.source,p.inverse])),hi=Math.max(v.initialEquity,...points.flatMap(p=>[p.source,p.inverse])),
     range=Math.max(1,hi-lo),first=points[0]?.at??v.cutoverAt,last=Math.max(first+1,points.at(-1)!.at),
     x=(at:number)=>12+(at-first)/(last-first)*376,y=(n:number)=>164-(n-lo)/range*140,
     segments:(typeof points)[]=[];
   for(const p of points){const segment=segments.at(-1);if(!segment||p.at-segment.at(-1)!.at>15*60_000)segments.push([p]);else segment.push(p);}
-  return <section className="fr-section" data-testid="shadow-inverse-comparison"><div className="fr-section-head"><h2>反向模拟 / 影子</h2><span>配对订单</span></div>
-    <div className="fr-paid-summary" data-testid="paired-paid-summary"><button onClick={()=>onSelect("inverse")}><small>反向模拟净额</small><b className={(v.paidCost?.inverse.netPnl??0)>=0?"fr-positive":"fr-negative"}>{signed(v.paidCost?.inverse.netPnl)} U</b><small>已扣手续费 {fmt(v.inverseFees,4)} U</small></button>
+  return <section className="fr-section" data-testid="shadow-inverse-comparison"><div className="fr-section-head"><h2>{data?.unifiedExecution?'策略模拟 / 影子':'反向模拟 / 影子'}</h2><span>{data?.unifiedExecution?'独立对照':'配对订单'}</span></div>
+    <div className="fr-paid-summary" data-testid="paired-paid-summary"><button onClick={()=>onSelect("inverse")}><small>{data?.unifiedExecution?'策略账户净额':'反向模拟净额'}</small><b className={(actual??0)>=0?"fr-positive":"fr-negative"}>{signed(actual)} U</b><small>已扣手续费 {fmt(actualFees,4)} U</small></button>
       <button onClick={()=>onSelect("source")}><small>原策略影子净额</small><b className={(v.paidCost?.source.netPnl??0)>=0?"fr-positive":"fr-negative"}>{signed(v.paidCost?.source.netPnl)} U</b><small>已扣手续费 {fmt(v.sourceFees,4)} U · 查看全部订单 →</small></button></div>
+    {data?.unifiedExecution&&<p className="fr-paid-note">原反向基准净额 {signed(data.unifiedExecution.baseline.netPnl)} U · 独立运行，供研究比较。</p>}
     <p className="fr-paid-note">净额只扣已发生费用，未平仓部分含浮动盈亏；已配对 / 已完成 {v.pairedOpened} / {v.pairedClosed}。</p>
     {!!v.paidCost?.stalePairs&&<p className="fr-paid-note">{v.paidCost.stalePairs} 组报价待更新，净额使用各自最后记录；缺失价格显示 —。</p>}
     <details><summary>同价镜像对照曲线</summary><p>虚线：影子 · 实线：反向模拟 · 同一成交价、同一当前价，只反方向；净额只扣已发生手续费。共同起点 {fmt(v.initialEquity)} U</p>

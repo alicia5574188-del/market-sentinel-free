@@ -5,8 +5,8 @@ export type LiveSession = { version: typeof LIVE_SESSION_VERSION; enabledAt: num
   sourcePolicy?:string;sourcePolicyAt?:number;
   scaleRatio?: number; scaleSourceEquity?: number; scaleLiveEquity?: number; scaleAt?: number;
   scaleRebasedAt?: number; scaleRebaseFrom?: number; scaleRebaseReason?:"ANCHOR_MISMATCH"|"LIVE_CAPITAL_INCREASE" };
-type SourceAccount = { startedAt: number; positions: { id: string; openedAt: number }[];inverseTrial?:unknown };
-export const liveSourcePolicy=(s:SourceAccount|null)=>s?.inverseTrial?'inverse-paper-live-v1':'current-paper-live-v1';
+type SourceAccount = { startedAt: number; positions: { id: string; openedAt: number }[];inverseTrial?:unknown;unifiedExecution?:{cutoverAt:number} };
+export const liveSourcePolicy=(s:SourceAccount|null)=>s?.unifiedExecution?'unified-paper-live-v1':s?.inverseTrial?'inverse-paper-live-v1':'current-paper-live-v1';
 export function startLiveSession(now: number, source: SourceAccount | null, migration = false): LiveSession {
   return { version: LIVE_SESSION_VERSION, enabledAt: now, sourceStartedAt: source?.startedAt ?? null,
     excludedSourceIds: source?.positions.map(t => t.id) ?? [], migration,sourcePolicy:liveSourcePolicy(source),sourcePolicyAt:now };
@@ -14,6 +14,9 @@ export function startLiveSession(now: number, source: SourceAccount | null, migr
 export function fenceLiveSourcePolicy(session:LiveSession,source:SourceAccount,now:number):LiveSession {
   const policy=liveSourcePolicy(source);
   if(session.sourcePolicy===policy||(!session.sourcePolicy&&policy==='current-paper-live-v1'))return session;
+  if(source.unifiedExecution)return {...session,sourcePolicy:policy,
+    sourcePolicyAt:Math.max(session.sourcePolicyAt??session.enabledAt,source.unifiedExecution.cutoverAt-1),
+    excludedSourceIds:[...new Set([...session.excludedSourceIds,...source.positions.filter(t=>t.openedAt<source.unifiedExecution!.cutoverAt).map(t=>t.id)])]};
   return {...session,sourcePolicy:policy,sourcePolicyAt:now,
     excludedSourceIds:[...new Set([...session.excludedSourceIds,...source.positions.map(t=>t.id)])]};
 }

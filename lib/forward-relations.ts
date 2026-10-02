@@ -1,5 +1,7 @@
 import {RESEARCH_PLAN_VERSION,researchPlanContext,type PlanResearchDecision} from './research-plan.ts';
 import {assertInverseTrade,assertInverseTrial,inverseTrialSummary,sourceDecisionState,shadowCapsule,applyInverseSourceTrade,migrateInverseSamePrice,INVERSE_COST,type InverseCopy,type InverseTrial} from './shadow-inverse-ledger.ts';
+import type {UnifiedTrade,UnifiedExecution} from './unified-execution-types.ts';
+import {unifiedExecutionSummary,unifiedReferenceState,closeUnifiedTrade} from './unified-execution.ts';
 import {advanceWinnerManagement, trendCore, WINNER_POLICY_VERSION, type WinnerPlan, type WinnerManagement} from "./winner-policy.ts";
 import {realizeTradeSlice, realizedContribution, remainingTradeFraction, assertTradeRealization, type TradeRealization} from "./trade-realization.ts";
 import {winnerEventHeadroom, recordWinnerRiskLoss, type WinnerRiskLedger} from "./winner-risk.ts";
@@ -64,7 +66,7 @@ export type Candle={time:number;open:number;high:number;low:number;close:number;
 export type Quote={bestBid:number;bestAsk:number;observedAt:number;fresh:boolean;entryReady?:boolean;sourceCount?:number;disagreementRate?:number;
   sourceBreadth?:number;directionalAgreement?:number;medianShortMove?:number;spreadRate?:number;bookImbalance?:number;
   bidLiquidityChange?:number;askLiquidityChange?:number;liquiditySourceCount?:number};
-export type Contract={quantoMultiplier:number;leverageMax:number;maintenanceRate:number;minContracts?:number;
+export type Contract={quantoMultiplier:number;leverageMax:number;maintenanceRate:number;minContracts?:number;tickSize?:number;
   enableDecimal?:boolean;orderSizeMin?:string|number;orderSizeMax?:string|number;marketOrderSizeMax?:string|number};
 
 export type Condition={feature:number;op:"GE"|"LE";threshold:number};
@@ -139,6 +141,7 @@ export type EntryContext={
 import type {ReviewEvent, TradeReview} from "./review-trace.ts";
 
 export type Trade={
+  unified?:UnifiedTrade;
   inverseCopy?:InverseCopy;
   winnerManagement?:WinnerManagement;realization?:TradeRealization;
   review?:TradeReview;
@@ -177,6 +180,7 @@ export type EntryValidation={id:string;candidateId:string;symbol:string;side:"LO
   probePullbackMin?:number;probeRestartMin?:number;probeRetestSeen?:boolean;
   status:"WAITING"|"CANCELLED";reason:string|null};
 export type ForwardState={
+  unifiedExecution?:UnifiedExecution;
   inverseTrial?:InverseTrial;
   winnerRisk?:WinnerRiskLedger;
   version:string;engineVersion:string;startedAt:number;revision:number;lastCycleAt:number;lastQuoteCycleAt:number;lastCandleAt:number;
@@ -454,6 +458,11 @@ function opportunityCompare(a:Opportunity,b:Opportunity){
 function equityMark(s:ForwardState,quotes:Record<string,Quote>,now:number){
   let floating=0,stale=0;
   for(const t of s.positions){
+    if(t.unified){
+      const q=quotes[t.symbol],valid=freshQuote(q,now),px=valid?(t.side==='LONG'?q!.bestBid:q!.bestAsk):t.lastPrice;
+      if(!valid)stale++;
+      floating+=dir(t.side)*t.quantity*(px-t.entryPrice);continue;
+    }
     if(t.inverseCopy){
       const source=s.inverseTrial?.source.positions.find(x=>x.id===t.inverseCopy!.sourceId),
         valid=!!source&&Number.isFinite(source.lastPrice)&&source.lastPrice>0&&Number.isFinite(source.lastQuoteAt)&&source.lastQuoteAt<=now;
@@ -1520,6 +1529,23 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
 }
 export function closeForwardForReset(state:ForwardState,quotes:Record<string,Quote>,now:number){
   const s=normalizeForward(structuredClone(state),now);
+  if(s.unifiedExecution){
+    const closedReference=closeForwardForReset(unifiedReferenceState(s),quotes,now);
+    s.inverseTrial=closedReference.inverseTrial;s.unifiedExecution.reference=shadowCapsule(closedReference);
+    for(const t of [...s.positions]){
+      const q=quotes[t.symbol];
+      if(t.unified){
+        const safe=freshQuote(q,now)?q!:{bestBid:t.lastPrice,bestAsk:t.lastPrice,observedAt:t.lastQuoteAt,fresh:false};
+        closeUnifiedTrade(s,t,safe,now,'ACCOUNT_RESET','用户重置账户；行政结算，非策略退出',true);
+      }else {
+        const r=closedReference.history.find(p=>p.id===t.id);if(!r)throw new Error('重置缺少原持仓结算');
+        const gross=r.grossPnl!-(t.realization?.gross??0),fees=r.exitFee-(t.realization?.fees??0),funding=r.fundingAllowance-(t.realization?.funding??0);
+        s.balance+=gross-fees-funding;s.grossPnl+=gross;s.fees+=fees;s.fundingAllowance+=funding;s.resolved++;if(r.netPnl!>0)s.wins++;
+        s.turnover+=t.quantity*r.exitPrice!;s.history.unshift(structuredClone(r));s.positions=s.positions.filter(p=>p.id!==t.id);
+      }
+    }
+    return s;
+  }
   if(s.inverseTrial){
     const source=structuredClone(sourceDecisionState(s));
     for(const t of [...source.positions]){const q=quotes[t.symbol],px=freshQuote(q,now)?(t.side==='LONG'?q!.bestBid:q!.bestAsk):t.lastPrice;
@@ -1605,7 +1631,7 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
   const routed=s.opportunities.filter(isIntelligenceOpportunity),
     activePlaybooks=[...new Set(routed.filter(o=>o.eligible).map(o=>o.playbook).filter((x):x is EnvironmentPlaybook=>!!x))],
     performanceCells=Object.values(s.environmentPerformance.cells).sort((a,b)=>b.updatedAt-a.updatedAt);
-  return{shadowInverse:inverseTrialSummary(s,quotes,now),version:s.version,engineVersion:ADAPTIVE_ENGINE_VERSION,grammar:ADAPTIVE_ENGINE_VERSION,positionIntelligenceVersion:POSITION_INTELLIGENCE_VERSION,mode:"REAL_FEED_PAPER",liveEligible:false,
+  return{unifiedExecution:unifiedExecutionSummary(s,quotes,now),shadowInverse:inverseTrialSummary(unifiedReferenceState(s),quotes,now),version:s.version,engineVersion:ADAPTIVE_ENGINE_VERSION,grammar:ADAPTIVE_ENGINE_VERSION,positionIntelligenceVersion:POSITION_INTELLIGENCE_VERSION,mode:"REAL_FEED_PAPER",liveEligible:false,
     strategyAuthorityVersion:ADAPTIVE_ENGINE_VERSION,executionVersion:ADAPTIVE_ENGINE_VERSION,regionVersion:MARKET_INTELLIGENCE_VERSION,
     regionLaunchVersion:MARKET_INTELLIGENCE_VERSION,policyVersion:ADAPTIVE_ENGINE_VERSION,exitPolicyVersion:ADAPTIVE_ENGINE_VERSION,
     policyUpgrade:null,exitPolicyUpgrade:null,startedAt:s.startedAt,cutoverAt:s.cutoverAt,updatedAt:s.lastQuoteCycleAt,
@@ -1631,7 +1657,7 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
       grammar:"四层市场智能：超大周期→大方向→短期变化→相对机会。系统先理解整个市场，再选择同相关组中性价比最高的交易表达。",
       historyBackfill:false,
       sampleMeaning:"不依赖旧策略样本训练；只使用当前已完成K线、多交易所实时共识和持续市场记忆做因果判断。",
-      accounting:s.inverseTrial?"反向模拟沿用影子成交价；新成交各扣0.05%手续费，历史费用保留；影子仍按冻结口径独立决策。"
+      accounting:s.unifiedExecution?"回退与延续共用实际方向盘口和成交意图；每次成交扣0.05%；原反向同价账本独立保留为对照。":s.inverseTrial?"反向模拟沿用影子成交价；新成交各扣0.05%手续费，历史费用保留；影子仍按冻结口径独立决策。"
         :"模拟仍使用新鲜买卖价并计入手续费、滑点和资金费占位；每笔新Trade冻结独立交易假设、相关组、失效条件与持仓计划。",
       risk:"总结构风险≤10%、同方向≤6.5%、组合保证金≤75%；同一高相关组正常只允许一个同方向主仓，反方向独立假设可并存。",
       validation:"单一噪声不能让大方向来回翻转。新版计划保留独立趋势核心；稳定市场预警只调整新增风险与普通机会确认，健康持仓不能被市场预警单独平掉。研究、订单与执行页共用订单冻结区域；旧多尺度地图仅作背景。",
