@@ -1,0 +1,60 @@
+name: Positive Mother Upper Bound Research
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/research-positive-mother-upper-bound.mjs'
+      - 'scripts/research-regime-system-portfolios.mjs'
+      - 'scripts/fetch-gate-history.mjs'
+      - 'scripts/aggregate-gate-history.mjs'
+      - 'research-results/regime-system-portfolios-2026-09-14.json'
+      - '.github/workflows/positive-mother-upper-bound.yml'
+permissions:
+  contents: read
+jobs:
+  research:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Syntax check
+        run: node --check scripts/research-positive-mother-upper-bound.mjs
+      - name: Fetch exact 44-month Gate 5m core history
+        env:
+          RESEARCH_INTERVAL: 5m
+          RESEARCH_DATASET: /tmp/gate-history-44m-5m.json
+          RESEARCH_MONTHS: 202301,202302,202303,202304,202305,202306,202307,202308,202309,202310,202311,202312,202401,202402,202403,202404,202405,202406,202407,202408,202409,202410,202411,202412,202501,202502,202503,202504,202505,202506,202507,202508,202509,202510,202511,202512,202601,202602,202603,202604,202605,202606,202607,202608
+          RESEARCH_SYMBOLS: BTC_USDT,ETH_USDT,SOL_USDT,XRP_USDT,BNB_USDT,DOGE_USDT,ADA_USDT,LINK_USDT,LTC_USDT,AVAX_USDT,BCH_USDT
+          RESEARCH_MIN_CONTRACTS: 11
+          RESEARCH_MIN_MONTH_COVERAGE: 0.70
+          RESEARCH_CONCURRENCY: 16
+        run: node scripts/fetch-gate-history.mjs
+      - name: Aggregate exact 5m history to frozen 1h signals
+        env:
+          RESEARCH_DATASET: /tmp/gate-history-44m-5m.json
+          RESEARCH_OUTPUT: /tmp/gate-history-44m-from5m-1h.json
+        run: node scripts/aggregate-gate-history.mjs
+      - name: Run hindsight upper-bound pool
+        env:
+          RESEARCH_SIGNAL_DATASET: /tmp/gate-history-44m-from5m-1h.json
+          RESEARCH_EXECUTION_DATASET: /tmp/gate-history-44m-5m.json
+          RESEARCH_OUTPUT: /tmp/positive-mother-upper-bound.json
+        run: node --max-old-space-size=6144 scripts/research-positive-mother-upper-bound.mjs
+      - name: Print compact result
+        if: always()
+        run: |
+          if [ -f /tmp/positive-mother-upper-bound.json ]; then
+            jq '{research,authority,decision,robustConfigCount,tacticFamilyCount,nativeStressTurnoverPerDay,gapTo5x,stress,adverse,interpretation}' /tmp/positive-mother-upper-bound.json
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: positive-mother-upper-bound
+          path: /tmp/positive-mother-upper-bound.json
+          if-no-files-found: warn
+          retention-days: 7
