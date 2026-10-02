@@ -1,3 +1,86 @@
+# 2026-10-02 — implement bounded causal exit research inside inverse orders
+
+New authority is diagnostics only. Attach metadata to inverseCopy rather than
+the optional six-point generic review or eight-point rotating shadow milestones:
+financial archives never omit this order field and source capsule cannot read it.
+No additional write key/timer; increased per-order bytes may add existing archive
+shards, accounted by prepareForwardWrite/critical reservations. Hot research bytes
+yield before financial/source history compaction; marked closed records recover
+on existing authenticated export pages. If a single financial trade is already
+near the archive ceiling, diagnostics yield with an explicit missing flag rather
+than block money. The scoped forward-store hash update covers only these optional
+diagnostic priority guards, with unchanged decoded source/financial windows tested.
+20points/16KiB caps,
+priority crossing/extrema/recovery/terminal anchors, explicit drops and pre-cross
+window preserve useful evidence while bounding runtime state. Existing mainloop
+and source provenance/decision method bodies stay untouched.
+
+10 U is strict gross floating loss of the remaining inverse position, not a stop.
+Hypothetical parent PnL includes settled REDUCE gross/fees, original entry debit
+and current remaining close notional*5bp; no invented funding debit. Alternative
+inverse-side executable BBO is diagnostic only. Source HOLD reasons and raw
+inverse support variables are separate; no invented inverse approved decision.
+Best/worst retained marks are explicitly hindsight. Old peaks are inherited
+without a fabricated time; no continuous-path or before-entry coverage guarantee.
+
+# 2026-10-02 — exit research objective supersedes entry-filter focus
+
+Owner explicitly wants every opening retained. Primary question is whether
+continued holding is justified at the time and whether earlier exit, pullback
+exit or partial exit reduces final loss without sacrificing too many recoveries.
+Do not implement refusal filters,60 U admission pauses or independent exits from
+this research request. Keep source strategy and LIVE controls as deployed.
+
+Separate original-source winner holding from inverse recovery holding. They are
+opposite directional questions. Compare persistent source trend support and
+inverse recovery evidence across price path, relative strength, flow and
+structure; never infer a universal exit from one coin, one U loss or giveback
+signal. Include MOVR/ALICE/CAP recovery controls and charge time-correct fees.
+The observer's EXPANSION/EXIT_CANDIDATE flag is not a transaction instruction.
+
+CAP06:35 exit can improve13.43 loss to0.91 in a recorded-price comparison;
+MOVR08:40 same flag would replace5.02 profit with1.81 loss. Existing75%-giveback
+flag gives11.17 U static improvement on6 cases, with missed profits: insufficient
+for deployment. Only5/15 deep-loss cases retain source OPEN milestones; at-most8
+per-snapshot checkpoints do not establish full historical first-trigger timing.
+No backfilling final support/concern families into earlier milestone decisions.
+
+# 2026-10-02 — owner's primary research cohort: deep inverse PAPER losses
+
+Owner requests a comprehensive read-only review of the large PAPER drawdown and
+orders whose maximum observed floating loss exceeds10 U. These are the primary
+future research subjects; retain recovery/profitable controls rather than make
+symbol blacklists or single-factor filters. No new trading change is authorized.
+Do not reinstate admission pauses,60 U gates, independent exits or deployment.
+
+09:26:33 snapshot has217 pairs/209 complete closed/8 open.15 closed orders exceed
+10 U gross MAE (14 symbols), net-139.00684 U,58.9005% of all losing-order losses.
+CAP short opened10-01 20:41 has39.24 U observed gross MAE and-33.12965 U final;
+ALICE short recovers11.5372 U MAE to zero gross/-0.20049 U net. CAP and MOVR
+controls recover roughly9 U MAE to positive outcomes. All15 entries precede the
+fixed1000 release; source exits remain unchanged. Allocation risk charge is NOT
+an inverse loss cap. Outcome-selected MAE/duration/final source protection are
+not entry-time knowledge. Mixed/TRANSITION and high scores also occur in controls.
+
+Combine current and05:52 exports for retained minute window10-01 20:38:56 to
+23:10:24:1061.59950→986.83412 U, -74.76538 U. Exact fill reconstruction splits
+this into cash-9.92093 (realized gross+2.54561, fees12.46654) and floating
+-64.84445 U. Screenshot984.86 U is absent from minute marks; accumulated stored
+drawdown8.78227% is a separate full-state field. Full chart GET requires auth;
+no access/control bypass or exact trough-time/per-symbol fabrication. Six risk
+cases overlap at22:11:46, notional1841.99817 U; their final sum is NOT synchronous
+drawdown attribution. No complete historic correlation/depth/OI/liquidation data.
+
+Yesterday's frozen85% rule, unchanged, matches3 current orders, none of15 cases;
+matched closed net totals+5.97431 U, so static removal hurts this cohort and is
+not an actual trading-path replay. Preserve rule parameters; don't tune on losses.
+Persistent report: /量化项目/drawdown-review-2026-10-02.html,
+library_file_id libfile_cfa1159098ec8191991f81a328af1372; contains all15 reviews,
+two verified figures and embedded machine-readable research results. Local
+analysis script/results in /workspace/scratch/34c7bf7c5b22/drawdown-analysis/.
+Future research must compare trend persistence, quantity/price amplitude,
+simultaneous exposure and recovery, measuring missed profits as well as losses.
+
 # 2026-10-02 — fixed1000 U allocation ONLY
 
 Owner cancels all proposed admission pauses, automatic recovery and emergency

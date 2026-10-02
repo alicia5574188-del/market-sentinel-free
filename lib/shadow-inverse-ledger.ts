@@ -3,6 +3,7 @@ import type {ForwardState,Trade,Quote,AuditEvent} from './forward-relations.ts';
 import {inversePaidFeeView} from './paid-fee-view.ts';
 import {SHADOW_FEE_RATE,INVERSE_COST,INVERSE_FEE_POLICY,recordedInverseFeeRate,type InverseFeeStamp} from './inverse-fee.ts';
 import {FIXED_ALLOCATION_EQUITY,FIXED_ALLOCATION_POLICY} from './fixed-allocation.ts';
+import type {InverseLossResearch} from './inverse-loss-research.ts';
 export {INVERSE_COST} from './inverse-fee.ts';
 
 export const SHADOW_INVERSE_VERSION='shadow-inverse-v1';
@@ -14,6 +15,8 @@ export type InverseFill=InverseFeeStamp & {sequence:number;kind:'OPEN'|'REDUCE'|
   sourceQuoteAt:number;quoteAt:number;sourcePrice:number;price:number;quantity:number;contracts:number;
   sourceGross:number;gross:number;sourceFee:number;fee:number;sourceFunding:number;funding:number;spreadDrag:number};
 export type InverseCopy={version:typeof SHADOW_INVERSE_VERSION;sourceBuild:typeof SHADOW_BASELINE_BUILD;sourceId:string;
+  lossResearch?:InverseLossResearch;
+  lossResearchHotOmitted?:true;
   cutoverAt:number;sourceSide:'LONG'|'SHORT';sourceEntryPrice:number;sourceStopPrice:number;sourceTargetPrice:number|null;
   sourceEntryPlan:Trade['entryContext'];sourceExitReason:string|null;sourceExitAudit?:Trade['exitAudit'];
   sourceRemainingContracts:number;fills:InverseFill[];sourceClosedAt:number|null;independentDecisions:false;liveExecution:'PAPER_ONLY'};

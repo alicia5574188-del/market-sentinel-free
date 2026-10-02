@@ -66,6 +66,11 @@ function compactClosedTrade(t:Trade,keepIntelligence:boolean){
   return row;
 }
 function withoutReview(t:Trade){const row={...t};delete row.review;return row;}
+function withoutLossResearch(t:Trade){
+  if(!t.inverseCopy?.lossResearch)return t;
+  const copy={...t.inverseCopy};delete copy.lossResearch;
+  return{...t,inverseCopy:{...copy,lossResearchHotOmitted:true as const}};
+}
 function compactShadowClosedTrade(t:Trade){
   // Closed-source PI is a duplicated narrative, never an input to the frozen
   // history-dependent rules. Preserve every numeric/identity/outcome field;
@@ -89,11 +94,12 @@ function hotProjection(next:ForwardState,includeSamples=true){
     eventLimit=Math.min(FORWARD_HOT_EVENT_LIMIT,next.events.length),
     narrativeLimit=Math.min(72,next.extremumRegime.history.length),
     evidenceLimit=Math.min(32,next.extremumRegime.evidence.length);
-  let droppedHotReview=false;
+  let droppedHotReview=false,droppedHotLossResearch=false;
   const samples=includeSamples?next.relationEngine.samples.map(packSample):[],paged=!includeSamples;
   const build=()=>{
-    const history=next.history.slice(0,total).map((t,i)=>compactClosedTrade(droppedHotReview?withoutReview(t):t,i<full)),
-      account={...next,positions:droppedHotReview?next.positions.map(withoutReview):next.positions,history,events:next.events.slice(0,eventLimit),
+    const hotTrade=(t:Trade)=>droppedHotLossResearch?withoutLossResearch(t):t,
+      history=next.history.slice(0,total).map((t,i)=>compactClosedTrade(hotTrade(droppedHotReview?withoutReview(t):t),i<full)),
+      account={...next,positions:next.positions.map(t=>hotTrade(droppedHotReview?withoutReview(t):t)),history,events:next.events.slice(0,eventLimit),
         ...(next.inverseTrial?{inverseTrial:{...next.inverseTrial,source:{...next.inverseTrial.source,
           positions:next.inverseTrial.source.positions.map(withoutReview),
           history:next.inverseTrial.source.history.slice(0,Math.max(32,total)).map(compactShadowClosedTrade),
@@ -113,6 +119,9 @@ function hotProjection(next:ForwardState,includeSamples=true){
   let account=build(),raw=encodeJson(account);
   // Optional review bytes must yield BEFORE any existing history or market-memory
   // compaction. Diagnostic load must not shorten the authoritative evidence window.
+  if(raw.length>FORWARD_ACCOUNT_TARGET_BYTES&&[...next.positions,...next.history].some(t=>t.inverseCopy?.lossResearch)){
+    droppedHotLossResearch=true;account=build();raw=encodeJson(account);
+  }
   if(raw.length>FORWARD_ACCOUNT_TARGET_BYTES&&[...next.positions,...next.history].some(t=>t.review)){
     droppedHotReview=true;account=build();raw=encodeJson(account);
   }
@@ -126,7 +135,7 @@ function hotProjection(next:ForwardState,includeSamples=true){
     else break;
     account=build();raw=encodeJson(account);
   }
-  return{account,raw,meta:{droppedHotReview,sourceHistory:next.history.length,hotHistory:total,fullHistory:full,summaryHistory:Math.max(0,total-full),
+  return{account,raw,meta:{droppedHotReview,droppedHotLossResearch,sourceHistory:next.history.length,hotHistory:total,fullHistory:full,summaryHistory:Math.max(0,total-full),
     sourceEvents:next.events.length,hotEvents:eventLimit,narrativeHistory:narrativeLimit,evidence:evidenceLimit,
     targetBytes:FORWARD_ACCOUNT_TARGET_BYTES}};
 }
@@ -410,7 +419,11 @@ export async function prepareForwardWrite(previous:ForwardState|null,next:Forwar
 
   let base:typeof firstBase|typeof continuationBase=firstBase,current:Trade[]=[];
   if(encodeJson(base).length>archiveLimit)throw new Error("Adaptive 10归档摘要超过单值预算；拒绝截断交易证据");
-  for(const trade of detailedTrades){
+  for(const original of detailedTrades){
+    // Diagnostic growth can never turn a previously valid financial trade
+    // into an oversized single-value failure. Normal traces remain intact.
+    const trade=original.inverseCopy?.lossResearch&&encodeJson({...continuationBase,trades:[original]}).length>archiveLimit
+      ?withoutLossResearch(original):original;
     if(encodeJson({...base,trades:[...current,trade]}).length<=archiveLimit){current.push(trade);continue;}
     shards.push({base,trades:current});base=continuationBase;current=[];
     if(encodeJson({...base,trades:[trade]}).length>archiveLimit)
