@@ -8,6 +8,7 @@ export type UnifiedBranch='RETURN'|'CONTINUATION';
 export type Acceptance={side:'LONG'|'SHORT';at:number;bars:number[];path:'HOLD_OUTSIDE'|'RETEST_RESTART';stop:number;boundary:number;epsilon:number};
 export type UnifiedTrade={version:typeof UNIFIED_EXECUTION_VERSION|'dual-thesis-v2';branch:UnifiedBranch;sourceId:string;referenceId:string;
   returnLogic?:ReturnLogic;migratedAt?:number;legacyReceipt?:InverseCopy;
+  researchObservation?:{checkedAt:number;confirmation:Acceptance|null;flowConfirmed:boolean};
   entryReason:string;holdReason:string;exitCondition:string;lastDecisionAt:number;lastBarAt:number;
   region:ReactionArea|null;epsilon:number;confirmation:Acceptance|null;initialStop:number|null;
   referenceContracts:number;referenceClosedAt?:number;referenceExitReason?:string|null;

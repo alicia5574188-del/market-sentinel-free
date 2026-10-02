@@ -252,6 +252,8 @@ function manageDirect(s:ForwardState,input:Input,marketReady:boolean){
       a=confirmAcceptance({area:region,epsilon,rows:input.paths[t.symbol]??[],now,after:t.openedAt}),
       candidate=ds.plans[t.symbol]?.candidate,
       confirms=!!a&&a.side!==t.side&&flowReady(s,t,a,input.analysisQuotes?.[t.symbol]??q,now);
+    // Reuse facts already evaluated above; optional evidence never feeds decisions.
+    u.researchObservation={checkedAt:now,confirmation:a?{...a,bars:a.bars.slice(-3)}:null,flowConfirmed:confirms};
     if(confirms){
       if(closeUnifiedTrade(s,t,q!,now,'RETURN_TREND_CONFIRMED','本币已经确认区域外持续趋势，等待回退的依据失效')){
         ds.completedConversions++;

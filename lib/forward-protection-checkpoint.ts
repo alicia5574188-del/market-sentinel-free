@@ -1,8 +1,9 @@
 /** Compact restart overlay for Adaptive Ten open-position protection only. */
 import type {ForwardState,Trade} from "./forward-relations.ts";
 import type {DirectMemory} from './direct-strategy-types.ts';
+import {boundedDirectExitResearch} from './direct-exit-research.ts';
 export const FORWARD_PROTECTION_CHECKPOINT_VERSION="adaptive-ten-protection-v1";
-type Row=Pick<Trade,"id"|"openedAt"|"favorable"|"adverse"|"lastPrice"|"lastQuoteAt"|"stopPrice"|"firstProfitAt"|"holdScore"|"profitFloorRate"|"peakPnlRate"|"winnerManagement"|"review"|"unified"|"positionIntelligence">;
+type Row=Pick<Trade,"id"|"openedAt"|"favorable"|"adverse"|"lastPrice"|"lastQuoteAt"|"stopPrice"|"firstProfitAt"|"holdScore"|"profitFloorRate"|"peakPnlRate"|"winnerManagement"|"review"|"unified"|"positionIntelligence"|"directExitResearch"|"directExitResearchOmitted">;
 export type ForwardProtectionCheckpoint={version:typeof FORWARD_PROTECTION_CHECKPOINT_VERSION;startedAt:number;baseRevision:number;
   basePersistedAt:number;quoteCycleAt:number;peakEquity:number;maxDrawdown:number;positions:Row[];
   shadow?:{cutoverAt:number;peakEquity:number;maxDrawdown:number;positions:Row[]};
@@ -44,6 +45,7 @@ export function buildForwardProtectionCheckpoint(s:ForwardState):ForwardProtecti
       id:t.id,openedAt:t.openedAt,favorable:t.favorable,adverse:t.adverse,lastPrice:t.lastPrice,lastQuoteAt:t.lastQuoteAt,stopPrice:t.stopPrice,
       firstProfitAt:t.firstProfitAt??null,holdScore:t.holdScore??50,profitFloorRate:t.profitFloorRate??0,peakPnlRate:t.peakPnlRate??t.favorable,winnerManagement:t.winnerManagement?structuredClone(t.winnerManagement):undefined,
       unified:t.unified?structuredClone(t.unified):undefined,positionIntelligence:t.unified&&t.positionIntelligence?structuredClone(t.positionIntelligence):undefined,
+      directExitResearch:boundedDirectExitResearch(t.directExitResearch),directExitResearchOmitted:t.directExitResearchOmitted,
       review:review&&t.review?.diagnosticVersion?structuredClone(t.review):undefined}));
   return{version:FORWARD_PROTECTION_CHECKPOINT_VERSION,startedAt:s.startedAt,baseRevision:s.revision,basePersistedAt:s.storage.persistedAt,
     quoteCycleAt:s.lastQuoteCycleAt,peakEquity:s.peakEquity,maxDrawdown:s.maxDrawdown,positions:rows(s.positions,true),
@@ -79,7 +81,10 @@ export function restoreForwardProtectionCheckpoint(s:ForwardState,value:unknown)
       throw new Error("前向保护检查点异常；保留账户");
     t.favorable=r.favorable;t.adverse=r.adverse;t.lastPrice=r.lastPrice;t.lastQuoteAt=r.lastQuoteAt;t.stopPrice=r.stopPrice;
     t.firstProfitAt=r.firstProfitAt??null;t.holdScore=r.holdScore;t.profitFloorRate=r.profitFloorRate;t.peakPnlRate=r.peakPnlRate;if(r.winnerManagement)t.winnerManagement=structuredClone(r.winnerManagement);
-    if(r.review?.diagnosticVersion)t.review=structuredClone(r.review);}
+    if(r.review?.diagnosticVersion)t.review=structuredClone(r.review);
+    const research=boundedDirectExitResearch(r.directExitResearch);
+    if(research){t.directExitResearch=research;delete t.directExitResearchOmitted;}
+    else if(r.directExitResearchOmitted){delete t.directExitResearch;t.directExitResearchOmitted=true;}}
   for(const t of next.positions){const r=rows.get(t.id)!;
     if(t.unified){if(!r.unified||r.unified.branch!==t.unified.branch||r.unified.sourceId!==t.unified.sourceId||r.unified.referenceId!==t.unified.referenceId||r.unified.initialStop!==t.unified.initialStop)
       throw new Error('统一策略保护身份不一致');t.unified=structuredClone(r.unified);

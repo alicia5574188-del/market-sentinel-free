@@ -175,9 +175,12 @@ test('real2s Worker coalesces transient protection until the durable10s slot wit
   assert.deepEqual(h.forwardState,committed);assert.ok(h.forwardPendingProtection);setPrice(101.1);
   await h.advanceForwardNow(T+12000,false);assert.equal(h.forwardError,null);assert.equal(writes.length,2);
   assert.equal(h.forwardPendingProtection,null);near(h.forwardState.positions[0].adverse,.0122);
+  assert.equal(h.forwardState.positions[0].directExitResearch.version,'actual-exit-research-v1');
+  assert.ok(h.forwardState.positions[0].directExitResearch.points.some((p:{at:number})=>p.at===T+4000));
   assert.equal(h.forwardProtectionBudget.writes,2);assert.ok(writes.every(w=>w.length===1&&w[0]===FORWARD_PROTECTION_STORAGE));
   const r=await readForwardStore({get:async<V>(k:string)=>structuredClone(data.get(k)) as V|undefined},T+13000);
   near(r.positions[0]!.adverse,h.forwardState.positions[0].adverse);near(r.balance,committed.balance);
+  assert.deepEqual(r.positions[0]!.directExitResearch,h.forwardState.positions[0].directExitResearch);
 });
 test('a financial exit bypasses a pending10s overlay, while restart retains the durable resource slot',async()=>{
   const {h,data,writes,setPrice}=await checkpointWorker();await h.advanceForwardNow(T+2000,false);
@@ -187,6 +190,7 @@ test('a financial exit bypasses a pending10s overlay, while restart retains the 
   assert.equal(h.forwardProtectionBudget.writes,1);assert.ok(writes.at(-1)!.some(k=>k.endsWith('head')));
   const r=await readForwardStore({get:async<V>(k:string)=>structuredClone(data.get(k)) as V|undefined},T+7000);
   near(r.balance,h.forwardState.balance);near(r.history[0]!.adverse,.0122);
+  assert.equal(r.history[0]!.directExitResearch!.finalNet,r.history[0]!.netPnl);
   const fresh=await checkpointWorker();fresh.h.forwardProtectionBudget=nextProtectionWriteBudget(null,T+2000);
   fresh.data.set(FORWARD_PROTECTION_STORAGE,{...(prepareForwardProtectionWrite(fresh.h.forwardState).entries[FORWARD_PROTECTION_STORAGE] as object),
     writeBudget:fresh.h.forwardProtectionBudget});

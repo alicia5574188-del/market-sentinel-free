@@ -3,6 +3,7 @@ import type { RelationMeasurement } from "./forward-relation-v2.ts";
 import { gzip, gunzip, MAX_STATE_BYTES } from "./storage-codec.ts";
 import { buildForwardProtectionCheckpoint, restoreForwardProtectionCheckpoint } from "./forward-protection-checkpoint.ts";
 import { MARKET_HYPOTHESIS_ACTIVE_LIMIT, MARKET_HYPOTHESIS_MEMORY_LIMIT, MARKET_HYPOTHESIS_RESOLVED_LIMIT } from "./market-intelligence-hypothesis-research.ts";
+import {withoutDirectExitResearch,DIRECT_EXIT_HOT_CLOSED} from './direct-exit-research.ts';
 
 export const FORWARD_STORAGE = "forward-relations:v1:";
 export const FORWARD_PROTECTION_STORAGE = `${FORWARD_STORAGE}protection`;
@@ -88,17 +89,18 @@ function archivePositionSummary(t:Trade){
     notional:t.notional,margin:t.margin,plannedRisk:t.plannedRisk,stopPrice:t.stopPrice,profitFloorRate:t.profitFloorRate??0,
     thesisId:t.entryContext?.thesisId??null,tradePlan:t.liquidityLifecycle?.currentPlan??t.entryContext?.tradePlan??null};
 }
-function hotProjection(next:ForwardState,includeSamples=true){
+function hotProjection(next:ForwardState,includeSamples=true,omitDirectResearch=false){
   let full=Math.min(FORWARD_HOT_HISTORY_FULL,next.history.length),
     total=Math.min(FORWARD_HOT_HISTORY_TOTAL,next.history.length),
     eventLimit=Math.min(FORWARD_HOT_EVENT_LIMIT,next.events.length),
     narrativeLimit=Math.min(72,next.extremumRegime.history.length),
     evidenceLimit=Math.min(32,next.extremumRegime.evidence.length);
-  let droppedHotReview=false,droppedHotLossResearch=false;
+  let droppedHotReview=false,droppedHotLossResearch=false,droppedHotDirectResearch=omitDirectResearch;
   const samples=includeSamples?next.relationEngine.samples.map(packSample):[],paged=!includeSamples;
   const build=()=>{
-    const hotTrade=(t:Trade)=>droppedHotLossResearch?withoutLossResearch(t):t,
-      history=next.history.slice(0,total).map((t,i)=>compactClosedTrade(hotTrade(droppedHotReview?withoutReview(t):t),i<full)),
+    const hotTrade=(t:Trade)=>{const row=droppedHotDirectResearch?withoutDirectExitResearch(t):t;return droppedHotLossResearch?withoutLossResearch(row):row;},
+      history=next.history.slice(0,total).map((t,i)=>{let row=i>=DIRECT_EXIT_HOT_CLOSED?withoutDirectExitResearch(t):t;
+        if(droppedHotReview)row=withoutReview(row);return compactClosedTrade(hotTrade(row),i<full);}),
       account={...next,positions:next.positions.map(t=>hotTrade(droppedHotReview?withoutReview(t):t)),history,events:next.events.slice(0,eventLimit),
         ...(next.inverseTrial?{inverseTrial:{...next.inverseTrial,source:{...next.inverseTrial.source,
           positions:next.inverseTrial.source.positions.map(withoutReview),
@@ -121,6 +123,9 @@ function hotProjection(next:ForwardState,includeSamples=true){
     delete account.__legacySampleRecovery;delete account.__persistedSampleManifest;return account;
   };
   let account=build(),raw=encodeJson(account);
+  if(raw.length>FORWARD_ACCOUNT_TARGET_BYTES&&[...next.positions,...next.history].some(t=>t.directExitResearch||t.unified?.researchObservation)){
+    droppedHotDirectResearch=true;account=build();raw=encodeJson(account);
+  }
   // Optional review bytes must yield BEFORE any existing history or market-memory
   // compaction. Diagnostic load must not shorten the authoritative evidence window.
   if(raw.length>FORWARD_ACCOUNT_TARGET_BYTES&&[...next.positions,...next.history].some(t=>t.inverseCopy?.lossResearch)){
@@ -139,7 +144,7 @@ function hotProjection(next:ForwardState,includeSamples=true){
     else break;
     account=build();raw=encodeJson(account);
   }
-  return{account,raw,meta:{droppedHotReview,droppedHotLossResearch,sourceHistory:next.history.length,hotHistory:total,fullHistory:full,summaryHistory:Math.max(0,total-full),
+  return{account,raw,meta:{droppedHotReview,droppedHotLossResearch,droppedHotDirectResearch,sourceHistory:next.history.length,hotHistory:total,fullHistory:full,summaryHistory:Math.max(0,total-full),
     sourceEvents:next.events.length,hotEvents:eventLimit,narrativeHistory:narrativeLimit,evidence:evidenceLimit,
     targetBytes:FORWARD_ACCOUNT_TARGET_BYTES}};
 }
@@ -348,6 +353,11 @@ export function prepareForwardProtectionWrite(next:ForwardState){
   if(!Number.isFinite(next.storage.persistedAt)||next.storage.persistedAt<=0)
     throw new Error("前向整包账户尚未持久化，拒绝保存孤立保护检查点");
   const checkpoint=buildForwardProtectionCheckpoint(next);
+  // Optional diagnostics yield first; never reject protection because of them.
+  for(const row of checkpoint.positions)if(new TextEncoder().encode(JSON.stringify(checkpoint)).length>120*1024){
+    if(row.directExitResearch){delete row.directExitResearch;row.directExitResearchOmitted=true;}
+    if(row.unified?.researchObservation)delete row.unified.researchObservation;
+  }
   if(new TextEncoder().encode(JSON.stringify(checkpoint)).length>120*1024)
     throw new Error("前向保护检查点超过单值预算；保留原账户，不截断保护状态");
   return {entries:{[FORWARD_PROTECTION_STORAGE]:checkpoint},writes:1};
@@ -360,11 +370,17 @@ export async function prepareForwardWrite(previous:ForwardState|null,next:Forwar
   delete recoveryState.__legacySampleRecovery;delete recoveryState.__persistedSampleManifest;
   const pages=await encodeSamplePages(next.relationEngine.samples),manifest:ForwardSampleManifest={version:FORWARD_PAGED_STATE_VERSION,
     count:next.relationEngine.samples.length,pages:pages.map(page=>page.meta)},manifestSha256=await digest(encodeJson(manifest));
-  const hot=hotProjection(next,false),raw=hot.raw,
-    accountBudgetBytes=next.inverseTrial?FORWARD_PAIRED_ACCOUNT_MAX_BYTES:FORWARD_ACCOUNT_MAX_BYTES;
+  let hot=hotProjection(next,false),raw=hot.raw;
+  const accountBudgetBytes=next.inverseTrial?FORWARD_PAIRED_ACCOUNT_MAX_BYTES:FORWARD_ACCOUNT_MAX_BYTES;
   if(raw.length>accountBudgetBytes)
     throw new Error(`Forward活跃金融状态超过已声明账户预算（${raw.length}/${accountBudgetBytes}字节）；拒绝截断当前持仓或资金状态`);
-  const compressed=await gzip(raw),useGzip=compressed.length<raw.length,bytes=useGzip?compressed:raw;
+  let compressed=await gzip(raw),useGzip=compressed.length<raw.length,bytes=useGzip?compressed:raw;
+  // Optional traces cannot push the account into another storage chunk.
+  if(bytes.length>(options.compact?FORWARD_COMPACT_BYTES:80*1024)
+    &&[...next.positions,...next.history].some(t=>t.directExitResearch||t.unified?.researchObservation)){
+    hot=hotProjection(next,false,true);raw=hot.raw;compressed=await gzip(raw);
+    useGzip=compressed.length<raw.length;bytes=useGzip?compressed:raw;
+  }
   if(bytes.length>MAX_STATE_BYTES)
     throw new Error("Forward压缩账户超过分片总预算；拒绝写入不能恢复的金融状态");
   const entries:Record<string,unknown>={};let count=0;
@@ -432,8 +448,12 @@ export async function prepareForwardWrite(previous:ForwardState|null,next:Forwar
   for(const original of detailedTrades){
     // Diagnostic growth can never turn a previously valid financial trade
     // into an oversized single-value failure. Normal traces remain intact.
-    const trade=original.inverseCopy?.lossResearch&&encodeJson({...continuationBase,trades:[original]}).length>archiveLimit
+    let trade=original.inverseCopy?.lossResearch&&encodeJson({...continuationBase,trades:[original]}).length>archiveLimit
       ?withoutLossResearch(original):original;
+    // Do not allocate extra financial archive shards solely for optional research.
+    if(encodeJson({...base,trades:[...current,trade]}).length>archiveLimit){
+      trade=withoutDirectExitResearch(trade);current=current.map(withoutDirectExitResearch);
+    }
     if(encodeJson({...base,trades:[...current,trade]}).length<=archiveLimit){current.push(trade);continue;}
     shards.push({base,trades:current,referenceTrades:[]});base=continuationBase;current=[];
     if(encodeJson({...base,trades:[trade]}).length>archiveLimit)

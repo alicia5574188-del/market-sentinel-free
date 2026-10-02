@@ -1,4 +1,5 @@
 import {reconcileSourceReduction,sourceReductionTarget,type SourceReduction} from "../lib/live-reduction.ts";
+import {directExecutionTradeProjection,DIRECT_EXIT_RESEARCH_VERSION,DIRECT_EXIT_RESEARCH_BYTES,DIRECT_EXIT_RESEARCH_POINTS} from '../lib/direct-exit-research.ts';
 import {reconcileSourceClose,sourceExitFillPrice,type SourceExit} from '../lib/live-exit.ts';
 import {FIXED_ALLOCATION_EQUITY,FIXED_ALLOCATION_POLICY,fixedLiveBasis,type FixedLiveBasis} from '../lib/fixed-allocation.ts';
 import { LiveHistoryReader } from "../lib/live-history-reader.ts";
@@ -1019,8 +1020,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       hourly: this.regimeHourly, quotes: this.regimeQuotes(now), contracts: this.regimeContracts(), now, allowNewEntries: false });
   }
 
-  private forwardView(now = Date.now()) {
+  private forwardView(now = Date.now(),includeResearch=false) {
     return this.forwardState ? { ...forwardSummary(this.forwardState, this.regimeQuotes(now), now),
+      ...(!includeResearch?{positions:this.forwardState.positions.map(directExecutionTradeProjection),
+        history:this.forwardState.history.map(directExecutionTradeProjection)}:{}),
       liveMirror: this.liveMirrorView(),
       storage: { ...this.forwardState.storage, error: this.forwardError } }
       : { version: FORWARD_VERSION, mode: "RECOVERY_REQUIRED", liveEligible: false, storage: { error: this.forwardError } };
@@ -1039,7 +1042,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         relativeStrength:row.relativeStrength??null,dataConfidence:row.dataConfidence??null,sourceCount:row.sourceCount??null,
         disagreementRate:row.disagreementRate??null,reason:row.reason,
       }));
-    return {directStrategy:s?directStrategySummary(s):null,unifiedExecution:s&&!s.directStrategy?(()=>{const u=unifiedExecutionSummary(s,this.regimeQuotes(now),now);return u?{version:u.version,cutoverAt:u.cutoverAt,
+    return {directExitResearch:s?.directStrategy?{version:DIRECT_EXIT_RESEARCH_VERSION,perTradeBytes:DIRECT_EXIT_RESEARCH_BYTES,pointsPerTrade:DIRECT_EXIT_RESEARCH_POINTS,
+      observedOpen:s.positions.filter(t=>!!t.directExitResearch).length,omittedOpen:s.positions.filter(t=>!!t.directExitResearchOmitted).length}:null,
+      directStrategy:s?directStrategySummary(s):null,unifiedExecution:s&&!s.directStrategy?(()=>{const u=unifiedExecutionSummary(s,this.regimeQuotes(now),now);return u?{version:u.version,cutoverAt:u.cutoverAt,
       returnOpen:u.returnOpen,continuationOpen:u.continuationOpen,completedConversions:u.completedConversions,legacyOpen:u.legacyOpen}:null;})():null,
       shadowInverse:s&&!s.directStrategy?(()=>{const v=inverseTrialSummary(unifiedReferenceState(s),this.regimeQuotes(now),now);if(!v)return null;const {curve:_,...summary}=v;return{...summary,paidCost:summary.paidCost?{...summary.paidCost,rows:undefined}:null};})():null,
       version:FORWARD_VERSION,engineVersion:ADAPTIVE_ENGINE_VERSION,policyVersion:s?.policyVersion??null,
@@ -3847,7 +3852,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if(path === "/member-feed" && request.method === "GET") {
       const s=this.forwardState,now=Date.now();
       const sourceState=s?{version:s.version,startedAt:s.startedAt,initialEquity:s.initialEquity,balance:s.balance,
-        positions:s.positions,history:s.history,policyVersion:s.policyVersion,storage:s.storage,
+        positions:s.positions.map(directExecutionTradeProjection),history:s.history.map(directExecutionTradeProjection),policyVersion:s.policyVersion,storage:s.storage,
         ...(s.directStrategy?{directStrategy:{version:s.directStrategy.version,cutoverAt:s.directStrategy.cutoverAt}}:
           s.unifiedExecution?{unifiedExecution:{version:s.unifiedExecution.version,cutoverAt:s.unifiedExecution.cutoverAt}}:{}),
         // Only the marks required by strict inverse PAPER equity. No second
@@ -3855,6 +3860,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         ...(s.inverseTrial&&!s.directStrategy?{inverseTrial:{source:{positions:s.inverseTrial.source.positions.map(t=>({
           id:t.id,lastPrice:t.lastPrice,lastQuoteAt:t.lastQuoteAt}))}}}:{})} as ForwardState:null;
       const view=s?forwardSummary(s,this.regimeQuotes(now),now):null;
+      if(view){view.positions=view.positions.map(directExecutionTradeProjection);view.history=view.history.map(directExecutionTradeProjection);}
       const feed:MemberFeed={version:MEMBERS_VERSION,at:now,healthy:!this.forwardError&&this.authorityReady
         &&this.runtime.lastSuccessAt!=null&&now-this.runtime.lastSuccessAt<=SYSTEM_HEALTH_STALE_AFTER_MS,
         error:this.forwardError,state:sourceState,view,metadata:this.runtime.contractMeta,ticks:this.runtime.tickSize,
@@ -3891,7 +3897,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         try{return json(await readReviewArchivePage(this.ctx.storage,startedAt,asOf,url.searchParams.get("cursor")));}
         catch{return json({error:"REVIEW_ARCHIVE_UNAVAILABLE_OR_INVALID_CURSOR"},400);}
       }
-      const exportedAt=Date.now(),view=structuredClone(this.forwardView(exportedAt));
+      const exportedAt=Date.now(),view=structuredClone(this.forwardView(exportedAt,true));
       const quotes=this.forwardQuotes(exportedAt),minutePaths=this.forwardMinutePaths();
       // No alarm rearming, account normalization, research advancement, Gate calls or writes on export.
       return json(buildReviewSnapshot({view,exportedAt,buildSha:FORWARD_BUILD_SHA,strategyFingerprint:STRATEGY_FINGERPRINT,
