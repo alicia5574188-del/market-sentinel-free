@@ -9,6 +9,14 @@ import {applyInverseSourceTrade,newInverseTrial,sourceDecisionState,shadowCapsul
 import {startLiveSession,fenceLiveSourcePolicy,sourceAfterEnable} from '../lib/live-session.ts';
 import {buildProportionalMirror} from '../lib/live-parity.ts';
 import {buildReviewSnapshot} from '../lib/research-snapshot.ts';
+import {registerHooks} from 'node:module';
+import {nextProtectionWriteBudget} from '../lib/forward-write-budget.ts';
+registerHooks({resolve(specifier,context,nextResolve){
+  if(specifier==='cloudflare:workers')return{url:'data:text/javascript,export class DurableObject{constructor(ctx,env){this.ctx=ctx;this.env=env;}}',shortCircuit:true};
+  if(specifier==='vinext/server/app-router-entry')return{url:'data:text/javascript,export default {fetch:()=>new Response("synthetic")};',shortCircuit:true};
+  return nextResolve(specifier,context);
+}});
+const {MarketStream}=await import('../worker/index-clean.ts');
 const B=300000,T=1790947200000,area={lower:98,upper:102,center:100,formedAt:T-B,balanced:true,basis:'OHLCV_PROXY' as const};
 const c={quantoMultiplier:.1,leverageMax:20,maintenanceRate:.005,minContracts:1,tickSize:.01};
 const q=(price=100,at=T):Quote=>({bestBid:price,bestAsk:price+.02,observedAt:at,fresh:true,entryReady:true,sourceCount:3});
@@ -136,6 +144,49 @@ test('manual account reset retains the direct policy and market observer; public
   assert.equal(snapshot.research.decisionAccount,'DIRECT_STRATEGY');assert.equal(snapshot.inverseExperiment,null);
   const next=resetForwardAccountPreservingLearning(f.s,T+B);assert.equal(next.directStrategy!.version,DIRECT_STRATEGY_VERSION);
   assert.deepEqual(next.extremumRegime,f.s.extremumRegime);assert.deepEqual(next.directStrategy!.plans,{});near(next.balance,1000);assert.equal(next.inverseTrial,undefined);
+});
+async function checkpointWorker(){
+  const f=fixture();openDirectPlan(f.s,f.p,q(),c,T,{TEST_USDT:q()});f.s.storage={persistedAt:T,error:null};f.s.lastQuoteCycleAt=T;
+  const data=new Map<string,unknown>(Object.entries((await prepareForwardWrite(null,f.s,T,{compact:true})).entries)),writes:string[][]=[];
+  const storage={get:async<V>(k:string)=>structuredClone(data.get(k)) as V|undefined,put:async(entries:Record<string,unknown>)=>{
+    writes.push(Object.keys(entries));for(const [k,v]of Object.entries(entries))data.set(k,structuredClone(v));
+  },transaction:async<V>(fn:(s:typeof storage)=>Promise<V>)=>fn(storage)};
+  // This test uses the real Worker with only storage/market host inputs injected.
+  // No bootstrap, private exchange call, owner mutation or network is allowed.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const h=new MarketStream({storage,waitUntil(){}} as never,{} as never,true) as any;
+  h.forwardState=f.s;h.ensureAdaptiveAccount=async()=>{};h.strategyCandles={};h.turnDailyCandles={};
+  h.forwardMinutePaths=()=>({});h.regimeContracts=()=>({TEST_USDT:c});h.dispatchCommittedLiveSource=()=>{};
+  let price=101;h.forwardQuotes=(now:number)=>({TEST_USDT:q(price,now)});h.forwardAnalysisQuotes=h.forwardQuotes;
+  return{h,data,writes,storage,setPrice:(p:number)=>{price=p;}};
+}
+test('real2s Worker coalesces transient protection until the durable10s slot without errors or unsaved publication',async()=>{
+  const {h,data,writes,setPrice}=await checkpointWorker();
+  await h.advanceForwardNow(T+2000,false);assert.equal(h.forwardError,null);assert.equal(writes.length,1);
+  const committed=structuredClone(h.forwardState);setPrice(101.2);
+  await h.advanceForwardNow(T+4000,false);assert.equal(h.forwardError,null);assert.equal(writes.length,1);
+  assert.deepEqual(h.forwardState,committed);assert.ok(h.forwardPendingProtection);setPrice(101.1);
+  await h.advanceForwardNow(T+12000,false);assert.equal(h.forwardError,null);assert.equal(writes.length,2);
+  assert.equal(h.forwardPendingProtection,null);near(h.forwardState.positions[0].adverse,.0122);
+  assert.equal(h.forwardProtectionBudget.writes,2);assert.ok(writes.every(w=>w.length===1&&w[0]===FORWARD_PROTECTION_STORAGE));
+  const r=await readForwardStore({get:async<V>(k:string)=>structuredClone(data.get(k)) as V|undefined},T+13000);
+  near(r.positions[0]!.adverse,h.forwardState.positions[0].adverse);near(r.balance,committed.balance);
+});
+test('a financial exit bypasses a pending10s overlay, while restart retains the durable resource slot',async()=>{
+  const {h,data,writes,setPrice}=await checkpointWorker();await h.advanceForwardNow(T+2000,false);
+  setPrice(101.2);await h.advanceForwardNow(T+4000,false);assert.ok(h.forwardPendingProtection);
+  setPrice(97.8);await h.advanceForwardNow(T+6000,false);assert.equal(h.forwardError,null);
+  assert.equal(h.forwardState.positions.length,0);assert.equal(h.forwardState.history.length,1);assert.equal(h.forwardPendingProtection,null);
+  assert.equal(h.forwardProtectionBudget.writes,1);assert.ok(writes.at(-1)!.some(k=>k.endsWith('head')));
+  const r=await readForwardStore({get:async<V>(k:string)=>structuredClone(data.get(k)) as V|undefined},T+7000);
+  near(r.balance,h.forwardState.balance);near(r.history[0]!.adverse,.0122);
+  const fresh=await checkpointWorker();fresh.h.forwardProtectionBudget=nextProtectionWriteBudget(null,T+2000);
+  fresh.data.set(FORWARD_PROTECTION_STORAGE,{...(prepareForwardProtectionWrite(fresh.h.forwardState).entries[FORWARD_PROTECTION_STORAGE] as object),
+    writeBudget:fresh.h.forwardProtectionBudget});
+  const unchanged=structuredClone(fresh.h.forwardState);await fresh.h.advanceForwardNow(T+4000,false);
+  assert.equal(fresh.h.forwardError,null);assert.equal(fresh.writes.length,0);assert.deepEqual(fresh.h.forwardState,unchanged);
+  await fresh.h.advanceForwardNow(T+12000,false);assert.equal(fresh.h.forwardError,null);assert.equal(fresh.writes.length,1);
+  assert.equal(fresh.h.forwardProtectionBudget.writes,2);
 });
 test('new-only LIVE fence and native sizing use actual direct intent and fixed leverage',()=>{
   const f=fixture();const session=startLiveSession(T-1,f.s),fenced=fenceLiveSourcePolicy({...session,sourcePolicy:'unified-paper-live-v1'},f.s,T);

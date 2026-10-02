@@ -1,5 +1,12 @@
 # 2026-10-02 — owner correction: independent dual-thesis research and execution
 
+Release continuity exposed the2s decision clock requesting the10s protection
+lane too soon. Fix that narrow admission conflict in advanceForwardNow: retain
+one bounded pending overlay, keep unsaved protection out of published authority,
+and preserve peaks/confirmation for the next tick. Full financial entries,
+reductions/exits bypass the wait; no cap/cadence/key/owner control changes.
+Run real-Worker sub10s/restart/financial-exit regressions and original gates.
+
 Owner rejects the shadow-dependent v1 wrapper, explicitly requiring extraction
 of prior inverse-return and genuine trend-continuation rules into one new
 research→entry→holding→exit system. Active new intents must not require another
