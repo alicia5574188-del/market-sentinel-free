@@ -316,9 +316,17 @@ Overview shows the original PAPER curve and a separate Gate-native LIVE equity
 curve with the same history controls. The simulated page shows no curve. LIVE
 history uses the existing manual activation: OFF hides its saved curve while retaining history;
 the next OFF-to-ON starts a new native baseline. Browser/process restart or
-repeated ON retains the session. Fresh native marks save at most once per five
-minutes through existing checkpoints, with optional row accounting and private
+repeated ON retains the session. Fresh native marks save at most once per minute
+through existing checkpoints, with optional row accounting and private
 owner/member-local reads; there is no extra Gate polling or account reset.
+Both curves keep the same renderer, smoothing, controls and latest-value preview.
+PAPER retains every existing archive point; LIVE now records more of its own path
+without discarding PAPER detail or fabricating missing past native observations.
+The one-minute native cap is1,440 small rows/account/day (up to1,152 more than
+the former five-minute cap), included in the existing optional write guard. The
+owner plus two continuously enabled members add at most107,136 rows/31-day month
+relative to the old sampling rate, before startup/session/manual effects. No
+extra exchange call, timer, financial write lane or hot-history array is added.
 # 深浮亏订单退出研究记录 — 2026-10-02
 
 研究快照新增 `research.inverseLossExit`，原始记录在每笔反向模拟订单的

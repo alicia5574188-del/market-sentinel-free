@@ -4,14 +4,15 @@ import assert from 'node:assert/strict';
 import {register} from 'node:module';
 import {Memory} from './member-fixtures.ts';
 import {observeLiveAccount,type LiveAccountMark} from '../lib/live-account-view.ts';
-import {prepareLiveEquity,liveEquityView,LiveEquityReader,LIVE_EQUITY_PREFIX,validLiveEquityCursor} from '../lib/live-equity.ts';
+import {prepareLiveEquity,liveEquityView,LiveEquityReader,LIVE_EQUITY_PREFIX,LIVE_EQUITY_SAMPLE_MS,validLiveEquityCursor} from '../lib/live-equity.ts';
+import {OPTIONAL_WRITE_GUARD_PER_DAY,PAID_PLAN_PLANNED_MONTHLY_ROWS,PAID_PLAN_ROW_SAFETY_LIMIT} from '../lib/forward-write-budget.ts';
 import {EquityHistoryCache} from '../lib/equity-cache.ts';
 import {startLiveSession} from '../lib/live-session.ts';
 import {createOwnerSession,ownerSessionCookie} from '../lib/owner-auth.ts';
 import {issueMemberSession,memberCookie} from '../lib/member-auth.ts';
 register('./worker-test-loader.mjs',import.meta.url);
 const {MarketStream,MemberExecutor,default:worker}=await import('../worker/index-clean.ts');
-const T=1790809800000,STEP=300000,ROOT='synthetic-live-curve-test-root';
+const T=1790809800000,STEP=LIVE_EQUITY_SAMPLE_MS,ROOT='synthetic-live-curve-test-root';
 function mark(at=T,equity=100,sessionAt=T,previous?:LiveAccountMark,user='synthetic-gate'){
   return observeLiveAccount({account:{user,total:equity-2,unrealised_pnl:2,available:80},positions:[],orders:[],priceOrders:[],checkedAt:at},sessionAt,previous);
 }
@@ -22,7 +23,7 @@ class ChartMemory extends Memory {
     if(o.reverse)rows.reverse();return new Map(rows.slice(0,o.limit??Infinity)) as Map<string,T>;
   }
 }
-test('native equity, five-minute sampling and invalid/off marks never synthesize a PAPER point',()=>{
+test('native equity, minute sampling and invalid/off marks never synthesize a PAPER point',()=>{
   const first=mark(),a=prepareLiveEquity(first,true,T,null,T)!;assert.equal(a.head.initialEquity,100);assert.equal(a.value.point.equity,100);
   const next=mark(T+STEP,87,T,first),b=prepareLiveEquity(next,true,T,a.head,T+STEP)!;
   assert.equal(b.head.initialEquity,100);assert.equal(b.value.point.equity,87);
@@ -30,6 +31,23 @@ test('native equity, five-minute sampling and invalid/off marks never synthesize
     [{...next,equity:NaN},true,T,T+STEP],[next,true,T,T+STEP+30001],[{...next,at:T+STEP+1},true,T,T+STEP]] as const)
     assert.equal(prepareLiveEquity(m,enabled,session,a.head,at),null);
   assert.equal(prepareLiveEquity(mark(T+10000,99,T,first),true,T,a.head,T+10000),null);
+  assert.equal(prepareLiveEquity(mark(T+STEP-1,99,T,first),true,T,a.head,T+STEP-1),null);
+});
+test('a day of frequent existing native marks stays within optional capacity and preserves legacy five-minute heads',()=>{
+  let previous=mark(),head=prepareLiveEquity(previous,true,T,null,T)!.head,rows=1;
+  const legacy=structuredClone(head);
+  for(let elapsed=10000;elapsed<86400000;elapsed+=10000){
+    const now=T+elapsed,m=mark(now,100+Math.sin(elapsed/60000),T,previous);
+    const p=prepareLiveEquity(m,true,T,head,now);previous=m;
+    if(p){assert.ok(p.head.lastAt-head.lastAt>=60000);assert.ok(JSON.stringify(p.value).length<1024);head=p.head;rows++;}
+  }
+  assert.equal(rows,1440);assert.ok(rows<OPTIONAL_WRITE_GUARD_PER_DAY*.02);
+  assert.ok(PAID_PLAN_PLANNED_MONTHLY_ROWS<PAID_PLAN_ROW_SAFETY_LIMIT,'curve writes remain inside the existing optional lane');
+  const oldHead={...legacy,lastAt:T+300000,lastEquity:90};
+  const resumed=prepareLiveEquity(mark(T+360000,91,T,previous),true,T,oldHead,T+360000)!;
+  assert.equal(resumed.head.startedAt,oldHead.startedAt);assert.equal(resumed.head.sessionAt,T);
+  assert.equal(resumed.head.initialEquity,oldHead.initialEquity);assert.equal(resumed.head.lastAt,T+360000);
+  assert.deepEqual(legacy,prepareLiveEquity(mark(),true,T,null,T)!.head);
 });
 test('OFF freezes the saved session; ON changes identity and cannot preview an old session or account',()=>{
   const first=mark(),head=prepareLiveEquity(first,true,T,null,T)!.head;

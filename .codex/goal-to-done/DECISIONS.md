@@ -1,3 +1,40 @@
+# 2026-10-02 — one-minute native curve observations, no PAPER detail reduction
+
+Keep all original PAPER observations and the shared chart renderer. Raising only
+native LIVE sampling from5min to1min captures more actual movement without new
+exchange work or large hot arrays. Namespace/version/session identity stay the
+same so old five-minute rows survive. At continuous sampling,1,440 rows/day/actor
+is1,152 above old cap; owner plus2members adds107,136 rows/31days (manual session
+effects excluded). All are charged inside the existing100,000/day optional lane,
+so the existing static monthly worst-case ceiling does not increase. Critical
+execution/financial journals retain priority. Actual cadence depends on fresh
+existing marks/checkpoint availability; do not claim exact PAPER/native alignment.
+
+# 2026-10-02 — broad-trend hypothesis is a future portfolio research question
+
+More than3 shadow winners reaching10 USDT floating profit in a time window may
+signal a unified market trend. Count distinct orders, not repeated crossings;
+concurrent/serial, aligned/opposed directions and correlation clusters must be
+separated. Four correlated winners or a fast sequence of closed winners alone
+cannot establish market-wide trend continuation. Threshold/window is research,
+not an automatic stop-new-entry rule. Owner now also wants research on preventing
+further adverse inverse entries after this condition. Preserve fixed1000 sizing;
+no immediate strategy modification. Compare causal exits and later-entry outcomes
+with missed recovery profits, costs and portfolio effects; disclose coverage.
+
+# 2026-10-02 — owner confirms source-profit cohort and real-account objective
+
+“超过10u浮盈” means SHADOW SOURCE floating profit, not profitable inverse PAPER
+trades. Research corresponding inverse loss exits to support real-account net
+profit and control a major trend's portfolio drawdown. Do not optimize the source
+to earn more or interpret10 USDT as a mandated immediate stop. The same-price
+paired gross mirror explains the relation; native LIVE fills, fees, funding and
+liquidation are separate facts and must not be inferred from PAPER alone.
+Use only the owner's newly reset account generation when next snapshot arrives.
+Evaluate causal early/rebound exits plus missed recoveries, costs and portfolio
+effects; label hindsight extrema. Preserve original entries and fixed1000 sizing.
+This clarification records the goal only; no trading change or release now.
+
 # 2026-10-02 — implement bounded causal exit research inside inverse orders
 
 New authority is diagnostics only. Attach metadata to inverseCopy rather than

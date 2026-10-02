@@ -1,3 +1,56 @@
+# 2026-10-02 — current scoped task: improve native curve recording density
+
+Owner asks whether LIVE can match PAPER's curve presentation without resource
+pressure. Both already use the same renderer; LIVE's five-minute observations
+are sparse. Raise only LIVE's existing observation cap to one minute while
+retaining every existing PAPER point, all native history/account/session baselines
+and current LIVE intent. Reuse fresh native account marks, existing checkpoint
+transactions and optional row reservations; no extra Gate read, timer or strategy.
+Same-price PAPER and native LIVE values/times need not coincide; do not fabricate
+missing historical LIVE marks or downsample PAPER to claim identical records.
+Verify legacy heads, one-minute bounds, owner/member atomic restoration, optional
+priority, cache/auth isolation, full release checks and advancing production.
+
+# 2026-10-02 — add synchronized source-winner / broad-trend research
+
+Owner adds: if more than3 distinct shadow source orders reach10 USDT floating
+profit within a time window, investigate whether a unified market trend is
+forming and how to avoid further adverse inverse exposure. This expands future
+research to portfolio state and prospective inverse entries as well as exits;
+it does not authorize a trading change now. Keep fixed1000 sizing unchanged.
+
+Treat count>=4 as a candidate signal, not proof or an automatic admission pause.
+Distinguish concurrently deep-profitable sources from sequential crossings;
+deduplicate source IDs/repeated crossings and separate aligned/opposed source
+directions, same-cluster concentration and broad independent participation.
+Window length is unspecified: report coverage and compare predeclared plausible
+windows without selecting one solely for favorable hindsight results.
+Use contemporaneous market breadth/direction/persistence, source holding evidence,
+correlation and available quote coverage. Compare existing inverse early/rebound
+exits and the outcomes of later inverse entries, including recoveries and missed
+profits. Separate prevented additional exposure from losses already held; charge
+costs and disclose missing synchronized history or non-executable static replay.
+No code, pause, switch, reset, new data cadence or deployment in this turn.
+
+# 2026-10-02 — standing objective: real-account net profit with trend drawdown control
+
+Owner clarifies at11:37 Asia/Shanghai: the research cohort is SHADOW SOURCE
+orders whose observed gross floating PROFIT exceeds10 USDT, corresponding to
+adverse exposure on their inverse copies. The goal is net profitability of the
+actual trading account and avoiding an outsized drawdown from a single major
+trend. Source profitability is not the optimization target.
+
+Owner has manually reset the account. On the next submitted snapshot, identify
+the new account generation and analyze only orders born in that generation;
+do not mix previous-generation outcomes into the new cohort's conclusions.
+Study when the inverse exposure should exit, using contemporaneous holding/
+trend/recovery evidence and fee-correct earlier/rebound exit comparisons against
+actual outcomes. Include missed recoveries/profits and portfolio drawdown, not
+only avoided losses or a hindsight best price.10 USDT selects cases; it is not
+an automatic stop/exit instruction. Preserve existing openings/fixed1000 sizing.
+No strategy/code/deployment change requested now; await the owner's next snapshot.
+Future execution changes require concrete evidence and owner authorization.
+
 # 2026-10-02 — bounded inverse PAPER loss-exit research, no strategy change
 
 Owner authorizes modifying research snapshots to identify when an inverse PAPER

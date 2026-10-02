@@ -1,7 +1,8 @@
 /** Account observations only; no exchange calls or execution authority. */
 import type {LiveAccountMark} from './live-account-view.ts';
-import {EQUITY_CURVE_VERSION,FIVE_MINUTES,type CurvePage,type EquityPoint} from './equity-curve.ts';
+import {EQUITY_CURVE_VERSION,type CurvePage,type EquityPoint} from './equity-curve.ts';
 export const LIVE_EQUITY_VERSION='gate-session-equity-v1';
+export const LIVE_EQUITY_SAMPLE_MS=60_000;
 export const LIVE_EQUITY_PREFIX='live-equity:v1:';
 export type LiveEquityHead={version:typeof LIVE_EQUITY_VERSION;sessionAt:number;accountUser:string;
   startedAt:number;initialEquity:number;lastAt:number;lastEquity:number};
@@ -20,7 +21,7 @@ export function liveEquityView(head:LiveEquityHead|null|undefined,mark:LiveAccou
     lastCycleAt:head.lastAt,policyVersion:LIVE_EQUITY_VERSION,engineVersion:LIVE_EQUITY_VERSION,
     storage:{persistedAt:head.lastAt}}};
 }
-/** A fresh native mark is sampled at most once per five minutes. The head is
+/** A fresh native mark is sampled at most once per minute. The head is
  * advanced by the caller only when its row and checkpoint commit together. */
 export function prepareLiveEquity(mark:LiveAccountMark|null|undefined,enabled:boolean,sessionAt:number,
   previous:LiveEquityHead|null|undefined,now:number):{head:LiveEquityHead;key:string;value:Observation}|null {
@@ -32,7 +33,7 @@ export function prepareLiveEquity(mark:LiveAccountMark|null|undefined,enabled:bo
   const same=previous?.version===LIVE_EQUITY_VERSION&&previous.sessionAt===sessionAt
     &&previous.accountUser===mark.accountUser&&previous.startedAt===mark.startedAt
     &&previous.initialEquity===mark.initialEquity;
-  if(same&&mark.at-previous.lastAt<FIVE_MINUTES)return null;
+  if(same&&mark.at-previous.lastAt<LIVE_EQUITY_SAMPLE_MS)return null;
   const head:LiveEquityHead={version:LIVE_EQUITY_VERSION,sessionAt,accountUser:mark.accountUser,
     startedAt:mark.startedAt,initialEquity:mark.initialEquity,lastAt:mark.at,lastEquity:mark.equity};
   const point:EquityPoint={at:mark.at,equity:mark.equity,kind:'observed',policy:LIVE_EQUITY_VERSION,homogeneous:true};
