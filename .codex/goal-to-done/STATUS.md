@@ -1,4 +1,64 @@
-# 2026-10-02 — owner explicitly authorizes publication; reviewed release pending
+# 2026-10-02 — native minute curve verified; reviewed release pending
+
+Only lib/live-equity.ts sampling cap and public health's matching sampleMs changed.
+Same renderer/PAPER archives, native history/version/session, frozen trading bodies,
+source/fixed1000 sizing and existing account marks/checkpoint/optional budget remain.
+107 focused curve/cache/archive/frontend/resource tests pass, including full-day
+frequent marks capped1440 rows, old5min head compatibility, owner/member atomic
+restoration, critical-journal priority and account-scoped readers. Release checks
+pass individually: direct341+4compat, equity74, members67, LIVE200, inverse10,
+feed-workerd, production build, architecture/migration43, typecheck, lint
+0errors/14existing warnings and installed Wrangler telemetry-off dry-run.
+Reviewed-main release/advancing receipts pending; no production change yet.
+Before receipt: main ea3c1e8, new owner account1790911794914 and activation
+1790911800793 retained, owner LIVE ON/operational, current curve sample300000.
+Branch ui/20261002-equity-minute-parity; log equity-minute-focused.log in scratch.
+
+# 2026-10-02 — add portfolio trend hypothesis; await next owner snapshot
+
+Owner's11:41 research addition: more than3 distinct shadow source winners reaching
+10 USDT floating profit within a window prompts investigation of broad aligned
+trend and further inverse exposure. Research existing exits and later entries,
+separate concurrent/serial winners, directions/correlation and recoveries. No
+window specified or new trading permission; notes only, production unchanged.
+
+# 2026-10-02 — new account cohort; await next owner snapshot
+
+Owner reports manual account reset and confirms shadow SOURCE floating profit
+over10 USDT as the cohort. Standing target: actual-account net profitability and
+control of outsized drawdowns from major trends, through evidence-based inverse
+exit timing. Analyze only the new account generation identified in the next
+snapshot; include earlier/rebound exits, missed recoveries, costs and portfolio
+effects. No automatic10 USDT stop, new-entry pause or trading modification.
+Goal/decision/status notes updated only; no production release/control/reset.
+
+# 2026-10-02 — research snapshot enhancement released; continuity verified
+
+Owner explicitly authorized “上线”. Git CLI push lacked HTTPS credentials, so
+the configured owner GitHub connector published the exact locally tested tree
+238f39a991a925355b0218ea4a17de708f6dd088 on research branch head
+44ada5dd11bd177adfb7a54af1ae63b1930769ae. PR607 verification36957687722
+completed successfully. Squash main ea3c1e8a9a0fc686fac70a5d15644805b819f1d1
+has the identical tree; original release36957853540 verify/deploy both succeeded.
+Local checkout is current main. This local receipt intentionally causes no
+second production release.
+
+Public new-build health observed twice: ready true, stale false, runtime/storage
+errors null. Account1790843524083, cutover/reconciliation1790843524739, frozen
+source2b4fd60, fixed-1000-v1/1000, inverse5bp/source7bp and owner LIVE OFF retained.
+Success1790909480804→1790909907648→1790909963173; heartbeat
+1790909476105→1790909878687→1790909941189; persisted
+1790909423859→1790909897196→1790909926687. Opened235→236→237 and
+closed225→227→227, exact gross mirror residual0. Root page returns normally.
+Initial independent post-release health GET returned transient503; subsequent
+two complete public reads were200 and advancing. No private Gate request,
+signed research export, real test trade, reset or owner/member LIVE control.
+Actual new causal traces can be reviewed from the owner's next signed export;
+pre-release missing path evidence is not reconstructed.
+Receipts: /workspace/scratch/34c7bf7c5b22/inverse-loss-release-before.json,
+inverse-loss-release-after-a.json and inverse-loss-release-after-b.json.
+
+# 2026-10-02 — owner explicitly authorizes publication; release authorization
 
 Owner replied “上线” at 10:49 Asia/Shanghai, explicitly authorizing this exact
 research-snapshot-only implementation through original GitHub/Cloudflare.

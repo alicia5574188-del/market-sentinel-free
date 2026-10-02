@@ -60,7 +60,7 @@ import { nextProtectionWriteBudget, readProtectionWriteBudget, protectionWriteBu
   PRIMARY_PLANNED_DO_ROWS, TWO_MEMBER_PLANNED_DO_ROWS, type ProtectionWriteBudget } from "../lib/forward-write-budget.ts";
 import { EquityReader } from "../lib/equity-reader.ts";
 import { EQUITY_CURVE_VERSION } from "../lib/equity-curve.ts";
-import {LIVE_EQUITY_VERSION,LiveEquityReader,prepareLiveEquity,type LiveEquityHead} from "../lib/live-equity.ts";
+import {LIVE_EQUITY_VERSION,LIVE_EQUITY_SAMPLE_MS,LiveEquityReader,prepareLiveEquity,type LiveEquityHead} from "../lib/live-equity.ts";
 import {buildLiveReview,readLiveReviewPage} from '../lib/live-review.ts';
 import {adjustInverseLeverage} from '../lib/live-leverage.ts';
 import { resourceDay, rollResourceDay, RESOURCE_DAY_POLICY, type ResourceCounters } from "../lib/resource-day.ts";
@@ -3939,7 +3939,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         buildSha: FORWARD_BUILD_SHA,
         liveMirror: {...this.liveMirrorView(),rows:undefined},
         liveTurnover:this.turnoverStatus(),
-        liveEquityCurve:{version:LIVE_EQUITY_VERSION,sampleMs:300_000,
+        liveEquityCurve:{version:LIVE_EQUITY_VERSION,sampleMs:LIVE_EQUITY_SAMPLE_MS,
           available:!!this.runtime.live.equityCurve&&this.runtime.live.equityCurve.sessionAt===this.runtime.live.activation?.enabledAt,
           lastSavedAt:this.runtime.live.equityCurve?.sessionAt===this.runtime.live.activation?.enabledAt?this.runtime.live.equityCurve?.lastAt??null:null},
         resourceAccounting:{policy:RESOURCE_DAY_POLICY,day:this.runtime.utcDay,nonAlarmWrites:this.runtime.nonAlarmWrites,

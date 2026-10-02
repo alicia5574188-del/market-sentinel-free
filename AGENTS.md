@@ -1,3 +1,15 @@
+# 2026-10-02 — native equity curve density parity
+
+Owner asks to keep LIVE and PAPER curves alike without excessive data pressure.
+Keep the same renderer and every existing PAPER archive point; increase native
+LIVE sampling from five minutes to at most once per minute using existing fresh
+account marks/checkpoint transactions. This narrowly supersedes the old native
+five-minute curve cap below. Preserve row namespace/version/session baseline and
+OFF/ON/reset behavior, historical rows, optional-write priority, source/financial
+state and all frozen execution methods. No new Gate call, timer, credential or
+control action. Verify owner/member restoration, stale marks, capacity, critical
+journals, cache/pagination and original reviewed-main deployment/continuity.
+
 # 2026-10-02 — fixed1000 U allocation ONLY
 
 Owner cancels all proposed admission pauses, automatic recovery and emergency
