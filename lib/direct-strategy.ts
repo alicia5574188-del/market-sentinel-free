@@ -197,7 +197,7 @@ export function openDirectPlan(s:ForwardState,p:DirectPlan,q:Quote,c:Contract,no
       forecast:{remainingNetRate:o.netRemainingSpaceRate,quality:o.score,sizingEquity:1000}};
   if(s.paperExecution)queuePaperEntry(s,t,timing??{prepareMs:2000,confirmMs:0,basis:'EXECUTION_CLOCK',samples:0});
   else{s.balance-=t.entryFee;s.fees+=t.entryFee;s.turnover+=notional;s.positions.push(t);s.lastEntryAt[t.symbol]=now;s.lastSide[t.symbol]=t.side;}
-  s.consumedTheses[o.id]=now;p.consumed=true;p.phase='HOLDING';note(s,t,now,p.reason);
+  s.consumedTheses[o.id]=now;p.consumed=true;p.phase=paperFilled(t)?'HOLDING':'EXECUTING';note(s,t,now,p.reason);
   return undefined;
 }
 /** Extract the inverse payoff: the original push's failure is a return profit
