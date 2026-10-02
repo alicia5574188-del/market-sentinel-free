@@ -1261,8 +1261,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const next = advanceShadowInverse({ state: previous, now, paths: this.strategyCandles,minutePaths:this.forwardMinutePaths(),
         daily:this.turnDailyCandles,quotes:executionQuotes,analysisQuotes:this.forwardAnalysisQuotes(now),contracts:this.regimeContracts(),
         entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue,
-        paperTiming:executionTiming([...Object.values(this.runtime.live.entries).flatMap(e=>e?.parity?[e.parity]:[]),
-          ...this.liveHistory.flatMap(p=>p.parity?[p.parity]:[]),...Object.values(this.runtime.live.positions).flatMap(p=>p?.parity?[p.parity]:[])]),
+        // exchangeEntryAt is refreshed with every position mark. entryAt is
+        // the immutable first confirmed native-position observation.
+        paperTiming:executionTiming([...this.liveHistory.flatMap(p=>p.parity?[{...p.parity,entryConfirmedAt:p.entryAt}]:[]),
+          ...Object.values(this.runtime.live.positions).flatMap(p=>p?.parity?[{...p.parity,entryConfirmedAt:p.entryAt}]:[])]),
         research:{rolling:this.shadowResearch.market[0]?.rolling??null},reviewTrace:event=>{if(reviewEvents.length<128)reviewEvents.push(event);} });
       try{captureTradeReviews(previous,next.state,now,FORWARD_BUILD_SHA,STRATEGY_FINGERPRINT,executionQuotes);}
       catch{this.reviewDiagnosticError="TRADE_REVIEW_CAPTURE_FAILED";}

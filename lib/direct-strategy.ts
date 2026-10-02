@@ -10,7 +10,7 @@ import {remainingTradeFraction} from './trade-realization.ts';
 import {forwardProtectionChanged} from './forward-protection-checkpoint.ts';
 import {DIRECT_STRATEGY_VERSION,type DirectPlan,type ReturnLogic} from './direct-strategy-types.ts';
 import type {Acceptance} from './unified-execution-types.ts';
-import {advancePaperExecution,queuePaperEntry,paperFilled,PAPER_EXECUTION_VERSION} from './paper-execution.ts';
+import {advancePaperExecution,queuePaperEntry,paperFilled,PAPER_EXECUTION_VERSION,PAPER_TIMING_VERSION} from './paper-execution.ts';
 export {DIRECT_STRATEGY_VERSION} from './direct-strategy-types.ts';
 export {directOpportunityView,directStrategySummary} from './direct-strategy-view.ts';
 const sign=(side:'LONG'|'SHORT')=>side==='LONG'?1:-1;
@@ -289,6 +289,9 @@ export function advanceDirectStrategy(input:Input){
   const state=normalizeForward(structuredClone(input.state),input.now),activated=migrateDirectStrategy(state,input.now);
   const transportActivated=!!input.paperTiming&&!state.paperExecution;
   if(transportActivated)state.paperExecution={version:PAPER_EXECUTION_VERSION,cutoverAt:input.now,cancelled:[]};
+  const timingRecovered=!!input.paperTiming&&state.positions.some(t=>t.paperOrder&&t.paperOrder.timing.version!==PAPER_TIMING_VERSION);
+  if(timingRecovered){for(const t of state.positions)if(t.paperOrder&&t.paperOrder.timing.version!==PAPER_TIMING_VERSION)
+    t.paperOrder.timing={...structuredClone(input.paperTiming!),version:PAPER_TIMING_VERSION};state.revision++;}
   const adapter:DirectExecutionAdapter={manage:(s,ready)=>manageDirect(s,{...input,state:s},ready),
     open:(s,o,q,c,now,response)=>{
       if(s.positions.some(t=>t.openedAt===now))return'本次执行已建立新仓，下一次继续核对组合容量';
@@ -303,6 +306,6 @@ export function advanceDirectStrategy(input:Input){
   const next=advanceForward({...input,state,directAdapter:adapter,allocationEquity:1000});
   next.state.latestReason=next.state.directStrategy!.summary;
   next.protectionChanged=next.protectionChanged||forwardProtectionChanged(input.state,next.state);
-  next.changed=next.changed||activated||transportActivated;
+  next.changed=next.changed||activated||transportActivated||timingRecovered;
   return next;
 }

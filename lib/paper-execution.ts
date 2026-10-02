@@ -7,7 +7,8 @@ import {closeUnifiedTrade} from './unified-execution.ts';
 import type {TradeRealization} from './trade-realization.ts';
 
 export const PAPER_EXECUTION_VERSION='live-steps-paper-v1';
-export type PaperTiming={prepareMs:number;confirmMs:number;basis:'OBSERVED_LIVE'|'EXECUTION_CLOCK';samples:number};
+export const PAPER_TIMING_VERSION='native-position-first-observed-v1';
+export type PaperTiming={version?:typeof PAPER_TIMING_VERSION;prepareMs:number;confirmMs:number;basis:'OBSERVED_LIVE'|'EXECUTION_CLOCK';samples:number};
 export type PaperAction={kind:'CLOSE'|'REDUCE';at:number;phase:'PREPARING'|'SUBMITTED';submittedAt?:number;
   reason:string;detail:string;contracts:number;sequence:number;filled:number;quoteAt?:number;liquidityKey?:string};
 export type PaperOrder={version:typeof PAPER_EXECUTION_VERSION;signalAt:number;signalPrice:number;requestedContracts:number;allocationRiskRate:number;
@@ -21,13 +22,13 @@ const direction=(t:Trade)=>t.side==='LONG'?1:-1;
 const fee=.0005;
 const rules=(c:Contract)=>({enableDecimal:c.enableDecimal,orderSizeMin:c.orderSizeMin==null?undefined:String(c.orderSizeMin),
   orderSizeMax:c.orderSizeMax==null?undefined:String(c.orderSizeMax),marketOrderSizeMax:c.marketOrderSizeMax==null?undefined:String(c.marketOrderSizeMax)});
-export function executionTiming(rows:{submitDelayMs?:number;submittedAt?:number;exchangeEntryAt?:number}[]):PaperTiming{
+export function executionTiming(rows:{submitDelayMs?:number;submittedAt?:number;entryConfirmedAt?:number;exchangeEntryAt?:number}[]):PaperTiming{
   const usable=rows.filter(x=>Number.isFinite(x.submitDelayMs)&&x.submitDelayMs!>=0&&Number.isFinite(x.submittedAt)
-    &&Number.isFinite(x.exchangeEntryAt)&&x.exchangeEntryAt!>=x.submittedAt!)
-    .sort((a,b)=>b.submittedAt!-a.submittedAt!).filter((x,i,a)=>a.findIndex(y=>y.submittedAt===x.submittedAt&&y.exchangeEntryAt===x.exchangeEntryAt)===i).slice(0,32);
+    &&Number.isFinite(x.entryConfirmedAt)&&x.entryConfirmedAt!>=x.submittedAt!)
+    .sort((a,b)=>b.submittedAt!-a.submittedAt!).filter((x,i,a)=>a.findIndex(y=>y.submittedAt===x.submittedAt&&y.entryConfirmedAt===x.entryConfirmedAt)===i).slice(0,32);
   const median=(xs:number[])=>xs.sort((a,b)=>a-b)[Math.floor(xs.length/2)]!;
-  return usable.length?{prepareMs:median(usable.map(x=>x.submitDelayMs!)),confirmMs:median(usable.map(x=>x.exchangeEntryAt!-x.submittedAt!)),
-    basis:'OBSERVED_LIVE',samples:usable.length}:{prepareMs:2000,confirmMs:0,basis:'EXECUTION_CLOCK',samples:0};
+  return usable.length?{version:PAPER_TIMING_VERSION,prepareMs:median(usable.map(x=>x.submitDelayMs!)),confirmMs:median(usable.map(x=>x.entryConfirmedAt!-x.submittedAt!)),
+    basis:'OBSERVED_LIVE',samples:usable.length}:{version:PAPER_TIMING_VERSION,prepareMs:2000,confirmMs:0,basis:'EXECUTION_CLOCK',samples:0};
 }
 /** Book sizes are USDT notionals, as in GateStreamingFeed/fetchTickerBbo.
  * Never invent unobserved depth or use the opposite side's executable price. */
@@ -56,7 +57,7 @@ export function paperBookFill(t:Trade,q:Quote,c:Contract,wanted:number,opening:b
 export function queuePaperEntry(s:ForwardState,t:Trade,timing:PaperTiming){
   t.paperOrder={version:PAPER_EXECUTION_VERSION,signalAt:t.openedAt,signalPrice:t.entryPrice,requestedContracts:t.contracts,
     allocationRiskRate:t.plannedRisk/t.notional,
-    phase:'PREPARING',timing:structuredClone(timing),reason:'核对账户、合约数量和逐仓杠杆；尚未成交',completedActions:0};
+    phase:'PREPARING',timing:{...structuredClone(timing),version:PAPER_TIMING_VERSION},reason:'核对账户、合约数量和逐仓杠杆；尚未成交',completedActions:0};
   s.positions.push(t);s.revision++;
 }
 export function assertPaperExecution(s:ForwardState){

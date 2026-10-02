@@ -33,6 +33,14 @@ source close instruction, not a fabricated PAPER settlement. Existing closure
 journal/member lookup protects it after hot-history rotation. Cancelled unfilled
 entries are bounded to32 hot records, separate from paid trade history.
 
+Latency samples use immutable native position.entryAt (first confirmed position
+observation) and submittedAt. The mutable receipt.exchangeEntryAt is refreshed
+with position marks and must never determine a matching delay. Timing carries
+native-position-first-observed-v1. Active saved orders lacking that marker
+recover only their latency model in the next existing financial commit; preserve
+their source identity, submission, paid fees, quantities and old closed history.
+No historical first confirmation is fabricated and no extra native read occurs.
+
 Resource bounds: reuse the existing2s decision clock,10s protection lane,
 financial reservation/cap, financial/archive keys and urgent book pool<=30.
 No independent order polling, unbounded fragment log, extra market requests or

@@ -1,4 +1,4 @@
-Status: final follow-up — PAPER execution steps, 2026-10-03 Asia/Shanghai.
+Status: final latency correction — PAPER execution steps, 2026-10-03 Asia/Shanghai.
 
 Implemented shared committed source intents and separate PAPER preparation,
 submission, observed-depth matching, cash/fees, partial settlement and restart
@@ -15,8 +15,14 @@ closed42, open8, authorityReady true, stale false, errors null, LIVE OFF.
 Final inspection found delayed trend-close must release the original consumed
 candidate for its continuation handoff. Added a regression and narrow fix;
 new order plans immediately say EXECUTING. Original fresh trend/risk gates stay.
-Next: verify the follow-up, publish through reviewed-main CI/deploy, obtain two
-advancing healthy production/account/LIVE continuity receipts.
+PR614 merged and deployed a55a4e0f738233ce95aa8702f49eb02542dac824.
+Final health exposed two pending entries with2028444ms confirmation delay:
+receipt.exchangeEntryAt is mutable with native mark refresh, not first fill.
+Correct sampling to immutable position.entryAt, version the latency basis and
+recover active old pending/filled-order latency without rewriting paid money.
+Tests reproduce refreshed old timestamps and saved pending recovery.
+Next: publish the latency correction through reviewed-main CI/deploy; require
+advancing healthy receipts and verify the anomalous pending delays disappear.
 Base: b5f591011ca380a61a80621b60311916819245cf. No private order or reset.
 Scope/evidence: research/PAPER_EXECUTION_STEPS.md and tests/paper-execution.test.ts.
 No claim of identical native prices, funding/liquidation or historical equity.
