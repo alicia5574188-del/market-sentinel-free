@@ -56,6 +56,13 @@ test('research creates actual return direction without any source order or secon
   assertInverseTrial(f.s);const v=forwardSummary(f.s,{TEST_USDT:q()},T);
   assert.equal(v.shadowInverse,null);assert.equal(v.unifiedExecution,null);assert.equal(v.directStrategy!.authority,'ONE_ACTUAL_ACCOUNT_NO_COMPANION_ORDERS');
 });
+test('current held plan explains the actual position even when a later observed move points the other way',()=>{
+  const f=fixture();openDirectPlan(f.s,f.p,q(),c,T,{TEST_USDT:q()});const t=f.s.positions[0]!;
+  const p=researchDirectPlan(f.s,opportunity('SHORT'),f.input(T+2000));
+  assert.equal(p.side,t.side);assert.equal(p.branch,t.unified!.branch);assert.equal(p.phase,'HOLDING');
+  assert.equal(p.reason,t.unified!.entryReason);assert.equal(p.holdReason,t.unified!.holdReason);
+  assert.equal(p.exitCondition,t.unified!.exitCondition);assert.equal(p.candidate.side,'SHORT');assert.equal(p.consumed,true);
+});
 test('trend research is independent of a losing return and uses each symbol own completed path',()=>{
   for(const [side,rows,price] of [['LONG',up,103.5],['SHORT',down,96.5]] as const){
     const f=fixture(side,side==='SHORT'?'MOVR_USDT':'TEST_USDT'),i=f.input(T+2*B,price,[...rows]);
