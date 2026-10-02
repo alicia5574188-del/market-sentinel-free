@@ -1,12 +1,22 @@
 {
   "sourceBuild": "2b4fd60f77c9b78526bd5087940945fe7e86fab8",
-  "transformation": "Relative import paths only; no decision/price/cost edits",
+  "transformation": "Relative import paths plus owner-authorized optional fixed allocation hook; exact reverse edits preserve original source provenance",
   "files": [
     {
       "path": "lib/shadow-baseline/forward-relations.ts",
       "originalPath": "lib/forward-relations.ts",
       "originalSha256": "d6408f8a49e14f3fa434c5d05806ae9f07309a9824fdb2be238c8cf6079a8143",
-      "vendoredSha256": "dfec49788614e70c162f77880f6b4f271a61f7343c12b608e57fe6f0be841ecb"
+      "vendoredSha256": "9042dd9a52f9523ae156f97219a05a7a4aa7b59b424454c8e696b248261f6b7e",
+      "authorizedEdits": [
+        {
+          "before": "legacyDrainOnly?:boolean;research?:MarketLifecycleResearchContext;reviewTrace?:(event:ReviewEvent)=>void}){",
+          "after": "legacyDrainOnly?:boolean;research?:MarketLifecycleResearchContext;reviewTrace?:(event:ReviewEvent)=>void;allocationEquity?:number}){"
+        },
+        {
+          "before": "  const opened=marketReady?advanceEntryResponses(s,input.quotes,input.contracts,input.minutePaths,input.paths,input.now,mark.equity,trace):0;",
+          "after": "  const allocationEquity=input.allocationEquity??mark.equity;\n  if(input.allocationEquity!==undefined&&(!Number.isFinite(allocationEquity)||allocationEquity<=0))throw new Error('开仓仓位基准无效');\n  const opened=marketReady?advanceEntryResponses(s,input.quotes,input.contracts,input.minutePaths,input.paths,input.now,allocationEquity,trace):0;"
+        }
+      ]
     },
     {
       "path": "lib/shadow-baseline/market-intelligence-engine.ts",
@@ -35,5 +45,6 @@
     "lib/market-intelligence-hypothesis-research.ts": "04489e02ff9dce45a13a89be9f417d3e83582d6989d9d6156582dc3b19afd2ce",
     "lib/market-intelligence-lifecycle.ts": "fe9e565accac2e47a37e41e9759bcbf2fb316a717b758f6dddc0c0a305392274",
     "lib/forward-structural-interrupt.ts": "39846733b9f5051188f4227f1dec22f8b155cf3b5f2da9f83abc749be85c2523"
-  }
+  },
+  "allocationPolicy": "fixed-1000-v1"
 }

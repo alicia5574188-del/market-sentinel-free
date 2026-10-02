@@ -1377,7 +1377,7 @@ function nextCandleAt(paths:Record<string,Candle[]>,now:number){
 }
 export function advanceForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;minutePaths?:Record<string,Candle[]>;daily?:Record<string,Candle[]>;
   quotes:Record<string,Quote>;analysisQuotes?:Record<string,Quote>;contracts:Record<string,Contract>;entrySymbols?:Iterable<string>;learningSymbols?:Iterable<string>;allowDataCycle?:boolean;
-  legacyDrainOnly?:boolean;research?:MarketLifecycleResearchContext;reviewTrace?:(event:ReviewEvent)=>void}){
+  legacyDrainOnly?:boolean;research?:MarketLifecycleResearchContext;reviewTrace?:(event:ReviewEvent)=>void;allocationEquity?:number}){
   // An optional observer has no return value or trading authority. A failed logger cannot block a trade.
   const trace=input.reviewTrace?(event:ReviewEvent)=>{try{input.reviewTrace!(event);}catch{/* diagnostics only */}}:undefined;
   const s=normalizeForward(structuredClone(input.state),input.now),
@@ -1443,7 +1443,9 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
   // lane). Once authorized, its frozen identity is handed to the critical 2s
   // execution clock; research refreshes can no longer make it disappear.
   if(marketReady)seedEntryResponses(s,input.quotes,input.now,trace);
-  const opened=marketReady?advanceEntryResponses(s,input.quotes,input.contracts,input.minutePaths,input.paths,input.now,mark.equity,trace):0;
+  const allocationEquity=input.allocationEquity??mark.equity;
+  if(input.allocationEquity!==undefined&&(!Number.isFinite(allocationEquity)||allocationEquity<=0))throw new Error('开仓仓位基准无效');
+  const opened=marketReady?advanceEntryResponses(s,input.quotes,input.contracts,input.minutePaths,input.paths,input.now,allocationEquity,trace):0;
 
   const states=Object.values(s.extremumRegime.symbols),longReady=states.filter(x=>x.longScore>=62).length,
     shortReady=states.filter(x=>x.shortScore>=62).length,divergent=states.filter(x=>x.regime==="DIVERGENT").length,

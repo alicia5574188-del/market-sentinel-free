@@ -6,6 +6,7 @@ import {captureTradeReviews} from './review-trace.ts';
 import {SHADOW_BASELINE_BUILD,SHARED_MARKET_KEYS,shadowCapsule,sourceDecisionState,newInverseTrial,
   applyInverseSourceTrade,markInversePositions,recordInverseCurve,assertInverseTrial} from './shadow-inverse-ledger.ts';
 import {beijingDayKey} from './beijing-time.ts';
+import {FIXED_ALLOCATION_EQUITY} from './fixed-allocation.ts';
 
 export function advanceShadowInverse(input:Parameters<typeof advanceBaseline>[0]){
   const s=normalizeForward(structuredClone(input.state),input.now),activated=!s.inverseTrial;
@@ -17,7 +18,7 @@ export function advanceShadowInverse(input:Parameters<typeof advanceBaseline>[0]
     s.revision++;s.events.unshift({id:`a${s.startedAt}-${s.revision}`,at:input.now,kind:'START',subject:'shadow-inverse-v1',
       reason:'影子决策固定2b4fd60f；新单反向复制，旧账户与旧持仓保留'});
   }
-  const sourceBefore=sourceDecisionState(s),source=advanceBaseline({...input,state:sourceBefore}),trial=s.inverseTrial!;
+  const sourceBefore=sourceDecisionState(s),source=advanceBaseline({...input,state:sourceBefore,allocationEquity:FIXED_ALLOCATION_EQUITY}),trial=s.inverseTrial!;
   // Observers cannot influence source decisions; baseline entries carry the
   // frozen code identity even though a newer build hosts the adapter.
   try{captureTradeReviews(sourceBefore,source.state,input.now,SHADOW_BASELINE_BUILD,

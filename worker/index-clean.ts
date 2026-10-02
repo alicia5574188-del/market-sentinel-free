@@ -1,5 +1,6 @@
 import {reconcileSourceReduction,sourceReductionTarget,type SourceReduction} from "../lib/live-reduction.ts";
 import {reconcileSourceClose,sourceExitFillPrice,type SourceExit} from '../lib/live-exit.ts';
+import {FIXED_ALLOCATION_EQUITY,FIXED_ALLOCATION_POLICY,fixedLiveBasis,type FixedLiveBasis} from '../lib/fixed-allocation.ts';
 import { LiveHistoryReader } from "../lib/live-history-reader.ts";
 /// <reference types="@cloudflare/workers-types" />
 
@@ -243,6 +244,7 @@ type LiveAuditEvent = {
 };
 
 type LiveRuntime = {
+  fixedBasis?:FixedLiveBasis;
   accountMark?:LiveAccountMark|null;
   equityCurve?:LiveEquityHead|null;
   turnoverAccountKey?: string;
@@ -1059,7 +1061,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   protected liveMirrorView() {
-    return mirrorCoverage(this.forwardState,this.runtime.live,this.forwardError??this.liveBindingError);
+    return {...mirrorCoverage(this.forwardState,this.runtime.live,this.forwardError??this.liveBindingError),
+      allocationPolicy:FIXED_ALLOCATION_POLICY,allocationEquity:FIXED_ALLOCATION_EQUITY,
+      fixedBasisEstablished:!!this.runtime.live.fixedBasis};
   }
 
   protected liveDesiredPortfolio(now:number):Record<string,MirrorSourceTrade> {
@@ -2990,16 +2994,22 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         if(paperMark.stalePositions)throw new LiveEntrySizingError("ECONOMICS",symbol,"模拟账户当前估值不完整，不能确定复制比例");
         const inverse=!!trade.forwardSource.inverseCopy;
         const scaled=inverse?this.runtime.live.activation:await this.ensureLiveSessionScale(paperMark.equity,equity,Date.now());
-        // Current LIVE capital is authority for inverse additions. A profitable
-        // theoretical ledger must neither enlarge exposure nor veto valid copies.
-        mirrorRatio=inverse?equity/paperMark.equity:scaled?.scaleRatio??equity/paperMark.equity;
+        // Freeze the native account capital anchor once. Profits and ordinary
+        // OFF/ON never compound future copies; actual-equity gates still apply.
+        if(inverse){
+          const prior=this.runtime.live.fixedBasis,basis=fixedLiveBasis(prior,equity,
+            String(snapshot.account.user??this.runtime.live.turnoverAccountKey??'program-account'),Date.now());
+          if(!prior){this.runtime.live.fixedBasis=basis;
+            try{await this.saveCheckpoint(Date.now(),true);}catch(error){delete this.runtime.live.fixedBasis;throw error;}}
+        }
+        mirrorRatio=inverse?this.runtime.live.fixedBasis!.liveEquity/FIXED_ALLOCATION_EQUITY:scaled?.scaleRatio??equity/paperMark.equity;
         const expectedLiveEquity=paperMark.equity*mirrorRatio;
         const liveEquityDrift=expectedLiveEquity>0?equity/expectedLiveEquity:0;
         if(!inverse&&liveEquityDrift<.85)throw new LiveEntrySizingError("ECONOMICS",symbol,
           `实盘权益已低于固定模拟比例预期的${(liveEquityDrift*100).toFixed(1)}%，暂停新增复制并保留已有保护`);
         const quote=this.runtime.evidence[symbol];
         const executablePrice=plan.side==='LONG'?quote?.bestAsk??0:quote?.bestBid??0;
-        sizing={source:trade.forwardSource,sourceEquity:paperMark.equity,equity,
+        sizing={source:trade.forwardSource,sourceEquity:inverse?FIXED_ALLOCATION_EQUITY:paperMark.equity,equity,
           available:availableForNewEntries,openRisk:riskForNewEntries,sameDirectionRisk:directionRiskForNewEntries[plan.side],
           entryPrice:executablePrice,
           quantoMultiplier:this.runtime.contractMeta[symbol]?.quantoMultiplier??0,
@@ -3009,7 +3019,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           mirrorRatio,sourceRiskAuthority:true,quoteObservedAt:quote?.observedAt};
         const result=buildProportionalMirror(sizing);
         intent=result.intent;binding=result.binding;
-        if(inverse){binding.receipt.entryPricePolicy='fresh-market-v1';delete binding.receipt.allowedAdverseEntryDriftRate;}
+        if(inverse){binding.receipt.entryPricePolicy='fresh-market-v1';delete binding.receipt.allowedAdverseEntryDriftRate;
+          binding.receipt.fixedAllocationPolicy=FIXED_ALLOCATION_POLICY;binding.receipt.fixedLiveEquity=this.runtime.live.fixedBasis!.liveEquity;}
       } catch (error) {
         if (!(error instanceof LiveEntrySizingError)) throw error;
         this.runtime.live.entrySkips[symbol] = { planId: plan.id, symbol, code: error.code, reason: error.message, observedAt: now,sizing:error.sizing };

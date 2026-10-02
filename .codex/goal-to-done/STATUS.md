@@ -1,4 +1,25 @@
-# 2026-10-02 — final account-matched page, in progress
+# 2026-10-02 — fixed1000 U allocation ONLY
+
+Owner cancels all proposed admission pauses, automatic recovery and emergency
+protection. This turn changes only new-source allocation to1000 U and freezes
+the native LIVE capital anchor/1000 ratio across profits, OFF/ON and restart.
+No60 U gate, independent stop, portfolio loss exit or signal exclusion; all
+normal source decisions/exits and existing LIVE controls remain as deployed.
+Preserve real wallets, fees/leverage, history, member isolation and cadence.
+The sole source edit is an optional allocation input; exact reverse edits must
+reconstruct the original source provenance. Reviewed-main release and advancing
+production receipts pending. Risk code was never published or deployed.
+
+Local verification: direct341+4, focused source/LIVE/pure64 plus later LIVE
+manual-toggle case; final LIVE/Gate200, equity73, members67, Forward78+4,
+architecture/migration43, full npm test, final typecheck/build and lint
+0 errors/14 existing warnings. Synthetic native storage roundtrip/atomic rollback
+passed. Native member smoke hit localhost keep-alive timeouts twice; the SAME compiled
+Worker and all original assertions passed in an isolated temporary harness
+adding Connection:close. Production/member code and repo smoke are unchanged. All seven native protection/source-exit/control methods are
+byte-identical to main. No private Gate request or real test trade.
+
+# 2026-10-02 — final account-matched page, done
 
 Base main6ee4c1d623f844f460972e19dd2c7b4161b9ace5. Frontend-only account
 selector inverse-first/shadow-second and all current shadow paired rows,
@@ -19,9 +40,17 @@ f4d9c566d0b05253d5c04d5cd5bded94057c55a0 matches tested tree
 d05b4f5fb67146378f87db8008b15d43b6f04147, deployed asset200 contains selector
 and complete retained shadow rows; guest native equity401. Public ready,
 authority ready/non-stale/errors null and account/source/session/OFF preserved.
-Final CSS token audit found undefined hover/focus variables; use actual theme
-raised/green variables, no functional change. Small reviewed follow-up pending
-before final receipt. Public before account
+Final CSS token audit found undefined hover/focus variables; actual theme
+raised/green variables now resolve, no functional change. PR605 exact-head
+CI36943432562 passes; final mainb9c9b5b55f08faa770fbf00540b328f9e0554240,
+tree74f5675816b6ce8ab0356afea83d751aa7d896f5, release36943594253 verify/deploy
+passes. Corrected production CSS200 and original new JS200; guest native
+equity401. Final public reads ready/authority-ready/non-stale/errors null;
+persisted1790899251150→1790899291761, heartbeat1790899238886→1790899300711,
+success1790899257033→1790899324971 advance. Source/account/session and owner
+OFF preserved; native history lastSaved1790896060718 retained while UI hides
+OFF curve. Fee policy/LIVE leverage unchanged. Final durable receipts saved
+in PR604/605; no receipt-only extra deployment. Public before account
 1790843524083/source2b4fd60f77c9b78526bd5087940945fe7e86fab8,
 activation1790860857522, owner OFF, ready/non-stale/errors null.
 
