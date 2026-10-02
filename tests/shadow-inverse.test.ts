@@ -71,11 +71,12 @@ test('legacy opposite-BBO pair is reconciled once to the exact shadow entry pric
   assertInverseTrial(s);
 });
 
-test('source is exact published 2b4fd60f, with import paths as the only transformation',()=>{
+test('source provenance reconstructs exact published 2b4fd60f plus only the authorized allocation hook',()=>{
   const manifest=JSON.parse(readFileSync(new URL('../lib/shadow-baseline/manifest.json',import.meta.url),'utf8'));
   const hash=(s:string)=>createHash('sha256').update(s).digest('hex');assert.equal(manifest.sourceBuild,SHADOW_BASELINE_BUILD);
   for(const f of manifest.files){const code=readFileSync(new URL('../'+f.path,import.meta.url),'utf8');assert.equal(hash(code),f.vendoredSha256);
-    const original=code.replace(/(from\s+["'])\.\.\//g,'$1./');assert.equal(hash(original),f.originalSha256);}
+    let original=code;for(const edit of f.authorizedEdits??[]){assert.ok(original.includes(edit.after));original=original.replace(edit.after,edit.before);}
+    original=original.replace(/(from\s+["'])\.\.\//g,'$1./');assert.equal(hash(original),f.originalSha256);}
   for(const [file,digest]of Object.entries(manifest.shared))assert.equal(hash(readFileSync(new URL('../'+file,import.meta.url),'utf8')),digest,file);
 });
 test('cutover preserves original account and history, excludes old positions from new pairs',()=>{
@@ -269,6 +270,35 @@ test('full frozen discovery and realtime response pipeline creates one inverse, 
       assert.equal(actual.openedAt,source.openedAt);assertInverseTrial(s);return;}
   }
   assert.fail('synthetic confirmed source opportunity never produced a paired inverse');
+});
+
+test('fixed1000 allocation creates equal new source quantities with honest700/1000/1500 U wallets',()=>{
+  const quantities:number[]=[];
+  for(const wallet of [700,1000,1500]){
+  const candles=(step:number)=>{let p=100;return Array.from({length:72},(_,i)=>{const o=p;p*=1+step+Math.sin(i/5)*.00003;
+    return{time:(T-(72-i)*B)/1000,open:o,close:p,low:Math.min(o,p)*.9995,high:Math.max(o,p)*1.0005,volume:1000+i};});};
+  const paths={BTC_USDT:candles(.0010),ETH_USDT:candles(.0018),SOL_USDT:candles(.0009)};
+  for(let i=56;i<72;i++)for(const k of ['open','close','high','low'] as const)paths.ETH_USDT[i]![k]*=1+(i-55)*.0008;
+  const contracts=Object.fromEntries(Object.keys(paths).map(k=>[k,{quantoMultiplier:.01,minContracts:1,leverageMax:10,maintenanceRate:.005}]));
+  let s=initialForward(T-2*B);s.balance=wallet;
+  for(let n=0;n<40;n++){
+    const now=T+n*2000,quotes=Object.fromEntries(Object.entries(paths).map(([k,r])=>{const p=r.at(-1)!.close*(1+n*.00009);
+      return[k,{...quote(p*.99995,p*1.00005,now),disagreementRate:.00008,sourceBreadth:.75,directionalAgreement:.9,
+        medianShortMove:.0005,bookImbalance:.4,bidLiquidityChange:.2,askLiquidityChange:-.2,liquiditySourceCount:3}];}));
+    const input={state:s,now,paths,quotes,contracts,entrySymbols:Object.keys(paths),allowDataCycle:n===0};
+    const expected=frozenAdvance({...input,state:sourceDecisionState(s),allocationEquity:1000});s=advanceShadowInverse(input).state;
+    near(s.inverseTrial!.source.balance,expected.state.balance);assert.equal(s.inverseTrial!.source.resolved,expected.state.resolved);
+    assert.deepEqual(s.inverseTrial!.source.positions.map(t=>[t.id,t.side,t.quantity,t.stopPrice]),expected.state.positions.map(t=>[t.id,t.side,t.quantity,t.stopPrice]));
+    if(n===3)s.balance+=50000; // Test-only perturbation; must not resize source entries.
+    if(s.inverseTrial!.totals.opened){const source=s.inverseTrial!.source.positions[0]!,actual=s.positions[0]!;
+      assert.equal(actual.inverseCopy!.sourceId,source.id);assert.notEqual(actual.side,source.side);near(actual.quantity,source.quantity);
+      assert.equal(actual.openedAt,source.openedAt);assertInverseTrial(s);
+      near(s.inverseTrial!.source.balance,wallet-source.entryFee);
+      quantities.push(source.quantity);break;}
+  }
+    assert.equal(quantities.length,[700,1000,1500].indexOf(wallet)+1);
+  }
+  assert.equal(new Set(quantities).size,1);
 });
 
 test('rich dual-ledger drain fits storage without losing active evidence or source outcome inputs',async()=>{

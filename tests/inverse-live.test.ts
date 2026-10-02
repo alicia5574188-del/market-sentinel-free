@@ -164,9 +164,9 @@ for(const side of ['LONG','SHORT'] as const)test(`real Worker copies inverse ${s
     await h.stream.syncLive(Date.now());assert.equal(h.calls.entries,1);assert.equal(network,0);
     assert.equal(h.calls.stops.length,0);
     await h.stream.syncLive(Date.now());assert.equal(h.calls.entries,1);
-    const initial=h.inverse.contracts;h.inverse.contracts*=.6;h.inverse.quantity*=.6;h.inverse.notional*=.6;h.inverse.margin*=.6;h.inverse.plannedRisk*=.6;
+    const filledBefore=Math.abs(Number(h.positions[0].size)),initial=h.inverse.contracts;h.inverse.contracts*=.6;h.inverse.quantity*=.6;h.inverse.notional*=.6;h.inverse.margin*=.6;h.inverse.plannedRisk*=.6;
     h.inverse.realization={sequence:1,initialContracts:initial} as Trade['realization'];
-    await h.stream.syncLive(Date.now());assert.deepEqual(h.calls.reductions,['4']);assert.equal(h.calls.entries,1);
+    await h.stream.syncLive(Date.now());assert.deepEqual(h.calls.reductions,[String(filledBefore-Math.ceil(filledBefore*.6))]);assert.equal(h.calls.entries,1);
     h.inverse.status='CLOSED';h.inverse.closedAt=Date.now();h.inverse.exitReason='SHADOW_SOURCE_EXIT';h.state.positions=[];h.state.history=[h.inverse];
     assert.equal(sourceLifecycle(h.state,h.inverse.id).status,'CLOSED');
     await h.stream.syncLive(Date.now());assert.equal(h.calls.closes,1);assert.equal(h.calls.entries,1);
@@ -203,7 +203,7 @@ test('price deterioration during leverage await submits the fresh quote without 
   await h.stream.syncLive(Date.now());assert.equal(h.calls.entries,1);
   assert.equal(h.stream.runtime.live.entries.TEST_USDT.parity.submitQuotePrice,99.9);
 });
-test('theoretical profit cannot suspend new copies; sizing uses current LIVE equity and preserves the session',async()=>{
+test('theoretical profit cannot suspend new copies; sizing fixes the real capital anchor and preserves the session',async()=>{
   const h=await harness('LONG'),activation=h.stream.runtime.live.activation;
   Object.assign(activation,{scaleRatio:1,scaleSourceEquity:1000,scaleLiveEquity:1000,scaleAt:Date.now()-1000});
   const before=structuredClone(activation);await h.stream.syncLive(Date.now());
@@ -213,6 +213,43 @@ test('theoretical profit cannot suspend new copies; sizing uses current LIVE equ
   assert.ok(entry.parity.ratio<=100/entry.parity.sourceEquity+1e-10);
   assert.ok(entry.notional<=entry.parity.targetNotional+1e-8);assert.ok(entry.notional<110);
   await h.stream.syncLive(Date.now());assert.equal(h.calls.entries,1);
+});
+test('real Worker fixed allocation survives profit/loss and an ordinary OFF-to-ON session after restart',async()=>{
+  const first=await harness('LONG');await first.stream.syncLive(Date.now());
+  const basis=JSON.parse(JSON.stringify(first.stream.runtime.live.fixedBasis)),original=first.stream.runtime.live.entries.TEST_USDT;
+  assert.equal(basis.liveEquity,100);assert.equal(original.parity.sourceEquity,1000);
+  for(const equity of [300,50]){
+    const h=await harness('LONG'),snapshot=h.gate.snapshot;
+    h.stream.runtime.live.fixedBasis=JSON.parse(JSON.stringify(basis));
+    h.stream.runtime.live.requestedEnabled=false;
+    h.stream.runtime.live.activation=startLiveSession(Date.now()-500,{...h.state,positions:[]});
+    h.stream.runtime.live.requestedEnabled=true;
+    h.gate.snapshot=async()=>{const s=await snapshot();s.account.total=String(equity);s.account.available=String(equity-10);return s;};
+    await h.stream.syncLive(Date.now());
+    assert.equal(h.calls.entries,1);assert.equal(h.calls.stops.length,0);assert.equal(h.calls.closes,0);
+    const entry=h.stream.runtime.live.entries.TEST_USDT;
+    assert.equal(entry.contracts,original.contracts);assert.equal(entry.parity.targetNotional,original.parity.targetNotional);
+    assert.equal(entry.parity.fixedLiveEquity,100);assert.equal(entry.parity.liveEquity,equity);
+    assert.deepEqual(h.stream.runtime.live.fixedBasis,basis);
+  }
+});
+test('fixed allocation still honors actual available funds and cannot send before its anchor is checkpointed',async()=>{
+  const h=await harness('LONG'),snapshot=h.gate.snapshot;
+  h.gate.snapshot=async()=>{const s=await snapshot();s.account.total='2';s.account.available='1';return s;};
+  h.stream.runtime.live.fixedBasis={version:'fixed-1000-v1',sourceEquity:1000,liveEquity:100,establishedAt:Date.now()-1000,accountKey:'program-account'};
+  await h.stream.syncLive(Date.now());assert.equal(h.calls.entries,0);assert.equal(h.calls.stops.length,0);
+  const fault=await harness('LONG');fault.stream.saveCheckpoint=async()=>{if(fault.stream.runtime.live.fixedBasis)throw new Error('fixed anchor checkpoint failed');};
+  await assert.rejects(fault.stream.syncLive(Date.now()),/checkpoint failed/);
+  assert.equal(fault.calls.entries,0);assert.equal(fault.stream.runtime.live.fixedBasis,undefined);
+});
+test('actual manual LIVE OFF/ON handler retains the fixed anchor and leaves an existing holding alone',async()=>{
+  const h=await harness('SHORT');await h.stream.syncLive(Date.now());await h.stream.syncLive(Date.now());
+  const basis=structuredClone(h.stream.runtime.live.fixedBasis),source=structuredClone(h.state),size=h.positions[0].size;
+  assert.equal((await h.stream.setLiveMode(false)).ok,true);
+  assert.deepEqual(h.stream.runtime.live.fixedBasis,basis);assert.equal(h.stream.runtime.live.requestedEnabled,false);
+  assert.equal((await h.stream.setLiveMode(true)).ok,true);
+  assert.deepEqual(h.stream.runtime.live.fixedBasis,basis);assert.equal(h.positions[0].size,size);
+  assert.deepEqual(h.state,source);assert.equal(h.calls.entries,1);assert.equal(h.calls.stops.length,0);assert.equal(h.calls.closes,0);
 });
 test('final shared quote reprices within reserved capital and never increases staged contract count',async()=>{
   const h=await harness('SHORT');let staged:any;

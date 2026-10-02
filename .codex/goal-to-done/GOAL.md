@@ -1,3 +1,15 @@
+# 2026-10-02 — fixed1000 U allocation ONLY
+
+Owner cancels all proposed admission pauses, automatic recovery and emergency
+protection. This turn changes only new-source allocation to1000 U and freezes
+the native LIVE capital anchor/1000 ratio across profits, OFF/ON and restart.
+No60 U gate, independent stop, portfolio loss exit or signal exclusion; all
+normal source decisions/exits and existing LIVE controls remain as deployed.
+Preserve real wallets, fees/leverage, history, member isolation and cadence.
+The sole source edit is an optional allocation input; exact reverse edits must
+reconstruct the original source provenance. Reviewed-main release and advancing
+production receipts pending. Risk code was never published or deployed.
+
 # 2026-10-02 — final account-matched page
 
 Inverse left, shadow right; a single account switch shows all current retained

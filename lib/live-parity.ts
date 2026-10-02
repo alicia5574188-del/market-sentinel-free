@@ -44,6 +44,7 @@ export type MirrorReceipt = {
   sourceRole?: 'INVERSE_PAPER'; nativeProtectionPolicy?:typeof INVERSE_LIVE_POLICY|typeof INVERSE_LIVE_EXIT_POLICY;
   nativeProtectionPrice?:number|null; shadowSourceId?:string;
   sourceAllocationRiskRate?:number; exitPolicy?:typeof INVERSE_LIVE_EXIT_POLICY;
+  fixedAllocationPolicy?:'fixed-1000-v1';fixedLiveEquity?:number;
   retiredProtectionTags?:string[]; protectionRemovedAt?:number;
   entryPricePolicy?:'favorable-ioc-v1'|'fresh-market-v1'; entryLimitPrice?:number;
   exitExecutionPolicy?:'priority-bounded-exit-v1';sourceExitPrice?:number|null;exitObservedAt?:number;

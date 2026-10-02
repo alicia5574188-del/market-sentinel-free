@@ -2,6 +2,7 @@
 import type {ForwardState,Trade,Quote,AuditEvent} from './forward-relations.ts';
 import {inversePaidFeeView} from './paid-fee-view.ts';
 import {SHADOW_FEE_RATE,INVERSE_COST,INVERSE_FEE_POLICY,recordedInverseFeeRate,type InverseFeeStamp} from './inverse-fee.ts';
+import {FIXED_ALLOCATION_EQUITY,FIXED_ALLOCATION_POLICY} from './fixed-allocation.ts';
 export {INVERSE_COST} from './inverse-fee.ts';
 
 export const SHADOW_INVERSE_VERSION='shadow-inverse-v1';
@@ -166,6 +167,7 @@ export function inverseTrialSummary(state:ForwardState,quotes:Record<string,Quot
   const v=state.inverseTrial;if(!v)return null;const a=v.totals,paid=inversePaidFeeView(state,quotes,now)!;
   const sourceNet=paid.source.netPnl??0,inverseNet=paid.inverse.netPnl??0;
   return{paidCost:paid,version:v.version,sourceBuild:v.sourceBuild,cutoverAt:v.cutoverAt,accountingMode:v.accountingMode??null,
+    allocationPolicy:FIXED_ALLOCATION_POLICY,allocationEquity:FIXED_ALLOCATION_EQUITY,
     feePolicy:INVERSE_FEE_POLICY,feeRate:INVERSE_COST.feeRate,sourceFeeRate:SHADOW_FEE_RATE,
     reconciledAt:v.reconciledAt??null,initialEquity:v.initialComparisonEquity,
     sourceEquity:v.initialComparisonEquity+sourceNet,inverseEquity:v.initialComparisonEquity+inverseNet,
