@@ -292,13 +292,15 @@ export function mirrorCoverage(state:ForwardState|null,live:{requestedEnabled:bo
   const actual=Object.values(live.positions).filter(p=>p?.status==="OPEN");
   const valued=actual.filter(p=>typeof p?.exchangeUnrealisedPnl==="number"&&Number.isFinite(p.exchangeUnrealisedPnl)&&!!p.exchangePnlAt);
   const inverseHeld=actual.filter(p=>isInverseLiveReceipt(p?.parity));
+  const leverageTarget=(p:typeof inverseHeld[number])=>p!.parity!.sourceRole==='UNIFIED_PAPER'
+    ?p!.parity!.sourceLeverage:inverseLiveLeverage(p!.parity!.sourceLeverage);
   return {version:LIVE_PARITY_VERSION,source:LIVE_PARITY_SOURCE,connected:!!state&&!sourceError,ownerControlled:true,
     accountRole:state?.unifiedExecution?'UNIFIED_PAPER':state?.inverseTrial?'INVERSE_PAPER':'CURRENT_PAPER',
     nativeProtectionPolicy:state?.unifiedExecution?'own-branch-evidence-v1':state?.inverseTrial?INVERSE_LIVE_EXIT_POLICY:null,
     leveragePolicy:state?.unifiedExecution?'actual-intent-isolated-v1':state?.inverseTrial?INVERSE_LIVE_LEVERAGE_POLICY:null,
     leverageAdjustment:{managed:inverseHeld.length,
-      atOrBelowTarget:inverseHeld.filter(p=>p?.leverage!=null&&p.leverage>0&&p.leverage<=inverseLiveLeverage(p.parity!.sourceLeverage)).length,
-      pending:inverseHeld.filter(p=>p?.leverage!=null&&p.leverage>inverseLiveLeverage(p.parity!.sourceLeverage)).length},
+      atOrBelowTarget:inverseHeld.filter(p=>p?.leverage!=null&&p.leverage>0&&p.leverage<=leverageTarget(p)).length,
+      pending:inverseHeld.filter(p=>p?.leverage!=null&&p.leverage>leverageTarget(p)).length},
     entryPricePolicy:state?.inverseTrial?'fresh-market-v1':LIVE_ENTRY_DRIFT_POLICY,
     accountViewPolicy:'gate-authoritative-v1',
     accountViewAt:live.accountMark?.sessionAt===(live.activation?.enabledAt??0)?live.accountMark.at:null,

@@ -16,6 +16,14 @@ registerHooks({resolve(specifier,context,next){
 }});
 const {MarketStream}=await import('../worker/index-clean.ts?inverse-live-tests');
 const T=1790809800000;
+test('coverage reports the actual unified leverage target without halving it again',()=>{
+  const positions:any={legacy:{status:'OPEN',leverage:5,parity:{sourceRole:'INVERSE_PAPER',sourceLeverage:10}},
+    current:{status:'OPEN',leverage:5,parity:{sourceRole:'UNIFIED_PAPER',unifiedBranch:'RETURN',sourceLeverage:5}}};
+  const covered=()=>mirrorCoverage(null,{requestedEnabled:false,activation:null,entries:{},positions,entrySkips:{}},null).leverageAdjustment;
+  assert.deepEqual(covered(),{managed:2,atOrBelowTarget:2,pending:0});
+  positions.current.leverage=10;
+  assert.deepEqual(covered(),{managed:2,atOrBelowTarget:1,pending:1});
+});
 function sourceTrade(side:'LONG'|'SHORT',now:number):Trade {
   const stop=side==='LONG'?98:102;
   return {id:'source-'+side,symbol:'TEST_USDT',side,status:'OPEN',openedAt:now,closedAt:null,entryPrice:100,exitPrice:null,
