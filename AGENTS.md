@@ -1,3 +1,21 @@
+# 2026-10-02 — owner correction: independent dual-thesis research and execution
+
+Owner rejects the shadow-dependent v1 wrapper, explicitly requiring extraction
+of prior inverse-return and genuine trend-continuation rules into one new
+research→entry→holding→exit system. Active new intents must not require another
+wallet/order lifecycle. Research and all user-facing explanations refer to the
+actual branch/direction/conditions; no active shadow account tab/comparison.
+Preserve fixed1000 allocation/frozen LIVE anchor, current account/history and
+native identities/manual controls, fees, lot/margin/risk bounds and cadence.
+Extract existing opportunity validation and geometric payoff rules; do not
+replace them with unrelated signals or claim equal future returns. Original
+frozen files remain byte-identical for tests/provenance; retired account evidence
+is preserved as inactive legacy data. Transition open obligations without
+close/reopen or reset. Scope includes implementation, tests and original
+reviewed-main publication already explicitly authorized at22:14. No private
+research publication or real exchange test. Screenshot reset observed; re-read
+current account identity rather than asserting the previous generation.
+
 # 2026-10-02 — owner-authorized unified execution implementation
 
 Owner now asks to complete RETURN / CONTINUATION implementation and its actual

@@ -69,7 +69,7 @@ export function confirmAcceptance(input:{area:ReactionArea|null;epsilon:number;r
 
 function audit(s:ForwardState,t:Trade,now:number,kind:'ENTRY'|'EXIT'|'PROTECTION',reason:string){
   s.events.unshift({id:`a${s.startedAt}-${++s.revision}`,at:now,kind,subject:t.id,reason,
-    detail:{strategy:UNIFIED_EXECUTION_VERSION,branch:t.unified?.branch??'LEGACY',sourceId:t.unified?.sourceId??null}});
+    detail:{strategy:t.unified?.version??UNIFIED_EXECUTION_VERSION,branch:t.unified?.branch??'LEGACY',sourceId:t.unified?.sourceId??null}});
   s.events=s.events.slice(0,160);
 }
 function explain(t:Trade,now:number,kind:'ENTRY'|'CONFIRM'|'REDUCE'|'EXIT',reason:string){
@@ -85,7 +85,7 @@ export function closeUnifiedTrade(s:ForwardState,t:Trade,q:Quote,now:number,reas
   t.status='CLOSED';t.closedAt=now;t.exitPrice=price;t.lastPrice=price;t.lastQuoteAt=q.observedAt;
   t.grossPnl=gross+(r?.gross??0);t.exitFee=paid+(r?.fees??0);t.fundingAllowance=0;t.netPnl=t.grossPnl-t.entryFee-t.exitFee;
   t.exitReason=reason;t.unified!.decision='EXIT';t.unified!.holdReason=detail;explain(t,now,'EXIT',detail);
-  t.exitAudit={trigger:reason,at:now,detail,evidence:{authority:UNIFIED_EXECUTION_VERSION,branch:t.unified!.branch,
+  t.exitAudit={trigger:reason,at:now,detail,evidence:{authority:t.unified!.version,branch:t.unified!.branch,
     sourceId:t.unified!.sourceId,quoteAt:q.observedAt,administrative,quoteFresh:fresh(q,now),stop:t.stopPrice,confirmationAt:t.unified!.confirmation?.at??null}};
   s.balance+=gross-paid;s.grossPnl+=gross;s.fees+=paid;s.turnover+=t.quantity*price;s.resolved++;if(t.netPnl>0)s.wins++;
   if(r)Object.assign(t,{quantity:r.initialQuantity,contracts:r.initialContracts,notional:r.initialNotional,margin:r.initialMargin,plannedRisk:r.initialRisk});
@@ -215,7 +215,7 @@ function syncLegacy(s:ForwardState,ref:ForwardState,now:number){
   }
   s.history=s.history.slice(0,240);
 }
-function manageContinuation(s:ForwardState,t:Trade,q:Quote,now:number,rows:Candle[],minuteRows:Candle[]|undefined,contract?:Contract){
+export function manageContinuation(s:ForwardState,t:Trade,q:Quote,now:number,rows:Candle[],minuteRows:Candle[]|undefined,contract?:Contract){
   const u=t.unified!,sign=d(t.side),price=exit(t.side,q),plan=t.entryContext!.winnerPlan!,closed=closedFiveMinutes(rows,now);
   if(sign*(price-t.stopPrice)<=0)return closeUnifiedTrade(s,t,q,now,'CONTINUATION_STRUCTURE_EXIT','新延续仓的结构保护边界被触及');
   const boundary=t.side==='LONG'?u.region!.upper:u.region!.lower,last=closed.slice(-2);
@@ -350,3 +350,4 @@ export function unifiedExecutionSummary(s:ForwardState,quotes:Record<string,Quot
     episodes:Object.values(u.episodes).sort((a,b)=>b.createdAt-a.createdAt).slice(0,30).map(e=>({...e})),droppedEpisodes:u.droppedEpisodes,
     executionPricePolicy:'actual-side-bbo-v1',holdingPolicy:'own-branch-evidence-v1'};
 }
+export {reduce as reduceUnifiedTrade};

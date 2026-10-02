@@ -398,6 +398,18 @@ function unifiedFixture(h:Awaited<ReturnType<typeof harness>>,branch:'RETURN'|'C
     entryReason:'test',holdReason:'test',exitCondition:'test',lastDecisionAt:openedAt,lastBarAt:0,decision:'HOLD',explanationEvents:[]};
   return t;
 }
+for(const branch of ['RETURN','CONTINUATION'] as const)test(`real Worker executes independent ${branch} intent and retains native close/reduction fences`,async()=>{
+  const h=await harness('LONG'),cutoverAt=Date.now()-120,t=unifiedFixture(h,branch,cutoverAt+20);
+  t.unified!.version='dual-thesis-v2';
+  h.state.directStrategy={version:'dual-thesis-v2',cutoverAt,retiredAt:cutoverAt,plans:{},completedConversions:0,summary:'synthetic independent strategy'};
+  const enabledAt=h.stream.runtime.live.activation.enabledAt;
+  await h.stream.syncLive(Date.now());await h.stream.syncLive(Date.now());
+  assert.equal(h.calls.entries,1);assert.equal(h.positions[0].leverage,'5');assert.equal(h.calls.stops.length,branch==='RETURN'?0:1);
+  assert.equal(h.stream.runtime.live.activation.enabledAt,enabledAt);assert.equal(h.stream.runtime.live.activation.sourcePolicy,'direct-thesis-live-v2');
+  assert.equal(h.stream.liveMirrorView().accountRole,'DIRECT_STRATEGY');
+  t.status='CLOSED';t.closedAt=Date.now();t.exitReason='RETURN_EVENT_COMPLETE';h.state.positions=[];h.state.history=[t];
+  await h.stream.syncLive(Date.now());assert.equal(h.calls.closes,1);assert.equal(h.calls.entries,1);assert.equal(h.stream.runtime.live.requestedEnabled,true);
+});
 for(const branch of ['RETURN','CONTINUATION'] as const)test(`real Worker executes unified ${branch} at 5x, honors committed reduction/close and deduplicates`,async()=>{
   const h=await harness('LONG'),t=unifiedFixture(h,branch);await h.stream.syncLive(Date.now());await h.stream.syncLive(Date.now());
   assert.equal(h.calls.entries,1);assert.equal(h.positions[0].leverage,'5');

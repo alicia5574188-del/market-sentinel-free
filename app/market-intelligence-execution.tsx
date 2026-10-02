@@ -4,6 +4,17 @@ import {BEIJING_TIME_ZONE} from "../lib/beijing-time.ts";
 import {type forwardSummary} from "../lib/forward-relations.ts";
 
 type View=ReturnType<typeof forwardSummary>;
+function DirectExecution({data,now,liveEnabled,liveOverview}:{data:NonNullable<View>;now:number;liveEnabled:boolean;liveOverview?:{copied?:number|null;eligible?:number|null}}){
+  const ds=data.directStrategy!,phase=(v:string)=>({READY:'当前可执行',VALIDATING:'验证推进响应',WAIT_LOCATION:'等待合适位置',HOLDING:'已执行',OBSERVE:'观察'}[v]??v);
+  return <><section className="fr-section" data-testid="direct-research-execution"><div className="fr-section-head"><h2>研究与交易计划</h2><span>更新 {clock(data.marketIntelligence?.updatedAt)}</span></div>
+    <p>{marketChangeText(data)}</p><p>{ds.summary}</p><p>市场同步上涨或下跌只提供背景。每个币分别判断：这次推进更可能回退，还是已经形成可以继续跟随的趋势。</p>
+    <div className="fr-journal">{ds.plans.map(p=><article key={p.id}><time>{p.symbol.replace('_',' / ')} · {p.branch==='RETURN'?'回退':'趋势延续'} · {side(p.side)}</time><div><b>{phase(p.phase)}</b><p>进场：{p.reason}</p><p>持仓：{p.holdReason}</p><p>退出：{p.exitCondition}</p>{p.confirmation&&<p>结构确认 {clock(p.confirmation.at)} · {p.confirmation.path==='HOLD_OUTSIDE'?'区域外连续推进':'回踩承接后重新推进'} · 保护位置 {p.confirmation.stop}</p>}</div></article>)}</div>
+    {!ds.plans.length&&<p>等待当前已完成的结构与新鲜盘口形成交易计划。</p>}</section>
+    <section className="fr-section"><div className="fr-section-head"><h2>当前持仓依据</h2><span>{data.positions.length} 笔策略订单</span></div>
+      {liveEnabled&&<p>实盘已跟上 {liveOverview?.copied??'—'} / 应执行 {liveOverview?.eligible??'—'}。实际成交及结算以实盘账户记录为准。</p>}
+      <div className="fr-journal">{data.positions.map(t=><article key={t.id}><time>{t.symbol.replace('_',' / ')} · {side(t.side)} · {t.unified?.branch==='RETURN'?'回退':'趋势延续'}</time><div><b>{t.unified?.decision==='REVIEW'?'复核持仓依据':'按计划持有'}</b><p>进场：{t.unified?.entryReason??t.entryContext?.reason}</p><p>持仓：{t.unified?.holdReason}</p><p>退出：{t.unified?.exitCondition}</p><p>最近判断 {clock(t.unified?.lastDecisionAt)} · 持有 {Math.max(0,Math.round((now-t.openedAt)/60000))} 分钟</p></div></article>)}</div>
+      {!data.positions.length&&<p>当前没有策略持仓。</p>}</section></>;
+}
 const bias=(v?:string)=>v==="BULLISH"?"偏多":v==="BEARISH"?"偏空":v?"中性":"待确认";
 const evolution=(v?:string)=>({
   ROTATIONAL:"轮动/震荡",TREND_FORMING:"趋势正在形成",EXPANDING:"方向正在扩张",STABLE_TREND:"稳定趋势",
@@ -78,9 +89,10 @@ function positionWatch(t:View["positions"][number]){
   return t.positionIntelligence?.summary??"观察原入场理由是否仍成立。";
 }
 
-export default function MarketIntelligenceExecution({data,now:_,liveEnabled,liveOverview}:{
-  data:View|null;now:number;liveEnabled:boolean;liveOverview?:{operational:boolean;lastSyncAt:number|null;positionCount:number};
+export default function MarketIntelligenceExecution({data,now,liveEnabled,liveOverview}:{
+  data:View|null;now:number;liveEnabled:boolean;liveOverview?:{operational:boolean;lastSyncAt:number|null;positionCount:number;copied?:number|null;eligible?:number|null};
 }){
+  if(data?.directStrategy)return <DirectExecution data={data} now={now} liveEnabled={liveEnabled} liveOverview={liveOverview}/>;
   const mi=data?.marketIntelligence,n=mi?.narrative,liquidity=mi?.liquidity,
     opportunities=[...(data?.opportunities??[])].sort((a,b)=>Number(b.eligible)-Number(a.eligible)||b.score-a.score),
     positions=[...(data?.positions??[])],
