@@ -9,7 +9,7 @@ export type ReturnLogic={moveSide:'LONG'|'SHORT';entryPrice:number;openedAt:numb
   firstAdvanceAt:number|null;plan:WinnerPlan;management?:WinnerManagement;assessment?:PositionIntelligenceState;
   entryResidual:number;entryRelativeStrength:number;entryRemainingSpaceRate:number;entryScore:number;validated:boolean;pendingExitReason?:string};
 export type DirectPlan={id:string;symbol:string;at:number;quoteAt:number;branch:UnifiedBranch;side:'LONG'|'SHORT';
-  phase:'OBSERVE'|'VALIDATING'|'READY'|'HOLDING'|'WAIT_LOCATION';reason:string;holdReason:string;exitCondition:string;
+  phase:'OBSERVE'|'VALIDATING'|'READY'|'HOLDING'|'WAIT_LOCATION'|'EXECUTING';reason:string;holdReason:string;exitCondition:string;
   confirmation:Acceptance|null;region:ReactionArea|null;candidate:Opportunity;continuationSeen?:boolean;consumed?:boolean};
 export type DirectMemory={id:string;region:ReactionArea|null;continuationSeen:boolean};
 export type DirectStrategy={version:typeof DIRECT_STRATEGY_VERSION;cutoverAt:number;plans:Record<string,DirectPlan>;memory?:Record<string,DirectMemory>;

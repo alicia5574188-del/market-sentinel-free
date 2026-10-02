@@ -10,6 +10,7 @@ import {remainingTradeFraction} from './trade-realization.ts';
 import {forwardProtectionChanged} from './forward-protection-checkpoint.ts';
 import {DIRECT_STRATEGY_VERSION,type DirectPlan,type ReturnLogic} from './direct-strategy-types.ts';
 import type {Acceptance} from './unified-execution-types.ts';
+import {advancePaperExecution,queuePaperEntry,paperFilled,PAPER_EXECUTION_VERSION} from './paper-execution.ts';
 export {DIRECT_STRATEGY_VERSION} from './direct-strategy-types.ts';
 export {directOpportunityView,directStrategySummary} from './direct-strategy-view.ts';
 const sign=(side:'LONG'|'SHORT')=>side==='LONG'?1:-1;
@@ -20,7 +21,8 @@ const mark=(side:Trade['side'],q:Quote)=>side==='LONG'?q.bestBid:q.bestAsk;
 const COST=2*(PAPER_COST.feeRate+PAPER_COST.slippageRate),FEE=.0005;
 type Input=Parameters<typeof advanceForward>[0];
 function note(s:ForwardState,t:Trade,now:number,reason:string){
-  s.events.unshift({id:`a${s.startedAt}-${++s.revision}`,at:now,kind:'ENTRY',subject:t.id,reason,
+  s.events.unshift({id:`a${s.startedAt}-${++s.revision}`,at:now,kind:paperFilled(t)?'ENTRY':'DATA',subject:t.id,
+    reason:paperFilled(t)?reason:`发出执行指令，尚未成交：${reason}`,
     detail:{strategy:DIRECT_STRATEGY_VERSION,branch:t.unified!.branch}});s.events=s.events.slice(0,160);
 }
 function legacySource(s:ForwardState,t:Trade){
@@ -112,15 +114,16 @@ export function researchDirectPlan(s:ForwardState,o:Opportunity,input:Input,prev
     exitCondition:branch==='RETURN'?'回退兑现、推进衰减确认结束，或本币持续趋势确认使回退依据失效':'结构保护被触及、区域接受失败，或本币持有依据持续失效',
     confirmation:a,region:area,candidate:structuredClone(o),continuationSeen:!!seen,consumed:previous?.id===o.id&&previous.consumed};
   const held=s.positions.find(t=>t.symbol===o.symbol&&t.unified);
-  if(held){const u=held.unified!;Object.assign(plan,{branch:u.branch,side:held.side,phase:'HOLDING',consumed:true,
+  if(held){const u=held.unified!;Object.assign(plan,{branch:u.branch,side:held.side,phase:!paperFilled(held)||held.paperOrder?.action?'EXECUTING':'HOLDING',consumed:true,
     reason:u.entryReason,holdReason:u.holdReason,exitCondition:u.exitCondition,confirmation:structuredClone(u.confirmation),region:structuredClone(u.region)});}
   return plan;
 }
 function currentRisk(t:Trade,quotes:Record<string,Quote>){
+  if(!paperFilled(t))return t.plannedRisk;
   const q=quotes[t.symbol],p=q?mark(t.side,q):t.lastPrice;
   return Math.max(t.plannedRisk,t.quantity*(Math.max(0,-sign(t.side)*(p-t.entryPrice))+p*FEE));
 }
-export function openDirectPlan(s:ForwardState,p:DirectPlan,q:Quote,c:Contract,now:number,quotes:Record<string,Quote>,predecessor?:Trade,minutePath?:NonNullable<Input['minutePaths']>[string]){
+export function openDirectPlan(s:ForwardState,p:DirectPlan,q:Quote,c:Contract,now:number,quotes:Record<string,Quote>,predecessor?:Trade,minutePath?:NonNullable<Input['minutePaths']>[string],timing?:Input['paperTiming']){
   if(!finitePositive(c.quantoMultiplier)||!finitePositive(c.leverageMax)||!Number.isFinite(c.maintenanceRate))return'合约规格未确认';
   const o=p.candidate,a=p.confirmation,price=fill(p.side,q),
     g=p.branch==='CONTINUATION'&&a?directContinuationGeometry(s,o,a,q,c):null,
@@ -192,7 +195,8 @@ export function openDirectPlan(s:ForwardState,p:DirectPlan,q:Quote,c:Contract,no
         entryRelativeStrength:o.relativeStrength??.5,portfolioRiskCharge:riskBudget,winnerPlan:p.branch==='CONTINUATION'?winnerPlan:undefined,
         tradePlan:p.branch==='CONTINUATION'?'WINNER_TREND':undefined},
       forecast:{remainingNetRate:o.netRemainingSpaceRate,quality:o.score,sizingEquity:1000}};
-  s.balance-=t.entryFee;s.fees+=t.entryFee;s.turnover+=notional;s.positions.push(t);s.lastEntryAt[t.symbol]=now;s.lastSide[t.symbol]=t.side;
+  if(s.paperExecution)queuePaperEntry(s,t,timing??{prepareMs:2000,confirmMs:0,basis:'EXECUTION_CLOCK',samples:0});
+  else{s.balance-=t.entryFee;s.fees+=t.entryFee;s.turnover+=notional;s.positions.push(t);s.lastEntryAt[t.symbol]=now;s.lastSide[t.symbol]=t.side;}
   s.consumedTheses[o.id]=now;p.consumed=true;p.phase='HOLDING';note(s,t,now,p.reason);
   return undefined;
 }
@@ -233,16 +237,18 @@ export function manageDirectReturn(s:ForwardState,t:Trade,q:Quote,input:Input){
 }
 function manageDirect(s:ForwardState,input:Input,marketReady:boolean){
   const ds=s.directStrategy!,now=input.now,prior=ds.plans;
+  advancePaperExecution(s,input.quotes,input.contracts,now);
   if(s.positions.some(t=>!t.unified))drainLegacyForwardPositions(s,input);
   if(marketReady){const plans:Record<string,DirectPlan>={};
     for(const o of s.opportunities.slice(0,30)){
       const p=researchDirectPlan(s,o,input,prior[o.symbol]),held=s.positions.find(t=>t.symbol===o.symbol);
-      if(held){p.phase='HOLDING';p.consumed=true;}plans[o.symbol]=p;
+      if(held){p.phase=!paperFilled(held)||held.paperOrder?.action?'EXECUTING':'HOLDING';p.consumed=true;}plans[o.symbol]=p;
     }
     ds.plans=plans;
   }
   for(const t of [...s.positions]){
     if(!t.unified)continue;
+    if(!paperFilled(t)||t.paperOrder?.action?.kind==='CLOSE')continue;
     const q=input.quotes[t.symbol];if(!freshQuote(q,now))continue;
     t.lastPrice=mark(t.side,q!);t.lastQuoteAt=q!.observedAt;const signed=sign(t.side)*(t.lastPrice/t.entryPrice-1);
     t.favorable=Math.max(t.favorable,signed);t.adverse=Math.max(t.adverse,-signed);t.peakPnlRate=t.favorable;
@@ -261,7 +267,7 @@ function manageDirect(s:ForwardState,input:Input,marketReady:boolean){
         const p=researchDirectPlan(s,candidate,input);p.region=structuredClone(region);p.branch='CONTINUATION';p.side=a!.side;p.confirmation=a;p.continuationSeen=true;p.consumed=false;
         // New entry uses current space, own fees/risk and a separate identity.
         delete s.consumedTheses[candidate.id];
-        const error=openDirectPlan(s,p,q!,input.contracts[t.symbol]!,now,input.quotes,t);
+        const error=openDirectPlan(s,p,q!,input.contracts[t.symbol]!,now,input.quotes,t,undefined,input.paperTiming);
         if(error){p.phase='WAIT_LOCATION';p.reason=error;p.consumed=true;s.consumedTheses[candidate.id]=now;}ds.plans[t.symbol]=p;
       }
       continue;
@@ -275,18 +281,20 @@ function manageDirect(s:ForwardState,input:Input,marketReady:boolean){
   if(marketReady)for(const p of Object.values(ds.plans).sort((a,b)=>b.candidate.score-a.candidate.score)){
     if(p.branch!=='CONTINUATION'||p.phase!=='READY'||p.consumed||!p.candidate.eligible||s.positions.some(t=>t.openedAt===now))continue;
     const q=input.quotes[p.symbol],c=input.contracts[p.symbol];if(!q||!c)continue;
-    const error=openDirectPlan(s,p,q,c,now,input.quotes);if(error){p.phase='WAIT_LOCATION';p.reason=error;}else break;
+    const error=openDirectPlan(s,p,q,c,now,input.quotes,undefined,undefined,input.paperTiming);if(error){p.phase='WAIT_LOCATION';p.reason=error;}else break;
   }
-  ds.summary=`回退持仓 ${s.positions.filter(t=>t.unified?.branch==='RETURN').length} 笔；趋势延续 ${s.positions.filter(t=>t.unified?.branch==='CONTINUATION').length} 笔。按每个币自己的推进、区域接受与剩余空间决定，不跟随全市场统一翻向。`;
+  ds.summary=`回退持仓 ${s.positions.filter(t=>paperFilled(t)&&t.unified?.branch==='RETURN').length} 笔；趋势延续 ${s.positions.filter(t=>paperFilled(t)&&t.unified?.branch==='CONTINUATION').length} 笔。${s.paperExecution?`等待成交 ${s.positions.filter(t=>!paperFilled(t)||t.paperOrder?.action).length} 笔。`:''}按每个币自己的推进、区域接受与剩余空间决定，不跟随全市场统一翻向。`;
 }
 export function advanceDirectStrategy(input:Input){
   const state=normalizeForward(structuredClone(input.state),input.now),activated=migrateDirectStrategy(state,input.now);
+  const transportActivated=!!input.paperTiming&&!state.paperExecution;
+  if(transportActivated)state.paperExecution={version:PAPER_EXECUTION_VERSION,cutoverAt:input.now,cancelled:[]};
   const adapter:DirectExecutionAdapter={manage:(s,ready)=>manageDirect(s,{...input,state:s},ready),
     open:(s,o,q,c,now,response)=>{
       if(s.positions.some(t=>t.openedAt===now))return'本次执行已建立新仓，下一次继续核对组合容量';
       const p=researchDirectPlan(s,o,{...input,state:s},s.directStrategy!.plans[o.symbol]);s.directStrategy!.plans[o.symbol]=p;
       if(p.branch==='CONTINUATION')return'本币已经进入趋势分支，按当前趋势位置执行';
-      const error=openDirectPlan(s,p,q,c,now,input.quotes,undefined,input.minutePaths?.[o.symbol]);
+      const error=openDirectPlan(s,p,q,c,now,input.quotes,undefined,input.minutePaths?.[o.symbol],input.paperTiming);
       if(!error){const t=s.positions.at(-1)!;t.entryContext!.entryResponse={version:'direct-entry-response-v2',startedAt:response.validation.startedAt,
         confirmedAt:now,elapsedMs:now-response.validation.startedAt,samples:response.validation.samples,advanceRate:response.decision.currentAdvanceRate,
         bestAdvanceRate:response.decision.bestAdvanceRate,maxAdverseRate:response.decision.maxAdverseRate,supportFamilies:response.decision.supportFamilies,fastLane:response.decision.fastLane};}
@@ -295,6 +303,6 @@ export function advanceDirectStrategy(input:Input){
   const next=advanceForward({...input,state,directAdapter:adapter,allocationEquity:1000});
   next.state.latestReason=next.state.directStrategy!.summary;
   next.protectionChanged=next.protectionChanged||forwardProtectionChanged(input.state,next.state);
-  next.changed=next.changed||activated;
+  next.changed=next.changed||activated||transportActivated;
   return next;
 }

@@ -1,3 +1,20 @@
+# 2026-10-03 — PAPER follows LIVE execution steps
+
+Owner explicitly requires simulation entry/reduction/exit to follow native
+execution steps, superseding instantaneous PAPER fills for this scoped task.
+Keep dual-thesis signals/geometry, fixed1000 allocation, original identities,
+balances/history/open obligations, new-only LIVE activation, manual intent,
+credentials/member isolation and frozen source provenance. Share the existing
+pure LIVE admission builder; commit one logical instruction for both transports,
+then separately confirm PAPER against later fresh observed Gate book depth.
+Never delay LIVE until PAPER fills or treat submission/absent depth as a fill.
+Persist pending actions, partial quantities, exact cash/fees and restart dedup.
+No reset, new request/timer, cadence/cap change or real-money verification trade.
+Document modeled matching, latency fallback, unavailable liquidation/funding/
+exchange-failure parity and unchanged old history. Run original gates plus
+PAPER execution, Worker commit/dispatch and partial restoration regressions.
+Use the original reviewed-main deployment and advancing production receipts.
+
 # 2026-10-03 — bounded actual-order exit research only
 
 Owner authorizes supplementing actual dual-thesis >10U adverse floating exit

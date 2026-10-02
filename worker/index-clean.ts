@@ -66,6 +66,7 @@ import { EquityReader } from "../lib/equity-reader.ts";
 import { EQUITY_CURVE_VERSION } from "../lib/equity-curve.ts";
 import {LIVE_EQUITY_VERSION,LIVE_EQUITY_SAMPLE_MS,LiveEquityReader,prepareLiveEquity,type LiveEquityHead} from "../lib/live-equity.ts";
 import {buildLiveReview,readLiveReviewPage} from '../lib/live-review.ts';
+import {executionTiming,paperSourceTrade} from '../lib/paper-execution.ts';
 import {adjustInverseLeverage} from '../lib/live-leverage.ts';
 import { resourceDay, rollResourceDay, RESOURCE_DAY_POLICY, type ResourceCounters } from "../lib/resource-day.ts";
 import {isTransientLiveReadErrorText,liveReadTimeoutDecision} from "../lib/live-read-resilience.ts";
@@ -519,6 +520,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private forwardMinuteCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
   private forwardMinuteRetryAt = new Map<string,number>();
   private gateStream = new GateStreamingFeed();
+  private paperBooks=new Map<string,{observedAt:number;bids:{price:number;size:number}[];asks:{price:number;size:number}[]}>();
   private marketHub = new MarketDataHub();
   private forwardMinuteQuoteBars: Record<string,{minute:number;open:number;high:number;low:number;close:number;samples:number;
     firstAt:number;lastAt:number;completed:Array<{time:number;open:number;high:number;low:number;close:number;volume:number}>}> = {};
@@ -1259,6 +1261,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const next = advanceShadowInverse({ state: previous, now, paths: this.strategyCandles,minutePaths:this.forwardMinutePaths(),
         daily:this.turnDailyCandles,quotes:executionQuotes,analysisQuotes:this.forwardAnalysisQuotes(now),contracts:this.regimeContracts(),
         entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue,
+        paperTiming:executionTiming([...Object.values(this.runtime.live.entries).flatMap(e=>e?.parity?[e.parity]:[]),
+          ...this.liveHistory.flatMap(p=>p.parity?[p.parity]:[]),...Object.values(this.runtime.live.positions).flatMap(p=>p?.parity?[p.parity]:[])]),
         research:{rolling:this.shadowResearch.market[0]?.rolling??null},reviewTrace:event=>{if(reviewEvents.length<128)reviewEvents.push(event);} });
       try{captureTradeReviews(previous,next.state,now,FORWARD_BUILD_SHA,STRATEGY_FINGERPRINT,executionQuotes);}
       catch{this.reviewDiagnosticError="TRADE_REVIEW_CAPTURE_FAILED";}
@@ -1270,7 +1274,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         // in the same atomic commit, not a new strategy/account or per-tick log.
         const bound=new Set([...Object.values(this.runtime.live.entries).flatMap(e=>e?.mirrorSourceId?[e.mirrorSourceId]:[]),
           ...Object.values(this.runtime.live.positions).flatMap(p=>p?.mirrorSourceId?[p.mirrorSourceId]:[])]);
-        const closures=next.state.history.filter(t=>bound.has(t.id)&&!this.mirrorClosures.has(t.id));
+        const closes=[...next.state.positions.map(paperSourceTrade).filter(t=>t.status==='CLOSED'),
+          ...next.state.history,...next.state.paperExecution?.cancelled??[]];
+        const closures=closes.filter(t=>(bound.has(t.id)||t.paperOrder?.phase==='CANCELLED')&&!this.mirrorClosures.has(t.id));
         for(const t of closures)prepared.entries[`${LIVE_PARITY_PREFIX}source-close:${t.id}`]=structuredClone(t);
         prepared.writes+=closures.length;
         // All extra persistence consumes the existing non-alarm write reserve.
@@ -1280,6 +1286,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         next.state.storage.layout=FORWARD_PAGED_STATE_VERSION;next.state.storage.sampleIntegrity="raw-sha256";
         this.forwardCompression=prepared.compression;
         for(const t of closures)this.mirrorClosures.set(t.id,structuredClone(t));
+        const cancelled=new Set(next.state.paperExecution?.cancelled.map(t=>t.id)??[]);
+        for(const [id,t]of this.mirrorClosures)if(t.paperOrder?.phase==='CANCELLED'&&!bound.has(id)&&!cancelled.has(id))this.mirrorClosures.delete(id);
       } else if (next.protectionChanged || state.directStrategy&&this.forwardPendingProtection) {
         // Only a new decision-relevant peak/confirmation requests this compact
         // write. Ordinary quote/audit changes do not write or create archives.
@@ -1326,7 +1334,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }catch{this.reviewDiagnosticError="CANDIDATE_REVIEW_CAPTURE_FAILED";}
       // Both realtime and candle lanes dispatch the SAME committed source.
       // Mark-only observations do not schedule more private reads.
-      const lifecycle=(s:ForwardState)=>JSON.stringify(s.positions.map(t=>[t.id,t.contracts,t.inverseCopy||t.unified?.branch==='RETURN'?null:t.stopPrice]).sort());
+      const lifecycle=(s:ForwardState)=>JSON.stringify(s.positions.map(paperSourceTrade).map(t=>[t.id,t.status,t.contracts,
+        t.sourceReductionIntent?.sequence,t.inverseCopy||t.unified?.branch==='RETURN'?null:t.stopPrice]).sort());
       if(lifecycle(previous)!==lifecycle(next.state))this.dispatchCommittedLiveSource();
     } catch (error) { this.forwardError = safeError(error); }
     finally { this.forwardBusy = false; }
@@ -2520,9 +2529,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private async executeCommittedSourceReduction(client:GateLiveClient,position:LivePosition,contracts:number,observedAt:number){
     const source=this.currentMirrorSource(position.id);
-    if(position.exitRequestedAt||!position.parity||source.status!=='OPEN'||!source.trade.realization)return;
+    if(position.exitRequestedAt||!position.parity||source.status!=='OPEN'||!(source.trade.sourceReductionIntent?.sequence||source.trade.realization))return;
     let price='0';
-    const first=!position.sourceReduction||position.sourceReduction.sourceSequence!==source.trade.realization.sequence;
+    const first=!position.sourceReduction||position.sourceReduction.sourceSequence!==(source.trade.sourceReductionIntent?.sequence??source.trade.realization!.sequence);
     if(first&&isCommittedLiveReceipt(position.parity)&&this.mirrorQuoteReady(position.symbol)){
       try{const q=this.runtime.evidence[position.symbol];price=liveExitPriceLimit(position.side,q.bestBid??0,q.bestAsk??0,this.runtime.tickSize[position.symbol]);}catch{/* immediate market fallback */}
     }
@@ -3455,10 +3464,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(!row?.fresh||row.bestBid==null||row.bestAsk==null||now-row.observedAt>STALE_AFTER_MS)return[];
       const external=this.marketHub.quote(symbol,now),mid=(row.bestBid+row.bestAsk)/2,
         meta=this.runtime.contractMeta[symbol],book=meta?this.gateStream.book(symbol,this.runtime.tickSize[symbol]??1e-8,meta.quantoMultiplier,now):null,
+        executionBook=book??this.paperBooks.get(symbol),
         bidDepth=book?.bids.slice(0,5).reduce((n,x)=>n+x.size,0)??0,askDepth=book?.asks.slice(0,5).reduce((n,x)=>n+x.size,0)??0,
         gateImbalance=bidDepth+askDepth>0?(bidDepth-askDepth)/(bidDepth+askDepth):0,
         bookImbalance=(external?.liquiditySourceCount??0)>=2?external!.bookImbalance:gateImbalance;
       return[[symbol,{bestBid:row.bestBid,bestAsk:row.bestAsk,observedAt:row.observedAt,fresh:true,
+        ...(executionBook&&executionBook.observedAt<=now&&now-executionBook.observedAt<=STALE_AFTER_MS?{bids:executionBook.bids.slice(0,50),asks:executionBook.asks.slice(0,50),
+          ...('sequence' in executionBook&&typeof executionBook.sequence==='number'?{bookSequence:executionBook.sequence}:{})}:{}),
         entryReady:this.symbolEntryReady(symbol,now),sourceCount:external?.sourceCount??0,
         disagreementRate:external?.disagreementRate??0,sourceBreadth:external?.sourceBreadth??0,
         directionalAgreement:external?.directionalAgreement??.5,medianShortMove:external?.medianShortMove??0,
@@ -3585,6 +3597,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const {snapshot}=result.value,bid=snapshot.bids[0]?.price??0,ask=snapshot.asks[0]?.price??0,at=snapshot.observedAt;
       const fresh=bid>0&&ask>=bid&&at>0&&Math.max(now,Date.now())-at<=STALE_AFTER_MS;
       if(!fresh){this.suspendSymbol(symbol,now,"Gate盘口失鲜",now+LOOP_MS);continue;}
+      this.paperBooks.set(symbol,{observedAt:at,bids:snapshot.bids.slice(0,50),asks:snapshot.asks.slice(0,50)});
+      while(this.paperBooks.size>FORWARD_EXECUTION_BBO_CAP)this.paperBooks.delete(this.paperBooks.keys().next().value!);
       const recovery=this.acceptFreshSymbol(symbol,now,at,true);
       if(recovery.recovered)this.runtime.feedQuality.recoveries++;
       this.sessionWarmup[symbol]=Math.min(1,(this.sessionWarmup[symbol]??0)+1);
@@ -3853,6 +3867,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const s=this.forwardState,now=Date.now();
       const sourceState=s?{version:s.version,startedAt:s.startedAt,initialEquity:s.initialEquity,balance:s.balance,
         positions:s.positions.map(directExecutionTradeProjection),history:s.history.map(directExecutionTradeProjection),policyVersion:s.policyVersion,storage:s.storage,
+        ...(s.paperExecution?{paperExecution:{...s.paperExecution,cancelled:s.paperExecution.cancelled.map(directExecutionTradeProjection)}}:{}),
         ...(s.directStrategy?{directStrategy:{version:s.directStrategy.version,cutoverAt:s.directStrategy.cutoverAt}}:
           s.unifiedExecution?{unifiedExecution:{version:s.unifiedExecution.version,cutoverAt:s.unifiedExecution.cutoverAt}}:{}),
         // Only the marks required by strict inverse PAPER equity. No second
@@ -3873,6 +3888,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const id=url.searchParams.get("id")??"",openedAt=Number(url.searchParams.get("openedAt"));
       if(!/^(?:ft-|iv-|ue-)[a-zA-Z0-9_-]{1,160}$/.test(id)||!Number.isSafeInteger(openedAt)||openedAt<=0)return json({error:"invalid source"},400);
       const current=sourceLifecycle(this.forwardState,id);if(current.status!=="UNKNOWN")return json({trade:current.status==="CLOSED"?current.trade:null,nextCursor:null});
+      const intentClose=await this.ctx.storage.get<ForwardState['positions'][number]>(`${LIVE_PARITY_PREFIX}source-close:${id}`);
+      if(intentClose?.id===id&&intentClose.status==='CLOSED')return json({trade:intentClose,nextCursor:null});
       const prefix=`${FORWARD_STORAGE}archive:`,cursor=url.searchParams.get("cursor");
       if(cursor&&(!cursor.startsWith(prefix)||cursor.length>150))return json({error:"invalid cursor"},400);
       const rows=await this.ctx.storage.list<{trades?:ForwardState["history"]}>({prefix,limit:32,

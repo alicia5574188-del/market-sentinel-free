@@ -2,10 +2,11 @@ import {RESEARCH_PLAN_VERSION,researchPlanContext,type PlanResearchDecision} fro
 import {assertInverseTrade,assertInverseTrial,inverseTrialSummary,sourceDecisionState,shadowCapsule,applyInverseSourceTrade,migrateInverseSamePrice,INVERSE_COST,type InverseCopy,type InverseTrial} from './shadow-inverse-ledger.ts';
 import type {UnifiedTrade,UnifiedExecution} from './unified-execution-types.ts';
 import type {DirectStrategy} from './direct-strategy-types.ts';
+import {assertPaperExecution,assertPaperRealization,type PaperRealization} from './paper-execution.ts';
 import {directStrategySummary,directOpportunityView} from './direct-strategy-view.ts';
 import {unifiedExecutionSummary,unifiedReferenceState,closeUnifiedTrade} from './unified-execution.ts';
 import {advanceWinnerManagement, trendCore, WINNER_POLICY_VERSION, type WinnerPlan, type WinnerManagement} from "./winner-policy.ts";
-import {realizeTradeSlice, realizedContribution, remainingTradeFraction, assertTradeRealization, type TradeRealization} from "./trade-realization.ts";
+import {realizeTradeSlice, realizedContribution, remainingTradeFraction, assertTradeRealization} from "./trade-realization.ts";
 import {winnerEventHeadroom, recordWinnerRiskLoss, type WinnerRiskLedger} from "./winner-risk.ts";
 import { familyExperimentSummary, initialFamilyExperimentState, isFamilyFailure,
   normalizeFamilyExperimentState, recordFamilyFailure, recordFamilyOutcome,
@@ -66,6 +67,7 @@ const safe=(v:number|null|undefined,fallback=0)=>typeof v==="number"&&Number.isF
 
 export type Candle={time:number;open:number;high:number;low:number;close:number;volume:number};
 export type Quote={bestBid:number;bestAsk:number;observedAt:number;fresh:boolean;entryReady?:boolean;sourceCount?:number;disagreementRate?:number;
+  bids?:{price:number;size:number}[];asks?:{price:number;size:number}[];bookSequence?:number;
   sourceBreadth?:number;directionalAgreement?:number;medianShortMove?:number;spreadRate?:number;bookImbalance?:number;
   bidLiquidityChange?:number;askLiquidityChange?:number;liquiditySourceCount?:number};
 export type Contract={quantoMultiplier:number;leverageMax:number;maintenanceRate:number;minContracts?:number;tickSize?:number;
@@ -143,11 +145,13 @@ export type EntryContext={
 import type {ReviewEvent, TradeReview} from "./review-trace.ts";
 
 export type Trade={
+  paperOrder?:import('./paper-execution.ts').PaperOrder;
+  sourceReductionIntent?:{sequence:number;contracts:number};
   directExitResearch?:import('./direct-exit-research.ts').DirectExitResearch;
   directExitResearchOmitted?:true;
   unified?:UnifiedTrade;
   inverseCopy?:InverseCopy;
-  winnerManagement?:WinnerManagement;realization?:TradeRealization;
+  winnerManagement?:WinnerManagement;realization?:PaperRealization;
   review?:TradeReview;
   id:string;symbol:string;side:"LONG"|"SHORT";rule:Rule;openedAt:number;closedAt:number|null;status:"OPEN"|"CLOSED";
   entryPrice:number;exitPrice:number|null;quantity:number;contracts:number;quantoMultiplier:number;notional:number;
@@ -184,6 +188,7 @@ export type EntryValidation={id:string;candidateId:string;symbol:string;side:"LO
   probePullbackMin?:number;probeRestartMin?:number;probeRetestSeen?:boolean;
   status:"WAITING"|"CANCELLED";reason:string|null};
 export type ForwardState={
+  paperExecution?:import('./paper-execution.ts').PaperExecution;
   directStrategy?:DirectStrategy;
   unifiedExecution?:UnifiedExecution;
   inverseTrial?:InverseTrial;
@@ -252,13 +257,13 @@ function normalizeRule(t:Partial<Trade>,now:number):Rule{
 function normalizeTrade(raw:Trade,now:number):Trade{
   const t=structuredClone(raw) as Trade,tick=Math.max(1e-9,safe(t.entryPrice,1)),side=t.side==="SHORT"?"SHORT":"LONG";
   assertInverseTrade(t);
-  assertTradeRealization(t);
+  if(t.paperOrder)assertPaperRealization(t);else assertTradeRealization(t);
   t.side=side;t.rule=normalizeRule(t,now);t.status=t.status==="CLOSED"?"CLOSED":"OPEN";
   t.openedAt=safe(t.openedAt,now);t.closedAt=t.status==="CLOSED"?safe(t.closedAt,now):null;
   t.entryPrice=tick;t.lastPrice=Math.max(1e-9,safe(t.lastPrice,t.entryPrice));t.lastQuoteAt=safe(t.lastQuoteAt,t.openedAt);
   t.stopPrice=Math.max(1e-9,safe(t.stopPrice,side==="LONG"?t.entryPrice*.99:t.entryPrice*1.01));
   t.armPrice=Math.max(1e-9,safe(t.armPrice,side==="LONG"?t.entryPrice*1.01:t.entryPrice*.99));
-  t.quantoMultiplier=Math.max(1e-12,safe(t.quantoMultiplier,1));t.contracts=t.realization?t.contracts:Math.max(1,safe(t.contracts,1));
+  t.quantoMultiplier=Math.max(1e-12,safe(t.quantoMultiplier,1));t.contracts=t.realization||t.paperOrder?t.contracts:Math.max(1,safe(t.contracts,1));
   t.quantity=Math.max(1e-12,safe(t.quantity,t.contracts*t.quantoMultiplier));
   t.notional=Math.max(1e-9,safe(t.notional,t.quantity*t.entryPrice));t.leverage=Math.max(1,safe(t.leverage,8));
   t.margin=Math.max(1e-9,safe(t.margin,t.notional/t.leverage));t.plannedRisk=Math.max(0,safe(t.plannedRisk,t.notional*.01));
@@ -331,7 +336,7 @@ function normalizeEntryValidations(value:unknown,now:number){
 }
 export function normalizeForward(v:ForwardState|null|undefined,now:number):ForwardState{
   if(!v)return initialForward(now);
-  migrateInverseSamePrice(v,now);assertInverseTrial(v);
+  migrateInverseSamePrice(v,now);assertInverseTrial(v);assertPaperExecution(v);
   if(v.version!==FORWARD_VERSION||!Number.isFinite(v.balance)||!Array.isArray(v.positions)||!Array.isArray(v.history)||v.liveEligible!==false)
     throw new Error("前向账户存储格式异常；保留原数据，禁止自动重置");
   const base=initialForward(v.startedAt>0?v.startedAt:now);
@@ -463,6 +468,7 @@ function opportunityCompare(a:Opportunity,b:Opportunity){
 function equityMark(s:ForwardState,quotes:Record<string,Quote>,now:number){
   let floating=0,stale=0;
   for(const t of s.positions){
+    if(t.paperOrder&&t.paperOrder.phase!=='FILLED')continue;
     if(t.unified){
       const q=quotes[t.symbol],valid=freshQuote(q,now),px=valid?(t.side==='LONG'?q!.bestBid:q!.bestAsk):t.lastPrice;
       if(!valid)stale++;
@@ -1456,7 +1462,7 @@ export type DirectExecutionAdapter={manage:(state:ForwardState,marketReady:boole
 export function advanceForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;minutePaths?:Record<string,Candle[]>;daily?:Record<string,Candle[]>;
   quotes:Record<string,Quote>;analysisQuotes?:Record<string,Quote>;contracts:Record<string,Contract>;entrySymbols?:Iterable<string>;learningSymbols?:Iterable<string>;allowDataCycle?:boolean;
   legacyDrainOnly?:boolean;research?:MarketLifecycleResearchContext;reviewTrace?:(event:ReviewEvent)=>void;
-  directAdapter?:DirectExecutionAdapter;allocationEquity?:number}){
+  directAdapter?:DirectExecutionAdapter;allocationEquity?:number;paperTiming?:import('./paper-execution.ts').PaperTiming}){
   // An optional observer has no return value or trading authority. A failed logger cannot block a trade.
   const trace=input.reviewTrace?(event:ReviewEvent)=>{try{input.reviewTrace!(event);}catch{/* diagnostics only */}}:undefined;
   const s=normalizeForward(structuredClone(input.state),input.now),
@@ -1661,7 +1667,7 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
     policyUpgrade:null,exitPolicyUpgrade:null,startedAt:s.startedAt,cutoverAt:s.cutoverAt,updatedAt:s.lastQuoteCycleAt,
     lastCycleAt:s.lastCycleAt,revision:s.revision,initialEquity:s.initialEquity,balance:s.balance,...mark,targetEquity:s.initialEquity*2,
     netPnl:mark.equity-s.initialEquity,maxDrawdown:s.maxDrawdown,resolved:s.resolved,wins:s.wins,grossPnl:s.grossPnl,fees:s.fees,
-    fundingAllowance:s.fundingAllowance,turnover:s.turnover,positions:s.positions,history:s.history,events:s.events,daily:s.daily,
+    fundingAllowance:s.fundingAllowance,turnover:s.turnover,positions:s.positions.filter(t=>!t.paperOrder||t.paperOrder.phase==='FILLED'),history:s.history,events:s.events,daily:s.daily,
     opportunities,entryOpportunities:opportunities,regions:[],marketPulse:s.marketPulse,
     hypothesisResearch:s.hypothesisResearch,researchPlanVersion:RESEARCH_PLAN_VERSION,
     environmentRouter:{...s.environmentContext,currentEnvironment:s.environmentContext.environment,activePlaybooks,

@@ -45,6 +45,7 @@ export function directExecutionTradeProjection(t:Trade):Trade{
   return row;
 }
 export function captureDirectExitResearch(s:ForwardState,t:Trade,q:Quote|undefined,now:number,fromEntry:boolean){
+  if(t.paperOrder&&t.paperOrder.phase!=='FILLED')return;
   if(t.unified?.version!=='dual-thesis-v2')return;
   const terminal=t.status==='CLOSED',fresh=!!q&&q.fresh&&q.observedAt<=now&&now-q.observedAt<=10000
     &&q.bestBid>0&&q.bestAsk>=q.bestBid;

@@ -11,6 +11,7 @@ import {evaluatePositionIntelligence} from './position-intelligence-engine.ts';
 import {realizeTradeSlice} from './trade-realization.ts';
 import {beijingDayKey} from './beijing-time.ts';
 import {UNIFIED_EXECUTION_VERSION,type Acceptance,type UnifiedEpisode,type UnifiedBranch} from './unified-execution-types.ts';
+import {queuePaperAction,paperFilled,rejectPaperEntry} from './paper-execution.ts';
 export {UNIFIED_EXECUTION_VERSION} from './unified-execution-types.ts';
 
 const d=(side:'LONG'|'SHORT')=>side==='LONG'?1:-1;
@@ -78,9 +79,11 @@ function explain(t:Trade,now:number,kind:'ENTRY'|'CONFIRM'|'REDUCE'|'EXIT',reaso
   // Each lifecycle has at most two trims, one confirmation and one exit.
   if(u.explanationEvents.length>8)throw new Error('统一策略事件身份重复，禁止截断资金证据');
 }
-export function closeUnifiedTrade(s:ForwardState,t:Trade,q:Quote,now:number,reason:string,detail:string,administrative=false){
+export function closeUnifiedTrade(s:ForwardState,t:Trade,q:Quote,now:number,reason:string,detail:string,administrative=false,executionConfirmed=false){
+  if(s.paperExecution&&!paperFilled(t)){if(administrative)rejectPaperEntry(s,t,now,reason);return false;}
   if(t.status!=='OPEN'||(!administrative&&!fresh(q,now)))return false;
   if(!positive(q.bestBid)||!positive(q.bestAsk)||q.bestAsk<q.bestBid)return false;
+  if(s.paperExecution&&!administrative&&!executionConfirmed){queuePaperAction(s,t,now,'CLOSE',reason,detail);return false;}
   const price=exit(t.side,q),gross=d(t.side)*t.quantity*(price-t.entryPrice),paid=t.quantity*price*fee,r=t.realization;
   t.status='CLOSED';t.closedAt=now;t.exitPrice=price;t.lastPrice=price;t.lastQuoteAt=q.observedAt;
   t.grossPnl=gross+(r?.gross??0);t.exitFee=paid+(r?.fees??0);t.fundingAllowance=0;t.netPnl=t.grossPnl-t.entryFee-t.exitFee;
@@ -113,6 +116,7 @@ function realizeReturnSlice(i:Parameters<typeof realizeTradeSlice>[0]){
   return{gross,fee:paid,funding:0,notional:quantity*t.entryPrice,exitNotional:quantity*i.price,credit:gross-paid,contracts};
 }
 function reduce(s:ForwardState,t:Trade,q:Quote,now:number,fraction:number,reason:string,contract?:Contract){
+  if(s.paperExecution){queuePaperAction(s,t,now,'REDUCE',reason,reason,fraction,contract);return false;}
   const input={trade:t,price:exit(t.side,q),now,quoteAt:q.observedAt,fraction,feeRate:fee,
     fundingPerDay:0,minContracts:contract?.minContracts??Number(contract?.orderSizeMin??1),reason},
     r=t.unified?.branch==='RETURN'?realizeReturnSlice(input):realizeTradeSlice(input);

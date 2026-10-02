@@ -1096,3 +1096,18 @@ Card defaults expose six core fields; full comparison/settlement remains folded.
   with native settlement plus quantity evidence; missing receipts are not a
   verdict of execution failure. Account results include manual/capital movements.
 - Owner/member auth and actor routing protect new native financial projections.
+# 2026-10-03 — execution alignment
+
+- User explicitly requests PAPER entry/exit based on LIVE execution steps.
+  Replace new direct instantaneous fills with a durable public-book transport.
+- Commit shared logical intents before either transport executes. Native
+  execution must begin without waiting for PAPER model confirmation; source
+  time/size/risk remain frozen so model slippage/partial entry cannot resize LIVE.
+- Share the existing proportional native builder and metadata/risk checks.
+  Match only later observed Gate depth; account cash/fees change for fills once.
+  Pending closes retain floating exposure; unchanged liquidity cannot be reused.
+- Preserve legacy financial records and original frozen realization/source code.
+  New model restoration has separate bounded validators and regression tests.
+- Historical receipt medians or explicit2s clock fallback model latency only.
+  Native funding/strong-liquidation/exchange failures and wallet differences
+  remain outside the model; exact native-equity coincidence is not certified.

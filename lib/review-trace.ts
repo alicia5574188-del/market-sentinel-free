@@ -41,9 +41,10 @@ const finite=(v:unknown):v is number=>typeof v==='number'&&Number.isFinite(v);
  * No signal, money, stop, order, changed flag or checkpoint cadence is modified. */
 export function captureTradeReviews(previous:ForwardState,next:ForwardState,now:number,buildSha:string,strategyFingerprint:string,quotes:Record<string,Quote>){
   trimDirectExitHistory(next,now);
-  const prior=new Map([...previous.positions,...previous.history].map(t=>[t.id,t]));
+  const prior=new Map([...previous.positions,...previous.history].filter(t=>!t.paperOrder||t.paperOrder.phase==='FILLED').map(t=>[t.id,t]));
   const source=new Map([...(next.inverseTrial?.source.positions??[]),...(next.inverseTrial?.source.history??[])].map(t=>[t.id,t]));
   for(const t of [...next.positions,...next.history]){
+    if(t.paperOrder&&t.paperOrder.phase!=='FILLED')continue;
     const old=prior.get(t.id); if(t.status==='CLOSED'&&old?.status==='CLOSED')continue;
     if(t.inverseCopy)captureInverseLossResearch(next,t,source.get(t.inverseCopy.sourceId),quotes[t.symbol],now);
     const fromEntry=!old&&t.openedAt===now;
