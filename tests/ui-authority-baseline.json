@@ -4,7 +4,7 @@
   "lib/regime-portfolio.ts": "d463c8a026f60969c894b81caccbf5836b13a7f52c5a1fd79714d0ac44703aa9",
   "lib/dual-paper.ts": "bb6c35a14b7ba44a64a499d28f53d8ace3a91d912dcc1875ab56edd6e8034fa6",
   "lib/forward-evidence.ts": "c1b45849e29a6c6021f9a71d1a88fbd7424ff3af3dbefb4b44ed28810d6f4c3b",
-  "lib/forward-store.ts": "327f418813f773a13dabe137eea8ec433b451c22efbd444bd1f173bb0614319c",
+  "lib/forward-store.ts": "844b23f6a43b7c32279773678357583c44abd7efe26b14cbfdbf32905a7b8a1f",
   "app/forward-dashboard.css": "56d0b99065a21f3e2fe89ad19c4b2e249834cc80b5d90f03b03f93aea73fe18f",
   "lib/forward-protection.ts": "7e3ba5b151634eaf637e960144fad119cfa59f26fd296f7cf5a2d0669fbc9066",
   "lib/forward-protection-checkpoint.ts": "b340629129e747ff0e0a9d243f0d4076d1bc9e92fa3fdadb510d9bf115ff2bbf",

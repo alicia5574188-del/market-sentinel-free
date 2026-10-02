@@ -1,3 +1,21 @@
+# 2026-10-02 — bounded inverse PAPER loss-exit research, no strategy change
+
+Owner authorizes modifying research snapshots to identify when an inverse PAPER
+order suffering more than10 U floating loss should have exited with less loss.
+Keep every opening and all current source/inverse/LIVE lifecycle decisions.
+Record contemporaneous source holding evidence, inverse directional observations,
+fee-correct hypothetical exit PnL, deep-loss crossings, rebounds, renewed loss and
+actual final results, including recovering profitable controls. No automatic
+exit, pause, resizing, independent protection, market query, cadence or reset.
+
+Each order owns at most20 research points/16 KiB, priority causal anchors,
+drop counts and entry/legacy coverage. Existing committed accounts/immutable
+close archives preserve the record; no standalone storage key or timer. State
+the uncommitted/restart and sampling limits, do not manufacture old crossing
+times or present hindsight extrema as causal rules. Acceptance: financial/source
+invariance, correct mixed fees/partial exits, cap stress, archive/restoration,
+standard release gates, reviewed-main deployment and advancing public receipt.
+
 # 2026-10-02 — fixed1000 U allocation ONLY
 
 Owner cancels all proposed admission pauses, automatic recovery and emergency

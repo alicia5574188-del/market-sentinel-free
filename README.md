@@ -319,3 +319,24 @@ the next OFF-to-ON starts a new native baseline. Browser/process restart or
 repeated ON retains the session. Fresh native marks save at most once per five
 minutes through existing checkpoints, with optional row accounting and private
 owner/member-local reads; there is no extra Gate polling or account reset.
+# 深浮亏订单退出研究记录 — 2026-10-02
+
+研究快照新增 `research.inverseLossExit`，原始记录在每笔反向模拟订单的
+`inverseCopy.lossResearch`。保留首次观察到毛浮亏超过10 U前的最近记录、首次越线、
+最深浮亏、回调至5 U/2 U以内、回到扣费不亏、再次恶化，以及源单实际持仓依据和最终退出。
+同时记录反向方向的价格路径、相对强弱、结构评分、跨所压力及盘口变化；这些是观察数据，
+不是已获执行权限的独立退出判断。保留恢复盈利的订单对照，避免只研究最终亏损单。
+
+每点包含当时同源价格下假设平仓的整笔净盈亏：已实现减仓毛额加剩余毛浮盈亏，扣已付
+入场/减仓费及当时费率估算的剩余平仓费；不添加原账本未扣的资金费。反向可执行BBO的
+退出估值单独显示，不冒充同价PAPER记录或实盘成交。最佳/最差观察点明确标为事后极值。
+
+每单最多20个点、16 KiB；关键锚点优先，删减计数及缺失覆盖随快照输出。记录沿用现有
+账户提交与订单归档，无新行情请求、alarm、存储key或写入计时器。较大的订单可能使现有
+归档分片增加，仍通过原提交行数预留和单值上限检验。热存储达到上限时，研究记录先让位，
+不挤掉源单历史或市场记忆；导出按需补取已平仓的归档记录。单笔金融记录本身接近单值上限时，
+研究字段也会让位并标记缺失，不阻塞成交。未提交或因压力未保留的持仓观察点可能在重启时丢失，
+不能宣称完整逐笔路径；旧单从上线后开始观察，不补造过去超过10 U的时间。超过10 U只是
+研究标签，不平仓、不暂停、不改开仓/仓位/影子原单/LIVE开关。
+
+验证：`npm run test:inverse-loss`，以及原直接、归档、实盘、会员、类型、构建和资源检查。

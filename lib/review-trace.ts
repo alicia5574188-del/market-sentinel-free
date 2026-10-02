@@ -1,6 +1,7 @@
 import {RESEARCH_PLAN_VERSION} from './research-plan.ts';
 import {realizedNetPnl,realizedContribution} from "./trade-realization.ts";
 import {PAPER_COST, type ForwardState, type Trade, type Quote} from './forward-relations.ts';
+import {captureInverseLossResearch} from './inverse-loss-research.ts';
 
 export const REVIEW_TRACE_VERSION = 'decision-review-v2';
 export const REVIEW_JOURNAL_KEY = 'market-intelligence:review:v2:journal';
@@ -39,8 +40,10 @@ const finite=(v:unknown):v is number=>typeof v==='number'&&Number.isFinite(v);
  * No signal, money, stop, order, changed flag or checkpoint cadence is modified. */
 export function captureTradeReviews(previous:ForwardState,next:ForwardState,now:number,buildSha:string,strategyFingerprint:string,quotes:Record<string,Quote>){
   const prior=new Map([...previous.positions,...previous.history].map(t=>[t.id,t]));
+  const source=new Map([...(next.inverseTrial?.source.positions??[]),...(next.inverseTrial?.source.history??[])].map(t=>[t.id,t]));
   for(const t of [...next.positions,...next.history]){
     const old=prior.get(t.id); if(t.status==='CLOSED'&&old?.status==='CLOSED')continue;
+    if(t.inverseCopy)captureInverseLossResearch(next,t,source.get(t.inverseCopy.sourceId),quotes[t.symbol],now);
     const fromEntry=!old&&t.openedAt===now;
     const review:TradeReview=t.review?structuredClone(t.review):{
       version:REVIEW_TRACE_VERSION,accountStartedAt:next.startedAt,observedSince:now,fromEntry,

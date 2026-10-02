@@ -38,6 +38,7 @@ jobs:
         run: |
           set -euo pipefail
           npm run test:direct
+          npm run test:inverse-loss
           npm run test:live-parity
           npm run test:members
           npm run test:equity
@@ -174,6 +175,7 @@ jobs:
             exit 0
           fi
           npm run test:direct
+          npm run test:inverse-loss
           npm run build
           npm run typecheck
           npx wrangler deploy --config dist/server/wrangler.json
