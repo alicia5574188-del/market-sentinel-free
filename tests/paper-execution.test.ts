@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {initialForward,forwardEquity,forwardSummary,normalizeForward,closeForwardForReset,type Quote,type Opportunity} from '../lib/forward-relations.ts';
-import {migrateDirectStrategy,researchDirectPlan,openDirectPlan} from '../lib/direct-strategy.ts';
-import {advancePaperExecution,executionTiming,paperBookFill,paperFilled,queuePaperAction,PAPER_EXECUTION_VERSION} from '../lib/paper-execution.ts';
+import {migrateDirectStrategy,researchDirectPlan,openDirectPlan,advanceDirectStrategy} from '../lib/direct-strategy.ts';
+import {advancePaperExecution,executionTiming,paperBookFill,paperFilled,queuePaperAction,PAPER_EXECUTION_VERSION,PAPER_TIMING_VERSION} from '../lib/paper-execution.ts';
 import {forwardMirrorSources,sourceLifecycle} from '../lib/live-parity.ts';
 import {sourceReductionTarget} from '../lib/live-reduction.ts';
 import {closeUnifiedTrade} from '../lib/unified-execution.ts';
@@ -121,10 +121,10 @@ test('manual reset cancels pending without paid fees or fictional market exits; 
   assert.equal(sourceLifecycle(closed,t.id).status,'CLOSED');
 });
 test('latency model is based on bounded observed receipts, with explicit execution-clock fallback',()=>{
-  assert.deepEqual(executionTiming([]),{prepareMs:2000,confirmMs:0,basis:'EXECUTION_CLOCK',samples:0});
-  assert.deepEqual(executionTiming([{submitDelayMs:3000,submittedAt:T,exchangeEntryAt:T+1000},
-    {submitDelayMs:2000,submittedAt:T,exchangeEntryAt:T+500}, {submitDelayMs:1000,submittedAt:T,exchangeEntryAt:T+200}]),
-    {prepareMs:2000,confirmMs:500,basis:'OBSERVED_LIVE',samples:3});
+  assert.deepEqual(executionTiming([]),{version:PAPER_TIMING_VERSION,prepareMs:2000,confirmMs:0,basis:'EXECUTION_CLOCK',samples:0});
+  assert.deepEqual(executionTiming([{submitDelayMs:3000,submittedAt:T,entryConfirmedAt:T+1000},
+    {submitDelayMs:2000,submittedAt:T,entryConfirmedAt:T+500}, {submitDelayMs:1000,submittedAt:T,entryConfirmedAt:T+200}]),
+    {version:PAPER_TIMING_VERSION,prepareMs:2000,confirmMs:500,basis:'OBSERVED_LIVE',samples:3});
 });
 test('transport heartbeats cannot consume the same partial-close depth twice, including after restore',()=>{
   const {s,t,advance}=fixture();advance(T+2000);advance(T+4000);
@@ -165,4 +165,20 @@ test('confirmed delayed return close releases the original continuation handoff 
   advance(T+10000,101);assert.equal(s.positions.length,0);assert.equal(plan.consumed,false);
   assert.equal(s.consumedTheses[plan.id],undefined);assert.equal(s.directStrategy!.completedConversions,1);
   near(s.balance,1000+s.history[0]!.netPnl!);
+});
+test('repeated native marks cannot become a thirty-minute execution latency; only first position confirmation is usable',()=>{
+  const marker={submitDelayMs:1000,submittedAt:T,entryConfirmedAt:T+1000,exchangeEntryAt:T+2028444};
+  const timing=executionTiming([marker]);near(timing.confirmMs,1000);assert.equal(timing.samples,1);
+  near(executionTiming([{...marker,exchangeEntryAt:T+7200000}]).confirmMs,1000);
+  const old={submitDelayMs:1000,submittedAt:T,exchangeEntryAt:T+2028444};
+  assert.equal(executionTiming([old]).basis,'EXECUTION_CLOCK');near(executionTiming([old]).confirmMs,0);
+});
+test('saved pending orders recover invalid old observation latency without resetting money, identity or filled history',()=>{
+  const {s,t,advance}=fixture();advance(T+2000);const id=t.id,cash=s.balance,started=s.startedAt;
+  t.paperOrder!.timing={prepareMs:1034,confirmMs:2028444,basis:'OBSERVED_LIVE',samples:32};
+  const next=advanceDirectStrategy({state:s,now:T+4000,paths:{},quotes:{TEST_USDT:quote(T+4000)},contracts:{TEST_USDT:c},
+    paperTiming:executionTiming([]),allowDataCycle:false});
+  assert.equal(next.changed,true);assert.equal(next.state.startedAt,started);assert.equal(next.state.positions[0]!.id,id);
+  assert.equal(next.state.positions[0]!.paperOrder!.phase,'FILLED');near(next.state.balance,cash-next.state.positions[0]!.entryFee);
+  assert.deepEqual(next.state.history,s.history);assert.equal(next.state.positions[0]!.paperOrder!.timing.version,PAPER_TIMING_VERSION);
 });
