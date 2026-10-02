@@ -1,3 +1,16 @@
+# 2026-10-03 — bounded actual-order exit research only
+
+Owner authorizes supplementing actual dual-thesis >10U adverse floating exit
+research and removing unnecessary diagnostic duplication. Do not change trade
+entry/holding/exit/sizing/manual LIVE, reset accounts or place test orders.
+Use bounded events, 4KiB/8 points per trade, eight recent closed traces hot,
+existing archive/protection writes only; optional diagnostics yield before
+financial/protection capacity. Keep newly closed traces through their existing
+archive commit. Timestamp anchors reference points instead of copying them.
+Exclude diagnostics from member dispatch. Preserve original resource gates,
+reviewed-main publication and advancing healthy production receipts. Missing
+and late observations must be explicit; no historical path fabrication.
+
 # 2026-10-02 — owner correction: independent dual-thesis research and execution
 
 Release continuity exposed the2s decision clock requesting the10s protection

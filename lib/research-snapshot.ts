@@ -3,6 +3,7 @@ import type {Trade} from './forward-relations.ts';
 import type {ReviewJournal, TradeReview} from './review-trace.ts';
 import {LIVE_REVIEW_VERSION,compareLiveReview,type LiveReview} from './live-review.ts';
 import {inverseLossResearchView} from './inverse-loss-research.ts';
+import {directExitResearchView} from './direct-exit-research.ts';
 
 export const REVIEW_SNAPSHOT_VERSION='market-intelligence-review-v2';
 const ARCHIVE_PREFIX='forward-relations:v1:archive:';
@@ -71,7 +72,9 @@ function mergeTradeRows(current:Trade[],incoming:Trade[],conflicts:string[]){
     if(old.status==='CLOSED'&&t.status!=='CLOSED')continue;
     if(t.status==='CLOSED'&&old.status!=='CLOSED'){byId.set(t.id,{...old,...t});continue;}
     const newer=(old.lastQuoteAt??0)>=(t.lastQuoteAt??0)?old:t,older=newer===old?t:old;
-    byId.set(t.id,{...older,...newer,review:preferReview(newer.review,older.review),positionIntelligence:newer.positionIntelligence??older.positionIntelligence,
+    byId.set(t.id,{...older,...newer,directExitResearch:newer.directExitResearch??older.directExitResearch,
+      directExitResearchOmitted:newer.directExitResearch||older.directExitResearch?undefined:newer.directExitResearchOmitted??older.directExitResearchOmitted,
+      review:preferReview(newer.review,older.review),positionIntelligence:newer.positionIntelligence??older.positionIntelligence,
       ...(newer.inverseCopy?{inverseCopy:{...newer.inverseCopy,lossResearch:newer.inverseCopy.lossResearch??older.inverseCopy?.lossResearch,
         lossResearchHotOmitted:newer.inverseCopy.lossResearch||older.inverseCopy?.lossResearch?undefined:newer.inverseCopy.lossResearchHotOmitted}}:{})});
   }
@@ -175,6 +178,7 @@ export function reviewVersionDiagnostics(s:ReviewSnapshot){
 export function finalizeReviewSnapshot(s:ReviewSnapshot):ReviewSnapshot{
   const closed=s.trades.filter(t=>t.status==='CLOSED'&&t.openedAt>=s.meta.accountStartedAt),open=s.trades.filter(t=>t.status==='OPEN');
   s.research.inverseLossExit=inverseLossResearchView(s.trades);
+  s.research.directExitResearch=directExitResearchView(s.trades);
   s.coverage.includedClosed=closed.length;s.coverage.missingClosed=Math.max(0,s.coverage.expectedClosed-closed.length);
   s.coverage.complete=s.coverage.missingClosed===0&&closed.length===s.coverage.expectedClosed&&s.coverage.conflictingTradeIds.length===0;
   const traceMissing=closed.filter(t=>!t.review?.terminal&&!t.inverseCopy?.sourceClosedAt),
@@ -199,6 +203,7 @@ export function finalizeReviewSnapshot(s:ReviewSnapshot):ReviewSnapshot{
     byExitBuild:grouped(closed,t=>t.review?.exitBuildSha??'UNKNOWN_LEGACY'),
     activeCount:open.length,exitTraceMissing:traceMissing.length,positionAssessmentMissing:piMissing.length,
     inverseLossArchiveMissing:closed.filter(t=>t.inverseCopy?.lossResearchHotOmitted&&!t.inverseCopy.lossResearch).length,
+    directExitArchiveMissing:closed.filter(t=>t.directExitResearchOmitted&&!t.directExitResearch).length,
     counterfactualMaturity:maturity,liveAssessment:ownerOff?'OWNER_OFF_NOT_A_COPY_FAILURE':(s.runtime.liveAssessment??'SEE_SCOPED_LIVE_EVIDENCE'),
     observedOrderWindow:{from:timestamp(closed.length?Math.min(...closed.map(t=>t.openedAt)):null),to:timestamp(closed.length?Math.max(...closed.map(t=>t.closedAt??0)):null)}};
   s.versionDiagnostics=reviewVersionDiagnostics(s);
@@ -226,6 +231,7 @@ export function finalizeReviewSnapshot(s:ReviewSnapshot):ReviewSnapshot{
   }
   s.issues=[];
   if(Number(s.summary.inverseLossArchiveMissing)>0)s.issues.push({code:'INVERSE_LOSS_RESEARCH_REQUIRES_ARCHIVE',classification:'INSUFFICIENT_EVIDENCE',count:Number(s.summary.inverseLossArchiveMissing)});
+  if(Number(s.summary.directExitArchiveMissing)>0)s.issues.push({code:'ACTUAL_EXIT_RESEARCH_REQUIRES_ARCHIVE',classification:'INSUFFICIENT_EVIDENCE',count:Number(s.summary.directExitArchiveMissing)});
   if(s.liveReview&&(s.liveReview.coverage.error||s.liveReview.coverage.limitReached))s.issues.push({
     code:'LIVE_REVIEW_HISTORY_INCOMPLETE',classification:'INSUFFICIENT_EVIDENCE',count:1});
   if(s.runtime.liveReviewError)s.issues.push({code:'LIVE_REVIEW_UNAVAILABLE',classification:'INSUFFICIENT_EVIDENCE',count:1});
@@ -310,7 +316,7 @@ export async function collectReviewSnapshot(fetcher:typeof fetch,progress?:(n:nu
   // Complete ledger counts do not imply complete exit evidence. Hot compaction
   // can remove assessments while retaining every settlement row.
   const needsArchive=()=>!data.coverage.complete||Number(data.summary.positionAssessmentMissing)>0||Number(data.summary.exitTraceMissing)>0
-    ||Number(data.summary.inverseLossArchiveMissing)>0;
+    ||Number(data.summary.inverseLossArchiveMissing)>0||Number(data.summary.directExitArchiveMissing)>0;
   // 3072 archive packets maximum per click, no background polling or writes.
   for(let page=0;page<64&&needsArchive()&&!data.coverage.archiveExhausted;page++){
     if(Date.now()>=deadline){data.coverage.exportLimitReached=true;break;}

@@ -22,7 +22,8 @@
     "lint": "bash scripts/sites-env.sh -- eslint . --ignore-pattern dist --ignore-pattern .next",
     "typecheck": "tsc --noEmit --incremental false",
     "test:forward-compat": "node --experimental-strip-types --test --test-name-pattern=\"real Forward Relation 2.0 horizon records migrate|strategy migration preserves account identity|manual PAPER reset preserves causal learning|summary exposes Market Intelligence lifecycle\" tests/adaptive-ten-core.test.ts",
-    "test:inverse-loss": "node --experimental-strip-types --test tests/inverse-loss-research.test.ts"
+    "test:inverse-loss": "node --experimental-strip-types --test tests/inverse-loss-research.test.ts",
+    "test:direct-exit": "node --experimental-strip-types --test tests/direct-exit-research.test.ts"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",

@@ -143,6 +143,8 @@ export type EntryContext={
 import type {ReviewEvent, TradeReview} from "./review-trace.ts";
 
 export type Trade={
+  directExitResearch?:import('./direct-exit-research.ts').DirectExitResearch;
+  directExitResearchOmitted?:true;
   unified?:UnifiedTrade;
   inverseCopy?:InverseCopy;
   winnerManagement?:WinnerManagement;realization?:TradeRealization;
