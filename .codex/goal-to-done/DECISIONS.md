@@ -1098,6 +1098,15 @@ Card defaults expose six core fields; full comparison/settlement remains folded.
 - Owner/member auth and actor routing protect new native financial projections.
 # 2026-10-03 — execution alignment
 
+- Released PR613/614/615 through original main CI/deploy; final95f0642 matches
+  tested tree8fd98eae. Confirmed delayed close preserves continuation handoff.
+- Read-only production verification exposed mutable exchangeEntryAt being used
+  as latency. Correct to immutable native position.entryAt, version the timing
+  basis and recover active old timing only. No paid-history reconstruction.
+- Two final advancing healthy receipts retained account1790951453949 and LIVE
+  OFF, pending0, closed46/open9. LastSuccess1790964286924 ->1790964312827;
+  persistedAt1790964242304 ->1790964309502. No funded verification order.
+
 - User explicitly requests PAPER entry/exit based on LIVE execution steps.
   Replace new direct instantaneous fills with a durable public-book transport.
 - Commit shared logical intents before either transport executes. Native
