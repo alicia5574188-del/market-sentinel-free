@@ -205,7 +205,13 @@ export function advancePaperExecution(s:ForwardState,quotes:Record<string,Quote>
           exitQuantity=t.quantity;delete o.action;
         closeUnifiedTrade(s,t,fq,now,a.reason,a.detail,false,true);
         if(closing)t.exitPrice=(closing.price*closing.quantity+f.price*exitQuantity)/(closing.quantity+exitQuantity);
-        if(a.reason==='RETURN_TREND_CONFIRMED')s.directStrategy!.completedConversions++;
+        if(a.reason==='RETURN_TREND_CONFIRMED'){
+          const ds=s.directStrategy!;ds.completedConversions++;
+          // Delayed settlement must release the same original handoff that
+          // immediate close did. Fresh research still rechecks trend/space.
+          const plan=ds.plans[t.symbol];
+          if(plan?.id===t.unified?.sourceId){plan.consumed=false;delete s.consumedTheses[plan.id];}
+        }
       }else{
         a.liquidityKey=key;
         applySlice(s,t,f.contracts,f.price,q!.observedAt,now,a);

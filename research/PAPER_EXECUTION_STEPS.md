@@ -21,6 +21,11 @@ depth across heartbeats and restarts. Full close supersedes a pending reduction;
 already realized money remains under the same parent. Durable commit failure
 cannot publish an instruction, move cash, or dispatch native execution.
 
+Confirmed RETURN_TREND_CONFIRMED settlement releases the original consumed
+candidate for the same continuation handoff as immediate settlement did.
+It never releases before cash settlement or directly creates a new trade:
+fresh per-symbol trend, space, metadata and portfolio checks still apply.
+
 Native entry is never gated on PAPER fill. A source projection freezes signal
 time, requested size and allocation risk; PAPER confirmation cannot change
 native copy sizing or backfill pre-enable signals. Pending close is an explicit

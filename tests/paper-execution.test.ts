@@ -24,6 +24,7 @@ function fixture(){
     winnerPlan:{version:'winner-preservation-v1',intent:'TREND',eventAt:T,initialStop:98,target:110,targetArea:null,
       origin:{lower:98,upper:102,center:100,formedAt:T-300000,balanced:true,basis:'OHLCV_PROXY'},riskGroup:'test',source:'RELATIVE_CORE'}};
   const q=quote(T),input={state:s,now:T,paths:{},quotes:{TEST_USDT:q},contracts:{TEST_USDT:c}},p=researchDirectPlan(s,o,input);
+  s.directStrategy!.plans[p.symbol]=p;
   assert.equal(openDirectPlan(s,p,q,c,T,input.quotes),undefined);
   const t=s.positions[0]!;
   const advance=(at:number,price=100,depth=100000)=>advancePaperExecution(s,{TEST_USDT:quote(at,price,depth)},{TEST_USDT:c},at);
@@ -155,4 +156,13 @@ test('close supersedes a partially filled reduction without coalescing different
   assert.equal(t.realization!.fills.length,2);assert.notEqual(t.realization!.fills[1]!.executionOrderId,reduction);
   normalizeForward(structuredClone(s),T+16000);advance(T+18000,97);
   near(s.balance,1000+s.history[0]!.netPnl!);normalizeForward(structuredClone(s),T+18000);
+});
+test('confirmed delayed return close releases the original continuation handoff only after paid settlement',()=>{
+  const {s,t,advance}=fixture();advance(T+2000);advance(T+4000);
+  const plan=s.directStrategy!.plans[t.symbol]!;assert.equal(plan.consumed,true);assert.ok(s.consumedTheses[plan.id]);
+  queuePaperAction(s,t,T+6000,'CLOSE','RETURN_TREND_CONFIRMED','confirmed trend');advance(T+8000);
+  assert.equal(plan.consumed,true);assert.equal(s.directStrategy!.completedConversions,0);
+  advance(T+10000,101);assert.equal(s.positions.length,0);assert.equal(plan.consumed,false);
+  assert.equal(s.consumedTheses[plan.id],undefined);assert.equal(s.directStrategy!.completedConversions,1);
+  near(s.balance,1000+s.history[0]!.netPnl!);
 });
