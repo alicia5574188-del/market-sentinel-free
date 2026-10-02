@@ -1,0 +1,54 @@
+name: Research Spot Perp Basis Pairs
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/research-spot-perp-basis-pairs.mjs'
+      - 'scripts/fetch-gate-history.mjs'
+      - '.github/workflows/research-spot-perp-basis-pairs.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Syntax check
+        run: node --check scripts/research-spot-perp-basis-pairs.mjs
+      - name: Fetch Gate futures 5m history
+        env:
+          RESEARCH_INTERVAL: 5m
+          RESEARCH_DATASET: /tmp/gate-history-basis-5m.json
+          RESEARCH_MONTHS: 202509,202510,202511,202512,202601,202602,202603,202604,202605,202606,202607,202608
+          RESEARCH_SYMBOLS: BTC_USDT,ETH_USDT,SOL_USDT,XRP_USDT,DOGE_USDT,ADA_USDT,BNB_USDT,SUI_USDT,AVAX_USDT,LINK_USDT,LTC_USDT,BCH_USDT,AAVE_USDT,UNI_USDT,ARB_USDT,FIL_USDT,PEPE_USDT,ENA_USDT
+          RESEARCH_MIN_CONTRACTS: 16
+          RESEARCH_MIN_MONTH_COVERAGE: 0.95
+          RESEARCH_CONCURRENCY: 16
+        run: node scripts/fetch-gate-history.mjs
+      - name: Run spot-perp basis pair research
+        env:
+          RESEARCH_DATASET: /tmp/gate-history-basis-5m.json
+          RESEARCH_OUTPUT: /tmp/spot-perp-basis-pairs.json
+        run: node --max-old-space-size=6144 scripts/research-spot-perp-basis-pairs.mjs
+      - name: Print compact result
+        if: always()
+        run: |
+          if [ -f /tmp/spot-perp-basis-pairs.json ]; then
+            jq '{research,authority,decision,passes,data,split,protocol,discoveryEligible,selected,targetBandBest,grossBest,interpretation}' /tmp/spot-perp-basis-pairs.json
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: spot-perp-basis-pairs
+          path: /tmp/spot-perp-basis-pairs.json
+          if-no-files-found: warn
+          retention-days: 7
