@@ -107,10 +107,14 @@ export function researchDirectPlan(s:ForwardState,o:Opportunity,input:Input,prev
         `${o.symbol.replace('_',' / ')}的${push}已形成可观察推进；尚未确认区域外持续延续，评估${side==='LONG'?'做多等待反弹':'做空等待回落'}`;
   if(s.directStrategy){const cache=s.directStrategy.memory??={};cache[o.symbol]={id:o.id,region:structuredClone(area),continuationSeen:!!seen};
     for(const key of Object.keys(cache).slice(0,Math.max(0,Object.keys(cache).length-30)))delete cache[key];}
-  return{id:o.id,symbol:o.symbol,at:input.now,quoteAt:q?.observedAt??0,branch,side,phase:a?(g?.valid?'READY':'WAIT_LOCATION'):'VALIDATING',
+  const plan:DirectPlan={id:o.id,symbol:o.symbol,at:input.now,quoteAt:q?.observedAt??0,branch,side,phase:a?(g?.valid?'READY':'WAIT_LOCATION'):'VALIDATING',
     reason,holdReason:branch==='RETURN'?'保留正常浮亏空间，等待这次推进衰减；持续趋势确认将否定回退依据':'回踩承接与区域外推进仍成立，保留趋势仓',
     exitCondition:branch==='RETURN'?'回退兑现、推进衰减确认结束，或本币持续趋势确认使回退依据失效':'结构保护被触及、区域接受失败，或本币持有依据持续失效',
     confirmation:a,region:area,candidate:structuredClone(o),continuationSeen:!!seen,consumed:previous?.id===o.id&&previous.consumed};
+  const held=s.positions.find(t=>t.symbol===o.symbol&&t.unified);
+  if(held){const u=held.unified!;Object.assign(plan,{branch:u.branch,side:held.side,phase:'HOLDING',consumed:true,
+    reason:u.entryReason,holdReason:u.holdReason,exitCondition:u.exitCondition,confirmation:structuredClone(u.confirmation),region:structuredClone(u.region)});}
+  return plan;
 }
 function currentRisk(t:Trade,quotes:Record<string,Quote>){
   const q=quotes[t.symbol],p=q?mark(t.side,q):t.lastPrice;

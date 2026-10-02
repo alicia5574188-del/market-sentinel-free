@@ -35,6 +35,12 @@ comparison disappear. Old frozen files remain byte-identical for offline tests.
 Plans are bounded to30, actual positions to10; inactive books do not receive
 new evaluations or protection overlays. Existing data requests, timers, write
 priorities and storage limits remain. Quotes alone do not request full commits.
+The2s evaluation clock stages one bounded protection overlay between10s durable
+slots. Pending peaks/confirmation are restored before the next evaluation;
+unsaved protection is not published as committed authority. Financial entry,
+reduction and exit bypass the staging delay. Restart uses the last durable
+overlay and its counter, without resetting the resource day or admitting an
+early duplicate write. No extra timer, storage key or increased daily cap.
 
 Synthetic mechanism, migration, restart, resource and real-Worker/fake-Gate
 checks establish execution behavior. They do not establish future profitability,

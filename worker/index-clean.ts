@@ -45,6 +45,7 @@ import { evaluateRegimePortfolio, initialRegimePortfolio, normalizeRegimePortfol
 import type { PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
 import {unifiedReferenceState,unifiedExecutionSummary} from '../lib/unified-execution.ts';
 import {advanceDirectStrategy as advanceShadowInverse,directStrategySummary,directOpportunityView} from '../lib/direct-strategy.ts';
+import {restoreForwardProtectionCheckpoint} from '../lib/forward-protection-checkpoint.ts';
 import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
 import { ADAPTIVE_ENGINE_VERSION, FORWARD_EXECUTION_BBO_CAP, FORWARD_MINUTE_CONFIRMATION_CAP, closeForwardForReset,
   forwardSummary, forwardEquity, freshQuote, forwardUrgentMinuteSymbols, forwardUrgentQuoteSymbols, forwardWatchSymbols,
@@ -57,6 +58,7 @@ import { advanceCounterfactualResearch, counterfactualResearchView, counterfactu
 import { advanceShadowResearch, initialShadowResearch, readShadowResearch, shadowResearchView, shadowResearchWrites,
   type ShadowResearchState } from "../lib/market-intelligence-shadow-research.ts";
 import { nextProtectionWriteBudget, readProtectionWriteBudget, protectionWriteBudgetView,
+  PROTECTION_WRITE_INTERVAL_MS,
   OPTIONAL_WRITE_GUARD_PER_DAY, PAID_PLAN_PLANNED_MONTHLY_ROWS, PAID_DO_INCLUDED_ROWS_PER_MONTH, PAID_PLAN_ROW_SAFETY_LIMIT,
   PRIMARY_PLANNED_DO_ROWS, TWO_MEMBER_PLANNED_DO_ROWS, type ProtectionWriteBudget } from "../lib/forward-write-budget.ts";
 import { EquityReader } from "../lib/equity-reader.ts";
@@ -546,6 +548,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private forwardBusy = false;
   private forwardLastAttemptAt = 0;
   private forwardProtectionBudget: ProtectionWriteBudget | null = null;
+  private forwardPendingProtection: import('../lib/forward-protection-checkpoint.ts').ForwardProtectionCheckpoint | null = null;
   private forwardCompression: Awaited<ReturnType<typeof prepareForwardWrite>>["compression"] | null = null;
   private equityReader = new EquityReader();
   private liveEquityReader = new LiveEquityReader();
@@ -1237,7 +1240,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.forwardBusy = true;
     try {
       await this.ensureAdaptiveAccount(now);
-      const state=this.forwardState!;
+      const committed=this.forwardState!,state=committed.directStrategy&&this.forwardPendingProtection
+        ?restoreForwardProtectionCheckpoint(committed,this.forwardPendingProtection):committed;
       const dataCycleDue=allowDataCycle&&(!state.lastCycleAt
         ||Math.floor((now-90_000)/BAR_MS)>Math.floor((state.lastCycleAt-90_000)/BAR_MS));
       const urgent=this.forwardUrgentSymbols(now).length>0||state.positions.length>0;
@@ -1271,12 +1275,23 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         next.state.storage.layout=FORWARD_PAGED_STATE_VERSION;next.state.storage.sampleIntegrity="raw-sha256";
         this.forwardCompression=prepared.compression;
         for(const t of closures)this.mirrorClosures.set(t.id,structuredClone(t));
-      } else if (next.protectionChanged) {
+      } else if (next.protectionChanged || state.directStrategy&&this.forwardPendingProtection) {
         // Only a new decision-relevant peak/confirmation requests this compact
         // write. Ordinary quote/audit changes do not write or create archives.
         // Keep the same base persistedAt: it fences this overlay to the last
         // full financial commit, which remains the sole account authority.
         const prepared=prepareForwardProtectionWrite(next.state);
+        // The fast decision clock stays at2s; this durable lane stays at10s.
+        // Stage one bounded overlay, without publishing unsaved protection.
+        // Restore it before the next evaluation so transient peaks/confirmation
+        // are retained. Financial entry/reduction/exit above bypass this wait.
+        if(next.state.directStrategy&&this.forwardProtectionBudget
+          &&now>=this.forwardProtectionBudget.lastCommittedAt
+          &&now-this.forwardProtectionBudget.lastCommittedAt<PROTECTION_WRITE_INTERVAL_MS){
+          this.forwardPendingProtection=prepared.entries[FORWARD_PROTECTION_STORAGE] as import('../lib/forward-protection-checkpoint.ts').ForwardProtectionCheckpoint;
+          if(this.forwardError?.includes('关键保护提交须遵守持久化十秒间隔'))this.forwardError=null;
+          return;
+        }
         // Resource counters survive a new financial generation and process
         // restart. They share the checkpoint key/atomic commit, NOT the exit
         // budget. A peak can no longer steal the final financial commit rows.
@@ -1292,6 +1307,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // A PAPER fill/rule update or critical protection update becomes visible
       // only after its atomic commit. A failed write retains the old authority.
       this.forwardState = next.state;
+      this.forwardPendingProtection=null;
       this.forwardError = null;
       try{
         const known=new Set(this.reviewJournal.candidates.map(r=>r.id));
