@@ -9,7 +9,7 @@ import { DurableObject } from "cloudflare:workers";
 import handler from "vinext/server/app-router-entry";
 import { GatePublicError, fetchActiveContracts, fetchContractDirectory, fetchContractStats, fetchLiquidations, fetchRecentTrades,
   fetchStructureCandles, fetchTickerBbo, fetchUrgentFuturesBook, fetchPendingExecutionBook } from "../lib/gate-market.ts";
-import {scanRangeAnomalies,rangeExecutionAdmission,rangeObservationSymbols,fairRangeRefreshBatch,type RangeDiscovery,type RangeScanner} from '../lib/anomaly-range.ts';
+import {ANOMALY_RANGE_VERSION,scanRangeAnomalies,rangeExecutionAdmission,rangeObservationSymbols,fairRangeRefreshBatch,type RangeDiscovery,type RangeScanner} from '../lib/anomaly-range.ts';
 import { MarketDataHub } from "../lib/market-data-hub.ts";
 import { GateStreamingFeed } from "../lib/gate-stream.ts";
 import { CORRELATED_DIRECTION_RISK_CAP, PORTFOLIO_RISK_CAP, remainingStressRisk, STALE_AFTER_MS, SYSTEM_VERSION, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
@@ -958,6 +958,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private refreshRadar(now:number) {
+    const windows=this.forwardState?.directStrategy?.rangeWindows??{};
+    for(const a of this.rangeScanner.detected.values())if(windows[`${ANOMALY_RANGE_VERSION}:${a.symbol}:${a.detectedAt}`])a.frozen=true;
     const common=this.marketHub.commonSymbols([...this.contractCatalog.keys()].filter(adaptiveSymbolAllowed)),
       rows=this.marketHub.discoveryRows(common,now);
     this.rangeDiscovery=scanRangeAnomalies(rows,this.rangeScanner,now,common.length,this.strategyPathSymbols().filter(symbol=>(this.strategyCandles[symbol]?.length??0)>=119).length);
