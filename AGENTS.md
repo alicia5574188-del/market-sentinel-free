@@ -1,3 +1,14 @@
+# 2026-10-04 — repair exhausted anomaly-plan slots
+
+Owner requests repair after the deployed anomaly policy stops admitting new work.
+Recycle terminal unheld plans immediately, retain bounded optional outcomes apart
+from ten active slots, expire stale unfilled plans and fairly rotate existing
+candle request batches. Report actual successful protection commits in health.
+Preserve financial records, active obligations, original proof/admission rules,
+fixed1000 sizing, manual LIVE,30/11/2s/write limits and original release path.
+No reset, private snapshot publication or exchange verification orders. Run
+continuous rotation/restart regressions and verify advancing production receipts.
+
 # 2026-10-03 21:30 — anomaly range implementation authorized
 
 Owner says to implement research/ANOMALY_RANGE_PLAN_2026-10-03.md and deploy via

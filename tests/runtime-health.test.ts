@@ -76,6 +76,20 @@ test("forward storage failures cannot hide behind healthy market transport", () 
   assert.match(runtimeNotice(runtime) ?? "", /synthetic write failure/);
   assert.doesNotMatch(runtimeNotice(runtime) ?? "", /行情重连|暂停新开仓/);
 });
+test('actual recent protection commit covers the 2s decision clock while old full-account timestamp stays honest',()=>{
+  const runtime=forwardLive();runtime.forward!.lastCycleAt=T;
+  runtime.forward!.storage={persistedAt:T-60*60_000,protectionPersistedAt:T-10_000,error:null};
+  assert.equal(runtimeReady(runtime),true);assert.equal(runtimeStatusLabel(runtime),'后台运行中');assert.equal(runtimeNotice(runtime),null);
+  runtime.forward!.storage.protectionPersistedAt=T-30_001;
+  assert.equal(runtimeReady(runtime),false);assert.match(runtimeStatusLabel(runtime),/持久化落后/);
+  for(const stamp of [T+1,Number.NaN,-1,0]){runtime.forward!.storage.protectionPersistedAt=stamp;assert.equal(runtimeReady(runtime),false);}
+  runtime.forward!.storage.protectionPersistedAt=T;runtime.forward!.storage.error='write rejected';
+  assert.match(runtimeStatusLabel(runtime),/存储异常/);
+  runtime.forward!.storage.error=null;runtime.forward!.storage.persistedAt=0;
+  assert.match(runtimeStatusLabel(runtime),/尚未持久化/);
+  runtime.forward!.storage.persistedAt=T;runtime.lastSuccessAt=T+15*60_000+1;
+  assert.match(runtimeStatusLabel(runtime),/周期未推进/);
+});
 
 test("missing forward state, cycle and durable state are separate diagnostic failures", () => {
   const cases: Array<[RuntimeHealthShape["forward"], string]> = [

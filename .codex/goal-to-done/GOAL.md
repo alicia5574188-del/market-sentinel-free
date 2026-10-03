@@ -1,3 +1,12 @@
+# Current repair — 2026-10-04
+
+Recover the stalled anomaly policy: expired plans must release slots below the
+byte limit, optional outcomes must not monopolise deep seats, failed candle
+refreshes must rotate, and health must report actual durable checkpoints.
+Continuous rotation, recovery, financial invariance and original release gates;
+deploy via reviewed main and confirm advancing production. Preserve account,
+history, manual LIVE, strategy proof/financial execution and resource clocks.
+
 # Current goal — owner authorization 2026-10-03 21:30
 
 Implement and publish the owner-authorized anomaly-range design. Preserve accounts,

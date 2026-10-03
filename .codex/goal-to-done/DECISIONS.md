@@ -1,3 +1,20 @@
+# 2026-10-04 — plan capacity incident
+
+Private receipt shows9 EXPIRED plus1 CONFIRMING in ten slots,18,338 research
+bytes below24KiB and473,657 account bytes below1MiB; capacitySkipped15043
+counts repeated attempts. Terminal plans were only evicted above the byte cap.
+Immediately recycle unheld terminal plans into at most12 compact outcome rows
+within6KiB/overall24KiB, without financial witnesses. Missing observations stay
+explicit; pending optional omissions are counted. Plans expire before the stale
+candle branch; confirmed-close edge reversal retains a30-minute observation
+window. Holdings keep immutable financial witnesses and original protections.
+Allocate deep seats to holdings, live plans, new anomalies, optional outcomes.
+Rotate attempted candle batches within existing5/4 request caps. A successful
+10s protection checkpoint carries current research; health exposes its actual
+commit timestamp with30s diagnostic tolerance alongside the unchanged full
+financial timestamp. Errors, missing persistence and genuine cycle stalls warn.
+Private source evidence remains local; regressions use synthetic causal fixtures.
+
 # 2026-10-03 — anomaly range controller and data concentration
 
 Implement from published main, exclude canceled LYN inverse candidate. Gate is

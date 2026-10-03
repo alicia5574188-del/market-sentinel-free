@@ -194,6 +194,9 @@ export function reviewVersionDiagnostics(s:ReviewSnapshot){
 export function finalizeReviewSnapshot(s:ReviewSnapshot):ReviewSnapshot{
   if(s.research.anomalyRangeAudit){const audit=obj(s.research.anomalyRangeAudit);
     audit.events=Object.values(obj(s.research.rangeResearch).events??{});
+    audit.recentOutcomes=obj(s.research.rangeResearch).recent??[];
+    audit.recycledPlans=obj(s.research.rangeResearch).recycled??0;
+    audit.omittedOutcomes=obj(s.research.rangeResearch).omittedOutcomes??0;
     audit.holdings=s.trades.filter(t=>t.unified?.anomaly).map(t=>({tradeId:t.id,symbol:t.symbol,side:t.side,status:t.status,
       signalAt:t.paperOrder?.signalAt??t.openedAt,fillAt:t.paperOrder?.confirmedAt??t.openedAt,entryPrice:t.entryPrice,
       plan:t.unified!.anomaly,originalWindow:decodeRangeWindow(t.unified!.anomaly!.window),entryReason:t.unified!.entryReason,

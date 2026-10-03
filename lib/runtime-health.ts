@@ -5,7 +5,7 @@ export type RuntimeHealthShape = {
   lastError?: unknown;
   lastSuccessAt?: number | null;
   forward?: { mode?: string; lastCycleAt?: number | null;
-    storage?: { persistedAt?: number; error?: unknown } } | null;
+    storage?: { persistedAt?: number; protectionPersistedAt?: number; error?: unknown } } | null;
   symbols?: string[];
   evidence?: Record<string, { fresh?: boolean; ancillaryFresh?: boolean; entryReady?: boolean }>;
   realtimeReadiness?: { capacity?: number; actionableMarkets?: number; protectedMarketsReady?: boolean };
@@ -32,11 +32,17 @@ function forwardRuntimeIssue(runtime: RuntimeHealthShape | null, now?: number) {
   const persisted = forward.storage?.persistedAt;
   if (typeof persisted !== "number" || !Number.isFinite(persisted) || persisted <= 0) return {
     label: "后台运行中 · 策略尚未持久化", notice: "前向策略尚无持久化记录；不能将内存中的状态视为已保存。" };
-  if (persisted < cycle) return {
+  const reference = now ?? runtime?.lastSuccessAt,
+    protection = forward.storage?.protectionPersistedAt,
+    validProtection = typeof protection === 'number' && Number.isFinite(protection) && protection > 0
+      && protection <= (typeof reference === 'number' && Number.isFinite(reference) ? reference : cycle);
+  // Actual durable 10s protection writes also save current strategy research.
+  // A bounded 30s diagnostic tolerance covers their 2s in-memory decision clock.
+  const durable = validProtection ? Math.max(persisted, protection) : persisted;
+  if (durable + (validProtection ? 30_000 : 0) < cycle) return {
     label: "后台运行中 · 策略持久化落后", notice: "前向策略周期晚于已保存状态；需要核查持久化进度。" };
   // Use the payload's own clock unless explicitly supplied. Browser clock
   // drift and replaying an old snapshot must not invent a strategy outage.
-  const reference = now ?? runtime?.lastSuccessAt;
   if (typeof reference === "number" && Number.isFinite(reference) && reference - cycle > FORWARD_CYCLE_STALL_MS) return {
     label: "后台运行中 · 策略周期未推进", notice: "行情仍在更新，但前向策略超过15分钟未完成新周期；需要核查策略执行。" };
   return null;

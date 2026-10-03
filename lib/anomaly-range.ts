@@ -20,7 +20,25 @@ export type RangeEvent={id:string;symbol:string;detectedAt:number;source:string;
   consumedAt:number;tradeId?:string;predecessorId?:string;reverseAfter?:number;reverseEligible?:boolean;
   admission?:{at:number;reason:string};exit?:{at:number;reason:string;net:number|null};
   outcomes:{minutes:number;dueAt:number;at:number|null;price:number|null;move:number|null;status:'PENDING'|'OBSERVED'|'MISSING'}[]};
-export type RangeResearch={version:typeof ANOMALY_RANGE_VERSION;startedAt:number;updatedAt:number;events:Record<string,RangeEvent>;bytes:number;capacitySkipped:number;discovery?:RangeDiscovery;error?:string};
+export type RangeResearch={version:typeof ANOMALY_RANGE_VERSION;startedAt:number;updatedAt:number;events:Record<string,RangeEvent>;bytes:number;capacitySkipped:number;discovery?:RangeDiscovery;error?:string}&RangeLifecycle;
+export type RangeOutcomeRecord=Pick<RangeEvent,'id'|'symbol'|'detectedAt'|'source'|'anchorPrice'|'H'|'L'|'direction'|'reason'|'outcomes'>;
+export const RANGE_OUTCOME_BYTES=6*1024;
+type RangeLifecycle={recent?:RangeOutcomeRecord[];recycled?:number;omittedOutcomes?:number};
+const terminal=(e:RangeEvent)=>e.phase==='DONE'||e.phase==='EXPIRED';
+const planExpired=(e:RangeEvent,now:number)=>now-(e.reverseEligible&&e.reverseAfter?e.reverseAfter:e.detectedAt)>=1800000;
+/** Outcome-only observations yield seats to executable work; holdings never rotate out. */
+export function rangeObservationSymbols(s:RangeResearch|undefined,held:string[],anomalies:RangeDiscovery['anomalies'],now:number,limit=RANGE_WINDOW_LIMIT){
+  const active=Object.values(s?.events??{}).filter(e=>!terminal(e)&&!planExpired(e,now)).map(e=>e.symbol),
+    recent=[...Object.values(s?.events??{}).filter(e=>terminal(e)||planExpired(e,now)),...(s?.recent??[])]
+      .filter(e=>e.outcomes.some(o=>o.status==='PENDING')).map(e=>e.symbol);
+  return [...new Set([...held,...active,...anomalies.filter(a=>now-a.detectedAt<1800000).map(a=>a.symbol),...recent])].slice(0,limit);
+}
+/** Rotate attempts as well as successes so a failing first batch cannot starve the rest. */
+export function fairRangeRefreshBatch(pool:string[],due:string[],attempts:Map<string,number>,now:number,limit:number){
+  const resident=new Set(pool);for(const symbol of attempts.keys())if(!resident.has(symbol))attempts.delete(symbol);
+  const batch=[...due].sort((a,b)=>(attempts.get(a)??0)-(attempts.get(b)??0)).slice(0,limit);
+  for(const symbol of batch)attempts.set(symbol,now);return batch;
+}
 /** Immutable original OHLC lives once per plan, then on its financial trade. */
 export type RangeWindows=Record<string,RangeWindow>;
 export type RangeHolding={version:typeof ANOMALY_RANGE_VERSION;eventId:string;kind:RangeKind;H:number;L:number;E:number;D:number;n5:number;
@@ -84,28 +102,52 @@ function validRangeProof(p:NonNullable<RangeEvent['proof']>,now:number){
     &&p.fiveBar.length===5&&p.fiveBar.every(Number.isFinite)&&p.fiveBar[0]!*1000+300000===p.fiveAt
     &&p.minuteBars.length===p.bars.length&&p.minuteBars.every((r,i)=>r.length===5&&r.every(Number.isFinite)&&r[0]!*1000+60000===p.bars[i]);
 }
+function validOutcomes(e:RangeOutcomeRecord,now:number){return Array.isArray(e.outcomes)&&e.outcomes.length===4&&e.outcomes.every((o,i)=>
+  o.minutes===[15,30,45,60][i]&&o.dueAt===e.detectedAt+o.minutes*60000&&['PENDING','OBSERVED','MISSING'].includes(o.status)
+  &&(o.at===null||Number.isFinite(o.at)&&o.at>=o.dueAt&&o.at<=now)&&(o.price===null||Number.isFinite(o.price)&&o.price>0)
+  &&(o.move===null||Number.isFinite(o.move)));}
+function observeOutcomes(e:RangeOutcomeRecord,rows:CandleLike[]|undefined,now:number){
+  const five=specialRows(rows,now).filter(r=>r.volumeVenue===e.source);
+  for(const o of e.outcomes)if(o.status==='PENDING'&&now>=o.dueAt){const r=five.find(r=>end(r)>=o.dueAt&&end(r)<=o.dueAt+300000);
+    if(r){o.at=end(r);o.price=r.close;o.move=r.close/e.anchorPrice-1;o.status='OBSERVED';}
+    else if(now>o.dueAt+300000)o.status='MISSING';}
+}
 export function normalizeRangeResearch(value:unknown):RangeResearch|undefined{
   const s=value as RangeResearch;if(!s||s.version!==ANOMALY_RANGE_VERSION||!Number.isFinite(s.updatedAt)||!Number.isFinite(s.startedAt)
     ||s.updatedAt<s.startedAt||!s.events||Object.keys(s.events).length>30||bytes(s)>RANGE_RESEARCH_BYTES)return;
+  if(s.recent!==undefined&&(!Array.isArray(s.recent)||s.recent.length>12||bytes(s.recent)>RANGE_OUTCOME_BYTES
+    ||s.recent.some(e=>!e||!e.id||!e.symbol||![e.detectedAt,e.anchorPrice,e.H,e.L].every(Number.isFinite)
+      ||e.detectedAt>s.updatedAt||e.anchorPrice<=0||e.H<=e.L||e.L<=0||typeof e.reason!=='string'
+      ||!['UP','DOWN','NEUTRAL'].includes(e.direction)||!['BYBIT','OKX','KUCOIN','MEXC','HTX'].includes(e.source)||!validOutcomes(e,s.updatedAt))))return;
+  if([s.recycled,s.omittedOutcomes].some(n=>n!==undefined&&(!Number.isSafeInteger(n)||n<0)))return;
   for(const [symbol,e] of Object.entries(s.events)){
     if(!e||e.symbol!==symbol||!e.id||![e.H,e.L,e.E,e.D,e.n5,e.detectedAt,e.lastAt,e.price,e.anchorPrice,e.consumedAt].every(Number.isFinite)
       ||e.H<=e.L||e.L<=0||e.n5<=0||e.E<=e.D||e.D<=0||e.anchorPrice<=0||e.consumedAt>s.updatedAt
       ||!['BYBIT','OKX','KUCOIN','MEXC','HTX'].includes(e.source)||!['UP','DOWN','NEUTRAL'].includes(e.direction)
       ||!['WATCH','CONFIRMING','READY','EXECUTING','HOLDING','EXPIRED','DONE'].includes(e.phase)||typeof e.active!=='boolean'||e.detectedAt>s.updatedAt||e.lastAt>s.updatedAt||!Array.isArray(e.swings)||e.swings.length>6
       ||e.swings.some(p=>!['HIGH','LOW'].includes(p.kind)||![p.price,p.at,p.confirmedAt].every(Number.isFinite)||p.price<=0||p.at>p.confirmedAt||p.confirmedAt>s.updatedAt)
-      ||!Array.isArray(e.outcomes)||e.outcomes.length!==4||e.outcomes.some((o,i)=>o.minutes!==[15,30,45,60][i]
-        ||o.dueAt!==e.detectedAt+o.minutes*60000||!['PENDING','OBSERVED','MISSING'].includes(o.status)
-        ||o.at!==null&&(!Number.isFinite(o.at)||o.at<o.dueAt||o.at>s.updatedAt)||o.price!==null&&(!Number.isFinite(o.price)||o.price<=0)
-        ||o.move!==null&&!Number.isFinite(o.move))||e.proof&&!validRangeProof(e.proof,s.updatedAt))return;
+      ||!validOutcomes(e,s.updatedAt)||e.proof&&!validRangeProof(e.proof,s.updatedAt))return;
   }return structuredClone(s);
 }
 export function boundRangeResearch(s:RangeResearch){
   for(const e of Object.values(s.events)){e.reason=e.reason.slice(0,90);if(e.admission)e.admission.reason=e.admission.reason.slice(0,90);}
-  // Untraded outcomes remain; remove oldest completed research only, never an active plan.
-  for(const e of Object.values(s.events).filter(e=>e.phase==='DONE'||e.phase==='EXPIRED').sort((a,b)=>a.detectedAt-b.detectedAt)){
-    if(bytes(s)<=RANGE_RESEARCH_BYTES-256)break;delete s.events[e.symbol];s.capacitySkipped++;
-  }
+  trimRangeOutcomes(s);
   s.bytes=bytes(s);if(s.bytes>RANGE_RESEARCH_BYTES)throw new Error('RANGE_RESEARCH_BOUND');return s;
+}
+function trimRangeOutcomes(s:RangeResearch,reserve=256){
+  const recent=s.recent??[];
+  while(recent.length&&(recent.length>12||bytes(recent)>RANGE_OUTCOME_BYTES||bytes(s)>RANGE_RESEARCH_BYTES-reserve)){
+    const resolved=recent.findIndex(e=>e.outcomes.every(o=>o.status!=='PENDING')),
+      [removed]=recent.splice(resolved>=0?resolved:0,1);
+    s.omittedOutcomes=(s.omittedOutcomes??0)+removed!.outcomes.filter(o=>o.status==='PENDING').length;
+  }
+}
+function recycleRangePlans(s:RangeResearch,windows:RangeWindows,protectedIds:Set<string|undefined>){
+  for(const e of Object.values(s.events))if(terminal(e)&&!protectedIds.has(e.id)){
+    const {id,symbol,detectedAt,source,anchorPrice,H,L,direction,reason,outcomes}=e;
+    (s.recent??=[]).push({id,symbol,detectedAt,source,anchorPrice,H,L,direction,reason:reason.slice(0,90),outcomes});
+    delete s.events[symbol];delete windows[id];s.recycled=(s.recycled??0)+1;
+  }trimRangeOutcomes(s);
 }
 export function advanceRangeResearch(input:{previous?:RangeResearch;windows:RangeWindows;now:number;paths:Record<string,CandleLike[]>;
   minutes?:Record<string,CandleLike[]>;quotes:Record<string,QuoteLike>;ticks:Record<string,number>;discovery?:RangeDiscovery;positions:Trade[];history:Trade[]}){
@@ -113,12 +155,25 @@ export function advanceRangeResearch(input:{previous?:RangeResearch;windows:Rang
   if(!s)throw new Error('RANGE_MEMORY_INVALID');if(input.now<s.updatedAt)return s;s.updatedAt=input.now;
   if(input.discovery)s.discovery={...input.discovery,anomalies:input.discovery.anomalies.slice(0,8)};
   const protectedIds=new Set(input.positions.map(t=>t.unified?.anomaly?.eventId).filter(Boolean));
+  for(const e of Object.values(s.events)){
+    if(protectedIds.has(e.id))continue;
+    const closed=input.history.findLast(t=>t.unified?.anomaly?.eventId===e.id);
+    if(closed&&e.tradeId===closed.id){e.exit={at:closed.closedAt!,reason:closed.exitReason??'EXIT',net:closed.netPnl};
+      e.predecessorId=closed.id;e.reverseAfter=closed.closedAt!;e.reverseEligible=!!closed.unified!.anomaly!.reverseEligible;e.phase=e.reverseEligible?'WATCH':'DONE';}
+    if(!terminal(e)&&planExpired(e,input.now)){e.phase='EXPIRED';e.reason='未成交计划30分钟到期，释放观察名额';}
+    observeOutcomes(e,input.paths[e.symbol],input.now);
+  }
+  for(const e of s.recent??[])observeOutcomes(e,input.paths[e.symbol],input.now);
+  const seen=new Set([...Object.values(s.events),...(s.recent??[])].map(e=>e.id));
+  recycleRangePlans(s,input.windows,protectedIds);
   for(const [id] of Object.entries(input.windows))if(!protectedIds.has(id)&&!Object.values(s.events).some(e=>e.id===id&&input.now-e.detectedAt<=3600000))delete input.windows[id];
   for(const a of input.discovery?.anomalies??[]){
+    if(a.detectedAt>input.now||input.now-a.detectedAt>=1800000||seen.has(`${ANOMALY_RANGE_VERSION}:${a.symbol}:${a.detectedAt}`))continue;
     const old=s.events[a.symbol];if(old&&(!['DONE','EXPIRED'].includes(old.phase)||input.now-old.detectedAt<3600000))continue;
     const cutoff=Math.floor(a.detectedAt/300000)*300000,five=specialRows(input.paths[a.symbol],input.now,300000,121),prior=five.filter(r=>end(r)<=cutoff).slice(-120),source=prior.at(-1)?.volumeVenue;
     if(prior.length<119||prior.some(r=>r.volumeVenue!==source)||source!==a.source||Object.keys(input.windows).length>=RANGE_WINDOW_LIMIT)continue;
-    if(Object.keys(s.events).length>=10&&!old||bytes(s)>RANGE_RESEARCH_BYTES-1400){s.capacitySkipped++;continue;}
+    trimRangeOutcomes(s,2200);
+    if(Object.keys(s.events).length>=10&&!old||bytes(s)>RANGE_RESEARCH_BYTES-2200){s.capacitySkipped++;continue;}
     const H=Math.max(...prior.map(r=>r.high)),L=Math.min(...prior.map(r=>r.low)),tick=input.ticks[a.symbol]??prior.at(-1)!.close*1e-6,n5=noise(prior,tick),E=Math.min(.75*n5,.1*(H-L)),D=Math.max(2*tick,.2*n5);
     if(H<=L||E<=D)continue;
     const swings=rangeSwings(prior,n5),e:RangeEvent={id:`${ANOMALY_RANGE_VERSION}:${a.symbol}:${a.detectedAt}`,symbol:a.symbol,detectedAt:a.detectedAt,source:source!,
@@ -135,13 +190,12 @@ export function advanceRangeResearch(input:{previous?:RangeResearch;windows:Rang
     if(held){e.tradeId=held.id;e.consumedAt=Math.max(e.consumedAt,held.openedAt);e.phase=held.paperOrder?.phase==='FILLED'?'HOLDING':'EXECUTING';}
     if(closed&&!held&&e.tradeId===closed.id){e.exit={at:closed.closedAt!,reason:closed.exitReason??'EXIT',net:closed.netPnl};
       e.predecessorId=closed.id;e.reverseAfter=closed.closedAt!;e.reverseEligible=!!closed.unified!.anomaly!.reverseEligible;e.phase=e.reverseEligible?'WATCH':'DONE';}
-    for(const o of e.outcomes)if(o.status==='PENDING'&&input.now>=o.dueAt){const r=five.find(r=>end(r)>=o.dueAt&&end(r)<=o.dueAt+300000);
-      if(r){o.at=end(r);o.price=r.close;o.move=r.close/e.anchorPrice-1;o.status='OBSERVED';}
-      else if(input.now>o.dueAt+300000)o.status='MISSING';}
+    observeOutcomes(e,input.paths[e.symbol],input.now);
+    if(!held&&!terminal(e)&&planExpired(e,input.now)){e.phase='EXPIRED';e.reason='未成交计划30分钟到期，释放观察名额';}
+    if(!held&&terminal(e))continue;
     if(!last||input.now-end(last)>600000){e.active=false;e.reason='同源完成K线缺失，停止新确认';continue;}
     e.price=q?.fresh&&q.priceSource===e.source&&input.now-q.observedAt<=10000?((q.bestBid+q.bestAsk)/2):last.close;const activity=recentSpecialActivity(five);e.active=activity.active;e.activity={turnover15:activity.turnover15,activityRatio:activity.activityRatio,at:end(last)};
     if(held||e.phase==='DONE'||e.phase==='EXPIRED')continue;
-    if(!e.reverseEligible&&input.now-e.detectedAt>1800000){e.phase='EXPIRED';e.reason='未成交计划30分钟到期，保留结果';continue;}
     if(e.proof&&input.now-e.proof.at>120000){delete e.proof;e.phase='WATCH';}
     if(end(last)>e.lastAt){
       const newly=five.filter(r=>end(r)>e.lastAt&&r.time*1000>=Math.floor(e.detectedAt/300000)*300000);
@@ -171,7 +225,7 @@ export function advanceRangeResearch(input:{previous?:RangeResearch;windows:Rang
       e.phase='READY';e.reason=choice.kind==='EDGE_BREAKOUT'?'5分钟收在区间外，随后1分钟强势推进':choice.kind==='EDGE_RETURN'?'边缘尝试被打回，随后1分钟向内确认':'内部波段同向，完成5分钟推进及后续1分钟确认';break;
     }
     if(!e.proof){e.phase='CONFIRMING';e.reason=!e.active?'近期成交不足或未知，继续观察':'等待5分钟位置证明及随后2至3根强势1分钟线';}
-  }return boundRangeResearch(s);
+  }recycleRangePlans(s,input.windows,protectedIds);return boundRangeResearch(s);
 }
 /** Map only a fresh, pinned same-venue analysis price to a fresh executable Gate quote. */
 export function rangeMarketRoute(s:RangeResearch|undefined,symbol:string,price:number,now:number,analysis?:QuoteLike){

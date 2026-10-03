@@ -9,7 +9,7 @@ import { DurableObject } from "cloudflare:workers";
 import handler from "vinext/server/app-router-entry";
 import { GatePublicError, fetchActiveContracts, fetchContractDirectory, fetchContractStats, fetchLiquidations, fetchRecentTrades,
   fetchStructureCandles, fetchTickerBbo, fetchUrgentFuturesBook, fetchPendingExecutionBook } from "../lib/gate-market.ts";
-import {scanRangeAnomalies,rangeExecutionAdmission,type RangeDiscovery,type RangeScanner} from '../lib/anomaly-range.ts';
+import {scanRangeAnomalies,rangeExecutionAdmission,rangeObservationSymbols,fairRangeRefreshBatch,type RangeDiscovery,type RangeScanner} from '../lib/anomaly-range.ts';
 import { MarketDataHub } from "../lib/market-data-hub.ts";
 import { GateStreamingFeed } from "../lib/gate-stream.ts";
 import { CORRELATED_DIRECTION_RISK_CAP, PORTFOLIO_RISK_CAP, remainingStressRisk, STALE_AFTER_MS, SYSTEM_VERSION, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
@@ -521,6 +521,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private strategyCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
   private forwardMinuteCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
   private forwardMinuteRetryAt = new Map<string,number>();
+  private rangeMinuteAttemptAt = new Map<string,number>();
+  private rangeFiveAttemptAt = new Map<string,number>();
   private gateStream = new GateStreamingFeed();
   private paperBooks=new Map<string,{observedAt:number;bids:{price:number;size:number}[];asks:{price:number;size:number}[]}>();
   private paperDepthBooks=new Map<string,import('../lib/liquidity-core.ts').BookSnapshot>();
@@ -959,11 +961,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const common=this.marketHub.commonSymbols([...this.contractCatalog.keys()].filter(adaptiveSymbolAllowed)),
       rows=this.marketHub.discoveryRows(common,now);
     this.rangeDiscovery=scanRangeAnomalies(rows,this.rangeScanner,now,common.length,this.strategyPathSymbols().filter(symbol=>(this.strategyCandles[symbol]?.length??0)>=119).length);
-    const held=this.forwardState?.positions.map(t=>t.symbol)??[],pending=Object.values(this.forwardState?.directStrategy?.rangeResearch?.events??{})
-      .filter(e=>!['DONE','EXPIRED'].includes(e.phase)||e.outcomes.some(o=>o.status==='PENDING')).map(e=>e.symbol);
-    this.runtime.liquidUniverse=[...new Set([...held,...pending,...this.rangeDiscovery.anomalies.map(a=>a.symbol)])].slice(0,SCAN_UNIVERSE_SIZE);
+    const held=this.forwardState?.positions.map(t=>t.symbol)??[],research=this.forwardState?.directStrategy?.rangeResearch;
+    this.runtime.liquidUniverse=rangeObservationSymbols(research,held,this.rangeDiscovery.anomalies,now,SCAN_UNIVERSE_SIZE);
     for(const symbol of Object.keys(this.strategyCandles))if(!this.runtime.liquidUniverse.includes(symbol))delete this.strategyCandles[symbol];
-    this.rangeDiscovery.queued+=Math.max(0,new Set([...pending,...this.rangeDiscovery.anomalies.map(a=>a.symbol)]).size-this.runtime.liquidUniverse.length);
+    this.rangeDiscovery.queued+=Math.max(0,rangeObservationSymbols(research,held,this.rangeDiscovery.anomalies,now,4096).length-this.runtime.liquidUniverse.length);
     this.runtime.radar=successfulRadarRuntime(this.runtime.radar,now,this.runtime.liquidUniverse.length,[]);
     this.runtime.lastRadarAt=now;
     for(const symbol of this.runtime.liquidUniverse)this.applyContractMetadata(symbol);
@@ -1013,7 +1014,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       ...(!includeResearch?{positions:this.forwardState.positions.map(directExecutionTradeProjection),
         history:this.forwardState.history.map(directExecutionTradeProjection)}:{}),
       liveMirror: this.liveMirrorView(),
-      storage: { ...this.forwardState.storage, error: this.forwardError } }
+      storage: { ...this.forwardState.storage, protectionPersistedAt:this.forwardProtectionBudget?.lastCommittedAt??0, error: this.forwardError } }
       : { version: FORWARD_VERSION, mode: "RECOVERY_REQUIRED", liveEligible: false, storage: { error: this.forwardError } };
   }
 
@@ -1056,7 +1057,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         }));
         return{waiting:records.filter(v=>v.status==="WAITING").length,cancelled:records.filter(v=>v.status==="CANCELLED").length,records};
       })(),
-      candidateDiagnostics:blocked,storage:{persistedAt:s?.storage.persistedAt??0,layout:s?.storage.layout??null,error:this.forwardError}};
+      candidateDiagnostics:blocked,storage:{persistedAt:s?.storage.persistedAt??0,protectionPersistedAt:this.forwardProtectionBudget?.lastCommittedAt??0,layout:s?.storage.layout??null,error:this.forwardError}};
   }
 
   protected liveMirrorView() {
@@ -3536,16 +3537,18 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // positions from monopolising all 1m discovery data.
       urgent=[...new Set([...freshImpulse.slice(0,3),...fixed])]
         .slice(0,FORWARD_MINUTE_CONFIRMATION_CAP);
-    const due=urgent.filter(symbol=>{
+    const due=fairRangeRefreshBatch(urgent,urgent.filter(symbol=>{
       if((this.forwardMinuteRetryAt.get(symbol)??0)>now)return false;
       const last=Math.max(this.forwardMinuteCandles[symbol]?.at(-1)?.time??0,this.gateStream.path(symbol,"1m").at(-1)?.time??0);
       return!last||(last+60)*1000<targetCompletedAt;
-    }).slice(0,4);
+    }),this.rangeMinuteAttemptAt??=new Map(),now,4);
     const results=await Promise.allSettled(due.map(async symbol=>{
       const coverage=this.marketHub.coverage(symbol,Date.now());
       if(coverage.sourceCount>=2&&coverage.disagreementRate>.015)
         throw new Error(`${symbol} external venue disagreement`);
-      const range=this.forwardState?.directStrategy?.rangeResearch?.events[symbol],held=this.forwardState?.positions.find(t=>t.symbol===symbol),
+      const research=this.forwardState?.directStrategy?.rangeResearch,
+        range=research?.events[symbol]??research?.recent?.findLast(e=>e.symbol===symbol&&e.outcomes.some(o=>o.status==='PENDING')),
+        held=this.forwardState?.positions.find(t=>t.symbol===symbol),
         external=range||held?.unified?.anomaly||!held?await this.marketHub.pinnedCandles(symbol,"1m",90,(range?.source??held?.unified?.anomaly?.source) as import('../lib/market-data-hub.ts').MarketSource|undefined):await this.marketHub.candles(symbol,"1m",90);
       if(external)return{symbol,rows:external.rows,source:external.source};
       if(!held||held.unified?.anomaly||this.marketHub.supports(symbol))throw new Error(`${symbol} external 1m temporarily unavailable`);
@@ -3706,16 +3709,18 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private async refreshAdaptiveCandles(now=Date.now()){
     const symbols=this.strategyPathSymbols();if(!symbols.length)return 0;
     const targetCompletedAt=latestCompletedStrategyCandleAt(now);
-    const due=symbols.filter(symbol=>{
+    const due=fairRangeRefreshBatch(symbols,symbols.filter(symbol=>{
       if((this.runtime.strategyCandleFailures[symbol]?.retryAt??0)>now)return false;
       const last=this.strategyCandles[symbol]?.at(-1);
       return !last||(last.time+300)*1000<targetCompletedAt;
-    }).slice(0,5);
+    }),this.rangeFiveAttemptAt??=new Map(),now,5);
     const results=await Promise.allSettled(due.map(async symbol=>{
       const coverage=this.marketHub.coverage(symbol,Date.now());
       if(coverage.sourceCount>=2&&coverage.disagreementRate>.015)
         throw new Error(`${symbol} external venue disagreement ${(coverage.disagreementRate*100).toFixed(2)}%`);
-      const range=this.forwardState?.directStrategy?.rangeResearch?.events[symbol],held=this.forwardState?.positions.find(t=>t.symbol===symbol),
+      const research=this.forwardState?.directStrategy?.rangeResearch,
+        range=research?.events[symbol]??research?.recent?.findLast(e=>e.symbol===symbol&&e.outcomes.some(o=>o.status==='PENDING')),
+        held=this.forwardState?.positions.find(t=>t.symbol===symbol),
         external=range||held?.unified?.anomaly||!held?await this.marketHub.pinnedCandles(symbol,"5m",120,(range?.source??held?.unified?.anomaly?.source) as import('../lib/market-data-hub.ts').MarketSource|undefined):await this.marketHub.candles(symbol,"5m",120);
       if(external)return{symbol,rows:external.rows,replace:true,source:external.source};
       if(!held||held.unified?.anomaly||this.marketHub.supports(symbol))throw new Error(`${symbol} external 5m temporarily unavailable`);
