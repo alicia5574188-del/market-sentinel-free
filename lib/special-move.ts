@@ -93,7 +93,11 @@ function ownRoute(w:SpecialWatch,rs:CandleLike[],fast:CandleLike[],q:QuoteLike,n
       retest=sign*(first.close-boundary)>epsilon&&sign*(prior.close-boundary)>-epsilon
         &&sign*(prior.close-first.close)<-epsilon&&sign*(last.close-first.close)>epsilon;
     if(!(retained||retest)||stamp<=ref.formedAt||old&&stamp<=old.proofAt)continue;
-    const stop=sign>0?Math.min(boundary,...recent.map(r=>r.low))-epsilon:Math.max(boundary,...recent.map(r=>r.high))+epsilon,
+    // A completed retest earns its own support, even when the initial burst
+    // left the old 5m reference far behind. First departure remains anchored
+    // to that old boundary; never invent a tighter stop merely to chase it.
+    const stop=sign>0?Math.min(...(retest?[]:[boundary]),...recent.map(r=>r.low))-epsilon
+      :Math.max(...(retest?[]:[boundary]),...recent.map(r=>r.high))+epsilon,
       target=last.close+sign*Math.max(price*.015,geometry.atr*4,Math.abs(last.close-stop)*2.5),
       route:MarketRoute={version:MARKET_AUTHORITY_VERSION,controllerVersion:SPECIAL_MOVE_VERSION,epoch:1,phase:sign>0?'UP':'DOWN',
         relation:'INDEPENDENT',branch:'CONTINUATION',side,proofAt:stamp,proofPrice:last.close,proofPath:retest?'RETEST_RESTART':'HOLD_OUTSIDE',

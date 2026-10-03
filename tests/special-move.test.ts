@@ -45,6 +45,17 @@ test('broad opposite direction does not veto the own explosive leg',()=>{
   const i=market();i.quotes.A_USDT=q(99);i.minutes.A_USDT=fast(-1);
   const w=advanceSpecialResearch(i).watches.A_USDT!;assert.equal(w.kind,'OPPOSITE_MOVE');assert.equal(w.route!.side,'SHORT');
 });
+test('a large burst is not chased, but a real completed retest earns new own support',()=>{
+  for(const side of [1,-1]){const i=own(side);i.quotes.A_USDT=q(100+side*12.5);
+    i.minutes.A_USDT=bars([...Array(12).fill(100),100+side*10,100+side*11,100+side*12.5],60000);
+    assert.equal(advanceSpecialResearch(i).watches.A_USDT!.route,undefined);
+    i.minutes.A_USDT=bars([...Array(12).fill(100),100+side*12,100+side*10.5,100+side*12.5],60000);
+    const route=advanceSpecialResearch(i).watches.A_USDT!.route!;assert.ok(route);
+    assert.equal(route.proofPath,'RETEST_RESTART');assert.equal(route.side,side>0?'LONG':'SHORT');
+    assert.ok(side*(route.stop-100)>0,'actual retest support must replace the distant launch reference');
+    assert.ok(Math.abs(route.proofPrice!-route.stop)/route.proofPrice!<.035);
+  }
+});
 test('uncompleted/future bars and quote-only advance cannot manufacture a launch',()=>{
   const i=own();i.minutes.A_USDT=bars(Array(15).fill(100),60000);
   i.minutes.A_USDT.push(...bars([100.5,100.8,101],60000,T+180000));
@@ -117,19 +128,20 @@ test('radar history and scan capacity are bounded; held names retain priority',(
   assert.equal(picked.length,30);assert.equal(picked[0]!.symbol,'X999_USDT');assert.equal(new Set(picked.map(r=>r.symbol)).size,30);
 });
 test('actual controller reaches shared PAPER submission without broad quorum or resetting money',()=>{
-  for(const side of [1,-1]){
+  for(const side of [1,-1])for(const launch of [1,12.5]){
   const base=initialForward(T-7200000),start=base.startedAt,c={quantoMultiplier:.1,leverageMax:20,maintenanceRate:.005,minContracts:1,tickSize:.01};
   const i=own(side);let s=base;
-  for(let n=0;n<=12;n++){const now=T+n*2000;
+  if(launch>1)i.minutes.A_USDT=bars([...Array(12).fill(100),100+side*12,100+side*10.5,100+side*launch],60000);
+  for(let n=0;n<=42;n++){const now=T+n*2000;
     s=advanceDirectStrategy({state:s,now,specialMove:true,marketAuthority:true,allowDataCycle:false,entrySymbols:['A_USDT','MISSING_USDT'],
-      quotes:{A_USDT:q(100+side*(1+n*.014),now)},analysisQuotes:{A_USDT:q(100+side*(1+n*.014),now)},paths:i.paths,minutePaths:i.minutes,
+      quotes:{A_USDT:q(100+side*(launch+n*.014),now)},analysisQuotes:{A_USDT:q(100+side*(launch+n*.014),now)},paths:i.paths,minutePaths:i.minutes,
       contracts:{A_USDT:c},paperTiming:{version:'native-position-first-observed-v1',prepareMs:2000,confirmMs:0,basis:'EXECUTION_CLOCK',samples:0}}).state;
     if(s.positions.length)break;
   }
   assert.equal(s.startedAt,start);assert.equal(s.history.length,0);assert.equal(s.directStrategy!.specialMove!.version,'special-move-v1');
   assert.ok(s.positions.length>0,JSON.stringify({plans:s.directStrategy!.plans,validations:s.entryValidations,diagnostics:s.entryDiagnostics}));
   assert.equal(s.positions[0]!.side,side>0?'LONG':'SHORT');assert.equal(s.positions[0]!.paperOrder!.phase,'PREPARING');
-  assert.equal(s.balance,1000);assert.ok(s.positions[0]!.notional>16);assert.equal(normalizeForward(s,T+24000).startedAt,start);
+  assert.equal(s.balance,1000);assert.ok(s.positions[0]!.notional>16);assert.equal(normalizeForward(s,T+84000).startedAt,start);
   }
 });
 test('losing optional research cannot rearm a previously traded same-side explosive event',()=>{

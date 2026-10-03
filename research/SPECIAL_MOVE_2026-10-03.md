@@ -51,7 +51,11 @@ an actual completed retained departure or pullback/restart beyond the reference
 formed before the last3five-minute bars. Prefer existing continuous fresh1m
 bars; otherwise use completed5m evidence. Three actual completed proof bars,
 their immutable times/price, reference and stop form one event identity.
-No new identity from repeated fresh ticks. Subsequent same-side events require
+No new identity from repeated fresh ticks. A completed retest's own extreme
+can establish new support beyond a distant
+pre-burst reference; a first departure keeps that reference and cannot tighten
+its stop just to make a chase pass. Once filled, the initial stop is immutable.
+Subsequent same-side events require
 a completed counter-move and restart; following an actual exit the proof's
 first bar must be after that exit, including after optional research eviction.
 
