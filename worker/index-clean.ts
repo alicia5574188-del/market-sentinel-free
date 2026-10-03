@@ -968,7 +968,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const executionEligible=eligibleRows.filter(forwardExecutionUniverseEligible),
       held=[...new Set([...(this.forwardState?.directStrategy?[]:this.forwardState?.inverseTrial?.source.positions.map(p=>p.symbol)??[]),...(this.forwardState?.positions.map(p=>p.symbol)??[])])],
       armed=Object.values(this.forwardState?.entryValidations??{}).filter(v=>v.status==="WAITING").map(v=>v.symbol),
-      locked=[...new Set([...held,...armed])];
+      locked=[...new Set([...held,...armed,...(this.forwardState?.directStrategy?.marketAuthority?.cohort??[])])];
     const universeRows=selectAnchorOpportunityUniverse({rows:eligibleRows,limit:SCAN_UNIVERSE_SIZE,
       lockedSymbols:locked,rotationSeed:Math.floor(now/RADAR_MS),explorationSlots:0,liquiditySlots:0});
     if(!universeRows.length)throw new Error("no liquid extremum-regime markets");

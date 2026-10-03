@@ -115,6 +115,7 @@ function observeCoin(previous:CoinEpisode|undefined,rows:CandleLike[],minutes:Ca
   return p;
 }
 export function advanceMarketAuthority(input:{previous?:MarketAuthority;now:number;ready:boolean;
+  protectedSymbols?:string[];
   symbols:string[];states:Record<string,MarketSymbolState>;paths:Record<string,CandleLike[]>;
   minutePaths?:Record<string,CandleLike[]>;quotes:Record<string,{observedAt:number;fresh:boolean}>}):MarketAuthority{
   const a=input.previous?structuredClone(input.previous):initialMarketAuthority(input.now);
@@ -122,8 +123,13 @@ export function advanceMarketAuthority(input:{previous?:MarketAuthority;now:numb
   if(!input.ready){a.reason='市场覆盖恢复中，保留已有状态，暂停新增';return a;}
   const selected=[...new Set(input.symbols)].slice(0,30);
   // Freeze the electorate during a trend so rotating the scan cannot vote it away.
-  if(!a.cohort.length||a.phase==='HANDOFF'||a.phase==='RANGE')a.cohort=selected;
-  const members=[...new Set([...a.cohort,...selected])].slice(0,30),coins:Record<string,CoinEpisode>={};
+  if(!a.cohort.length||a.phase==='HANDOFF'||a.phase==='RANGE'){
+    const representatives=selected.filter(s=>s==='BTC_USDT'||s==='ETH_USDT'),groups=new Set(representatives.map(s=>input.states[s]?.clusterId??s));
+    for(const s of selected){const group=input.states[s]?.clusterId??s;
+      if(!groups.has(group)){representatives.push(s);groups.add(group);}if(representatives.length>=8)break;}
+    a.cohort=[...new Set([...representatives,...selected])].slice(0,8);
+  }
+  const members=[...new Set([...(input.protectedSymbols??[]),...a.cohort,...selected])].slice(0,30),coins:Record<string,CoinEpisode>={};
   const grouped=new Map<string,CoinEpisode[]>();
   for(const symbol of members){
     const rows=contiguousTail(closedFiveMinutes(input.paths[symbol],input.now),300),q=input.quotes[symbol],state=input.states[symbol];

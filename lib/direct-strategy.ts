@@ -368,6 +368,7 @@ function manageMarketTrade(s:ForwardState,t:Trade,q:Quote,input:Input){
 function manageMarketDirect(s:ForwardState,input:Input,ready:boolean){
   const ds=s.directStrategy!,oldEpoch=ds.marketAuthority!.epoch,now=input.now;
   ds.marketAuthority=advanceMarketAuthority({previous:ds.marketAuthority,now,ready,symbols:s.selectedSymbols,
+    protectedSymbols:s.positions.map(t=>t.symbol),
     states:s.extremumRegime.symbols,paths:input.paths,minutePaths:input.minutePaths,quotes:input.analysisQuotes??input.quotes});
   const a=ds.marketAuthority;
   if(a.epoch!==oldEpoch)s.revision++;

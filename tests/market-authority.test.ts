@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {advanceMarketAuthority,initialMarketAuthority,routeMarketCoin,routeStillPermitted,validMarketAuthority,
   MARKET_AUTHORITY_VERSION,type CoinEpisode,type MarketAuthority,type MarketRoute} from '../lib/market-authority.ts';
 import type {MarketSymbolState,CandleLike} from '../lib/market-intelligence-engine.ts';
-import {initialForward,type Opportunity,type Quote,normalizeForward} from '../lib/forward-relations.ts';
+import {initialForward,type Opportunity,type Quote,normalizeForward,forwardUrgentQuoteSymbols,forwardUrgentMinuteSymbols} from '../lib/forward-relations.ts';
 import {migrateDirectStrategy,researchDirectPlan,openDirectPlan,advanceDirectStrategy} from '../lib/direct-strategy.ts';
 import {buildForwardProtectionCheckpoint,restoreForwardProtectionCheckpoint} from '../lib/forward-protection-checkpoint.ts';
 import {advancePaperExecution} from '../lib/paper-execution.ts';
@@ -95,7 +95,7 @@ test('a synchronous common factor remains one counted group and cannot be multip
   const names=Array.from({length:9},(_,i)=>`C${i}_USDT`),states=Object.fromEntries(names.map(s=>[s,{...state(s),clusterId:'common'}]));
   const a=advanceMarketAuthority({now:T,ready:true,symbols:names,paths:Object.fromEntries(names.map(s=>[s,[...base,...up]])),states,
     quotes:Object.fromEntries(names.map(s=>[s,quote()]))});
-  assert.equal(a.groups,1);assert.equal(a.phase,'UP');assert.equal(a.coverage,9);assert.equal(a.fresh,true);
+  assert.equal(a.groups,1);assert.equal(a.phase,'UP');assert.equal(a.coverage,8);assert.equal(a.fresh,true);
 });
 test('both failed departures are required to earn range permission',()=>{
   const a=active('RANGE');for(const p of Object.values(a.coins)){p.phase='HANDOFF';p.side=null;p.lastAt=T-3*B;p.upperFailed=false;p.lowerFailed=false;}
@@ -128,6 +128,17 @@ test('controller has bounded production metadata under a full thirty-symbol elec
     quotes:Object.fromEntries(names.map(s=>[s,quote()]))});
   assert.equal(Object.keys(a.coins).length,30);assert.ok(validMarketAuthority(a));
   assert.ok(Buffer.byteLength(JSON.stringify(a))<32000);assert.ok(a.events.length<=8);
+});
+test('frozen observers remain collected during scan rotation and held coin memory wins the thirty-slot bound',()=>{
+  const a=observe(),rotated=Array.from({length:30},(_,i)=>`NEW${i}_USDT`),held='HELD_USDT',names=[...symbols,...rotated,held];
+  const next=advanceMarketAuthority({previous:a,now:T+2000,ready:true,symbols:rotated,protectedSymbols:[held],
+    paths:Object.fromEntries(names.map(s=>[s,[...base,...up]])),states:Object.fromEntries(names.map(s=>[s,state(s)])),
+    quotes:Object.fromEntries(names.map(s=>[s,quote(104,T+2000)]))});
+  assert.deepEqual(next.cohort,a.cohort);assert.equal(next.fresh,true);assert.ok(next.coins[held]);
+  assert.equal(Object.keys(next.coins).length,30);
+  const s=account(next);assert.ok(forwardUrgentQuoteSymbols(s,T+2000,names).includes(symbols[0]!));
+  assert.ok(forwardUrgentMinuteSymbols(s,names).includes(symbols[0]!));
+  assert.ok(forwardUrgentMinuteSymbols(s,names).length<=11);
 });
 test('only sustained independent permission can detach from the common branch',()=>{
   const a=active('DOWN');a.coins.A_USDT=coin('UP');

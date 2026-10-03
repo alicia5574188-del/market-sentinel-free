@@ -22,7 +22,12 @@ rewrite losses, enable LIVE or create another strategy account.
    support. A genuinely synchronous single common factor is explicitly one group:
    at least six covered symbols and 80% agreement are required. Do not describe
    that case as multiple independent confirmations. Freeze the electorate during
-   a trend, rather than letting scan rotation declare a different market.
+   a trend, rather than letting scan rotation declare a different market. Retain
+   up to eight market representatives, prioritizing anchor/group coverage. Keep
+   those observers in existing scan/BBO/minute allocation ahead of ordinary new
+   discovery, with holdings and armed execution first. This prevents a frozen
+   electorate being silently evicted by radar rotation. The same 30 scan/BBO and
+   11 minute capacities apply; held coin memory wins the 30-episode bound.
 4. `UP` permits follower LONG continuation only; `DOWN` permits SHORT continuation
    only. `RANGE` permits failed-departure returns only. `HANDOFF` permits neither.
    Follower amplitude/score differences select location and size, never a branch.
