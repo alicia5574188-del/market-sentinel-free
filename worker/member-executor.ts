@@ -1,7 +1,7 @@
 /// <reference types="@cloudflare/workers-types" />
 import type { MarketStream, CloudflareEnv, LivePosition } from "./index-clean.ts";
 import type { MemberFeed } from "./member-directory.ts";
-import { MEMBERS_VERSION, digestMember, memberVaultRoot, validMemberId } from "../lib/member-auth.ts";
+import { MEMBERS_VERSION, MEMBER_USAGE_HEARTBEAT_MS, digestMember, memberVaultRoot, validMemberId } from "../lib/member-auth.ts";
 import { encryptGateCredentials, decryptGateCredentials, gateKeyHint, normalizeGateCredentials, type EncryptedGateCredentials, type GateCredentials } from "../lib/credential-vault.ts";
 import { GateLiveClient, gateMarkedEquity, buildLiveStopIntent, liveExitTag } from "../lib/gate-live.ts";
 import { LIVE_PARITY_PREFIX, LIVE_PARITY_VERSION, forwardMirrorSources, type MirrorBinding } from "../lib/live-parity.ts";
@@ -28,6 +28,8 @@ export function memberExecutionClass(Base:typeof MarketStream) {
     private sourceWork:Promise<void>|null=null;
     private memberTick:Promise<void>|null=null;
     private usageAt=0;
+    private usageSignature:string|null=null;
+    private usageWork:Promise<void>|null=null;
     private bootError:string|null=null;
     private deleted=false;
     private deleting=false;
@@ -198,10 +200,17 @@ export function memberExecutionClass(Base:typeof MarketStream) {
         this.launchLiveSettlementBackground();
         await this.saveCheckpoint(Date.now(),false).catch(e=>{this.runtime.live.lastError=errorText(e);this.runtime.live.operational=false;});
         this.launchTurnoverWork(Date.now());
-        if(Date.now()-this.usageAt>=60000) {
-          this.usageAt=Date.now();const t=turnoverView(this.turnoverState,this.turnoverError,Date.now());
-          this.ctx.waitUntil(this.directory("/usage",{notional:t.systemTagged,fills:t.fillCount,through:t.checkedThrough,
-            reportedAt:this.usageAt,partial:t.catchingUp,error:!!t.error}).catch(()=>undefined));
+        const usageNow=Date.now(),t=turnoverView(this.turnoverState,this.turnoverError,usageNow),
+          usage={notional:t.systemTagged,fills:t.fillCount,through:t.checkedThrough,partial:t.catchingUp,error:!!t.error},
+          usageSignature=JSON.stringify([usage.notional,usage.fills,usage.through,usage.partial,usage.error]),
+          usageChanged=usageSignature!==this.usageSignature,
+          usageHeartbeatDue=usageNow-this.usageAt>=MEMBER_USAGE_HEARTBEAT_MS;
+        if(!this.usageWork&&(usageChanged||usageHeartbeatDue)) {
+          const reportedAt=usageNow;
+          const work=this.directory("/usage",{...usage,reportedAt}).then(()=>{
+            this.usageAt=reportedAt;this.usageSignature=usageSignature;
+          }).catch(()=>undefined).finally(()=>{if(this.usageWork===work)this.usageWork=null;});
+          this.usageWork=work;this.ctx.waitUntil(work);
         }
       })();
       try{await this.memberTick;}finally{this.memberTick=null;}
