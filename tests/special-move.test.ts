@@ -63,6 +63,12 @@ test('uncompleted/future bars and quote-only advance cannot manufacture a launch
   const broken=flat();broken.splice(32,1);assert.equal(specialRows(broken,T).length,3);
   const future=own();future.quotes.A_USDT=q(101,T+1);assert.equal(advanceSpecialResearch(future).watches.A_USDT!.fresh,false);
 });
+test('another venue cannot manufacture an own 1m departure from the 5m reference',()=>{
+  const i=own();for(const r of i.minutes.A_USDT)r.volumeVenue='OKX';
+  assert.equal(advanceSpecialResearch(i).watches.A_USDT!.route,undefined);
+  i.paths.A_USDT=bars([...Array(33).fill(100),100.5,100.8,101]);
+  assert.equal(advanceSpecialResearch(i).watches.A_USDT!.route!.proofAt,T,'same-venue completed5m evidence remains admissible');
+});
 test('far chase, stale quote and disagreement block executable admission',()=>{
   const r=advanceSpecialResearch(own());assert.equal(specialMarketRoute(r,'A_USDT',102,T).route,null);
   assert.equal(specialMarketRoute(r,'A_USDT',101,T+10001).route,null);

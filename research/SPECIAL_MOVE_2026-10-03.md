@@ -49,7 +49,9 @@ Official field references:
 Being special is an observation, not a buy/sell instruction. The coin must have
 an actual completed retained departure or pullback/restart beyond the reference
 formed before the last3five-minute bars. Prefer existing continuous fresh1m
-bars; otherwise use completed5m evidence. Three actual completed proof bars,
+proof from the same declared venue as the5m reference; different-venue minutes
+cannot create a departure by their price offset. Otherwise use completed5m
+evidence. Three actual completed proof bars,
 their immutable times/price, reference and stop form one event identity.
 No new identity from repeated fresh ticks. A completed retest's own extreme
 can establish new support beyond a distant

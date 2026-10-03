@@ -70,7 +70,8 @@ export function specialDescription(w:SpecialWatch){
 function ownRoute(w:SpecialWatch,rs:CandleLike[],fast:CandleLike[],q:QuoteLike,now:number):{route?:MarketRoute;code:string}{
   const price=(q.bestBid+q.bestAsk)/2,geometry=reactionGeometry(rs,now),ref=geometry.area;
   if(!ref)return{code:'SPECIAL_COVERAGE'};
-  const minute=fast.length>=15&&now-(fast.at(-1)!.time*1000+60000)<=120000,
+  const minute=fast.length>=15&&now-(fast.at(-1)!.time*1000+60000)<=120000
+      &&fast.slice(-3).every(r=>r.volumeVenue===rs.at(-1)!.volumeVenue),
     structural=minute?fast:rs,step=minute?60000:300000,recent=structural.slice(-3),last=recent.at(-1),prior=recent.at(-2),first=recent[0],
     epsilon=Math.max(price*.0002,geometry.atr*.10),stamp=last?last.time*1000+step:0;
   if(!last||!prior||!first||now-stamp>(minute?120000:600000))return{code:'SPECIAL_COVERAGE'};
