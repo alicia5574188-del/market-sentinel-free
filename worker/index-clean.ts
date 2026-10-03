@@ -7,8 +7,9 @@ import { LiveHistoryReader } from "../lib/live-history-reader.ts";
 
 import { DurableObject } from "cloudflare:workers";
 import handler from "vinext/server/app-router-entry";
-import { GatePublicError, fetchActiveContracts, fetchContractStats, fetchGateRadarTickers, fetchLiquidations, fetchRecentTrades,
+import { GatePublicError, fetchActiveContracts, fetchContractDirectory, fetchContractStats, fetchLiquidations, fetchRecentTrades,
   fetchStructureCandles, fetchTickerBbo, fetchUrgentFuturesBook, fetchPendingExecutionBook } from "../lib/gate-market.ts";
+import {scanRangeAnomalies,rangeExecutionAdmission,type RangeDiscovery,type RangeScanner} from '../lib/anomaly-range.ts';
 import { MarketDataHub } from "../lib/market-data-hub.ts";
 import { GateStreamingFeed } from "../lib/gate-stream.ts";
 import { CORRELATED_DIRECTION_RISK_CAP, PORTFOLIO_RISK_CAP, remainingStressRisk, STALE_AFTER_MS, SYSTEM_VERSION, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
@@ -53,8 +54,7 @@ import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId}
 import { ADAPTIVE_ENGINE_VERSION, FORWARD_EXECUTION_BBO_CAP, FORWARD_MINUTE_CONFIRMATION_CAP, closeForwardForReset,
   forwardSummary, forwardEquity, freshQuote, forwardUrgentMinuteSymbols, forwardUrgentQuoteSymbols, forwardWatchSymbols,
   resetForwardAccountPreservingLearning, BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
-import { FORWARD_EXECUTION_VOLUME_FLOOR_USD, forwardExecutionUniverseEligible, selectAnchorOpportunityUniverse } from "../lib/multi-turn-universe.ts";
-import {selectSpecialMoveUniverse,observeSpecialRadar,type SpecialRadarHistory} from '../lib/special-move.ts';
+import { FORWARD_EXECUTION_VOLUME_FLOOR_USD } from "../lib/multi-turn-universe.ts";
 import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite, prepareForwardReset,
   FORWARD_STORAGE, FORWARD_PROTECTION_STORAGE, FORWARD_PAGED_STATE_VERSION } from "../lib/forward-store.ts";
 import { advanceCounterfactualResearch, counterfactualResearchView, counterfactualResearchWrites,
@@ -109,7 +109,6 @@ const FEED_QUALITY_WINDOW_MS = 60 * 60_000;
 const HEARTBEAT_MS = 30_000;
 const UNIVERSE_MS = 10 * 60_000;
 const RADAR_MS = 15_000;
-const GATE_RADAR_MS = RADAR_MS;
 const RADAR_ENTRY_STALE_MS = 150_000;
 const STRATEGY_CANDLE_GRACE_MS = 8_000;
 const STRATEGY_CANDLE_STALE_MS = 11 * 60_000;
@@ -520,7 +519,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private memory: Record<string, SymbolMemory> = {};
   private structureCandles: Record<string, Partial<Record<"1m" | "15m" | "1h" | "4h", Awaited<ReturnType<typeof fetchStructureCandles>>>>> = {};
   private strategyCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
-  private specialRadarHistory:SpecialRadarHistory=new Map();
   private forwardMinuteCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
   private forwardMinuteRetryAt = new Map<string,number>();
   private gateStream = new GateStreamingFeed();
@@ -536,10 +534,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private turnDailyFailures = new Map<string,{retryAt:number;lastError:string}>();
   private regimeHourly: Record<string, RegimeHourlyPath> = {};
   private sessionWarmup: Record<string, number> = {};
+  private rangeScanner:RangeScanner={prices:new Map(),detected:new Map()};
+  private rangeDiscovery:RangeDiscovery|undefined;
   private contractCatalog = new Map<string, Awaited<ReturnType<typeof fetchActiveContracts>>[number]>();
-  private gateRadarCache: Awaited<ReturnType<typeof fetchGateRadarTickers>> = [];
-  private gateRadarShortMoves=new Map<string,number>();
-  private gateRadarAt=0;
   private authorityReady = true;
   private authorityView = { positions: {} as RuntimeState["positions"], equity: CANONICAL_PAPER_REFERENCE_EQUITY, equityVersion: 0 };
   protected liveClient: GateLiveClient | null = null;
@@ -959,41 +956,21 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private refreshRadar(now:number) {
-    const cached=this.gateRadarAt>0&&now-this.gateRadarAt<=2*GATE_RADAR_MS?new Map(this.gateRadarCache.map(row=>[row.symbol,row])):null;
-    const known=this.contractCatalog.size
-      ?[...this.contractCatalog.values()].filter(row=>adaptiveSymbolAllowed(row.symbol)).map(row=>{
-        const fresh=cached?.get(row.symbol);return fresh?{...fresh,fundingRate:row.fundingRate,
-          shortMoveRate:this.gateRadarShortMoves.get(row.symbol)??0,directionalAgreement:1,sourceBreadth:Math.sign(this.gateRadarShortMoves.get(row.symbol)??0),
-          sourceCount:1}:{symbol:row.symbol,last:row.last,volume24hUsd:row.volume24hUsd,fundingRate:row.fundingRate};
-      })
-      :[...new Set([...this.runtime.liquidUniverse,...DEFAULT_SYMBOLS])].flatMap(symbol=>{
-        const q=this.marketHub.quote(symbol,now);return q?[{symbol,last:q.mid,volume24hUsd:q.volume24hUsd,fundingRate:0}]:[];
-      });
-    const bulkRows=this.marketHub.radarRows(known,now),eligibleRows=this.forwardState?.directStrategy?.specialMove
-      ?observeSpecialRadar(bulkRows,this.specialRadarHistory,now):bulkRows;
-    if(!eligibleRows.length)throw new Error("no Gate-tradable extremum-regime markets");
-    const executionEligible=eligibleRows.filter(forwardExecutionUniverseEligible),
-      held=[...new Set([...(this.forwardState?.directStrategy?[]:this.forwardState?.inverseTrial?.source.positions.map(p=>p.symbol)??[]),...(this.forwardState?.positions.map(p=>p.symbol)??[])])],
-      armed=Object.values(this.forwardState?.entryValidations??{}).filter(v=>v.status==="WAITING").map(v=>v.symbol),
-      locked=[...new Set([...held,...armed,...(this.forwardState?.directStrategy?.specialMove?[]:this.forwardState?.directStrategy?.marketAuthority?.cohort??[])])];
-    const universeRows=this.forwardState?.directStrategy?.specialMove?selectSpecialMoveUniverse({rows:eligibleRows,limit:SCAN_UNIVERSE_SIZE,
-      lockedSymbols:locked,research:this.forwardState.directStrategy.specialResearch,rotationSeed:Math.floor(now/RADAR_MS),now}):
-      selectAnchorOpportunityUniverse({rows:eligibleRows,limit:SCAN_UNIVERSE_SIZE,
-      lockedSymbols:locked,rotationSeed:Math.floor(now/RADAR_MS),explorationSlots:0,liquiditySlots:0});
-    if(!universeRows.length)throw new Error("no liquid extremum-regime markets");
-    this.runtime.liquidUniverse=universeRows.map(row=>row.symbol);
-    this.runtime.radar=successfulRadarRuntime(this.runtime.radar,now,universeRows.length,[]);
+    const common=this.marketHub.commonSymbols([...this.contractCatalog.keys()].filter(adaptiveSymbolAllowed)),
+      rows=this.marketHub.discoveryRows(common,now);
+    this.rangeDiscovery=scanRangeAnomalies(rows,this.rangeScanner,now,common.length,this.strategyPathSymbols().filter(symbol=>(this.strategyCandles[symbol]?.length??0)>=119).length);
+    const held=this.forwardState?.positions.map(t=>t.symbol)??[],pending=Object.values(this.forwardState?.directStrategy?.rangeResearch?.events??{})
+      .filter(e=>!['DONE','EXPIRED'].includes(e.phase)||e.outcomes.some(o=>o.status==='PENDING')).map(e=>e.symbol);
+    this.runtime.liquidUniverse=[...new Set([...held,...pending,...this.rangeDiscovery.anomalies.map(a=>a.symbol)])].slice(0,SCAN_UNIVERSE_SIZE);
+    for(const symbol of Object.keys(this.strategyCandles))if(!this.runtime.liquidUniverse.includes(symbol))delete this.strategyCandles[symbol];
+    this.rangeDiscovery.queued+=Math.max(0,new Set([...pending,...this.rangeDiscovery.anomalies.map(a=>a.symbol)]).size-this.runtime.liquidUniverse.length);
+    this.runtime.radar=successfulRadarRuntime(this.runtime.radar,now,this.runtime.liquidUniverse.length,[]);
     this.runtime.lastRadarAt=now;
-    if(this.forwardState&&this.reviewJournal.accountStartedAt===this.forwardState.startedAt){
-      try{const selected=new Set(universeRows.map(r=>r.symbol));
-        recordDiscoveryReview(this.reviewJournal,{at:now,sourceAt:this.gateRadarAt||null,catalogCount:this.contractCatalog.size,
-          radarInputCount:eligibleRows.length,eligibleCount:executionEligible.length,
-          selected:universeRows.map((r,i)=>({symbol:r.symbol,rank:i+1,source:r.selectionSource,score:r.activityScore})),
-          sampledOutside:eligibleRows.filter(r=>!selected.has(r.symbol)).sort((a,b)=>Math.abs(b.shortMoveRate??0)-Math.abs(a.shortMoveRate??0))
-            .slice(0,6).map(r=>({symbol:r.symbol,shortMoveRate:r.shortMoveRate??0,
-              reason:forwardExecutionUniverseEligible(r)?"OUTSIDE_RANKED_ANALYSIS_POOL":"OUTSIDE_EXECUTION_UNIVERSE"}))});
-      }catch{this.reviewDiagnosticError="DISCOVERY_REVIEW_CAPTURE_FAILED";}
-    }
+    for(const symbol of this.runtime.liquidUniverse)this.applyContractMetadata(symbol);
+    if(this.forwardState&&this.reviewJournal.accountStartedAt===this.forwardState.startedAt){try{
+      recordDiscoveryReview(this.reviewJournal,{at:now,sourceAt:now,catalogCount:this.contractCatalog.size,radarInputCount:rows.length,
+        eligibleCount:common.length,selected:this.runtime.liquidUniverse.map((symbol,i)=>({symbol,rank:i+1,source:'SPECIAL_RESPONSE',score:this.rangeDiscovery?.anomalies.find(a=>a.symbol===symbol)?.score??0})),sampledOutside:[]});
+    }catch{this.reviewDiagnosticError='DISCOVERY_REVIEW_CAPTURE_FAILED';}}
     // Gate realtime capacity is execution-only: open exposure and candidates
     // that are actually eligible. Analysis-only markets stay on Bybit/OKX/KuCoin.
     const protectedSymbols=[...this.currentAuthorityProtectionSymbols()];
@@ -1268,8 +1245,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.forwardLastAttemptAt=now;
       const previous = state,reviewEvents:ReviewEvent[]=[],executionQuotes=this.forwardQuotes(now);
       const next = advanceShadowInverse({ state: previous, now, paths: this.strategyCandles,minutePaths:this.forwardMinutePaths(),
-        daily:this.turnDailyCandles,quotes:executionQuotes,analysisQuotes:this.forwardAnalysisQuotes(now),contracts:this.regimeContracts(),
-        entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue,marketAuthority:true,specialMove:true,
+        daily:this.turnDailyCandles,quotes:executionQuotes,analysisQuotes:{...this.forwardAnalysisQuotes(now),...Object.fromEntries(this.runtime.liquidUniverse.flatMap(symbol=>{const q=this.marketHub.pinnedQuote(symbol,now);
+          return q?[[symbol,{bestBid:q.bid,bestAsk:q.ask,observedAt:q.observedAt,fresh:true,sourceCount:q.sourceCount,priceSource:q.source,disagreementRate:this.marketHub.coverage(symbol,now).disagreementRate}]]:[];}))},contracts:this.regimeContracts(),
+        entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue,marketAuthority:true,specialMove:true,anomalyRange:true,rangeDiscovery:this.rangeDiscovery,
         // exchangeEntryAt is refreshed with every position mark. entryAt is
         // the immutable first confirmed native-position observation.
         paperTiming:executionTiming([...this.liveHistory.flatMap(p=>p.parity?[{...p.parity,entryConfirmedAt:p.entryAt}]:[]),
@@ -1280,7 +1258,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // Observations use existing inputs after all financial decisions. Optional
       // failure neither changes those decisions nor requests another write.
       try{const ds=next.state.directStrategy;
-        if(ds?.marketAuthority&&ds.episodeResearch?.updatedAt!==now)ds.episodeResearch=advanceEpisodeResearch({previous:ds.episodeResearch,now,
+        if(ds?.marketAuthority&&!ds.anomalyRange&&ds.episodeResearch?.updatedAt!==now)ds.episodeResearch=advanceEpisodeResearch({previous:ds.episodeResearch,now,
           accountStartedAt:next.state.startedAt,authority:ds.specialMove?{...ds.marketAuthority,coins:{}}:ds.marketAuthority,states:next.state.extremumRegime.symbols,
           paths:this.strategyCandles,minutePaths:this.forwardMinutePaths(),quotes:executionQuotes,
           positions:next.state.positions,history:next.state.history});
@@ -2985,6 +2963,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     for (const trade of desiredTrades) {
       const symbol = trade.symbol;
       if(!trade.forwardSource)continue; // Legacy sources only drain existing exposure.
+      const rangeBlock=rangeExecutionAdmission(trade.forwardSource,this.forwardQuotes(Date.now())[symbol],Date.now(),
+        Date.now()-(snapshot.positionsCheckedAt??snapshot.checkedAt)<=10000&&!actualPositions.some(p=>p.contract===symbol&&Number(p.size??0)!==0)&&!this.liveEntryAwaitingReconcile(this.runtime.live.entries[symbol]));
+      if(rangeBlock){this.runtime.live.entrySkips[symbol]={planId:trade.id,symbol,code:'ECONOMICS',reason:rangeBlock,observedAt:Date.now()};continue;}
       const plan = { ...arenaTradePlan(trade), expiresAt:trade.openedAt+trade.forwardSource.rule.horizon*60_000 };
       const prior = this.runtime.live.entries[symbol],priorPosition=this.runtime.live.positions[symbol];
       if(prior?.planId===plan.id&&prior.marketSubmittedAt!=null
@@ -3093,9 +3074,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           :!sameLiveSession(activation,this.runtime.live.activation)?"实盘开启会话在提交前发生变化"
           :!sourceAfterEnable(binding!.sourceAtCopy,this.runtime.live.activation,this.forwardState!.startedAt)?"模拟源单不再属于本次开启会话"
           :!mirrorSourceFresh(stagedSource??undefined,plan.id,Date.now())?"模拟源单在提交前已结束或超过自身持有期限":null;
-      if(preflightFailure){
+      const rangePreflight=stagedSource?rangeExecutionAdmission(stagedSource,this.forwardQuotes(Date.now())[symbol],Date.now(),
+        Date.now()-(snapshot.positionsCheckedAt??snapshot.checkedAt)<=10000&&!actualPositions.some(p=>p.contract===symbol&&Number(p.size??0)!==0)&&!this.liveEntryAwaitingReconcile(this.runtime.live.entries[symbol])):null;
+      if(preflightFailure||rangePreflight){
         this.runtime.live.entrySkips[symbol]={planId:plan.id,symbol,code:"RETRYING",
-          reason:`${preflightFailure}；未发送 Gate 入场订单`,observedAt:Date.now()};
+          reason:`${preflightFailure??rangePreflight}；未发送 Gate 入场订单`,observedAt:Date.now()};
         continue;
       }
       if(!this.mirrorQuoteReady(symbol)&&!(await this.ensureMirrorExecutableQuote(symbol,Date.now()))){
@@ -3562,9 +3545,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const coverage=this.marketHub.coverage(symbol,Date.now());
       if(coverage.sourceCount>=2&&coverage.disagreementRate>.015)
         throw new Error(`${symbol} external venue disagreement`);
-      const external=await this.marketHub.candles(symbol,"1m",90);
+      const range=this.forwardState?.directStrategy?.rangeResearch?.events[symbol],held=this.forwardState?.positions.find(t=>t.symbol===symbol),
+        external=range||held?.unified?.anomaly||!held?await this.marketHub.pinnedCandles(symbol,"1m",90,(range?.source??held?.unified?.anomaly?.source) as import('../lib/market-data-hub.ts').MarketSource|undefined):await this.marketHub.candles(symbol,"1m",90);
       if(external)return{symbol,rows:external.rows,source:external.source};
-      if(this.marketHub.supports(symbol))throw new Error(`${symbol} external 1m temporarily unavailable`);
+      if(!held||held.unified?.anomaly||this.marketHub.supports(symbol))throw new Error(`${symbol} external 1m temporarily unavailable`);
       return{symbol,rows:await fetchStructureCandles(symbol,"1m",90),source:"GATE" as const};
     }));
     results.forEach((result,index)=>{
@@ -3723,6 +3707,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const symbols=this.strategyPathSymbols();if(!symbols.length)return 0;
     const targetCompletedAt=latestCompletedStrategyCandleAt(now);
     const due=symbols.filter(symbol=>{
+      if((this.runtime.strategyCandleFailures[symbol]?.retryAt??0)>now)return false;
       const last=this.strategyCandles[symbol]?.at(-1);
       return !last||(last.time+300)*1000<targetCompletedAt;
     }).slice(0,5);
@@ -3730,9 +3715,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const coverage=this.marketHub.coverage(symbol,Date.now());
       if(coverage.sourceCount>=2&&coverage.disagreementRate>.015)
         throw new Error(`${symbol} external venue disagreement ${(coverage.disagreementRate*100).toFixed(2)}%`);
-      const external=await this.marketHub.candles(symbol,"5m",120);
+      const range=this.forwardState?.directStrategy?.rangeResearch?.events[symbol],held=this.forwardState?.positions.find(t=>t.symbol===symbol),
+        external=range||held?.unified?.anomaly||!held?await this.marketHub.pinnedCandles(symbol,"5m",120,(range?.source??held?.unified?.anomaly?.source) as import('../lib/market-data-hub.ts').MarketSource|undefined):await this.marketHub.candles(symbol,"5m",120);
       if(external)return{symbol,rows:external.rows,replace:true,source:external.source};
-      if(this.marketHub.supports(symbol))throw new Error(`${symbol} external 5m temporarily unavailable`);
+      if(!held||held.unified?.anomaly||this.marketHub.supports(symbol))throw new Error(`${symbol} external 5m temporarily unavailable`);
       // True Gate-only contracts retain a low-frequency fallback. A temporary
       // Bybit/OKX/KuCoin outage never redirects common-market analysis onto Gate.
       const rows=await fetchStructureCandles(symbol,"5m",(this.strategyCandles[symbol]?.length??0)>=120?6:120);
@@ -3745,8 +3731,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         this.runtime.strategyCandleFailures[symbol]={count:(prior?.count??0)+1,lastFailureAt:now,retryAt:now+5000,
           lastError:`5m多源刷新失败：${safeError(result.reason)}`};return;
       }
-      const rows=result.value.replace?result.value.rows:mergeStrategyCandlePath(this.strategyCandles[symbol]??[],result.value.rows);
-      if(rows.length>=30){this.strategyCandles[symbol]=rows.slice(-120);delete this.runtime.strategyCandleFailures[symbol];}
+      const rows=result.value.replace?[...new Map([...(this.strategyCandles[symbol]??[]).filter(r=>r.volumeVenue===result.value.source),...result.value.rows].map(r=>[r.time,r])).values()].sort((a,b)=>a.time-b.time):mergeStrategyCandlePath(this.strategyCandles[symbol]??[],result.value.rows);
+      if(rows.length>=30){this.strategyCandles[symbol]=rows.slice(-121);delete this.runtime.strategyCandleFailures[symbol];}
     });
     return due.length;
   }
@@ -3775,22 +3761,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         if(refresh)await refresh.catch(()=>undefined);
       }
       if(universeDue){
-        subrequests+=2;
-        try{this.refreshUniverse(Date.now(),await fetchActiveContracts());}
+        subrequests++;
+        try{this.refreshUniverse(Date.now(),await fetchContractDirectory());}
         catch(error){this.runtime.lastError=`universe: ${safeError(error)}`;}
       }
+      subrequests+=await this.marketHub.refreshInstrumentCatalog(Date.now());
       const radarDue=radarAttemptDue(this.runtime.radar,Date.now());
       if(radarDue){
-        // Gate bulk discovery is optional and explicitly yields to private LIVE
-        // work. Bybit/OKX/KuCoin remain the normal scan surface.
-        if(!this.liveSyncWork&&Date.now()-this.gateRadarAt>=GATE_RADAR_MS){
-          try{
-            const previous=new Map(this.gateRadarCache.map(row=>[row.symbol,row.last])),next=await fetchGateRadarTickers(),
-              moves=new Map<string,number>();
-            for(const row of next){const prior=previous.get(row.symbol);if(prior&&prior>0)moves.set(row.symbol,row.last/prior-1);}
-            this.gateRadarCache=next;this.gateRadarShortMoves=moves;this.gateRadarAt=Date.now();subrequests++;
-          }catch{/* stale Gate-only discovery must never block external analysis */}
-        }
         try{this.refreshRadar(Date.now());}
         catch(error){this.runtime.radar=failedRadarRuntime(this.runtime.radar,Date.now(),error);}
       }
@@ -3798,13 +3775,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // L0 macro cycle needs real daily history. Warm one market per optional
       // pass from independent public venues so Gate outages cannot blind or
       // stall the ultra-long-horizon narrative.
-      subrequests+=await this.refreshTurnDaily(Date.now());
+      if(this.forwardState?.positions.some(t=>!t.unified?.anomaly))subrequests+=await this.refreshTurnDaily(Date.now());
       subrequests+=await this.refreshForwardUrgentMinutes(Date.now());
       await this.advanceForwardNow(Date.now(),true);
       // Research-only counterfactuals run after the authoritative PAPER commit.
       // They never feed back into entry, exit, risk or LIVE execution.
-      await this.advanceCounterfactualResearchNow(Date.now(),true);
-      await this.advanceShadowResearchNow(Date.now());
+      if(!this.forwardState?.directStrategy?.anomalyRange){await this.advanceCounterfactualResearchNow(Date.now(),true);
+        await this.advanceShadowResearchNow(Date.now());}
       await this.persistReviewJournal(Date.now());
       this.runtime.subrequestCount+=subrequests;
       this.runtime.maxSubrequestsInAlarm=Math.max(this.runtime.maxSubrequestsInAlarm,subrequests);

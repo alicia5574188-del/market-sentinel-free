@@ -6,7 +6,7 @@ import type {InverseCopy} from './shadow-inverse-ledger.ts';
 export const UNIFIED_EXECUTION_VERSION='return-continuation-v1';
 export type UnifiedBranch='RETURN'|'CONTINUATION';
 export type Acceptance={side:'LONG'|'SHORT';at:number;bars:number[];path:'HOLD_OUTSIDE'|'RETEST_RESTART';stop:number;boundary:number;epsilon:number};
-export type UnifiedTrade={version:typeof UNIFIED_EXECUTION_VERSION|'dual-thesis-v2';branch:UnifiedBranch;sourceId:string;referenceId:string;
+export type UnifiedTrade={anomaly?:import('./anomaly-range.ts').RangeHolding;version:typeof UNIFIED_EXECUTION_VERSION|'dual-thesis-v2';branch:UnifiedBranch;sourceId:string;referenceId:string;
   marketRoute?:import('./market-authority.ts').MarketRoute;
   adaptive?:import('./adaptive-controller.ts').AdaptiveHolding;
   response?:import('./event-response.ts').ResponseHolding;

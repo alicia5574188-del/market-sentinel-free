@@ -18,6 +18,10 @@ export type DirectStrategy={version:typeof DIRECT_STRATEGY_VERSION;cutoverAt:num
   adaptive?:{version:'adaptive-causal-v1';cutoverAt:number};
   specialMove?:{version:'special-move-v1';cutoverAt:number};
   specialResearch?:import('./special-move.ts').SpecialResearch;
+  anomalyRange?:{version:'anomaly-range-v1';cutoverAt:number};
+  rangeResearch?:import('./anomaly-range.ts').RangeResearch;
+  rangeWindows?:import('./anomaly-range.ts').RangeWindows;
+  rangeAnalysis?:Record<string,import('./market-intelligence-engine.ts').QuoteLike>;
   eventResponse?:{version:'event-response-v1';cutoverAt:number};
   eventResearch?:import('./event-response.ts').EventResearch;
   eventResearchError?:string;

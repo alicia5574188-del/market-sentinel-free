@@ -1,3 +1,4 @@
+import {decodeRangeWindow} from './anomaly-range.ts';
 import {RESEARCH_PLAN_VERSION} from './research-plan.ts';
 import type {Trade} from './forward-relations.ts';
 import type {ReviewJournal, TradeReview} from './review-trace.ts';
@@ -129,6 +130,9 @@ export function buildReviewSnapshot(input:{view:ObjectRow;buildSha:string|null;s
       episodeResearch:obj(v.directStrategy).episodeResearch??null,
       specialResearch:obj(v.directStrategy).specialResearch??null,
       eventResearch:obj(v.directStrategy).eventResearch??null,
+      rangeResearch:obj(v.directStrategy).rangeResearch??null,
+      anomalyRangeAudit:{version:'anomaly-range-audit-v1',policy:obj(v.directStrategy).anomalyRange??null,
+        coverage:'BOUNDED_ONLINE_DISCOVERY_AND_EVENTS; HISTORICAL_WINDOW_LOADED_AT_DETECTION; OUTCOME_GAPS_EXPLICIT',holdings:[]},
       eventResponseAudit:{version:'event-response-audit-v1',
         policy:obj(v.directStrategy).eventResponse??null,
         events:Object.values(obj(obj(v.directStrategy).eventResearch).events??{}),
@@ -188,6 +192,13 @@ export function reviewVersionDiagnostics(s:ReviewSnapshot){
 }
 
 export function finalizeReviewSnapshot(s:ReviewSnapshot):ReviewSnapshot{
+  if(s.research.anomalyRangeAudit){const audit=obj(s.research.anomalyRangeAudit);
+    audit.events=Object.values(obj(s.research.rangeResearch).events??{});
+    audit.holdings=s.trades.filter(t=>t.unified?.anomaly).map(t=>({tradeId:t.id,symbol:t.symbol,side:t.side,status:t.status,
+      signalAt:t.paperOrder?.signalAt??t.openedAt,fillAt:t.paperOrder?.confirmedAt??t.openedAt,entryPrice:t.entryPrice,
+      plan:t.unified!.anomaly,originalWindow:decodeRangeWindow(t.unified!.anomaly!.window),entryReason:t.unified!.entryReason,
+      holdReason:t.unified!.holdReason,exitReason:t.exitReason,actualExitPrice:t.exitPrice,netPnl:t.netPnl,
+      entryFee:t.entryFee,exitFee:t.exitFee,predecessorId:t.unified!.predecessorId??null}));}
   if(s.research.eventResponseAudit){const audit=obj(s.research.eventResponseAudit);
     audit.researchError=obj(s.research.directStrategy).eventResearchError??null;
     audit.holdings=s.trades.filter(t=>t.unified?.response).map(t=>({tradeId:t.id,symbol:t.symbol,status:t.status,

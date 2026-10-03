@@ -1,0 +1,289 @@
+/** Frozen pre-event geometry and causal plans. Pure: no IO, account controls or sizing. */
+import type {CandleLike,QuoteLike} from './market-intelligence-engine.ts';
+import type {Trade,Quote} from './forward-relations.ts';
+import {specialRows,recentSpecialActivity} from './special-move.ts';
+import {MARKET_AUTHORITY_VERSION,type MarketRoute} from './market-authority.ts';
+export const ANOMALY_RANGE_VERSION='anomaly-range-v1';
+export const RANGE_RESEARCH_BYTES=24*1024,RANGE_WINDOW_LIMIT=30;
+type Side='LONG'|'SHORT';
+export type RangeKind='EDGE_BREAKOUT'|'EDGE_RETURN'|'INTERNAL_TREND';
+export type RangeDiscovery={at:number;scanned:number;shared:number;excluded:number;marketSamples:number;marketMove:number|null;
+  anomalies:{symbol:string;detectedAt:number;source:string;sourceCount:number;own:number;residual:number;score:number;kind:string}[];queued:number;loaded:number};
+export type RangeWindow={source:string;start:number;cutoff:number;count:number;ohlc64:string};
+export type RangeSwing={price:number;at:number;confirmedAt:number;kind:'HIGH'|'LOW'};
+export type RangeEvent={id:string;symbol:string;detectedAt:number;source:string;score:number;own:number;residual:number;anomalyKind:string;
+  H:number;L:number;n5:number;E:number;D:number;minutes:number;highAt:number;lowAt:number;direction:'UP'|'DOWN'|'NEUTRAL';swings:RangeSwing[];
+  phase:'WATCH'|'CONFIRMING'|'READY'|'EXECUTING'|'HOLDING'|'EXPIRED'|'DONE';reason:string;lastAt:number;price:number;anchorPrice:number;active:boolean;
+  upperExtreme:number;lowerExtreme:number;upperTouchedAt:number;lowerTouchedAt:number;
+  activity?:{turnover15:number|null;activityRatio:number|null;at:number};
+  proof?:{kind:RangeKind;side:Side;fiveAt:number;at:number;price:number;stop:number;target:number;bars:number[];n1:number;bodyBaseline:number;fiveBar:number[];minuteBars:number[][];id:string};
+  consumedAt:number;tradeId?:string;predecessorId?:string;reverseAfter?:number;reverseEligible?:boolean;
+  admission?:{at:number;reason:string};exit?:{at:number;reason:string;net:number|null};
+  outcomes:{minutes:number;dueAt:number;at:number|null;price:number|null;move:number|null;status:'PENDING'|'OBSERVED'|'MISSING'}[]};
+export type RangeResearch={version:typeof ANOMALY_RANGE_VERSION;startedAt:number;updatedAt:number;events:Record<string,RangeEvent>;bytes:number;capacitySkipped:number;discovery?:RangeDiscovery;error?:string};
+/** Immutable original OHLC lives once per plan, then on its financial trade. */
+export type RangeWindows=Record<string,RangeWindow>;
+export type RangeHolding={version:typeof ANOMALY_RANGE_VERSION;eventId:string;kind:RangeKind;H:number;L:number;E:number;D:number;n5:number;
+  scale:number;scaleAt:number;source:string;window:RangeWindow;activity?:RangeEvent['activity'];proof:NonNullable<RangeEvent['proof']>;swings:RangeSwing[];
+  initialRisk:number;lastBarAt:number;insideAt:number;quoteAt:number;peak:number;peakAt:number;retainedPeak:number;peakSamples:number;
+  progressReviewAt:number;stage:'HOLD'|'REVIEW'|'EXIT';reason:string;reverseEligible:boolean};
+const d=(side:Side)=>side==='LONG'?1:-1,median=(a:number[])=>{const b=a.filter(Number.isFinite).sort((x,y)=>x-y);return b.length?b[Math.floor(b.length/2)]!:0;};
+const end=(r:CandleLike,ms=300000)=>r.time*1000+ms,bytes=(v:unknown)=>new TextEncoder().encode(JSON.stringify(v)).length;
+export function encodeRangeWindow(rows:CandleLike[],source:string,cutoff:number):RangeWindow{
+  const raw=new Uint8Array(rows.length*32),view=new DataView(raw.buffer);
+  rows.forEach((r,i)=>[r.open,r.high,r.low,r.close].forEach((v,j)=>view.setFloat64(i*32+j*8,v,true)));
+  return{source,start:rows[0]!.time*1000,cutoff,count:rows.length,ohlc64:btoa(String.fromCharCode(...raw))};
+}
+export function decodeRangeWindow(w:RangeWindow){
+  if(!w||!['BYBIT','OKX','KUCOIN','MEXC','HTX'].includes(w.source)||![119,120].includes(w.count)
+    ||!Number.isFinite(w.start)||w.start<=0||w.cutoff!==w.start+w.count*300000||w.ohlc64.length>5120)throw new Error('RANGE_WINDOW_INVALID');
+  const raw=Uint8Array.from(atob(w.ohlc64),c=>c.charCodeAt(0));if(raw.length!==w.count*32)throw new Error('RANGE_WINDOW_INVALID');
+  const view=new DataView(raw.buffer);return Array.from({length:w.count},(_,i)=>{
+    const [open,high,low,close]=[0,1,2,3].map(j=>view.getFloat64(i*32+j*8,true));
+    if(![open,high,low,close].every(Number.isFinite)||low!<=0||high!<Math.max(open!,close!)||low!>Math.min(open!,close!))throw new Error('RANGE_WINDOW_INVALID');
+    return{time:(w.start+i*300000)/1000,open:open!,high:high!,low:low!,close:close!,volume:0,volumeVenue:w.source};
+  });
+}
+const noise=(rows:CandleLike[],tick:number)=>Math.max(2*tick,median(rows.slice(-20).map((r,i,a)=>Math.max(r.high-r.low,i?Math.abs(r.high-a[i-1]!.close):0,i?Math.abs(r.low-a[i-1]!.close):0))));
+/** Reversal-confirmed turns, never retrospectively actionable at the extreme. */
+export function rangeSwings(rows:CandleLike[],n5:number){
+  const swings:RangeSwing[]=[];if(!rows.length)return swings;
+  let kind:'HIGH'|'LOW'|null=null,high=rows[0]!,low=rows[0]!;
+  for(const r of rows){
+    if(kind!=='LOW'&&r.high>=high.high)high=r;if(kind!=='HIGH'&&r.low<=low.low)low=r;
+    if(kind!=='LOW'&&high.high-r.close>=1.5*n5){swings.push({kind:'HIGH',price:high.high,at:high.time*1000,confirmedAt:end(r)});kind='LOW';low=r;}
+    else if(kind!=='HIGH'&&r.close-low.low>=1.5*n5){swings.push({kind:'LOW',price:low.low,at:low.time*1000,confirmedAt:end(r)});kind='HIGH';high=r;}
+  }
+  return swings;
+}
+export function rangeDirection(swings:RangeSwing[],n5:number,now:number):RangeEvent['direction']{
+  const lows=swings.filter(s=>s.kind==='LOW').slice(-3),highs=swings.filter(s=>s.kind==='HIGH').slice(-3),
+    up=lows.length===3&&lows.every((s,i)=>!i||s.price-lows[i-1]!.price>.5*n5),
+    down=highs.length===3&&highs.every((s,i)=>!i||highs[i-1]!.price-s.price>.5*n5);
+  if(up&&!down&&now-lows.at(-1)!.confirmedAt<=7200000)return'UP';
+  if(down&&!up&&now-highs.at(-1)!.confirmedAt<=7200000)return'DOWN';return'NEUTRAL';
+}
+export function strongRangeProof(minutes:CandleLike[],fiveAt:number,side:Side,n5:number,tick:number,inside:(price:number)=>boolean){
+  const baseline=minutes.filter(r=>end(r,60000)<=fiveAt).slice(-20);if(baseline.length<20)return;
+  const n1=noise(baseline,tick),body=median(baseline.map(r=>Math.abs(r.close-r.open))),dir=d(side),
+    after=minutes.filter(r=>r.time*1000>=fiveAt),strong=(r:CandleLike)=>r.high>r.low&&dir*(r.close-r.open)>0
+      &&Math.abs(r.close-r.open)/(r.high-r.low)>=.55&&Math.abs(r.close-r.open)>=body
+      &&(dir>0?r.high-r.close:r.close-r.low)/(r.high-r.low)<=.25;
+  for(const count of [2,3]){const a=after.slice(-count);if(a.length!==count||a.some((r,i)=>!inside(r.close)||i>0&&r.time-a[i-1]!.time!==60))continue;
+    const s=a.filter(strong);if(count===2&&s.length!==2||count===3&&s.length<2)continue;
+        if(count===3&&a.some(r=>!strong(r)&&(Math.abs(r.close-r.open)>n1*.5||dir*(r.close-r.open)<-n1*.25)))continue;
+    if(dir*(a.at(-1)!.close-a[0]!.open)<Math.max(n1,.25*n5)||dir*(s.at(-1)!.close-s[0]!.close)<=0)continue;
+    return{at:end(a.at(-1)!,60000),price:a.at(-1)!.close,bars:a.map(r=>end(r,60000)),n1,bodyBaseline:body,minuteBars:a.map(r=>[r.time,r.open,r.high,r.low,r.close])};
+  }
+}
+function validRangeProof(p:NonNullable<RangeEvent['proof']>,now:number){
+  return !!p.id&&['EDGE_BREAKOUT','EDGE_RETURN','INTERNAL_TREND'].includes(p.kind)&&['LONG','SHORT'].includes(p.side)
+    &&[p.fiveAt,p.at,p.price,p.stop,p.target,p.n1,p.bodyBaseline].every(Number.isFinite)&&p.price>0&&p.stop>0&&p.target>0&&p.n1>0&&p.bodyBaseline>=0
+    &&p.at<=now&&p.fiveAt<p.at&&Array.isArray(p.bars)&&[2,3].includes(p.bars.length)
+    &&p.bars.every((at,i)=>Number.isFinite(at)&&at>=p.fiveAt+60000&&(!i||at-p.bars[i-1]===60000))&&p.at===p.bars.at(-1)
+    &&p.fiveBar.length===5&&p.fiveBar.every(Number.isFinite)&&p.fiveBar[0]!*1000+300000===p.fiveAt
+    &&p.minuteBars.length===p.bars.length&&p.minuteBars.every((r,i)=>r.length===5&&r.every(Number.isFinite)&&r[0]!*1000+60000===p.bars[i]);
+}
+export function normalizeRangeResearch(value:unknown):RangeResearch|undefined{
+  const s=value as RangeResearch;if(!s||s.version!==ANOMALY_RANGE_VERSION||!Number.isFinite(s.updatedAt)||!Number.isFinite(s.startedAt)
+    ||s.updatedAt<s.startedAt||!s.events||Object.keys(s.events).length>30||bytes(s)>RANGE_RESEARCH_BYTES)return;
+  for(const [symbol,e] of Object.entries(s.events)){
+    if(!e||e.symbol!==symbol||!e.id||![e.H,e.L,e.E,e.D,e.n5,e.detectedAt,e.lastAt,e.price,e.anchorPrice,e.consumedAt].every(Number.isFinite)
+      ||e.H<=e.L||e.L<=0||e.n5<=0||e.E<=e.D||e.D<=0||e.anchorPrice<=0||e.consumedAt>s.updatedAt
+      ||!['BYBIT','OKX','KUCOIN','MEXC','HTX'].includes(e.source)||!['UP','DOWN','NEUTRAL'].includes(e.direction)
+      ||!['WATCH','CONFIRMING','READY','EXECUTING','HOLDING','EXPIRED','DONE'].includes(e.phase)||typeof e.active!=='boolean'||e.detectedAt>s.updatedAt||e.lastAt>s.updatedAt||!Array.isArray(e.swings)||e.swings.length>6
+      ||e.swings.some(p=>!['HIGH','LOW'].includes(p.kind)||![p.price,p.at,p.confirmedAt].every(Number.isFinite)||p.price<=0||p.at>p.confirmedAt||p.confirmedAt>s.updatedAt)
+      ||!Array.isArray(e.outcomes)||e.outcomes.length!==4||e.outcomes.some((o,i)=>o.minutes!==[15,30,45,60][i]
+        ||o.dueAt!==e.detectedAt+o.minutes*60000||!['PENDING','OBSERVED','MISSING'].includes(o.status)
+        ||o.at!==null&&(!Number.isFinite(o.at)||o.at<o.dueAt||o.at>s.updatedAt)||o.price!==null&&(!Number.isFinite(o.price)||o.price<=0)
+        ||o.move!==null&&!Number.isFinite(o.move))||e.proof&&!validRangeProof(e.proof,s.updatedAt))return;
+  }return structuredClone(s);
+}
+export function boundRangeResearch(s:RangeResearch){
+  for(const e of Object.values(s.events)){e.reason=e.reason.slice(0,90);if(e.admission)e.admission.reason=e.admission.reason.slice(0,90);}
+  // Untraded outcomes remain; remove oldest completed research only, never an active plan.
+  for(const e of Object.values(s.events).filter(e=>e.phase==='DONE'||e.phase==='EXPIRED').sort((a,b)=>a.detectedAt-b.detectedAt)){
+    if(bytes(s)<=RANGE_RESEARCH_BYTES-256)break;delete s.events[e.symbol];s.capacitySkipped++;
+  }
+  s.bytes=bytes(s);if(s.bytes>RANGE_RESEARCH_BYTES)throw new Error('RANGE_RESEARCH_BOUND');return s;
+}
+export function advanceRangeResearch(input:{previous?:RangeResearch;windows:RangeWindows;now:number;paths:Record<string,CandleLike[]>;
+  minutes?:Record<string,CandleLike[]>;quotes:Record<string,QuoteLike>;ticks:Record<string,number>;discovery?:RangeDiscovery;positions:Trade[];history:Trade[]}){
+  const s=normalizeRangeResearch(input.previous)??(!input.previous?{version:ANOMALY_RANGE_VERSION,startedAt:input.now,updatedAt:input.now,events:{},bytes:0,capacitySkipped:0}:null);
+  if(!s)throw new Error('RANGE_MEMORY_INVALID');if(input.now<s.updatedAt)return s;s.updatedAt=input.now;
+  if(input.discovery)s.discovery={...input.discovery,anomalies:input.discovery.anomalies.slice(0,8)};
+  const protectedIds=new Set(input.positions.map(t=>t.unified?.anomaly?.eventId).filter(Boolean));
+  for(const [id] of Object.entries(input.windows))if(!protectedIds.has(id)&&!Object.values(s.events).some(e=>e.id===id&&input.now-e.detectedAt<=3600000))delete input.windows[id];
+  for(const a of input.discovery?.anomalies??[]){
+    const old=s.events[a.symbol];if(old&&(!['DONE','EXPIRED'].includes(old.phase)||input.now-old.detectedAt<3600000))continue;
+    const cutoff=Math.floor(a.detectedAt/300000)*300000,five=specialRows(input.paths[a.symbol],input.now,300000,121),prior=five.filter(r=>end(r)<=cutoff).slice(-120),source=prior.at(-1)?.volumeVenue;
+    if(prior.length<119||prior.some(r=>r.volumeVenue!==source)||source!==a.source||Object.keys(input.windows).length>=RANGE_WINDOW_LIMIT)continue;
+    if(Object.keys(s.events).length>=10&&!old||bytes(s)>RANGE_RESEARCH_BYTES-1400){s.capacitySkipped++;continue;}
+    const H=Math.max(...prior.map(r=>r.high)),L=Math.min(...prior.map(r=>r.low)),tick=input.ticks[a.symbol]??prior.at(-1)!.close*1e-6,n5=noise(prior,tick),E=Math.min(.75*n5,.1*(H-L)),D=Math.max(2*tick,.2*n5);
+    if(H<=L||E<=D)continue;
+    const swings=rangeSwings(prior,n5),e:RangeEvent={id:`${ANOMALY_RANGE_VERSION}:${a.symbol}:${a.detectedAt}`,symbol:a.symbol,detectedAt:a.detectedAt,source:source!,
+      score:a.score,own:a.own,residual:a.residual,anomalyKind:a.kind,H,L,n5,E,D,minutes:prior.length*5,
+      highAt:prior.findLast(r=>r.high===H)!.time*1000,lowAt:prior.findLast(r=>r.low===L)!.time*1000,direction:rangeDirection(swings,n5,input.now),swings:swings.slice(-6),
+      phase:'WATCH',reason:'固定异动前区间，等待完整方向证明',lastAt:cutoff,price:prior.at(-1)!.close,anchorPrice:prior.at(-1)!.close,active:false,
+      upperExtreme:H,lowerExtreme:L,upperTouchedAt:0,lowerTouchedAt:0,consumedAt:0,
+      outcomes:[15,30,45,60].map(minutes=>({minutes,dueAt:a.detectedAt+minutes*60000,at:null,price:null,move:null,status:'PENDING'}))};
+    input.windows[e.id]=encodeRangeWindow(prior,source!,cutoff);s.events[a.symbol]=e;
+  }
+  for(const e of Object.values(s.events)){
+    const five=specialRows(input.paths[e.symbol],input.now).filter(r=>r.volumeVenue===e.source),minutes=specialRows(input.minutes?.[e.symbol],input.now,60000).filter(r=>r.volumeVenue===e.source),last=five.at(-1),q=input.quotes[e.symbol];
+    const held=input.positions.find(t=>t.unified?.anomaly?.eventId===e.id),closed=input.history.findLast(t=>t.unified?.anomaly?.eventId===e.id);
+    if(held){e.tradeId=held.id;e.consumedAt=Math.max(e.consumedAt,held.openedAt);e.phase=held.paperOrder?.phase==='FILLED'?'HOLDING':'EXECUTING';}
+    if(closed&&!held&&e.tradeId===closed.id){e.exit={at:closed.closedAt!,reason:closed.exitReason??'EXIT',net:closed.netPnl};
+      e.predecessorId=closed.id;e.reverseAfter=closed.closedAt!;e.reverseEligible=!!closed.unified!.anomaly!.reverseEligible;e.phase=e.reverseEligible?'WATCH':'DONE';}
+    for(const o of e.outcomes)if(o.status==='PENDING'&&input.now>=o.dueAt){const r=five.find(r=>end(r)>=o.dueAt&&end(r)<=o.dueAt+300000);
+      if(r){o.at=end(r);o.price=r.close;o.move=r.close/e.anchorPrice-1;o.status='OBSERVED';}
+      else if(input.now>o.dueAt+300000)o.status='MISSING';}
+    if(!last||input.now-end(last)>600000){e.active=false;e.reason='同源完成K线缺失，停止新确认';continue;}
+    e.price=q?.fresh&&q.priceSource===e.source&&input.now-q.observedAt<=10000?((q.bestBid+q.bestAsk)/2):last.close;const activity=recentSpecialActivity(five);e.active=activity.active;e.activity={turnover15:activity.turnover15,activityRatio:activity.activityRatio,at:end(last)};
+    if(held||e.phase==='DONE'||e.phase==='EXPIRED')continue;
+    if(!e.reverseEligible&&input.now-e.detectedAt>1800000){e.phase='EXPIRED';e.reason='未成交计划30分钟到期，保留结果';continue;}
+    if(e.proof&&input.now-e.proof.at>120000){delete e.proof;e.phase='WATCH';}
+    if(end(last)>e.lastAt){
+      const newly=five.filter(r=>end(r)>e.lastAt&&r.time*1000>=Math.floor(e.detectedAt/300000)*300000);
+      for(const r of newly){if(r.high>=e.H-e.E){e.upperTouchedAt=end(r);e.upperExtreme=Math.max(e.upperExtreme,r.high);}
+        if(r.low<=e.L+e.E){e.lowerTouchedAt=end(r);e.lowerExtreme=Math.min(e.lowerExtreme,r.low);}}
+      e.lastAt=end(last);
+    }
+    const window=input.windows[e.id]??closed?.unified?.anomaly?.window;if(!window){e.reason='原始冻结证据未恢复，停止本计划';continue;}
+    const full=[...decodeRangeWindow(window),...five.filter(r=>r.time*1000>=window.cutoff)],swings=rangeSwings(full,e.n5);e.swings=swings.slice(-6);e.direction=rangeDirection(swings,e.n5,input.now);
+    const choices:{kind:RangeKind;side:Side;stop:number;target:number;test:(p:number)=>boolean}[]=[];
+    if(last.close>e.H+e.D)choices.push({kind:'EDGE_BREAKOUT',side:'LONG',stop:Math.min(last.low,e.H-e.E-e.D),target:last.close,test:p=>p>e.H+e.D});
+    if(last.close<e.L-e.D)choices.push({kind:'EDGE_BREAKOUT',side:'SHORT',stop:Math.max(last.high,e.L+e.E+e.D),target:last.close,test:p=>p<e.L-e.D});
+    if(e.upperTouchedAt&&last.close<e.H-e.D&&Math.abs(last.close-e.H)<=e.E)choices.push({kind:'EDGE_RETURN',side:'SHORT',stop:e.upperExtreme+e.D,target:Math.max((e.H+e.L)/2,...swings.filter(s=>s.kind==='LOW'&&s.price<last.close-e.D&&s.confirmedAt<=end(last)).map(s=>s.price)),test:p=>p<e.H-e.D&&Math.abs(p-e.H)<=e.E});
+    if(e.lowerTouchedAt&&last.close>e.L+e.D&&Math.abs(last.close-e.L)<=e.E)choices.push({kind:'EDGE_RETURN',side:'LONG',stop:e.lowerExtreme-e.D,target:Math.min((e.H+e.L)/2,...swings.filter(s=>s.kind==='HIGH'&&s.price>last.close+e.D&&s.confirmedAt<=end(last)).map(s=>s.price)),test:p=>p>e.L+e.D&&Math.abs(p-e.L)<=e.E});
+    if(!e.reverseEligible&&last.close>e.L+e.E&&last.close<e.H-e.E&&e.direction!=='NEUTRAL'){
+      const side:Side=e.direction==='UP'?'LONG':'SHORT',dir=d(side),support=swings.findLast(s=>s.kind===(dir>0?'LOW':'HIGH')&&dir*(last.close-s.price)>e.D),
+        obstacles=swings.filter(s=>s.kind===(dir>0?'HIGH':'LOW')&&dir*(s.price-last.close)>e.D).map(s=>s.price);
+      if(support&&dir*(last.close-last.open)>e.D)choices.push({kind:'INTERNAL_TREND',side,stop:support.price-dir*e.D,
+        target:dir>0?Math.min(e.H,...obstacles):Math.max(e.L,...obstacles),test:p=>p>e.L+e.E&&p<e.H-e.E&&dir*(p-last.open)>0});
+    }
+    if(e.reverseEligible&&e.reverseAfter&&end(last)<=e.consumedAt)choices.length=0;
+    for(const choice of choices){if(e.reverseEligible&&closed?.unified?.anomaly?.kind==='EDGE_BREAKOUT'&&choice.kind!=='EDGE_RETURN'
+        ||e.reverseEligible&&closed?.unified?.anomaly?.kind==='EDGE_RETURN'&&choice.kind!=='EDGE_BREAKOUT')continue;
+      const proof=strongRangeProof(minutes,end(last),choice.side,e.n5,input.ticks[e.symbol]??e.n5/1000,choice.test);
+      if(!proof||proof.at<=e.consumedAt||input.now-proof.at>120000)continue;
+      e.proof={...choice,...proof,fiveAt:end(last),fiveBar:[last.time,last.open,last.high,last.low,last.close],id:`${e.id}:${choice.kind}:${choice.side}:${proof.at}`};delete (e.proof as unknown as {test?:unknown}).test;
+      e.phase='READY';e.reason=choice.kind==='EDGE_BREAKOUT'?'5分钟收在区间外，随后1分钟强势推进':choice.kind==='EDGE_RETURN'?'边缘尝试被打回，随后1分钟向内确认':'内部波段同向，完成5分钟推进及后续1分钟确认';break;
+    }
+    if(!e.proof){e.phase='CONFIRMING';e.reason=!e.active?'近期成交不足或未知，继续观察':'等待5分钟位置证明及随后2至3根强势1分钟线';}
+  }return boundRangeResearch(s);
+}
+/** Map only a fresh, pinned same-venue analysis price to a fresh executable Gate quote. */
+export function rangeMarketRoute(s:RangeResearch|undefined,symbol:string,price:number,now:number,analysis?:QuoteLike){
+  const e=s?.events[symbol],p=e?.proof,fail=(code:string,reason:string)=>({route:null,code,reason});
+  if(!e||!p||!['READY','EXECUTING'].includes(e.phase)||!e.active||s?.error)return fail('RANGE_PROOF_WAIT',e?.reason??'等待异动及冻结区间');
+  if(!analysis?.fresh||!Number.isFinite(analysis.bestBid)||!Number.isFinite(analysis.bestAsk)||now-analysis.observedAt>10000||analysis.observedAt>now||((analysis.bestBid+analysis.bestAsk)/2)<=0||(analysis.sourceCount??0)<2||analysis.priceSource!==e.source||(analysis.disagreementRate??0)>.008)
+    return fail('RANGE_SOURCE_WAIT','等待同源分析价格');
+  if(now-p.at>120000||p.at>now||Math.abs(((analysis.bestBid+analysis.bestAsk)/2)-p.price)>e.n5)return fail('RANGE_LATE','证明过期或已偏离一个正常波动');
+  const scale=price/((analysis.bestBid+analysis.bestAsk)/2);if(!(scale>.97&&scale<1.03))return fail('RANGE_BASIS','分析与执行价差异常，停止新增');
+  if(p.kind==='EDGE_RETURN'&&Math.min(Math.abs(((analysis.bestBid+analysis.bestAsk)/2)-e.H),Math.abs(((analysis.bestBid+analysis.bestAsk)/2)-e.L))>e.E)return fail('RANGE_EDGE_LOST','实际入场已离开边缘，不反向追单');
+  const dir=d(p.side);if(dir*(price-p.stop*scale)<=0)return fail('RANGE_STOP','实际失效位已经触发');
+  const route:MarketRoute={version:MARKET_AUTHORITY_VERSION,controllerVersion:ANOMALY_RANGE_VERSION,epoch:1,phase:p.kind==='EDGE_RETURN'?'RANGE':p.side==='LONG'?'UP':'DOWN',
+    eventId:p.id,relation:'INDEPENDENT',branch:p.kind==='EDGE_RETURN'?'RETURN':'CONTINUATION',side:p.side,proofAt:p.at,proofPrice:p.price*scale,
+    proofBars:[p.fiveAt,...p.bars],stop:p.stop*scale,target:p.kind==='EDGE_BREAKOUT'?price:p.target*scale,
+    targetBasis:p.kind==='EDGE_BREAKOUT'?'MEASURED_RESPONSE':p.kind==='EDGE_RETURN'?'ACCEPTED_CENTER':'OBSERVED_OBSTACLE',
+    reference:{lower:e.L*scale,upper:e.H*scale,center:(e.H+e.L)/2*scale,formedAt:e.detectedAt,balanced:true,basis:'OHLCV_PROXY'},reason:e.reason};
+  return{route,code:'RANGE_READY',reason:e.reason,scale};
+}
+export function makeRangeHolding(e:RangeEvent,w:RangeWindow,price:number,analysis:QuoteLike,now:number):RangeHolding{
+  const scale=price/((analysis.bestBid+analysis.bestAsk)/2);return{version:ANOMALY_RANGE_VERSION,eventId:e.id,kind:e.proof!.kind,H:e.H*scale,L:e.L*scale,E:e.E*scale,D:e.D*scale,n5:e.n5*scale,
+    scale,scaleAt:analysis.observedAt,source:e.source,activity:e.activity?structuredClone(e.activity):undefined,window:structuredClone(w),proof:structuredClone(e.proof!),swings:structuredClone(e.swings),
+    initialRisk:Math.abs(price-e.proof!.stop*scale),lastBarAt:0,insideAt:0,quoteAt:0,peak:0,peakAt:now,retainedPeak:0,peakSamples:0,
+    progressReviewAt:now,stage:'HOLD',reason:'按冻结计划持有，普通回调观察',reverseEligible:false};
+}
+export function validRangeHolding(m:RangeHolding){try{const rows=decodeRangeWindow(m.window);return m.version===ANOMALY_RANGE_VERSION&&!!m.eventId
+  &&[m.H,m.L,m.E,m.D,m.n5,m.scale,m.scaleAt,m.initialRisk,m.lastBarAt,m.insideAt,m.quoteAt,m.peak,m.peakAt,m.retainedPeak,m.peakSamples].every(Number.isFinite)
+  &&m.H>m.L&&m.L>0&&m.scale>0&&m.initialRisk>0&&m.window.source===m.source&&validRangeProof(m.proof,Math.max(m.scaleAt,m.proof.at))
+  &&Math.abs(Math.max(...rows.map(r=>r.high))*m.scale-m.H)<=m.H*1e-10&&Math.abs(Math.min(...rows.map(r=>r.low))*m.scale-m.L)<=m.L*1e-10
+  &&['HOLD','REVIEW','EXIT'].includes(m.stage)&&typeof m.reverseEligible==='boolean'&&m.peakSamples>=0&&m.peakSamples<=3;}catch{return false;}}
+export function rangeHoldingDecision(t:Trade,q:Quote,now:number,path:CandleLike[],minutePath:CandleLike[]=[]){
+  const m=structuredClone(t.unified!.anomaly!),dir=d(t.side),px=dir>0?q.bestBid:q.bestAsk;let stop=t.stopPrice,exit:string|undefined;
+  if(!validRangeHolding(m))return{memory:m,stop,exit:undefined,reason:'原始区间记忆异常，保留已提交硬保护'};
+  m.reverseEligible=false;
+  const net=dir*(px-t.entryPrice)-(px+t.entryPrice)*.0005;
+  if(q.observedAt>m.quoteAt){m.quoteAt=q.observedAt;if(net>m.peak+m.n5*.05){m.peak=net;m.peakAt=now;m.peakSamples=1;}
+    else if(net>=m.peak-m.n5*.25&&m.peak>0){m.peakSamples=Math.min(3,m.peakSamples+1);if(m.peakSamples>=3)m.retainedPeak=Math.max(m.retainedPeak,Math.min(net,m.peak));}}
+  const r=m.retainedPeak/m.initialRisk,share=r>=6?.8:r>=4?.65:r>=2?.5:0;
+  if(share){const floor=Math.min(m.retainedPeak*share,m.retainedPeak-m.n5),guard=t.entryPrice+dir*(floor+(px+t.entryPrice)*.0005);
+    if(floor>0&&dir*(guard-stop)>0)stop=guard;}
+  if(dir*(px-stop)<=0){exit='RANGE_HARD_PROTECTION';m.reason='实际退出价触及原结构或已赚优势保护';}
+  const rows=specialRows(path,now).filter(r=>r.volumeVenue===m.source),minutes=specialRows(minutePath,now,60000).filter(r=>r.volumeVenue===m.source),last=rows.at(-1),scaled=(p:number)=>p*m.scale;
+  if(!exit&&last&&end(last)>m.lastBarAt&&end(last)>t.openedAt){
+    const full=[...decodeRangeWindow(m.window),...rows.filter(r=>r.time*1000>=m.window.cutoff)],swings=rangeSwings(full,m.n5/m.scale);
+    m.swings=swings.slice(-6);
+    const support=swings.findLast(s=>s.confirmedAt<=end(last)&&s.kind===(dir>0?'LOW':'HIGH')&&s.confirmedAt>t.openedAt);
+    if(support&&dir*(scaled(support.price)-dir*m.D-stop)>0&&dir*(px-scaled(support.price))>m.n5)stop=scaled(support.price)-dir*m.D;
+    const boundary=dir>0?m.H:m.L,inside=dir*(scaled(last.close)-boundary)<-m.D;
+    if(m.kind==='EDGE_BREAKOUT'){
+      if(inside){if(!m.insideAt)m.insideAt=end(last);m.stage='REVIEW';m.reason='完整5分钟回到区间内，检查后续收复';
+        const inward=strongRangeProof(minutes,m.insideAt,dir>0?'SHORT':'LONG',m.n5/m.scale,m.D/m.scale/2,p=>dir*(scaled(p)-boundary)<-m.D),
+          failed=minutes.filter(r=>r.time*1000>=m.insideAt).slice(-2);
+        if(inward||end(last)>=m.insideAt+300000&&inside){exit='RANGE_BREAKOUT_FAILED';m.reason='回到区间内且新完成证据未能收复，突破计划失效';
+          m.reverseEligible=!!inward&&inward.at>t.openedAt&&Math.abs(px-boundary)<=m.E&&failed.every(r=>dir*(scaled(r.close)-boundary)<-m.D);}
+      }else if(dir*(scaled(last.close)-boundary)>m.D){m.insideAt=0;m.stage='HOLD';m.reason='原边缘仍有效，保留外侧推进';}
+    }else{
+      if(m.kind==='EDGE_RETURN'){
+        const edge=dir>0?m.L:m.H,outward=-dir*(scaled(last.close)-edge)>m.D;
+        if(outward&&end(last)>t.openedAt){m.insideAt=end(last);m.stage='REVIEW';m.reason='回归后完成5分钟再次站在原边缘外，检查随后推进';}
+      }
+      if(dir*(scaled(last.close)-stop)<-m.D){exit='RANGE_STRUCTURE_FAILED';m.reason='完成5分钟破坏实际方向的持仓结构';}
+      m.swings=swings.slice(-6);
+    }
+    m.lastBarAt=end(last);
+  }
+  // Minute failed recovery may arrive between five-minute refreshes.
+  if(!exit&&m.kind==='EDGE_BREAKOUT'&&m.insideAt){const boundary=dir>0?m.H:m.L,
+    inward=strongRangeProof(minutes,m.insideAt,dir>0?'SHORT':'LONG',m.n5/m.scale,m.D/m.scale/2,p=>dir*(scaled(p)-boundary)<-m.D);
+    if(inward){exit='RANGE_BREAKOUT_FAILED';m.reason='完成回内后，随后强势向内证明使突破失效';m.reverseEligible=Math.abs(px-boundary)<=m.E;}}
+  if(!exit&&m.kind==='EDGE_RETURN'&&m.insideAt){const edge=dir>0?m.L:m.H,
+    outward=strongRangeProof(minutes,m.insideAt,dir>0?'SHORT':'LONG',m.n5/m.scale,m.D/m.scale/2,p=>-dir*(scaled(p)-edge)>m.D);
+    if(outward){exit='RANGE_RETURN_FAILED';m.reason='回归被原边缘外的新5分钟及随后强势小线否定';m.reverseEligible=Math.abs(px-edge)<=m.E;}}
+  const contrary=minutes.filter(r=>r.time*1000>=t.openedAt).slice(-2);
+  if(!exit&&contrary.length===2&&contrary[1]!.time-contrary[0]!.time===60&&now-end(contrary[1]!,60000)<=120000
+    &&contrary.every(r=>dir*(r.close-r.open)<0)&&dir*(scaled(contrary[1]!.close)-scaled(contrary[0]!.open))<-m.proof.n1*m.scale){
+    m.stage='REVIEW';m.reason='两根完成小线反向超过正常噪声，复查结构；不直接平仓或反向';}
+  if(!exit&&now-m.progressReviewAt>=900000){m.progressReviewAt=now;
+    if(now-m.peakAt>=1800000&&net<=m.n5){m.stage='REVIEW';m.reason='30分钟没有新进展，等待结构损伤或恢复失败；时间本身不平仓';}}
+  if(exit)m.stage='EXIT';return{memory:m,stop,exit,reason:m.reason};
+}
+export type RangeScanner={prices:Map<string,{at:number;price:number}[]>;detected:Map<string,RangeDiscovery['anomalies'][number]>};
+export function scanRangeAnomalies(rows:{symbol:string;last:number;observedAt:number;source:string;sourceCount:number;volume24hUsd:number}[],scanner:RangeScanner,now:number,shared:number,loaded:number):RangeDiscovery{
+  if(rows.length>4096)throw new Error('COMMON_POOL_CAPACITY');
+  const present=new Set(rows.map(r=>r.symbol));for(const [key] of scanner.prices)if(!present.has(key.split(':')[0]!))scanner.prices.delete(key);
+  const measured=rows.flatMap(row=>{
+    if(now-row.observedAt>12000||row.observedAt>now||row.last<=0)return[];
+    const key=`${row.symbol}:${row.source}`,p=scanner.prices.get(key)??[],last=p.at(-1);
+    if(!last||row.observedAt>last.at){if(last&&Math.floor(last.at/60000)===Math.floor(row.observedAt/60000))p[p.length-1]={at:row.observedAt,price:row.last};
+      else p.push({at:row.observedAt,price:row.last});while(p.length>64)p.shift();scanner.prices.set(key,p);}
+    const duration=p.length>=16?15:3,anchor=p.findLast(x=>x.at<=row.observedAt-duration*60000),tail=anchor?p.filter(x=>x.at>=anchor.at):[];
+    if(!anchor||row.observedAt-duration*60000-anchor.at>120000||tail.some((x,i)=>i>0&&x.at-tail[i-1]!.at>120000))return[];
+    const own=row.last/anchor.price-1,normal=median(p.slice(0,-2).slice(-20).slice(1).map((x,i)=>Math.abs(x.price/p.slice(0,-2).slice(-20)[i]!.price-1)));
+    return[{row,own,duration,normal}];
+  }),marketRows=measured.filter(x=>x.row.volume24hUsd>=1e6),market=marketRows.length>=5?median(marketRows.map(x=>x.own)):null;
+  const abnormalities=measured.filter(x=>x.row.volume24hUsd>=1e6&&market!==null&&
+    (Math.abs(x.own-market)>=Math.max(x.duration===15?.004:.0015,x.normal*Math.sqrt(x.duration)*3)
+      ||Math.abs(market)>=(x.duration===15?.004:.0015)&&Math.abs(x.own)<Math.abs(market)*.25));
+  for(const x of abnormalities){const old=scanner.detected.get(x.row.symbol),residual=x.own-market!,kind=Math.abs(x.own)<Math.abs(market!)*.25?'ACTIVE_NONRESPONSE':x.own*market!<0?'OPPOSITE_MOVE':'OWN_ACCELERATION';
+    scanner.detected.set(x.row.symbol,{symbol:x.row.symbol,source:old?.source??x.row.source,sourceCount:x.row.sourceCount,detectedAt:old?.detectedAt??now,
+      own:x.own,residual,kind,score:Math.min(99,60+Math.abs(residual)*2000)});}
+  for(const [symbol,a] of scanner.detected)if(now-a.detectedAt>1800000||!present.has(symbol))scanner.detected.delete(symbol);
+  const anomalies=[...scanner.detected.values()].sort((a,b)=>b.score-a.score||a.detectedAt-b.detectedAt);
+  return{at:now,scanned:rows.filter(r=>now-r.observedAt<=12000).length,shared,excluded:shared-rows.length,marketSamples:marketRows.length,marketMove:market,
+    anomalies:anomalies.slice(0,30),queued:Math.max(0,anomalies.length-30),loaded};
+}
+/** Per-account admission: source closure is never native zero exposure. */
+export function rangeExecutionAdmission(t:Trade,q:Quote|undefined,now:number,confirmedFlat:boolean){
+  const m=t.unified?.anomaly;if(!m)return null;
+  if(!confirmedFlat)return'原方向尚未在本账户确认归零，等待平仓或未知提交核对';
+  if(!q?.fresh||now-q.observedAt>10000||q.observedAt>now)return'等待本账户新鲜执行报价';
+  if(now-m.proof.at>120000||now<m.proof.at)return'原入场证明已过期，不迟到复制';
+  const px=t.side==='LONG'?q.bestAsk:q.bestBid,dir=d(t.side);
+  if(Math.abs(px-m.proof.price*m.scale)>m.n5)return'执行价已离开原证明一个正常波动，不追单';
+  if(m.kind==='EDGE_RETURN'&&Math.min(Math.abs(px-m.H),Math.abs(px-m.L))>m.E)return'当前执行价已离开区间边缘，取消反向';
+  if(dir*(px-t.stopPrice)<=0)return'原计划保护位已触发，不开新仓';return null;
+}

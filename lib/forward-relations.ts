@@ -1466,7 +1466,7 @@ export type DirectExecutionAdapter={manage:(state:ForwardState,marketReady:boole
 export function advanceForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;minutePaths?:Record<string,Candle[]>;daily?:Record<string,Candle[]>;
   quotes:Record<string,Quote>;analysisQuotes?:Record<string,Quote>;contracts:Record<string,Contract>;entrySymbols?:Iterable<string>;learningSymbols?:Iterable<string>;allowDataCycle?:boolean;
   legacyDrainOnly?:boolean;research?:MarketLifecycleResearchContext;reviewTrace?:(event:ReviewEvent)=>void;
-  directAdapter?:DirectExecutionAdapter;allocationEquity?:number;marketAuthority?:boolean;specialMove?:boolean;paperTiming?:import('./paper-execution.ts').PaperTiming}){
+  directAdapter?:DirectExecutionAdapter;allocationEquity?:number;marketAuthority?:boolean;specialMove?:boolean;anomalyRange?:boolean;rangeDiscovery?:import('./anomaly-range.ts').RangeDiscovery;paperTiming?:import('./paper-execution.ts').PaperTiming}){
   // An optional observer has no return value or trading authority. A failed logger cannot block a trade.
   const trace=input.reviewTrace?(event:ReviewEvent)=>{try{input.reviewTrace!(event);}catch{/* diagnostics only */}}:undefined;
   const s=normalizeForward(structuredClone(input.state),input.now),
@@ -1483,6 +1483,18 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
     expectedMarkets=Math.max(1,allowed?.size??Math.max(Object.keys(input.paths).length,s.selectedSymbols.length)),
     requiredPaths=Math.min(expectedMarkets,Math.max(3,Math.ceil(expectedMarkets*.60))),
     marketReady=readyPaths>0&&(!!input.specialMove||readyPaths>=requiredPaths);
+  if(input.anomalyRange&&input.directAdapter&&!s.positions.some(t=>!t.unified?.anomaly)){
+    // New range plans need only their own loaded candles. Preserve retired
+    // descriptive memory without rebuilding market prediction on every tick.
+    s.opportunities=[];s.selectedSymbols=Object.keys(input.paths).filter(x=>!allowed||allowed.has(x)).slice(0,30);
+    if(dataDue)s.lastCandleAt=candleAt;s.lastCycleAt=input.now;
+    input.directAdapter.manage(s,marketReady);
+    const mark=equityMark(s,input.quotes,input.now);s.peakEquity=Math.max(s.peakEquity,mark.equity);
+    s.maxDrawdown=Math.max(s.maxDrawdown,1-mark.equity/Math.max(s.peakEquity,1));updateDaily(s,input.now,mark.equity);
+    const after=JSON.stringify({p:s.positions.map(t=>[t.id,t.status,t.stopPrice,t.profitFloorRate,t.contracts,t.realization?.sequence]),h:s.history.length,b:s.balance,r:s.revision,
+      v:Object.values(s.entryValidations).filter(x=>x.status==='WAITING').map(x=>x.id).sort()});
+    return{state:s,changed:before!==after||dataDue,protectionChanged:input.state.positions.some(t=>s.positions.find(n=>n.id===t.id)?.stopPrice!==t.stopPrice)};
+  }
   if(marketReady){
     const priorNarrative=structuredClone(s.extremumRegime.narrative),priorHistory=structuredClone(s.extremumRegime.history),
       priorInternals=s.extremumRegime.internals?structuredClone(s.extremumRegime.internals):undefined,
@@ -1632,6 +1644,7 @@ export function resetForwardAccountPreservingLearning(previous:ForwardState,now:
   return next;
 }
 export function forwardUrgentQuoteSymbols(s:ForwardState,now:number,entrySymbols?:Iterable<string>){
+  if(s.directStrategy?.anomalyRange)return [...new Set([...s.positions.map(t=>t.symbol),...Object.values(s.directStrategy.rangeResearch?.events??{}).filter(e=>e.phase==='READY'&&!s.positions.some(t=>t.symbol===e.symbol)).sort((a,b)=>b.score-a.score).map(e=>e.symbol)])];
   const allowed=entrySymbols?new Set(entrySymbols):null,keep=(x:string)=>!allowed||allowed.has(x),
     armed=Object.values(s.entryValidations).filter(v=>v.status==="WAITING"&&keep(v.symbol)).sort((a,b)=>a.startedAt-b.startedAt);
   const premium=s.opportunities.filter(o=>o.premium&&o.eligible&&o.expiresAt>now&&keep(o.symbol)).sort(opportunityCompare);
@@ -1643,6 +1656,7 @@ export function forwardUrgentQuoteSymbols(s:ForwardState,now:number,entrySymbols
     ...premium.map(o=>o.symbol),...normal.map(o=>o.symbol),...watched.map(r=>r.symbol)])];
 }
 export function forwardUrgentMinuteSymbols(s:ForwardState,entrySymbols?:Iterable<string>){
+  if(s.directStrategy?.anomalyRange)return [...new Set([...s.positions.map(t=>t.symbol),...Object.values(s.directStrategy.rangeResearch?.events??{}).filter(e=>!['DONE','EXPIRED'].includes(e.phase)).sort((a,b)=>Number(b.phase==='READY')-Number(a.phase==='READY')||b.score-a.score).map(e=>e.symbol)])].slice(0,FORWARD_MINUTE_CONFIRMATION_CAP);
   const allowed=entrySymbols?new Set(entrySymbols):undefined,keep=(x:string)=>!allowed||allowed.has(x),
     armed=Object.values(s.entryValidations).filter(v=>v.status==="WAITING"&&keep(v.symbol))
       .sort((a,b)=>a.startedAt-b.startedAt).map(v=>v.symbol),

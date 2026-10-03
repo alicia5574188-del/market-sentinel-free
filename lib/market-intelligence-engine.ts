@@ -11,7 +11,7 @@ import {buildMarketLiquidityResearch,initialMarketLiquidityResearch,
 export const MARKET_INTELLIGENCE_VERSION="market-intelligence-v1";
 
 export type CandleLike={time:number;open:number;high:number;low:number;close:number;volume:number;turnoverUsd?:number;volumeVenue?:string};
-export type QuoteLike={bestBid:number;bestAsk:number;observedAt:number;fresh:boolean;entryReady?:boolean;
+export type QuoteLike={priceSource?:string;bestBid:number;bestAsk:number;observedAt:number;fresh:boolean;entryReady?:boolean;
   sourceCount?:number;disagreementRate?:number;sourceBreadth?:number;directionalAgreement?:number;medianShortMove?:number;
   spreadRate?:number;bookImbalance?:number;bidLiquidityChange?:number;askLiquidityChange?:number;liquiditySourceCount?:number};
 export type MarketBias="BULLISH"|"BEARISH"|"NEUTRAL";

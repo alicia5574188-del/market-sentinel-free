@@ -7,6 +7,6 @@
   "lib/forward-store.ts": "844b23f6a43b7c32279773678357583c44abd7efe26b14cbfdbf32905a7b8a1f",
   "app/forward-dashboard.css": "56d0b99065a21f3e2fe89ad19c4b2e249834cc80b5d90f03b03f93aea73fe18f",
   "lib/forward-protection.ts": "7e3ba5b151634eaf637e960144fad119cfa59f26fd296f7cf5a2d0669fbc9066",
-  "lib/forward-protection-checkpoint.ts": "b340629129e747ff0e0a9d243f0d4076d1bc9e92fa3fdadb510d9bf115ff2bbf",
+  "lib/forward-protection-checkpoint.ts": "16cfd67f1805d4fb39f676329292292a8a62bcfb05c486507c4cd3aafba2f850",
   "lib/forward-write-budget.ts": "642ee520a35dcfc549cf3bfd089895aa2e32830a4e5c2af22138d3dc635ddc49"
 }

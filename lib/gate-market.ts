@@ -163,6 +163,17 @@ export type GateContract = {
   market_order_size_max?: string | number;
 };
 
+/** Contracts-only metadata; never request Gate bulk prices for external discovery. */
+export async function fetchContractDirectory(){
+  const contracts=await gatePublic<GateContract[]>("/futures/usdt/contracts",GATE_RESILIENT_TIMEOUT_MS,2);
+  return contracts.filter(c=>c.name?.endsWith('_USDT')&&!c.in_delisting&&(!c.status||c.status==='trading')&&isCryptoContractType(c.contract_type))
+    .map(c=>({symbol:c.name!,tickSize:Number(c.order_price_round??.0001),quantoMultiplier:Number(c.quanto_multiplier??1),
+      maintenanceRate:Number(c.maintenance_rate??.005),leverageMax:Number(c.leverage_max??50),
+      enableDecimal:typeof c.enable_decimal==='boolean'?c.enable_decimal:undefined,
+      orderSizeMin:c.order_size_min==null?undefined:String(c.order_size_min),orderSizeMax:c.order_size_max==null?undefined:String(c.order_size_max),
+      marketOrderSizeMax:c.market_order_size_max==null?undefined:String(c.market_order_size_max),fundingRate:0,last:0,volume24hUsd:0}));
+}
+
 export async function fetchActiveContracts() {
   const [rows, contracts] = await Promise.all([
     gatePublic<GateTicker[]>("/futures/usdt/tickers", GATE_RESILIENT_TIMEOUT_MS, 2),

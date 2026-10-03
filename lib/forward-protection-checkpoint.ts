@@ -5,6 +5,7 @@ import {boundedDirectExitResearch} from './direct-exit-research.ts';
 import {validMarketAuthority} from './market-authority.ts';
 import {normalizeEpisodeResearch} from './episode-research.ts';
 import {normalizeSpecialResearch,type SpecialResearch} from './special-move.ts';
+import {normalizeRangeResearch,type RangeResearch} from './anomaly-range.ts';
 import {normalizeEventResearch,type EventResearch} from './event-response.ts';
 export const FORWARD_PROTECTION_CHECKPOINT_VERSION="adaptive-ten-protection-v1";
 type Row=Pick<Trade,"id"|"openedAt"|"favorable"|"adverse"|"lastPrice"|"lastQuoteAt"|"stopPrice"|"firstProfitAt"|"holdScore"|"profitFloorRate"|"peakPnlRate"|"winnerManagement"|"review"|"unified"|"positionIntelligence"|"directExitResearch"|"directExitResearchOmitted">;
@@ -13,12 +14,16 @@ export type ForwardProtectionCheckpoint={version:typeof FORWARD_PROTECTION_CHECK
   shadow?:{cutoverAt:number;peakEquity:number;maxDrawdown:number;positions:Row[]};
   unifiedReference?:{cutoverAt:number;peakEquity:number;maxDrawdown:number;positions:Row[]};
   directMemory?:{cutoverAt:number;memory:Record<string,DirectMemory>;marketAuthority?:import('./market-authority.ts').MarketAuthority;
-    episodeResearch?:import('./episode-research.ts').EpisodeResearch;specialResearch?:SpecialResearch;eventResearch?:EventResearch}};
+    episodeResearch?:import('./episode-research.ts').EpisodeResearch;specialResearch?:SpecialResearch;eventResearch?:EventResearch;rangeResearch?:RangeResearch}};
 type LegacyProtectionRow=Partial<Row>&{id?:string;openedAt?:number;favorable?:number;adverse?:number;lastPrice?:number;lastQuoteAt?:number;
   stopPrice?:number;profitProtection?:{floorRate?:number}|null};
 type LegacyProtectionCheckpoint={version:"forward-protection-checkpoint-v1";startedAt:number;baseRevision:number;basePersistedAt:number;
   quoteCycleAt:number;peakEquity:number;maxDrawdown:number;positions:LegacyProtectionRow[]};
 
+function protectionUnified(t:Trade){const u=t.unified?structuredClone(t.unified):undefined;
+  // Immutable window already belongs to this financial generation. Overlay stores
+  // only its identity plus evolving protection; restoration joins the exact base.
+  if(u?.anomaly)delete (u.anomaly as Partial<typeof u.anomaly>).window;return u;}
 const finite=(v:unknown)=>typeof v==="number"&&Number.isFinite(v);
 function migrateLegacyCheckpoint(s:ForwardState,c:LegacyProtectionCheckpoint):ForwardProtectionCheckpoint{
   if(!Array.isArray(c.positions)||c.positions.length!==s.positions.length)throw new Error("前向保护检查点异常；保留账户");
@@ -37,6 +42,7 @@ function migrateLegacyCheckpoint(s:ForwardState,c:LegacyProtectionCheckpoint):Fo
     basePersistedAt:c.basePersistedAt,quoteCycleAt:c.quoteCycleAt,peakEquity:c.peakEquity,maxDrawdown:c.maxDrawdown,positions};
 }
 export function forwardProtectionChanged(previous:ForwardState,next:ForwardState){
+  if(next.directStrategy?.anomalyRange&&JSON.stringify(next.directStrategy.rangeResearch)!==JSON.stringify(previous.directStrategy?.rangeResearch))return true;
   if(next.directStrategy?.eventResponse&&JSON.stringify(next.directStrategy.eventResearch)!==JSON.stringify(previous.directStrategy?.eventResearch))return true;
   if(next.directStrategy?.specialMove&&JSON.stringify(next.directStrategy.specialResearch)!==JSON.stringify(previous.directStrategy?.specialResearch))return true;
   if(next.directStrategy?.marketAuthority&&JSON.stringify(next.directStrategy.marketAuthority)!==JSON.stringify(previous.directStrategy?.marketAuthority))return true;
@@ -52,7 +58,7 @@ export function buildForwardProtectionCheckpoint(s:ForwardState):ForwardProtecti
   const rows=(positions:Trade[],review:boolean)=>positions.map(t=>({
       id:t.id,openedAt:t.openedAt,favorable:t.favorable,adverse:t.adverse,lastPrice:t.lastPrice,lastQuoteAt:t.lastQuoteAt,stopPrice:t.stopPrice,
       firstProfitAt:t.firstProfitAt??null,holdScore:t.holdScore??50,profitFloorRate:t.profitFloorRate??0,peakPnlRate:t.peakPnlRate??t.favorable,winnerManagement:t.winnerManagement?structuredClone(t.winnerManagement):undefined,
-      unified:t.unified?structuredClone(t.unified):undefined,positionIntelligence:t.unified&&t.positionIntelligence?structuredClone(t.positionIntelligence):undefined,
+      unified:protectionUnified(t),positionIntelligence:t.unified&&t.positionIntelligence?structuredClone(t.positionIntelligence):undefined,
       directExitResearch:boundedDirectExitResearch(t.directExitResearch),directExitResearchOmitted:t.directExitResearchOmitted,
       review:review&&t.review?.diagnosticVersion?structuredClone(t.review):undefined}));
   const checkpoint:ForwardProtectionCheckpoint={version:FORWARD_PROTECTION_CHECKPOINT_VERSION,startedAt:s.startedAt,baseRevision:s.revision,basePersistedAt:s.storage.persistedAt,
@@ -60,6 +66,7 @@ export function buildForwardProtectionCheckpoint(s:ForwardState):ForwardProtecti
     ...(s.directStrategy?{directMemory:{cutoverAt:s.directStrategy.cutoverAt,memory:structuredClone(s.directStrategy.memory??{}),
       marketAuthority:s.directStrategy.marketAuthority&&!s.directStrategy.specialMove?structuredClone(s.directStrategy.marketAuthority):undefined,
       specialResearch:normalizeSpecialResearch(s.directStrategy.specialResearch),
+      rangeResearch:normalizeRangeResearch(s.directStrategy.rangeResearch),
       eventResearch:normalizeEventResearch(s.directStrategy.eventResearch),
       episodeResearch:normalizeEpisodeResearch(s.directStrategy.episodeResearch)}}:{}),
     ...(s.inverseTrial&&!s.directStrategy?{shadow:{cutoverAt:s.inverseTrial.cutoverAt,peakEquity:s.inverseTrial.source.peakEquity,
@@ -72,6 +79,8 @@ export function buildForwardProtectionCheckpoint(s:ForwardState):ForwardProtecti
     delete checkpoint.directMemory.episodeResearch;
   if(checkpoint.directMemory?.specialResearch&&new TextEncoder().encode(JSON.stringify(checkpoint)).length>112*1024)
     delete checkpoint.directMemory.specialResearch;
+  if(checkpoint.directMemory?.eventResearch&&new TextEncoder().encode(JSON.stringify(checkpoint)).length>112*1024)delete checkpoint.directMemory.eventResearch;
+  if(checkpoint.directMemory?.rangeResearch&&new TextEncoder().encode(JSON.stringify(checkpoint)).length>112*1024)delete checkpoint.directMemory.rangeResearch;
   return checkpoint;
 }
 export function restoreForwardProtectionCheckpoint(s:ForwardState,value:unknown):ForwardState{
@@ -91,6 +100,9 @@ export function restoreForwardProtectionCheckpoint(s:ForwardState,value:unknown)
         ||(r.region&&(![r.region.lower,r.region.upper,r.region.center,r.region.formedAt].every(finite)||r.region.lower<=0||r.region.upper<=r.region.lower))))
       throw new Error('独立策略事件检查点损坏；保留账户');
     next.directStrategy.memory=structuredClone(m.memory);
+    const range=normalizeRangeResearch(m.rangeResearch);
+    if(m.rangeResearch&&!range&&next.directStrategy.rangeResearch)next.directStrategy.rangeResearch.error='区间检查点不可用，保留原计划与保护';
+    if(range&&range.updatedAt>=(next.directStrategy.rangeResearch?.updatedAt??0))next.directStrategy.rangeResearch=range;
     const response=normalizeEventResearch(m.eventResearch);
     if(m.eventResearch&&!response)next.directStrategy.eventResearchError='事件研究检查点不可用，保留基础事件与持仓保护';
     if(response&&response.updatedAt>=(next.directStrategy.eventResearch?.updatedAt??0))next.directStrategy.eventResearch=response;
@@ -124,7 +136,12 @@ export function restoreForwardProtectionCheckpoint(s:ForwardState,value:unknown)
   for(const t of next.positions){const r=rows.get(t.id)!;
     if(t.unified){if(!r.unified||r.unified.branch!==t.unified.branch||r.unified.sourceId!==t.unified.sourceId||r.unified.referenceId!==t.unified.referenceId||r.unified.initialStop!==t.unified.initialStop)
       throw new Error('统一策略保护身份不一致');
-      if(r.unified.lastDecisionAt>=t.unified.lastDecisionAt){t.unified=structuredClone(r.unified);
+      if(r.unified.lastDecisionAt>=t.unified.lastDecisionAt){const u=structuredClone(r.unified);
+        if(t.unified.anomaly){if(!u.anomaly||u.anomaly.eventId!==t.unified.anomaly.eventId||u.anomaly.source!==t.unified.anomaly.source
+          ||JSON.stringify([u.anomaly.H,u.anomaly.L,u.anomaly.E,u.anomaly.D,u.anomaly.n5,u.anomaly.scale,u.anomaly.scaleAt,u.anomaly.initialRisk,u.anomaly.kind,u.anomaly.proof])
+            !==JSON.stringify([t.unified.anomaly.H,t.unified.anomaly.L,t.unified.anomaly.E,t.unified.anomaly.D,t.unified.anomaly.n5,t.unified.anomaly.scale,t.unified.anomaly.scaleAt,t.unified.anomaly.initialRisk,t.unified.anomaly.kind,t.unified.anomaly.proof]))throw new Error('冻结区间保护身份不一致');
+          u.anomaly.window=structuredClone(t.unified.anomaly.window);}
+        t.unified=u;
         if(r.positionIntelligence)t.positionIntelligence=structuredClone(r.positionIntelligence);}}}
   if(next.unifiedExecution&&!next.directStrategy){
     const cRef=c.unifiedReference,ref=next.unifiedExecution.reference;
