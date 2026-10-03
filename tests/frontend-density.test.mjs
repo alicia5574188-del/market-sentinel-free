@@ -331,4 +331,8 @@ test('special-coin research explains active nonresponse and missing volume befor
       residual:0,turnover15:null,active:false,fresh:false,phase:'MISSING_DATA',score:0}}}};
   const html=render('app/market-intelligence-execution.tsx',{data,now:data.updatedAt,liveEnabled:false});
   for(const text of ['特别币持续研究','近期成交活跃，却没有响应市场波动','等待本币真正启动','近期15分钟成交 未知','数据不足'])assert.ok(html.includes(text),text);
+  data.directStrategy.explanation='发现特别的活跃币，本币实际启动才交易';
+  const overview=render('app/forward-dashboard.tsx',dashboardProps(data));
+  assert.match(overview,/特别币爆发段/);assert.match(overview,/本币实际启动才交易/);assert.match(overview,/special-move-v1/);
+  assert.doesNotMatch(overview,/市场决定跟随币的策略分支/);
 });

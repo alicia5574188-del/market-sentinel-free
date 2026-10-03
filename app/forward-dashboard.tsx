@@ -78,7 +78,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       </section>
       {liveEnabled?<section className="fr-section"><div className="fr-section-head"><h2>实盘复制</h2><button className="fr-text-button" onClick={()=>selectLedger("inverse")}>查看同步账户 →</button></div>
         <p>已复制 {liveOverview?.copied??"—"} / 应复制 {liveOverview?.eligible??"—"} · 未跟上 {liveOverview?.missing??"—"}。模拟页与实盘页共用真实成交、持仓和结算记录；未成交不产生模拟利润。</p>{!data?.directStrategy&&<button className="fr-text-button" onClick={()=>selectLedger("source")}>查看全部影子订单 →</button>}</section>:!data?.directStrategy&&<InversePanel data={data} onSelect={selectLedger}/>}
-      {data?.directStrategy&&<section className="fr-section" data-testid="direct-strategy-summary"><div className="fr-section-head"><h2>回退与趋势延续</h2><span>固定 1,000 U 仓位基准</span></div><p>{data.directStrategy.summary}</p><p>{data.directStrategy.marketAuthority?'市场决定跟随币的策略分支：双向失败回归或单向延续。切换等待；独立币须持续证明独立结构。每笔按实际方向验证、保护和退出。':'回退等待推进衰减；延续跟随已确认结构。'}</p></section>}
+      {data?.directStrategy&&<section className="fr-section" data-testid="direct-strategy-summary"><div className="fr-section-head"><h2>{data.directStrategy.specialMove?'特别币爆发段':'回退与趋势延续'}</h2><span>固定 1,000 U 仓位基准</span></div><p>{data.directStrategy.summary}</p><p>{data.directStrategy.specialMove?data.directStrategy.explanation:data.directStrategy.marketAuthority?'市场决定跟随币的策略分支：双向失败回归或单向延续。切换等待；独立币须持续证明独立结构。每笔按实际方向验证、保护和退出。':'回退等待推进衰减；延续跟随已确认结构。'}</p></section>}
       <PaperEquitySection data={data} healthy={healthy} cache={equityCache} cacheScope={cacheScope}/>
       {liveEnabled&&<LiveEquityCurve head={liveOverview?.equityCurve} mark={actual} enabled={liveEnabled} sessionAt={liveOverview?.sessionAt??0} cacheScope={cacheScope} now={now}/>}
       <section className="fr-section"><div className="fr-section-head"><h2>{data?.directStrategy?"当前交易计划":data?.unifiedExecution?"参考机会 · 实际分支待确认":data?.shadowInverse?"影子机会 · 模拟反向":"当前最优机会"}</h2><span>{eligible.length} 个可参与</span></div>
@@ -115,7 +115,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
 
     {(liveMounted||(tab==="paper"&&actualLedger&&liveEnabled))&&<div className="fr-live-panel-host" hidden={tab!=="live"&&!(tab==="paper"&&actualLedger&&liveEnabled)}>{livePanel}</div>}
     {(error||data?.storage.error)&&<aside className="fr-error" role="alert"><b>运行提示</b><p>{data?.storage.error??error}</p></aside>}
-    <footer className="fr-footer"><span>行情更新 {time(feedAt)} · 运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>{data?.directStrategy?.version??data?.engineVersion??data?.version??"—"} · 北京时间</span></footer>
+    <footer className="fr-footer"><span>行情更新 {time(feedAt)} · 运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>{data?.directStrategy?.specialMove?.version??data?.directStrategy?.version??data?.engineVersion??data?.version??"—"} · 北京时间</span></footer>
     <nav className="fr-nav">{nav.map(([id,icon,label])=><button key={id} className={id===tab?"selected":""} onClick={()=>select(id)}><span>{icon}</span><b>{label}</b>{id==="paper"&&(liveEnabled?(liveOverview?.positionCount??0):positions.length)>0&&<i>{liveEnabled?liveOverview?.positionCount:positions.length}</i>}</button>)}</nav>
   </main>;
 }
