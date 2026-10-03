@@ -11,6 +11,7 @@ import {buildProportionalMirror,sourceLifecycle} from '../lib/live-parity.ts';
 import {buildReviewSnapshot} from '../lib/research-snapshot.ts';
 import {registerHooks} from 'node:module';
 import {nextProtectionWriteBudget} from '../lib/forward-write-budget.ts';
+import {initialMarketAuthority} from '../lib/market-authority.ts';
 registerHooks({resolve(specifier,context,nextResolve){
   if(specifier==='cloudflare:workers')return{url:'data:text/javascript,export class DurableObject{constructor(ctx,env){this.ctx=ctx;this.env=env;}}',shortCircuit:true};
   if(specifier==='vinext/server/app-router-entry')return{url:'data:text/javascript,export default {fetch:()=>new Response("synthetic")};',shortCircuit:true};
@@ -154,6 +155,8 @@ test('manual account reset retains the direct policy and market observer; public
 });
 async function checkpointWorker(){
   const f=fixture();openDirectPlan(f.s,f.p,q(),c,T,{TEST_USDT:q()});
+  // Cutover is committed separately; this fixture exercises subsequent 2s/10s protection.
+  f.s.directStrategy!.marketAuthority=initialMarketAuthority(T);
   f.s.paperExecution={version:'live-steps-paper-v1',cutoverAt:T,cancelled:[]};
   f.s.storage={persistedAt:T,error:null};f.s.lastQuoteCycleAt=T;
   const data=new Map<string,unknown>(Object.entries((await prepareForwardWrite(null,f.s,T,{compact:true})).entries)),writes:string[][]=[];

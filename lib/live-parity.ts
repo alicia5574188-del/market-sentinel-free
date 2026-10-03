@@ -20,6 +20,7 @@ export const LIVE_MIN_CONTRACT_UPLIFT_MAX_RISK_RATE = .0075;
 const LIVE_MIN_CONTRACT_UPLIFT_RISK_MULTIPLE=4,LIVE_MIN_CONTRACT_UPLIFT_RISK_FLOOR_RATE=.004;
 export type MirrorSourceTrade = ArenaTrade & { forwardSource?: Trade };
 export type MirrorReceipt = {
+  marketAuthorityVersion?:string;
   executionLeverage?:number;leveragePolicy?:typeof INVERSE_LIVE_LEVERAGE_POLICY|'actual-intent-isolated-v1';
   leverageAdjustAt?:number;leverageAdjustError?:string|null;
   version: typeof LIVE_PARITY_VERSION; sourceId: string; sourceRuleId: string;
@@ -148,7 +149,7 @@ export function liveEntryDriftGuard(source:Trade,currentPrice:number) {
  * unknown exposure blocks only additions, never protection or owner intent. */
 export function mirrorPositionRisk(position:{status:string;side:"LONG"|"SHORT";entryPrice:number;
   currentStop:number;notional:number;plannedRisk?:number;
-  parity?:Pick<MirrorReceipt,"sourceOpenedAt"|"sourceDeadline"|"sourceRole"|"unifiedBranch"|"sourceAllocationRiskRate">},markPrice=position.entryPrice) {
+  parity?:Pick<MirrorReceipt,"sourceOpenedAt"|"sourceDeadline"|"sourceRole"|"unifiedBranch"|"sourceAllocationRiskRate"|"marketAuthorityVersion">},markPrice=position.entryPrice) {
   if(position.status!=="OPEN")return 0;
   const horizonMs=position.parity ? position.parity.sourceDeadline-position.parity.sourceOpenedAt : NaN;
   if(isInverseLiveReceipt(position.parity)){
@@ -191,10 +192,10 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
   const direction=t.side==="LONG"?1:-1;
   const protection=liveProtectionPrice(t);
   if (protection!=null&&direction*(input.entryPrice-protection)<=0)fail("ECONOMICS","当前价已越过源单止损，不开即平");
-  if(t.unified?.branch==='CONTINUATION'){
-    const target=t.entryContext?.winnerPlan?.target,risk=direction*(input.entryPrice-protection!)+(input.entryPrice+protection!)*.0005,
+  if(t.unified?.branch==='CONTINUATION'||t.unified?.marketRoute){
+    const target=t.unified?.marketRoute?.target??t.entryContext?.winnerPlan?.target,risk=direction*(input.entryPrice-protection!)+(input.entryPrice+protection!)*.0005,
       remaining=target==null?0:direction*(target-input.entryPrice)-(input.entryPrice+target)*.0005;
-    if(target==null||risk<=0||remaining/risk<1.35)fail('ECONOMICS','实盘当前成交价到已知障碍的扣费空间不足以覆盖新结构风险，不把延迟复制当作原成交');
+    if(target==null||risk<=0||remaining/risk<1.35)fail('ECONOMICS','实盘当前成交价到冻结目标或有限估计的扣费空间不足以覆盖新结构风险，不把延迟复制当作原成交');
   }
   const drift=liveEntryDriftGuard(t,input.entryPrice);
   if(!t.inverseCopy&&!t.unified&&drift.adverse>drift.allowed+1e-9)fail("ECONOMICS",
@@ -260,9 +261,10 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
     exitPolicy:INVERSE_LIVE_EXIT_POLICY,nativeProtectionPrice:null,shadowSourceId:t.inverseCopy.sourceId,
     sourceAllocationRiskRate:t.plannedRisk/t.notional});
   if(t.unified)Object.assign(receipt,{sourceRole:'UNIFIED_PAPER',unifiedBranch:t.unified.branch,executionLeverage:leverage,leveragePolicy:'actual-intent-isolated-v1',
-    nativeProtectionPolicy:t.unified.branch==='RETURN'?INVERSE_LIVE_EXIT_POLICY:undefined,
+    nativeProtectionPolicy:t.unified.branch==='RETURN'&&!t.unified.marketRoute?INVERSE_LIVE_EXIT_POLICY:undefined,
     nativeProtectionPrice:protection,shadowSourceId:t.unified.sourceId,sourceAllocationRiskRate:t.plannedRisk/t.notional,
     entryPricePolicy:'fresh-market-v1'});
+  if(t.unified?.marketRoute)receipt.marketAuthorityVersion=t.unified.marketRoute.version;
   return {intent:{kind:"MARKET",tag,size,contracts,notional,plannedRisk,leverage,margin,
     body:{contract:t.symbol,size:`${direction<0?"-":""}${quantityText}`,price:"0",tif:"ioc",text:tag,reduce_only:false}},
     binding:{version:LIVE_PARITY_VERSION,sourceAtCopy:structuredClone(t),receipt}};

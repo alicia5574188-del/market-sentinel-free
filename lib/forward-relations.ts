@@ -88,6 +88,7 @@ export type Region={
   outerLower?:number;outerUpper?:number;outerCenter?:number;outerWidthRate?:number;outerBars?:number;outerQuality?:number;
 };
 export type Opportunity={
+  marketRoute?:import('./market-authority.ts').MarketRoute;
   winnerPlan?:WinnerPlan;
   id:string;symbol:string;side:"LONG"|"SHORT";mode:OpportunityMode;premium:boolean;reserve?:boolean;score:number;eligible:boolean;
   completedAt:number;expiresAt:number;price:number;stopPrice:number;targetPrice:number;stopRate:number;targetRate:number;directionStrength:number;
@@ -1462,7 +1463,7 @@ export type DirectExecutionAdapter={manage:(state:ForwardState,marketReady:boole
 export function advanceForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;minutePaths?:Record<string,Candle[]>;daily?:Record<string,Candle[]>;
   quotes:Record<string,Quote>;analysisQuotes?:Record<string,Quote>;contracts:Record<string,Contract>;entrySymbols?:Iterable<string>;learningSymbols?:Iterable<string>;allowDataCycle?:boolean;
   legacyDrainOnly?:boolean;research?:MarketLifecycleResearchContext;reviewTrace?:(event:ReviewEvent)=>void;
-  directAdapter?:DirectExecutionAdapter;allocationEquity?:number;paperTiming?:import('./paper-execution.ts').PaperTiming}){
+  directAdapter?:DirectExecutionAdapter;allocationEquity?:number;marketAuthority?:boolean;paperTiming?:import('./paper-execution.ts').PaperTiming}){
   // An optional observer has no return value or trading authority. A failed logger cannot block a trade.
   const trace=input.reviewTrace?(event:ReviewEvent)=>{try{input.reviewTrace!(event);}catch{/* diagnostics only */}}:undefined;
   const s=normalizeForward(structuredClone(input.state),input.now),
@@ -1633,13 +1634,14 @@ export function forwardUrgentQuoteSymbols(s:ForwardState,now:number,entrySymbols
   const premium=s.opportunities.filter(o=>o.premium&&o.eligible&&o.expiresAt>now&&keep(o.symbol)).sort(opportunityCompare);
   const normal=s.opportunities.filter(o=>!o.premium&&o.eligible&&o.expiresAt>now&&keep(o.symbol)).sort(opportunityCompare);
   const watched=Object.values(s.extremumRegime.symbols).filter(r=>keep(r.symbol)&&r.watchScore>=58).sort((a,b)=>b.watchScore-a.watchScore);
-  return[...new Set([...(s.directStrategy?[]:s.inverseTrial?.source.positions.map(t=>t.symbol)??[]),...s.positions.map(t=>t.symbol),...armed.map(v=>v.symbol),...premium.map(o=>o.symbol),...normal.map(o=>o.symbol),...watched.map(r=>r.symbol)])];
+  return[...new Set([...(s.directStrategy?[]:s.inverseTrial?.source.positions.map(t=>t.symbol)??[]),...s.positions.map(t=>t.symbol),...armed.map(v=>v.symbol),
+    ...(s.directStrategy?.marketAuthority?.cohort??[]).filter(keep),...premium.map(o=>o.symbol),...normal.map(o=>o.symbol),...watched.map(r=>r.symbol)])];
 }
 export function forwardUrgentMinuteSymbols(s:ForwardState,entrySymbols?:Iterable<string>){
   const allowed=entrySymbols?new Set(entrySymbols):undefined,keep=(x:string)=>!allowed||allowed.has(x),
     armed=Object.values(s.entryValidations).filter(v=>v.status==="WAITING"&&keep(v.symbol))
       .sort((a,b)=>a.startedAt-b.startedAt).map(v=>v.symbol),
-    research=intelligenceUrgentMinuteSymbols(s.extremumRegime,allowed),
+    research=[...(s.directStrategy?.marketAuthority?.cohort??[]).filter(keep),...intelligenceUrgentMinuteSymbols(s.extremumRegime,allowed)],
     positions=[...new Set([...(s.directStrategy?[]:s.inverseTrial?.source.positions.map(t=>t.symbol)??[]),...s.positions.map(t=>t.symbol)])].filter(keep);
   // Entry discovery/authorization is the time-sensitive use of 1m data.
   // Existing positions still retain realtime price/flow and 5m structure even
@@ -1681,7 +1683,7 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
     relationEngine:{version:s.relationEngine.version,retired:true,updatedAt:s.relationEngine.updatedAt,diagnostics:s.relationEngine.diagnostics,rules:[]},
     familyExperiment:{retired:true,...familyExperimentSummary(s.familyExperiment),maxNewReservePer5m:0},
     entryValidation:{waiting:validations.filter(v=>v.status==="WAITING").length,cancelled:validations.filter(v=>v.status==="CANCELLED").length,
-      records:validations.slice(0,6).map(v=>s.directStrategy?{...v,side:s.directStrategy.plans[v.symbol]?.side??(v.side==='LONG'?'SHORT' as const:'LONG' as const),
+      records:validations.slice(0,6).map(v=>s.directStrategy?{...v,side:s.directStrategy.marketAuthority?v.side:s.directStrategy.plans[v.symbol]?.side??(v.side==='LONG'?'SHORT' as const:'LONG' as const),
         ...(v.frozenOpportunity?{frozenOpportunity:directOpportunityView(s,v.frozenOpportunity)}:{}),
         reason:s.directStrategy.plans[v.symbol]?.reason??'等待当前推进响应验证'}:v)},
     marketCount:s.selectedSymbols.length,markets:s.selectedSymbols,latestReason:s.latestReason,entryDiagnostics:s.entryDiagnostics,
@@ -1695,8 +1697,8 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
       accounting:s.directStrategy?"单一账户按实际方向买卖盘口成交；回退和趋势延续各有独立持仓与退出依据；每次成交扣0.05%，所有已发生亏损与费用如实保留。":s.unifiedExecution?"回退与延续共用实际方向盘口和成交意图；每次成交扣0.05%；原反向同价账本独立保留为对照。":s.inverseTrial?"反向模拟沿用影子成交价；新成交各扣0.05%手续费，历史费用保留；影子仍按冻结口径独立决策。"
         :"模拟仍使用新鲜买卖价并计入手续费、滑点和资金费占位；每笔新Trade冻结独立交易假设、相关组、失效条件与持仓计划。",
       risk:"总结构风险≤10%、同方向≤6.5%、组合保证金≤75%；同一高相关组正常只允许一个同方向主仓，反方向独立假设可并存。",
-      validation:s.directStrategy?"回退验证推进事件的响应与位置；延续必须由本币已完成的区域外推进或回踩重启确认，并重新核对扣费空间。市场统一上涨不替代本币证据。":"单一噪声不能让大方向来回翻转。新版计划保留独立趋势核心；稳定市场预警只调整新增风险与普通机会确认，健康持仓不能被市场预警单独平掉。研究、订单与执行页共用订单冻结区域；旧多尺度地图仅作背景。",
-      liquidation:s.directStrategy?"回退仓沿用推进衰减和回落退出边界，计划风险是分配额度，仍可能出现较大浮亏；延续仓执行自己的结构保护。逐仓强平和真实成交费用以交易所为准。":"先执行既定硬风险与保护线；主动退出需要本币新的价格失败依据。盈利后的部分兑现统一由同一计划管理，不把同源价格分数当成多项独立证据。"},
+      validation:s.directStrategy?"市场统一许可跟随币的策略分支，独立币须持续残差与自身结构确认。两类开仓都验证实际持仓方向、结构风险和扣费空间；切换等待新确认。":"单一噪声不能让大方向来回翻转。新版计划保留独立趋势核心；稳定市场预警只调整新增风险与普通机会确认，健康持仓不能被市场预警单独平掉。研究、订单与执行页共用订单冻结区域；旧多尺度地图仅作背景。",
+      liquidation:s.directStrategy?"新回退仓执行失败极值保护并回归重心；新延续仓执行自身承接保护。旧记录保留原始依据并先完成不兼容分支退出；交易所强平、费用和实际成交仍是实际账户事实。":"先执行既定硬风险与保护线；主动退出需要本币新的价格失败依据。盈利后的部分兑现统一由同一计划管理，不把同源价格分数当成多项独立证据。"},
     cost:s.directStrategy||s.inverseTrial?{feeRate:INVERSE_COST.feeRate,slippageRate:0,fundingAllowancePerDay:0,
       assumption:"后续成交按当前实盘taker参考0.05%各扣一次；历史已扣费用保留，未自动同步VIP/优惠变动"}:PAPER_COST,
     nextCycleAt:s.lastCandleAt+BAR_MS};

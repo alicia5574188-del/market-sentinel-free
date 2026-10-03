@@ -165,7 +165,8 @@ function prepareEntry(s:ForwardState,t:Trade,q:Quote,c:Contract,quotes:Record<st
     risk=(x:Trade)=>!paperFilled(x)?x.plannedRisk:mirrorPositionRisk({status:'OPEN',side:x.side,entryPrice:x.entryPrice,
       currentStop:x.stopPrice,notional:x.notional,plannedRisk:x.plannedRisk,parity:{sourceOpenedAt:x.openedAt,
         sourceDeadline:x.openedAt+Math.max(5,x.expectedHoldMinutes??180)*60000,sourceRole:'UNIFIED_PAPER',
-        unifiedBranch:x.unified?.branch,sourceAllocationRiskRate:x.plannedRisk/x.notional}},
+        unifiedBranch:x.unified?.branch,sourceAllocationRiskRate:x.plannedRisk/x.notional,
+        marketAuthorityVersion:x.unified?.marketRoute?.version}},
       quotes[x.symbol]?(x.side==='LONG'?quotes[x.symbol]!.bestBid:quotes[x.symbol]!.bestAsk):x.lastPrice);
   return buildProportionalMirror({source:paperSourceTrade(t),sourceEquity:1000,equity:mark.equity,available:Math.max(0,mark.equity-margin),
     entryPrice:price,quantoMultiplier:c.quantoMultiplier,leverageMax:c.leverageMax,maintenanceRate:c.maintenanceRate,
@@ -217,7 +218,7 @@ export function advancePaperExecution(s:ForwardState,quotes:Record<string,Quote>
         a.liquidityKey=key;
         applySlice(s,t,f.contracts,f.price,q!.observedAt,now,a);
         if(a.filled>=a.contracts-1e-9){o.completedActions=a.sequence;delete o.action;
-          const management=t.unified?.branch==='RETURN'?t.unified.returnLogic?.management:t.winnerManagement;
+          const management=t.unified?.branch==='RETURN'&&!t.unified.marketRoute?t.unified.returnLogic?.management:t.winnerManagement;
           if(management){management.trimCount++;management.lastTrimEvent=management.obstacleSince;}}
       }
       continue;

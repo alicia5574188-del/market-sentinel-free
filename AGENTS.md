@@ -1,3 +1,16 @@
+# 2026-10-03 — owner-authorized market branch authority and release
+
+Implement and deploy `market-regime-authority-v1` via original reviewed main.
+Follow `research/MARKET_AUTHORITY_2026-10-03.md`: one market permission for
+followers, sustained independent residual/structure for exceptions, HANDOFF
+with neither branch, actual-side entry/holding/exit and fixed episode anchors.
+Preserve financial history/account, owner/member intent/keys/new-only activation,
+fixed1000 sizing, original risk/margin/resource/clock contracts and frozen source.
+No historical profitability replay/backtest. Synthetic functional and original
+release checks are required. Production enables this scoped controller; legacy
+fixtures may explicitly retain unactivated policy provenance. Do not publish
+private snapshots/account evidence or execute a real exchange test.
+
 # 2026-10-03 — PAPER follows LIVE execution steps
 
 Owner explicitly requires simulation entry/reduction/exit to follow native

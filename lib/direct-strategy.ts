@@ -10,7 +10,8 @@ import {remainingTradeFraction} from './trade-realization.ts';
 import {forwardProtectionChanged} from './forward-protection-checkpoint.ts';
 import {DIRECT_STRATEGY_VERSION,type DirectPlan,type ReturnLogic} from './direct-strategy-types.ts';
 import type {Acceptance} from './unified-execution-types.ts';
-import {advancePaperExecution,queuePaperEntry,paperFilled,PAPER_EXECUTION_VERSION,PAPER_TIMING_VERSION} from './paper-execution.ts';
+import {advancePaperExecution,queuePaperEntry,rejectPaperEntry,paperFilled,PAPER_EXECUTION_VERSION,PAPER_TIMING_VERSION} from './paper-execution.ts';
+import {advanceMarketAuthority,initialMarketAuthority,routeMarketCoin,routeStillPermitted,MARKET_AUTHORITY_VERSION,type MarketRoute} from './market-authority.ts';
 export {DIRECT_STRATEGY_VERSION} from './direct-strategy-types.ts';
 export {directOpportunityView,directStrategySummary} from './direct-strategy-view.ts';
 const sign=(side:'LONG'|'SHORT')=>side==='LONG'?1:-1;
@@ -95,6 +96,7 @@ function areaFor(o:Opportunity,input:Input){
 }
 /** Both actual sides and explanations are produced before any position exists. */
 export function researchDirectPlan(s:ForwardState,o:Opportunity,input:Input,previous?:DirectPlan):DirectPlan{
+  if(s.directStrategy?.marketAuthority)return marketPlan(s,o,input);
   const memory=s.directStrategy?.memory?.[o.symbol],sameMemory=memory?.id===o.id?memory:null;
   const q=input.quotes[o.symbol],area=sameMemory?.region?.balanced?structuredClone(sameMemory.region):
     previous?.id===o.id&&previous.region?.balanced?structuredClone(previous.region):areaFor(o,input),epsilon=Math.max(input.contracts[o.symbol]?.tickSize??0,
@@ -125,8 +127,11 @@ function currentRisk(t:Trade,quotes:Record<string,Quote>){
 }
 export function openDirectPlan(s:ForwardState,p:DirectPlan,q:Quote,c:Contract,now:number,quotes:Record<string,Quote>,predecessor?:Trade,minutePath?:NonNullable<Input['minutePaths']>[string],timing?:Input['paperTiming']){
   if(!finitePositive(c.quantoMultiplier)||!finitePositive(c.leverageMax)||!Number.isFinite(c.maintenanceRate))return'合约规格未确认';
-  const o=p.candidate,a=p.confirmation,price=fill(p.side,q),
-    g=p.branch==='CONTINUATION'&&a?directContinuationGeometry(s,o,a,q,c):null,
+  const o=p.candidate,a=p.confirmation,route=o.marketRoute,price=fill(p.side,q),
+    routeGeometry=route?{price,stop:route.stop,target:route.target,ratio:(sign(p.side)*(route.target-price)-(price+route.target)*FEE)/(sign(p.side)*(price-route.stop)+(price+route.stop)*FEE),
+      riskRate:(sign(p.side)*(price-route.stop)+(price+route.stop)*FEE)/price,leverage:Math.max(1,Math.min(5,Math.floor(c.leverageMax/2))),
+      valid:sign(p.side)*(price-route.stop)>0&&sign(p.side)*(route.target-price)>0,reason:'实际持仓方向的冻结结构与扣费空间'}:null,
+    g=routeGeometry??(p.branch==='CONTINUATION'&&a?directContinuationGeometry(s,o,a,q,c):null),
     geometry=o.winnerPlan,movePrice=fill(o.side,q),width=geometry?Math.abs(movePrice-geometry.initialStop)/movePrice:o.stopRate,
     riskRate=g?.riskRate??Math.max(.004,width)+COST,
     wanted=1000*(geometry?.intent==='RANGE'?.003:o.premium?.0065:.0055)*Math.max(.70,Math.min(1,o.environmentRiskScale??1)),
@@ -139,16 +144,21 @@ export function openDirectPlan(s:ForwardState,p:DirectPlan,q:Quote,c:Contract,no
     contracts=Math.floor(Math.min(1000*.70,riskBudget/riskRate)/(basePrice*c.quantoMultiplier)),quantity=contracts*c.quantoMultiplier,
     leverage=g?.leverage??Math.max(1,Math.min(5,Math.floor(c.leverageMax/2))),notional=quantity*price,margin=notional/leverage;
   if(!freshQuote(q,now)||q.entryReady!==true)return'等待实时执行盘口';
+  if(s.directStrategy?.marketAuthority&&(!route||route.relation==='FOLLOWER'&&route.epoch!==s.directStrategy.marketAuthority.epoch
+    ||!routeStillPermitted(s.directStrategy.marketAuthority,route,o.symbol)))return'市场分支许可已经改变，取消原执行计划';
+  if(route?.relation==='FOLLOWER'&&s.directStrategy?.marketAuthority?.warning)return'共同推进转弱，暂停新增并复核承接保护';
+  if(route&&(!g?.valid||g.ratio<1.35||g.riskRate>.037||1/leverage<=g.riskRate+c.maintenanceRate+2*FEE))return'实际方向当前风险或扣费空间不足';
+  if(route?.relation==='FOLLOWER'&&followerConflict(s,route))return'旧市场分支持仓尚未确认关闭，等待衔接完成';
   if(o.completedAt>now||o.expiresAt<=now)return'交易事件尚未完成或已失效';
   if(s.positions.some(t=>t.symbol===o.symbol)||s.positions.length>=10)return'已有持仓或当前组合容量已满';
   if(p.consumed||s.consumedTheses[o.id])return'本次交易事件已经执行，不重复开仓';
-  if(p.branch==='RETURN'&&(!geometry||p.continuationSeen))return'当前推进已确认延续或缺少原回退几何依据';
+  if(p.branch==='RETURN'&&(!geometry||p.continuationSeen)&&!route)return'当前推进已确认延续或缺少原回退几何依据';
   if(p.branch==='CONTINUATION'&&!g?.valid)return g?.reason??'等待本币持续趋势确认';
-  if(p.branch==='RETURN'&&(width<.004||width>.035||sign(o.side)*(movePrice-geometry!.initialStop)<=0))return'回退事件的初始空间无效';
+  if(p.branch==='RETURN'&&!route&&(width<.004||width>.035||sign(o.side)*(movePrice-geometry!.initialStop)<=0))return'回退事件的初始空间无效';
   const remainingMove=o.netRemainingSpaceRate-Math.max(0,sign(o.side)*(movePrice/o.price-1));
-  if(p.branch==='RETURN'&&!executionValueAtQuote({remainingNetRate:remainingMove,pullbackRiskRate:o.pullbackRiskRate}).executable)
+  if(p.branch==='RETURN'&&!route&&!executionValueAtQuote({remainingNetRate:remainingMove,pullbackRiskRate:o.pullbackRiskRate}).executable)
     return'实时入场已消耗剩余空间，等待推进事件重新具备有效位置';
-  if(p.branch==='RETURN'&&geometry!.intent==='RANGE'){
+  if(p.branch==='RETURN'&&!route&&geometry!.intent==='RANGE'){
     const gross=geometry!.target==null?0:sign(o.side)*(geometry!.target!/movePrice-1);
     if(gross-COST<COST*2||(gross-COST)/(width+COST)<1.25)return'推进事件的有限目标净空间不足';
   }
@@ -162,16 +172,16 @@ export function openDirectPlan(s:ForwardState,p:DirectPlan,q:Quote,c:Contract,no
     entryTarget:o.liquidityTargetLower!=null&&o.liquidityTargetUpper!=null?{lower:o.liquidityTargetLower,upper:o.liquidityTargetUpper}:null,
     entryBaseline:capturePositionBaseline(o.side,s.extremumRegime.symbols[o.symbol],now),entryResponseValidated:true,
     marketStateAgeMs:Math.max(0,now-s.extremumRegime.updatedAt),costRate:COST}):undefined;
-  if(observedAssessment?.entryConflict)return'入场与持仓证据冲突，等待推进事件重新形成持续响应';
+  if(observedAssessment?.entryConflict&&!route)return'入场与持仓证据冲突，等待推进事件重新形成持续响应';
   if(markNow.stalePositions||!finitePositive(riskBudget)||riskBudget<1000*(geometry?.intent==='RANGE'?.0015:.0035)
     ||contracts<min||s.positions.reduce((n,t)=>n+t.margin,0)+margin>equity*.75)return'当前账户风险、合约数量或逐仓保证金容量不足';
   if(s.positions.some(t=>t.side===p.side&&o.clusterId&&t.entryContext?.clusterId===o.clusterId))return'同相关组已有同方向主仓';
   if(!predecessor&&now-(s.lastExitAt[o.symbol]??0)<15*60_000&&s.lastSide[o.symbol]===p.side)return'同币同方向事件尚未重置';
   const id=`ue-d${now.toString(36)}-${o.symbol}-${p.branch==='RETURN'?'r':'c'}`,stop=g?.stop??geometry!.initialStop,
-    winnerPlan:WinnerPlan=g?{version:WINNER_POLICY_VERSION,intent:'TREND',eventAt:now,initialStop:g.stop,target:g.target,targetArea:null,
+    winnerPlan:WinnerPlan=route?structuredClone(geometry!):g?{version:WINNER_POLICY_VERSION,intent:'TREND',eventAt:now,initialStop:g.stop,target:g.target,targetArea:null,
       origin:structuredClone(p.region),riskGroup:`direct:${o.clusterId??o.symbol}:${p.side}`,source:'RELATIVE_CORE'}:structuredClone(geometry!);
   const u:NonNullable<Trade['unified']>={version:DIRECT_STRATEGY_VERSION,branch:p.branch,sourceId:o.id,referenceId:o.id,region:structuredClone(p.region??winnerPlan.origin),
-      epsilon:a?.epsilon??0,confirmation:structuredClone(a),initialStop:g?.stop??null,referenceContracts:contracts,
+      epsilon:a?.epsilon??0,confirmation:structuredClone(a),initialStop:g?.stop??null,referenceContracts:contracts,...(route?{marketRoute:structuredClone(route)}:{}),
       entryReason:p.reason,holdReason:p.holdReason,exitCondition:p.exitCondition,lastDecisionAt:now,lastBarAt:0,decision:'HOLD' as const,
       explanationEvents:[{at:now,kind:'ENTRY' as const,reason:p.reason,price,quoteAt:q.observedAt}],
       ...(predecessor?{predecessorId:predecessor.id,predecessorNet:predecessor.netPnl!}:{}),
@@ -183,7 +193,7 @@ export function openDirectPlan(s:ForwardState,p:DirectPlan,q:Quote,c:Contract,no
       armPrice:g?.target??geometry!.target??stop,lastPrice:mark(p.side,q),lastQuoteAt:q.observedAt,entryFee:notional*FEE,exitFee:0,
       fundingAllowance:0,grossPnl:null,netPnl:null,exitReason:null,favorable:0,adverse:0,firstProfitAt:null,peakPnlRate:0,profitFloorRate:0,
       holdScore:o.score,expectedHoldMinutes:o.expectedHoldMinutes,relationFailureBars:0,lastRelationBar:now,execution:'REAL_QUOTE_PAPER_MODEL',liveEligible:false,
-      rule:{id:o.id,signature:`${DIRECT_STRATEGY_VERSION}:${p.branch}`,parentId:null,version:1,createdAt:now,expiresAt:o.expiresAt,status:'EXPERIMENTAL',
+      rule:{id:o.id,signature:`${route?MARKET_AUTHORITY_VERSION:DIRECT_STRATEGY_VERSION}:${p.branch}`,parentId:null,version:1,createdAt:now,expiresAt:o.expiresAt,status:'EXPERIMENTAL',
         conditions:[],side:p.side,horizon:o.expectedHoldMinutes,stopRate:riskRate,armRate:o.targetRate,givebackRate:.01,exitMode:'REACTION_DECAY',samples:0,
         trainGroups:0,checkGroups:0,estimatedNetRate:o.netRemainingSpaceRate,priorResponse:null,recentResponse:0,standardError:0,reason:p.reason,
         mutation:'CREATE',grammar:DIRECT_STRATEGY_VERSION,liveEligible:false},unified:u,
@@ -192,8 +202,8 @@ export function openDirectPlan(s:ForwardState,p:DirectPlan,q:Quote,c:Contract,no
         positionScore:o.positionScore,executionScore:o.executionScore,remainingSpaceRate:g?sign(p.side)*(g.target!/price-1)-2*FEE:o.netRemainingSpaceRate,
         pullbackRiskRate:width,edgeRatio:g?.ratio??o.edgeRatio,expectedHoldMinutes:o.expectedHoldMinutes,marketFit:o.marketFit,regionId:o.regionId,
         clusterId:o.clusterId,thesisId:o.id,thesisSummary:p.reason,invalidationSummary:p.exitCondition,entryResidual:o.residual??0,
-        entryRelativeStrength:o.relativeStrength??.5,portfolioRiskCharge:riskBudget,winnerPlan:p.branch==='CONTINUATION'?winnerPlan:undefined,
-        tradePlan:p.branch==='CONTINUATION'?'WINNER_TREND':undefined},
+        entryRelativeStrength:o.relativeStrength??.5,portfolioRiskCharge:riskBudget,winnerPlan:route||p.branch==='CONTINUATION'?winnerPlan:undefined,
+        tradePlan:route?(p.branch==='RETURN'?'RANGE_REVERSION':'WINNER_TREND'):p.branch==='CONTINUATION'?'WINNER_TREND':undefined},
       forecast:{remainingNetRate:o.netRemainingSpaceRate,quality:o.score,sizingEquity:1000}};
   if(s.paperExecution)queuePaperEntry(s,t,timing??{prepareMs:2000,confirmMs:0,basis:'EXECUTION_CLOCK',samples:0});
   else{s.balance-=t.entryFee;s.fees+=t.entryFee;s.turnover+=notional;s.positions.push(t);s.lastEntryAt[t.symbol]=now;s.lastSide[t.symbol]=t.side;}
@@ -236,6 +246,7 @@ export function manageDirectReturn(s:ForwardState,t:Trade,q:Quote,input:Input){
   return false;
 }
 function manageDirect(s:ForwardState,input:Input,marketReady:boolean){
+  if(s.directStrategy?.marketAuthority){manageMarketDirect(s,input,marketReady);return;}
   const ds=s.directStrategy!,now=input.now,prior=ds.plans;
   advancePaperExecution(s,input.quotes,input.contracts,now);
   if(s.positions.some(t=>!t.unified))drainLegacyForwardPositions(s,input);
@@ -285,8 +296,117 @@ function manageDirect(s:ForwardState,input:Input,marketReady:boolean){
   }
   ds.summary=`回退持仓 ${s.positions.filter(t=>paperFilled(t)&&t.unified?.branch==='RETURN').length} 笔；趋势延续 ${s.positions.filter(t=>paperFilled(t)&&t.unified?.branch==='CONTINUATION').length} 笔。${s.paperExecution?`等待成交 ${s.positions.filter(t=>!paperFilled(t)||t.paperOrder?.action).length} 笔。`:''}按每个币自己的推进、区域接受与剩余空间决定，不跟随全市场统一翻向。`;
 }
+function marketPlan(s:ForwardState,o:Opportunity,input:Input):DirectPlan{
+  const a=s.directStrategy!.marketAuthority!,r=o.marketRoute,held=s.positions.find(t=>t.symbol===o.symbol&&t.unified),
+    reason=r?.reason??a.coins[o.symbol]?.reason??a.reason;
+  return{id:o.id,symbol:o.symbol,at:input.now,quoteAt:input.quotes[o.symbol]?.observedAt??0,
+    branch:held?.unified?.branch??r?.branch??(a.phase==='UP'||a.phase==='DOWN'?'CONTINUATION':'RETURN'),side:held?.side??r?.side??o.side,
+    phase:held?(!paperFilled(held)||held.paperOrder?.action?'EXECUTING':'HOLDING'):r&&o.eligible?'VALIDATING':'OBSERVE',
+    reason:held?.unified?.entryReason??reason,holdReason:held?.unified?.holdReason??'按实际方向保留承接结构；单次波动不换向',
+    exitCondition:held?.unified?.exitCondition??(r?.branch==='RETURN'?'触及失败极值止损、回到稳定重心，或市场确认趋势':'触及承接止损、承接破坏且恢复失败，或共同趋势失效'),
+    confirmation:r?.branch==='CONTINUATION'?{side:r.side,at:r.proofAt,bars:r.proofBars??[r.proofAt],path:r.proofPath??'HOLD_OUTSIDE',stop:r.stop,
+      boundary:r.side==='LONG'?r.reference.upper:r.reference.lower,epsilon:0}:null,
+    region:r?.reference??a.coins[o.symbol]?.reference??null,candidate:structuredClone(o),consumed:!!held||!!s.consumedTheses[o.id]};
+}
+function followerConflict(s:ForwardState,r:MarketRoute){return s.positions.some(t=>
+  t.unified&&t.unified.marketRoute?.relation!=='INDEPENDENT'
+    &&(t.unified.branch!==r.branch||r.branch==='CONTINUATION'&&t.side!==r.side));}
+function routeOpportunity(s:ForwardState,o:Opportunity,input:Input):Opportunity{
+  const a=s.directStrategy!.marketAuthority!,q=input.quotes[o.symbol],
+    price=q?(q.bestAsk+q.bestBid)/2:o.price,r=routeMarketCoin(a,o.symbol,price,input.now);
+  if(!r)return{...o,marketRoute:undefined,eligible:false,reason:a.coins[o.symbol]?.reason??a.reason};
+  // Price is the frozen proof price, not refreshed into a new thesis every tick.
+  const p=a.coins[o.symbol]!,base=r.branch==='RETURN'?p.rejectedPrice:p.eventPrice,
+    d=sign(r.side),risk=Math.max(.0001,d*(price-r.stop)/price),net=d*(r.target-price)/price-COST,
+    id=`${MARKET_AUTHORITY_VERSION}:${o.symbol}:${r.branch}:${r.side}:${r.proofAt}`,
+    geometry:WinnerPlan={version:WINNER_POLICY_VERSION,intent:r.branch==='RETURN'?'RANGE':'TREND',eventAt:r.proofAt,
+      initialStop:r.stop,target:r.branch==='RETURN'?r.target:null,targetArea:r.branch==='RETURN'?r.reference:null,
+      origin:structuredClone(r.reference),riskGroup:`${o.clusterId??o.symbol}:${r.side}`,source:r.branch==='RETURN'?'EDGE_REJECTION':'RELATIVE_CORE'};
+  return{...o,id,thesisId:id,side:r.side,price:base,marketRoute:r,eligible:!followerConflict(s,r)||r.relation==='INDEPENDENT',
+    completedAt:r.proofAt,expiresAt:r.proofAt+12*60_000,thesisSince:r.proofAt,thesisBars:3,
+    mode:r.branch==='RETURN'?'REVERSAL':'CONTINUATION',reason:r.reason,thesisSummary:r.reason,
+    invalidationSummary:`实际${r.side}方向的结构失效位置 ${r.stop}`,winnerPlan:geometry,
+    targetRate:d*(r.target/price-1),netRemainingSpaceRate:net,pullbackRiskRate:risk,stopRate:risk,edgeRatio:net/(risk+COST),
+    confirmationStage:'READY',tradePlan:r.branch==='RETURN'?'RANGE_REVERSION':'WINNER_TREND',
+    liquidityInvalidationPrice:r.stop,liquidityOriginLower:r.reference.lower,liquidityOriginUpper:r.reference.upper,
+    liquidityTargetLower:r.target,liquidityTargetUpper:r.target,environment:r.branch==='RETURN'?'ROTATION':'TREND',
+    environmentProbe:false,environmentForceRetest:false,environmentRiskScale:1,environmentMainline:true,
+    environmentScore:o.score,extendedConfirmation:false};
+}
+function manageMarketTrade(s:ForwardState,t:Trade,q:Quote,input:Input){
+  const u=t.unified!,r=u.marketRoute!,a=s.directStrategy!.marketAuthority!,now=input.now,d=sign(t.side),px=mark(t.side,q),
+    coin=a.coins[t.symbol],ownPlan=t.entryContext!.winnerPlan!;
+  // Structural hard protection runs even with missing whole-market data.
+  if(d*(px-t.stopPrice)<=0)return closeUnifiedTrade(s,t,q,now,'MARKET_ROUTE_STRUCTURE_EXIT','实际持仓方向触及既定结构保护');
+  const thesisInvalid=a.fresh&&!routeStillPermitted(a,r,t.symbol);
+  if(thesisInvalid)return closeUnifiedTrade(s,t,q,now,'MARKET_ROUTE_PERMISSION_EXIT',coin?.reason??a.reason);
+  const pi=evaluatePositionIntelligence({now,openedAt:t.openedAt,side:t.side,signedRate:d*(px/t.entryPrice-1),
+    peakFavorableRate:t.favorable,ageMin:(now-t.openedAt)/60000,firstProfit:!!t.firstProfitAt,
+    expectedHoldMinutes:t.expectedHoldMinutes??60,stopRate:Math.abs(ownPlan.initialStop/t.entryPrice-1),
+    entryScore:t.entryContext!.entryScore,entryResidual:t.entryContext!.entryResidual??0,
+    entryRelativeStrength:t.entryContext!.entryRelativeStrength??.5,entryRemainingSpaceRate:t.entryContext!.remainingSpaceRate,
+    state:s.extremumRegime.symbols[t.symbol],narrative:s.extremumRegime.narrative,quote:q,minutePath:input.minutePaths?.[t.symbol],
+    currentPrice:px,entryTradePlan:t.entryContext!.tradePlan,previous:t.positionIntelligence,entryBaseline:t.positionIntelligence?.baseline,
+    costRate:COST,marketStateAgeMs:Math.max(0,now-s.extremumRegime.updatedAt),entryResponseValidated:true});
+  // Market warning is a protection review, never an opposite entry signal.
+  const currentStop=coin?.side===t.side&&d*(coin.stop-t.stopPrice)>0?coin.stop:t.stopPrice,
+    outcome=advanceWinnerManagement({side:t.side,price:px,entryPrice:t.entryPrice,openedAt:t.openedAt,now,plan:ownPlan,
+      previous:t.winnerManagement,currentStop,rows:input.paths[t.symbol],cost:COST,remainingFraction:remainingTradeFraction(t),
+      concernFamilies:pi.concernFamilies,supportFamilies:pi.supportFamilies,
+      positionExit:!!coin?.failed,trendEligible:r.branch==='CONTINUATION'&&!coin?.warning});
+  t.positionIntelligence=pi;t.winnerManagement=outcome.state;t.stopPrice=outcome.state.protectedStop;
+  u.lastBarAt=Math.max(outcome.state.lastBarAt,coin?.lastAt??0);u.lastDecisionAt=now;
+  u.decision=a.warning||coin?.warning?'REVIEW':'HOLD';
+  u.holdReason=r.branch==='RETURN'?'失败极值仍有效，按实际持仓方向等待回到稳定重心':a.warning||coin?.warning?
+    '推进保留变弱，复核承接保护；未确认结构失效，不直接反向':'市场许可与本币承接仍成立，保留趋势延伸';
+  u.exitCondition=`实际方向保护 ${t.stopPrice}；${r.branch==='RETURN'?`回归重心 ${r.target}`:'承接破坏且恢复失败'}；市场分支许可失效则退出`;
+  if(outcome.action==='EXIT')return closeUnifiedTrade(s,t,q,now,outcome.reason,outcome.state.reason);
+  if(outcome.action==='REDUCE'&&reduceUnifiedTrade(s,t,q,now,outcome.fraction,outcome.state.reason,input.contracts[t.symbol])){
+    outcome.state.trimCount++;outcome.state.lastTrimEvent=outcome.state.obstacleSince;}
+  return false;
+}
+function manageMarketDirect(s:ForwardState,input:Input,ready:boolean){
+  const ds=s.directStrategy!,oldEpoch=ds.marketAuthority!.epoch,now=input.now;
+  ds.marketAuthority=advanceMarketAuthority({previous:ds.marketAuthority,now,ready,symbols:s.selectedSymbols,
+    protectedSymbols:s.positions.map(t=>t.symbol),
+    states:s.extremumRegime.symbols,paths:input.paths,minutePaths:input.minutePaths,quotes:input.analysisQuotes??input.quotes});
+  const a=ds.marketAuthority;
+  if(a.epoch!==oldEpoch)s.revision++;
+  for(const t of [...s.positions])if(t.unified&&!paperFilled(t)){
+    const r=t.unified.marketRoute;
+    if(!r||a.fresh&&!routeStillPermitted(a,r,t.symbol))rejectPaperEntry(s,t,now,'市场分支切换，撤销未成交旧意图');
+  }
+  advancePaperExecution(s,input.quotes,input.contracts,now);
+  if(s.positions.some(t=>!t.unified))drainLegacyForwardPositions(s,input);
+  for(const t of [...s.positions]){
+    if(!t.unified||!paperFilled(t)||t.paperOrder?.action?.kind==='CLOSE')continue;
+    const q=input.quotes[t.symbol];if(!freshQuote(q,now))continue;
+    t.lastPrice=mark(t.side,q!);t.lastQuoteAt=q!.observedAt;const signed=sign(t.side)*(t.lastPrice/t.entryPrice-1);
+    t.favorable=Math.max(t.favorable,signed);t.adverse=Math.max(t.adverse,-signed);t.peakPnlRate=t.favorable;
+    if(!t.firstProfitAt&&signed>2*FEE)t.firstProfitAt=now;
+    if(t.unified.marketRoute){manageMarketTrade(s,t,q!,input);continue;}
+    // Preserve legacy entry identities/financial records. Never fabricate new
+    // structural anchors for positions already filled before this release.
+    const compatible=a.phase==='RANGE'?t.unified.branch==='RETURN':a.phase==='UP'||a.phase==='DOWN'?
+      t.unified.branch==='CONTINUATION'&&t.side===(a.phase==='UP'?'LONG':'SHORT'):true;
+    if(a.fresh&&!compatible){closeUnifiedTrade(s,t,q!,now,'LEGACY_MARKET_PERMISSION_EXIT','统一市场分支已确认，旧分支持仓先完成退出');continue;}
+    if(t.unified.branch==='CONTINUATION')manageContinuation(s,t,q!,now,input.paths[t.symbol]??[],input.minutePaths?.[t.symbol],input.contracts[t.symbol]);
+    else manageDirectReturn(s,t,q!,input);
+  }
+  s.opportunities=s.opportunities.slice(0,30).map(o=>routeOpportunity(s,o,input));
+  for(const v of Object.values(s.entryValidations))if(v.status==='WAITING'){
+    const r=v.frozenOpportunity?.marketRoute;
+    if(!r||r.relation==='FOLLOWER'&&r.epoch!==a.epoch||a.fresh&&!routeStillPermitted(a,r,v.symbol)){
+      v.status='CANCELLED';v.reason='统一市场许可改变，旧方向验证已撤销';}
+  }
+  ds.plans=Object.fromEntries(s.opportunities.map(o=>[o.symbol,marketPlan(s,o,input)]));
+  ds.summary=`${a.reason}。${a.warning?'推进转弱，复核保护。':''}回退 ${s.positions.filter(t=>paperFilled(t)&&t.unified?.branch==='RETURN').length} 笔；延续 ${s.positions.filter(t=>paperFilled(t)&&t.unified?.branch==='CONTINUATION').length} 笔；切换先完成旧分支退出。`;
+}
 export function advanceDirectStrategy(input:Input){
   const state=normalizeForward(structuredClone(input.state),input.now),activated=migrateDirectStrategy(state,input.now);
+  const authorityActivated=!!input.marketAuthority&&!state.directStrategy!.marketAuthority;
+  if(authorityActivated){state.directStrategy!.marketAuthority=initialMarketAuthority(input.now);state.entryValidations={};
+    state.directStrategy!.plans={};state.directStrategy!.memory={};state.revision++;}
   const transportActivated=!!input.paperTiming&&!state.paperExecution;
   if(transportActivated)state.paperExecution={version:PAPER_EXECUTION_VERSION,cutoverAt:input.now,cancelled:[]};
   const timingRecovered=!!input.paperTiming&&state.positions.some(t=>t.paperOrder&&t.paperOrder.timing.version!==PAPER_TIMING_VERSION);
@@ -296,7 +416,7 @@ export function advanceDirectStrategy(input:Input){
     open:(s,o,q,c,now,response)=>{
       if(s.positions.some(t=>t.openedAt===now))return'本次执行已建立新仓，下一次继续核对组合容量';
       const p=researchDirectPlan(s,o,{...input,state:s},s.directStrategy!.plans[o.symbol]);s.directStrategy!.plans[o.symbol]=p;
-      if(p.branch==='CONTINUATION')return'本币已经进入趋势分支，按当前趋势位置执行';
+      if(p.branch==='CONTINUATION'&&!s.directStrategy!.marketAuthority)return'本币已经进入趋势分支，按当前趋势位置执行';
       const error=openDirectPlan(s,p,q,c,now,input.quotes,undefined,input.minutePaths?.[o.symbol],input.paperTiming);
       if(!error){const t=s.positions.at(-1)!;t.entryContext!.entryResponse={version:'direct-entry-response-v2',startedAt:response.validation.startedAt,
         confirmedAt:now,elapsedMs:now-response.validation.startedAt,samples:response.validation.samples,advanceRate:response.decision.currentAdvanceRate,
@@ -306,6 +426,6 @@ export function advanceDirectStrategy(input:Input){
   const next=advanceForward({...input,state,directAdapter:adapter,allocationEquity:1000});
   next.state.latestReason=next.state.directStrategy!.summary;
   next.protectionChanged=next.protectionChanged||forwardProtectionChanged(input.state,next.state);
-  next.changed=next.changed||activated||transportActivated||timingRecovered;
+  next.changed=next.changed||activated||authorityActivated||transportActivated||timingRecovered;
   return next;
 }

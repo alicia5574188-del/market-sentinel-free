@@ -7,6 +7,7 @@ export const UNIFIED_EXECUTION_VERSION='return-continuation-v1';
 export type UnifiedBranch='RETURN'|'CONTINUATION';
 export type Acceptance={side:'LONG'|'SHORT';at:number;bars:number[];path:'HOLD_OUTSIDE'|'RETEST_RESTART';stop:number;boundary:number;epsilon:number};
 export type UnifiedTrade={version:typeof UNIFIED_EXECUTION_VERSION|'dual-thesis-v2';branch:UnifiedBranch;sourceId:string;referenceId:string;
+  marketRoute?:import('./market-authority.ts').MarketRoute;
   returnLogic?:ReturnLogic;migratedAt?:number;legacyReceipt?:InverseCopy;
   researchObservation?:{checkedAt:number;confirmation:Acceptance|null;flowConfirmed:boolean};
   entryReason:string;holdReason:string;exitCondition:string;lastDecisionAt:number;lastBarAt:number;

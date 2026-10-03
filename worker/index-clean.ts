@@ -968,7 +968,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const executionEligible=eligibleRows.filter(forwardExecutionUniverseEligible),
       held=[...new Set([...(this.forwardState?.directStrategy?[]:this.forwardState?.inverseTrial?.source.positions.map(p=>p.symbol)??[]),...(this.forwardState?.positions.map(p=>p.symbol)??[])])],
       armed=Object.values(this.forwardState?.entryValidations??{}).filter(v=>v.status==="WAITING").map(v=>v.symbol),
-      locked=[...new Set([...held,...armed])];
+      locked=[...new Set([...held,...armed,...(this.forwardState?.directStrategy?.marketAuthority?.cohort??[])])];
     const universeRows=selectAnchorOpportunityUniverse({rows:eligibleRows,limit:SCAN_UNIVERSE_SIZE,
       lockedSymbols:locked,rotationSeed:Math.floor(now/RADAR_MS),explorationSlots:0,liquiditySlots:0});
     if(!universeRows.length)throw new Error("no liquid extremum-regime markets");
@@ -1260,7 +1260,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const previous = state,reviewEvents:ReviewEvent[]=[],executionQuotes=this.forwardQuotes(now);
       const next = advanceShadowInverse({ state: previous, now, paths: this.strategyCandles,minutePaths:this.forwardMinutePaths(),
         daily:this.turnDailyCandles,quotes:executionQuotes,analysisQuotes:this.forwardAnalysisQuotes(now),contracts:this.regimeContracts(),
-        entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue,
+        entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue,marketAuthority:true,
         // exchangeEntryAt is refreshed with every position mark. entryAt is
         // the immutable first confirmed native-position observation.
         paperTiming:executionTiming([...this.liveHistory.flatMap(p=>p.parity?[{...p.parity,entryConfirmedAt:p.entryAt}]:[]),
@@ -1337,7 +1337,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // Both realtime and candle lanes dispatch the SAME committed source.
       // Mark-only observations do not schedule more private reads.
       const lifecycle=(s:ForwardState)=>JSON.stringify(s.positions.map(paperSourceTrade).map(t=>[t.id,t.status,t.contracts,
-        t.sourceReductionIntent?.sequence,t.inverseCopy||t.unified?.branch==='RETURN'?null:t.stopPrice]).sort());
+        t.sourceReductionIntent?.sequence,t.inverseCopy||t.unified?.branch==='RETURN'&&!t.unified.marketRoute?null:t.stopPrice]).sort());
       if(lifecycle(previous)!==lifecycle(next.state))this.dispatchCommittedLiveSource();
     } catch (error) { this.forwardError = safeError(error); }
     finally { this.forwardBusy = false; }
