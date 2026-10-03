@@ -1,0 +1,63 @@
+name: Validate Regime Satellite Expansion V2
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/research-regime-satellite-expansion-v2.mjs"
+      - ".github/workflows/validate-regime-satellite-expansion-v2.yml"
+      - "lib/regime-portfolio.ts"
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Syntax check
+        run: node --check scripts/research-regime-satellite-expansion-v2.mjs
+      - name: Fetch locked 19-symbol 13-month Gate 5m dataset
+        env:
+          RESEARCH_INTERVAL: 5m
+          RESEARCH_DATASET: /tmp/gate-5m-satellite-expansion-13m.json
+          RESEARCH_MONTHS: 202508,202509,202510,202511,202512,202601,202602,202603,202604,202605,202606,202607,202608
+          RESEARCH_SYMBOLS: BTC_USDT,ETH_USDT,SOL_USDT,XRP_USDT,BNB_USDT,DOGE_USDT,ADA_USDT,LINK_USDT,LTC_USDT,AVAX_USDT,BCH_USDT,SUI_USDT,UNI_USDT,FIL_USDT,AAVE_USDT,ARB_USDT,APT_USDT,PEPE_USDT,WLD_USDT
+          RESEARCH_MIN_CONTRACTS: 19
+          RESEARCH_MIN_MONTH_COVERAGE: 0.98
+          RESEARCH_CONCURRENCY: 16
+        run: |
+          ok=0
+          for attempt in 1 2 3; do
+            if node scripts/fetch-gate-history.mjs; then ok=1; break; fi
+            echo "Gate archive fetch attempt $attempt failed; retrying locked dataset"
+            sleep 3
+          done
+          test "$ok" = "1"
+      - name: Aggregate to canonical 1h
+        env:
+          RESEARCH_DATASET: /tmp/gate-5m-satellite-expansion-13m.json
+          RESEARCH_OUTPUT: /tmp/gate-1h-satellite-expansion-13m.json
+          RESEARCH_MAX_FILL_HOURS: 3
+        run: node scripts/aggregate-gate-history.mjs
+      - name: Assert frozen 19-symbol dataset hashes
+        run: |
+          test "$(jq -r .sha256 /tmp/gate-5m-satellite-expansion-13m.json)" = "55d4201c67196b231b1437c2891385b3d654ef39cba1e3be02b15e157763c648"
+          test "$(jq -r .sha256 /tmp/gate-1h-satellite-expansion-13m.json)" = "7e06d28673395a8e5046380dc60809b72bd53b53688e7fdc69cffb8c35d330dc"
+      - name: Run production-parity satellite expansion audit
+        env:
+          RESEARCH_5M_DATASET: /tmp/gate-5m-satellite-expansion-13m.json
+          RESEARCH_1H_DATASET: /tmp/gate-1h-satellite-expansion-13m.json
+          RESEARCH_OUTPUT: /tmp/regime-satellite-expansion-v2.json
+        run: node --experimental-strip-types scripts/research-regime-satellite-expansion-v2.mjs
+      - name: Print compact result
+        run: jq '{decision,baselineParity,preliminary,selected,discoveryQualified,validationPass,evaluationPass,candidates:(.candidateAudits|map({symbol,basePass,robustPass,base,stress,adverse})),combo:(if .combo then {discovery:.combo.discovery,validation:.combo.validation,evaluation:.combo.evaluation} else null end)}' /tmp/regime-satellite-expansion-v2.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: regime-satellite-expansion-v2
+          path: /tmp/regime-satellite-expansion-v2.json
+          retention-days: 7

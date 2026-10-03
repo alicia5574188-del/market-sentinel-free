@@ -1,0 +1,48 @@
+name: Validate BRM Trend7 External Satellite
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/research-brm-trend7-external-satellite.mjs"
+      - ".github/workflows/validate-brm-trend7-external-satellite.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Fetch Gate 5m core plus SUI UNI external universe
+        env:
+          RESEARCH_INTERVAL: 5m
+          RESEARCH_DATASET: /tmp/gate-history-brm-satellite.json
+          RESEARCH_MONTHS: 202510,202511,202512,202601,202602,202603,202604,202605,202606,202607,202608
+          RESEARCH_SYMBOLS: BTC_USDT,ETH_USDT,SOL_USDT,XRP_USDT,BNB_USDT,DOGE_USDT,ADA_USDT,LINK_USDT,LTC_USDT,AVAX_USDT,BCH_USDT,SUI_USDT,UNI_USDT
+          RESEARCH_MIN_CONTRACTS: 13
+          RESEARCH_MIN_MONTH_COVERAGE: 0.70
+          RESEARCH_CONCURRENCY: 16
+        run: node scripts/fetch-gate-history.mjs
+      - name: Validate frozen BRM-7 plus median7 4pct gate on external satellites
+        env:
+          RESEARCH_DATASET: /tmp/gate-history-brm-satellite.json
+          RESEARCH_OUTPUT: /tmp/brm-trend7-external-satellite.json
+          RESEARCH_FRICTION: 0.0014
+          RESEARCH_STRESS_FRICTION: 0.0022
+          RESEARCH_ENTRY_SLIPPAGE: 0.00025
+        run: node scripts/research-brm-trend7-external-satellite.mjs
+      - name: Print result
+        run: jq '{decision,rawSignalCount,externalPass,ungated:.ungated.base,gated}' /tmp/brm-trend7-external-satellite.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: brm-trend7-external-satellite
+          path: /tmp/brm-trend7-external-satellite.json
+          retention-days: 7

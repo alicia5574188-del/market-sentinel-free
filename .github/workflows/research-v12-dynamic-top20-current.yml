@@ -1,0 +1,53 @@
+name: Research V12 Current Dynamic Top20
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/research-v12-dynamic-top20-current.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout historical V12 release candidate
+        uses: actions/checkout@v4
+        with:
+          ref: 2ef2faccc180489646dfb1d9874b8821095f5a4a
+          path: v12
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+          cache: npm
+          cache-dependency-path: v12/package-lock.json
+      - name: Install historical dependencies
+        working-directory: v12
+        run: npm ci
+      - name: Fetch today's dynamic crypto Top20 and 30-day causal dataset
+        working-directory: v12
+        env:
+          RESEARCH_DAYS: "30"
+          RESEARCH_SYMBOLS: "20"
+          RESEARCH_DATASET: /tmp/v12-dynamic-top20-current.json
+        run: |
+          set -euo pipefail
+          npm run research:all-regime | tee /tmp/v12-current-all-regime.log
+          node -e 'const d=JSON.parse(require("fs").readFileSync("/tmp/v12-dynamic-top20-current.json","utf8")); console.log(JSON.stringify({now:d.now,days:d.days,universePolicy:d.universePolicy,symbols:d.symbols},null,2))' | tee /tmp/v12-current-symbols.json
+      - name: Run exact historical V12 coverage gate
+        working-directory: v12
+        env:
+          RESEARCH_DATASET: /tmp/v12-dynamic-top20-current.json
+        run: npm run research:v12 | tee /tmp/v12-current-research.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v12-current-dynamic-top20
+          path: |
+            /tmp/v12-current-symbols.json
+            /tmp/v12-current-all-regime.log
+            /tmp/v12-current-research.log
+          retention-days: 7
