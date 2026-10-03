@@ -4,6 +4,7 @@ import {BEIJING_TIME_ZONE} from "../lib/beijing-time.ts";
 import {type forwardSummary} from "../lib/forward-relations.ts";
 import type {EpisodeResearch} from '../lib/episode-research.ts';
 import type {SpecialResearch,SpecialWatch} from '../lib/special-move.ts';
+import type {EventResearch,ResponseEvent} from '../lib/event-response.ts';
 
 function specialDescription(w:SpecialWatch){return{reason:({ACTIVE_NONRESPONSE:'近期成交活跃，却没有响应市场波动',RELATIVE_LEADER:'相对市场明显走强或走弱',OPPOSITE_MOVE:'实际方向与市场不同',OWN_ACCELERATION:'自身推进明显加速',ORDINARY:'当前未发现特别表现'}[w.kind]),next:({SPECIAL_READY:'本币启动已确认，核对实际进场位置',SPECIAL_LOCATION:'等待有效回踩与扣费后的空间',SPECIAL_COVERAGE:'等待连续价格、真实近期成交额与新鲜报价',SPECIAL_LOW_ACTIVITY:'近期成交太低或明显萎缩，停止交易授权',SPECIAL_EVENT_ENDED:'旧段承接失效，等待新的启动',SPECIAL_EVENT_OLD:'旧启动已超出入场时效，等待新的回踩重启',SPECIAL_DORMANT:'离开扫描池，记忆保留，当前不授权交易',SPECIAL_ORDINARY:'当前只观察',SPECIAL_NO_RESPONSE:'等待本币真正启动并保留价格优势',SPECIAL_WATCH:'持续观察会跟随、继续不响应，还是走出相反方向'}[w.code]??w.code)};}
 
@@ -63,17 +64,42 @@ function DirectExecution({data,now,liveEnabled,liveOverview}:{data:NonNullable<V
         <div className="fr-exec-compact-head"><b>{t.symbol.replace('_',' / ')} · {side(t.side)}</b><span>{t.unified?.decision==='EXIT'?'准备退出':t.unified?.decision==='REVIEW'?'复核持仓':'继续持有'}</span></div>
         <p>{t.unified?.holdReason??positionWatch(t)}</p><p className="fr-exec-exit">退出条件：{t.unified?.exitCondition??'按原交易计划执行'}</p>
         <details className="fr-exec-research-details"><summary>查看依据</summary><p>进场：{t.unified?.entryReason??t.entryContext?.reason??'暂无记录'}</p>
-        {observed&&<><p>研究观察：{researchSignal(observed.signal)} · {observed.reason}</p><p>研究承接 {observed.holdingSupport} · 当前执行保护 {observed.executionStop}</p>
+        {ds.eventResponse&&!t.unified?.response&&<p>沿用入场时的原策略规则</p>}
+        {t.unified?.response&&<><p>事件响应 · {({LAUNCH:'启动观察',ADVANTAGE:'优势保留',REVIEW:'复核恢复',EXIT:'准备退出'})[t.unified.response.stage]}</p>
+          <p>已记录最高推进 {(t.unified.response.peak*100).toFixed(2)}% · 连续恢复失败 {t.unified.response.failedRecoveries} 次</p>
+          <p>恢复耗时 {t.unified.response.recoveryMs==null?'尚未完成':`${Math.round(t.unified.response.recoveryMs/1000)} 秒`} · 风险保护 {t.stopPrice}</p></>}
+        {observed&&!t.unified?.response&&<><p>研究观察：{researchSignal(observed.signal)} · {observed.reason}</p><p>研究承接 {observed.holdingSupport} · 当前执行保护 {observed.executionStop}</p>
           <p>当前净盈亏 {observed.netPnl==null?'—':`${observed.netPnl.toFixed(2)} U`} · 已记录最高净盈亏 {observed.peakNetPnl==null?'—':`${observed.peakNetPnl.toFixed(2)} U`}
           {observed.fillRatio!=null&&observed.fillRatio<.99?` · 计划成交 ${(observed.fillRatio*100).toFixed(1)}%`:''}</p></>}
         <p>最近判断 {clock(t.unified?.lastDecisionAt)} · 持有 {Math.max(0,Math.round((now-t.openedAt)/60000))} 分钟</p></details></article>;})}</div>
       {!data.positions.length&&<p>暂无持仓，等待有效启动。</p>}
       {ds.execution&&<details className="fr-exec-research-details"><summary>成交说明</summary><p>模拟按实盘的执行校验、提交和成交确认步骤结算；盘口模拟与交易所实际成交仍可能存在差异。</p></details>}</section>
-    {ds.specialResearch?<SpecialResearchView research={ds.specialResearch} now={now} plans={plans} held={held}/>:<section className="fr-section"><div className="fr-section-head"><h2>重点观察</h2><span>{plans.length} 个计划</span></div>
+    {ds.eventResearchError?<section className="fr-section"><h2>事件研究待恢复</h2><p>{ds.eventResearchError}</p></section>:ds.eventResearch?<EventResponseView research={ds.eventResearch} now={now} held={held}/>:ds.specialResearch?<SpecialResearchView research={ds.specialResearch} now={now} plans={plans} held={held}/>:<section className="fr-section"><div className="fr-section-head"><h2>重点观察</h2><span>{plans.length} 个计划</span></div>
       <div className="fr-exec-compact-list">{plans.map(p=><article className="fr-exec-compact-row" key={p.id}><div className="fr-exec-compact-head"><b>{p.symbol.replace('_',' / ')} · {p.permission==='WAIT'?'观察':side(p.side)}</b><span>{planPhase(p.phase)}</span></div><p>{p.reason.replace(/^[A-Z_]+: /,'')}</p><details className="fr-exec-research-details"><summary>查看计划</summary><PlanDetails plan={p}/></details></article>)}</div>
       {!plans.length&&<p>等待当前结构与新鲜盘口形成交易计划。</p>}
       {ds.episodeResearch&&<details className="fr-exec-research-details"><summary>详细行情研究</summary><EpisodeResearchView research={ds.episodeResearch} now={now}/></details>}</section>}
   </div>;
+}
+function EventResponseView({research,now,held}:{research:EventResearch;now:number;held:Set<string>}){
+  const rows=Object.values(research.events).filter(e=>!held.has(e.symbol)).sort((a,b)=>Number(b.phase==='READY')-Number(a.phase==='READY')
+    ||Number(b.fresh)-Number(a.fresh)||b.score-a.score),
+    render=(e:ResponseEvent)=><article className="fr-exec-compact-row" key={e.id}>
+      <div className="fr-exec-compact-head"><b>{e.symbol.replace('_',' / ')}{e.side?` · ${side(e.side)}`:''}</b>
+        <span>{!e.fresh?'数据待补齐':({WATCH:'等待响应',CONFIRMING:'确认优势',READY:'核对执行',EXECUTING:'等待成交',HOLDING:'持仓中',FAILED:'失败已记录',LATE:'已走远',DORMANT:'记忆保留'})[e.phase]}</span></div>
+      <p>{e.admission&&now-e.admission.at<10000?e.admission.reason:e.reason}</p>
+      <details className="fr-exec-research-details"><summary>查看事件依据</summary>
+        <p>{({ACTIVE_NONRESPONSE:'活跃但未响应大盘',RELATIVE_LEADER:'相对大盘特别强弱',OPPOSITE_MOVE:'与大盘反向',OWN_ACCELERATION:'自身价格加速',ORDINARY:'事件持续观察'})[e.kind]} · 已观察 {Math.max(0,Math.round((now-e.detectedAt)/60000))} 分钟</p>
+        <p>近期15分钟成交 {e.turnover15==null?'未知':`${Math.round(e.turnover15).toLocaleString()} USDT`} · {e.active?'活跃':'成交待核对'}</p>
+        {e.last&&<p>自身推进 {(e.last.progress*100).toFixed(2)}% · 优势保留 {(e.last.retained*100).toFixed(0)}% · 回落深度 {(e.last.counter*100).toFixed(2)}%</p>}
+        <p>启动尝试 {e.attempts} 次 · 失败 {e.failures} 次 · 事件发现 {clock(e.detectedAt)}</p>
+        <p>{e.outcomes.map(o=>`${o.minutes}分钟 ${o.status==='OBSERVED'?`${(o.move!*100).toFixed(2)}%`:o.status==='MISSING'?'缺少实际观察':'尚未到期'}`).join(' · ')}</p>
+      </details></article>;
+  return <section className="fr-section" data-testid="event-response-research"><div className="fr-section-head"><h2>重点事件</h2><span>{rows.length} 个 · {clock(research.updatedAt)}</span></div>
+    <div className="fr-exec-compact-list">{rows.slice(0,3).map(render)}</div>
+    {rows.length>3&&<details className="fr-exec-research-details"><summary>其余事件 · {rows.length-3} 个</summary>{rows.slice(3).map(render)}</details>}
+    {!rows.length&&<p>正在寻找活跃的特别币；发现异常后等待实际价格响应。</p>}
+    {research.capacitySkipped>0&&<details className="fr-exec-research-details"><summary>研究覆盖</summary><p>记忆容量不足时保留已有事件；累计暂缓记录 {research.capacitySkipped} 次新观察，不把重复观察计作独立机会。</p></details>}
+  </section>;
 }
 const bias=(v?:string)=>v==="BULLISH"?"偏多":v==="BEARISH"?"偏空":v?"中性":"待确认";
 const evolution=(v?:string)=>({

@@ -1,3 +1,18 @@
+# 2026-10-03 16:46 — event-response controller, research exports and recovery
+
+Owner authorizes implementation and deployment of stable unusual-event memory,
+measured own-price progress/retention/recovery, early failed-launch exits and
+earned-advantage holding. No cross-coin hedge, chart-pattern/region admission or
+fabricated geometric profit target for new events. Preserve fixed1000 sizing,
+original account/history, native shared admission/lot/margin/risk, LIVE intent,
+scan30/minute11/2s/write budgets; legacy holdings retain their original policy.
+Redesign snapshots and compact execution UI. Repair the observed matching-base
+protection restoration error without resetting, dropping protection or accepting
+corrupt financial identities. Run causal, restoration, integration and original
+release gates; reviewed main deployment and advancing production are required.
+Pure controller/state/checkpoint helpers are in scope; frozen Worker methods
+stay unchanged unless a reproduced recovery defect specifically requires it.
+
 # 2026-10-03 13:57 — owner authorizes special-coin reconstruction
 
 Owner replaces broad-market prediction and ordinary return trading with live

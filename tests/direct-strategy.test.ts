@@ -12,6 +12,7 @@ import {buildReviewSnapshot} from '../lib/research-snapshot.ts';
 import {registerHooks} from 'node:module';
 import {nextProtectionWriteBudget} from '../lib/forward-write-budget.ts';
 import {initialMarketAuthority} from '../lib/market-authority.ts';
+import {advanceEventResearch} from '../lib/event-response.ts';
 registerHooks({resolve(specifier,context,nextResolve){
   if(specifier==='cloudflare:workers')return{url:'data:text/javascript,export class DurableObject{constructor(ctx,env){this.ctx=ctx;this.env=env;}}',shortCircuit:true};
   if(specifier==='vinext/server/app-router-entry')return{url:'data:text/javascript,export default {fetch:()=>new Response("synthetic")};',shortCircuit:true};
@@ -159,6 +160,8 @@ async function checkpointWorker(){
   f.s.directStrategy!.marketAuthority=initialMarketAuthority(T);
   f.s.directStrategy!.adaptive={version:'adaptive-causal-v1',cutoverAt:T};
   f.s.directStrategy!.specialMove={version:'special-move-v1',cutoverAt:T};
+  f.s.directStrategy!.eventResponse={version:'event-response-v1',cutoverAt:T};
+  f.s.directStrategy!.eventResearch=advanceEventResearch({now:T,paths:{},quotes:{},states:{}});
   f.s.paperExecution={version:'live-steps-paper-v1',cutoverAt:T,cancelled:[]};
   f.s.storage={persistedAt:T,error:null};f.s.lastQuoteCycleAt=T;
   const data=new Map<string,unknown>(Object.entries((await prepareForwardWrite(null,f.s,T,{compact:true})).entries)),writes:string[][]=[];
@@ -226,6 +229,18 @@ test('a financial exit bypasses a pending10s overlay, while restart retains the 
   assert.equal(fresh.h.forwardError,null);assert.equal(fresh.writes.length,0);assert.deepEqual(fresh.h.forwardState,unchanged);
   await fresh.h.advanceForwardNow(T+12000,false);assert.equal(fresh.h.forwardError,null);assert.equal(fresh.writes.length,1);
   assert.equal(fresh.h.forwardProtectionBudget.writes,2);
+});
+test('actual Worker resumes a matching older staged overlay and retains stronger current observed peaks',async()=>{
+  const {h,writes}=await checkpointWorker();await h.advanceForwardNow(T+2000,false);
+  h.forwardPendingProtection=prepareForwardProtectionWrite(h.forwardState).entries[FORWARD_PROTECTION_STORAGE];
+  h.forwardState.positions[0].favorable=.04;h.forwardState.positions[0].peakPnlRate=.04;
+  h.forwardState.positions[0].adverse=.02;h.forwardState.positions[0].lastQuoteAt=T+3000;
+  const identity=h.forwardState.startedAt,balance=h.forwardState.balance;
+  await h.advanceForwardNow(T+4000,false);assert.equal(h.forwardError,null);
+  await h.advanceForwardNow(T+12000,false);assert.equal(h.forwardError,null);
+  assert.equal(h.forwardState.startedAt,identity);near(h.forwardState.balance,balance);
+  near(h.forwardState.positions[0].favorable,.04);assert.ok(h.forwardState.positions[0].adverse>=.02);
+  assert.equal(h.forwardPendingProtection,null);assert.ok(writes.at(-1).includes(FORWARD_PROTECTION_STORAGE));
 });
 test('failed intent commit retains financial and LIVE source authority; retry dispatches exactly once before matching',async()=>{
   const {h,storage,setPrice}=await checkpointWorker(),before=structuredClone(h.forwardState),put=storage.put;
