@@ -1,4 +1,7 @@
 import test from 'node:test';
+import {marketCandidateReviewEvents,directStrategySummary} from '../lib/direct-strategy-view.ts';
+import {migrateDirectStrategy} from '../lib/direct-strategy.ts';
+import {initialMarketAuthority} from '../lib/market-authority.ts';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {initialForward,advanceForward,type Trade,type Quote,type Opportunity} from '../lib/forward-relations.ts';
@@ -90,6 +93,28 @@ test('journal coalesces repeated waits and stays below its own byte budget',()=>
   assert.ok(new TextEncoder().encode(JSON.stringify(j)).length<REVIEW_JOURNAL_BYTES);assert.ok(j.droppedCandidates>0);assert.ok(j.droppedDiscovery>0);
   appendReviewEvents(j,[{at:T+999999,id:'candidate-599',symbol:'X_USDT',stage:'WAIT_RETEST',reason:'waiting 999'}],T+999999);
   assert.equal(j.candidates.at(-1)!.events.length,1);
+});
+test('market observation identities retain blocked-reason changes across refreshed candidate IDs within the existing cap',()=>{
+  const s=initialForward(T);migrateDirectStrategy(s,T);s.directStrategy!.marketAuthority=initialMarketAuthority(T);
+  const j=initialReviewJournal(T,T);
+  for(let i=0;i<120;i++){
+    s.opportunities=Array.from({length:30},(_,n)=>({id:`refresh-${i}-${n}`,symbol:`C${n}_USDT`,side:'LONG',
+      eligible:false,price:100,reason:i<60?'OWN_STRUCTURE_UNCONFIRMED: 等待本币结构':'OWN_TREND_WARNING: 本币推进转弱',
+      expiresAt:T+600000,tradePlan:'WINNER_TREND'}) as ForwardState['opportunities']);
+    appendReviewEvents(j,marketCandidateReviewEvents(s,T+i*2000),T+i*2000);
+  }
+  assert.equal(j.candidates.length,30);assert.equal(j.droppedCandidates,0);
+  assert.ok(j.candidates.every(c=>c.firstObservedAt===T&&c.events.length===2));
+  assert.equal(j.candidates[0]!.events[1]!.reason,'OWN_TREND_WARNING: 本币推进转弱');
+  assert.equal(j.candidates[0]!.events[1]!.candidateId,'refresh-60-0');
+  assert.ok(new TextEncoder().encode(JSON.stringify(j)).length<REVIEW_JOURNAL_BYTES);
+});
+test('an unpermitted market observation displays WAIT instead of an invented return branch',()=>{
+  const s=initialForward(T);migrateDirectStrategy(s,T);s.directStrategy!.marketAuthority=initialMarketAuthority(T);
+  const o={id:'o',symbol:'AAA_USDT',side:'LONG',reason:'OWN_STRUCTURE_UNCONFIRMED: 等待本币结构',eligible:false,score:90} as ForwardState['opportunities'][number];
+  s.directStrategy!.plans.AAA_USDT={id:o.id,symbol:o.symbol,at:T,quoteAt:T,branch:'RETURN',side:'LONG',phase:'OBSERVE',
+    reason:o.reason,holdReason:'wait',exitCondition:'wait',confirmation:null,region:null,candidate:o};
+  const p=directStrategySummary(s)!.plans[0]!;assert.equal(p.branch,'WAIT');assert.equal(p.permission,'WAIT');
 });
 test('research retirement affects trade records only, never market geometry or current positions',()=>{
   const s=initialForward(T),old=initialShadowResearch(T);old.trades=[{tradeId:'old',openedAt:T-1000,status:'OPEN',updatedAt:T-1} as TradeShadowResearch];

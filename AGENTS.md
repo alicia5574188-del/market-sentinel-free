@@ -1,3 +1,19 @@
+# 2026-10-03 — owner-authorized mixed-market admission adjustment
+
+Owner authorizes adjustment after review snapshot shows INJ own accepted trend
+blocked by global HANDOFF and redundant five-minute independence waiting. In
+fresh mixed/HANDOFF markets allow LOCAL routes from existing completed own
+trend/range proof; preserve own warning/location/cost/risk/response and strong
+common-direction veto. A revoked common leg requires a post-revocation proof.
+LOCAL holdings in different groups can coexist; unrelated common epoch changes
+cancel pending intents, aligned confirmed common direction retains holdings,
+contrary common permission or own failure exits through existing execution.
+Keep three-five-minute independent evidence for contrary accepted common trends.
+Use stable per-symbol diagnostic observations and precise blockers within the
+existing64row/10event/80KiB bounds. Preserve native instructions, account/history,
+manual controls, scan30/minute11/resource clocks and original release path.
+No reset, historical profitability replay, test exchange order or new timer/read.
+
 # 2026-10-03 — owner-authorized market branch authority and release
 
 Implement and deploy `market-regime-authority-v1` via original reviewed main.

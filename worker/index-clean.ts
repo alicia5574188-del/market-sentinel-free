@@ -46,6 +46,7 @@ import { evaluateRegimePortfolio, initialRegimePortfolio, normalizeRegimePortfol
 import type { PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
 import {unifiedReferenceState,unifiedExecutionSummary} from '../lib/unified-execution.ts';
 import {advanceDirectStrategy as advanceShadowInverse,directStrategySummary,directOpportunityView} from '../lib/direct-strategy.ts';
+import {marketCandidateReviewEvents} from '../lib/direct-strategy-view.ts';
 import {restoreForwardProtectionCheckpoint} from '../lib/forward-protection-checkpoint.ts';
 import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
 import { ADAPTIVE_ENGINE_VERSION, FORWARD_EXECUTION_BBO_CAP, FORWARD_MINUTE_CONFIRMATION_CAP, closeForwardForReset,
@@ -1326,8 +1327,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.forwardError = null;
       try{
         const known=new Set(this.reviewJournal.candidates.map(r=>r.id));
-        const discovered:ReviewEvent[]=next.state.opportunities.filter(o=>!known.has(o.id)).map(o=>directOpportunityView(next.state,o)).map(o=>({at:now,id:o.id,symbol:o.symbol,
-          stage:"CANDIDATE_OBSERVED",side:o.side,reason:o.eligible?"STRATEGY_ELIGIBLE":"STRATEGY_NOT_ELIGIBLE",price:o.price,plan:o.tradePlan,expiresAt:o.expiresAt}));
+        const discovered:ReviewEvent[]=marketCandidateReviewEvents(next.state,now)
+          .filter(e=>!!next.state.directStrategy?.marketAuthority||!known.has(e.id));
         appendReviewEvents(this.reviewJournal,[...discovered,...reviewEvents].map(e=>({...e,
           ...(next.state.directStrategy?{side:next.state.positions.find(t=>t.id===e.tradeId)?.side??next.state.directStrategy.plans[e.symbol]?.side??e.side}:{}),
           buildSha:FORWARD_BUILD_SHA,strategyFingerprint:STRATEGY_FINGERPRINT,
