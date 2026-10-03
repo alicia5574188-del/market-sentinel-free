@@ -182,8 +182,8 @@ export function advanceMarketAuthority(input:{previous?:MarketAuthority;now:numb
     const support=old==='UP'?a.up:a.down;
     if(support<.40&&fraction('failed')+(old==='UP'?a.down:a.up)>=.60)a.phase='HANDOFF';
   }else a.phase=desired;
-  a.reason=a.phase==='UP'?'多数独立代表组确认上涨接受：跟随币只许上涨延续':
-    a.phase==='DOWN'?'多数独立代表组确认下跌接受：跟随币只许下跌延续':
+  a.reason=a.phase==='UP'?'共同上涨趋势仍有效：跟随币只许上涨延续':
+    a.phase==='DOWN'?'共同下跌趋势仍有效：跟随币只许下跌延续':
     a.phase==='RANGE'?'多数代表组确认双向失败：跟随币只许失败回归':'旧状态已失效，新方向或双向回归尚未共同确认，等待';
   if(old!==a.phase){a.epoch++;a.since=input.now;a.events.unshift({at:input.now,from:old,to:a.phase,reason:a.reason});a.events=a.events.slice(0,8);}
   return a;
