@@ -5,6 +5,7 @@ import {advanceMarketAuthority,initialMarketAuthority,routeMarketCoin,routeStill
 import type {MarketSymbolState,CandleLike} from '../lib/market-intelligence-engine.ts';
 import {initialForward,type Opportunity,type Quote,normalizeForward,forwardUrgentQuoteSymbols,forwardUrgentMinuteSymbols} from '../lib/forward-relations.ts';
 import {migrateDirectStrategy,researchDirectPlan,openDirectPlan,advanceDirectStrategy} from '../lib/direct-strategy.ts';
+import {marketCandidateReviewEvents,directStrategySummary} from '../lib/direct-strategy-view.ts';
 import {buildForwardProtectionCheckpoint,restoreForwardProtectionCheckpoint} from '../lib/forward-protection-checkpoint.ts';
 import {advancePaperExecution} from '../lib/paper-execution.ts';
 import {buildProportionalMirror} from '../lib/live-parity.ts';
@@ -292,4 +293,9 @@ test('mixed production adapter routes actual local directions through entry vali
   const own=next.state.opportunities.filter(o=>o.eligible);assert.ok(own.length>0);
   assert.ok(own.every(o=>o.marketRoute!.relation==='LOCAL'));
   assert.ok(Object.values(next.state.entryValidations).some(v=>v.status==='WAITING'));
+  const blocked=next.state.opportunities.find(o=>!o.eligible&&!o.marketRoute)!;
+  assert.ok(blocked);assert.match(blocked.reason,/^OWN_STRUCTURE_UNCONFIRMED:/);
+  assert.equal(next.state.directStrategy!.plans[blocked.symbol]!.reason,blocked.reason);
+  assert.equal(directStrategySummary(next.state)!.plans.find(p=>p.symbol===blocked.symbol)!.reason,blocked.reason);
+  assert.equal(marketCandidateReviewEvents(next.state,T).find(e=>e.symbol===blocked.symbol)!.reason,blocked.reason);
 });

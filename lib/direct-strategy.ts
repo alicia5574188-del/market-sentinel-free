@@ -303,7 +303,7 @@ function manageDirect(s:ForwardState,input:Input,marketReady:boolean){
 }
 function marketPlan(s:ForwardState,o:Opportunity,input:Input):DirectPlan{
   const a=s.directStrategy!.marketAuthority!,r=o.marketRoute,held=s.positions.find(t=>t.symbol===o.symbol&&t.unified),
-    reason=r?.reason??a.coins[o.symbol]?.reason??a.reason;
+    reason=o.reason||r?.reason||a.coins[o.symbol]?.reason||a.reason;
   return{id:o.id,symbol:o.symbol,at:input.now,quoteAt:input.quotes[o.symbol]?.observedAt??0,
     branch:held?.unified?.branch??r?.branch??(a.phase==='UP'||a.phase==='DOWN'?'CONTINUATION':'RETURN'),side:held?.side??r?.side??o.side,
     phase:held?(!paperFilled(held)||held.paperOrder?.action?'EXECUTING':'HOLDING'):r&&o.eligible?'VALIDATING':'OBSERVE',
