@@ -16,7 +16,7 @@ export type ResponseEvent={id:string;symbol:string;detectedAt:number;anchorAt:nu
   tradeId?:string;entry?:{at:number;price:number;progress:number;retained:number;noise:number};
   exit?:{at:number;reason:string;price:number;net:number|null;peak:number;giveback:number};
   outcomes:{minutes:number;dueAt:number;at:number|null;observedAt?:number;price:number|null;move:number|null;status:'PENDING'|'OBSERVED'|'MISSING'}[];
-  changes:{at:number;code:string;price:number}[]};
+  changes:{at:number;code:string;price:number}[];compacted?:boolean};
 export type EventResearch={version:typeof EVENT_RESPONSE_VERSION;startedAt:number;updatedAt:number;events:Record<string,ResponseEvent>;
   marketMove:number|null;bytes:number;capacitySkipped:number;expired:number;coverage:{prices:number;active:number;fresh:number}};
 export type ResponseHolding={version:typeof EVENT_RESPONSE_VERSION;eventId:string;entryAt:number;sourceAt:number;peak:number;peakAt:number;
@@ -25,6 +25,23 @@ export type ResponseHolding={version:typeof EVENT_RESPONSE_VERSION;eventId:strin
 const dir=(s:Side)=>s==='LONG'?1:-1;
 const median=(a:number[])=>{const b=a.filter(Number.isFinite).sort((x,y)=>x-y);return b.length?b[Math.floor(b.length/2)]!:0;};
 const size=(x:unknown)=>new TextEncoder().encode(JSON.stringify(x)).length;
+export function boundedEventResearch(s:EventResearch){
+  for(const e of Object.values(s.events))if(e.tradeId||e.admission?.code==='NATIVE_ADMISSION'&&(e.quote?.samples??0)>=3)delete e.quote;
+  if(size(s)>EVENT_RESEARCH_BYTES-2000)for(const e of Object.values(s.events)){
+    e.changes=[];e.reason=e.reason.slice(0,65);
+    if(e.admission)e.admission.reason=e.admission.reason.slice(0,55);
+    // Closed trades keep authoritative response points in their financial archive.
+    if(e.exit)delete e.last;
+    e.compacted=true;
+  }
+  if(size(s)>EVENT_RESEARCH_BYTES-256)for(const e of Object.values(s.events)){
+    e.reason=e.reason.slice(0,24);
+    if(e.admission)e.admission.reason=e.admission.reason.slice(0,28);
+  }
+  s.bytes=size(s);s.bytes=size(s);
+  if(s.bytes>EVENT_RESEARCH_BYTES)throw new Error('EVENT_RESEARCH_BOUND');
+  return s;
+}
 export function validResponseHolding(m:ResponseHolding){return m?.version===EVENT_RESPONSE_VERSION&&typeof m.eventId==='string'&&!!m.eventId
   &&[m.entryAt,m.sourceAt,m.peak,m.peakAt,m.lastClose,m.lastCloseAt,m.failedRecoveries,m.counterProgress].every(Number.isFinite)
   &&m.entryAt>0&&m.lastClose>0&&m.peak>=0&&m.failedRecoveries>=0&&m.counterProgress>=0
@@ -123,7 +140,7 @@ export function advanceEventResearch(input:{previous?:EventResearch;now:number;p
     if(activity.active)s.coverage.active++;if(valid)s.coverage.fresh++;
     if(!old&&(!activity.active||!valid||kind==='ORDINARY'))continue;
     const selected=responseRows(five,input.minutes?.[symbol],input.now),last=selected.rows.at(-1)!;
-    if(!old&&(Object.keys(s.events).length>=EVENT_LIMIT||size(s)+Object.keys(s.events).length*650>EVENT_RESEARCH_BYTES-2200)){s.capacitySkipped++;continue;}
+    if(!old&&(Object.keys(s.events).length>=EVENT_LIMIT||size(s)+Object.keys(s.events).length*1000>EVENT_RESEARCH_BYTES-2500)){s.capacitySkipped++;continue;}
     const e=old??{id:`${EVENT_RESPONSE_VERSION}:${symbol}:${input.now}`,symbol,detectedAt:input.now,
       anchorAt:last.time*1000+selected.step,anchorPrice:last.close,lastSeenAt:input.now,kind,score:Math.min(98,60+Math.abs(residual)/vol*8),
       beta,correlation,marketMove:s.marketMove,residual,turnover15:activity.turnover15,active:activity.active,fresh:valid,
@@ -149,8 +166,7 @@ export function advanceEventResearch(input:{previous?:EventResearch;now:number;p
   }
   // Keep event identities/anchors/outcomes first. Optional explanation changes
   // yield space; no rotating rank is allowed to evict a live event.
-  if(size(s)>EVENT_RESEARCH_BYTES-256)for(const e of Object.values(s.events)){e.changes=e.changes.slice(-1);e.reason=e.reason.slice(0,65);}
-  s.bytes=size(s);s.bytes=size(s);if(s.bytes>EVENT_RESEARCH_BYTES)throw new Error('EVENT_RESEARCH_BOUND');return s;
+  return boundedEventResearch(s);
 }
 export function eventMarketRoute(s:EventResearch|undefined,symbol:string,price:number,now:number){
   const e=s?.events[symbol],m=e?.last;

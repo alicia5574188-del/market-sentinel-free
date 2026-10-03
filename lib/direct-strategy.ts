@@ -15,7 +15,7 @@ import {advanceMarketAuthority,initialMarketAuthority,marketRouteDecision,routeS
 import {advanceEpisodeResearch} from './episode-research.ts';
 import {adaptiveMarketRoute,adaptiveHoldingDecision,ADAPTIVE_CONTROLLER_VERSION} from './adaptive-controller.ts';
 import {advanceSpecialResearch,specialMarketRoute,SPECIAL_MOVE_VERSION} from './special-move.ts';
-import {advanceEventResearch,eventMarketRoute,confirmEventQuote,eventHoldingDecision,EVENT_RESPONSE_VERSION} from './event-response.ts';
+import {advanceEventResearch,boundedEventResearch,eventMarketRoute,confirmEventQuote,eventHoldingDecision,EVENT_RESPONSE_VERSION} from './event-response.ts';
 export {DIRECT_STRATEGY_VERSION} from './direct-strategy-types.ts';
 export {directOpportunityView,directStrategySummary} from './direct-strategy-view.ts';
 const sign=(side:'LONG'|'SHORT')=>side==='LONG'?1:-1;
@@ -508,6 +508,8 @@ function manageMarketDirect(s:ForwardState,input:Input,ready:boolean){
     // Entry is already evaluated above with the same native sizing/queue path.
     // Do not send these events through retired geometric response/location gates.
     for(const o of s.opportunities)o.eligible=false;
+    if(ds.eventResearch){try{boundedEventResearch(ds.eventResearch);}
+      catch{ds.eventResearchError='事件研究容量不足，暂停新增；已有持仓继续自身保护';}}
   }
   ds.summary=ds.eventResponse?`记录活跃异常事件；按自身推进保留与恢复参与，失败启动提前退出，有优势继续持有。已记住 ${Object.keys(ds.eventResearch?.events??{}).length} 个事件；${s.positions.filter(paperFilled).length} 笔实际持仓。`:ds.specialMove?`持续研究特别的活跃币；自身启动并保留价格优势后参与爆发段。研究记忆 ${Object.keys(ds.specialResearch?.watches??{}).length} 币；${s.positions.filter(paperFilled).length} 笔实际持仓。`:
     `${ds.adaptive?'按实际失败参与回归，按持续承接参与延续；持仓依据独立观察。':a.reason}。回退 ${s.positions.filter(t=>paperFilled(t)&&t.unified?.branch==='RETURN').length} 笔；延续 ${s.positions.filter(t=>paperFilled(t)&&t.unified?.branch==='CONTINUATION').length} 笔；新方向须取得自身证明。`;
