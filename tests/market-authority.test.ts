@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {advanceMarketAuthority,initialMarketAuthority,routeMarketCoin,routeStillPermitted,validMarketAuthority,
-  MARKET_AUTHORITY_VERSION,type CoinEpisode,type MarketAuthority,type MarketRoute} from '../lib/market-authority.ts';
+  MARKET_AUTHORITY_VERSION,marketRouteDecision,type CoinEpisode,type MarketAuthority,type MarketRoute} from '../lib/market-authority.ts';
 import type {MarketSymbolState,CandleLike} from '../lib/market-intelligence-engine.ts';
 import {initialForward,type Opportunity,type Quote,normalizeForward,forwardUrgentQuoteSymbols,forwardUrgentMinuteSymbols} from '../lib/forward-relations.ts';
 import {migrateDirectStrategy,researchDirectPlan,openDirectPlan,advanceDirectStrategy} from '../lib/direct-strategy.ts';
@@ -182,8 +182,8 @@ test('actual return holding hits its own stop or finite target and never promote
   }
 });
 test('both new branches pass shared LIVE admission and reach a later fresh PAPER book fill with own protection',()=>{
-  for(const phase of ['UP','RANGE'] as const){
-    const a=active(phase),price=phase==='UP'?104:102,r=routeMarketCoin(a,'A_USDT',price,T)!,s=account(a),o=opportunity(r),
+  for(const phase of ['UP','RANGE','LOCAL'] as const){
+    const a=phase==='LOCAL'?mixed():active(phase),price=phase==='RANGE'?102:104,r=routeMarketCoin(a,'A_USDT',price,T)!,s=account(a),o=opportunity(r),
       c={...contract,enableDecimal:false,orderSizeMin:'1',orderSizeMax:'100000'},q={...quote(price),
         bids:[{price:price-.01,size:100000}],asks:[{price:price+.01,size:100000}]},
       p=researchDirectPlan(s,o,{state:s,now:T,quotes:{A_USDT:q},paths:{},contracts:{A_USDT:c}});
@@ -230,4 +230,66 @@ test('cutover retains financial history and manual account generation without a 
   assert.equal(next.state.balance,917);assert.equal(next.state.fees,23);assert.equal(next.state.resolved,91);
   assert.equal(next.state.startedAt,s.startedAt);assert.equal(next.state.directStrategy!.marketAuthority!.version,MARKET_AUTHORITY_VERSION);
   assert.equal(next.state.positions.length,0);assert.equal(next.changed,true);
+});
+function mixed(){const a=active('UP');a.phase='HANDOFF';a.routingPolicy='mixed-own-structure-v1';
+  for(const p of Object.values(a.coins))p.dataReady=true;return a;}
+test('mixed market admits completed own structure without waiting for independent five-minute votes',()=>{
+  const a=mixed();a.warning=true;a.coins.B_USDT= {...coin('DOWN'),dataReady:true};
+  for(const [s,price,side] of [['A_USDT',104,'LONG'],['B_USDT',96,'SHORT']] as const){
+    const p=a.coins[s]!;assert.equal(p.independentBars,0);
+    const r=routeMarketCoin(a,s,price,T)!;assert.equal(r.relation,'LOCAL');assert.equal(r.side,side);
+    assert.equal(r.branch,'CONTINUATION');assert.ok(routeStillPermitted(a,r,s));}
+});
+test('mixed range still requires its own established balanced range and failed departure event',()=>{
+  const a=mixed();a.coins.A_USDT={...coin('RANGE'),dataReady:true};
+  assert.equal(routeMarketCoin(a,'A_USDT',102,T)!.branch,'RETURN');
+  a.coins.A_USDT!.rejected=null;
+  assert.equal(marketRouteDecision(a,'A_USDT',102,T).code,'RANGE_EVENT_MISSING');
+  a.coins.A_USDT!.phase='HANDOFF';
+  assert.equal(marketRouteDecision(a,'A_USDT',102,T).code,'OWN_STRUCTURE_UNCONFIRMED');
+});
+test('mixed admission retains own warning, data, price location and cost gates',()=>{
+  const a=mixed(),p=a.coins.A_USDT!;
+  p.warning=true;assert.equal(marketRouteDecision(a,'A_USDT',104,T).code,'OWN_TREND_WARNING');p.warning=false;
+  p.dataReady=false;assert.equal(marketRouteDecision(a,'A_USDT',104,T).code,'OWN_DATA_STALE');p.dataReady=true;
+  assert.equal(marketRouteDecision(a,'A_USDT',108,T).code,'ENTRY_TOO_EXTENDED');
+  p.stop=104.1;assert.equal(marketRouteDecision(a,'A_USDT',104,T).code,'ENTRY_SPACE_RISK');
+  a.fresh=false;assert.equal(marketRouteDecision(a,'A_USDT',104,T).code,'MARKET_COVERAGE');
+});
+test('fresh accepted common direction still vetoes a contrary local trend',()=>{
+  const a=mixed(),r=routeMarketCoin(a,'A_USDT',104,T)!;
+  a.phase='DOWN';assert.equal(routeMarketCoin(a,'A_USDT',104,T),null);assert.equal(routeStillPermitted(a,r,'A_USDT'),false);
+  a.phase='UP';assert.equal(routeStillPermitted(a,r,'A_USDT'),true);
+});
+test('revoked common leg cannot re-enter via local label without a later structure proof',()=>{
+  const a=mixed(),r=routeMarketCoin(a,'A_USDT',104,T)!;a.since=T;a.epoch++;
+  a.events=[{at:T,from:'UP',to:'HANDOFF',reason:'accepted common support revoked'}];
+  assert.equal(marketRouteDecision(a,'A_USDT',104,T).code,'OLD_LEG_PROOF');
+  assert.equal(routeStillPermitted(a,r,'A_USDT'),false);
+  a.coins.A_USDT!.proofAt=T+60000;a.coins.A_USDT!.lastAt=T+60000;
+  assert.equal(routeMarketCoin(a,'A_USDT',104,T+60000)!.relation,'LOCAL');
+});
+test('local pending intent rechecks epoch and own warning at execution; local holdings do not globally block other groups',()=>{
+  const a=mixed(),r=routeMarketCoin(a,'A_USDT',104,T)!,s=account(a),q=quote(),o=opportunity(r),
+    p=researchDirectPlan(s,o,{state:s,now:T,quotes:{A_USDT:q},paths:{},contracts:{A_USDT:contract}});
+  a.coins.A_USDT!.warning=true;assert.match(openDirectPlan(s,p,q,contract,T,{A_USDT:q})!,/OWN_TREND_WARNING/);
+  a.coins.A_USDT!.warning=false;a.epoch++;
+  assert.match(openDirectPlan(s,p,q,contract,T,{A_USDT:q})!,/许可/);a.epoch--;
+  assert.equal(openDirectPlan(s,p,q,contract,T,{A_USDT:q}),undefined);
+  const restored=normalizeForward(s,T);assert.equal(restored.positions[0]!.unified!.marketRoute!.relation,'LOCAL');
+  s.positions[0]!.symbol='B_USDT';s.positions[0]!.unified!.branch='RETURN';s.positions[0]!.entryContext!.clusterId='B';
+  const nextO={...o,id:'second-own-event'},nextP=researchDirectPlan(s,nextO,{state:s,now:T+2000,
+    quotes:{A_USDT:quote(104,T+2000)},paths:{},contracts:{A_USDT:contract}});
+  assert.equal(openDirectPlan(s,nextP,quote(104,T+2000),contract,T+2000,{A_USDT:quote(104,T+2000),B_USDT:quote(104,T+2000)}),undefined);
+});
+test('mixed production adapter routes actual local directions through entry validation',()=>{
+  const names=Array.from({length:6},(_,i)=>`M${i}_USDT`),history=Array.from({length:48},(_,i)=>bar(T+(i-51)*B,100,102,98,i%2?100.5:99.5)),
+    quiet=up.map(r=>bar(r.time*1000,100,101,99,100)),tails=[up,up,down,down,quiet,quiet],
+    paths=Object.fromEntries(names.map((s,i)=>[s,[...history,...tails[i]!]])),
+    quotes=Object.fromEntries(names.map((s,i)=>[s,quote(tails[i]!.at(-1)!.close)])),contracts=Object.fromEntries(names.map(s=>[s,contract]));
+  const next=advanceDirectStrategy({state:initialForward(T-7200000),now:T,marketAuthority:true,paths,quotes,contracts});
+  assert.equal(next.state.directStrategy!.marketAuthority!.phase,'HANDOFF');
+  const own=next.state.opportunities.filter(o=>o.eligible);assert.ok(own.length>0);
+  assert.ok(own.every(o=>o.marketRoute!.relation==='LOCAL'));
+  assert.ok(Object.values(next.state.entryValidations).some(v=>v.status==='WAITING'));
 });

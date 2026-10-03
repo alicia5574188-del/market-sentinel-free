@@ -1,5 +1,35 @@
 # Unified market branch authority
 
+## Owner-authorized mixed-market adjustment
+
+Routing policy `mixed-own-structure-v1` adds LOCAL admission only while common
+phase is HANDOFF. Existing completed own UP/DOWN or established RANGE proof,
+fresh multi-venue coin coverage and the same location/cost gates earn a route;
+own warnings still block trend entry. Official-minute proof is usable immediately
+through the original entry response, without a second three-five-minute wait.
+RANGE still requires both failed edges and a fresh own rejection event. A mere
+unconfirmed trend never grants a return. Accepted common UP/DOWN/RANGE retains
+its veto; contrary exceptions still require existing sustained residual evidence.
+
+One fresh, divided correlation group can supply LOCAL observations in HANDOFF;
+it cannot establish common permission without the original common quorum. A
+previous accepted common trend revoked into HANDOFF requires a later own proof
+before another LOCAL entry, so relabelling cannot revive its old event. Pending
+LOCAL intents recheck the epoch, fresh own data, warning and price geometry just
+before admission. LOCAL holdings survive a later aligned common phase; contrary
+common permission or own structural failure exits through original source/PAPER/
+native steps. Unrelated LOCAL groups may hold different directions/branches;
+unsettled incompatible common obligations and same-coin/cluster/risk/margin caps
+still gate entry. No earlier fill/fee/history is rewritten.
+
+Observation logs use stable per-symbol diagnostic IDs, with actual current
+candidate IDs attached to events. Exact authorization/fill IDs are unchanged.
+Changes in blocker are retained rather than appending refreshed IDs every tick.
+Existing64row/10event/80KiB caps and journal persistence cadence remain unchanged.
+WAIT is explicitly shown for an unpermitted plan; no invented return label.
+The later original sections describe common/independent routing and unchanged
+structure/management contracts. No historical profitability replay was added.
+
 Algorithm marker: `market-regime-authority-v1`. Existing account/envelope/storage
 versions remain readable; active version is in `directStrategy.marketAuthority`
 and every new trade's `unified.marketRoute`. This release replaces autonomous

@@ -7,16 +7,18 @@ export type MarketPhase='HANDOFF'|'RANGE'|'UP'|'DOWN';
 type Side='LONG'|'SHORT';
 export type MarketRoute={version:typeof MARKET_AUTHORITY_VERSION;epoch:number;phase:MarketPhase;
   proofPath?:'HOLD_OUTSIDE'|'RETEST_RESTART';proofBars?:number[];
-  relation:'FOLLOWER'|'INDEPENDENT';branch:'RETURN'|'CONTINUATION';side:Side;proofAt:number;
+  relation:'FOLLOWER'|'INDEPENDENT'|'LOCAL';branch:'RETURN'|'CONTINUATION';side:Side;proofAt:number;
   stop:number;target:number;targetBasis:'ACCEPTED_CENTER'|'OBSERVED_OBSTACLE'|'VOLATILITY_ESTIMATE';
   reference:ReactionArea;reason:string};
 export type CoinEpisode={reference:ReactionArea;lastAt:number;phase:MarketPhase;side:Side|null;
+  dataReady?:boolean;
   revokedSide?:Side;revokedAt?:number;
   acceptancePath?:'HOLD_OUTSIDE'|'RETEST_RESTART';acceptanceBars?:number[];
   proofAt:number;stop:number;eventPrice:number;atr:number;warning:boolean;failed:boolean;
   rejected:Side|null;rejectedAt:number;rejectedPrice:number;extreme:number;upperFailed:boolean;lowerFailed:boolean;
   independentBars:number;independentAt:number;relation:'FOLLOWER'|'INDEPENDENT';reason:string};
 export type MarketAuthority={version:typeof MARKET_AUTHORITY_VERSION;epoch:number;phase:MarketPhase;
+  routingPolicy?:'mixed-own-structure-v1';
   since:number;checkedAt:number;fresh:boolean;warning:boolean;reason:string;
   groups:number;up:number;down:number;range:number;coverage:number;cohort:string[];
   coins:Record<string,CoinEpisode>;events:{at:number;from:MarketPhase;to:MarketPhase;reason:string}[]};
@@ -123,7 +125,7 @@ export function advanceMarketAuthority(input:{previous?:MarketAuthority;now:numb
   symbols:string[];states:Record<string,MarketSymbolState>;paths:Record<string,CandleLike[]>;
   minutePaths?:Record<string,CandleLike[]>;quotes:Record<string,{observedAt:number;fresh:boolean}>}):MarketAuthority{
   const a=input.previous?structuredClone(input.previous):initialMarketAuthority(input.now);
-  a.checkedAt=input.now;a.fresh=false;
+  a.routingPolicy='mixed-own-structure-v1';a.checkedAt=input.now;a.fresh=false;
   if(!input.ready){a.reason='市场覆盖恢复中，保留已有状态，暂停新增';return a;}
   const selected=[...new Set(input.symbols)].slice(0,30);
   // Freeze the electorate during a trend so rotating the scan cannot vote it away.
@@ -141,7 +143,7 @@ export function advanceMarketAuthority(input:{previous?:MarketAuthority;now:numb
     if(!p)continue;coins[symbol]=p;
     const fresh=!!q?.fresh&&q.observedAt<=input.now&&input.now-q.observedAt<=10000
       &&rows.length>=15&&input.now-end(rows.at(-1)!)<=600000&&!!state&&state.dataConfidence>=60&&state.sourceCount>=2;
-    if(!fresh)continue;
+    p.dataReady=fresh;if(!fresh)continue;
     // Permission to detach requires sustained residual beyond normal noise AND
     // own completed structure. Amplitude or a DIVERGENT label alone cannot detach.
     if(end(rows.at(-1)!)>p.independentAt){
@@ -171,10 +173,13 @@ export function advanceMarketAuthority(input:{previous?:MarketAuthority;now:numb
   // In a highly synchronous market all followers may form one correlation
   // cluster. Broad agreement in that common factor is usable, but is reported
   // as one group rather than invented independent confirmations.
-  a.fresh=a.coverage>=Math.max(3,Math.ceil(a.cohort.length*.6))&&(a.groups>=2||commonFactor);
+  const commonQuorum=a.groups>=2||commonFactor;
+  // Fresh observations in one correlated but divided group still support own
+  // structure in HANDOFF. They do not earn a new common directional permission.
+  a.fresh=a.coverage>=Math.max(3,Math.ceil(a.cohort.length*.6))&&(commonQuorum||a.phase==='HANDOFF');
   if(!a.fresh){a.reason='新鲜代表组覆盖不足，保留市场判断并暂停新增';return a;}
   a.warning=(a.phase==='UP'?a.up:a.phase==='DOWN'?a.down:1)<.60||fraction('warn')>=.40;
-  const desired:MarketPhase=a.up>=.65?'UP':a.down>=.65?'DOWN':a.range>=.65?'RANGE':'HANDOFF';
+  const desired:MarketPhase=!commonQuorum?'HANDOFF':a.up>=.65?'UP':a.down>=.65?'DOWN':a.range>=.65?'RANGE':'HANDOFF';
   const old=a.phase;
   // Opposite/range votes cannot directly flip an accepted trend. A common
   // support failure first revokes its authority. The next episode earns entry.
@@ -184,35 +189,54 @@ export function advanceMarketAuthority(input:{previous?:MarketAuthority;now:numb
   }else a.phase=desired;
   a.reason=a.phase==='UP'?'共同上涨趋势仍有效：跟随币只许上涨延续':
     a.phase==='DOWN'?'共同下跌趋势仍有效：跟随币只许下跌延续':
-    a.phase==='RANGE'?'多数代表组确认双向失败：跟随币只许失败回归':'旧状态已失效，新方向或双向回归尚未共同确认，等待';
+    a.phase==='RANGE'?'多数代表组确认双向失败：跟随币只许失败回归':'共同方向未统一：按本币已确认结构评估延续或回归';
   if(old!==a.phase){a.epoch++;a.since=input.now;a.events.unshift({at:input.now,from:old,to:a.phase,reason:a.reason});a.events=a.events.slice(0,8);}
   return a;
 }
-export function routeMarketCoin(a:MarketAuthority,symbol:string,price:number,now:number):MarketRoute|null{
-  const p=a.coins[symbol];if(!a.fresh||!p||p.failed||p.lastAt>now||now-p.lastAt>600000||!(price>0))return null;
-  if(p.relation==='FOLLOWER'&&a.warning)return null;
-  const phase=p.relation==='INDEPENDENT'?p.phase:a.phase;
-  if(phase==='HANDOFF')return null;
+export function marketRouteDecision(a:MarketAuthority,symbol:string,price:number,now:number):{route:MarketRoute|null;code:string;reason:string}{
+  const blocked=(code:string,reason:string)=>({route:null,code,reason}),p=a.coins[symbol];
+  if(!a.fresh)return blocked('MARKET_COVERAGE','市场新鲜覆盖不足，等待恢复');
+  if(!p)return blocked('OWN_STRUCTURE_MISSING','等待本币完整结构');
+  if(p.dataReady===false||p.lastAt>now||now-p.lastAt>600000||!(price>0))return blocked('OWN_DATA_STALE','本币结构或报价未满足新鲜覆盖');
+  if(p.failed)return blocked('OWN_STRUCTURE_FAILED','本币上一段承接已失效，等待新的结构');
+  const local=p.relation!=='INDEPENDENT'&&a.phase==='HANDOFF'&&a.routingPolicy==='mixed-own-structure-v1',
+    relation=local?'LOCAL':p.relation,phase=relation==='FOLLOWER'?a.phase:p.phase;
+  if(local&&p.dataReady!==true)return blocked('OWN_DATA_STALE','本币独立数据覆盖尚未确认');
+  if(relation==='FOLLOWER'&&a.warning)return blocked('COMMON_TREND_WARNING','共同趋势转弱，等待承接重新推进');
+  if(phase==='HANDOFF')return blocked('OWN_STRUCTURE_UNCONFIRMED','共同方向未统一，本币尚无已确认的延续或双向回归结构');
+  const revoked=a.events.find(e=>e.to==='HANDOFF'&&(e.from==='UP'||e.from==='DOWN'));
+  if(local&&revoked&&revoked.at===a.since&&p.proofAt<=revoked.at)
+    return blocked('OLD_LEG_PROOF','旧共同趋势已撤销，本币须在切换后重新证明承接');
   let side:Side,branch:MarketRoute['branch'],proofAt:number,stop:number,target:number,basis:MarketRoute['targetBasis'];
   if(phase==='RANGE'){
-    if(!p.reference.balanced||!p.rejected||now-p.rejectedAt>600000)return null;
+    if(!p.reference.balanced||!p.rejected||now-p.rejectedAt>600000)return blocked('RANGE_EVENT_MISSING','等待已确认震荡中的本次离开失败与回归响应');
     side=p.rejected;branch='RETURN';proofAt=p.rejectedAt;stop=p.extreme;target=p.reference.center;basis='ACCEPTED_CENTER';
   }else{
-    side=phase==='UP'?'LONG':'SHORT';if(p.side!==side||p.warning||p.phase!==phase)return null;
+    side=phase==='UP'?'LONG':'SHORT';
+    if(p.side!==side||p.phase!==phase)return blocked('COMMON_OWN_CONFLICT','本币结构与共同市场许可不一致');
+    if(p.warning)return blocked('OWN_TREND_WARNING','本币推进转弱，等待承接后重新推进');
     branch='CONTINUATION';proofAt=p.proofAt;stop=p.stop;
     // A leg estimate is finite and labelled; it is never called observed liquidity.
     target=p.eventPrice+dir(side)*Math.max(p.atr*4,Math.abs(p.eventPrice-stop)*2.2);basis='VOLATILITY_ESTIMATE';
-    if(dir(side)*(price-p.eventPrice)>p.atr*.75)return null;
+    if(dir(side)*(price-p.eventPrice)>p.atr*.75)return blocked('ENTRY_TOO_EXTENDED','价格已超过确认位置的允许追价距离');
   }
   const risk=dir(side)*(price-stop),room=dir(side)*(target-price),cost=price*.0019;
-  if(!(stop>0&&target>0)||risk<=0||risk/price>.035||room-cost<cost*2||(room-cost)/(risk+cost)<1.35)return null;
-  return{version:MARKET_AUTHORITY_VERSION,epoch:a.epoch,phase,relation:p.relation,branch,side,proofAt,stop,target,targetBasis:basis,
+  if(!(stop>0&&target>0)||risk<=0||risk/price>.035||room-cost<cost*2||(room-cost)/(risk+cost)<1.35)
+    return blocked('ENTRY_SPACE_RISK','实际方向的结构风险或扣费后剩余空间不足');
+  const route:MarketRoute={version:MARKET_AUTHORITY_VERSION,epoch:a.epoch,phase,relation,branch,side,proofAt,stop,target,targetBasis:basis,
     ...(branch==='CONTINUATION'?{proofPath:p.acceptancePath,proofBars:p.acceptanceBars}:{}),
-    reference:structuredClone(p.reference),reason:`${p.relation==='FOLLOWER'?'跟随统一市场':'独立残差与结构持续确认'}；${p.reason}；${branch==='RETURN'?'失败后回到稳定重心':'按本币承接位置延续'}`};
+    reference:structuredClone(p.reference),reason:`${relation==='FOLLOWER'?'跟随统一市场':relation==='LOCAL'?'市场分化，本币完整结构取得许可':'独立残差与结构持续确认'}；${p.reason}；${branch==='RETURN'?'失败后回到稳定重心':'按本币承接位置延续'}`};
+  return{route,code:'ROUTE_PERMITTED',reason:route.reason};
+}
+export function routeMarketCoin(a:MarketAuthority,symbol:string,price:number,now:number):MarketRoute|null{
+  return marketRouteDecision(a,symbol,price,now).route;
 }
 export function routeStillPermitted(a:MarketAuthority,r:MarketRoute,symbol:string){
   const p=a.coins[symbol];if(!a.fresh||!p||p.failed)return false;
-  const phase=p.relation==='INDEPENDENT'?p.phase:a.phase;
+  if(r.relation==='LOCAL'&&a.phase==='HANDOFF'&&a.events.some(e=>e.at===a.since&&e.to==='HANDOFF'
+    &&(e.from==='UP'||e.from==='DOWN'))&&p.proofAt<=a.since)return false;
+  if(r.relation==='INDEPENDENT'&&p.relation!=='INDEPENDENT'&&a.phase!==r.phase)return false;
+  const phase=p.relation==='INDEPENDENT'||r.relation==='LOCAL'&&a.phase==='HANDOFF'?p.phase:a.phase;
   return phase===r.phase&&(r.branch==='RETURN'?phase==='RANGE':phase===(r.side==='LONG'?'UP':'DOWN'));
 }
 export function validMarketAuthority(a:MarketAuthority){return a?.version===MARKET_AUTHORITY_VERSION
@@ -224,7 +248,7 @@ export function validMarketAuthority(a:MarketAuthority){return a?.version===MARK
     &&p.reference.lower>0&&p.reference.upper>p.reference.lower&&p.independentBars<=3);}
 export function validMarketRoute(r:MarketRoute){return r?.version===MARKET_AUTHORITY_VERSION
   &&Number.isSafeInteger(r.epoch)&&r.epoch>0&&['RANGE','UP','DOWN'].includes(r.phase)
-  &&['FOLLOWER','INDEPENDENT'].includes(r.relation)&&['RETURN','CONTINUATION'].includes(r.branch)
+  &&['FOLLOWER','INDEPENDENT','LOCAL'].includes(r.relation)&&['RETURN','CONTINUATION'].includes(r.branch)
   &&['LONG','SHORT'].includes(r.side)&&[r.proofAt,r.stop,r.target,r.reference?.lower,r.reference?.upper,
     r.reference?.center,r.reference?.formedAt].every(Number.isFinite)&&r.stop>0&&r.target>0
   &&r.reference.lower>0&&r.reference.upper>r.reference.lower
