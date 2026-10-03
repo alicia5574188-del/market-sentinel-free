@@ -107,7 +107,7 @@ test("execution page exposes the same narrative used by strategy decisions",asyn
   assert.match(dashboard,/哨兵 · 市场智能系统/);assert.match(dashboard,/MarketIntelligenceExecution/);assert.match(dashboard,/market-intelligence-v1/);
   for(const text of["市场作战总览","当前市场","正在发生","接下来可能","正在观察","等待执行","正在持仓"])assert.match(execution,new RegExp(text));
   assert.match(workflow,/market-intelligence-v1/);
-  assert.match(workflow,/marketIntelligenceTracked >= 20/);assert.match(workflow,/marketIntelligenceCoverage\.dailyMarkets >= 3/);
+  assert.match(workflow,/anomalyRange\.version == "anomaly-range-v1"/);assert.match(workflow,/rangeResearch\.discovery\.scanned > 0/);assert.doesNotMatch(workflow,/marketIntelligenceCoverage\.dailyMarkets >= 3/);
   assert.match(execution,/hypothesisResearch\?\.active/);
   assert.match(execution,/planText\(t\.entryContext\.winnerPlan,t\.stopPrice\)/,"holding display must use its actual frozen plan");
   assert.doesNotMatch(execution,/系统刚刚发现的细节|当前交易假设 · 最值得关注的机会|全市场异类与相关组|跨所流动性/);
@@ -376,19 +376,15 @@ test("independent discovery, frozen authorization and plan invalidation form one
   assert.match(manage,/LIQUIDITY_HYPOTHESIS_INVALIDATED/);
 });
 
-test("Gate-only discovery uses the same 15-second radar cadence without bypassing multi-source entry safety",async()=>{
-  const [worker,hub,engine,winner]=await Promise.all([
-    read("worker/index-clean.ts"),read("lib/market-data-hub.ts"),read("lib/market-intelligence-engine.ts"),read("lib/winner-policy.ts")
-  ]);
-  assert.match(worker,/const GATE_RADAR_MS = RADAR_MS/);
-  assert.match(worker,/gateRadarShortMoves=new Map<string,number>\(\)/);
-  assert.match(worker,/row\.last\/prior-1/);
-  assert.match(worker,/shortMoveRate:this\.gateRadarShortMoves\.get\(row\.symbol\)\?\?0/);
-  assert.match(hub,/shortMoveRate:q\?\.medianShortMove\?\?row\.shortMoveRate\?\?0/);
-  assert.match(hub,/sourceCount:q\?\.sourceCount\?\?row\.sourceCount\?\?0/);
-  assert.match(engine,/chosen=selectWinnerOpportunity/);
-  assert.equal((winner.match(/s\.sourceCount>=2/g)??[]).length,2,
-    "Gate-only impulse may enter discovery but one venue alone must not gain order authority");
+test("external shared perpetual discovery never polls Gate bulk prices or silently promotes Gate-only coins",async()=>{
+  const [worker,hub]=await Promise.all([read('worker/index-clean.ts'),read('lib/market-data-hub.ts')]);
+  const optional=worker.slice(worker.indexOf('private launchOptionalWork'),worker.indexOf('async alarm('));
+  assert.doesNotMatch(optional,/fetchGateRadarTickers|fetchActiveContracts/);
+  assert.match(optional,/fetchContractDirectory/);assert.match(optional,/refreshInstrumentCatalog/);
+  const radar=worker.slice(worker.indexOf('private refreshRadar'),worker.indexOf('protected regimeQuotes'));
+  assert.match(radar,/commonSymbols/);assert.match(radar,/discoveryRows/);assert.match(radar,/scanRangeAnomalies/);
+  assert.doesNotMatch(radar,/EXPLORATION|radarRows|selectAnchorOpportunityUniverse/);
+  assert.match(hub,/LinearPerpetual/);assert.match(hub,/nextPageCursor/);assert.match(hub,/r\.state==='live'/);
 });
 
 test("opportunity capture reserves execution capacity and all formal plans use liquidity invalidation",async()=>{

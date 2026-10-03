@@ -162,6 +162,8 @@ async function checkpointWorker(){
   f.s.directStrategy!.specialMove={version:'special-move-v1',cutoverAt:T};
   f.s.directStrategy!.eventResponse={version:'event-response-v1',cutoverAt:T};
   f.s.directStrategy!.eventResearch=advanceEventResearch({now:T,paths:{},quotes:{},states:{}});
+  f.s.directStrategy!.anomalyRange={version:'anomaly-range-v1',cutoverAt:T};
+  f.s.directStrategy!.rangeResearch={version:'anomaly-range-v1',startedAt:T,updatedAt:T,events:{},bytes:0,capacitySkipped:0};f.s.directStrategy!.rangeWindows={};
   f.s.paperExecution={version:'live-steps-paper-v1',cutoverAt:T,cancelled:[]};
   f.s.storage={persistedAt:T,error:null};f.s.lastQuoteCycleAt=T;
   const data=new Map<string,unknown>(Object.entries((await prepareForwardWrite(null,f.s,T,{compact:true})).entries)),writes:string[][]=[];

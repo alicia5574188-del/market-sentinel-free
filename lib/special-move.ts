@@ -17,12 +17,12 @@ const med=(a:number[])=>{const b=a.filter(Number.isFinite).sort((x,y)=>x-y);retu
 const d=(s:'LONG'|'SHORT')=>s==='LONG'?1:-1;
 const bytes=(x:unknown)=>new TextEncoder().encode(JSON.stringify(x)).length;
 const clamp=(x:number,a:number,b:number)=>Math.max(a,Math.min(b,x));
-export function specialRows(input:CandleLike[]|undefined,now:number,step=300000){
+export function specialRows(input:CandleLike[]|undefined,now:number,step=300000,maxRows=120){
   const unique=new Map<number,CandleLike>();
   for(const r of input??[])if([r.time,r.open,r.high,r.low,r.close,r.volume].every(Number.isFinite)&&r.time>0
     &&r.open>0&&r.low>0&&r.close>0&&r.high>=Math.max(r.open,r.close)&&r.low<=Math.min(r.open,r.close)
     &&r.volume>=0&&r.time*1000+step<=now)unique.set(r.time,r);
-  const all=[...unique.values()].sort((a,b)=>a.time-b.time).slice(-120);let start=0;
+  const all=[...unique.values()].sort((a,b)=>a.time-b.time).slice(-maxRows);let start=0;
   for(let i=1;i<all.length;i++)if((all[i]!.time-all[i-1]!.time)*1000!==step)start=i;
   return all.slice(start);
 }

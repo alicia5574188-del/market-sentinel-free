@@ -1,3 +1,22 @@
+# 2026-10-03 — anomaly range controller and data concentration
+
+Implement from published main, exclude canceled LYN inverse candidate. Gate is
+contracts-only discovery, external verified perpetual catalogs define common
+pool; bulk observations cover whole pool (4096 hard failure ceiling), detailed
+30 seats and minute11 are separate. Source pinned; no new Gate research fallback.
+Frozen119/120 completed pre-event5m OHLC are lossless64bit, once per financial
+plan/trade, protection overlays retain verified identity and mutable protection.
+Hot detailed10 events /24KiB and8 display discoveries disclose capacity omissions.
+Completed5m plus new2/3minute proof distinguishes breakout/return/internal.
+Breakout has measured response, no promised geometric target; scoped exemption
+in shared admission preserves all native lot/margin/risk/cost checks. Initial
+stop allows ordinary edge retest. Confirmed5m support and retained3quote peaks
+only tighten stops. Opposite minutes review, no timer-only close. Reversal requires
+edge proof and each own native account flat, no partial/unknown exposure shortcut.
+Keep fixed1000, account/history, LIVE intent and original2s/write/native path.
+Full original regression gates and actual queued-close/reverse/budget tests pass.
+Natural profitability observation is separate from causal/mechanism validation.
+
 # 2026-10-02 — one-minute native curve observations, no PAPER detail reduction
 
 Keep all original PAPER observations and the shared chart renderer. Raising only

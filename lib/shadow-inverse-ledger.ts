@@ -5,6 +5,7 @@ import {SHADOW_FEE_RATE,INVERSE_COST,INVERSE_FEE_POLICY,recordedInverseFeeRate,t
 import {FIXED_ALLOCATION_EQUITY,FIXED_ALLOCATION_POLICY} from './fixed-allocation.ts';
 import type {InverseLossResearch} from './inverse-loss-research.ts';
 import {validMarketAuthority,validMarketRoute} from './market-authority.ts';
+import {validRangeHolding,decodeRangeWindow,normalizeRangeResearch} from './anomaly-range.ts';
 import {validResponseHolding} from './event-response.ts';
 export {INVERSE_COST} from './inverse-fee.ts';
 
@@ -274,6 +275,10 @@ export function assertInverseTrade(t:Trade){
 export function assertInverseTrial(state:ForwardState){
   if(state.directStrategy){
     const ds=state.directStrategy;
+    if(ds.anomalyRange){if(ds.anomalyRange.version!=='anomaly-range-v1'||!finite(ds.anomalyRange.cutoverAt))throw new Error('区间策略版本损坏');
+      if(ds.rangeResearch&&!normalizeRangeResearch(ds.rangeResearch))throw new Error('区间研究记忆损坏；保留账户');
+      if(Object.keys(ds.rangeWindows??{}).length>30)throw new Error('冻结窗口容量异常');
+      for(const w of Object.values(ds.rangeWindows??{}))decodeRangeWindow(w);}
     if(ds.eventResponse&&(ds.eventResponse.version!=='event-response-v1'||!finite(ds.eventResponse.cutoverAt)
       ||ds.eventResponse.cutoverAt<=0))
       throw new Error('事件响应执行记忆损坏；保留账户');
@@ -295,6 +300,7 @@ export function assertInverseTrial(state:ForwardState){
     const ids=new Set<string>();
     for(const t of [...state.positions,...state.history])if(t.unified?.version==='dual-thesis-v2'){
       const u=t.unified;
+      if(u.anomaly&&(!validRangeHolding(u.anomaly)||u.marketRoute?.controllerVersion!=='anomaly-range-v1'))throw new Error('区间持仓记忆损坏；保留账户');
       if(u.response&&(!validResponseHolding(u.response)||u.response.eventId!==u.marketRoute?.eventId
         ||u.marketRoute.controllerVersion!=='event-response-v1'))throw new Error('事件持仓响应记忆损坏；保留账户');
       if(u.adaptive&&(u.adaptive.version!=='adaptive-causal-v1'
@@ -311,7 +317,7 @@ export function assertInverseTrial(state:ForwardState){
         ||!Array.isArray(u.explanationEvents)||u.explanationEvents.length>8
         ||u.explanationEvents.some(e=>![e.at,e.quoteAt,e.price].every(finite)||e.price<=0||e.quoteAt>e.at)
         ||(!u.migratedAt&&!same(t.entryFee,(t.realization?.initialNotional??t.notional)*.0005))
-        ||(u.branch==='RETURN'&&(!u.returnLogic||!['LONG','SHORT'].includes(u.returnLogic.moveSide)||!u.marketRoute&&u.returnLogic.moveSide===t.side
+        ||(u.branch==='RETURN'&&!u.anomaly&&(!u.returnLogic||!['LONG','SHORT'].includes(u.returnLogic.moveSide)||!u.marketRoute&&u.returnLogic.moveSide===t.side
           ||!u.returnLogic.plan||![u.returnLogic.entryPrice,u.returnLogic.openedAt,u.returnLogic.peakAdvance,u.returnLogic.plan.initialStop,
             u.returnLogic.entryResidual,u.returnLogic.entryRelativeStrength,u.returnLogic.entryRemainingSpaceRate,u.returnLogic.entryScore].every(finite)
           ||u.returnLogic.entryPrice<=0||u.returnLogic.plan.initialStop<=0||u.returnLogic.peakAdvance<0))

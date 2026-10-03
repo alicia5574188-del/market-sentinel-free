@@ -66,6 +66,10 @@ export class MarketDataHub{
     MEXC:{lastSuccessAt:0,lastFailureAt:0,failures:0,lastError:null,rows:0,nextRetryAt:0},
     HTX:{lastSuccessAt:0,lastFailureAt:0,failures:0,lastError:null,rows:0,nextRetryAt:0},
   };
+  private instrumentCatalog=new Map<MarketSource,Set<string>>();
+  private pinnedSources=new Map<string,MarketSource>();
+  private catalogAt=0;
+  private catalogRetryAt=0;
   private lastAttemptAt=0;
   private inFlight:Promise<void>|null=null;
   private candleSource=new Map<string,{source:MarketSource;at:number}>();
@@ -94,6 +98,50 @@ export class MarketDataHub{
     // Never let one refresh failure stop the strategy loop. Cached rows remain
     // available until their freshness fence expires; freshQuote then prevents
     // execution from stale data. Health exposes the degraded sources separately.
+  }
+  /** Actual listed, trading USDT perpetuals. Commit a source only after all pages. */
+  async refreshInstrumentCatalog(now=Date.now()){
+    if(now<this.catalogRetryAt)return 0;
+    let requests=0;
+    const results=await Promise.allSettled([
+      (async()=>{const out=new Set<string>();let cursor='';const seen=new Set<string>();
+        for(let page=0;page<8;page++){requests++;
+          const b=await json<{retCode:number;result:{list:{symbol:string;contractType:string;status:string;settleCoin:string;quoteCoin:string;baseCoin:string}[];nextPageCursor?:string}}>(
+            `${BYBIT}/v5/market/instruments-info?category=linear&limit=1000${cursor?'&cursor='+encodeURIComponent(cursor):''}`,CANDLE_TIMEOUT_MS);
+          if(b.retCode!==0||!Array.isArray(b.result?.list))throw new Error('Bybit instrument payload');
+          for(const r of b.result.list){const symbol=canonical(r.symbol);if(symbol&&r.contractType==='LinearPerpetual'&&r.status==='Trading'&&r.settleCoin==='USDT'&&r.quoteCoin==='USDT'&&r.symbol===r.baseCoin+'USDT')out.add(symbol);}
+          cursor=b.result.nextPageCursor??'';if(!cursor)return out;if(seen.has(cursor))throw new Error('Bybit directory repeated cursor');seen.add(cursor);
+        }throw new Error('Bybit incomplete instrument directory');})(),
+      (async()=>{requests++;const b=await json<{code:string;data:{instId:string;instType:string;settleCcy:string;ctType:string;state:string;ctValCcy:string}[]}>(`${OKX}/api/v5/public/instruments?instType=SWAP`,CANDLE_TIMEOUT_MS);
+        if(b.code!=='0'||!Array.isArray(b.data))throw new Error('OKX instrument payload');
+        return new Set(b.data.flatMap(r=>{const symbol=canonicalOkx(r.instId);return symbol&&r.instType==='SWAP'&&r.settleCcy==='USDT'&&r.ctType==='linear'&&r.state==='live'&&r.ctValCcy===symbol.slice(0,-5)?[symbol]:[];}));})(),
+      (async()=>{requests++;const b=await json<{code:string;data:{symbol:string;baseCurrency:string;quoteCurrency:string;settleCurrency:string;status:string;isInverse:boolean;expireDate:number|null}[]}>(`${KUCOIN}/api/v1/contracts/active`,CANDLE_TIMEOUT_MS);
+        if(b.code!=='200000'||!Array.isArray(b.data))throw new Error('KuCoin instrument payload');
+        return new Set(b.data.flatMap(r=>{const symbol=canonicalKucoin(r.symbol),base=r.baseCurrency==='XBT'?'BTC':r.baseCurrency;
+          return symbol&&symbol===base+'_USDT'&&r.quoteCurrency==='USDT'&&r.settleCurrency==='USDT'&&r.status==='Open'&&!r.isInverse&&!r.expireDate?[symbol]:[];}));})(),
+    ]);
+    const sources:MarketSource[]=['BYBIT','OKX','KUCOIN'];results.forEach((r,i)=>{if(r.status==='fulfilled')this.instrumentCatalog.set(sources[i]!,r.value);});
+    if(results.some(r=>r.status==='fulfilled')){this.catalogAt=now;this.catalogRetryAt=now+600000;}else this.catalogRetryAt=now+30000;return requests;
+  }
+  private sourceQuote(source:MarketSource,symbol:string){return(source==='BYBIT'?this.bybit:source==='OKX'?this.okx:source==='KUCOIN'?this.kucoin:source==='MEXC'?this.mexc:this.htx).get(symbol);}
+  commonSymbols(symbols:Iterable<string>){return [...symbols].filter(symbol=>[...this.instrumentCatalog.values()].some(c=>c.has(symbol)));}
+  pinSource(symbol:string,source?:MarketSource,now=Date.now()){if(source){if(!this.instrumentCatalog.get(source)?.has(symbol))return null;this.pinnedSources.set(symbol,source);return source;}
+    const prior=this.pinnedSources.get(symbol);if(prior)return prior;
+    const chosen=(['BYBIT','OKX','KUCOIN'] as MarketSource[]).find(v=>this.instrumentCatalog.get(v)?.has(symbol)&&!!this.sourceQuote(v,symbol)&&validQuote(this.sourceQuote(v,symbol)!,now));
+    if(chosen)this.pinnedSources.set(symbol,chosen);return chosen??null;
+  }
+  pinnedQuote(symbol:string,now=Date.now()){
+    const source=this.pinSource(symbol,undefined,now);if(!source)return null;const q=this.sourceQuote(source,symbol);if(!q||!validQuote(q,now))return null;
+    return{...q,sourceCount:[...this.instrumentCatalog.keys()].filter(v=>this.instrumentCatalog.get(v)?.has(symbol)&&this.sourceQuote(v,symbol)&&validQuote(this.sourceQuote(v,symbol)!,now)).length};
+  }
+  discoveryRows(symbols:Iterable<string>,now=Date.now()){
+    return this.commonSymbols(symbols).flatMap(symbol=>{const q=this.pinnedQuote(symbol,now);return q?[{symbol,last:(q.bid+q.ask)/2,observedAt:q.observedAt,source:q.source,sourceCount:q.sourceCount,volume24hUsd:q.volume24hUsd}]:[];});
+  }
+  async pinnedCandles(symbol:string,interval:'1m'|'5m',limit:number,source?:MarketSource){
+    const chosen=this.pinSource(symbol,source);if(!chosen)return null;
+    try{const rows=chosen==='BYBIT'?await this.bybitCandles(externalSymbol(symbol)!,interval,limit):chosen==='OKX'?await this.okxCandles(okxSymbol(symbol)!,interval,limit):
+      chosen==='KUCOIN'?await this.kucoinCandles(kucoinSymbol(symbol)!,interval,limit):chosen==='MEXC'?await this.mexcCandles(mexcSymbol(symbol)!,interval,limit):await this.htxCandles(htxSymbol(symbol)!,interval,limit);
+      return{source:chosen,rows:rows.map(r=>({...r,volumeVenue:chosen}))};}catch{return null;}
   }
   private ok(source:MarketSource,now:number,rows:number){this.health[source]={lastSuccessAt:now,lastFailureAt:this.health[source].lastFailureAt,
     failures:0,lastError:null,rows,nextRetryAt:0};}
@@ -322,6 +370,7 @@ export class MarketDataHub{
     const sources=(["BYBIT","OKX","KUCOIN","MEXC","HTX"] as MarketSource[]).map(source=>({source,...this.health[source],
       fresh:this.health[source].lastSuccessAt>0&&now-this.health[source].lastSuccessAt<=15_000}));
     return{version:"multi-source-market-hub-v5",sources,healthySources:sources.filter(s=>s.fresh).length,
+      instrumentCatalog:{at:this.catalogAt,nextRetryAt:this.catalogRetryAt,sources:[...this.instrumentCatalog].map(([source,rows])=>({source,contracts:rows.size}))},
       lastSuccessAt:Math.max(...sources.map(s=>s.lastSuccessAt),0),lastAttemptAt:this.lastAttemptAt,inFlight:!!this.inFlight};
   }
 }

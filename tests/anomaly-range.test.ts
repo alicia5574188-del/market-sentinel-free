@@ -1,0 +1,178 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {advanceRangeResearch,decodeRangeWindow,rangeDirection,strongRangeProof,rangeMarketRoute,makeRangeHolding,
+  rangeHoldingDecision,rangeExecutionAdmission,scanRangeAnomalies,normalizeRangeResearch,RANGE_RESEARCH_BYTES,type RangeWindows,type RangeScanner} from '../lib/anomaly-range.ts';
+import {advanceDirectStrategy} from '../lib/direct-strategy.ts';
+import {initialForward,normalizeForward,forwardSummary,resetForwardAccountPreservingLearning,type Quote} from '../lib/forward-relations.ts';
+import {buildForwardProtectionCheckpoint,restoreForwardProtectionCheckpoint} from '../lib/forward-protection-checkpoint.ts';
+import {prepareForwardWrite,readForwardStore} from '../lib/forward-store.ts';
+import {buildReviewSnapshot} from '../lib/research-snapshot.ts';
+import {MarketDataHub} from '../lib/market-data-hub.ts';
+import {fetchContractDirectory} from '../lib/gate-market.ts';
+import {validMarketRoute} from '../lib/market-authority.ts';
+import type {CandleLike} from '../lib/market-intelligence-engine.ts';
+const B=300000,T=Math.floor(1791014400000/B)*B;
+const candle=(at:number,open:number,close:number,span=.4):CandleLike=>({time:at/1000,open,close,
+  high:Math.max(open,close)+span/2,low:Math.min(open,close)-span/2,volume:100,turnoverUsd:10000,volumeVenue:'BYBIT'});
+const quote=(at:number,p:number):Quote=>({bestBid:p-.0001,bestAsk:p+.0001,observedAt:at,fresh:true,entryReady:true,sourceCount:2,priceSource:'BYBIT',
+  bookCoverage:'DEPTH20',bids:[{price:p-.0001,size:100000}],asks:[{price:p+.0001,size:100000}]});
+function fixture(side=1,kind:'EDGE_BREAKOUT'|'EDGE_RETURN'='EDGE_BREAKOUT'){
+  const windows:RangeWindows={},prior=Array.from({length:120},(_,i)=>candle(T-(120-i)*B,100+Math.sin(i/7),100+Math.sin(i/7))),
+    H=Math.max(...prior.map(r=>r.high)),L=Math.min(...prior.map(r=>r.low)),edge=side>0?H:L,
+    close=kind==='EDGE_BREAKOUT'?edge+side*.15:edge-side*.09,proofSide=kind==='EDGE_BREAKOUT'?side:-side,
+    eventBar=candle(T,kind==='EDGE_BREAKOUT'?edge-side*.1:edge+side*.05,close,.02),
+    minutes=[...Array.from({length:20},(_,i)=>candle(T+B-(20-i)*60000,close-.005,close,.03)),
+      candle(T+B,close,close+proofSide*.07,.005),candle(T+B+60000,close+proofSide*.07,close+proofSide*.14,.005)],now=T+B+120000,
+    discovery={at:T,scanned:500,shared:500,excluded:0,marketSamples:500,marketMove:0,loaded:1,queued:0,
+      anomalies:[{symbol:'A_USDT',detectedAt:T,source:'BYBIT',sourceCount:2,own:side*.01,residual:side*.01,score:90,kind:'OWN_ACCELERATION'}]},
+    paths={A_USDT:[...prior,eventBar]},q=quote(now,minutes.at(-1)!.close),input={now,windows,paths,minutes:{A_USDT:minutes},quotes:{A_USDT:q},ticks:{A_USDT:.001},discovery,positions:[],history:[]};
+  const research=advanceRangeResearch(input);return{input,research,e:research.events.A_USDT!,q,prior,H,L};
+}
+test('pre-event 120 OHLC are lossless and frozen; current spike cannot move the range',()=>{
+  const f=fixture();assert.equal(f.e.H,f.H);assert.equal(f.e.L,f.L);assert.equal(f.e.minutes,600);
+  const decoded=decodeRangeWindow(f.input.windows[f.e.id]!);assert.deepEqual(decoded.map(r=>[r.open,r.high,r.low,r.close]),f.prior.map(r=>[r.open,r.high,r.low,r.close]));
+  assert.ok(Buffer.byteLength(JSON.stringify(f.input.windows[f.e.id]))<8192);
+  const next=advanceRangeResearch({...f.input,previous:f.research,now:f.input.now+2000});assert.equal(next.events.A_USDT!.id,f.e.id);assert.equal(next.events.A_USDT!.H,f.H);
+  const broken={...f.input,windows:{},paths:{A_USDT:f.input.paths.A_USDT.slice(2)}};assert.equal(Object.keys(advanceRangeResearch(broken).events).length,0);
+  const short={...f.input,windows:{},paths:{A_USDT:f.input.paths.A_USDT.slice(1)}};assert.equal(advanceRangeResearch(short).events.A_USDT!.minutes,595);
+  assert.throws(()=>decodeRangeWindow({...f.input.windows[f.e.id]!,ohlc64:'broken'}));
+});
+test('outward completed five then new strong minutes authorize both sides; future/internal/wrong-source bars do not',()=>{
+  for(const side of [1,-1]){const f=fixture(side);assert.equal(f.e.phase,'READY');assert.equal(f.e.proof!.side,side>0?'LONG':'SHORT');assert.equal(f.e.proof!.kind,'EDGE_BREAKOUT');
+    assert.ok(f.e.proof!.bars.every(at=>at>f.e.proof!.fiveAt));const r=rangeMarketRoute(f.research,'A_USDT',(f.q.bestAsk+f.q.bestBid)/2,f.input.now,f.q);assert.ok(r.route);assert.ok(validMarketRoute(r.route));
+    const no=advanceRangeResearch({...f.input,windows:{},now:f.input.now-1});assert.notEqual(no.events.A_USDT?.phase,'READY');
+    const foreign=advanceRangeResearch({...f.input,windows:{},minutes:{A_USDT:f.input.minutes.A_USDT.map(r=>({...r,volumeVenue:'OKX'}))}});assert.notEqual(foreign.events.A_USDT?.phase,'READY');
+  }
+  const f=fixture();assert.equal(strongRangeProof(f.input.minutes.A_USDT,T+B+120000,'LONG',f.e.n5,.001,()=>true),undefined);
+  assert.equal(rangeMarketRoute(f.research,'A_USDT',f.q.bestAsk,f.input.now+120001,{...f.q,observedAt:f.input.now+120001}).route,null);
+});
+test('near-edge rejection needs no new high/low; executing return remains at edge and cost-checked',()=>{
+  for(const side of [1,-1]){const f=fixture(side,'EDGE_RETURN');assert.equal(f.e.proof?.kind,'EDGE_RETURN');assert.equal(f.e.proof?.side,side>0?'SHORT':'LONG');
+    assert.ok(rangeMarketRoute(f.research,'A_USDT',f.q.bestAsk,f.input.now,f.q).route);
+    assert.equal(rangeMarketRoute(f.research,'A_USDT',100,f.input.now,quote(f.input.now,100)).route,null);}
+});
+test('causal swing direction: three rising lows, declining highs and compression are distinct',()=>{
+  const low=[1,2,3].map((price,i)=>({kind:'LOW' as const,price:price+90,at:T+i,confirmedAt:T+100+i})),
+    high=[3,2,1].map((price,i)=>({kind:'HIGH' as const,price:price+100,at:T+i,confirmedAt:T+100+i}));
+  assert.equal(rangeDirection(low,.4,T+200),'UP');assert.equal(rangeDirection(high,.4,T+200),'DOWN');
+  assert.equal(rangeDirection([...low,...high],.4,T+200),'NEUTRAL');assert.equal(rangeDirection(low,.4,T+7200200),'NEUTRAL');
+});
+function trade(){const f=fixture(),r=rangeMarketRoute(f.research,'A_USDT',(f.q.bestBid+f.q.bestAsk)/2,f.input.now,f.q).route!,
+  state=initialForward(T-3600000),out=advanceDirectStrategy({state,now:f.input.now,paths:f.input.paths,minutePaths:f.input.minutes,quotes:f.input.quotes,
+    analysisQuotes:f.input.quotes,contracts:{A_USDT:{quantoMultiplier:.1,leverageMax:20,maintenanceRate:.005,minContracts:1,tickSize:.001,enableDecimal:false,orderSizeMin:'1',orderSizeMax:'1000000',marketOrderSizeMax:'1000000'}},
+    marketAuthority:true,specialMove:true,anomalyRange:true,rangeDiscovery:f.input.discovery,paperTiming:{prepareMs:2000,confirmMs:0,basis:'EXECUTION_CLOCK',samples:0}});
+  assert.equal(out.state.positions.length,1,JSON.stringify(out.state.directStrategy?.plans));
+  const t=out.state.positions[0]!;assert.equal(t.side,r.side);assert.equal(t.unified!.anomaly!.kind,'EDGE_BREAKOUT');
+  return{...f,state:out.state,t};}
+test('actual new plan uses native fixed1000 sizing/queue; immutable witness survives account/restart/archive/snapshot',async()=>{
+  const f=trade();assert.ok(f.t.paperOrder);assert.equal(f.t.forecast!.sizingEquity,1000);normalizeForward(structuredClone(f.state),f.input.now);
+  const prepared=await prepareForwardWrite(null,f.state,f.input.now),store=new Map(Object.entries(prepared.entries)),
+    restored=await readForwardStore({get:async(key:string)=>store.get(key)},f.input.now+1);
+  assert.equal(restored!.positions[0]!.unified!.anomaly!.window.ohlc64,f.t.unified!.anomaly!.window.ohlc64);
+  const checkpoint=buildForwardProtectionCheckpoint({...restored!,lastQuoteCycleAt:f.input.now+2000});
+  assert.equal(checkpoint.positions[0]!.unified!.anomaly!.window,undefined,'immutable witness not duplicated every protection write');
+  const over=restoreForwardProtectionCheckpoint(restored!,checkpoint);assert.equal(over.positions[0]!.unified!.anomaly!.window.ohlc64,f.t.unified!.anomaly!.window.ohlc64);
+  const reset=resetForwardAccountPreservingLearning(over,f.input.now+4000);assert.equal(reset.directStrategy!.rangeResearch!.events.A_USDT!.id,f.e.id);
+  const snapshot=buildReviewSnapshot({view:{...forwardSummary(restored!,f.input.quotes,f.input.now),positions:[f.t]},exportedAt:f.input.now,strategyFingerprint:null,buildSha:'test'} as Parameters<typeof buildReviewSnapshot>[0]);
+  assert.ok(snapshot.research.anomalyRangeAudit);assert.equal((snapshot.research.anomalyRangeAudit as {holdings:unknown[]}).holdings.length,1);
+});
+test('normal pullbacks and thirty minutes alone do not close; internal/profit exits do not authorize a flip',()=>{
+  const f=trade(),t=f.t;t.openedAt=f.input.now;t.unified!.anomaly=makeRangeHolding(f.e,f.input.windows[f.e.id]!,t.entryPrice,f.q,f.input.now);
+  const normal=rangeHoldingDecision(t,quote(f.input.now+60000,t.entryPrice-.02),f.input.now+60000,f.input.paths.A_USDT,f.input.minutes.A_USDT);
+  assert.equal(normal.exit,undefined);assert.equal(normal.memory.reverseEligible,false);
+  const stagnant=rangeHoldingDecision(t,quote(f.input.now+1800000,t.entryPrice),f.input.now+1800000,[],[]);assert.equal(stagnant.exit,undefined);assert.equal(stagnant.memory.stage,'REVIEW');
+  t.unified!.anomaly.kind='INTERNAL_TREND';const stopped=rangeHoldingDecision(t,quote(f.input.now+2000,t.stopPrice-.1),f.input.now+2000,[],[]);
+  assert.equal(stopped.exit,'RANGE_HARD_PROTECTION');assert.equal(stopped.memory.reverseEligible,false);
+});
+test('opposite entry is per-account flat-confirmed, fresh and edge-bound; partial/unknown close blocks native entry',()=>{
+  const f=trade();assert.match(rangeExecutionAdmission(f.t,f.q,f.input.now,false)!,/归零/);assert.equal(rangeExecutionAdmission(f.t,f.q,f.input.now,true),null);
+  assert.match(rangeExecutionAdmission(f.t,quote(f.input.now+120001,f.q.bestAsk),f.input.now+120001,true)!,/过期/);
+  f.t.unified!.anomaly!.kind='EDGE_RETURN';assert.match(rangeExecutionAdmission(f.t,quote(f.input.now,100),f.input.now,true)!,/证明|边缘/);
+});
+test('bulk discovery covers more than 30 coins; missing/changed-source history does not invent a move',()=>{
+  const scanner:RangeScanner={prices:new Map(),detected:new Map()},rows=Array.from({length:200},(_,i)=>({symbol:`X${i}_USDT`,source:'BYBIT',sourceCount:2,last:100,observedAt:T,volume24hUsd:2e6}));
+  for(let n=0;n<4;n++)scanRangeAnomalies(rows.map((r,i)=>({...r,last:i===199?100+n*.25:100,observedAt:T+n*60000})),scanner,T+n*60000,200,0);
+  const s=scanRangeAnomalies(rows.map((r,i)=>({...r,last:i===199?102:100,observedAt:T+240000})),scanner,T+240000,200,0);
+  assert.equal(s.scanned,200);assert.equal(s.marketSamples,200);assert.ok(s.anomalies.some(a=>a.symbol==='X199_USDT'));
+  const switched=scanRangeAnomalies(rows.map(r=>({...r,source:'OKX',last:120,observedAt:T+300000})),{prices:new Map(),detected:new Map()},T+300000,200,0);assert.equal(switched.marketSamples,0);
+  assert.throws(()=>scanRangeAnomalies(Array.from({length:4097},()=>rows[0]!),scanner,T,4097,0),/CAPACITY/);
+});
+test('capacity keeps original anchors and explicitly counts missed deep plans',()=>{
+  const f=fixture(),paths=Object.fromEntries(Array.from({length:30},(_,i)=>[`X${i}_USDT`,f.input.paths.A_USDT])),
+    discovery={...f.input.discovery,anomalies:Array.from({length:30},(_,i)=>({...f.input.discovery.anomalies[0]!,symbol:`X${i}_USDT`}))};
+  const s=advanceRangeResearch({...f.input,paths,windows:{},discovery});assert.ok(s.capacitySkipped>0);assert.ok(Buffer.byteLength(JSON.stringify(s))<=RANGE_RESEARCH_BYTES);assert.ok(normalizeRangeResearch(s));
+});
+test('actual common contract catalog paginates Bybit, excludes delivery/USDC/delisted and uses no Gate prices',async()=>{
+  const original=globalThis.fetch,calls:string[]=[],instrument=(symbol:string,extra={})=>({symbol,baseCoin:symbol.slice(0,-4),quoteCoin:'USDT',settleCoin:'USDT',status:'Trading',contractType:'LinearPerpetual',...extra});
+  globalThis.fetch=async url=>{const u=String(url);calls.push(u);
+    if(u.includes('instruments-info'))return Response.json({retCode:0,result:{list:u.includes('cursor=next')?[instrument('ETHUSDT')]:[instrument('BTCUSDT'),instrument('BADUSDT',{contractType:'LinearFutures'}),instrument('USDCUSDT',{settleCoin:'USDC'}),instrument('DEADUSDT',{status:'Settled'})],nextPageCursor:u.includes('cursor=next')?'':'next'}});
+    if(u.includes('bybit')&&u.includes('tickers'))return Response.json({retCode:0,result:{list:Array.from({length:20},(_,i)=>({symbol:i===0?'BTCUSDT':i===1?'ETHUSDT':`X${i}USDT`,lastPrice:'100',bid1Price:'99.9',ask1Price:'100.1',turnover24h:'10000000'}))}});
+    if(u.includes('/futures/usdt/contracts'))return Response.json([{name:'BTC_USDT',quanto_multiplier:'0.01',order_price_round:'0.1',leverage_max:'100',maintenance_rate:'0.005',status:'trading'}]);
+    throw new Error('synthetic source unavailable');};
+  try{const hub=new MarketDataHub();assert.equal(await hub.refreshInstrumentCatalog(T),4);await hub.refresh(T);
+    assert.deepEqual(hub.commonSymbols(['BTC_USDT','ETH_USDT','BAD_USDT','USDC_USDT','DEAD_USDT','GATEONLY_USDT']),['BTC_USDT','ETH_USDT']);
+    assert.equal(hub.discoveryRows(['BTC_USDT','ETH_USDT','GATEONLY_USDT'],T).length,2);
+    assert.equal(await hub.refreshInstrumentCatalog(T+1),0);assert.equal(calls.filter(u=>u.includes('cursor=next')).length,1);
+    const directory=await fetchContractDirectory();assert.equal(directory[0]!.symbol,'BTC_USDT');assert.equal(directory[0]!.last,0);
+    assert.equal(calls.filter(u=>u.includes('/futures/usdt/tickers')).length,0);
+    calls.length=0;assert.equal(await hub.pinnedCandles('BTC_USDT','5m',120,'BYBIT'),null);assert.equal(calls.length,1);assert.ok(calls[0]!.includes('bybit'));}
+  finally{globalThis.fetch=original;}
+});
+test('completed reentry plus later inward minute proof exits at edge, never midrange; sideways reentry exits without flip',()=>{
+  const f=trade(),t=f.t,m=t.unified!.anomaly!,now=f.input.now+B,
+    returned=candle(T+B,f.H+.1,f.H-.09,.02),minuteStart=T+2*B,
+    minute=[...Array.from({length:20},(_,i)=>candle(minuteStart-(20-i)*60000,f.H-.095,f.H-.09,.03)),
+      candle(minuteStart,f.H-.09,f.H-.16,.005),candle(minuteStart+60000,f.H-.16,f.H-.23,.005)],at=minuteStart+120000;
+  const result=rangeHoldingDecision(t,quote(at,f.H-.23),at,[...f.input.paths.A_USDT,returned],minute);
+  assert.equal(result.exit,'RANGE_BREAKOUT_FAILED');assert.equal(result.memory.reverseEligible,true);
+  const internal=rangeHoldingDecision(t,quote(at,100),at,[...f.input.paths.A_USDT,returned],minute);
+  assert.equal(internal.memory.reverseEligible,false);
+  const insideFirst=rangeHoldingDecision(t,quote(now,f.H-.1),now,[...f.input.paths.A_USDT,returned],[]);
+  assert.equal(insideFirst.exit,undefined);t.unified!.anomaly=insideFirst.memory;
+  const sideways=candle(T+2*B,f.H-.1,f.H-.11,.02),late=T+3*B;
+  const failed=rangeHoldingDecision(t,quote(late,f.H-.11),late,[...f.input.paths.A_USDT,returned,sideways],[]);
+  assert.equal(failed.exit,'RANGE_BREAKOUT_FAILED');assert.equal(failed.memory.reverseEligible,false);
+  assert.equal(m.window.ohlc64,f.input.windows[f.e.id]!.ohlc64);
+});
+test('profit guard needs three distinct retained quotes and cannot widen or automatically reverse',()=>{
+  const f=trade(),t=f.t,R=t.unified!.anomaly!.initialRisk,price=t.entryPrice+R*5;
+  let r=rangeHoldingDecision(t,quote(f.input.now+2000,price),f.input.now+2000,[],[]);assert.equal(r.stop,t.stopPrice);t.unified!.anomaly=r.memory;
+  r=rangeHoldingDecision(t,quote(f.input.now+2000,price),f.input.now+4000,[],[]);assert.equal(r.memory.peakSamples,1);t.unified!.anomaly=r.memory;
+  for(const n of [4000,6000]){r=rangeHoldingDecision(t,quote(f.input.now+n,price),f.input.now+n,[],[]);t.unified!.anomaly=r.memory;t.stopPrice=r.stop;}
+  assert.ok(t.stopPrice>t.entryPrice);const stopped=rangeHoldingDecision(t,quote(f.input.now+8000,t.stopPrice-.01),f.input.now+8000,[],[]);
+  assert.equal(stopped.exit,'RANGE_HARD_PROTECTION');assert.equal(stopped.memory.reverseEligible,false);assert.ok(stopped.stop>=t.stopPrice);
+});
+test('real PAPER queue confirms old closure before new edge return and never reuses the old proof or witness',()=>{
+  const f=trade(),contracts={A_USDT:{quantoMultiplier:.1,leverageMax:20,maintenanceRate:.005,minContracts:1,tickSize:.001,enableDecimal:false,orderSizeMin:'1',orderSizeMax:'1000000',marketOrderSizeMax:'1000000'}},
+    apply=(state:typeof f.state,at:number,p:number,paths=f.input.paths,minutes=f.input.minutes)=>advanceDirectStrategy({state,now:at,paths,minutePaths:minutes,
+      quotes:{A_USDT:quote(at,p)},analysisQuotes:{A_USDT:quote(at,p)},contracts,marketAuthority:true,specialMove:true,anomalyRange:true,
+      rangeDiscovery:f.input.discovery,paperTiming:{prepareMs:2000,confirmMs:0,basis:'EXECUTION_CLOCK',samples:0}}).state;
+  let s=apply(f.state,f.input.now+2000,f.q.bestAsk);s=apply(s,f.input.now+4000,f.q.bestAsk);assert.equal(s.positions[0]!.paperOrder!.phase,'FILLED',JSON.stringify(s.positions[0]!.paperOrder));
+  const oldId=s.positions[0]!.id,oldProof=s.positions[0]!.unified!.anomaly!.proof.id,witness=s.positions[0]!.unified!.anomaly!.window.ohlc64,
+    returned=candle(T+B,f.H+.1,f.H-.09,.02),minuteStart=T+2*B,
+    minutes={A_USDT:[...Array.from({length:20},(_,i)=>candle(minuteStart-(20-i)*60000,f.H-.095,f.H-.09,.03)),
+      candle(minuteStart,f.H-.09,f.H-.16,.005),candle(minuteStart+60000,f.H-.16,f.H-.23,.005)]},paths={A_USDT:[...f.input.paths.A_USDT,returned]},at=minuteStart+120000;
+  s=apply(s,at,f.H-.23,paths,minutes);assert.equal(s.positions.length,1);assert.equal(s.positions[0]!.side,'LONG');assert.equal(s.positions[0]!.paperOrder!.action!.kind,'CLOSE');
+  s=apply(s,at+2000,f.H-.23,paths,minutes);assert.equal(s.positions[0]!.paperOrder!.action!.phase,'SUBMITTED');assert.equal(s.history.length,0);
+  s=apply(s,at+4000,f.H-.23,paths,minutes);assert.equal(s.history[0]!.id,oldId);assert.equal(s.positions.length,0);
+  s=apply(s,at+6000,f.H-.23,paths,minutes);assert.equal(s.positions.length,1,JSON.stringify(s.directStrategy!.plans));assert.equal(s.positions[0]!.side,'SHORT');
+  assert.equal(s.positions[0]!.unified!.predecessorId,oldId);assert.notEqual(s.positions[0]!.unified!.anomaly!.proof.id,oldProof);
+  assert.equal(s.positions[0]!.unified!.anomaly!.window.ohlc64,witness);assert.ok(s.history[0]!.exitFee>0);assert.equal(s.fees,s.history[0]!.entryFee+s.history[0]!.exitFee,'unfilled reverse has not charged account fees');
+  normalizeForward(s,at+6000);
+});
+test('ten full immutable financial witnesses and bounded research fit original account/protection budgets',async()=>{
+  const f=trade(),s=structuredClone(f.state);s.positions=Array.from({length:10},(_,i)=>{const t=structuredClone(f.t);t.id=`budget_${i}`;t.symbol=`X${i}_USDT`;
+    t.rule.id+=i;t.unified!.sourceId+=i;t.unified!.referenceId+=i;t.unified!.anomaly!.eventId+=i;return t;});
+  const raw=buildForwardProtectionCheckpoint(s);assert.ok(Buffer.byteLength(JSON.stringify(raw))<112*1024);
+  assert.ok(raw.positions.every(t=>!t.unified!.anomaly!.window));
+  const saved=await prepareForwardWrite(null,s,f.input.now),store=new Map(Object.entries(saved.entries));
+  const restored=await readForwardStore({get:async<V>(key:string)=>structuredClone(store.get(key)) as V|undefined},f.input.now+1);
+  assert.equal(restored.positions.length,10);assert.ok(restored.positions.every(t=>decodeRangeWindow(t.unified!.anomaly!.window).length===120));
+});
+
+test('two substantive contrary completed minutes request review without automatic close or flip',()=>{
+  const f=trade(),t=f.t;t.openedAt=f.input.now;const at=f.input.now,px=t.entryPrice,mins=[candle(at,px+.16,px+.10,.01),candle(at+60000,px+.10,px+.04,.01)];
+  const decision=rangeHoldingDecision(t,quote(at+120000,px+.04),at+120000,[],mins);
+  assert.equal(decision.exit,undefined);assert.equal(decision.memory.stage,'REVIEW');assert.equal(decision.memory.reverseEligible,false);
+  assert.match(decision.reason,/两根/);
+});

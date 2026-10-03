@@ -1,3 +1,17 @@
+# 2026-10-03 21:30 — anomaly range implementation authorized
+
+Owner says to implement research/ANOMALY_RANGE_PLAN_2026-10-03.md and deploy via
+original reviewed-main path. Scope supersedes prior controller/discovery limits
+for the new policy: Gate contracts-only directory, actual external USDT perpetual
+catalogs/bulk discovery, anomaly-only deep seats, frozen pre-event windows,
+completed 5m then fresh 1m proof, edge breakout/return and internal trend holding.
+Reverse only at edges after confirmed closure, with fresh proof; preserve native
+admission, fixed1000 sizing, manual LIVE, financial history and old filled policy.
+Worker discovery/candle/activation and scoped baselines may change as required;
+order/auth/account/critical financial execution remain protected. No reset or
+verification exchange orders. Snapshot evidence/UI and causal/resource/recovery
+checks plus original deployment/advancing receipts are required.
+
 # 2026-10-03 16:46 — event-response controller, research exports and recovery
 
 Owner authorizes implementation and deployment of stable unusual-event memory,

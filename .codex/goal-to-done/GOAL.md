@@ -1,3 +1,14 @@
+# Current goal — owner authorization 2026-10-03 21:30
+
+Implement and publish the owner-authorized anomaly-range design. Preserve accounts,
+old obligations, manual LIVE, native sizing/execution and existing resource clocks.
+Acceptance: external common-pool discovery without Gate bulk fallback; frozen
+pre-event evidence; causal dual plans and edge-only reversal; auditable snapshots;
+compact UI; functional/recovery/resource and original release checks; advancing
+production receipt. Canceled inverse candidate is excluded.
+
+# Prior project goals (historical scope)
+
 # 2026-10-03 — current task: PAPER executes through LIVE steps
 
 Complete the owner's request for simulated entry/reduction/exit to follow the

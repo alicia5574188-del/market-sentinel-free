@@ -1,4 +1,5 @@
 "use client";
+import type {RangeResearch} from '../lib/anomaly-range.ts';
 
 import {BEIJING_TIME_ZONE} from "../lib/beijing-time.ts";
 import {type forwardSummary} from "../lib/forward-relations.ts";
@@ -61,10 +62,10 @@ function DirectExecution({data,now,liveEnabled,liveOverview}:{data:NonNullable<V
       {liveEnabled&&<p>实盘已跟上 {liveOverview?.copied??'—'} / 应执行 {liveOverview?.eligible??'—'}。实际成交及结算以实盘账户记录为准。</p>}
       {ds.execution?.pending.map(p=><div className="fr-exec-pending" key={p.id}><b>{p.symbol.replace('_',' / ')} · {p.kind==='OPEN'?'等待开仓成交':p.kind==='CLOSE'?'等待平仓成交':'等待减仓成交'}</b><details className="fr-exec-research-details"><summary>查看原因</summary><p>{p.reason}</p></details></div>)}
       <div className="fr-exec-compact-list">{data.positions.map(t=>{const observed=ds.episodeResearch?.holdings.find(h=>h.tradeId===t.id);return <article className="fr-exec-compact-row" key={t.id}>
-        <div className="fr-exec-compact-head"><b>{t.symbol.replace('_',' / ')} · {side(t.side)}</b><span>{t.unified?.decision==='EXIT'?'准备退出':t.unified?.decision==='REVIEW'?'复核持仓':'继续持有'}</span></div>
+        <div className="fr-exec-compact-head"><b>{t.symbol.replace('_',' / ')} · {side(t.side)}{t.unified?.anomaly?` · ${({EDGE_BREAKOUT:'边缘突破',EDGE_RETURN:'边缘回归',INTERNAL_TREND:'内部顺势'})[t.unified.anomaly.kind]}`:''}</b><span>{t.unified?.decision==='EXIT'?'准备退出':t.unified?.decision==='REVIEW'?'复核持仓':'继续持有'}</span></div>
         <p>{t.unified?.holdReason??positionWatch(t)}</p><p className="fr-exec-exit">退出条件：{t.unified?.exitCondition??'按原交易计划执行'}</p>
         <details className="fr-exec-research-details"><summary>查看依据</summary><p>进场：{t.unified?.entryReason??t.entryContext?.reason??'暂无记录'}</p>
-        {ds.eventResponse&&!t.unified?.response&&<p>沿用入场时的原策略规则</p>}
+        {(ds.anomalyRange?!t.unified?.anomaly:ds.eventResponse&&!t.unified?.response)&&<p>沿用入场时的原策略规则</p>}
         {t.unified?.response&&<><p>事件响应 · {({LAUNCH:'启动观察',ADVANTAGE:'优势保留',REVIEW:'复核恢复',EXIT:'准备退出'})[t.unified.response.stage]}</p>
           <p>已记录最高推进 {(t.unified.response.peak*100).toFixed(2)}% · 连续恢复失败 {t.unified.response.failedRecoveries} 次</p>
           <p>恢复耗时 {t.unified.response.recoveryMs==null?'尚未完成':`${Math.round(t.unified.response.recoveryMs/1000)} 秒`} · 风险保护 {t.stopPrice}</p></>}
@@ -74,11 +75,27 @@ function DirectExecution({data,now,liveEnabled,liveOverview}:{data:NonNullable<V
         <p>最近判断 {clock(t.unified?.lastDecisionAt)} · 持有 {Math.max(0,Math.round((now-t.openedAt)/60000))} 分钟</p></details></article>;})}</div>
       {!data.positions.length&&<p>暂无持仓，等待有效启动。</p>}
       {ds.execution&&<details className="fr-exec-research-details"><summary>成交说明</summary><p>模拟按实盘的执行校验、提交和成交确认步骤结算；盘口模拟与交易所实际成交仍可能存在差异。</p></details>}</section>
-    {ds.eventResearchError?<section className="fr-section"><h2>事件研究待恢复</h2><p>{ds.eventResearchError}</p></section>:ds.eventResearch?<EventResponseView research={ds.eventResearch} now={now} held={held}/>:ds.specialResearch?<SpecialResearchView research={ds.specialResearch} now={now} plans={plans} held={held}/>:<section className="fr-section"><div className="fr-section-head"><h2>重点观察</h2><span>{plans.length} 个计划</span></div>
+    {ds.anomalyRange?<RangeResearchView research={ds.rangeResearch} held={held}/>:ds.eventResearchError?<section className="fr-section"><h2>事件研究待恢复</h2><p>{ds.eventResearchError}</p></section>:ds.eventResearch?<EventResponseView research={ds.eventResearch} now={now} held={held}/>:ds.specialResearch?<SpecialResearchView research={ds.specialResearch} now={now} plans={plans} held={held}/>:<section className="fr-section"><div className="fr-section-head"><h2>重点观察</h2><span>{plans.length} 个计划</span></div>
       <div className="fr-exec-compact-list">{plans.map(p=><article className="fr-exec-compact-row" key={p.id}><div className="fr-exec-compact-head"><b>{p.symbol.replace('_',' / ')} · {p.permission==='WAIT'?'观察':side(p.side)}</b><span>{planPhase(p.phase)}</span></div><p>{p.reason.replace(/^[A-Z_]+: /,'')}</p><details className="fr-exec-research-details"><summary>查看计划</summary><PlanDetails plan={p}/></details></article>)}</div>
       {!plans.length&&<p>等待当前结构与新鲜盘口形成交易计划。</p>}
       {ds.episodeResearch&&<details className="fr-exec-research-details"><summary>详细行情研究</summary><EpisodeResearchView research={ds.episodeResearch} now={now}/></details>}</section>}
   </div>;
+}
+function RangeResearchView({research,held}:{research:RangeResearch|null|undefined;held:Set<string>}){
+  const discovery=research?.discovery,events=Object.values(research?.events??{}).filter(e=>!held.has(e.symbol));
+  return <section className="fr-section"><div className="fr-section-head"><h2>异动与区间计划</h2><span>{events.length} 个观察</span></div>
+    <p>共同币池 {discovery?.shared??'—'} · 已扫描 {discovery?.scanned??'—'} · K线观察 {discovery?.loaded??0} · 排队 {discovery?.queued??0} · 记录容量跳过 {research?.capacitySkipped??0}</p>
+    <p>扫描更新 {clock(discovery?.at)}{research?.error?` · ${research.error}`:''}</p>
+    <div className="fr-exec-compact-list">{events.map(e=><article className="fr-exec-compact-row" key={e.id}>
+      <div className="fr-exec-compact-head"><b>{e.symbol.replace('_',' / ')} · {e.proof?side(e.proof.side):'观察'}</b><span>{e.phase==='EXPIRED'?'计划到期':e.phase==='DONE'?'已结束':e.proof?({EDGE_BREAKOUT:'边缘突破',EDGE_RETURN:'边缘回归',INTERNAL_TREND:'内部顺势'})[e.proof.kind]:'等待确认'}</span></div>
+      <p>区间 {e.L.toPrecision(6)} ～ {e.H.toPrecision(6)} · {e.minutes} 分钟 · {e.direction==='UP'?'内部偏多':e.direction==='DOWN'?'内部偏空':'内部方向不明确'}</p>
+      <p>位置 {e.price>e.H?'上沿外':e.price<e.L?'下沿外':Math.abs(e.price-e.H)<=e.E?'上沿附近':Math.abs(e.price-e.L)<=e.E?'下沿附近':'区间内部'} · {e.own>0?'本次上涨':e.own<0?'本次下跌':'尚未移动'}</p>
+      <p>{e.admission?.reason??e.reason}</p><details className="fr-exec-research-details"><summary>双向计划</summary>
+        <p>来源 {e.source} · 首次发现 {clock(e.detectedAt)}</p><p>向外：5分钟完成在区间外，随后2至3根强势1分钟线。向内：边缘尝试被打回，完成回内与随后小线证明。</p>
+        <p>内部：只沿有效波段方向，核对前方空间；内部订单退出不自动反向。反向须在本账户归零后再次核对边缘。</p>
+      </details></article>)}</div>{!events.length&&<p>等待活跃币出现相对市场的异常移动。</p>}
+    {discovery?.anomalies.filter(a=>!research?.events[a.symbol]).slice(0,6).map(a=><p key={a.symbol}>{a.symbol.replace('_',' / ')}：异动已发现，等待完整同源区间或观察席。</p>)}
+  </section>;
 }
 function EventResponseView({research,now,held}:{research:EventResearch;now:number;held:Set<string>}){
   const rows=Object.values(research.events).filter(e=>!held.has(e.symbol)).sort((a,b)=>Number(b.phase==='READY')-Number(a.phase==='READY')

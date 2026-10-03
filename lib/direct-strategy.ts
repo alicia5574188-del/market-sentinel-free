@@ -16,6 +16,7 @@ import {advanceEpisodeResearch} from './episode-research.ts';
 import {adaptiveMarketRoute,adaptiveHoldingDecision,ADAPTIVE_CONTROLLER_VERSION} from './adaptive-controller.ts';
 import {advanceSpecialResearch,specialMarketRoute,SPECIAL_MOVE_VERSION} from './special-move.ts';
 import {advanceEventResearch,boundedEventResearch,eventMarketRoute,confirmEventQuote,eventHoldingDecision,EVENT_RESPONSE_VERSION} from './event-response.ts';
+import {ANOMALY_RANGE_VERSION,advanceRangeResearch,rangeMarketRoute,rangeHoldingDecision,makeRangeHolding} from './anomaly-range.ts';
 export {DIRECT_STRATEGY_VERSION} from './direct-strategy-types.ts';
 export {directOpportunityView,directStrategySummary} from './direct-strategy-view.ts';
 const sign=(side:'LONG'|'SHORT')=>side==='LONG'?1:-1;
@@ -27,6 +28,7 @@ const COST=2*(PAPER_COST.feeRate+PAPER_COST.slippageRate),FEE=.0005;
 type Input=Parameters<typeof advanceForward>[0]&{/** Legacy-policy fixture/compatibility only; production defaults to new events. */eventResponse?:boolean};
 function currentRoute(s:ForwardState,symbol:string,price:number,input:Input){
   const ds=s.directStrategy!;
+  if(ds.anomalyRange)return rangeMarketRoute(ds.rangeResearch,symbol,price,input.now,ds.rangeAnalysis?.[symbol]);
   if(ds.eventResponse&&ds.eventResearchError)return{route:null,code:'RESPONSE_RESEARCH_ERROR',reason:ds.eventResearchError};
   if(ds.eventResponse)return eventMarketRoute(ds.eventResearch,symbol,price,input.now);
   if(ds.specialMove)return specialMarketRoute(ds.specialResearch,symbol,price,input.now);
@@ -34,6 +36,8 @@ function currentRoute(s:ForwardState,symbol:string,price:number,input:Input){
     input.minutePaths?.[symbol],input.paths[symbol]):marketRouteDecision(ds.marketAuthority!,symbol,price,input.now);
 }
 function currentPermission(s:ForwardState,r:MarketRoute,symbol:string,input:Input){
+  if(r.controllerVersion===ANOMALY_RANGE_VERSION){const q=input.quotes[symbol];if(!freshQuote(q,input.now))return false;
+    const current=currentRoute(s,symbol,(q!.bestBid+q!.bestAsk)/2,input).route;return !!current&&current.eventId===r.eventId&&current.side===r.side;}
   if(r.controllerVersion===EVENT_RESPONSE_VERSION){
     if(s.directStrategy?.eventResearchError)return false;
     const e=s.directStrategy?.eventResearch?.events[symbol],q=input.quotes[symbol];
@@ -172,12 +176,13 @@ export function openDirectPlan(s:ForwardState,p:DirectPlan,q:Quote,c:Contract,no
     ||!currentPermission(s,route,o.symbol,{now,quotes,minutePaths:minutePath?{[o.symbol]:minutePath}: {},paths:holdingPath?{[o.symbol]:holdingPath}:{},state:s} as Input)))return'市场分支许可已经改变，取消原执行计划';
   if(route?.relation==='FOLLOWER'&&s.directStrategy?.marketAuthority?.warning)return'共同推进转弱，暂停新增并复核承接保护';
   if(route&&s.directStrategy?.marketAuthority){
-    const current=s.directStrategy.eventResponse?eventMarketRoute(s.directStrategy.eventResearch,o.symbol,price,now):s.directStrategy.specialMove?specialMarketRoute(s.directStrategy.specialResearch,o.symbol,price,now):s.directStrategy.adaptive?adaptiveMarketRoute(s.directStrategy.marketAuthority,s.directStrategy.episodeResearch?.symbols[o.symbol],
+    const current=s.directStrategy.anomalyRange?rangeMarketRoute(s.directStrategy.rangeResearch,o.symbol,price,now,s.directStrategy.rangeAnalysis?.[o.symbol]):s.directStrategy.eventResponse?eventMarketRoute(s.directStrategy.eventResearch,o.symbol,price,now):s.directStrategy.specialMove?specialMarketRoute(s.directStrategy.specialResearch,o.symbol,price,now):s.directStrategy.adaptive?adaptiveMarketRoute(s.directStrategy.marketAuthority,s.directStrategy.episodeResearch?.symbols[o.symbol],
       o.symbol,price,now,minutePath,holdingPath):marketRouteDecision(s.directStrategy.marketAuthority,o.symbol,price,now);
     if(!current.route||current.route.side!==route.side||current.route.branch!==route.branch)
       return`${current.code}: ${current.reason}`;
   }
-  const responseRoute=route?.controllerVersion===EVENT_RESPONSE_VERSION;
+  const rangeRoute=route?.controllerVersion===ANOMALY_RANGE_VERSION,rangeEvent=s.directStrategy?.rangeResearch?.events[o.symbol],
+    responseRoute=route?.controllerVersion===EVENT_RESPONSE_VERSION||rangeRoute&&rangeEvent?.proof?.kind==='EDGE_BREAKOUT';
   if(route&&(!g||(!responseRoute&&(!g.valid||g.ratio<1.35))||g.riskRate<=0||g.riskRate>.037||1/leverage<=g.riskRate+c.maintenanceRate+2*FEE))return'实际方向当前风险或扣费空间不足';
   if(route&&!s.directStrategy?.adaptive&&route.relation!=='INDEPENDENT'&&followerConflict(s,route))return'旧市场分支持仓尚未确认关闭，等待衔接完成';
   if(o.completedAt>now||o.expiresAt<=now)return'交易事件尚未完成或已失效';
@@ -220,12 +225,15 @@ export function openDirectPlan(s:ForwardState,p:DirectPlan,q:Quote,c:Contract,no
       entryReason:p.reason,holdReason:p.holdReason,exitCondition:p.exitCondition,lastDecisionAt:now,lastBarAt:0,decision:'HOLD' as const,
       explanationEvents:[{at:now,kind:'ENTRY' as const,reason:p.reason,price,quoteAt:q.observedAt}],
       ...(predecessor?{predecessorId:predecessor.id,predecessorNet:predecessor.netPnl!}:{}),
-      ...(responseRoute?{response:{version:EVENT_RESPONSE_VERSION,eventId:route.eventId!,entryAt:now,sourceAt:0,peak:0,peakAt:now,
+      ...(route?.controllerVersion===EVENT_RESPONSE_VERSION?{response:{version:EVENT_RESPONSE_VERSION,eventId:route.eventId!,entryAt:now,sourceAt:0,peak:0,peakAt:now,
         lastClose:price,lastCloseAt:now,counterSince:null,recoveryMs:null,failedRecoveries:0,counterProgress:0,stage:'LAUNCH' as const,
         reason:'新事件启动观察中',points:[]}}:{}),
-      ...(p.branch==='RETURN'?{returnLogic:{moveSide:o.side,entryPrice:movePrice,openedAt:now,peakAdvance:0,firstAdvanceAt:null,
+      ...(p.branch==='RETURN'&&!rangeRoute?{returnLogic:{moveSide:o.side,entryPrice:movePrice,openedAt:now,peakAdvance:0,firstAdvanceAt:null,
         plan:structuredClone(geometry!),entryResidual:o.residual??0,entryRelativeStrength:o.relativeStrength??.5,
         entryRemainingSpaceRate:remainingMove,entryScore:o.environmentScore??o.score,validated:true,assessment:observedAssessment} satisfies ReturnLogic}:{})};
+  if(rangeRoute){const w=s.directStrategy!.rangeWindows?.[rangeEvent!.id]??predecessor?.unified?.anomaly?.window,analysis=s.directStrategy!.rangeAnalysis?.[o.symbol];
+    if(!w||!analysis)return'原始冻结窗口或同源价格缺失，保留账户不猜测';
+    u.anomaly=makeRangeHolding(rangeEvent!,w,price,analysis,now);}
   const t:Trade={id,symbol:o.symbol,side:p.side,status:'OPEN',openedAt:now,closedAt:null,entryPrice:price,exitPrice:null,
       quantity,contracts,quantoMultiplier:c.quantoMultiplier,notional,leverage,margin,plannedRisk:notional*riskRate,stopPrice:stop,
       armPrice:g?.target??geometry!.target??stop,lastPrice:mark(p.side,q),lastQuoteAt:q.observedAt,entryFee:notional*FEE,exitFee:0,
@@ -358,12 +366,12 @@ function routeOpportunity(s:ForwardState,o:Opportunity,input:Input):Opportunity{
     d=sign(r.side),risk=Math.max(.0001,d*(price-r.stop)/price),net=r.controllerVersion===EVENT_RESPONSE_VERSION?0:d*(r.target-price)/price-COST,
     id=r.eventId??`${MARKET_AUTHORITY_VERSION}:${o.symbol}:${r.branch}:${r.side}:${r.proofAt}`,
     conflict=!s.directStrategy!.adaptive&&followerConflict(s,r),
-    ownScore=s.directStrategy!.eventResponse?s.directStrategy!.eventResearch!.events[o.symbol]!.score:s.directStrategy!.specialMove?s.directStrategy!.specialResearch!.watches[o.symbol]!.score:o.score,
+    ownScore=s.directStrategy!.anomalyRange?s.directStrategy!.rangeResearch!.events[o.symbol]!.score:s.directStrategy!.eventResponse?s.directStrategy!.eventResearch!.events[o.symbol]!.score:s.directStrategy!.specialMove?s.directStrategy!.specialResearch!.watches[o.symbol]!.score:o.score,
     geometry:WinnerPlan={version:WINNER_POLICY_VERSION,intent:r.branch==='RETURN'?'RANGE':'TREND',eventAt:r.proofAt,
       initialStop:r.stop,target:r.branch==='RETURN'?r.target:null,targetArea:r.branch==='RETURN'?r.reference:null,
       origin:structuredClone(r.reference),riskGroup:`${o.clusterId??o.symbol}:${r.side}`,source:r.branch==='RETURN'?'EDGE_REJECTION':'RELATIVE_CORE'};
   return{...o,id,thesisId:id,side:r.side,price:base,marketRoute:r,eligible:!conflict||r.relation==='INDEPENDENT',
-    completedAt:r.proofAt,expiresAt:r.proofAt+12*60_000,thesisSince:r.proofAt,thesisBars:3,
+    completedAt:r.proofAt,expiresAt:r.proofAt+(r.controllerVersion===ANOMALY_RANGE_VERSION?2:12)*60_000,thesisSince:r.proofAt,thesisBars:3,
     mode:r.branch==='RETURN'?'REVERSAL':'CONTINUATION',reason:conflict&&r.relation!=='INDEPENDENT'?
       'OLD_BRANCH_PENDING: 旧市场分支持仓尚未确认关闭':r.reason,thesisSummary:r.reason,
     invalidationSummary:r.controllerVersion===EVENT_RESPONSE_VERSION?'启动连续恢复失败、价格优势持续丢失或资金风险保护触发':`实际${r.side}方向的结构失效位置 ${r.stop}`,winnerPlan:geometry,
@@ -374,12 +382,16 @@ function routeOpportunity(s:ForwardState,o:Opportunity,input:Input):Opportunity{
     liquidityTargetLower:r.target,liquidityTargetUpper:r.target,environment:r.branch==='RETURN'?'ROTATION':'TREND',
     environmentProbe:false,environmentForceRetest:false,environmentRiskScale:1,environmentMainline:true,
     score:ownScore,premium:ownScore>=82,environmentScore:ownScore,extendedConfirmation:false,
-    ...(s.directStrategy!.specialMove?{residual:s.directStrategy!.eventResponse?s.directStrategy!.eventResearch!.events[o.symbol]!.residual:s.directStrategy!.specialResearch!.watches[o.symbol]!.residual,
+    ...(s.directStrategy!.specialMove?{residual:s.directStrategy!.anomalyRange?s.directStrategy!.rangeResearch!.events[o.symbol]!.residual:s.directStrategy!.eventResponse?s.directStrategy!.eventResearch!.events[o.symbol]!.residual:s.directStrategy!.specialResearch!.watches[o.symbol]!.residual,
       expectedHoldMinutes:90,regime:'DIVERGENT' as const,environmentReason:r.reason,futureResearchAction:'NORMAL' as const}: {})};
 }
 function manageMarketTrade(s:ForwardState,t:Trade,q:Quote,input:Input){
   const u=t.unified!,r=u.marketRoute!,a=s.directStrategy!.marketAuthority!,now=input.now,d=sign(t.side),px=mark(t.side,q),
     coin=a.coins[t.symbol],ownPlan=t.entryContext!.winnerPlan!;
+  if(u.anomaly){const result=rangeHoldingDecision(t,q,now,input.paths[t.symbol]??[],input.minutePaths?.[t.symbol]);
+    u.anomaly=result.memory;t.stopPrice=result.stop;u.lastBarAt=result.memory.lastBarAt;u.lastDecisionAt=now;
+    u.decision=result.memory.stage;u.holdReason=result.reason;u.exitCondition='原计划结构失效或实际保护触发；仅边缘新确认可反向';
+    if(result.exit)return closeUnifiedTrade(s,t,q,now,result.exit,result.reason);return false;}
   if(u.response){
     const result=eventHoldingDecision(t,q,now,input.paths[t.symbol]??[],input.minutePaths?.[t.symbol]);
     u.response=result.memory;t.stopPrice=result.stop;u.lastBarAt=result.memory.sourceAt;u.lastDecisionAt=now;
@@ -431,16 +443,24 @@ function manageMarketTrade(s:ForwardState,t:Trade,q:Quote,input:Input){
 }
 function manageMarketDirect(s:ForwardState,input:Input,ready:boolean){
   const ds=s.directStrategy!,oldEpoch=ds.marketAuthority!.epoch,now=input.now;
-  ds.marketAuthority=advanceMarketAuthority({previous:ds.marketAuthority,now,ready,symbols:s.selectedSymbols,
+  if(!ds.anomalyRange||s.positions.some(t=>!t.unified?.anomaly))ds.marketAuthority=advanceMarketAuthority({previous:ds.marketAuthority,now,ready,symbols:s.selectedSymbols,
     protectedSymbols:s.positions.map(t=>t.symbol),
     states:s.extremumRegime.symbols,paths:input.paths,minutePaths:input.minutePaths,quotes:input.analysisQuotes??input.quotes});
-  const a=ds.marketAuthority;
-  if(ds.eventResponse){try{ds.eventResearch=advanceEventResearch({previous:ds.eventResearch,now,paths:input.paths,minutes:input.minutePaths,
+  const a=ds.marketAuthority!;
+  if(ds.anomalyRange){
+    ds.rangeWindows??={};ds.rangeAnalysis=Object.fromEntries(Object.entries(input.analysisQuotes??{}).filter(([symbol])=>!!input.paths[symbol]));
+    const windowsBefore=JSON.stringify(ds.rangeWindows);
+    try{ds.rangeResearch=advanceRangeResearch({previous:ds.rangeResearch,windows:ds.rangeWindows,now,paths:input.paths,minutes:input.minutePaths,
+      quotes:ds.rangeAnalysis,ticks:Object.fromEntries(Object.entries(input.contracts).map(([k,c])=>[k,c.tickSize??0])),
+      discovery:input.rangeDiscovery,positions:s.positions,history:s.history});delete ds.rangeResearch.error;}
+    catch{if(ds.rangeResearch)ds.rangeResearch.error='区间研究未恢复，暂停新增；保留持仓保护';}
+    if(windowsBefore!==JSON.stringify(ds.rangeWindows))s.revision++;
+  }else if(ds.eventResponse){try{ds.eventResearch=advanceEventResearch({previous:ds.eventResearch,now,paths:input.paths,minutes:input.minutePaths,
     quotes:input.analysisQuotes??input.quotes,states:s.extremumRegime.symbols,positions:s.positions,history:s.history});delete ds.eventResearchError;}
     catch{ds.eventResearchError='事件研究暂不可用，暂停新增；已有持仓继续自身保护';}}
   else if(ds.specialMove)ds.specialResearch=advanceSpecialResearch({previous:ds.specialResearch,now,paths:input.paths,minutes:input.minutePaths,
     quotes:input.analysisQuotes??input.quotes,states:s.extremumRegime.symbols,protectedSymbols:s.positions.map(t=>t.symbol)});
-  if(ds.adaptive)ds.episodeResearch=advanceEpisodeResearch({previous:ds.episodeResearch,now,accountStartedAt:s.startedAt,
+  if(ds.adaptive&&(!ds.anomalyRange||s.positions.some(t=>!t.unified?.anomaly)))ds.episodeResearch=advanceEpisodeResearch({previous:ds.episodeResearch,now,accountStartedAt:s.startedAt,
     authority:ds.specialMove?{...a,coins:{}}:a,states:s.extremumRegime.symbols,paths:input.paths,minutePaths:input.minutePaths,quotes:input.quotes,
     positions:s.positions,history:s.history});
   if(a.epoch!==oldEpoch)s.revision++;
@@ -469,13 +489,13 @@ function manageMarketDirect(s:ForwardState,input:Input,ready:boolean){
     if(t.unified.branch==='CONTINUATION')manageContinuation(s,t,q!,now,input.paths[t.symbol]??[],input.minutePaths?.[t.symbol],input.contracts[t.symbol]);
     else manageDirectReturn(s,t,q!,input);
   }
-  if(ds.eventResponse&&!ds.eventResearchError){
+  if(ds.anomalyRange||ds.eventResponse&&!ds.eventResearchError){
     // Discovery does not inherit the retired chart engine's candidate selection.
     // Reuse its descriptive row where present; transport-only zeros elsewhere.
     const existing=new Map(s.opportunities.map(o=>[o.symbol,o]));
-    s.opportunities=Object.values(ds.eventResearch?.events??{}).filter(e=>input.paths[e.symbol]&&input.quotes[e.symbol]).slice(0,30).map(e=>{
-      const row:Opportunity=existing.get(e.symbol)??{id:e.id,symbol:e.symbol,side:e.side??'LONG',mode:'CONTINUATION',premium:false,score:e.score,eligible:false,
-        completedAt:e.anchorAt,expiresAt:now+600000,price:e.anchorPrice,stopPrice:e.anchorPrice,targetPrice:e.anchorPrice,stopRate:0,targetRate:0,
+    s.opportunities=Object.values(ds.anomalyRange?ds.rangeResearch?.events??{}:ds.eventResearch?.events??{}).filter(e=>input.paths[e.symbol]&&input.quotes[e.symbol]).slice(0,30).map(e=>{
+      const row:Opportunity=existing.get(e.symbol)??{id:e.id,symbol:e.symbol,side:('side' in e?e.side:e.proof?.side)??'LONG',mode:'CONTINUATION',premium:false,score:e.score,eligible:false,
+        completedAt:('anchorAt' in e?e.anchorAt:e.detectedAt),expiresAt:now+600000,price:('anchorPrice' in e?e.anchorPrice:e.price),stopPrice:('anchorPrice' in e?e.anchorPrice:e.price),targetPrice:('anchorPrice' in e?e.anchorPrice:e.price),stopRate:0,targetRate:0,
         directionStrength:0,pathEfficiency:0,momentumPersistence:0,positionScore:0,spaceScore:0,executionScore:0,grossRemainingSpaceRate:0,
         netRemainingSpaceRate:0,pullbackRiskRate:0,edgeRatio:0,expectedHoldMinutes:90,marketFit:0,regionId:null,regionQuality:null,reason:e.reason,
         clusterId:s.extremumRegime.symbols[e.symbol]?.clusterId};
@@ -488,7 +508,19 @@ function manageMarketDirect(s:ForwardState,input:Input,ready:boolean){
       v.status='CANCELLED';v.reason='统一市场许可改变，旧方向验证已撤销';}
   }
   ds.plans=Object.fromEntries(s.opportunities.map(o=>[o.symbol,marketPlan(s,o,input)]));
-  if(ds.eventResponse&&!ds.eventResearchError){
+  if(ds.anomalyRange){
+    for(const p of Object.values(ds.plans).sort((a,b)=>b.candidate.score-a.candidate.score)){
+      const e=ds.rangeResearch?.events[p.symbol],q=input.quotes[p.symbol],c=input.contracts[p.symbol];
+      if(!e?.proof||!q||!c||!p.candidate.eligible||p.consumed||s.positions.some(t=>t.openedAt===now))continue;
+      p.holdReason='按冻结计划持有；普通回调复查，结构失效退出';p.exitCondition='实际硬保护或计划结构失效；边缘新证明才可反向';
+      const predecessor=e.predecessorId?s.history.find(t=>t.id===e.predecessorId):undefined;
+      if(e.reverseEligible&&(!predecessor||s.positions.some(t=>t.symbol===p.symbol)))continue;
+      const error=openDirectPlan(s,p,q,c,now,input.quotes,predecessor,input.minutePaths?.[p.symbol],input.paperTiming,input.paths[p.symbol]);
+      if(error){e.admission={at:now,reason:error};p.reason=error;}
+      else{const t=s.positions.at(-1)!;e.tradeId=t.id;e.phase='EXECUTING';e.consumedAt=e.proof.at;delete ds.rangeWindows![e.id];break;}
+    }
+    for(const o of s.opportunities)o.eligible=false;
+  }else if(ds.eventResponse&&!ds.eventResearchError){
     for(const p of Object.values(ds.plans).sort((a,b)=>b.candidate.score-a.candidate.score)){
       if(p.consumed)continue;
       const e=ds.eventResearch!.events[p.symbol],q=input.quotes[p.symbol],c=input.contracts[p.symbol];
@@ -511,7 +543,7 @@ function manageMarketDirect(s:ForwardState,input:Input,ready:boolean){
     if(ds.eventResearch){try{boundedEventResearch(ds.eventResearch);}
       catch{ds.eventResearchError='事件研究容量不足，暂停新增；已有持仓继续自身保护';}}
   }
-  ds.summary=ds.eventResponse?`记录活跃异常事件；按自身推进保留与恢复参与，失败启动提前退出，有优势继续持有。已记住 ${Object.keys(ds.eventResearch?.events??{}).length} 个事件；${s.positions.filter(paperFilled).length} 笔实际持仓。`:ds.specialMove?`持续研究特别的活跃币；自身启动并保留价格优势后参与爆发段。研究记忆 ${Object.keys(ds.specialResearch?.watches??{}).length} 币；${s.positions.filter(paperFilled).length} 笔实际持仓。`:
+  ds.summary=ds.anomalyRange?`外部异动发现，固定约10小时区间；边缘突破、边缘回归、内部顺势分别执行。已记住 ${Object.keys(ds.rangeResearch?.events??{}).length} 个计划；${s.positions.filter(paperFilled).length} 笔持仓。`:ds.eventResponse?`记录活跃异常事件；按自身推进保留与恢复参与，失败启动提前退出，有优势继续持有。已记住 ${Object.keys(ds.eventResearch?.events??{}).length} 个事件；${s.positions.filter(paperFilled).length} 笔实际持仓。`:ds.specialMove?`持续研究特别的活跃币；自身启动并保留价格优势后参与爆发段。研究记忆 ${Object.keys(ds.specialResearch?.watches??{}).length} 币；${s.positions.filter(paperFilled).length} 笔实际持仓。`:
     `${ds.adaptive?'按实际失败参与回归，按持续承接参与延续；持仓依据独立观察。':a.reason}。回退 ${s.positions.filter(t=>paperFilled(t)&&t.unified?.branch==='RETURN').length} 笔；延续 ${s.positions.filter(t=>paperFilled(t)&&t.unified?.branch==='CONTINUATION').length} 笔；新方向须取得自身证明。`;
 }
 export function advanceDirectStrategy(input:Input){
@@ -524,7 +556,9 @@ export function advanceDirectStrategy(input:Input){
   const transportActivated=!!input.paperTiming&&!state.paperExecution;
   const specialActivated=!!input.specialMove&&!state.directStrategy!.specialMove;
   if(specialActivated){state.directStrategy!.specialMove={version:SPECIAL_MOVE_VERSION,cutoverAt:input.now};state.entryValidations={};state.revision++;}
-  const responseActivated=!!input.specialMove&&input.eventResponse!==false&&(!state.directStrategy!.eventResponse
+  const rangeActivated=!!input.anomalyRange&&!state.directStrategy!.anomalyRange;
+  if(rangeActivated){state.directStrategy!.anomalyRange={version:ANOMALY_RANGE_VERSION,cutoverAt:input.now};state.directStrategy!.plans={};state.entryValidations={};state.revision++;}
+  const responseActivated=!input.anomalyRange&&!!input.specialMove&&input.eventResponse!==false&&(!state.directStrategy!.eventResponse
     ||state.directStrategy!.eventResponse.cutoverAt<state.startedAt);
   if(responseActivated){state.directStrategy!.eventResponse={version:EVENT_RESPONSE_VERSION,cutoverAt:input.now};
     delete state.directStrategy!.eventResearch;delete state.directStrategy!.eventResearchError;
@@ -547,6 +581,6 @@ export function advanceDirectStrategy(input:Input){
   const next=advanceForward({...input,state,directAdapter:adapter,allocationEquity:1000});
   next.state.latestReason=next.state.directStrategy!.summary;
   next.protectionChanged=next.protectionChanged||forwardProtectionChanged(input.state,next.state);
-  next.changed=next.changed||activated||authorityActivated||adaptiveActivated||specialActivated||responseActivated||transportActivated||timingRecovered;
+  next.changed=next.changed||activated||authorityActivated||adaptiveActivated||specialActivated||responseActivated||rangeActivated||transportActivated||timingRecovered;
   return next;
 }

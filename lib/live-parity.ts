@@ -1,3 +1,4 @@
+import {rangeExecutionAdmission,validRangeHolding} from './anomaly-range.ts';
 /** Single source contract for owner-enabled execution.
  * Pure: this module has no credentials, network requests, or authority to switch LIVE.
  * Order identity/strategy/lifecycle come from the persisted current PAPER account.
@@ -193,7 +194,15 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
   const direction=t.side==="LONG"?1:-1;
   const protection=liveProtectionPrice(t);
   if (protection!=null&&direction*(input.entryPrice-protection)<=0)fail("ECONOMICS","当前价已越过源单止损，不开即平");
-  if(t.unified?.marketRoute?.controllerVersion==='event-response-v1'){
+  if(t.unified?.marketRoute?.controllerVersion==='anomaly-range-v1'){
+    if(!t.unified.anomaly||!validRangeHolding(t.unified.anomaly))fail('ECONOMICS','原始区间计划证据不完整');
+    const reason=rangeExecutionAdmission(t,{bestBid:input.entryPrice,bestAsk:input.entryPrice,observedAt:input.quoteObservedAt??input.now,fresh:true},input.now,true);
+    if(reason)fail('ECONOMICS',reason);
+  }
+  if(t.unified?.marketRoute?.controllerVersion==='anomaly-range-v1'&&t.unified.anomaly?.kind==='EDGE_BREAKOUT'){
+    // Observed outward proof has no promised price target. All stop/lot/margin/
+    // native risk checks below remain common to PAPER and LIVE.
+  }else if(t.unified?.marketRoute?.controllerVersion==='event-response-v1'){
     if(!responseEntryExecutable(t,input.entryPrice,input.now))fail('ECONOMICS','真实成交价未保留事件价格优势或已超过启动时效');
   }else if(t.unified?.branch==='CONTINUATION'||t.unified?.marketRoute){
     const target=t.unified?.marketRoute?.target??t.entryContext?.winnerPlan?.target,risk=direction*(input.entryPrice-protection!)+(input.entryPrice+protection!)*.0005,
