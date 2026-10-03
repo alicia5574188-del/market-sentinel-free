@@ -124,7 +124,7 @@ export function advanceMarketAuthority(input:{previous?:MarketAuthority;now:numb
   const selected=[...new Set(input.symbols)].slice(0,30);
   // Freeze the electorate during a trend so rotating the scan cannot vote it away.
   if(!a.cohort.length||a.phase==='HANDOFF'||a.phase==='RANGE'){
-    const representatives=selected.filter(s=>s==='BTC_USDT'||s==='ETH_USDT'),groups=new Set(representatives.map(s=>input.states[s]?.clusterId??s));
+    const representatives:string[]=selected.filter(s=>s==='BTC_USDT'||s==='ETH_USDT'),groups=new Set(representatives.map(s=>input.states[s]?.clusterId??s));
     for(const s of selected){const group=input.states[s]?.clusterId??s;
       if(!groups.has(group)){representatives.push(s);groups.add(group);}if(representatives.length>=8)break;}
     a.cohort=[...new Set([...representatives,...selected])].slice(0,8);

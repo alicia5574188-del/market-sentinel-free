@@ -1641,12 +1641,12 @@ export function forwardUrgentMinuteSymbols(s:ForwardState,entrySymbols?:Iterable
   const allowed=entrySymbols?new Set(entrySymbols):undefined,keep=(x:string)=>!allowed||allowed.has(x),
     armed=Object.values(s.entryValidations).filter(v=>v.status==="WAITING"&&keep(v.symbol))
       .sort((a,b)=>a.startedAt-b.startedAt).map(v=>v.symbol),
-    research=intelligenceUrgentMinuteSymbols(s.extremumRegime,allowed),
+    research=[...(s.directStrategy?.marketAuthority?.cohort??[]).filter(keep),...intelligenceUrgentMinuteSymbols(s.extremumRegime,allowed)],
     positions=[...new Set([...(s.directStrategy?[]:s.inverseTrial?.source.positions.map(t=>t.symbol)??[]),...s.positions.map(t=>t.symbol)])].filter(keep);
   // Entry discovery/authorization is the time-sensitive use of 1m data.
   // Existing positions still retain realtime price/flow and 5m structure even
   // when their 1m refresh rotates behind active entry work.
-  return[...new Set([...armed,...(s.directStrategy?.marketAuthority?.cohort??[]).filter(keep),...research,...positions])].slice(0,FORWARD_MINUTE_CONFIRMATION_CAP);
+  return[...new Set([...armed,...research,...positions])].slice(0,FORWARD_MINUTE_CONFIRMATION_CAP);
 }
 export function forwardWatchSymbols(s:ForwardState,now:number,entrySymbols?:Iterable<string>){
   return forwardUrgentQuoteSymbols(s,now,entrySymbols).slice(0,FORWARD_EXECUTION_BBO_CAP);
