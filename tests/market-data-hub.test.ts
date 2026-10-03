@@ -143,10 +143,12 @@ test("5m, 1m and 1d keep venue affinity and fail over from Bybit to KuCoin toget
   },async()=>{
     const hub=new MarketDataHub();
     const five=await hub.candles("BTC_USDT","5m",8);assert.equal(five?.source,"BYBIT");
+    assert.equal(five?.rows[0]?.turnoverUsd,0);assert.equal(five?.rows[0]?.volumeVenue,'BYBIT');
     const one=await hub.candles("BTC_USDT","1m",8);assert.equal(one?.source,"BYBIT");
     const day=await hub.candles("BTC_USDT","1d",8);assert.equal(day?.source,"BYBIT");
     bybitOk=false;
     const switched=await hub.candles("BTC_USDT","5m",8);assert.equal(switched?.source,"KUCOIN");
+    assert.equal(switched?.rows[0]?.turnoverUsd,2000);assert.equal(switched?.rows[0]?.volumeVenue,'KUCOIN');
     const oneAfter=await hub.candles("BTC_USDT","1m",8);assert.equal(oneAfter?.source,"KUCOIN");
     const dayAfter=await hub.candles("BTC_USDT","1d",8);assert.equal(dayAfter?.source,"KUCOIN");
   });
@@ -229,7 +231,9 @@ test("MEXC and HTX provide complete candle fallback when the three primary candl
   },async()=>{
     const hub=new MarketDataHub();
     const mexc=await hub.candles("BTC_USDT","5m",8);assert.equal(mexc?.source,"MEXC");assert.ok((mexc?.rows.length??0)>=6);
+    assert.equal(mexc?.rows[0]?.turnoverUsd,undefined,'unknown contract volume must not become USD');
     fallback="HTX";
     const htx=await hub.candles("ETH_USDT","1m",8);assert.equal(htx?.source,"HTX");assert.ok((htx?.rows.length??0)>=6);
+    assert.equal(htx?.rows[0]?.turnoverUsd,undefined);
   });
 });

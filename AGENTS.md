@@ -1,3 +1,21 @@
+# 2026-10-03 13:57 — owner authorizes special-coin reconstruction
+
+Owner replaces broad-market prediction and ordinary return trading with live
+discovery of unusual liquid coins and participation in their own explosive legs.
+Include active nonresponders, early leaders and departures from correlated peers;
+market relationships are observed background, not a common-direction trade veto.
+Research must retain bounded per-coin episodes across rotation, distinguish watch
+from executable own breakout/retest, exclude recent low/unknown activity, and
+record failed hypotheses as well as actual results. Preserve fixed1000 allocation,
+risk/margin/lot controls, original PAPER/LIVE steps, all financial identities and
+history, manual intent and current scan30/minute11/2s/write budgets. Old positions
+retain their own policy; no reset, verification trade, new timer or historical
+profit backtest. This authorizes pure discovery/research/entry/holding helpers,
+active controller and UI replacement, existing-input quote-turnover parsing and
+bounded checkpoint memory; only advanceForwardNow method baseline changes to
+activate this scoped controller are permitted. Reviewed-main original CI/deploy
+and advancing production/controller/research receipts remain mandatory.
+
 # 2026-10-03 — owner requests adaptive execution deployment
 
 The research-only phase is deployed (PR619). Owner now says to launch and observe

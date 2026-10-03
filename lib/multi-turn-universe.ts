@@ -3,6 +3,7 @@ export type MultiTurnUniverseTicker={
   volume24hUsd:number;executionVolume24hUsd?:number;fundingRate:number;openInterest:number;
   sourceCount?:number;sourceDisagreementRate?:number;
   shortMoveRate?:number;directionalAgreement?:number;sourceBreadth?:number;
+  observedAt?:number;move15Rate?:number;move30Rate?:number;move60Rate?:number;
 };
 export type MultiTurnUniverseClass="MARKET_AMPLIFIER"|"INDEPENDENT_VOLATILITY";
 export type RankedMultiTurnUniverse=MultiTurnUniverseTicker&{
@@ -68,7 +69,7 @@ export function rankMultiTurnUniverse(rows:MultiTurnUniverseTicker[],limit=30):R
 
 
 export type AnchorOpportunityUniverseRow=MultiTurnUniverseTicker&{
-  selectionSource:"LOCKED_ANCHOR"|"FRESH_IMPULSE"|"MARKET_CORE"|"LIQUIDITY"|"ACTIVITY"|"EXPLORATION";
+  selectionSource:"LOCKED_ANCHOR"|"FRESH_IMPULSE"|"MARKET_CORE"|"LIQUIDITY"|"ACTIVITY"|"EXPLORATION"|"SPECIAL_RESPONSE"|"RESEARCH_WATCH";
   activityScore:number;
   range24hRate:number;
   liquidityFloorUsd:number;

@@ -158,6 +158,7 @@ async function checkpointWorker(){
   // Cutover is committed separately; this fixture exercises subsequent 2s/10s protection.
   f.s.directStrategy!.marketAuthority=initialMarketAuthority(T);
   f.s.directStrategy!.adaptive={version:'adaptive-causal-v1',cutoverAt:T};
+  f.s.directStrategy!.specialMove={version:'special-move-v1',cutoverAt:T};
   f.s.paperExecution={version:'live-steps-paper-v1',cutoverAt:T,cancelled:[]};
   f.s.storage={persistedAt:T,error:null};f.s.lastQuoteCycleAt=T;
   const data=new Map<string,unknown>(Object.entries((await prepareForwardWrite(null,f.s,T,{compact:true})).entries)),writes:string[][]=[];

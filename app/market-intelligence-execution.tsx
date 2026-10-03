@@ -3,6 +3,9 @@
 import {BEIJING_TIME_ZONE} from "../lib/beijing-time.ts";
 import {type forwardSummary} from "../lib/forward-relations.ts";
 import type {EpisodeResearch} from '../lib/episode-research.ts';
+import type {SpecialResearch,SpecialWatch} from '../lib/special-move.ts';
+
+function specialDescription(w:SpecialWatch){return{reason:({ACTIVE_NONRESPONSE:'近期成交活跃，却没有响应市场波动',RELATIVE_LEADER:'相对市场明显走强或走弱',OPPOSITE_MOVE:'实际方向与市场不同',OWN_ACCELERATION:'自身推进明显加速',ORDINARY:'当前未发现特别表现'}[w.kind]),next:({SPECIAL_READY:'本币启动已确认，核对实际进场位置',SPECIAL_LOCATION:'等待有效回踩与扣费后的空间',SPECIAL_COVERAGE:'等待连续价格、真实近期成交额与新鲜报价',SPECIAL_LOW_ACTIVITY:'近期成交太低或明显萎缩，停止交易授权',SPECIAL_EVENT_ENDED:'旧段承接失效，等待新的启动',SPECIAL_EVENT_OLD:'旧启动已超出入场时效，等待新的回踩重启',SPECIAL_DORMANT:'离开扫描池，记忆保留，当前不授权交易',SPECIAL_ORDINARY:'当前只观察',SPECIAL_NO_RESPONSE:'等待本币真正启动并保留价格优势',SPECIAL_WATCH:'持续观察会跟随、继续不响应，还是走出相反方向'}[w.code]??w.code)};}
 
 type View=ReturnType<typeof forwardSummary>;
 const researchPhase=(phase:string)=>({UNCONFIRMED:'方向待确认',ROTATION:'双向回归',ADVANCING:'推进承接有效',PULLBACK:'回调观察',SUPPORT_BROKEN:'承接受损',RECOVERY_FAILED:'恢复失败',RECOVERY_BUILDING:'恢复待确认'}[phase]??phase);
@@ -19,13 +22,22 @@ function EpisodeResearchView({research,now}:{research:EpisodeResearch;now:number
     </div></article>)}</div>
   </section>;
 }
+function SpecialResearchView({research,now}:{research:SpecialResearch;now:number}){
+  const rows=Object.values(research.watches).sort((a,b)=>Number(b.phase==='READY')-Number(a.phase==='READY')||Number(b.fresh)-Number(a.fresh)||b.score-a.score).slice(0,8);
+  return <section className="fr-section" data-testid="special-research"><div className="fr-section-head"><h2>特别币持续研究</h2><span>更新 {clock(research.updatedAt)}</span></div>
+    <div className="fr-journal">{rows.map(w=>{const detail=specialDescription(w);return <article key={w.symbol}><time>{w.symbol.replace('_',' / ')} · 已观察 {Math.max(0,Math.round((now-w.firstSeenAt)/60000))} 分钟</time><div>
+      <b>{detail.reason}</b><p>{detail.next}</p><p>{[15,30,45,60].map((n,i)=>`${n}分钟 ${w.moves[i]==null?'数据不足':`${(w.moves[i]!*100).toFixed(2)}%`}`).join(' · ')}</p>
+      <p>近期15分钟成交 {w.turnover15==null?'未知':`${Math.round(w.turnover15).toLocaleString()} USDT`} · {w.active?'活跃':w.turnover15==null?'待核对':'低量'} · {w.fresh?'证据有效':'当前数据待补齐'}</p>
+      <p>相对市场30分钟偏离 {(w.residual*100).toFixed(2)}%{w.route?` · 本币启动 ${clock(w.route.proofAt)}`:''}</p>
+    </div></article>;})}</div>{!rows.length&&<p>正在发现值得持续研究的活跃币。</p>}</section>;
+}
 function DirectExecution({data,now,liveEnabled,liveOverview}:{data:NonNullable<View>;now:number;liveEnabled:boolean;liveOverview?:{copied?:number|null;eligible?:number|null}}){
   const ds=data.directStrategy!,phase=(v:string)=>({READY:'当前可执行',VALIDATING:'验证推进响应',WAIT_LOCATION:'等待合适位置',HOLDING:'已执行',OBSERVE:'观察',EXECUTING:'等待成交确认'}[v]??v);
   return <><section className="fr-section" data-testid="direct-research-execution"><div className="fr-section-head"><h2>研究与交易计划</h2><span>更新 {clock(data.marketIntelligence?.updatedAt)}</span></div>
-    <p>{ds.marketAuthority?`市场背景：${({UP:'上涨延续',DOWN:'下跌延续',RANGE:'双向失败回归',HANDOFF:'本币结构评估'})[ds.marketAuthority.phase]} · ${ds.marketAuthority.fresh?'覆盖有效':'等待新鲜覆盖'} · 确认于 ${clock(ds.marketAuthority.since)}`:marketChangeText(data)}</p><p>{ds.summary}</p><p>{ds.adaptive?'离开失败且回归响应成立时做回归，持续承接成立时做延续；单边趋势中限制逆势，正常回调保留持仓。':ds.marketAuthority?'共同趋势明确时服从共同方向；方向分化时按本币完整结构参与，转弱或位置不合适继续等待。':'逐币判断推进是否回退或形成延续。'}</p>
-    <div className="fr-journal">{ds.plans.map(p=><article key={p.id}><time>{p.symbol.replace('_',' / ')} · {p.permission==='WAIT'?'等待分支许可':p.branch==='RETURN'?'回退':'趋势延续'} · {side(p.side)}</time><div><b>{phase(p.phase)}</b><p>进场：{p.reason.replace(/^[A-Z_]+: /,'')}</p>{p.marketRoute&&<p>{p.marketRoute.relation==='INDEPENDENT'?'独立行情':p.marketRoute.relation==='LOCAL'?'本币结构许可':'跟随市场'} · 结构确认 {clock(p.marketRoute.proofAt)} · {p.marketRoute.targetBasis==='VOLATILITY_ESTIMATE'?'入场空间为波动估计':'目标为已接受重心'}</p>}<p>持仓：{p.holdReason}</p><p>退出：{p.exitCondition}</p>{p.confirmation&&<p>结构确认 {clock(p.confirmation.at)} · {p.confirmation.path==='HOLD_OUTSIDE'?'区域外连续推进':'回踩承接后重新推进'} · 保护位置 {p.confirmation.stop}</p>}</div></article>)}</div>
+    <p>{ds.specialMove?'市场作为比较背景，重点观察活跃币与市场不同的表现。':ds.marketAuthority?`市场背景：${({UP:'上涨延续',DOWN:'下跌延续',RANGE:'双向失败回归',HANDOFF:'本币结构评估'})[ds.marketAuthority.phase]} · ${ds.marketAuthority.fresh?'覆盖有效':'等待新鲜覆盖'} · 确认于 ${clock(ds.marketAuthority.since)}`:marketChangeText(data)}</p><p>{ds.summary}</p><p>{ds.specialMove?'特别表现进入持续研究；本币启动并保留价格优势后参与爆发段，正常回调继续观察承接。':ds.adaptive?'离开失败且回归响应成立时做回归，持续承接成立时做延续；单边趋势中限制逆势，正常回调保留持仓。':ds.marketAuthority?'共同趋势明确时服从共同方向；方向分化时按本币完整结构参与，转弱或位置不合适继续等待。':'逐币判断推进是否回退或形成延续。'}</p>
+    <div className="fr-journal">{ds.plans.map(p=><article key={p.id}><time>{p.symbol.replace('_',' / ')} · {p.permission==='WAIT'?(ds.specialMove?'等待本币启动':'等待分支许可'):p.branch==='RETURN'?'回退':ds.specialMove?'自身爆发段':'趋势延续'} · {side(p.side)}</time><div><b>{phase(p.phase)}</b><p>进场：{p.reason.replace(/^[A-Z_]+: /,'')}</p>{p.marketRoute&&<p>{p.marketRoute.relation==='INDEPENDENT'?'独立行情':p.marketRoute.relation==='LOCAL'?'本币结构许可':'跟随市场'} · 结构确认 {clock(p.marketRoute.proofAt)} · {p.marketRoute.targetBasis==='VOLATILITY_ESTIMATE'?'入场空间为波动估计':'目标为已接受重心'}</p>}<p>持仓：{p.holdReason}</p><p>退出：{p.exitCondition}</p>{p.confirmation&&<p>结构确认 {clock(p.confirmation.at)} · {p.confirmation.path==='HOLD_OUTSIDE'?'区域外连续推进':'回踩承接后重新推进'} · 保护位置 {p.confirmation.stop}</p>}</div></article>)}</div>
     {!ds.plans.length&&<p>等待当前已完成的结构与新鲜盘口形成交易计划。</p>}</section>
-    {ds.episodeResearch&&<EpisodeResearchView research={ds.episodeResearch} now={now}/>}
+    {ds.specialResearch?<SpecialResearchView research={ds.specialResearch} now={now}/>:ds.episodeResearch&&<EpisodeResearchView research={ds.episodeResearch} now={now}/>}
     <section className="fr-section"><div className="fr-section-head"><h2>当前持仓依据</h2><span>{data.positions.length} 笔策略订单</span></div>
       {liveEnabled&&<p>实盘已跟上 {liveOverview?.copied??'—'} / 应执行 {liveOverview?.eligible??'—'}。实际成交及结算以实盘账户记录为准。</p>}
       {ds.execution&&<p>模拟按实盘的执行校验、提交和成交确认步骤结算。旧记录保留；模拟盘口成交与交易所实际成交仍可能存在差异。</p>}

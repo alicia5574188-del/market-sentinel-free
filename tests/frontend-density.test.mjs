@@ -323,3 +323,12 @@ test('independent strategy renders actual research, entry, holding and exit with
   for(const text of ['DIRECT_ENTRY','DIRECT_HOLD','DIRECT_EXIT','MOVR / USDT · 趋势延续 · 做空'])assert.ok(execution.includes(text));
   assert.doesNotMatch(execution,/影子|反向|参考机会|原追随/);
 });
+test('special-coin research explains active nonresponse and missing volume before any trade',()=>{
+  const data=account();data.directStrategy={specialMove:{version:'special-move-v1'},summary:'持续研究特别的活跃币',plans:[],
+    specialResearch:{updatedAt:data.updatedAt,watches:{MOVR_USDT:{symbol:'MOVR_USDT',kind:'ACTIVE_NONRESPONSE',code:'SPECIAL_NO_RESPONSE',
+      firstSeenAt:data.updatedAt-600000,moves:[0,0,0,0],residual:-.01,turnover15:10000,active:true,fresh:true,phase:'WATCH',score:90},
+    X_USDT:{symbol:'X_USDT',kind:'ORDINARY',code:'SPECIAL_COVERAGE',firstSeenAt:data.updatedAt,moves:[null,null,null,null],
+      residual:0,turnover15:null,active:false,fresh:false,phase:'MISSING_DATA',score:0}}}};
+  const html=render('app/market-intelligence-execution.tsx',{data,now:data.updatedAt,liveEnabled:false});
+  for(const text of ['特别币持续研究','近期成交活跃，却没有响应市场波动','等待本币真正启动','近期15分钟成交 未知','数据不足'])assert.ok(html.includes(text),text);
+});

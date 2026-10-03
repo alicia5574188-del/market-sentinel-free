@@ -8,7 +8,7 @@
 export type MarketSource="BYBIT"|"OKX"|"KUCOIN"|"MEXC"|"HTX";
 export type HubQuote={source:MarketSource;symbol:string;observedAt:number;last:number;bid:number;ask:number;
   bidSize:number;askSize:number;volume24hUsd:number;change24hRate:number};
-export type HubCandle={time:number;open:number;high:number;low:number;close:number;volume:number};
+export type HubCandle={time:number;open:number;high:number;low:number;close:number;volume:number;turnoverUsd?:number;volumeVenue?:string};
 export type ConsensusQuote={symbol:string;observedAt:number;mid:number;bid:number;ask:number;sources:MarketSource[];
   sourceCount:number;disagreementRate:number;volume24hUsd:number;change24hRate:number;
   sourceBreadth:number;directionalAgreement:number;medianShortMove:number;
@@ -231,7 +231,7 @@ export class MarketDataHub{
       return{symbol:row.symbol,last,volume24hUsd:Math.max(row.volume24hUsd,q?.volume24hUsd??0),executionVolume24hUsd:Math.max(0,row.volume24hUsd),
         high24h:Math.max(high,low),low24h:Math.min(high,low),change24hRate:Number.isFinite(gateChange)?gateChange:q?.change24hRate??0,
         fundingRate:row.fundingRate,openInterest:Number.isFinite(Number(row.openInterest))?Number(row.openInterest):0,
-        sourceCount:q?.sourceCount??row.sourceCount??0,sourceDisagreementRate:q?.disagreementRate??0,
+        sourceCount:q?.sourceCount??row.sourceCount??0,sourceDisagreementRate:q?.disagreementRate??0,observedAt:q?.observedAt,
         shortMoveRate:q?.medianShortMove??row.shortMoveRate??0,directionalAgreement:q?.directionalAgreement??row.directionalAgreement??.5,
         sourceBreadth:q?.sourceBreadth??row.sourceBreadth??0};});
   }
@@ -268,7 +268,7 @@ export class MarketDataHub{
     if(body.retCode!==0||!Array.isArray(body.result?.list))throw new Error("Bybit kline payload");
     const seconds=interval==="1m"?60:interval==="5m"?300:86400,completed=Math.floor(Date.now()/1000/seconds)*seconds;
     return continuous(body.result!.list!.map(r=>({time:Number(r[0])/1000,open:Number(r[1]),high:Number(r[2]),low:Number(r[3]),
-      close:Number(r[4]),volume:Number(r[5])})).filter(r=>r.time+seconds<=completed),seconds).slice(-n);
+      close:Number(r[4]),volume:Number(r[5]),...(r[6]!=null&&r[6]!==''&&Number.isFinite(Number(r[6]))&&Number(r[6])>=0?{turnoverUsd:Number(r[6]),volumeVenue:'BYBIT'}:{})})).filter(r=>r.time+seconds<=completed),seconds).slice(-n);
   }
   private async okxCandles(instId:string,interval:"1m"|"5m"|"1d",limit:number){
     type Res={code?:string;data?:string[][]};
@@ -277,7 +277,7 @@ export class MarketDataHub{
     if(body.code!=="0"||!Array.isArray(body.data))throw new Error("OKX kline payload");
     const seconds=interval==="1m"?60:interval==="5m"?300:86400,completed=Math.floor(Date.now()/1000/seconds)*seconds;
     return continuous(body.data.map(r=>({time:Number(r[0])/1000,open:Number(r[1]),high:Number(r[2]),low:Number(r[3]),
-      close:Number(r[4]),volume:Number(r[5])}))
+      close:Number(r[4]),volume:Number(r[5]),...(r[7]!=null&&r[7]!==''&&Number.isFinite(Number(r[7]))&&Number(r[7])>=0?{turnoverUsd:Number(r[7]),volumeVenue:'OKX'}:{})}))
       .filter((r,i)=>body.data![i]?.[8]==="1"&&r.time+seconds<=completed),seconds).slice(-n);
   }
 
@@ -289,7 +289,7 @@ export class MarketDataHub{
     if(body.code!=="200000"||!Array.isArray(body.data))throw new Error("KuCoin kline payload");
     const completed=Math.floor(now/1000/seconds)*seconds;
     return continuous(body.data.map(r=>({time:Number(r[0])/1000,open:Number(r[1]),high:Number(r[2]),low:Number(r[3]),
-      close:Number(r[4]),volume:Number(r[5])})).filter(r=>r.time+seconds<=completed),seconds).slice(-n);
+      close:Number(r[4]),volume:Number(r[5]),...(r[6]!=null&&r[6]!==''&&Number.isFinite(Number(r[6]))&&Number(r[6])>=0?{turnoverUsd:Number(r[6]),volumeVenue:'KUCOIN'}:{})})).filter(r=>r.time+seconds<=completed),seconds).slice(-n);
   }
 
   private async mexcCandles(symbol:string,interval:"1m"|"5m"|"1d",limit:number){

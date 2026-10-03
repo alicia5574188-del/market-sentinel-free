@@ -273,6 +273,8 @@ export function assertInverseTrade(t:Trade){
 export function assertInverseTrial(state:ForwardState){
   if(state.directStrategy){
     const ds=state.directStrategy;
+    if(ds.specialMove&&(ds.specialMove.version!=='special-move-v1'||!finite(ds.specialMove.cutoverAt)||ds.specialMove.cutoverAt<=0))
+      throw new Error('特别币执行版本损坏；保留账户');
     if(ds.adaptive&&(ds.adaptive.version!=='adaptive-causal-v1'||!finite(ds.adaptive.cutoverAt)||ds.adaptive.cutoverAt<=0))
       throw new Error('自适应执行版本损坏；保留账户');
     if(ds.marketAuthority&&!validMarketAuthority(ds.marketAuthority))throw new Error('市场统一许可记忆损坏；保留账户');
