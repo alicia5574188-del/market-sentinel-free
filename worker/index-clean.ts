@@ -54,6 +54,7 @@ import { ADAPTIVE_ENGINE_VERSION, FORWARD_EXECUTION_BBO_CAP, FORWARD_MINUTE_CONF
   forwardSummary, forwardEquity, freshQuote, forwardUrgentMinuteSymbols, forwardUrgentQuoteSymbols, forwardWatchSymbols,
   resetForwardAccountPreservingLearning, BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
 import { FORWARD_EXECUTION_VOLUME_FLOOR_USD, forwardExecutionUniverseEligible, selectAnchorOpportunityUniverse } from "../lib/multi-turn-universe.ts";
+import {selectSpecialMoveUniverse,observeSpecialRadar,type SpecialRadarHistory} from '../lib/special-move.ts';
 import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite, prepareForwardReset,
   FORWARD_STORAGE, FORWARD_PROTECTION_STORAGE, FORWARD_PAGED_STATE_VERSION } from "../lib/forward-store.ts";
 import { advanceCounterfactualResearch, counterfactualResearchView, counterfactualResearchWrites,
@@ -519,6 +520,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private memory: Record<string, SymbolMemory> = {};
   private structureCandles: Record<string, Partial<Record<"1m" | "15m" | "1h" | "4h", Awaited<ReturnType<typeof fetchStructureCandles>>>>> = {};
   private strategyCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
+  private specialRadarHistory:SpecialRadarHistory=new Map();
   private forwardMinuteCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
   private forwardMinuteRetryAt = new Map<string,number>();
   private gateStream = new GateStreamingFeed();
@@ -967,13 +969,16 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       :[...new Set([...this.runtime.liquidUniverse,...DEFAULT_SYMBOLS])].flatMap(symbol=>{
         const q=this.marketHub.quote(symbol,now);return q?[{symbol,last:q.mid,volume24hUsd:q.volume24hUsd,fundingRate:0}]:[];
       });
-    const eligibleRows=this.marketHub.radarRows(known,now);
+    const bulkRows=this.marketHub.radarRows(known,now),eligibleRows=this.forwardState?.directStrategy?.specialMove
+      ?observeSpecialRadar(bulkRows,this.specialRadarHistory,now):bulkRows;
     if(!eligibleRows.length)throw new Error("no Gate-tradable extremum-regime markets");
     const executionEligible=eligibleRows.filter(forwardExecutionUniverseEligible),
       held=[...new Set([...(this.forwardState?.directStrategy?[]:this.forwardState?.inverseTrial?.source.positions.map(p=>p.symbol)??[]),...(this.forwardState?.positions.map(p=>p.symbol)??[])])],
       armed=Object.values(this.forwardState?.entryValidations??{}).filter(v=>v.status==="WAITING").map(v=>v.symbol),
-      locked=[...new Set([...held,...armed,...(this.forwardState?.directStrategy?.marketAuthority?.cohort??[])])];
-    const universeRows=selectAnchorOpportunityUniverse({rows:eligibleRows,limit:SCAN_UNIVERSE_SIZE,
+      locked=[...new Set([...held,...armed,...(this.forwardState?.directStrategy?.specialMove?[]:this.forwardState?.directStrategy?.marketAuthority?.cohort??[])])];
+    const universeRows=this.forwardState?.directStrategy?.specialMove?selectSpecialMoveUniverse({rows:eligibleRows,limit:SCAN_UNIVERSE_SIZE,
+      lockedSymbols:locked,research:this.forwardState.directStrategy.specialResearch,rotationSeed:Math.floor(now/RADAR_MS),now}):
+      selectAnchorOpportunityUniverse({rows:eligibleRows,limit:SCAN_UNIVERSE_SIZE,
       lockedSymbols:locked,rotationSeed:Math.floor(now/RADAR_MS),explorationSlots:0,liquiditySlots:0});
     if(!universeRows.length)throw new Error("no liquid extremum-regime markets");
     this.runtime.liquidUniverse=universeRows.map(row=>row.symbol);
@@ -1264,7 +1269,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const previous = state,reviewEvents:ReviewEvent[]=[],executionQuotes=this.forwardQuotes(now);
       const next = advanceShadowInverse({ state: previous, now, paths: this.strategyCandles,minutePaths:this.forwardMinutePaths(),
         daily:this.turnDailyCandles,quotes:executionQuotes,analysisQuotes:this.forwardAnalysisQuotes(now),contracts:this.regimeContracts(),
-        entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue,marketAuthority:true,
+        entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue,marketAuthority:true,specialMove:true,
         // exchangeEntryAt is refreshed with every position mark. entryAt is
         // the immutable first confirmed native-position observation.
         paperTiming:executionTiming([...this.liveHistory.flatMap(p=>p.parity?[{...p.parity,entryConfirmedAt:p.entryAt}]:[]),
@@ -1276,7 +1281,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // failure neither changes those decisions nor requests another write.
       try{const ds=next.state.directStrategy;
         if(ds?.marketAuthority&&ds.episodeResearch?.updatedAt!==now)ds.episodeResearch=advanceEpisodeResearch({previous:ds.episodeResearch,now,
-          accountStartedAt:next.state.startedAt,authority:ds.marketAuthority,states:next.state.extremumRegime.symbols,
+          accountStartedAt:next.state.startedAt,authority:ds.specialMove?{...ds.marketAuthority,coins:{}}:ds.marketAuthority,states:next.state.extremumRegime.symbols,
           paths:this.strategyCandles,minutePaths:this.forwardMinutePaths(),quotes:executionQuotes,
           positions:next.state.positions,history:next.state.history});
       }catch{this.reviewDiagnosticError="EPISODE_RESEARCH_CAPTURE_FAILED";}

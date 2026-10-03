@@ -255,7 +255,7 @@ export async function fetchContractStats(symbol: string) {
 }
 
 export type GateCandle = { time: number; volume: number; close: number; high: number; low: number; open: number };
-type GateCandleRow = { t?: number; v?: string | number; c?: string | number; h?: string | number; l?: string | number; o?: string | number };
+type GateCandleRow = { t?: number; v?: string | number; c?: string | number; h?: string | number; l?: string | number; o?: string | number;sum?:string|number };
 
 export async function fetchUrgentMinuteCandles(symbol:string,limit=60){
   const boundedLimit=Math.max(2,Math.min(120,Math.floor(limit)));
@@ -286,6 +286,7 @@ export async function fetchStructureCandles(symbol: string, interval: "1m" | "5m
   const completedBefore = Math.floor(Date.now() / 1_000 / intervalSeconds) * intervalSeconds;
   const parsed = rows.map((row) => ({
     time: Number(row.t), volume: Number(row.v), close: Number(row.c), high: Number(row.h), low: Number(row.l), open: Number(row.o),
+    ...(row.sum!=null&&row.sum!==''&&Number.isFinite(Number(row.sum))&&Number(row.sum)>=0?{turnoverUsd:Number(row.sum),volumeVenue:'GATE'}:{}),
   })).filter((row) => row.time > 0 && row.time + intervalSeconds <= Date.now() / 1_000 && row.time < completedBefore
     && [row.volume, row.close, row.high, row.low, row.open].every(Number.isFinite)
     && row.close > 0 && row.high >= row.low && row.volume >= 0).sort((a, b) => a.time - b.time);

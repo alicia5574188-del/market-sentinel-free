@@ -4,6 +4,7 @@ import type {DirectMemory} from './direct-strategy-types.ts';
 import {boundedDirectExitResearch} from './direct-exit-research.ts';
 import {validMarketAuthority} from './market-authority.ts';
 import {normalizeEpisodeResearch} from './episode-research.ts';
+import {normalizeSpecialResearch,type SpecialResearch} from './special-move.ts';
 export const FORWARD_PROTECTION_CHECKPOINT_VERSION="adaptive-ten-protection-v1";
 type Row=Pick<Trade,"id"|"openedAt"|"favorable"|"adverse"|"lastPrice"|"lastQuoteAt"|"stopPrice"|"firstProfitAt"|"holdScore"|"profitFloorRate"|"peakPnlRate"|"winnerManagement"|"review"|"unified"|"positionIntelligence"|"directExitResearch"|"directExitResearchOmitted">;
 export type ForwardProtectionCheckpoint={version:typeof FORWARD_PROTECTION_CHECKPOINT_VERSION;startedAt:number;baseRevision:number;
@@ -11,7 +12,7 @@ export type ForwardProtectionCheckpoint={version:typeof FORWARD_PROTECTION_CHECK
   shadow?:{cutoverAt:number;peakEquity:number;maxDrawdown:number;positions:Row[]};
   unifiedReference?:{cutoverAt:number;peakEquity:number;maxDrawdown:number;positions:Row[]};
   directMemory?:{cutoverAt:number;memory:Record<string,DirectMemory>;marketAuthority?:import('./market-authority.ts').MarketAuthority;
-    episodeResearch?:import('./episode-research.ts').EpisodeResearch}};
+    episodeResearch?:import('./episode-research.ts').EpisodeResearch;specialResearch?:SpecialResearch}};
 type LegacyProtectionRow=Partial<Row>&{id?:string;openedAt?:number;favorable?:number;adverse?:number;lastPrice?:number;lastQuoteAt?:number;
   stopPrice?:number;profitProtection?:{floorRate?:number}|null};
 type LegacyProtectionCheckpoint={version:"forward-protection-checkpoint-v1";startedAt:number;baseRevision:number;basePersistedAt:number;
@@ -35,6 +36,7 @@ function migrateLegacyCheckpoint(s:ForwardState,c:LegacyProtectionCheckpoint):Fo
     basePersistedAt:c.basePersistedAt,quoteCycleAt:c.quoteCycleAt,peakEquity:c.peakEquity,maxDrawdown:c.maxDrawdown,positions};
 }
 export function forwardProtectionChanged(previous:ForwardState,next:ForwardState){
+  if(next.directStrategy?.specialMove&&JSON.stringify(next.directStrategy.specialResearch)!==JSON.stringify(previous.directStrategy?.specialResearch))return true;
   if(next.directStrategy?.marketAuthority&&JSON.stringify(next.directStrategy.marketAuthority)!==JSON.stringify(previous.directStrategy?.marketAuthority))return true;
   if(next.directStrategy&&JSON.stringify(next.directStrategy.memory??{})!==JSON.stringify(previous.directStrategy?.memory??{}))return true;
   if(next.peakEquity>previous.peakEquity||next.maxDrawdown>previous.maxDrawdown)return true;
@@ -54,7 +56,8 @@ export function buildForwardProtectionCheckpoint(s:ForwardState):ForwardProtecti
   const checkpoint:ForwardProtectionCheckpoint={version:FORWARD_PROTECTION_CHECKPOINT_VERSION,startedAt:s.startedAt,baseRevision:s.revision,basePersistedAt:s.storage.persistedAt,
     quoteCycleAt:s.lastQuoteCycleAt,peakEquity:s.peakEquity,maxDrawdown:s.maxDrawdown,positions:rows(s.positions,true),
     ...(s.directStrategy?{directMemory:{cutoverAt:s.directStrategy.cutoverAt,memory:structuredClone(s.directStrategy.memory??{}),
-      marketAuthority:s.directStrategy.marketAuthority?structuredClone(s.directStrategy.marketAuthority):undefined,
+      marketAuthority:s.directStrategy.marketAuthority&&!s.directStrategy.specialMove?structuredClone(s.directStrategy.marketAuthority):undefined,
+      specialResearch:normalizeSpecialResearch(s.directStrategy.specialResearch),
       episodeResearch:normalizeEpisodeResearch(s.directStrategy.episodeResearch)}}:{}),
     ...(s.inverseTrial&&!s.directStrategy?{shadow:{cutoverAt:s.inverseTrial.cutoverAt,peakEquity:s.inverseTrial.source.peakEquity,
       maxDrawdown:s.inverseTrial.source.maxDrawdown,positions:rows(s.inverseTrial.source.positions,false)}}:{}),
@@ -64,6 +67,8 @@ export function buildForwardProtectionCheckpoint(s:ForwardState):ForwardProtecti
   // Optional observations cannot make a valid financial checkpoint oversized.
   if(checkpoint.directMemory?.episodeResearch&&new TextEncoder().encode(JSON.stringify(checkpoint)).length>112*1024)
     delete checkpoint.directMemory.episodeResearch;
+  if(checkpoint.directMemory?.specialResearch&&new TextEncoder().encode(JSON.stringify(checkpoint)).length>112*1024)
+    delete checkpoint.directMemory.specialResearch;
   return checkpoint;
 }
 export function restoreForwardProtectionCheckpoint(s:ForwardState,value:unknown):ForwardState{
@@ -83,6 +88,8 @@ export function restoreForwardProtectionCheckpoint(s:ForwardState,value:unknown)
         ||(r.region&&(![r.region.lower,r.region.upper,r.region.center,r.region.formedAt].every(finite)||r.region.lower<=0||r.region.upper<=r.region.lower))))
       throw new Error('独立策略事件检查点损坏；保留账户');
     next.directStrategy.memory=structuredClone(m.memory);
+    const special=normalizeSpecialResearch(m.specialResearch);
+    if(special&&special.updatedAt>=(next.directStrategy.specialResearch?.updatedAt??0))next.directStrategy.specialResearch=special;
     const observed=normalizeEpisodeResearch(m.episodeResearch);
     if(observed&&observed.updatedAt>=(next.directStrategy.episodeResearch?.updatedAt??0))next.directStrategy.episodeResearch=observed;
     if(m.marketAuthority){if(!validMarketAuthority(m.marketAuthority))throw new Error('市场许可检查点损坏');

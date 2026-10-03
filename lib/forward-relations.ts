@@ -25,6 +25,7 @@ import {capturePositionBaseline} from "./position-evidence-contract.ts";
 import { beijingDayKey } from "./beijing-time.ts";
 import { ENTRY_RESPONSE_VERSION, entryResponseWindowMs, evaluateEntryResponse,
   type EntryResponseDecision } from "./market-intelligence-entry-response.ts";
+import {evaluateSpecialEntryResponse} from './special-entry-response.ts';
 import { deriveMarketEvolution, deriveOpportunityLifecycle, extendedEntryConfirmationReady,
   type MarketEvolutionState, type MarketLifecycleResearchContext,
   type OpportunityLifecyclePhase, type ProfitLifecycleState } from "./market-intelligence-lifecycle.ts";
@@ -65,7 +66,7 @@ const dir=(side:"LONG"|"SHORT")=>side==="LONG"?1:-1;
 const dayKey=(now:number)=>beijingDayKey(now);
 const safe=(v:number|null|undefined,fallback=0)=>typeof v==="number"&&Number.isFinite(v)?v:fallback;
 
-export type Candle={time:number;open:number;high:number;low:number;close:number;volume:number};
+export type Candle={time:number;open:number;high:number;low:number;close:number;volume:number;turnoverUsd?:number;volumeVenue?:string};
 export type Quote={bestBid:number;bestAsk:number;observedAt:number;fresh:boolean;entryReady?:boolean;sourceCount?:number;disagreementRate?:number;
   bids?:{price:number;size:number}[];asks?:{price:number;size:number}[];bookSequence?:number;bookCoverage?:'BBO'|'DEPTH20';
   sourceBreadth?:number;directionalAgreement?:number;medianShortMove?:number;spreadRate?:number;bookImbalance?:number;
@@ -1328,13 +1329,15 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
       validation.status="CANCELLED";validation.reason="价格已经触及冻结交易计划的流动性失效边界，原假设真正失效。";
       reject(validation.reason);continue;
     }
-    const decision=evaluateEntryResponse({now,side:validation.side,score:o.environmentScore??o.score,edgeRatio:o.edgeRatio,pullbackRiskRate:o.pullbackRiskRate,
+    const respond=o.marketRoute?.controllerVersion==='special-move-v1'?evaluateSpecialEntryResponse:evaluateEntryResponse;
+    const decision=respond({now,side:validation.side,score:o.environmentScore??o.score,edgeRatio:o.edgeRatio,pullbackRiskRate:o.pullbackRiskRate,
         stopRate:o.stopRate,sourceCount:o.sourceCount??0,disagreementRate:o.disagreementRate??0,mode:o.mode,
         fastLaneAllowed:!!o.environmentMainline,price,
         memory:{startedAt:validation.startedAt,deadlineAt:validation.deadlineAt,initialPrice:validation.initialPrice,samples:validation.samples,
           bestAdvanceRate:validation.bestAdvanceRate,maxAdverseRate:validation.maxAdverseRate,
           supportSamples:validation.supportSamples,oppositionSamples:validation.oppositionSamples},
         state,quote:q,minutePath:minutePaths?.[validation.symbol],costRate:ROUND_TRIP_COST,
+        ownLaunchProof:o.marketRoute?.controllerVersion==='special-move-v1'?{side:o.marketRoute.side,at:o.marketRoute.proofAt}:undefined,
         allowRetest:!!validation.stableThesis||(o.tradePlan!=null&&o.tradePlan!=="OBSERVE_ONLY")});
     validation.lastPrice=price;validation.lastQuoteAt=q!.observedAt;validation.samples++;
     validation.bestAdvanceRate=decision.bestAdvanceRate;validation.maxAdverseRate=decision.maxAdverseRate;
@@ -1400,7 +1403,7 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
     const recentLocation=entryLocation30(paths?.[validation.symbol],validation.side,price,now),
       locationDecision=entryLocationDecision({sidePosition30:recentLocation?.sidePosition30??null,
         breakoutRate30:recentLocation?.breakoutRate30??null,confirmationAdvanceRate:decision.bestAdvanceRate,costRate:ROUND_TRIP_COST});
-    if(locationDecision.action==="WAIT_RETEST"){
+    if(locationDecision.action==="WAIT_RETEST"&&o.marketRoute?.controllerVersion!=='special-move-v1'){
       const stable=stableEntryThesisProfile({score:o.environmentScore??o.score,premium:!!o.premium,
         thesisBars:o.thesisBars??state?.signalBars??0,stage:o.confirmationStage??state?.stage??"OBSERVE",edgeRatio:o.edgeRatio,
         sourceCount:o.sourceCount??state?.sourceCount??0,dataConfidence:o.dataConfidence??state?.dataConfidence??0,
@@ -1418,7 +1421,7 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
 
     const meta=contracts[o.symbol];if(!meta){reject("等待合约规格");continue;}
     const last=s.lastExitAt[o.symbol]??0,lastSide=s.lastSide[o.symbol];
-    if(now-last<15*60_000&&lastSide===o.side){validation.status="CANCELLED";validation.reason="同币同方向假设尚未重置";reject(validation.reason);continue;}
+    if(now-last<15*60_000&&lastSide===o.side&&o.marketRoute?.controllerVersion!=='special-move-v1'){validation.status="CANCELLED";validation.reason="同币同方向假设尚未重置";reject(validation.reason);continue;}
     const error=commit?commit(s,o,q!,meta,now,{validation,decision}):openIntelligenceTrade(s,o,q!,meta,now,equity,{validation,decision},minutePaths?.[o.symbol]);
     if(error){
       if(error.startsWith("实时成交性价比")||error.startsWith("实时入场已消耗剩余空间")||error.startsWith("入场与持仓证据冲突")){
@@ -1463,7 +1466,7 @@ export type DirectExecutionAdapter={manage:(state:ForwardState,marketReady:boole
 export function advanceForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;minutePaths?:Record<string,Candle[]>;daily?:Record<string,Candle[]>;
   quotes:Record<string,Quote>;analysisQuotes?:Record<string,Quote>;contracts:Record<string,Contract>;entrySymbols?:Iterable<string>;learningSymbols?:Iterable<string>;allowDataCycle?:boolean;
   legacyDrainOnly?:boolean;research?:MarketLifecycleResearchContext;reviewTrace?:(event:ReviewEvent)=>void;
-  directAdapter?:DirectExecutionAdapter;allocationEquity?:number;marketAuthority?:boolean;paperTiming?:import('./paper-execution.ts').PaperTiming}){
+  directAdapter?:DirectExecutionAdapter;allocationEquity?:number;marketAuthority?:boolean;specialMove?:boolean;paperTiming?:import('./paper-execution.ts').PaperTiming}){
   // An optional observer has no return value or trading authority. A failed logger cannot block a trade.
   const trace=input.reviewTrace?(event:ReviewEvent)=>{try{input.reviewTrace!(event);}catch{/* diagnostics only */}}:undefined;
   const s=normalizeForward(structuredClone(input.state),input.now),
@@ -1479,7 +1482,7 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
     readyPaths=Object.values(input.paths).filter(rows=>!!validPath(rows,input.now)).length,
     expectedMarkets=Math.max(1,allowed?.size??Math.max(Object.keys(input.paths).length,s.selectedSymbols.length)),
     requiredPaths=Math.min(expectedMarkets,Math.max(3,Math.ceil(expectedMarkets*.60))),
-    marketReady=readyPaths>=requiredPaths;
+    marketReady=readyPaths>0&&(!!input.specialMove||readyPaths>=requiredPaths);
   if(marketReady){
     const priorNarrative=structuredClone(s.extremumRegime.narrative),priorHistory=structuredClone(s.extremumRegime.history),
       priorInternals=s.extremumRegime.internals?structuredClone(s.extremumRegime.internals):undefined,
@@ -1635,13 +1638,17 @@ export function forwardUrgentQuoteSymbols(s:ForwardState,now:number,entrySymbols
   const normal=s.opportunities.filter(o=>!o.premium&&o.eligible&&o.expiresAt>now&&keep(o.symbol)).sort(opportunityCompare);
   const watched=Object.values(s.extremumRegime.symbols).filter(r=>keep(r.symbol)&&r.watchScore>=58).sort((a,b)=>b.watchScore-a.watchScore);
   return[...new Set([...(s.directStrategy?[]:s.inverseTrial?.source.positions.map(t=>t.symbol)??[]),...s.positions.map(t=>t.symbol),...armed.map(v=>v.symbol),
-    ...(s.directStrategy?.marketAuthority?.cohort??[]).filter(keep),...premium.map(o=>o.symbol),...normal.map(o=>o.symbol),...watched.map(r=>r.symbol)])];
+    ...(s.directStrategy?.specialMove?Object.values(s.directStrategy.specialResearch?.watches??{}).filter(w=>w.active&&w.phase!=='DORMANT'&&w.kind!=='ORDINARY')
+      .sort((a,b)=>b.score-a.score).map(w=>w.symbol):s.directStrategy?.marketAuthority?.cohort??[]).filter(keep),
+    ...premium.map(o=>o.symbol),...normal.map(o=>o.symbol),...watched.map(r=>r.symbol)])];
 }
 export function forwardUrgentMinuteSymbols(s:ForwardState,entrySymbols?:Iterable<string>){
   const allowed=entrySymbols?new Set(entrySymbols):undefined,keep=(x:string)=>!allowed||allowed.has(x),
     armed=Object.values(s.entryValidations).filter(v=>v.status==="WAITING"&&keep(v.symbol))
       .sort((a,b)=>a.startedAt-b.startedAt).map(v=>v.symbol),
-    research=[...(s.directStrategy?.marketAuthority?.cohort??[]).filter(keep),...intelligenceUrgentMinuteSymbols(s.extremumRegime,allowed)],
+    research=[...(s.directStrategy?.specialMove?Object.values(s.directStrategy.specialResearch?.watches??{}).filter(w=>w.active&&w.phase!=='DORMANT'&&w.kind!=='ORDINARY')
+      .sort((a,b)=>Number(b.phase==='READY')-Number(a.phase==='READY')||b.score-a.score).map(w=>w.symbol):s.directStrategy?.marketAuthority?.cohort??[]).filter(keep),
+      ...intelligenceUrgentMinuteSymbols(s.extremumRegime,allowed)],
     positions=[...new Set([...(s.directStrategy?[]:s.inverseTrial?.source.positions.map(t=>t.symbol)??[]),...s.positions.map(t=>t.symbol)])].filter(keep);
   // Entry discovery/authorization is the time-sensitive use of 1m data.
   // Existing positions still retain realtime price/flow and 5m structure even

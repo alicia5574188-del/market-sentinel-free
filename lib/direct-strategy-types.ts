@@ -16,4 +16,6 @@ export type DirectStrategy={version:typeof DIRECT_STRATEGY_VERSION;cutoverAt:num
   marketAuthority?:import('./market-authority.ts').MarketAuthority;
   episodeResearch?:import('./episode-research.ts').EpisodeResearch;
   adaptive?:{version:'adaptive-causal-v1';cutoverAt:number};
+  specialMove?:{version:'special-move-v1';cutoverAt:number};
+  specialResearch?:import('./special-move.ts').SpecialResearch;
   completedConversions:number;retiredAt:number;summary:string};

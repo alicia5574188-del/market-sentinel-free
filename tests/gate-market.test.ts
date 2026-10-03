@@ -44,10 +44,11 @@ test("single-contract ticker BBO is a lightweight executable fallback",async()=>
 
 test("Gate candle objects exclude unfinished rows, deduplicate, and retain only a continuous completed suffix", async () => {
   const now = Math.floor(Date.now() / 60_000) * 60;
-  const row = (t: number) => ({ t, v: "1", o: "100", h: "102", l: "99", c: "101" });
+  const row = (t: number) => ({ t, v: "1", o: "100", h: "102", l: "99", c: "101",sum:'1234' });
   await withFetch([row(now - 300), row(now - 180), row(now - 120), row(now - 120), row(now - 60), row(now)], async () => {
     const rows = await fetchStructureCandles("X_USDT", "1m");
     assert.deepEqual(rows.map((item) => item.time), [now - 180, now - 120, now - 60]);
+    assert.equal(rows[0]!.turnoverUsd,1234);assert.equal(rows[0]!.volumeVenue,'GATE');
   });
 });
 
