@@ -19,6 +19,13 @@ rank cannot evict it. Memory is ≤32events,24KiB and6h; admission reserves futu
 outcome/decision bytes. Capacity skips and missing coverage are explicit. This
 is bounded observation memory, not a complete tick archive or learned profit.
 
+Before persistence, unused quote confirmations, repeated explanations and closed
+derived points yield space to completed outcomes and entry/exit receipts. Event
+identity, anchors, proof and financial receipts remain exact; compacted watches
+are marked. Actual trade response points remain in the existing trade archive.
+The bound is checked again after quote/admission mutations, with future growth
+reserved when admitting a new watch.
+
 Own causal response uses completed fresh continuous same-venue1m where available,
 otherwise5m. Noise is median absolute close/open movement of earlier bars.
 Progress must exceed max(0.28%,2.5×noise), be retained by two completed closes,

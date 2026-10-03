@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {advanceEventResearch,eventMarketRoute,confirmEventQuote,eventHoldingDecision,normalizeEventResearch,responseRows,
+import {advanceEventResearch,boundedEventResearch,eventMarketRoute,confirmEventQuote,eventHoldingDecision,normalizeEventResearch,responseRows,
   EVENT_RESEARCH_BYTES,type ResponseEvent,type ResponseHolding} from '../lib/event-response.ts';
 import {initialForward,normalizeForward,forwardSummary,resetForwardAccountPreservingLearning,type Quote,type Trade} from '../lib/forward-relations.ts';
 import {advanceDirectStrategy} from '../lib/direct-strategy.ts';
@@ -65,6 +65,36 @@ test('capacity preserves existing event anchors and outcomes instead of evicting
   const next=advanceEventResearch({...i,previous:r,now:T+2000});
   assert.deepEqual(Object.fromEntries(Object.values(next.events).map(e=>[e.symbol,e.id])),ids);
   assert.ok(Buffer.byteLength(JSON.stringify(next))<=EVENT_RESEARCH_BYTES);assert.ok(normalizeEventResearch(next));
+});
+test('mature outcome and closed-trade pressure compacts explanations while preserving causal and financial receipts',()=>{
+  const source=launched(),r=structuredClone(source.r);r.events={};r.updatedAt=T+3600000;
+  for(let n=0;n<14;n++){
+    const e=structuredClone(source.e),symbol=`PRESSURE_${n}_USDT`;e.symbol=symbol;e.id=`event-response-v1:${symbol}:${T}`;
+    e.phase='FAILED';e.tradeId=`pressure_${n}`;
+    e.entry={at:T+180000,price:100.123456789,progress:.0123456789,retained:.8123456789,noise:.00123456789};
+    e.exit={at:T+1800000,reason:'RESPONSE_ADVANTAGE_LOST',price:101.123456789,net:5.123456789,peak:.023456789,giveback:.0123456789};
+    e.quote={firstAt:T+120000,firstPrice:100.8123456789,lastAt:T+124000,samples:3,peak:.0123456789,retained:.8123456789};
+    e.reason='自身推进已连续保留，核对随后真实盘口与成交成本；本次自身启动未保留，记住失败，不重置事件再追单'.repeat(2);
+    e.changes=Array.from({length:3},(_,i)=>({at:T+i,code:'RESPONSE_OPTIONAL_EXPLANATION_CHANGE_WITH_DETAILED_CONTEXT',price:100.123456789}));
+    e.outcomes=e.outcomes.map(o=>({...o,at:o.dueAt,observedAt:o.dueAt,price:101.123456789,move:.0123456789,status:'OBSERVED'}));
+    r.events[symbol]=e;
+  }
+  assert.ok(Buffer.byteLength(JSON.stringify(r))>EVENT_RESEARCH_BYTES);
+  const receipts=Object.values(r.events).map(e=>({id:e.id,detectedAt:e.detectedAt,anchorAt:e.anchorAt,anchorPrice:e.anchorPrice,entry:e.entry,exit:e.exit,outcomes:e.outcomes}));
+  boundedEventResearch(r);
+  assert.ok(r.bytes<=EVENT_RESEARCH_BYTES);assert.equal(r.bytes,Buffer.byteLength(JSON.stringify(r)));assert.ok(normalizeEventResearch(r));
+  assert.deepEqual(Object.values(r.events).map(e=>({id:e.id,detectedAt:e.detectedAt,anchorAt:e.anchorAt,anchorPrice:e.anchorPrice,entry:e.entry,exit:e.exit,outcomes:e.outcomes})),receipts);
+  assert.ok(Object.values(r.events).every(e=>e.compacted&&!e.quote));
+  // Native risk/lot rejection must not consume an event or lose its frozen proof.
+  const blocked=structuredClone(r);
+  for(const e of Object.values(blocked.events)){
+    delete e.exit;delete e.entry;delete e.tradeId;e.phase='READY';e.last=structuredClone(source.e.last);
+    e.quote={firstAt:T+120000,firstPrice:100.8,lastAt:T+124000,samples:3,peak:.008,retained:1};
+    e.admission={at:T+124000,code:'NATIVE_ADMISSION',reason:'本周期资金风险预算已用完，保持原来的限制，等待真实可用预算'.repeat(5),price:100.8};
+  }
+  boundedEventResearch(blocked);assert.ok(normalizeEventResearch(blocked));
+  assert.ok(blocked.bytes<=EVENT_RESEARCH_BYTES);
+  assert.ok(Object.values(blocked.events).every(e=>e.proofAt===source.e.proofAt&&e.last&&!e.quote&&e.admission?.code==='NATIVE_ADMISSION'));
 });
 function holding(side=1){const m:ResponseHolding={version:'event-response-v1',eventId:'event',entryAt:T,sourceAt:0,peak:0,peakAt:T,
   lastClose:100,lastCloseAt:T,counterSince:null,recoveryMs:null,failedRecoveries:0,counterProgress:0,stage:'LAUNCH',reason:'test',points:[]};
