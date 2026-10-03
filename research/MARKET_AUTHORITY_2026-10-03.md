@@ -83,6 +83,15 @@ PAPER branch closure confirmation; native account reconciliation/admission and
 new-only owner/member activation remain separate exchange execution constraints.
 PAPER book-model matching and native fills are not promised equal.
 
+Marked v1 returns have an actual adverse-side structure stop, so their execution
+receipt uses the existing regular native protection path. Legacy inverse/return
+receipts remain event-only, with no reflected guard reintroduced. Receipt version
+disambiguates these obligations across owner/member restart. New trend admission
+checks the labelled finite route estimate even though its holding plan deliberately
+has no mandatory profit target; PAPER uses that same LIVE admission builder.
+Native guard creation/update stays per admitted order/confirmed structure change
+inside the existing serialized executor and resource limits, never a new timer.
+
 ## Persistence, evidence and release
 
 At most 30 coin episodes, 30 electorate members and eight phase events. Store the

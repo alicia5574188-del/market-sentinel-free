@@ -1337,7 +1337,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // Both realtime and candle lanes dispatch the SAME committed source.
       // Mark-only observations do not schedule more private reads.
       const lifecycle=(s:ForwardState)=>JSON.stringify(s.positions.map(paperSourceTrade).map(t=>[t.id,t.status,t.contracts,
-        t.sourceReductionIntent?.sequence,t.inverseCopy||t.unified?.branch==='RETURN'?null:t.stopPrice]).sort());
+        t.sourceReductionIntent?.sequence,t.inverseCopy||t.unified?.branch==='RETURN'&&!t.unified.marketRoute?null:t.stopPrice]).sort());
       if(lifecycle(previous)!==lifecycle(next.state))this.dispatchCommittedLiveSource();
     } catch (error) { this.forwardError = safeError(error); }
     finally { this.forwardBusy = false; }

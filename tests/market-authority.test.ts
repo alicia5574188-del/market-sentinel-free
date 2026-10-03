@@ -6,6 +6,9 @@ import type {MarketSymbolState,CandleLike} from '../lib/market-intelligence-engi
 import {initialForward,type Opportunity,type Quote,normalizeForward} from '../lib/forward-relations.ts';
 import {migrateDirectStrategy,researchDirectPlan,openDirectPlan,advanceDirectStrategy} from '../lib/direct-strategy.ts';
 import {buildForwardProtectionCheckpoint,restoreForwardProtectionCheckpoint} from '../lib/forward-protection-checkpoint.ts';
+import {advancePaperExecution} from '../lib/paper-execution.ts';
+import {buildProportionalMirror} from '../lib/live-parity.ts';
+import {liveProtectionPrice,isInverseLiveReceipt} from '../lib/live-source-policy.ts';
 const B=300000,T=1791000000000;
 const symbols=['A_USDT','B_USDT','C_USDT'];
 const bar=(at:number,open:number,high:number,low:number,close:number):CandleLike=>({time:at/1000,open,high,low,close,volume:100});
@@ -151,6 +154,26 @@ test('actual return holding hits its own stop or finite target and never promote
     const next=advanceDirectStrategy({state:s,now:T+2000,quotes:{A_USDT:quote(price,T+2000)},paths:{},contracts:{A_USDT:contract}});
     assert.equal(next.state.positions.length,0);assert.equal(next.state.history[0]!.exitReason,reason);
     assert.equal(next.state.history[0]!.id,s.positions[0]!.id);
+  }
+});
+test('both new branches pass shared LIVE admission and reach a later fresh PAPER book fill with own protection',()=>{
+  for(const phase of ['UP','RANGE'] as const){
+    const a=active(phase),price=phase==='UP'?104:102,r=routeMarketCoin(a,'A_USDT',price,T)!,s=account(a),o=opportunity(r),
+      c={...contract,enableDecimal:false,orderSizeMin:'1',orderSizeMax:'100000'},q={...quote(price),
+        bids:[{price:price-.01,size:100000}],asks:[{price:price+.01,size:100000}]},
+      p=researchDirectPlan(s,o,{state:s,now:T,quotes:{A_USDT:q},paths:{},contracts:{A_USDT:c}});
+    s.paperExecution={version:'live-steps-paper-v1',cutoverAt:T,cancelled:[]};
+    assert.equal(openDirectPlan(s,p,q,c,T,{A_USDT:q},undefined,undefined,{prepareMs:2000,confirmMs:0,basis:'EXECUTION_CLOCK',samples:0}),undefined);
+    const t=s.positions[0]!;assert.equal(s.balance,1000);assert.notEqual(t.paperOrder!.phase,'FILLED');
+    const mirror=buildProportionalMirror({source:t,sourceEquity:1000,equity:1000,available:1000,entryPrice:price,
+      quantoMultiplier:c.quantoMultiplier,leverageMax:c.leverageMax,maintenanceRate:c.maintenanceRate,
+      openRisk:0,sameDirectionRisk:0,openMargin:0,openNotional:0,now:T,policy:'synthetic',mirrorRatio:1,
+      sourceRiskAuthority:true,sizeRules:{enableDecimal:false,orderSizeMin:'1',orderSizeMax:'100000'}});
+    assert.equal(isInverseLiveReceipt(mirror.binding.receipt),false);assert.equal(mirror.binding.receipt.marketAuthorityVersion,MARKET_AUTHORITY_VERSION);
+    assert.equal(liveProtectionPrice(t),r.stop);assert.equal(mirror.binding.receipt.nativeProtectionPrice,r.stop);
+    for(const dt of [2000,4000,6000])advancePaperExecution(s,{A_USDT:{...q,observedAt:T+dt}},{A_USDT:c},T+dt);
+    assert.equal(s.positions[0]!.paperOrder!.phase,'FILLED',s.paperExecution.cancelled[0]?.exitReason);
+    assert.ok(s.balance<1000);assert.equal(s.positions[0]!.side,r.side);normalizeForward(s,T+6000);
   }
 });
 test('new branches share entry response; stale epoch and opposing unsettled follower exposure block admission',()=>{
