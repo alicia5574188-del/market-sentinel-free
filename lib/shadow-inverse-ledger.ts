@@ -274,6 +274,8 @@ export function assertInverseTrade(t:Trade){
 export function assertInverseTrial(state:ForwardState){
   if(state.directStrategy){
     const ds=state.directStrategy;
+    if(ds.specialInverse&&(ds.specialInverse.version!=='special-move-inverse-v1'||!finite(ds.specialInverse.cutoverAt)||ds.specialInverse.cutoverAt<=0))
+      throw new Error('原信号反向策略标记损坏；保留账户');
     if(ds.eventResponse&&(ds.eventResponse.version!=='event-response-v1'||!finite(ds.eventResponse.cutoverAt)
       ||ds.eventResponse.cutoverAt<=0))
       throw new Error('事件响应执行记忆损坏；保留账户');
@@ -315,7 +317,9 @@ export function assertInverseTrial(state:ForwardState){
           ||!u.returnLogic.plan||![u.returnLogic.entryPrice,u.returnLogic.openedAt,u.returnLogic.peakAdvance,u.returnLogic.plan.initialStop,
             u.returnLogic.entryResidual,u.returnLogic.entryRelativeStrength,u.returnLogic.entryRemainingSpaceRate,u.returnLogic.entryScore].every(finite)
           ||u.returnLogic.entryPrice<=0||u.returnLogic.plan.initialStop<=0||u.returnLogic.peakAdvance<0))
-        ||(u.branch==='CONTINUATION'&&(!u.marketRoute&&!u.region?.balanced||!u.confirmation||!finite(u.initialStop)||u.initialStop!<=0||!t.entryContext?.winnerPlan)))
+        ||(u.branch==='CONTINUATION'&&(!u.marketRoute&&!u.region?.balanced
+          ||!u.confirmation&&u.marketRoute?.controllerVersion!=='special-move-inverse-v1'
+          ||!finite(u.initialStop)||u.initialStop!<=0||!t.entryContext?.winnerPlan)))
         throw new Error('独立策略订单依据或资金不完整');
       if(t.status==='OPEN'){if(ids.has(t.symbol))throw new Error('独立策略同币重复持仓');ids.add(t.symbol);}
       else if(!finite(t.netPnl)||!finite(t.grossPnl)||!same(t.netPnl,t.grossPnl-t.entryFee-t.exitFee-t.fundingAllowance))

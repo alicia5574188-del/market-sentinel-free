@@ -77,7 +77,7 @@ test('far chase, stale quote and disagreement block executable admission',()=>{
 test('repeated fresh ticks retain one proof, stop and target across checkpoint restoration',()=>{
   const i=own(),r=advanceSpecialResearch(i),again=advanceSpecialResearch({...i,previous:r,now:T+2000,quotes:{A_USDT:q(101.01,T+2000)}});
   assert.deepEqual(again.watches.A_USDT!.route,r.watches.A_USDT!.route);
-  const s=initialForward(T-7200000),activated=advanceDirectStrategy({state:s,now:T,specialMove:true,marketAuthority:true,
+  const s=initialForward(T-7200000),activated=advanceDirectStrategy({state:s,now:T,specialInverse:false,specialMove:true,marketAuthority:true,
     allowDataCycle:false,quotes:{},paths:{},contracts:{}}).state;
   activated.directStrategy!.specialResearch=again;activated.lastQuoteCycleAt=T+2000;
   const restored=restoreForwardProtectionCheckpoint(activated,buildForwardProtectionCheckpoint(activated));
@@ -139,7 +139,7 @@ test('actual controller reaches shared PAPER submission without broad quorum or 
   const i=own(side);let s=base;
   if(launch>1)i.minutes.A_USDT=bars([...Array(12).fill(100),100+side*12,100+side*10.5,100+side*launch],60000);
   for(let n=0;n<=42;n++){const now=T+n*2000;
-    s=advanceDirectStrategy({state:s,now,eventResponse:false,specialMove:true,marketAuthority:true,allowDataCycle:false,entrySymbols:['A_USDT','MISSING_USDT'],
+    s=advanceDirectStrategy({state:s,now,eventResponse:false,specialInverse:false,specialMove:true,marketAuthority:true,allowDataCycle:false,entrySymbols:['A_USDT','MISSING_USDT'],
       quotes:{A_USDT:q(100+side*(launch+n*.014),now)},analysisQuotes:{A_USDT:q(100+side*(launch+n*.014),now)},paths:i.paths,minutePaths:i.minutes,
       contracts:{A_USDT:c},paperTiming:{version:'native-position-first-observed-v1',prepareMs:2000,confirmMs:0,basis:'EXECUTION_CLOCK',samples:0}}).state;
     if(s.positions.length)break;
@@ -152,7 +152,7 @@ test('actual controller reaches shared PAPER submission without broad quorum or 
 });
 test('losing optional research cannot rearm a previously traded same-side explosive event',()=>{
   const i=own(),c={quantoMultiplier:.1,leverageMax:20,maintenanceRate:.005,minContracts:1,tickSize:.01};
-  const s=advanceDirectStrategy({state:initialForward(T-7200000),now:T,eventResponse:false,specialMove:true,marketAuthority:true,
+  const s=advanceDirectStrategy({state:initialForward(T-7200000),now:T,eventResponse:false,specialInverse:false,specialMove:true,marketAuthority:true,
     quotes:i.quotes,paths:i.paths,minutePaths:i.minutes,contracts:{A_USDT:c},allowDataCycle:false}).state;
   s.lastSide.A_USDT='LONG';s.lastExitAt.A_USDT=T+1000;
   assert.match(openDirectPlan(s,s.directStrategy!.plans.A_USDT!,q(),c,T,i.quotes,undefined,i.minutes.A_USDT,undefined,i.paths.A_USDT)!,/等待退出之后真实回踩重启/);

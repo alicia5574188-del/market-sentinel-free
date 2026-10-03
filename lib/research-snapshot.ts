@@ -129,6 +129,9 @@ export function buildReviewSnapshot(input:{view:ObjectRow;buildSha:string|null;s
       episodeResearch:obj(v.directStrategy).episodeResearch??null,
       specialResearch:obj(v.directStrategy).specialResearch??null,
       eventResearch:obj(v.directStrategy).eventResearch??null,
+      specialInverseAudit:{version:'special-inverse-audit-v1',policy:obj(v.directStrategy).specialInverse??null,
+        holdingPolicy:'ACTUAL_SIDE_ADAPTIVE; NOT_SOURCE_EXIT_MIRROR; NO_SECOND_WALLET',
+        target:'SOURCE_PROTECTION_REFERENCE_IS_NOT_A_PROFIT_FORECAST'},
       eventResponseAudit:{version:'event-response-audit-v1',
         policy:obj(v.directStrategy).eventResponse??null,
         events:Object.values(obj(obj(v.directStrategy).eventResearch).events??{}),
@@ -188,6 +191,12 @@ export function reviewVersionDiagnostics(s:ReviewSnapshot){
 }
 
 export function finalizeReviewSnapshot(s:ReviewSnapshot):ReviewSnapshot{
+  if(s.research.specialInverseAudit){const audit=obj(s.research.specialInverseAudit);
+    audit.trades=s.trades.filter(t=>t.unified?.marketRoute?.controllerVersion==='special-move-inverse-v1').map(t=>({
+      tradeId:t.id,symbol:t.symbol,status:t.status,source:t.unified!.marketRoute!.sourceRoute,actualSide:t.side,
+      signalAt:t.paperOrder?.signalAt??t.openedAt,fillAt:t.paperOrder?.confirmedAt??t.openedAt,actualEntryPrice:t.entryPrice,
+      riskStop:t.unified!.initialStop,currentStop:t.stopPrice,holding:t.unified!.adaptive,exitReason:t.exitReason,
+      actualExitPrice:t.exitPrice,netPnl:t.netPnl,entryFee:t.entryFee,exitFee:t.exitFee}));}
   if(s.research.eventResponseAudit){const audit=obj(s.research.eventResponseAudit);
     audit.researchError=obj(s.research.directStrategy).eventResearchError??null;
     audit.holdings=s.trades.filter(t=>t.unified?.response).map(t=>({tradeId:t.id,symbol:t.symbol,status:t.status,

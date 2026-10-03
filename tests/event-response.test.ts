@@ -129,7 +129,7 @@ test('actual new controller submits and fills native PAPER for both sides, prese
       enableDecimal:false,orderSizeMin:'1',orderSizeMax:'100000',marketOrderSizeMax:'100000'};
     const timing={version:'native-position-first-observed-v1' as const,prepareMs:2000,confirmMs:0,basis:'EXECUTION_CLOCK' as const,samples:0};
     const apply=(i:ReturnType<typeof market>)=>{s.extremumRegime.symbols=i.states;s.extremumRegime.updatedAt=i.now;
-      s=advanceDirectStrategy({state:s,now:i.now,specialMove:true,marketAuthority:true,allowDataCycle:false,paths:i.paths,minutePaths:i.minutes,
+      s=advanceDirectStrategy({state:s,now:i.now,specialInverse:false,specialMove:true,marketAuthority:true,allowDataCycle:false,paths:i.paths,minutePaths:i.minutes,
         quotes:i.quotes,analysisQuotes:i.quotes,contracts:{A_USDT:c},paperTiming:timing}).state;};
     apply(market());assert.equal(s.positions.length,0);
     for(let n=0;n<=4;n++){const now=T+120000+n*2000,i=market(now,100+side*.8);
@@ -144,7 +144,7 @@ test('actual new controller submits and fills native PAPER for both sides, prese
     const snapshot=buildReviewSnapshot({view:forwardSummary(restored,{A_USDT:q(T+130000,100+side*.8)},T+130000),exportedAt:T+130000,buildSha:'test',strategyFingerprint:'test'});
     const audit=snapshot.research.eventResponseAudit as {events:ResponseEvent[];holdings:unknown[]};assert.ok(audit.events.length);assert.equal(audit.holdings.length,1);
     const damaged=structuredClone(restored),balance=damaged.balance;damaged.directStrategy!.eventResearch!.version='corrupt' as never;
-    const protectedState=advanceDirectStrategy({state:damaged,now:T+132000,specialMove:true,marketAuthority:true,paths:{},
+    const protectedState=advanceDirectStrategy({state:damaged,now:T+132000,specialInverse:false,specialMove:true,marketAuthority:true,paths:{},
       quotes:{A_USDT:q(T+132000,100-side*2)},contracts:{A_USDT:c},paperTiming:timing}).state;
     assert.ok(protectedState.directStrategy!.eventResearchError);assert.equal(protectedState.balance,balance);
     assert.equal(protectedState.positions[0]!.paperOrder!.action!.kind,'CLOSE','optional watch failure cannot block own fresh hard protection');
@@ -152,16 +152,16 @@ test('actual new controller submits and fills native PAPER for both sides, prese
 });
 test('invalid optional watch memory is visible and never fabricates replacement events or resets money',()=>{
   const {r}=launched(),s=initialForward(T-7200000);
-  const activated=advanceDirectStrategy({state:s,now:T,specialMove:true,marketAuthority:true,paths:{},quotes:{},contracts:{}}).state;
+  const activated=advanceDirectStrategy({state:s,now:T,specialInverse:false,specialMove:true,marketAuthority:true,paths:{},quotes:{},contracts:{}}).state;
   activated.directStrategy!.eventResearch={...r,version:'corrupt'} as never;
-  const result=advanceDirectStrategy({state:activated,now:T+130000,specialMove:true,marketAuthority:true,paths:{},quotes:{},contracts:{}}).state;
+  const result=advanceDirectStrategy({state:activated,now:T+130000,specialInverse:false,specialMove:true,marketAuthority:true,paths:{},quotes:{},contracts:{}}).state;
   assert.equal(result.startedAt,s.startedAt);assert.ok(result.directStrategy!.eventResearchError);assert.equal(result.positions.length,0);
 });
 test('explicit manual PAPER reset remains readable and does not retain another account event-to-trade links',()=>{
-  const s=advanceDirectStrategy({state:initialForward(T-7200000),now:T,specialMove:true,marketAuthority:true,paths:{},quotes:{},contracts:{}}).state;
+  const s=advanceDirectStrategy({state:initialForward(T-7200000),now:T,specialInverse:false,specialMove:true,marketAuthority:true,paths:{},quotes:{},contracts:{}}).state;
   s.directStrategy!.eventResearch=launched().r;s.directStrategy!.eventResearch!.events.A_USDT!.tradeId='retired-account-trade';
   const reset=resetForwardAccountPreservingLearning(s,T+180000);normalizeForward(reset,T+180001);
-  const next=advanceDirectStrategy({state:reset,now:T+180002,specialMove:true,marketAuthority:true,paths:{},quotes:{},contracts:{}}).state;
+  const next=advanceDirectStrategy({state:reset,now:T+180002,specialInverse:false,specialMove:true,marketAuthority:true,paths:{},quotes:{},contracts:{}}).state;
   assert.equal(next.startedAt,reset.startedAt);assert.equal(next.balance,reset.balance);
   assert.equal(next.directStrategy!.eventResponse!.cutoverAt,T+180002);assert.equal(Object.keys(next.directStrategy!.eventResearch!.events).length,0);
   assert.deepEqual(next.extremumRegime,reset.extremumRegime);

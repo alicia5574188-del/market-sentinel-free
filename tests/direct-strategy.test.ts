@@ -161,6 +161,7 @@ async function checkpointWorker(){
   f.s.directStrategy!.adaptive={version:'adaptive-causal-v1',cutoverAt:T};
   f.s.directStrategy!.specialMove={version:'special-move-v1',cutoverAt:T};
   f.s.directStrategy!.eventResponse={version:'event-response-v1',cutoverAt:T};
+  f.s.directStrategy!.specialInverse={version:'special-move-inverse-v1',cutoverAt:T};
   f.s.directStrategy!.eventResearch=advanceEventResearch({now:T,paths:{},quotes:{},states:{}});
   f.s.paperExecution={version:'live-steps-paper-v1',cutoverAt:T,cancelled:[]};
   f.s.storage={persistedAt:T,error:null};f.s.lastQuoteCycleAt=T;

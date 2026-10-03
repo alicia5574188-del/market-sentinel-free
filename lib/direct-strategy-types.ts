@@ -21,4 +21,5 @@ export type DirectStrategy={version:typeof DIRECT_STRATEGY_VERSION;cutoverAt:num
   eventResponse?:{version:'event-response-v1';cutoverAt:number};
   eventResearch?:import('./event-response.ts').EventResearch;
   eventResearchError?:string;
+  specialInverse?:{version:'special-move-inverse-v1';cutoverAt:number};
   completedConversions:number;retiredAt:number;summary:string};

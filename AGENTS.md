@@ -1,3 +1,16 @@
+# 2026-10-03 17:56 — original special-move entry inverted
+
+Owner requests future entries reverse the original special-move-v1 signal that
+opened the pre-reset LYN trade. Preserve original discovery and source response
+validation; invert actual intent only, with mirrored loss budget and actual-side
+adaptive holding/recovery/profit protection, not event-response failed-launch.
+Do not reproduce the protection recovery outage or infer a profitable inverse
+backtest from that delayed loss. Preserve account/history/old filled policies,
+fixed1000/native risk/lot/margin/LIVE intent and scan30/minute11/2s/write budgets.
+Record original signal and actual direction distinctly in snapshots and UI.
+Existing source response/realization and frozen Worker bodies remain unchanged.
+Complete original reviewed-main release and advancing production receipts.
+
 # 2026-10-03 16:46 — event-response controller, research exports and recovery
 
 Owner authorizes implementation and deployment of stable unusual-event memory,

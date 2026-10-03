@@ -27,7 +27,7 @@ export default defineConfig(async () => {
         "lib/market-intelligence-liquidity.ts","lib/market-intelligence-lifecycle.ts","lib/trade-realization.ts",
         "lib/shadow-inverse.ts","lib/shadow-inverse-ledger.ts","lib/shadow-baseline/manifest.json",
         "lib/unified-execution.ts","lib/unified-execution-types.ts","lib/direct-strategy.ts","lib/direct-strategy-types.ts","lib/direct-strategy-view.ts",
-        "lib/event-response.ts","lib/forward-protection-checkpoint.ts",
+        "lib/event-response.ts","lib/special-inverse.ts","lib/forward-protection-checkpoint.ts",
         "lib/live-parity.ts","lib/live-session.ts","lib/live-source-policy.ts","lib/live-leverage.ts",
         "lib/shadow-baseline/forward-relations.ts","lib/shadow-baseline/market-intelligence-engine.ts","lib/shadow-baseline/winner-policy.ts"
       ].map(path=>path+"\n"+readFileSync(path,"utf8")).join("\n")).digest("hex")),

@@ -12,6 +12,7 @@ import { PORTFOLIO_RISK_CAP, CORRELATED_DIRECTION_RISK_CAP } from "./liquidity-c
 import {liveProtectionPrice,INVERSE_LIVE_POLICY,INVERSE_LIVE_EXIT_POLICY,isInverseLiveReceipt,INVERSE_LIVE_LEVERAGE_POLICY,inverseLiveLeverage} from './live-source-policy.ts';
 import {paperSourceTrade} from './paper-execution.ts';
 import {responseEntryExecutable} from './event-response.ts';
+import {inverseSpecialEntryExecutable} from './special-inverse.ts';
 
 export const LIVE_PARITY_VERSION = "current-paper-live-parity-v1";
 export const LIVE_PARITY_SOURCE = "CURRENT_FORWARD_ACCOUNT";
@@ -193,7 +194,9 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
   const direction=t.side==="LONG"?1:-1;
   const protection=liveProtectionPrice(t);
   if (protection!=null&&direction*(input.entryPrice-protection)<=0)fail("ECONOMICS","当前价已越过源单止损，不开即平");
-  if(t.unified?.marketRoute?.controllerVersion==='event-response-v1'){
+  if(t.unified?.marketRoute?.controllerVersion==='special-move-inverse-v1'){
+    if(!inverseSpecialEntryExecutable(t,input.entryPrice,input.now))fail('ECONOMICS','原信号证据已失效或反向实际成交偏离冻结入场风险');
+  }else if(t.unified?.marketRoute?.controllerVersion==='event-response-v1'){
     if(!responseEntryExecutable(t,input.entryPrice,input.now))fail('ECONOMICS','真实成交价未保留事件价格优势或已超过启动时效');
   }else if(t.unified?.branch==='CONTINUATION'||t.unified?.marketRoute){
     const target=t.unified?.marketRoute?.target??t.entryContext?.winnerPlan?.target,risk=direction*(input.entryPrice-protection!)+(input.entryPrice+protection!)*.0005,
