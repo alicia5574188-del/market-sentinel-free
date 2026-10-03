@@ -1,3 +1,19 @@
+# 2026-10-03 — current owner direction: research first, adaptive design second
+
+Implement independent causal episode/holding research before a new execution
+controller: distinguish fast entry proof from persistent holding anchors, price
+advantage from relative ranks, normal pullback from failed recovery, and sustained
+trend from an actual failed departure. Report15/30/45/60 completed-price windows,
+group breadth, paired branch hypotheses and bounded decision changes. Research
+is observational in this phase; complete the next adaptive execution design in
+research/EPISODE_RESEARCH_2026-10-03.md. Do not change trades, size, money, LIVE,
+account history or create verification orders. Reuse existing primary inputs and
+write clocks. Optional capped research must never prevent financial execution.
+This scoped task permits the advanceForwardNow hash update only for pure optional
+research capture; other frozen methods/source remain unchanged. Verify financial
+invariance, causality, restoration, budget and original release gates; deploy
+verified research through reviewed main and check advancing production receipts.
+
 # 2026-10-03 — owner-authorized mixed-market admission adjustment
 
 Owner authorizes adjustment after review snapshot shows INJ own accepted trend
