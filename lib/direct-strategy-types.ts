@@ -13,4 +13,5 @@ export type DirectPlan={id:string;symbol:string;at:number;quoteAt:number;branch:
   confirmation:Acceptance|null;region:ReactionArea|null;candidate:Opportunity;continuationSeen?:boolean;consumed?:boolean};
 export type DirectMemory={id:string;region:ReactionArea|null;continuationSeen:boolean};
 export type DirectStrategy={version:typeof DIRECT_STRATEGY_VERSION;cutoverAt:number;plans:Record<string,DirectPlan>;memory?:Record<string,DirectMemory>;
+  marketAuthority?:import('./market-authority.ts').MarketAuthority;
   completedConversions:number;retiredAt:number;summary:string};

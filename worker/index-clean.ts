@@ -1260,7 +1260,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const previous = state,reviewEvents:ReviewEvent[]=[],executionQuotes=this.forwardQuotes(now);
       const next = advanceShadowInverse({ state: previous, now, paths: this.strategyCandles,minutePaths:this.forwardMinutePaths(),
         daily:this.turnDailyCandles,quotes:executionQuotes,analysisQuotes:this.forwardAnalysisQuotes(now),contracts:this.regimeContracts(),
-        entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue,
+        entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue,marketAuthority:true,
         // exchangeEntryAt is refreshed with every position mark. entryAt is
         // the immutable first confirmed native-position observation.
         paperTiming:executionTiming([...this.liveHistory.flatMap(p=>p.parity?[{...p.parity,entryConfirmedAt:p.entryAt}]:[]),

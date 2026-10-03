@@ -2,13 +2,14 @@
 import type {ForwardState,Trade} from "./forward-relations.ts";
 import type {DirectMemory} from './direct-strategy-types.ts';
 import {boundedDirectExitResearch} from './direct-exit-research.ts';
+import {validMarketAuthority} from './market-authority.ts';
 export const FORWARD_PROTECTION_CHECKPOINT_VERSION="adaptive-ten-protection-v1";
 type Row=Pick<Trade,"id"|"openedAt"|"favorable"|"adverse"|"lastPrice"|"lastQuoteAt"|"stopPrice"|"firstProfitAt"|"holdScore"|"profitFloorRate"|"peakPnlRate"|"winnerManagement"|"review"|"unified"|"positionIntelligence"|"directExitResearch"|"directExitResearchOmitted">;
 export type ForwardProtectionCheckpoint={version:typeof FORWARD_PROTECTION_CHECKPOINT_VERSION;startedAt:number;baseRevision:number;
   basePersistedAt:number;quoteCycleAt:number;peakEquity:number;maxDrawdown:number;positions:Row[];
   shadow?:{cutoverAt:number;peakEquity:number;maxDrawdown:number;positions:Row[]};
   unifiedReference?:{cutoverAt:number;peakEquity:number;maxDrawdown:number;positions:Row[]};
-  directMemory?:{cutoverAt:number;memory:Record<string,DirectMemory>}};
+  directMemory?:{cutoverAt:number;memory:Record<string,DirectMemory>;marketAuthority?:import('./market-authority.ts').MarketAuthority}};
 type LegacyProtectionRow=Partial<Row>&{id?:string;openedAt?:number;favorable?:number;adverse?:number;lastPrice?:number;lastQuoteAt?:number;
   stopPrice?:number;profitProtection?:{floorRate?:number}|null};
 type LegacyProtectionCheckpoint={version:"forward-protection-checkpoint-v1";startedAt:number;baseRevision:number;basePersistedAt:number;
@@ -32,6 +33,7 @@ function migrateLegacyCheckpoint(s:ForwardState,c:LegacyProtectionCheckpoint):Fo
     basePersistedAt:c.basePersistedAt,quoteCycleAt:c.quoteCycleAt,peakEquity:c.peakEquity,maxDrawdown:c.maxDrawdown,positions};
 }
 export function forwardProtectionChanged(previous:ForwardState,next:ForwardState){
+  if(next.directStrategy?.marketAuthority&&JSON.stringify(next.directStrategy.marketAuthority)!==JSON.stringify(previous.directStrategy?.marketAuthority))return true;
   if(next.directStrategy&&JSON.stringify(next.directStrategy.memory??{})!==JSON.stringify(previous.directStrategy?.memory??{}))return true;
   if(next.peakEquity>previous.peakEquity||next.maxDrawdown>previous.maxDrawdown)return true;
   const old=new Map(previous.positions.map(t=>[t.id,t]));
@@ -49,7 +51,8 @@ export function buildForwardProtectionCheckpoint(s:ForwardState):ForwardProtecti
       review:review&&t.review?.diagnosticVersion?structuredClone(t.review):undefined}));
   return{version:FORWARD_PROTECTION_CHECKPOINT_VERSION,startedAt:s.startedAt,baseRevision:s.revision,basePersistedAt:s.storage.persistedAt,
     quoteCycleAt:s.lastQuoteCycleAt,peakEquity:s.peakEquity,maxDrawdown:s.maxDrawdown,positions:rows(s.positions,true),
-    ...(s.directStrategy?{directMemory:{cutoverAt:s.directStrategy.cutoverAt,memory:structuredClone(s.directStrategy.memory??{})}}:{}),
+    ...(s.directStrategy?{directMemory:{cutoverAt:s.directStrategy.cutoverAt,memory:structuredClone(s.directStrategy.memory??{}),
+      marketAuthority:s.directStrategy.marketAuthority?structuredClone(s.directStrategy.marketAuthority):undefined}}:{}),
     ...(s.inverseTrial&&!s.directStrategy?{shadow:{cutoverAt:s.inverseTrial.cutoverAt,peakEquity:s.inverseTrial.source.peakEquity,
       maxDrawdown:s.inverseTrial.source.maxDrawdown,positions:rows(s.inverseTrial.source.positions,false)}}:{}),
     ...(s.unifiedExecution&&!s.directStrategy?{unifiedReference:{cutoverAt:s.unifiedExecution.cutoverAt,peakEquity:s.unifiedExecution.reference.peakEquity,
@@ -72,6 +75,8 @@ export function restoreForwardProtectionCheckpoint(s:ForwardState,value:unknown)
         ||(r.region&&(![r.region.lower,r.region.upper,r.region.center,r.region.formedAt].every(finite)||r.region.lower<=0||r.region.upper<=r.region.lower))))
       throw new Error('独立策略事件检查点损坏；保留账户');
     next.directStrategy.memory=structuredClone(m.memory);
+    if(m.marketAuthority){if(!validMarketAuthority(m.marketAuthority))throw new Error('市场许可检查点损坏');
+      next.directStrategy.marketAuthority=structuredClone(m.marketAuthority);}
     for(const [symbol,p] of Object.entries(next.directStrategy.plans)){const r=m.memory[symbol];
       if(r?.id===p.id){p.region=structuredClone(r.region);p.continuationSeen=!!p.continuationSeen||r.continuationSeen;}}
   }

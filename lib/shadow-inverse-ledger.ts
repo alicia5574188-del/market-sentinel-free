@@ -4,6 +4,7 @@ import {inversePaidFeeView} from './paid-fee-view.ts';
 import {SHADOW_FEE_RATE,INVERSE_COST,INVERSE_FEE_POLICY,recordedInverseFeeRate,type InverseFeeStamp} from './inverse-fee.ts';
 import {FIXED_ALLOCATION_EQUITY,FIXED_ALLOCATION_POLICY} from './fixed-allocation.ts';
 import type {InverseLossResearch} from './inverse-loss-research.ts';
+import {validMarketAuthority,validMarketRoute} from './market-authority.ts';
 export {INVERSE_COST} from './inverse-fee.ts';
 
 export const SHADOW_INVERSE_VERSION='shadow-inverse-v1';
@@ -272,6 +273,7 @@ export function assertInverseTrade(t:Trade){
 export function assertInverseTrial(state:ForwardState){
   if(state.directStrategy){
     const ds=state.directStrategy;
+    if(ds.marketAuthority&&!validMarketAuthority(ds.marketAuthority))throw new Error('市场统一许可记忆损坏；保留账户');
     if(ds.version!=='dual-thesis-v2'||!finite(ds.cutoverAt)||ds.cutoverAt<state.startedAt||!ds.plans||Object.keys(ds.plans).length>30
       ||!finite(ds.completedConversions)||ds.completedConversions<0||!finite(ds.retiredAt)||!ds.summary)
       throw new Error('独立策略状态损坏；保留账户，禁止重置');
@@ -285,6 +287,8 @@ export function assertInverseTrial(state:ForwardState){
     const ids=new Set<string>();
     for(const t of [...state.positions,...state.history])if(t.unified?.version==='dual-thesis-v2'){
       const u=t.unified;
+      if(u.marketRoute&&(!validMarketRoute(u.marketRoute)||u.marketRoute.side!==t.side||u.marketRoute.branch!==u.branch
+        ||!t.entryContext?.winnerPlan))throw new Error('实际方向市场许可不完整');
       if(!['RETURN','CONTINUATION'].includes(u.branch)||!u.sourceId||!u.entryReason||!u.holdReason||!u.exitCondition
         ||![t.entryPrice,t.quantity,t.contracts,t.quantoMultiplier,t.notional,t.leverage,t.margin,t.entryFee,t.exitFee,t.plannedRisk].every(finite)
         ||t.entryPrice<=0||t.quantity<=0||t.contracts<=0||t.leverage<1||t.entryFee<0||t.exitFee<0||t.plannedRisk<0
@@ -292,11 +296,11 @@ export function assertInverseTrial(state:ForwardState){
         ||!Array.isArray(u.explanationEvents)||u.explanationEvents.length>8
         ||u.explanationEvents.some(e=>![e.at,e.quoteAt,e.price].every(finite)||e.price<=0||e.quoteAt>e.at)
         ||(!u.migratedAt&&!same(t.entryFee,(t.realization?.initialNotional??t.notional)*.0005))
-        ||(u.branch==='RETURN'&&(!u.returnLogic||!['LONG','SHORT'].includes(u.returnLogic.moveSide)||u.returnLogic.moveSide===t.side
+        ||(u.branch==='RETURN'&&(!u.returnLogic||!['LONG','SHORT'].includes(u.returnLogic.moveSide)||!u.marketRoute&&u.returnLogic.moveSide===t.side
           ||!u.returnLogic.plan||![u.returnLogic.entryPrice,u.returnLogic.openedAt,u.returnLogic.peakAdvance,u.returnLogic.plan.initialStop,
             u.returnLogic.entryResidual,u.returnLogic.entryRelativeStrength,u.returnLogic.entryRemainingSpaceRate,u.returnLogic.entryScore].every(finite)
           ||u.returnLogic.entryPrice<=0||u.returnLogic.plan.initialStop<=0||u.returnLogic.peakAdvance<0))
-        ||(u.branch==='CONTINUATION'&&(!u.region?.balanced||!u.confirmation||!finite(u.initialStop)||u.initialStop!<=0||!t.entryContext?.winnerPlan)))
+        ||(u.branch==='CONTINUATION'&&(!u.marketRoute&&!u.region?.balanced||!u.confirmation||!finite(u.initialStop)||u.initialStop!<=0||!t.entryContext?.winnerPlan)))
         throw new Error('独立策略订单依据或资金不完整');
       if(t.status==='OPEN'){if(ids.has(t.symbol))throw new Error('独立策略同币重复持仓');ids.add(t.symbol);}
       else if(!finite(t.netPnl)||!finite(t.grossPnl)||!same(t.netPnl,t.grossPnl-t.entryFee-t.exitFee-t.fundingAllowance))

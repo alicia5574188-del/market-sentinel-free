@@ -114,6 +114,7 @@ jobs:
               .runtime.lastError == null and
               .runtime.forward.version == "forward-relations-v1.0" and
               .runtime.forward.strategyAuthorityVersion == "market-intelligence-v1" and
+              .runtime.forward.directStrategy.marketAuthority.version == "market-regime-authority-v1" and
               .runtime.forward.executionVersion == "market-intelligence-v1" and
               .runtime.forward.positionLimit == null and
               .runtime.forward.executionBboCapacity == 30 and
@@ -187,6 +188,7 @@ jobs:
               .runtime.buildSha == $sha and
               .runtime.authorityReady == true and .runtime.stale == false and .runtime.lastError == null and
               .runtime.forward.strategyAuthorityVersion == "market-intelligence-v1" and
+              .runtime.forward.directStrategy.marketAuthority.version == "market-regime-authority-v1" and
               .runtime.forward.positionLimit == null and .runtime.forward.executionBboCapacity == 30 and .runtime.forward.minuteConfirmationCapacity == 11 and .runtime.forward.storage.error == null and
               .runtime.forward.lastCycleAt > 0 and .runtime.realtimeReadiness.capacity == 30 and
               .runtime.realtimeReadiness.protectedMarketsReady == true and .runtime.multiSourceMarket.healthySources >= 3 and
