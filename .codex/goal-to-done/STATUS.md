@@ -8,7 +8,12 @@ storage-overlay recovery. Inverse10, exit9, live208, members67, equity74,
 architecture/migration43, npm test/build, typecheck, lint(0errors/13existing
 warnings), feed/member workerd smoke, dry-run and diff check pass. Private
 incident receipt replays10 events to1 active/9 recycled,9222bytes, no error.
-Publication and production receipt pending.
+PR627 deployed main2368699ccc8c24a252edf22a10c490210c37c105 via run37138451612.
+Healthy exact-build receipt recycles all10 old plans,6335bytes, scanning478 shared505;
+account generation/manual LIVE unchanged, storage/research/runtime errors null.
+Follow-up diagnostic fixes the verified same-alarm ordering: market health is
+published before strategy commit, so a valid later cycle is also a source clock.
+Clock regression/typecheck pass; final CI and advancing production receipt pending.
 
 PREVIOUS_RELEASE — 2026-10-03. Released through PR626; production main
 9374f4b2c90401881af96c23ce89559a07ad6f26. Original main CI/deploy run

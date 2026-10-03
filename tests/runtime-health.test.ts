@@ -80,6 +80,9 @@ test('actual recent protection commit covers the 2s decision clock while old ful
   const runtime=forwardLive();runtime.forward!.lastCycleAt=T;
   runtime.forward!.storage={persistedAt:T-60*60_000,protectionPersistedAt:T-10_000,error:null};
   assert.equal(runtimeReady(runtime),true);assert.equal(runtimeStatusLabel(runtime),'后台运行中');assert.equal(runtimeNotice(runtime),null);
+  runtime.lastSuccessAt=T-10_001;
+  assert.equal(runtimeReady(runtime),true,'market health is published just before the same alarm commits its strategy checkpoint');
+  runtime.lastSuccessAt=T;
   runtime.forward!.storage.protectionPersistedAt=T-30_001;
   assert.equal(runtimeReady(runtime),false);assert.match(runtimeStatusLabel(runtime),/持久化落后/);
   for(const stamp of [T+1,Number.NaN,-1,0]){runtime.forward!.storage.protectionPersistedAt=stamp;assert.equal(runtimeReady(runtime),false);}

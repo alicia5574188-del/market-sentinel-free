@@ -34,8 +34,9 @@ function forwardRuntimeIssue(runtime: RuntimeHealthShape | null, now?: number) {
     label: "后台运行中 · 策略尚未持久化", notice: "前向策略尚无持久化记录；不能将内存中的状态视为已保存。" };
   const reference = now ?? runtime?.lastSuccessAt,
     protection = forward.storage?.protectionPersistedAt,
+    // The same alarm publishes market health before its strategy commit.
     validProtection = typeof protection === 'number' && Number.isFinite(protection) && protection > 0
-      && protection <= (typeof reference === 'number' && Number.isFinite(reference) ? reference : cycle);
+      && protection <= Math.max(cycle, typeof reference === 'number' && Number.isFinite(reference) ? reference : cycle);
   // Actual durable 10s protection writes also save current strategy research.
   // A bounded 30s diagnostic tolerance covers their 2s in-memory decision clock.
   const durable = validProtection ? Math.max(persisted, protection) : persisted;
