@@ -11,6 +11,7 @@ import {buildReviewSnapshot} from '../lib/research-snapshot.ts';
 import {MarketDataHub} from '../lib/market-data-hub.ts';
 import {fetchContractDirectory} from '../lib/gate-market.ts';
 import {validMarketRoute} from '../lib/market-authority.ts';
+import {rangePriority,selectRangePlans,rankRangeDiscovery} from '../lib/range-scheduler.ts';
 import type {CandleLike} from '../lib/market-intelligence-engine.ts';
 const B=300000,T=Math.floor(1791014400000/B)*B;
 const candle=(at:number,open:number,close:number,span=.4):CandleLike=>({time:at/1000,open,close,
@@ -98,10 +99,97 @@ test('bulk discovery covers more than 30 coins; missing/changed-source history d
   const switched=scanRangeAnomalies(rows.map(r=>({...r,source:'OKX',last:120,observedAt:T+300000})),{prices:new Map(),detected:new Map()},T+300000,200,0);assert.equal(switched.marketSamples,0);
   assert.throws(()=>scanRangeAnomalies(Array.from({length:4097},()=>rows[0]!),scanner,T,4097,0),/CAPACITY/);
 });
-test('capacity keeps original anchors and explicitly counts missed deep plans',()=>{
+test('all thirty candidates compete for ten plans within original byte and window budgets',()=>{
   const f=fixture(),paths=Object.fromEntries(Array.from({length:30},(_,i)=>[`X${i}_USDT`,f.input.paths.A_USDT])),
     discovery={...f.input.discovery,anomalies:Array.from({length:30},(_,i)=>({...f.input.discovery.anomalies[0]!,symbol:`X${i}_USDT`}))};
-  const s=advanceRangeResearch({...f.input,paths,windows:{},discovery});assert.ok(s.capacitySkipped>0);assert.ok(Buffer.byteLength(JSON.stringify(s))<=RANGE_RESEARCH_BYTES);assert.ok(normalizeRangeResearch(s));
+  const windows:RangeWindows={},s=advanceRangeResearch({...f.input,paths,windows,discovery});assert.equal(s.waiting,20);assert.equal(Object.keys(s.events).length,10);
+  assert.equal(Object.keys(windows).length,30);assert.ok(Object.values(s.events).every(e=>e.H===f.H&&e.L===f.L));
+  assert.ok(Buffer.byteLength(JSON.stringify(s))<=RANGE_RESEARCH_BYTES);assert.ok(normalizeRangeResearch(s));
+});
+test('thirty live watches rotate before timeout, preserve original ranges and survive cold storage restore',async()=>{
+  const f=fixture(),symbols=Array.from({length:30},(_,i)=>`X${i}_USDT`),windows:RangeWindows={},
+    paths=Object.fromEntries(symbols.map(s=>[s,f.input.paths.A_USDT])),
+    discovery={...f.input.discovery,anomalies:symbols.map(symbol=>({...f.input.discovery.anomalies[0]!,symbol,frozen:false}))};
+  let research=advanceRangeResearch({...f.input,paths,windows,discovery});const visited=new Set(Object.keys(research.events)),original=structuredClone(windows);
+  for(const a of discovery.anomalies)a.frozen=true;
+  for(let n=1;n<=12;n++){
+    const now=f.input.now+n*60000;
+    research=advanceRangeResearch({...f.input,previous:research,now,paths,windows,discovery});
+    Object.keys(research.events).forEach(s=>visited.add(s));assert.ok(Object.keys(research.events).length<=10);assert.ok(normalizeRangeResearch(research));
+    assert.ok(Buffer.byteLength(JSON.stringify(research))<=RANGE_RESEARCH_BYTES);
+  }
+  assert.equal(visited.size,30);assert.ok(research.rotated!>0);assert.deepEqual(windows,original);
+  const state=initialForward(T);state.directStrategy=structuredClone(trade().state.directStrategy!);state.directStrategy.rangeResearch=research;state.directStrategy.rangeWindows=windows;
+  const saved=await prepareForwardWrite(null,state,research.updatedAt),store=new Map(Object.entries(saved.entries)),
+    restored=await readForwardStore({get:async<V>(key:string)=>structuredClone(store.get(key)) as V|undefined},research.updatedAt);
+  assert.deepEqual(restored!.directStrategy!.rangeWindows,original);
+  const now=research.updatedAt+60000,next=advanceRangeResearch({...f.input,previous:restored!.directStrategy!.rangeResearch,now,windows:restored!.directStrategy!.rangeWindows!,paths,discovery});
+  assert.ok(Object.values(next.events).every(e=>e.H===f.H&&e.L===f.L));assert.ok(normalizeRangeResearch(next));
+});
+test('fresh actionable newcomer replaces stalled watches without waiting thirty minutes; ten proofs remain bounded',()=>{
+  const f=fixture(),old=structuredClone(f.research),windows:RangeWindows={};old.events={};
+  for(let i=0;i<10;i++){const e=structuredClone(f.e);e.symbol=`OLD${i}_USDT`;e.id=`anomaly-range-v1:${e.symbol}:${T}`;e.phase='CONFIRMING';delete e.proof;
+    old.events[e.symbol]=e;windows[e.id]=f.input.windows[f.e.id]!;}
+  const next=advanceRangeResearch({...f.input,previous:old,windows});assert.equal(next.events.A_USDT!.phase,'READY');assert.equal(next.events.A_USDT!.rank,1);assert.ok(next.rotated!>0);
+  const symbols=Array.from({length:10},(_,i)=>`READY${i}_USDT`),paths=Object.fromEntries(symbols.map(s=>[s,f.input.paths.A_USDT])),
+    minutes=Object.fromEntries(symbols.map(s=>[s,f.input.minutes.A_USDT])),quotes=Object.fromEntries(symbols.map(s=>[s,f.q])),
+    discovery={...f.input.discovery,anomalies:symbols.map(symbol=>({...f.input.discovery.anomalies[0]!,symbol}))},
+    ten=advanceRangeResearch({...f.input,windows:{},paths,minutes,quotes,discovery});
+  assert.ok(Object.values(ten.events).filter(e=>e.phase==='READY').length>=8);assert.ok(ten.events.READY0_USDT);assert.ok(normalizeRangeResearch(ten));assert.ok(Buffer.byteLength(JSON.stringify(ten))<=RANGE_RESEARCH_BYTES);
+});
+test('completed same-direction internal evidence ranks ahead of a raw spike; submitted execution keeps its seat',()=>{
+  const f=fixture(),internal={...structuredClone(f.e),symbol:'TREND_USDT',direction:'UP' as const};internal.proof!.kind='INTERNAL_TREND';
+  const raw={...structuredClone(f.e),symbol:'SPIKE_USDT',score:99};delete raw.proof;raw.phase='CONFIRMING';
+  assert.ok(rangePriority(internal,f.q,f.input.now).score>rangePriority(raw,f.q,f.input.now).score);
+  assert.ok(rangePriority(internal,{...f.q,priceSource:'OKX'},f.input.now).score<rangePriority(raw,f.q,f.input.now).score);
+  const pending={...raw,symbol:'PENDING_USDT',phase:'EXECUTING' as const},events=[pending,...Array.from({length:30},(_,i)=>({...internal,symbol:`R${i}_USDT`}))],
+    quotes=Object.fromEntries(events.map(e=>[e.symbol,f.q]));assert.ok(selectRangePlans(events,quotes,f.input.now).selected.has(pending.symbol));
+  const anomalies=Array.from({length:90},(_,i)=>({...f.input.discovery.anomalies[0]!,symbol:`POOL${i}_USDT`,score:99-i/100})),visited=new Set<string>();
+  for(let n=0;n<17;n++)rankRangeDiscovery(anomalies,f.input.now+n*60000).forEach(a=>visited.add(a.symbol));
+  assert.equal(visited.size,90,'deep observation gives later discoveries a turn within their lifetime');
+});
+test('internal aligned trend uses existing completed five and new post-anomaly minutes, then holds through breakout and ordinary pullback',()=>{
+  for(const sign of [1,-1]){
+    const mirror=(p:number)=>sign>0?p:200-p,prior=Array.from({length:120},(_,i)=>candle(T-(120-i)*B,mirror(100+i*.01+Math.sin(i/7)),mirror(100+i*.01+Math.sin(i/7)),.1)),
+      detectedAt=T+60000,now=T+180000,last=101.5;
+    prior[119]=candle(T-B,mirror(last-.15),mirror(last),.02);
+    const minutes=[...Array.from({length:21},(_,i)=>candle(T-(20-i)*60000,mirror(last-.005),mirror(last),.03)),
+      candle(detectedAt,mirror(last),mirror(last+.07),.005),candle(detectedAt+60000,mirror(last+.07),mirror(last+.14),.005)],q=quote(now,mirror(last+.14)),windows:RangeWindows={},
+      input={now,windows,paths:{A_USDT:prior},minutes:{A_USDT:minutes},quotes:{A_USDT:q},ticks:{A_USDT:.001},positions:[],history:[],
+        discovery:{...fixture().input.discovery,at:now,anomalies:[{...fixture().input.discovery.anomalies[0]!,detectedAt,own:sign*.01,residual:sign*.01}]}},
+      s=advanceRangeResearch(input),e=s.events.A_USDT!;
+    assert.equal(e.proof!.kind,'INTERNAL_TREND');assert.equal(e.proof!.side,sign>0?'LONG':'SHORT');assert.ok(e.proof!.fiveAt<detectedAt);
+    assert.ok(e.proof!.minuteBars.every(r=>r[0]!*1000>=detectedAt));
+    const contrary=advanceRangeResearch({...input,windows:{},discovery:{...input.discovery,anomalies:input.discovery.anomalies.map(a=>({...a,own:-a.own}))}});
+    assert.notEqual(contrary.events.A_USDT!.proof?.kind,'INTERNAL_TREND');
+    const changed=advanceRangeResearch({...input,previous:s,now:now+2000,quotes:{A_USDT:quote(now+2000,mirror(last+.14))},
+      discovery:{...input.discovery,anomalies:input.discovery.anomalies.map(a=>({...a,own:-a.own}))}});
+    assert.notEqual(changed.events.A_USDT!.proof?.kind,'INTERNAL_TREND','fresh internal proof yields when the own anomaly changes direction');
+    const t=structuredClone(trade().t);t.side=e.proof!.side;t.openedAt=now;t.entryPrice=mirror(last+.14);t.stopPrice=e.proof!.stop;
+    t.unified!.anomaly=makeRangeHolding(e,windows[e.id]!,t.entryPrice,q,now);
+    const witness=structuredClone(t.unified!.anomaly),edge=sign>0?e.H:e.L,breakout=candle(T,edge-sign*.1,edge+sign*.15,.02),at=T+B;
+    let result=rangeHoldingDecision(t,quote(at,edge+sign*.15),at,[...prior,breakout],[]);
+    assert.equal(result.exit,undefined);assert.equal(result.memory.breakoutAt,at);assert.equal(result.memory.kind,'INTERNAL_TREND');
+    assert.deepEqual(result.memory.proof,witness.proof);assert.deepEqual(result.memory.window,witness.window);
+    t.unified!.anomaly=result.memory;t.stopPrice=result.stop;
+    const returned=candle(T+B,edge+sign*.15,edge-sign*.07,.02),later=T+2*B+60000;
+    result=rangeHoldingDecision(t,quote(later,edge-sign*.07),later,[...prior,breakout,returned],[]);
+    assert.equal(result.exit,undefined);assert.equal(result.memory.reverseEligible,false);assert.ok(sign*(result.stop-t.stopPrice)>=0);
+  }
+});
+test('fast return can close before another five-minute bar and resume edge return only after confirmed flat',()=>{
+  const f=trade(),t=structuredClone(f.t),minuteStart=f.input.now,
+    minutes=[...Array.from({length:20},(_,i)=>candle(minuteStart-(20-i)*60000,f.H-.095,f.H-.09,.03)),
+      candle(minuteStart,f.H-.09,f.H-.16,.005),candle(minuteStart+60000,f.H-.16,f.H-.23,.005)],now=minuteStart+120000;
+  const decision=rangeHoldingDecision(t,quote(now,f.H-.23),now,f.input.paths.A_USDT,minutes);
+  assert.equal(decision.exit,'RANGE_BREAKOUT_FAILED');assert.equal(decision.memory.reverseEligible,true);
+  f.research.events.A_USDT!.tradeId=t.id;
+  const closed={...t,closedAt:now,unified:{...t.unified!,anomaly:decision.memory}},next=advanceRangeResearch({...f.input,previous:f.research,now:now+6000,
+    windows:f.input.windows,quotes:{A_USDT:quote(now+6000,f.H-.23)},minutes:{A_USDT:minutes},history:[closed]});
+  assert.equal(next.events.A_USDT!.proof!.kind,'EDGE_RETURN');assert.equal(next.events.A_USDT!.proof!.side,'SHORT');
+  assert.notEqual(next.events.A_USDT!.proof!.id,t.unified!.anomaly!.proof.id);
+  const occupied=advanceRangeResearch({...f.input,previous:f.research,now,history:[closed],positions:[t]});assert.equal(occupied.events.A_USDT!.phase,'EXECUTING');
+  const future=rangeHoldingDecision(t,quote(now-1,f.H-.23),now-1,f.input.paths.A_USDT,minutes);assert.equal(future.memory.reverseEligible,false);
 });
 test('below-budget expired plans immediately release all ten admission seats and frozen windows',()=>{
   const f=fixture(),s=structuredClone(f.research),windows:RangeWindows={};s.events={};
@@ -134,7 +222,31 @@ test('actual pending/filled financial obligations never expire or lose their imm
   assert.deepEqual(windows,before);assert.deepEqual(f.t.unified!.anomaly!.window,witness);
   const filled=structuredClone(f.t);filled.paperOrder!.phase='FILLED';
   const holding=advanceRangeResearch({...f.input,previous:next,now:now+2000,windows,paths:{},discovery:undefined,positions:[filled]});
-  assert.equal(holding.events.A_USDT!.phase,'HOLDING');assert.deepEqual(filled.unified!.anomaly!.window,witness);
+  assert.equal(holding.events.A_USDT,undefined);assert.equal(windows[f.e.id],undefined);assert.deepEqual(filled.unified!.anomaly!.window,witness);
+  assert.deepEqual(filled.unified!.anomaly,f.t.unified!.anomaly,'releasing research does not change financial protection');
+});
+test('ten submitted financial orders survive research pressure without losing execution seats or own witnesses',()=>{
+  const f=trade(),previous=structuredClone(f.research),windows:RangeWindows={};previous.events={};
+  const positions=Array.from({length:10},(_,i)=>{const e=structuredClone(f.e),t=structuredClone(f.t);e.symbol=`P${i}_USDT`;e.id=`anomaly-range-v1:${e.symbol}:${T}`;e.phase='EXECUTING';e.reason='';
+    e.tradeId=`pending_${i}`;t.id=e.tradeId;t.symbol=e.symbol;t.unified!.anomaly!.eventId=e.id;t.unified!.anomaly!.proof=structuredClone(e.proof!);
+    previous.events[e.symbol]=e;windows[e.id]=f.input.windows[f.e.id]!;return t;});
+  previous.ranking=[];previous.discovery=undefined;assert.ok(normalizeRangeResearch(previous));const financial=structuredClone(positions);
+  const discovery={...f.input.discovery,anomalies:Array.from({length:8},(_,i)=>({...f.input.discovery.anomalies[0]!,symbol:`NEW_MARKET${i}_USDT`}))},
+    quotes=Object.fromEntries(positions.map(t=>[t.symbol,f.q])),paths=Object.fromEntries(positions.map(t=>[t.symbol,f.input.paths.A_USDT])),
+    next=advanceRangeResearch({...f.input,previous,windows,positions,quotes,paths,discovery});
+  assert.equal(Object.keys(next.events).length,10);assert.ok(Object.values(next.events).every(e=>e.phase==='EXECUTING'));assert.ok(normalizeRangeResearch(next));
+  assert.deepEqual(positions,financial);assert.equal(Object.keys(windows).length,10);
+});
+test('an evicted parked original window is never recaptured later within the same frozen anomaly',()=>{
+  const f=fixture(),symbols=Array.from({length:30},(_,i)=>`EVICT${i}_USDT`),windows:RangeWindows={},
+    paths=Object.fromEntries(symbols.map(s=>[s,f.input.paths.A_USDT])),discovery={...f.input.discovery,anomalies:symbols.map(symbol=>({...f.input.discovery.anomalies[0]!,symbol}))};
+  const previous=advanceRangeResearch({...f.input,paths,windows,discovery}),ids=new Set(Object.keys(windows)),
+    newDiscovery={...f.input.discovery,anomalies:[{...f.input.discovery.anomalies[0]!,symbol:'NEW_USDT'}]},
+    next=advanceRangeResearch({...f.input,previous,paths:{...paths,NEW_USDT:f.input.paths.A_USDT},windows,discovery:newDiscovery});
+  const victim=[...ids].find(id=>!windows[id])!;assert.ok(victim);const symbol=victim.split(':')[1]!;
+  const resumed=advanceRangeResearch({...f.input,previous:next,now:f.input.now+2000,paths,windows,
+    discovery:{...discovery,anomalies:[{...discovery.anomalies.find(a=>a.symbol===symbol)!,frozen:true}]}});
+  assert.equal(resumed.events[symbol],undefined);assert.equal(windows[victim],undefined);assert.ok(resumed.capacitySkipped>next.capacitySkipped);
 });
 test('optional pending outcomes yield bounded bytes and disclose omissions instead of blocking active work',()=>{
   const f=fixture(),s=structuredClone(f.research);s.events={};
@@ -202,7 +314,7 @@ test('actual common contract catalog paginates Bybit, excludes delivery/USDC/del
     calls.length=0;assert.equal(await hub.pinnedCandles('BTC_USDT','5m',120,'BYBIT'),null);assert.equal(calls.length,1);assert.ok(calls[0]!.includes('bybit'));}
   finally{globalThis.fetch=original;}
 });
-test('completed reentry plus later inward minute proof exits at edge, never midrange; sideways reentry exits without flip',()=>{
+test('fast completed reentry exits at edge; later shallow sideways pullbacks keep holding',()=>{
   const f=trade(),t=f.t,m=t.unified!.anomaly!,now=f.input.now+B,
     returned=candle(T+B,f.H+.1,f.H-.09,.02),minuteStart=T+2*B,
     minute=[...Array.from({length:20},(_,i)=>candle(minuteStart-(20-i)*60000,f.H-.095,f.H-.09,.03)),
@@ -215,7 +327,7 @@ test('completed reentry plus later inward minute proof exits at edge, never midr
   assert.equal(insideFirst.exit,undefined);t.unified!.anomaly=insideFirst.memory;
   const sideways=candle(T+2*B,f.H-.1,f.H-.11,.02),late=T+3*B;
   const failed=rangeHoldingDecision(t,quote(late,f.H-.11),late,[...f.input.paths.A_USDT,returned,sideways],[]);
-  assert.equal(failed.exit,'RANGE_BREAKOUT_FAILED');assert.equal(failed.memory.reverseEligible,false);
+  assert.equal(failed.exit,undefined);assert.equal(failed.memory.reverseEligible,false);
   assert.equal(m.window.ohlc64,f.input.windows[f.e.id]!.ohlc64);
 });
 test('profit guard needs three distinct retained quotes and cannot widen or automatically reverse',()=>{

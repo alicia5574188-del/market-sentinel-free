@@ -1,4 +1,15 @@
-# Current repair — 2026-10-04
+# Current goal — ranked rotation and early internal participation
+
+Rank anomalies by completed executable evidence and same-direction internal
+trend, rotate weak observations before30m, and let new strong events compete
+even with ten seats occupied. Preserve original windows through parking/restart.
+Filled positions release research seats; their own financial policy protects
+continuation and ordinary pullbacks. Rapid confirmed reentry may request closure
+and edge return only after native confirmed flat. Original proof/admission,
+financial/control state, bounded resources, full release checks and advancing
+reviewed-main deployment are required.
+
+# Previous repair — 2026-10-04
 
 Recover the stalled anomaly policy: expired plans must release slots below the
 byte limit, optional outcomes must not monopolise deep seats, failed candle

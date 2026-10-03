@@ -1,3 +1,19 @@
+# 2026-10-04 — owner authorizes ranked anomaly rotation and trend holding
+
+Owner requests ranking unusual moves by executable proximity, early entry along
+an existing internal trend, continuation after breaking the frozen range,
+holding through ordinary pullbacks, and edge return after a particularly fast
+confirmed failure. Supersedes prior fixed watch-seat retention and timer-only
+shallow reentry exits. Rank causal same-source proofs ahead of raw magnitude;
+rotate research seats before expiry, preserve original frozen windows, release
+filled research seats while financial trades keep their witnesses/protection.
+Pure policy, data scheduling selectors, compact UI/audit and scoped Worker
+discovery are authorized. Preserve completed 5m/fresh post-anomaly 1m evidence,
+native flat-confirmed reversal, stops that never widen, financial identities,
+fixed1000/native admission/execution, manual LIVE,30/11/2s/write/storage caps.
+Run meaningful causal/rotation/restart/resource and original release gates;
+deploy reviewed main, verify advancing production. No reset or exchange tests.
+
 # 2026-10-04 — repair exhausted anomaly-plan slots
 
 Owner requests repair after the deployed anomaly policy stops admitting new work.

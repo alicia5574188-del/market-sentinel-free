@@ -1644,7 +1644,7 @@ export function resetForwardAccountPreservingLearning(previous:ForwardState,now:
   return next;
 }
 export function forwardUrgentQuoteSymbols(s:ForwardState,now:number,entrySymbols?:Iterable<string>){
-  if(s.directStrategy?.anomalyRange)return [...new Set([...s.positions.map(t=>t.symbol),...Object.values(s.directStrategy.rangeResearch?.events??{}).filter(e=>e.phase==='READY'&&!s.positions.some(t=>t.symbol===e.symbol)).sort((a,b)=>b.score-a.score).map(e=>e.symbol)])];
+  if(s.directStrategy?.anomalyRange)return [...new Set([...s.positions.map(t=>t.symbol),...Object.values(s.directStrategy.rangeResearch?.events??{}).filter(e=>e.phase==='READY'&&!s.positions.some(t=>t.symbol===e.symbol)).sort((a,b)=>(a.rank??Infinity)-(b.rank??Infinity)||b.score-a.score).map(e=>e.symbol)])];
   const allowed=entrySymbols?new Set(entrySymbols):null,keep=(x:string)=>!allowed||allowed.has(x),
     armed=Object.values(s.entryValidations).filter(v=>v.status==="WAITING"&&keep(v.symbol)).sort((a,b)=>a.startedAt-b.startedAt);
   const premium=s.opportunities.filter(o=>o.premium&&o.eligible&&o.expiresAt>now&&keep(o.symbol)).sort(opportunityCompare);
@@ -1656,7 +1656,7 @@ export function forwardUrgentQuoteSymbols(s:ForwardState,now:number,entrySymbols
     ...premium.map(o=>o.symbol),...normal.map(o=>o.symbol),...watched.map(r=>r.symbol)])];
 }
 export function forwardUrgentMinuteSymbols(s:ForwardState,entrySymbols?:Iterable<string>){
-  if(s.directStrategy?.anomalyRange)return [...new Set([...s.positions.map(t=>t.symbol),...Object.values(s.directStrategy.rangeResearch?.events??{}).filter(e=>!['DONE','EXPIRED'].includes(e.phase)).sort((a,b)=>Number(b.phase==='READY')-Number(a.phase==='READY')||b.score-a.score).map(e=>e.symbol)])].slice(0,FORWARD_MINUTE_CONFIRMATION_CAP);
+  if(s.directStrategy?.anomalyRange)return [...new Set([...s.positions.map(t=>t.symbol),...Object.values(s.directStrategy.rangeResearch?.events??{}).filter(e=>!['DONE','EXPIRED'].includes(e.phase)).sort((a,b)=>(a.rank??Infinity)-(b.rank??Infinity)||Number(b.phase==='READY')-Number(a.phase==='READY')||b.score-a.score).map(e=>e.symbol)])].slice(0,FORWARD_MINUTE_CONFIRMATION_CAP);
   const allowed=entrySymbols?new Set(entrySymbols):undefined,keep=(x:string)=>!allowed||allowed.has(x),
     armed=Object.values(s.entryValidations).filter(v=>v.status==="WAITING"&&keep(v.symbol))
       .sort((a,b)=>a.startedAt-b.startedAt).map(v=>v.symbol),

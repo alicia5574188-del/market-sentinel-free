@@ -1,4 +1,16 @@
-IN_PROGRESS — 2026-10-04 incident repair on
+IN_PROGRESS — ranked rotation on codex/anomaly-priority-rotation-20261004,
+based on published main cd5e9cc3355b6828ebc7824aa27f417a932a9847. Policy,
+ranking/parking, fixed-window restoration, early internal trend and rapid
+edge-return handling implemented. Focused29 and direct546 regressions pass,
+including ten pending obligations under pressure, evicted-window non-redraw,
+thirty live watches rotating before timeout and both-side internal entries.
+Inverse10, exit9, live208, members67, equity74, architecture/migration43,
+full npm test/build, typecheck, lint(0errors/13existing warnings), feed/member
+workerd smoke and dry-run pass. Seven protected Worker bodies unchanged.
+Next: original PR CI, reviewed-main deployment and advancing production evidence.
+No reset, LIVE change or exchange test order.
+
+PREVIOUS_DONE — 2026-10-04 incident repair on
 codex/anomaly-range-capacity-repair-20261004. Implemented immediate terminal-plan
 recycling, bounded optional outcomes, stale-plan expiry, deep-seat priority,
 fair failed-request rotation and actual protection-persistence diagnostics.
@@ -13,7 +25,15 @@ Healthy exact-build receipt recycles all10 old plans,6335bytes, scanning478 shar
 account generation/manual LIVE unchanged, storage/research/runtime errors null.
 Follow-up diagnostic fixes the verified same-alarm ordering: market health is
 published before strategy commit, so a valid later cycle is also a source clock.
-Clock regression/typecheck pass; final CI and advancing production receipt pending.
+PR628 deploy run37138978585 succeeded; final production build
+cd5e9cc3355b6828ebc7824aa27f417a932a9847 matches reviewed main. Later read-only
+PR628 job111248806651 observed ten newly admitted CONFIRMING plans and203
+measured markets after warming. Final deployment job111249572576 retained all
+ten new plans and advanced cycle/checkpoint beyond that receipt;20288 research
+bytes, runtime/research/storage errors null, authority healthy, manual LIVE OFF
+and original account generation unchanged. Seven protected Worker method bodies
+and native financial/auth/order modules match pre-repair main. No reset or test
+exchange order. Original final CI passes; durable release receipts in PR627/628.
 
 PREVIOUS_RELEASE — 2026-10-03. Released through PR626; production main
 9374f4b2c90401881af96c23ce89559a07ad6f26. Original main CI/deploy run

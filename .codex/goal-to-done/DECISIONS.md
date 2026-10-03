@@ -1,3 +1,26 @@
+# 2026-10-04 — ranked anomaly rotation
+
+Keep actual submitted execution protected. Fresh executable evidence wins;
+otherwise completed aligned internal setups precede breakout, edge return and
+raw magnitude. At most10 formal seats, usually8 merit plus2 rotating checks;
+deep discovery at most30, with4 rotating checks and two-source merit preference.
+Rotation advances multiple seats each minute within existing fetch/poll budgets.
+Evaluate newcomers before formal selection; preserve at most30 lossless original
+windows while parked. A scanner frozen flag prevents redrawing an evicted window
+inside the same episode. Optional outcomes/rank labels yield before causal
+financial evidence under6KiB/24KiB budgets; weak unheld plans park if richer proof
+rows consume the original byte cap. Under pressure a submitted research row
+may omit its proof duplicate only when the actual financial trade owns the
+identical proof ID; no financial witness or protection is removed. Filled holdings use their financial witness
+and free observation seats. Internal proof can use an already completed5m but
+requires new strong minutes beginning after discovery, aligned own move and
+remaining native space/cost checks. Its immutable kind/proof stay unchanged
+after breakout; mutable breakoutAt enables continued breakout management.
+Rapid return within5m requires completed inward minute proof, same frozen edge,
+actual edge execution and confirmed flat; no midpoint reversal. Late shallow
+pullbacks and timers alone do not close. Hard loss and earned-profit protection
+never widen. No forced entries, verification orders or historical profit claims.
+
 # 2026-10-04 — plan capacity incident
 
 Private receipt shows9 EXPIRED plus1 CONFIRMING in ten slots,18,338 research

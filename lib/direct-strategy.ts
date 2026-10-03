@@ -509,7 +509,7 @@ function manageMarketDirect(s:ForwardState,input:Input,ready:boolean){
   }
   ds.plans=Object.fromEntries(s.opportunities.map(o=>[o.symbol,marketPlan(s,o,input)]));
   if(ds.anomalyRange){
-    for(const p of Object.values(ds.plans).sort((a,b)=>b.candidate.score-a.candidate.score)){
+    for(const p of Object.values(ds.plans).sort((a,b)=>(ds.rangeResearch?.events[a.symbol]?.rank??Infinity)-(ds.rangeResearch?.events[b.symbol]?.rank??Infinity)||b.candidate.score-a.candidate.score)){
       const e=ds.rangeResearch?.events[p.symbol],q=input.quotes[p.symbol],c=input.contracts[p.symbol];
       if(!e?.proof||!q||!c||!p.candidate.eligible||p.consumed||s.positions.some(t=>t.openedAt===now))continue;
       p.holdReason='按冻结计划持有；普通回调复查，结构失效退出';p.exitCondition='实际硬保护或计划结构失效；边缘新证明才可反向';
