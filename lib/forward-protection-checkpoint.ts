@@ -5,6 +5,7 @@ import {boundedDirectExitResearch} from './direct-exit-research.ts';
 import {validMarketAuthority} from './market-authority.ts';
 import {normalizeEpisodeResearch} from './episode-research.ts';
 import {normalizeSpecialResearch,type SpecialResearch} from './special-move.ts';
+import {normalizeEventResearch,type EventResearch} from './event-response.ts';
 export const FORWARD_PROTECTION_CHECKPOINT_VERSION="adaptive-ten-protection-v1";
 type Row=Pick<Trade,"id"|"openedAt"|"favorable"|"adverse"|"lastPrice"|"lastQuoteAt"|"stopPrice"|"firstProfitAt"|"holdScore"|"profitFloorRate"|"peakPnlRate"|"winnerManagement"|"review"|"unified"|"positionIntelligence"|"directExitResearch"|"directExitResearchOmitted">;
 export type ForwardProtectionCheckpoint={version:typeof FORWARD_PROTECTION_CHECKPOINT_VERSION;startedAt:number;baseRevision:number;
@@ -12,7 +13,7 @@ export type ForwardProtectionCheckpoint={version:typeof FORWARD_PROTECTION_CHECK
   shadow?:{cutoverAt:number;peakEquity:number;maxDrawdown:number;positions:Row[]};
   unifiedReference?:{cutoverAt:number;peakEquity:number;maxDrawdown:number;positions:Row[]};
   directMemory?:{cutoverAt:number;memory:Record<string,DirectMemory>;marketAuthority?:import('./market-authority.ts').MarketAuthority;
-    episodeResearch?:import('./episode-research.ts').EpisodeResearch;specialResearch?:SpecialResearch}};
+    episodeResearch?:import('./episode-research.ts').EpisodeResearch;specialResearch?:SpecialResearch;eventResearch?:EventResearch}};
 type LegacyProtectionRow=Partial<Row>&{id?:string;openedAt?:number;favorable?:number;adverse?:number;lastPrice?:number;lastQuoteAt?:number;
   stopPrice?:number;profitProtection?:{floorRate?:number}|null};
 type LegacyProtectionCheckpoint={version:"forward-protection-checkpoint-v1";startedAt:number;baseRevision:number;basePersistedAt:number;
@@ -36,6 +37,7 @@ function migrateLegacyCheckpoint(s:ForwardState,c:LegacyProtectionCheckpoint):Fo
     basePersistedAt:c.basePersistedAt,quoteCycleAt:c.quoteCycleAt,peakEquity:c.peakEquity,maxDrawdown:c.maxDrawdown,positions};
 }
 export function forwardProtectionChanged(previous:ForwardState,next:ForwardState){
+  if(next.directStrategy?.eventResponse&&JSON.stringify(next.directStrategy.eventResearch)!==JSON.stringify(previous.directStrategy?.eventResearch))return true;
   if(next.directStrategy?.specialMove&&JSON.stringify(next.directStrategy.specialResearch)!==JSON.stringify(previous.directStrategy?.specialResearch))return true;
   if(next.directStrategy?.marketAuthority&&JSON.stringify(next.directStrategy.marketAuthority)!==JSON.stringify(previous.directStrategy?.marketAuthority))return true;
   if(next.directStrategy&&JSON.stringify(next.directStrategy.memory??{})!==JSON.stringify(previous.directStrategy?.memory??{}))return true;
@@ -58,6 +60,7 @@ export function buildForwardProtectionCheckpoint(s:ForwardState):ForwardProtecti
     ...(s.directStrategy?{directMemory:{cutoverAt:s.directStrategy.cutoverAt,memory:structuredClone(s.directStrategy.memory??{}),
       marketAuthority:s.directStrategy.marketAuthority&&!s.directStrategy.specialMove?structuredClone(s.directStrategy.marketAuthority):undefined,
       specialResearch:normalizeSpecialResearch(s.directStrategy.specialResearch),
+      eventResearch:normalizeEventResearch(s.directStrategy.eventResearch),
       episodeResearch:normalizeEpisodeResearch(s.directStrategy.episodeResearch)}}:{}),
     ...(s.inverseTrial&&!s.directStrategy?{shadow:{cutoverAt:s.inverseTrial.cutoverAt,peakEquity:s.inverseTrial.source.peakEquity,
       maxDrawdown:s.inverseTrial.source.maxDrawdown,positions:rows(s.inverseTrial.source.positions,false)}}:{}),
@@ -88,6 +91,9 @@ export function restoreForwardProtectionCheckpoint(s:ForwardState,value:unknown)
         ||(r.region&&(![r.region.lower,r.region.upper,r.region.center,r.region.formedAt].every(finite)||r.region.lower<=0||r.region.upper<=r.region.lower))))
       throw new Error('独立策略事件检查点损坏；保留账户');
     next.directStrategy.memory=structuredClone(m.memory);
+    const response=normalizeEventResearch(m.eventResearch);
+    if(m.eventResearch&&!response)next.directStrategy.eventResearchError='事件研究检查点不可用，保留基础事件与持仓保护';
+    if(response&&response.updatedAt>=(next.directStrategy.eventResearch?.updatedAt??0))next.directStrategy.eventResearch=response;
     const special=normalizeSpecialResearch(m.specialResearch);
     if(special&&special.updatedAt>=(next.directStrategy.specialResearch?.updatedAt??0))next.directStrategy.specialResearch=special;
     const observed=normalizeEpisodeResearch(m.episodeResearch);
@@ -98,19 +104,28 @@ export function restoreForwardProtectionCheckpoint(s:ForwardState,value:unknown)
       if(r?.id===p.id){p.region=structuredClone(r.region);p.continuationSeen=!!p.continuationSeen||r.continuationSeen;}}
   }
   for(const t of next.positions){const r=rows.get(t.id);if(!r||r.openedAt!==t.openedAt||![r.favorable,r.adverse,r.lastPrice,r.lastQuoteAt,r.stopPrice,r.holdScore,r.profitFloorRate,r.peakPnlRate].every(finite)
-      ||r.lastPrice<=0||r.stopPrice<=0||r.favorable<t.favorable||r.adverse<t.adverse||r.lastQuoteAt<t.lastQuoteAt
-      ||(!t.inverseCopy&&(t.unified?.branch!=='RETURN'||t.unified.marketRoute)&&((t.side==="LONG"&&r.stopPrice+1e-12<t.stopPrice)||(t.side==="SHORT"&&r.stopPrice-1e-12>t.stopPrice))))
+      ||r.lastPrice<=0||r.stopPrice<=0||r.favorable<0||r.adverse<0||r.lastQuoteAt<0||r.profitFloorRate!<0||r.peakPnlRate!<0)
       throw new Error("前向保护检查点异常；保留账户");
-    t.favorable=r.favorable;t.adverse=r.adverse;t.lastPrice=r.lastPrice;t.lastQuoteAt=r.lastQuoteAt;t.stopPrice=r.stopPrice;
-    t.firstProfitAt=r.firstProfitAt??null;t.holdScore=r.holdScore;t.profitFloorRate=r.profitFloorRate;t.peakPnlRate=r.peakPnlRate;if(r.winnerManagement)t.winnerManagement=structuredClone(r.winnerManagement);
-    if(r.review?.diagnosticVersion)t.review=structuredClone(r.review);
+    // A staged overlay can be older than the in-memory protection restored on
+    // the previous tick. Same financial generation is a join, not an assertion
+    // that every observation is newer. Never regress quote time or earned risk.
+    const newer=r.lastQuoteAt>=t.lastQuoteAt;
+    t.favorable=Math.max(t.favorable,r.favorable);t.adverse=Math.max(t.adverse,r.adverse);
+    if(newer){t.lastPrice=r.lastPrice;t.lastQuoteAt=r.lastQuoteAt;t.holdScore=r.holdScore;}
+    t.stopPrice=t.inverseCopy||t.unified?.branch==='RETURN'&&!t.unified.marketRoute
+      ?(newer?r.stopPrice:t.stopPrice):t.side==='LONG'?Math.max(t.stopPrice,r.stopPrice):Math.min(t.stopPrice,r.stopPrice);
+    t.firstProfitAt=t.firstProfitAt&&r.firstProfitAt?Math.min(t.firstProfitAt,r.firstProfitAt):t.firstProfitAt??r.firstProfitAt??null;
+    t.profitFloorRate=Math.max(t.profitFloorRate??0,r.profitFloorRate!);t.peakPnlRate=Math.max(t.peakPnlRate??0,r.peakPnlRate!,t.favorable);
+    if(newer&&r.winnerManagement)t.winnerManagement=structuredClone(r.winnerManagement);
+    if(newer&&r.review?.diagnosticVersion)t.review=structuredClone(r.review);
     const research=boundedDirectExitResearch(r.directExitResearch);
     if(research){t.directExitResearch=research;delete t.directExitResearchOmitted;}
     else if(r.directExitResearchOmitted){delete t.directExitResearch;t.directExitResearchOmitted=true;}}
   for(const t of next.positions){const r=rows.get(t.id)!;
     if(t.unified){if(!r.unified||r.unified.branch!==t.unified.branch||r.unified.sourceId!==t.unified.sourceId||r.unified.referenceId!==t.unified.referenceId||r.unified.initialStop!==t.unified.initialStop)
-      throw new Error('统一策略保护身份不一致');t.unified=structuredClone(r.unified);
-      if(r.positionIntelligence)t.positionIntelligence=structuredClone(r.positionIntelligence);}}
+      throw new Error('统一策略保护身份不一致');
+      if(r.unified.lastDecisionAt>=t.unified.lastDecisionAt){t.unified=structuredClone(r.unified);
+        if(r.positionIntelligence)t.positionIntelligence=structuredClone(r.positionIntelligence);}}}
   if(next.unifiedExecution&&!next.directStrategy){
     const cRef=c.unifiedReference,ref=next.unifiedExecution.reference;
     if(!cRef||cRef.cutoverAt!==next.unifiedExecution.cutoverAt||![cRef.peakEquity,cRef.maxDrawdown].every(finite)

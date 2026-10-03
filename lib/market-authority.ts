@@ -6,11 +6,13 @@ export const MARKET_AUTHORITY_VERSION='market-regime-authority-v1';
 export type MarketPhase='HANDOFF'|'RANGE'|'UP'|'DOWN';
 type Side='LONG'|'SHORT';
 export type MarketRoute={version:typeof MARKET_AUTHORITY_VERSION;epoch:number;phase:MarketPhase;
-  controllerVersion?:'adaptive-causal-v1'|'special-move-v1';
+  controllerVersion?:'adaptive-causal-v1'|'special-move-v1'|'event-response-v1';
+  eventId?:string;observedProgress?:number;
+  responseAnchor?:number;responsePeak?:number;responseNoise?:number;
   proofPrice?:number;
   proofPath?:'HOLD_OUTSIDE'|'RETEST_RESTART';proofBars?:number[];
   relation:'FOLLOWER'|'INDEPENDENT'|'LOCAL';branch:'RETURN'|'CONTINUATION';side:Side;proofAt:number;
-  stop:number;target:number;targetBasis:'ACCEPTED_CENTER'|'OBSERVED_OBSTACLE'|'VOLATILITY_ESTIMATE';
+  stop:number;target:number;targetBasis:'ACCEPTED_CENTER'|'OBSERVED_OBSTACLE'|'VOLATILITY_ESTIMATE'|'MEASURED_RESPONSE';
   reference:ReactionArea;reason:string};
 export type CoinEpisode={reference:ReactionArea;lastAt:number;phase:MarketPhase;side:Side|null;
   dataReady?:boolean;
@@ -249,7 +251,9 @@ export function validMarketAuthority(a:MarketAuthority){return a?.version===MARK
     p.reference.lower,p.reference.upper,p.reference.center,p.reference.formedAt].every(Number.isFinite)
     &&p.reference.lower>0&&p.reference.upper>p.reference.lower&&p.independentBars<=3);}
 export function validMarketRoute(r:MarketRoute){return r?.version===MARKET_AUTHORITY_VERSION
-  &&(!r.controllerVersion||r.controllerVersion==='adaptive-causal-v1'||r.controllerVersion==='special-move-v1')
+  &&(!r.controllerVersion||r.controllerVersion==='adaptive-causal-v1'||r.controllerVersion==='special-move-v1'||r.controllerVersion==='event-response-v1'
+    &&typeof r.eventId==='string'&&!!r.eventId&&[r.observedProgress,r.responseAnchor,r.responsePeak,r.responseNoise].every(Number.isFinite)
+    &&r.responseAnchor!>0&&r.responsePeak!>0&&r.responseNoise!>0&&r.targetBasis==='MEASURED_RESPONSE')
   &&(r.proofPrice===undefined||Number.isFinite(r.proofPrice)&&r.proofPrice>0)
   &&Number.isSafeInteger(r.epoch)&&r.epoch>0&&['RANGE','UP','DOWN'].includes(r.phase)
   &&['FOLLOWER','INDEPENDENT','LOCAL'].includes(r.relation)&&['RETURN','CONTINUATION'].includes(r.branch)

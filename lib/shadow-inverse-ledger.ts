@@ -5,6 +5,7 @@ import {SHADOW_FEE_RATE,INVERSE_COST,INVERSE_FEE_POLICY,recordedInverseFeeRate,t
 import {FIXED_ALLOCATION_EQUITY,FIXED_ALLOCATION_POLICY} from './fixed-allocation.ts';
 import type {InverseLossResearch} from './inverse-loss-research.ts';
 import {validMarketAuthority,validMarketRoute} from './market-authority.ts';
+import {validResponseHolding} from './event-response.ts';
 export {INVERSE_COST} from './inverse-fee.ts';
 
 export const SHADOW_INVERSE_VERSION='shadow-inverse-v1';
@@ -273,6 +274,9 @@ export function assertInverseTrade(t:Trade){
 export function assertInverseTrial(state:ForwardState){
   if(state.directStrategy){
     const ds=state.directStrategy;
+    if(ds.eventResponse&&(ds.eventResponse.version!=='event-response-v1'||!finite(ds.eventResponse.cutoverAt)
+      ||ds.eventResponse.cutoverAt<state.startedAt))
+      throw new Error('事件响应执行记忆损坏；保留账户');
     if(ds.specialMove&&(ds.specialMove.version!=='special-move-v1'||!finite(ds.specialMove.cutoverAt)||ds.specialMove.cutoverAt<=0))
       throw new Error('特别币执行版本损坏；保留账户');
     if(ds.adaptive&&(ds.adaptive.version!=='adaptive-causal-v1'||!finite(ds.adaptive.cutoverAt)||ds.adaptive.cutoverAt<=0))
@@ -291,6 +295,8 @@ export function assertInverseTrial(state:ForwardState){
     const ids=new Set<string>();
     for(const t of [...state.positions,...state.history])if(t.unified?.version==='dual-thesis-v2'){
       const u=t.unified;
+      if(u.response&&(!validResponseHolding(u.response)||u.response.eventId!==u.marketRoute?.eventId
+        ||u.marketRoute.controllerVersion!=='event-response-v1'))throw new Error('事件持仓响应记忆损坏；保留账户');
       if(u.adaptive&&(u.adaptive.version!=='adaptive-causal-v1'
         ||![u.adaptive.adoptedAt,u.adaptive.holdingSupport,u.adaptive.holdingSupportAt,u.adaptive.sourceAt].every(finite)
         ||u.adaptive.holdingSupport<=0||u.adaptive.peakNetPnl!==null&&!finite(u.adaptive.peakNetPnl)

@@ -357,3 +357,15 @@ test('compact execution merges held coins, folds extra watches and keeps exit an
   assert.match(html,/WAIT_REASON/);assert.match(html,/AWAIT_FILL/);
   assert.equal(html.split('A / USDT').length-1,1);
 });
+test('event execution renders actual retained response, blocker, missing outcomes and folded additional events',()=>{
+  const data=account(),event=symbol=>({id:symbol,symbol,side:'SHORT',kind:'ACTIVE_NONRESPONSE',phase:'READY',fresh:true,active:true,
+    score:90,reason:'RESPONSE_REASON',detectedAt:data.updatedAt-600000,attempts:1,failures:0,turnover15:10000,
+    last:{progress:.01,retained:.75,counter:.003},outcomes:[{minutes:15,status:'MISSING'},{minutes:30,status:'PENDING'}],
+    admission:{at:data.updatedAt,reason:'NATIVE_BLOCKER'}});
+  data.directStrategy={eventResponse:{version:'event-response-v1'},plans:[],eventResearch:{updatedAt:data.updatedAt,capacitySkipped:0,
+    events:Object.fromEntries(['A','B','C','D'].map(k=>[`${k}_USDT`,event(`${k}_USDT`)]))}};
+  const html=render('app/market-intelligence-execution.tsx',{data,now:data.updatedAt,liveEnabled:false});
+  assert.match(html,/重点事件/);assert.match(html,/自身推进 1\.00%/);assert.match(html,/优势保留 75%/);
+  assert.match(html,/NATIVE_BLOCKER/);assert.match(html,/缺少实际观察/);assert.match(html,/其余事件 · 1 个/);
+  assert.equal(html.split('<section ').length-1,2);assert.doesNotMatch(html,/区域外|支撑|压力|波动估计|<details[^>]*\bopen(?:=|>)/);
+});

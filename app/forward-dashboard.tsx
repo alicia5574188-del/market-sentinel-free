@@ -115,7 +115,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
 
     {(liveMounted||(tab==="paper"&&actualLedger&&liveEnabled))&&<div className="fr-live-panel-host" hidden={tab!=="live"&&!(tab==="paper"&&actualLedger&&liveEnabled)}>{livePanel}</div>}
     {(error||data?.storage.error)&&<aside className="fr-error" role="alert"><b>运行提示</b><p>{data?.storage.error??error}</p></aside>}
-    <footer className="fr-footer"><span>行情更新 {time(feedAt)} · 运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>{data?.directStrategy?.specialMove?.version??data?.directStrategy?.version??data?.engineVersion??data?.version??"—"} · 北京时间</span></footer>
+    <footer className="fr-footer"><span>行情更新 {time(feedAt)} · 运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>{data?.directStrategy?.eventResponse?.version??data?.directStrategy?.specialMove?.version??data?.directStrategy?.version??data?.engineVersion??data?.version??"—"} · 北京时间</span></footer>
     <nav className="fr-nav">{nav.map(([id,icon,label])=><button key={id} className={id===tab?"selected":""} onClick={()=>select(id)}><span>{icon}</span><b>{label}</b>{id==="paper"&&(liveEnabled?(liveOverview?.positionCount??0):positions.length)>0&&<i>{liveEnabled?liveOverview?.positionCount:positions.length}</i>}</button>)}</nav>
   </main>;
 }

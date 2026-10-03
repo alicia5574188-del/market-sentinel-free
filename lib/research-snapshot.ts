@@ -128,6 +128,16 @@ export function buildReviewSnapshot(input:{view:ObjectRow;buildSha:string|null;s
       directStrategy:v.directStrategy??null,
       episodeResearch:obj(v.directStrategy).episodeResearch??null,
       specialResearch:obj(v.directStrategy).specialResearch??null,
+      eventResearch:obj(v.directStrategy).eventResearch??null,
+      eventResponseAudit:{version:'event-response-audit-v1',
+        policy:obj(v.directStrategy).eventResponse??null,
+        events:Object.values(obj(obj(v.directStrategy).eventResearch).events??{}),
+        holdings:trades.filter(t=>t.unified?.response).map(t=>({tradeId:t.id,symbol:t.symbol,status:t.status,
+          signalAt:t.paperOrder?.signalAt??t.openedAt,fillAt:t.paperOrder?.confirmedAt??t.openedAt,entryPrice:t.entryPrice,
+          response:t.unified!.response,entryReason:t.unified!.entryReason,holdReason:t.unified!.holdReason,exitReason:t.exitReason,
+          actualExitPrice:t.exitPrice,netPnl:t.netPnl,entryFee:t.entryFee,exitFee:t.exitFee})),
+        coverage:'BOUNDED_OBSERVED_EVENTS; NO_SYNTHETIC_PRICE_HISTORY; MISSING_CHECKPOINTS_EXPLICIT',
+        target:'NO_GEOMETRIC_PRICE_TARGET; OBSERVED_PROGRESS_IS_NOT_EXPECTED_PROFIT'},
       unifiedExecution:v.unifiedExecution??null,referenceTrades:obj(obj(v.unifiedExecution).baseline).retainedTrades??[],sourceToInverse:trades.filter(t=>t.inverseCopy).map(t=>({sourceId:t.inverseCopy!.sourceId,inverseId:t.id})),
       tradeQuality:currentShadow,retiredTrades:arr(rawShadow.retiredTrades),priorAccount:{excludedShadowCount:olderShadow.length+arr(rawShadow.retiredTrades).length,excludedShadowTradeIds:olderShadow.map(t=>t.tradeId),
         excludedOpenRecords:olderShadow.filter(t=>t.status==='OPEN').length,status:'ISOLATED_NOT_ASSUMED_CLOSED'},
@@ -178,6 +188,12 @@ export function reviewVersionDiagnostics(s:ReviewSnapshot){
 }
 
 export function finalizeReviewSnapshot(s:ReviewSnapshot):ReviewSnapshot{
+  if(s.research.eventResponseAudit){const audit=obj(s.research.eventResponseAudit);
+    audit.researchError=obj(s.research.directStrategy).eventResearchError??null;
+    audit.holdings=s.trades.filter(t=>t.unified?.response).map(t=>({tradeId:t.id,symbol:t.symbol,status:t.status,
+      signalAt:t.paperOrder?.signalAt??t.openedAt,fillAt:t.paperOrder?.confirmedAt??t.openedAt,entryPrice:t.entryPrice,
+      response:t.unified!.response,entryReason:t.unified!.entryReason,holdReason:t.unified!.holdReason,exitReason:t.exitReason,
+      actualExitPrice:t.exitPrice,netPnl:t.netPnl,entryFee:t.entryFee,exitFee:t.exitFee}));}
   const closed=s.trades.filter(t=>t.status==='CLOSED'&&t.openedAt>=s.meta.accountStartedAt),open=s.trades.filter(t=>t.status==='OPEN');
   s.research.inverseLossExit=inverseLossResearchView(s.trades);
   s.research.directExitResearch=directExitResearchView(s.trades);
