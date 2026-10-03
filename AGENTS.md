@@ -1,4 +1,22 @@
-# 2026-10-03 — current owner direction: research first, adaptive design second
+# 2026-10-03 — owner requests adaptive execution deployment
+
+The research-only phase is deployed (PR619). Owner now says to launch and observe
+the adaptive system. Implement the documented adaptive entry/holding controller:
+actual failed departure/continuation for returns, accepted retained progress for
+continuation, independent completed holding support and causal profit defense.
+Do not close a filled holding merely because market permission changed. Keep
+existing hard stops and never widen them. Preserve current financial identities,
+history, fixed allocation/risk limits, native sizing, owner/member intent and
+scan30/2s cadence. Repair observed PAPER depth using targeted real20level books
+only during pending actions, with existing BBO protection fallback. No fabricated
+liquidity or verification order, no account reset, no historical profit backtest.
+This authorization permits pure controller/source helpers and processAdaptiveBooks
+method hash updates only for this targeted public depth observation, and
+advanceForwardNow only to skip duplicate research computation in the same cycle. Other frozen
+methods and native execution stay unchanged. Reviewed-main CI, original deployment
+and advancing health/research/controller receipts are mandatory.
+
+# 2026-10-03 — completed research-first phase
 
 Implement independent causal episode/holding research before a new execution
 controller: distinguish fast entry proof from persistent holding anchors, price

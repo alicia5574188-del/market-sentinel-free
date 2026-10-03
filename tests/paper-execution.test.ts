@@ -30,6 +30,18 @@ function fixture(){
   const advance=(at:number,price=100,depth=100000)=>advancePaperExecution(s,{TEST_USDT:quote(at,price,depth)},{TEST_USDT:c},at);
   return{s,t,advance};
 }
+test('adaptive PAPER waits for actual depth and then matches several observed levels without increasing the request',()=>{
+  const {s,t,advance}=fixture();s.directStrategy!.adaptive={version:'adaptive-causal-v1',cutoverAt:T};
+  const wanted=t.paperOrder!.requestedContracts,planned=t.contracts;advance(T+2000);
+  advancePaperExecution(s,{TEST_USDT:{...quote(T+4000,100,10),bookCoverage:'BBO'}},{TEST_USDT:c},T+4000);
+  assert.equal(t.paperOrder!.phase,'SUBMITTED');assert.equal(s.fees,0);assert.equal(s.turnover,0);
+  const depth={...quote(T+6000),bookCoverage:'DEPTH20' as const,bookSequence:7,
+    bids:[{price:100,size:10},{price:99.99,size:100000}],asks:[{price:100.02,size:10},{price:100.03,size:100000}]};
+  advancePaperExecution(s,{TEST_USDT:depth},{TEST_USDT:c},T+6000);
+  assert.equal(t.paperOrder!.phase,'FILLED');assert.ok(t.contracts>10/100.02);assert.ok(t.contracts<=planned);
+  assert.equal(t.paperOrder!.requestedContracts,wanted);assert.ok(t.entryPrice>=99.99&&t.entryPrice<=100);
+  normalizeForward(s,T+6000);
+});
 test('signal is a committed instruction, not a paid PAPER fill; LIVE starts before PAPER confirmation',()=>{
   const {s,t,advance}=fixture();near(s.balance,1000);near(s.fees,0);near(s.turnover,0);
   assert.equal(paperFilled(t),false);near(forwardEquity(s,{TEST_USDT:quote(T,120)},T).equity,1000);

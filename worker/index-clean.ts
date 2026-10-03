@@ -8,7 +8,7 @@ import { LiveHistoryReader } from "../lib/live-history-reader.ts";
 import { DurableObject } from "cloudflare:workers";
 import handler from "vinext/server/app-router-entry";
 import { GatePublicError, fetchActiveContracts, fetchContractStats, fetchGateRadarTickers, fetchLiquidations, fetchRecentTrades,
-  fetchStructureCandles, fetchTickerBbo, fetchUrgentFuturesBook } from "../lib/gate-market.ts";
+  fetchStructureCandles, fetchTickerBbo, fetchUrgentFuturesBook, fetchPendingExecutionBook } from "../lib/gate-market.ts";
 import { MarketDataHub } from "../lib/market-data-hub.ts";
 import { GateStreamingFeed } from "../lib/gate-stream.ts";
 import { CORRELATED_DIRECTION_RISK_CAP, PORTFOLIO_RISK_CAP, remainingStressRisk, STALE_AFTER_MS, SYSTEM_VERSION, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
@@ -523,6 +523,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private forwardMinuteRetryAt = new Map<string,number>();
   private gateStream = new GateStreamingFeed();
   private paperBooks=new Map<string,{observedAt:number;bids:{price:number;size:number}[];asks:{price:number;size:number}[]}>();
+  private paperDepthBooks=new Map<string,import('../lib/liquidity-core.ts').BookSnapshot>();
+  private paperDepthRefresh:Promise<void>|null=null;
   private marketHub = new MarketDataHub();
   private forwardMinuteQuoteBars: Record<string,{minute:number;open:number;high:number;low:number;close:number;samples:number;
     firstAt:number;lastAt:number;completed:Array<{time:number;open:number;high:number;low:number;close:number;volume:number}>}> = {};
@@ -1273,7 +1275,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // Observations use existing inputs after all financial decisions. Optional
       // failure neither changes those decisions nor requests another write.
       try{const ds=next.state.directStrategy;
-        if(ds?.marketAuthority)ds.episodeResearch=advanceEpisodeResearch({previous:ds.episodeResearch,now,
+        if(ds?.marketAuthority&&ds.episodeResearch?.updatedAt!==now)ds.episodeResearch=advanceEpisodeResearch({previous:ds.episodeResearch,now,
           accountStartedAt:next.state.startedAt,authority:ds.marketAuthority,states:next.state.extremumRegime.symbols,
           paths:this.strategyCandles,minutePaths:this.forwardMinutePaths(),quotes:executionQuotes,
           positions:next.state.positions,history:next.state.history});
@@ -3476,11 +3478,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(!row?.fresh||row.bestBid==null||row.bestAsk==null||now-row.observedAt>STALE_AFTER_MS)return[];
       const external=this.marketHub.quote(symbol,now),mid=(row.bestBid+row.bestAsk)/2,
         meta=this.runtime.contractMeta[symbol],book=meta?this.gateStream.book(symbol,this.runtime.tickSize[symbol]??1e-8,meta.quantoMultiplier,now):null,
-        executionBook=book??this.paperBooks.get(symbol),
+        depth=this.paperDepthBooks.get(symbol),hasDepth=!!depth&&depth.observedAt<=now&&now-depth.observedAt<=2000,
+        executionBook=hasDepth?depth:book??this.paperBooks.get(symbol),
         bidDepth=book?.bids.slice(0,5).reduce((n,x)=>n+x.size,0)??0,askDepth=book?.asks.slice(0,5).reduce((n,x)=>n+x.size,0)??0,
         gateImbalance=bidDepth+askDepth>0?(bidDepth-askDepth)/(bidDepth+askDepth):0,
         bookImbalance=(external?.liquiditySourceCount??0)>=2?external!.bookImbalance:gateImbalance;
-      return[[symbol,{bestBid:row.bestBid,bestAsk:row.bestAsk,observedAt:row.observedAt,fresh:true,
+      return[[symbol,{bestBid:hasDepth?depth!.bids[0]!.price:row.bestBid,bestAsk:hasDepth?depth!.asks[0]!.price:row.bestAsk,
+        observedAt:hasDepth?depth!.observedAt:row.observedAt,fresh:true,bookCoverage:hasDepth?'DEPTH20' as const:'BBO' as const,
         ...(executionBook&&executionBook.observedAt<=now&&now-executionBook.observedAt<=STALE_AFTER_MS?{bids:executionBook.bids.slice(0,50),asks:executionBook.asks.slice(0,50),
           ...('sequence' in executionBook&&typeof executionBook.sequence==='number'?{bookSequence:executionBook.sequence}:{})}:{}),
         entryReady:this.symbolEntryReady(symbol,now),sourceCount:external?.sourceCount??0,
@@ -3579,6 +3583,22 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.ctx.waitUntil(this.gateStream.ensure(this.runtime.symbols,[],[],now));
     }
     const urgent=new Set([...this.currentAuthorityProtectionSymbols(),...this.forwardUrgentSymbols(now)]);
+    // Real observed depth only while an order has an execution obligation.
+    // Rotate at most two reads per existing2s cycle; misses retain BBO protection.
+    const pending=this.forwardState?.positions.filter(t=>t.paperOrder&&(t.paperOrder.phase!=='FILLED'||t.paperOrder.action)).map(t=>t.symbol)??[],
+      wantedDepth=new Set(pending);
+    for(const symbol of this.paperDepthBooks.keys())if(!wantedDepth.has(symbol))this.paperDepthBooks.delete(symbol);
+    if(pending.length&&!this.paperDepthRefresh){
+      const cursor=Math.floor(now/LOOP_MS)%pending.length,depthSymbols=[...pending.slice(cursor),...pending.slice(0,cursor)].slice(0,2);
+      const task=Promise.allSettled(depthSymbols.map(symbol=>fetchPendingExecutionBook(symbol,this.runtime.tickSize[symbol]??.0001,
+        this.runtime.contractMeta[symbol]?.quantoMultiplier??1))).then(results=>{
+          const stillPending=new Set(this.forwardState?.positions.filter(t=>t.paperOrder&&(t.paperOrder.phase!=='FILLED'||t.paperOrder.action)).map(t=>t.symbol));
+          results.forEach((r,i)=>{if(r.status==='fulfilled'&&stillPending.has(depthSymbols[i]!)&&r.value.observedAt<=Date.now()&&Date.now()-r.value.observedAt<=2000){
+            this.paperDepthBooks.set(depthSymbols[i]!,r.value);this.gateStream.used('rest');}});
+          while(this.paperDepthBooks.size>10)this.paperDepthBooks.delete(this.paperDepthBooks.keys().next().value!);
+        });
+      this.paperDepthRefresh=task;this.ctx.waitUntil(task.finally(()=>{if(this.paperDepthRefresh===task)this.paperDepthRefresh=null;}));
+    }
     const streamBook=(symbol:string)=>this.gateStream.book(symbol,this.runtime.tickSize[symbol]??.0001,
       this.runtime.contractMeta[symbol]?.quantoMultiplier??1,Math.max(now,Date.now()));
     const due=cycleSymbols.filter(symbol=>streamBook(symbol)||(this.runtime.feedFailures[symbol]?.retryAt??0)<=now);

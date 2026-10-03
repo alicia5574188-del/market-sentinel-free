@@ -157,6 +157,7 @@ async function checkpointWorker(){
   const f=fixture();openDirectPlan(f.s,f.p,q(),c,T,{TEST_USDT:q()});
   // Cutover is committed separately; this fixture exercises subsequent 2s/10s protection.
   f.s.directStrategy!.marketAuthority=initialMarketAuthority(T);
+  f.s.directStrategy!.adaptive={version:'adaptive-causal-v1',cutoverAt:T};
   f.s.paperExecution={version:'live-steps-paper-v1',cutoverAt:T,cancelled:[]};
   f.s.storage={persistedAt:T,error:null};f.s.lastQuoteCycleAt=T;
   const data=new Map<string,unknown>(Object.entries((await prepareForwardWrite(null,f.s,T,{compact:true})).entries)),writes:string[][]=[];
@@ -173,6 +174,20 @@ async function checkpointWorker(){
   let price=101;h.forwardQuotes=(now:number)=>({TEST_USDT:{...q(price,now),bids:[{price,size:100000}],asks:[{price:price+.02,size:100000}]}});h.forwardAnalysisQuotes=h.forwardQuotes;
   return{h,data,writes,storage,setPrice:(p:number)=>{price=p;}};
 }
+test('real Worker exposes a consistent fresh depth quote only for its bounded matching window, then restores BBO',async()=>{
+  const {h}=await checkpointWorker(),now=T+2000;
+  h.runtime.evidence={TEST_USDT:{fresh:true,observedAt:now,bestBid:100,bestAsk:100.02}};
+  h.runtime.contractMeta={TEST_USDT:c};h.runtime.tickSize={TEST_USDT:.01};h.symbolEntryReady=()=>true;
+  h.gateStream.book=()=>({symbol:'TEST_USDT',observedAt:now,sequence:9,
+    bids:[{price:100,size:10}],asks:[{price:100.02,size:10}]});
+  h.paperDepthBooks.set('TEST_USDT',{symbol:'TEST_USDT',observedAt:now,sequence:44,
+    bids:[{price:99.99,size:10},{price:99.98,size:1000}],asks:[{price:100.03,size:10},{price:100.04,size:1000}]});
+  const read=MarketStream.prototype as unknown as {forwardQuotes:(this:unknown,now:number)=>Record<string,Quote>};
+  const deep=read.forwardQuotes.call(h,now).TEST_USDT!;
+  assert.equal(deep.bookCoverage,'DEPTH20');assert.equal(deep.bestAsk,deep.asks![0]!.price);assert.equal(deep.bookSequence,44);
+  assert.equal(deep.observedAt,now);assert.equal(deep.asks!.length,2);
+  const stale=read.forwardQuotes.call(h,now+2001).TEST_USDT!;assert.equal(stale.bookCoverage,'BBO');assert.equal(stale.asks!.length,1);
+});
 test('real2s Worker coalesces transient protection until the durable10s slot without errors or unsaved publication',async()=>{
   const {h,data,writes,setPrice}=await checkpointWorker();
   await h.advanceForwardNow(T+2000,false);assert.equal(h.forwardError,null);assert.equal(writes.length,1);

@@ -15,4 +15,5 @@ export type DirectMemory={id:string;region:ReactionArea|null;continuationSeen:bo
 export type DirectStrategy={version:typeof DIRECT_STRATEGY_VERSION;cutoverAt:number;plans:Record<string,DirectPlan>;memory?:Record<string,DirectMemory>;
   marketAuthority?:import('./market-authority.ts').MarketAuthority;
   episodeResearch?:import('./episode-research.ts').EpisodeResearch;
+  adaptive?:{version:'adaptive-causal-v1';cutoverAt:number};
   completedConversions:number;retiredAt:number;summary:string};

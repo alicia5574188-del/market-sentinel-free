@@ -273,6 +273,8 @@ export function assertInverseTrade(t:Trade){
 export function assertInverseTrial(state:ForwardState){
   if(state.directStrategy){
     const ds=state.directStrategy;
+    if(ds.adaptive&&(ds.adaptive.version!=='adaptive-causal-v1'||!finite(ds.adaptive.cutoverAt)||ds.adaptive.cutoverAt<=0))
+      throw new Error('自适应执行版本损坏；保留账户');
     if(ds.marketAuthority&&!validMarketAuthority(ds.marketAuthority))throw new Error('市场统一许可记忆损坏；保留账户');
     if(ds.version!=='dual-thesis-v2'||!finite(ds.cutoverAt)||ds.cutoverAt<state.startedAt||!ds.plans||Object.keys(ds.plans).length>30
       ||!finite(ds.completedConversions)||ds.completedConversions<0||!finite(ds.retiredAt)||!ds.summary)
@@ -287,6 +289,11 @@ export function assertInverseTrial(state:ForwardState){
     const ids=new Set<string>();
     for(const t of [...state.positions,...state.history])if(t.unified?.version==='dual-thesis-v2'){
       const u=t.unified;
+      if(u.adaptive&&(u.adaptive.version!=='adaptive-causal-v1'
+        ||![u.adaptive.adoptedAt,u.adaptive.holdingSupport,u.adaptive.holdingSupportAt,u.adaptive.sourceAt].every(finite)
+        ||u.adaptive.holdingSupport<=0||u.adaptive.peakNetPnl!==null&&!finite(u.adaptive.peakNetPnl)
+        ||!['UNOBSERVED','INTACT','PULLBACK','SUPPORT_BROKEN','RECOVERY_FAILED','RECOVERY_BUILDING'].includes(u.adaptive.premise)))
+        throw new Error('自适应持仓依据损坏；保留账户与原保护');
       if(u.marketRoute&&(!validMarketRoute(u.marketRoute)||u.marketRoute.side!==t.side||u.marketRoute.branch!==u.branch
         ||!t.entryContext?.winnerPlan))throw new Error('实际方向市场许可不完整');
       if(!['RETURN','CONTINUATION'].includes(u.branch)||!u.sourceId||!u.entryReason||!u.holdReason||!u.exitCondition

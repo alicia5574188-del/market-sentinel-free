@@ -14,7 +14,7 @@ export type ResearchEpisode={symbol:string;group:string;id:string;side:Side|null
   observedSince:number;sourceAt:number;quoteAt:number;fresh:boolean;minuteEvidence:boolean;
   entryProofAt:number;entrySupport:number;holdingSupport:number;holdingSupportAt:number;frontier:number;
   reference:{lower:number;upper:number;center:number;formedAt:number;balanced:boolean};
-  failedSide:Side|null;failedAt:number;reason:string;nextEvidence:string;windows:Window[];changes:Change[];droppedChanges:number;
+  failedSide:Side|null;failedAt:number;failedPrice?:number;failedPriceAt?:number;reason:string;nextEvidence:string;windows:Window[];changes:Change[];droppedChanges:number;
   hypotheses:{continuation:{side:Side|null;stage:'ACCEPTED'|'PULLBACK'|'INVALIDATED'|'UNCONFIRMED';basisAt:number};
     return:{side:Side|null;stage:'FAILED_DEPARTURE'|'FAILED_TREND'|'UNCONFIRMED';basisAt:number;target:number|null}}};
 export type HoldingResearch={tradeId:string;symbol:string;side:Side;observedSince:number;fromEntry:boolean;
@@ -108,14 +108,17 @@ function observe(symbol:string,p:CoinEpisode,old:ResearchEpisode|undefined,rs:Ca
     const epsilon=Math.max(p.atr*.15,(q!.bestAsk-q!.bestBid)/2),price=(q!.bestBid+q!.bestAsk)/2,
       pivot=holdingPivot(side,r.holdingSupport,r.holdingSupportAt,r.entryProofAt,rs,price,epsilon);
     r.holdingSupport=pivot.level;r.holdingSupportAt=pivot.at;
-    const eligible=structural.filter(x=>end(x,step)>r.entryProofAt),current=premise(side,r.holdingSupport,eligible,epsilon);
+    // The completed acceptance bar is itself valid initial evidence. Requiring
+    // another bar would add a redundant1m/5m embargo after a genuine proof.
+    const eligible=structural.filter(x=>end(x,step)>=r.entryProofAt),current=premise(side,r.holdingSupport,eligible,epsilon);
     r.phase=current==='UNOBSERVED'?'UNCONFIRMED':current==='INTACT'?'ADVANCING':current;
     if(['SUPPORT_BROKEN','RECOVERY_FAILED','RECOVERY_BUILDING'].includes(previousPhase)
       &&(current==='INTACT'||current==='PULLBACK')&&!recovered(side,r.holdingSupport,eligible,epsilon))r.phase='RECOVERY_BUILDING';
     const tail=structural.filter(x=>end(x,step)>=r.entryProofAt),extreme=side==='LONG'?
       Math.max(r.frontier,...tail.map(x=>x.high)):Math.min(r.frontier,...tail.map(x=>x.low));
     r.frontier=extreme;
-    if(r.phase==='RECOVERY_FAILED'){r.failedSide=side;r.failedAt||=sourceAt;}
+    if(r.phase==='RECOVERY_FAILED'){r.failedSide=side;r.failedAt||=sourceAt;
+      if(!r.failedPrice){r.failedPrice=eligible.at(-1)!.close;r.failedPriceAt=sourceAt;}}
   }else if(p.phase==='RANGE'&&p.reference.balanced&&p.upperFailed&&p.lowerFailed)r.phase='ROTATION';
   else r.phase='UNCONFIRMED';
   const failedDeparture=p.rejected&&p.rejectedAt<=sourceAt&&now-p.rejectedAt<=600000&&p.reference.balanced,
@@ -131,7 +134,7 @@ function observe(symbol:string,p:CoinEpisode,old:ResearchEpisode|undefined,rs:Ca
   while(r.changes.length>4){r.changes.splice(1,1);r.droppedChanges++;}
   return r;
 }
-function observeHolding(t:Trade,old:HoldingResearch|undefined,rs:CandleLike[],fast:CandleLike[],q:QuoteLike|undefined,now:number):HoldingResearch{
+export function observeHolding(t:Trade,old:HoldingResearch|undefined,rs:CandleLike[],fast:CandleLike[],q:QuoteLike|undefined,now:number):HoldingResearch{
   // A closed order's evidence stops at its actual close. Later market prices
   // cannot rewrite that order's holding verdict or suggest a historical fill.
   if(t.status==='CLOSED'){
@@ -159,7 +162,7 @@ function observeHolding(t:Trade,old:HoldingResearch|undefined,rs:CandleLike[],fa
       &&(raw==='INTACT'||raw==='PULLBACK')&&!recovered(t.side,pivot.level,eligible,epsilon)?'RECOVERY_BUILDING':raw,
     originalNotional=initialTradeNotional(t),risk=Math.abs(initial/t.entryPrice-1)*originalNotional,
     meaningful=peak!=null&&peak>=Math.max(originalNotional*.001*4,risk*1.1),
-    counter=structural.at(-1)&&structural.at(-2)&&d(t.side)*(structural.at(-1)!.close-structural.at(-2)!.close)<-epsilon,
+    counter=eligible.at(-1)&&eligible.at(-2)&&d(t.side)*(eligible.at(-1)!.close-eligible.at(-2)!.close)<-epsilon,
     protect=fresh&&meaningful&&giveback!=null&&peak!=null&&giveback>=peak*.35
       &&(current==='RECOVERY_FAILED'||current==='SUPPORT_BROKEN'||!!counter),
     signal:HoldingResearch['signal']=closed?'CLOSED':!fresh||pending?'OBSERVE':current==='RECOVERY_FAILED'?'EXIT_CANDIDATE':
@@ -176,6 +179,11 @@ function observeHolding(t:Trade,old:HoldingResearch|undefined,rs:CandleLike[],fa
     actualNotional:originalNotional,fillRatio:o?.requestedContracts?Math.min(1,(t.realization?.initialContracts??t.contracts)/o.requestedContracts):null,
     signal,reason};
 }
+/** Same input validation for observations used by execution; no alternate
+ * candle family, stale fallback or future-bar access. */
+export function researchHolding(t:Trade,old:HoldingResearch|undefined,input:{paths:CandleLike[];minutes?:CandleLike[];quote:QuoteLike;now:number}){
+  return observeHolding(t,old,rows(input.paths,input.now,300000),rows(input.minutes,input.now,60000),input.quote,input.now);
+}
 export function initialEpisodeResearch(now:number,accountStartedAt:number):EpisodeResearch{return{version:EPISODE_RESEARCH_VERSION,
   mode:'OBSERVATIONAL',startedAt:now,updatedAt:now,accountStartedAt,symbols:{},holdings:[],transitions:[],droppedTransitions:0,breadth:{groups:0,up:0,down:0,rotation:0,stressed:0,missing:0},
   summary:'等待持续价格证据',droppedSymbols:0,droppedHoldings:0,bytes:0};}
@@ -191,6 +199,14 @@ export function normalizeEpisodeResearch(value:unknown):EpisodeResearch|undefine
     if(Object.values(v.symbols).some(r=>!r||!reasons[r.phase]||!Array.isArray(r.changes)||r.changes.length>4
       ||!Array.isArray(r.windows)||r.windows.length!==4||!r.hypotheses
       ||![r.sourceAt,r.holdingSupport,r.entryProofAt,r.reference?.lower,r.reference?.upper,r.reference?.center].every(Number.isFinite)))return;
+    if(Object.values(v.symbols).some(r=>![null,'LONG','SHORT'].includes(r.side)
+      ||!['ACCEPTED','PULLBACK','INVALIDATED','UNCONFIRMED'].includes(r.hypotheses.continuation?.stage)
+      ||!['FAILED_DEPARTURE','FAILED_TREND','UNCONFIRMED'].includes(r.hypotheses.return?.stage)
+      ||![null,'LONG','SHORT'].includes(r.hypotheses.return?.side)
+      ||![r.failedAt,r.hypotheses.return?.basisAt,r.hypotheses.continuation?.basisAt].every(Number.isFinite)
+      ||r.hypotheses.return.target!==null&&!(Number.isFinite(r.hypotheses.return.target)&&r.hypotheses.return.target>0)
+      ||r.failedPrice!==undefined&&!(Number.isFinite(r.failedPrice)&&r.failedPrice>0)
+      ||r.failedPriceAt!==undefined&&!(Number.isFinite(r.failedPriceAt)&&r.failedPriceAt>0)))return;
     if(v.holdings.some(r=>!r||!['PENDING','OPEN','CLOSED'].includes(r.status)
       ||!['LONG','SHORT'].includes(r.side)||!['UNOBSERVED','INTACT','PULLBACK','SUPPORT_BROKEN','RECOVERY_FAILED','RECOVERY_BUILDING'].includes(r.premise)
       ||!['OBSERVE','HOLD','REVIEW','PROTECT_CANDIDATE','EXIT_CANDIDATE','CLOSED'].includes(r.signal)

@@ -1,13 +1,24 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { fetchActiveContracts, fetchBackgroundFuturesBook, fetchContractStats, fetchFuturesBook, fetchLiquidations,
-  fetchMarketTickers, fetchStructureCandles, fetchTickerBbo, fetchUrgentFuturesBook } from "../lib/gate-market.ts";
+  fetchMarketTickers, fetchStructureCandles, fetchTickerBbo, fetchUrgentFuturesBook, fetchPendingExecutionBook } from "../lib/gate-market.ts";
 
 const withFetch = async (body: unknown, run: () => Promise<void>) => {
   const prior = globalThis.fetch;
   globalThis.fetch = async () => Response.json(body);
   try { await run(); } finally { globalThis.fetch = prior; }
 };
+test('pending execution depth observes20levels with decimal sizes and only one bounded public attempt',async()=>{
+  const prior=globalThis.fetch;let requests=0;
+  globalThis.fetch=async(input,init)=>{requests++;assert.match(String(input),/\/futures\/usdt\/order_book\?contract=X_USDT&limit=20&with_id=true$/);
+    assert.equal(new Headers(init?.headers).get('X-Gate-Size-Decimal'),'1');assert.ok(init?.signal);
+    return Response.json({id:31,update:Date.now(),bids:[{p:'99',s:'0.5'},{p:'98',s:'10'}],asks:[{p:'101',s:'1.2'},{p:'102',s:'10'}]});};
+  try{const b=await fetchPendingExecutionBook('X_USDT',.01,.1);assert.equal(b.bids.length,2);
+    assert.equal(b.sequence,31);assert.equal(b.asks[0]!.size,1.2*101*.1);assert.equal(requests,1);
+    globalThis.fetch=async()=>{requests++;throw new Error('synthetic unavailable');};
+    await assert.rejects(fetchPendingExecutionBook('X_USDT'),/unavailable/);assert.equal(requests,2);
+  }finally{globalThis.fetch=prior;}
+});
 
 test("Gate book requires both exchange id and update, parses object levels, and converts contracts to USDT", async () => {
   await withFetch({ update: Date.now(), bids: [{ p: "99", s: "2" }], asks: [{ p: "101", s: "3" }] }, async () => {
