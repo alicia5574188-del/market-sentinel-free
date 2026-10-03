@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {advanceEventResearch,eventMarketRoute,confirmEventQuote,eventHoldingDecision,normalizeEventResearch,responseRows,
   EVENT_RESEARCH_BYTES,type ResponseEvent,type ResponseHolding} from '../lib/event-response.ts';
-import {initialForward,normalizeForward,forwardSummary,type Quote,type Trade} from '../lib/forward-relations.ts';
+import {initialForward,normalizeForward,forwardSummary,resetForwardAccountPreservingLearning,type Quote,type Trade} from '../lib/forward-relations.ts';
 import {advanceDirectStrategy} from '../lib/direct-strategy.ts';
 import {buildForwardProtectionCheckpoint,restoreForwardProtectionCheckpoint} from '../lib/forward-protection-checkpoint.ts';
 import {prepareForwardWrite,readForwardStore} from '../lib/forward-store.ts';
@@ -126,4 +126,13 @@ test('invalid optional watch memory is visible and never fabricates replacement 
   activated.directStrategy!.eventResearch={...r,version:'corrupt'} as never;
   const result=advanceDirectStrategy({state:activated,now:T+130000,specialMove:true,marketAuthority:true,paths:{},quotes:{},contracts:{}}).state;
   assert.equal(result.startedAt,s.startedAt);assert.ok(result.directStrategy!.eventResearchError);assert.equal(result.positions.length,0);
+});
+test('explicit manual PAPER reset remains readable and does not retain another account event-to-trade links',()=>{
+  const s=advanceDirectStrategy({state:initialForward(T-7200000),now:T,specialMove:true,marketAuthority:true,paths:{},quotes:{},contracts:{}}).state;
+  s.directStrategy!.eventResearch=launched().r;s.directStrategy!.eventResearch!.events.A_USDT!.tradeId='retired-account-trade';
+  const reset=resetForwardAccountPreservingLearning(s,T+180000);normalizeForward(reset,T+180001);
+  const next=advanceDirectStrategy({state:reset,now:T+180002,specialMove:true,marketAuthority:true,paths:{},quotes:{},contracts:{}}).state;
+  assert.equal(next.startedAt,reset.startedAt);assert.equal(next.balance,reset.balance);
+  assert.equal(next.directStrategy!.eventResponse!.cutoverAt,T+180002);assert.equal(Object.keys(next.directStrategy!.eventResearch!.events).length,0);
+  assert.deepEqual(next.extremumRegime,reset.extremumRegime);
 });

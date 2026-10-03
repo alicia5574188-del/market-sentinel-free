@@ -275,7 +275,7 @@ export function assertInverseTrial(state:ForwardState){
   if(state.directStrategy){
     const ds=state.directStrategy;
     if(ds.eventResponse&&(ds.eventResponse.version!=='event-response-v1'||!finite(ds.eventResponse.cutoverAt)
-      ||ds.eventResponse.cutoverAt<state.startedAt))
+      ||ds.eventResponse.cutoverAt<=0))
       throw new Error('事件响应执行记忆损坏；保留账户');
     if(ds.specialMove&&(ds.specialMove.version!=='special-move-v1'||!finite(ds.specialMove.cutoverAt)||ds.specialMove.cutoverAt<=0))
       throw new Error('特别币执行版本损坏；保留账户');

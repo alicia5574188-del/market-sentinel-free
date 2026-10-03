@@ -522,8 +522,11 @@ export function advanceDirectStrategy(input:Input){
   const transportActivated=!!input.paperTiming&&!state.paperExecution;
   const specialActivated=!!input.specialMove&&!state.directStrategy!.specialMove;
   if(specialActivated){state.directStrategy!.specialMove={version:SPECIAL_MOVE_VERSION,cutoverAt:input.now};state.entryValidations={};state.revision++;}
-  const responseActivated=!!input.specialMove&&input.eventResponse!==false&&!state.directStrategy!.eventResponse;
-  if(responseActivated){state.directStrategy!.eventResponse={version:EVENT_RESPONSE_VERSION,cutoverAt:input.now};state.entryValidations={};state.directStrategy!.plans={};state.revision++;}
+  const responseActivated=!!input.specialMove&&input.eventResponse!==false&&(!state.directStrategy!.eventResponse
+    ||state.directStrategy!.eventResponse.cutoverAt<state.startedAt);
+  if(responseActivated){state.directStrategy!.eventResponse={version:EVENT_RESPONSE_VERSION,cutoverAt:input.now};
+    delete state.directStrategy!.eventResearch;delete state.directStrategy!.eventResearchError;
+    state.entryValidations={};state.directStrategy!.plans={};state.revision++;}
   if(transportActivated)state.paperExecution={version:PAPER_EXECUTION_VERSION,cutoverAt:input.now,cancelled:[]};
   const timingRecovered=!!input.paperTiming&&state.positions.some(t=>t.paperOrder&&t.paperOrder.timing.version!==PAPER_TIMING_VERSION);
   if(timingRecovered){for(const t of state.positions)if(t.paperOrder&&t.paperOrder.timing.version!==PAPER_TIMING_VERSION)
