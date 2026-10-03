@@ -29,7 +29,8 @@ export function specialRows(input:CandleLike[]|undefined,now:number,step=300000)
 const move=(rs:CandleLike[],n:number)=>rs.length>n?rs.at(-1)!.close/rs.at(-n-1)!.close-1:null;
 export function recentSpecialActivity(rs:CandleLike[]){
   const recent=rs.slice(-3),prior=rs.slice(-15,-3),known=(r:CandleLike)=>Number.isFinite(r.turnoverUsd)&&r.turnoverUsd!>=0;
-  const same=recent.length===3&&recent.every(known)&&new Set(recent.map(r=>r.volumeVenue)).size===1,
+  const same=recent.length===3&&recent.every(known)&&typeof recent[0]?.volumeVenue==='string'
+    &&recent[0].volumeVenue.length>0&&new Set(recent.map(r=>r.volumeVenue)).size===1,
     total=same?recent.reduce((n,r)=>n+r.turnoverUsd!,0):null,
     base=prior.length===12&&prior.every(known)&&prior.every(r=>r.volumeVenue===recent[0]?.volumeVenue)
       ?med(prior.map(r=>r.turnoverUsd!)):null,
@@ -42,8 +43,8 @@ export function normalizeSpecialResearch(value:unknown):SpecialResearch|undefine
   if(!s||s.version!==SPECIAL_MOVE_VERSION||![s.startedAt,s.updatedAt,s.dropped,s.bytes].every(Number.isFinite)
     ||s.startedAt<=0||s.updatedAt<s.startedAt||!Array.isArray(s.marketMoves)||s.marketMoves.length!==4
     ||s.marketMoves.some(v=>v!==null&&!Number.isFinite(v))
-    ||!s.watches||Object.keys(s.watches).length>64||bytes(s)>SPECIAL_RESEARCH_BYTES)return;
-  for(const [symbol,w] of Object.entries(s.watches))if(w.symbol!==symbol||![w.firstSeenAt,w.lastSeenAt,w.observedAt,w.sourceAt,w.score,w.correlation,w.beta,w.residual].every(Number.isFinite)
+    ||!s.watches||typeof s.watches!=='object'||Array.isArray(s.watches)||Object.keys(s.watches).length>64||bytes(s)>SPECIAL_RESEARCH_BYTES)return;
+  for(const [symbol,w] of Object.entries(s.watches))if(!w||typeof w!=='object'||w.symbol!==symbol||![w.firstSeenAt,w.lastSeenAt,w.observedAt,w.sourceAt,w.score,w.correlation,w.beta,w.residual].every(Number.isFinite)
     ||!['ACTIVE_NONRESPONSE','RELATIVE_LEADER','OPPOSITE_MOVE','OWN_ACCELERATION','ORDINARY'].includes(w.kind)
     ||!['WATCH','READY','WAIT_LOCATION','DORMANT','LOW_ACTIVITY','MISSING_DATA'].includes(w.phase)
     ||!Array.isArray(w.moves)||!Array.isArray(w.marketMoves)||w.moves.length!==4||w.marketMoves.length!==4

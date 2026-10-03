@@ -31,6 +31,7 @@ test('actual recent quote turnover excludes low or unknown activity even with a 
     const w=advanceSpecialResearch(i).watches.A_USDT!;assert.equal(w.active,false);
     assert.equal(w.phase,missing?'MISSING_DATA':'LOW_ACTIVITY');assert.equal(w.route,undefined);}
   const rows=flat();rows.at(-1)!.volumeVenue='OKX';assert.equal(recentSpecialActivity(rows).turnover15,null);
+  for(const b of rows)delete b.volumeVenue;assert.equal(recentSpecialActivity(rows).active,false);
   const shrunk=flat();for(const b of shrunk.slice(-3))b.turnoverUsd=1000;assert.equal(recentSpecialActivity(shrunk).active,false);
 });
 test('live unusual discovery can precede the 5m close; completed own 1m proof authorizes both sides',()=>{
@@ -91,6 +92,8 @@ test('group duplicates cannot overpower comparison; large research remains cappe
   assert.ok(r.watches.A_USDT);assert.ok(r.dropped>0);
 });
 test('corrupt or future persisted observations are rejected as optional research',()=>{
+  const malformed=advanceSpecialResearch(own());assert.equal(normalizeSpecialResearch({...malformed,watches:{A_USDT:null}}),undefined);
+  assert.equal(normalizeSpecialResearch({...malformed,watches:[]}),undefined);
   const r=advanceSpecialResearch(own());for(const corrupt of [(x:typeof r)=>{x.watches.A_USDT!.observedAt=T+1;},
     (x:typeof r)=>{x.watches.A_USDT!.route!.proofBars=[T+1];},(x:typeof r)=>{x.watches.A_USDT!.route!.reference.upper=NaN;}]){
     const x=structuredClone(r);corrupt(x);assert.equal(normalizeSpecialResearch(x),undefined);}
