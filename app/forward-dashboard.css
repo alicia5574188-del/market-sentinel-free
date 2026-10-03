@@ -218,6 +218,19 @@ main.fr-app{--fr-ink:#eef4fc;--fr-muted:#b8c6d9;--fr-line:#304158;--fr-green:#71
 
 
 /* Market Intelligence 1.1 execution page: decision-first visual hierarchy. */
+.fr-exec-compact-list{display:grid;gap:0}
+.fr-exec-compact-row{min-width:0;padding:17px 0;border-bottom:1px solid var(--fr-line)}
+.fr-exec-compact-row:last-child{border-bottom:0;padding-bottom:0}
+.fr-exec-compact-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
+.fr-exec-compact-head b{font-size:18px;font-size:var(--fr-fs18,18px)}
+.fr-exec-compact-head span{font-size:14px;font-size:var(--fr-fs14,14px);color:#b8d8c9}
+.fr-exec-watch-kind{display:block;margin-top:6px;font-size:14px;font-size:var(--fr-fs14,14px);color:var(--fr-muted)}
+.fr-exec-compact-row>p{margin-top:9px;line-height:1.7;overflow-wrap:anywhere}
+.fr-exec-compact-row>.fr-exec-exit{font-size:14px;font-size:var(--fr-fs14,14px);color:var(--fr-muted)}
+.fr-exec-compact .fr-exec-research-details{margin-top:10px;padding-top:0;border-top:0}
+.fr-exec-compact .fr-exec-research-details>summary{list-style:revert;min-height:32px;padding:5px 0}
+.fr-exec-compact .fr-exec-research-details>summary::-webkit-details-marker{display:revert}
+.fr-exec-pending{margin-top:12px;padding:12px 14px;border:1px solid #756847;border-radius:10px;background:#2a281e}
 .fr-exec-title{padding-bottom:21px}
 .fr-exec-primary{border-color:#45695f;background:linear-gradient(180deg,#162720 0%,var(--fr-panel) 42%)}
 

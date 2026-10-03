@@ -320,7 +320,10 @@ test('independent strategy renders actual research, entry, holding and exit with
   assert.match(overview,/回退与趋势延续|固定 1,000 U/);assert.doesNotMatch(overview,/影子|反向|shadow-orders|shadow-inverse-comparison/);
   for(const text of ['DIRECT_ENTRY','DIRECT_HOLD','DIRECT_EXIT'])assert.ok(overview.includes(text));assert.doesNotMatch(overview,/OLD_PUSH_REASON|90\.00%/);
   const execution=render('app/market-intelligence-execution.tsx',{data,now:data.updatedAt,liveEnabled:false});
-  for(const text of ['DIRECT_ENTRY','DIRECT_HOLD','DIRECT_EXIT','MOVR / USDT · 趋势延续 · 做空'])assert.ok(execution.includes(text));
+  for(const text of ['DIRECT_ENTRY','DIRECT_HOLD','DIRECT_EXIT','MOVR / USDT · 做空'])assert.ok(execution.includes(text));
+  assert.equal(execution.split('MOVR / USDT').length-1,1,'held coin must not repeat as an entry plan');
+  assert.match(execution,/<details[^>]*><summary>查看依据<\/summary>[\s\S]*DIRECT_ENTRY/);
+  assert.doesNotMatch(execution,/<details[^>]*\bopen(?:=|>)/);
   assert.doesNotMatch(execution,/影子|反向|参考机会|原追随/);
 });
 test('special-coin research explains active nonresponse and missing volume before any trade',()=>{
@@ -330,9 +333,27 @@ test('special-coin research explains active nonresponse and missing volume befor
     X_USDT:{symbol:'X_USDT',kind:'ORDINARY',code:'SPECIAL_COVERAGE',firstSeenAt:data.updatedAt,moves:[null,null,null,null],
       residual:0,turnover15:null,active:false,fresh:false,phase:'MISSING_DATA',score:0}}}};
   const html=render('app/market-intelligence-execution.tsx',{data,now:data.updatedAt,liveEnabled:false});
-  for(const text of ['特别币持续研究','近期成交活跃，却没有响应市场波动','等待本币真正启动','近期15分钟成交 未知','数据不足'])assert.ok(html.includes(text),text);
+  for(const text of ['重点观察','近期成交活跃，却没有响应市场波动','等待本币真正启动','近期15分钟成交 未知','数据不足','数据待补齐'])assert.ok(html.includes(text),text);
   data.directStrategy.explanation='发现特别的活跃币，本币实际启动才交易';
   const overview=render('app/forward-dashboard.tsx',dashboardProps(data));
   assert.match(overview,/特别币爆发段/);assert.match(overview,/本币实际启动才交易/);assert.match(overview,/special-move-v1/);
   assert.doesNotMatch(overview,/市场决定跟随币的策略分支/);
+});
+test('compact execution merges held coins, folds extra watches and keeps exit and pending fill truth visible',()=>{
+  const data=account(),watch=symbol=>({symbol,kind:'ACTIVE_NONRESPONSE',code:'SPECIAL_NO_RESPONSE',firstSeenAt:data.updatedAt,
+    moves:[0,0,0,0],residual:0,turnover15:10000,active:true,fresh:true,phase:'WATCH',score:10});
+  data.positions=[{id:'held',symbol:'HELD_USDT',side:'SHORT',openedAt:data.updatedAt,
+    unified:{decision:'EXIT',entryReason:'HELD_ENTRY',holdReason:'HELD_FAILURE',exitCondition:'HELD_EXIT',lastDecisionAt:data.updatedAt}}];
+  data.directStrategy={specialMove:{version:'special-move-v1'},plans:[{id:'held-plan',symbol:'HELD_USDT',phase:'HOLDING',reason:'DUPLICATE_PLAN'},
+    {id:'wait',symbol:'A_USDT',permission:'WAIT',side:'SHORT',phase:'OBSERVE',reason:'WAIT_REASON',holdReason:'WAIT_HOLD',exitCondition:'WAIT_EXIT'}],
+    execution:{pending:[{id:'close',symbol:'HELD_USDT',kind:'CLOSE',reason:'AWAIT_FILL'}]},
+    specialResearch:{updatedAt:data.updatedAt,watches:Object.fromEntries(['HELD','A','B','C','D','E'].map(s=>[`${s}_USDT`,watch(`${s}_USDT`)]))}};
+  const html=render('app/market-intelligence-execution.tsx',{data,now:data.updatedAt,liveEnabled:false});
+  assert.equal(html.split('<section ').length-1,2);
+  assert.doesNotMatch(html,/DUPLICATE_PLAN|A \/ USDT · 做空|<details[^>]*\bopen(?:=|>)/);
+  assert.match(html,/准备退出/);assert.match(html,/等待平仓成交/);
+  assert.match(html,/<p>HELD_FAILURE<\/p><p[^>]*>退出条件：HELD_EXIT<\/p>/);
+  assert.match(html,/<summary>其余观察币 · 2 个<\/summary>/);
+  assert.match(html,/WAIT_REASON/);assert.match(html,/AWAIT_FILL/);
+  assert.equal(html.split('A / USDT').length-1,1);
 });
