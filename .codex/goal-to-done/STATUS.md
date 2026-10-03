@@ -2,7 +2,7 @@ IN_PROGRESS — 2026-10-04 incident repair on
 codex/anomaly-range-capacity-repair-20261004. Implemented immediate terminal-plan
 recycling, bounded optional outcomes, stale-plan expiry, deep-seat priority,
 fair failed-request rotation and actual protection-persistence diagnostics.
-Focused33 tests and direct540 pass including200 lifecycle/restart rotations,
+Focused34 tests and direct541 pass including200 lifecycle/restart rotations,
 bounded pending-outcome omissions, actual Worker failed-request fairness and
 storage-overlay recovery. Inverse10, exit9, live208, members67, equity74,
 architecture/migration43, npm test/build, typecheck, lint(0errors/13existing

@@ -1014,7 +1014,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       ...(!includeResearch?{positions:this.forwardState.positions.map(directExecutionTradeProjection),
         history:this.forwardState.history.map(directExecutionTradeProjection)}:{}),
       liveMirror: this.liveMirrorView(),
-      storage: { ...this.forwardState.storage, error: this.forwardError } }
+      storage: { ...this.forwardState.storage, protectionPersistedAt:this.forwardProtectionBudget?.lastCommittedAt??0, error: this.forwardError } }
       : { version: FORWARD_VERSION, mode: "RECOVERY_REQUIRED", liveEligible: false, storage: { error: this.forwardError } };
   }
 
