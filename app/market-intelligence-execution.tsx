@@ -22,32 +22,58 @@ function EpisodeResearchView({research,now}:{research:EpisodeResearch;now:number
     </div></article>)}</div>
   </section>;
 }
-function SpecialResearchView({research,now}:{research:SpecialResearch;now:number}){
-  const rows=Object.values(research.watches).sort((a,b)=>Number(b.phase==='READY')-Number(a.phase==='READY')||Number(b.fresh)-Number(a.fresh)||b.score-a.score).slice(0,8);
-  return <section className="fr-section" data-testid="special-research"><div className="fr-section-head"><h2>特别币持续研究</h2><span>更新 {clock(research.updatedAt)}</span></div>
-    <div className="fr-journal">{rows.map(w=>{const detail=specialDescription(w);return <article key={w.symbol}><time>{w.symbol.replace('_',' / ')} · 已观察 {Math.max(0,Math.round((now-w.firstSeenAt)/60000))} 分钟</time><div>
-      <b>{detail.reason}</b><p>{detail.next}</p><p>{[15,30,45,60].map((n,i)=>`${n}分钟 ${w.moves[i]==null?'数据不足':`${(w.moves[i]!*100).toFixed(2)}%`}`).join(' · ')}</p>
-      <p>近期15分钟成交 {w.turnover15==null?'未知':`${Math.round(w.turnover15).toLocaleString()} USDT`} · {w.active?'活跃':w.turnover15==null?'待核对':'低量'} · {w.fresh?'证据有效':'当前数据待补齐'}</p>
-      <p>相对市场30分钟偏离 {(w.residual*100).toFixed(2)}%{w.route?` · 本币启动 ${clock(w.route.proofAt)}`:''}</p>
-    </div></article>;})}</div>{!rows.length&&<p>正在发现值得持续研究的活跃币。</p>}</section>;
+type DirectPlan=NonNullable<NonNullable<View>['directStrategy']>['plans'][number];
+const planPhase=(v:string)=>({READY:'当前可执行',VALIDATING:'确认启动',WAIT_LOCATION:'等待回踩',HOLDING:'已执行',OBSERVE:'观察',EXECUTING:'等待成交确认'}[v]??v);
+function PlanDetails({plan}:{plan:DirectPlan}){
+  return <><p>进场：{plan.reason.replace(/^[A-Z_]+: /,'')}</p><p>持仓：{plan.holdReason}</p><p>退出：{plan.exitCondition}</p>
+    {plan.marketRoute&&<p>{plan.marketRoute.relation==='INDEPENDENT'?'独立行情':plan.marketRoute.relation==='LOCAL'?'本币结构许可':'跟随市场'} · 结构确认 {clock(plan.marketRoute.proofAt)} · {plan.marketRoute.targetBasis==='VOLATILITY_ESTIMATE'?'入场空间为波动估计':'目标为已接受重心'}</p>}
+    {plan.confirmation&&<p>结构确认 {clock(plan.confirmation.at)} · {plan.confirmation.path==='HOLD_OUTSIDE'?'区域外连续推进':'回踩承接后重新推进'} · 保护位置 {plan.confirmation.stop}</p>}</>;
+}
+function SpecialResearchView({research,now,plans,held}:{research:SpecialResearch;now:number;plans:DirectPlan[];held:Set<string>}){
+  const planBySymbol=new Map(plans.map(p=>[p.symbol,p])),
+    priority=(symbol:string)=>{const p=planBySymbol.get(symbol);return p?.phase==='EXECUTING'?2:p&&p.permission!=='WAIT'?1:0;},
+    watches=Object.values(research.watches).filter(w=>!held.has(w.symbol)),
+    rows=watches.sort((a,b)=>priority(b.symbol)-priority(a.symbol)||Number(b.phase==='READY')-Number(a.phase==='READY')||Number(b.fresh)-Number(a.fresh)||b.score-a.score),
+    renderRow=(w:SpecialWatch)=>{const detail=specialDescription(w),plan=planBySymbol.get(w.symbol);
+      const status=!w.fresh?'数据待补齐':!w.active?w.turnover15==null?'成交待核对':'低量观察':plan?planPhase(plan.phase):w.phase==='READY'?'启动已确认':'观察';
+      return <article className="fr-exec-compact-row" key={w.symbol}>
+        <div className="fr-exec-compact-head"><b>{w.symbol.replace('_',' / ')}{plan&&plan.permission!=='WAIT'?` · ${side(plan.side)}`:''}</b><span>{status}</span></div>
+        <small className="fr-exec-watch-kind">{({ACTIVE_NONRESPONSE:'活跃，但未跟随大盘',RELATIVE_LEADER:'比大盘更强或更弱',OPPOSITE_MOVE:'与大盘反向',OWN_ACCELERATION:'自身走势加速',ORDINARY:'暂未发现特别表现'})[w.kind]}</small>
+        <p>{plan?plan.reason.replace(/^[A-Z_]+: /,''):detail.next}</p>
+        <details className="fr-exec-research-details"><summary>查看依据</summary><b>{detail.reason}</b>
+          <p>已观察 {Math.max(0,Math.round((now-w.firstSeenAt)/60000))} 分钟</p>
+          <p>{[15,30,45,60].map((n,i)=>`${n}分钟 ${w.moves[i]==null?'数据不足':`${(w.moves[i]!*100).toFixed(2)}%`}`).join(' · ')}</p>
+          <p>近期15分钟成交 {w.turnover15==null?'未知':`${Math.round(w.turnover15).toLocaleString()} USDT`} · {w.active?'活跃':w.turnover15==null?'待核对':'低量'} · {w.fresh?'证据有效':'当前数据待补齐'}</p>
+          <p>相对市场30分钟偏离 {(w.residual*100).toFixed(2)}%{w.route?` · 本币启动 ${clock(w.route.proofAt)}`:''}</p>
+          {plan&&<PlanDetails plan={plan}/>}</details></article>;};
+  return <section className="fr-section" data-testid="special-research"><div className="fr-section-head"><h2>重点观察</h2><span>{rows.length} 个 · {clock(research.updatedAt)}</span></div>
+    <div className="fr-exec-compact-list">{rows.slice(0,3).map(renderRow)}
+      {plans.filter(p=>!held.has(p.symbol)&&!research.watches[p.symbol]).map(p=><article className="fr-exec-compact-row" key={p.id}><div className="fr-exec-compact-head"><b>{p.symbol.replace('_',' / ')}{p.permission!=='WAIT'?` · ${side(p.side)}`:''}</b><span>{planPhase(p.phase)}</span></div><p>{p.reason.replace(/^[A-Z_]+: /,'')}</p><details className="fr-exec-research-details"><summary>查看计划</summary><PlanDetails plan={p}/></details></article>)}
+    </div>
+    {rows.length>3&&<details className="fr-exec-research-details"><summary>其余观察币 · {rows.length-3} 个</summary><div className="fr-exec-compact-list">{rows.slice(3).map(renderRow)}</div></details>}
+    {!rows.length&&!plans.length&&<p>正在寻找特别的活跃币，等待本币启动。</p>}</section>;
 }
 function DirectExecution({data,now,liveEnabled,liveOverview}:{data:NonNullable<View>;now:number;liveEnabled:boolean;liveOverview?:{copied?:number|null;eligible?:number|null}}){
-  const ds=data.directStrategy!,phase=(v:string)=>({READY:'当前可执行',VALIDATING:'验证推进响应',WAIT_LOCATION:'等待合适位置',HOLDING:'已执行',OBSERVE:'观察',EXECUTING:'等待成交确认'}[v]??v);
-  return <><section className="fr-section" data-testid="direct-research-execution"><div className="fr-section-head"><h2>研究与交易计划</h2><span>更新 {clock(data.marketIntelligence?.updatedAt)}</span></div>
-    <p>{ds.specialMove?'市场作为比较背景，重点观察活跃币与市场不同的表现。':ds.marketAuthority?`市场背景：${({UP:'上涨延续',DOWN:'下跌延续',RANGE:'双向失败回归',HANDOFF:'本币结构评估'})[ds.marketAuthority.phase]} · ${ds.marketAuthority.fresh?'覆盖有效':'等待新鲜覆盖'} · 确认于 ${clock(ds.marketAuthority.since)}`:marketChangeText(data)}</p><p>{ds.summary}</p><p>{ds.specialMove?'特别表现进入持续研究；本币启动并保留价格优势后参与爆发段，正常回调继续观察承接。':ds.adaptive?'离开失败且回归响应成立时做回归，持续承接成立时做延续；单边趋势中限制逆势，正常回调保留持仓。':ds.marketAuthority?'共同趋势明确时服从共同方向；方向分化时按本币完整结构参与，转弱或位置不合适继续等待。':'逐币判断推进是否回退或形成延续。'}</p>
-    <div className="fr-journal">{ds.plans.map(p=><article key={p.id}><time>{p.symbol.replace('_',' / ')} · {p.permission==='WAIT'?(ds.specialMove?'等待本币启动':'等待分支许可'):p.branch==='RETURN'?'回退':ds.specialMove?'自身爆发段':'趋势延续'} · {side(p.side)}</time><div><b>{phase(p.phase)}</b><p>进场：{p.reason.replace(/^[A-Z_]+: /,'')}</p>{p.marketRoute&&<p>{p.marketRoute.relation==='INDEPENDENT'?'独立行情':p.marketRoute.relation==='LOCAL'?'本币结构许可':'跟随市场'} · 结构确认 {clock(p.marketRoute.proofAt)} · {p.marketRoute.targetBasis==='VOLATILITY_ESTIMATE'?'入场空间为波动估计':'目标为已接受重心'}</p>}<p>持仓：{p.holdReason}</p><p>退出：{p.exitCondition}</p>{p.confirmation&&<p>结构确认 {clock(p.confirmation.at)} · {p.confirmation.path==='HOLD_OUTSIDE'?'区域外连续推进':'回踩承接后重新推进'} · 保护位置 {p.confirmation.stop}</p>}</div></article>)}</div>
-    {!ds.plans.length&&<p>等待当前已完成的结构与新鲜盘口形成交易计划。</p>}</section>
-    {ds.specialResearch?<SpecialResearchView research={ds.specialResearch} now={now}/>:ds.episodeResearch&&<EpisodeResearchView research={ds.episodeResearch} now={now}/>}
-    <section className="fr-section"><div className="fr-section-head"><h2>当前持仓依据</h2><span>{data.positions.length} 笔策略订单</span></div>
+  const ds=data.directStrategy!,held=new Set(data.positions.map(t=>t.symbol)),plans=ds.plans.filter(p=>!held.has(p.symbol));
+  return <div className="fr-execution-page fr-exec-compact" data-testid="direct-research-execution">
+    <section className="fr-section"><div className="fr-section-head"><h2>当前持仓</h2><span>{data.positions.length} 笔</span></div>
       {liveEnabled&&<p>实盘已跟上 {liveOverview?.copied??'—'} / 应执行 {liveOverview?.eligible??'—'}。实际成交及结算以实盘账户记录为准。</p>}
-      {ds.execution&&<p>模拟按实盘的执行校验、提交和成交确认步骤结算。旧记录保留；模拟盘口成交与交易所实际成交仍可能存在差异。</p>}
-      {ds.execution?.pending.map(p=><p key={p.id}>{p.symbol.replace('_',' / ')} · {p.kind==='OPEN'?'等待开仓成交':p.kind==='CLOSE'?'等待平仓成交':'等待减仓成交'} · {p.reason}</p>)}
-      <div className="fr-journal">{data.positions.map(t=>{const observed=ds.episodeResearch?.holdings.find(h=>h.tradeId===t.id);return <article key={t.id}><time>{t.symbol.replace('_',' / ')} · {side(t.side)} · {t.unified?.branch==='RETURN'?'回退':'趋势延续'}</time><div><b>{t.unified?.decision==='REVIEW'?'复核持仓依据':'按计划持有'}</b><p>进场：{t.unified?.entryReason??t.entryContext?.reason}</p><p>持仓：{t.unified?.holdReason}</p><p>退出：{t.unified?.exitCondition}</p>
+      {ds.execution?.pending.map(p=><div className="fr-exec-pending" key={p.id}><b>{p.symbol.replace('_',' / ')} · {p.kind==='OPEN'?'等待开仓成交':p.kind==='CLOSE'?'等待平仓成交':'等待减仓成交'}</b><details className="fr-exec-research-details"><summary>查看原因</summary><p>{p.reason}</p></details></div>)}
+      <div className="fr-exec-compact-list">{data.positions.map(t=>{const observed=ds.episodeResearch?.holdings.find(h=>h.tradeId===t.id);return <article className="fr-exec-compact-row" key={t.id}>
+        <div className="fr-exec-compact-head"><b>{t.symbol.replace('_',' / ')} · {side(t.side)}</b><span>{t.unified?.decision==='EXIT'?'准备退出':t.unified?.decision==='REVIEW'?'复核持仓':'继续持有'}</span></div>
+        <p>{t.unified?.holdReason??positionWatch(t)}</p><p className="fr-exec-exit">退出条件：{t.unified?.exitCondition??'按原交易计划执行'}</p>
+        <details className="fr-exec-research-details"><summary>查看依据</summary><p>进场：{t.unified?.entryReason??t.entryContext?.reason??'暂无记录'}</p>
         {observed&&<><p>研究观察：{researchSignal(observed.signal)} · {observed.reason}</p><p>研究承接 {observed.holdingSupport} · 当前执行保护 {observed.executionStop}</p>
           <p>当前净盈亏 {observed.netPnl==null?'—':`${observed.netPnl.toFixed(2)} U`} · 已记录最高净盈亏 {observed.peakNetPnl==null?'—':`${observed.peakNetPnl.toFixed(2)} U`}
           {observed.fillRatio!=null&&observed.fillRatio<.99?` · 计划成交 ${(observed.fillRatio*100).toFixed(1)}%`:''}</p></>}
-        <p>最近判断 {clock(t.unified?.lastDecisionAt)} · 持有 {Math.max(0,Math.round((now-t.openedAt)/60000))} 分钟</p></div></article>;})}</div>
-      {!data.positions.length&&<p>当前没有策略持仓。</p>}</section></>;
+        <p>最近判断 {clock(t.unified?.lastDecisionAt)} · 持有 {Math.max(0,Math.round((now-t.openedAt)/60000))} 分钟</p></details></article>;})}</div>
+      {!data.positions.length&&<p>暂无持仓，等待有效启动。</p>}
+      {ds.execution&&<details className="fr-exec-research-details"><summary>成交说明</summary><p>模拟按实盘的执行校验、提交和成交确认步骤结算；盘口模拟与交易所实际成交仍可能存在差异。</p></details>}</section>
+    {ds.specialResearch?<SpecialResearchView research={ds.specialResearch} now={now} plans={plans} held={held}/>:<section className="fr-section"><div className="fr-section-head"><h2>重点观察</h2><span>{plans.length} 个计划</span></div>
+      <div className="fr-exec-compact-list">{plans.map(p=><article className="fr-exec-compact-row" key={p.id}><div className="fr-exec-compact-head"><b>{p.symbol.replace('_',' / ')} · {p.permission==='WAIT'?'观察':side(p.side)}</b><span>{planPhase(p.phase)}</span></div><p>{p.reason.replace(/^[A-Z_]+: /,'')}</p><details className="fr-exec-research-details"><summary>查看计划</summary><PlanDetails plan={p}/></details></article>)}</div>
+      {!plans.length&&<p>等待当前结构与新鲜盘口形成交易计划。</p>}
+      {ds.episodeResearch&&<details className="fr-exec-research-details"><summary>详细行情研究</summary><EpisodeResearchView research={ds.episodeResearch} now={now}/></details>}</section>}
+  </div>;
 }
 const bias=(v?:string)=>v==="BULLISH"?"偏多":v==="BEARISH"?"偏空":v?"中性":"待确认";
 const evolution=(v?:string)=>({
