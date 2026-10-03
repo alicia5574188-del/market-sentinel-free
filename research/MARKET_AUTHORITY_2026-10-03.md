@@ -50,7 +50,10 @@ completed counter move and renewed advance; financial protection never loosens.
 
 Two completed closes beyond accepted support, with recovery still failing, revoke
 that coin's trend. Common support <40% together with >=60% broken/opposite group
-evidence revokes the market trend into HANDOFF. A confirmed opposite/range vote
+evidence revokes the market trend into HANDOFF. Unconfirmed followers and failures
+of the other direction do not count as broken accepted supports. Retain recorded
+support failure while a new reference forms; resetting geometry cannot erase the
+failure that invalidated the preceding leg. A confirmed opposite/range vote
 cannot directly flip an accepted trend. The next cycle must separately establish
 the next direction or a two-sided failed-departure range. Missing coverage keeps
 the last phase as stale and suspends entries; it cannot create opposite authority.

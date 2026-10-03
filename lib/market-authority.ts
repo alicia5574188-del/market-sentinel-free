@@ -11,6 +11,7 @@ export type MarketRoute={version:typeof MARKET_AUTHORITY_VERSION;epoch:number;ph
   stop:number;target:number;targetBasis:'ACCEPTED_CENTER'|'OBSERVED_OBSTACLE'|'VOLATILITY_ESTIMATE';
   reference:ReactionArea;reason:string};
 export type CoinEpisode={reference:ReactionArea;lastAt:number;phase:MarketPhase;side:Side|null;
+  revokedSide?:Side;revokedAt?:number;
   acceptancePath?:'HOLD_OUTSIDE'|'RETEST_RESTART';acceptanceBars?:number[];
   proofAt:number;stop:number;eventPrice:number;atr:number;warning:boolean;failed:boolean;
   rejected:Side|null;rejectedAt:number;rejectedPrice:number;extreme:number;upperFailed:boolean;lowerFailed:boolean;
@@ -42,7 +43,9 @@ function observeCoin(previous:CoinEpisode|undefined,rows:CandleLike[],minutes:Ca
   const p:CoinEpisode=start?{reference:structuredClone(geometry.area),lastAt:0,phase:'HANDOFF',side:null,
     proofAt:0,stop:0,eventPrice:last.close,atr:geometry.atr,warning:false,failed:false,rejected:null,rejectedAt:0,rejectedPrice:0,
     extreme:0,upperFailed:false,lowerFailed:false,independentBars:previous?.independentBars??0,
-    independentAt:previous?.independentAt??0,relation:previous?.relation??'FOLLOWER',reason:'离开与反压结果未确认'}:structuredClone(previous!);
+    independentAt:previous?.independentAt??0,relation:previous?.relation??'FOLLOWER',
+    ...(previous?.revokedSide?{revokedSide:previous.revokedSide,revokedAt:previous.revokedAt}:{}),
+    reason:previous?.failed?'前段接受支撑已破坏，新参考区等待双向失败或新方向确认':'离开与反压结果未确认'}:structuredClone(previous!);
   const ref=p.reference,atr=Math.max(geometry.atr,last.close*.0005),eps=atr*.15;
   // Official 1m bars may accelerate proof against the SAME frozen 5m reference.
   // Need three completed minute bars, never quote-built candles or repeated ticks.
@@ -55,7 +58,7 @@ function observeCoin(previous:CoinEpisode|undefined,rows:CandleLike[],minutes:Ca
     const d=dir(p.side),recent=tail.slice(-3),bad=recent.slice(-2).filter(r=>d*(r.close-p.stop)<-eps);
     // Broken accepted support AND failed recovery. One wick only warns.
     if(bad.length===2&&d*(recent.at(-1)!.close-recent.at(-2)!.close)<=eps){
-      p.failed=true;p.phase='HANDOFF';p.reason='接受支撑破坏，后续恢复未收回；旧趋势结束';return p;
+      p.failed=true;p.revokedSide=p.side;p.revokedAt=stamp;p.phase='HANDOFF';p.reason='接受支撑破坏，后续恢复未收回；旧趋势结束';return p;
     }
     const progress=d*(final.close-p.eventPrice),peak=d>0?Math.max(...tail.map(r=>r.high)):Math.min(...tail.map(r=>r.low));
     p.warning=d*(final.close-peak)<-atr*.8||progress<=0||bad.length>0;
@@ -103,6 +106,7 @@ function observeCoin(previous:CoinEpisode|undefined,rows:CandleLike[],minutes:Ca
         &&d*(recent[1]!.close-recent[0]!.close)<0&&d*(recent[2]!.close-recent[0]!.close)>eps;
     if(accepted||retest){
       p.side=side;p.phase=d>0?'UP':'DOWN';p.proofAt=stamp;p.eventPrice=final.close;p.failed=false;
+      delete p.revokedSide;delete p.revokedAt;
       p.acceptancePath=retest?'RETEST_RESTART':'HOLD_OUTSIDE';p.acceptanceBars=recent.map(r=>end(r,ms));
       p.stop=d>0?Math.min(...recent.map(r=>r.low))-eps:Math.max(...recent.map(r=>r.high))+eps;
       p.reason=retest?'离开后反压未收回，重新推进':'连续收盘在参考区外，反压未夺回接受区';return p;
@@ -158,7 +162,7 @@ export function advanceMarketAuthority(input:{previous?:MarketAuthority;now:numb
     up:ps.filter(p=>p.phase==='UP'&&!p.failed).length/ps.length,
     down:ps.filter(p=>p.phase==='DOWN'&&!p.failed).length/ps.length,
     range:ps.filter(p=>p.phase==='RANGE').length/ps.length,
-    failed:ps.filter(p=>p.failed||p.phase==='HANDOFF').length/ps.length,
+    failed:ps.filter(p=>p.revokedSide===(a.phase==='UP'?'LONG':a.phase==='DOWN'?'SHORT':null)).length/ps.length,
     warn:ps.filter(p=>p.warning).length/ps.length}));
   const fraction=(key:'up'|'down'|'range'|'failed'|'warn')=>votes.length?votes.reduce((n,v)=>n+v[key],0)/votes.length:0;
   a.groups=groups.length;a.coverage=groups.reduce((n,g)=>n+g.length,0);a.up=fraction('up');a.down=fraction('down');a.range=fraction('range');

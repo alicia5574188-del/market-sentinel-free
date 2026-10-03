@@ -68,6 +68,20 @@ test('market warning retains accepted trend; common broken support enters handof
   const failed=observe(warning,T+2*B,two);assert.equal(failed.phase,'HANDOFF');
   assert.equal(routeMarketCoin(failed,'A_USDT',firstStop-.6,T+2*B),null);
 });
+test('unconfirmed followers only thin support; they cannot pose as broken accepted supports',()=>{
+  for(const revokedSide of [undefined,'SHORT'] as const){
+    const a=active('UP');for(const p of Object.values(a.coins)){p.phase='HANDOFF';p.side=null;p.revokedSide=revokedSide;p.failed=!!revokedSide;}
+    const next=observe(a,T+2000);assert.equal(next.phase,'UP');assert.equal(next.warning,true);
+    assert.equal(routeMarketCoin(next,'A_USDT',104,T+2000),null);
+  }
+});
+test('a recorded support failure remains causal evidence while the next reference is being established',()=>{
+  const a=active('UP');for(const p of Object.values(a.coins))Object.assign(p,{phase:'HANDOFF',failed:true,
+    revokedSide:'LONG',revokedAt:T-5*B,lastAt:T-5*B,proofAt:T-12*B});
+  const quiet=[bar(T-3*B,100,101,99,100),bar(T-2*B,100,101,99,100),bar(T-B,100,101,99,100)];
+  const next=observe(a,T,quiet);assert.equal(next.phase,'HANDOFF');
+  assert.equal(next.coins.A_USDT!.revokedSide,'LONG');assert.equal(next.coins.A_USDT!.revokedAt,T-5*B);
+});
 test('same completed bar cannot multiply independent evidence or move a frozen reference',()=>{
   const a=observe();const again=observe(a,T+2000);assert.deepEqual(again.coins,a.coins);
   assert.equal(again.epoch,a.epoch);assert.deepEqual(again.coins.A_USDT!.reference,a.coins.A_USDT!.reference);
