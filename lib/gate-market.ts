@@ -123,6 +123,11 @@ export async function fetchUrgentFuturesBook(symbol:string,tickSize=.0001,quanto
 export async function fetchBackgroundFuturesBook(symbol:string,tickSize=.0001,quantoMultiplier=1):Promise<BookSnapshot>{
   return fetchFuturesBookPolicy(symbol,tickSize,quantoMultiplier,1_500,1,20);
 }
+/** Pending PAPER actions only: one bounded public observation, no retries or
+ * market-wide depth sweep. The existing BBO remains the protection fallback. */
+export async function fetchPendingExecutionBook(symbol:string,tickSize=.0001,quantoMultiplier=1):Promise<BookSnapshot>{
+  return fetchFuturesBookPolicy(symbol,tickSize,quantoMultiplier,900,1,20);
+}
 
 export type GateTicker = {
   contract?: string;

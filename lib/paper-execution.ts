@@ -236,6 +236,8 @@ export function advancePaperExecution(s:ForwardState,quotes:Record<string,Quote>
       continue;
     }
     if(now<=o.submittedAt!||now-o.submittedAt!<o.timing.confirmMs||q!.observedAt<=o.submitQuoteAt!)continue;
+    if(s.directStrategy?.adaptive&&q!.bookCoverage==='BBO'){
+      blocked(s,o,new Error('等待本次执行的实际多档盘口；第一档不足不能代表完整IOC成交'));continue;}
     try{
       const f=paperBookFill(t,q!,c,t.contracts,true);if(!f)continue;
       const checked=prepareEntry(s,t,q!,c,quotes,now,f.price),n=Math.min(f.contracts,checked.intent.contracts,t.contracts);

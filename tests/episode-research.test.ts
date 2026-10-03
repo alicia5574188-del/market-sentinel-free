@@ -73,7 +73,7 @@ test('a single reclaim cannot revive failed research; two retained closes and re
 });
 test('episode replacement retains causal transition receipts and cannot reuse pre-proof prices',()=>{
   const i=input(),first=advanceEpisodeResearch(i);i.authority.coins.A_USDT!.reference.formedAt+=60000;
-  i.authority.coins.A_USDT!.proofAt=T;i.minutePaths.A_USDT=minutes([98.5,98.2,98]);
+  i.authority.coins.A_USDT!.proofAt=T;i.minutePaths.A_USDT=minutes([98.5,98.2,98]).map(r=>({...r,time:r.time-60}));
   const next=advanceEpisodeResearch({...i,previous:first});
   assert.equal(next.symbols.A_USDT!.phase,'UNCONFIRMED');assert.equal(next.transitions.length,2);
   assert.equal(next.transitions[1]!.from,'ADVANCING');assert.notEqual(next.transitions[0]!.episodeId,next.transitions[1]!.episodeId);

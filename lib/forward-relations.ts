@@ -67,7 +67,7 @@ const safe=(v:number|null|undefined,fallback=0)=>typeof v==="number"&&Number.isF
 
 export type Candle={time:number;open:number;high:number;low:number;close:number;volume:number};
 export type Quote={bestBid:number;bestAsk:number;observedAt:number;fresh:boolean;entryReady?:boolean;sourceCount?:number;disagreementRate?:number;
-  bids?:{price:number;size:number}[];asks?:{price:number;size:number}[];bookSequence?:number;
+  bids?:{price:number;size:number}[];asks?:{price:number;size:number}[];bookSequence?:number;bookCoverage?:'BBO'|'DEPTH20';
   sourceBreadth?:number;directionalAgreement?:number;medianShortMove?:number;spreadRate?:number;bookImbalance?:number;
   bidLiquidityChange?:number;askLiquidityChange?:number;liquiditySourceCount?:number};
 export type Contract={quantoMultiplier:number;leverageMax:number;maintenanceRate:number;minContracts?:number;tickSize?:number;
