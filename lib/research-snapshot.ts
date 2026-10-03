@@ -126,6 +126,7 @@ export function buildReviewSnapshot(input:{view:ObjectRow;buildSha:string|null;s
     research:{shadowUpdatedAt:rawShadow.updatedAt??null,counterfactualUpdatedAt:rawCounter.updatedAt??null,
       decisionAccount:v.directStrategy?'DIRECT_STRATEGY':v.unifiedExecution?'UNIFIED_EXECUTION':v.shadowInverse?'FROZEN_SHADOW_SOURCE':'PAPER',
       directStrategy:v.directStrategy??null,
+      episodeResearch:obj(v.directStrategy).episodeResearch??null,
       unifiedExecution:v.unifiedExecution??null,referenceTrades:obj(obj(v.unifiedExecution).baseline).retainedTrades??[],sourceToInverse:trades.filter(t=>t.inverseCopy).map(t=>({sourceId:t.inverseCopy!.sourceId,inverseId:t.id})),
       tradeQuality:currentShadow,retiredTrades:arr(rawShadow.retiredTrades),priorAccount:{excludedShadowCount:olderShadow.length+arr(rawShadow.retiredTrades).length,excludedShadowTradeIds:olderShadow.map(t=>t.tradeId),
         excludedOpenRecords:olderShadow.filter(t=>t.status==='OPEN').length,status:'ISOLATED_NOT_ASSUMED_CLOSED'},

@@ -47,6 +47,7 @@ import type { PreviousMarketRegimeCandidate } from "../lib/previous-market-regim
 import {unifiedReferenceState,unifiedExecutionSummary} from '../lib/unified-execution.ts';
 import {advanceDirectStrategy as advanceShadowInverse,directStrategySummary,directOpportunityView} from '../lib/direct-strategy.ts';
 import {marketCandidateReviewEvents} from '../lib/direct-strategy-view.ts';
+import {advanceEpisodeResearch} from '../lib/episode-research.ts';
 import {restoreForwardProtectionCheckpoint} from '../lib/forward-protection-checkpoint.ts';
 import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
 import { ADAPTIVE_ENGINE_VERSION, FORWARD_EXECUTION_BBO_CAP, FORWARD_MINUTE_CONFIRMATION_CAP, closeForwardForReset,
@@ -1269,6 +1270,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         research:{rolling:this.shadowResearch.market[0]?.rolling??null},reviewTrace:event=>{if(reviewEvents.length<128)reviewEvents.push(event);} });
       try{captureTradeReviews(previous,next.state,now,FORWARD_BUILD_SHA,STRATEGY_FINGERPRINT,executionQuotes);}
       catch{this.reviewDiagnosticError="TRADE_REVIEW_CAPTURE_FAILED";}
+      // Observations use existing inputs after all financial decisions. Optional
+      // failure neither changes those decisions nor requests another write.
+      try{const ds=next.state.directStrategy;
+        if(ds?.marketAuthority)ds.episodeResearch=advanceEpisodeResearch({previous:ds.episodeResearch,now,
+          accountStartedAt:next.state.startedAt,authority:ds.marketAuthority,states:next.state.extremumRegime.symbols,
+          paths:this.strategyCandles,minutePaths:this.forwardMinutePaths(),quotes:executionQuotes,
+          positions:next.state.positions,history:next.state.history});
+      }catch{this.reviewDiagnosticError="EPISODE_RESEARCH_CAPTURE_FAILED";}
       if (next.changed || !previous.storage.persistedAt) {
         next.state.storage = { persistedAt: now, error: null };
         const prepared = await prepareForwardWrite(previous.storage.persistedAt ? previous : null, next.state, now, {compact:true});

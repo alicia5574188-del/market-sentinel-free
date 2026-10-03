@@ -38,6 +38,7 @@ export function directStrategySummary(s:ForwardState){
       branch:ds.marketAuthority&&!candidate.marketRoute&&p.phase==='OBSERVE'?'WAIT':p.branch,
       marketRoute:candidate.marketRoute??null,permission:ds.marketAuthority?(candidate.marketRoute?.branch??'WAIT'):p.branch})),
     marketAuthority:ds.marketAuthority?structuredClone(ds.marketAuthority):null,
+    episodeResearch:ds.episodeResearch?structuredClone(ds.episodeResearch):null,
     authority:'ONE_ACTUAL_ACCOUNT_NO_COMPANION_ORDERS',entryPolicy:ds.marketAuthority?'market-permission-own-side-response':'observed-push-response-or-completed-trend',holdingPolicy:'own-geometric-branch',
     explanation:ds.marketAuthority?'共同趋势明确时跟随共同方向；市场分化时按本币完整结构参与。逆共同趋势须持续独立残差确认。回退到重心退出，延续按承接保护持有。':
       '回退：推进衰减兑现；延续：站稳后跟随，结构破坏退出。所有成本与前段亏损均计入当前账户'};
