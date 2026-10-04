@@ -151,6 +151,25 @@ test('an inside turn near the edge is a return without strong bars, and a wick o
   const done=rangeHoldingDecision(fresh,quote(now+4000,e.proof!.target*holding.scale-.05),now+4000,prior,minutes);
   assert.equal(done.exit,'RANGE_RETURN_TARGET');
 });
+test('a return does not scratch a profit bounce before the center or a second outside close',()=>{
+  const f=fixture(1,'EDGE_RETURN'),e=f.e,px=e.proof!.price,holding=makeRangeHolding(e,f.input.windows[e.id]!,px,f.q,f.input.now),
+    t=structuredClone(trade().t),target=e.proof!.target*holding.scale;
+  holding.initialRisk=holding.n5*.25;
+  const R=holding.initialRisk,favorable=px-holding.n5;
+  assert.ok(favorable>target+holding.D,'profit must stop short of the center');
+  assert.ok(px-favorable>2*R);
+  t.side='SHORT';t.openedAt=f.input.now;t.entryPrice=px;t.stopPrice=e.proof!.stop;t.unified!.anomaly=holding;t.unified!.branch='RETURN';
+  let r=rangeHoldingDecision(t,quote(f.input.now+2000,favorable),f.input.now+2000,f.input.paths.A_USDT,f.input.minutes.A_USDT);
+  assert.equal(r.exit,undefined);assert.equal(r.stop,e.proof!.stop);t.unified!.anomaly=r.memory;
+  for(const n of [4000,6000,8000]){r=rangeHoldingDecision(t,quote(f.input.now+n,favorable),f.input.now+n,f.input.paths.A_USDT,f.input.minutes.A_USDT);
+    assert.equal(r.stop,e.proof!.stop);t.unified!.anomaly=r.memory;t.stopPrice=r.stop;}
+  assert.ok(r.memory.retainedPeak>2*R);
+  const bounced=rangeHoldingDecision(t,quote(f.input.now+10000,px-R*.2),f.input.now+10000,f.input.paths.A_USDT,f.input.minutes.A_USDT);
+  assert.equal(bounced.exit,undefined,bounced.reason);assert.equal(bounced.stop,e.proof!.stop);
+  const armed=structuredClone(t);armed.stopPrice=px-R;armed.unified!.anomaly!.retainedPeak=holding.n5;
+  const crossed=rangeHoldingDecision(armed,quote(f.input.now+12000,px-R*.2),f.input.now+12000,f.input.paths.A_USDT,f.input.minutes.A_USDT);
+  assert.equal(crossed.exit,undefined,crossed.reason);
+});
 test('a green bar or a wick at the old edge is not a return, but the next close back from a new extreme is',()=>{
   const prior=Array.from({length:120},(_,i)=>candle(T-(120-i)*B,100,100,.4));
   prior[10]!.high=101.2;prior[10]!.close=100.4;

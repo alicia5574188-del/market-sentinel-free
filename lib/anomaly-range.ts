@@ -545,11 +545,11 @@ export function rangeHoldingDecision(t:Trade,q:Quote,now:number,path:CandleLike[
   const net=dir*(px-t.entryPrice)-(px+t.entryPrice)*.0005;
   if(q.observedAt>m.quoteAt){m.quoteAt=q.observedAt;if(net>m.peak+m.n5*.05){m.peak=net;m.peakAt=now;m.peakSamples=1;}
     else if(net>=m.peak-m.n5*.25&&m.peak>0){m.peakSamples=Math.min(3,m.peakSamples+1);if(m.peakSamples>=3)m.retainedPeak=Math.max(m.retainedPeak,Math.min(net,m.peak));}}
-  const r=m.retainedPeak/m.initialRisk,share=r>=6?.8:r>=4?.65:r>=2?.5:0;
+  const returning=m.kind==='EDGE_RETURN';
+  const r=m.retainedPeak/m.initialRisk,share=returning?0:r>=6?.8:r>=4?.65:r>=2?.5:0;
   if(share){const floor=Math.min(m.retainedPeak*share,m.retainedPeak-m.n5),guard=t.entryPrice+dir*(floor+(px+t.entryPrice)*.0005);
     if(floor>0&&dir*(guard-stop)>0)stop=guard;}
-  const profitLock=dir*(stop-t.entryPrice)>m.D;
-  if(dir*(px-stop)<=0&&!(m.kind==='EDGE_RETURN'&&!profitLock)){exit='RANGE_HARD_PROTECTION';m.reason='实际退出价触及原结构或已赚优势保护';}
+  if(!returning&&dir*(px-stop)<=0){exit='RANGE_HARD_PROTECTION';m.reason='实际退出价触及原结构或已赚优势保护';}
   const rows=specialRows(path,now).filter(r=>r.volumeVenue===m.source),minutes=specialRows(minutePath,now,60000).filter(r=>r.volumeVenue===m.source),last=rows.at(-1),scaled=(p:number)=>p*m.scale;
   const boundary=dir>0?m.H:m.L;
   if(m.kind==='INTERNAL_TREND'&&!m.breakoutAt&&last&&end(last)>t.openedAt&&dir*(scaled(last.close)-boundary)>m.D){m.breakoutAt=end(last);m.reason='内部顺势已突破原边缘，继续持有';}
@@ -562,7 +562,7 @@ export function rangeHoldingDecision(t:Trade,q:Quote,now:number,path:CandleLike[
     const full=[...decodeRangeWindow(m.window),...rows.filter(r=>r.time*1000>=m.window.cutoff)],swings=rangeSwings(full,m.n5/m.scale);
     m.swings=retainEdgeSwings(m.swings,swings,m.H,m.L,m.scale);
     const support=swings.findLast(s=>s.confirmedAt<=end(last)&&s.kind===(dir>0?'LOW':'HIGH')&&s.confirmedAt>t.openedAt);
-    if(support&&dir*(scaled(support.price)-dir*m.D-stop)>0&&dir*(px-scaled(support.price))>m.n5)stop=scaled(support.price)-dir*m.D;
+    if(!returning&&support&&dir*(scaled(support.price)-dir*m.D-stop)>0&&dir*(px-scaled(support.price))>m.n5)stop=scaled(support.price)-dir*m.D;
     const boundary=dir>0?m.H:m.L,inside=dir*(scaled(last.close)-boundary)<-m.D;
     if(breakout){
       if(inside){if(!m.insideAt)m.insideAt=end(last);m.stage='REVIEW';m.reason='完整5分钟回到区间内，检查后续收复';
