@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {advanceRangeResearch,decodeRangeWindow,rangeDirection,strongRangeProof,rangeMarketRoute,makeRangeHolding,
   rangeHoldingDecision,rangeExecutionAdmission,scanRangeAnomalies,normalizeRangeResearch,rangeObservationSymbols,fairRangeRefreshBatch,
-  validRangeHolding,thinFiveTape,sparseFiveTurnover,RANGE_OUTCOME_BYTES,RANGE_RESEARCH_BYTES,type RangeResearch,type RangeWindows,type RangeScanner} from '../lib/anomaly-range.ts';
+  validRangeHolding,thinFiveTape,sparseFiveTurnover,activeSwingRange,RANGE_OUTCOME_BYTES,RANGE_RESEARCH_BYTES,type RangeResearch,type RangeWindows,type RangeScanner} from '../lib/anomaly-range.ts';
 import {advanceDirectStrategy} from '../lib/direct-strategy.ts';
 import {initialForward,normalizeForward,forwardSummary,resetForwardAccountPreservingLearning,type Quote} from '../lib/forward-relations.ts';
 import {buildForwardProtectionCheckpoint,restoreForwardProtectionCheckpoint} from '../lib/forward-protection-checkpoint.ts';
@@ -116,7 +116,7 @@ test('near-edge rejection needs no new high/low; executing return remains at edg
     assert.ok(rangeMarketRoute(f.research,'A_USDT',f.q.bestAsk,f.input.now,f.q).route);
     assert.equal(rangeMarketRoute(f.research,'A_USDT',100,f.input.now,quote(f.input.now,100)).route,null);}
 });
-test('an inside turn near the edge is a return without strong bars, and the stop waits for a second breakout cross',()=>{
+test('an inside turn near the edge is a return without strong bars, and a wick or the first close outside does not stop',()=>{
   const prior=Array.from({length:120},(_,i)=>candle(T-(120-i)*B,100.25,100.25,.2));
   prior[8]=candle(T-(120-8)*B,100,99.2,.15);
   prior[60]=candle(T-(120-60)*B,100.3,101.35,.12);
@@ -129,17 +129,42 @@ test('an inside turn near the edge is a return without strong bars, and the stop
   assert.equal(e.proof?.kind,'EDGE_RETURN',e?.reason);assert.equal(e.proof?.side,'SHORT');
   const px=e.proof!.price,holding=makeRangeHolding(e,windows[e.id]!,px,q,now),base=structuredClone(trade().t);
   base.side='SHORT';base.openedAt=now;base.entryPrice=px;base.stopPrice=e.proof!.stop;base.unified!.anomaly=holding;base.unified!.branch='RETURN';
-  const entry=holding.H+holding.D,first=rangeHoldingDecision(base,quote(now+1000,entry+holding.D*.2),now+1000,prior,minutes);
-  assert.equal(first.exit,undefined,first.reason);assert.ok(first.memory.returnProbeAt);assert.equal(first.memory.returnBackAt,undefined);
-  base.unified!.anomaly=first.memory;base.stopPrice=first.stop;
-  const back=rangeHoldingDecision(base,quote(now+2000,entry-holding.n5),now+2000,prior,minutes);
-  assert.equal(back.exit,undefined,back.reason);assert.ok(back.memory.returnBackAt);
-  base.unified!.anomaly=back.memory;
-  const second=rangeHoldingDecision(base,quote(now+3000,entry+holding.D*.2),now+3000,prior,minutes);
+  const room=Math.max(holding.n5,holding.D),edge=holding.H;
+  const wick=candle(T+B,edge,edge-holding.D,.05);wick.high=edge+room+holding.n5;wick.low=Math.min(wick.low,edge-holding.D);
+  const wickAt=T+B+300000+1000,wicked=rangeHoldingDecision(base,quote(wickAt,edge-holding.D),wickAt,[...prior,wick],minutes);
+  assert.equal(wicked.exit,undefined,wicked.reason);assert.equal(wicked.memory.returnProbeAt,undefined);
+  const stabbed=rangeHoldingDecision(base,quote(now+1000,e.proof!.stop+holding.n5),now+1000,prior,minutes);
+  assert.equal(stabbed.exit,undefined,'a tick through the structural stop is not a second close');
+  const out1=candle(T+2*B,edge,edge+room+holding.n5*.5,.05);
+  base.unified!.anomaly=wicked.memory;
+  const probed=rangeHoldingDecision(base,quote(T+2*B+300000+1000,out1.close),T+2*B+300000+1000,[...prior,wick,out1],minutes);
+  assert.equal(probed.exit,undefined,probed.reason);assert.ok(probed.memory.returnProbeAt);assert.equal(probed.memory.returnBackAt,undefined);
+  const back=candle(T+3*B,edge,edge-holding.n5*.4,.05);
+  base.unified!.anomaly=probed.memory;
+  const returned=rangeHoldingDecision(base,quote(T+3*B+300000+1000,back.close),T+3*B+300000+1000,[...prior,wick,out1,back],minutes);
+  assert.equal(returned.exit,undefined,returned.reason);assert.ok(returned.memory.returnBackAt);
+  const out2=candle(T+4*B,edge,edge+room+holding.n5,.05);
+  base.unified!.anomaly=returned.memory;
+  const second=rangeHoldingDecision(base,quote(T+4*B+300000+1000,out2.close),T+4*B+300000+1000,[...prior,wick,out1,back,out2],minutes);
   assert.equal(second.exit,'RANGE_RETURN_FAILED');
   const fresh=structuredClone(base);fresh.unified!.anomaly=structuredClone(holding);fresh.stopPrice=e.proof!.stop;
   const done=rangeHoldingDecision(fresh,quote(now+4000,e.proof!.target*holding.scale-.05),now+4000,prior,minutes);
   assert.equal(done.exit,'RANGE_RETURN_TARGET');
+});
+test('a completed close through the old floor promotes the later pulled-back high',()=>{
+  const bars=Array.from({length:80},(_,i)=>candle(T-(80-i)*B,100,100,.3));
+  bars[15]=candle(T-(80-15)*B,100,96,.2);bars[15]!.low=90;
+  bars[25]=candle(T-(80-25)*B,110,128,.2);bars[25]!.high=130;
+  for(let i=26;i<40;i++)bars[i]=candle(T-(80-i)*B,120,118,.2);
+  bars[45]=candle(T-(80-45)*B,100,82,.2);bars[45]!.low=80;bars[45]!.close=82;
+  bars[55]=candle(T-(80-55)*B,100,108,.2);bars[55]!.high=110;
+  for(let i=56;i<80;i++)bars[i]=candle(T-(80-i)*B,104,102,.25);
+  const swing=activeSwingRange(bars,.001,102);
+  assert.equal(swing?.rebuilt,true);assert.ok(swing!.H>105&&swing!.H<120,`promoted high ${swing?.H}`);
+  const wick=bars.map(r=>({...r}));
+  for(let i=45;i<80;i++)wick[i]={...wick[i]!,open:110,close:112,high:i===55?130:114,low:i===45?80:108};
+  const kept=activeSwingRange(wick,.001,112);
+  assert.equal(kept?.rebuilt,false);assert.ok((kept?.H??0)>120,`wick kept the old high ${kept?.H}`);
 });
 test('causal swing direction: three rising lows, declining highs and compression are distinct',()=>{
   const low=[1,2,3].map((price,i)=>({kind:'LOW' as const,price:price+90,at:T+i,confirmedAt:T+100+i})),

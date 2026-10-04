@@ -125,7 +125,8 @@ function puncture(rows:CandleLike[],high:RangeSwing,tick:number){
   const prev=rows.slice(i-12,i),n=noise(prev,tick),limit=Math.max(n,Math.max(2*tick,.2*n)),shelf=Math.max(...prev.map(r=>r.high));
   return high.price-shelf>limit;
 }
-/** Highest confirmed high, unless that print is a puncture which has closed back through an older high. */
+/** Highest confirmed high, unless that print is a puncture which has closed back through an older high.
+ * A completed close through that range, followed by a later confirmed turn, retires the stale edge. */
 export function activeSwingRange(rows:CandleLike[],tick:number,price?:number){
   if(rows.length<30)return;
   const n5=noise(rows,tick),swings=rangeSwings(rows,n5),highs=swings.filter(s=>s.kind==='HIGH');
@@ -134,11 +135,19 @@ export function activeSwingRange(rows:CandleLike[],tick:number,price?:number){
   for(const s of highs)if(s.at<top.at&&top.price-s.price>D&&(!earlier||s.price>earlier.price))earlier=s;
   const mark=price??rows.at(-1)!.close;
   if(earlier&&puncture(rows,top,tick)&&mark<=earlier.price+D)high=earlier;
-  const low=swings.filter(s=>s.kind==='LOW'&&s.at<high.at).at(-1);
+  let low=swings.filter(s=>s.kind==='LOW'&&s.at<high.at).at(-1);
   if(!low||!(high.price>low.price))return;
+  const floor=low,ceiling=high,room=Math.max(n5,D);
+  const downBar=rows.find(r=>r.time*1000>floor.at&&r.close<=floor.price-room);
+  const upBar=rows.find(r=>r.time*1000>ceiling.at&&r.close>=ceiling.price+room);
+  const downAt=downBar?downBar.time*1000:0,upAt=upBar?upBar.time*1000:0;let rebuilt=false;
+  if(downAt&&downAt>=upAt){const nh=highs.filter(h=>h.at>downAt&&h.price<ceiling.price-D).at(-1),nl=nh&&swings.filter(s=>s.kind==='LOW'&&s.at<nh.at).at(-1);
+    if(nh&&nl&&nh.price>nl.price){high=nh;low=nl;rebuilt=true;}}
+  else if(upAt){const nl=swings.filter(s=>s.kind==='LOW'&&s.at>upAt&&s.price>floor.price+D).at(-1),nh=nl&&highs.filter(h=>h.at<nl.at).at(-1);
+    if(nl&&nh&&nh.price>nl.price){high=nh;low=nl;rebuilt=true;}}
   const H=high.price,L=low.price,E=Math.min(.75*n5,.1*(H-L));
-  if(!(E>D))return;
-  return{H,L,n5,E,D,highAt:high.at,lowAt:low.at,highConfirmed:high.confirmedAt,lowConfirmed:low.confirmedAt,rejected:high!==top};
+  if(!(H>L&&E>D))return;
+  return{H,L,n5,E,D,highAt:high.at,lowAt:low.at,highConfirmed:high.confirmedAt,lowConfirmed:low.confirmedAt,rejected:high!==top,rebuilt};
 }
 function rememberSwingPair(existing:RangeSwing[],pair:{H:number;L:number;highAt:number;lowAt:number;highConfirmed:number;lowConfirmed:number}){
   const defining:RangeSwing[]=[{kind:'LOW',price:pair.L,at:pair.lowAt,confirmedAt:Math.max(pair.lowAt,pair.lowConfirmed)},{kind:'HIGH',price:pair.H,at:pair.highAt,confirmedAt:Math.max(pair.highAt,pair.highConfirmed)}];
@@ -390,7 +399,7 @@ export function advanceRangeResearch(input:{previous?:RangeResearch;windows:Rang
         plateau=ceil.time*1000>swing.highAt&&swing.H>ceil.high+swing.D,
         brokeReal=!!inherited&&(inherited.side==='LONG'?inherited.event.close>swing.H+swing.D:inherited.event.close<swing.L-swing.D),
         innerShort=inheritedTaken&&pullback&&!!inherited&&inherited.L>swing.L+swing.D&&!(inherited.kind==='EDGE_BREAKOUT'&&inherited.side==='LONG')&&!brokeReal;
-      if(swing.rejected&&Math.abs(e.H-swing.H)>swing.D){
+      if((swing.rejected||swing.rebuilt)&&(Math.abs(e.H-swing.H)>swing.D||Math.abs(e.L-swing.L)>swing.D)){
         const H=swing.H,L=swing.L,E=Math.min(.75*swing.n5,.1*(H-L)),D=Math.max(2*tick,.2*swing.n5);
         if(H>L&&E>D){e.H=H;e.L=L;e.n5=swing.n5;e.highAt=swing.highAt;e.lowAt=swing.lowAt;e.E=E;e.D=D;
           e.upperExtreme=Math.max(e.upperExtreme,H);e.lowerExtreme=Math.min(e.lowerExtreme,L);
@@ -509,7 +518,8 @@ export function rangeHoldingDecision(t:Trade,q:Quote,now:number,path:CandleLike[
   const r=m.retainedPeak/m.initialRisk,share=r>=6?.8:r>=4?.65:r>=2?.5:0;
   if(share){const floor=Math.min(m.retainedPeak*share,m.retainedPeak-m.n5),guard=t.entryPrice+dir*(floor+(px+t.entryPrice)*.0005);
     if(floor>0&&dir*(guard-stop)>0)stop=guard;}
-  if(dir*(px-stop)<=0){exit='RANGE_HARD_PROTECTION';m.reason='实际退出价触及原结构或已赚优势保护';}
+  const profitLock=dir*(stop-t.entryPrice)>m.D;
+  if(dir*(px-stop)<=0&&!(m.kind==='EDGE_RETURN'&&!profitLock)){exit='RANGE_HARD_PROTECTION';m.reason='实际退出价触及原结构或已赚优势保护';}
   const rows=specialRows(path,now).filter(r=>r.volumeVenue===m.source),minutes=specialRows(minutePath,now,60000).filter(r=>r.volumeVenue===m.source),last=rows.at(-1),scaled=(p:number)=>p*m.scale;
   const boundary=dir>0?m.H:m.L;
   if(m.kind==='INTERNAL_TREND'&&!m.breakoutAt&&last&&end(last)>t.openedAt&&dir*(scaled(last.close)-boundary)>m.D){m.breakoutAt=end(last);m.reason='内部顺势已突破原边缘，继续持有';}
@@ -532,7 +542,12 @@ export function rangeHoldingDecision(t:Trade,q:Quote,now:number,path:CandleLike[
           m.reverseEligible=!!inward&&inward.at>t.openedAt&&Math.abs(px-boundary)<=m.E&&failed.every(r=>dir*(scaled(r.close)-boundary)<-m.D);}
       }else if(dir*(scaled(last.close)-boundary)>m.D){m.insideAt=0;m.stage='HOLD';m.reason='原边缘仍有效，保留外侧推进';}
     }else{
-      if(dir*(scaled(last.close)-stop)<-m.D){exit='RANGE_STRUCTURE_FAILED';m.reason='完成5分钟破坏实际方向的持仓结构';}
+      if(m.kind==='EDGE_RETURN'){const edge=dir>0?m.L:m.H,room=Math.max(m.n5,m.D),close=scaled(last.close),
+        outside=dir>0?close<=edge-room:close>=edge+room,inside=dir>0?close>=edge:close<=edge;
+        if(outside&&!m.returnProbeAt){m.returnProbeAt=end(last);m.stage='REVIEW';m.reason='第一根5分钟收在区间外一个正常波动，下影线不算，先拿着';}
+        else if(m.returnProbeAt&&!m.returnBackAt&&inside&&end(last)>m.returnProbeAt){m.returnBackAt=end(last);m.stage='HOLD';m.reason='已收回区间内，再有一根收在外面才止损';}
+        else if(m.returnProbeAt&&m.returnBackAt&&outside&&end(last)>m.returnBackAt){exit='RANGE_RETURN_FAILED';m.reason='收回区间后，又一根5分钟收在区间外，回归止损';}}
+      else if(dir*(scaled(last.close)-stop)<-m.D){exit='RANGE_STRUCTURE_FAILED';m.reason='完成5分钟破坏实际方向的持仓结构';}
       m.swings=retainEdgeSwings(m.swings,swings,m.H,m.L,m.scale);
     }
     m.lastBarAt=end(last);
@@ -541,13 +556,7 @@ export function rangeHoldingDecision(t:Trade,q:Quote,now:number,path:CandleLike[
   if(!exit&&breakout&&m.insideAt){const boundary=dir>0?m.H:m.L,
     inward=strongRangeProof(minutes,m.insideAt,dir>0?'SHORT':'LONG',m.n5/m.scale,m.D/m.scale/2,p=>dir*(scaled(p)-boundary)<-m.D);
     if(inward&&(fast||dir*(boundary-px)>=m.n5)){exit='RANGE_BREAKOUT_FAILED';m.reason='完成回内后，随后强势向内证明使突破失效';m.reverseEligible=Math.abs(px-boundary)<=m.E;}}
-  if(!exit&&m.kind==='EDGE_RETURN'){
-    const breakoutEntry=dir>0?m.L-m.D:m.H+m.D,beyond=dir>0?px<=breakoutEntry:px>=breakoutEntry,pulled=dir>0?px>=breakoutEntry+m.D:px<=breakoutEntry-m.D;
-    if(!m.returnProbeAt&&beyond){m.returnProbeAt=now;m.stage='REVIEW';m.reason='突破进场已触发，先容错，回归继续等待';}
-    else if(m.returnProbeAt&&!m.returnBackAt&&pulled){m.returnBackAt=now;m.stage='HOLD';m.reason='已回到突破进场位内侧，回归继续按原计划等待';}
-    else if(m.returnProbeAt&&m.returnBackAt&&beyond){exit='RANGE_RETURN_FAILED';m.reason='回调后再次超过突破进场位，回归止损';}
-    if(!exit&&dir*(px-m.proof.target*m.scale)>=0){exit='RANGE_RETURN_TARGET';m.reason='到达回归重心，按原计划出场';}
-  }
+  if(!exit&&m.kind==='EDGE_RETURN'&&dir*(px-m.proof.target*m.scale)>=0){exit='RANGE_RETURN_TARGET';m.reason='到达回归重心，按原计划出场';}
   const contrary=minutes.filter(r=>r.time*1000>=t.openedAt).slice(-2);
   if(!exit&&contrary.length===2&&contrary[1]!.time-contrary[0]!.time===60&&now-end(contrary[1]!,60000)<=120000
     &&contrary.every(r=>dir*(r.close-r.open)<0)&&dir*(scaled(contrary[1]!.close)-scaled(contrary[0]!.open))<-m.proof.n1*m.scale){

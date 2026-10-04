@@ -391,7 +391,7 @@ function manageMarketTrade(s:ForwardState,t:Trade,q:Quote,input:Input){
   if(u.anomaly){const result=rangeHoldingDecision(t,q,now,input.paths[t.symbol]??[],input.minutePaths?.[t.symbol]);
     u.anomaly=result.memory;t.stopPrice=result.stop;u.lastBarAt=result.memory.lastBarAt;u.lastDecisionAt=now;
     u.decision=result.memory.stage;u.holdReason=result.reason;u.exitCondition=result.memory.kind==='EDGE_RETURN'
-      ?`突破进场位先容错；回调后再越过才止损。未止损则按回归重心 ${(result.memory.proof.target*result.memory.scale).toPrecision(6)} 出场`
+      ?`下影线不算突破。第一根5分钟收在区间外先拿着；收回区间后，再有一根收在外面才止损。未止损则按回归重心 ${(result.memory.proof.target*result.memory.scale).toPrecision(6)} 出场`
       :'原计划结构失效或实际保护触发；仅边缘新确认可反向';
     if(result.exit)return closeUnifiedTrade(s,t,q,now,result.exit,result.reason);return false;}
   if(u.response){

@@ -131,8 +131,7 @@ function holdStatus(t:Position){
 function holdNext(t:Position){
   const m=t.unified?.anomaly;
   if(!m)return t.unified?.exitCondition??'按原来的计划走';
-  if(m.kind==='EDGE_RETURN'){const entry=t.side==='LONG'?m.L-m.D:m.H+m.D;
-    return `走到 ${num(m.proof.target*m.scale)} 出场；越过 ${num(entry)} 后缩回，再越过才止损`;}
+  if(m.kind==='EDGE_RETURN')return `走到 ${num(m.proof.target*m.scale)} 出场。下影线不算。第一根5分钟收出区间先拿着；收回去之后，再收出一根才止损`;
   if(m.kind==='EDGE_BREAKOUT')return `收回区间并确认失败才出，否则按保护价 ${num(t.stopPrice)}`;
   return t.unified?.exitCondition??`结构坏了就出，保护价 ${num(t.stopPrice)}`;
 }
