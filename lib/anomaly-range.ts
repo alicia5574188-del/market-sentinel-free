@@ -125,8 +125,10 @@ function puncture(rows:CandleLike[],high:RangeSwing,tick:number){
   const prev=rows.slice(i-12,i),n=noise(prev,tick),limit=Math.max(n,Math.max(2*tick,.2*n)),shelf=Math.max(...prev.map(r=>r.high));
   return high.price-shelf>limit;
 }
-/** Highest confirmed high, unless that print is a puncture which has closed back through an older high.
- * A completed close through that range, followed by a later confirmed turn, retires the stale edge. */
+/** Highest confirmed high and the low before it.
+ * A later high replaces that ceiling only while price is still inside the later swing.
+ * Once price has left that swing, the ceiling stays the unbroken major high and the floor
+ * is the confirmed pullback low after it. */
 export function activeSwingRange(rows:CandleLike[],tick:number,price?:number){
   if(rows.length<30)return;
   const n5=noise(rows,tick),swings=rangeSwings(rows,n5),highs=swings.filter(s=>s.kind==='HIGH');
@@ -142,7 +144,9 @@ export function activeSwingRange(rows:CandleLike[],tick:number,price?:number){
   const upBar=rows.find(r=>r.time*1000>ceiling.at&&r.close>=ceiling.price+room);
   const downAt=downBar?downBar.time*1000:0,upAt=upBar?upBar.time*1000:0;let rebuilt=false;
   if(downAt&&downAt>=upAt){const nh=highs.filter(h=>h.at>downAt&&h.price<ceiling.price-D).at(-1),nl=nh&&swings.filter(s=>s.kind==='LOW'&&s.at<nh.at).at(-1);
-    if(nh&&nl&&nh.price>nl.price){high=nh;low=nl;rebuilt=true;}}
+    if(nh&&nl&&nh.price>nl.price&&mark<=nh.price+D&&mark>=nl.price-D){high=nh;low=nl;rebuilt=true;}
+    else if(nh){const pull=swings.filter(s=>s.kind==='LOW'&&s.at>ceiling.at).at(-1);
+      if(pull&&ceiling.price>pull.price){high=ceiling;low=pull;rebuilt=true;}}}
   else if(upAt){const nl=swings.filter(s=>s.kind==='LOW'&&s.at>upAt&&s.price>floor.price+D).at(-1),nh=nl&&highs.filter(h=>h.at<nl.at).at(-1);
     if(nl&&nh&&nh.price>nl.price){high=nh;low=nl;rebuilt=true;}}
   const H=high.price,L=low.price,E=Math.min(.75*n5,.1*(H-L));
@@ -154,18 +158,23 @@ function rememberSwingPair(existing:RangeSwing[],pair:{H:number;L:number;highAt:
   const rest=existing.filter(s=>s.at>pair.highAt&&!defining.some(d=>d.kind===s.kind&&s.at===d.at)).sort((a,b)=>b.at-a.at).slice(0,4);
   return [...defining,...rest].sort((a,b)=>a.at-b.at);
 }
-/** Keep the swing pair that defines H/L. Newer turns after that high may trail; lows between the pair must not. */
+/** Keep the swing pair that defines H/L. The floor may print after the high once a pullback is confirmed. */
 function retainEdgeSwings(existing:RangeSwing[],fresh:RangeSwing[],H:number,L:number,scale:number){
   const px=(p:number)=>p*scale,high=existing.find(s=>s.kind==='HIGH'&&Math.abs(px(s.price)-H)<=H*1e-8),
     low=existing.find(s=>s.kind==='LOW'&&Math.abs(px(s.price)-L)<=L*1e-8);
-  if(!high||!low||!(low.at<high.at))return fresh.slice(-6);
-  const rest=fresh.filter(s=>s.at>high.at&&!((s.kind===high.kind&&s.at===high.at)||(s.kind===low.kind&&s.at===low.at))).sort((a,b)=>b.at-a.at).slice(0,4);
+  if(!high||!low||high.at===low.at)return fresh.slice(-6);
+  if(low.at<high.at){if(existing.some(s=>s.kind==='LOW'&&s.at>low.at&&s.at<high.at))return fresh.slice(-6);}
+  else if(existing.some(s=>s.kind==='HIGH'&&s.at>high.at&&s.at<low.at&&px(s.price)>H))return fresh.slice(-6);
+  const after=Math.max(high.at,low.at);
+  const rest=fresh.filter(s=>s.at>after&&!((s.kind===high.kind&&s.at===high.at)||(s.kind===low.kind&&s.at===low.at))).sort((a,b)=>b.at-a.at).slice(0,4);
   return [low,high,...rest].sort((a,b)=>a.at-b.at);
 }
 function holdingSwingMatches(m:RangeHolding){
   const px=(p:number)=>p*m.scale,high=m.swings.find(s=>s.kind==='HIGH'&&Math.abs(px(s.price)-m.H)<=m.H*1e-8),
     low=m.swings.find(s=>s.kind==='LOW'&&Math.abs(px(s.price)-m.L)<=m.L*1e-8);
-  return !!high&&!!low&&low.at<high.at&&!m.swings.some(s=>s.kind==='LOW'&&s.at>low.at&&s.at<high.at);
+  if(!high||!low||high.at===low.at)return false;
+  if(low.at<high.at)return !m.swings.some(s=>s.kind==='LOW'&&s.at>low.at&&s.at<high.at);
+  return !m.swings.some(s=>s.kind==='HIGH'&&s.at>high.at&&s.at<low.at&&px(s.price)>m.H);
 }
 function windowGeometry(prior:CandleLike[],tick:number){
   const H=Math.max(...prior.map(r=>r.high)),L=Math.min(...prior.map(r=>r.low)),n5=noise(prior,tick),E=Math.min(.75*n5,.1*(H-L)),D=Math.max(2*tick,.2*n5);

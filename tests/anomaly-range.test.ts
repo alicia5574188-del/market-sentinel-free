@@ -212,6 +212,23 @@ test('a completed close through the old floor promotes the later pulled-back hig
   const kept=activeSwingRange(wick,.001,112);
   assert.equal(kept?.rebuilt,false);assert.ok((kept?.H??0)>120,`wick kept the old high ${kept?.H}`);
 });
+test('a climb back above the later high restores the major high and the confirmed pullback low',()=>{
+  const bars=Array.from({length:90},(_,i)=>candle(T-(90-i)*B,100,100,.3));
+  bars[12]=candle(T-(90-12)*B,100,96,.2);bars[12]!.low=90;
+  bars[24]=candle(T-(90-24)*B,110,128,.2);bars[24]!.high=130;
+  for(let i=25;i<36;i++)bars[i]=candle(T-(90-i)*B,120,118,.2);
+  bars[42]=candle(T-(90-42)*B,100,82,.2);bars[42]!.low=80;bars[42]!.close=82;
+  bars[52]=candle(T-(90-52)*B,100,108,.2);bars[52]!.high=110;
+  for(let i=53;i<64;i++)bars[i]=candle(T-(90-i)*B,104,102,.25);
+  bars[70]=candle(T-(90-70)*B,100,88,.2);bars[70]!.low=86;
+  for(let i=71;i<90;i++)bars[i]=candle(T-(90-i)*B,112,116,.2);
+  const inside=activeSwingRange(bars.slice(0,64),.001,102);
+  assert.equal(inside?.rebuilt,true);assert.ok((inside?.H??0)>105&&(inside?.H??0)<120,`still under the later high ${inside?.H}`);
+  const back=activeSwingRange(bars,.001,116);
+  assert.equal(back?.rebuilt,true);assert.ok((back?.H??0)>120,`major high restored ${back?.H}`);
+  assert.ok((back?.L??999)<90,`pullback low kept ${back?.L}`);
+  assert.ok(116>back!.L&&116<back!.H);
+});
 test('causal swing direction: three rising lows, declining highs and compression are distinct',()=>{
   const low=[1,2,3].map((price,i)=>({kind:'LOW' as const,price:price+90,at:T+i,confirmedAt:T+100+i})),
     high=[3,2,1].map((price,i)=>({kind:'HIGH' as const,price:price+100,at:T+i,confirmedAt:T+100+i}));
