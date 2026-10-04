@@ -76,6 +76,19 @@ test('a rejection already inside the scan window uses the prior edge instead of 
   assert.equal(e.phase,'READY',e?.reason);assert.equal(e.proof!.kind,'EDGE_RETURN');assert.equal(e.proof!.side,'SHORT');
   assert.equal(e.H,oldH);assert.ok(e.H<prior[116]!.high);
 });
+test('a pullback low inside the last ten hours does not replace the low before the high',()=>{
+  const older=Array.from({length:80},(_,i)=>candle(T-(200-i)*B,100+Math.sin(i/6),100+Math.sin(i/6),.4));
+  older[40]=candle(T-(200-40)*B,100,96,.3);
+  const rally=candle(T-(200-70)*B,100,130,.4),after=Array.from({length:120},(_,i)=>candle(T-(120-i)*B,122,122,.4));
+  after[80]=candle(T-(120-80)*B,122,118,.3);
+  const prior=[...older.slice(0,70),rally,...older.slice(71),...after],now=T+90000,q=quote(now,121),windows:RangeWindows={},
+    discovery={at:T,scanned:1,shared:1,excluded:0,marketSamples:1,marketMove:0,loaded:1,queued:0,
+      anomalies:[{symbol:'A_USDT',detectedAt:T,source:'BYBIT',sourceCount:2,own:-.02,residual:-.02,score:90,kind:'OWN_ACCELERATION'}]},
+    e=advanceRangeResearch({now,windows,paths:{A_USDT:prior},minutes:{A_USDT:[candle(T-120000,121.2,121,.1),candle(T-60000,121,120.8,.1)]},
+      quotes:{A_USDT:q},ticks:{A_USDT:.001},discovery,positions:[],history:[]}).events.A_USDT!;
+  assert.ok(e.L<118,`floor ${e.L} stayed at the pullback`);assert.ok(e.H>125,`high ${e.H}`);
+  assert.notEqual(e.proof?.side,'SHORT');
+});
 test('near-edge rejection needs no new high/low; executing return remains at edge and cost-checked',()=>{
   for(const side of [1,-1]){const f=fixture(side,'EDGE_RETURN');assert.equal(f.e.proof?.kind,'EDGE_RETURN');assert.equal(f.e.proof?.side,side>0?'SHORT':'LONG');
     assert.ok(rangeMarketRoute(f.research,'A_USDT',f.q.bestAsk,f.input.now,f.q).route);

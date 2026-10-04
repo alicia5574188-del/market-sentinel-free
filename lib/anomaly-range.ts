@@ -97,6 +97,36 @@ export function strongRangeProof(minutes:CandleLike[],fiveAt:number,side:Side,n5
     return{at:end(a.at(-1)!,60000),price:a.at(-1)!.close,bars:a.map(r=>end(r,60000)),n1,bodyBaseline:body,minuteBars:a.map(r=>[r.time,r.open,r.high,r.low,r.close])};
   }
 }
+const SWING_LOOKBACK=288;
+/** Highest confirmed high, and the swing low immediately before it. Later pullback lows do not move the floor. */
+export function activeSwingRange(rows:CandleLike[],tick:number){
+  if(rows.length<30)return;
+  const n5=noise(rows,tick),swings=rangeSwings(rows,n5),highs=swings.filter(s=>s.kind==='HIGH');
+  if(!highs.length||!(n5>0))return;
+  const high=highs.reduce((a,b)=>a.price>=b.price?a:b),low=swings.filter(s=>s.kind==='LOW'&&s.at<high.at).at(-1);
+  if(!low||!(high.price>low.price))return;
+  const H=high.price,L=low.price,E=Math.min(.75*n5,.1*(H-L)),D=Math.max(2*tick,.2*n5);
+  if(!(E>D))return;
+  return{H,L,n5,E,D,highAt:high.at,lowAt:low.at,highConfirmed:high.confirmedAt,lowConfirmed:low.confirmedAt};
+}
+function rememberSwingPair(existing:RangeSwing[],pair:{H:number;L:number;highAt:number;lowAt:number;highConfirmed:number;lowConfirmed:number}){
+  const defining:RangeSwing[]=[{kind:'LOW',price:pair.L,at:pair.lowAt,confirmedAt:Math.max(pair.lowAt,pair.lowConfirmed)},{kind:'HIGH',price:pair.H,at:pair.highAt,confirmedAt:Math.max(pair.highAt,pair.highConfirmed)}];
+  const rest=existing.filter(s=>s.at>pair.highAt&&!defining.some(d=>d.kind===s.kind&&s.at===d.at)).sort((a,b)=>b.at-a.at).slice(0,4);
+  return [...defining,...rest].sort((a,b)=>a.at-b.at);
+}
+/** Keep the swing pair that defines H/L. Newer turns after that high may trail; lows between the pair must not. */
+function retainEdgeSwings(existing:RangeSwing[],fresh:RangeSwing[],H:number,L:number,scale:number){
+  const px=(p:number)=>p*scale,high=existing.find(s=>s.kind==='HIGH'&&Math.abs(px(s.price)-H)<=H*1e-8),
+    low=existing.find(s=>s.kind==='LOW'&&Math.abs(px(s.price)-L)<=L*1e-8);
+  if(!high||!low||!(low.at<high.at))return fresh.slice(-6);
+  const rest=fresh.filter(s=>s.at>high.at&&!((s.kind===high.kind&&s.at===high.at)||(s.kind===low.kind&&s.at===low.at))).sort((a,b)=>b.at-a.at).slice(0,4);
+  return [low,high,...rest].sort((a,b)=>a.at-b.at);
+}
+function holdingSwingMatches(m:RangeHolding){
+  const px=(p:number)=>p*m.scale,high=m.swings.find(s=>s.kind==='HIGH'&&Math.abs(px(s.price)-m.H)<=m.H*1e-8),
+    low=m.swings.find(s=>s.kind==='LOW'&&Math.abs(px(s.price)-m.L)<=m.L*1e-8);
+  return !!high&&!!low&&low.at<high.at&&!m.swings.some(s=>s.kind==='LOW'&&s.at>low.at&&s.at<high.at);
+}
 function windowGeometry(prior:CandleLike[],tick:number){
   const H=Math.max(...prior.map(r=>r.high)),L=Math.min(...prior.map(r=>r.low)),n5=noise(prior,tick),E=Math.min(.75*n5,.1*(H-L)),D=Math.max(2*tick,.2*n5);
   return{H,L,n5,E,D,highAt:prior.findLast(r=>r.high===H)!.time*1000,lowAt:prior.findLast(r=>r.low===L)!.time*1000};
@@ -307,6 +337,24 @@ export function advanceRangeResearch(input:{previous?:RangeResearch;windows:Rang
         }else{drop();e.reason='上次事件同向，等待仍在正确一侧的完成小线';}
       }
     }
+    const history=specialRows(input.paths[e.symbol],input.now,300000,SWING_LOOKBACK).filter(r=>r.volumeVenue===e.source),
+      swing=activeSwingRange(history,tick),recent=history.slice(-120);
+    if(swing&&recent.length>=30){
+      const floor=recent.reduce((a,b)=>a.low<=b.low?a:b),ceil=recent.reduce((a,b)=>a.high>=b.high?a:b),
+        pullback=floor.time*1000>swing.highAt&&swing.L<floor.low-swing.D,
+        plateau=ceil.time*1000>swing.highAt&&swing.H>ceil.high+swing.D,
+        brokeReal=!!inherited&&(inherited.side==='LONG'?inherited.event.close>swing.H+swing.D:inherited.event.close<swing.L-swing.D),
+        innerShort=inheritedTaken&&pullback&&!!inherited&&inherited.L>swing.L+swing.D&&!(inherited.kind==='EDGE_BREAKOUT'&&inherited.side==='LONG')&&!brokeReal;
+      if((pullback||plateau)&&(!inheritedTaken||innerShort)){
+        const H=plateau?swing.H:e.H,L=pullback?swing.L:e.L,highAt=plateau?swing.highAt:e.highAt,lowAt=pullback?swing.lowAt:e.lowAt,
+          E=Math.min(.75*e.n5,.1*(H-L)),D=Math.max(2*tick,.2*e.n5);
+        if(H>L&&E>D){e.H=H;e.L=L;e.highAt=highAt;e.lowAt=lowAt;e.E=E;e.D=D;
+          e.upperExtreme=Math.max(e.upperExtreme,H);e.lowerExtreme=Math.min(e.lowerExtreme,L);
+          e.swings=rememberSwingPair(e.swings,{H,L,highAt,lowAt,highConfirmed:plateau?swing.highConfirmed:highAt,lowConfirmed:pullback?swing.lowConfirmed:lowAt});
+          if(innerShort){if(e.proof?.fiveAt===end(inherited!.event))delete e.proof;inheritedTaken=false;if(!e.proof)e.phase='WATCH';}
+          else if(pullback&&e.proof?.side==='SHORT'&&e.proof.kind==='EDGE_BREAKOUT'){delete e.proof;e.phase='WATCH';}}
+      }
+    }
     const choices:{kind:RangeKind;side:Side;stop:number;target:number;test:(p:number)=>boolean;from?:number}[]=[];
     if(!inheritedTaken&&last.close>e.H+e.D)choices.push({kind:'EDGE_BREAKOUT',side:'LONG',stop:Math.min(last.low,e.H-e.E-e.D),target:last.close,test:p=>p>e.H+e.D});
     if(!inheritedTaken&&last.close<e.L-e.D)choices.push({kind:'EDGE_BREAKOUT',side:'SHORT',stop:Math.max(last.high,e.L+e.E+e.D),target:last.close,test:p=>p<e.L-e.D});
@@ -386,7 +434,7 @@ export function makeRangeHolding(e:RangeEvent,w:RangeWindow,price:number,analysi
 export function validRangeHolding(m:RangeHolding){try{const rows=decodeRangeWindow(m.window);return m.version===ANOMALY_RANGE_VERSION&&!!m.eventId
   &&[m.H,m.L,m.E,m.D,m.n5,m.scale,m.scaleAt,m.initialRisk,m.lastBarAt,m.insideAt,m.quoteAt,m.peak,m.peakAt,m.retainedPeak,m.peakSamples].every(Number.isFinite)
   &&m.H>m.L&&m.L>0&&m.scale>0&&m.initialRisk>0&&m.window.source===m.source&&validRangeProof(m.proof,Math.max(m.scaleAt,m.proof.at))
-  &&rangeGeometryMatches(rows,m.H,m.L,m.scale)
+  &&(rangeGeometryMatches(rows,m.H,m.L,m.scale)||holdingSwingMatches(m))
   &&['HOLD','REVIEW','EXIT'].includes(m.stage)&&typeof m.reverseEligible==='boolean'&&m.peakSamples>=0&&m.peakSamples<=3
   &&(m.breakoutAt===undefined||Number.isFinite(m.breakoutAt)&&m.breakoutAt>=m.proof.fiveAt&&m.breakoutAt<=m.lastBarAt);}catch{return false;}}
 export function rangeHoldingDecision(t:Trade,q:Quote,now:number,path:CandleLike[],minutePath:CandleLike[]=[]){
@@ -410,7 +458,7 @@ export function rangeHoldingDecision(t:Trade,q:Quote,now:number,path:CandleLike[
       m.reverseEligible=Math.abs(px-boundary)<=m.E;}}
   if(!exit&&last&&end(last)>m.lastBarAt&&end(last)>t.openedAt){
     const full=[...decodeRangeWindow(m.window),...rows.filter(r=>r.time*1000>=m.window.cutoff)],swings=rangeSwings(full,m.n5/m.scale);
-    m.swings=swings.slice(-6);
+    m.swings=retainEdgeSwings(m.swings,swings,m.H,m.L,m.scale);
     const support=swings.findLast(s=>s.confirmedAt<=end(last)&&s.kind===(dir>0?'LOW':'HIGH')&&s.confirmedAt>t.openedAt);
     if(support&&dir*(scaled(support.price)-dir*m.D-stop)>0&&dir*(px-scaled(support.price))>m.n5)stop=scaled(support.price)-dir*m.D;
     const boundary=dir>0?m.H:m.L,inside=dir*(scaled(last.close)-boundary)<-m.D;
@@ -427,7 +475,7 @@ export function rangeHoldingDecision(t:Trade,q:Quote,now:number,path:CandleLike[
         if(outward&&end(last)>t.openedAt){m.insideAt=end(last);m.stage='REVIEW';m.reason='回归后完成5分钟再次站在原边缘外，检查随后推进';}
       }
       if(dir*(scaled(last.close)-stop)<-m.D){exit='RANGE_STRUCTURE_FAILED';m.reason='完成5分钟破坏实际方向的持仓结构';}
-      m.swings=swings.slice(-6);
+      m.swings=retainEdgeSwings(m.swings,swings,m.H,m.L,m.scale);
     }
     m.lastBarAt=end(last);
   }

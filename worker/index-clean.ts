@@ -3723,7 +3723,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const research=this.forwardState?.directStrategy?.rangeResearch,
         range=research?.events[symbol]??research?.recent?.findLast(e=>e.symbol===symbol&&e.outcomes.some(o=>o.status==='PENDING')),
         held=this.forwardState?.positions.find(t=>t.symbol===symbol),
-        external=range||held?.unified?.anomaly||!held?await this.marketHub.pinnedCandles(symbol,"5m",120,(range?.source??held?.unified?.anomaly?.source) as import('../lib/market-data-hub.ts').MarketSource|undefined):await this.marketHub.candles(symbol,"5m",120);
+        depth=(this.strategyCandles[symbol]?.length??0)>=288?6:288,
+        external=range||held?.unified?.anomaly||!held?await this.marketHub.pinnedCandles(symbol,"5m",depth,(range?.source??held?.unified?.anomaly?.source) as import('../lib/market-data-hub.ts').MarketSource|undefined):await this.marketHub.candles(symbol,"5m",120);
       if(external)return{symbol,rows:external.rows,replace:true,source:external.source};
       if(!held||held.unified?.anomaly||this.marketHub.supports(symbol))throw new Error(`${symbol} external 5m temporarily unavailable`);
       // True Gate-only contracts retain a low-frequency fallback. A temporary
@@ -3739,7 +3740,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           lastError:`5m多源刷新失败：${safeError(result.reason)}`};return;
       }
       const rows=result.value.replace?[...new Map([...(this.strategyCandles[symbol]??[]).filter(r=>r.volumeVenue===result.value.source),...result.value.rows].map(r=>[r.time,r])).values()].sort((a,b)=>a.time-b.time):mergeStrategyCandlePath(this.strategyCandles[symbol]??[],result.value.rows);
-      if(rows.length>=30){this.strategyCandles[symbol]=rows.slice(-121);delete this.runtime.strategyCandleFailures[symbol];}
+      if(rows.length>=30){this.strategyCandles[symbol]=rows.slice(-289);delete this.runtime.strategyCandleFailures[symbol];}
     });
     return due.length;
   }
