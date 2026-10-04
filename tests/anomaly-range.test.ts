@@ -151,6 +151,33 @@ test('an inside turn near the edge is a return without strong bars, and a wick o
   const done=rangeHoldingDecision(fresh,quote(now+4000,e.proof!.target*holding.scale-.05),now+4000,prior,minutes);
   assert.equal(done.exit,'RANGE_RETURN_TARGET');
 });
+test('a green bar or a wick at the old edge is not a return, but the next close back from a new extreme is',()=>{
+  const prior=Array.from({length:120},(_,i)=>candle(T-(120-i)*B,100,100,.4));
+  prior[10]!.high=101.2;prior[10]!.close=100.4;
+  const wick=candle(T,100.9,101.05,.1);wick.high=101.55;
+  const stuck=candle(T+B,101.02,100.96,.04),stuck2=candle(T+B+60000,100.96,100.9,.04);
+  const no=advanceRangeResearch({now:T+B+120000,windows:{},paths:{A_USDT:[...prior,wick]},
+    minutes:{A_USDT:[stuck,stuck2]},quotes:{A_USDT:quote(T+B+120000,100.9)},ticks:{A_USDT:.001},positions:[],history:[],
+    discovery:{at:T,scanned:1,shared:1,excluded:0,marketSamples:1,marketMove:0,loaded:1,queued:0,
+      anomalies:[{symbol:'A_USDT',detectedAt:T,source:'BYBIT',sourceCount:2,own:-.01,residual:-.01,score:80,kind:'OWN_ACCELERATION'}]}}).events.A_USDT!;
+  assert.notEqual(no.proof?.kind,'EDGE_RETURN',no.reason);
+  const spike=candle(T,100.3,102.6,.2);spike.high=103;
+  const back=candle(T+B,102.9,102.75,.1);
+  const m1=candle(T+2*B,102.75,102.65,.04),m2=candle(T+2*B+60000,102.65,102.55,.04),now=T+2*B+120000;
+  const yes=advanceRangeResearch({now,windows:{},paths:{A_USDT:[...prior,spike,back]},minutes:{A_USDT:[m1,m2]},
+    quotes:{A_USDT:quote(now,102.55)},ticks:{A_USDT:.001},positions:[],history:[],
+    discovery:{at:T,scanned:1,shared:1,excluded:0,marketSamples:1,marketMove:0,loaded:1,queued:0,
+      anomalies:[{symbol:'A_USDT',detectedAt:T,source:'BYBIT',sourceCount:2,own:-.01,residual:-.01,score:80,kind:'OWN_ACCELERATION'}]}}).events.A_USDT!;
+  assert.equal(yes.proof?.kind,'EDGE_RETURN',yes?.reason);assert.equal(yes.proof?.side,'SHORT');
+  assert.ok(Math.abs(yes.H-103)<1e-9,`edge ${yes.H} should be the fresh high`);
+  assert.ok(yes.proof!.stop>103);
+  const rising=candle(T+2*B,102.7,102.85,.04),rising2=candle(T+2*B+60000,102.85,102.95,.04);
+  const early=advanceRangeResearch({now,windows:{},paths:{A_USDT:[...prior,spike,back]},minutes:{A_USDT:[rising,rising2]},
+    quotes:{A_USDT:quote(now,102.95)},ticks:{A_USDT:.001},positions:[],history:[],
+    discovery:{at:T,scanned:1,shared:1,excluded:0,marketSamples:1,marketMove:0,loaded:1,queued:0,
+      anomalies:[{symbol:'A_USDT',detectedAt:T,source:'BYBIT',sourceCount:2,own:-.01,residual:-.01,score:80,kind:'OWN_ACCELERATION'}]}}).events.A_USDT!;
+  assert.notEqual(early.proof?.side,'SHORT',early?.reason);
+});
 test('a completed close through the old floor promotes the later pulled-back high',()=>{
   const bars=Array.from({length:80},(_,i)=>candle(T-(80-i)*B,100,100,.3));
   bars[15]=candle(T-(80-15)*B,100,96,.2);bars[15]!.low=90;

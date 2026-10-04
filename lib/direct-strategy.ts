@@ -545,7 +545,7 @@ function manageMarketDirect(s:ForwardState,input:Input,ready:boolean){
     if(ds.eventResearch){try{boundedEventResearch(ds.eventResearch);}
       catch{ds.eventResearchError='事件研究容量不足，暂停新增；已有持仓继续自身保护';}}
   }
-  ds.summary=ds.anomalyRange?`外部异动发现，区间按已回落的高点和它前面的低点。突破要收在区间外并有强势小线；回归可以冲出边界回头，或从内部靠近边界回头。已记住 ${Object.keys(ds.rangeResearch?.events??{}).length} 个计划；${s.positions.filter(paperFilled).length} 笔持仓。`:ds.eventResponse?`记录活跃异常事件；按自身推进保留与恢复参与，失败启动提前退出，有优势继续持有。已记住 ${Object.keys(ds.eventResearch?.events??{}).length} 个事件；${s.positions.filter(paperFilled).length} 笔实际持仓。`:ds.specialMove?`持续研究特别的活跃币；自身启动并保留价格优势后参与爆发段。研究记忆 ${Object.keys(ds.specialResearch?.watches??{}).length} 币；${s.positions.filter(paperFilled).length} 笔实际持仓。`:
+  ds.summary=ds.anomalyRange?`外部异动发现，区间按已回落的高点和它前面的低点。突破要收在区间外并有强势小线；回归要等5分钟从边界往回收，贴着边或只出影线不做。刚打出的极值，下一根收回来且还在一个正常波动内，就用它当边界。已记住 ${Object.keys(ds.rangeResearch?.events??{}).length} 个计划；${s.positions.filter(paperFilled).length} 笔持仓。`:ds.eventResponse?`记录活跃异常事件；按自身推进保留与恢复参与，失败启动提前退出，有优势继续持有。已记住 ${Object.keys(ds.eventResearch?.events??{}).length} 个事件；${s.positions.filter(paperFilled).length} 笔实际持仓。`:ds.specialMove?`持续研究特别的活跃币；自身启动并保留价格优势后参与爆发段。研究记忆 ${Object.keys(ds.specialResearch?.watches??{}).length} 币；${s.positions.filter(paperFilled).length} 笔实际持仓。`:
     `${ds.adaptive?'按实际失败参与回归，按持续承接参与延续；持仓依据独立观察。':a.reason}。回退 ${s.positions.filter(t=>paperFilled(t)&&t.unified?.branch==='RETURN').length} 笔；延续 ${s.positions.filter(t=>paperFilled(t)&&t.unified?.branch==='CONTINUATION').length} 笔；新方向须取得自身证明。`;
 }
 export function advanceDirectStrategy(input:Input){

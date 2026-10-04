@@ -98,14 +98,14 @@ function watchLine(e:RangeEvent,now:number){
   if(!e.active)return '成交不够，先看着，不下单。';
   if(e.phase==='CONFIRMING')return '等这根 5 分钟走完。收在外面做突破，回头做回归。';
   const place=where(e);
-  if(place.includes('上沿'))return '在上沿。回头就做空回归；收在外面并走强，才做多突破。';
-  if(place.includes('下沿'))return '在下沿。回头就做多回归；收在外面并走强，才做空突破。';
+  if(place.includes('上沿'))return '在上沿。5分钟往回收完才做空；只出上影线不做。收在外面并走强，才做多突破。';
+  if(place.includes('下沿'))return '在下沿。5分钟往回收完才做多；只出下影线不做。收在外面并走强，才做空突破。';
   return '还在区间里面，等它靠近上沿或下沿。';
 }
 function orderLine(e:RangeEvent){
   const p=e.proof;if(!p)return e.reason;
   if(p.kind==='EDGE_RETURN'){const turned=(p.side==='SHORT'?e.upperExtreme>e.H:e.lowerExtreme<e.L);
-    return `${turned?'冲出边界后又回头':'从区间里面靠近边界后回头'}。走到 ${num(p.target)} 出场。`;}
+    return `${turned?'冲出新极值后，5分钟已经往回收':'5分钟已从边界往回收'}。走到 ${num(p.target)} 出场。`;}
   if(p.kind==='EDGE_BREAKOUT')return `已经收在区间外面。错了就按 ${num(p.stop)} 出。`;
   return `顺着区间里的方向做。错了就按 ${num(p.stop)} 出。`;
 }
@@ -154,7 +154,7 @@ function RangeExecution({data,now,liveEnabled,liveOverview}:{data:NonNullable<Vi
       <div className="fr-pipeline">{steps.map(([name,count],i)=><div key={name} className={i===active?'current':i<active&&Number(count)>0?'done':''}><span>{i+1}</span><b>{name} {count}</b></div>)}</div>
       <p>{headline.endsWith('。')?headline:`${headline}。`}</p>
       <p className="fr-exec-exit">币池 {discovery?.shared??'—'}，扫到价格 {discovery?.scanned??'—'}，看过 K 线 {discovery?.loaded??0}{backlog?`。一次看不过来，还有 ${backlog} 个在排队`:''}。</p>
-      {!data.positions.length&&!orders.length&&!waiting.length&&!watching.length&&<p className="fr-exec-exit">靠近边界回头就做回归。收在区间外面并走强，才做突破。</p>}
+      {!data.positions.length&&!orders.length&&!waiting.length&&!watching.length&&<p className="fr-exec-exit">回归要等5分钟从边界往回收完。贴着边或只出影线不做。收在区间外面并走强，才做突破。</p>}
       {liveEnabled&&<p>实盘已跟上 {liveOverview?.copied??'—'} / 应执行 {liveOverview?.eligible??'—'}。成交以实盘账户为准。</p>}
     </section>
     <section className="fr-section"><div className="fr-section-head"><h2>正在做</h2><span>{data.positions.length} 笔</span></div>

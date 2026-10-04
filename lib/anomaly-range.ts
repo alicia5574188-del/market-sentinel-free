@@ -415,10 +415,35 @@ export function advanceRangeResearch(input:{previous?:RangeResearch;windows:Rang
           else if(pullback&&e.proof?.side==='SHORT'&&e.proof.kind==='EDGE_BREAKOUT'){delete e.proof;e.phase='WATCH';}}
       }
     }
-    const choices:{kind:RangeKind;side:Side;stop:number;target:number;test:(p:number)=>boolean;from?:number}[]=[];
+    const choices:{kind:RangeKind;side:Side;stop:number;target:number;test:(p:number)=>boolean;from?:number;fade?:{price:number;at:number}}[]=[];
+    // A high or low printed on the previous bars is the edge once the next completed
+    // bar has closed back, and that close is still inside one normal five-minute move.
+    const freshBars=five.slice(-4,-1);
+    const freshShort=(()=>{
+      if(freshBars.length<1||!(last.close<last.open)||!(last.high-last.close>=e.D))return;
+      const extreme=freshBars.reduce((a,b)=>a.high>=b.high?a:b);
+      if(last.high>extreme.high)return;
+      const back=extreme.high-last.close;
+      if(!(back>=e.D&&back<=e.n5&&extreme.high>e.H+e.D&&last.close>e.H&&last.close>e.L+e.D))return;
+      const edge=extreme.high,stop=edge+2*e.D,target=(edge+e.L)/2;
+      if(!(stop>last.close&&target<last.close))return;
+      return{edge,at:extreme.time*1000,stop,target,test:(p:number)=>p<edge&&p>=last.close-e.n5-e.D&&p>e.L+e.D};
+    })();
+    const freshLong=(()=>{
+      if(freshBars.length<1||!(last.close>last.open)||!(last.close-last.low>=e.D))return;
+      const extreme=freshBars.reduce((a,b)=>a.low<=b.low?a:b);
+      if(last.low<extreme.low)return;
+      const back=last.close-extreme.low;
+      if(!(back>=e.D&&back<=e.n5&&extreme.low<e.L-e.D&&last.close<e.L&&last.close<e.H-e.D))return;
+      const edge=extreme.low,stop=edge-2*e.D,target=(e.H+edge)/2;
+      if(!(stop>0&&stop<last.close&&target>last.close))return;
+      return{edge,at:extreme.time*1000,stop,target,test:(p:number)=>p>edge&&p<=last.close+e.n5+e.D&&p<e.H-e.D};
+    })();
+    if(freshShort)choices.push({kind:'EDGE_RETURN',side:'SHORT',stop:freshShort.stop,target:freshShort.target,test:freshShort.test,fade:{price:freshShort.edge,at:freshShort.at}});
+    if(freshLong)choices.push({kind:'EDGE_RETURN',side:'LONG',stop:freshLong.stop,target:freshLong.target,test:freshLong.test,fade:{price:freshLong.edge,at:freshLong.at}});
     if(!inheritedTaken&&last.close>e.H+e.D)choices.push({kind:'EDGE_BREAKOUT',side:'LONG',stop:Math.min(last.low,e.H-e.E-e.D),target:last.close,test:p=>p>e.H+e.D});
     if(!inheritedTaken&&last.close<e.L-e.D)choices.push({kind:'EDGE_BREAKOUT',side:'SHORT',stop:Math.max(last.high,e.L+e.E+e.D),target:last.close,test:p=>p<e.L-e.D});
-    const band=Math.max(e.E,e.n5),turnedDown=last.close<last.open||last.high-last.close>=e.D,turnedUp=last.close>last.open||last.close-last.low>=e.D,
+    const band=Math.max(e.E,e.n5),turnedDown=last.close<last.open&&last.high-last.close>=e.D,turnedUp=last.close>last.open&&last.close-last.low>=e.D,
       nearHigh=Math.abs(last.close-e.H)<=band||e.upperExtreme>e.H&&last.close<=e.H&&e.H-last.close<=band+e.D,
       nearLow=Math.abs(last.close-e.L)<=band||e.lowerExtreme<e.L&&last.close>=e.L&&last.close-e.L<=band+e.D;
     if(!inheritedTaken&&nearHigh&&turnedDown&&last.close<e.H+e.D&&last.close>e.L+band)choices.push({kind:'EDGE_RETURN',side:'SHORT',stop:e.H+2*e.D,target:(e.H+e.L)/2,test:p=>p<e.H+e.D&&p>e.L+e.D&&Math.abs(p-e.H)<=band+e.D});
@@ -446,8 +471,13 @@ export function advanceRangeResearch(input:{previous?:RangeResearch;windows:Rang
         ?closedMinuteProof(minutes,end(last),tick,input.now,choice.test)??strongRangeProof(minutes,choice.from??end(last),choice.side,e.n5,tick,choice.test)
         :strongRangeProof(minutes,choice.from??end(last),choice.side,e.n5,tick,choice.test);
       if(!proof||proof.at<=e.consumedAt||(choice.kind!=='EDGE_RETURN'&&proof.minuteBars[0]![0]!*1000<e.detectedAt)||input.now-proof.at>120000)continue;
-      e.proof={...choice,...proof,fiveAt:end(last),fiveBar:[last.time,last.open,last.high,last.low,last.close],id:`${e.id}:${choice.kind}:${choice.side}:${proof.at}`};delete (e.proof as unknown as {test?:unknown;from?:number}).test;delete (e.proof as unknown as {from?:number}).from;
-      e.phase='READY';e.reason=choice.kind==='EDGE_BREAKOUT'?'5分钟收在区间外，随后1分钟强势推进':choice.kind==='EDGE_RETURN'?'边界回头或靠近边界回头，容错进场':'内部波段同向，完成5分钟推进及后续1分钟确认';break;
+      const fadeEdge=choice.fade?.price??(choice.side==='SHORT'?e.H:e.L);
+      if(choice.kind==='EDGE_RETURN'&&choice.from===undefined&&!proof.minuteBars.every(b=>choice.side==='SHORT'?b[4]!<b[1]!&&b[2]!<=fadeEdge+tick:b[4]!>b[1]!&&b[3]!>=fadeEdge-tick))continue;
+      if(choice.fade&&choice.side==='SHORT'&&choice.fade.price>e.H){e.H=choice.fade.price;e.highAt=choice.fade.at;e.upperExtreme=Math.max(e.upperExtreme,e.H);}
+      else if(choice.fade&&choice.side==='LONG'&&choice.fade.price<e.L){e.L=choice.fade.price;e.lowAt=choice.fade.at;e.lowerExtreme=Math.min(e.lowerExtreme,e.L);}
+      if(choice.fade){e.E=Math.min(.75*e.n5,.1*(e.H-e.L));e.swings=rememberSwingPair(e.swings,{H:e.H,L:e.L,highAt:e.highAt,lowAt:e.lowAt,highConfirmed:e.highAt,lowConfirmed:e.lowAt});}
+      e.proof={...choice,...proof,fiveAt:end(last),fiveBar:[last.time,last.open,last.high,last.low,last.close],id:`${e.id}:${choice.kind}:${choice.side}:${proof.at}`};delete (e.proof as unknown as {test?:unknown;from?:number;fade?:unknown}).test;delete (e.proof as unknown as {from?:number}).from;delete (e.proof as unknown as {fade?:unknown}).fade;
+      e.phase='READY';e.reason=choice.kind==='EDGE_BREAKOUT'?'5分钟收在区间外，随后1分钟强势推进':choice.kind==='EDGE_RETURN'?'5分钟已从边界往回收，收盘还在一个正常波动内，1分钟继续同向':'内部波段同向，完成5分钟推进及后续1分钟确认';break;
     }
     if(!inheritedTaken&&!e.proof){e.phase='CONFIRMING';e.reason=!e.active?'近期成交不足或未知，继续观察':'等待突破的区间外收盘和强势小线，或边界回头的完成小线';}
   }
@@ -482,7 +512,7 @@ export function rangeMarketRoute(s:RangeResearch|undefined,symbol:string,price:n
     return fail('RANGE_SOURCE_WAIT','等待同源分析价格');
   if(now-p.at>120000||p.at>now||Math.abs(((analysis.bestBid+analysis.bestAsk)/2)-p.price)>e.n5)return fail('RANGE_LATE','证明过期或已偏离一个正常波动');
   const scale=price/((analysis.bestBid+analysis.bestAsk)/2);if(!(scale>.97&&scale<1.03))return fail('RANGE_BASIS','分析与执行价差异常，停止新增');
-  if(p.kind==='EDGE_RETURN'&&Math.min(Math.abs(((analysis.bestBid+analysis.bestAsk)/2)-e.H),Math.abs(((analysis.bestBid+analysis.bestAsk)/2)-e.L))>Math.max(e.E,e.n5)+e.D)return fail('RANGE_EDGE_LOST','实际入场已离开可回归的边界，不追已经走远的回头');
+  if(p.kind==='EDGE_RETURN'&&Math.min(Math.abs(((analysis.bestBid+analysis.bestAsk)/2)-e.H),Math.abs(((analysis.bestBid+analysis.bestAsk)/2)-e.L))>e.n5+Math.max(e.E,e.n5)+e.D)return fail('RANGE_EDGE_LOST','实际入场已离开可回归的边界，不追已经走远的回头');
   const dir=d(p.side);if(dir*(price-p.stop*scale)<=0)return fail('RANGE_STOP','实际失效位已经触发');
   const route:MarketRoute={version:MARKET_AUTHORITY_VERSION,controllerVersion:ANOMALY_RANGE_VERSION,epoch:1,phase:p.kind==='EDGE_RETURN'?'RANGE':p.side==='LONG'?'UP':'DOWN',
     eventId:p.id,relation:'INDEPENDENT',branch:p.kind==='EDGE_RETURN'?'RETURN':'CONTINUATION',side:p.side,proofAt:p.at,proofPrice:p.price*scale,
@@ -600,6 +630,6 @@ export function rangeExecutionAdmission(t:Trade,q:Quote|undefined,now:number,con
   if(now-m.proof.at>120000||now<m.proof.at)return'原入场证明已过期，不迟到复制';
   const px=t.side==='LONG'?q.bestAsk:q.bestBid,dir=d(t.side);
   if(Math.abs(px-m.proof.price*m.scale)>m.n5)return'执行价已离开原证明一个正常波动，不追单';
-  if(m.kind==='EDGE_RETURN'&&Math.min(Math.abs(px-m.H),Math.abs(px-m.L))>Math.max(m.E,m.n5)+m.D)return'当前执行价已离开可回归的边界，取消反向';
+  if(m.kind==='EDGE_RETURN'&&Math.min(Math.abs(px-m.H),Math.abs(px-m.L))>m.n5+Math.max(m.E,m.n5)+m.D)return'当前执行价已离开可回归的边界，取消反向';
   if(dir*(px-t.stopPrice)<=0)return'原计划保护位已触发，不开新仓';return null;
 }
