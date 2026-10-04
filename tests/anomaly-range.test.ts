@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {advanceRangeResearch,decodeRangeWindow,rangeDirection,strongRangeProof,rangeMarketRoute,makeRangeHolding,
   rangeHoldingDecision,rangeExecutionAdmission,scanRangeAnomalies,normalizeRangeResearch,rangeObservationSymbols,fairRangeRefreshBatch,
-  validRangeHolding,thinFiveTape,sparseFiveTurnover,activeSwingRange,RANGE_OUTCOME_BYTES,RANGE_RESEARCH_BYTES,type RangeResearch,type RangeWindows,type RangeScanner} from '../lib/anomaly-range.ts';
+  validRangeHolding,thinFiveTape,sparseFiveTurnover,activeSwingRange,lastingRange,RANGE_OUTCOME_BYTES,RANGE_RESEARCH_BYTES,type RangeResearch,type RangeWindows,type RangeScanner} from '../lib/anomaly-range.ts';
 import {advanceDirectStrategy} from '../lib/direct-strategy.ts';
 import {initialForward,normalizeForward,forwardSummary,resetForwardAccountPreservingLearning,type Quote} from '../lib/forward-relations.ts';
 import {buildForwardProtectionCheckpoint,restoreForwardProtectionCheckpoint} from '../lib/forward-protection-checkpoint.ts';
@@ -228,6 +228,26 @@ test('a climb back above the later high restores the major high and the confirme
   assert.equal(back?.rebuilt,true);assert.ok((back?.H??0)>120,`major high restored ${back?.H}`);
   assert.ok((back?.L??999)<90,`pullback low kept ${back?.L}`);
   assert.ok(116>back!.L&&116<back!.H);
+});
+test('a break stays in force for two hours and a later close outside is not another breakout',()=>{
+  const bars=Array.from({length:80},(_,i)=>candle(T-(160-i)*B,100,100,.3));
+  bars[20]=candle(T-(160-20)*B,100,96,.2);bars[20]!.low=94;
+  bars[40]=candle(T-(160-40)*B,104,108,.2);bars[40]!.high=110;
+  for(let i=41;i<60;i++)bars[i]=candle(T-(160-i)*B,106,105,.2);
+  const early=lastingRange(bars,.001,105);
+  assert.ok(early&&early.H>108&&early.L<98,`range before the break ${early?.H}/${early?.L}`);
+  const broke=candle(T-(160-60)*B,108,112,.2);
+  const chasing=Array.from({length:20},(_,i)=>candle(T-(100-i)*B,112+i*.05,113+i*.05,.2));
+  const held=lastingRange([...bars,broke,...chasing],.001,chasing.at(-1)!.close);
+  assert.ok(held?.brokeAt,'the break is still the active range');
+  assert.ok(held&&held.H>108&&held.H<111,`ceiling stayed ${held?.H}`);
+  assert.ok((held?.L??999)<98,`floor stayed ${held?.L}`);
+  const tail=chasing.at(-1)!,minutes=[candle(tail.time*1000,tail.close-.1,tail.close,.05),candle(tail.time*1000+60000,tail.close,tail.close+.1,.05)];
+  const e=advanceRangeResearch({now:tail.time*1000+120000,windows:{},paths:{A_USDT:[...bars,broke,...chasing]},minutes:{A_USDT:minutes},
+    quotes:{A_USDT:quote(tail.time*1000+120000,tail.close)},ticks:{A_USDT:.001},positions:[],history:[],
+    discovery:{at:T,scanned:1,shared:1,excluded:0,marketSamples:1,marketMove:0,loaded:1,queued:0,
+      anomalies:[{symbol:'A_USDT',detectedAt:bars[0]!.time*1000,source:'BYBIT',sourceCount:2,own:.02,residual:.02,score:90,kind:'OWN_ACCELERATION'}]}}).events.A_USDT!;
+  assert.notEqual(e?.proof?.kind,'EDGE_BREAKOUT',e?.reason??'no event');
 });
 test('causal swing direction: three rising lows, declining highs and compression are distinct',()=>{
   const low=[1,2,3].map((price,i)=>({kind:'LOW' as const,price:price+90,at:T+i,confirmedAt:T+100+i})),

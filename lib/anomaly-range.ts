@@ -153,6 +153,57 @@ export function activeSwingRange(rows:CandleLike[],tick:number,price?:number){
   if(!(H>L&&E>D))return;
   return{H,L,n5,E,D,highAt:high.at,lowAt:low.at,highConfirmed:high.confirmedAt,lowConfirmed:low.confirmedAt,rejected:high!==top,rebuilt};
 }
+const RANGE_REDRAW_MS=2*60*60*1000;
+function outsideBox(bar:CandleLike,box:{H:number;L:number;D:number}){return bar.close>box.H+box.D||bar.close<box.L-box.D;}
+/** A broken range stays in force for two hours. After that, the next range is either a return
+ * into the old box that formed a new extreme, or a pullback that traded back near the breakout extreme. */
+function postBreakRange(old:{H:number;L:number;D:number;n5:number},next:{H:number;L:number;D:number;n5:number;lowAt:number;highAt:number},rows:CandleLike[],mark:number,brokeAt:number){
+  const n5=Math.max(old.n5,next.n5),swings=rangeSwings(rows,next.n5);
+  if(mark<=old.H+old.D&&mark>=old.L-old.D&&swings.some(s=>s.confirmedAt>brokeAt&&s.price<=old.H&&s.price>=old.L))return true;
+  if(!(mark<=next.H+next.D&&mark>=next.L-next.D))return false;
+  const breakBar=rows.find(r=>end(r)>=brokeAt&&end(r)<brokeAt+300000),up=!!breakBar&&breakBar.close>old.H;
+  if(up){const since=rows.filter(r=>end(r)>=brokeAt),spike=Math.max(...since.map(r=>r.high));
+    return next.lowAt+300000>brokeAt&&next.H>=spike-n5&&since.some(r=>r.time*1000>next.lowAt&&r.high>=spike-n5);}
+  const since=rows.filter(r=>end(r)>=brokeAt),spike=Math.min(...since.map(r=>r.low));
+  return next.highAt+300000>brokeAt&&next.L<=spike+n5&&since.some(r=>r.time*1000>next.highAt&&r.low<=spike+n5);
+}
+/** The range still being traded.
+ * A high is established only after price pulls away and comes back without closing through it.
+ * A low printed on the way down is not a floor unless price then returns to that high.
+ * A high made after the close already left the prior ceiling is the breakout leg, not a new range. */
+export function lastingRange(rows:CandleLike[],tick:number,price?:number){
+  const mark=price??rows.at(-1)?.close,proposed=activeSwingRange(rows,tick,mark);
+  if(!proposed||mark==null)return proposed?{...proposed,brokeAt:0}:undefined;
+  const n5=proposed.n5,D=proposed.D,swings=rangeSwings(rows,n5),highs=swings.filter(s=>s.kind==='HIGH'),lows=swings.filter(s=>s.kind==='LOW');
+  const retestBar=(at:number,level:number)=>{let pulled=false;for(const r of rows){if(r.time*1000<=at)continue;
+    if(!pulled){if(level-r.low>=n5)pulled=true;continue;}
+    if(r.high>=level-n5&&r.high<=level+n5&&r.close<=level+D)return r;}};
+  let H=proposed.H,L=proposed.L,highAt=proposed.highAt,lowAt=proposed.lowAt,highConfirmed=proposed.highConfirmed,lowConfirmed=proposed.lowConfirmed,replaced=false;
+  if(!retestBar(proposed.highAt,proposed.H)){
+    const priorRows=rows.filter(r=>r.time*1000<proposed.highAt),prior=priorRows.length>=30?activeSwingRange(priorRows,tick,priorRows.at(-1)!.close):undefined;
+    if(prior&&proposed.H>prior.H+prior.D){const left=rows.find(r=>r.time*1000>prior.highAt&&r.close>prior.H+prior.D);
+      if(left&&proposed.highAt>left.time*1000){H=prior.H;L=prior.L;highAt=prior.highAt;lowAt=prior.lowAt;highConfirmed=prior.highConfirmed;lowConfirmed=prior.lowConfirmed;replaced=true;}}
+  }
+  const cameBack=(after:number,level:number)=>rows.some(r=>r.time*1000>after&&r.high>=level-n5&&r.high<=level+n5&&r.close<=level+D);
+  if(lowAt>highAt&&!cameBack(lowAt,H)){
+    const returned=lows.filter(s=>s.at>highAt&&s.at<lowAt&&cameBack(s.at,H)).reduce((a,b)=>!a||b.price<a.price?b:a,undefined as RangeSwing|undefined);
+    const floor=returned??lows.filter(s=>s.at<highAt).at(-1);
+    if(floor&&H>floor.price){L=floor.price;lowAt=floor.at;lowConfirmed=floor.confirmedAt;replaced=true;}
+  }
+  const qualified=highs.map(h=>({h,back:retestBar(h.at,h.price)})).filter((x):x is {h:RangeSwing;back:CandleLike}=>!!x.back)
+    .map(x=>{const between=lows.filter(s=>s.at>x.h.at&&s.at<x.back.time*1000),floor=between.reduce((a,b)=>!a||b.price<a.price?b:a,undefined as RangeSwing|undefined);return floor?{...x,floor}:undefined;})
+    .filter((x):x is {h:RangeSwing;back:CandleLike;floor:RangeSwing}=>!!x&&x.h.price-x.floor.price>=3*n5);
+  const later=(a:{back:CandleLike},b:{back:CandleLike})=>a.back.time-b.back.time;
+  const near=qualified.filter(x=>Math.abs(x.h.price-H)<=n5).sort(later).at(-1),above=qualified.filter(x=>x.h.price>H+n5).sort(later).at(-1);
+  if(above&&(!near||above.back.time>near.back.time)&&proposed.highAt>above.back.time*1000){
+    H=above.h.price;highAt=above.h.at;highConfirmed=above.h.confirmedAt;L=above.floor.price;lowAt=above.floor.at;lowConfirmed=above.floor.confirmedAt;replaced=true;
+  }
+  const E=Math.min(.75*n5,.1*(H-L));
+  if(!(H>L&&E>D))return{...proposed,brokeAt:0};
+  const born=Math.max(highAt,lowAt),breakBar=rows.find(r=>r.time*1000>born&&(r.close>H+D||r.close<L-D)),brokeAt=breakBar?end(breakBar):0;
+  if(!replaced&&!brokeAt)return{...proposed,brokeAt:0};
+  return{H,L,n5,E,D,highAt,lowAt,highConfirmed,lowConfirmed,rejected:false,rebuilt:false,brokeAt};
+}
 function rememberSwingPair(existing:RangeSwing[],pair:{H:number;L:number;highAt:number;lowAt:number;highConfirmed:number;lowConfirmed:number}){
   const defining:RangeSwing[]=[{kind:'LOW',price:pair.L,at:pair.lowAt,confirmedAt:Math.max(pair.lowAt,pair.lowConfirmed)},{kind:'HIGH',price:pair.H,at:pair.highAt,confirmedAt:Math.max(pair.highAt,pair.highConfirmed)}];
   const rest=existing.filter(s=>s.at>pair.highAt&&!defining.some(d=>d.kind===s.kind&&s.at===d.at)).sort((a,b)=>b.at-a.at).slice(0,4);
@@ -407,14 +458,19 @@ export function advanceRangeResearch(input:{previous?:RangeResearch;windows:Rang
         pullback=floor.time*1000>swing.highAt&&swing.L<floor.low-swing.D,
         plateau=ceil.time*1000>swing.highAt&&swing.H>ceil.high+swing.D,
         brokeReal=!!inherited&&(inherited.side==='LONG'?inherited.event.close>swing.H+swing.D:inherited.event.close<swing.L-swing.D),
-        innerShort=inheritedTaken&&pullback&&!!inherited&&inherited.L>swing.L+swing.D&&!(inherited.kind==='EDGE_BREAKOUT'&&inherited.side==='LONG')&&!brokeReal;
-      if((swing.rejected||swing.rebuilt)&&(Math.abs(e.H-swing.H)>swing.D||Math.abs(e.L-swing.L)>swing.D)){
+        innerShort=inheritedTaken&&pullback&&!!inherited&&inherited.L>swing.L+swing.D&&!(inherited.kind==='EDGE_BREAKOUT'&&inherited.side==='LONG')&&!brokeReal,
+        heldRange=lastingRange(history,tick,e.price),breakAge=heldRange?.brokeAt?input.now-heldRange.brokeAt:0,
+        outsideSwing=e.price>swing.H+swing.D||e.price<swing.L-swing.D,
+        settledNow=!!heldRange?.brokeAt&&breakAge>=RANGE_REDRAW_MS&&postBreakRange(heldRange,swing,history,e.price,heldRange.brokeAt),
+        redrawBlocked=!!heldRange?.brokeAt&&!settledNow&&(breakAge<RANGE_REDRAW_MS||outsideSwing),
+        blocked=redrawBlocked&&swing.rebuilt&&!swing.rejected;
+      if(!blocked&&(swing.rejected||swing.rebuilt)&&(Math.abs(e.H-swing.H)>swing.D||Math.abs(e.L-swing.L)>swing.D)){
         const H=swing.H,L=swing.L,E=Math.min(.75*swing.n5,.1*(H-L)),D=Math.max(2*tick,.2*swing.n5);
         if(H>L&&E>D){e.H=H;e.L=L;e.n5=swing.n5;e.highAt=swing.highAt;e.lowAt=swing.lowAt;e.E=E;e.D=D;
           e.upperExtreme=Math.max(e.upperExtreme,H);e.lowerExtreme=Math.min(e.lowerExtreme,L);
           e.swings=rememberSwingPair(e.swings,{H,L,highAt:swing.highAt,lowAt:swing.lowAt,highConfirmed:swing.highConfirmed,lowConfirmed:swing.lowConfirmed});
           if(e.proof)delete e.proof;inheritedTaken=false;if(e.phase==='READY')e.phase='WATCH';}
-      }else if((pullback||plateau)&&(!inheritedTaken||innerShort)){
+      }else if(!redrawBlocked&&(pullback||plateau)&&(!inheritedTaken||innerShort)){
         const H=plateau?swing.H:e.H,L=pullback?swing.L:e.L,highAt=plateau?swing.highAt:e.highAt,lowAt=pullback?swing.lowAt:e.lowAt,
           E=Math.min(.75*e.n5,.1*(H-L)),D=Math.max(2*tick,.2*e.n5);
         if(H>L&&E>D){e.H=H;e.L=L;e.highAt=highAt;e.lowAt=lowAt;e.E=E;e.D=D;
@@ -422,6 +478,27 @@ export function advanceRangeResearch(input:{previous?:RangeResearch;windows:Rang
           e.swings=rememberSwingPair(e.swings,{H,L,highAt,lowAt,highConfirmed:plateau?swing.highConfirmed:highAt,lowConfirmed:pullback?swing.lowConfirmed:lowAt});
           if(innerShort){if(e.proof?.fiveAt===end(inherited!.event))delete e.proof;inheritedTaken=false;if(!e.proof)e.phase='WATCH';}
           else if(pullback&&e.proof?.side==='SHORT'&&e.proof.kind==='EDGE_BREAKOUT'){delete e.proof;e.phase='WATCH';}}
+      }
+      // A high or low printed after the close already left this range is the breakout leg.
+      // Put the edges back on the range that was broken. A new box waits until it has settled.
+      if(heldRange?.brokeAt&&!settledNow&&!inheritedTaken){
+        const sameSwing=Math.abs(heldRange.H-swing.H)<=heldRange.D&&Math.abs(heldRange.L-swing.L)<=heldRange.D;
+        const chaseHigh=e.H>heldRange.H+heldRange.D&&e.highAt>=heldRange.brokeAt;
+        const chaseLow=!sameSwing&&outsideSwing&&e.L<heldRange.L-heldRange.D&&e.lowAt>=heldRange.brokeAt-300000;
+        const heldContains=e.price<=heldRange.H+heldRange.D&&e.price>=heldRange.L-heldRange.D;
+        const keepWhileYoung=!sameSwing&&heldContains&&!outsideSwing&&heldRange.H>e.H+heldRange.D&&breakAge<RANGE_REDRAW_MS;
+        if((chaseHigh||chaseLow||keepWhileYoung)&&(Math.abs(e.H-heldRange.H)>heldRange.D||Math.abs(e.L-heldRange.L)>heldRange.D)){
+          const H=heldRange.H,L=heldRange.L,E=Math.min(.75*heldRange.n5,.1*(H-L)),D=Math.max(2*tick,.2*heldRange.n5);
+          if(H>L&&E>D){e.H=H;e.L=L;e.n5=heldRange.n5;e.highAt=heldRange.highAt;e.lowAt=heldRange.lowAt;e.E=E;e.D=D;
+            e.swings=rememberSwingPair(e.swings,{H,L,highAt:heldRange.highAt,lowAt:heldRange.lowAt,highConfirmed:heldRange.highConfirmed,lowConfirmed:heldRange.lowConfirmed});
+            if(e.proof)delete e.proof;if(e.phase==='READY')e.phase='WATCH';}
+        }
+      }
+      if(redrawBlocked&&outsideSwing&&!inheritedTaken&&breakAge>=RANGE_REDRAW_MS&&heldRange&&(Math.abs(heldRange.H-swing.H)>heldRange.D||Math.abs(heldRange.L-swing.L)>heldRange.D)&&(Math.abs(e.H-heldRange.H)>heldRange.D||Math.abs(e.L-heldRange.L)>heldRange.D)){
+        const H=heldRange.H,L=heldRange.L,E=Math.min(.75*heldRange.n5,.1*(H-L)),D=Math.max(2*tick,.2*heldRange.n5);
+        if(H>L&&E>D){e.H=H;e.L=L;e.n5=heldRange.n5;e.highAt=heldRange.highAt;e.lowAt=heldRange.lowAt;e.E=E;e.D=D;
+          e.swings=rememberSwingPair(e.swings,{H,L,highAt:heldRange.highAt,lowAt:heldRange.lowAt,highConfirmed:heldRange.highConfirmed,lowConfirmed:heldRange.lowConfirmed});
+          if(e.proof)delete e.proof;if(e.phase==='READY')e.phase='WATCH';}
       }
     }
     const choices:{kind:RangeKind;side:Side;stop:number;target:number;test:(p:number)=>boolean;from?:number;fade?:{price:number;at:number}}[]=[];
@@ -450,8 +527,11 @@ export function advanceRangeResearch(input:{previous?:RangeResearch;windows:Rang
     })();
     if(freshShort)choices.push({kind:'EDGE_RETURN',side:'SHORT',stop:freshShort.stop,target:freshShort.target,test:freshShort.test,fade:{price:freshShort.edge,at:freshShort.at}});
     if(freshLong)choices.push({kind:'EDGE_RETURN',side:'LONG',stop:freshLong.stop,target:freshLong.target,test:freshLong.test,fade:{price:freshLong.edge,at:freshLong.at}});
-    if(!inheritedTaken&&last.close>e.H+e.D)choices.push({kind:'EDGE_BREAKOUT',side:'LONG',stop:Math.min(last.low,e.H-e.E-e.D),target:last.close,test:p=>p>e.H+e.D});
-    if(!inheritedTaken&&last.close<e.L-e.D)choices.push({kind:'EDGE_BREAKOUT',side:'SHORT',stop:Math.max(last.high,e.L+e.E+e.D),target:last.close,test:p=>p<e.L-e.D});
+    const earlier=five.at(-2),nearEnough=(distance:number)=>distance<=e.n5+e.D;
+    const openedUp=last.close>e.H+e.D&&!(earlier&&earlier.close>e.H+e.D)&&nearEnough(last.close-e.H);
+    const openedDown=last.close<e.L-e.D&&!(earlier&&earlier.close<e.L-e.D)&&nearEnough(e.L-last.close);
+    if(!inheritedTaken&&openedUp)choices.push({kind:'EDGE_BREAKOUT',side:'LONG',stop:Math.min(last.low,e.H-e.E-e.D),target:last.close,test:p=>p>e.H+e.D});
+    if(!inheritedTaken&&openedDown)choices.push({kind:'EDGE_BREAKOUT',side:'SHORT',stop:Math.max(last.high,e.L+e.E+e.D),target:last.close,test:p=>p<e.L-e.D});
     const band=Math.max(e.E,e.n5),turnedDown=last.close<last.open&&last.high-last.close>=e.D,turnedUp=last.close>last.open&&last.close-last.low>=e.D,
       nearHigh=Math.abs(last.close-e.H)<=band||e.upperExtreme>e.H&&last.close<=e.H&&e.H-last.close<=band+e.D,
       nearLow=Math.abs(last.close-e.L)<=band||e.lowerExtreme<e.L&&last.close>=e.L&&last.close-e.L<=band+e.D;
