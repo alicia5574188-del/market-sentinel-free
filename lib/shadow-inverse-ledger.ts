@@ -5,7 +5,7 @@ import {SHADOW_FEE_RATE,INVERSE_COST,INVERSE_FEE_POLICY,recordedInverseFeeRate,t
 import {FIXED_ALLOCATION_EQUITY,FIXED_ALLOCATION_POLICY} from './fixed-allocation.ts';
 import type {InverseLossResearch} from './inverse-loss-research.ts';
 import {validMarketAuthority,validMarketRoute} from './market-authority.ts';
-import {validRangeHolding,decodeRangeWindow,normalizeRangeResearch} from './anomaly-range.ts';
+import {decodeRangeWindow,normalizeRangeResearch} from './anomaly-range.ts';
 import {validResponseHolding} from './event-response.ts';
 export {INVERSE_COST} from './inverse-fee.ts';
 
@@ -276,8 +276,9 @@ export function assertInverseTrial(state:ForwardState){
   if(state.directStrategy){
     const ds=state.directStrategy;
     if(ds.anomalyRange){if(ds.anomalyRange.version!=='anomaly-range-v1'||!finite(ds.anomalyRange.cutoverAt))throw new Error('区间策略版本损坏');
-      if(ds.rangeResearch&&!normalizeRangeResearch(ds.rangeResearch))throw new Error('区间研究记忆损坏；保留账户');
-      if(Object.keys(ds.rangeWindows??{}).length>30)throw new Error('冻结窗口容量异常');
+      if(ds.rangeResearch&&!normalizeRangeResearch(ds.rangeResearch))delete ds.rangeResearch;
+      const windows=ds.rangeWindows??{},held=new Set(state.positions.flatMap(t=>t.unified?.anomaly?.eventId?[t.unified.anomaly.eventId]:[]));
+      for(const id of Object.keys(windows).sort()){if(Object.keys(windows).length<=30)break;if(!held.has(id))delete windows[id];}
       for(const [id,w] of Object.entries(ds.rangeWindows??{}))try{decodeRangeWindow(w);}catch{delete ds.rangeWindows![id];}}
     if(ds.eventResponse&&(ds.eventResponse.version!=='event-response-v1'||!finite(ds.eventResponse.cutoverAt)
       ||ds.eventResponse.cutoverAt<=0))
@@ -300,7 +301,9 @@ export function assertInverseTrial(state:ForwardState){
     const ids=new Set<string>();
     for(const t of [...state.positions,...state.history])if(t.unified?.version==='dual-thesis-v2'){
       const u=t.unified;
-      if(u.anomaly&&(!validRangeHolding(u.anomaly)||u.marketRoute?.controllerVersion!=='anomaly-range-v1'))throw new Error('区间持仓记忆损坏；保留账户');
+      // An unreadable range witness is not an account fault. Cash, size and the
+      // submitted stop stay; the holding path keeps that stop and will not
+      // invent an exit from a witness it cannot read. This must not halt the cycle.
       if(u.response&&(!validResponseHolding(u.response)||u.response.eventId!==u.marketRoute?.eventId
         ||u.marketRoute.controllerVersion!=='event-response-v1'))throw new Error('事件持仓响应记忆损坏；保留账户');
       if(u.adaptive&&(u.adaptive.version!=='adaptive-causal-v1'

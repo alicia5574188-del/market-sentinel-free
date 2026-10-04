@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {advanceRangeResearch,decodeRangeWindow,rangeDirection,strongRangeProof,rangeMarketRoute,makeRangeHolding,
   rangeHoldingDecision,rangeExecutionAdmission,scanRangeAnomalies,normalizeRangeResearch,rangeObservationSymbols,fairRangeRefreshBatch,
-  validRangeHolding,thinFiveTape,RANGE_OUTCOME_BYTES,RANGE_RESEARCH_BYTES,type RangeResearch,type RangeWindows,type RangeScanner} from '../lib/anomaly-range.ts';
+  validRangeHolding,thinFiveTape,sparseFiveTurnover,RANGE_OUTCOME_BYTES,RANGE_RESEARCH_BYTES,type RangeResearch,type RangeWindows,type RangeScanner} from '../lib/anomaly-range.ts';
 import {advanceDirectStrategy} from '../lib/direct-strategy.ts';
 import {initialForward,normalizeForward,forwardSummary,resetForwardAccountPreservingLearning,type Quote} from '../lib/forward-relations.ts';
 import {buildForwardProtectionCheckpoint,restoreForwardProtectionCheckpoint} from '../lib/forward-protection-checkpoint.ts';
@@ -264,6 +264,34 @@ test('Gate turnover under one million is not scanned and releases an existing wa
     discovery:{...f.input.discovery,gateVolume:{ZK_USDT:252_900,A_USDT:5_000_000}}});
   assert.equal(next.events.ZK_USDT,undefined);assert.match(next.recent?.find(r=>r.symbol==='ZK_USDT')?.reason??'',/100万/);
   assert.equal('gateVolume' in (next.discovery??{}),false);assert.notEqual(next.events.A_USDT?.phase,'EXPIRED');
+});
+test('continuous flat candles with no quote turnover are not a traded tape',()=>{
+  const quiet=Array.from({length:48},(_,i)=>candle(T-(48-i)*B,100,100,0)).map(r=>({...r,high:r.close,low:r.close,turnoverUsd:iTurn(r)}));
+  function iTurn(r:{time:number}){return r.time%2?80:0;}
+  assert.equal(sparseFiveTurnover(quiet,T+B),true);
+  assert.equal(thinFiveTape(quiet,.4),false,'time-continuous zero-sum bars are not price holes');
+  const liquid=quiet.map(r=>({...r,turnoverUsd:20_000}));
+  assert.equal(sparseFiveTurnover(liquid,T+B),false);
+  const now=T+120000,windows:RangeWindows={},q=quote(now,100),
+    discovery={at:T,scanned:1,shared:1,excluded:0,marketSamples:1,marketMove:0,loaded:1,queued:0,
+      anomalies:[{symbol:'ZK_USDT',detectedAt:T,source:'BYBIT',sourceCount:2,own:.08,residual:.08,score:90,kind:'OWN_ACCELERATION'}]},
+    skipped=advanceRangeResearch({now,windows,paths:{ZK_USDT:quiet},minutes:{ZK_USDT:[]},quotes:{ZK_USDT:q},ticks:{ZK_USDT:.001},discovery,positions:[],history:[]});
+  assert.equal(skipped.events.ZK_USDT,undefined);
+  const f=fixture(),previous=structuredClone(f.research),zk=structuredClone(f.e);zk.symbol='ZK_USDT';zk.id=`anomaly-range-v1:ZK_USDT:${T}`;previous.events={ZK_USDT:zk};
+  const dropped=advanceRangeResearch({...f.input,previous,windows:structuredClone(f.input.windows),paths:{...f.input.paths,ZK_USDT:quiet},
+    discovery:{...f.input.discovery,anomalies:[{...f.input.discovery.anomalies[0]!,symbol:'ZK_USDT'}]}});
+  assert.equal(dropped.events.ZK_USDT,undefined);assert.match(dropped.recent?.find(r=>r.symbol==='ZK_USDT')?.reason??'',/断续/);
+});
+test('a broken range holding does not stop the account and still exits on the submitted stop',()=>{
+  const f=trade(),state=structuredClone(f.state),balance=state.balance;
+  state.positions[0]!.unified!.anomaly!.window={...state.positions[0]!.unified!.anomaly!.window,ohlc64:'broken'};
+  assert.equal(validRangeHolding(state.positions[0]!.unified!.anomaly!),false);
+  const restored=normalizeForward(state,f.input.now);
+  assert.equal(restored.positions.length,1);assert.equal(restored.balance,balance);assert.equal(restored.startedAt,state.startedAt);
+  const t=restored.positions[0]!,hit=rangeHoldingDecision(t,quote(f.input.now,t.side==='LONG'?t.stopPrice-.1:t.stopPrice+.1),f.input.now,[],[]);
+  assert.equal(hit.exit,'RANGE_HARD_PROTECTION');
+  const held=rangeHoldingDecision(t,quote(f.input.now,t.entryPrice),f.input.now,[],[]);
+  assert.equal(held.exit,undefined);
 });
 test('internal aligned trend uses existing completed five and new post-anomaly minutes, then holds through breakout and ordinary pullback',()=>{
   for(const sign of [1,-1]){

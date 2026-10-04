@@ -202,7 +202,7 @@ export function finalizeReviewSnapshot(s:ReviewSnapshot):ReviewSnapshot{
     audit.omittedOutcomes=obj(s.research.rangeResearch).omittedOutcomes??0;
     audit.holdings=s.trades.filter(t=>t.unified?.anomaly).map(t=>({tradeId:t.id,symbol:t.symbol,side:t.side,status:t.status,
       signalAt:t.paperOrder?.signalAt??t.openedAt,fillAt:t.paperOrder?.confirmedAt??t.openedAt,entryPrice:t.entryPrice,
-      plan:t.unified!.anomaly,originalWindow:decodeRangeWindow(t.unified!.anomaly!.window),entryReason:t.unified!.entryReason,
+      plan:t.unified!.anomaly,originalWindow:(()=>{try{return decodeRangeWindow(t.unified!.anomaly!.window);}catch{return null;}})(),entryReason:t.unified!.entryReason,
       holdReason:t.unified!.holdReason,exitReason:t.exitReason,actualExitPrice:t.exitPrice,netPnl:t.netPnl,
       entryFee:t.entryFee,exitFee:t.exitFee,predecessorId:t.unified!.predecessorId??null}));}
   if(s.research.eventResponseAudit){const audit=obj(s.research.eventResponseAudit);

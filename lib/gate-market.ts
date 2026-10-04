@@ -163,7 +163,7 @@ export type GateContract = {
   market_order_size_max?: string | number;
 };
 
-/** Contracts-only metadata; never request Gate bulk prices for external discovery. */
+/** Contracts-only metadata. Turnover is merged from the settle ticker, never from contract count. */
 export async function fetchContractDirectory(){
   const contracts=await gatePublic<GateContract[]>("/futures/usdt/contracts",GATE_RESILIENT_TIMEOUT_MS,2);
   return contracts.filter(c=>c.name?.endsWith('_USDT')&&!c.in_delisting&&(!c.status||c.status==='trading')&&isCryptoContractType(c.contract_type))
@@ -172,6 +172,15 @@ export async function fetchContractDirectory(){
       enableDecimal:typeof c.enable_decimal==='boolean'?c.enable_decimal:undefined,
       orderSizeMin:c.order_size_min==null?undefined:String(c.order_size_min),orderSizeMax:c.order_size_max==null?undefined:String(c.order_size_max),
       marketOrderSizeMax:c.market_order_size_max==null?undefined:String(c.market_order_size_max),fundingRate:0,last:0,volume24hUsd:0}));
+}
+
+/** Directory lists contracts. A successful ticker replaces turnover with Gate settle volume.
+ * A failed ticker keeps the previous settle volume. A missing symbol on a successful ticker is zero, not a stale number. */
+export function applyGateTurnover<T extends {symbol:string;volume24hUsd:number}>(
+  directory:T[],tickers:{symbol:string;volume24hUsd:number}[]|null,previous?:Map<string,{volume24hUsd:number}>){
+  if(!tickers)return directory.map(row=>({...row,volume24hUsd:previous?.get(row.symbol)?.volume24hUsd??row.volume24hUsd}));
+  const live=new Map(tickers.map(t=>[t.symbol,Math.max(0,Number(t.volume24hUsd)||0)]));
+  return directory.map(row=>({...row,volume24hUsd:live.get(row.symbol)??0}));
 }
 
 export async function fetchActiveContracts() {

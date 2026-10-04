@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { fetchActiveContracts, fetchBackgroundFuturesBook, fetchContractStats, fetchFuturesBook, fetchLiquidations,
-  fetchMarketTickers, fetchStructureCandles, fetchTickerBbo, fetchUrgentFuturesBook, fetchPendingExecutionBook } from "../lib/gate-market.ts";
+  fetchMarketTickers, fetchStructureCandles, fetchTickerBbo, fetchUrgentFuturesBook, fetchPendingExecutionBook, applyGateTurnover } from "../lib/gate-market.ts";
 
 const withFetch = async (body: unknown, run: () => Promise<void>) => {
   const prior = globalThis.fetch;
@@ -119,6 +119,16 @@ test("one bulk ticker request returns the complete low-cost radar surface", asyn
     assert.deepEqual(await fetchMarketTickers(), [{ symbol: "X_USDT", last: 2, volume24hUsd: 3_000_000,
       high24h: 2.4, low24h: 1.8, change24hRate: .125, fundingRate: 0.001, openInterest: 55 }]);
   });
+});
+
+test("Gate settle turnover replaces a zero directory and a failed ticker does not wipe the last amount",()=>{
+  const directory=[{symbol:"ZK_USDT",volume24hUsd:0},{symbol:"BTC_USDT",volume24hUsd:0},{symbol:"1INCH_USDT",volume24hUsd:0}];
+  const live=applyGateTurnover(directory,[{symbol:"ZK_USDT",volume24hUsd:255_209},{symbol:"BTC_USDT",volume24hUsd:5_000_000}]);
+  assert.equal(live.find(r=>r.symbol==="ZK_USDT")!.volume24hUsd,255_209);
+  assert.equal(live.find(r=>r.symbol==="1INCH_USDT")!.volume24hUsd,0);
+  const kept=applyGateTurnover(directory,null,new Map([["ZK_USDT",{volume24hUsd:255_209}],["BTC_USDT",{volume24hUsd:5_000_000}]]));
+  assert.equal(kept.find(r=>r.symbol==="ZK_USDT")!.volume24hUsd,255_209);
+  assert.equal(kept.find(r=>r.symbol==="BTC_USDT")!.volume24hUsd,5_000_000);
 });
 
 test("contract metadata carries actual decimal support and min/max quantity without integer coercion",async()=>{

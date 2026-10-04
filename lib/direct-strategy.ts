@@ -366,7 +366,7 @@ function routeOpportunity(s:ForwardState,o:Opportunity,input:Input):Opportunity{
     d=sign(r.side),risk=Math.max(.0001,d*(price-r.stop)/price),net=r.controllerVersion===EVENT_RESPONSE_VERSION?0:d*(r.target-price)/price-COST,
     id=r.eventId??`${MARKET_AUTHORITY_VERSION}:${o.symbol}:${r.branch}:${r.side}:${r.proofAt}`,
     conflict=!s.directStrategy!.adaptive&&followerConflict(s,r),
-    ownScore=s.directStrategy!.anomalyRange?s.directStrategy!.rangeResearch!.events[o.symbol]!.score:s.directStrategy!.eventResponse?s.directStrategy!.eventResearch!.events[o.symbol]!.score:s.directStrategy!.specialMove?s.directStrategy!.specialResearch!.watches[o.symbol]!.score:o.score,
+    ownScore=s.directStrategy!.anomalyRange?s.directStrategy!.rangeResearch?.events[o.symbol]?.score??o.score:s.directStrategy!.eventResponse?s.directStrategy!.eventResearch?.events[o.symbol]?.score??o.score:s.directStrategy!.specialMove?s.directStrategy!.specialResearch?.watches[o.symbol]?.score??o.score:o.score,
     geometry:WinnerPlan={version:WINNER_POLICY_VERSION,intent:r.branch==='RETURN'?'RANGE':'TREND',eventAt:r.proofAt,
       initialStop:r.stop,target:r.branch==='RETURN'?r.target:null,targetArea:r.branch==='RETURN'?r.reference:null,
       origin:structuredClone(r.reference),riskGroup:`${o.clusterId??o.symbol}:${r.side}`,source:r.branch==='RETURN'?'EDGE_REJECTION':'RELATIVE_CORE'};
@@ -382,7 +382,7 @@ function routeOpportunity(s:ForwardState,o:Opportunity,input:Input):Opportunity{
     liquidityTargetLower:r.target,liquidityTargetUpper:r.target,environment:r.branch==='RETURN'?'ROTATION':'TREND',
     environmentProbe:false,environmentForceRetest:false,environmentRiskScale:1,environmentMainline:true,
     score:ownScore,premium:ownScore>=82,environmentScore:ownScore,extendedConfirmation:false,
-    ...(s.directStrategy!.specialMove?{residual:s.directStrategy!.anomalyRange?s.directStrategy!.rangeResearch!.events[o.symbol]!.residual:s.directStrategy!.eventResponse?s.directStrategy!.eventResearch!.events[o.symbol]!.residual:s.directStrategy!.specialResearch!.watches[o.symbol]!.residual,
+    ...(s.directStrategy!.specialMove?{residual:s.directStrategy!.anomalyRange?s.directStrategy!.rangeResearch?.events[o.symbol]?.residual??0:s.directStrategy!.eventResponse?s.directStrategy!.eventResearch?.events[o.symbol]?.residual??0:s.directStrategy!.specialResearch?.watches[o.symbol]?.residual??0,
       expectedHoldMinutes:90,regime:'DIVERGENT' as const,environmentReason:r.reason,futureResearchAction:'NORMAL' as const}: {})};
 }
 function manageMarketTrade(s:ForwardState,t:Trade,q:Quote,input:Input){

@@ -76,6 +76,18 @@ export function thinFiveTape(rows:CandleLike[],n5:number){
     if((cur.time-prev.time)*1000>300000||hole>limit||Math.abs(cur.open-prev.close)>limit*2)gaps++;}
   return gaps>=4&&gaps/(recent.length-1)>=.25;
 }
+/** A flat zero-sum print is not a traded bar. Gate hides those minutes on the chart and still returns them. */
+export const FIVE_BAR_MIN_TURNOVER_USD=1_000;
+export function sparseFiveTurnover(rows:CandleLike[],now=Number.POSITIVE_INFINITY){
+  const step=300,slots=48,done=rows.filter(r=>Number.isFinite(r.time)&&r.time>0&&r.time*1000+step*1000<=now);
+  if(!done.length)return false;
+  const byTime=new Map<number,CandleLike>();for(const r of done)byTime.set(r.time,r);
+  const last=Math.max(...byTime.keys());let known=0,alive=0,streak=0,maxStreak=0;const dead:boolean[]=[];
+  for(let i=slots-1;i>=0;i--){const r=byTime.get(last-i*step),quoted=!!r&&r.turnoverUsd!=null&&Number.isFinite(r.turnoverUsd);
+    if(quoted)known++;const quiet=!r||(quoted&&r.turnoverUsd!<FIVE_BAR_MIN_TURNOVER_USD);
+    if(quiet){streak++;maxStreak=Math.max(maxStreak,streak);}else{streak=0;alive++;}dead.push(quiet);}
+  return known>=12&&(alive/slots<.6||maxStreak>=6||dead.slice(-3).filter(Boolean).length>=2);
+}
 /** Reversal-confirmed turns, never retrospectively actionable at the extreme. */
 export function rangeSwings(rows:CandleLike[],n5:number){
   const swings:RangeSwing[]=[];if(!rows.length)return swings;
@@ -273,9 +285,10 @@ export function advanceRangeResearch(input:{previous?:RangeResearch;windows:Rang
   const latestClosed=new Map(input.history.filter(t=>t.unified?.anomaly).map(t=>[t.unified!.anomaly!.eventId,t]));
   for(const t of latestClosed.values()){const m=t.unified!.anomaly!;
     if(!m.reverseEligible||!t.closedAt||input.now-t.closedAt>=1800000||input.positions.some(p=>p.symbol===t.symbol)||s.events[t.symbol])continue;
-    const detectedAt=Number(m.eventId.split(':').at(-1)),prior=decodeRangeWindow(m.window),
+    let prior:CandleLike[];try{prior=decodeRangeWindow(m.window);}catch{continue;}
+    const detectedAt=Number(m.eventId.split(':').at(-1)),
       e=seedRangeEvent({symbol:t.symbol,detectedAt,source:m.source,sourceCount:0,own:0,residual:0,score:0,kind:'CONFIRMED_EDGE_EXIT'},prior,m.window.cutoff,input.ticks[t.symbol]??m.D/m.scale/2,input.now);
-    if(e){e.id=m.eventId;e.tradeId=t.id;e.predecessorId=t.id;e.reverseAfter=t.closedAt;e.reverseEligible=true;e.consumedAt=m.proof.at;s.events[e.symbol]=e;}}
+    if(e&&m.proof){e.id=m.eventId;e.tradeId=t.id;e.predecessorId=t.id;e.reverseAfter=t.closedAt;e.reverseEligible=true;e.consumedAt=m.proof.at;s.events[e.symbol]=e;}}
   for(const e of Object.values(s.events)){
     const a=input.discovery?.anomalies.find(a=>a.symbol===e.symbol&&a.source===e.source);
     if(a){e.own=a.own;e.residual=a.residual;e.score=a.score;}
@@ -294,6 +307,7 @@ export function advanceRangeResearch(input:{previous?:RangeResearch;windows:Rang
   for(const a of input.discovery?.anomalies??[]){
     const id=`${ANOMALY_RANGE_VERSION}:${a.symbol}:${a.detectedAt}`;
     if(a.detectedAt>input.now||input.now-a.detectedAt>=1800000||seen.has(id)||s.events[a.symbol]||input.positions.some(t=>t.symbol===a.symbol))continue;
+    if(sparseFiveTurnover(input.paths[a.symbol]??[],input.now))continue;
     const cached=input.windows[id],parked=s.recent?.find(r=>r.id===id&&r.parked);
     if(!cached&&(a.frozen||parked)){s.capacitySkipped++;continue;} // Never redraw a forgotten original range.
     const cutoff=cached?.cutoff??Math.floor(a.detectedAt/300000)*300000,
@@ -327,6 +341,7 @@ export function advanceRangeResearch(input:{previous?:RangeResearch;windows:Rang
     if(!last||input.now-end(last)>600000){e.active=false;e.reason='同源完成K线缺失，停止新确认';continue;}
     e.price=q?.fresh&&q.priceSource===e.source&&input.now-q.observedAt<=10000?((q.bestBid+q.bestAsk)/2):last.close;const activity=recentSpecialActivity(five);e.active=activity.active;e.activity={turnover15:activity.turnover15,activityRatio:activity.activityRatio,at:end(last)};
     if(held||e.phase==='DONE'||e.phase==='EXPIRED')continue;
+    if(sparseFiveTurnover(input.paths[e.symbol]??[],input.now)){delete e.proof;e.phase='EXPIRED';e.reason='5分钟成交断续，单根不足1000美元，不观察';continue;}
     if(thinFiveTape(five,e.n5)){delete e.proof;e.phase='EXPIRED';e.reason='5分钟K线断层，成交太稀，不观察';continue;}
     if(e.proof&&input.now-e.proof.at>120000){delete e.proof;e.phase='WATCH';}
     if(end(last)>e.lastAt){
@@ -483,7 +498,10 @@ export function validRangeHolding(m:RangeHolding){try{const rows=decodeRangeWind
   &&(m.breakoutAt===undefined||Number.isFinite(m.breakoutAt)&&m.breakoutAt>=m.proof.fiveAt&&m.breakoutAt<=m.lastBarAt);}catch{return false;}}
 export function rangeHoldingDecision(t:Trade,q:Quote,now:number,path:CandleLike[],minutePath:CandleLike[]=[]){
   const m=structuredClone(t.unified!.anomaly!),dir=d(t.side),px=dir>0?q.bestBid:q.bestAsk;let stop=t.stopPrice,exit:string|undefined;
-  if(!validRangeHolding(m))return{memory:m,stop,exit:undefined,reason:'原始区间记忆异常，保留已提交硬保护'};
+  if(!validRangeHolding(m)){
+    if(dir*(px-stop)<=0)return{memory:m,stop,exit:'RANGE_HARD_PROTECTION',reason:'原始区间记忆异常，按已提交硬保护退出'};
+    return{memory:m,stop,exit:undefined,reason:'原始区间记忆异常，保留已提交硬保护'};
+  }
   m.reverseEligible=false;
   const net=dir*(px-t.entryPrice)-(px+t.entryPrice)*.0005;
   if(q.observedAt>m.quoteAt){m.quoteAt=q.observedAt;if(net>m.peak+m.n5*.05){m.peak=net;m.peakAt=now;m.peakSamples=1;}

@@ -7,8 +7,8 @@ import { LiveHistoryReader } from "../lib/live-history-reader.ts";
 
 import { DurableObject } from "cloudflare:workers";
 import handler from "vinext/server/app-router-entry";
-import { GatePublicError, fetchActiveContracts, fetchContractDirectory, fetchContractStats, fetchLiquidations, fetchRecentTrades,
-  fetchStructureCandles, fetchTickerBbo, fetchUrgentFuturesBook, fetchPendingExecutionBook } from "../lib/gate-market.ts";
+import { GatePublicError, fetchActiveContracts, fetchContractDirectory, applyGateTurnover, fetchContractStats, fetchLiquidations, fetchRecentTrades,
+  fetchStructureCandles, fetchTickerBbo, fetchMarketTickers, fetchUrgentFuturesBook, fetchPendingExecutionBook } from "../lib/gate-market.ts";
 import {ANOMALY_RANGE_VERSION,scanRangeAnomalies,rangeExecutionAdmission,rangeObservationSymbols,fairRangeRefreshBatch,type RangeDiscovery,type RangeScanner} from '../lib/anomaly-range.ts';
 import { MarketDataHub } from "../lib/market-data-hub.ts";
 import { GateStreamingFeed } from "../lib/gate-stream.ts";
@@ -964,6 +964,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       rows=this.marketHub.discoveryRows(common,now).map(row=>({...row,volume24hUsd:this.contractCatalog.get(row.symbol)?.volume24hUsd??0}));
     this.rangeDiscovery=scanRangeAnomalies(rows,this.rangeScanner,now,common.length,this.strategyPathSymbols().filter(symbol=>(this.strategyCandles[symbol]?.length??0)>=119).length);
     const held=this.forwardState?.positions.map(t=>t.symbol)??[],research=this.forwardState?.directStrategy?.rangeResearch;
+    const quietReason=/成交断续|K线断层|不足100万/,heldSet=new Set(held);
+    const quiet=new Set([...Object.values(research?.events??{}),...(research?.recent??[])].filter(e=>quietReason.test(e.reason??'')&&!heldSet.has(e.symbol)).map(e=>e.symbol));
+    for(const symbol of quiet)this.rangeScanner.detected.delete(symbol);
+    if(quiet.size)this.rangeDiscovery={...this.rangeDiscovery,anomalies:this.rangeDiscovery.anomalies.filter(a=>!quiet.has(a.symbol))};
     const gateVolume=Object.fromEntries([...new Set([...Object.keys(research?.events??{}),...this.rangeDiscovery.anomalies.map(a=>a.symbol)])]
       .flatMap(symbol=>{const row=this.contractCatalog.get(symbol);return row?[[symbol,row.volume24hUsd]]:[]}));
     this.rangeDiscovery={...this.rangeDiscovery,gateVolume};
@@ -3773,7 +3777,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }
       if(universeDue){
         subrequests++;
-        try{this.refreshUniverse(Date.now(),await fetchContractDirectory());}
+        try{
+          const directory=await fetchContractDirectory();
+          let tickers:Awaited<ReturnType<typeof fetchMarketTickers>>|null=null;
+          try{tickers=await fetchMarketTickers();subrequests++;}
+          catch{/* keep the last Gate settle turnover; do not zero the universe or stop the cycle */}
+          this.refreshUniverse(Date.now(),applyGateTurnover(directory,tickers,this.contractCatalog));
+        }
         catch(error){this.runtime.lastError=`universe: ${safeError(error)}`;}
       }
       subrequests+=await this.marketHub.refreshInstrumentCatalog(Date.now());
