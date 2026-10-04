@@ -369,3 +369,23 @@ test('event execution renders actual retained response, blocker, missing outcome
   assert.match(html,/NATIVE_BLOCKER/);assert.match(html,/缺少实际观察/);assert.match(html,/其余事件 · 1 个/);
   assert.equal(html.split('<section ').length-1,2);assert.doesNotMatch(html,/区域外|支撑|压力|波动估计|<details[^>]*\bopen(?:=|>)/);
 });
+test('range execution shows scan, watch, wait and the live trade without a rule lecture',()=>{
+  const data=account(),base={H:101,L:99,E:.2,D:.05,n5:.2,price:100.8,own:.01,active:true,source:'BYBIT',rank:1};
+  data.positions=[{id:'held',symbol:'LDO_USDT',side:'SHORT',openedAt:data.updatedAt-120000,stopPrice:101.2,
+    unified:{decision:'HOLD',holdReason:'探出一次后缩回来了',anomaly:{kind:'EDGE_RETURN',stage:'HOLD',H:101.1,L:99.1,D:.05,scale:1,
+      returnProbeAt:data.updatedAt,returnBackAt:data.updatedAt,proof:{target:100,kind:'EDGE_RETURN',side:'SHORT'}}}}];
+  data.directStrategy={anomalyRange:{version:'anomaly-range-v1'},plans:[],execution:{pending:[]},rangeResearch:{updatedAt:data.updatedAt,waiting:2,
+    discovery:{at:data.updatedAt,scanned:420,shared:800,loaded:36,queued:0,anomalies:[
+      {symbol:'NEW_USDT',kind:'OWN_ACCELERATION',own:.02},{symbol:'LDO_USDT',kind:'OWN_ACCELERATION',own:.01}]},
+    events:{
+      LDO_USDT:{id:'held-event',symbol:'LDO_USDT',phase:'HOLDING',...base},
+      READY_USDT:{id:'ready',symbol:'READY_USDT',phase:'READY',...base,price:100.9,upperExtreme:101.4,proof:{kind:'EDGE_RETURN',side:'SHORT',target:100,stop:101.2}},
+      WAIT_USDT:{id:'wait',symbol:'WAIT_USDT',phase:'CONFIRMING',...base,price:100.2},
+      WATCH_USDT:{id:'watch',symbol:'WATCH_USDT',phase:'WATCH',...base,price:100.85}
+    }}};
+  const html=render('app/market-intelligence-execution.tsx',{data,now:data.updatedAt,liveEnabled:false});
+  for(const text of ['现在','扫描 420','在看 1','在等 1','下单 1','持仓 1','正在做 1 笔','可以下单','还在看','刚扫到','LDO / USDT','做空 · 回归','再探出就止损','走到 100 出场','READY / USDT','做空 回归','WAIT / USDT','等这根 5 分钟走完','WATCH / USDT','靠近上沿','NEW / USDT','自己在涨'])
+    assert.ok(html.includes(text),text);
+  assert.equal(html.split('LDO / USDT').length-1,1);
+  assert.doesNotMatch(html,/回归面板|双向计划|共同币池|硬保护在突破进场位/);
+});

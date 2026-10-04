@@ -1,5 +1,5 @@
 "use client";
-import type {RangeResearch} from '../lib/anomaly-range.ts';
+import type {RangeEvent} from '../lib/anomaly-range.ts';
 
 import {BEIJING_TIME_ZONE} from "../lib/beijing-time.ts";
 import {type forwardSummary} from "../lib/forward-relations.ts";
@@ -57,6 +57,7 @@ function SpecialResearchView({research,now,plans,held}:{research:SpecialResearch
 }
 function DirectExecution({data,now,liveEnabled,liveOverview}:{data:NonNullable<View>;now:number;liveEnabled:boolean;liveOverview?:{copied?:number|null;eligible?:number|null}}){
   const ds=data.directStrategy!,held=new Set(data.positions.map(t=>t.symbol)),plans=ds.plans.filter(p=>!held.has(p.symbol));
+  if(ds.anomalyRange)return <RangeExecution data={data} now={now} liveEnabled={liveEnabled} liveOverview={liveOverview}/>;
   return <div className="fr-execution-page fr-exec-compact" data-testid="direct-research-execution">
     <section className="fr-section"><div className="fr-section-head"><h2>当前持仓</h2><span>{data.positions.length} 笔</span></div>
       {liveEnabled&&<p>实盘已跟上 {liveOverview?.copied??'—'} / 应执行 {liveOverview?.eligible??'—'}。实际成交及结算以实盘账户记录为准。</p>}
@@ -75,57 +76,105 @@ function DirectExecution({data,now,liveEnabled,liveOverview}:{data:NonNullable<V
         <p>最近判断 {clock(t.unified?.lastDecisionAt)} · 持有 {Math.max(0,Math.round((now-t.openedAt)/60000))} 分钟</p></details></article>;})}</div>
       {!data.positions.length&&<p>暂无持仓，等待有效启动。</p>}
       {ds.execution&&<details className="fr-exec-research-details"><summary>成交说明</summary><p>模拟按实盘的执行校验、提交和成交确认步骤结算；盘口模拟与交易所实际成交仍可能存在差异。</p></details>}</section>
-    {ds.anomalyRange?<><RangeReturnPanel data={data} now={now}/><RangeResearchView research={ds.rangeResearch} held={held}/></>:ds.eventResearchError?<section className="fr-section"><h2>事件研究待恢复</h2><p>{ds.eventResearchError}</p></section>:ds.eventResearch?<EventResponseView research={ds.eventResearch} now={now} held={held}/>:ds.specialResearch?<SpecialResearchView research={ds.specialResearch} now={now} plans={plans} held={held}/>:<section className="fr-section"><div className="fr-section-head"><h2>重点观察</h2><span>{plans.length} 个计划</span></div>
+    {ds.eventResearchError?<section className="fr-section"><h2>事件研究待恢复</h2><p>{ds.eventResearchError}</p></section>:ds.eventResearch?<EventResponseView research={ds.eventResearch} now={now} held={held}/>:ds.specialResearch?<SpecialResearchView research={ds.specialResearch} now={now} plans={plans} held={held}/>:<section className="fr-section"><div className="fr-section-head"><h2>重点观察</h2><span>{plans.length} 个计划</span></div>
       <div className="fr-exec-compact-list">{plans.map(p=><article className="fr-exec-compact-row" key={p.id}><div className="fr-exec-compact-head"><b>{p.symbol.replace('_',' / ')} · {p.permission==='WAIT'?'观察':side(p.side)}</b><span>{planPhase(p.phase)}</span></div><p>{p.reason.replace(/^[A-Z_]+: /,'')}</p><details className="fr-exec-research-details"><summary>查看计划</summary><PlanDetails plan={p}/></details></article>)}</div>
       {!plans.length&&<p>等待当前结构与新鲜盘口形成交易计划。</p>}
       {ds.episodeResearch&&<details className="fr-exec-research-details"><summary>详细行情研究</summary><EpisodeResearchView research={ds.episodeResearch} now={now}/></details>}</section>}
   </div>;
 }
-function returnStage(probe?:number,back?:number){
-  if(probe&&back)return '已回到突破进场位内侧，等第二次越过';
-  if(probe)return '突破进场已触发，容错中';
-  return '尚未越过突破进场位';
+function num(v?:number){return typeof v==='number'&&Number.isFinite(v)?Number(v.toPrecision(6)).toString():'—';}
+function where(e:RangeEvent){
+  const band=Math.max(e.E,e.n5);
+  if(e.price>e.H+e.D)return '已经收在上沿外';
+  if(e.price<e.L-e.D)return '已经收在下沿外';
+  if(e.price>e.H)return '刚探出上沿';
+  if(e.price<e.L)return '刚探出下沿';
+  if(Math.abs(e.price-e.H)<=band)return '靠近上沿';
+  if(Math.abs(e.price-e.L)<=band)return '靠近下沿';
+  return '在区间里面';
 }
-function RangeReturnPanel({data,now}:{data:NonNullable<View>;now:number}){
-  const research=data.directStrategy?.rangeResearch,held=new Set(data.positions.map(t=>t.symbol)),
-    positions=data.positions.filter(t=>t.unified?.anomaly?.kind==='EDGE_RETURN'),
-    plans=Object.values(research?.events??{}).filter(e=>!held.has(e.symbol)&&e.proof?.kind==='EDGE_RETURN').sort((a,b)=>(a.rank??Infinity)-(b.rank??Infinity));
-  return <section className="fr-section" data-testid="range-return-panel"><div className="fr-section-head"><h2>回归</h2><span>{positions.length} 笔持仓 · {plans.length} 个计划</span></div>
-    <p>冲出边界后回头，或从区间内部靠近边界后回头，都可以做。靠近边界允许一个完整 5 分钟波动的容错。</p>
-    <p>止损不是突破单第一次进场。价格先越过突破进场位，再回调回来，之后再次越过这个位置，才止损。只探出一次就缩回的，回归单继续拿着，并按区间重心出场。</p>
-    <div className="fr-exec-compact-list">{positions.map(t=>{const m=t.unified!.anomaly!,entry=t.side==='LONG'?m.L-m.D:m.H+m.D,center=m.proof.target*m.scale,hard=t.side==='LONG'?m.L-2*m.D:m.H+2*m.D;
-      return <article className="fr-exec-compact-row" key={t.id}>
-        <div className="fr-exec-compact-head"><b>{t.symbol.replace('_',' / ')} · {side(t.side)} · 持仓</b><span>{returnStage(m.returnProbeAt,m.returnBackAt)}</span></div>
-        <div className="fr-return-stage"><span className={m.returnProbeAt?'on':''}>1 首次越过</span><span className={m.returnBackAt?'on':''}>2 回调回来</span><span className={m.stage==='EXIT'&&m.returnBackAt?'on':''}>3 再次越过才止损</span></div>
-        <p>区间 {m.L.toPrecision(6)} ～ {m.H.toPrecision(6)} · 突破进场位 {entry.toPrecision(6)} · 重心 {center.toPrecision(6)} · 硬保护 {hard.toPrecision(6)}</p>
-        <p>{t.unified?.holdReason??m.reason}</p>
-        <p className="fr-exec-exit">持有 {Math.max(0,Math.round((now-t.openedAt)/60000))} 分钟 · 硬保护在突破进场位之外再留一段边界缓冲，不替代第二次越过</p>
-      </article>;})}
-    {plans.map(e=>{const entry=e.proof!.side==='LONG'?e.L-e.D:e.H+e.D,beyond=e.proof!.side==='SHORT'?e.upperExtreme>e.H:e.lowerExtreme<e.L;
-      return <article className="fr-exec-compact-row" key={e.id}>
-        <div className="fr-exec-compact-head"><b>#{e.rank??'—'} {e.symbol.replace('_',' / ')} · {side(e.proof!.side)}</b><span>{e.phase==='READY'?'可执行':'等待成交'}</span></div>
-        <p>{beyond?'冲出边界后回头':'从内部靠近边界后回头'} · 容错 {Math.max(e.E,e.n5).toPrecision(4)}</p>
-        <p>区间 {e.L.toPrecision(6)} ～ {e.H.toPrecision(6)} · 突破进场位 {entry.toPrecision(6)} · 重心 {e.proof!.target.toPrecision(6)}</p>
-        <p>{e.reason}</p>
-      </article>;})}
-    </div>{!positions.length&&!plans.length&&<p>当前没有回归单。价格靠近上沿或下沿并回头时，会出现在这里。</p>}</section>;
+function watchLine(e:RangeEvent,now:number){
+  if(e.admission&&now-e.admission.at<120000)return e.admission.reason;
+  if(!e.active)return '成交不够，先看着，不下单。';
+  if(e.phase==='CONFIRMING')return '等这根 5 分钟走完。收在外面做突破，回头做回归。';
+  const place=where(e);
+  if(place.includes('上沿'))return '在上沿。回头就做空回归；收在外面并走强，才做多突破。';
+  if(place.includes('下沿'))return '在下沿。回头就做多回归；收在外面并走强，才做空突破。';
+  return '还在区间里面，等它靠近上沿或下沿。';
 }
-function RangeResearchView({research,held}:{research:RangeResearch|null|undefined;held:Set<string>}){
-  const discovery=research?.discovery,events=Object.values(research?.events??{}).filter(e=>!held.has(e.symbol)).sort((a,b)=>(a.rank??Infinity)-(b.rank??Infinity));
-  return <section className="fr-section"><div className="fr-section-head"><h2>异动与区间计划</h2><span>{events.length} 个观察</span></div>
-    <p>共同币池 {discovery?.shared??'—'} · 已扫描 {discovery?.scanned??'—'} · K线观察 {discovery?.loaded??0} · 待轮换 {research?.waiting??0} · 扫描排队 {discovery?.queued??0} · 已轮换 {research?.rotated??0}</p>
-    <p>扫描更新 {clock(discovery?.at)}{research?.error?` · ${research.error}`:''}</p>
-    <div className="fr-exec-compact-list">{events.map(e=><article className="fr-exec-compact-row" key={e.id}>
-      <div className="fr-exec-compact-head"><b>#{e.rank??'—'} {e.symbol.replace('_',' / ')} · {e.proof?side(e.proof.side):'观察'}</b><span>{e.phase==='EXPIRED'?'计划到期':e.phase==='DONE'?'已结束':e.proof?({EDGE_BREAKOUT:'边缘突破',EDGE_RETURN:'边缘回归',INTERNAL_TREND:'内部顺势'})[e.proof.kind]:'等待确认'}</span></div>
-      {research?.ranking?.find(r=>r.symbol===e.symbol)&&<p>{research.ranking.find(r=>r.symbol===e.symbol)!.reason}</p>}
-      <p>区间 {e.L.toPrecision(6)} ～ {e.H.toPrecision(6)} · {e.minutes} 分钟 · {e.direction==='UP'?'内部偏多':e.direction==='DOWN'?'内部偏空':'内部方向不明确'}</p>
-      <p>位置 {e.price>e.H?'上沿外':e.price<e.L?'下沿外':Math.abs(e.price-e.H)<=e.E?'上沿附近':Math.abs(e.price-e.L)<=e.E?'下沿附近':'区间内部'} · {e.own>0?'本次上涨':e.own<0?'本次下跌':'尚未移动'}</p>
-      <p>{e.admission?.reason??e.reason}</p><details className="fr-exec-research-details"><summary>双向计划</summary>
-        <p>来源 {e.source} · 首次发现 {clock(e.detectedAt)}</p><p>突破：5分钟收在区间外，随后要有强势1分钟线。回归：冲出边界回头，或从内部靠近边界回头，都可做，并留一个5分钟波动的容错。</p>
-        <p>回归止损：突破进场位第一次越过先不止损。回调回来之后再次越过，才止损。否则继续拿到区间重心。</p>
-      </details></article>)}</div>{!events.length&&<p>等待活跃币出现相对市场的异常移动。</p>}
-    {discovery?.anomalies.filter(a=>!research?.events[a.symbol]).slice(0,6).map(a=><p key={a.symbol}>{a.symbol.replace('_',' / ')}：异动已发现，等待完整同源区间或观察席。</p>)}
-  </section>;
+function orderLine(e:RangeEvent){
+  const p=e.proof;if(!p)return e.reason;
+  if(p.kind==='EDGE_RETURN'){const turned=(p.side==='SHORT'?e.upperExtreme>e.H:e.lowerExtreme<e.L);
+    return `${turned?'冲出边界后又回头':'从区间里面靠近边界后回头'}。走到 ${num(p.target)} 出场。`;}
+  if(p.kind==='EDGE_BREAKOUT')return `已经收在区间外面。错了就按 ${num(p.stop)} 出。`;
+  return `顺着区间里的方向做。错了就按 ${num(p.stop)} 出。`;
+}
+function scanLine(a:{kind:string;own:number}){
+  const wait='等排上后看它的区间。';
+  if(a.kind==='ACTIVE_NONRESPONSE')return `成交还在，但没跟着大盘走。${wait}`;
+  if(a.kind==='OPPOSITE_MOVE')return `${a.own>=0?'和大盘反着涨':'和大盘反着跌'}。${wait}`;
+  return `${a.own>=0?'自己在涨':'自己在跌'}。${wait}`;
+}
+type Position=NonNullable<View>['positions'][number];
+function holdStatus(t:Position){
+  const m=t.unified?.anomaly;
+  if(m?.kind==='EDGE_RETURN'){
+    if(m.stage==='EXIT'||t.unified?.decision==='EXIT')return '准备出';
+    if(m.returnProbeAt&&m.returnBackAt)return '再探出就止损';
+    if(m.returnProbeAt)return '探出一次，还拿着';
+    return '按回归拿着';
+  }
+  if(t.unified?.decision==='EXIT'||m?.stage==='EXIT')return '准备出';
+  if(t.unified?.decision==='REVIEW'||m?.stage==='REVIEW')return '在复核';
+  return '继续拿着';
+}
+function holdNext(t:Position){
+  const m=t.unified?.anomaly;
+  if(!m)return t.unified?.exitCondition??'按原来的计划走';
+  if(m.kind==='EDGE_RETURN'){const entry=t.side==='LONG'?m.L-m.D:m.H+m.D;
+    return `走到 ${num(m.proof.target*m.scale)} 出场；越过 ${num(entry)} 后缩回，再越过才止损`;}
+  if(m.kind==='EDGE_BREAKOUT')return `收回区间并确认失败才出，否则按保护价 ${num(t.stopPrice)}`;
+  return t.unified?.exitCondition??`结构坏了就出，保护价 ${num(t.stopPrice)}`;
+}
+function RangeExecution({data,now,liveEnabled,liveOverview}:{data:NonNullable<View>;now:number;liveEnabled:boolean;liveOverview?:{copied?:number|null;eligible?:number|null}}){
+  const ds=data.directStrategy!,research=ds.rangeResearch,discovery=research?.discovery,held=new Set(data.positions.map(t=>t.symbol)),
+    open=Object.values(research?.events??{}).filter(e=>!held.has(e.symbol)&&e.phase!=='DONE'&&e.phase!=='EXPIRED').sort((a,b)=>(a.rank??Infinity)-(b.rank??Infinity)),
+    orders=open.filter(e=>e.phase==='READY'||e.phase==='EXECUTING'),waiting=open.filter(e=>e.phase==='CONFIRMING'),
+    watching=open.filter(e=>e.phase==='WATCH'||e.phase==='HOLDING'),
+    seen=new Set([...held,...Object.keys(research?.events??{})]),fresh=(discovery?.anomalies??[]).filter(a=>!seen.has(a.symbol)),
+    steps=[['扫描',discovery?.scanned??'—'],['在看',watching.length],['在等',waiting.length],['下单',orders.length],['持仓',data.positions.length]] as const,
+    active=data.positions.length?4:orders.length?3:waiting.length?2:watching.length?1:0,backlog=(research?.waiting??0)||(discovery?.queued??0),
+    headline=research?.error??(!discovery?'还没扫完第一轮。':[data.positions.length&&`正在做 ${data.positions.length} 笔`,orders.length&&`${orders.length} 个可以下单`,waiting.length&&`${waiting.length} 个在等 K 线走完`,watching.length&&`${watching.length} 个区间还在看`,!data.positions.length&&!orders.length&&!waiting.length&&!watching.length&&fresh.length&&`扫到 ${fresh.length} 个异动，还没排上`].filter(Boolean).join('，')||`扫过 ${discovery.scanned} 个币，这次没有要盯的。`);
+  const row=(e:RangeEvent,title:string,text:string)=><article className="fr-exec-compact-row" key={e.id}>
+    <div className="fr-exec-compact-head"><b>{e.symbol.replace('_',' / ')}</b><span>{title}</span></div>
+    <p>{text}</p><p className="fr-exec-exit">区间 {num(e.L)} – {num(e.H)}{e.own>0?' · 这次在涨':e.own<0?' · 这次在跌':''}</p></article>;
+  const watchRows=[...waiting,...watching];
+  return <div className="fr-execution-page fr-exec-compact" data-testid="direct-research-execution">
+    <section className="fr-section"><div className="fr-section-head"><h2>现在</h2><span>{clock(discovery?.at??research?.updatedAt)}</span></div>
+      <div className="fr-pipeline">{steps.map(([name,count],i)=><div key={name} className={i===active?'current':i<active&&Number(count)>0?'done':''}><span>{i+1}</span><b>{name} {count}</b></div>)}</div>
+      <p>{headline.endsWith('。')?headline:`${headline}。`}</p>
+      <p className="fr-exec-exit">币池 {discovery?.shared??'—'}，扫到价格 {discovery?.scanned??'—'}，看过 K 线 {discovery?.loaded??0}{backlog?`。一次看不过来，还有 ${backlog} 个在排队`:''}。</p>
+      {!data.positions.length&&!orders.length&&!waiting.length&&!watching.length&&<p className="fr-exec-exit">靠近边界回头就做回归。收在区间外面并走强，才做突破。</p>}
+      {liveEnabled&&<p>实盘已跟上 {liveOverview?.copied??'—'} / 应执行 {liveOverview?.eligible??'—'}。成交以实盘账户为准。</p>}
+    </section>
+    <section className="fr-section"><div className="fr-section-head"><h2>正在做</h2><span>{data.positions.length} 笔</span></div>
+      {ds.execution?.pending.map(p=><p key={p.id}>{p.symbol.replace('_',' / ')} · {p.kind==='OPEN'?'正在下单':p.kind==='CLOSE'?'正在平仓':'正在减仓'} · {p.reason}</p>)}
+      <div className="fr-exec-compact-list">{data.positions.map(t=>{const m=t.unified?.anomaly,kind=m?({EDGE_BREAKOUT:'突破',EDGE_RETURN:'回归',INTERNAL_TREND:'顺势'})[m.kind]:'';
+        return <article className="fr-exec-compact-row" key={t.id}><div className="fr-exec-compact-head"><b>{t.symbol.replace('_',' / ')} · {side(t.side)}{kind?` · ${kind}`:''}</b><span>{holdStatus(t)}</span></div>
+          <p>{t.unified?.holdReason??positionWatch(t)}</p>
+          <p className="fr-exec-exit">{holdNext(t)}{t.openedAt?` · 拿了 ${Math.max(0,Math.round((now-t.openedAt)/60000))} 分钟`:''}</p>
+          {!m&&ds.anomalyRange&&<p className="fr-exec-exit">这笔是以前的规则，不按现在的区间走。</p>}</article>;})}</div>
+      {!data.positions.length&&!ds.execution?.pending.length&&<p>还没有持仓。</p>}
+    </section>
+    {!!orders.length&&<section className="fr-section"><div className="fr-section-head"><h2>可以下单</h2><span>{orders.length} 个</span></div>
+      <div className="fr-exec-compact-list">{orders.map(e=>row(e,e.proof?`${side(e.proof.side)} ${({EDGE_BREAKOUT:'突破',EDGE_RETURN:'回归',INTERNAL_TREND:'顺势'})[e.proof.kind]}`:e.phase==='EXECUTING'?'正在提交':'等成交',`${e.phase==='EXECUTING'?'正在提交。':''}${orderLine(e)}`))}</div></section>}
+    {!!watchRows.length&&<section className="fr-section"><div className="fr-section-head"><h2>还在看</h2><span>{watchRows.length} 个</span></div>
+      <div className="fr-exec-compact-list">{watchRows.slice(0,8).map(e=>row(e,where(e),watchLine(e,now)))}</div>
+      {watchRows.length>8&&<details className="fr-exec-research-details"><summary>其余 {watchRows.length-8} 个</summary><div className="fr-exec-compact-list">{watchRows.slice(8).map(e=>row(e,where(e),watchLine(e,now)))}</div></details>}</section>}
+    {!!fresh.length&&<section className="fr-section"><div className="fr-section-head"><h2>刚扫到</h2><span>{fresh.length} 个还没排上</span></div>
+      <div className="fr-exec-compact-list">{fresh.slice(0,6).map(a=><article className="fr-exec-compact-row" key={a.symbol}><div className="fr-exec-compact-head"><b>{a.symbol.replace('_',' / ')}</b><span>等排上</span></div><p>{scanLine(a)}</p></article>)}</div>
+      {fresh.length>6&&<p className="fr-exec-exit">还有 {fresh.length-6} 个，一样在等空位。</p>}</section>}
+  </div>;
 }
 function EventResponseView({research,now,held}:{research:EventResearch;now:number;held:Set<string>}){
   const rows=Object.values(research.events).filter(e=>!held.has(e.symbol)).sort((a,b)=>Number(b.phase==='READY')-Number(a.phase==='READY')
