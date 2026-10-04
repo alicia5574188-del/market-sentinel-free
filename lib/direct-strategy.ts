@@ -390,7 +390,9 @@ function manageMarketTrade(s:ForwardState,t:Trade,q:Quote,input:Input){
     coin=a.coins[t.symbol],ownPlan=t.entryContext!.winnerPlan!;
   if(u.anomaly){const result=rangeHoldingDecision(t,q,now,input.paths[t.symbol]??[],input.minutePaths?.[t.symbol]);
     u.anomaly=result.memory;t.stopPrice=result.stop;u.lastBarAt=result.memory.lastBarAt;u.lastDecisionAt=now;
-    u.decision=result.memory.stage;u.holdReason=result.reason;u.exitCondition='原计划结构失效或实际保护触发；仅边缘新确认可反向';
+    u.decision=result.memory.stage;u.holdReason=result.reason;u.exitCondition=result.memory.kind==='EDGE_RETURN'
+      ?`突破进场位先容错；回调后再越过才止损。未止损则按回归重心 ${(result.memory.proof.target*result.memory.scale).toPrecision(6)} 出场`
+      :'原计划结构失效或实际保护触发；仅边缘新确认可反向';
     if(result.exit)return closeUnifiedTrade(s,t,q,now,result.exit,result.reason);return false;}
   if(u.response){
     const result=eventHoldingDecision(t,q,now,input.paths[t.symbol]??[],input.minutePaths?.[t.symbol]);
@@ -543,7 +545,7 @@ function manageMarketDirect(s:ForwardState,input:Input,ready:boolean){
     if(ds.eventResearch){try{boundedEventResearch(ds.eventResearch);}
       catch{ds.eventResearchError='事件研究容量不足，暂停新增；已有持仓继续自身保护';}}
   }
-  ds.summary=ds.anomalyRange?`外部异动发现，固定约10小时区间；边缘突破、边缘回归、内部顺势分别执行。已记住 ${Object.keys(ds.rangeResearch?.events??{}).length} 个计划；${s.positions.filter(paperFilled).length} 笔持仓。`:ds.eventResponse?`记录活跃异常事件；按自身推进保留与恢复参与，失败启动提前退出，有优势继续持有。已记住 ${Object.keys(ds.eventResearch?.events??{}).length} 个事件；${s.positions.filter(paperFilled).length} 笔实际持仓。`:ds.specialMove?`持续研究特别的活跃币；自身启动并保留价格优势后参与爆发段。研究记忆 ${Object.keys(ds.specialResearch?.watches??{}).length} 币；${s.positions.filter(paperFilled).length} 笔实际持仓。`:
+  ds.summary=ds.anomalyRange?`外部异动发现，区间按已回落的高点和它前面的低点。突破要收在区间外并有强势小线；回归可以冲出边界回头，或从内部靠近边界回头。已记住 ${Object.keys(ds.rangeResearch?.events??{}).length} 个计划；${s.positions.filter(paperFilled).length} 笔持仓。`:ds.eventResponse?`记录活跃异常事件；按自身推进保留与恢复参与，失败启动提前退出，有优势继续持有。已记住 ${Object.keys(ds.eventResearch?.events??{}).length} 个事件；${s.positions.filter(paperFilled).length} 笔实际持仓。`:ds.specialMove?`持续研究特别的活跃币；自身启动并保留价格优势后参与爆发段。研究记忆 ${Object.keys(ds.specialResearch?.watches??{}).length} 币；${s.positions.filter(paperFilled).length} 笔实际持仓。`:
     `${ds.adaptive?'按实际失败参与回归，按持续承接参与延续；持仓依据独立观察。':a.reason}。回退 ${s.positions.filter(t=>paperFilled(t)&&t.unified?.branch==='RETURN').length} 笔；延续 ${s.positions.filter(t=>paperFilled(t)&&t.unified?.branch==='CONTINUATION').length} 笔；新方向须取得自身证明。`;
 }
 export function advanceDirectStrategy(input:Input){

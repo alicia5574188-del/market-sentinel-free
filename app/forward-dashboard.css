@@ -230,6 +230,9 @@ main.fr-app{--fr-ink:#eef4fc;--fr-muted:#b8c6d9;--fr-line:#304158;--fr-green:#71
 .fr-exec-compact .fr-exec-research-details{margin-top:10px;padding-top:0;border-top:0}
 .fr-exec-compact .fr-exec-research-details>summary{list-style:revert;min-height:32px;padding:5px 0}
 .fr-exec-compact .fr-exec-research-details>summary::-webkit-details-marker{display:revert}
+.fr-return-stage{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.fr-return-stage span{border:1px solid var(--fr-line);border-radius:999px;padding:2px 8px;font-size:12px;color:var(--fr-muted)}
+.fr-return-stage span.on{color:#b8d8c9;border-color:#6f9f86}
 .fr-exec-pending{margin-top:12px;padding:12px 14px;border:1px solid #756847;border-radius:10px;background:#2a281e}
 .fr-exec-title{padding-bottom:21px}
 .fr-exec-primary{border-color:#45695f;background:linear-gradient(180deg,#162720 0%,var(--fr-panel) 42%)}

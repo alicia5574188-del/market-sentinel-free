@@ -94,6 +94,31 @@ test('near-edge rejection needs no new high/low; executing return remains at edg
     assert.ok(rangeMarketRoute(f.research,'A_USDT',f.q.bestAsk,f.input.now,f.q).route);
     assert.equal(rangeMarketRoute(f.research,'A_USDT',100,f.input.now,quote(f.input.now,100)).route,null);}
 });
+test('an inside turn near the edge is a return without strong bars, and the stop waits for a second breakout cross',()=>{
+  const prior=Array.from({length:120},(_,i)=>candle(T-(120-i)*B,100.25,100.25,.2));
+  prior[8]=candle(T-(120-8)*B,100,99.2,.15);
+  prior[60]=candle(T-(120-60)*B,100.3,101.35,.12);
+  prior[119]=candle(T-B,101.35,101.25,.08);
+  const now=T+120000,minutes=[candle(T,101.28,101.22,.08),candle(T+60000,101.22,101.18,.08)],q=quote(now,101.18),windows:RangeWindows={},
+    discovery={at:T,scanned:1,shared:1,excluded:0,marketSamples:1,marketMove:0,loaded:1,queued:0,
+      anomalies:[{symbol:'A_USDT',detectedAt:T,source:'BYBIT',sourceCount:2,own:.01,residual:.01,score:90,kind:'OWN_ACCELERATION'}]},
+    research=advanceRangeResearch({now,windows,paths:{A_USDT:prior},minutes:{A_USDT:minutes},quotes:{A_USDT:q},ticks:{A_USDT:.001},discovery,positions:[],history:[]}),
+    e=research.events.A_USDT!;
+  assert.equal(e.proof?.kind,'EDGE_RETURN',e?.reason);assert.equal(e.proof?.side,'SHORT');
+  const px=e.proof!.price,holding=makeRangeHolding(e,windows[e.id]!,px,q,now),base=structuredClone(trade().t);
+  base.side='SHORT';base.openedAt=now;base.entryPrice=px;base.stopPrice=e.proof!.stop;base.unified!.anomaly=holding;base.unified!.branch='RETURN';
+  const entry=holding.H+holding.D,first=rangeHoldingDecision(base,quote(now+1000,entry+holding.D*.2),now+1000,prior,minutes);
+  assert.equal(first.exit,undefined,first.reason);assert.ok(first.memory.returnProbeAt);assert.equal(first.memory.returnBackAt,undefined);
+  base.unified!.anomaly=first.memory;base.stopPrice=first.stop;
+  const back=rangeHoldingDecision(base,quote(now+2000,entry-holding.n5),now+2000,prior,minutes);
+  assert.equal(back.exit,undefined,back.reason);assert.ok(back.memory.returnBackAt);
+  base.unified!.anomaly=back.memory;
+  const second=rangeHoldingDecision(base,quote(now+3000,entry+holding.D*.2),now+3000,prior,minutes);
+  assert.equal(second.exit,'RANGE_RETURN_FAILED');
+  const fresh=structuredClone(base);fresh.unified!.anomaly=structuredClone(holding);fresh.stopPrice=e.proof!.stop;
+  const done=rangeHoldingDecision(fresh,quote(now+4000,e.proof!.target*holding.scale-.05),now+4000,prior,minutes);
+  assert.equal(done.exit,'RANGE_RETURN_TARGET');
+});
 test('causal swing direction: three rising lows, declining highs and compression are distinct',()=>{
   const low=[1,2,3].map((price,i)=>({kind:'LOW' as const,price:price+90,at:T+i,confirmedAt:T+100+i})),
     high=[3,2,1].map((price,i)=>({kind:'HIGH' as const,price:price+100,at:T+i,confirmedAt:T+100+i}));

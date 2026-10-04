@@ -75,11 +75,40 @@ function DirectExecution({data,now,liveEnabled,liveOverview}:{data:NonNullable<V
         <p>最近判断 {clock(t.unified?.lastDecisionAt)} · 持有 {Math.max(0,Math.round((now-t.openedAt)/60000))} 分钟</p></details></article>;})}</div>
       {!data.positions.length&&<p>暂无持仓，等待有效启动。</p>}
       {ds.execution&&<details className="fr-exec-research-details"><summary>成交说明</summary><p>模拟按实盘的执行校验、提交和成交确认步骤结算；盘口模拟与交易所实际成交仍可能存在差异。</p></details>}</section>
-    {ds.anomalyRange?<RangeResearchView research={ds.rangeResearch} held={held}/>:ds.eventResearchError?<section className="fr-section"><h2>事件研究待恢复</h2><p>{ds.eventResearchError}</p></section>:ds.eventResearch?<EventResponseView research={ds.eventResearch} now={now} held={held}/>:ds.specialResearch?<SpecialResearchView research={ds.specialResearch} now={now} plans={plans} held={held}/>:<section className="fr-section"><div className="fr-section-head"><h2>重点观察</h2><span>{plans.length} 个计划</span></div>
+    {ds.anomalyRange?<><RangeReturnPanel data={data} now={now}/><RangeResearchView research={ds.rangeResearch} held={held}/></>:ds.eventResearchError?<section className="fr-section"><h2>事件研究待恢复</h2><p>{ds.eventResearchError}</p></section>:ds.eventResearch?<EventResponseView research={ds.eventResearch} now={now} held={held}/>:ds.specialResearch?<SpecialResearchView research={ds.specialResearch} now={now} plans={plans} held={held}/>:<section className="fr-section"><div className="fr-section-head"><h2>重点观察</h2><span>{plans.length} 个计划</span></div>
       <div className="fr-exec-compact-list">{plans.map(p=><article className="fr-exec-compact-row" key={p.id}><div className="fr-exec-compact-head"><b>{p.symbol.replace('_',' / ')} · {p.permission==='WAIT'?'观察':side(p.side)}</b><span>{planPhase(p.phase)}</span></div><p>{p.reason.replace(/^[A-Z_]+: /,'')}</p><details className="fr-exec-research-details"><summary>查看计划</summary><PlanDetails plan={p}/></details></article>)}</div>
       {!plans.length&&<p>等待当前结构与新鲜盘口形成交易计划。</p>}
       {ds.episodeResearch&&<details className="fr-exec-research-details"><summary>详细行情研究</summary><EpisodeResearchView research={ds.episodeResearch} now={now}/></details>}</section>}
   </div>;
+}
+function returnStage(probe?:number,back?:number){
+  if(probe&&back)return '已回到突破进场位内侧，等第二次越过';
+  if(probe)return '突破进场已触发，容错中';
+  return '尚未越过突破进场位';
+}
+function RangeReturnPanel({data,now}:{data:NonNullable<View>;now:number}){
+  const research=data.directStrategy?.rangeResearch,held=new Set(data.positions.map(t=>t.symbol)),
+    positions=data.positions.filter(t=>t.unified?.anomaly?.kind==='EDGE_RETURN'),
+    plans=Object.values(research?.events??{}).filter(e=>!held.has(e.symbol)&&e.proof?.kind==='EDGE_RETURN').sort((a,b)=>(a.rank??Infinity)-(b.rank??Infinity));
+  return <section className="fr-section" data-testid="range-return-panel"><div className="fr-section-head"><h2>回归</h2><span>{positions.length} 笔持仓 · {plans.length} 个计划</span></div>
+    <p>冲出边界后回头，或从区间内部靠近边界后回头，都可以做。靠近边界允许一个完整 5 分钟波动的容错。</p>
+    <p>止损不是突破单第一次进场。价格先越过突破进场位，再回调回来，之后再次越过这个位置，才止损。只探出一次就缩回的，回归单继续拿着，并按区间重心出场。</p>
+    <div className="fr-exec-compact-list">{positions.map(t=>{const m=t.unified!.anomaly!,entry=t.side==='LONG'?m.L-m.D:m.H+m.D,center=m.proof.target*m.scale,hard=t.side==='LONG'?m.L-2*m.D:m.H+2*m.D;
+      return <article className="fr-exec-compact-row" key={t.id}>
+        <div className="fr-exec-compact-head"><b>{t.symbol.replace('_',' / ')} · {side(t.side)} · 持仓</b><span>{returnStage(m.returnProbeAt,m.returnBackAt)}</span></div>
+        <div className="fr-return-stage"><span className={m.returnProbeAt?'on':''}>1 首次越过</span><span className={m.returnBackAt?'on':''}>2 回调回来</span><span className={m.stage==='EXIT'&&m.returnBackAt?'on':''}>3 再次越过才止损</span></div>
+        <p>区间 {m.L.toPrecision(6)} ～ {m.H.toPrecision(6)} · 突破进场位 {entry.toPrecision(6)} · 重心 {center.toPrecision(6)} · 硬保护 {hard.toPrecision(6)}</p>
+        <p>{t.unified?.holdReason??m.reason}</p>
+        <p className="fr-exec-exit">持有 {Math.max(0,Math.round((now-t.openedAt)/60000))} 分钟 · 硬保护在突破进场位之外再留一段边界缓冲，不替代第二次越过</p>
+      </article>;})}
+    {plans.map(e=>{const entry=e.proof!.side==='LONG'?e.L-e.D:e.H+e.D,beyond=e.proof!.side==='SHORT'?e.upperExtreme>e.H:e.lowerExtreme<e.L;
+      return <article className="fr-exec-compact-row" key={e.id}>
+        <div className="fr-exec-compact-head"><b>#{e.rank??'—'} {e.symbol.replace('_',' / ')} · {side(e.proof!.side)}</b><span>{e.phase==='READY'?'可执行':'等待成交'}</span></div>
+        <p>{beyond?'冲出边界后回头':'从内部靠近边界后回头'} · 容错 {Math.max(e.E,e.n5).toPrecision(4)}</p>
+        <p>区间 {e.L.toPrecision(6)} ～ {e.H.toPrecision(6)} · 突破进场位 {entry.toPrecision(6)} · 重心 {e.proof!.target.toPrecision(6)}</p>
+        <p>{e.reason}</p>
+      </article>;})}
+    </div>{!positions.length&&!plans.length&&<p>当前没有回归单。价格靠近上沿或下沿并回头时，会出现在这里。</p>}</section>;
 }
 function RangeResearchView({research,held}:{research:RangeResearch|null|undefined;held:Set<string>}){
   const discovery=research?.discovery,events=Object.values(research?.events??{}).filter(e=>!held.has(e.symbol)).sort((a,b)=>(a.rank??Infinity)-(b.rank??Infinity));
@@ -92,8 +121,8 @@ function RangeResearchView({research,held}:{research:RangeResearch|null|undefine
       <p>区间 {e.L.toPrecision(6)} ～ {e.H.toPrecision(6)} · {e.minutes} 分钟 · {e.direction==='UP'?'内部偏多':e.direction==='DOWN'?'内部偏空':'内部方向不明确'}</p>
       <p>位置 {e.price>e.H?'上沿外':e.price<e.L?'下沿外':Math.abs(e.price-e.H)<=e.E?'上沿附近':Math.abs(e.price-e.L)<=e.E?'下沿附近':'区间内部'} · {e.own>0?'本次上涨':e.own<0?'本次下跌':'尚未移动'}</p>
       <p>{e.admission?.reason??e.reason}</p><details className="fr-exec-research-details"><summary>双向计划</summary>
-        <p>来源 {e.source} · 首次发现 {clock(e.detectedAt)}</p><p>向外：5分钟完成在区间外，随后2至3根强势1分钟线。向内：边缘尝试被打回，完成回内与随后小线证明。</p>
-        <p>内部：异动与有效趋势同向即可核对进场，突破后继续持有。普通回调等待；快速回区间须有强势向内小线证明，反向须在本账户归零后再次核对边缘。</p>
+        <p>来源 {e.source} · 首次发现 {clock(e.detectedAt)}</p><p>突破：5分钟收在区间外，随后要有强势1分钟线。回归：冲出边界回头，或从内部靠近边界回头，都可做，并留一个5分钟波动的容错。</p>
+        <p>回归止损：突破进场位第一次越过先不止损。回调回来之后再次越过，才止损。否则继续拿到区间重心。</p>
       </details></article>)}</div>{!events.length&&<p>等待活跃币出现相对市场的异常移动。</p>}
     {discovery?.anomalies.filter(a=>!research?.events[a.symbol]).slice(0,6).map(a=><p key={a.symbol}>{a.symbol.replace('_',' / ')}：异动已发现，等待完整同源区间或观察席。</p>)}
   </section>;
