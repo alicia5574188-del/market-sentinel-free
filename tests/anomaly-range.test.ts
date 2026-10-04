@@ -253,6 +253,18 @@ test('gappy five-minute tape is not watched, and a mid-range coin ranks behind a
   assert.ok(ranks.filter(r=>r.rank<=8).every(r=>r.symbol.startsWith('E')));
   assert.equal(ranks.find(r=>r.symbol==='MID_USDT')!.rank,11);
 });
+test('Gate turnover under one million is not scanned and releases an existing watch',()=>{
+  const scanner:RangeScanner={prices:new Map(),detected:new Map([['ZK_USDT',{symbol:'ZK_USDT',detectedAt:T,source:'BYBIT',sourceCount:2,own:.08,residual:.08,score:90,kind:'OWN_ACCELERATION'}]])},
+    rows=[{symbol:'ZK_USDT',source:'BYBIT',sourceCount:2,last:100,observedAt:T,volume24hUsd:252_900},
+      ...Array.from({length:8},(_,i)=>({symbol:`L${i}_USDT`,source:'BYBIT',sourceCount:2,last:100,observedAt:T,volume24hUsd:2_000_000}))];
+  const seen=scanRangeAnomalies(rows,scanner,T,9,0);
+  assert.equal(seen.anomalies.some(a=>a.symbol==='ZK_USDT'),false);assert.equal(scanner.detected.has('ZK_USDT'),false);
+  const f=fixture(),previous=structuredClone(f.research),zk=structuredClone(f.e);zk.symbol='ZK_USDT';zk.id=`anomaly-range-v1:ZK_USDT:${T}`;previous.events.ZK_USDT=zk;
+  const next=advanceRangeResearch({...f.input,previous,windows:structuredClone(f.input.windows),paths:{...f.input.paths,ZK_USDT:f.input.paths.A_USDT},
+    discovery:{...f.input.discovery,gateVolume:{ZK_USDT:252_900,A_USDT:5_000_000}}});
+  assert.equal(next.events.ZK_USDT,undefined);assert.match(next.recent?.find(r=>r.symbol==='ZK_USDT')?.reason??'',/100万/);
+  assert.equal('gateVolume' in (next.discovery??{}),false);assert.notEqual(next.events.A_USDT?.phase,'EXPIRED');
+});
 test('internal aligned trend uses existing completed five and new post-anomaly minutes, then holds through breakout and ordinary pullback',()=>{
   for(const sign of [1,-1]){
     const mirror=(p:number)=>sign>0?p:200-p,prior=Array.from({length:120},(_,i)=>candle(T-(120-i)*B,mirror(100+i*.01+Math.sin(i/7)),mirror(100+i*.01+Math.sin(i/7)),.1)),

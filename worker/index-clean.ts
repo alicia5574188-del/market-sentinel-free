@@ -961,9 +961,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const windows=this.forwardState?.directStrategy?.rangeWindows??{};
     for(const a of this.rangeScanner.detected.values())if(windows[`${ANOMALY_RANGE_VERSION}:${a.symbol}:${a.detectedAt}`])a.frozen=true;
     const common=this.marketHub.commonSymbols([...this.contractCatalog.keys()].filter(adaptiveSymbolAllowed)),
-      rows=this.marketHub.discoveryRows(common,now);
+      rows=this.marketHub.discoveryRows(common,now).map(row=>({...row,volume24hUsd:this.contractCatalog.get(row.symbol)?.volume24hUsd??0}));
     this.rangeDiscovery=scanRangeAnomalies(rows,this.rangeScanner,now,common.length,this.strategyPathSymbols().filter(symbol=>(this.strategyCandles[symbol]?.length??0)>=119).length);
     const held=this.forwardState?.positions.map(t=>t.symbol)??[],research=this.forwardState?.directStrategy?.rangeResearch;
+    const gateVolume=Object.fromEntries([...new Set([...Object.keys(research?.events??{}),...this.rangeDiscovery.anomalies.map(a=>a.symbol)])]
+      .flatMap(symbol=>{const row=this.contractCatalog.get(symbol);return row?[[symbol,row.volume24hUsd]]:[]}));
+    this.rangeDiscovery={...this.rangeDiscovery,gateVolume};
     this.runtime.liquidUniverse=rangeObservationSymbols(research,held,this.rangeDiscovery.anomalies,now,SCAN_UNIVERSE_SIZE);
     for(const symbol of Object.keys(this.strategyCandles))if(!this.runtime.liquidUniverse.includes(symbol))delete this.strategyCandles[symbol];
     this.rangeDiscovery.queued+=Math.max(0,rangeObservationSymbols(research,held,this.rangeDiscovery.anomalies,now,4096).length-this.runtime.liquidUniverse.length);

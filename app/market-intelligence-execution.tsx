@@ -142,7 +142,7 @@ function RangeExecution({data,now,liveEnabled,liveOverview}:{data:NonNullable<Vi
     orders=open.filter(e=>e.phase==='READY'||e.phase==='EXECUTING'),waiting=open.filter(e=>e.phase==='CONFIRMING'),
     watching=open.filter(e=>e.phase==='WATCH'||e.phase==='HOLDING'),
     seen=new Set([...held,...Object.keys(research?.events??{})]),fresh=(discovery?.anomalies??[]).filter(a=>!seen.has(a.symbol)),
-    thin=new Set((research?.recent??[]).filter(r=>r.reason.includes('断层')).map(r=>r.symbol)),
+    thin=new Set((research?.recent??[]).filter(r=>r.reason.includes('断层')||r.reason.includes('成交额')).map(r=>r.symbol)),
     steps=[['扫描',discovery?.scanned??'—'],['在看',watching.length],['在等',waiting.length],['下单',orders.length],['持仓',data.positions.length]] as const,
     active=data.positions.length?4:orders.length?3:waiting.length?2:watching.length?1:0,backlog=(research?.waiting??0)||(discovery?.queued??0),
     headline=research?.error??(!discovery?'还没扫完第一轮。':[data.positions.length&&`正在做 ${data.positions.length} 笔`,orders.length&&`${orders.length} 个可以下单`,waiting.length&&`${waiting.length} 个在等 K 线走完`,watching.length&&`${watching.length} 个区间还在看`,!data.positions.length&&!orders.length&&!waiting.length&&!watching.length&&fresh.length&&`扫到 ${fresh.length} 个异动，还没排上`].filter(Boolean).join('，')||`扫过 ${discovery.scanned} 个币，这次没有要盯的。`);
@@ -173,7 +173,7 @@ function RangeExecution({data,now,liveEnabled,liveOverview}:{data:NonNullable<Vi
       <div className="fr-exec-compact-list">{watchRows.slice(0,8).map(e=>row(e,where(e),watchLine(e,now)))}</div>
       {watchRows.length>8&&<details className="fr-exec-research-details"><summary>其余 {watchRows.length-8} 个</summary><div className="fr-exec-compact-list">{watchRows.slice(8).map(e=>row(e,where(e),watchLine(e,now)))}</div></details>}</section>}
     {!!fresh.length&&<section className="fr-section"><div className="fr-section-head"><h2>刚扫到</h2><span>{fresh.length} 个还没排上</span></div>
-      <div className="fr-exec-compact-list">{fresh.slice(0,6).map(a=><article className="fr-exec-compact-row" key={a.symbol}><div className="fr-exec-compact-head"><b>{a.symbol.replace('_',' / ')}</b><span>{thin.has(a.symbol)?'不看':'等排上'}</span></div><p>{thin.has(a.symbol)?'5分钟K线接不上，成交太稀，不占用观察席。':scanLine(a)}</p></article>)}</div>
+      <div className="fr-exec-compact-list">{fresh.slice(0,6).map(a=><article className="fr-exec-compact-row" key={a.symbol}><div className="fr-exec-compact-head"><b>{a.symbol.replace('_',' / ')}</b><span>{thin.has(a.symbol)?'不看':'等排上'}</span></div><p>{thin.has(a.symbol)?(research?.recent??[]).find(r=>r.symbol===a.symbol)?.reason??'成交太稀，不占用观察席。':scanLine(a)}</p></article>)}</div>
       {fresh.length>6&&<p className="fr-exec-exit">还有 {fresh.length-6} 个，一样在等空位。</p>}</section>}
   </div>;
 }

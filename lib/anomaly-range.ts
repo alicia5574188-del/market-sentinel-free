@@ -5,11 +5,13 @@ import {specialRows,recentSpecialActivity} from './special-move.ts';
 import {MARKET_AUTHORITY_VERSION,type MarketRoute} from './market-authority.ts';
 import {selectRangePlans,rankRangeDiscovery,type RangeRank} from './range-scheduler.ts';
 export const ANOMALY_RANGE_VERSION='anomaly-range-v1';
-export const RANGE_RESEARCH_BYTES=24*1024,RANGE_WINDOW_LIMIT=30;
+export const RANGE_RESEARCH_BYTES=24*1024,RANGE_WINDOW_LIMIT=30,RANGE_MIN_VOLUME_24H_USD=1_000_000;
 type Side='LONG'|'SHORT';
 export type RangeKind='EDGE_BREAKOUT'|'EDGE_RETURN'|'INTERNAL_TREND';
 export type RangeDiscovery={at:number;scanned:number;shared:number;excluded:number;marketSamples:number;marketMove:number|null;
-  anomalies:{symbol:string;detectedAt:number;source:string;sourceCount:number;own:number;residual:number;score:number;kind:string;frozen?:boolean}[];queued:number;loaded:number};
+  anomalies:{symbol:string;detectedAt:number;source:string;sourceCount:number;own:number;residual:number;score:number;kind:string;frozen?:boolean}[];queued:number;loaded:number;
+  /** Gate 24h turnover for symbols already under watch. Not persisted. */
+  gateVolume?:Record<string,number>};
 export type RangeWindow={source:string;start:number;cutoff:number;count:number;ohlc64:string};
 export type RangeSwing={price:number;at:number;confirmedAt:number;kind:'HIGH'|'LOW'};
 export type RangeEvent={id:string;symbol:string;detectedAt:number;source:string;score:number;own:number;residual:number;anomalyKind:string;
@@ -258,7 +260,9 @@ export function advanceRangeResearch(input:{previous?:RangeResearch;windows:Rang
   minutes?:Record<string,CandleLike[]>;quotes:Record<string,QuoteLike>;ticks:Record<string,number>;discovery?:RangeDiscovery;positions:Trade[];history:Trade[]}){
   const s=normalizeRangeResearch(input.previous)??(!input.previous?{version:ANOMALY_RANGE_VERSION,startedAt:input.now,updatedAt:input.now,events:{},bytes:0,capacitySkipped:0}:null);
   if(!s)throw new Error('RANGE_MEMORY_INVALID');if(input.now<s.updatedAt)return s;s.updatedAt=input.now;
-  if(input.discovery)s.discovery={...input.discovery,anomalies:input.discovery.anomalies.slice(0,8)};
+  if(input.discovery){const {gateVolume,...rest}=input.discovery;s.discovery={...rest,anomalies:rest.anomalies.slice(0,8)};
+    for(const e of Object.values(s.events)){const vol=gateVolume?.[e.symbol];
+      if(vol!=null&&vol<RANGE_MIN_VOLUME_24H_USD&&!input.positions.some(t=>t.symbol===e.symbol)){delete e.proof;e.phase='EXPIRED';e.reason='Gate近24小时成交额不足100万，不观察';}}}
   const pending=input.positions.filter(t=>t.paperOrder?.phase!=='FILLED'),protectedIds=new Set(pending.map(t=>t.unified?.anomaly?.eventId).filter(Boolean)),
     previouslySelected=new Set(Object.values(s.events).map(e=>e.id));
   // Filled orders already own immutable geometry and mutable holding protection.
@@ -555,7 +559,8 @@ export function scanRangeAnomalies(rows:{symbol:string;last:number;observedAt:nu
   for(const x of abnormalities){const old=scanner.detected.get(x.row.symbol),residual=x.own-market!,kind=Math.abs(x.own)<Math.abs(market!)*.25?'ACTIVE_NONRESPONSE':x.own*market!<0?'OPPOSITE_MOVE':'OWN_ACCELERATION';
     scanner.detected.set(x.row.symbol,{symbol:x.row.symbol,source:old?.source??x.row.source,sourceCount:x.row.sourceCount,detectedAt:old?.detectedAt??now,...(old?.frozen?{frozen:true}:{}),
       own:x.own,residual,kind,score:Math.min(99,60+Math.abs(residual)*2000)});}
-  for(const [symbol,a] of scanner.detected)if(now-a.detectedAt>1800000||!present.has(symbol))scanner.detected.delete(symbol);
+  for(const [symbol,a] of scanner.detected){const row=rows.find(r=>r.symbol===symbol);
+    if(now-a.detectedAt>1800000||!present.has(symbol)||!row||row.volume24hUsd<RANGE_MIN_VOLUME_24H_USD)scanner.detected.delete(symbol);}
   const anomalies=[...scanner.detected.values()];
   return{at:now,scanned:rows.filter(r=>now-r.observedAt<=12000).length,shared,excluded:shared-rows.length,marketSamples:marketRows.length,marketMove:market,
     anomalies:rankRangeDiscovery(anomalies,now),queued:Math.max(0,anomalies.length-30),loaded};
