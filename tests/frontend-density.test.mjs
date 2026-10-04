@@ -246,6 +246,15 @@ test("inverse cards show only their own exact-price net and paid fees without an
   assert.match(summary,/已扣手续费 0\.1400 U/);assert.doesNotMatch(summary,/平仓 [0-9]|已减仓 [0-9]/);
   assert.doesNotMatch(summary,/毛盈亏镜像校验|报价毛额差/);
 });
+test("a simulated order shows the range frozen at entry",()=>{
+  const t={id:"range-1",status:"CLOSED",symbol:"AXS_USDT",side:"SHORT",entryPrice:1.3904,exitPrice:1.37,lastPrice:1.37,
+    quantity:0,contracts:1,notional:1000,entryFee:.5,leverage:5,margin:200,plannedRisk:20,openedAt:1790760000000,closedAt:1790761200000,
+    stopPrice:1.45,expectedHoldMinutes:30,favorable:.01,adverse:0,holdScore:0,profitFloorRate:0,netPnl:12,entryContext:null,
+    unified:{anomaly:{kind:"EDGE_RETURN",L:1.3461,H:1.4496},branch:"RETURN",entryReason:"边界回头",holdReason:"按冻结计划持有",exitCondition:"到重心出场"}};
+  const html=render("app/forward-dashboard.tsx",{trade:t,now:1790761200000},{},"TradeCard");
+  assert.match(html,/进场区间 1\.346100 – 1\.449600/);
+  assert.match(html,/<dt>进场区间<\/dt><dd>1\.346100 – 1\.449600<\/dd>/);
+});
 test("comparison shows exact-mirror paid-fee nets and overview fee never adds estimates",()=>{
   const data=account();data.fees=3.25;
   data.shadowInverse={sourceNet:-999,inverseNet:888,sourceFees:1.25,inverseFees:1.25,pairedOpened:7,pairedClosed:2,legacyOpen:0,

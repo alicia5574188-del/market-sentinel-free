@@ -162,6 +162,7 @@ function RangeExecution({data,now,liveEnabled,liveOverview}:{data:NonNullable<Vi
       <div className="fr-exec-compact-list">{data.positions.map(t=>{const m=t.unified?.anomaly,kind=m?({EDGE_BREAKOUT:'突破',EDGE_RETURN:'回归',INTERNAL_TREND:'顺势'})[m.kind]:'';
         return <article className="fr-exec-compact-row" key={t.id}><div className="fr-exec-compact-head"><b>{t.symbol.replace('_',' / ')} · {side(t.side)}{kind?` · ${kind}`:''}</b><span>{holdStatus(t)}</span></div>
           <p>{t.unified?.holdReason??positionWatch(t)}</p>
+          {m&&<p className="fr-exec-exit">进场区间 {num(m.L)} – {num(m.H)}</p>}
           <p className="fr-exec-exit">{holdNext(t)}{t.openedAt?` · 拿了 ${Math.max(0,Math.round((now-t.openedAt)/60000))} 分钟`:''}</p>
           {!m&&ds.anomalyRange&&<p className="fr-exec-exit">这笔是以前的规则，不按现在的区间走。</p>}</article>;})}</div>
       {!data.positions.length&&!ds.execution?.pending.length&&<p>还没有持仓。</p>}
