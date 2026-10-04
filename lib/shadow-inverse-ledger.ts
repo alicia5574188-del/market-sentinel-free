@@ -278,7 +278,7 @@ export function assertInverseTrial(state:ForwardState){
     if(ds.anomalyRange){if(ds.anomalyRange.version!=='anomaly-range-v1'||!finite(ds.anomalyRange.cutoverAt))throw new Error('区间策略版本损坏');
       if(ds.rangeResearch&&!normalizeRangeResearch(ds.rangeResearch))throw new Error('区间研究记忆损坏；保留账户');
       if(Object.keys(ds.rangeWindows??{}).length>30)throw new Error('冻结窗口容量异常');
-      for(const w of Object.values(ds.rangeWindows??{}))decodeRangeWindow(w);}
+      for(const [id,w] of Object.entries(ds.rangeWindows??{}))try{decodeRangeWindow(w);}catch{delete ds.rangeWindows![id];}}
     if(ds.eventResponse&&(ds.eventResponse.version!=='event-response-v1'||!finite(ds.eventResponse.cutoverAt)
       ||ds.eventResponse.cutoverAt<=0))
       throw new Error('事件响应执行记忆损坏；保留账户');

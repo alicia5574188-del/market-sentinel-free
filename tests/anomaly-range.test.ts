@@ -89,6 +89,28 @@ test('a pullback low inside the last ten hours does not replace the low before t
   assert.ok(e.L<118,`floor ${e.L} stayed at the pullback`);assert.ok(e.H>125,`high ${e.H}`);
   assert.notEqual(e.proof?.side,'SHORT');
 });
+test('a later puncture that closes back keeps the older high, and a bad freeze cannot stop the account',()=>{
+  const n=220,bars=Array.from({length:n},(_,i)=>candle(T-(n-i)*B,100,100,.2)),hi=n-192;
+  bars[hi-15]=candle(T-(n-(hi-15))*B,100,97,.15);
+  bars[hi]=candle(T-(n-hi)*B,104,107.6,.16);
+  bars[hi+1]=candle(T-(n-(hi+1))*B,107.4,103,.16);
+  for(let i=hi+2;i<n-6;i++)bars[i]=candle(T-(n-i)*B,103.4,103.4,.2);
+  const si=n-5;
+  bars[si]=candle(T-(n-si)*B,104,112,.2);
+  for(let i=si+1;i<n;i++)bars[i]=candle(T-(n-i)*B,108,107.5,.16);
+  const now=T+90000,q=quote(now,107.5),windows:RangeWindows={},
+    discovery={at:T,scanned:1,shared:1,excluded:0,marketSamples:1,marketMove:0,loaded:1,queued:0,
+      anomalies:[{symbol:'A_USDT',detectedAt:T,source:'BYBIT',sourceCount:2,own:-.02,residual:-.02,score:90,kind:'OWN_ACCELERATION'}]},
+    e=advanceRangeResearch({now,windows,paths:{A_USDT:bars},minutes:{A_USDT:[candle(T-120000,107.7,107.55,.1),candle(T-60000,107.55,107.5,.1)]},
+      quotes:{A_USDT:q},ticks:{A_USDT:.001},discovery,positions:[],history:[]}).events.A_USDT!;
+  assert.ok(e.H>107&&e.H<110,`high ${e.H} followed the puncture`);assert.ok(e.L<99,`floor ${e.L}`);
+  const lag=Array.from({length:130},(_,i)=>candle(T-2*B-(130-i)*B,100,100,.2)),late:RangeWindows={};
+  assert.equal(advanceRangeResearch({now,windows:late,paths:{A_USDT:lag},minutes:{A_USDT:[]},quotes:{A_USDT:q},ticks:{A_USDT:.001},discovery,positions:[],history:[]}).events.A_USDT,undefined);
+  assert.equal(Object.keys(late).length,0);
+  const state=structuredClone(trade().state),id=Object.keys(state.directStrategy!.rangeWindows??{})[0]??`anomaly-range-v1:BAD_USDT:${T}`;
+  state.directStrategy!.rangeWindows??={};state.directStrategy!.rangeWindows[id]={source:'BYBIT',start:T-120*B,cutoff:T+B,count:120,ohlc64:windows[e.id]!.ohlc64};
+  const restored=normalizeForward(state,now);assert.equal(restored.directStrategy!.rangeWindows![id],undefined);
+});
 test('near-edge rejection needs no new high/low; executing return remains at edge and cost-checked',()=>{
   for(const side of [1,-1]){const f=fixture(side,'EDGE_RETURN');assert.equal(f.e.proof?.kind,'EDGE_RETURN');assert.equal(f.e.proof?.side,side>0?'SHORT':'LONG');
     assert.ok(rangeMarketRoute(f.research,'A_USDT',f.q.bestAsk,f.input.now,f.q).route);

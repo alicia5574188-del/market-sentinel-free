@@ -106,16 +106,25 @@ export function strongRangeProof(minutes:CandleLike[],fiveAt:number,side:Side,n5
   }
 }
 const SWING_LOOKBACK=288;
-/** Highest confirmed high, and the swing low immediately before it. Later pullback lows do not move the floor. */
-export function activeSwingRange(rows:CandleLike[],tick:number){
+function puncture(rows:CandleLike[],high:RangeSwing,tick:number){
+  const i=rows.findIndex(r=>r.time*1000===high.at);if(i<12)return false;
+  const prev=rows.slice(i-12,i),n=noise(prev,tick),limit=Math.max(n,Math.max(2*tick,.2*n)),shelf=Math.max(...prev.map(r=>r.high));
+  return high.price-shelf>limit;
+}
+/** Highest confirmed high, unless that print is a puncture which has closed back through an older high. */
+export function activeSwingRange(rows:CandleLike[],tick:number,price?:number){
   if(rows.length<30)return;
   const n5=noise(rows,tick),swings=rangeSwings(rows,n5),highs=swings.filter(s=>s.kind==='HIGH');
   if(!highs.length||!(n5>0))return;
-  const high=highs.reduce((a,b)=>a.price>=b.price?a:b),low=swings.filter(s=>s.kind==='LOW'&&s.at<high.at).at(-1);
+  const D=Math.max(2*tick,.2*n5),top=highs.reduce((a,b)=>a.price>=b.price?a:b);let high=top,earlier:RangeSwing|undefined;
+  for(const s of highs)if(s.at<top.at&&top.price-s.price>D&&(!earlier||s.price>earlier.price))earlier=s;
+  const mark=price??rows.at(-1)!.close;
+  if(earlier&&puncture(rows,top,tick)&&mark<=earlier.price+D)high=earlier;
+  const low=swings.filter(s=>s.kind==='LOW'&&s.at<high.at).at(-1);
   if(!low||!(high.price>low.price))return;
-  const H=high.price,L=low.price,E=Math.min(.75*n5,.1*(H-L)),D=Math.max(2*tick,.2*n5);
+  const H=high.price,L=low.price,E=Math.min(.75*n5,.1*(H-L));
   if(!(E>D))return;
-  return{H,L,n5,E,D,highAt:high.at,lowAt:low.at,highConfirmed:high.confirmedAt,lowConfirmed:low.confirmedAt};
+  return{H,L,n5,E,D,highAt:high.at,lowAt:low.at,highConfirmed:high.confirmedAt,lowConfirmed:low.confirmedAt,rejected:high!==top};
 }
 function rememberSwingPair(existing:RangeSwing[],pair:{H:number;L:number;highAt:number;lowAt:number;highConfirmed:number;lowConfirmed:number}){
   const defining:RangeSwing[]=[{kind:'LOW',price:pair.L,at:pair.lowAt,confirmedAt:Math.max(pair.lowAt,pair.lowConfirmed)},{kind:'HIGH',price:pair.H,at:pair.highAt,confirmedAt:Math.max(pair.highAt,pair.highConfirmed)}];
@@ -284,7 +293,13 @@ export function advanceRangeResearch(input:{previous?:RangeResearch;windows:Rang
     const cached=input.windows[id],parked=s.recent?.find(r=>r.id===id&&r.parked);
     if(!cached&&(a.frozen||parked)){s.capacitySkipped++;continue;} // Never redraw a forgotten original range.
     const cutoff=cached?.cutoff??Math.floor(a.detectedAt/300000)*300000,
-      five=specialRows(input.paths[a.symbol],input.now,300000,121),prior=cached?decodeRangeWindow(cached):five.filter(r=>end(r)<=cutoff).slice(-120),source=prior.at(-1)?.volumeVenue;
+      five=specialRows(input.paths[a.symbol],input.now,300000,121);
+    let prior:CandleLike[]|undefined;
+    if(cached){try{prior=decodeRangeWindow(cached);}catch{delete input.windows[id];continue;}}
+    else{const rows=five.filter(r=>end(r)<=cutoff).slice(-120),start=rows[0]?rows[0].time*1000:0;
+      if(rows.length<119||start+rows.length*300000!==cutoff||rows.some((r,i)=>r.time*1000!==start+i*300000))continue;prior=rows;}
+    if(!prior)continue;
+    const source=prior.at(-1)!.volumeVenue;
     if(!five.length||prior.length<119||prior.some(r=>r.volumeVenue!==source)||source!==a.source)continue;
     const e=seedRangeEvent(a,prior,cutoff,input.ticks[a.symbol]??prior.at(-1)!.close*1e-6,input.now);if(!e)continue;
     if(!cached&&Object.keys(input.windows).length>=RANGE_WINDOW_LIMIT){
@@ -317,9 +332,11 @@ export function advanceRangeResearch(input:{previous?:RangeResearch;windows:Rang
       e.lastAt=end(last);
     }
     const window=input.windows[e.id]??closed?.unified?.anomaly?.window;if(!window){e.reason='原始冻结证据未恢复，停止本计划';continue;}
-    const full=[...decodeRangeWindow(window),...five.filter(r=>r.time*1000>=window.cutoff)],swings=rangeSwings(full,e.n5);e.swings=swings.slice(-6);e.direction=rangeDirection(swings,e.n5,input.now);
+    let frozen:CandleLike[];
+    try{frozen=decodeRangeWindow(window);}catch{if(input.windows[e.id])delete input.windows[e.id];e.phase='EXPIRED';e.reason='冻结窗口对不上，释放观察';continue;}
+    const full=[...frozen,...five.filter(r=>r.time*1000>=window.cutoff)],swings=rangeSwings(full,e.n5);e.swings=swings.slice(-6);e.direction=rangeDirection(swings,e.n5,input.now);
     if(e.proof?.kind==='INTERNAL_TREND'&&(e.own*d(e.proof.side)<=0||e.direction!==(e.proof.side==='LONG'?'UP':'DOWN'))){delete e.proof;e.phase='WATCH';}
-    const tick=input.ticks[e.symbol]??e.n5/1000,frozen=decodeRangeWindow(window),inherited=inheritedEdge(frozen,tick),aligned=!!inherited&&e.own*d(inherited.side)>0;
+    const tick=input.ticks[e.symbol]??e.n5/1000,inherited=inheritedEdge(frozen,tick),aligned=!!inherited&&e.own*d(inherited.side)>0;
     let inheritedTaken=false;
     if(inherited&&!aligned){
       const g=windowGeometry(frozen,tick);
@@ -347,14 +364,20 @@ export function advanceRangeResearch(input:{previous?:RangeResearch;windows:Rang
       }
     }
     const history=specialRows(input.paths[e.symbol],input.now,300000,SWING_LOOKBACK).filter(r=>r.volumeVenue===e.source),
-      swing=activeSwingRange(history,tick),recent=history.slice(-120);
+      swing=activeSwingRange(history,tick,e.price),recent=history.slice(-120);
     if(swing&&recent.length>=30){
       const floor=recent.reduce((a,b)=>a.low<=b.low?a:b),ceil=recent.reduce((a,b)=>a.high>=b.high?a:b),
         pullback=floor.time*1000>swing.highAt&&swing.L<floor.low-swing.D,
         plateau=ceil.time*1000>swing.highAt&&swing.H>ceil.high+swing.D,
         brokeReal=!!inherited&&(inherited.side==='LONG'?inherited.event.close>swing.H+swing.D:inherited.event.close<swing.L-swing.D),
         innerShort=inheritedTaken&&pullback&&!!inherited&&inherited.L>swing.L+swing.D&&!(inherited.kind==='EDGE_BREAKOUT'&&inherited.side==='LONG')&&!brokeReal;
-      if((pullback||plateau)&&(!inheritedTaken||innerShort)){
+      if(swing.rejected&&Math.abs(e.H-swing.H)>swing.D){
+        const H=swing.H,L=swing.L,E=Math.min(.75*swing.n5,.1*(H-L)),D=Math.max(2*tick,.2*swing.n5);
+        if(H>L&&E>D){e.H=H;e.L=L;e.n5=swing.n5;e.highAt=swing.highAt;e.lowAt=swing.lowAt;e.E=E;e.D=D;
+          e.upperExtreme=Math.max(e.upperExtreme,H);e.lowerExtreme=Math.min(e.lowerExtreme,L);
+          e.swings=rememberSwingPair(e.swings,{H,L,highAt:swing.highAt,lowAt:swing.lowAt,highConfirmed:swing.highConfirmed,lowConfirmed:swing.lowConfirmed});
+          if(e.proof)delete e.proof;inheritedTaken=false;if(e.phase==='READY')e.phase='WATCH';}
+      }else if((pullback||plateau)&&(!inheritedTaken||innerShort)){
         const H=plateau?swing.H:e.H,L=pullback?swing.L:e.L,highAt=plateau?swing.highAt:e.highAt,lowAt=pullback?swing.lowAt:e.lowAt,
           E=Math.min(.75*e.n5,.1*(H-L)),D=Math.max(2*tick,.2*e.n5);
         if(H>L&&E>D){e.H=H;e.L=L;e.highAt=highAt;e.lowAt=lowAt;e.E=E;e.D=D;
