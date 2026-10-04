@@ -66,6 +66,14 @@ export function decodeRangeWindow(w:RangeWindow){
   });
 }
 const noise=(rows:CandleLike[],tick:number)=>Math.max(2*tick,median(rows.slice(-20).map((r,i,a)=>Math.max(r.high-r.low,i?Math.abs(r.high-a[i-1]!.close):0,i?Math.abs(r.low-a[i-1]!.close):0))));
+/** Repeated holes between 5m candles mean the book is too thin to trade. One impulse candle is not enough. */
+export function thinFiveTape(rows:CandleLike[],n5:number){
+  const recent=rows.slice(-36);if(recent.length<12||!(n5>0))return false;let gaps=0;
+  for(let i=1;i<recent.length;i++){const prev=recent[i-1]!,cur=recent[i]!,limit=Math.max(n5,prev.close*.004),
+    hole=Math.max(0,cur.low-prev.high,prev.low-cur.high);
+    if((cur.time-prev.time)*1000>300000||hole>limit||Math.abs(cur.open-prev.close)>limit*2)gaps++;}
+  return gaps>=4&&gaps/(recent.length-1)>=.25;
+}
 /** Reversal-confirmed turns, never retrospectively actionable at the extreme. */
 export function rangeSwings(rows:CandleLike[],n5:number){
   const swings:RangeSwing[]=[];if(!rows.length)return swings;
@@ -300,6 +308,7 @@ export function advanceRangeResearch(input:{previous?:RangeResearch;windows:Rang
     if(!last||input.now-end(last)>600000){e.active=false;e.reason='同源完成K线缺失，停止新确认';continue;}
     e.price=q?.fresh&&q.priceSource===e.source&&input.now-q.observedAt<=10000?((q.bestBid+q.bestAsk)/2):last.close;const activity=recentSpecialActivity(five);e.active=activity.active;e.activity={turnover15:activity.turnover15,activityRatio:activity.activityRatio,at:end(last)};
     if(held||e.phase==='DONE'||e.phase==='EXPIRED')continue;
+    if(thinFiveTape(five,e.n5)){delete e.proof;e.phase='EXPIRED';e.reason='5分钟K线断层，成交太稀，不观察';continue;}
     if(e.proof&&input.now-e.proof.at>120000){delete e.proof;e.phase='WATCH';}
     if(end(last)>e.lastAt){
       const newly=five.filter(r=>end(r)>e.lastAt&&r.time*1000>=Math.floor(e.detectedAt/300000)*300000),reach=Math.max(e.E,e.n5);

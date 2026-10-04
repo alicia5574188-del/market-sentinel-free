@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {advanceRangeResearch,decodeRangeWindow,rangeDirection,strongRangeProof,rangeMarketRoute,makeRangeHolding,
   rangeHoldingDecision,rangeExecutionAdmission,scanRangeAnomalies,normalizeRangeResearch,rangeObservationSymbols,fairRangeRefreshBatch,
-  validRangeHolding,RANGE_OUTCOME_BYTES,RANGE_RESEARCH_BYTES,type RangeResearch,type RangeWindows,type RangeScanner} from '../lib/anomaly-range.ts';
+  validRangeHolding,thinFiveTape,RANGE_OUTCOME_BYTES,RANGE_RESEARCH_BYTES,type RangeResearch,type RangeWindows,type RangeScanner} from '../lib/anomaly-range.ts';
 import {advanceDirectStrategy} from '../lib/direct-strategy.ts';
 import {initialForward,normalizeForward,forwardSummary,resetForwardAccountPreservingLearning,type Quote} from '../lib/forward-relations.ts';
 import {buildForwardProtectionCheckpoint,restoreForwardProtectionCheckpoint} from '../lib/forward-protection-checkpoint.ts';
@@ -213,6 +213,23 @@ test('completed same-direction internal evidence ranks ahead of a raw spike; sub
   const anomalies=Array.from({length:90},(_,i)=>({...f.input.discovery.anomalies[0]!,symbol:`POOL${i}_USDT`,score:99-i/100})),visited=new Set<string>();
   for(let n=0;n<17;n++)rankRangeDiscovery(anomalies,f.input.now+n*60000).forEach(a=>visited.add(a.symbol));
   assert.equal(visited.size,90,'deep observation gives later discoveries a turn within their lifetime');
+});
+test('gappy five-minute tape is not watched, and a mid-range coin ranks behind an edge',()=>{
+  const prior=Array.from({length:120},(_,i)=>{const gappy=i>=84&&i<100,base=gappy&&i%2?110:100;return candle(T-(120-i)*B,base,base,gappy?.05:.4);});
+  assert.equal(thinFiveTape(prior,.4),true);
+  const now=T+120000,windows:RangeWindows={},q=quote(now,100),
+    discovery={at:T,scanned:1,shared:1,excluded:0,marketSamples:1,marketMove:0,loaded:1,queued:0,
+      anomalies:[{symbol:'A_USDT',detectedAt:T,source:'BYBIT',sourceCount:2,own:.02,residual:.02,score:90,kind:'OWN_ACCELERATION'}]},
+    dropped=advanceRangeResearch({now,windows,paths:{A_USDT:prior},minutes:{A_USDT:[]},quotes:{A_USDT:q},ticks:{A_USDT:.001},discovery,positions:[],history:[]});
+  assert.equal(dropped.events.A_USDT,undefined);assert.match(dropped.recent?.find(r=>r.symbol==='A_USDT')?.reason??'',/断层/);
+  const f=fixture(),edge={...structuredClone(f.e),symbol:'EDGE_USDT',phase:'CONFIRMING' as const,price:f.e.H},mid={...structuredClone(f.e),symbol:'MID_USDT',phase:'CONFIRMING' as const,price:(f.e.H+f.e.L)/2};
+  delete edge.proof;delete mid.proof;
+  assert.ok(rangePriority(edge,f.q,f.input.now).score>rangePriority(mid,f.q,f.input.now).score);
+  assert.match(rangePriority(mid,f.q,f.input.now).reason,/中间/);
+  const edges=Array.from({length:10},(_,i)=>({...edge,symbol:`E${i}_USDT`})),events=[...edges,mid],
+    quotes=Object.fromEntries(events.map(e=>[e.symbol,f.q])),ranks=selectRangePlans(events,quotes,f.input.now).ranking;
+  assert.ok(ranks.filter(r=>r.rank<=8).every(r=>r.symbol.startsWith('E')));
+  assert.equal(ranks.find(r=>r.symbol==='MID_USDT')!.rank,11);
 });
 test('internal aligned trend uses existing completed five and new post-anomaly minutes, then holds through breakout and ordinary pullback',()=>{
   for(const sign of [1,-1]){
