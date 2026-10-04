@@ -97,6 +97,42 @@ export function strongRangeProof(minutes:CandleLike[],fiveAt:number,side:Side,n5
     return{at:end(a.at(-1)!,60000),price:a.at(-1)!.close,bars:a.map(r=>end(r,60000)),n1,bodyBaseline:body,minuteBars:a.map(r=>[r.time,r.open,r.high,r.low,r.close])};
   }
 }
+function windowGeometry(prior:CandleLike[],tick:number){
+  const H=Math.max(...prior.map(r=>r.high)),L=Math.min(...prior.map(r=>r.low)),n5=noise(prior,tick),E=Math.min(.75*n5,.1*(H-L)),D=Math.max(2*tick,.2*n5);
+  return{H,L,n5,E,D,highAt:prior.findLast(r=>r.high===H)!.time*1000,lowAt:prior.findLast(r=>r.low===L)!.time*1000};
+}
+/** The latest range is the balance before a recent extreme, never the extreme itself. */
+function inheritedEdge(prior:CandleLike[],tick:number){
+  if(prior.length<119)return;
+  let highI=0,lowI=0;
+  for(let i=1;i<prior.length;i++){if(prior[i]!.high>=prior[highI]!.high)highI=i;if(prior[i]!.low<=prior[lowI]!.low)lowI=i;}
+  const recent=prior.length-6;
+  for(const i of [highI,lowI].filter((v,n,a)=>v>=recent&&a.indexOf(v)===n).sort((a,b)=>b-a)){
+    const base=prior.slice(0,i);if(base.length<30)continue;
+    const H=Math.max(...base.map(r=>r.high)),L=Math.min(...base.map(r=>r.low)),n5=noise(base,tick),E=Math.min(.75*n5,.1*(H-L)),D=Math.max(2*tick,.2*n5);
+    if(!(H>L&&E>D&&n5>0))continue;
+    const bar=prior[i]!,body=bar.close-bar.open,clear=Math.max(D,n5);
+    const up=i===highI&&body>=n5&&bar.close>=H+clear,down=i===lowI&&-body>=n5&&bar.close<=L-clear;
+    const rejectUp=i===highI&&bar.high>=H&&bar.close<=H-D&&bar.close>=L+D,rejectDown=i===lowI&&bar.low<=L&&bar.close>=L+D&&bar.close<=H-D;
+    const kind:RangeKind|undefined=up||down?'EDGE_BREAKOUT':rejectUp||rejectDown?'EDGE_RETURN':undefined;if(!kind)continue;
+    const side:Side=up||rejectDown?'LONG':'SHORT',
+      stop=kind==='EDGE_BREAKOUT'?side==='LONG'?H-E-D:L+E+D:side==='LONG'?bar.low-D:bar.high+D,
+      target=kind==='EDGE_BREAKOUT'?side==='LONG'?bar.high:bar.low:(H+L)/2;
+    if(!(stop>0&&target>0))continue;
+    return{H,L,n5,E,D,kind,side,event:bar,stop,target,highAt:base.findLast(r=>r.high===H)!.time*1000,lowAt:base.findLast(r=>r.low===L)!.time*1000};
+  }
+}
+function closedMinuteProof(minutes:CandleLike[],eventAt:number,tick:number,now:number,ok:(price:number)=>boolean){
+  const a=minutes.filter(r=>r.time*1000>=eventAt&&end(r,60000)<=now).slice(-2);
+  if(a.length!==2||a[1]!.time-a[0]!.time!==60||a.some(r=>!ok(r.close)))return;
+  const n1=Math.max(tick,median(a.map(r=>Math.max(r.high-r.low,tick))));if(!(n1>0))return;
+  return{at:end(a[1]!,60000),price:a[1]!.close,bars:a.map(r=>end(r,60000)),n1,bodyBaseline:median(a.map(r=>Math.abs(r.close-r.open))),minuteBars:a.map(r=>[r.time,r.open,r.high,r.low,r.close])};
+}
+function rangeGeometryMatches(rows:CandleLike[],H:number,L:number,scale:number){
+  const ok=(k:number)=>{const part=rows.slice(0,k);if(part.length<30)return false;const hi=Math.max(...part.map(r=>r.high)),lo=Math.min(...part.map(r=>r.low));
+    return Math.abs(hi*scale-H)<=H*1e-10&&Math.abs(lo*scale-L)<=L*1e-10;};
+  return ok(rows.length)||rows.some((_,i)=>i>=30&&i<rows.length&&ok(i));
+}
 function validRangeProof(p:NonNullable<RangeEvent['proof']>,now:number){
   return !!p.id&&['EDGE_BREAKOUT','EDGE_RETURN','INTERNAL_TREND'].includes(p.kind)&&['LONG','SHORT'].includes(p.side)
     &&[p.fiveAt,p.at,p.price,p.stop,p.target,p.n1,p.bodyBaseline].every(Number.isFinite)&&p.price>0&&p.stop>0&&p.target>0&&p.n1>0&&p.bodyBaseline>=0
@@ -244,35 +280,62 @@ export function advanceRangeResearch(input:{previous?:RangeResearch;windows:Rang
     const window=input.windows[e.id]??closed?.unified?.anomaly?.window;if(!window){e.reason='原始冻结证据未恢复，停止本计划';continue;}
     const full=[...decodeRangeWindow(window),...five.filter(r=>r.time*1000>=window.cutoff)],swings=rangeSwings(full,e.n5);e.swings=swings.slice(-6);e.direction=rangeDirection(swings,e.n5,input.now);
     if(e.proof?.kind==='INTERNAL_TREND'&&(e.own*d(e.proof.side)<=0||e.direction!==(e.proof.side==='LONG'?'UP':'DOWN'))){delete e.proof;e.phase='WATCH';}
+    const tick=input.ticks[e.symbol]??e.n5/1000,frozen=decodeRangeWindow(window),inherited=inheritedEdge(frozen,tick),aligned=!!inherited&&e.own*d(inherited.side)>0;
+    let inheritedTaken=false;
+    if(inherited&&!aligned){
+      const g=windowGeometry(frozen,tick);
+      if(e.proof?.fiveAt===end(inherited.event)){delete e.proof;e.phase='WATCH';}
+      e.H=g.H;e.L=g.L;e.n5=g.n5;e.E=g.E;e.D=g.D;e.highAt=g.highAt;e.lowAt=g.lowAt;
+    }else if(inherited&&aligned){
+      inheritedTaken=true;
+      e.H=inherited.H;e.L=inherited.L;e.n5=inherited.n5;e.E=inherited.E;e.D=inherited.D;e.highAt=inherited.highAt;e.lowAt=inherited.lowAt;
+      e.upperExtreme=inherited.H;e.lowerExtreme=inherited.L;
+      const dir=d(inherited.side),edge=inherited.kind==='EDGE_RETURN'?inherited.side==='LONG'?inherited.L:inherited.H:inherited.side==='LONG'?inherited.H:inherited.L,eventAt=end(inherited.event),
+        cap=inherited.side==='LONG'?inherited.event.high+inherited.n5:inherited.event.low-inherited.n5,
+        zone=(p:number)=>inherited.kind==='EDGE_BREAKOUT'?dir*(p-edge)>inherited.D&&dir*(p-cap)<=0:dir*(p-edge)>inherited.D&&Math.abs(p-edge)<=inherited.E,
+        drop=()=>{if(e.proof?.fiveAt===eventAt){delete e.proof;}e.phase='CONFIRMING';};
+      if(inherited.kind==='EDGE_BREAKOUT'&&dir*(e.price-cap)>0){drop();e.reason='沿上次边缘事件已越过极值，不追';}
+      else if(!zone(e.price)){drop();e.reason='上次边缘事件的位置已经失效';}
+      else if(e.proof?.fiveAt===eventAt&&input.now-e.proof.at<=120000&&zone(e.proof.price))e.phase='READY';
+      else{
+        const proof=closedMinuteProof(minutes,eventAt,tick,input.now,zone);
+        if(proof&&proof.at>e.consumedAt&&input.now-proof.at<=120000){
+          e.proof={kind:inherited.kind,side:inherited.side,stop:inherited.stop,target:inherited.target,...proof,fiveAt:eventAt,
+            fiveBar:[inherited.event.time,inherited.event.open,inherited.event.high,inherited.event.low,inherited.event.close],
+            id:`${e.id}:${inherited.kind}:${inherited.side}:${proof.at}`};
+          e.phase='READY';e.reason=inherited.kind==='EDGE_BREAKOUT'?'上次突破已选方向，异动同向，不等再破极值':'上次回归已选方向，异动同向，直接沿该方向';
+        }else{drop();e.reason='上次事件同向，等待仍在正确一侧的完成小线';}
+      }
+    }
     const choices:{kind:RangeKind;side:Side;stop:number;target:number;test:(p:number)=>boolean;from?:number}[]=[];
-    if(last.close>e.H+e.D)choices.push({kind:'EDGE_BREAKOUT',side:'LONG',stop:Math.min(last.low,e.H-e.E-e.D),target:last.close,test:p=>p>e.H+e.D});
-    if(last.close<e.L-e.D)choices.push({kind:'EDGE_BREAKOUT',side:'SHORT',stop:Math.max(last.high,e.L+e.E+e.D),target:last.close,test:p=>p<e.L-e.D});
-    if(e.upperTouchedAt&&last.close<e.H-e.D&&Math.abs(last.close-e.H)<=e.E)choices.push({kind:'EDGE_RETURN',side:'SHORT',stop:e.upperExtreme+e.D,target:Math.max((e.H+e.L)/2,...swings.filter(s=>s.kind==='LOW'&&s.price<last.close-e.D&&s.confirmedAt<=end(last)).map(s=>s.price)),test:p=>p<e.H-e.D&&Math.abs(p-e.H)<=e.E});
-    if(e.lowerTouchedAt&&last.close>e.L+e.D&&Math.abs(last.close-e.L)<=e.E)choices.push({kind:'EDGE_RETURN',side:'LONG',stop:e.lowerExtreme-e.D,target:Math.min((e.H+e.L)/2,...swings.filter(s=>s.kind==='HIGH'&&s.price>last.close+e.D&&s.confirmedAt<=end(last)).map(s=>s.price)),test:p=>p>e.L+e.D&&Math.abs(p-e.L)<=e.E});
+    if(!inheritedTaken&&last.close>e.H+e.D)choices.push({kind:'EDGE_BREAKOUT',side:'LONG',stop:Math.min(last.low,e.H-e.E-e.D),target:last.close,test:p=>p>e.H+e.D});
+    if(!inheritedTaken&&last.close<e.L-e.D)choices.push({kind:'EDGE_BREAKOUT',side:'SHORT',stop:Math.max(last.high,e.L+e.E+e.D),target:last.close,test:p=>p<e.L-e.D});
+    if(!inheritedTaken&&e.upperTouchedAt&&last.close<e.H-e.D&&Math.abs(last.close-e.H)<=e.E)choices.push({kind:'EDGE_RETURN',side:'SHORT',stop:e.upperExtreme+e.D,target:Math.max((e.H+e.L)/2,...swings.filter(s=>s.kind==='LOW'&&s.price<last.close-e.D&&s.confirmedAt<=end(last)).map(s=>s.price)),test:p=>p<e.H-e.D&&Math.abs(p-e.H)<=e.E});
+    if(!inheritedTaken&&e.lowerTouchedAt&&last.close>e.L+e.D&&Math.abs(last.close-e.L)<=e.E)choices.push({kind:'EDGE_RETURN',side:'LONG',stop:e.lowerExtreme-e.D,target:Math.min((e.H+e.L)/2,...swings.filter(s=>s.kind==='HIGH'&&s.price>last.close+e.D&&s.confirmedAt<=end(last)).map(s=>s.price)),test:p=>p>e.L+e.D&&Math.abs(p-e.L)<=e.E});
     const closedMemory=closed?.unified?.anomaly,minute=minutes.at(-1);
-    if(e.reverseEligible&&closedMemory&&minute&&(closedMemory.kind==='EDGE_BREAKOUT'||closedMemory.breakoutAt)
+    if(!inheritedTaken&&e.reverseEligible&&closedMemory&&minute&&(closedMemory.kind==='EDGE_BREAKOUT'||closedMemory.breakoutAt)
       &&input.now-Math.max(closed!.openedAt,closedMemory.breakoutAt??closedMemory.proof.fiveAt)<=300000){
       const upper=closed!.side==='LONG',boundary=upper?e.H:e.L,side:Side=upper?'SHORT':'LONG',dir=d(side),
         inward=(p:number)=>dir*(p-boundary)>e.D&&Math.abs(p-boundary)<=e.E;
       if(inward(minute.close))choices.unshift({kind:'EDGE_RETURN',side,stop:(upper?e.upperExtreme:e.lowerExtreme)-dir*e.D,
         target:(e.H+e.L)/2,test:inward,from:Math.max(end(last),Math.ceil(closed!.openedAt/60000)*60000)});
     }
-    if(!e.reverseEligible&&last.close>e.L+e.E&&last.close<e.H-e.E&&e.direction!=='NEUTRAL'){
+    if(!inheritedTaken&&!e.reverseEligible&&last.close>e.L+e.E&&last.close<e.H-e.E&&e.direction!=='NEUTRAL'){
       const side:Side=e.direction==='UP'?'LONG':'SHORT',dir=d(side),support=swings.findLast(s=>s.kind===(dir>0?'LOW':'HIGH')&&dir*(last.close-s.price)>e.D),
         obstacles=swings.filter(s=>s.kind===(dir>0?'HIGH':'LOW')&&dir*(s.price-last.close)>e.D).map(s=>s.price);
       if(support&&e.own*dir>0&&dir*(last.close-last.open)>e.D)choices.push({kind:'INTERNAL_TREND',side,stop:support.price-dir*e.D,
         target:dir>0?Math.min(e.H,...obstacles):Math.max(e.L,...obstacles),test:p=>p>e.L+e.E&&p<e.H-e.E&&dir*(p-last.open)>0});
     }
-    if(e.reverseEligible&&e.reverseAfter&&end(last)<=e.consumedAt){const fast=choices.filter(c=>c.from!==undefined);choices.splice(0,choices.length,...fast);}
-    delete e.setup;if(choices[0])e.setup={kind:choices[0].kind,side:choices[0].side,at:end(last)};
-    for(const choice of choices){if(e.reverseEligible&&(closed?.unified?.anomaly?.kind==='EDGE_BREAKOUT'||closed?.unified?.anomaly?.breakoutAt)&&choice.kind!=='EDGE_RETURN'
+    if(!inheritedTaken&&e.reverseEligible&&e.reverseAfter&&end(last)<=e.consumedAt){const fast=choices.filter(c=>c.from!==undefined);choices.splice(0,choices.length,...fast);}
+    if(!inheritedTaken){delete e.setup;if(choices[0])e.setup={kind:choices[0].kind,side:choices[0].side,at:end(last)};}
+    if(!inheritedTaken)for(const choice of choices){if(e.reverseEligible&&(closed?.unified?.anomaly?.kind==='EDGE_BREAKOUT'||closed?.unified?.anomaly?.breakoutAt)&&choice.kind!=='EDGE_RETURN'
         ||e.reverseEligible&&closed?.unified?.anomaly?.kind==='EDGE_RETURN'&&choice.kind!=='EDGE_BREAKOUT')continue;
       const proof=strongRangeProof(minutes,choice.from??end(last),choice.side,e.n5,input.ticks[e.symbol]??e.n5/1000,choice.test);
       if(!proof||proof.at<=e.consumedAt||proof.minuteBars[0]![0]!*1000<e.detectedAt||input.now-proof.at>120000)continue;
       e.proof={...choice,...proof,fiveAt:end(last),fiveBar:[last.time,last.open,last.high,last.low,last.close],id:`${e.id}:${choice.kind}:${choice.side}:${proof.at}`};delete (e.proof as unknown as {test?:unknown;from?:number}).test;delete (e.proof as unknown as {from?:number}).from;
       e.phase='READY';e.reason=choice.kind==='EDGE_BREAKOUT'?'5分钟收在区间外，随后1分钟强势推进':choice.kind==='EDGE_RETURN'?'边缘尝试被打回，随后1分钟向内确认':'内部波段同向，完成5分钟推进及后续1分钟确认';break;
     }
-    if(!e.proof){e.phase='CONFIRMING';e.reason=!e.active?'近期成交不足或未知，继续观察':'等待5分钟位置证明及随后2至3根强势1分钟线';}
+    if(!inheritedTaken&&!e.proof){e.phase='CONFIRMING';e.reason=!e.active?'近期成交不足或未知，继续观察':'等待5分钟位置证明及随后2至3根强势1分钟线';}
   }
   recycleRangePlans(s,input.windows,protectedIds);
   const selection=selectRangePlans(Object.values(s.events),input.quotes,input.now);
@@ -323,7 +386,7 @@ export function makeRangeHolding(e:RangeEvent,w:RangeWindow,price:number,analysi
 export function validRangeHolding(m:RangeHolding){try{const rows=decodeRangeWindow(m.window);return m.version===ANOMALY_RANGE_VERSION&&!!m.eventId
   &&[m.H,m.L,m.E,m.D,m.n5,m.scale,m.scaleAt,m.initialRisk,m.lastBarAt,m.insideAt,m.quoteAt,m.peak,m.peakAt,m.retainedPeak,m.peakSamples].every(Number.isFinite)
   &&m.H>m.L&&m.L>0&&m.scale>0&&m.initialRisk>0&&m.window.source===m.source&&validRangeProof(m.proof,Math.max(m.scaleAt,m.proof.at))
-  &&Math.abs(Math.max(...rows.map(r=>r.high))*m.scale-m.H)<=m.H*1e-10&&Math.abs(Math.min(...rows.map(r=>r.low))*m.scale-m.L)<=m.L*1e-10
+  &&rangeGeometryMatches(rows,m.H,m.L,m.scale)
   &&['HOLD','REVIEW','EXIT'].includes(m.stage)&&typeof m.reverseEligible==='boolean'&&m.peakSamples>=0&&m.peakSamples<=3
   &&(m.breakoutAt===undefined||Number.isFinite(m.breakoutAt)&&m.breakoutAt>=m.proof.fiveAt&&m.breakoutAt<=m.lastBarAt);}catch{return false;}}
 export function rangeHoldingDecision(t:Trade,q:Quote,now:number,path:CandleLike[],minutePath:CandleLike[]=[]){

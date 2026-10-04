@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {advanceRangeResearch,decodeRangeWindow,rangeDirection,strongRangeProof,rangeMarketRoute,makeRangeHolding,
   rangeHoldingDecision,rangeExecutionAdmission,scanRangeAnomalies,normalizeRangeResearch,rangeObservationSymbols,fairRangeRefreshBatch,
-  RANGE_OUTCOME_BYTES,RANGE_RESEARCH_BYTES,type RangeResearch,type RangeWindows,type RangeScanner} from '../lib/anomaly-range.ts';
+  validRangeHolding,RANGE_OUTCOME_BYTES,RANGE_RESEARCH_BYTES,type RangeResearch,type RangeWindows,type RangeScanner} from '../lib/anomaly-range.ts';
 import {advanceDirectStrategy} from '../lib/direct-strategy.ts';
 import {initialForward,normalizeForward,forwardSummary,resetForwardAccountPreservingLearning,type Quote} from '../lib/forward-relations.ts';
 import {buildForwardProtectionCheckpoint,restoreForwardProtectionCheckpoint} from '../lib/forward-protection-checkpoint.ts';
@@ -47,6 +47,34 @@ test('outward completed five then new strong minutes authorize both sides; futur
   }
   const f=fixture();assert.equal(strongRangeProof(f.input.minutes.A_USDT,T+B+120000,'LONG',f.e.n5,.001,()=>true),undefined);
   assert.equal(rangeMarketRoute(f.research,'A_USDT',f.q.bestAsk,f.input.now+120001,{...f.q,observedAt:f.input.now+120001}).route,null);
+});
+test('a breakout already inside the scan window keeps the prior range and does not wait for its high',()=>{
+  const prior=Array.from({length:120},(_,i)=>candle(T-(120-i)*B,100+2*Math.sin(i/8),100+2*Math.sin(i/8),.3)),oldH=Math.max(...prior.slice(0,116).map(r=>r.high));
+  prior[116]=candle(T-(120-116)*B,102,110,.2);
+  for(const i of [117,118,119])prior[i]=candle(T-(120-i)*B,104.6,105,.2);
+  const now=T+90000,minutes=[candle(T-120000,104.6,104.8,.1),candle(T-60000,104.8,105,.1)],q=quote(now,105),windows:RangeWindows={},
+    discovery={at:T,scanned:1,shared:1,excluded:0,marketSamples:1,marketMove:0,loaded:1,queued:0,
+      anomalies:[{symbol:'A_USDT',detectedAt:T,source:'BYBIT',sourceCount:2,own:.02,residual:.02,score:90,kind:'OWN_ACCELERATION'}]},
+    input={now,windows,paths:{A_USDT:prior},minutes:{A_USDT:minutes},quotes:{A_USDT:q},ticks:{A_USDT:.001},discovery,positions:[],history:[]},
+    e=advanceRangeResearch(input).events.A_USDT!;
+  assert.equal(e.phase,'READY',e?.reason);assert.equal(e.proof!.kind,'EDGE_BREAKOUT');assert.equal(e.proof!.side,'LONG');
+  assert.equal(e.H,oldH);assert.ok(e.H<prior[116]!.high);assert.ok(e.proof!.price<prior[116]!.high);
+  assert.equal(validRangeHolding(makeRangeHolding(e,windows[e.id]!,105,q,now)),true);
+  const contrary=advanceRangeResearch({...input,windows:{},discovery:{...discovery,anomalies:[{...discovery.anomalies[0]!,own:-.02,residual:-.02}]}}).events.A_USDT!;
+  assert.notEqual(contrary.proof?.kind,'EDGE_BREAKOUT');assert.ok(contrary.H>e.H);
+  const chased=advanceRangeResearch({...input,windows:{},quotes:{A_USDT:quote(now,112)},minutes:{A_USDT:[candle(T-120000,111,111.4,.1),candle(T-60000,111.4,112,.1)]}}).events.A_USDT!;
+  assert.notEqual(chased.phase,'READY');assert.match(chased.reason,/不追/);
+});
+test('a rejection already inside the scan window uses the prior edge instead of the spike',()=>{
+  const prior=Array.from({length:120},(_,i)=>candle(T-(120-i)*B,100+2*Math.sin(i/8),100+2*Math.sin(i/8),.3)),oldH=Math.max(...prior.slice(0,116).map(r=>r.high));
+  prior[116]=candle(T-(120-116)*B,103,oldH-.12,.3);
+  for(const i of [117,118,119])prior[i]=candle(T-(120-i)*B,oldH-.1,oldH-.12,.1);
+  const now=T+90000,px=oldH-.12,minutes=[candle(T-120000,px+.02,px,.05),candle(T-60000,px,px-.01,.05)],q=quote(now,px-.01),windows:RangeWindows={},
+    discovery={at:T,scanned:1,shared:1,excluded:0,marketSamples:1,marketMove:0,loaded:1,queued:0,
+      anomalies:[{symbol:'A_USDT',detectedAt:T,source:'BYBIT',sourceCount:2,own:-.02,residual:-.02,score:90,kind:'OWN_ACCELERATION'}]},
+    e=advanceRangeResearch({now,windows,paths:{A_USDT:prior},minutes:{A_USDT:minutes},quotes:{A_USDT:q},ticks:{A_USDT:.001},discovery,positions:[],history:[]}).events.A_USDT!;
+  assert.equal(e.phase,'READY',e?.reason);assert.equal(e.proof!.kind,'EDGE_RETURN');assert.equal(e.proof!.side,'SHORT');
+  assert.equal(e.H,oldH);assert.ok(e.H<prior[116]!.high);
 });
 test('near-edge rejection needs no new high/low; executing return remains at edge and cost-checked',()=>{
   for(const side of [1,-1]){const f=fixture(side,'EDGE_RETURN');assert.equal(f.e.proof?.kind,'EDGE_RETURN');assert.equal(f.e.proof?.side,side>0?'SHORT':'LONG');
