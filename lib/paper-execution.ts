@@ -38,19 +38,22 @@ function wickBook(q:Quote){
 function settleWickEntry(s:ForwardState,t:Trade,q:Quote,c:Contract,quotes:Record<string,Quote>,now:number){
   const book=wickBook(q);if(!book)return false;
   const o=t.paperOrder!;
-  const f=paperBookFill(t,book,c,t.contracts,true);if(!f)return false;
-  const px=f.price,dir=t.side==='LONG'?1:-1;
+  const px=t.side==='LONG'?book.bestAsk:book.bestBid,dir=t.side==='LONG'?1:-1;
   if(!(t.stopPrice>0)||dir*(px-t.stopPrice)<=0)throw new Error('当前价已越过止损，不开');
   const mark=forwardEquity(s,quotes,now);
   if(mark.stalePositions)throw new Error('已有持仓估值不完整');
   const used=s.positions.filter(x=>x.id!==t.id).reduce((n,x)=>n+x.margin,0);
   const room=mark.equity*.75-used;if(!(room>0))throw new Error('可用保证金不足');
-  const affordable=Math.floor(room*t.leverage/(px*c.quantoMultiplier));
-  let n=Math.min(f.contracts,t.contracts,Math.max(affordable,0));
   const unit=px*c.quantoMultiplier;
+  const affordable=Math.floor(room*t.leverage/unit);
+  let n=Math.min(t.contracts,Math.max(affordable,0));
   if(n*unit>500)n=Math.floor(500/unit);
-  if(!(n*unit>=300))throw new Error('盘口或保证金不足300 USDT，不开');
-  const exact=paperBookFill(t,book,c,n,true);if(!exact)return false;
+  if(!(n*unit>=300))throw new Error('保证金不足300 USDT，不开');
+  const walked=paperBookFill(t,book,c,n,true);
+  const covered=!!walked&&walked.contracts*c.quantoMultiplier*walked.price>=300;
+  const touch=t.side==='LONG'?{...book,asks:[{price:book.bestAsk,size:n*unit}]}:{...book,bids:[{price:book.bestBid,size:n*unit}]};
+  const exact=covered?paperBookFill(t,book,c,walked!.contracts,true):paperBookFill(t,touch,c,n,true);
+  if(!exact||exact.contracts*c.quantoMultiplier*exact.price<300)throw new Error('保证金不足300 USDT，不开');
   const margin=exact.contracts*c.quantoMultiplier*exact.price/t.leverage;
   if(used+margin>mark.equity*.75+1e-6)throw new Error('可用保证金不足');
   const requested=t.contracts;

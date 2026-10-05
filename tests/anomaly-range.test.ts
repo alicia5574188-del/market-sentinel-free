@@ -266,6 +266,10 @@ test('a wick accepted inside 30 seconds fills on the bid and ask, and does not s
   const nowBook=run(initialForward(T-3600000),proofAt+20_000,mismatch);
   assert.equal(nowBook.state.positions[0]?.paperOrder?.phase,'FILLED');
   assert.ok(nowBook.state.positions[0]!.openedAt-proofAt<=30_000);
+  const thin:Quote={...quote(proofAt+22_000,f.q.bestAsk),bids:[{price:f.q.bestAsk-.0001,size:1}],asks:[{price:f.q.bestAsk+.0001,size:1}]};
+  const thinFill=run(initialForward(T-3600000),proofAt+22_000,thin);
+  assert.equal(thinFill.state.positions[0]?.paperOrder?.phase,'FILLED',thinFill.state.positions[0]?.paperOrder?.reason??JSON.stringify(thinFill.state.directStrategy?.plans));
+  assert.ok((thinFill.state.positions[0]?.notional??0)>=300&&(thinFill.state.positions[0]?.notional??999)<=500);
 });
 test('a wick fills even when older positions already exceed the portfolio risk cap',()=>{
   const f=fixture(),proofAt=f.e.proof!.at,contract={quantoMultiplier:.1,leverageMax:20,maintenanceRate:.005,minContracts:1,tickSize:.001,enableDecimal:false,orderSizeMin:'1',orderSizeMax:'1000000',marketOrderSizeMax:'1000000'};
