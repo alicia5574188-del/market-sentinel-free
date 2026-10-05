@@ -25,7 +25,7 @@ function fixture(side=1,kind:'EDGE_BREAKOUT'|'EDGE_RETURN'='EDGE_BREAKOUT'){
     signalClose=100+side*.12,
     eventBar=candle(T,signalClose-side*.2,signalClose,.02,side>0?{up:.02,down:.5}:{up:.5,down:.02}),
     minutes=[...Array.from({length:20},(_,i)=>candle(T+B-(20-i)*60000,close-.005,close,.03)),
-      candle(T+B,close,close+proofSide*.07,.005),candle(T+B+60000,close+proofSide*.07,close+proofSide*.14,.005)],now=T+B+60000,
+      candle(T+B,close,close+proofSide*.07,.005),candle(T+B+60000,close+proofSide*.07,close+proofSide*.14,.005)],now=T+B+15000,
     discovery={at:T,scanned:500,shared:500,excluded:0,marketSamples:500,marketMove:0,loaded:1,queued:0,
       anomalies:[{symbol:'A_USDT',detectedAt:T,source:'BYBIT',sourceCount:2,own:side*.01,residual:side*.01,score:90,kind:'OWN_ACCELERATION'}]},
     paths={A_USDT:[...prior,eventBar]},q=quote(now,signalClose),input={now,windows,paths,minutes:{A_USDT:minutes},quotes:{A_USDT:q},ticks:{A_USDT:.001},discovery,positions:[],history:[]};
@@ -47,6 +47,7 @@ test('outward completed five then new strong minutes authorize both sides; futur
     const foreign=advanceRangeResearch({...f.input,windows:{},paths:{A_USDT:f.input.paths.A_USDT.map(r=>({...r,volumeVenue:'OKX'}))}});assert.notEqual(foreign.events.A_USDT?.phase,'READY');
   }
   const f=fixture();assert.equal(strongRangeProof(f.input.minutes.A_USDT,T+B+120000,'LONG',f.e.n5,.001,()=>true),undefined);
+  assert.equal(rangeMarketRoute(f.research,'A_USDT',f.q.bestAsk,f.e.proof!.at+30001,{...f.q,observedAt:f.e.proof!.at+30001}).route,null);
   assert.equal(rangeMarketRoute(f.research,'A_USDT',f.q.bestAsk,f.input.now+120001,{...f.q,observedAt:f.input.now+120001}).route,null);
 });
 test('a breakout already inside the scan window keeps the prior range and does not wait for its high',()=>{
@@ -224,6 +225,22 @@ function trade(){const f=fixture(),r=rangeMarketRoute(f.research,'A_USDT',(f.q.b
   assert.equal(out.state.positions.length,1,JSON.stringify(out.state.directStrategy?.plans));
   const t=out.state.positions[0]!;assert.equal(t.side,r.side);assert.equal(t.unified!.anomaly!.kind,'WICK');
   return{...f,state:out.state,t};}
+test('two fresh wicks from one close are both queued, and the same wick is refused after 30 seconds',()=>{
+  const f=fixture(),symbols=['A_USDT','B_USDT'],
+    paths=Object.fromEntries(symbols.map(s=>[s,f.input.paths.A_USDT])),
+    minutes=Object.fromEntries(symbols.map(s=>[s,f.input.minutes.A_USDT])),
+    discovery={...f.input.discovery,anomalies:symbols.map(symbol=>({...f.input.discovery.anomalies[0]!,symbol}))},
+    contracts=Object.fromEntries(symbols.map(s=>[s,{quantoMultiplier:.1,leverageMax:20,maintenanceRate:.005,minContracts:1,tickSize:.001,enableDecimal:false,orderSizeMin:'1',orderSizeMax:'1000000',marketOrderSizeMax:'1000000'}])),
+    run=(now:number)=>advanceDirectStrategy({state:initialForward(T-3600000),now,paths,minutePaths:minutes,quotes:Object.fromEntries(symbols.map(s=>[s,quote(now,f.q.bestAsk)])),
+      analysisQuotes:Object.fromEntries(symbols.map(s=>[s,quote(now,f.q.bestAsk)])),contracts,marketAuthority:true,specialMove:true,anomalyRange:true,rangeDiscovery:discovery,
+      paperTiming:{prepareMs:2000,confirmMs:0,basis:'EXECUTION_CLOCK',samples:0}});
+  const opened=run(f.input.now);
+  assert.ok(opened.state.positions.length>=1);
+  assert.equal(opened.state.positions.filter(t=>t.symbol==='A_USDT').length,1);
+  if(!opened.state.positions.some(t=>t.symbol==='B_USDT'))assert.match(opened.state.directStrategy!.plans.B_USDT?.reason??'',/风险|容量/);
+  assert.ok(opened.state.positions.every(t=>t.unified?.anomaly?.kind==='WICK'&&t.openedAt-t.unified!.anomaly!.proof.at<=30000));
+  const late=run(f.e.proof!.at+30001);assert.equal(late.state.positions.length,0);
+});
 test('actual new plan uses native fixed1000 sizing/queue; immutable witness survives account/restart/archive/snapshot',async()=>{
   const f=trade();assert.ok(f.t.paperOrder);assert.equal(f.t.forecast!.sizingEquity,1000);normalizeForward(structuredClone(f.state),f.input.now);
   const prepared=await prepareForwardWrite(null,f.state,f.input.now),store=new Map(Object.entries(prepared.entries)),

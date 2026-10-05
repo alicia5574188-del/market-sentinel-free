@@ -16,7 +16,7 @@ import {advanceEpisodeResearch} from './episode-research.ts';
 import {adaptiveMarketRoute,adaptiveHoldingDecision,ADAPTIVE_CONTROLLER_VERSION} from './adaptive-controller.ts';
 import {advanceSpecialResearch,specialMarketRoute,SPECIAL_MOVE_VERSION} from './special-move.ts';
 import {advanceEventResearch,boundedEventResearch,eventMarketRoute,confirmEventQuote,eventHoldingDecision,EVENT_RESPONSE_VERSION} from './event-response.ts';
-import {ANOMALY_RANGE_VERSION,advanceRangeResearch,rangeMarketRoute,rangeHoldingDecision,makeRangeHolding,wickGoal} from './anomaly-range.ts';
+import {ANOMALY_RANGE_VERSION,advanceRangeResearch,rangeMarketRoute,rangeHoldingDecision,makeRangeHolding,wickGoal,WICK_ENTRY_MS} from './anomaly-range.ts';
 export {DIRECT_STRATEGY_VERSION} from './direct-strategy-types.ts';
 export {directOpportunityView,directStrategySummary} from './direct-strategy-view.ts';
 const sign=(side:'LONG'|'SHORT')=>side==='LONG'?1:-1;
@@ -257,7 +257,8 @@ export function openDirectPlan(s:ForwardState,p:DirectPlan,q:Quote,c:Contract,no
   if(t.unified?.anomaly?.kind==='WICK'){const m=t.unified.anomaly,dir=sign(t.side),bodyTp=m.proof.bodyBaseline*(m.proof.wickMultiple??0)*m.scale;
     const goal=wickGoal(t.side,t.entryPrice,t.quantity,m.proof.target*m.scale,bodyTp,m.proof.price*m.scale);t.armPrice=goal;
     const hard=t.entryPrice-dir*3*Math.abs(goal-t.entryPrice);if(hard>0&&dir*(hard-t.stopPrice)<0){t.stopPrice=hard;t.plannedRisk=Math.max(t.plannedRisk,t.quantity*(Math.abs(t.entryPrice-hard)+(t.entryPrice+hard)*FEE));}}
-  if(s.paperExecution)queuePaperEntry(s,t,timing??{prepareMs:2000,confirmMs:0,basis:'EXECUTION_CLOCK',samples:0});
+  if(s.paperExecution){const base=timing??{prepareMs:2000,confirmMs:0,basis:'EXECUTION_CLOCK' as const,samples:0};
+    queuePaperEntry(s,t,t.unified?.anomaly?.kind==='WICK'?{...base,prepareMs:Math.min(base.prepareMs,2000),confirmMs:0}:base);}
   else{s.balance-=t.entryFee;s.fees+=t.entryFee;s.turnover+=notional;s.positions.push(t);s.lastEntryAt[t.symbol]=now;s.lastSide[t.symbol]=t.side;}
   s.consumedTheses[o.id]=now;p.consumed=true;p.phase=paperFilled(t)?'HOLDING':'EXECUTING';note(s,t,now,p.reason);
   return undefined;
@@ -521,7 +522,9 @@ function manageMarketDirect(s:ForwardState,input:Input,ready:boolean){
   if(ds.anomalyRange){
     for(const p of Object.values(ds.plans).sort((a,b)=>(ds.rangeResearch?.events[a.symbol]?.rank??Infinity)-(ds.rangeResearch?.events[b.symbol]?.rank??Infinity)||b.candidate.score-a.candidate.score)){
       const e=ds.rangeResearch?.events[p.symbol],q=input.quotes[p.symbol],c=input.contracts[p.symbol];
-      if(!e?.proof||!q||!c||!p.candidate.eligible||p.consumed||s.positions.some(t=>t.openedAt===now))continue;
+      const wick=e?.proof?.kind==='WICK';
+      if(!e?.proof||!q||!c||!p.candidate.eligible||p.consumed||(!wick&&s.positions.some(t=>t.openedAt===now)))continue;
+      if(wick&&(now<e.proof.at||now-e.proof.at>WICK_ENTRY_MS)){e.admission={at:now,reason:'5分钟收盘已超过30秒，不再进场'};p.reason=e.admission.reason;continue;}
       const priced=e.proof.kind==='WICK';
       p.holdReason=priced?`止盈 ${Number(e.proof.target.toPrecision(6))}，最大止损 ${Number(e.proof.stop.toPrecision(6))}`:'按冻结计划持有；普通回调复查，结构失效退出';
       p.exitCondition=priced?'到止盈出场；到达最大止损直接出':'实际硬保护或计划结构失效；边缘新证明才可反向';
@@ -529,7 +532,7 @@ function manageMarketDirect(s:ForwardState,input:Input,ready:boolean){
       if(e.reverseEligible&&(!predecessor||s.positions.some(t=>t.symbol===p.symbol)))continue;
       const error=openDirectPlan(s,p,q,c,now,input.quotes,predecessor,input.minutePaths?.[p.symbol],input.paperTiming,input.paths[p.symbol]);
       if(error){e.admission={at:now,reason:error};p.reason=error;}
-      else{const t=s.positions.at(-1)!;e.tradeId=t.id;e.phase='EXECUTING';e.consumedAt=e.proof.at;delete ds.rangeWindows![e.id];break;}
+      else{const t=s.positions.at(-1)!;e.tradeId=t.id;e.phase='EXECUTING';e.consumedAt=e.proof.at;delete ds.rangeWindows![e.id];if(!wick)break;}
     }
     for(const o of s.opportunities)o.eligible=false;
   }else if(ds.eventResponse&&!ds.eventResearchError){
@@ -555,7 +558,7 @@ function manageMarketDirect(s:ForwardState,input:Input,ready:boolean){
     if(ds.eventResearch){try{boundedEventResearch(ds.eventResearch);}
       catch{ds.eventResearchError='事件研究容量不足，暂停新增；已有持仓继续自身保护';}}
   }
-  ds.summary=ds.anomalyRange?`只盯强于大盘、或和大盘反向的币。等这根5分钟走完，按影线进场。止盈净利润至少5U，不够就把止盈价外推，不加仓。最大止损是这个止盈距离的3倍。在看 ${Object.keys(ds.rangeResearch?.events??{}).length} 个；持仓 ${s.positions.filter(paperFilled).length} 笔。`:ds.eventResponse?`记录活跃异常事件；按自身推进保留与恢复参与，失败启动提前退出，有优势继续持有。已记住 ${Object.keys(ds.eventResearch?.events??{}).length} 个事件；${s.positions.filter(paperFilled).length} 笔实际持仓。`:ds.specialMove?`持续研究特别的活跃币；自身启动并保留价格优势后参与爆发段。研究记忆 ${Object.keys(ds.specialResearch?.watches??{}).length} 币；${s.positions.filter(paperFilled).length} 笔实际持仓。`:
+  ds.summary=ds.anomalyRange?`只盯强于大盘、或和大盘反向的币。等这根5分钟走完，按影线进场。收盘后30秒内进场，过了不追。止盈净利润至少5U，不够就把止盈价外推，不加仓。最大止损是这个止盈距离的3倍。在看 ${Object.keys(ds.rangeResearch?.events??{}).length} 个；持仓 ${s.positions.filter(paperFilled).length} 笔。`:ds.eventResponse?`记录活跃异常事件；按自身推进保留与恢复参与，失败启动提前退出，有优势继续持有。已记住 ${Object.keys(ds.eventResearch?.events??{}).length} 个事件；${s.positions.filter(paperFilled).length} 笔实际持仓。`:ds.specialMove?`持续研究特别的活跃币；自身启动并保留价格优势后参与爆发段。研究记忆 ${Object.keys(ds.specialResearch?.watches??{}).length} 币；${s.positions.filter(paperFilled).length} 笔实际持仓。`:
     `${ds.adaptive?'按实际失败参与回归，按持续承接参与延续；持仓依据独立观察。':a.reason}。回退 ${s.positions.filter(t=>paperFilled(t)&&t.unified?.branch==='RETURN').length} 笔；延续 ${s.positions.filter(t=>paperFilled(t)&&t.unified?.branch==='CONTINUATION').length} 笔；新方向须取得自身证明。`;
 }
 export function advanceDirectStrategy(input:Input){

@@ -4,6 +4,7 @@ import {forwardEquity,freshQuote,type ForwardState,type Trade,type Quote,type Co
 import {buildProportionalMirror,mirrorPositionRisk} from './live-parity.ts';
 import {quantizeMirrorNotional} from './gate-quantity.ts';
 import {closeUnifiedTrade} from './unified-execution.ts';
+import {WICK_ENTRY_MS} from './wick-target.ts';
 import type {TradeRealization} from './trade-realization.ts';
 
 export const PAPER_EXECUTION_VERSION='live-steps-paper-v1';
@@ -224,6 +225,7 @@ export function advancePaperExecution(s:ForwardState,quotes:Record<string,Quote>
       continue;
     }
     if(o.phase==='FILLED')continue;
+    if(t.unified?.anomaly?.kind==='WICK'&&now-t.unified.anomaly.proof.at>WICK_ENTRY_MS){rejectPaperEntry(s,t,now,'5分钟收盘已超过30秒，不再进场');continue;}
     if(t.rule.expiresAt<=now){rejectPaperEntry(s,t,now,'待执行期间交易事件已失效，未冒充成交');continue;}
     if(o.phase==='PREPARING'){
       if(now<=o.signalAt||now-o.signalAt<o.timing.prepareMs)continue;

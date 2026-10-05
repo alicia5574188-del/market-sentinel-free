@@ -9,7 +9,7 @@ export function msUntilFiveClose(now:number,anchor=now){
 }
 export function rangePriority(e:RangeEvent,q:QuoteLike|undefined,now:number){
   const usable=!!q?.fresh&&q.observedAt<=now&&now-q.observedAt<=10000&&q.priceSource===e.source&&(q.sourceCount??0)>=2&&(q.disagreementRate??0)<=.008,
-    proof=e.proof&&now-e.proof.at<=120000&&e.proof.at<=now&&Math.abs(e.price-e.proof.price)<=e.n5?e.proof:undefined;
+    proof=e.proof&&now-e.proof.at<=(e.proof.kind==='WICK'?30_000:120_000)&&e.proof.at<=now&&Math.abs(e.price-e.proof.price)<=e.n5?e.proof:undefined;
   if(e.phase==='EXECUTING')return{score:10000,reason:'已提交，保留执行'};
   if(usable&&e.active&&proof?.kind==='WICK')return{score:925,reason:'影线已经收完'};
   if(usable&&e.active&&proof)return{score:900,reason:'证明已完成'};

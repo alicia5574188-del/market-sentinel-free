@@ -4,8 +4,8 @@ import type {Trade,Quote} from './forward-relations.ts';
 import {specialRows,recentSpecialActivity} from './special-move.ts';
 import {MARKET_AUTHORITY_VERSION,type MarketRoute} from './market-authority.ts';
 import {selectRangePlans,rankRangeDiscovery,type RangeRank} from './range-scheduler.ts';
-import {wickGoal} from './wick-target.ts';
-export {wickGoal,wickProfitTarget} from './wick-target.ts';
+import {wickGoal,WICK_ENTRY_MS} from './wick-target.ts';
+export {wickGoal,wickProfitTarget,WICK_ENTRY_MS} from './wick-target.ts';
 export const ANOMALY_RANGE_VERSION='anomaly-range-v1';
 export const RANGE_RESEARCH_BYTES=24*1024,RANGE_WINDOW_LIMIT=30,RANGE_MIN_VOLUME_24H_USD=1_000_000,WICK_WATCH_MS=15*60*1000;
 type Side='LONG'|'SHORT';
@@ -408,8 +408,9 @@ export function advanceRangeResearch(input:{previous?:RangeResearch;windows:Rang
     const five=specialRows(input.paths[e.symbol],input.now).filter(r=>r.volumeVenue===e.source),minutes=specialRows(input.minutes?.[e.symbol],input.now,60000).filter(r=>r.volumeVenue===e.source),last=five.at(-1),q=input.quotes[e.symbol];
     const held=input.positions.find(t=>t.unified?.anomaly?.eventId===e.id),closed=input.history.findLast(t=>t.unified?.anomaly?.eventId===e.id);
     if(held){e.tradeId=held.id;e.consumedAt=Math.max(e.consumedAt,held.openedAt);e.phase=held.paperOrder?.phase==='FILLED'?'HOLDING':'EXECUTING';}
-    if(closed&&!held&&e.tradeId===closed.id){e.exit={at:closed.closedAt!,reason:closed.exitReason??'EXIT',net:closed.netPnl};
+    else if(closed&&e.tradeId===closed.id){e.exit={at:closed.closedAt!,reason:closed.exitReason??'EXIT',net:closed.netPnl};
       e.predecessorId=closed.id;e.reverseAfter=closed.closedAt!;e.reverseEligible=!!closed.unified!.anomaly!.reverseEligible;e.phase=e.reverseEligible?'WATCH':'DONE';}
+    else if(e.phase==='EXECUTING')e.phase='CONFIRMING';
     observeOutcomes(e,input.paths[e.symbol],input.now);
     if(!held&&!terminal(e)&&planExpired(e,input.now)){e.phase='EXPIRED';e.reason='观察满3根5分钟，没有新的异动就放开';}
     if(!held&&terminal(e))continue;
@@ -418,7 +419,7 @@ export function advanceRangeResearch(input:{previous?:RangeResearch;windows:Rang
     if(held||e.phase==='DONE'||e.phase==='EXPIRED')continue;
     if(sparseFiveTurnover(input.paths[e.symbol]??[],input.now)){delete e.proof;e.phase='EXPIRED';e.reason='5分钟成交断续，单根不足1000美元，不观察';continue;}
     if(thinFiveTape(five,e.n5)){delete e.proof;e.phase='EXPIRED';e.reason='5分钟K线断层，成交太稀，不观察';continue;}
-    if(e.proof&&input.now-e.proof.at>120000){delete e.proof;e.phase='WATCH';}
+    if(e.proof&&input.now-e.proof.at>(e.proof.kind==='WICK'?WICK_ENTRY_MS:120000)){delete e.proof;e.phase='WATCH';}
     if(end(last)>e.lastAt){
       const newly=five.filter(r=>end(r)>e.lastAt&&r.time*1000>=Math.floor(e.detectedAt/300000)*300000),reach=Math.max(e.E,e.n5);
       for(const r of newly){if(r.high>=e.H-reach){e.upperTouchedAt=end(r);e.upperExtreme=Math.max(e.upperExtreme,r.high);}
@@ -509,7 +510,7 @@ export function advanceRangeResearch(input:{previous?:RangeResearch;windows:Rang
     }
     const scanBar=Math.floor(e.detectedAt/300000)*300000;
     const wickBar=five.filter(r=>{const start=r.time*1000,closed=end(r);return closed<=input.now&&closed>e.detectedAt&&start>=scanBar&&closed>e.consumedAt;})
-      .map(bar=>({bar,signal:wickSignal(bar)})).find(x=>x.signal&&input.now-end(x.bar)<=120000);
+      .map(bar=>({bar,signal:wickSignal(bar)})).find(x=>x.signal&&input.now-end(x.bar)<=WICK_ENTRY_MS);
     if(wickBar?.signal){const bar=wickBar.bar,w=wickBar.signal,dir=d(w.side),tp=w.body*w.multiple,closed=end(bar);
       e.proof={kind:'WICK',side:w.side,fiveAt:closed,at:closed,price:bar.close,stop:bar.close-dir*3*tp,target:bar.close+dir*tp,
         bars:[closed],n1:w.body,bodyBaseline:w.body,fiveBar:[bar.time,bar.open,bar.high,bar.low,bar.close],minuteBars:[],wickMultiple:w.multiple,scannedAt:e.detectedAt,
@@ -546,7 +547,7 @@ export function rangeMarketRoute(s:RangeResearch|undefined,symbol:string,price:n
   if(!e||!p||!['READY','EXECUTING'].includes(e.phase)||!e.active||s?.error)return fail('RANGE_PROOF_WAIT',e?.reason??'等待异动及冻结区间');
   if(!analysis?.fresh||!Number.isFinite(analysis.bestBid)||!Number.isFinite(analysis.bestAsk)||now-analysis.observedAt>10000||analysis.observedAt>now||((analysis.bestBid+analysis.bestAsk)/2)<=0||(analysis.sourceCount??0)<2||analysis.priceSource!==e.source||(analysis.disagreementRate??0)>.008)
     return fail('RANGE_SOURCE_WAIT','等待同源分析价格');
-  if(now-p.at>120000||p.at>now||Math.abs(((analysis.bestBid+analysis.bestAsk)/2)-p.price)>e.n5)return fail('RANGE_LATE','证明过期或已偏离一个正常波动');
+  if(now-p.at>(p.kind==='WICK'?WICK_ENTRY_MS:120000)||p.at>now||Math.abs(((analysis.bestBid+analysis.bestAsk)/2)-p.price)>e.n5)return fail('RANGE_LATE','证明过期或已偏离一个正常波动');
   const scale=price/((analysis.bestBid+analysis.bestAsk)/2);if(!(scale>.97&&scale<1.03))return fail('RANGE_BASIS','分析与执行价差异常，停止新增');
   if(p.kind==='EDGE_RETURN'&&Math.min(Math.abs(((analysis.bestBid+analysis.bestAsk)/2)-e.H),Math.abs(((analysis.bestBid+analysis.bestAsk)/2)-e.L))>e.n5+Math.max(e.E,e.n5)+e.D)return fail('RANGE_EDGE_LOST','实际入场已离开可回归的边界，不追已经走远的回头');
   const dir=d(p.side);if(dir*(price-p.stop*scale)<=0)return fail('RANGE_STOP','实际失效位已经触发');
@@ -696,7 +697,7 @@ export function rangeExecutionAdmission(t:Trade,q:Quote|undefined,now:number,con
   const m=t.unified?.anomaly;if(!m)return null;
   if(!confirmedFlat)return'原方向尚未在本账户确认归零，等待平仓或未知提交核对';
   if(!q?.fresh||now-q.observedAt>10000||q.observedAt>now)return'等待本账户新鲜执行报价';
-  if(now-m.proof.at>120000||now<m.proof.at)return'原入场证明已过期，不迟到复制';
+  if(now-m.proof.at>(m.kind==='WICK'?WICK_ENTRY_MS:120000)||now<m.proof.at)return'原入场证明已过期，不迟到复制';
   const px=t.side==='LONG'?q.bestAsk:q.bestBid,dir=d(t.side);
   if(Math.abs(px-m.proof.price*m.scale)>m.n5)return'执行价已离开原证明一个正常波动，不追单';
   if(m.kind==='EDGE_RETURN'&&Math.min(Math.abs(px-m.H),Math.abs(px-m.L))>m.n5+Math.max(m.E,m.n5)+m.D)return'当前执行价已离开可回归的边界，取消反向';
