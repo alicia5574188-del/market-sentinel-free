@@ -266,6 +266,22 @@ test('a wick accepted inside 30 seconds fills on the bid and ask, and does not s
   assert.equal(nowBook.state.positions[0]?.paperOrder?.phase,'FILLED');
   assert.ok(nowBook.state.positions[0]!.openedAt-proofAt<=30_000);
 });
+test('a wick fills even when older positions already exceed the portfolio risk cap',()=>{
+  const f=fixture(),proofAt=f.e.proof!.at,contract={quantoMultiplier:.1,leverageMax:20,maintenanceRate:.005,minContracts:1,tickSize:.001,enableDecimal:false,orderSizeMin:'1',orderSizeMax:'1000000',marketOrderSizeMax:'1000000'};
+  const state=initialForward(T-3600000);
+  state.paperExecution={version:'live-steps-paper-v1',cutoverAt:state.startedAt,cancelled:[]};
+  state.positions.push({id:'risk-sink',symbol:'Z_USDT',side:'SHORT',status:'OPEN',openedAt:state.startedAt+1000,closedAt:null,entryPrice:1,exitPrice:null,
+    quantity:1,contracts:1,quantoMultiplier:1,notional:100,leverage:5,margin:20,plannedRisk:500,stopPrice:1.2,armPrice:.8,lastPrice:1,lastQuoteAt:state.startedAt+1000,
+    entryFee:0,exitFee:0,fundingAllowance:0,grossPnl:null,netPnl:null,exitReason:null,favorable:0,adverse:0,firstProfitAt:null,peakPnlRate:0,profitFloorRate:0,
+    holdScore:0,expectedHoldMinutes:90,relationFailureBars:0,lastRelationBar:0,execution:'REAL_QUOTE_PAPER_MODEL',liveEligible:false,
+    rule:{id:'sink',signature:'x',parentId:null,version:1,createdAt:state.startedAt,expiresAt:proofAt+600000,status:'EXPERIMENTAL',conditions:[],side:'SHORT',horizon:90,stopRate:.01,armRate:.01,givebackRate:.01,exitMode:'REACTION_DECAY',samples:0,trainGroups:0,checkGroups:0,estimatedNetRate:0,priorResponse:null,recentResponse:0,standardError:0,reason:'sink',mutation:'CREATE',grammar:'market-intelligence-v1',liveEligible:false,authority:'ADAPTIVE_TEN',turnTimeframe:'5m'},
+    paperOrder:{version:'live-steps-paper-v1',signalAt:state.startedAt+1000,signalPrice:1,requestedContracts:1,allocationRiskRate:.1,phase:'PREPARING',timing:{version:'native-position-first-observed-v1',prepareMs:2000,confirmMs:0,basis:'EXECUTION_CLOCK',samples:0},reason:'占着旧风险额度',completedActions:0}} as never);
+  const out=advanceDirectStrategy({state,now:proofAt+20_000,paths:f.input.paths,minutePaths:f.input.minutes,quotes:{A_USDT:quote(proofAt+20_000,f.q.bestAsk)},
+    analysisQuotes:{A_USDT:quote(proofAt+20_000,f.q.bestAsk)},contracts:{A_USDT:contract},marketAuthority:true,specialMove:true,anomalyRange:true,
+    rangeDiscovery:f.input.discovery,paperTiming:{prepareMs:2000,confirmMs:0,basis:'EXECUTION_CLOCK',samples:0}});
+  const opened=out.state.positions.find(t=>t.symbol==='A_USDT');
+  assert.equal(opened?.paperOrder?.phase,'FILLED',opened?.paperOrder?.reason??JSON.stringify(out.state.directStrategy?.plans?.A_USDT?.reason));
+});
 test('actual new plan uses native fixed1000 sizing/queue; immutable witness survives account/restart/archive/snapshot',async()=>{
   const f=trade();assert.ok(f.t.paperOrder);assert.equal(f.t.forecast!.sizingEquity,1000);normalizeForward(structuredClone(f.state),f.input.now);
   const prepared=await prepareForwardWrite(null,f.state,f.input.now),store=new Map(Object.entries(prepared.entries)),

@@ -39,10 +39,21 @@ function settleWickEntry(s:ForwardState,t:Trade,q:Quote,c:Contract,quotes:Record
   const book=wickBook(q);if(!book)return false;
   const o=t.paperOrder!;
   const f=paperBookFill(t,book,c,t.contracts,true);if(!f)return false;
-  const checked=prepareEntry(s,t,book,c,quotes,now,f.price),n=Math.min(f.contracts,checked.intent.contracts,t.contracts);
+  const px=f.price,dir=t.side==='LONG'?1:-1;
+  if(!(t.stopPrice>0)||dir*(px-t.stopPrice)<=0)throw new Error('当前价已越过止损，不开');
+  const mark=forwardEquity(s,quotes,now);
+  if(mark.stalePositions)throw new Error('已有持仓估值不完整');
+  const used=s.positions.filter(x=>x.id!==t.id).reduce((n,x)=>n+x.margin,0);
+  const room=mark.equity*.75-used;if(!(room>0))throw new Error('可用保证金不足');
+  const affordable=Math.floor(room*t.leverage/(px*c.quantoMultiplier));
+  const n=Math.min(f.contracts,t.contracts,Math.max(affordable,0));
+  if(!(n>0))throw new Error('可用保证金不足');
   const exact=paperBookFill(t,book,c,n,true);if(!exact)return false;
+  const margin=exact.contracts*c.quantoMultiplier*exact.price/t.leverage;
+  if(used+margin>mark.equity*.75+1e-6)throw new Error('可用保证金不足');
+  const requested=t.contracts;
   t.contracts=exact.contracts;t.quantity=t.contracts*t.quantoMultiplier;t.entryPrice=exact.price;t.openedAt=now;
-  t.notional=t.quantity*t.entryPrice;t.margin=t.notional/t.leverage;t.plannedRisk=checked.intent.plannedRisk*t.contracts/checked.intent.contracts;
+  t.notional=t.quantity*t.entryPrice;t.margin=margin;t.plannedRisk=t.plannedRisk*t.contracts/requested;
   t.lastPrice=t.side==='LONG'?book.bestBid:book.bestAsk;t.lastQuoteAt=q.observedAt;t.entryFee=t.notional*fee;
   o.phase='FILLED';o.preparedAt=now;o.submittedAt=now;o.submitQuoteAt=q.observedAt;o.confirmedAt=now;o.fillMode='OBSERVED_BOOK_VWAP';
   o.unfilledContracts=o.requestedContracts-t.contracts;
@@ -60,7 +71,7 @@ export function fillPendingWickEntries(s:ForwardState,quotes:Record<string,Quote
     const q=quotes[t.symbol],c=contracts[t.symbol];
     if(!freshQuote(q,now)||!c)continue;
     try{if(!settleWickEntry(s,t,q!,c,quotes,now)&&!wickBook(q!))blocked(s,t.paperOrder!,new Error('等待本次执行的实际多档盘口；第一档不足不能代表完整IOC成交'));}
-    catch(e){blocked(s,t.paperOrder!,e);}
+    catch(e){rejectPaperEntry(s,t,now,e instanceof Error?e.message:'执行检查未通过');}
   }
 }
 const rules=(c:Contract)=>({enableDecimal:c.enableDecimal,orderSizeMin:c.orderSizeMin==null?undefined:String(c.orderSizeMin),
@@ -271,7 +282,7 @@ export function advancePaperExecution(s:ForwardState,quotes:Record<string,Quote>
     if(wickProof&&now-wickProof.at>WICK_ENTRY_MS&&!wickFillPending(t,now)){rejectPaperEntry(s,t,now,'5分钟收盘已超过30秒，不再进场');continue;}
     if(wickFillPending(t,now)){
       try{if(!settleWickEntry(s,t,q!,c,quotes,now)&&!wickBook(q!))blocked(s,o,new Error('等待本次执行的实际多档盘口；第一档不足不能代表完整IOC成交'));}
-      catch(e){blocked(s,o,e);}
+      catch(e){rejectPaperEntry(s,t,now,e instanceof Error?e.message:'执行检查未通过');}
       continue;
     }
     if(t.rule.expiresAt<=now){rejectPaperEntry(s,t,now,'待执行期间交易事件已失效，未冒充成交');continue;}
