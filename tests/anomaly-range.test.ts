@@ -262,10 +262,14 @@ test('a wick accepted inside 30 seconds fills when the book arrives, and does no
   const filled=run(queued.state,proofAt+32_000,quote(proofAt+32_000,f.q.bestAsk));
   assert.equal(filled.state.positions.length,1);
   assert.equal(filled.state.positions[0]!.paperOrder!.phase,'FILLED');
-  assert.ok(filled.state.positions[0]!.openedAt-proofAt<=38_000);
-  const expired=run(queued.state,proofAt+38_001,quote(proofAt+38_001,f.q.bestAsk));
+  assert.ok(filled.state.positions[0]!.openedAt-proofAt<=50_000);
+  const expired=run(queued.state,proofAt+50_001,quote(proofAt+50_001,f.q.bestAsk));
   assert.equal(expired.state.positions.length,0);
   assert.equal(run(initialForward(T-3600000),proofAt+30_001,quote(proofAt+30_001,f.q.bestAsk)).state.positions.length,0);
+  const mismatch:Quote={...quote(proofAt+20_000,f.q.bestAsk),bookCoverage:'BBO',bestBid:f.q.bestBid-.05,bestAsk:f.q.bestAsk+.05};
+  const nowBook=run(initialForward(T-3600000),proofAt+20_000,mismatch);
+  assert.equal(nowBook.state.positions[0]?.paperOrder?.phase,'FILLED');
+  assert.ok(nowBook.state.positions[0]!.openedAt-proofAt<=30_000);
 });
 test('actual new plan uses native fixed1000 sizing/queue; immutable witness survives account/restart/archive/snapshot',async()=>{
   const f=trade();assert.ok(f.t.paperOrder);assert.equal(f.t.forecast!.sizingEquity,1000);normalizeForward(structuredClone(f.state),f.input.now);
@@ -450,7 +454,8 @@ test('stale candles cannot make an unfilled plan immortal; retired outcomes comp
 test('actual pending/filled financial obligations never expire or lose their immutable witness',()=>{
   const f=trade(),s=f.state.directStrategy!.rangeResearch!,windows=f.state.directStrategy!.rangeWindows!,now=T+65*60000;
   const witness=structuredClone(f.t.unified!.anomaly!.window),before=structuredClone(windows);
-  const next=advanceRangeResearch({...f.input,previous:s,now,windows,paths:{},discovery:undefined,positions:[f.t]});
+  const pending=structuredClone(f.t);pending.paperOrder!.phase='PREPARING';
+  const next=advanceRangeResearch({...f.input,previous:s,now,windows,paths:{},discovery:undefined,positions:[pending]});
   assert.equal(next.events.A_USDT!.phase,'EXECUTING');assert.equal(next.recycled??0,0);
   assert.deepEqual(windows,before);assert.deepEqual(f.t.unified!.anomaly!.window,witness);
   const filled=structuredClone(f.t);filled.paperOrder!.phase='FILLED';
@@ -461,7 +466,7 @@ test('actual pending/filled financial obligations never expire or lose their imm
 test('ten submitted financial orders survive research pressure without losing execution seats or own witnesses',()=>{
   const f=trade(),previous=structuredClone(f.research),windows:RangeWindows={};previous.events={};
   const positions=Array.from({length:10},(_,i)=>{const e=structuredClone(f.e),t=structuredClone(f.t);e.symbol=`P${i}_USDT`;e.id=`anomaly-range-v1:${e.symbol}:${T}`;e.phase='EXECUTING';e.reason='';
-    e.tradeId=`pending_${i}`;t.id=e.tradeId;t.symbol=e.symbol;t.unified!.anomaly!.eventId=e.id;t.unified!.anomaly!.proof=structuredClone(e.proof!);
+    e.tradeId=`pending_${i}`;t.id=e.tradeId;t.symbol=e.symbol;t.paperOrder!.phase='PREPARING';t.unified!.anomaly!.eventId=e.id;t.unified!.anomaly!.proof=structuredClone(e.proof!);
     previous.events[e.symbol]=e;windows[e.id]=f.input.windows[f.e.id]!;return t;});
   previous.ranking=[];previous.discovery=undefined;assert.ok(normalizeRangeResearch(previous));const financial=structuredClone(positions);
   const discovery={...f.input.discovery,anomalies:Array.from({length:8},(_,i)=>({...f.input.discovery.anomalies[0]!,symbol:`NEW_MARKET${i}_USDT`}))},

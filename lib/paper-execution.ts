@@ -28,6 +28,40 @@ export function wickFillPending(t:Trade,now:number){
 }
 const direction=(t:Trade)=>t.side==='LONG'?1:-1;
 const fee=.0005;
+/** Trade the observed book, even when the ticker top and the book top differ. */
+function wickBook(q:Quote){
+  const bid=q.bids?.[0]?.price,ask=q.asks?.[0]?.price;
+  if(!(bid!=null&&bid>0)||!(ask!=null&&ask>=bid))return;
+  return {...q,bestBid:bid,bestAsk:ask};
+}
+function settleWickEntry(s:ForwardState,t:Trade,q:Quote,c:Contract,quotes:Record<string,Quote>,now:number){
+  const book=wickBook(q);if(!book)return false;
+  const o=t.paperOrder!;
+  const f=paperBookFill(t,book,c,t.contracts,true);if(!f)return false;
+  const checked=prepareEntry(s,t,book,c,quotes,now,f.price),n=Math.min(f.contracts,checked.intent.contracts,t.contracts);
+  const exact=paperBookFill(t,book,c,n,true);if(!exact)return false;
+  t.contracts=exact.contracts;t.quantity=t.contracts*t.quantoMultiplier;t.entryPrice=exact.price;t.openedAt=now;
+  t.notional=t.quantity*t.entryPrice;t.margin=t.notional/t.leverage;t.plannedRisk=checked.intent.plannedRisk*t.contracts/checked.intent.contracts;
+  t.lastPrice=t.side==='LONG'?book.bestBid:book.bestAsk;t.lastQuoteAt=q.observedAt;t.entryFee=t.notional*fee;
+  o.phase='FILLED';o.preparedAt=now;o.submittedAt=now;o.submitQuoteAt=q.observedAt;o.confirmedAt=now;o.fillMode='OBSERVED_BOOK_VWAP';
+  o.unfilledContracts=o.requestedContracts-t.contracts;
+  o.reason=o.unfilledContracts>0?'IOC部分成交，未成交余量不补单':'当前盘口撮合确认';
+  t.unified!.explanationEvents[0]={at:now,kind:'ENTRY',reason:t.unified!.entryReason,price:exact.price,quoteAt:q.observedAt};
+  if(t.entryContext)t.entryContext.capturedAt=now;
+  s.balance-=t.entryFee;s.fees+=t.entryFee;s.turnover+=t.notional;s.lastEntryAt[t.symbol]=now;s.lastSide[t.symbol]=t.side;s.revision++;
+  return true;
+}
+/** Fill wick orders already accepted inside 30s on the book in hand. Does not touch exits. */
+export function fillPendingWickEntries(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<string,Contract>,now:number){
+  if(!s.paperExecution)return;
+  for(const t of [...s.positions]){
+    if(!wickFillPending(t,now)||t.paperOrder?.action)continue;
+    const q=quotes[t.symbol],c=contracts[t.symbol];
+    if(!freshQuote(q,now)||!c)continue;
+    try{if(!settleWickEntry(s,t,q!,c,quotes,now)&&!wickBook(q!))blocked(s,t.paperOrder!,new Error('等待本次执行的实际多档盘口；第一档不足不能代表完整IOC成交'));}
+    catch(e){blocked(s,t.paperOrder!,e);}
+  }
+}
 const rules=(c:Contract)=>({enableDecimal:c.enableDecimal,orderSizeMin:c.orderSizeMin==null?undefined:String(c.orderSizeMin),
   orderSizeMax:c.orderSizeMax==null?undefined:String(c.orderSizeMax),marketOrderSizeMax:c.marketOrderSizeMax==null?undefined:String(c.marketOrderSizeMax)});
 export function executionTiming(rows:{submitDelayMs?:number;submittedAt?:number;entryConfirmedAt?:number;exchangeEntryAt?:number}[]):PaperTiming{
@@ -235,21 +269,8 @@ export function advancePaperExecution(s:ForwardState,quotes:Record<string,Quote>
     const wickProof=t.unified?.anomaly?.kind==='WICK'?t.unified.anomaly.proof:undefined;
     if(wickProof&&now-wickProof.at>WICK_ENTRY_MS&&!wickFillPending(t,now)){rejectPaperEntry(s,t,now,'5分钟收盘已超过30秒，不再进场');continue;}
     if(wickFillPending(t,now)){
-      if(s.directStrategy?.adaptive&&q!.bookCoverage==='BBO'){blocked(s,o,new Error('等待本次执行的实际多档盘口；第一档不足不能代表完整IOC成交'));continue;}
-      try{
-        const f=paperBookFill(t,q!,c,t.contracts,true);if(!f)continue;
-        const checked=prepareEntry(s,t,q!,c,quotes,now,f.price),n=Math.min(f.contracts,checked.intent.contracts,t.contracts);
-        const exact=paperBookFill(t,q!,c,n,true);if(!exact)continue;
-        t.contracts=exact.contracts;t.quantity=t.contracts*t.quantoMultiplier;t.entryPrice=exact.price;t.openedAt=now;
-        t.notional=t.quantity*t.entryPrice;t.margin=t.notional/t.leverage;t.plannedRisk=checked.intent.plannedRisk*t.contracts/checked.intent.contracts;
-        t.lastPrice=t.side==='LONG'?q!.bestBid:q!.bestAsk;t.lastQuoteAt=q!.observedAt;t.entryFee=t.notional*fee;
-        o.phase='FILLED';o.preparedAt=now;o.submittedAt=now;o.submitQuoteAt=q!.observedAt;o.confirmedAt=now;o.fillMode='OBSERVED_BOOK_VWAP';
-        o.unfilledContracts=o.requestedContracts-t.contracts;
-        o.reason=o.unfilledContracts>0?'IOC部分成交，未成交余量不补单':'当前盘口撮合确认';
-        t.unified!.explanationEvents[0]={at:now,kind:'ENTRY',reason:t.unified!.entryReason,price:exact.price,quoteAt:q!.observedAt};
-        if(t.entryContext)t.entryContext.capturedAt=now;
-        s.balance-=t.entryFee;s.fees+=t.entryFee;s.turnover+=t.notional;s.lastEntryAt[t.symbol]=now;s.lastSide[t.symbol]=t.side;s.revision++;
-      }catch(e){blocked(s,o,e);}
+      try{if(!settleWickEntry(s,t,q!,c,quotes,now)&&!wickBook(q!))blocked(s,o,new Error('等待本次执行的实际多档盘口；第一档不足不能代表完整IOC成交'));}
+      catch(e){blocked(s,o,e);}
       continue;
     }
     if(t.rule.expiresAt<=now){rejectPaperEntry(s,t,now,'待执行期间交易事件已失效，未冒充成交');continue;}
