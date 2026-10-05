@@ -9,6 +9,12 @@ export type CurveAccount={startedAt:number;initialEquity:number;equity:number;up
   policyVersion?:string;engineVersion?:string;storage:{persistedAt?:number|null};stalePositions?:number};
 const number=(v:number)=>v.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
 const stamp=(t:number)=>new Date(t).toLocaleString("zh-CN",{timeZone:BEIJING_TIME_ZONE,month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false});
+const axisClock=(t:number)=>{
+  const parts=new Intl.DateTimeFormat("en-GB",{timeZone:BEIJING_TIME_ZONE,month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date(t));
+  const g=(type:string)=>parts.find(p=>p.type===type)?.value??"";
+  return {date:`${g("month")}/${g("day")}`,time:`${g("hour")}:${g("minute")}`};
+};
+const PLOT_H=268;
 type Range="24h"|"7d"|"all";
 export default function EquityCurve({data,healthy,fixture,cache,cacheScope="owner",label="模拟账户净值"}:{data:CurveAccount|null;healthy:boolean;
   fixture?:{points:EquityPoint[];complete:boolean};cache?:EquityHistoryCache;cacheScope?:string;label?:string}){
@@ -88,15 +94,15 @@ export default function EquityCurve({data,healthy,fixture,cache,cacheScope="owne
       <div className="eq-ranges" role="group" aria-label="净值时间范围">{([["24h","24小时"],["7d","7天"],["all","全部"]] as const).map(([id,label])=><button key={id} aria-pressed={range===id} onClick={()=>switchRange(id)}>{label}</button>)}</div>
     </div>
     <div className="eq-selection" aria-live="polite"><strong>{shown?number(shown.equity):"—"}<small> U</small></strong><div>{shown&&<><b className={shown.equity>=context.initialEquity?"fr-positive":"fr-negative"}>{shown.equity>=context.initialEquity?"+":""}{number(shown.equity-context.initialEquity)} U{context.initialEquity>0?` · ${((shown.equity/context.initialEquity-1)*100).toFixed(2)}%`:''}</b><span>{stamp(shown.at)} · {shown.kind==="origin"?"初始本金":shown.kind==="preview"?"当前估值":shown.stale?"已保存净值 · 含陈旧报价":"已保存净值"}</span></>}</div></div>
-    <div className="eq-plot"><svg className="eq-axis" width="54" height="248" aria-hidden="true">{[min,(min+max)/2,max].filter(v=>Math.abs(y(v)-y(context.initialEquity))>16).map(v=><text key={v} x="48" y={y(v)+4} textAnchor="end">{v.toFixed(0)}</text>)}<text className="eq-base-label" x="48" y={y(context.initialEquity)+4} textAnchor="end">{context.initialEquity.toFixed(0)}</text></svg>
+    <div className="eq-plot"><svg className="eq-axis" width="54" height={PLOT_H} aria-hidden="true">{[min,(min+max)/2,max].filter(v=>Math.abs(y(v)-y(context.initialEquity))>16).map(v=><text key={v} x="48" y={y(v)+4} textAnchor="end">{v.toFixed(0)}</text>)}<text className="eq-base-label" x="48" y={y(context.initialEquity)+4} textAnchor="end">{context.initialEquity.toFixed(0)}</text></svg>
       <div className="eq-scroll" ref={scroll} tabIndex={0} role="region" aria-label="净值曲线，可左右滑动或使用方向键" onScroll={e=>{const n=e.currentTarget;setOffset(n.scrollLeft);atLatest.current=n.scrollLeft>=n.scrollWidth-n.clientWidth-8;}}>
-        <svg width={canvasWidth} height="248" viewBox={`0 0 ${canvasWidth} 248`} onPointerDown={pick} onPointerMove={e=>{if(e.buttons===1)pick(e);}} role="img" aria-label={`${label}曲线；空白处缺少连续记录`}>
+        <svg width={canvasWidth} height={PLOT_H} viewBox={`0 0 ${canvasWidth} ${PLOT_H}`} onPointerDown={pick} onPointerMove={e=>{if(e.buttons===1)pick(e);}} role="img" aria-label={`${label}曲线；空白处缺少连续记录`}>
           {[min,(min+max)/2,max].map(v=><line key={v} x1="0" x2={canvasWidth} y1={y(v)} y2={y(v)} className="eq-grid"/>)}
           <line x1="0" x2={canvasWidth} y1={y(context.initialEquity)} y2={y(context.initialEquity)} className="eq-baseline"/>
           {curveSegments(chartPoints).map((segment,i)=><g key={i}><path d={smoothPath(segment.map(p=>({x:x(p.at),y:y(p.equity)})))} className="eq-curve"/>{segment.length===1&&<circle cx={x(segment[0].at)} cy={y(segment[0].equity)} r="3" className="eq-dot"/>}</g>)}
           {chartPoints[0]&&<circle cx={x(account)} cy={y(context.initialEquity)} r="4" className="eq-origin"/>}
           {shown&&<g><line x1={x(shown.at)} x2={x(shown.at)} y1="16" y2="220" className="eq-cross"/><circle cx={x(shown.at)} cy={y(shown.equity)} r="4" className="eq-dot"/></g>}
-          {Array.from({length:ticks+1},(_,i)=>{const t=account+i/ticks*(end-account);return <text className="eq-time" key={i} x={14+i/ticks*plot} y="241" textAnchor={i===0?"start":i===ticks?"end":"middle"}>{range==="24h"?stamp(t).slice(-5):stamp(t).slice(0,5)}</text>;})}
+          {Array.from({length:ticks+1},(_,i)=>{const t=account+i/ticks*(end-account),p=axisClock(t),xPos=14+i/ticks*plot,anchor=i===0?"start":i===ticks?"end":"middle";return <text className="eq-time" key={i} x={xPos} y="236" textAnchor={anchor}><tspan x={xPos}>{p.date}</tspan><tspan className="eq-hour" x={xPos} dy="15">{p.time}</tspan></text>;})}
         </svg>
       </div>
     </div>
