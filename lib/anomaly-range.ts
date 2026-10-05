@@ -701,7 +701,9 @@ export function rangeExecutionAdmission(t:Trade,q:Quote|undefined,now:number,con
   const wickLimit=wickInTime?WICK_ENTRY_MS+WICK_FILL_GRACE_MS:WICK_ENTRY_MS;
   if(now-m.proof.at>(m.kind==='WICK'?wickLimit:120000)||now<m.proof.at)return'原入场证明已过期，不迟到复制';
   const px=t.side==='LONG'?q.bestAsk:q.bestBid,dir=d(t.side);
-  if(Math.abs(px-m.proof.price*m.scale)>m.n5)return'执行价已离开原证明一个正常波动，不追单';
+  // The 30s clock is the chase limit. A wick already accepted inside it fills at the
+  // quote in hand; one normal fluctuation must not cancel that fill.
+  if(!(m.kind==='WICK'&&wickInTime)&&Math.abs(px-m.proof.price*m.scale)>m.n5)return'执行价已离开原证明一个正常波动，不追单';
   if(m.kind==='EDGE_RETURN'&&Math.min(Math.abs(px-m.H),Math.abs(px-m.L))>m.n5+Math.max(m.E,m.n5)+m.D)return'当前执行价已离开可回归的边界，取消反向';
   if(dir*(px-t.stopPrice)<=0)return'原计划保护位已触发，不开新仓';return null;
 }

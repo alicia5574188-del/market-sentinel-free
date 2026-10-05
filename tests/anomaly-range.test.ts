@@ -250,21 +250,16 @@ test('two fresh wicks from one close are both queued, and the same wick is refus
   assert.equal(crowded.state.positions.length,4,JSON.stringify(crowded.state.directStrategy?.plans));
   assert.match(crowded.state.directStrategy!.plans.I_USDT?.reason??'',/保证金|容量/);
 });
-test('a wick accepted inside 30 seconds fills when the book arrives, and does not start after 30 seconds',()=>{
+test('a wick accepted inside 30 seconds fills on the bid and ask, and does not start after 30 seconds',()=>{
   const f=fixture(),proofAt=f.e.proof!.at,contract={quantoMultiplier:.1,leverageMax:20,maintenanceRate:.005,minContracts:1,tickSize:.001,enableDecimal:false,orderSizeMin:'1',orderSizeMax:'1000000',marketOrderSizeMax:'1000000'},
     bbo=(at:number):Quote=>({...quote(at,f.q.bestAsk),bookCoverage:'BBO',bids:undefined,asks:undefined}),
     run=(state:ReturnType<typeof initialForward>,now:number,q:Quote)=>advanceDirectStrategy({state,now,paths:f.input.paths,minutePaths:f.input.minutes,
       quotes:{A_USDT:q},analysisQuotes:{A_USDT:q},contracts:{A_USDT:contract},marketAuthority:true,specialMove:true,anomalyRange:true,
       rangeDiscovery:f.input.discovery,paperTiming:{prepareMs:2000,confirmMs:0,basis:'EXECUTION_CLOCK',samples:0}});
-  const queued=run(initialForward(T-3600000),proofAt+26_000,bbo(proofAt+26_000));
-  assert.equal(queued.state.positions.length,1,JSON.stringify(queued.state.directStrategy?.plans));
-  assert.equal(queued.state.positions[0]!.paperOrder!.phase,'PREPARING');
-  const filled=run(queued.state,proofAt+32_000,quote(proofAt+32_000,f.q.bestAsk));
-  assert.equal(filled.state.positions.length,1);
+  const filled=run(initialForward(T-3600000),proofAt+26_000,bbo(proofAt+26_000));
+  assert.equal(filled.state.positions.length,1,JSON.stringify(filled.state.directStrategy?.plans));
   assert.equal(filled.state.positions[0]!.paperOrder!.phase,'FILLED');
-  assert.ok(filled.state.positions[0]!.openedAt-proofAt<=50_000);
-  const expired=run(queued.state,proofAt+50_001,quote(proofAt+50_001,f.q.bestAsk));
-  assert.equal(expired.state.positions.length,0);
+  assert.ok(filled.state.positions[0]!.openedAt-proofAt<=30_000);
   assert.equal(run(initialForward(T-3600000),proofAt+30_001,quote(proofAt+30_001,f.q.bestAsk)).state.positions.length,0);
   const mismatch:Quote={...quote(proofAt+20_000,f.q.bestAsk),bookCoverage:'BBO',bestBid:f.q.bestBid-.05,bestAsk:f.q.bestAsk+.05};
   const nowBook=run(initialForward(T-3600000),proofAt+20_000,mismatch);

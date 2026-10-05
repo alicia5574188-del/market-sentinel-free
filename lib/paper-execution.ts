@@ -28,11 +28,12 @@ export function wickFillPending(t:Trade,now:number){
 }
 const direction=(t:Trade)=>t.side==='LONG'?1:-1;
 const fee=.0005;
-/** Trade the observed book, even when the ticker top and the book top differ. */
+/** Use the real ladder when it is there. Otherwise the observed bid/ask is the book. */
 function wickBook(q:Quote){
-  const bid=q.bids?.[0]?.price,ask=q.asks?.[0]?.price;
-  if(!(bid!=null&&bid>0)||!(ask!=null&&ask>=bid))return;
-  return {...q,bestBid:bid,bestAsk:ask};
+  if(!(q.bestBid>0)||!(q.bestAsk>=q.bestBid))return;
+  const bids=q.bids?.length?q.bids:[{price:q.bestBid,size:1e12}],asks=q.asks?.length?q.asks:[{price:q.bestAsk,size:1e12}];
+  if(!(bids[0]!.price>0)||!(asks[0]!.price>=bids[0]!.price))return;
+  return {...q,bestBid:bids[0]!.price,bestAsk:asks[0]!.price,bids,asks};
 }
 function settleWickEntry(s:ForwardState,t:Trade,q:Quote,c:Contract,quotes:Record<string,Quote>,now:number){
   const book=wickBook(q);if(!book)return false;

@@ -562,7 +562,7 @@ function manageMarketDirect(s:ForwardState,input:Input,ready:boolean){
     if(ds.eventResearch){try{boundedEventResearch(ds.eventResearch);}
       catch{ds.eventResearchError='事件研究容量不足，暂停新增；已有持仓继续自身保护';}}
   }
-  ds.summary=ds.anomalyRange?`只盯强于大盘、或和大盘反向的币。等这根5分钟走完，按影线进场。收盘后30秒内进场，过了不追。30秒内接上的单，有盘口就当轮成交。止盈净利润至少5U，不够就把止盈价外推，不加仓。最大止损是这个止盈距离的3倍。风险额度不拦新单，保证金够就继续开。在看 ${Object.keys(ds.rangeResearch?.events??{}).length} 个；持仓 ${s.positions.filter(paperFilled).length} 笔。`:ds.eventResponse?`记录活跃异常事件；按自身推进保留与恢复参与，失败启动提前退出，有优势继续持有。已记住 ${Object.keys(ds.eventResearch?.events??{}).length} 个事件；${s.positions.filter(paperFilled).length} 笔实际持仓。`:ds.specialMove?`持续研究特别的活跃币；自身启动并保留价格优势后参与爆发段。研究记忆 ${Object.keys(ds.specialResearch?.watches??{}).length} 币；${s.positions.filter(paperFilled).length} 笔实际持仓。`:
+  ds.summary=ds.anomalyRange?`只盯强于大盘、或和大盘反向的币。等这根5分钟走完，按影线进场。收盘后30秒内进场，过了不追。30秒内接上的单，有买一卖一就当轮成交。止盈净利润至少5U，不够就把止盈价外推，不加仓。最大止损是这个止盈距离的3倍。风险额度不拦新单，保证金够就继续开。在看 ${Object.keys(ds.rangeResearch?.events??{}).length} 个；持仓 ${s.positions.filter(paperFilled).length} 笔。`:ds.eventResponse?`记录活跃异常事件；按自身推进保留与恢复参与，失败启动提前退出，有优势继续持有。已记住 ${Object.keys(ds.eventResearch?.events??{}).length} 个事件；${s.positions.filter(paperFilled).length} 笔实际持仓。`:ds.specialMove?`持续研究特别的活跃币；自身启动并保留价格优势后参与爆发段。研究记忆 ${Object.keys(ds.specialResearch?.watches??{}).length} 币；${s.positions.filter(paperFilled).length} 笔实际持仓。`:
     `${ds.adaptive?'按实际失败参与回归，按持续承接参与延续；持仓依据独立观察。':a.reason}。回退 ${s.positions.filter(t=>paperFilled(t)&&t.unified?.branch==='RETURN').length} 笔；延续 ${s.positions.filter(t=>paperFilled(t)&&t.unified?.branch==='CONTINUATION').length} 笔；新方向须取得自身证明。`;
 }
 export function advanceDirectStrategy(input:Input){
