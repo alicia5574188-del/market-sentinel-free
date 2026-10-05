@@ -4,7 +4,7 @@ import {forwardEquity,freshQuote,type ForwardState,type Trade,type Quote,type Co
 import {buildProportionalMirror,mirrorPositionRisk} from './live-parity.ts';
 import {quantizeMirrorNotional} from './gate-quantity.ts';
 import {closeUnifiedTrade} from './unified-execution.ts';
-import {WICK_ENTRY_MS} from './wick-target.ts';
+import {WICK_ENTRY_MS,WICK_FILL_GRACE_MS} from './wick-target.ts';
 import type {TradeRealization} from './trade-realization.ts';
 
 export const PAPER_EXECUTION_VERSION='live-steps-paper-v1';
@@ -19,6 +19,13 @@ export type PaperOrder={version:typeof PAPER_EXECUTION_VERSION;signalAt:number;s
 export type PaperExecution={version:typeof PAPER_EXECUTION_VERSION;cutoverAt:number;cancelled:Trade[]};
 export type PaperRealization=Omit<TradeRealization,'fills'>&{fills:(TradeRealization['fills'][number]&{executionOrderId?:string})[]};
 export function paperFilled(t:Trade){return !t.paperOrder||t.paperOrder.phase==='FILLED';}
+/** True only for a wick order that was signaled inside 30s and is still inside the fill grace. */
+export function wickFillPending(t:Trade,now:number){
+  const proof=t.unified?.anomaly?.kind==='WICK'?t.unified.anomaly.proof:undefined,o=t.paperOrder;
+  return !!proof&&!!o&&o.phase!=='FILLED'&&o.phase!=='CANCELLED'
+    &&o.signalAt>=proof.at&&o.signalAt-proof.at<=WICK_ENTRY_MS
+    &&now>=proof.at&&now-proof.at<=WICK_ENTRY_MS+WICK_FILL_GRACE_MS;
+}
 const direction=(t:Trade)=>t.side==='LONG'?1:-1;
 const fee=.0005;
 const rules=(c:Contract)=>({enableDecimal:c.enableDecimal,orderSizeMin:c.orderSizeMin==null?undefined:String(c.orderSizeMin),
@@ -225,7 +232,26 @@ export function advancePaperExecution(s:ForwardState,quotes:Record<string,Quote>
       continue;
     }
     if(o.phase==='FILLED')continue;
-    if(t.unified?.anomaly?.kind==='WICK'&&now-t.unified.anomaly.proof.at>WICK_ENTRY_MS){rejectPaperEntry(s,t,now,'5分钟收盘已超过30秒，不再进场');continue;}
+    const wickProof=t.unified?.anomaly?.kind==='WICK'?t.unified.anomaly.proof:undefined;
+    if(wickProof&&now-wickProof.at>WICK_ENTRY_MS&&!wickFillPending(t,now)){rejectPaperEntry(s,t,now,'5分钟收盘已超过30秒，不再进场');continue;}
+    if(wickFillPending(t,now)){
+      if(s.directStrategy?.adaptive&&q!.bookCoverage==='BBO'){blocked(s,o,new Error('等待本次执行的实际多档盘口；第一档不足不能代表完整IOC成交'));continue;}
+      try{
+        const f=paperBookFill(t,q!,c,t.contracts,true);if(!f)continue;
+        const checked=prepareEntry(s,t,q!,c,quotes,now,f.price),n=Math.min(f.contracts,checked.intent.contracts,t.contracts);
+        const exact=paperBookFill(t,q!,c,n,true);if(!exact)continue;
+        t.contracts=exact.contracts;t.quantity=t.contracts*t.quantoMultiplier;t.entryPrice=exact.price;t.openedAt=now;
+        t.notional=t.quantity*t.entryPrice;t.margin=t.notional/t.leverage;t.plannedRisk=checked.intent.plannedRisk*t.contracts/checked.intent.contracts;
+        t.lastPrice=t.side==='LONG'?q!.bestBid:q!.bestAsk;t.lastQuoteAt=q!.observedAt;t.entryFee=t.notional*fee;
+        o.phase='FILLED';o.preparedAt=now;o.submittedAt=now;o.submitQuoteAt=q!.observedAt;o.confirmedAt=now;o.fillMode='OBSERVED_BOOK_VWAP';
+        o.unfilledContracts=o.requestedContracts-t.contracts;
+        o.reason=o.unfilledContracts>0?'IOC部分成交，未成交余量不补单':'当前盘口撮合确认';
+        t.unified!.explanationEvents[0]={at:now,kind:'ENTRY',reason:t.unified!.entryReason,price:exact.price,quoteAt:q!.observedAt};
+        if(t.entryContext)t.entryContext.capturedAt=now;
+        s.balance-=t.entryFee;s.fees+=t.entryFee;s.turnover+=t.notional;s.lastEntryAt[t.symbol]=now;s.lastSide[t.symbol]=t.side;s.revision++;
+      }catch(e){blocked(s,o,e);}
+      continue;
+    }
     if(t.rule.expiresAt<=now){rejectPaperEntry(s,t,now,'待执行期间交易事件已失效，未冒充成交');continue;}
     if(o.phase==='PREPARING'){
       if(now<=o.signalAt||now-o.signalAt<o.timing.prepareMs)continue;

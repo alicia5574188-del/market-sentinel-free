@@ -1,5 +1,8 @@
 /** A wick entry is only valid in the first 30 seconds after the 5-minute close. */
 export const WICK_ENTRY_MS=30_000;
+/** The depth book arrives on a later cycle. An order already accepted inside the
+ * 30s window may finish that fill; a new order still cannot start after 30s. */
+export const WICK_FILL_GRACE_MS=8_000;
 /** Take-profit price that nets `minNet` after both taker fees. Undefined when size cannot reach it above zero. */
 export function wickProfitTarget(side:'LONG'|'SHORT',entry:number,quantity:number,minNet=5,fee=.0005){
   if(!(entry>0)||!(quantity>0)||!(minNet>0)||!(fee>=0)||fee>=1)return;
