@@ -1,5 +1,6 @@
 "use client";
 import type {RangeEvent} from '../lib/anomaly-range.ts';
+import {msUntilFiveClose} from '../lib/range-scheduler.ts';
 
 import {BEIJING_TIME_ZONE} from "../lib/beijing-time.ts";
 import {type forwardSummary} from "../lib/forward-relations.ts";
@@ -83,95 +84,55 @@ function DirectExecution({data,now,liveEnabled,liveOverview}:{data:NonNullable<V
   </div>;
 }
 function num(v?:number){return typeof v==='number'&&Number.isFinite(v)?Number(v.toPrecision(6)).toString():'—';}
-function where(e:RangeEvent){
-  const band=Math.max(e.E,e.n5);
-  if(e.price>e.H+e.D)return '已经收在上沿外';
-  if(e.price<e.L-e.D)return '已经收在下沿外';
-  if(e.price>e.H)return '刚探出上沿';
-  if(e.price<e.L)return '刚探出下沿';
-  if(Math.abs(e.price-e.H)<=band)return '靠近上沿';
-  if(Math.abs(e.price-e.L)<=band)return '靠近下沿';
-  return '在区间里面';
-}
-function watchLine(e:RangeEvent,now:number){
-  if(e.admission&&now-e.admission.at<120000)return e.admission.reason;
-  if(!e.active)return '成交不够，先看着，不下单。';
-  return `扫描 ${clockFull(e.detectedAt)}。等5分钟收出影线，上影线做空，下影线做多。扫描时没走完的那根也算。`;
-}
-function orderLine(e:RangeEvent){
-  const p=e.proof;if(!p)return e.reason;
-  if(p.kind==='WICK')return `${p.side==='SHORT'?'上影线做空':'下影线做多'}。止盈 ${num(p.target)}，最远止损 ${num(p.stop)}。`;
-  if(p.kind==='EDGE_RETURN'){const turned=(p.side==='SHORT'?e.upperExtreme>e.H:e.lowerExtreme<e.L);
-    return `${turned?'冲出新极值后，5分钟已经往回收':'5分钟已从边界往回收'}。走到 ${num(p.target)} 出场。`;}
-  if(p.kind==='EDGE_BREAKOUT')return `已经收在区间外面。错了就按 ${num(p.stop)} 出。`;
-  return `顺着区间里的方向做。错了就按 ${num(p.stop)} 出。`;
-}
-function scanLine(a:{kind:string;own:number}){
-  if(a.kind==='OPPOSITE_MOVE')return `${a.own>=0?'和大盘反着涨':'和大盘反着跌'}。等这根5分钟走出影线。`;
-  return `${a.own>=0?'比大盘更强':'比大盘更强地走'}。等这根5分钟走出影线。`;
+function prices(target?:number,stop?:number){
+  const tp=typeof target==='number'&&target>0?`止盈 ${num(target)}`:'',sl=typeof stop==='number'&&stop>0?`最大止损 ${num(stop)}`:'';
+  return [tp,sl].filter(Boolean).join(' · ');
 }
 type Position=NonNullable<View>['positions'][number];
 function holdStatus(t:Position){
-  const m=t.unified?.anomaly;
-  if(m?.kind==='EDGE_RETURN'){
-    if(m.stage==='EXIT'||t.unified?.decision==='EXIT')return '准备出';
-    if(m.returnProbeAt&&m.returnBackAt)return '再探出就止损';
-    if(m.returnProbeAt)return '探出一次，还拿着';
-    return '按回归拿着';
-  }
-  if(t.unified?.decision==='EXIT'||m?.stage==='EXIT')return '准备出';
-  if(t.unified?.decision==='REVIEW'||m?.stage==='REVIEW')return '在复核';
+  if(t.unified?.decision==='EXIT'||t.unified?.anomaly?.stage==='EXIT')return '准备出';
+  if(t.unified?.decision==='REVIEW'||t.unified?.anomaly?.stage==='REVIEW')return '在复核';
   return '继续拿着';
-}
-function holdNext(t:Position){
-  const m=t.unified?.anomaly;
-  if(!m)return t.unified?.exitCondition??'按原来的计划走';
-  if(m.kind==='WICK')return `止盈按进场那根实体的 ${m.proof.wickMultiple??'3到5'} 倍。不到1倍止盈距离的浮亏继续拿；到过2倍等回到1倍亏损或成本；到3倍直接止损`;
-  if(m.kind==='EDGE_RETURN')return `走到 ${num(m.proof.target*m.scale)} 出场。下影线不算。第一根5分钟收出区间先拿着；收回去之后，再收出一根才止损`;
-  if(m.kind==='EDGE_BREAKOUT')return `收回区间并确认失败才出，否则按保护价 ${num(t.stopPrice)}`;
-  return t.unified?.exitCondition??`结构坏了就出，保护价 ${num(t.stopPrice)}`;
 }
 function RangeExecution({data,now,liveEnabled,liveOverview}:{data:NonNullable<View>;now:number;liveEnabled:boolean;liveOverview?:{copied?:number|null;eligible?:number|null}}){
   const ds=data.directStrategy!,research=ds.rangeResearch,discovery=research?.discovery,held=new Set(data.positions.map(t=>t.symbol)),
-    open=Object.values(research?.events??{}).filter(e=>!held.has(e.symbol)&&e.phase!=='DONE'&&e.phase!=='EXPIRED').sort((a,b)=>(a.rank??Infinity)-(b.rank??Infinity)),
+    byClose=(a:{lastAt?:number;detectedAt:number},b:{lastAt?:number;detectedAt:number})=>msUntilFiveClose(now,a.lastAt||a.detectedAt)-msUntilFiveClose(now,b.lastAt||b.detectedAt)||a.detectedAt-b.detectedAt,
+    open=Object.values(research?.events??{}).filter(e=>!held.has(e.symbol)&&e.phase!=='DONE'&&e.phase!=='EXPIRED').sort(byClose),
     orders=open.filter(e=>e.phase==='READY'||e.phase==='EXECUTING'),waiting=open.filter(e=>e.phase==='CONFIRMING'),
     watching=open.filter(e=>e.phase==='WATCH'||e.phase==='HOLDING'),
-    seen=new Set([...held,...Object.keys(research?.events??{})]),fresh=(discovery?.anomalies??[]).filter(a=>!seen.has(a.symbol)),
+    seen=new Set([...held,...Object.keys(research?.events??{})]),fresh=(discovery?.anomalies??[]).filter(a=>!seen.has(a.symbol)).sort((a,b)=>msUntilFiveClose(now,a.detectedAt)-msUntilFiveClose(now,b.detectedAt)||a.detectedAt-b.detectedAt),
     thin=new Set((research?.recent??[]).filter(r=>r.reason.includes('断层')||r.reason.includes('成交额')).map(r=>r.symbol)),
     steps=[['扫描',discovery?.scanned??'—'],['在看',watching.length],['在等',waiting.length],['下单',orders.length],['持仓',data.positions.length]] as const,
     active=data.positions.length?4:orders.length?3:waiting.length?2:watching.length?1:0,backlog=(research?.waiting??0)||(discovery?.queued??0),
-    headline=research?.error??(!discovery?'还没扫完第一轮。':[data.positions.length&&`正在做 ${data.positions.length} 笔`,orders.length&&`${orders.length} 个可以下单`,waiting.length&&`${waiting.length} 个在等 K 线走完`,watching.length&&`${watching.length} 个区间还在看`,!data.positions.length&&!orders.length&&!waiting.length&&!watching.length&&fresh.length&&`扫到 ${fresh.length} 个异动，还没排上`].filter(Boolean).join('，')||`扫过 ${discovery.scanned} 个币，这次没有要盯的。`);
+    headline=research?.error??(!discovery?'还没扫完第一轮。':[data.positions.length&&`正在做 ${data.positions.length} 笔`,orders.length&&`${orders.length} 个可以下单`,waiting.length&&`${waiting.length} 个在等收盘`,watching.length&&`${watching.length} 个在等收盘`,!data.positions.length&&!orders.length&&!waiting.length&&!watching.length&&fresh.length&&`扫到 ${fresh.length} 个异动，还没排上`].filter(Boolean).join('，')||`扫过 ${discovery.scanned} 个币，这次没有要盯的。`);
   const row=(e:RangeEvent,title:string,text:string)=><article className="fr-exec-compact-row" key={e.id}>
-    <div className="fr-exec-compact-head"><b>{e.symbol.replace('_',' / ')}</b><span>{title}</span></div>
-    <p>{text}</p><p className="fr-exec-exit">扫描 {clockFull(e.detectedAt)} · 区间 {num(e.L)} – {num(e.H)}{e.own>0?' · 这次在涨':e.own<0?' · 这次在跌':''}</p></article>;
-  const watchRows=[...waiting,...watching];
+    <div className="fr-exec-compact-head"><b>{e.symbol.replace('_',' / ')}</b>{title&&<span>{title}</span>}</div>
+    <p>{text}</p><p className="fr-exec-exit">扫描 {clockFull(e.detectedAt)}</p></article>;
+  const watchRows=[...waiting,...watching].sort(byClose);
   return <div className="fr-execution-page fr-exec-compact" data-testid="direct-research-execution">
     <section className="fr-section"><div className="fr-section-head"><h2>现在</h2><span>{clock(discovery?.at??research?.updatedAt)}</span></div>
       <div className="fr-pipeline">{steps.map(([name,count],i)=><div key={name} className={i===active?'current':i<active&&Number(count)>0?'done':''}><span>{i+1}</span><b>{name} {count}</b></div>)}</div>
       <p>{headline.endsWith('。')?headline:`${headline}。`}</p>
       <p className="fr-exec-exit">币池 {discovery?.shared??'—'}，扫到价格 {discovery?.scanned??'—'}，看过 K 线 {discovery?.loaded??0}{backlog?`。一次看不过来，还有 ${backlog} 个在排队`:''}。</p>
-      {!data.positions.length&&!orders.length&&!waiting.length&&!watching.length&&<p className="fr-exec-exit">只做强于大盘和反向的币。扫到之后等5分钟影线：上影线做空，下影线做多。扫描时没走完的那根也算。</p>}
       {liveEnabled&&<p>实盘已跟上 {liveOverview?.copied??'—'} / 应执行 {liveOverview?.eligible??'—'}。成交以实盘账户为准。</p>}
     </section>
     <section className="fr-section"><div className="fr-section-head"><h2>正在做</h2><span>{data.positions.length} 笔</span></div>
       {ds.execution?.pending.map(p=><p key={p.id}>{p.symbol.replace('_',' / ')} · {p.kind==='OPEN'?'正在下单':p.kind==='CLOSE'?'正在平仓':'正在减仓'} · {p.reason}</p>)}
-      <div className="fr-exec-compact-list">{data.positions.map(t=>{const m=t.unified?.anomaly,kind=kindName(m?.kind);
+      <div className="fr-exec-compact-list">{data.positions.map(t=>{const m=t.unified?.anomaly,wick=m?.kind==='WICK',kind=wick?'影线':'';
         return <article className="fr-exec-compact-row" key={t.id}><div className="fr-exec-compact-head"><b>{t.symbol.replace('_',' / ')} · {side(t.side)}{kind?` · ${kind}`:''}</b><span>{holdStatus(t)}</span></div>
-          <p>{t.unified?.holdReason??positionWatch(t)}</p>
+          <p>{prices(wick&&m?.proof?.target?m.proof.target*(m.scale||1):undefined,t.stopPrice)}</p>
           <p className="fr-exec-exit">扫描 {clockFull(scannedAt(m))}</p>
-          {m&&<p className="fr-exec-exit">进场区间 {num(m.L)} – {num(m.H)}</p>}
-          <p className="fr-exec-exit">{holdNext(t)}{t.openedAt?` · 拿了 ${Math.max(0,Math.round((now-t.openedAt)/60000))} 分钟`:''}</p>
-          {!m&&ds.anomalyRange&&<p className="fr-exec-exit">这笔是以前的规则，不按现在的区间走。</p>}</article>;})}</div>
+          {t.openedAt?<p className="fr-exec-exit">拿了 {Math.max(0,Math.round((now-t.openedAt)/60000))} 分钟</p>:null}</article>;})}</div>
       {!data.positions.length&&!ds.execution?.pending.length&&<p>还没有持仓。</p>}
     </section>
     {!!orders.length&&<section className="fr-section"><div className="fr-section-head"><h2>可以下单</h2><span>{orders.length} 个</span></div>
-      <div className="fr-exec-compact-list">{orders.map(e=>row(e,e.proof?`${side(e.proof.side)} ${kindName(e.proof.kind)}`:e.phase==='EXECUTING'?'正在提交':'等成交',`${e.phase==='EXECUTING'?'正在提交。':''}扫描 ${clockFull(e.detectedAt)}。${orderLine(e)}`))}</div></section>}
+      <div className="fr-exec-compact-list">{orders.map(e=>row(e,e.proof?side(e.proof.side):e.phase==='EXECUTING'?'正在提交':'',e.proof?prices(e.proof.target,e.proof.stop)||'等待5分钟k线走完':'等待5分钟k线走完'))}</div></section>}
     {!!watchRows.length&&<section className="fr-section"><div className="fr-section-head"><h2>还在看</h2><span>{watchRows.length} 个</span></div>
-      <div className="fr-exec-compact-list">{watchRows.slice(0,8).map(e=>row(e,where(e),watchLine(e,now)))}</div>
-      {watchRows.length>8&&<details className="fr-exec-research-details"><summary>其余 {watchRows.length-8} 个</summary><div className="fr-exec-compact-list">{watchRows.slice(8).map(e=>row(e,where(e),watchLine(e,now)))}</div></details>}</section>}
+      <div className="fr-exec-compact-list">{watchRows.slice(0,8).map(e=>row(e,'','等待5分钟k线走完'))}</div>
+      {watchRows.length>8&&<details className="fr-exec-research-details"><summary>其余 {watchRows.length-8} 个</summary><div className="fr-exec-compact-list">{watchRows.slice(8).map(e=>row(e,'','等待5分钟k线走完'))}</div></details>}</section>}
     {!!fresh.length&&<section className="fr-section"><div className="fr-section-head"><h2>刚扫到</h2><span>{fresh.length} 个还没排上</span></div>
-      <div className="fr-exec-compact-list">{fresh.slice(0,6).map(a=><article className="fr-exec-compact-row" key={a.symbol}><div className="fr-exec-compact-head"><b>{a.symbol.replace('_',' / ')}</b><span>{thin.has(a.symbol)?'不看':'等影线'}</span></div><p>扫描 {clockFull(a.detectedAt)}。{thin.has(a.symbol)?(research?.recent??[]).find(r=>r.symbol===a.symbol)?.reason??'成交太稀，不占用观察席。':scanLine(a)}</p></article>)}</div>
-      {fresh.length>6&&<p className="fr-exec-exit">还有 {fresh.length-6} 个，一样在等空位。</p>}</section>}
+      <div className="fr-exec-compact-list">{fresh.slice(0,6).map(a=><article className="fr-exec-compact-row" key={a.symbol}><div className="fr-exec-compact-head"><b>{a.symbol.replace('_',' / ')}</b><span>{thin.has(a.symbol)?'不看':''}</span></div><p>等待5分钟k线走完</p><p className="fr-exec-exit">扫描 {clockFull(a.detectedAt)}</p></article>)}</div>
+      {fresh.length>6&&<p className="fr-exec-exit">还有 {fresh.length-6} 个，一样在等收盘。</p>}</section>}
   </div>;
 }
 function EventResponseView({research,now,held}:{research:EventResearch;now:number;held:Set<string>}){
@@ -210,7 +171,6 @@ const liquidityState=(v?:string)=>({
 const side=(v?:string)=>v==="LONG"?"做多":v==="SHORT"?"做空":"方向观察";
 const clock=(v?:number)=>v?new Date(v).toLocaleTimeString("zh-CN",{timeZone:BEIJING_TIME_ZONE,hour12:false}):"—";
 const clockFull=(v?:number)=>v?new Date(v).toLocaleString("zh-CN",{timeZone:BEIJING_TIME_ZONE,month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false}):"—";
-const kindName=(k?:string)=>({EDGE_BREAKOUT:'突破',EDGE_RETURN:'回归',INTERNAL_TREND:'顺势',WICK:'影线'}[k??'']??'');
 function scannedAt(m?:{scannedAt?:number;eventId?:string;detectedAt?:number}){
   if(m?.scannedAt&&Number.isFinite(m.scannedAt))return m.scannedAt;
   if(m?.detectedAt&&Number.isFinite(m.detectedAt))return m.detectedAt;

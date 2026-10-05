@@ -78,11 +78,11 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       </section>
       {liveEnabled?<section className="fr-section"><div className="fr-section-head"><h2>实盘复制</h2><button className="fr-text-button" onClick={()=>selectLedger("inverse")}>查看同步账户 →</button></div>
         <p>已复制 {liveOverview?.copied??"—"} / 应复制 {liveOverview?.eligible??"—"} · 未跟上 {liveOverview?.missing??"—"}。模拟页与实盘页共用真实成交、持仓和结算记录；未成交不产生模拟利润。</p>{!data?.directStrategy&&<button className="fr-text-button" onClick={()=>selectLedger("source")}>查看全部影子订单 →</button>}</section>:!data?.directStrategy&&<InversePanel data={data} onSelect={selectLedger}/>}
-      {data?.directStrategy&&<section className="fr-section" data-testid="direct-strategy-summary"><div className="fr-section-head"><h2>{data.directStrategy.anomalyRange?'异动与区间计划':data.directStrategy.specialMove?'特别币爆发段':'回退与趋势延续'}</h2><span>固定 1,000 U 仓位基准</span></div><p>{data.directStrategy.summary}</p><p>{data.directStrategy.specialMove?data.directStrategy.explanation:data.directStrategy.marketAuthority?'市场决定跟随币的策略分支：双向失败回归或单向延续。切换等待；独立币须持续证明独立结构。每笔按实际方向验证、保护和退出。':'回退等待推进衰减；延续跟随已确认结构。'}</p></section>}
+      {data?.directStrategy&&<section className="fr-section" data-testid="direct-strategy-summary"><div className="fr-section-head"><h2>{data.directStrategy.anomalyRange?'影线':data.directStrategy.specialMove?'特别币爆发段':'回退与趋势延续'}</h2><span>固定 1,000 U 仓位基准</span></div><p>{data.directStrategy.summary}</p>{!data.directStrategy.anomalyRange&&<p>{data.directStrategy.specialMove?data.directStrategy.explanation:data.directStrategy.marketAuthority?'市场决定跟随币的策略分支：双向失败回归或单向延续。切换等待；独立币须持续证明独立结构。每笔按实际方向验证、保护和退出。':'回退等待推进衰减；延续跟随已确认结构。'}</p>}</section>}
       <PaperEquitySection data={data} healthy={healthy} cache={equityCache} cacheScope={cacheScope}/>
       {liveEnabled&&<LiveEquityCurve head={liveOverview?.equityCurve} mark={actual} enabled={liveEnabled} sessionAt={liveOverview?.sessionAt??0} cacheScope={cacheScope} now={now}/>}
-      <section className="fr-section"><div className="fr-section-head"><h2>{data?.directStrategy?"当前交易计划":data?.unifiedExecution?"参考机会 · 实际分支待确认":data?.shadowInverse?"影子机会 · 模拟反向":"当前最优机会"}</h2><span>{eligible.length} 个可参与</span></div>
-        <OpportunityGrid rows={opportunities.slice(0,6)} inverse={!!data?.shadowInverse&&!data?.unifiedExecution} plans={data?.directStrategy?.plans}/></section>
+      {!data?.directStrategy?.anomalyRange&&<section className="fr-section"><div className="fr-section-head"><h2>{data?.directStrategy?"当前交易计划":data?.unifiedExecution?"参考机会 · 实际分支待确认":data?.shadowInverse?"影子机会 · 模拟反向":"当前最优机会"}</h2><span>{eligible.length} 个可参与</span></div>
+        <OpportunityGrid rows={opportunities.slice(0,6)} inverse={!!data?.shadowInverse&&!data?.unifiedExecution} plans={data?.directStrategy?.plans}/></section>}
     </>}
 
     {tab==="execution"&&<MarketIntelligenceExecution data={data} now={now} liveEnabled={liveEnabled} liveOverview={liveOverview}/>}
@@ -146,6 +146,12 @@ function anomalyScanned(m?:{scannedAt?:number;eventId?:string}){
   if(m?.scannedAt&&Number.isFinite(m.scannedAt))return m.scannedAt;
   const n=Number(m?.eventId?.split(':').at(-1));return Number.isFinite(n)&&n>1e12?n:undefined;
 }
+function wickLevels(t:Trade){
+  const m=t.unified?.anomaly;
+  if(m?.kind!=='WICK'||!(m.proof?.target>0))return null;
+  const scale=m.scale>0?m.scale:1;
+  return{tp:m.proof.target*scale,stop:t.stopPrice};
+}
 function openTradeNetPnl(t:Trade,px=t.lastPrice){
   return tradePaidNetPnl(t,px);
 }
@@ -153,20 +159,22 @@ export function TradeCard({trade:t,now,paid}:{trade:Trade;now:number;paid?:PaidP
   const open=t.status==="OPEN";
   const pair=t.inverseCopy?(paid?.status===t.status?paid:pairedPaidView(t,undefined,now||t.lastQuoteAt)):null;
   const px=pair?pair.inverse.price:open?t.lastPrice:t.exitPrice??t.lastPrice;
-  const pnl=pair?pair.inverse.netPnl:open?openTradeNetPnl(t,px??t.lastPrice):t.netPnl,rate=pnl!==null&&initialTradeNotional(t)>0?pnl/initialTradeNotional(t):null,ctx=t.entryContext;
-  return <details className={`fr-position-row${t.inverseCopy?" fr-inverse-row":""}`}><summary><span className="fr-position-primary"><b>{t.symbol.replace("_"," / ")}</b><small>{t.side==="LONG"?"多单":"空单"} · {t.unified?(t.unified.anomaly?({EDGE_BREAKOUT:'边缘突破',EDGE_RETURN:'边缘回归',INTERNAL_TREND:'内部顺势',WICK:'影线'})[t.unified.anomaly.kind]:t.unified.branch==='RETURN'?'回退':'延续'):t.inverseCopy?"影子反向":ctx?.winnerPlan?(ctx.winnerPlan.intent==="TREND"?"独立趋势":"边缘回归"):ctx?(ctx.reserve?"低风险 · ":"")+modeName(ctx.mode):"兼容持仓"}{ctx?.strategyVersion==="market-intelligence-v1"?` · ${ctx.regime??"—"}`:ctx?.relationHorizon?` · ${ctx.relationHorizon}m旧关系`:""} · {fmt(t.leverage,0)}×</small>
+  const pnl=pair?pair.inverse.netPnl:open?openTradeNetPnl(t,px??t.lastPrice):t.netPnl,rate=pnl!==null&&initialTradeNotional(t)>0?pnl/initialTradeNotional(t):null,ctx=t.entryContext,levels=wickLevels(t);
+  const planName=t.unified?.anomaly?.kind==='WICK'?'影线':t.unified?.anomaly?'':t.unified?(t.unified.branch==='RETURN'?'回退':'延续'):'';
+  return <details className={`fr-position-row${t.inverseCopy?" fr-inverse-row":""}`}><summary><span className="fr-position-primary"><b>{t.symbol.replace("_"," / ")}</b><small>{t.side==="LONG"?"多单":"空单"} · {t.unified?(planName||(t.inverseCopy?"影子反向":"持仓")):t.inverseCopy?"影子反向":ctx?.winnerPlan?(ctx.winnerPlan.intent==="TREND"?"独立趋势":"边缘回归"):ctx?(ctx.reserve?"低风险 · ":"")+modeName(ctx.mode):"兼容持仓"}{ctx?.strategyVersion==="market-intelligence-v1"?` · ${ctx.regime??"—"}`:ctx?.relationHorizon?` · ${ctx.relationHorizon}m旧关系`:""} · {fmt(t.leverage,0)}×</small>
     <b className={(pnl??0)>=0?"fr-positive":"fr-negative"}>{signed(pnl)} U</b><small>{signed(rate===null?null:rate*100,3)}% · {duration(t.openedAt,t.closedAt,now)}</small>{pair&&<small>已扣手续费 {fmt(pair.inverse.fees,4)} U{!pair.quoteFresh?" · 估值待更新":""}</small>}</span>
-    <span className="fr-position-entry"><b>{t.unified?`${t.unified.anomaly?({EDGE_BREAKOUT:'边缘突破',EDGE_RETURN:'边缘回归',INTERNAL_TREND:'内部顺势',WICK:'影线'})[t.unified.anomaly.kind]:t.unified.branch==='RETURN'?'回退':'延续'} · ${open?'持仓中':'已退出'}`:t.inverseCopy?(open?"仅跟随影子":"跟随影子退出"):open?`持仓评分 ${fmt(t.holdScore,0)}`:exitName(t.exitReason)}</b><small>MFE {fmt(t.favorable*100,2)}% · MAE {fmt(t.adverse*100,2)}% · 锁利 {fmt((t.profitFloorRate??0)*100,2)}%</small>
+    <span className="fr-position-entry"><b>{t.unified?`${planName?`${planName} · `:''}${open?'持仓中':'已退出'}`:t.inverseCopy?(open?"仅跟随影子":"跟随影子退出"):open?`持仓评分 ${fmt(t.holdScore,0)}`:exitName(t.exitReason)}</b>
+      {levels&&<small>止盈 {fmt(levels.tp,6)} · 最大止损 {fmt(levels.stop,6)}</small>}
       {anomalyScanned(t.unified?.anomaly)&&<small>扫描 {time(anomalyScanned(t.unified?.anomaly))}</small>}
-      {t.unified?.anomaly&&<small>进场区间 {fmt(t.unified.anomaly.L,6)} – {fmt(t.unified.anomaly.H,6)}</small>}
-      <small>{t.inverseCopy?"反向模拟 · 仅扣已发生费用":ctx?(ctx.strategyVersion==="market-intelligence-v1"?`入场评分 ${fmt(ctx.entryScore,0)} · 相关组 ${ctx.clusterId?.replace("corr:","")??"—"} · 假设 ${ctx.postEntryState??"PENDING"}`:`入场评分 ${fmt(ctx.entryScore,0)} · 旧关系 ${ctx.relationStatus??"—"} ${fmt((ctx.relationHealth??0)*100,0)} · 首次浮赢 ${t.firstProfitAt?time(t.firstProfitAt):"尚未"}`):"历史兼容持仓"}</small></span></summary>
-    <article className="fr-trade fr-trade-unified"><dl><div><dt>入场价</dt><dd>{fmt(t.entryPrice,6)}</dd></div>{anomalyScanned(t.unified?.anomaly)&&<div><dt>扫描时间</dt><dd>{time(anomalyScanned(t.unified?.anomaly))}</dd></div>}{t.unified?.anomaly&&<div><dt>进场区间</dt><dd>{fmt(t.unified.anomaly.L,6)} – {fmt(t.unified.anomaly.H,6)}</dd></div>}<div><dt>{open?"当前价":"出场价"}</dt><dd>{fmt(px,6)}</dd></div><div><dt>{t.unified?.branch==='RETURN'?"原退出事件参考":t.inverseCopy?"源单退出参考":"当前防守"}</dt><dd>{fmt(t.inverseCopy?.sourceStopPrice??t.stopPrice,6)}</dd></div>
+      {!levels&&<small>MFE {fmt(t.favorable*100,2)}% · MAE {fmt(t.adverse*100,2)}% · 锁利 {fmt((t.profitFloorRate??0)*100,2)}%</small>}
+      {!levels&&<small>{t.inverseCopy?"反向模拟 · 仅扣已发生费用":ctx?(ctx.strategyVersion==="market-intelligence-v1"?`入场评分 ${fmt(ctx.entryScore,0)} · 相关组 ${ctx.clusterId?.replace("corr:","")??"—"} · 假设 ${ctx.postEntryState??"PENDING"}`:`入场评分 ${fmt(ctx.entryScore,0)} · 旧关系 ${ctx.relationStatus??"—"} ${fmt((ctx.relationHealth??0)*100,0)} · 首次浮赢 ${t.firstProfitAt?time(t.firstProfitAt):"尚未"}`):"历史兼容持仓"}</small>}</span></summary>
+    <article className="fr-trade fr-trade-unified"><dl><div><dt>入场价</dt><dd>{fmt(t.entryPrice,6)}</dd></div>{anomalyScanned(t.unified?.anomaly)&&<div><dt>扫描时间</dt><dd>{time(anomalyScanned(t.unified?.anomaly))}</dd></div>}{levels&&<div><dt>止盈</dt><dd>{fmt(levels.tp,6)}</dd></div>}<div><dt>{open?"当前价":"出场价"}</dt><dd>{fmt(px,6)}</dd></div><div><dt>{levels?'最大止损':t.unified?.branch==='RETURN'?"原退出事件参考":t.inverseCopy?"源单退出参考":"当前防守"}</dt><dd>{fmt(t.inverseCopy?.sourceStopPrice??levels?.stop??t.stopPrice,6)}</dd></div>
       <div><dt>名义金额</dt><dd>{fmt(t.notional)} U</dd></div><div><dt>保证金 / 杠杆</dt><dd>{fmt(t.margin)} U / {fmt(t.leverage,0)}×</dd></div><div><dt>{t.inverseCopy?"源单风险参考":"计划风险"}</dt><dd>{fmt(t.plannedRisk)} U</dd></div>
       <div><dt>进场时间</dt><dd>{time(t.openedAt)}</dd></div><div><dt>平仓时间</dt><dd>{open?"尚未平仓":time(t.closedAt)}</dd></div><div><dt>持仓时长</dt><dd>{duration(t.openedAt,t.closedAt,now)}</dd></div><div><dt>预计持有</dt><dd>{fmt(t.expectedHoldMinutes,0)} 分钟</dd></div></dl>
       {t.realization&&<p className="fr-trade-reason">{t.inverseCopy?"已跟随减仓":"已部分兑现"} {t.realization.sequence} 次 · 已实现净额 {signed(realizedNetPnl(t))} U · 剩余 {fmt(open?remainingTradeFraction(t)*100:0,0)}%</p>}
-      {t.unified&&<p className="fr-trade-reason">进场：{t.unified.entryReason}<br/>持仓：{t.unified.holdReason}<br/>退出：{open?t.unified.exitCondition:t.exitAudit?.detail??t.exitReason}</p>}
+      {t.unified&&!t.unified.anomaly&&<p className="fr-trade-reason">进场：{t.unified.entryReason}<br/>持仓：{t.unified.holdReason}<br/>退出：{open?t.unified.exitCondition:t.exitAudit?.detail??t.exitReason}</p>}
       {t.inverseCopy&&<p className="fr-trade-reason">影子单 {t.inverseCopy.sourceId} · {t.inverseCopy.fills.length} 次成交配对 · {t.inverseCopy.sourceExitReason??"影子尚未退出"}</p>}{t.winnerManagement&&<p className="fr-trade-reason">持仓计划：{t.winnerManagement.reason}</p>}
-      {ctx&&<p className="fr-trade-reason">入场依据：{ctx.reason}</p>}{t.exitReason&&<p className="fr-trade-reason">退出依据：{exitName(t.exitReason)}</p>}</article></details>;
+      {ctx&&!t.unified?.anomaly&&<p className="fr-trade-reason">入场依据：{ctx.reason}</p>}{t.exitReason&&<p className="fr-trade-reason">退出依据：{exitName(t.exitReason)}</p>}</article></details>;
 }
 export function ShadowOrdersPanel({data}:{data:View|null}){
   const v=data?.shadowInverse,paid=v?.paidCost,trades=data?.unifiedExecution?data.unifiedExecution.baseline.retainedTrades:[...(data?.positions??[]),...(data?.history??[])],

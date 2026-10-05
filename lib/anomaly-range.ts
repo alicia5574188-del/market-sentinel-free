@@ -5,7 +5,7 @@ import {specialRows,recentSpecialActivity} from './special-move.ts';
 import {MARKET_AUTHORITY_VERSION,type MarketRoute} from './market-authority.ts';
 import {selectRangePlans,rankRangeDiscovery,type RangeRank} from './range-scheduler.ts';
 export const ANOMALY_RANGE_VERSION='anomaly-range-v1';
-export const RANGE_RESEARCH_BYTES=24*1024,RANGE_WINDOW_LIMIT=30,RANGE_MIN_VOLUME_24H_USD=1_000_000;
+export const RANGE_RESEARCH_BYTES=24*1024,RANGE_WINDOW_LIMIT=30,RANGE_MIN_VOLUME_24H_USD=1_000_000,WICK_WATCH_MS=15*60*1000;
 type Side='LONG'|'SHORT';
 export type RangeKind='EDGE_BREAKOUT'|'EDGE_RETURN'|'INTERNAL_TREND'|'WICK';
 export type RangeDiscovery={at:number;scanned:number;shared:number;excluded:number;marketSamples:number;marketMove:number|null;
@@ -29,13 +29,13 @@ export type RangeOutcomeRecord=Pick<RangeEvent,'id'|'symbol'|'detectedAt'|'sourc
 export const RANGE_OUTCOME_BYTES=6*1024;
 type RangeLifecycle={recent?:RangeOutcomeRecord[];recycled?:number;omittedOutcomes?:number;ranking?:RangeRank[];waiting?:number;rotated?:number};
 const terminal=(e:RangeEvent)=>e.phase==='DONE'||e.phase==='EXPIRED';
-const planExpired=(e:RangeEvent,now:number)=>now-(e.reverseEligible&&e.reverseAfter?e.reverseAfter:e.detectedAt)>=1800000;
+const planExpired=(e:RangeEvent,now:number)=>now-(e.reverseEligible&&e.reverseAfter?e.reverseAfter:e.detectedAt)>=(e.reverseEligible?1800000:WICK_WATCH_MS);
 /** Outcome-only observations yield seats to executable work; holdings never rotate out. */
 export function rangeObservationSymbols(s:RangeResearch|undefined,held:string[],anomalies:RangeDiscovery['anomalies'],now:number,limit=RANGE_WINDOW_LIMIT){
   const active=Object.values(s?.events??{}).filter(e=>!terminal(e)&&!planExpired(e,now)).sort((a,b)=>(a.rank??Infinity)-(b.rank??Infinity)).map(e=>e.symbol),
     recent=[...Object.values(s?.events??{}).filter(e=>terminal(e)||planExpired(e,now)),...(s?.recent??[])]
       .filter(e=>e.outcomes.some(o=>o.status==='PENDING')).map(e=>e.symbol);
-  const pinned=[...new Set([...held,...active])].slice(0,limit),newcomers=anomalies.filter(a=>now-a.detectedAt<1800000&&!pinned.includes(a.symbol));
+  const pinned=[...new Set([...held,...active])].slice(0,limit),newcomers=anomalies.filter(a=>now-a.detectedAt<WICK_WATCH_MS&&!pinned.includes(a.symbol));
   return [...new Set([...pinned,...rankRangeDiscovery(newcomers,now,Math.max(0,limit-pinned.length)).map(a=>a.symbol),...recent])].slice(0,limit);
 }
 /** Rotate attempts as well as successes so a failing first batch cannot starve the rest. */
@@ -369,7 +369,7 @@ export function advanceRangeResearch(input:{previous?:RangeResearch;windows:Rang
     const closed=input.history.findLast(t=>t.unified?.anomaly?.eventId===e.id);
     if(closed&&e.tradeId===closed.id){e.exit={at:closed.closedAt!,reason:closed.exitReason??'EXIT',net:closed.netPnl};
       e.predecessorId=closed.id;e.reverseAfter=closed.closedAt!;e.reverseEligible=!!closed.unified!.anomaly!.reverseEligible;e.phase=e.reverseEligible?'WATCH':'DONE';}
-    if(!terminal(e)&&planExpired(e,input.now)){e.phase='EXPIRED';e.reason='未成交计划30分钟到期，释放观察名额';}
+    if(!terminal(e)&&planExpired(e,input.now)){e.phase='EXPIRED';e.reason='观察满3根5分钟，没有新的异动就放开';}
     observeOutcomes(e,input.paths[e.symbol],input.now);
   }
   for(const e of s.recent??[]){observeOutcomes(e,input.paths[e.symbol],input.now);if(input.now-e.detectedAt>=1800000)e.parked=false;}
@@ -379,7 +379,7 @@ export function advanceRangeResearch(input:{previous?:RangeResearch;windows:Rang
     &&input.now-Number(id.split(':').at(-1))>=1800000)delete input.windows[id];
   for(const a of input.discovery?.anomalies??[]){
     const id=`${ANOMALY_RANGE_VERSION}:${a.symbol}:${a.detectedAt}`;
-    if(a.detectedAt>input.now||input.now-a.detectedAt>=1800000||seen.has(id)||s.events[a.symbol]||input.positions.some(t=>t.symbol===a.symbol))continue;
+    if(a.detectedAt>input.now||input.now-a.detectedAt>=WICK_WATCH_MS||seen.has(id)||s.events[a.symbol]||input.positions.some(t=>t.symbol===a.symbol))continue;
     if(sparseFiveTurnover(input.paths[a.symbol]??[],input.now))continue;
     const cached=input.windows[id],parked=s.recent?.find(r=>r.id===id&&r.parked);
     if(!cached&&(a.frozen||parked)){s.capacitySkipped++;continue;} // Never redraw a forgotten original range.
@@ -409,7 +409,7 @@ export function advanceRangeResearch(input:{previous?:RangeResearch;windows:Rang
     if(closed&&!held&&e.tradeId===closed.id){e.exit={at:closed.closedAt!,reason:closed.exitReason??'EXIT',net:closed.netPnl};
       e.predecessorId=closed.id;e.reverseAfter=closed.closedAt!;e.reverseEligible=!!closed.unified!.anomaly!.reverseEligible;e.phase=e.reverseEligible?'WATCH':'DONE';}
     observeOutcomes(e,input.paths[e.symbol],input.now);
-    if(!held&&!terminal(e)&&planExpired(e,input.now)){e.phase='EXPIRED';e.reason='未成交计划30分钟到期，释放观察名额';}
+    if(!held&&!terminal(e)&&planExpired(e,input.now)){e.phase='EXPIRED';e.reason='观察满3根5分钟，没有新的异动就放开';}
     if(!held&&terminal(e))continue;
     if(!last||input.now-end(last)>600000){e.active=false;e.reason='同源完成K线缺失，停止新确认';continue;}
     e.price=q?.fresh&&q.priceSource===e.source&&input.now-q.observedAt<=10000?((q.bestBid+q.bestAsk)/2):last.close;const activity=recentSpecialActivity(five);e.active=activity.active;e.activity={turnover15:activity.turnover15,activityRatio:activity.activityRatio,at:end(last)};
@@ -513,7 +513,7 @@ export function advanceRangeResearch(input:{previous?:RangeResearch;windows:Rang
         bars:[closed],n1:w.body,bodyBaseline:w.body,fiveBar:[bar.time,bar.open,bar.high,bar.low,bar.close],minuteBars:[],wickMultiple:w.multiple,scannedAt:e.detectedAt,
         id:`${e.id}:WICK:${w.side}:${closed}`};
       e.phase='READY';e.reason=w.side==='SHORT'?'上影线长过实体，做空':'下影线长过实体，做多';
-    }else if(e.proof?.kind!=='WICK'){if(e.proof)delete e.proof;e.phase='CONFIRMING';e.reason=!e.active?'近期成交不足或未知，继续观察':'等5分钟收出上影线或下影线。扫描时没走完的那根也算';}
+    }else if(e.proof?.kind!=='WICK'){if(e.proof)delete e.proof;e.phase='CONFIRMING';e.reason=!e.active?'近期成交不足或未知，继续观察':'等待5分钟k线走完';}
   }
   recycleRangePlans(s,input.windows,protectedIds);
   const selection=selectRangePlans(Object.values(s.events),input.quotes,input.now);
@@ -654,7 +654,7 @@ export function wickSignal(bar:CandleLike){
   const wick=side==='SHORT'?upper:lower,ratio=wick/body,multiple=Math.min(5,Math.max(3,3+(ratio-1.5)/1.5*2));
   return{side,body,upper,lower,multiple};
 }
-export type RangeScanner={prices:Map<string,{at:number;price:number}[]>;detected:Map<string,RangeDiscovery['anomalies'][number]>};
+export type RangeScanner={prices:Map<string,{at:number;price:number}[]>;detected:Map<string,RangeDiscovery['anomalies'][number]>;quiet?:Set<string>};
 export function scanRangeAnomalies(rows:{symbol:string;last:number;observedAt:number;source:string;sourceCount:number;volume24hUsd:number}[],scanner:RangeScanner,now:number,shared:number,loaded:number):RangeDiscovery{
   if(rows.length>4096)throw new Error('COMMON_POOL_CAPACITY');
   const present=new Set(rows.map(r=>r.symbol));for(const [key] of scanner.prices)if(!present.has(key.split(':')[0]!))scanner.prices.delete(key);
@@ -672,11 +672,17 @@ export function scanRangeAnomalies(rows:{symbol:string;last:number;observedAt:nu
     (Math.abs(x.own-market)>=Math.max(x.duration===15?.004:.0015,x.normal*Math.sqrt(x.duration)*3)
       ||Math.abs(market)>=(x.duration===15?.004:.0015)&&Math.abs(x.own)<Math.abs(market)*.25));
   for(const x of abnormalities){const old=scanner.detected.get(x.row.symbol),residual=x.own-market!,kind=Math.abs(x.own)<Math.abs(market!)*.25?'ACTIVE_NONRESPONSE':x.own*market!<0?'OPPOSITE_MOVE':'OWN_ACCELERATION';
-    if(!tradableAnomaly(kind,residual)){if(old&&!old.frozen)scanner.detected.delete(x.row.symbol);continue;}
+    const quiet=scanner.quiet??=new Set<string>();
+    if(!tradableAnomaly(kind,residual)){if(old&&!old.frozen)scanner.detected.delete(x.row.symbol);quiet.delete(x.row.symbol);continue;}
+    if(quiet.has(x.row.symbol))continue;
+    if(old&&!old.frozen&&now-old.detectedAt>=WICK_WATCH_MS){scanner.detected.delete(x.row.symbol);quiet.add(x.row.symbol);continue;}
     scanner.detected.set(x.row.symbol,{symbol:x.row.symbol,source:old?.source??x.row.source,sourceCount:x.row.sourceCount,detectedAt:old?.detectedAt??now,...(old?.frozen?{frozen:true}:{}),
       own:x.own,residual,kind,score:Math.min(99,60+Math.abs(residual)*2000)});}
-  for(const [symbol,a] of scanner.detected){const row=rows.find(r=>r.symbol===symbol);
-    if(!a.frozen&&!tradableAnomaly(a.kind,a.residual)||now-a.detectedAt>1800000||!present.has(symbol)||!row||row.volume24hUsd<RANGE_MIN_VOLUME_24H_USD)scanner.detected.delete(symbol);}
+  const quiet=scanner.quiet??=new Set<string>(),tradableNow=new Set(abnormalities.filter(x=>tradableAnomaly(Math.abs(x.own)<Math.abs(market!)*.25?'ACTIVE_NONRESPONSE':x.own*market!<0?'OPPOSITE_MOVE':'OWN_ACCELERATION',x.own-market!)).map(x=>x.row.symbol));
+  for(const symbol of quiet)if(!tradableNow.has(symbol))quiet.delete(symbol);
+  for(const [symbol,a] of scanner.detected){const row=rows.find(r=>r.symbol===symbol),aged=!a.frozen&&now-a.detectedAt>=WICK_WATCH_MS;
+    if((!a.frozen&&!tradableAnomaly(a.kind,a.residual))||aged||now-a.detectedAt>1800000||!present.has(symbol)||!row||row.volume24hUsd<RANGE_MIN_VOLUME_24H_USD){
+      if(aged&&tradableNow.has(symbol))quiet.add(symbol);scanner.detected.delete(symbol);}}
   const anomalies=[...scanner.detected.values()];
   return{at:now,scanned:rows.filter(r=>now-r.observedAt<=12000).length,shared,excluded:shared-rows.length,marketSamples:marketRows.length,marketMove:market,
     anomalies:rankRangeDiscovery(anomalies,now),queued:Math.max(0,anomalies.length-30),loaded};

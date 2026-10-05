@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {advanceRangeResearch,decodeRangeWindow,rangeDirection,strongRangeProof,rangeMarketRoute,makeRangeHolding,
   rangeHoldingDecision,rangeExecutionAdmission,scanRangeAnomalies,normalizeRangeResearch,rangeObservationSymbols,fairRangeRefreshBatch,
-  validRangeHolding,thinFiveTape,sparseFiveTurnover,activeSwingRange,lastingRange,wickSignal,tradableAnomaly,RANGE_OUTCOME_BYTES,RANGE_RESEARCH_BYTES,type RangeResearch,type RangeWindows,type RangeScanner} from '../lib/anomaly-range.ts';
+  validRangeHolding,thinFiveTape,sparseFiveTurnover,activeSwingRange,lastingRange,wickSignal,tradableAnomaly,WICK_WATCH_MS,RANGE_OUTCOME_BYTES,RANGE_RESEARCH_BYTES,type RangeResearch,type RangeWindows,type RangeScanner} from '../lib/anomaly-range.ts';
 import {advanceDirectStrategy} from '../lib/direct-strategy.ts';
 import {initialForward,normalizeForward,forwardSummary,resetForwardAccountPreservingLearning,type Quote} from '../lib/forward-relations.ts';
 import {buildForwardProtectionCheckpoint,restoreForwardProtectionCheckpoint} from '../lib/forward-protection-checkpoint.ts';
@@ -266,10 +266,10 @@ test('thirty live watches rotate before timeout, preserve original ranges and su
   const f=fixture(),symbols=Array.from({length:30},(_,i)=>`X${i}_USDT`),windows:RangeWindows={},
     paths=Object.fromEntries(symbols.map(s=>[s,f.input.paths.A_USDT])),
     discovery={...f.input.discovery,anomalies:symbols.map(symbol=>({...f.input.discovery.anomalies[0]!,symbol,frozen:false}))};
-  let research=advanceRangeResearch({...f.input,paths,windows,discovery});const visited=new Set(Object.keys(research.events)),original=structuredClone(windows);
+  let research=advanceRangeResearch({...f.input,now:T+60000,paths,windows,discovery});const visited=new Set(Object.keys(research.events)),original=structuredClone(windows);
   for(const a of discovery.anomalies)a.frozen=true;
   for(let n=1;n<=12;n++){
-    const now=f.input.now+n*60000;
+    const now=T+60000+n*60000;
     research=advanceRangeResearch({...f.input,previous:research,now,paths,windows,discovery});
     Object.keys(research.events).forEach(s=>visited.add(s));assert.ok(Object.keys(research.events).length<=10);assert.ok(normalizeRangeResearch(research));
     assert.ok(Buffer.byteLength(JSON.stringify(research))<=RANGE_RESEARCH_BYTES);
@@ -312,14 +312,14 @@ test('gappy five-minute tape is not watched, and a mid-range coin ranks behind a
       anomalies:[{symbol:'A_USDT',detectedAt:T,source:'BYBIT',sourceCount:2,own:.02,residual:.02,score:90,kind:'OWN_ACCELERATION'}]},
     dropped=advanceRangeResearch({now,windows,paths:{A_USDT:prior},minutes:{A_USDT:[]},quotes:{A_USDT:q},ticks:{A_USDT:.001},discovery,positions:[],history:[]});
   assert.equal(dropped.events.A_USDT,undefined);assert.match(dropped.recent?.find(r=>r.symbol==='A_USDT')?.reason??'',/断层/);
-  const f=fixture(),edge={...structuredClone(f.e),symbol:'EDGE_USDT',phase:'CONFIRMING' as const,price:f.e.H},mid={...structuredClone(f.e),symbol:'MID_USDT',phase:'CONFIRMING' as const,price:(f.e.H+f.e.L)/2};
-  delete edge.proof;delete mid.proof;
-  assert.ok(rangePriority(edge,f.q,f.input.now).score>rangePriority(mid,f.q,f.input.now).score);
-  assert.match(rangePriority(mid,f.q,f.input.now).reason,/中间/);
-  const edges=Array.from({length:10},(_,i)=>({...edge,symbol:`E${i}_USDT`})),events=[...edges,mid],
+  const f=fixture(),soon={...structuredClone(f.e),symbol:'SOON_USDT',phase:'CONFIRMING' as const,active:true,lastAt:f.input.now-299000},late={...structuredClone(f.e),symbol:'LATE_USDT',phase:'CONFIRMING' as const,active:true,lastAt:f.input.now-1000};
+  delete soon.proof;delete late.proof;
+  assert.ok(rangePriority(soon,f.q,f.input.now).score>rangePriority(late,f.q,f.input.now).score);
+  assert.match(rangePriority(soon,f.q,f.input.now).reason,/5分钟/);
+  const soons=Array.from({length:10},(_,i)=>({...soon,symbol:`S${i}_USDT`})),events=[...soons,late],
     quotes=Object.fromEntries(events.map(e=>[e.symbol,f.q])),ranks=selectRangePlans(events,quotes,f.input.now).ranking;
-  assert.ok(ranks.filter(r=>r.rank<=8).every(r=>r.symbol.startsWith('E')));
-  assert.equal(ranks.find(r=>r.symbol==='MID_USDT')!.rank,11);
+  assert.ok(ranks.filter(r=>r.rank<=8).every(r=>r.symbol.startsWith('S')));
+  assert.equal(ranks.find(r=>r.symbol==='LATE_USDT')!.rank,11);
 });
 test('Gate turnover under one million is not scanned and releases an existing watch',()=>{
   const scanner:RangeScanner={prices:new Map(),detected:new Map([['ZK_USDT',{symbol:'ZK_USDT',detectedAt:T,source:'BYBIT',sourceCount:2,own:.08,residual:.08,score:90,kind:'OWN_ACCELERATION'}]])},
@@ -567,4 +567,9 @@ test('a wick longer than one and a half bodies chooses the side, and only strong
   t.unified!.anomaly=armed.memory;
   const back=rangeHoldingDecision(t,quote(f.input.now+4000,px-tp*.5),f.input.now+4000,[],[]);
   assert.equal(back.exit,'WICK_ONE_STOP');
+  const scanner:RangeScanner={prices:new Map(),detected:new Map([['ZK_USDT',{symbol:'ZK_USDT',detectedAt:T-WICK_WATCH_MS,source:'BYBIT',sourceCount:2,own:.02,residual:.02,score:80,kind:'OWN_ACCELERATION'}]]),quiet:new Set(['ZK_USDT'])},
+    flat=[{symbol:'ZK_USDT',source:'BYBIT',sourceCount:2,last:100,observedAt:T,volume24hUsd:2e6},...Array.from({length:8},(_,i)=>({symbol:`L${i}_USDT`,source:'BYBIT',sourceCount:2,last:100,observedAt:T,volume24hUsd:2e6}))];
+  const dropped=scanRangeAnomalies(flat,scanner,T,9,0);
+  assert.equal(dropped.anomalies.some(a=>a.symbol==='ZK_USDT'),false);
+  assert.equal(scanner.quiet?.has('ZK_USDT'),false);
 });

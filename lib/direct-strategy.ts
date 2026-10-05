@@ -519,7 +519,9 @@ function manageMarketDirect(s:ForwardState,input:Input,ready:boolean){
     for(const p of Object.values(ds.plans).sort((a,b)=>(ds.rangeResearch?.events[a.symbol]?.rank??Infinity)-(ds.rangeResearch?.events[b.symbol]?.rank??Infinity)||b.candidate.score-a.candidate.score)){
       const e=ds.rangeResearch?.events[p.symbol],q=input.quotes[p.symbol],c=input.contracts[p.symbol];
       if(!e?.proof||!q||!c||!p.candidate.eligible||p.consumed||s.positions.some(t=>t.openedAt===now))continue;
-      p.holdReason='按冻结计划持有；普通回调复查，结构失效退出';p.exitCondition='实际硬保护或计划结构失效；边缘新证明才可反向';
+      const priced=e.proof.kind==='WICK';
+      p.holdReason=priced?`止盈 ${Number(e.proof.target.toPrecision(6))}，最大止损 ${Number(e.proof.stop.toPrecision(6))}`:'按冻结计划持有；普通回调复查，结构失效退出';
+      p.exitCondition=priced?'到止盈出场；到达最大止损直接出':'实际硬保护或计划结构失效；边缘新证明才可反向';
       const predecessor=e.predecessorId?s.history.find(t=>t.id===e.predecessorId):undefined;
       if(e.reverseEligible&&(!predecessor||s.positions.some(t=>t.symbol===p.symbol)))continue;
       const error=openDirectPlan(s,p,q,c,now,input.quotes,predecessor,input.minutePaths?.[p.symbol],input.paperTiming,input.paths[p.symbol]);
@@ -550,7 +552,7 @@ function manageMarketDirect(s:ForwardState,input:Input,ready:boolean){
     if(ds.eventResearch){try{boundedEventResearch(ds.eventResearch);}
       catch{ds.eventResearchError='事件研究容量不足，暂停新增；已有持仓继续自身保护';}}
   }
-  ds.summary=ds.anomalyRange?`外部异动发现，区间上沿用还没被收盘越过的已回落高点，下沿用它之后已经确认的回落低点。突破后两小时不重画；没回到高点附近之前，下跌中的新低点不当下沿。突破只做刚收出去的那一根。已记住 ${Object.keys(ds.rangeResearch?.events??{}).length} 个计划；${s.positions.filter(paperFilled).length} 笔持仓。`:ds.eventResponse?`记录活跃异常事件；按自身推进保留与恢复参与，失败启动提前退出，有优势继续持有。已记住 ${Object.keys(ds.eventResearch?.events??{}).length} 个事件；${s.positions.filter(paperFilled).length} 笔实际持仓。`:ds.specialMove?`持续研究特别的活跃币；自身启动并保留价格优势后参与爆发段。研究记忆 ${Object.keys(ds.specialResearch?.watches??{}).length} 币；${s.positions.filter(paperFilled).length} 笔实际持仓。`:
+  ds.summary=ds.anomalyRange?`只盯强于大盘、或和大盘反向的币。等这根5分钟走完，按影线进场。止盈和最大止损写在每一笔上。在看 ${Object.keys(ds.rangeResearch?.events??{}).length} 个；持仓 ${s.positions.filter(paperFilled).length} 笔。`:ds.eventResponse?`记录活跃异常事件；按自身推进保留与恢复参与，失败启动提前退出，有优势继续持有。已记住 ${Object.keys(ds.eventResearch?.events??{}).length} 个事件；${s.positions.filter(paperFilled).length} 笔实际持仓。`:ds.specialMove?`持续研究特别的活跃币；自身启动并保留价格优势后参与爆发段。研究记忆 ${Object.keys(ds.specialResearch?.watches??{}).length} 币；${s.positions.filter(paperFilled).length} 笔实际持仓。`:
     `${ds.adaptive?'按实际失败参与回归，按持续承接参与延续；持仓依据独立观察。':a.reason}。回退 ${s.positions.filter(t=>paperFilled(t)&&t.unified?.branch==='RETURN').length} 笔；延续 ${s.positions.filter(t=>paperFilled(t)&&t.unified?.branch==='CONTINUATION').length} 笔；新方向须取得自身证明。`;
 }
 export function advanceDirectStrategy(input:Input){
