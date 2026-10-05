@@ -168,11 +168,12 @@ export function openDirectPlan(s:ForwardState,p:DirectPlan,q:Quote,c:Contract,no
     cycle=s.positions.concat(s.history).filter(t=>t.openedAt>=s.lastCandleAt).reduce((n,t)=>n+(t.realization?.initialRisk??t.plannedRisk),0),
     trendRisk=s.positions.filter(t=>t.side===p.side&&t.unified?.branch==='CONTINUATION').reduce((n,t)=>n+currentRisk(t,quotes),0),
     wick=s.directStrategy?.rangeResearch?.events[o.symbol]?.proof?.kind==='WICK',
-    bookRoom=equity>0?Math.max(0,.10-used/equity)/.10:0,
-    riskBudget=Math.min(wanted,1000*.015-cycle,equity*.099-used,equity*.0645-sameRisk,p.branch==='CONTINUATION'?equity*.025-trendRisk:Infinity,wick?equity*.012*bookRoom:Infinity),
+    riskBudget=wick?wanted:Math.min(wanted,1000*.015-cycle,equity*.099-used,equity*.0645-sameRisk,p.branch==='CONTINUATION'?equity*.025-trendRisk:Infinity),
     basePrice=p.branch==='RETURN'?movePrice:price,min=Math.max(1,Math.ceil(c.minContracts??Number(c.orderSizeMin??1))),
-    contracts=Math.floor(Math.min(1000*.70,riskBudget/riskRate)/(basePrice*c.quantoMultiplier)),quantity=contracts*c.quantoMultiplier,
-    leverage=g?.leverage??Math.max(1,Math.min(5,Math.floor(c.leverageMax/2))),notional=quantity*price,margin=notional/leverage;
+    leverage=g?.leverage??Math.max(1,Math.min(5,Math.floor(c.leverageMax/2))),
+    rawContracts=Math.floor(Math.min(1000*.70,riskBudget/riskRate)/(basePrice*c.quantoMultiplier)),
+    contracts=wick&&rawContracts<min&&s.positions.reduce((n,t)=>n+t.margin,0)+min*basePrice*c.quantoMultiplier/leverage<=equity*.75?min:rawContracts,
+    quantity=contracts*c.quantoMultiplier,notional=quantity*price,margin=notional/leverage;
   if(!freshQuote(q,now)||q.entryReady!==true)return'等待实时执行盘口';
   if(s.directStrategy?.marketAuthority&&(!route||!s.directStrategy.adaptive&&route.relation!=='INDEPENDENT'&&route.epoch!==s.directStrategy.marketAuthority.epoch
     ||!currentPermission(s,route,o.symbol,{now,quotes,minutePaths:minutePath?{[o.symbol]:minutePath}: {},paths:holdingPath?{[o.symbol]:holdingPath}:{},state:s} as Input)))return'市场分支许可已经改变，取消原执行计划';
@@ -186,10 +187,10 @@ export function openDirectPlan(s:ForwardState,p:DirectPlan,q:Quote,c:Contract,no
   const rangeRoute=route?.controllerVersion===ANOMALY_RANGE_VERSION,rangeEvent=s.directStrategy?.rangeResearch?.events[o.symbol],
     wickRoute=rangeRoute&&rangeEvent?.proof?.kind==='WICK',
     responseRoute=route?.controllerVersion===EVENT_RESPONSE_VERSION||rangeRoute&&rangeEvent?.proof?.kind==='EDGE_BREAKOUT'||wickRoute;
-  if(route&&(!g||(!responseRoute&&(!g.valid||g.ratio<1.35))||g.riskRate<=0||g.riskRate>.037||1/leverage<=g.riskRate+c.maintenanceRate+2*FEE))return'实际方向当前风险或扣费空间不足';
+  if(route&&(!g||(!responseRoute&&(!g.valid||g.ratio<1.35))||g.riskRate<=0||(!wickRoute&&g.riskRate>.037)||1/leverage<=g.riskRate+c.maintenanceRate+2*FEE))return'实际方向当前风险或扣费空间不足';
   if(route&&!s.directStrategy?.adaptive&&route.relation!=='INDEPENDENT'&&followerConflict(s,route))return'旧市场分支持仓尚未确认关闭，等待衔接完成';
   if(o.completedAt>now||o.expiresAt<=now)return'交易事件尚未完成或已失效';
-  if(s.positions.some(t=>t.symbol===o.symbol)||s.positions.length>=10)return'已有持仓或当前组合容量已满';
+  if(s.positions.some(t=>t.symbol===o.symbol)||(!wickRoute&&s.positions.length>=10))return'已有持仓或当前组合容量已满';
   if(p.consumed||s.consumedTheses[o.id])return'本次交易事件已经执行，不重复开仓';
   if(s.directStrategy?.specialMove&&!responseRoute&&route&&s.lastSide[o.symbol]===p.side
     &&(s.lastExitAt[o.symbol]??0)>=s.directStrategy.specialMove.cutoverAt
@@ -216,9 +217,9 @@ export function openDirectPlan(s:ForwardState,p:DirectPlan,q:Quote,c:Contract,no
     entryBaseline:capturePositionBaseline(o.side,s.extremumRegime.symbols[o.symbol],now),entryResponseValidated:true,
     marketStateAgeMs:Math.max(0,now-s.extremumRegime.updatedAt),costRate:COST}):undefined;
   if(observedAssessment?.entryConflict&&!route)return'入场与持仓证据冲突，等待推进事件重新形成持续响应';
-  if(markNow.stalePositions||!finitePositive(riskBudget)||riskBudget<1000*(geometry?.intent==='RANGE'?.0015:.0035)
+  if(markNow.stalePositions||(!wickRoute&&(!finitePositive(riskBudget)||riskBudget<1000*(geometry?.intent==='RANGE'?.0015:.0035)))
     ||contracts<min||s.positions.reduce((n,t)=>n+t.margin,0)+margin>equity*.75)return'当前账户风险、合约数量或逐仓保证金容量不足';
-  if(s.positions.some(t=>t.side===p.side&&o.clusterId&&t.entryContext?.clusterId===o.clusterId))return'同相关组已有同方向主仓';
+  if(!wickRoute&&s.positions.some(t=>t.side===p.side&&o.clusterId&&t.entryContext?.clusterId===o.clusterId))return'同相关组已有同方向主仓';
   if(!predecessor&&!s.directStrategy?.specialMove&&now-(s.lastExitAt[o.symbol]??0)<15*60_000&&s.lastSide[o.symbol]===p.side)return'同币同方向事件尚未重置';
   const id=`ue-d${now.toString(36)}-${o.symbol}-${p.branch==='RETURN'?'r':'c'}`,stop=g?.stop??geometry!.initialStop,
     winnerPlan:WinnerPlan=route?structuredClone(geometry!):g?{version:WINNER_POLICY_VERSION,intent:'TREND',eventAt:now,initialStop:g.stop,target:g.target,targetArea:null,
@@ -558,7 +559,7 @@ function manageMarketDirect(s:ForwardState,input:Input,ready:boolean){
     if(ds.eventResearch){try{boundedEventResearch(ds.eventResearch);}
       catch{ds.eventResearchError='事件研究容量不足，暂停新增；已有持仓继续自身保护';}}
   }
-  ds.summary=ds.anomalyRange?`只盯强于大盘、或和大盘反向的币。等这根5分钟走完，按影线进场。收盘后30秒内进场，过了不追。止盈净利润至少5U，不够就把止盈价外推，不加仓。最大止损是这个止盈距离的3倍。在看 ${Object.keys(ds.rangeResearch?.events??{}).length} 个；持仓 ${s.positions.filter(paperFilled).length} 笔。`:ds.eventResponse?`记录活跃异常事件；按自身推进保留与恢复参与，失败启动提前退出，有优势继续持有。已记住 ${Object.keys(ds.eventResearch?.events??{}).length} 个事件；${s.positions.filter(paperFilled).length} 笔实际持仓。`:ds.specialMove?`持续研究特别的活跃币；自身启动并保留价格优势后参与爆发段。研究记忆 ${Object.keys(ds.specialResearch?.watches??{}).length} 币；${s.positions.filter(paperFilled).length} 笔实际持仓。`:
+  ds.summary=ds.anomalyRange?`只盯强于大盘、或和大盘反向的币。等这根5分钟走完，按影线进场。收盘后30秒内进场，过了不追。止盈净利润至少5U，不够就把止盈价外推，不加仓。最大止损是这个止盈距离的3倍。风险额度不拦新单，保证金够就继续开。在看 ${Object.keys(ds.rangeResearch?.events??{}).length} 个；持仓 ${s.positions.filter(paperFilled).length} 笔。`:ds.eventResponse?`记录活跃异常事件；按自身推进保留与恢复参与，失败启动提前退出，有优势继续持有。已记住 ${Object.keys(ds.eventResearch?.events??{}).length} 个事件；${s.positions.filter(paperFilled).length} 笔实际持仓。`:ds.specialMove?`持续研究特别的活跃币；自身启动并保留价格优势后参与爆发段。研究记忆 ${Object.keys(ds.specialResearch?.watches??{}).length} 币；${s.positions.filter(paperFilled).length} 笔实际持仓。`:
     `${ds.adaptive?'按实际失败参与回归，按持续承接参与延续；持仓依据独立观察。':a.reason}。回退 ${s.positions.filter(t=>paperFilled(t)&&t.unified?.branch==='RETURN').length} 笔；延续 ${s.positions.filter(t=>paperFilled(t)&&t.unified?.branch==='CONTINUATION').length} 笔；新方向须取得自身证明。`;
 }
 export function advanceDirectStrategy(input:Input){

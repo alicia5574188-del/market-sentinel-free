@@ -226,7 +226,7 @@ function trade(){const f=fixture(),r=rangeMarketRoute(f.research,'A_USDT',(f.q.b
   const t=out.state.positions[0]!;assert.equal(t.side,r.side);assert.equal(t.unified!.anomaly!.kind,'WICK');
   return{...f,state:out.state,t};}
 test('two fresh wicks from one close are both queued, and the same wick is refused after 30 seconds',()=>{
-  const f=fixture(),symbols=['A_USDT','B_USDT'],
+  const f=fixture(),symbols=['A_USDT','B_USDT','C_USDT'],
     paths=Object.fromEntries(symbols.map(s=>[s,f.input.paths.A_USDT])),
     minutes=Object.fromEntries(symbols.map(s=>[s,f.input.minutes.A_USDT])),
     discovery={...f.input.discovery,anomalies:symbols.map(symbol=>({...f.input.discovery.anomalies[0]!,symbol}))},
@@ -235,11 +235,20 @@ test('two fresh wicks from one close are both queued, and the same wick is refus
       analysisQuotes:Object.fromEntries(symbols.map(s=>[s,quote(now,f.q.bestAsk)])),contracts,marketAuthority:true,specialMove:true,anomalyRange:true,rangeDiscovery:discovery,
       paperTiming:{prepareMs:2000,confirmMs:0,basis:'EXECUTION_CLOCK',samples:0}});
   const opened=run(f.input.now);
-  assert.ok(opened.state.positions.length>=1);
-  assert.equal(opened.state.positions.filter(t=>t.symbol==='A_USDT').length,1);
-  if(!opened.state.positions.some(t=>t.symbol==='B_USDT'))assert.match(opened.state.directStrategy!.plans.B_USDT?.reason??'',/风险|容量/);
+  assert.deepEqual(opened.state.positions.map(t=>t.symbol).sort(),symbols);
   assert.ok(opened.state.positions.every(t=>t.unified?.anomaly?.kind==='WICK'&&t.openedAt-t.unified!.anomaly!.proof.at<=30000));
   const late=run(f.e.proof!.at+30001);assert.equal(late.state.positions.length,0);
+  const fat=['E_USDT','F_USDT','G_USDT','H_USDT','I_USDT'],
+    fatContract={quantoMultiplier:8,leverageMax:20,maintenanceRate:.005,minContracts:1,tickSize:.001,enableDecimal:false,orderSizeMin:'1',orderSizeMax:'1000000',marketOrderSizeMax:'1000000'},
+    crowded=advanceDirectStrategy({state:initialForward(T-3600000),now:f.input.now,paths:Object.fromEntries(fat.map(s=>[s,f.input.paths.A_USDT])),
+      minutePaths:Object.fromEntries(fat.map(s=>[s,f.input.minutes.A_USDT])),
+      quotes:Object.fromEntries(fat.map(s=>[s,quote(f.input.now,f.q.bestAsk)])),
+      analysisQuotes:Object.fromEntries(fat.map(s=>[s,quote(f.input.now,f.q.bestAsk)])),
+      contracts:Object.fromEntries(fat.map(s=>[s,fatContract])),marketAuthority:true,specialMove:true,anomalyRange:true,
+      rangeDiscovery:{...f.input.discovery,anomalies:fat.map(symbol=>({...f.input.discovery.anomalies[0]!,symbol}))},
+      paperTiming:{prepareMs:2000,confirmMs:0,basis:'EXECUTION_CLOCK',samples:0}});
+  assert.equal(crowded.state.positions.length,4,JSON.stringify(crowded.state.directStrategy?.plans));
+  assert.match(crowded.state.directStrategy!.plans.I_USDT?.reason??'',/保证金|容量/);
 });
 test('actual new plan uses native fixed1000 sizing/queue; immutable witness survives account/restart/archive/snapshot',async()=>{
   const f=trade();assert.ok(f.t.paperOrder);assert.equal(f.t.forecast!.sizingEquity,1000);normalizeForward(structuredClone(f.state),f.input.now);
