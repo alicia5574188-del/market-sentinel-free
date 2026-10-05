@@ -47,7 +47,7 @@ import {advanceShadowInverse} from '../lib/shadow-inverse.ts';
 import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
 import { ADAPTIVE_ENGINE_VERSION, FORWARD_EXECUTION_BBO_CAP, FORWARD_MINUTE_CONFIRMATION_CAP, closeForwardForReset,
   forwardSummary, forwardEquity, freshQuote, forwardUrgentMinuteSymbols, forwardUrgentQuoteSymbols, forwardWatchSymbols,
-  resetForwardAccountPreservingLearning, BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
+  resetForwardAccountPreservingLearning, initialForward, BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
 import { FORWARD_EXECUTION_VOLUME_FLOOR_USD, forwardExecutionUniverseEligible, selectAnchorOpportunityUniverse } from "../lib/multi-turn-universe.ts";
 import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite, prepareForwardReset,
   FORWARD_STORAGE, FORWARD_PROTECTION_STORAGE, FORWARD_PAGED_STATE_VERSION } from "../lib/forward-store.ts";
@@ -723,7 +723,16 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         const overlay=await ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
         this.forwardProtectionBudget=readProtectionWriteBudget(overlay?.writeBudget);
       }
-      catch (error) { this.forwardError = safeError(error); }
+      catch (error) {
+        this.forwardError = safeError(error);
+        // The owner asked to abandon this unread later-system ledger. The reset
+        // control cannot run until the account loads, so this one incompatibility
+        // is cleared here. A later mismatch still stops instead of rewriting itself.
+        if(/部分兑现账本与剩余仓位不一致/.test(this.forwardError)){
+          try{await this.resetPaperAccount();}
+          catch(resetError){this.forwardError=safeError(resetError);}
+        }
+      }
       // Owner intent has its own durable record. Background checkpoints and
       // deployments cannot replace a later OFF with an earlier in-flight ON.
       const intent=await ctx.storage.get<{enabled:boolean;changedAt:number;activation?:LiveSession|null}>(`${LIVE_PARITY_PREFIX}owner-intent`);
@@ -1903,7 +1912,29 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         throw new Error("请先关闭实盘并确认 Gate 没有本系统持仓或待成交订单");
 
       stage="读取当前模拟账户";
-      if(!this.forwardState)this.forwardState=await readForwardStore(this.ctx.storage,now);
+      if(!this.forwardState){
+        try{this.forwardState=await readForwardStore(this.ctx.storage,now);}
+        catch(error){
+          if(!/部分兑现账本与剩余仓位不一致/.test(safeError(error)))throw error;
+          // This version will not rebuild a partial-realization record it rejects.
+          // The owner asked to discard that later-system ledger and start at 1000U.
+          stage="丢弃无法读取的旧账";
+          const next=initialForward(now);
+          next.latestReason="旧模拟账的部分兑现记录对不上，已重置为1000U。";
+          next.storage={persistedAt:now+1,error:null,layout:FORWARD_PAGED_STATE_VERSION};
+          const fresh=await prepareForwardWrite(null,next,now+1,{compact:true});
+          const accountEntries={...fresh.entries,...prepareForwardProtectionWrite(next).entries};
+          const reservation=this.reserveCriticalWrites(Object.keys(accountEntries).length);
+          try{
+            await this.ctx.storage.transaction(async transaction=>{await transaction.put(accountEntries);});
+            reservation.finish(true);
+          }finally{reservation.finish(false);}
+          fresh.state.storage.layout=FORWARD_PAGED_STATE_VERSION;
+          this.forwardCompression=fresh.compression;this.forwardState=fresh.state;this.forwardError=null;
+          this.forwardProtectionBudget=readProtectionWriteBudget(undefined);this.mirrorClosures.clear();
+          return{ok:true,equity:1000,forward:forwardSummary(this.forwardState,this.regimeQuotes(now),now)};
+        }
+      }
       const previous=this.forwardState;if(!previous)throw new Error("模拟账户尚未恢复");
 
       stage="封存旧账户";

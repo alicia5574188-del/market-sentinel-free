@@ -199,6 +199,29 @@ test('reset explicitly closes both books administratively, including saved-mark 
     assert.equal(next.balance,1000);assert.equal(next.inverseTrial,undefined);assert.equal(s.positions.length,1);
   }
 });
+test('an inconsistent partial realization blocks a normal load and can be dropped only for an explicit reset',async()=>{
+  const s=initialForward(T-B);s.storage.persistedAt=T;sourceOpen(s,trade('later-1'));
+  const base=normalizeForward(structuredClone(s),T+1);
+  const write=await prepareForwardWrite(null,base,T,{compact:true}),db=new Map(Object.entries(write.entries)),
+    reader={get:async<V>(key:string)=>structuredClone(db.get(key)) as V|undefined};
+  const headKey=[...db.keys()].find(k=>k.endsWith('head'))!;
+  const head=db.get(headKey) as {inline:Uint8Array;sha256:string;rawLength:number;encoding?:string};
+  const {gunzipSync,gzipSync}=await import('node:zlib');
+  const raw=Buffer.from(gunzipSync(head.inline));
+  const parsed=JSON.parse(raw.toString('utf8')) as ForwardState;
+  const open=parsed.positions[0]!;
+  open.realization={version:'partial-realization-v1',initialQuantity:open.quantity,initialContracts:open.contracts,
+    initialNotional:open.notional,initialMargin:open.margin,initialRisk:open.plannedRisk,initialEntryFee:open.entryFee,
+    gross:1,fees:0,funding:0,sequence:1,fills:[{sequence:1,at:T,quoteAt:T,price:open.entryPrice,contracts:1,
+      quantity:1,gross:1,fee:0,funding:0,reason:'later system'}]};
+  const nextRaw=Buffer.from(JSON.stringify(parsed)),packed=gzipSync(nextRaw);
+  db.set(headKey,{...head,inline:packed,length:packed.length,rawLength:nextRaw.length,sha256:createHash('sha256').update(packed).digest('hex')});
+  await assert.rejects(()=>readForwardStore(reader,T+1),/部分兑现账本与剩余仓位不一致/);
+  const recovered=await readForwardStore(reader,T+1,{dropRealization:true});
+  assert.equal(recovered.positions[0]!.realization,undefined);
+  const closed=closeForwardForReset(recovered,{},T+60000),next=resetForwardAccountPreservingLearning(recovered,T+60000);
+  assert.equal(closed.positions.length,0);assert.equal(next.balance,1000);assert.equal(next.initialEquity,1000);
+});
 test('financial tampering, lost source counterpart and duplicate lifecycle fail closed',()=>{
   const {s}=fixture();for(const mutate of [(x:ForwardState)=>x.positions[0]!.quantity++,
     (x:ForwardState)=>x.positions[0]!.inverseCopy!.fills[0]!.fee++,

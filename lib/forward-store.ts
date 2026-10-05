@@ -199,7 +199,7 @@ function packedPageIssue(samples:unknown[],meta:SamplePageMeta,allowLegacyDrift=
   return !allowLegacyDrift&&(firstAt!==meta.firstAt||lastAt!==meta.lastAt)?"BOUNDS":null;
 }
 
-export async function readForwardStore(storage: Reader, now: number) {
+export async function readForwardStore(storage: Reader, now: number, options?:{dropRealization?:boolean}) {
   const head=await storage.get<Head>(`${FORWARD_STORAGE}head`);
   if(!head)return normalizeForward(null,now);
   const accountLimit=head.accountMode==="shadow-inverse-v1"?FORWARD_PAIRED_ACCOUNT_MAX_BYTES:FORWARD_ACCOUNT_MAX_BYTES;
@@ -222,6 +222,12 @@ export async function readForwardStore(storage: Reader, now: number) {
   if(head.encoding==="gzip"&&raw.length!==head.rawLength)throw new Error("前向解压长度校验失败");
   if(head.version===FORWARD_PAGED_STATE_VERSION&&raw.length>accountLimit)throw new Error("前向账户主状态超过预算；拒绝截断账户");
   const decoded=JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(raw)) as ForwardState;
+  // An explicit reset is the only caller. A later strategy's partial-realization
+  // record cannot pass this version's remaining-size check, and that must not
+  // make the owner's reset impossible. Ordinary loads still fail closed.
+  if(options?.dropRealization){
+    for(const t of [...(decoded.positions??[]),...(decoded.history??[])]) delete t.realization;
+  }
   if(head.accountMode!==undefined&&decoded.inverseTrial?.version!==head.accountMode)
     throw new Error("前向双账户存储头与配对账本不一致；保留原账户");
   if(head.version===FORWARD_PAGED_STATE_VERSION){
