@@ -581,8 +581,11 @@ export function rangeHoldingDecision(t:Trade,q:Quote,now:number,path:CandleLike[
     else if(net>=m.peak-m.n5*.25&&m.peak>0){m.peakSamples=Math.min(3,m.peakSamples+1);if(m.peakSamples>=3)m.retainedPeak=Math.max(m.retainedPeak,Math.min(net,m.peak));}}
   if(m.kind==='WICK'&&m.proof.bodyBaseline>0&&(m.proof.wickMultiple??0)>=3){
     const Dtp=m.proof.bodyBaseline*m.proof.wickMultiple!*m.scale,adverse=dir*(t.entryPrice-px);
+    const minNet=wickProfitTarget(t.side,t.entryPrice,t.quantity),stored=m.proof.target*m.scale;
+    if(minNet!==undefined&&dir*(minNet-stored)>0&&dir*(minNet-m.proof.price*m.scale)>0)m.proof.target=minNet/m.scale;
+    const tpPx=m.proof.target*m.scale,goal=dir>0?Math.max(t.entryPrice+Dtp,tpPx):Math.min(t.entryPrice-Dtp,tpPx);
     if(adverse>=2*Dtp&&!m.insideAt){m.insideAt=now;m.stage='REVIEW';m.reason='浮亏到了止盈距离的2倍，回到1倍亏损或成本就出';}
-    if(dir*(px-t.entryPrice)>=Dtp){exit='WICK_TARGET';m.stage='EXIT';m.reason='到达这根K线实体的止盈';}
+    if(dir*(px-goal)>=0){exit='WICK_TARGET';m.stage='EXIT';m.reason='到达止盈';}
     else if(m.insideAt&&dir*(px-t.entryPrice)>=0){exit='WICK_BREAKEVEN';m.stage='EXIT';m.reason='浮亏到过2倍止盈距离，价格回到成本，保本出场';}
     else if(m.insideAt&&adverse<=Dtp){exit='WICK_ONE_STOP';m.stage='EXIT';m.reason='浮亏到过2倍止盈距离，回到1倍止损出场';}
     else if(adverse>=3*Dtp||dir*(px-stop)<=0){exit='WICK_HARD_STOP';m.stage='EXIT';m.reason='浮亏到达止盈距离的3倍，直接止损';}
@@ -644,7 +647,16 @@ export function rangeHoldingDecision(t:Trade,q:Quote,now:number,path:CandleLike[
 export function tradableAnomaly(kind:string,residual:number){
   return kind==='OPPOSITE_MOVE'||(kind==='OWN_ACCELERATION'&&residual>0);
 }
-/** Upper wick shorts, lower wick longs. The traded wick must exceed 1.5 bodies; the other wick must be under half a body. */
+/** Price that nets `minNet` after both taker fees. Undefined when size cannot reach it above zero. */
+export function wickProfitTarget(side:Side,entry:number,quantity:number,minNet=5,fee=.0005){
+  if(!(entry>0)||!(quantity>0)||!(minNet>0)||!(fee>=0)||fee>=1)return;
+  const raw=side==='LONG'
+    ?(minNet+entry*quantity*(1+fee))/(quantity*(1-fee))
+    :(entry*quantity*(1-fee)-minNet)/(quantity*(1+fee));
+  if(!Number.isFinite(raw)||raw<=0)return;
+  if(side==='LONG'?raw<=entry:raw>=entry)return;
+  return raw;
+}
 export function wickSignal(bar:CandleLike){
   const body=Math.abs(bar.close-bar.open),upper=bar.high-Math.max(bar.open,bar.close),lower=Math.min(bar.open,bar.close)-bar.low;
   if(!(body>0)||!(bar.high>=Math.max(bar.open,bar.close))||!(bar.low<=Math.min(bar.open,bar.close))||!(upper>=0)||!(lower>=0))return;

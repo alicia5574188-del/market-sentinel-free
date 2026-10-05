@@ -16,7 +16,7 @@ import {advanceEpisodeResearch} from './episode-research.ts';
 import {adaptiveMarketRoute,adaptiveHoldingDecision,ADAPTIVE_CONTROLLER_VERSION} from './adaptive-controller.ts';
 import {advanceSpecialResearch,specialMarketRoute,SPECIAL_MOVE_VERSION} from './special-move.ts';
 import {advanceEventResearch,boundedEventResearch,eventMarketRoute,confirmEventQuote,eventHoldingDecision,EVENT_RESPONSE_VERSION} from './event-response.ts';
-import {ANOMALY_RANGE_VERSION,advanceRangeResearch,rangeMarketRoute,rangeHoldingDecision,makeRangeHolding} from './anomaly-range.ts';
+import {ANOMALY_RANGE_VERSION,advanceRangeResearch,rangeMarketRoute,rangeHoldingDecision,makeRangeHolding,wickProfitTarget} from './anomaly-range.ts';
 export {DIRECT_STRATEGY_VERSION} from './direct-strategy-types.ts';
 export {directOpportunityView,directStrategySummary} from './direct-strategy-view.ts';
 const sign=(side:'LONG'|'SHORT')=>side==='LONG'?1:-1;
@@ -254,6 +254,8 @@ export function openDirectPlan(s:ForwardState,p:DirectPlan,q:Quote,c:Contract,no
         entryRelativeStrength:o.relativeStrength??.5,portfolioRiskCharge:riskBudget,winnerPlan:route||p.branch==='CONTINUATION'?winnerPlan:undefined,
         tradePlan:route?(p.branch==='RETURN'?'RANGE_REVERSION':'WINNER_TREND'):p.branch==='CONTINUATION'?'WINNER_TREND':undefined},
       forecast:{remainingNetRate:o.netRemainingSpaceRate,quality:o.score,sizingEquity:1000}};
+  if(t.unified?.anomaly?.kind==='WICK'){const m=t.unified.anomaly,need=wickProfitTarget(t.side,t.entryPrice,t.quantity),dir=sign(t.side);
+    if(need!==undefined&&dir*(need-m.proof.target*m.scale)>0&&dir*(need-m.proof.price*m.scale)>0){m.proof.target=need/m.scale;t.armPrice=need;if(t.unified.marketRoute)t.unified.marketRoute.target=need;}}
   if(s.paperExecution)queuePaperEntry(s,t,timing??{prepareMs:2000,confirmMs:0,basis:'EXECUTION_CLOCK',samples:0});
   else{s.balance-=t.entryFee;s.fees+=t.entryFee;s.turnover+=notional;s.positions.push(t);s.lastEntryAt[t.symbol]=now;s.lastSide[t.symbol]=t.side;}
   s.consumedTheses[o.id]=now;p.consumed=true;p.phase=paperFilled(t)?'HOLDING':'EXECUTING';note(s,t,now,p.reason);
@@ -394,7 +396,7 @@ function manageMarketTrade(s:ForwardState,t:Trade,q:Quote,input:Input){
   if(u.anomaly){const result=rangeHoldingDecision(t,q,now,input.paths[t.symbol]??[],input.minutePaths?.[t.symbol]);
     u.anomaly=result.memory;t.stopPrice=result.stop;u.lastBarAt=result.memory.lastBarAt;u.lastDecisionAt=now;
     u.decision=result.memory.stage;u.holdReason=result.reason;u.exitCondition=result.memory.kind==='WICK'
-      ?'止盈是这根K线实体的3到5倍。浮亏不到1倍止盈距离继续拿；到过2倍就等回到1倍亏损或成本；到3倍直接止损'
+      ?'止盈按这根K线实体的3到5倍；按这个价净利润不到5U，就把止盈价外推到至少5U，不加仓。浮亏不到1倍原来的止盈距离继续拿；到过2倍就等回到1倍亏损或成本；到3倍直接止损'
       :result.memory.kind==='EDGE_RETURN'
       ?`下影线不算突破。第一根5分钟收在区间外先拿着；收回区间后，再有一根收在外面才止损。未止损则按回归重心 ${(result.memory.proof.target*result.memory.scale).toPrecision(6)} 出场`
       :'原计划结构失效或实际保护触发；仅边缘新确认可反向';
@@ -552,7 +554,7 @@ function manageMarketDirect(s:ForwardState,input:Input,ready:boolean){
     if(ds.eventResearch){try{boundedEventResearch(ds.eventResearch);}
       catch{ds.eventResearchError='事件研究容量不足，暂停新增；已有持仓继续自身保护';}}
   }
-  ds.summary=ds.anomalyRange?`只盯强于大盘、或和大盘反向的币。等这根5分钟走完，按影线进场。止盈和最大止损写在每一笔上。在看 ${Object.keys(ds.rangeResearch?.events??{}).length} 个；持仓 ${s.positions.filter(paperFilled).length} 笔。`:ds.eventResponse?`记录活跃异常事件；按自身推进保留与恢复参与，失败启动提前退出，有优势继续持有。已记住 ${Object.keys(ds.eventResearch?.events??{}).length} 个事件；${s.positions.filter(paperFilled).length} 笔实际持仓。`:ds.specialMove?`持续研究特别的活跃币；自身启动并保留价格优势后参与爆发段。研究记忆 ${Object.keys(ds.specialResearch?.watches??{}).length} 币；${s.positions.filter(paperFilled).length} 笔实际持仓。`:
+  ds.summary=ds.anomalyRange?`只盯强于大盘、或和大盘反向的币。等这根5分钟走完，按影线进场。止盈净利润至少5U，不够就把止盈价外推，不加仓。在看 ${Object.keys(ds.rangeResearch?.events??{}).length} 个；持仓 ${s.positions.filter(paperFilled).length} 笔。`:ds.eventResponse?`记录活跃异常事件；按自身推进保留与恢复参与，失败启动提前退出，有优势继续持有。已记住 ${Object.keys(ds.eventResearch?.events??{}).length} 个事件；${s.positions.filter(paperFilled).length} 笔实际持仓。`:ds.specialMove?`持续研究特别的活跃币；自身启动并保留价格优势后参与爆发段。研究记忆 ${Object.keys(ds.specialResearch?.watches??{}).length} 币；${s.positions.filter(paperFilled).length} 笔实际持仓。`:
     `${ds.adaptive?'按实际失败参与回归，按持续承接参与延续；持仓依据独立观察。':a.reason}。回退 ${s.positions.filter(t=>paperFilled(t)&&t.unified?.branch==='RETURN').length} 笔；延续 ${s.positions.filter(t=>paperFilled(t)&&t.unified?.branch==='CONTINUATION').length} 笔；新方向须取得自身证明。`;
 }
 export function advanceDirectStrategy(input:Input){
