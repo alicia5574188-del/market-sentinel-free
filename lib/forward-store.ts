@@ -1,6 +1,7 @@
 import { FORWARD_VERSION, normalizeForward, type ForwardState, type Trade } from "./forward-relations.ts";
 import type { RelationMeasurement } from "./forward-relation-v2.ts";
 import { gzip, gunzip, MAX_STATE_BYTES } from "./storage-codec.ts";
+import { assertTradeRealization } from "./trade-realization.ts";
 import { buildForwardProtectionCheckpoint, restoreForwardProtectionCheckpoint } from "./forward-protection-checkpoint.ts";
 import { MARKET_HYPOTHESIS_ACTIVE_LIMIT, MARKET_HYPOTHESIS_MEMORY_LIMIT, MARKET_HYPOTHESIS_RESOLVED_LIMIT } from "./market-intelligence-hypothesis-research.ts";
 
@@ -226,7 +227,10 @@ export async function readForwardStore(storage: Reader, now: number, options?:{d
   // record cannot pass this version's remaining-size check, and that must not
   // make the owner's reset impossible. Ordinary loads still fail closed.
   if(options?.dropRealization){
-    for(const t of [...(decoded.positions??[]),...(decoded.history??[])]) delete t.realization;
+    for(const t of [...(decoded.positions??[]),...(decoded.history??[])]){
+      try{assertTradeRealization(t);}
+      catch(error){if(error instanceof Error&&error.message.includes("部分兑现账本与剩余仓位不一致"))delete t.realization;else throw error;}
+    }
   }
   if(head.accountMode!==undefined&&decoded.inverseTrial?.version!==head.accountMode)
     throw new Error("前向双账户存储头与配对账本不一致；保留原账户");

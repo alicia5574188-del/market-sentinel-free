@@ -47,7 +47,7 @@ import {advanceShadowInverse} from '../lib/shadow-inverse.ts';
 import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
 import { ADAPTIVE_ENGINE_VERSION, FORWARD_EXECUTION_BBO_CAP, FORWARD_MINUTE_CONFIRMATION_CAP, closeForwardForReset,
   forwardSummary, forwardEquity, freshQuote, forwardUrgentMinuteSymbols, forwardUrgentQuoteSymbols, forwardWatchSymbols,
-  resetForwardAccountPreservingLearning, initialForward, BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
+  resetForwardAccountPreservingLearning, BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
 import { FORWARD_EXECUTION_VOLUME_FLOOR_USD, forwardExecutionUniverseEligible, selectAnchorOpportunityUniverse } from "../lib/multi-turn-universe.ts";
 import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite, prepareForwardReset,
   FORWARD_STORAGE, FORWARD_PROTECTION_STORAGE, FORWARD_PAGED_STATE_VERSION } from "../lib/forward-store.ts";
@@ -1916,23 +1916,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         try{this.forwardState=await readForwardStore(this.ctx.storage,now);}
         catch(error){
           if(!/部分兑现账本与剩余仓位不一致/.test(safeError(error)))throw error;
-          // This version will not rebuild a partial-realization record it rejects.
-          // The owner asked to discard that later-system ledger and start at 1000U.
-          stage="丢弃无法读取的旧账";
-          const next=initialForward(now);
-          next.latestReason="旧模拟账的部分兑现记录对不上，已重置为1000U。";
-          next.storage={persistedAt:now+1,error:null,layout:FORWARD_PAGED_STATE_VERSION};
-          const fresh=await prepareForwardWrite(null,next,now+1,{compact:true});
-          const accountEntries={...fresh.entries,...prepareForwardProtectionWrite(next).entries};
-          const reservation=this.reserveCriticalWrites(Object.keys(accountEntries).length);
-          try{
-            await this.ctx.storage.transaction(async transaction=>{await transaction.put(accountEntries);});
-            reservation.finish(true);
-          }finally{reservation.finish(false);}
-          fresh.state.storage.layout=FORWARD_PAGED_STATE_VERSION;
-          this.forwardCompression=fresh.compression;this.forwardState=fresh.state;this.forwardError=null;
-          this.forwardProtectionBudget=readProtectionWriteBudget(undefined);this.mirrorClosures.clear();
-          return{ok:true,equity:1000,forward:forwardSummary(this.forwardState,this.regimeQuotes(now),now)};
+          this.forwardState=await readForwardStore(this.ctx.storage,now,{dropRealization:true});
         }
       }
       const previous=this.forwardState;if(!previous)throw new Error("模拟账户尚未恢复");
