@@ -199,9 +199,10 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
     const reason=rangeExecutionAdmission(t,{bestBid:input.entryPrice,bestAsk:input.entryPrice,observedAt:input.quoteObservedAt??input.now,fresh:true},input.now,true);
     if(reason)fail('ECONOMICS',reason);
   }
-  if(t.unified?.marketRoute?.controllerVersion==='anomaly-range-v1'&&t.unified.anomaly?.kind==='EDGE_BREAKOUT'){
-    // Observed outward proof has no promised price target. All stop/lot/margin/
-    // native risk checks below remain common to PAPER and LIVE.
+  if(t.unified?.marketRoute?.controllerVersion==='anomaly-range-v1'&&(t.unified.anomaly?.kind==='EDGE_BREAKOUT'||t.unified.anomaly?.kind==='WICK')){
+    // Breakout has no promised target. A wick stop is up to three times the
+    // body target, so the 1.35 reward/risk gate would reject the plan itself.
+    // Stop, lot, margin and account risk checks below stay in force.
   }else if(t.unified?.marketRoute?.controllerVersion==='event-response-v1'){
     if(!responseEntryExecutable(t,input.entryPrice,input.now))fail('ECONOMICS','真实成交价未保留事件价格优势或已超过启动时效');
   }else if(t.unified?.branch==='CONTINUATION'||t.unified?.marketRoute){

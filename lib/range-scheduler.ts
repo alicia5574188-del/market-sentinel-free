@@ -6,6 +6,7 @@ export function rangePriority(e:RangeEvent,q:QuoteLike|undefined,now:number){
     proof=e.proof&&now-e.proof.at<=120000&&e.proof.at<=now&&Math.abs(e.price-e.proof.price)<=e.n5?e.proof:undefined,
     aligned=e.direction==='UP'?e.own>0:e.direction==='DOWN'?e.own<0:false;
   if(e.phase==='EXECUTING')return{score:10000,reason:'已提交，保留执行'};
+  if(usable&&e.active&&proof?.kind==='WICK')return{score:925,reason:'影线已经收完'};
   const band=Math.max(e.E,e.n5);
   if(e.price>e.L+band&&e.price<e.H-band)return{score:15,reason:'价格在区间中间，让出优先席位'};
   if(usable&&e.active&&proof)return{score:900+(proof.kind==='INTERNAL_TREND'&&aligned?30:proof.kind==='EDGE_BREAKOUT'?20:10),reason:proof.kind==='INTERNAL_TREND'?'内部同向证明完成':proof.kind==='EDGE_BREAKOUT'?'突破证明完成':'边缘回归证明完成'};

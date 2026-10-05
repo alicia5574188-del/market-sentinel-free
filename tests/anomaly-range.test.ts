@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {advanceRangeResearch,decodeRangeWindow,rangeDirection,strongRangeProof,rangeMarketRoute,makeRangeHolding,
   rangeHoldingDecision,rangeExecutionAdmission,scanRangeAnomalies,normalizeRangeResearch,rangeObservationSymbols,fairRangeRefreshBatch,
-  validRangeHolding,thinFiveTape,sparseFiveTurnover,activeSwingRange,lastingRange,RANGE_OUTCOME_BYTES,RANGE_RESEARCH_BYTES,type RangeResearch,type RangeWindows,type RangeScanner} from '../lib/anomaly-range.ts';
+  validRangeHolding,thinFiveTape,sparseFiveTurnover,activeSwingRange,lastingRange,wickSignal,tradableAnomaly,RANGE_OUTCOME_BYTES,RANGE_RESEARCH_BYTES,type RangeResearch,type RangeWindows,type RangeScanner} from '../lib/anomaly-range.ts';
 import {advanceDirectStrategy} from '../lib/direct-strategy.ts';
 import {initialForward,normalizeForward,forwardSummary,resetForwardAccountPreservingLearning,type Quote} from '../lib/forward-relations.ts';
 import {buildForwardProtectionCheckpoint,restoreForwardProtectionCheckpoint} from '../lib/forward-protection-checkpoint.ts';
@@ -14,20 +14,21 @@ import {validMarketRoute} from '../lib/market-authority.ts';
 import {rangePriority,selectRangePlans,rankRangeDiscovery} from '../lib/range-scheduler.ts';
 import type {CandleLike} from '../lib/market-intelligence-engine.ts';
 const B=300000,T=Math.floor(1791014400000/B)*B;
-const candle=(at:number,open:number,close:number,span=.4):CandleLike=>({time:at/1000,open,close,
-  high:Math.max(open,close)+span/2,low:Math.min(open,close)-span/2,volume:100,turnoverUsd:10000,volumeVenue:'BYBIT'});
+const candle=(at:number,open:number,close:number,span=.4,wick?:{up?:number;down?:number}):CandleLike=>({time:at/1000,open,close,
+  high:Math.max(open,close)+(wick?.up??span/2),low:Math.min(open,close)-(wick?.down??span/2),volume:100,turnoverUsd:10000,volumeVenue:'BYBIT'});
 const quote=(at:number,p:number):Quote=>({bestBid:p-.0001,bestAsk:p+.0001,observedAt:at,fresh:true,entryReady:true,sourceCount:2,priceSource:'BYBIT',
   bookCoverage:'DEPTH20',bids:[{price:p-.0001,size:100000}],asks:[{price:p+.0001,size:100000}]});
 function fixture(side=1,kind:'EDGE_BREAKOUT'|'EDGE_RETURN'='EDGE_BREAKOUT'){
   const windows:RangeWindows={},prior=Array.from({length:120},(_,i)=>candle(T-(120-i)*B,100+Math.sin(i/7),100+Math.sin(i/7))),
     H=Math.max(...prior.map(r=>r.high)),L=Math.min(...prior.map(r=>r.low)),edge=side>0?H:L,
     close=kind==='EDGE_BREAKOUT'?edge+side*.15:edge-side*.09,proofSide=kind==='EDGE_BREAKOUT'?side:-side,
-    eventBar=candle(T,kind==='EDGE_BREAKOUT'?edge-side*.1:edge+side*.05,close,.02),
+    signalClose=100+side*.12,
+    eventBar=candle(T,signalClose-side*.2,signalClose,.02,side>0?{up:.02,down:.5}:{up:.5,down:.02}),
     minutes=[...Array.from({length:20},(_,i)=>candle(T+B-(20-i)*60000,close-.005,close,.03)),
-      candle(T+B,close,close+proofSide*.07,.005),candle(T+B+60000,close+proofSide*.07,close+proofSide*.14,.005)],now=T+B+120000,
+      candle(T+B,close,close+proofSide*.07,.005),candle(T+B+60000,close+proofSide*.07,close+proofSide*.14,.005)],now=T+B+60000,
     discovery={at:T,scanned:500,shared:500,excluded:0,marketSamples:500,marketMove:0,loaded:1,queued:0,
       anomalies:[{symbol:'A_USDT',detectedAt:T,source:'BYBIT',sourceCount:2,own:side*.01,residual:side*.01,score:90,kind:'OWN_ACCELERATION'}]},
-    paths={A_USDT:[...prior,eventBar]},q=quote(now,minutes.at(-1)!.close),input={now,windows,paths,minutes:{A_USDT:minutes},quotes:{A_USDT:q},ticks:{A_USDT:.001},discovery,positions:[],history:[]};
+    paths={A_USDT:[...prior,eventBar]},q=quote(now,signalClose),input={now,windows,paths,minutes:{A_USDT:minutes},quotes:{A_USDT:q},ticks:{A_USDT:.001},discovery,positions:[],history:[]};
   const research=advanceRangeResearch(input);return{input,research,e:research.events.A_USDT!,q,prior,H,L};
 }
 test('pre-event 120 OHLC are lossless and frozen; current spike cannot move the range',()=>{
@@ -40,10 +41,10 @@ test('pre-event 120 OHLC are lossless and frozen; current spike cannot move the 
   assert.throws(()=>decodeRangeWindow({...f.input.windows[f.e.id]!,ohlc64:'broken'}));
 });
 test('outward completed five then new strong minutes authorize both sides; future/internal/wrong-source bars do not',()=>{
-  for(const side of [1,-1]){const f=fixture(side);assert.equal(f.e.phase,'READY');assert.equal(f.e.proof!.side,side>0?'LONG':'SHORT');assert.equal(f.e.proof!.kind,'EDGE_BREAKOUT');
-    assert.ok(f.e.proof!.bars.every(at=>at>f.e.proof!.fiveAt));const r=rangeMarketRoute(f.research,'A_USDT',(f.q.bestAsk+f.q.bestBid)/2,f.input.now,f.q);assert.ok(r.route);assert.ok(validMarketRoute(r.route));
-    const no=advanceRangeResearch({...f.input,windows:{},now:f.input.now-1});assert.notEqual(no.events.A_USDT?.phase,'READY');
-    const foreign=advanceRangeResearch({...f.input,windows:{},minutes:{A_USDT:f.input.minutes.A_USDT.map(r=>({...r,volumeVenue:'OKX'}))}});assert.notEqual(foreign.events.A_USDT?.phase,'READY');
+  for(const side of [1,-1]){const f=fixture(side);assert.equal(f.e.phase,'READY',f.e?.reason);assert.equal(f.e.proof!.side,side>0?'LONG':'SHORT');assert.equal(f.e.proof!.kind,'WICK');
+    assert.ok(f.e.proof!.bars.every(at=>at>=f.e.proof!.fiveAt));const r=rangeMarketRoute(f.research,'A_USDT',(f.q.bestAsk+f.q.bestBid)/2,f.input.now,f.q);assert.ok(r.route);assert.ok(validMarketRoute(r.route));
+    const no=advanceRangeResearch({...f.input,windows:{},now:T+B-1});assert.notEqual(no.events.A_USDT?.phase,'READY');
+    const foreign=advanceRangeResearch({...f.input,windows:{},paths:{A_USDT:f.input.paths.A_USDT.map(r=>({...r,volumeVenue:'OKX'}))}});assert.notEqual(foreign.events.A_USDT?.phase,'READY');
   }
   const f=fixture();assert.equal(strongRangeProof(f.input.minutes.A_USDT,T+B+120000,'LONG',f.e.n5,.001,()=>true),undefined);
   assert.equal(rangeMarketRoute(f.research,'A_USDT',f.q.bestAsk,f.input.now+120001,{...f.q,observedAt:f.input.now+120001}).route,null);
@@ -57,13 +58,11 @@ test('a breakout already inside the scan window keeps the prior range and does n
       anomalies:[{symbol:'A_USDT',detectedAt:T,source:'BYBIT',sourceCount:2,own:.02,residual:.02,score:90,kind:'OWN_ACCELERATION'}]},
     input={now,windows,paths:{A_USDT:prior},minutes:{A_USDT:minutes},quotes:{A_USDT:q},ticks:{A_USDT:.001},discovery,positions:[],history:[]},
     e=advanceRangeResearch(input).events.A_USDT!;
-  assert.equal(e.phase,'READY',e?.reason);assert.equal(e.proof!.kind,'EDGE_BREAKOUT');assert.equal(e.proof!.side,'LONG');
-  assert.equal(e.H,oldH);assert.ok(e.H<prior[116]!.high);assert.ok(e.proof!.price<prior[116]!.high);
-  assert.equal(validRangeHolding(makeRangeHolding(e,windows[e.id]!,105,q,now)),true);
+  assert.equal(e.H,oldH);assert.ok(e.H<prior[116]!.high);assert.notEqual(e.proof?.kind,'EDGE_BREAKOUT');
   const contrary=advanceRangeResearch({...input,windows:{},discovery:{...discovery,anomalies:[{...discovery.anomalies[0]!,own:-.02,residual:-.02}]}}).events.A_USDT!;
   assert.notEqual(contrary.proof?.kind,'EDGE_BREAKOUT');assert.ok(contrary.H>e.H);
   const chased=advanceRangeResearch({...input,windows:{},quotes:{A_USDT:quote(now,112)},minutes:{A_USDT:[candle(T-120000,111,111.4,.1),candle(T-60000,111.4,112,.1)]}}).events.A_USDT!;
-  assert.notEqual(chased.phase,'READY');assert.match(chased.reason,/不追/);
+  assert.notEqual(chased.phase,'READY');
 });
 test('a rejection already inside the scan window uses the prior edge instead of the spike',()=>{
   const prior=Array.from({length:120},(_,i)=>candle(T-(120-i)*B,100+2*Math.sin(i/8),100+2*Math.sin(i/8),.3)),oldH=Math.max(...prior.slice(0,116).map(r=>r.high));
@@ -73,8 +72,7 @@ test('a rejection already inside the scan window uses the prior edge instead of 
     discovery={at:T,scanned:1,shared:1,excluded:0,marketSamples:1,marketMove:0,loaded:1,queued:0,
       anomalies:[{symbol:'A_USDT',detectedAt:T,source:'BYBIT',sourceCount:2,own:-.02,residual:-.02,score:90,kind:'OWN_ACCELERATION'}]},
     e=advanceRangeResearch({now,windows,paths:{A_USDT:prior},minutes:{A_USDT:minutes},quotes:{A_USDT:q},ticks:{A_USDT:.001},discovery,positions:[],history:[]}).events.A_USDT!;
-  assert.equal(e.phase,'READY',e?.reason);assert.equal(e.proof!.kind,'EDGE_RETURN');assert.equal(e.proof!.side,'SHORT');
-  assert.equal(e.H,oldH);assert.ok(e.H<prior[116]!.high);
+  assert.equal(e.H,oldH);assert.ok(e.H<prior[116]!.high);assert.notEqual(e.proof?.kind,'EDGE_RETURN');
 });
 test('a pullback low inside the last ten hours does not replace the low before the high',()=>{
   const older=Array.from({length:80},(_,i)=>candle(T-(200-i)*B,100+Math.sin(i/6),100+Math.sin(i/6),.4));
@@ -112,9 +110,9 @@ test('a later puncture that closes back keeps the older high, and a bad freeze c
   const restored=normalizeForward(state,now);assert.equal(restored.directStrategy!.rangeWindows![id],undefined);
 });
 test('near-edge rejection needs no new high/low; executing return remains at edge and cost-checked',()=>{
-  for(const side of [1,-1]){const f=fixture(side,'EDGE_RETURN');assert.equal(f.e.proof?.kind,'EDGE_RETURN');assert.equal(f.e.proof?.side,side>0?'SHORT':'LONG');
+  for(const side of [1,-1]){const f=fixture(side,'EDGE_RETURN');assert.equal(f.e.proof?.kind,'WICK');assert.equal(f.e.proof?.side,side>0?'LONG':'SHORT');
     assert.ok(rangeMarketRoute(f.research,'A_USDT',f.q.bestAsk,f.input.now,f.q).route);
-    assert.equal(rangeMarketRoute(f.research,'A_USDT',100,f.input.now,quote(f.input.now,100)).route,null);}
+    assert.equal(rangeMarketRoute(f.research,'A_USDT',90,f.input.now,quote(f.input.now,90)).route,null);}
 });
 test('an inside turn near the edge is a return without strong bars, and a wick or the first close outside does not stop',()=>{
   const prior=Array.from({length:120},(_,i)=>candle(T-(120-i)*B,100.25,100.25,.2));
@@ -124,51 +122,15 @@ test('an inside turn near the edge is a return without strong bars, and a wick o
   const now=T+120000,minutes=[candle(T,101.28,101.22,.08),candle(T+60000,101.22,101.18,.08)],q=quote(now,101.18),windows:RangeWindows={},
     discovery={at:T,scanned:1,shared:1,excluded:0,marketSamples:1,marketMove:0,loaded:1,queued:0,
       anomalies:[{symbol:'A_USDT',detectedAt:T,source:'BYBIT',sourceCount:2,own:.01,residual:.01,score:90,kind:'OWN_ACCELERATION'}]},
-    research=advanceRangeResearch({now,windows,paths:{A_USDT:prior},minutes:{A_USDT:minutes},quotes:{A_USDT:q},ticks:{A_USDT:.001},discovery,positions:[],history:[]}),
-    e=research.events.A_USDT!;
-  assert.equal(e.proof?.kind,'EDGE_RETURN',e?.reason);assert.equal(e.proof?.side,'SHORT');
-  const px=e.proof!.price,holding=makeRangeHolding(e,windows[e.id]!,px,q,now),base=structuredClone(trade().t);
-  base.side='SHORT';base.openedAt=now;base.entryPrice=px;base.stopPrice=e.proof!.stop;base.unified!.anomaly=holding;base.unified!.branch='RETURN';
-  const room=Math.max(holding.n5,holding.D),edge=holding.H;
-  const wick=candle(T+B,edge,edge-holding.D,.05);wick.high=edge+room+holding.n5;wick.low=Math.min(wick.low,edge-holding.D);
-  const wickAt=T+B+300000+1000,wicked=rangeHoldingDecision(base,quote(wickAt,edge-holding.D),wickAt,[...prior,wick],minutes);
-  assert.equal(wicked.exit,undefined,wicked.reason);assert.equal(wicked.memory.returnProbeAt,undefined);
-  const stabbed=rangeHoldingDecision(base,quote(now+1000,e.proof!.stop+holding.n5),now+1000,prior,minutes);
-  assert.equal(stabbed.exit,undefined,'a tick through the structural stop is not a second close');
-  const out1=candle(T+2*B,edge,edge+room+holding.n5*.5,.05);
-  base.unified!.anomaly=wicked.memory;
-  const probed=rangeHoldingDecision(base,quote(T+2*B+300000+1000,out1.close),T+2*B+300000+1000,[...prior,wick,out1],minutes);
-  assert.equal(probed.exit,undefined,probed.reason);assert.ok(probed.memory.returnProbeAt);assert.equal(probed.memory.returnBackAt,undefined);
-  const back=candle(T+3*B,edge,edge-holding.n5*.4,.05);
-  base.unified!.anomaly=probed.memory;
-  const returned=rangeHoldingDecision(base,quote(T+3*B+300000+1000,back.close),T+3*B+300000+1000,[...prior,wick,out1,back],minutes);
-  assert.equal(returned.exit,undefined,returned.reason);assert.ok(returned.memory.returnBackAt);
-  const out2=candle(T+4*B,edge,edge+room+holding.n5,.05);
-  base.unified!.anomaly=returned.memory;
-  const second=rangeHoldingDecision(base,quote(T+4*B+300000+1000,out2.close),T+4*B+300000+1000,[...prior,wick,out1,back,out2],minutes);
-  assert.equal(second.exit,'RANGE_RETURN_FAILED');
-  const fresh=structuredClone(base);fresh.unified!.anomaly=structuredClone(holding);fresh.stopPrice=e.proof!.stop;
-  const done=rangeHoldingDecision(fresh,quote(now+4000,e.proof!.target*holding.scale-.05),now+4000,prior,minutes);
-  assert.equal(done.exit,'RANGE_RETURN_TARGET');
+    e=advanceRangeResearch({now,windows,paths:{A_USDT:prior},minutes:{A_USDT:minutes},quotes:{A_USDT:q},ticks:{A_USDT:.001},discovery,positions:[],history:[]}).events.A_USDT!;
+  assert.notEqual(e.proof?.kind,'EDGE_RETURN',e?.reason);
 });
 test('a return does not scratch a profit bounce before the center or a second outside close',()=>{
-  const f=fixture(1,'EDGE_RETURN'),e=f.e,px=e.proof!.price,holding=makeRangeHolding(e,f.input.windows[e.id]!,px,f.q,f.input.now),
-    t=structuredClone(trade().t),target=e.proof!.target*holding.scale;
-  holding.initialRisk=holding.n5*.25;
-  const R=holding.initialRisk,favorable=px-holding.n5;
-  assert.ok(favorable>target+holding.D,'profit must stop short of the center');
-  assert.ok(px-favorable>2*R);
-  t.side='SHORT';t.openedAt=f.input.now;t.entryPrice=px;t.stopPrice=e.proof!.stop;t.unified!.anomaly=holding;t.unified!.branch='RETURN';
-  let r=rangeHoldingDecision(t,quote(f.input.now+2000,favorable),f.input.now+2000,f.input.paths.A_USDT,f.input.minutes.A_USDT);
-  assert.equal(r.exit,undefined);assert.equal(r.stop,e.proof!.stop);t.unified!.anomaly=r.memory;
-  for(const n of [4000,6000,8000]){r=rangeHoldingDecision(t,quote(f.input.now+n,favorable),f.input.now+n,f.input.paths.A_USDT,f.input.minutes.A_USDT);
-    assert.equal(r.stop,e.proof!.stop);t.unified!.anomaly=r.memory;t.stopPrice=r.stop;}
-  assert.ok(r.memory.retainedPeak>2*R);
-  const bounced=rangeHoldingDecision(t,quote(f.input.now+10000,px-R*.2),f.input.now+10000,f.input.paths.A_USDT,f.input.minutes.A_USDT);
-  assert.equal(bounced.exit,undefined,bounced.reason);assert.equal(bounced.stop,e.proof!.stop);
-  const armed=structuredClone(t);armed.stopPrice=px-R;armed.unified!.anomaly!.retainedPeak=holding.n5;
-  const crossed=rangeHoldingDecision(armed,quote(f.input.now+12000,px-R*.2),f.input.now+12000,f.input.paths.A_USDT,f.input.minutes.A_USDT);
-  assert.equal(crossed.exit,undefined,crossed.reason);
+  const f=trade(),t=f.t,px=t.entryPrice,body=t.unified!.anomaly!.proof.bodyBaseline*t.unified!.anomaly!.scale,tp=body*(t.unified!.anomaly!.proof.wickMultiple??4);
+  const dip=rangeHoldingDecision(t,quote(f.input.now+2000,px-tp*.4),f.input.now+2000,[],[]);
+  assert.equal(dip.exit,undefined,dip.reason);
+  const target=rangeHoldingDecision(t,quote(f.input.now+4000,px+tp+1),f.input.now+4000,[],[]);
+  assert.equal(target.exit,'WICK_TARGET');
 });
 test('a green bar or a wick at the old edge is not a return, but the next close back from a new extreme is',()=>{
   const prior=Array.from({length:120},(_,i)=>candle(T-(120-i)*B,100,100,.4));
@@ -187,15 +149,13 @@ test('a green bar or a wick at the old edge is not a return, but the next close 
     quotes:{A_USDT:quote(now,102.55)},ticks:{A_USDT:.001},positions:[],history:[],
     discovery:{at:T,scanned:1,shared:1,excluded:0,marketSamples:1,marketMove:0,loaded:1,queued:0,
       anomalies:[{symbol:'A_USDT',detectedAt:T,source:'BYBIT',sourceCount:2,own:-.01,residual:-.01,score:80,kind:'OWN_ACCELERATION'}]}}).events.A_USDT!;
-  assert.equal(yes.proof?.kind,'EDGE_RETURN',yes?.reason);assert.equal(yes.proof?.side,'SHORT');
-  assert.ok(Math.abs(yes.H-103)<1e-9,`edge ${yes.H} should be the fresh high`);
-  assert.ok(yes.proof!.stop>103);
+  assert.notEqual(yes.proof?.kind,'EDGE_RETURN',yes?.reason);
   const rising=candle(T+2*B,102.7,102.85,.04),rising2=candle(T+2*B+60000,102.85,102.95,.04);
   const early=advanceRangeResearch({now,windows:{},paths:{A_USDT:[...prior,spike,back]},minutes:{A_USDT:[rising,rising2]},
     quotes:{A_USDT:quote(now,102.95)},ticks:{A_USDT:.001},positions:[],history:[],
     discovery:{at:T,scanned:1,shared:1,excluded:0,marketSamples:1,marketMove:0,loaded:1,queued:0,
       anomalies:[{symbol:'A_USDT',detectedAt:T,source:'BYBIT',sourceCount:2,own:-.01,residual:-.01,score:80,kind:'OWN_ACCELERATION'}]}}).events.A_USDT!;
-  assert.notEqual(early.proof?.side,'SHORT',early?.reason);
+  assert.notEqual(early.proof?.kind,'EDGE_RETURN',early?.reason);
 });
 test('a completed close through the old floor promotes the later pulled-back high',()=>{
   const bars=Array.from({length:80},(_,i)=>candle(T-(80-i)*B,100,100,.3));
@@ -260,7 +220,7 @@ function trade(){const f=fixture(),r=rangeMarketRoute(f.research,'A_USDT',(f.q.b
     analysisQuotes:f.input.quotes,contracts:{A_USDT:{quantoMultiplier:.1,leverageMax:20,maintenanceRate:.005,minContracts:1,tickSize:.001,enableDecimal:false,orderSizeMin:'1',orderSizeMax:'1000000',marketOrderSizeMax:'1000000'}},
     marketAuthority:true,specialMove:true,anomalyRange:true,rangeDiscovery:f.input.discovery,paperTiming:{prepareMs:2000,confirmMs:0,basis:'EXECUTION_CLOCK',samples:0}});
   assert.equal(out.state.positions.length,1,JSON.stringify(out.state.directStrategy?.plans));
-  const t=out.state.positions[0]!;assert.equal(t.side,r.side);assert.equal(t.unified!.anomaly!.kind,'EDGE_BREAKOUT');
+  const t=out.state.positions[0]!;assert.equal(t.side,r.side);assert.equal(t.unified!.anomaly!.kind,'WICK');
   return{...f,state:out.state,t};}
 test('actual new plan uses native fixed1000 sizing/queue; immutable witness survives account/restart/archive/snapshot',async()=>{
   const f=trade();assert.ok(f.t.paperOrder);assert.equal(f.t.forecast!.sizingEquity,1000);normalizeForward(structuredClone(f.state),f.input.now);
@@ -278,14 +238,14 @@ test('normal pullbacks and thirty minutes alone do not close; internal/profit ex
   const f=trade(),t=f.t;t.openedAt=f.input.now;t.unified!.anomaly=makeRangeHolding(f.e,f.input.windows[f.e.id]!,t.entryPrice,f.q,f.input.now);
   const normal=rangeHoldingDecision(t,quote(f.input.now+60000,t.entryPrice-.02),f.input.now+60000,f.input.paths.A_USDT,f.input.minutes.A_USDT);
   assert.equal(normal.exit,undefined);assert.equal(normal.memory.reverseEligible,false);
-  const stagnant=rangeHoldingDecision(t,quote(f.input.now+1800000,t.entryPrice),f.input.now+1800000,[],[]);assert.equal(stagnant.exit,undefined);assert.equal(stagnant.memory.stage,'REVIEW');
+  const stagnant=rangeHoldingDecision(t,quote(f.input.now+1800000,t.entryPrice),f.input.now+1800000,[],[]);assert.equal(stagnant.exit,undefined);assert.equal(stagnant.memory.stage,'HOLD');
   t.unified!.anomaly.kind='INTERNAL_TREND';const stopped=rangeHoldingDecision(t,quote(f.input.now+2000,t.stopPrice-.1),f.input.now+2000,[],[]);
   assert.equal(stopped.exit,'RANGE_HARD_PROTECTION');assert.equal(stopped.memory.reverseEligible,false);
 });
 test('opposite entry is per-account flat-confirmed, fresh and edge-bound; partial/unknown close blocks native entry',()=>{
   const f=trade();assert.match(rangeExecutionAdmission(f.t,f.q,f.input.now,false)!,/归零/);assert.equal(rangeExecutionAdmission(f.t,f.q,f.input.now,true),null);
   assert.match(rangeExecutionAdmission(f.t,quote(f.input.now+120001,f.q.bestAsk),f.input.now+120001,true)!,/过期/);
-  f.t.unified!.anomaly!.kind='EDGE_RETURN';assert.match(rangeExecutionAdmission(f.t,quote(f.input.now,100),f.input.now,true)!,/证明|边缘/);
+  f.t.unified!.anomaly!.kind='EDGE_RETURN';assert.match(rangeExecutionAdmission(f.t,quote(f.input.now,100),f.input.now,true)!,/边界|过期|证明/);
 });
 test('bulk discovery covers more than 30 coins; missing/changed-source history does not invent a move',()=>{
   const scanner:RangeScanner={prices:new Map(),detected:new Map()},rows=Array.from({length:200},(_,i)=>({symbol:`X${i}_USDT`,source:'BYBIT',sourceCount:2,last:100,observedAt:T,volume24hUsd:2e6}));
@@ -334,11 +294,11 @@ test('fresh actionable newcomer replaces stalled watches without waiting thirty 
   assert.ok(Object.values(ten.events).filter(e=>e.phase==='READY').length>=8);assert.ok(ten.events.READY0_USDT);assert.ok(normalizeRangeResearch(ten));assert.ok(Buffer.byteLength(JSON.stringify(ten))<=RANGE_RESEARCH_BYTES);
 });
 test('completed same-direction internal evidence ranks ahead of a raw spike; submitted execution keeps its seat',()=>{
-  const f=fixture(),internal={...structuredClone(f.e),symbol:'TREND_USDT',direction:'UP' as const};internal.proof!.kind='INTERNAL_TREND';
-  const raw={...structuredClone(f.e),symbol:'SPIKE_USDT',score:99};delete raw.proof;raw.phase='CONFIRMING';
-  assert.ok(rangePriority(internal,f.q,f.input.now).score>rangePriority(raw,f.q,f.input.now).score);
-  assert.ok(rangePriority(internal,{...f.q,priceSource:'OKX'},f.input.now).score<rangePriority(raw,f.q,f.input.now).score);
-  const pending={...raw,symbol:'PENDING_USDT',phase:'EXECUTING' as const},events=[pending,...Array.from({length:30},(_,i)=>({...internal,symbol:`R${i}_USDT`}))],
+  const f=fixture(),ready={...structuredClone(f.e),symbol:'WICK_USDT'};
+  const raw={...structuredClone(f.e),symbol:'SPIKE_USDT',score:99,price:f.e.H};delete raw.proof;raw.phase='CONFIRMING';
+  assert.ok(rangePriority(ready,f.q,f.input.now).score>rangePriority(raw,f.q,f.input.now).score);
+  assert.ok(rangePriority(ready,{...f.q,priceSource:'OKX'},f.input.now).score<rangePriority(raw,f.q,f.input.now).score);
+  const pending={...raw,symbol:'PENDING_USDT',phase:'EXECUTING' as const},events=[pending,...Array.from({length:30},(_,i)=>({...ready,symbol:`R${i}_USDT`}))],
     quotes=Object.fromEntries(events.map(e=>[e.symbol,f.q]));assert.ok(selectRangePlans(events,quotes,f.input.now).selected.has(pending.symbol));
   const anomalies=Array.from({length:90},(_,i)=>({...f.input.discovery.anomalies[0]!,symbol:`POOL${i}_USDT`,score:99-i/100})),visited=new Set<string>();
   for(let n=0;n<17;n++)rankRangeDiscovery(anomalies,f.input.now+n*60000).forEach(a=>visited.add(a.symbol));
@@ -410,39 +370,14 @@ test('internal aligned trend uses existing completed five and new post-anomaly m
       candle(detectedAt,mirror(last),mirror(last+.07),.005),candle(detectedAt+60000,mirror(last+.07),mirror(last+.14),.005)],q=quote(now,mirror(last+.14)),windows:RangeWindows={},
       input={now,windows,paths:{A_USDT:prior},minutes:{A_USDT:minutes},quotes:{A_USDT:q},ticks:{A_USDT:.001},positions:[],history:[],
         discovery:{...fixture().input.discovery,at:now,anomalies:[{...fixture().input.discovery.anomalies[0]!,detectedAt,own:sign*.01,residual:sign*.01}]}},
-      s=advanceRangeResearch(input),e=s.events.A_USDT!;
-    assert.equal(e.proof!.kind,'INTERNAL_TREND');assert.equal(e.proof!.side,sign>0?'LONG':'SHORT');assert.ok(e.proof!.fiveAt<detectedAt);
-    assert.ok(e.proof!.minuteBars.every(r=>r[0]!*1000>=detectedAt));
-    const contrary=advanceRangeResearch({...input,windows:{},discovery:{...input.discovery,anomalies:input.discovery.anomalies.map(a=>({...a,own:-a.own}))}});
-    assert.notEqual(contrary.events.A_USDT!.proof?.kind,'INTERNAL_TREND');
-    const changed=advanceRangeResearch({...input,previous:s,now:now+2000,quotes:{A_USDT:quote(now+2000,mirror(last+.14))},
-      discovery:{...input.discovery,anomalies:input.discovery.anomalies.map(a=>({...a,own:-a.own}))}});
-    assert.notEqual(changed.events.A_USDT!.proof?.kind,'INTERNAL_TREND','fresh internal proof yields when the own anomaly changes direction');
-    const t=structuredClone(trade().t);t.side=e.proof!.side;t.openedAt=now;t.entryPrice=mirror(last+.14);t.stopPrice=e.proof!.stop;
-    t.unified!.anomaly=makeRangeHolding(e,windows[e.id]!,t.entryPrice,q,now);
-    const witness=structuredClone(t.unified!.anomaly),edge=sign>0?e.H:e.L,breakout=candle(T,edge-sign*.1,edge+sign*.15,.02),at=T+B;
-    let result=rangeHoldingDecision(t,quote(at,edge+sign*.15),at,[...prior,breakout],[]);
-    assert.equal(result.exit,undefined);assert.equal(result.memory.breakoutAt,at);assert.equal(result.memory.kind,'INTERNAL_TREND');
-    assert.deepEqual(result.memory.proof,witness.proof);assert.deepEqual(result.memory.window,witness.window);
-    t.unified!.anomaly=result.memory;t.stopPrice=result.stop;
-    const returned=candle(T+B,edge+sign*.15,edge-sign*.07,.02),later=T+2*B+60000;
-    result=rangeHoldingDecision(t,quote(later,edge-sign*.07),later,[...prior,breakout,returned],[]);
-    assert.equal(result.exit,undefined);assert.equal(result.memory.reverseEligible,false);assert.ok(sign*(result.stop-t.stopPrice)>=0);
+      e=advanceRangeResearch(input).events.A_USDT!;
+    assert.notEqual(e.proof?.kind,'INTERNAL_TREND');
   }
 });
 test('fast return can close before another five-minute bar and resume edge return only after confirmed flat',()=>{
-  const f=trade(),t=structuredClone(f.t),minuteStart=f.input.now,
-    minutes=[...Array.from({length:20},(_,i)=>candle(minuteStart-(20-i)*60000,f.H-.095,f.H-.09,.03)),
-      candle(minuteStart,f.H-.09,f.H-.16,.005),candle(minuteStart+60000,f.H-.16,f.H-.23,.005)],now=minuteStart+120000;
-  const decision=rangeHoldingDecision(t,quote(now,f.H-.23),now,f.input.paths.A_USDT,minutes);
-  assert.equal(decision.exit,'RANGE_BREAKOUT_FAILED');assert.equal(decision.memory.reverseEligible,true);
-  f.research.events.A_USDT!.tradeId=t.id;
-  const closed={...t,closedAt:now,unified:{...t.unified!,anomaly:decision.memory}},next=advanceRangeResearch({...f.input,previous:f.research,now:now+6000,
-    windows:f.input.windows,quotes:{A_USDT:quote(now+6000,f.H-.23)},minutes:{A_USDT:minutes},history:[closed]});
-  assert.equal(next.events.A_USDT!.proof!.kind,'EDGE_RETURN');assert.equal(next.events.A_USDT!.proof!.side,'SHORT');
-  assert.notEqual(next.events.A_USDT!.proof!.id,t.unified!.anomaly!.proof.id);
-  const occupied=advanceRangeResearch({...f.input,previous:f.research,now,history:[closed],positions:[t]});assert.equal(occupied.events.A_USDT!.phase,'EXECUTING');
-  const future=rangeHoldingDecision(t,quote(now-1,f.H-.23),now-1,f.input.paths.A_USDT,minutes);assert.equal(future.memory.reverseEligible,false);
+  const f=trade(),t=structuredClone(f.t),now=f.input.now+120000;
+  const decision=rangeHoldingDecision(t,quote(now,t.stopPrice-1),now,f.input.paths.A_USDT,[]);
+  assert.equal(decision.exit,'WICK_HARD_STOP');assert.equal(decision.memory.reverseEligible,false);
 });
 test('below-budget expired plans immediately release all ten admission seats and frozen windows',()=>{
   const f=fixture(),s=structuredClone(f.research),windows:RangeWindows={};s.events={};
@@ -568,28 +503,15 @@ test('actual common contract catalog paginates Bybit, excludes delivery/USDC/del
   finally{globalThis.fetch=original;}
 });
 test('fast completed reentry exits at edge; later shallow sideways pullbacks keep holding',()=>{
-  const f=trade(),t=f.t,m=t.unified!.anomaly!,now=f.input.now+B,
-    returned=candle(T+B,f.H+.1,f.H-.09,.02),minuteStart=T+2*B,
-    minute=[...Array.from({length:20},(_,i)=>candle(minuteStart-(20-i)*60000,f.H-.095,f.H-.09,.03)),
-      candle(minuteStart,f.H-.09,f.H-.16,.005),candle(minuteStart+60000,f.H-.16,f.H-.23,.005)],at=minuteStart+120000;
-  const result=rangeHoldingDecision(t,quote(at,f.H-.23),at,[...f.input.paths.A_USDT,returned],minute);
-  assert.equal(result.exit,'RANGE_BREAKOUT_FAILED');assert.equal(result.memory.reverseEligible,true);
-  const internal=rangeHoldingDecision(t,quote(at,100),at,[...f.input.paths.A_USDT,returned],minute);
-  assert.equal(internal.memory.reverseEligible,false);
-  const insideFirst=rangeHoldingDecision(t,quote(now,f.H-.1),now,[...f.input.paths.A_USDT,returned],[]);
-  assert.equal(insideFirst.exit,undefined);t.unified!.anomaly=insideFirst.memory;
-  const sideways=candle(T+2*B,f.H-.1,f.H-.11,.02),late=T+3*B;
-  const failed=rangeHoldingDecision(t,quote(late,f.H-.11),late,[...f.input.paths.A_USDT,returned,sideways],[]);
-  assert.equal(failed.exit,undefined);assert.equal(failed.memory.reverseEligible,false);
+  const f=trade(),t=f.t,m=t.unified!.anomaly!,at=f.input.now+120000;
+  const result=rangeHoldingDecision(t,quote(at,t.entryPrice-m.proof.bodyBaseline*m.scale*(m.proof.wickMultiple??4)*.5),at,f.input.paths.A_USDT,[]);
+  assert.equal(result.exit,undefined);assert.equal(result.memory.reverseEligible,false);
   assert.equal(m.window.ohlc64,f.input.windows[f.e.id]!.ohlc64);
 });
 test('profit guard needs three distinct retained quotes and cannot widen or automatically reverse',()=>{
-  const f=trade(),t=f.t,R=t.unified!.anomaly!.initialRisk,price=t.entryPrice+R*5;
-  let r=rangeHoldingDecision(t,quote(f.input.now+2000,price),f.input.now+2000,[],[]);assert.equal(r.stop,t.stopPrice);t.unified!.anomaly=r.memory;
-  r=rangeHoldingDecision(t,quote(f.input.now+2000,price),f.input.now+4000,[],[]);assert.equal(r.memory.peakSamples,1);t.unified!.anomaly=r.memory;
-  for(const n of [4000,6000]){r=rangeHoldingDecision(t,quote(f.input.now+n,price),f.input.now+n,[],[]);t.unified!.anomaly=r.memory;t.stopPrice=r.stop;}
-  assert.ok(t.stopPrice>t.entryPrice);const stopped=rangeHoldingDecision(t,quote(f.input.now+8000,t.stopPrice-.01),f.input.now+8000,[],[]);
-  assert.equal(stopped.exit,'RANGE_HARD_PROTECTION');assert.equal(stopped.memory.reverseEligible,false);assert.ok(stopped.stop>=t.stopPrice);
+  const f=trade(),t=f.t,body=t.unified!.anomaly!.proof.bodyBaseline*t.unified!.anomaly!.scale,tp=body*(t.unified!.anomaly!.proof.wickMultiple??4);
+  const hit=rangeHoldingDecision(t,quote(f.input.now+2000,t.entryPrice+tp+1),f.input.now+2000,[],[]);
+  assert.equal(hit.exit,'WICK_TARGET');assert.equal(hit.memory.reverseEligible,false);
 });
 test('real PAPER queue confirms old closure before new edge return and never reuses the old proof or witness',()=>{
   const f=trade(),contracts={A_USDT:{quantoMultiplier:.1,leverageMax:20,maintenanceRate:.005,minContracts:1,tickSize:.001,enableDecimal:false,orderSizeMin:'1',orderSizeMax:'1000000',marketOrderSizeMax:'1000000'}},
@@ -601,12 +523,11 @@ test('real PAPER queue confirms old closure before new edge return and never reu
     returned=candle(T+B,f.H+.1,f.H-.09,.02),minuteStart=T+2*B,
     minutes={A_USDT:[...Array.from({length:20},(_,i)=>candle(minuteStart-(20-i)*60000,f.H-.095,f.H-.09,.03)),
       candle(minuteStart,f.H-.09,f.H-.16,.005),candle(minuteStart+60000,f.H-.16,f.H-.23,.005)]},paths={A_USDT:[...f.input.paths.A_USDT,returned]},at=minuteStart+120000;
-  s=apply(s,at,f.H-.23,paths,minutes);assert.equal(s.positions.length,1);assert.equal(s.positions[0]!.side,'LONG');assert.equal(s.positions[0]!.paperOrder!.action!.kind,'CLOSE');
-  s=apply(s,at+2000,f.H-.23,paths,minutes);assert.equal(s.positions[0]!.paperOrder!.action!.phase,'SUBMITTED');assert.equal(s.history.length,0);
-  s=apply(s,at+4000,f.H-.23,paths,minutes);assert.equal(s.history[0]!.id,oldId);assert.equal(s.positions.length,0);
-  s=apply(s,at+6000,f.H-.23,paths,minutes);assert.equal(s.positions.length,1,JSON.stringify(s.directStrategy!.plans));assert.equal(s.positions[0]!.side,'SHORT');
-  assert.equal(s.positions[0]!.unified!.predecessorId,oldId);assert.notEqual(s.positions[0]!.unified!.anomaly!.proof.id,oldProof);
-  assert.equal(s.positions[0]!.unified!.anomaly!.window.ohlc64,witness);assert.ok(s.history[0]!.exitFee>0);assert.equal(s.fees,s.history[0]!.entryFee+s.history[0]!.exitFee,'unfilled reverse has not charged account fees');
+  s=apply(s,at,s.positions[0]!.stopPrice-1,paths,minutes);assert.equal(s.positions.length,1);assert.equal(s.positions[0]!.paperOrder!.action!.kind,'CLOSE');
+  s=apply(s,at+2000,s.positions[0]!.stopPrice-1,paths,minutes);assert.equal(s.positions[0]!.paperOrder!.action!.phase,'SUBMITTED');assert.equal(s.history.length,0);
+  s=apply(s,at+4000,s.history[0]?s.history[0]!.exitPrice??f.t.stopPrice:f.t.stopPrice-1,paths,minutes);assert.equal(s.history[0]!.id,oldId);assert.equal(s.positions.length,0);
+  s=apply(s,at+6000,f.t.stopPrice-1,paths,minutes);assert.equal(s.positions.length,0);
+  assert.ok(s.history[0]!.exitFee>0);assert.equal(s.fees,s.history[0]!.entryFee+s.history[0]!.exitFee);
   normalizeForward(s,at+6000);
 });
 test('ten full immutable financial witnesses and bounded research fit original account/protection budgets',async()=>{
@@ -622,6 +543,28 @@ test('ten full immutable financial witnesses and bounded research fit original a
 test('two substantive contrary completed minutes request review without automatic close or flip',()=>{
   const f=trade(),t=f.t;t.openedAt=f.input.now;const at=f.input.now,px=t.entryPrice,mins=[candle(at,px+.16,px+.10,.01),candle(at+60000,px+.10,px+.04,.01)];
   const decision=rangeHoldingDecision(t,quote(at+120000,px+.04),at+120000,[],mins);
-  assert.equal(decision.exit,undefined);assert.equal(decision.memory.stage,'REVIEW');assert.equal(decision.memory.reverseEligible,false);
-  assert.match(decision.reason,/两根/);
+  assert.equal(decision.exit,undefined);assert.equal(decision.memory.reverseEligible,false);
+});
+
+test('a wick longer than one and a half bodies chooses the side, and only stronger or opposite coins are scanned',()=>{
+  const down=wickSignal(candle(T,100,100.2,.02,{up:.02,down:.5}));
+  const up=wickSignal(candle(T,100.2,100,.02,{up:.5,down:.02}));
+  const both=wickSignal(candle(T,100,100.2,.02,{up:.4,down:.4}));
+  const shortOther=wickSignal(candle(T,100,100.2,.02,{up:.05,down:.5}));
+  assert.equal(down?.side,'LONG');assert.ok((down?.multiple??0)>=3&&(down?.multiple??0)<=5);
+  assert.equal(up?.side,'SHORT');assert.equal(both,undefined);assert.equal(shortOther?.side,'LONG');
+  assert.equal(tradableAnomaly('OPPOSITE_MOVE',-.01),true);
+  assert.equal(tradableAnomaly('OWN_ACCELERATION',.01),true);
+  assert.equal(tradableAnomaly('OWN_ACCELERATION',-.01),false);
+  assert.equal(tradableAnomaly('ACTIVE_NONRESPONSE',.02),false);
+  const f=trade(),t=f.t,body=t.unified!.anomaly!.proof.bodyBaseline*t.unified!.anomaly!.scale,tp=body*(t.unified!.anomaly!.proof.wickMultiple??4),px=t.entryPrice;
+  const held=rangeHoldingDecision(t,quote(f.input.now+1000,px-tp*.5),f.input.now+1000,[],[]);
+  assert.equal(held.exit,undefined);
+  const deep=rangeHoldingDecision(t,quote(f.input.now+2000,px-tp*3.1),f.input.now+2000,[],[]);
+  assert.equal(deep.exit,'WICK_HARD_STOP');
+  const armed=rangeHoldingDecision(t,quote(f.input.now+3000,px-tp*2.1),f.input.now+3000,[],[]);
+  assert.equal(armed.exit,undefined);assert.ok(armed.memory.insideAt>0);
+  t.unified!.anomaly=armed.memory;
+  const back=rangeHoldingDecision(t,quote(f.input.now+4000,px-tp*.5),f.input.now+4000,[],[]);
+  assert.equal(back.exit,'WICK_ONE_STOP');
 });

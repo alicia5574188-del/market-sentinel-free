@@ -167,7 +167,9 @@ export function openDirectPlan(s:ForwardState,p:DirectPlan,q:Quote,c:Contract,no
     sameRisk=s.positions.filter(t=>t.side===p.side).reduce((n,t)=>n+currentRisk(t,quotes),0),
     cycle=s.positions.concat(s.history).filter(t=>t.openedAt>=s.lastCandleAt).reduce((n,t)=>n+(t.realization?.initialRisk??t.plannedRisk),0),
     trendRisk=s.positions.filter(t=>t.side===p.side&&t.unified?.branch==='CONTINUATION').reduce((n,t)=>n+currentRisk(t,quotes),0),
-    riskBudget=Math.min(wanted,1000*.015-cycle,equity*.099-used,equity*.0645-sameRisk,p.branch==='CONTINUATION'?equity*.025-trendRisk:Infinity),
+    wick=s.directStrategy?.rangeResearch?.events[o.symbol]?.proof?.kind==='WICK',
+    bookRoom=equity>0?Math.max(0,.10-used/equity)/.10:0,
+    riskBudget=Math.min(wanted,1000*.015-cycle,equity*.099-used,equity*.0645-sameRisk,p.branch==='CONTINUATION'?equity*.025-trendRisk:Infinity,wick?equity*.012*bookRoom:Infinity),
     basePrice=p.branch==='RETURN'?movePrice:price,min=Math.max(1,Math.ceil(c.minContracts??Number(c.orderSizeMin??1))),
     contracts=Math.floor(Math.min(1000*.70,riskBudget/riskRate)/(basePrice*c.quantoMultiplier)),quantity=contracts*c.quantoMultiplier,
     leverage=g?.leverage??Math.max(1,Math.min(5,Math.floor(c.leverageMax/2))),notional=quantity*price,margin=notional/leverage;
@@ -182,7 +184,8 @@ export function openDirectPlan(s:ForwardState,p:DirectPlan,q:Quote,c:Contract,no
       return`${current.code}: ${current.reason}`;
   }
   const rangeRoute=route?.controllerVersion===ANOMALY_RANGE_VERSION,rangeEvent=s.directStrategy?.rangeResearch?.events[o.symbol],
-    responseRoute=route?.controllerVersion===EVENT_RESPONSE_VERSION||rangeRoute&&rangeEvent?.proof?.kind==='EDGE_BREAKOUT';
+    wickRoute=rangeRoute&&rangeEvent?.proof?.kind==='WICK',
+    responseRoute=route?.controllerVersion===EVENT_RESPONSE_VERSION||rangeRoute&&rangeEvent?.proof?.kind==='EDGE_BREAKOUT'||wickRoute;
   if(route&&(!g||(!responseRoute&&(!g.valid||g.ratio<1.35))||g.riskRate<=0||g.riskRate>.037||1/leverage<=g.riskRate+c.maintenanceRate+2*FEE))return'实际方向当前风险或扣费空间不足';
   if(route&&!s.directStrategy?.adaptive&&route.relation!=='INDEPENDENT'&&followerConflict(s,route))return'旧市场分支持仓尚未确认关闭，等待衔接完成';
   if(o.completedAt>now||o.expiresAt<=now)return'交易事件尚未完成或已失效';
@@ -390,7 +393,9 @@ function manageMarketTrade(s:ForwardState,t:Trade,q:Quote,input:Input){
     coin=a.coins[t.symbol],ownPlan=t.entryContext!.winnerPlan!;
   if(u.anomaly){const result=rangeHoldingDecision(t,q,now,input.paths[t.symbol]??[],input.minutePaths?.[t.symbol]);
     u.anomaly=result.memory;t.stopPrice=result.stop;u.lastBarAt=result.memory.lastBarAt;u.lastDecisionAt=now;
-    u.decision=result.memory.stage;u.holdReason=result.reason;u.exitCondition=result.memory.kind==='EDGE_RETURN'
+    u.decision=result.memory.stage;u.holdReason=result.reason;u.exitCondition=result.memory.kind==='WICK'
+      ?'止盈是这根K线实体的3到5倍。浮亏不到1倍止盈距离继续拿；到过2倍就等回到1倍亏损或成本；到3倍直接止损'
+      :result.memory.kind==='EDGE_RETURN'
       ?`下影线不算突破。第一根5分钟收在区间外先拿着；收回区间后，再有一根收在外面才止损。未止损则按回归重心 ${(result.memory.proof.target*result.memory.scale).toPrecision(6)} 出场`
       :'原计划结构失效或实际保护触发；仅边缘新确认可反向';
     if(result.exit)return closeUnifiedTrade(s,t,q,now,result.exit,result.reason);return false;}

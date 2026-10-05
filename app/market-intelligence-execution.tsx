@@ -63,7 +63,7 @@ function DirectExecution({data,now,liveEnabled,liveOverview}:{data:NonNullable<V
       {liveEnabled&&<p>实盘已跟上 {liveOverview?.copied??'—'} / 应执行 {liveOverview?.eligible??'—'}。实际成交及结算以实盘账户记录为准。</p>}
       {ds.execution?.pending.map(p=><div className="fr-exec-pending" key={p.id}><b>{p.symbol.replace('_',' / ')} · {p.kind==='OPEN'?'等待开仓成交':p.kind==='CLOSE'?'等待平仓成交':'等待减仓成交'}</b><details className="fr-exec-research-details"><summary>查看原因</summary><p>{p.reason}</p></details></div>)}
       <div className="fr-exec-compact-list">{data.positions.map(t=>{const observed=ds.episodeResearch?.holdings.find(h=>h.tradeId===t.id);return <article className="fr-exec-compact-row" key={t.id}>
-        <div className="fr-exec-compact-head"><b>{t.symbol.replace('_',' / ')} · {side(t.side)}{t.unified?.anomaly?` · ${({EDGE_BREAKOUT:'边缘突破',EDGE_RETURN:'边缘回归',INTERNAL_TREND:'内部顺势'})[t.unified.anomaly.kind]}`:''}</b><span>{t.unified?.decision==='EXIT'?'准备退出':t.unified?.decision==='REVIEW'?'复核持仓':'继续持有'}</span></div>
+        <div className="fr-exec-compact-head"><b>{t.symbol.replace('_',' / ')} · {side(t.side)}{t.unified?.anomaly?` · ${({EDGE_BREAKOUT:'边缘突破',EDGE_RETURN:'边缘回归',INTERNAL_TREND:'内部顺势',WICK:'影线'})[t.unified.anomaly.kind]}`:''}</b><span>{t.unified?.decision==='EXIT'?'准备退出':t.unified?.decision==='REVIEW'?'复核持仓':'继续持有'}</span></div>
         <p>{t.unified?.holdReason??positionWatch(t)}</p><p className="fr-exec-exit">退出条件：{t.unified?.exitCondition??'按原交易计划执行'}</p>
         <details className="fr-exec-research-details"><summary>查看依据</summary><p>进场：{t.unified?.entryReason??t.entryContext?.reason??'暂无记录'}</p>
         {(ds.anomalyRange?!t.unified?.anomaly:ds.eventResponse&&!t.unified?.response)&&<p>沿用入场时的原策略规则</p>}
@@ -96,24 +96,19 @@ function where(e:RangeEvent){
 function watchLine(e:RangeEvent,now:number){
   if(e.admission&&now-e.admission.at<120000)return e.admission.reason;
   if(!e.active)return '成交不够，先看着，不下单。';
-  if(e.phase==='CONFIRMING')return '等这根 5 分钟走完。收在外面做突破，回头做回归。';
-  const place=where(e);
-  if(place.includes('上沿'))return '在上沿。5分钟往回收完才做空；只出上影线不做。收在外面并走强，才做多突破。';
-  if(place.includes('下沿'))return '在下沿。5分钟往回收完才做多；只出下影线不做。收在外面并走强，才做空突破。';
-  return '还在区间里面，等它靠近上沿或下沿。';
+  return `扫描 ${clockFull(e.detectedAt)}。等5分钟收出影线，上影线做空，下影线做多。扫描时没走完的那根也算。`;
 }
 function orderLine(e:RangeEvent){
   const p=e.proof;if(!p)return e.reason;
+  if(p.kind==='WICK')return `${p.side==='SHORT'?'上影线做空':'下影线做多'}。止盈 ${num(p.target)}，最远止损 ${num(p.stop)}。`;
   if(p.kind==='EDGE_RETURN'){const turned=(p.side==='SHORT'?e.upperExtreme>e.H:e.lowerExtreme<e.L);
     return `${turned?'冲出新极值后，5分钟已经往回收':'5分钟已从边界往回收'}。走到 ${num(p.target)} 出场。`;}
   if(p.kind==='EDGE_BREAKOUT')return `已经收在区间外面。错了就按 ${num(p.stop)} 出。`;
   return `顺着区间里的方向做。错了就按 ${num(p.stop)} 出。`;
 }
 function scanLine(a:{kind:string;own:number}){
-  const wait='等排上后看它的区间。';
-  if(a.kind==='ACTIVE_NONRESPONSE')return `成交还在，但没跟着大盘走。${wait}`;
-  if(a.kind==='OPPOSITE_MOVE')return `${a.own>=0?'和大盘反着涨':'和大盘反着跌'}。${wait}`;
-  return `${a.own>=0?'自己在涨':'自己在跌'}。${wait}`;
+  if(a.kind==='OPPOSITE_MOVE')return `${a.own>=0?'和大盘反着涨':'和大盘反着跌'}。等这根5分钟走出影线。`;
+  return `${a.own>=0?'比大盘更强':'比大盘更强地走'}。等这根5分钟走出影线。`;
 }
 type Position=NonNullable<View>['positions'][number];
 function holdStatus(t:Position){
@@ -131,6 +126,7 @@ function holdStatus(t:Position){
 function holdNext(t:Position){
   const m=t.unified?.anomaly;
   if(!m)return t.unified?.exitCondition??'按原来的计划走';
+  if(m.kind==='WICK')return `止盈按进场那根实体的 ${m.proof.wickMultiple??'3到5'} 倍。不到1倍止盈距离的浮亏继续拿；到过2倍等回到1倍亏损或成本；到3倍直接止损`;
   if(m.kind==='EDGE_RETURN')return `走到 ${num(m.proof.target*m.scale)} 出场。下影线不算。第一根5分钟收出区间先拿着；收回去之后，再收出一根才止损`;
   if(m.kind==='EDGE_BREAKOUT')return `收回区间并确认失败才出，否则按保护价 ${num(t.stopPrice)}`;
   return t.unified?.exitCondition??`结构坏了就出，保护价 ${num(t.stopPrice)}`;
@@ -147,33 +143,34 @@ function RangeExecution({data,now,liveEnabled,liveOverview}:{data:NonNullable<Vi
     headline=research?.error??(!discovery?'还没扫完第一轮。':[data.positions.length&&`正在做 ${data.positions.length} 笔`,orders.length&&`${orders.length} 个可以下单`,waiting.length&&`${waiting.length} 个在等 K 线走完`,watching.length&&`${watching.length} 个区间还在看`,!data.positions.length&&!orders.length&&!waiting.length&&!watching.length&&fresh.length&&`扫到 ${fresh.length} 个异动，还没排上`].filter(Boolean).join('，')||`扫过 ${discovery.scanned} 个币，这次没有要盯的。`);
   const row=(e:RangeEvent,title:string,text:string)=><article className="fr-exec-compact-row" key={e.id}>
     <div className="fr-exec-compact-head"><b>{e.symbol.replace('_',' / ')}</b><span>{title}</span></div>
-    <p>{text}</p><p className="fr-exec-exit">区间 {num(e.L)} – {num(e.H)}{e.own>0?' · 这次在涨':e.own<0?' · 这次在跌':''}</p></article>;
+    <p>{text}</p><p className="fr-exec-exit">扫描 {clockFull(e.detectedAt)} · 区间 {num(e.L)} – {num(e.H)}{e.own>0?' · 这次在涨':e.own<0?' · 这次在跌':''}</p></article>;
   const watchRows=[...waiting,...watching];
   return <div className="fr-execution-page fr-exec-compact" data-testid="direct-research-execution">
     <section className="fr-section"><div className="fr-section-head"><h2>现在</h2><span>{clock(discovery?.at??research?.updatedAt)}</span></div>
       <div className="fr-pipeline">{steps.map(([name,count],i)=><div key={name} className={i===active?'current':i<active&&Number(count)>0?'done':''}><span>{i+1}</span><b>{name} {count}</b></div>)}</div>
       <p>{headline.endsWith('。')?headline:`${headline}。`}</p>
       <p className="fr-exec-exit">币池 {discovery?.shared??'—'}，扫到价格 {discovery?.scanned??'—'}，看过 K 线 {discovery?.loaded??0}{backlog?`。一次看不过来，还有 ${backlog} 个在排队`:''}。</p>
-      {!data.positions.length&&!orders.length&&!waiting.length&&!watching.length&&<p className="fr-exec-exit">回归要等5分钟从边界往回收完。贴着边或只出影线不做。收在区间外面并走强，才做突破。</p>}
+      {!data.positions.length&&!orders.length&&!waiting.length&&!watching.length&&<p className="fr-exec-exit">只做强于大盘和反向的币。扫到之后等5分钟影线：上影线做空，下影线做多。扫描时没走完的那根也算。</p>}
       {liveEnabled&&<p>实盘已跟上 {liveOverview?.copied??'—'} / 应执行 {liveOverview?.eligible??'—'}。成交以实盘账户为准。</p>}
     </section>
     <section className="fr-section"><div className="fr-section-head"><h2>正在做</h2><span>{data.positions.length} 笔</span></div>
       {ds.execution?.pending.map(p=><p key={p.id}>{p.symbol.replace('_',' / ')} · {p.kind==='OPEN'?'正在下单':p.kind==='CLOSE'?'正在平仓':'正在减仓'} · {p.reason}</p>)}
-      <div className="fr-exec-compact-list">{data.positions.map(t=>{const m=t.unified?.anomaly,kind=m?({EDGE_BREAKOUT:'突破',EDGE_RETURN:'回归',INTERNAL_TREND:'顺势'})[m.kind]:'';
+      <div className="fr-exec-compact-list">{data.positions.map(t=>{const m=t.unified?.anomaly,kind=kindName(m?.kind);
         return <article className="fr-exec-compact-row" key={t.id}><div className="fr-exec-compact-head"><b>{t.symbol.replace('_',' / ')} · {side(t.side)}{kind?` · ${kind}`:''}</b><span>{holdStatus(t)}</span></div>
           <p>{t.unified?.holdReason??positionWatch(t)}</p>
+          <p className="fr-exec-exit">扫描 {clockFull(scannedAt(m))}</p>
           {m&&<p className="fr-exec-exit">进场区间 {num(m.L)} – {num(m.H)}</p>}
           <p className="fr-exec-exit">{holdNext(t)}{t.openedAt?` · 拿了 ${Math.max(0,Math.round((now-t.openedAt)/60000))} 分钟`:''}</p>
           {!m&&ds.anomalyRange&&<p className="fr-exec-exit">这笔是以前的规则，不按现在的区间走。</p>}</article>;})}</div>
       {!data.positions.length&&!ds.execution?.pending.length&&<p>还没有持仓。</p>}
     </section>
     {!!orders.length&&<section className="fr-section"><div className="fr-section-head"><h2>可以下单</h2><span>{orders.length} 个</span></div>
-      <div className="fr-exec-compact-list">{orders.map(e=>row(e,e.proof?`${side(e.proof.side)} ${({EDGE_BREAKOUT:'突破',EDGE_RETURN:'回归',INTERNAL_TREND:'顺势'})[e.proof.kind]}`:e.phase==='EXECUTING'?'正在提交':'等成交',`${e.phase==='EXECUTING'?'正在提交。':''}${orderLine(e)}`))}</div></section>}
+      <div className="fr-exec-compact-list">{orders.map(e=>row(e,e.proof?`${side(e.proof.side)} ${kindName(e.proof.kind)}`:e.phase==='EXECUTING'?'正在提交':'等成交',`${e.phase==='EXECUTING'?'正在提交。':''}扫描 ${clockFull(e.detectedAt)}。${orderLine(e)}`))}</div></section>}
     {!!watchRows.length&&<section className="fr-section"><div className="fr-section-head"><h2>还在看</h2><span>{watchRows.length} 个</span></div>
       <div className="fr-exec-compact-list">{watchRows.slice(0,8).map(e=>row(e,where(e),watchLine(e,now)))}</div>
       {watchRows.length>8&&<details className="fr-exec-research-details"><summary>其余 {watchRows.length-8} 个</summary><div className="fr-exec-compact-list">{watchRows.slice(8).map(e=>row(e,where(e),watchLine(e,now)))}</div></details>}</section>}
     {!!fresh.length&&<section className="fr-section"><div className="fr-section-head"><h2>刚扫到</h2><span>{fresh.length} 个还没排上</span></div>
-      <div className="fr-exec-compact-list">{fresh.slice(0,6).map(a=><article className="fr-exec-compact-row" key={a.symbol}><div className="fr-exec-compact-head"><b>{a.symbol.replace('_',' / ')}</b><span>{thin.has(a.symbol)?'不看':'等排上'}</span></div><p>{thin.has(a.symbol)?(research?.recent??[]).find(r=>r.symbol===a.symbol)?.reason??'成交太稀，不占用观察席。':scanLine(a)}</p></article>)}</div>
+      <div className="fr-exec-compact-list">{fresh.slice(0,6).map(a=><article className="fr-exec-compact-row" key={a.symbol}><div className="fr-exec-compact-head"><b>{a.symbol.replace('_',' / ')}</b><span>{thin.has(a.symbol)?'不看':'等影线'}</span></div><p>扫描 {clockFull(a.detectedAt)}。{thin.has(a.symbol)?(research?.recent??[]).find(r=>r.symbol===a.symbol)?.reason??'成交太稀，不占用观察席。':scanLine(a)}</p></article>)}</div>
       {fresh.length>6&&<p className="fr-exec-exit">还有 {fresh.length-6} 个，一样在等空位。</p>}</section>}
   </div>;
 }
@@ -212,6 +209,13 @@ const liquidityState=(v?:string)=>({
 }[v??""]??"流动性状态待确认");
 const side=(v?:string)=>v==="LONG"?"做多":v==="SHORT"?"做空":"方向观察";
 const clock=(v?:number)=>v?new Date(v).toLocaleTimeString("zh-CN",{timeZone:BEIJING_TIME_ZONE,hour12:false}):"—";
+const clockFull=(v?:number)=>v?new Date(v).toLocaleString("zh-CN",{timeZone:BEIJING_TIME_ZONE,month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false}):"—";
+const kindName=(k?:string)=>({EDGE_BREAKOUT:'突破',EDGE_RETURN:'回归',INTERNAL_TREND:'顺势',WICK:'影线'}[k??'']??'');
+function scannedAt(m?:{scannedAt?:number;eventId?:string;detectedAt?:number}){
+  if(m?.scannedAt&&Number.isFinite(m.scannedAt))return m.scannedAt;
+  if(m?.detectedAt&&Number.isFinite(m.detectedAt))return m.detectedAt;
+  const n=Number(m?.eventId?.split(':').at(-1));return Number.isFinite(n)&&n>1e12?n:undefined;
+}
 const pressure=(v?:number)=>typeof v!=="number"?"待确认":v>=.65?"高":v>=.45?"上升中":"低";
 
 function marketChangeText(data:View|null){

@@ -250,10 +250,12 @@ test("a simulated order shows the range frozen at entry",()=>{
   const t={id:"range-1",status:"CLOSED",symbol:"AXS_USDT",side:"SHORT",entryPrice:1.3904,exitPrice:1.37,lastPrice:1.37,
     quantity:0,contracts:1,notional:1000,entryFee:.5,leverage:5,margin:200,plannedRisk:20,openedAt:1790760000000,closedAt:1790761200000,
     stopPrice:1.45,expectedHoldMinutes:30,favorable:.01,adverse:0,holdScore:0,profitFloorRate:0,netPnl:12,entryContext:null,
-    unified:{anomaly:{kind:"EDGE_RETURN",L:1.3461,H:1.4496},branch:"RETURN",entryReason:"边界回头",holdReason:"按冻结计划持有",exitCondition:"到重心出场"}};
+    unified:{anomaly:{kind:"EDGE_RETURN",L:1.3461,H:1.4496,scannedAt:1790760600000},branch:"RETURN",entryReason:"边界回头",holdReason:"按冻结计划持有",exitCondition:"到重心出场"}};
   const html=render("app/forward-dashboard.tsx",{trade:t,now:1790761200000},{},"TradeCard");
   assert.match(html,/进场区间 1\.346100 – 1\.449600/);
   assert.match(html,/<dt>进场区间<\/dt><dd>1\.346100 – 1\.449600<\/dd>/);
+  assert.match(html,/扫描 09\/30 17:30:00/);
+  assert.match(html,/<dt>扫描时间<\/dt><dd>09\/30 17:30:00<\/dd>/);
 });
 test("comparison shows exact-mirror paid-fee nets and overview fee never adds estimates",()=>{
   const data=account();data.fees=3.25;
@@ -379,13 +381,13 @@ test('event execution renders actual retained response, blocker, missing outcome
   assert.equal(html.split('<section ').length-1,2);assert.doesNotMatch(html,/区域外|支撑|压力|波动估计|<details[^>]*\bopen(?:=|>)/);
 });
 test('range execution shows scan, watch, wait and the live trade without a rule lecture',()=>{
-  const data=account(),base={H:101,L:99,E:.2,D:.05,n5:.2,price:100.8,own:.01,active:true,source:'BYBIT',rank:1};
+  const data=account(),base={H:101,L:99,E:.2,D:.05,n5:.2,price:100.8,own:.01,active:true,source:'BYBIT',rank:1,detectedAt:1790760600000};
   data.positions=[{id:'held',symbol:'LDO_USDT',side:'SHORT',openedAt:data.updatedAt-120000,stopPrice:101.2,
-    unified:{decision:'HOLD',holdReason:'探出一次后缩回来了',anomaly:{kind:'EDGE_RETURN',stage:'HOLD',H:101.1,L:99.1,D:.05,scale:1,
+    unified:{decision:'HOLD',holdReason:'探出一次后缩回来了',anomaly:{kind:'EDGE_RETURN',stage:'HOLD',H:101.1,L:99.1,D:.05,scale:1,scannedAt:1790760600000,
       returnProbeAt:data.updatedAt,returnBackAt:data.updatedAt,proof:{target:100,kind:'EDGE_RETURN',side:'SHORT'}}}}];
   data.directStrategy={anomalyRange:{version:'anomaly-range-v1'},plans:[],execution:{pending:[]},rangeResearch:{updatedAt:data.updatedAt,waiting:2,
     discovery:{at:data.updatedAt,scanned:420,shared:800,loaded:36,queued:0,anomalies:[
-      {symbol:'NEW_USDT',kind:'OWN_ACCELERATION',own:.02},{symbol:'LDO_USDT',kind:'OWN_ACCELERATION',own:.01}]},
+      {symbol:'NEW_USDT',kind:'OWN_ACCELERATION',own:.02,detectedAt:1790760600000},{symbol:'LDO_USDT',kind:'OWN_ACCELERATION',own:.01,detectedAt:1790760600000}]},
     events:{
       LDO_USDT:{id:'held-event',symbol:'LDO_USDT',phase:'HOLDING',...base},
       READY_USDT:{id:'ready',symbol:'READY_USDT',phase:'READY',...base,price:100.9,upperExtreme:101.4,proof:{kind:'EDGE_RETURN',side:'SHORT',target:100,stop:101.2}},
@@ -393,7 +395,7 @@ test('range execution shows scan, watch, wait and the live trade without a rule 
       WATCH_USDT:{id:'watch',symbol:'WATCH_USDT',phase:'WATCH',...base,price:100.85}
     }}};
   const html=render('app/market-intelligence-execution.tsx',{data,now:data.updatedAt,liveEnabled:false});
-  for(const text of ['现在','扫描 420','在看 1','在等 1','下单 1','持仓 1','正在做 1 笔','可以下单','还在看','刚扫到','LDO / USDT','做空 · 回归','再探出就止损','走到 100 出场','READY / USDT','做空 回归','WAIT / USDT','等这根 5 分钟走完','WATCH / USDT','靠近上沿','NEW / USDT','自己在涨'])
+  for(const text of ['现在','扫描 420','在看 1','在等 1','下单 1','持仓 1','正在做 1 笔','可以下单','还在看','刚扫到','LDO / USDT','做空 · 回归','再探出就止损','走到 100 出场','READY / USDT','做空 回归','WAIT / USDT','等5分钟收出影线','WATCH / USDT','靠近上沿','NEW / USDT','比大盘更强','扫描 09/30 17:30'])
     assert.ok(html.includes(text),text);
   assert.equal(html.split('LDO / USDT').length-1,1);
   assert.doesNotMatch(html,/回归面板|双向计划|共同币池|硬保护在突破进场位/);

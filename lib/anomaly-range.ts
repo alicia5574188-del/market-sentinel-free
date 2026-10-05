@@ -7,7 +7,7 @@ import {selectRangePlans,rankRangeDiscovery,type RangeRank} from './range-schedu
 export const ANOMALY_RANGE_VERSION='anomaly-range-v1';
 export const RANGE_RESEARCH_BYTES=24*1024,RANGE_WINDOW_LIMIT=30,RANGE_MIN_VOLUME_24H_USD=1_000_000;
 type Side='LONG'|'SHORT';
-export type RangeKind='EDGE_BREAKOUT'|'EDGE_RETURN'|'INTERNAL_TREND';
+export type RangeKind='EDGE_BREAKOUT'|'EDGE_RETURN'|'INTERNAL_TREND'|'WICK';
 export type RangeDiscovery={at:number;scanned:number;shared:number;excluded:number;marketSamples:number;marketMove:number|null;
   anomalies:{symbol:string;detectedAt:number;source:string;sourceCount:number;own:number;residual:number;score:number;kind:string;frozen?:boolean}[];queued:number;loaded:number;
   /** Gate 24h turnover for symbols already under watch. Not persisted. */
@@ -19,7 +19,7 @@ export type RangeEvent={id:string;symbol:string;detectedAt:number;source:string;
   phase:'WATCH'|'CONFIRMING'|'READY'|'EXECUTING'|'HOLDING'|'EXPIRED'|'DONE';reason:string;lastAt:number;price:number;anchorPrice:number;active:boolean;
   upperExtreme:number;lowerExtreme:number;upperTouchedAt:number;lowerTouchedAt:number;
   activity?:{turnover15:number|null;activityRatio:number|null;at:number};
-  proof?:{kind:RangeKind;side:Side;fiveAt:number;at:number;price:number;stop:number;target:number;bars:number[];n1:number;bodyBaseline:number;fiveBar:number[];minuteBars:number[][];id:string};
+  proof?:{kind:RangeKind;side:Side;fiveAt:number;at:number;price:number;stop:number;target:number;bars:number[];n1:number;bodyBaseline:number;fiveBar:number[];minuteBars:number[][];id:string;wickMultiple?:number;scannedAt?:number};
   consumedAt:number;tradeId?:string;predecessorId?:string;reverseAfter?:number;reverseEligible?:boolean;
   admission?:{at:number;reason:string};exit?:{at:number;reason:string;net:number|null};
   setup?:{kind:RangeKind;side:Side;at:number};rank?:number;
@@ -49,7 +49,7 @@ export type RangeWindows=Record<string,RangeWindow>;
 export type RangeHolding={version:typeof ANOMALY_RANGE_VERSION;eventId:string;kind:RangeKind;H:number;L:number;E:number;D:number;n5:number;
   scale:number;scaleAt:number;source:string;window:RangeWindow;activity?:RangeEvent['activity'];proof:NonNullable<RangeEvent['proof']>;swings:RangeSwing[];
   initialRisk:number;lastBarAt:number;insideAt:number;quoteAt:number;peak:number;peakAt:number;retainedPeak:number;peakSamples:number;
-  progressReviewAt:number;stage:'HOLD'|'REVIEW'|'EXIT';reason:string;reverseEligible:boolean;breakoutAt?:number;returnProbeAt?:number;returnBackAt?:number};
+  progressReviewAt:number;stage:'HOLD'|'REVIEW'|'EXIT';reason:string;reverseEligible:boolean;breakoutAt?:number;returnProbeAt?:number;returnBackAt?:number;scannedAt?:number};
 const d=(side:Side)=>side==='LONG'?1:-1,median=(a:number[])=>{const b=a.filter(Number.isFinite).sort((x,y)=>x-y);return b.length?b[Math.floor(b.length/2)]!:0;};
 const end=(r:CandleLike,ms=300000)=>r.time*1000+ms,bytes=(v:unknown)=>new TextEncoder().encode(JSON.stringify(v)).length;
 export function encodeRangeWindow(rows:CandleLike[],source:string,cutoff:number):RangeWindow{
@@ -264,6 +264,10 @@ function rangeGeometryMatches(rows:CandleLike[],H:number,L:number,scale:number){
   return ok(rows.length)||rows.some((_,i)=>i>=30&&i<rows.length&&ok(i));
 }
 function validRangeProof(p:NonNullable<RangeEvent['proof']>,now:number){
+  if(p.kind==='WICK')return !!p.id&&['LONG','SHORT'].includes(p.side)&&[p.fiveAt,p.at,p.price,p.stop,p.target,p.bodyBaseline,p.wickMultiple,p.scannedAt].every(Number.isFinite)
+    &&p.price>0&&p.stop>0&&p.target>0&&p.bodyBaseline>0&&p.wickMultiple!>=3&&p.wickMultiple!<=5&&p.scannedAt!>0&&p.at===p.fiveAt&&p.at<=now
+    &&p.fiveBar.length===5&&p.fiveBar.every(Number.isFinite)&&p.fiveBar[0]!*1000+300000===p.fiveAt
+    &&(p.side==='LONG'?p.stop<p.price&&p.target>p.price:p.stop>p.price&&p.target<p.price);
   return !!p.id&&['EDGE_BREAKOUT','EDGE_RETURN','INTERNAL_TREND'].includes(p.kind)&&['LONG','SHORT'].includes(p.side)
     &&[p.fiveAt,p.at,p.price,p.stop,p.target,p.n1,p.bodyBaseline].every(Number.isFinite)&&p.price>0&&p.stop>0&&p.target>0&&p.n1>0&&p.bodyBaseline>=0
     &&p.at<=now&&p.fiveAt<p.at&&Array.isArray(p.bars)&&[2,3].includes(p.bars.length)
@@ -501,74 +505,15 @@ export function advanceRangeResearch(input:{previous?:RangeResearch;windows:Rang
           if(e.proof)delete e.proof;if(e.phase==='READY')e.phase='WATCH';}
       }
     }
-    const choices:{kind:RangeKind;side:Side;stop:number;target:number;test:(p:number)=>boolean;from?:number;fade?:{price:number;at:number}}[]=[];
-    // A high or low printed on the previous bars is the edge once the next completed
-    // bar has closed back, and that close is still inside one normal five-minute move.
-    const freshBars=five.slice(-4,-1);
-    const freshShort=(()=>{
-      if(freshBars.length<1||!(last.close<last.open)||!(last.high-last.close>=e.D))return;
-      const extreme=freshBars.reduce((a,b)=>a.high>=b.high?a:b);
-      if(last.high>extreme.high)return;
-      const back=extreme.high-last.close;
-      if(!(back>=e.D&&back<=e.n5&&extreme.high>e.H+e.D&&last.close>e.H&&last.close>e.L+e.D))return;
-      const edge=extreme.high,stop=edge+2*e.D,target=(edge+e.L)/2;
-      if(!(stop>last.close&&target<last.close))return;
-      return{edge,at:extreme.time*1000,stop,target,test:(p:number)=>p<edge&&p>=last.close-e.n5-e.D&&p>e.L+e.D};
-    })();
-    const freshLong=(()=>{
-      if(freshBars.length<1||!(last.close>last.open)||!(last.close-last.low>=e.D))return;
-      const extreme=freshBars.reduce((a,b)=>a.low<=b.low?a:b);
-      if(last.low<extreme.low)return;
-      const back=last.close-extreme.low;
-      if(!(back>=e.D&&back<=e.n5&&extreme.low<e.L-e.D&&last.close<e.L&&last.close<e.H-e.D))return;
-      const edge=extreme.low,stop=edge-2*e.D,target=(e.H+edge)/2;
-      if(!(stop>0&&stop<last.close&&target>last.close))return;
-      return{edge,at:extreme.time*1000,stop,target,test:(p:number)=>p>edge&&p<=last.close+e.n5+e.D&&p<e.H-e.D};
-    })();
-    if(freshShort)choices.push({kind:'EDGE_RETURN',side:'SHORT',stop:freshShort.stop,target:freshShort.target,test:freshShort.test,fade:{price:freshShort.edge,at:freshShort.at}});
-    if(freshLong)choices.push({kind:'EDGE_RETURN',side:'LONG',stop:freshLong.stop,target:freshLong.target,test:freshLong.test,fade:{price:freshLong.edge,at:freshLong.at}});
-    const earlier=five.at(-2),nearEnough=(distance:number)=>distance<=e.n5+e.D;
-    const openedUp=last.close>e.H+e.D&&!(earlier&&earlier.close>e.H+e.D)&&nearEnough(last.close-e.H);
-    const openedDown=last.close<e.L-e.D&&!(earlier&&earlier.close<e.L-e.D)&&nearEnough(e.L-last.close);
-    if(!inheritedTaken&&openedUp)choices.push({kind:'EDGE_BREAKOUT',side:'LONG',stop:Math.min(last.low,e.H-e.E-e.D),target:last.close,test:p=>p>e.H+e.D});
-    if(!inheritedTaken&&openedDown)choices.push({kind:'EDGE_BREAKOUT',side:'SHORT',stop:Math.max(last.high,e.L+e.E+e.D),target:last.close,test:p=>p<e.L-e.D});
-    const band=Math.max(e.E,e.n5),turnedDown=last.close<last.open&&last.high-last.close>=e.D,turnedUp=last.close>last.open&&last.close-last.low>=e.D,
-      nearHigh=Math.abs(last.close-e.H)<=band||e.upperExtreme>e.H&&last.close<=e.H&&e.H-last.close<=band+e.D,
-      nearLow=Math.abs(last.close-e.L)<=band||e.lowerExtreme<e.L&&last.close>=e.L&&last.close-e.L<=band+e.D;
-    if(!inheritedTaken&&nearHigh&&turnedDown&&last.close<e.H+e.D&&last.close>e.L+band)choices.push({kind:'EDGE_RETURN',side:'SHORT',stop:e.H+2*e.D,target:(e.H+e.L)/2,test:p=>p<e.H+e.D&&p>e.L+e.D&&Math.abs(p-e.H)<=band+e.D});
-    if(!inheritedTaken&&nearLow&&turnedUp&&last.close>e.L-e.D&&last.close<e.H-band){const stop=e.L-2*e.D;
-      if(stop>0)choices.push({kind:'EDGE_RETURN',side:'LONG',stop,target:(e.H+e.L)/2,test:p=>p>e.L-e.D&&p<e.H-e.D&&Math.abs(p-e.L)<=band+e.D});}
-    const closedMemory=closed?.unified?.anomaly,minute=minutes.at(-1);
-    if(!inheritedTaken&&e.reverseEligible&&closedMemory&&minute&&(closedMemory.kind==='EDGE_BREAKOUT'||closedMemory.breakoutAt)
-      &&input.now-Math.max(closed!.openedAt,closedMemory.breakoutAt??closedMemory.proof.fiveAt)<=300000){
-      const upper=closed!.side==='LONG',boundary=upper?e.H:e.L,side:Side=upper?'SHORT':'LONG',dir=d(side),
-        inward=(p:number)=>dir*(p-boundary)>e.D&&Math.abs(p-boundary)<=e.E;
-      if(inward(minute.close))choices.unshift({kind:'EDGE_RETURN',side,stop:(upper?e.upperExtreme:e.lowerExtreme)-dir*e.D,
-        target:(e.H+e.L)/2,test:inward,from:Math.max(end(last),Math.ceil(closed!.openedAt/60000)*60000)});
-    }
-    if(!inheritedTaken&&!e.reverseEligible&&last.close>e.L+e.E&&last.close<e.H-e.E&&e.direction!=='NEUTRAL'){
-      const side:Side=e.direction==='UP'?'LONG':'SHORT',dir=d(side),support=swings.findLast(s=>s.kind===(dir>0?'LOW':'HIGH')&&dir*(last.close-s.price)>e.D),
-        obstacles=swings.filter(s=>s.kind===(dir>0?'HIGH':'LOW')&&dir*(s.price-last.close)>e.D).map(s=>s.price);
-      if(support&&e.own*dir>0&&dir*(last.close-last.open)>e.D)choices.push({kind:'INTERNAL_TREND',side,stop:support.price-dir*e.D,
-        target:dir>0?Math.min(e.H,...obstacles):Math.max(e.L,...obstacles),test:p=>p>e.L+e.E&&p<e.H-e.E&&dir*(p-last.open)>0});
-    }
-    if(!inheritedTaken&&e.reverseEligible&&e.reverseAfter&&end(last)<=e.consumedAt){const fast=choices.filter(c=>c.from!==undefined);choices.splice(0,choices.length,...fast);}
-    if(!inheritedTaken){delete e.setup;if(choices[0])e.setup={kind:choices[0].kind,side:choices[0].side,at:end(last)};}
-    if(!inheritedTaken)for(const choice of choices){if(e.reverseEligible&&(closed?.unified?.anomaly?.kind==='EDGE_BREAKOUT'||closed?.unified?.anomaly?.breakoutAt)&&choice.kind!=='EDGE_RETURN'
-        ||e.reverseEligible&&closed?.unified?.anomaly?.kind==='EDGE_RETURN'&&choice.kind!=='EDGE_BREAKOUT')continue;
-      const tick=input.ticks[e.symbol]??e.n5/1000,proof=choice.kind==='EDGE_RETURN'
-        ?closedMinuteProof(minutes,end(last),tick,input.now,choice.test)??strongRangeProof(minutes,choice.from??end(last),choice.side,e.n5,tick,choice.test)
-        :strongRangeProof(minutes,choice.from??end(last),choice.side,e.n5,tick,choice.test);
-      if(!proof||proof.at<=e.consumedAt||(choice.kind!=='EDGE_RETURN'&&proof.minuteBars[0]![0]!*1000<e.detectedAt)||input.now-proof.at>120000)continue;
-      const fadeEdge=choice.fade?.price??(choice.side==='SHORT'?e.H:e.L);
-      if(choice.kind==='EDGE_RETURN'&&choice.from===undefined&&!proof.minuteBars.every(b=>choice.side==='SHORT'?b[4]!<b[1]!&&b[2]!<=fadeEdge+tick:b[4]!>b[1]!&&b[3]!>=fadeEdge-tick))continue;
-      if(choice.fade&&choice.side==='SHORT'&&choice.fade.price>e.H){e.H=choice.fade.price;e.highAt=choice.fade.at;e.upperExtreme=Math.max(e.upperExtreme,e.H);}
-      else if(choice.fade&&choice.side==='LONG'&&choice.fade.price<e.L){e.L=choice.fade.price;e.lowAt=choice.fade.at;e.lowerExtreme=Math.min(e.lowerExtreme,e.L);}
-      if(choice.fade){e.E=Math.min(.75*e.n5,.1*(e.H-e.L));e.swings=rememberSwingPair(e.swings,{H:e.H,L:e.L,highAt:e.highAt,lowAt:e.lowAt,highConfirmed:e.highAt,lowConfirmed:e.lowAt});}
-      e.proof={...choice,...proof,fiveAt:end(last),fiveBar:[last.time,last.open,last.high,last.low,last.close],id:`${e.id}:${choice.kind}:${choice.side}:${proof.at}`};delete (e.proof as unknown as {test?:unknown;from?:number;fade?:unknown}).test;delete (e.proof as unknown as {from?:number}).from;delete (e.proof as unknown as {fade?:unknown}).fade;
-      e.phase='READY';e.reason=choice.kind==='EDGE_BREAKOUT'?'5分钟收在区间外，随后1分钟强势推进':choice.kind==='EDGE_RETURN'?'5分钟已从边界往回收，收盘还在一个正常波动内，1分钟继续同向':'内部波段同向，完成5分钟推进及后续1分钟确认';break;
-    }
-    if(!inheritedTaken&&!e.proof){e.phase='CONFIRMING';e.reason=!e.active?'近期成交不足或未知，继续观察':'等待突破的区间外收盘和强势小线，或边界回头的完成小线';}
+    const scanBar=Math.floor(e.detectedAt/300000)*300000;
+    const wickBar=five.filter(r=>{const start=r.time*1000,closed=end(r);return closed<=input.now&&closed>e.detectedAt&&start>=scanBar&&closed>e.consumedAt;})
+      .map(bar=>({bar,signal:wickSignal(bar)})).find(x=>x.signal&&input.now-end(x.bar)<=120000);
+    if(wickBar?.signal){const bar=wickBar.bar,w=wickBar.signal,dir=d(w.side),tp=w.body*w.multiple,closed=end(bar);
+      e.proof={kind:'WICK',side:w.side,fiveAt:closed,at:closed,price:bar.close,stop:bar.close-dir*3*tp,target:bar.close+dir*tp,
+        bars:[closed],n1:w.body,bodyBaseline:w.body,fiveBar:[bar.time,bar.open,bar.high,bar.low,bar.close],minuteBars:[],wickMultiple:w.multiple,scannedAt:e.detectedAt,
+        id:`${e.id}:WICK:${w.side}:${closed}`};
+      e.phase='READY';e.reason=w.side==='SHORT'?'上影线长过实体，做空':'下影线长过实体，做多';
+    }else if(e.proof?.kind!=='WICK'){if(e.proof)delete e.proof;e.phase='CONFIRMING';e.reason=!e.active?'近期成交不足或未知，继续观察':'等5分钟收出上影线或下影线。扫描时没走完的那根也算';}
   }
   recycleRangePlans(s,input.windows,protectedIds);
   const selection=selectRangePlans(Object.values(s.events),input.quotes,input.now);
@@ -614,12 +559,12 @@ export function makeRangeHolding(e:RangeEvent,w:RangeWindow,price:number,analysi
   const scale=price/((analysis.bestBid+analysis.bestAsk)/2);return{version:ANOMALY_RANGE_VERSION,eventId:e.id,kind:e.proof!.kind,H:e.H*scale,L:e.L*scale,E:e.E*scale,D:e.D*scale,n5:e.n5*scale,
     scale,scaleAt:analysis.observedAt,source:e.source,activity:e.activity?structuredClone(e.activity):undefined,window:structuredClone(w),proof:structuredClone(e.proof!),swings:structuredClone(e.swings),
     initialRisk:Math.abs(price-e.proof!.stop*scale),lastBarAt:0,insideAt:0,quoteAt:0,peak:0,peakAt:now,retainedPeak:0,peakSamples:0,
-    progressReviewAt:now,stage:'HOLD',reason:'按冻结计划持有，普通回调观察',reverseEligible:false};
+    progressReviewAt:now,stage:'HOLD',reason:e.proof!.kind==='WICK'?'影线计划：浮亏不到1倍止盈距离继续拿':'按冻结计划持有，普通回调观察',reverseEligible:false,scannedAt:e.detectedAt};
 }
 export function validRangeHolding(m:RangeHolding){try{const rows=decodeRangeWindow(m.window);return m.version===ANOMALY_RANGE_VERSION&&!!m.eventId
   &&[m.H,m.L,m.E,m.D,m.n5,m.scale,m.scaleAt,m.initialRisk,m.lastBarAt,m.insideAt,m.quoteAt,m.peak,m.peakAt,m.retainedPeak,m.peakSamples].every(Number.isFinite)
   &&m.H>m.L&&m.L>0&&m.scale>0&&m.initialRisk>0&&m.window.source===m.source&&validRangeProof(m.proof,Math.max(m.scaleAt,m.proof.at))
-  &&(rangeGeometryMatches(rows,m.H,m.L,m.scale)||holdingSwingMatches(m))
+  &&(m.proof.kind==='WICK'||rangeGeometryMatches(rows,m.H,m.L,m.scale)||holdingSwingMatches(m))
   &&['HOLD','REVIEW','EXIT'].includes(m.stage)&&typeof m.reverseEligible==='boolean'&&m.peakSamples>=0&&m.peakSamples<=3
   &&(m.returnProbeAt===undefined||Number.isFinite(m.returnProbeAt)&&m.returnProbeAt>0)
   &&(m.returnBackAt===undefined||Number.isFinite(m.returnBackAt)&&m.returnProbeAt!==undefined&&m.returnBackAt>=m.returnProbeAt)
@@ -634,6 +579,16 @@ export function rangeHoldingDecision(t:Trade,q:Quote,now:number,path:CandleLike[
   const net=dir*(px-t.entryPrice)-(px+t.entryPrice)*.0005;
   if(q.observedAt>m.quoteAt){m.quoteAt=q.observedAt;if(net>m.peak+m.n5*.05){m.peak=net;m.peakAt=now;m.peakSamples=1;}
     else if(net>=m.peak-m.n5*.25&&m.peak>0){m.peakSamples=Math.min(3,m.peakSamples+1);if(m.peakSamples>=3)m.retainedPeak=Math.max(m.retainedPeak,Math.min(net,m.peak));}}
+  if(m.kind==='WICK'&&m.proof.bodyBaseline>0&&(m.proof.wickMultiple??0)>=3){
+    const Dtp=m.proof.bodyBaseline*m.proof.wickMultiple!*m.scale,adverse=dir*(t.entryPrice-px);
+    if(adverse>=2*Dtp&&!m.insideAt){m.insideAt=now;m.stage='REVIEW';m.reason='浮亏到了止盈距离的2倍，回到1倍亏损或成本就出';}
+    if(dir*(px-t.entryPrice)>=Dtp){exit='WICK_TARGET';m.stage='EXIT';m.reason='到达这根K线实体的止盈';}
+    else if(m.insideAt&&dir*(px-t.entryPrice)>=0){exit='WICK_BREAKEVEN';m.stage='EXIT';m.reason='浮亏到过2倍止盈距离，价格回到成本，保本出场';}
+    else if(m.insideAt&&adverse<=Dtp){exit='WICK_ONE_STOP';m.stage='EXIT';m.reason='浮亏到过2倍止盈距离，回到1倍止损出场';}
+    else if(adverse>=3*Dtp||dir*(px-stop)<=0){exit='WICK_HARD_STOP';m.stage='EXIT';m.reason='浮亏到达止盈距离的3倍，直接止损';}
+    else{m.stage=m.insideAt?'REVIEW':'HOLD';m.reason=adverse<=Dtp?'浮亏还没到1倍止盈距离，继续拿着':m.insideAt?'浮亏到过2倍，等回到1倍止损或成本':'浮亏超过1倍止盈距离，还没到2倍，继续拿着';}
+    return{memory:m,stop,exit,reason:m.reason};
+  }
   const returning=m.kind==='EDGE_RETURN';
   const r=m.retainedPeak/m.initialRisk,share=returning?0:r>=6?.8:r>=4?.65:r>=2?.5:0;
   if(share){const floor=Math.min(m.retainedPeak*share,m.retainedPeak-m.n5),guard=t.entryPrice+dir*(floor+(px+t.entryPrice)*.0005);
@@ -685,6 +640,20 @@ export function rangeHoldingDecision(t:Trade,q:Quote,now:number,path:CandleLike[
   if(m.breakoutAt)m.lastBarAt=Math.max(m.lastBarAt,m.breakoutAt);
   if(exit)m.stage='EXIT';return{memory:m,stop,exit,reason:m.reason};
 }
+/** Stronger than the basket, or actually opposite it. Flat non-response and same-direction weakness are not scanned. */
+export function tradableAnomaly(kind:string,residual:number){
+  return kind==='OPPOSITE_MOVE'||(kind==='OWN_ACCELERATION'&&residual>0);
+}
+/** Upper wick shorts, lower wick longs. The traded wick must exceed 1.5 bodies; the other wick must be under half a body. */
+export function wickSignal(bar:CandleLike){
+  const body=Math.abs(bar.close-bar.open),upper=bar.high-Math.max(bar.open,bar.close),lower=Math.min(bar.open,bar.close)-bar.low;
+  if(!(body>0)||!(bar.high>=Math.max(bar.open,bar.close))||!(bar.low<=Math.min(bar.open,bar.close))||!(upper>=0)||!(lower>=0))return;
+  const longUpper=upper>body*1.5,longLower=lower>body*1.5,smallUpper=upper<body*.5,smallLower=lower<body*.5;
+  const side:Side|undefined=longUpper&&smallLower?'SHORT':longLower&&smallUpper?'LONG':undefined;
+  if(!side)return;
+  const wick=side==='SHORT'?upper:lower,ratio=wick/body,multiple=Math.min(5,Math.max(3,3+(ratio-1.5)/1.5*2));
+  return{side,body,upper,lower,multiple};
+}
 export type RangeScanner={prices:Map<string,{at:number;price:number}[]>;detected:Map<string,RangeDiscovery['anomalies'][number]>};
 export function scanRangeAnomalies(rows:{symbol:string;last:number;observedAt:number;source:string;sourceCount:number;volume24hUsd:number}[],scanner:RangeScanner,now:number,shared:number,loaded:number):RangeDiscovery{
   if(rows.length>4096)throw new Error('COMMON_POOL_CAPACITY');
@@ -703,10 +672,11 @@ export function scanRangeAnomalies(rows:{symbol:string;last:number;observedAt:nu
     (Math.abs(x.own-market)>=Math.max(x.duration===15?.004:.0015,x.normal*Math.sqrt(x.duration)*3)
       ||Math.abs(market)>=(x.duration===15?.004:.0015)&&Math.abs(x.own)<Math.abs(market)*.25));
   for(const x of abnormalities){const old=scanner.detected.get(x.row.symbol),residual=x.own-market!,kind=Math.abs(x.own)<Math.abs(market!)*.25?'ACTIVE_NONRESPONSE':x.own*market!<0?'OPPOSITE_MOVE':'OWN_ACCELERATION';
+    if(!tradableAnomaly(kind,residual)){if(old&&!old.frozen)scanner.detected.delete(x.row.symbol);continue;}
     scanner.detected.set(x.row.symbol,{symbol:x.row.symbol,source:old?.source??x.row.source,sourceCount:x.row.sourceCount,detectedAt:old?.detectedAt??now,...(old?.frozen?{frozen:true}:{}),
       own:x.own,residual,kind,score:Math.min(99,60+Math.abs(residual)*2000)});}
   for(const [symbol,a] of scanner.detected){const row=rows.find(r=>r.symbol===symbol);
-    if(now-a.detectedAt>1800000||!present.has(symbol)||!row||row.volume24hUsd<RANGE_MIN_VOLUME_24H_USD)scanner.detected.delete(symbol);}
+    if(!a.frozen&&!tradableAnomaly(a.kind,a.residual)||now-a.detectedAt>1800000||!present.has(symbol)||!row||row.volume24hUsd<RANGE_MIN_VOLUME_24H_USD)scanner.detected.delete(symbol);}
   const anomalies=[...scanner.detected.values()];
   return{at:now,scanned:rows.filter(r=>now-r.observedAt<=12000).length,shared,excluded:shared-rows.length,marketSamples:marketRows.length,marketMove:market,
     anomalies:rankRangeDiscovery(anomalies,now),queued:Math.max(0,anomalies.length-30),loaded};
