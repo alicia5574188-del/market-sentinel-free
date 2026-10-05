@@ -236,6 +236,7 @@ test('two fresh wicks from one close are both queued, and the same wick is refus
       paperTiming:{prepareMs:2000,confirmMs:0,basis:'EXECUTION_CLOCK',samples:0}});
   const opened=run(f.input.now);
   assert.deepEqual(opened.state.positions.map(t=>t.symbol).sort(),symbols);
+  assert.ok(opened.state.positions.every(t=>t.notional>=300&&t.notional<=500),opened.state.positions.map(t=>`${t.symbol}:${t.notional.toFixed(1)}`).join(','));
   assert.ok(opened.state.positions.every(t=>t.unified?.anomaly?.kind==='WICK'&&t.openedAt-t.unified!.anomaly!.proof.at<=30000));
   const late=run(f.e.proof!.at+30001);assert.equal(late.state.positions.length,0);
   const fat=['E_USDT','F_USDT','G_USDT','H_USDT','I_USDT'],
@@ -247,8 +248,8 @@ test('two fresh wicks from one close are both queued, and the same wick is refus
       contracts:Object.fromEntries(fat.map(s=>[s,fatContract])),marketAuthority:true,specialMove:true,anomalyRange:true,
       rangeDiscovery:{...f.input.discovery,anomalies:fat.map(symbol=>({...f.input.discovery.anomalies[0]!,symbol}))},
       paperTiming:{prepareMs:2000,confirmMs:0,basis:'EXECUTION_CLOCK',samples:0}});
-  assert.equal(crowded.state.positions.length,4,JSON.stringify(crowded.state.directStrategy?.plans));
-  assert.match(crowded.state.directStrategy!.plans.I_USDT?.reason??'',/保证金|容量/);
+  assert.equal(crowded.state.positions.length,0);
+  assert.match(crowded.state.directStrategy!.plans.I_USDT?.reason??'',/300到500/);
 });
 test('a wick accepted inside 30 seconds fills on the bid and ask, and does not start after 30 seconds',()=>{
   const f=fixture(),proofAt=f.e.proof!.at,contract={quantoMultiplier:.1,leverageMax:20,maintenanceRate:.005,minContracts:1,tickSize:.001,enableDecimal:false,orderSizeMin:'1',orderSizeMax:'1000000',marketOrderSizeMax:'1000000'},

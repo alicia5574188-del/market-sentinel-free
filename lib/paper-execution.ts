@@ -46,8 +46,10 @@ function settleWickEntry(s:ForwardState,t:Trade,q:Quote,c:Contract,quotes:Record
   const used=s.positions.filter(x=>x.id!==t.id).reduce((n,x)=>n+x.margin,0);
   const room=mark.equity*.75-used;if(!(room>0))throw new Error('可用保证金不足');
   const affordable=Math.floor(room*t.leverage/(px*c.quantoMultiplier));
-  const n=Math.min(f.contracts,t.contracts,Math.max(affordable,0));
-  if(!(n>0))throw new Error('可用保证金不足');
+  let n=Math.min(f.contracts,t.contracts,Math.max(affordable,0));
+  const unit=px*c.quantoMultiplier;
+  if(n*unit>500)n=Math.floor(500/unit);
+  if(!(n*unit>=300))throw new Error('盘口或保证金不足300 USDT，不开');
   const exact=paperBookFill(t,book,c,n,true);if(!exact)return false;
   const margin=exact.contracts*c.quantoMultiplier*exact.price/t.leverage;
   if(used+margin>mark.equity*.75+1e-6)throw new Error('可用保证金不足');
