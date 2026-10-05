@@ -36,6 +36,7 @@ function render(path,props,extra={},component="default"){
     "../lib/research-snapshot.ts":{collectReviewSnapshot(){throw new Error("render must not export");}},
     "../lib/beijing-time.ts":{BEIJING_TIME_ZONE:"Asia/Shanghai",beijingDayKey:()=>"2026-09-30"},
     "../lib/range-scheduler.ts":schedulerModule.exports,
+    "../lib/wick-target.ts":wickModule.exports,
     "../lib/equity-cache.ts":{EquityHistoryCache:class{cancel(){}}},
     "../lib/record-view.ts":{recordWindows:rows=>({recent:rows.slice(0,10),archive:rows.slice(10)}),archivePage:rows=>({items:rows,page:0,pages:1})},
     "./record-controls.tsx":{ArchivePagination:()=>null},
@@ -55,6 +56,9 @@ function render(path,props,extra={},component="default"){
 const schedulerModule={exports:{}};
 const schedulerSource=ts.transpileModule(read("lib/range-scheduler.ts"),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
 runInNewContext(`(function(require,module,exports){${schedulerSource}\n})`,{})(name=>{throw new Error(`range scheduler imported ${name}`);},schedulerModule,schedulerModule.exports);
+const wickModule={exports:{}};
+const wickSource=ts.transpileModule(read("lib/wick-target.ts"),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
+runInNewContext(`(function(require,module,exports){${wickSource}\n})`,{})(name=>{throw new Error(`wick target imported ${name}`);},wickModule,wickModule.exports);
 const account=()=>({startedAt:1790670000000,updatedAt:1790761200000,initialEquity:1000,equity:922.82,
   netPnl:-77.18,maxDrawdown:.141,floating:3.2,turnover:800,fees:4,resolved:5,
   positions:[],opportunities:[],history:[],events:[],storage:{error:null},engineVersion:"market-intelligence-v1"});

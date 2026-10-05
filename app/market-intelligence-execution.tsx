@@ -1,6 +1,7 @@
 "use client";
 import type {RangeEvent} from '../lib/anomaly-range.ts';
 import {msUntilFiveClose} from '../lib/range-scheduler.ts';
+import {wickGoal} from '../lib/wick-target.ts';
 
 import {BEIJING_TIME_ZONE} from "../lib/beijing-time.ts";
 import {type forwardSummary} from "../lib/forward-relations.ts";
@@ -119,8 +120,9 @@ function RangeExecution({data,now,liveEnabled,liveOverview}:{data:NonNullable<Vi
     <section className="fr-section"><div className="fr-section-head"><h2>正在做</h2><span>{data.positions.length} 笔</span></div>
       {ds.execution?.pending.map(p=><p key={p.id}>{p.symbol.replace('_',' / ')} · {p.kind==='OPEN'?'正在下单':p.kind==='CLOSE'?'正在平仓':'正在减仓'} · {p.reason}</p>)}
       <div className="fr-exec-compact-list">{data.positions.map(t=>{const m=t.unified?.anomaly,wick=m?.kind==='WICK',kind=wick?'影线':'';
+        const scale=m&&m.scale>0?m.scale:1,proof=m?.proof,body=proof&&proof.bodyBaseline>0&&(proof.wickMultiple??0)>=3?proof.bodyBaseline*(proof.wickMultiple??0)*scale:0;
         return <article className="fr-exec-compact-row" key={t.id}><div className="fr-exec-compact-head"><b>{t.symbol.replace('_',' / ')} · {side(t.side)}{kind?` · ${kind}`:''}</b><span>{holdStatus(t)}</span></div>
-          <p>{prices(wick&&m?.proof?.target?m.proof.target*(m.scale||1):undefined,t.stopPrice)}</p>
+          <p>{prices(wick&&proof?.target?wickGoal(t.side,t.entryPrice,t.quantity,proof.target*scale,body,(proof.price??0)*scale):undefined,t.stopPrice)}</p>
           <p className="fr-exec-exit">扫描 {clockFull(scannedAt(m))}</p>
           {t.openedAt?<p className="fr-exec-exit">拿了 {Math.max(0,Math.round((now-t.openedAt)/60000))} 分钟</p>:null}</article>;})}</div>
       {!data.positions.length&&!ds.execution?.pending.length&&<p>还没有持仓。</p>}

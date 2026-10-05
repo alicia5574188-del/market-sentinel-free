@@ -124,7 +124,8 @@ export function restoreForwardProtectionCheckpoint(s:ForwardState,value:unknown)
     const newer=r.lastQuoteAt>=t.lastQuoteAt;
     t.favorable=Math.max(t.favorable,r.favorable);t.adverse=Math.max(t.adverse,r.adverse);
     if(newer){t.lastPrice=r.lastPrice;t.lastQuoteAt=r.lastQuoteAt;t.holdScore=r.holdScore;}
-    t.stopPrice=t.inverseCopy||t.unified?.branch==='RETURN'&&!t.unified.marketRoute
+    const wick=t.unified?.anomaly?.kind==='WICK';
+    t.stopPrice=t.inverseCopy||t.unified?.branch==='RETURN'&&!t.unified.marketRoute||wick
       ?(newer?r.stopPrice:t.stopPrice):t.side==='LONG'?Math.max(t.stopPrice,r.stopPrice):Math.min(t.stopPrice,r.stopPrice);
     t.firstProfitAt=t.firstProfitAt&&r.firstProfitAt?Math.min(t.firstProfitAt,r.firstProfitAt):t.firstProfitAt??r.firstProfitAt??null;
     t.profitFloorRate=Math.max(t.profitFloorRate??0,r.profitFloorRate!);t.peakPnlRate=Math.max(t.peakPnlRate??0,r.peakPnlRate!,t.favorable);

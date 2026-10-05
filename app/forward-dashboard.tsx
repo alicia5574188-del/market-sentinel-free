@@ -14,6 +14,7 @@ import "./account-first.css";
 import "./paid-fee.css";
 import {remainingPaidNetPnl,tradePaidNetPnl,pairedPaidView,type PaidPair} from "../lib/paid-fee-view.ts";
 import {collectReviewSnapshot} from "../lib/research-snapshot.ts";
+import {wickGoal} from "../lib/wick-target.ts";
 
 type View=ReturnType<typeof forwardSummary>;
 type Tab="overview"|"execution"|"paper"|"live"|"journal"|"settings";
@@ -149,8 +150,8 @@ function anomalyScanned(m?:{scannedAt?:number;eventId?:string}){
 function wickLevels(t:Trade){
   const m=t.unified?.anomaly;
   if(m?.kind!=='WICK'||!(m.proof?.target>0))return null;
-  const scale=m.scale>0?m.scale:1;
-  return{tp:m.proof.target*scale,stop:t.stopPrice};
+  const scale=m.scale>0?m.scale:1,proof=m.proof,body=proof.bodyBaseline>0&&(proof.wickMultiple??0)>=3?proof.bodyBaseline*proof.wickMultiple!*scale:0;
+  return{tp:wickGoal(t.side,t.entryPrice,t.quantity,proof.target*scale,body,(proof.price??0)*scale),stop:t.stopPrice};
 }
 function openTradeNetPnl(t:Trade,px=t.lastPrice){
   return tradePaidNetPnl(t,px);

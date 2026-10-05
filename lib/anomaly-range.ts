@@ -4,6 +4,8 @@ import type {Trade,Quote} from './forward-relations.ts';
 import {specialRows,recentSpecialActivity} from './special-move.ts';
 import {MARKET_AUTHORITY_VERSION,type MarketRoute} from './market-authority.ts';
 import {selectRangePlans,rankRangeDiscovery,type RangeRank} from './range-scheduler.ts';
+import {wickGoal} from './wick-target.ts';
+export {wickGoal,wickProfitTarget} from './wick-target.ts';
 export const ANOMALY_RANGE_VERSION='anomaly-range-v1';
 export const RANGE_RESEARCH_BYTES=24*1024,RANGE_WINDOW_LIMIT=30,RANGE_MIN_VOLUME_24H_USD=1_000_000,WICK_WATCH_MS=15*60*1000;
 type Side='LONG'|'SHORT';
@@ -580,10 +582,10 @@ export function rangeHoldingDecision(t:Trade,q:Quote,now:number,path:CandleLike[
   if(q.observedAt>m.quoteAt){m.quoteAt=q.observedAt;if(net>m.peak+m.n5*.05){m.peak=net;m.peakAt=now;m.peakSamples=1;}
     else if(net>=m.peak-m.n5*.25&&m.peak>0){m.peakSamples=Math.min(3,m.peakSamples+1);if(m.peakSamples>=3)m.retainedPeak=Math.max(m.retainedPeak,Math.min(net,m.peak));}}
   if(m.kind==='WICK'&&m.proof.bodyBaseline>0&&(m.proof.wickMultiple??0)>=3){
-    const Dtp=m.proof.bodyBaseline*m.proof.wickMultiple!*m.scale,adverse=dir*(t.entryPrice-px);
-    const minNet=wickProfitTarget(t.side,t.entryPrice,t.quantity),stored=m.proof.target*m.scale;
-    if(minNet!==undefined&&dir*(minNet-stored)>0&&dir*(minNet-m.proof.price*m.scale)>0)m.proof.target=minNet/m.scale;
-    const tpPx=m.proof.target*m.scale,goal=dir>0?Math.max(t.entryPrice+Dtp,tpPx):Math.min(t.entryPrice-Dtp,tpPx);
+    const bodyTp=m.proof.bodyBaseline*m.proof.wickMultiple!*m.scale,candle=m.proof.target*m.scale;
+    const goal=wickGoal(t.side,t.entryPrice,t.quantity,candle,bodyTp,m.proof.price*m.scale);
+    const Dtp=Math.abs(goal-t.entryPrice),hard=t.entryPrice-dir*3*Dtp,adverse=dir*(t.entryPrice-px);
+    if(hard>0&&dir*(hard-stop)<0)stop=hard;
     if(adverse>=2*Dtp&&!m.insideAt){m.insideAt=now;m.stage='REVIEW';m.reason='浮亏到了止盈距离的2倍，回到1倍亏损或成本就出';}
     if(dir*(px-goal)>=0){exit='WICK_TARGET';m.stage='EXIT';m.reason='到达止盈';}
     else if(m.insideAt&&dir*(px-t.entryPrice)>=0){exit='WICK_BREAKEVEN';m.stage='EXIT';m.reason='浮亏到过2倍止盈距离，价格回到成本，保本出场';}
@@ -646,16 +648,6 @@ export function rangeHoldingDecision(t:Trade,q:Quote,now:number,path:CandleLike[
 /** Stronger than the basket, or actually opposite it. Flat non-response and same-direction weakness are not scanned. */
 export function tradableAnomaly(kind:string,residual:number){
   return kind==='OPPOSITE_MOVE'||(kind==='OWN_ACCELERATION'&&residual>0);
-}
-/** Price that nets `minNet` after both taker fees. Undefined when size cannot reach it above zero. */
-export function wickProfitTarget(side:Side,entry:number,quantity:number,minNet=5,fee=.0005){
-  if(!(entry>0)||!(quantity>0)||!(minNet>0)||!(fee>=0)||fee>=1)return;
-  const raw=side==='LONG'
-    ?(minNet+entry*quantity*(1+fee))/(quantity*(1-fee))
-    :(entry*quantity*(1-fee)-minNet)/(quantity*(1+fee));
-  if(!Number.isFinite(raw)||raw<=0)return;
-  if(side==='LONG'?raw<=entry:raw>=entry)return;
-  return raw;
 }
 export function wickSignal(bar:CandleLike){
   const body=Math.abs(bar.close-bar.open),upper=bar.high-Math.max(bar.open,bar.close),lower=Math.min(bar.open,bar.close)-bar.low;

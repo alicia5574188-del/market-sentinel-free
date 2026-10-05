@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {advanceRangeResearch,decodeRangeWindow,rangeDirection,strongRangeProof,rangeMarketRoute,makeRangeHolding,
   rangeHoldingDecision,rangeExecutionAdmission,scanRangeAnomalies,normalizeRangeResearch,rangeObservationSymbols,fairRangeRefreshBatch,
-  validRangeHolding,thinFiveTape,sparseFiveTurnover,activeSwingRange,lastingRange,wickSignal,tradableAnomaly,wickProfitTarget,WICK_WATCH_MS,RANGE_OUTCOME_BYTES,RANGE_RESEARCH_BYTES,type RangeResearch,type RangeWindows,type RangeScanner} from '../lib/anomaly-range.ts';
+  validRangeHolding,thinFiveTape,sparseFiveTurnover,activeSwingRange,lastingRange,wickSignal,tradableAnomaly,wickProfitTarget,wickGoal,WICK_WATCH_MS,RANGE_OUTCOME_BYTES,RANGE_RESEARCH_BYTES,type RangeResearch,type RangeWindows,type RangeScanner} from '../lib/anomaly-range.ts';
 import {advanceDirectStrategy} from '../lib/direct-strategy.ts';
 import {initialForward,normalizeForward,forwardSummary,resetForwardAccountPreservingLearning,type Quote} from '../lib/forward-relations.ts';
 import {buildForwardProtectionCheckpoint,restoreForwardProtectionCheckpoint} from '../lib/forward-protection-checkpoint.ts';
@@ -130,7 +130,7 @@ test('a return does not scratch a profit bounce before the center or a second ou
   const dip=rangeHoldingDecision(t,quote(f.input.now+2000,px-tp*.4),f.input.now+2000,[],[]);
   assert.equal(dip.exit,undefined,dip.reason);
   const seen=rangeHoldingDecision(t,quote(f.input.now+3000,px),f.input.now+3000,[],[]);
-  const goal=seen.memory.proof.target*seen.memory.scale;
+  const m=seen.memory,goal=wickGoal(t.side,px,t.quantity,m.proof.target*m.scale,m.proof.bodyBaseline*m.scale*(m.proof.wickMultiple??0),m.proof.price*m.scale);
   const target=rangeHoldingDecision(t,quote(f.input.now+4000,goal+1),f.input.now+4000,[],[]);
   assert.equal(target.exit,'WICK_TARGET');
 });
@@ -513,9 +513,11 @@ test('fast completed reentry exits at edge; later shallow sideways pullbacks kee
 test('profit guard needs three distinct retained quotes and cannot widen or automatically reverse',()=>{
   const f=trade(),t=f.t;
   const seen=rangeHoldingDecision(t,quote(f.input.now+1000,t.entryPrice),f.input.now+1000,[],[]);
-  const goal=seen.memory.proof.target*seen.memory.scale;
+  const m=seen.memory,goal=wickGoal(t.side,t.entryPrice,t.quantity,m.proof.target*m.scale,m.proof.bodyBaseline*m.scale*(m.proof.wickMultiple??0),m.proof.price*m.scale);
   const hit=rangeHoldingDecision(t,quote(f.input.now+2000,goal+1),f.input.now+2000,[],[]);
-  assert.equal(hit.exit,'WICK_TARGET');assert.equal(hit.memory.reverseEligible,false);assert.equal(hit.stop,t.stopPrice);
+  assert.equal(hit.exit,'WICK_TARGET');assert.equal(hit.memory.reverseEligible,false);
+  const dist=Math.abs(goal-t.entryPrice),hard=t.entryPrice-(t.side==='LONG'?1:-1)*3*dist;
+  assert.ok(Math.abs(hit.stop-hard)<1e-6,`${hit.stop} vs ${hard}`);assert.ok(t.side==='LONG'?hit.stop<=t.stopPrice:hit.stop>=t.stopPrice);
 });
 test('real PAPER queue confirms old closure before new edge return and never reuses the old proof or witness',()=>{
   const f=trade(),contracts={A_USDT:{quantoMultiplier:.1,leverageMax:20,maintenanceRate:.005,minContracts:1,tickSize:.001,enableDecimal:false,orderSizeMin:'1',orderSizeMax:'1000000',marketOrderSizeMax:'1000000'}},
@@ -561,15 +563,17 @@ test('a wick longer than one and a half bodies chooses the side, and only strong
   assert.equal(tradableAnomaly('OWN_ACCELERATION',.01),true);
   assert.equal(tradableAnomaly('OWN_ACCELERATION',-.01),false);
   assert.equal(tradableAnomaly('ACTIVE_NONRESPONSE',.02),false);
-  const f=trade(),t=f.t,body=t.unified!.anomaly!.proof.bodyBaseline*t.unified!.anomaly!.scale,tp=body*(t.unified!.anomaly!.proof.wickMultiple??4),px=t.entryPrice;
-  const held=rangeHoldingDecision(t,quote(f.input.now+1000,px-tp*.5),f.input.now+1000,[],[]);
-  assert.equal(held.exit,undefined);
-  const deep=rangeHoldingDecision(t,quote(f.input.now+2000,px-tp*3.1),f.input.now+2000,[],[]);
+  const f=trade(),t=f.t,px=t.entryPrice,born0=t.unified!.anomaly!,proofTarget=born0.proof.target;
+  const goal0=wickGoal(t.side,px,t.quantity,proofTarget*born0.scale,born0.proof.bodyBaseline*born0.scale*(born0.proof.wickMultiple??0),born0.proof.price*born0.scale);
+  const Dtp=Math.abs(goal0-px);
+  const held=rangeHoldingDecision(t,quote(f.input.now+1000,px-Dtp*.5),f.input.now+1000,[],[]);
+  assert.equal(held.exit,undefined);assert.equal(held.memory.proof.target,proofTarget);
+  const deep=rangeHoldingDecision(t,quote(f.input.now+2000,px-Dtp*3.1),f.input.now+2000,[],[]);
   assert.equal(deep.exit,'WICK_HARD_STOP');
-  const armed=rangeHoldingDecision(t,quote(f.input.now+3000,px-tp*2.1),f.input.now+3000,[],[]);
+  const armed=rangeHoldingDecision(t,quote(f.input.now+3000,px-Dtp*2.1),f.input.now+3000,[],[]);
   assert.equal(armed.exit,undefined);assert.ok(armed.memory.insideAt>0);
   t.unified!.anomaly=armed.memory;
-  const back=rangeHoldingDecision(t,quote(f.input.now+4000,px-tp*.5),f.input.now+4000,[],[]);
+  const back=rangeHoldingDecision(t,quote(f.input.now+4000,px-Dtp*.5),f.input.now+4000,[],[]);
   assert.equal(back.exit,'WICK_ONE_STOP');
   const scanner:RangeScanner={prices:new Map(),detected:new Map([['ZK_USDT',{symbol:'ZK_USDT',detectedAt:T-WICK_WATCH_MS,source:'BYBIT',sourceCount:2,own:.02,residual:.02,score:80,kind:'OWN_ACCELERATION'}]]),quiet:new Set(['ZK_USDT'])},
     flat=[{symbol:'ZK_USDT',source:'BYBIT',sourceCount:2,last:100,observedAt:T,volume24hUsd:2e6},...Array.from({length:8},(_,i)=>({symbol:`L${i}_USDT`,source:'BYBIT',sourceCount:2,last:100,observedAt:T,volume24hUsd:2e6}))];
@@ -579,12 +583,18 @@ test('a wick longer than one and a half bodies chooses the side, and only strong
   const floor=wickProfitTarget('SHORT',792.55,.883)!;
   assert.ok(floor<792.55);
   assert.ok((792.55-floor)*.883-(792.55+floor)*.883*.0005>=5-1e-6);
-  const fresh=trade().t,stop=fresh.stopPrice,qty=fresh.quantity,born=fresh.unified!.anomaly!;
-  const tpPx=born.proof.target*born.scale,net=(tpPx-fresh.entryPrice)*qty-(fresh.entryPrice+tpPx)*qty*.0005;
-  assert.ok(net>=5-1e-6,`net ${net}`);
-  const bodyPx=fresh.entryPrice+born.proof.bodyBaseline*born.scale*(born.proof.wickMultiple??4);
-  if(bodyPx<tpPx-1e-6){const early=rangeHoldingDecision(fresh,quote(fresh.openedAt+1000,bodyPx),fresh.openedAt+1000,[],[]);
-    assert.equal(early.exit,undefined);assert.equal(early.stop,stop);assert.equal(early.memory.proof.target*early.memory.scale,tpPx);}
-  const paid=rangeHoldingDecision(fresh,quote(fresh.openedAt+2000,tpPx+0.01),fresh.openedAt+2000,[],[]);
-  assert.equal(paid.exit,'WICK_TARGET');assert.equal(paid.stop,stop);assert.equal(fresh.quantity,qty);
+  const bornTrade=trade(),fresh=bornTrade.t,qty=fresh.quantity,born=fresh.unified!.anomaly!,candlePx=born.proof.target*born.scale;
+  const goal=wickGoal(fresh.side,fresh.entryPrice,qty,candlePx,born.proof.bodyBaseline*born.scale*(born.proof.wickMultiple??0),born.proof.price*born.scale);
+  const net=(fresh.side==='LONG'?goal-fresh.entryPrice:fresh.entryPrice-goal)*qty-(fresh.entryPrice+goal)*qty*.0005;
+  assert.ok(net>=5-1e-6,`net ${net}`);assert.equal(born.proof.target*born.scale,candlePx);
+  const hard=fresh.entryPrice-(fresh.side==='LONG'?1:-1)*3*Math.abs(goal-fresh.entryPrice);
+  assert.ok(Math.abs(fresh.stopPrice-hard)<1e-6,`${fresh.stopPrice} vs ${hard}`);assert.equal(fresh.quantity,qty);
+  const bodyPx=fresh.side==='LONG'?fresh.entryPrice+born.proof.bodyBaseline*born.scale*(born.proof.wickMultiple??4):fresh.entryPrice-born.proof.bodyBaseline*born.scale*(born.proof.wickMultiple??4);
+  if((fresh.side==='LONG'?bodyPx<goal:bodyPx>goal)){const early=rangeHoldingDecision(fresh,quote(fresh.openedAt+1000,bodyPx),fresh.openedAt+1000,[],[]);
+    assert.equal(early.exit,undefined);assert.equal(early.memory.proof.target,born.proof.target);assert.ok(Math.abs(early.stop-hard)<1e-6,`${early.stop} vs ${hard}`);}
+  const paid=rangeHoldingDecision(fresh,quote(fresh.openedAt+2000,fresh.side==='LONG'?goal+0.01:goal-0.01),fresh.openedAt+2000,[],[]);
+  assert.equal(paid.exit,'WICK_TARGET');assert.ok(Math.abs(paid.stop-hard)<1e-6);assert.equal(fresh.quantity,qty);
+  const committed=structuredClone(bornTrade.state);committed.positions[0]!.stopPrice=fresh.side==='LONG'?hard+1:hard-1;committed.positions[0]!.lastQuoteAt=fresh.lastQuoteAt-1;
+  const kept=restoreForwardProtectionCheckpoint(committed,buildForwardProtectionCheckpoint(bornTrade.state));
+  assert.ok(Math.abs(kept.positions[0]!.stopPrice-hard)<1e-6,`${kept.positions[0]!.stopPrice} vs ${hard}`);
 });
