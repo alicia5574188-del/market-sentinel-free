@@ -27,6 +27,7 @@ import { MEMBERS_VERSION, digestMember, clearMemberCookie } from "../lib/member-
 import { MemberDirectory, type MemberFeed } from "./member-directory.ts";
 import { memberExecutionClass } from "./member-executor.ts";
 import { memberRoutes } from "./member-routes.ts";
+import { pageForwardView } from "../lib/page-runtime-view.ts";
 import { isAsset, runtimeStatus, paperHistory, accountLogs, strategyRuntimeLogs, ownerAuthenticated, authSession, ownerLogin, ownerLogout, ownerLiveStatus, ownerLiveSource, ownerLiveMode, ownerLiveCredentials, ownerPaperAction } from "./http-handlers.ts";
 
 import { type EventEntryAssessment, type RadarCandidate } from "../lib/market-radar.ts";
@@ -3889,6 +3890,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const quotes=this.forwardQuotes(exportedAt),minutePaths=this.forwardMinutePaths();
       // No alarm rearming, account normalization, research advancement, Gate calls or writes on export.
       return json(buildReviewSnapshot({view,exportedAt,buildSha:FORWARD_BUILD_SHA,strategyFingerprint:STRATEGY_FINGERPRINT,
+        inverseSources:(()=>{const src=this.forwardState.inverseTrial?.source;if(!src)return [];
+          return [...src.positions,...src.history].map(t=>({id:t.id,status:t.status==="CLOSED"?"CLOSED" as const:"OPEN" as const,
+            price:quotes[t.symbol]?(quotes[t.symbol]!.bestBid+quotes[t.symbol]!.bestAsk)/2:t.lastPrice??null,quoteAt:quotes[t.symbol]?.observedAt??t.lastQuoteAt??null,
+            exitPrice:t.exitPrice??null,closedAt:t.closedAt??null}));})(),
         counterfactual:counterfactualResearchView(this.counterfactualResearch),shadow:shadowResearchView(this.shadowResearch),
         journal:structuredClone(this.reviewJournal),
         marketData:{sources:this.marketHub.status(exportedAt),transport:this.gateStream.status(exportedAt),feedQuality:this.runtime.feedQuality,
@@ -4106,7 +4111,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const effectiveState = !this.authorityReady ? "RECOVERY_REQUIRED" : stale ? "RECONNECTING" : this.runtime.state;
       return json({ ...publicRuntime, ...this.authorityView, paperCycle: paperCycleSummary(paperCycle, this.authorityView.equity),
         buildSha: FORWARD_BUILD_SHA,
-        forward: this.forwardView(), legacyRetired: true,
+        forward: pageForwardView(this.forwardView()), legacyRetired: true,
         strategyArena: canonicalPaperSummary({ current: strategyArena, previous: previousStrategyArena, regime: regimePortfolio }, canonicalPaper),
         marketRegimes: marketRegimeSummary(marketRegimes),
         strategyData: { liquidMarkets: REGIME_UNIVERSE.length, stableMarkets: regimePortfolio.warmMarkets,
