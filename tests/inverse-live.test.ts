@@ -173,6 +173,17 @@ for(const side of ['LONG','SHORT'] as const)test(`real Worker copies inverse ${s
     assert.equal(h.stream.runtime.live.requestedEnabled,true);
   }finally{globalThis.fetch=priorFetch;}
 });
+for(const side of ['LONG','SHORT'] as const)test(`a 5U soft-loss inverse exit (${side}) is a normal close for live follow-through`,async()=>{
+  const h=await harness(side),priorFetch=globalThis.fetch;let network=0;
+  globalThis.fetch=async()=>{network++;throw new Error('network forbidden');};
+  try{
+    await h.stream.syncLive(Date.now());assert.equal(h.calls.entries,1);assert.equal(network,0);
+    h.inverse.status='CLOSED';h.inverse.closedAt=Date.now();h.inverse.exitReason='INVERSE_SOFT_LOSS_EXIT';
+    h.state.positions=[];h.state.history=[h.inverse];
+    assert.equal(sourceLifecycle(h.state,h.inverse.id).status,'CLOSED');
+    await h.stream.syncLive(Date.now());assert.equal(h.calls.closes,1);assert.equal(h.calls.entries,1);
+  }finally{globalThis.fetch=priorFetch;}
+});
 test('source close during leverage await cancels before the single market network boundary',async()=>{
   const h=await harness('LONG');h.gate.setLeverage=async()=>{
     h.inverse.status='CLOSED';h.inverse.closedAt=Date.now();h.state.positions=[];h.state.history=[h.inverse];};

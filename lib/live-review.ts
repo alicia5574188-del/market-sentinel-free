@@ -87,6 +87,7 @@ export function compareLiveReview(review:LiveReview,trades:unknown[],paperComple
     return {sourceId:t.id,symbol:t.symbol,paperStatus:t.status,liveStatus:p.status??e.status??'NO_RETAINED_RECEIPT',
       paperEntryPrice:sourceEntry,liveEntryPrice:entry,paperExitPrice:sourceExit,liveExitPrice:actualExit,
       sourceContracts,actualContracts,quantityRatio:ratio,requestedRatio:p.requestedRatio??null,
+      paperExitReason:t.exitReason??null,
       lifecycleComparable:comparable,paperNetPnl:modelNet,scaledPaperNetPnl:comparable&&ratio!==null&&modelNet!==null?ratio*modelNet:null,
       liveNetPnl:actualNet,liveFees:settlement.fees??null,liveFunding:settlement.funding??null,
       netDifference:comparable&&actualNet!==null&&ratio!==null&&modelNet!==null?actualNet-ratio*modelNet:null,
@@ -97,12 +98,24 @@ export function compareLiveReview(review:LiveReview,trades:unknown[],paperComple
       exitDelayMs:num(p.exitAt)!==null&&num(t.closedAt)!==null?Number(p.exitAt)-Number(t.closedAt):null};
   });
   const settled=paired.filter(p=>p.liveNetPnl!==null),comparable=settled.filter(p=>p.netDifference!==null);
+  const median=(xs:(number|null)[])=>{const v=xs.filter((x):x is number=>x!==null).sort((a,b)=>a-b);
+    return v.length?v[Math.floor(v.length/2)]!:null;};
+  const adverseShare=(xs:(number|null)[])=>{const v=xs.filter((x):x is number=>x!==null);
+    return v.length?v.filter(x=>x>0).length/v.length:null;};
+  const softLoss=paired.filter(p=>p.paperExitReason==='INVERSE_SOFT_LOSS_EXIT');
+  const executionGap={medianAdverseEntryRate:median(paired.map(p=>p.adverseEntryRate)),
+    adverseEntryShare:adverseShare(paired.map(p=>p.adverseEntryRate)),
+    medianAdverseExitRate:median(paired.map(p=>p.adverseExitRate)),
+    adverseExitShare:adverseShare(paired.map(p=>p.adverseExitRate)),
+    medianSubmitDelayMs:median(paired.map(p=>p.submitDelayMs as number|null)),
+    medianExitDelayMs:median(paired.map(p=>p.exitDelayMs)),
+    softLossExits:{paper:softLoss.length,liveFollowedExit:softLoss.filter(p=>p.liveStatus==='CLOSED').length}};
   return {scope:'POST_ENABLE_INCLUDED_PAPER_ORDERS_NOT_WHOLE_ACCOUNT_RECONCILIATION',paperHistoryComplete:paperComplete,sourceAccountMatches,
     eligibleIncluded:eligible.length,withRetainedReceipt:paired.filter(p=>p.liveStatus!=='NO_RETAINED_RECEIPT').length,
     withoutRetainedReceipt:paired.filter(p=>p.liveStatus==='NO_RETAINED_RECEIPT').length,
     nativeSettledIncluded:settled.length,comparableClosed:comparable.length,
     comparableNetDifference:comparable.length?comparable.reduce((n,p)=>n+p.netDifference!,0):null,
-    quantityScaling:'ACTUAL_ORIGINAL_CONTRACTS_OVER_SOURCE_CONTRACTS_AT_COPY; REDUCTIONS_CAN_LIMIT_COMPARABILITY',paired};
+    quantityScaling:'ACTUAL_ORIGINAL_CONTRACTS_OVER_SOURCE_CONTRACTS_AT_COPY; REDUCTIONS_CAN_LIMIT_COMPARABILITY',executionGap,paired};
 }
 export async function readLiveReviewPage(storage:{list<T>(options:{prefix:string;start:string;end:string;reverse:boolean;limit:number}):Promise<Map<string,T>>},
   context:LiveReview['context'],cursor:string|null,cached:unknown[]=[]){

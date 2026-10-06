@@ -190,6 +190,7 @@ function InversePanel({data,onSelect}:{data:View|null;onSelect:(ledger:"inverse"
     <div className="fr-paid-summary" data-testid="paired-paid-summary"><button onClick={()=>onSelect("inverse")}><small>反向模拟净额</small><b className={(v.paidCost?.inverse.netPnl??0)>=0?"fr-positive":"fr-negative"}>{signed(v.paidCost?.inverse.netPnl)} U</b><small>已扣手续费 {fmt(v.inverseFees,4)} U</small></button>
       <button onClick={()=>onSelect("source")}><small>原策略影子净额</small><b className={(v.paidCost?.source.netPnl??0)>=0?"fr-positive":"fr-negative"}>{signed(v.paidCost?.source.netPnl)} U</b><small>已扣手续费 {fmt(v.sourceFees,4)} U · 查看全部订单 →</small></button></div>
     <p className="fr-paid-note">净额只扣已发生费用，未平仓部分含浮动盈亏；已配对 / 已完成 {v.pairedOpened} / {v.pairedClosed}。</p>
+    {v.liveCostEstimate&&<p className="fr-paid-note" data-testid="live-cost-estimate">按实盘实测成本估算：每笔成交多扣 {(v.liveCostEstimate.gapRate*100).toFixed(2)}% 后，反向净额约 {signed(v.liveCostEstimate.estimatedNet)} U（额外成本合计 {fmt(v.liveCostEstimate.executionGap,2)} U）。仅估算，不改模拟账。</p>}
     {!!v.paidCost?.stalePairs&&<p className="fr-paid-note">{v.paidCost.stalePairs} 组报价待更新，净额使用各自最后记录；缺失价格显示 —。</p>}
     <details><summary>同价镜像对照曲线</summary><p>虚线：影子 · 实线：反向模拟 · 同一成交价、同一当前价，只反方向；净额只扣已发生手续费。共同起点 {fmt(v.initialEquity)} U</p>
       {v.paidCost&&<p className="fr-paid-note">毛盈亏镜像校验 {fmt(v.paidCost.reconciliation.grossMirrorResidual,6)} U（应为 0） · 两边净额合计 {fmt(v.paidCost.reconciliation.netSum,4)} U ＝ −已扣手续费合计 {fmt(v.paidCost.reconciliation.paidFees,4)} U</p>}
