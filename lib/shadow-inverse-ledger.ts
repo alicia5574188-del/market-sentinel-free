@@ -22,7 +22,9 @@ export type InverseCopy={version:typeof SHADOW_INVERSE_VERSION;sourceBuild:typeo
   cutoverAt:number;sourceSide:'LONG'|'SHORT';sourceEntryPrice:number;sourceStopPrice:number;sourceTargetPrice:number|null;
   sourceEntryPlan:Trade['entryContext'];sourceExitReason:string|null;sourceExitAudit?:Trade['exitAudit'];
   sourceRemainingContracts:number;fills:InverseFill[];sourceClosedAt:number|null;independentDecisions:false;liveExecution:'PAPER_ONLY';
-  detachedRemainingQuantity?:number;detachedRemainingContracts?:number;detachedSourceSequence?:number;detachedSourceClosed?:boolean};
+  detachedRemainingQuantity?:number;detachedRemainingContracts?:number;detachedSourceSequence?:number;detachedSourceClosed?:boolean;
+  /** Research only: quantity/notional the cut inverse would have closed at had it kept following the source. */
+  detachedHoldQuantity?:number;detachedHoldNotional?:number};
 
 /** Market memory is shared once. Every wallet/history-dependent variable is
  * instead supplied by the source's own capsule, never the inverse wallet. */
@@ -106,11 +108,13 @@ function bookDetachedSource(state:ForwardState,t:Trade,source:Trade){
   for(const sf of reductions.slice(already)){
     if(sf.quantity<=0||sf.quantity>quantity+1e-8||sf.contracts<=0||sf.contracts>contracts+1e-8)throw new Error('提前平仓后的影子减仓数量超过反向剩余');
     bookSourceOnly(state,source,sf.quantity,sf.price,sf.at,sf.fee);
+    i.detachedHoldQuantity=(i.detachedHoldQuantity??0)+sf.quantity;i.detachedHoldNotional=(i.detachedHoldNotional??0)+sf.quantity*sf.price;
     quantity-=sf.quantity;contracts-=sf.contracts;i.detachedSourceSequence=(i.detachedSourceSequence??0)+1;
   }
   i.detachedRemainingQuantity=quantity;i.detachedRemainingContracts=contracts;i.sourceRemainingContracts=source.status==='CLOSED'?0:source.contracts;
   if(source.status!=='CLOSED')return;
-  if(quantity>0)bookSourceOnly(state,source,quantity,source.exitPrice!,source.closedAt!,source.exitFee!-(source.realization?.fees??0));
+  if(quantity>0){bookSourceOnly(state,source,quantity,source.exitPrice!,source.closedAt!,source.exitFee!-(source.realization?.fees??0));
+    i.detachedHoldQuantity=(i.detachedHoldQuantity??0)+quantity;i.detachedHoldNotional=(i.detachedHoldNotional??0)+quantity*source.exitPrice!;}
   i.detachedSourceClosed=true;i.detachedRemainingQuantity=0;i.detachedRemainingContracts=0;
   i.sourceClosedAt=source.closedAt;i.sourceExitReason=source.exitReason;i.sourceExitAudit=structuredClone(source.exitAudit);i.sourceRemainingContracts=0;
 }
