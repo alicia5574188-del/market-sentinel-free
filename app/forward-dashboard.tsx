@@ -199,7 +199,8 @@ function InversePanel({data,onSelect}:{data:View|null;onSelect:(ledger:"inverse"
           <polyline fill="none" className="eq-curve" points={rows.map(p=>`${x(p.at)},${y(p.inverse)}`).join(' ')}/></g>)}
         <text x="12" y="14" fill="currentColor" fontSize="10">{fmt(hi)} U</text><text x="12" y="180" fill="currentColor" fontSize="10">{fmt(lo)} U</text>
       </svg><p>各自已扣手续费：影子 {fmt(v.sourceFees)} U / 反向 {fmt(v.inverseFees)} U</p>
-      <p>仅统计新配对订单；原账户总曲线保留在下方。{v.stalePositions?"当前报价不齐，估值待更新。":""}</p>
+      <p>仅统计新配对订单；原账户总曲线保留在下方。对照两边手续费都按实盘 0.05% 记，反向账户已经扣掉的现金不动。波峰和波谷只记录时间，现在不自动切换。{v.stalePositions?"当前报价不齐，估值待更新。":""}</p>
+      {v.swings?.length?<ul className="fr-paid-note">{[...v.swings].slice(-8).reverse().map(s=><li key={`${s.book}-${s.at}-${s.kind}`}>{s.book==="inverse"?"反向":"影子"}{s.kind==="PEAK"?"波峰":"波谷"} {time(s.at)} · {fmt(s.equity)} U</li>)}</ul>:null}
     </details></section>;
 }
 function Metric({label,value}:{label:string;value:string}){return <span><small>{label}</small><b>{value}</b></span>;}

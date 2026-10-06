@@ -5,7 +5,7 @@ import {readFileSync} from 'node:fs';
 import {initialForward,normalizeForward,closeForwardForReset,resetForwardAccountPreservingLearning,forwardSummary,type Trade,type ForwardState,type Quote} from '../lib/forward-relations.ts';
 import {advanceForward as frozenAdvance} from '../lib/shadow-baseline/forward-relations.ts';
 import {SHADOW_BASELINE_BUILD,SHADOW_INVERSE_VERSION,newInverseTrial,sourceDecisionState,shadowCapsule,
-  applyInverseSourceTrade,inverseTrialSummary,markInversePositions,assertInverseTrade,assertInverseTrial,inverseId,migrateInverseSamePrice,MIRROR_ACCOUNTING_MODE} from '../lib/shadow-inverse-ledger.ts';
+  applyInverseSourceTrade,inverseTrialSummary,markInversePositions,assertInverseTrade,assertInverseTrial,inverseId,migrateInverseSamePrice,alignComparisonSourceFees,recordInverseCurve,MIRROR_ACCOUNTING_MODE} from '../lib/shadow-inverse-ledger.ts';
 import {advanceShadowInverse} from '../lib/shadow-inverse.ts';
 import {INVERSE_FEE_POLICY,INVERSE_COST} from '../lib/inverse-fee.ts';
 import {realizeTradeSlice,assertTradeRealization} from '../lib/trade-realization.ts';
@@ -53,9 +53,11 @@ function sourceClose(s:ForwardState,t:Trade,price:number,now:number){
 }
 function retainSource(s:ForwardState,source:ForwardState){s.inverseTrial!.source=shadowCapsule(source);s.inverseTrial!.lastSourceRevision=source.revision;}
 function legacyOpenFee(s:ForwardState){
-  const t=s.positions.find(t=>t.inverseCopy)!,f=t.inverseCopy!.fills[0]!,delta=f.sourceFee-f.fee;
-  f.fee=f.sourceFee;delete f.feeRate;delete f.feePolicy;t.entryFee=f.fee;
-  s.balance-=delta;s.fees+=delta;s.inverseTrial!.totals.fees+=delta;delete s.inverseTrial!.totals.feeSavings;
+  const t=s.positions.find(t=>t.inverseCopy)!,f=t.inverseCopy!.fills[0]!;
+  const legacy=f.quantity*f.sourcePrice*.0007,feeDelta=legacy-f.fee,sourceDelta=legacy-f.sourceFee;
+  f.fee=legacy;f.sourceFee=legacy;delete f.feeRate;delete f.feePolicy;delete f.sourceFeeRate;delete f.sourceFeePolicy;delete f.frozenSourceFee;
+  t.entryFee=legacy;s.balance-=feeDelta;s.fees+=feeDelta;s.inverseTrial!.totals.fees+=feeDelta;s.inverseTrial!.totals.sourceFees+=sourceDelta;
+  s.inverseTrial!.totals.feeSavings=(s.inverseTrial!.totals.feeSavings??0)+sourceDelta-feeDelta;
 }
 
 
@@ -118,7 +120,7 @@ test('legacy 7bp entry restores unchanged, then new 5bp exit and its receipt sur
   const m=restored.history[0]!,fills=m.inverseCopy!.fills;near(fills[0]!.fee,.7);assert.equal(fills[0]!.feePolicy,undefined);
   near(fills[1]!.fee,.485);assert.equal(fills[1]!.feePolicy,INVERSE_FEE_POLICY);near(fills[1]!.feeRate!,.0005);
   near(m.netPnl!,28.815);near(restored.balance,1028.815);near(restored.fees,1.185);
-  near(restored.inverseTrial!.totals.feeSavings!,.194);assertInverseTrial(restored);
+  near(restored.inverseTrial!.totals.feeSavings!,0);assertInverseTrial(restored);
   const summary=inverseTrialSummary(restored,{},at)!;near(summary.inverseFees,1.185);near(summary.paidCost!.inverse.fees,1.185);
   near(summary.paidCost!.reconciliation.netSum!,-summary.paidCost!.reconciliation.paidFees);
   const snapshot=buildReviewSnapshot({view:forwardSummary(restored,{},at),exportedAt:at,buildSha:'fee-test',strategyFingerprint:'fee-fp'});
@@ -149,7 +151,7 @@ test('invalid fee stamps, altered totals and lost accounting mode reject without
     const {s}=fixture();Object.assign(s.positions[0]!.inverseCopy!.fills[0]!,stamp);
     const before=JSON.stringify(s);assert.throws(()=>assertInverseTrade(s.positions[0]!),/费率/);assert.equal(JSON.stringify(s),before);
   }
-  const {s}=fixture();s.inverseTrial!.totals.feeSavings=0;assert.throws(()=>assertInverseTrial(s),/金融状态/);
+  const {s}=fixture();s.inverseTrial!.totals.feeSavings=1;assert.throws(()=>assertInverseTrial(s),/金融状态/);
   const {s:lost}=fixture();lost.inverseTrial!.accountingMode=undefined;const before=JSON.stringify(lost);
   assert.throws(()=>migrateInverseSamePrice(lost,T+1),/禁止.*改写/);assert.equal(JSON.stringify(lost),before);
 });
@@ -385,4 +387,40 @@ test('declared paired storage requires an actual matching dual ledger after veri
   const s=initialForward(T-B),write=await prepareForwardWrite(null,s,T,{compact:true}),key='forward-relations:v1:head';
   const db=new Map(Object.entries(write.entries));db.set(key,{...(db.get(key) as object),accountMode:'shadow-inverse-v1'});
   await assert.rejects(()=>readForwardStore({get:async<T>(k:string)=>structuredClone(db.get(k)) as T|undefined},T+1),/配对账本不一致/);
+});
+test('new comparison fills book both legs at 5bp and keep the frozen 7bp receipt',()=>{
+  const {s,t}=fixture(),f=s.positions[0]!.inverseCopy!.fills[0]!;
+  near(f.fee,t.notional*.0005);near(f.sourceFee,t.notional*.0005);near(f.frozenSourceFee!,t.notional*.0007);
+  near(t.entryFee,t.notional*.0007);near(s.positions[0]!.entryFee,t.notional*.0005);
+  near(s.balance,1000-s.positions[0]!.entryFee);near(s.inverseTrial!.totals.feeSavings!,0);assertInverseTrial(s);
+});
+test('a stored 7bp source column is aligned to 5bp without touching inverse cash',()=>{
+  const {s}=fixture(),f=s.positions[0]!.inverseCopy!.fills[0]!,before=s.balance;
+  f.sourceFee=f.quantity*f.sourcePrice*.0007;delete f.sourceFeeRate;delete f.sourceFeePolicy;delete f.frozenSourceFee;
+  s.inverseTrial!.totals.sourceFees=f.sourceFee;s.inverseTrial!.totals.feeSavings=f.sourceFee-f.fee;
+  assert.equal(alignComparisonSourceFees(s),true);assert.equal(alignComparisonSourceFees(s),false);
+  near(s.balance,before);near(f.sourceFee,f.fee);near(f.frozenSourceFee!,f.quantity*f.sourcePrice*.0007);
+  near(s.inverseTrial!.totals.sourceFees,s.inverseTrial!.totals.fees);near(s.inverseTrial!.totals.feeSavings!,0);
+  assertInverseTrial(s);
+});
+test('1U reversals record peak and trough times and a restart keeps them',async()=>{
+  const {s}=fixture();
+  const sample=(at:number,price:number)=>{
+    const src=s.inverseTrial!.source.positions[0]!;src.lastPrice=price;src.lastQuoteAt=at;recordInverseCurve(s,{},at);
+  };
+  sample(T+60_000,100);sample(T+120_000,100.2);sample(T+180_000,100);sample(T+240_000,100.05);
+  const early=s.inverseTrial!.swings??[];
+  assert.equal(early.filter(x=>x.book==='source'&&x.kind==='PEAK').length,1);
+  assert.equal(early.filter(x=>x.book==='inverse'&&x.kind==='TROUGH').length,1);
+  assert.equal(early.filter(x=>x.book==='source'&&x.kind==='TROUGH').length,0);
+  sample(T+300_000,99.8);sample(T+360_000,100.05);
+  const swings=s.inverseTrial!.swings??[];
+  const sourceTrough=swings.filter(x=>x.book==='source'&&x.kind==='TROUGH').at(-1)!;
+  const inversePeak=swings.filter(x=>x.book==='inverse'&&x.kind==='PEAK').at(-1)!;
+  assert.equal(sourceTrough.at,T+300_000);assert.equal(inversePeak.at,T+300_000);
+  near(sourceTrough.equity,997.5);near(inversePeak.equity,1001.5);
+  assert.equal(inverseTrialSummary(s,{},T+360_000)!.swings.length,swings.length);
+  s.storage.persistedAt=T;const write=await prepareForwardWrite(null,s,T+360_000,{compact:true});
+  const restored=await readForwardStore({get:async<V>(k:string)=>structuredClone(new Map(Object.entries(write.entries)).get(k)) as V|undefined},T+360_001);
+  assert.deepEqual(restored.inverseTrial!.swings,swings);assertInverseTrial(restored);
 });

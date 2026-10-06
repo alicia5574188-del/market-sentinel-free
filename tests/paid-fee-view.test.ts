@@ -73,7 +73,7 @@ test('new 5bp inverse fee is independent of the frozen 7bp source in pair and ag
   first.fee=.5;first.feeRate=.0005;first.feePolicy=INVERSE_FEE_POLICY;inverse.entryFee=.5;
   const row=pairedPaidView(inverse,undefined,now,source)!;near(row.source.fees,.7);near(row.inverse.fees,.5);
   near(row.paidFees,1.2);near(row.netSum,-1.2);near(row.inverse.netPnl,tradePaidNetPnl(inverse));
-  near(row.inverse.estimatedExitFee,.55);near(row.source.estimatedExitFee,.77);
+  near(row.inverse.estimatedExitFee,.55);near(row.source.estimatedExitFee,.55);
   const aggregate=inversePaidFeeView(state(inverse),{},now)!;near(aggregate.inverse.fees,.5);
   near(aggregate.source.fees,.7);near(aggregate.reconciliation.paidFees,1.2);near(aggregate.reconciliation.netSum,-1.2);
 });

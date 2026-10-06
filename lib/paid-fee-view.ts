@@ -41,8 +41,7 @@ export function pairedPaidView(t:Trade,_q?:Quote,now=t.lastQuoteAt,source?:Trade
       exitFees=isSource?sourceExitFees:exits.reduce((n,f)=>n+f.fee,0),
       realizedGross=isSource?sourceRealized:-sourceRealized,floatingGross=sourceFloating===null?null:isSource?sourceFloating:-sourceFloating,
       grossPnl=floatingGross===null?null:realizedGross+floatingGross,fees=entryFees+exitFees,
-      estimatedExitFee=closed?0:sharedPrice===null?null:t.quantity*sharedPrice*(isSource
-        ?sourceEntry>0?sourceEntryFees/(first.quantity*sourceEntry):0:INVERSE_COST.feeRate);
+      estimatedExitFee=closed?0:sharedPrice===null?null:t.quantity*sharedPrice*INVERSE_COST.feeRate;
     return{side,entryPrice,price:sharedPrice,quoteAt:sharedQuoteAt,realizedGross,floatingGross,grossPnl,entryFees,exitFees,fees,
       netPnl:grossPnl===null?null:grossPnl-fees,estimatedExitFee};
   }
