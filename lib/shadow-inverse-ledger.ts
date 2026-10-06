@@ -32,6 +32,7 @@ export type InverseTrial={version:typeof SHADOW_INVERSE_VERSION;sourceBuild:type
   accountingMode?:typeof MIRROR_ACCOUNTING_MODE;reconciledAt?:number;
   initialComparisonEquity:number;legacyIds:string[];source:ShadowCapsule;totals:InverseTotals;
   curve:{at:number;source:number;inverse:number;theoretical:number}[];droppedCurvePoints:number;lastSourceRevision:number;
+  comparisonFeesAligned?:'both-live-5bp-v1';
   swings?:EquitySwing[];swingArm?:{source?:SwingArm;inverse?:SwingArm}};
 export type EquitySwing={at:number;book:'source'|'inverse';kind:'PEAK'|'TROUGH';equity:number};
 export type SwingArm={at:number;equity:number;side:'FLAT'|'HIGH'|'LOW'};
@@ -222,21 +223,29 @@ function noteEquitySwing(arm:SwingArm|undefined,at:number,equity:number,book:Equ
   return arm;
 }
 /** Displayed comparison fees were 7bp on the frozen source and 5bp on the inverse.
- * Book the source column at 5bp too. Inverse cash and the frozen receipt stay. */
+ * Book both columns at the live 5bp taker. Inverse cash and frozen receipts stay. */
 export function alignComparisonSourceFees(state:ForwardState){
   const trial=state.inverseTrial;if(!trial)return false;
   let delta=0;
   for(const t of [...state.positions,...state.history]){
     for(const f of t.inverseCopy?.fills??[]){
-      const live=f.price*f.quantity*INVERSE_COST.feeRate,legacy=f.sourcePrice*f.quantity*SHADOW_FEE_RATE;
-      if(f.frozenSourceFee!==undefined||!same(f.sourceFee,legacy)||!same(f.fee,live)||same(legacy,live))continue;
-      f.frozenSourceFee=f.sourceFee;f.sourceFee=live;f.sourceFeeRate=INVERSE_COST.feeRate;f.sourceFeePolicy=INVERSE_FEE_POLICY;
-      delta+=live-legacy;
+      const sourceNotional=f.sourcePrice*f.quantity,inverseNotional=f.price*f.quantity;
+      if(!(sourceNotional>0)||!(inverseNotional>0)||f.frozenSourceFee!==undefined)continue;
+      const sourceRate=f.sourceFee/sourceNotional,inverseRate=f.fee/inverseNotional;
+      if(Math.abs(sourceRate-SHADOW_FEE_RATE)>1e-8||Math.abs(inverseRate-INVERSE_COST.feeRate)>1e-8)continue;
+      const live=inverseNotional*INVERSE_COST.feeRate,previous=f.sourceFee;
+      f.frozenSourceFee=previous;f.sourceFee=live;f.sourceFeeRate=INVERSE_COST.feeRate;f.sourceFeePolicy=INVERSE_FEE_POLICY;
+      delta+=live-previous;
     }
   }
-  if(!delta)return false;
-  trial.totals.sourceFees+=delta;trial.totals.feeSavings=(trial.totals.feeSavings??0)+delta;
-  return true;
+  if(delta){trial.totals.sourceFees+=delta;trial.totals.feeSavings=(trial.totals.feeSavings??0)+delta;}
+  let changed=delta!==0;
+  if(trial.comparisonFeesAligned!=='both-live-5bp-v1'){
+    const extra=trial.totals.feeSavings??0;
+    if(extra>0){trial.totals.sourceFees-=extra;trial.totals.feeSavings=0;changed=true;}
+    trial.comparisonFeesAligned='both-live-5bp-v1';changed=true;
+  }
+  return changed;
 }
 export function migrateInverseSamePrice(state:ForwardState,now:number){
   const trial=state.inverseTrial;if(!trial||trial.accountingMode===MIRROR_ACCOUNTING_MODE)return false;
