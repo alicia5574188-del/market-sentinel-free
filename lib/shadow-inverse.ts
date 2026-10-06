@@ -4,7 +4,7 @@ import {advanceForward as advanceBaseline} from './shadow-baseline/forward-relat
 import {normalizeForward,drainLegacyForwardPositions,forwardEquity,type ForwardState} from './forward-relations.ts';
 import {captureTradeReviews} from './review-trace.ts';
 import {SHADOW_BASELINE_BUILD,SHARED_MARKET_KEYS,shadowCapsule,sourceDecisionState,newInverseTrial,
-  applyInverseSourceTrade,markInversePositions,recordInverseCurve,assertInverseTrial} from './shadow-inverse-ledger.ts';
+  applyInverseSourceTrade,applyInverseSoftLossExits,markInversePositions,recordInverseCurve,assertInverseTrial} from './shadow-inverse-ledger.ts';
 import {beijingDayKey} from './beijing-time.ts';
 import {FIXED_ALLOCATION_EQUITY} from './fixed-allocation.ts';
 
@@ -36,7 +36,9 @@ export function advanceShadowInverse(input:Parameters<typeof advanceBaseline>[0]
     if(m){m.stopPrice=t.stopPrice;m.armPrice=t.armPrice;m.inverseCopy!.sourceStopPrice=t.stopPrice;
       m.inverseCopy!.sourceTargetPrice=t.winnerManagement?.targetLevel??t.entryContext?.winnerPlan?.target??null;}}
   trial.source=shadowCapsule(source.state);trial.lastSourceRevision=source.state.revision;
-  markInversePositions(s,input.quotes,input.now);recordInverseCurve(s,input.quotes,input.now);
+  markInversePositions(s,input.quotes,input.now);
+  const softLoss=applyInverseSoftLossExits(s,input.now);
+  recordInverseCurve(s,input.quotes,input.now);
   const mark=forwardEquity(s,input.quotes,input.now);s.peakEquity=Math.max(s.peakEquity,mark.equity);
   s.maxDrawdown=Math.max(s.maxDrawdown,1-mark.equity/Math.max(s.peakEquity,1));
   const day=beijingDayKey(input.now),daily=s.daily.at(-1);
@@ -45,6 +47,6 @@ export function advanceShadowInverse(input:Parameters<typeof advanceBaseline>[0]
   s.daily=s.daily.slice(-45);
   s.latestReason=`影子按2b4fd60f独立决策；模拟只反向跟随。已配对${trial.totals.opened}笔，旧持仓${s.positions.filter(t=>!t.inverseCopy).length}笔单独收尾。`;
   assertInverseTrial(s);
-  return{state:s,changed:activated||source.changed||beforeFinancial!==JSON.stringify([s.balance,s.resolved,s.positions.map(t=>[t.id,t.stopPrice,t.contracts])]),
+  return{state:s,changed:activated||source.changed||softLoss||beforeFinancial!==JSON.stringify([s.balance,s.resolved,s.positions.map(t=>[t.id,t.stopPrice,t.contracts])]),
     protectionChanged:source.protectionChanged};
 }

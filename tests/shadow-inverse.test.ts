@@ -5,7 +5,7 @@ import {readFileSync} from 'node:fs';
 import {initialForward,normalizeForward,closeForwardForReset,resetForwardAccountPreservingLearning,forwardSummary,type Trade,type ForwardState,type Quote} from '../lib/forward-relations.ts';
 import {advanceForward as frozenAdvance} from '../lib/shadow-baseline/forward-relations.ts';
 import {SHADOW_BASELINE_BUILD,SHADOW_INVERSE_VERSION,newInverseTrial,sourceDecisionState,shadowCapsule,
-  applyInverseSourceTrade,inverseTrialSummary,markInversePositions,assertInverseTrade,assertInverseTrial,inverseId,migrateInverseSamePrice,alignComparisonSourceFees,recordInverseCurve,MIRROR_ACCOUNTING_MODE} from '../lib/shadow-inverse-ledger.ts';
+  applyInverseSourceTrade,applyInverseSoftLossExits,inverseTrialSummary,markInversePositions,assertInverseTrade,assertInverseTrial,inverseId,migrateInverseSamePrice,alignComparisonSourceFees,recordInverseCurve,MIRROR_ACCOUNTING_MODE} from '../lib/shadow-inverse-ledger.ts';
 import {advanceShadowInverse} from '../lib/shadow-inverse.ts';
 import {INVERSE_FEE_POLICY,INVERSE_COST} from '../lib/inverse-fee.ts';
 import {realizeTradeSlice,assertTradeRealization} from '../lib/trade-realization.ts';
@@ -170,7 +170,9 @@ test('source profitable partial exits are mirrored even when the inverse loses; 
 });
 test('neither source stop movement nor large inverse loss can independently exit or resize the mirror',()=>{
   const {s,source,t}=fixture();t.stopPrice=120;applyInverseSourceTrade(s,t,quote(130,130,T+2000),T+2000);retainSource(s,source);
-  markInversePositions(s,{TEST_USDT:quote(130,130,T+2000)},T+2000);assert.equal(s.positions.length,1);assert.equal(s.positions[0]!.quantity,10);
+  markInversePositions(s,{TEST_USDT:quote(130,130,T+2000)},T+2000);
+  assert.equal(applyInverseSoftLossExits(s,T+2000),false);
+  assert.equal(s.positions.length,1);assert.equal(s.positions[0]!.quantity,10);
   assert.equal(s.positions[0]!.inverseCopy!.sourceStopPrice,120);assert.ok(inverseTrialSummary(s,{TEST_USDT:quote(130,130,T+2000)},T+2000)!.inverseNet<0);
 });
 test('inverse balance, histories and outcome counters cannot leak into source decision state',()=>{
@@ -423,4 +425,34 @@ test('1U reversals record peak and trough times and a restart keeps them',async(
   s.storage.persistedAt=T;const write=await prepareForwardWrite(null,s,T+360_000,{compact:true});
   const restored=await readForwardStore({get:async<V>(k:string)=>structuredClone(new Map(Object.entries(write.entries)).get(k)) as V|undefined},T+360_001);
   assert.deepEqual(restored.inverseTrial!.swings,swings);assertInverseTrial(restored);
+});
+test('a soft source hold cuts only the inverse once floating gross is worse than 5U',()=>{
+  const intel=(phase:'DECAYING'|'BUILDING',hold:number,continuation:number,concerns:('FLOW')[])=>({
+    version:'test',updatedAt:T+60_000,decision:phase==='DECAYING'?'REVIEW':'HOLD',phase,reviewSince:null,reviewBars:0,lastCompletedBar:T,
+    entryAdvantage:0,currentAdvantage:0,advantageChange:0,remainingSpaceRate:.01,expectedPullbackRate:.01,continuationRatio:continuation,
+    holdValueScore:hold,exitValueScore:100-hold,dataConfidence:80,counterfactualNewEntry:false,supportFamilies:[],concernFamilies:concerns,
+    assessments:[],reasons:[],concerns:[],summary:'test'}) as NonNullable<Trade['positionIntelligence']>;
+  const arm=(soft:boolean,price:number)=>{
+    const pack=fixture('LONG'),now=T+60_000;
+    pack.t.lastPrice=price;pack.t.lastQuoteAt=now;pack.t.positionIntelligence=intel(soft?'DECAYING':'BUILDING',soft?70:96,soft?1.1:1.8,soft?['FLOW']:[]);
+    retainSource(pack.s,pack.source);
+    const inv=pack.s.positions[0]!;inv.lastPrice=price;inv.lastQuoteAt=now;
+    return {pack,now,inv,cut:applyInverseSoftLossExits(pack.s,now)};
+  };
+  const firm=arm(false,101);
+  assert.equal(firm.cut,false);assert.equal(firm.inv.status,'OPEN');assertInverseTrial(firm.pack.s);
+  const shallow=arm(true,100.5);
+  assert.equal(shallow.cut,false);assert.equal(shallow.inv.status,'OPEN');
+  const {pack,now,inv,cut}=arm(true,101);
+  assert.equal(cut,true);assert.equal(inv.status,'CLOSED');assert.equal(inv.exitReason,'INVERSE_SOFT_LOSS_EXIT');
+  assert.equal(pack.s.positions.length,0);assert.equal(pack.source.positions.length,1);
+  near(inv.netPnl!,-10-inv.entryFee-10*101*.0005);near(pack.s.balance,1000-inv.entryFee-10.505);
+  assert.equal(applyInverseSoftLossExits(pack.s,now+1),false);
+  const summary=inverseTrialSummary(pack.s,{TEST_USDT:quote(101,101,now)},now)!;
+  near(summary.inverseNet,inv.netPnl!);near(summary.sourceNet,9.5);
+  sourceClose(pack.source,pack.t,102,now+60_000);retainSource(pack.s,pack.source);
+  const net=inv.netPnl;applyInverseSourceTrade(pack.s,pack.t,quote(102,102,now+60_000),now+60_000);
+  near(inv.netPnl!,net!);assert.equal(inv.inverseCopy!.detachedSourceClosed,true);assert.equal(inv.inverseCopy!.sourceExitReason,'WINNER_THESIS_EXIT');
+  near(pack.s.inverseTrial!.totals.detachedSourceGross!,20);assertInverseTrial(pack.s);
+  assert.equal(summary.independentDecisions,false);
 });

@@ -60,16 +60,27 @@ export function inversePaidFeeView(state:ForwardState,_quotes:Record<string,Quot
     const row=pairedPaidView(t,undefined,now,trial.source.positions.find(s=>s.id===t.inverseCopy!.sourceId));if(row)rows.push(row);
   }
   const sourceFloating=sumKnown(rows.map(r=>r.source.floatingGross));
-  const sourceGross=sourceFloating===null?null:a.sourceGross+sourceFloating,
-    inverseGross=sourceGross===null?null:-sourceGross,
-    source={realizedGross:a.sourceGross,floatingGross:sourceFloating,grossPnl:sourceGross,fees:a.sourceFees,
+  let detachedFloating=0,detachedStale=false;
+  for(const source of trial.source.positions){
+    if(source.openedAt<trial.cutoverAt||(trial.legacyIds??[]).includes(source.id))continue;
+    if(state.positions.some(p=>p.inverseCopy?.sourceId===source.id))continue;
+    if(!state.history.some(h=>h.inverseCopy?.sourceId===source.id&&h.inverseCopy.fills.some(f=>f.earlySoftLoss)))continue;
+    const price=source.lastPrice,at=source.lastQuoteAt;
+    if(!positive(price)||!finite(at)||at>now||now-at>10_000){detachedStale=true;continue;}
+    detachedFloating+=direction(source.side)*source.quantity*(price-source.entryPrice);
+  }
+  const pairedFloating=sourceFloating,floating=pairedFloating===null||detachedStale?null:pairedFloating+detachedFloating,
+    inverseFloating=pairedFloating===null?null:-pairedFloating,
+    sourceGross=floating===null?null:a.sourceGross+floating,
+    inverseGross=inverseFloating===null?null:a.gross+inverseFloating,
+    source={realizedGross:a.sourceGross,floatingGross:floating,grossPnl:sourceGross,fees:a.sourceFees,
       netPnl:sourceGross===null?null:sourceGross-a.sourceFees},
-    inverse={realizedGross:-a.sourceGross,floatingGross:sourceFloating===null?null:-sourceFloating,grossPnl:inverseGross,fees:a.fees,
+    inverse={realizedGross:a.gross,floatingGross:inverseFloating,grossPnl:inverseGross,fees:a.fees,
       netPnl:inverseGross===null?null:inverseGross-a.fees},
     netSum=sumKnown([source.netPnl,inverse.netPnl]);
   return{version:PAID_FEE_VIEW_VERSION,asOf:now,scope:'POST_CUTOVER_PAIRED_ONLY_EXACT_PRICE',source,inverse,rows,
-    stalePairs:rows.filter(r=>!r.quoteFresh).length,missingSourceMarks:rows.filter(r=>r.source.price===null).length,
+    stalePairs:rows.filter(r=>!r.quoteFresh).length+(detachedStale?1:0),missingSourceMarks:rows.filter(r=>r.source.price===null).length,
     estimatedExitFees:{source:sumKnown(rows.map(r=>r.source.estimatedExitFee)),inverse:sumKnown(rows.map(r=>r.inverse.estimatedExitFee)),includedInNet:false},
-    reconciliation:{paidFees:a.sourceFees+a.fees,grossMirrorResidual:sourceGross===null?null:sourceGross+inverseGross!,netSum},
-    accountingBasis:'Exact same source event/current price on both PAPER legs; gross PnL mirrors exactly; net deducts filled fees only.'};
+    reconciliation:{paidFees:a.sourceFees+a.fees,grossMirrorResidual:sourceGross===null||inverseGross===null?null:sourceGross+inverseGross,netSum},
+    accountingBasis:'Exact same source event/current price on both PAPER legs; gross PnL mirrors exactly until an inverse soft-loss exit. After that cut, inverse cash stays flat and the source column keeps the still-open shadow.'};
 }
