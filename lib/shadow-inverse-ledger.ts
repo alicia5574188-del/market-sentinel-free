@@ -3,7 +3,7 @@
  * entry, size, or profit rule. */
 import type {ForwardState,Trade,Quote,AuditEvent} from './forward-relations.ts';
 import {inversePaidFeeView} from './paid-fee-view.ts';
-import {SHADOW_FEE_RATE,INVERSE_COST,INVERSE_FEE_POLICY,recordedInverseFeeRate,recordedSourceFeeRate,type InverseFeeStamp} from './inverse-fee.ts';
+import {SHADOW_FEE_RATE,INVERSE_COST,INVERSE_FEE_POLICY,LIVE_EXECUTION_GAP_RATE,LIVE_EXECUTION_GAP_POLICY,recordedInverseFeeRate,recordedSourceFeeRate,type InverseFeeStamp} from './inverse-fee.ts';
 import {FIXED_ALLOCATION_EQUITY,FIXED_ALLOCATION_POLICY} from './fixed-allocation.ts';
 import type {InverseLossResearch} from './inverse-loss-research.ts';
 export {INVERSE_COST} from './inverse-fee.ts';
@@ -258,7 +258,12 @@ export function markInversePositions(state:ForwardState,_quotes:Record<string,Qu
 export function inverseTrialSummary(state:ForwardState,quotes:Record<string,Quote>,now:number){
   const v=state.inverseTrial;if(!v)return null;const a=v.totals,paid=inversePaidFeeView(state,quotes,now)!;
   const sourceNet=paid.source.netPnl??0,inverseNet=paid.inverse.netPnl??0;
-  return{paidCost:paid,version:v.version,sourceBuild:v.sourceBuild,cutoverAt:v.cutoverAt,accountingMode:v.accountingMode??null,
+  const tradedNotional=INVERSE_COST.feeRate>0?a.fees/INVERSE_COST.feeRate:0,
+    executionGap=tradedNotional*LIVE_EXECUTION_GAP_RATE,
+    liveCostEstimate={policy:LIVE_EXECUTION_GAP_POLICY,gapRate:LIVE_EXECUTION_GAP_RATE,tradedNotional,executionGap,
+      estimatedNet:inverseNet-executionGap,
+      scope:'Estimate only: applies the measured 6bp live adverse gap to inverse traded notional. Paper books are unchanged.'};
+  return{paidCost:paid,liveCostEstimate,version:v.version,sourceBuild:v.sourceBuild,cutoverAt:v.cutoverAt,accountingMode:v.accountingMode??null,
     allocationPolicy:FIXED_ALLOCATION_POLICY,allocationEquity:FIXED_ALLOCATION_EQUITY,
     feePolicy:INVERSE_FEE_POLICY,feeRate:INVERSE_COST.feeRate,sourceFeeRate:INVERSE_COST.feeRate,
     reconciledAt:v.reconciledAt??null,initialEquity:v.initialComparisonEquity,
