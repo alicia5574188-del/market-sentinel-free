@@ -5,10 +5,11 @@ import {OperatorRequestError,operatorRequest} from "../lib/operator-ui.ts";
 
 test("owner PAPER reset remains isolated, confirmed and unavailable to members",()=>{
   const worker=readFileSync(new URL("../worker/index-clean.ts",import.meta.url),"utf8");
+  const handlers=readFileSync(new URL("../worker/http-handlers.ts",import.meta.url),"utf8");
   const page=readFileSync(new URL("../app/page.tsx",import.meta.url),"utf8");
   const control=readFileSync(new URL("../app/paper-account-reset.tsx",import.meta.url),"utf8");
   const cache=readFileSync(new URL("../lib/equity-cache.ts",import.meta.url),"utf8");
-  const ownerAction=worker.slice(worker.indexOf("async function ownerPaperAction"),worker.indexOf("const worker ="));
+  const ownerAction=handlers.slice(handlers.indexOf("async function ownerPaperAction"));
   const resetMethod=worker.slice(worker.indexOf("private async resetPaperAccount"),worker.indexOf("private async clearPaperHistory"));
   assert.match(ownerAction,/sameOriginMutation\(request\)/);
   assert.match(ownerAction,/ownerAuthenticated\(request, env\)/);
