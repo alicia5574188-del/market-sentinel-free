@@ -1,3 +1,10 @@
+# 2026-10-06 — 状态记录与线上对齐
+
+main 最新提交为 `ea197f8`（Cut the inverse when a 5U floating loss meets a soft source hold），
+其前依次为 `f33666f`、`cb3b0ed`、`021ed6b`。线上 Worker `market-sentinel-free`
+最近一次部署为 2026-10-06 16:22（北京时间），与 main 一致。本文件下方 2026-10-02
+及更早标注「待发布」的条目实际均已随后续部署上线，仅作历史记录保留。
+
 # 2026-09-23 — LIVE边缘兼容与大跌连续性修复，待发布
 
 基于已部署`e645c1d`完成五项定向修复：Gate签名请求改为Cloudflare支持的
