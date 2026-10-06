@@ -7,7 +7,7 @@ import {advanceForward as frozenAdvance} from '../lib/shadow-baseline/forward-re
 import {SHADOW_BASELINE_BUILD,SHADOW_INVERSE_VERSION,newInverseTrial,sourceDecisionState,shadowCapsule,
   applyInverseSourceTrade,applyInverseSoftLossExits,inverseTrialSummary,markInversePositions,assertInverseTrade,assertInverseTrial,inverseId,migrateInverseSamePrice,alignComparisonSourceFees,recordInverseCurve,MIRROR_ACCOUNTING_MODE} from '../lib/shadow-inverse-ledger.ts';
 import {advanceShadowInverse} from '../lib/shadow-inverse.ts';
-import {INVERSE_FEE_POLICY,INVERSE_COST} from '../lib/inverse-fee.ts';
+import {INVERSE_FEE_POLICY,INVERSE_COST,LIVE_EXECUTION_GAP_RATE,LIVE_EXECUTION_GAP_POLICY} from '../lib/inverse-fee.ts';
 import {realizeTradeSlice,assertTradeRealization} from '../lib/trade-realization.ts';
 import {prepareForwardWrite,readForwardStore,prepareForwardProtectionWrite} from '../lib/forward-store.ts';
 import {restoreForwardProtectionCheckpoint,buildForwardProtectionCheckpoint} from '../lib/forward-protection-checkpoint.ts';
@@ -455,4 +455,18 @@ test('a soft source hold cuts only the inverse once floating gross is worse than
   near(inv.netPnl!,net!);assert.equal(inv.inverseCopy!.detachedSourceClosed,true);assert.equal(inv.inverseCopy!.sourceExitReason,'WINNER_THESIS_EXIT');
   near(pack.s.inverseTrial!.totals.detachedSourceGross!,20);assertInverseTrial(pack.s);
   assert.equal(summary.independentDecisions,false);
+});
+
+test('live cost estimate applies the measured 6bp gap to traded notional without changing paper books',()=>{
+  const {s,source,t}=fixture('LONG');
+  sourceClose(source,t,110,T+60_000);retainSource(s,source);
+  applyInverseSourceTrade(s,t,quote(110,110,T+60_000),T+60_000);
+  const summary=inverseTrialSummary(s,{TEST_USDT:quote(110,110,T+60_000)},T+60_000)!;
+  const est=summary.liveCostEstimate;
+  assert.equal(est.policy,LIVE_EXECUTION_GAP_POLICY);assert.equal(est.gapRate,LIVE_EXECUTION_GAP_RATE);
+  const traded=s.inverseTrial!.totals.fees/INVERSE_COST.feeRate;
+  near(est.tradedNotional,traded);near(est.executionGap,traded*LIVE_EXECUTION_GAP_RATE);
+  near(est.estimatedNet,summary.inverseNet-est.executionGap);
+  assert.ok(est.estimatedNet<summary.inverseNet);
+  assertInverseTrial(s);
 });
