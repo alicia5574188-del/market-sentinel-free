@@ -130,3 +130,20 @@ test('HTTP export is authenticated and account query cannot redirect a member to
   assert.deepEqual(await(await worker.fetch(request(memberCookie(await issueMemberSession(ROOT,id,1))),env,{} as never)).json(),{member:true});
   assert.equal(primary,1);assert.equal(member,1);
 });
+
+test('execution gap summary reports adverse medians, delays and soft-loss live follow-through',()=>{
+  const l:any=live();
+  l.positions.BBB=position('b',{symbol:'BBB_USDT',status:'CLOSED',entryPrice:99,exitPrice:95,
+    parity:{sourceId:'b',activationAt:T,sourceOpenedAt:T+1000,sourceEntryPrice:100,sourceContractsAtCopy:10,
+      copiedAt:T+2000,ratio:.25,sourceNotional:1000,submittedAt:T+2500,submitDelayMs:3000}});
+  const r=buildLiveReview({live:l,at:T+30000});
+  const c=compareLiveReview(r,[
+    {id:'a',openedAt:T+1000,closedAt:T+20000,side:'LONG',entryPrice:100,exitPrice:104,netPnl:8,exitReason:'SHADOW_SOURCE_EXIT'},
+    {id:'b',openedAt:T+1000,closedAt:T+20000,side:'LONG',entryPrice:100,exitPrice:96,netPnl:-4,exitReason:'INVERSE_SOFT_LOSS_EXIT'}],true,T-1000);
+  const g=c.executionGap;
+  assert.equal(g.medianAdverseEntryRate,.01);assert.equal(g.adverseEntryShare,.5);
+  assert.equal(g.medianAdverseExitRate,null);assert.equal(g.adverseExitShare,null);
+  assert.equal(g.medianSubmitDelayMs,3000);assert.equal(g.medianExitDelayMs,0);
+  assert.deepEqual(g.softLossExits,{paper:1,liveFollowedExit:1});
+  assert.equal(c.paired[1].paperExitReason,'INVERSE_SOFT_LOSS_EXIT');
+});
