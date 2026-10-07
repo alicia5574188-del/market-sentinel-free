@@ -35,7 +35,9 @@ export const SHARED_MARKET_KEYS=['extremumRegime','hypothesisResearch','environm
 export type ShadowCapsule=Omit<ForwardState,typeof SHARED_MARKET_KEYS[number]|'inverseTrial'>;
 export type InverseTotals={sourceGross:number;sourceFees:number;sourceFunding:number;gross:number;fees:number;funding:number;feeSavings?:number;
   spreadDrag:number;opened:number;closed:number;reductions:number;
-  detachedGross?:number;detachedFees?:number;detachedSourceGross?:number;detachedSourceFees?:number;detachedSourceFunding?:number};
+  detachedGross?:number;detachedFees?:number;detachedSourceGross?:number;detachedSourceFees?:number;detachedSourceFunding?:number;
+  /** Executable-book copies: their gross and fee no longer mirror the source, so they are carried apart from the same-price identity. */
+  executableGross?:number;executableSourceGross?:number;executableFeeDelta?:number};
 export type InverseTrial={version:typeof SHADOW_INVERSE_VERSION;sourceBuild:typeof SHADOW_BASELINE_BUILD;cutoverAt:number;
   accountingMode?:typeof MIRROR_ACCOUNTING_MODE;reconciledAt?:number;
   initialComparisonEquity:number;legacyIds:string[];source:ShadowCapsule;totals:InverseTotals;
@@ -114,7 +116,9 @@ function addFill(state:ForwardState,t:Trade,source:Trade,kind:InverseFill['kind'
       ...(administrative?{administrative}:{})};
   i.fills.push(fill);const a=state.inverseTrial!.totals;
   a.sourceGross+=sourceGross;a.sourceFees+=sourceFee;a.sourceFunding+=sourceFunding;
-  a.gross+=gross;a.fees+=fee;a.funding+=funding;a.spreadDrag+=spreadDrag;a.feeSavings=(a.feeSavings??0)+sourceFee-fee;
+  a.gross+=gross;a.fees+=fee;a.funding+=funding;a.spreadDrag+=spreadDrag;
+  if(exec){a.executableGross=(a.executableGross??0)+gross;a.executableSourceGross=(a.executableSourceGross??0)+sourceGross;a.executableFeeDelta=(a.executableFeeDelta??0)+fee-sourceFee;}
+  else a.feeSavings=(a.feeSavings??0)+sourceFee-fee;
   state.balance+=gross-fee;state.grossPnl+=gross;state.fees+=fee;
   state.turnover+=quantity*price;return fill;
 }
@@ -448,10 +452,10 @@ export function assertInverseTrial(state:ForwardState){
     ||['initialEquity','peakEquity','maxDrawdown','resolved','wins','grossPnl','fees','fundingAllowance','turnover'].some(k=>!finite((t.source as unknown as Record<string,unknown>)[k]))
     ||t.curve.some((p,n)=>![p.at,p.source,p.inverse,p.theoretical].every(finite)||p.at<t.cutoverAt||(n>0&&p.at<=t.curve[n-1]!.at))
     ||t.totals.closed>t.totals.opened||t.totals.opened-t.totals.closed!==state.positions.filter(p=>p.inverseCopy).length
-    ||!same(t.totals.gross-(t.totals.detachedGross??0),-(t.totals.sourceGross-(t.totals.detachedSourceGross??0)))
+    ||!same(t.totals.gross-(t.totals.detachedGross??0)-(t.totals.executableGross??0),-(t.totals.sourceGross-(t.totals.detachedSourceGross??0)-(t.totals.executableSourceGross??0)))
     ||t.totals.fees<0||t.totals.sourceFees<0||(t.totals.feeSavings??0)<0||(t.totals.detachedFees??0)<0
-    ||!same(t.totals.fees-(t.totals.detachedFees??0)+(t.totals.feeSavings??0),t.totals.sourceFees-(t.totals.detachedSourceFees??0))
-    ||t.totals.funding!==0||t.totals.spreadDrag!==0)
+    ||!same(t.totals.fees-(t.totals.detachedFees??0)-(t.totals.executableFeeDelta??0)+(t.totals.feeSavings??0),t.totals.sourceFees-(t.totals.detachedSourceFees??0))
+    ||t.totals.funding!==0||!(t.totals.spreadDrag>=0))
     throw new Error('影子金融状态损坏；保留原账户，不重置试验');
   for(const source of t.source.positions){
     if(source.openedAt<t.cutoverAt||t.legacyIds.includes(source.id))continue;

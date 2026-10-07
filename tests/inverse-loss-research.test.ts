@@ -11,6 +11,7 @@ import type {PositionIntelligenceState} from '../lib/position-intelligence-engin
 const T=1790907600000;
 const quote=(p:number,at:number):Quote=>({bestBid:p,bestAsk:p+.05,observedAt:at,fresh:true,entryReady:true,sourceCount:3,
   bookImbalance:.3,bidLiquidityChange:.2,askLiquidityChange:-.1});
+const flat=(p:number,at:number):Quote=>({...quote(p,at),bestAsk:p});
 const pi=(at:number,decision='HOLD'):PositionIntelligenceState=>({updatedAt:at,decision,phase:'HEALTHY',holdValueScore:82,
   continuationRatio:1.8,advantageChange:12,dataConfidence:90,reviewBars:1,lastCompletedBar:T,supportFamilies:['RELATIVE','PATH','STRUCTURE'],
   concernFamilies:['FLOW'],assessments:[{family:'RELATIVE',stance:'SUPPORT',severity:.8},{family:'FLOW',stance:'CONCERN',severity:.4}],exitBasis:null} as PositionIntelligenceState);
@@ -22,12 +23,13 @@ function fixture(side:'LONG'|'SHORT'='LONG'){
     grossPnl:null,netPnl:null,exitReason:null,rule:{id:'r',signature:'r',conditions:[],side:'LONG',reason:'source'},
     execution:'REAL_QUOTE_PAPER_MODEL',liveEligible:false,positionIntelligence:pi(T)} as Trade;
   source.positions=[t];source.balance-=t.entryFee;source.fees+=t.entryFee;source.turnover+=t.notional;
-  applyInverseSourceTrade(s,t,quote(100,T),T);s.inverseTrial.source=shadowCapsule(source);
+  // Zero-spread book for the ledger so the research numbers stay on the source price; research still sees the real BBO.
+  applyInverseSourceTrade(s,t,flat(100,T),T);s.inverseTrial.source=shadowCapsule(source);
   return s;
 }
 function observe(s:ForwardState,p:number,at:number){
   const t=s.inverseTrial!.source.positions[0];t.lastPrice=p;t.lastQuoteAt=at;t.positionIntelligence=pi(at);
-  markInversePositions(s,{TEST_USDT:quote(p,at)},at);
+  markInversePositions(s,{TEST_USDT:flat(p,at)},at);
   captureInverseLossResearch(s,s.positions[0],t,quote(p,at),at);
   return s.positions[0].inverseCopy!.lossResearch!;
 }
@@ -37,7 +39,7 @@ function close(s:ForwardState,p:number,at:number){
     fundingAllowance:funding,netPnl:gross-t.entryFee-fee-funding,exitReason:'WINNER_STRUCTURE_EXIT',positionIntelligence:pi(at),
     exitAudit:{trigger:'WINNER_STRUCTURE_EXIT',at,evidence:{quoteAt:at}}});
   src.positions=src.positions.filter(x=>x.id!==t.id);src.history.unshift(t);src.balance+=gross-fee-funding;src.grossPnl+=gross;src.fees+=fee;src.fundingAllowance+=funding;src.resolved++;
-  applyInverseSourceTrade(s,t,quote(p,at),at);
+  applyInverseSourceTrade(s,t,flat(p,at),at);
   captureInverseLossResearch(s,s.history[0],t,quote(p,at),at);
   return s.history[0];
 }
@@ -50,7 +52,7 @@ test('strict gross loss crossing, fee-correct hypothetical exit and independent 
   const before=strip(s),sourceBefore=structuredClone(s.inverseTrial!.source);
   // Mark is financial-engine work; capture itself may change only loss metadata.
   const st=s.inverseTrial!.source.positions[0];st.lastPrice=101.2;st.lastQuoteAt=T+120000;st.positionIntelligence=pi(T+120000);
-  markInversePositions(s,{},T+120000);const marked=strip(s);
+  markInversePositions(s,{TEST_USDT:flat(101.2,T+120000)},T+120000);const marked=strip(s);
   captureInverseLossResearch(s,s.positions[0],st,quote(101.2,T+120000),T+120000);
   assert.deepEqual(strip(s),marked);assert.deepEqual(s.inverseTrial!.source,marked.inverseTrial!.source);
   const r=s.positions[0].inverseCopy!.lossResearch!,p=r.points.find(x=>x.at===r.anchors.firstLoss10)!;
