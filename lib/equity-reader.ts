@@ -29,7 +29,10 @@ export class EquityReader {
         ...(after?{startAfter:after}:{start:`${PREFIX}${String(context.startedAt).padStart(16,"0")}`}),
         ...(cursor?{end:cursor}:{}),limit:65,reverse:!after});
       const entries=[...rows.entries()],page=entries.slice(0,64);
-      const points=page.flatMap(([,v])=>{const p=archivedEquity(v,context,now);return p?[p]:[];}).sort((a,b)=>a.at-b.at);
+      const ranked=page.flatMap(([key,v])=>{const p=archivedEquity(v,context,now);return p?[{key,point:p}]:[];});
+      const byAt=new Map<number,{key:string;point:(typeof ranked)[number]["point"]}>();
+      for(const row of ranked){const prev=byAt.get(row.point.at);if(!prev||row.key>prev.key)byAt.set(row.point.at,row);}
+      const points=[...byAt.values()].map(row=>row.point).sort((a,b)=>a.at-b.at);
       const result={version:EQUITY_CURVE_VERSION,points,nextCursor:!after&&entries.length>64?page.at(-1)![0]:null,
         newestCursor:after?(page.at(-1)?.[0]??after):(page[0]?.[0]??null),
         afterCursor:after?(page.at(-1)?.[0]??after):null,moreAfter:!!after&&entries.length>64,

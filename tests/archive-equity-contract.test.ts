@@ -68,6 +68,14 @@ test("compaction does not relabel an inherited position as current exit policy",
   assert.ok(point);assert.equal(point.equity,equity);assert.equal(point.homogeneous,false);
 });
 
+test("a second commit in the same millisecond gets its own equity time",async()=>{
+  const first=await saved([position()]);
+  const next=structuredClone(first.state);next.revision=2;next.daily[0]!.endEquity=first.equity+5;
+  const write=await prepareForwardWrite(first.state,next,T,{compact:true});
+  const packets=Object.entries(write.entries).filter(([key])=>key.startsWith(`${FORWARD_STORAGE}archive:`));
+  const points=packets.flatMap(([,value])=>{const p=archivedEquity(value,first.context,T+10);return p?[p]:[];});
+  assert.equal(points.length,1);assert.equal(points[0]!.at,T+1);assert.equal(points[0]!.equity,first.equity+5);
+});
 test("oversized twelve-position archives preserve all trade evidence and exactly one real equity observation",async()=>{
   const {state,write,packets,context,equity}=await saved(Array.from({length:12},(_,i)=>position(i,T,true)));
   assert.ok(packets.length>1,"fixture must exercise the archive sharding path");

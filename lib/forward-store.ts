@@ -360,6 +360,14 @@ export function prepareForwardProtectionWrite(next:ForwardState){
 }
 
 export async function prepareForwardWrite(previous:ForwardState|null,next:ForwardState,now:number,options:{compact?:boolean}={}){
+  // Two commits can land in the same millisecond. The equity chart keys marks
+  // by this timestamp, so the later commit steps one millisecond instead of
+  // publishing a second amount at the time already saved.
+  const priorPersisted=previous?.storage.persistedAt??0,observedAt=priorPersisted>=now?priorPersisted+1:now;
+  if(observedAt!==now){
+    next.storage.persistedAt=observedAt;
+    const row=next.daily.at(-1);if(row?.lastAt===now)row.lastAt=observedAt;
+  }
   const recoveryState=next as ForwardStateWithRecovery,previousInternal=previous as ForwardStateWithRecovery|null,
     legacySampleRecovery=recoveryState.__legacySampleRecovery??previousInternal?.__legacySampleRecovery??[],
     persistedSampleManifest=recoveryState.__persistedSampleManifest??previousInternal?.__persistedSampleManifest??null;
@@ -409,7 +417,7 @@ export async function prepareForwardWrite(previous:ForwardState|null,next:Forwar
   const trades=[...next.positions,...next.history].filter(t=>subjects.has(t.id));
   const packet={inverseComparison:next.inverseTrial?{version:next.inverseTrial.version,sourceBuild:next.inverseTrial.sourceBuild,
       cutoverAt:next.inverseTrial.cutoverAt,totals:next.inverseTrial.totals,lastPoint:next.inverseTrial.curve.at(-1)}:undefined,
-    at:now,version:FORWARD_VERSION,engineVersion:next.engineVersion,policyVersion:next.policyVersion,
+    at:observedAt,version:FORWARD_VERSION,engineVersion:next.engineVersion,policyVersion:next.policyVersion,
     startedAt:next.startedAt,revision:next.revision,events,trades:trades.map(withoutReview),
     // The authoritative account state is persisted separately in the paged head/chunks.
     // Archive packets keep a compact position snapshot and full event-subject trades,
@@ -420,9 +428,9 @@ export async function prepareForwardWrite(previous:ForwardState|null,next:Forwar
     daily:next.daily.at(-1)??null,marketPulse:next.marketPulse,
     opportunities:next.opportunities.slice(0,12).map(o=>({symbol:o.symbol,side:o.side,mode:o.mode,score:o.score,eligible:o.eligible,
       premium:o.premium,netRemainingSpaceRate:o.netRemainingSpaceRate,edgeRatio:o.edgeRatio}))};
-  const archivePrefix=`${FORWARD_STORAGE}archive:${String(now).padStart(16,"0")}:`,archiveLimit=112*1024,
+  const archivePrefix=`${FORWARD_STORAGE}archive:${String(observedAt).padStart(16,"0")}:`,archiveLimit=112*1024,
     detailedTrades=trades.map(withoutReview),reviewByTrade=new Map(trades.filter(t=>!!t.review).map(t=>[t.id,t.review!])),
-    firstBase={...packet,trades:[] as Trade[]},continuationBase={at:now,version:FORWARD_VERSION,engineVersion:next.engineVersion,
+    firstBase={...packet,trades:[] as Trade[]},continuationBase={at:observedAt,version:FORWARD_VERSION,engineVersion:next.engineVersion,
       policyVersion:next.policyVersion,startedAt:next.startedAt,revision:next.revision,events:[] as typeof events,trades:[] as Trade[],
       account:null,daily:null,marketPulse:null,opportunities:[] as typeof packet.opportunities,archiveContinuation:true},
     shards:Array<{base:typeof firstBase|typeof continuationBase;trades:Trade[]}>=[];

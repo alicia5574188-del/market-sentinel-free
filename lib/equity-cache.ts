@@ -170,8 +170,12 @@ export class EquityHistoryCache {
           if(p.at===ctx.startedAt&&p.equity===ctx.initialEquity)continue;
           if(!finite(p.at)||p.at<=ctx.startedAt||p.at>page.generatedAt||!finite(p.equity)||p.kind!=="observed"
             ||typeof p.policy!=="string"||typeof p.homogeneous!=="boolean")throw new Error("净值记录格式异常。");
-          const old=points.get(p.at);if(old&&old.equity!==p.equity)throw new Error("历史净值核对不一致；保留原记录，暂不更新建议。");
-          if(!old)points.set(p.at,p);
+          const old=points.get(p.at);
+          // Two commits in one millisecond were both archived at this time.
+          // The amount already on the chart stays; a second amount must not
+          // stop the rest of the history or the drawdown note from loading.
+          if(old)continue;
+          points.set(p.at,p);
         }
         const validCursor=(v:unknown)=>v===null||(this.cursorOK(v)&&Number(v.split(":")[3])>=ctx.startedAt);
         if(!validCursor(page.nextCursor)||!validCursor(page.newestCursor??null)

@@ -31,6 +31,17 @@ function host(n=150){
   const cache=new EquityHistoryCache(options);cache.configure(context,"owner");
   return {cache,archive,disk,reader,urls,options,time:(ms:number)=>{now+=ms;},now:()=>now};
 }
+test("a later archive row at an existing time keeps the saved amount and does not block the chart",async()=>{
+  const h=host(1);await h.cache.load(T,T+STEP,()=>true);
+  const saved=h.cache.getSnapshot().points[0]!.equity;
+  const dup=`forward-relations:v1:archive:${String(T+2*STEP).padStart(16,"0")}:2`;
+  h.archive.rows.set(dup,{at:T+STEP,startedAt:T,policyVersion:context.policy,daily:{lastAt:T+STEP,endEquity:saved+50},account:{positions:[]}});
+  h.time(STEP);await h.cache.load(T,T+2*STEP,()=>true);
+  assert.equal(h.cache.getSnapshot().error,null);
+  assert.equal(h.cache.getSnapshot().points.length,1);
+  assert.equal(h.cache.getSnapshot().points[0]!.equity,saved);
+  assert.equal(h.cache.getSnapshot().catchingUp,false);
+});
 test("first read gets history once; repeated tab/range remounts make no extra read after completion",async()=>{
   const h=host();await h.cache.load(T,T+150*STEP,()=>true);
   assert.equal(h.urls.length,3);assert.equal(h.cache.getSnapshot().points.length,150);const exact=JSON.stringify(h.cache.getSnapshot().points);

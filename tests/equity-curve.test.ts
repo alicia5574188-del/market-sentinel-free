@@ -83,6 +83,13 @@ test("smooth cubic passes through points and has no inter-point extrema or overs
   }
 });
 test("empty or single point curve is safe",()=>{assert.equal(smoothPath([]),"");assert.equal(smoothPath([{x:1,y:2}]),"M1,2");assert.equal(nearestPoint([],T),null);});
+test("two archive rows at one time contribute the later row only",async()=>{
+  const storage=new ReadMemory();
+  storage.data.set(key(1),packet(1,1100));
+  storage.data.set(key(1)+":later",{...packet(1,1250)});
+  const page=await new EquityReader().read(storage,context,null,T+2*STEP);
+  assert.equal(page.points.length,1);assert.equal(page.points[0]!.equity,1250);
+});
 test("bounded descending archive pagination is exact and duplicate-free",async()=>{
   const storage=new ReadMemory();for(let i=1;i<=140;i++)storage.data.set(key(i),packet(i,1000+i));
   const r=new EquityReader(),a=await r.read(storage,context,null,T+150*STEP),b=await r.read(storage,context,a.nextCursor,T+150*STEP+1000),c=await r.read(storage,context,b.nextCursor,T+150*STEP+2000);
