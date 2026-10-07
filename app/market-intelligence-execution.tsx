@@ -55,7 +55,8 @@ function waitingReason(v:NonNullable<View["entryValidation"]>["records"][number]
 }
 
 function positionAction(t:View["positions"][number]){
-  if(t.inverseCopy)return"仅跟随影子";
+  if(t.inverseCopy?.alignment==="WITH_SOURCE")return"顺着确认持有";
+  if(t.inverseCopy)return"反着确认持有";
   if(t.winnerManagement?.research){
     const m=t.winnerManagement;
     return m.appliedAction==="EXIT"?"准备退出":m.appliedAction==="REDUCE"?"已部分兑现":m.research!.level==="MARKET_CAUTION"?"预警但继续持有":m.research!.level==="LOCAL_REVIEW"||m.research!.level==="PROTECT"?"复核本币变化":"继续持有";
@@ -65,7 +66,8 @@ function positionAction(t:View["positions"][number]){
 }
 
 function positionWatch(t:View["positions"][number]){
-  if(t.inverseCopy)return `影子${t.inverseCopy.sourceSide==="LONG"?"做多":"做空"}，模拟反向；源单退出参考 ${t.inverseCopy.sourceStopPrice}。`;
+  if(t.inverseCopy?.alignment==="WITH_SOURCE")return `这一笔顺着确认，影子${t.inverseCopy.sourceSide==="LONG"?"做多":"做空"}，模拟也${t.side==="LONG"?"做多":"做空"}。`;
+  if(t.inverseCopy)return `这一笔反着做，影子${t.inverseCopy.sourceSide==="LONG"?"做多":"做空"}，模拟${t.side==="LONG"?"做多":"做空"}。`;
   if(t.winnerManagement)return t.winnerManagement.reason;
   const plan=t.liquidityLifecycle?.currentPlan??t.entryContext?.tradePlan,concern=t.positionIntelligence?.concerns?.[0];
   if(concern)return concern;
@@ -74,6 +76,10 @@ function positionWatch(t:View["positions"][number]){
   if(plan==="LIQUIDITY_REJECTION")return"观察向区域内回归；再次有效离开则复核。";
   if(plan==="FAMILY_TURN")return"观察相关币是否持续共同转向。";
   return t.positionIntelligence?.summary??"观察原入场理由是否仍成立。";
+}
+
+function bookModeOf(data:View|null){
+  return {withSource:!!(data as {confirmationReality?:{entryHalted?:boolean}}|null)?.confirmationReality?.entryHalted};
 }
 
 export default function MarketIntelligenceExecution({data,now:_,liveEnabled,liveOverview}:{
@@ -108,12 +114,12 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
           {observed.length?observed.map(o=><p key={o.id}><b>{o.symbol.replace("_"," / ")} · {side(o.side)} · {tradePlanName(o.tradePlan)}</b><br/>
             {o.eligible&&!waitingByCandidate.has(o.id)?"条件已成立，等待执行队列。":observeReason(o,liquidity?.symbols?.[o.symbol])}</p>):<p>暂无重点观察标的。</p>}
         </div></article>
-        <article><time>等待执行 · {waitingValidations.length}{data?.shadowInverse?" · 影子决策，模拟反向":""}</time><div>
+        <article><time>等待执行 · {waitingValidations.length}{data?.shadowInverse?(bookModeOf(data).withSource?" · 新单顺着确认":" · 新单反着确认"):""}</time><div>
           {waitingValidations.map(v=>{const o=v.frozenOpportunity??opportunities.find(x=>x.id===v.candidateId);return <p key={v.id}><b>{v.symbol.replace("_"," / ")} · {side(v.side)} · {tradePlanName(o?.tradePlan)}</b><br/>
             {waitingReason(v,o)}{o?.winnerPlan&&<><br/><small>{planText(o.winnerPlan)}</small></>}</p>})}
           {!waitingValidations.length&&<p>暂无已武装计划。</p>}
         </div></article>
-        <article><time>{liveEnabled?'影子信号持仓':'正在持仓'} · {positions.length}</time><div>
+        <article><time>{data?.shadowInverse?"模拟持仓":"正在持仓"} · {positions.length}</time><div>
           {positions.length?positions.map(t=><p key={t.id}><b>{t.symbol.replace("_"," / ")} · {side(t.side)} · {tradePlanName(t.liquidityLifecycle?.currentPlan??t.entryContext?.tradePlan)} · {positionAction(t)}</b><br/>
             {positionWatch(t)}{t.entryContext?.winnerPlan&&<><br/><small>{planText(t.entryContext.winnerPlan,t.stopPrice)}</small></>}</p>):<p>暂无持仓。</p>}
         </div></article>

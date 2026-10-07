@@ -251,11 +251,11 @@ test("comparison shows exact-mirror paid-fee nets and overview fee never adds es
     paidCost:{source:{netPnl:-5},inverse:{netPnl:2.5},rows:[],stalePairs:0,
       reconciliation:{grossMirrorResidual:0,paidFees:2.5,netSum:-2.5},estimatedExitFees:{source:66,inverse:66}}};
   const html=render("app/forward-dashboard.tsx",dashboardProps(data));
-  assert.match(html,/原策略影子净额/);assert.match(html,/-5\.00 U/);assert.match(html,/\+2\.50 U/);
-  assert.ok(html.indexOf('反向模拟净额')<html.indexOf('原策略影子净额'));
+  assert.match(html,/影子净额/);assert.match(html,/-5\.00 U/);assert.match(html,/\+2\.50 U/);
+  assert.ok(html.indexOf('模拟净额')<html.indexOf('影子净额'));
   assert.doesNotMatch(html,/-999\.00|\+888\.00|报价毛额差|资金费占位/);
   assert.match(html,/<small>模拟已扣手续费<\/small><b>3\.25 U<\/b>/);
-  assert.match(html,/同价镜像对照曲线/);assert.match(html,/毛盈亏镜像校验 0\.000000 U/);
+  assert.match(html,/和影子的对照/);assert.match(html,/两边毛盈亏对照 0\.000000 U/);
 });
 
 test('LIVE OFF hides saved native curve and cached native statistics while preserving PAPER history',()=>{
@@ -284,12 +284,12 @@ test('one account click reveals all shadow orders and switches native account fa
   const draw=()=>{cursor=0;refCursor=0;buttons.length=0;return render('app/forward-dashboard.tsx',{...dashboardProps(data),liveEnabled:true,livePanel:'NATIVE_ORDER_PANEL',liveOverview:{equity:321.09,positionCount:1}},
     {react:hooks,'react/jsx-runtime':{...jsxRuntime,jsx:capture(jsxRuntime.jsx),jsxs:capture(jsxRuntime.jsxs)}});};
   let html=draw();buttons.find(b=>b.children==='查看全部影子订单 →').onClick();html=draw();
-  assert.ok(html.indexOf('反向模拟')<html.indexOf('影子订单</button>'));
+  assert.ok(html.indexOf('模拟账户')<html.indexOf('影子订单</button>'));
   assert.match(html,/shadow-orders-panel/);for(const symbol of ['AAVE / USDT','SUI / USDT','WLD / USDT'])assert.ok(html.includes(symbol));
   assert.match(html,/-12\.56 U/);assert.match(html,/-4\.14 U/);assert.match(html,/0\.2828 U/);assert.match(html,/当前已平仓记录 1/);
   assert.doesNotMatch(html,/NATIVE_ORDER_PANEL|paper-live-mirror|live-curve-fixture|paired-order-costs/);
   const panel=html.match(/data-testid="shadow-orders-panel"[\s\S]*?<\/section>/)?.[0];assert.doesNotMatch(panel,/<details|<summary/);
-  buttons.find(b=>Array.isArray(b.children)&&b.children[0]==='反向模拟').onClick();html=draw();
+  buttons.find(b=>Array.isArray(b.children)&&b.children[0]==='模拟账户').onClick();html=draw();
   assert.match(html,/NATIVE_ORDER_PANEL|paper-live-mirror/);assert.doesNotMatch(html,/shadow-orders-panel|-12\.56 U/);
   buttons.find(b=>b.children==='影子订单').onClick();html=draw();
   assert.match(html,/shadow-orders-panel/);assert.match(html,/<div class="fr-live-panel-host" hidden="">NATIVE_ORDER_PANEL<\/div>/);
