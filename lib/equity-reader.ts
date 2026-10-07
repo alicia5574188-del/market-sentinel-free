@@ -16,8 +16,13 @@ export class EquityReader {
     const key=`${context.startedAt}:${context.policy}:${context.exitPolicy}:${context.comparableSince}:${after?`after:${after}`:cursor??"latest"}`;
     const cached=this.cache.get(key);
     if(cached&&(cursor||now-cached.at<30_000))return {...cached.page,context,generatedAt:now};
-    if(this.active){if(this.active.key===key)return {...await this.active.work,context,generatedAt:now};throw new Error("CURVE_BUSY");}
-    if(now-this.lastRead<500)throw new Error("CURVE_BUSY");
+    // Queue behind one in-flight archive scan instead of rejecting: still bounded
+    // to a single storage.list at a time, but the chart never sees a busy error.
+    while(this.active){
+      if(this.active.key===key)return {...await this.active.work,context,generatedAt:now};
+      await this.active.work.catch(()=>undefined);
+      const hit=this.cache.get(key);if(hit&&(cursor||now-hit.at<30_000))return {...hit.page,context,generatedAt:now};
+    }
     this.lastRead=now;
     const work=(async()=>{
       const rows=await storage.list<unknown>({prefix:PREFIX,
