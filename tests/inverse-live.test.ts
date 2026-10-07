@@ -404,3 +404,20 @@ test('inverse live entry tries maker first; a full maker fill opens the position
   await h.stream.syncLive(Date.now());
   assert.equal(h.calls.makers,1);assert.equal(h.calls.entries,0);assert.equal(h.positions.length,1);
 });
+
+test('a shadow-following inverse close rests reduce-only maker first; full maker fill needs no market close',async()=>{
+  const h=await harness('LONG');await h.stream.syncLive(Date.now());assert.equal(h.calls.entries,1);
+  const g=h.gate as any;let body:any=null;
+  let held=0;g.placeMakerEntry=async(b:any)=>{body=b;held=Number(h.positions[0].size);const qty=Math.abs(Number(h.positions[0].size));h.positions.length=0;
+    g._mk={id_string:'mexit',status:'finished',finish_as:'filled',size:String(-qty),left:'0',fill_price:b.price};return 'mexit';};
+  const inspect=g.inspectEntry;g.inspectEntry=async(k:string,s:string,t:string,id:string)=>id==='mexit'?g._mk:inspect(k,s,t,id);
+  h.inverse.status='CLOSED';h.inverse.closedAt=Date.now();h.inverse.exitReason='SHADOW_SOURCE_EXIT';h.state.positions=[];h.state.history=[h.inverse];
+  await h.stream.syncLive(Date.now());
+  assert.equal(body.reduce_only,true);assert.equal(body.tif,'poc');assert.equal(Math.sign(Number(body.size)),-Math.sign(held));
+  assert.equal(h.calls.closes,0);assert.equal(h.positions.length,0);
+});
+test('a soft-loss inverse close never waits for a maker order',async()=>{
+  const h=await harness('SHORT');await h.stream.syncLive(Date.now());const before=h.calls.makers;
+  h.inverse.status='CLOSED';h.inverse.closedAt=Date.now();h.inverse.exitReason='INVERSE_SOFT_LOSS_EXIT';h.state.positions=[];h.state.history=[h.inverse];
+  await h.stream.syncLive(Date.now());assert.equal(h.calls.makers,before);assert.equal(h.calls.closes,1);
+});
