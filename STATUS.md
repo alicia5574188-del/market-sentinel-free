@@ -51,6 +51,9 @@ Design:research/LIVE_SYNC_LATENCY_2026-09-23.md.
 - 验证：冻结 44 个月研究证据未改；267 项直接测试、17 项架构/迁移测试、4 项全行情引擎测试、类型检查、Lint、生产构建、空白检查和 Cloudflare 部署预检均通过。
 - 发布：PR #215 已通过 GitHub 审查并合并 `main`。当前 GitHub 连接器写入不会触发 `push` 工作流，且未暴露 `workflow_dispatch`；生产仍为旧版本，需从 Actions 对 `main` 手动运行一次后继续核验。
 
+## 2026-10-07 净值曲线加载提速
+- 服务器净值读取改为排队，不再返回「繁忙」；手机端遇繁忙 1.2 秒内自动重试 3 次，不再锁 60 秒；分页间隔 0.7 秒降到 0.12 秒。只改图表读取，交易不受影响。
+
 ## 2026-10-06 晚（待上线）
 - 页面 10 秒刷新的数据不再携带研究专用字段（review、lossResearch、sourceEntryPlan、sourceExitAudit、重复的 entryOpportunities）；研究快照导出不受影响。
 - 新增研究快照 research.inverseSoftLossExit：每次「浮亏5U提前平仓」后，记录若继续跟随影子的结局与规则收益；不参与任何交易决策。
