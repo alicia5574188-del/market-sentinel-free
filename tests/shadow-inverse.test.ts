@@ -168,12 +168,12 @@ test('source profitable partial exits are mirrored even when the inverse loses; 
   const m=s.history[0]!;assert.equal(m.inverseCopy!.fills.length,4);assert.equal(s.resolved,1);assert.equal(m.quantity,10);assert.equal(m.contracts,100);
   near(m.netPnl!,m.inverseCopy!.fills.reduce((n,f)=>n+f.gross-f.fee-f.funding,0));near(s.balance,1000+m.netPnl!);assertTradeRealization(m);assertInverseTrial(s);
 });
-test('neither source stop movement nor large inverse loss can independently exit or resize the mirror',()=>{
-  const {s,source,t}=fixture();t.stopPrice=120;applyInverseSourceTrade(s,t,quote(130,130,T+2000),T+2000);retainSource(s,source);
-  markInversePositions(s,{TEST_USDT:quote(130,130,T+2000)},T+2000);
+test('neither source stop movement nor an inverse loss below the 10U hard cap can independently exit or resize the mirror',()=>{
+  const {s,source,t}=fixture();t.stopPrice=120;applyInverseSourceTrade(s,t,quote(100.8,100.8,T+2000),T+2000);retainSource(s,source);
+  markInversePositions(s,{TEST_USDT:quote(100.8,100.8,T+2000)},T+2000);
   assert.equal(applyInverseSoftLossExits(s,T+2000),false);
   assert.equal(s.positions.length,1);assert.equal(s.positions[0]!.quantity,10);
-  assert.equal(s.positions[0]!.inverseCopy!.sourceStopPrice,120);assert.ok(inverseTrialSummary(s,{TEST_USDT:quote(130,130,T+2000)},T+2000)!.inverseNet<0);
+  assert.equal(s.positions[0]!.inverseCopy!.sourceStopPrice,120);assert.ok(inverseTrialSummary(s,{TEST_USDT:quote(100.8,100.8,T+2000)},T+2000)!.inverseNet<0);
 });
 test('inverse balance, histories and outcome counters cannot leak into source decision state',()=>{
   const {s}=fixture(),before=JSON.stringify(sourceDecisionState(s));s.balance=123456;s.history=[trade('foreign')];s.wins=666;s.resolved=888;
@@ -441,6 +441,10 @@ test('a soft source hold cuts only the inverse once floating gross is worse than
   };
   const firm=arm(false,101);
   assert.equal(firm.cut,false);assert.equal(firm.inv.status,'OPEN');assertInverseTrial(firm.pack.s);
+  // Hard backstop: past 10U gross the inverse is cut even while the shadow is still strong.
+  const hard=arm(false,101.2);
+  assert.equal(hard.cut,true);assert.equal(hard.inv.status,'CLOSED');assert.equal(hard.inv.exitReason,'INVERSE_SOFT_LOSS_EXIT');
+  assert.equal((hard.inv.exitAudit!.evidence as {hardLossCap?:boolean}).hardLossCap,true);assert.equal(hard.pack.source.positions.length,1);assertInverseTrial(hard.pack.s);
   const shallow=arm(true,100.5);
   assert.equal(shallow.cut,false);assert.equal(shallow.inv.status,'OPEN');
   const {pack,now,inv,cut}=arm(true,101);
