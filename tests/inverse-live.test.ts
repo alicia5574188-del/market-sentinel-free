@@ -77,7 +77,7 @@ async function harness(side:'LONG'|'SHORT') {
   const quote=side==='LONG'?100.02:99.98;
   stream.runtime.evidence.TEST_USDT={bestBid:quote,bestAsk:quote,midpoint:quote,observedAt:now,fresh:true};
   stream.saveCheckpoint=async()=>{for(const [key,value]of stream.liveJournal)data.set(key,structuredClone(value));stream.liveJournal.clear();};
-  const calls={entries:0,stops:[] as any[],reductions:[] as string[],closes:0,leverage:0,cancels:[] as string[]},positions:any[]=[],priceOrders:any[]=[],orders=new Map<string,any>();
+  const calls={makers:0,entries:0,stops:[] as any[],reductions:[] as string[],closes:0,leverage:0,cancels:[] as string[]},positions:any[]=[],priceOrders:any[]=[],orders=new Map<string,any>();
   const gate={snapshot:async()=>({account:{total:'100',available:'90',unrealised_pnl:'0',margin_mode:0},
     positions:structuredClone(positions),orders:[],priceOrders:structuredClone(priceOrders),checkedAt:Date.now()}),
     setLeverage:async(_symbol?:string,leverage=5)=>{calls.leverage++;if(positions[0]){
@@ -88,6 +88,8 @@ async function harness(side:'LONG'|'SHORT') {
       const price=String(inverse.side==='LONG'?stream.runtime.evidence.TEST_USDT.bestAsk:stream.runtime.evidence.TEST_USDT.bestBid);
       positions.push({contract:'TEST_USDT',size:String(intent.size),entry_price:price,leverage:String(intent.leverage),margin:String(intent.margin),unrealised_pnl:'0',mark_price:price});
       orders.set('entry',{id_string:'entry',status:'finished',finish_as:'filled',fill_price:price,size:String(intent.size),left:'0'});return'entry';},
+    // Quote has bid==ask, so post-only would cross: Gate rejects and the full size goes to market.
+    placeMakerEntry:async()=>{calls.makers++;throw new Error('Gate 400 ORDER_POC_IMMEDIATE');},
     inspectEntry:async(_kind:string,_symbol:string,_tag:string,id:string)=>orders.get(id)??null,
     createStop:async(intent:any)=>{calls.stops.push(intent);const id='stop'+calls.stops.length;
       priceOrders.push({id_string:id,text:intent.tag,initial:intent.body.initial});return id;},
@@ -390,4 +392,32 @@ test('noninverse legacy native stop creation remains intact',async()=>{
   const h=await harness('LONG');
   await h.stream.createImmediateLiveStop(h.gate,{planId:'legacy-source',symbol:'TEST_USDT',side:'LONG',invalidation:98});
   assert.equal(h.calls.stops.length,1);assert.equal(h.calls.stops[0].price,98);assert.equal(h.calls.closes,0);
+});
+
+test('inverse live entry tries maker first; a full maker fill opens the position without any market order',async()=>{
+  const h=await harness('LONG');const g=h.gate as any;
+  g.placeMakerEntry=async(body:any)=>{h.calls.makers++;assert.equal(body.tif,'poc');assert.ok(String(body.text).startsWith('t-ms-e-'));
+    h.positions.push({contract:'TEST_USDT',size:String(body.size),entry_price:body.price,leverage:'5',margin:'1',unrealised_pnl:'0',mark_price:body.price});
+    return 'maker';};
+  const inspect=g.inspectEntry;g.inspectEntry=async(k:string,s:string,t:string,id:string)=>id==='maker'
+    ?{id_string:'maker',status:'finished',finish_as:'filled',size:h.positions[0]?.size,left:'0',fill_price:h.positions[0]?.entry_price}:inspect(k,s,t,id);
+  await h.stream.syncLive(Date.now());
+  assert.equal(h.calls.makers,1);assert.equal(h.calls.entries,0);assert.equal(h.positions.length,1);
+});
+
+test('a shadow-following inverse close rests reduce-only maker first; full maker fill needs no market close',async()=>{
+  const h=await harness('LONG');await h.stream.syncLive(Date.now());assert.equal(h.calls.entries,1);
+  const g=h.gate as any;let body:any=null;
+  let held=0;g.placeMakerEntry=async(b:any)=>{body=b;held=Number(h.positions[0].size);const qty=Math.abs(Number(h.positions[0].size));h.positions.length=0;
+    g._mk={id_string:'mexit',status:'finished',finish_as:'filled',size:String(-qty),left:'0',fill_price:b.price};return 'mexit';};
+  const inspect=g.inspectEntry;g.inspectEntry=async(k:string,s:string,t:string,id:string)=>id==='mexit'?g._mk:inspect(k,s,t,id);
+  h.inverse.status='CLOSED';h.inverse.closedAt=Date.now();h.inverse.exitReason='SHADOW_SOURCE_EXIT';h.state.positions=[];h.state.history=[h.inverse];
+  await h.stream.syncLive(Date.now());
+  assert.equal(body.reduce_only,true);assert.equal(body.tif,'poc');assert.equal(Math.sign(Number(body.size)),-Math.sign(held));
+  assert.equal(h.calls.closes,0);assert.equal(h.positions.length,0);
+});
+test('a soft-loss inverse close never waits for a maker order',async()=>{
+  const h=await harness('SHORT');await h.stream.syncLive(Date.now());const before=h.calls.makers;
+  h.inverse.status='CLOSED';h.inverse.closedAt=Date.now();h.inverse.exitReason='INVERSE_SOFT_LOSS_EXIT';h.state.positions=[];h.state.history=[h.inverse];
+  await h.stream.syncLive(Date.now());assert.equal(h.calls.makers,before);assert.equal(h.calls.closes,1);
 });

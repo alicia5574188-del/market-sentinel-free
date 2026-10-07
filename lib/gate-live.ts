@@ -335,6 +335,12 @@ export class GateLiveClient {
     return responseId(response.raw, response.data);
   }
 
+  /** Post-only maker entry; same signed transport and final local fence as createEntry. */
+  async placeMakerEntry(body: Record<string, unknown>, beforeSend: () => boolean) {
+    const response = await this.request<GateLiveOrder>("POST", "/futures/usdt/orders", "", body, beforeSend);
+    return responseId(response.raw, response.data);
+  }
+
   async createStop(intent: LiveStopIntent) {
     const response = await this.request<GateLiveOrder>("POST", "/futures/usdt/price_orders", "", intent.body);
     return responseId(response.raw, response.data);

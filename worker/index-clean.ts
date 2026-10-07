@@ -1,5 +1,5 @@
 import {reconcileSourceReduction,sourceReductionTarget,type SourceReduction} from "../lib/live-reduction.ts";
-import {reconcileSourceClose,sourceExitFillPrice,type SourceExit} from '../lib/live-exit.ts';
+import {reconcileSourceClose,sourceExitFillPrice,SOURCE_EXIT_EXECUTION_POLICY,type SourceExit} from '../lib/live-exit.ts';
 import {FIXED_ALLOCATION_EQUITY,FIXED_ALLOCATION_POLICY,fixedLiveBasis,type FixedLiveBasis} from '../lib/fixed-allocation.ts';
 import { LiveHistoryReader } from "../lib/live-history-reader.ts";
 /// <reference types="@cloudflare/workers-types" />
@@ -72,6 +72,9 @@ import { LIVE_TURNOVER_PREFIX, LIVE_TURNOVER_VERSION, initialTurnover, validateT
 import { LIVE_PARITY_VERSION, LIVE_PARITY_PREFIX, buildProportionalMirror, forwardMirrorSources, mirrorPositionRisk,
   sourceLifecycle, mirrorSourceFresh, mirrorCoverage, liveEntryDriftGuard,
   type MirrorSourceTrade, type MirrorReceipt, type MirrorBinding } from "../lib/live-parity.ts";
+// Inverse closes that merely follow the shadow are not protective; they may rest 2s.
+const MAKER_EXIT_REASONS=new Set(["SHADOW_SOURCE_EXIT"]);
+import { makerFirstEntry, makerEntryTag, MakerStateUnknownError, LIVE_MAKER_ENTRY_POLICY, type MakerResult } from "../lib/live-maker-entry.ts";
 import {buildReviewSnapshot, readReviewArchivePage} from "../lib/research-snapshot.ts";
 import {liveExitPriceLimit} from '../lib/live-entry-price.ts';
 import {observeLiveAccount,type LiveAccountMark} from '../lib/live-account-view.ts';
@@ -212,7 +215,8 @@ type LiveEntry = {
   mirrorSourceId?: string;
 };
 
-export type LivePosition = {sourceReduction?:SourceReduction;sourceExit?:SourceExit} & PaperPosition & Partial<ReturnType<typeof gatePositionValuation>> & {
+export type LivePosition = {sourceReduction?:SourceReduction;sourceExit?:SourceExit;
+  makerExit?:{tag:string;startedAt:number;orderId?:string|null;filled?:number;price?:number|null;rejected?:boolean;waitedMs?:number;error?:string}} & PaperPosition & Partial<ReturnType<typeof gatePositionValuation>> & {
   exchangeSize: number;
   leverage: number;
   margin: number;
@@ -563,10 +567,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   protected liveSyncWork: Promise<void> | null = null;
   private liveSourceDispatch:Promise<void>|null=null;
   private liveSourceQueued=false;
+  private liveLeverageConfirmed=new Map<string,string>();private liveLeverageClient:unknown=null;
   private liveSnapshotCache:GateLiveSnapshot|null=null;
   private liveOrderSnapshotCache:GateLiveOrderSnapshot|null=null;
   private liveOrderAuditAt=0;
-  private liveExecution={version:"stable-loop-live-v1",cycles:0,sourceWakeups:0,
+  private liveExecution={version:"stable-loop-live-v1",cycles:0,sourceWakeups:0,leverageSkips:0,
     startedAt:null as number|null,finishedAt:null as number|null,lastDurationMs:null as number|null};
   private liveReadTimeoutStreak=0;
   protected liveJournal = new Map<string, unknown>();
@@ -2474,7 +2479,20 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     } finally { if(this.liveSyncWork===work)this.liveSyncWork=null; }
   }
 
+  private sourceExitPersist(position:LivePosition,source:{closedAt?:number|null;exitReason?:string|null;exitPrice:number|null}){
+    return async (state:SourceExit)=>{
+        position.sourceExit=state;position.exitRequestedAt??=state.observedAt;
+        position.exitReason=source.exitReason??'PAPER_SOURCE_EXIT';position.exitOrderId=state.last.orderId;
+        Object.assign(position.parity!,{sourceClosedAt:source.closedAt,sourceExitReason:source.exitReason,
+          exitExecutionPolicy:state.version,sourceExitPrice:source.exitPrice,exitObservedAt:state.observedAt,
+          exitSubmittedAt:state.last.submittedAt,exitDelayMs:Math.max(0,state.last.submittedAt-state.sourceClosedAt),
+          exitLimitPrice:state.last.kind==='LIMIT'?Number(state.last.price):null});
+        this.runtime.live.positions[position.symbol]=position;await this.saveCheckpoint(Date.now(),true);
+      };
+  }
+
   private async executeCommittedSourceClose(client:GateLiveClient,position:LivePosition,contracts:number,observedAt:number){
+    // contracts may be refreshed after a maker window
     const lifecycle=this.currentMirrorSource(position.id);
     if(!isInverseLiveReceipt(position.parity)||lifecycle.status!=='CLOSED')return;
     if(position.exitRequestedAt&&!position.sourceExit)return; // retain an older in-flight close identity
@@ -2488,17 +2506,50 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }catch{/* Missing/stale price metadata cannot delay a committed exit. */}
     }
     const stillClosed=()=>this.runtime.live.positions[position.symbol]?.id===position.id&&this.currentMirrorSource(position.id).status==='CLOSED';
+    // Non-urgent source exits rest reduce-only post-only for 2s first; protective
+    // and soft-loss exits keep the immediate path. Reduce-only can never flip.
+    if(!position.sourceExit&&!position.makerExit&&contracts>0&&MAKER_EXIT_REASONS.has(String(source.exitReason??''))
+      &&this.mirrorQuoteReady(position.symbol,started)){
+      const q=this.runtime.evidence[position.symbol],size=(()=>{try{return quantizeMirrorNotional(contracts,1,1,this.runtime.contractMeta[position.symbol]);}catch{return null;}})();
+      if(size&&size.quantity>0&&Math.abs(size.quantity-contracts)<=Math.max(1e-9,contracts*1e-8)){
+        const tag=makerEntryTag(liveExitTag(position.id));
+        position.makerExit={tag,startedAt:started};this.runtime.live.positions[position.symbol]=position;await this.saveCheckpoint(Date.now(),true);
+        try{
+          const r=await makerFirstEntry({placeMaker:(b,f)=>client.placeMakerEntry(b,f),
+            inspect:id=>client.inspectEntry('LIMIT',position.symbol,tag,id),cancel:id=>client.cancelOrder('LIMIT',id)},
+            {symbol:position.symbol,side:position.side==='LONG'?'SHORT':'LONG',contractsText:size.quantityText,
+              bestBid:q.bestBid??0,bestAsk:q.bestAsk??0,tag,beforeSend:stillClosed,reduceOnly:true});
+          Object.assign(position.makerExit,{orderId:r.makerOrderId,filled:r.filledContracts,price:r.fillPrice,rejected:r.rejected,waitedMs:r.waitedMs});
+          if(position.parity)Object.assign(position.parity,{makerExitPolicy:LIVE_MAKER_ENTRY_POLICY,makerExitFilledContracts:r.filledContracts,
+            makerExitPrice:r.fillPrice,makerExitWaitedMs:r.waitedMs});
+          if(r.filledContracts>0&&r.fillPrice){
+            const now2=Date.now(),prior:SourceExit={version:SOURCE_EXIT_EXECUTION_POLICY,sourceClosedAt:source.closedAt??started,
+              sourceExitPrice:source.exitPrice,observedAt:started,initialContracts:contracts,attempt:1,
+              knownFilled:r.filledContracts,knownValue:r.filledContracts*r.fillPrice,
+              last:{tag,kind:'LIMIT',price:String(r.makerPrice),submittedAt:started,orderId:r.makerOrderId,terminal:true,accounted:true}};
+            const current=await client.position(position.symbol),left=Math.abs(Number(current.size));
+            await reconcileSourceClose({id:position.id,sourceClosedAt:prior.sourceClosedAt,sourceExitPrice:source.exitPrice,
+              actualContracts:Number.isFinite(left)?left:contracts,observedAt:now2,now:now2,limit:null,prior,stillClosed,
+              definitiveRejection:definitiveGateRejection,persist:this.sourceExitPersist(position,source),
+              inspect:(t,id)=>client.inspectEntry('LIMIT',position.symbol,t,id),
+              remaining:async()=>({contracts:Number.isFinite(left)?left:contracts,observedAt:now2}),
+              submit:(t,price,guard)=>client.sourceExit(position.symbol,position.side,t,price,guard)});
+            return;
+          }
+        }catch(error){
+          // Unknown maker state cannot delay the exit: everything is reduce-only.
+          position.makerExit.error=safeError(error);
+        }
+        await this.saveCheckpoint(Date.now(),true);
+        const current=await client.position(position.symbol),left=Math.abs(Number(current.size));
+        if(Number.isFinite(left))contracts=left;
+        limit=null; // after the 2s maker window, finish immediately
+        if(contracts<=0)return;
+      }
+    }
     await reconcileSourceClose({id:position.id,sourceClosedAt:source.closedAt??started,sourceExitPrice:source.exitPrice,
       actualContracts:contracts,observedAt,now:started,limit,prior:position.sourceExit,stillClosed,definitiveRejection:definitiveGateRejection,
-      persist:async state=>{
-        position.sourceExit=state;position.exitRequestedAt??=state.observedAt;
-        position.exitReason=source.exitReason??'PAPER_SOURCE_EXIT';position.exitOrderId=state.last.orderId;
-        Object.assign(position.parity!,{sourceClosedAt:source.closedAt,sourceExitReason:source.exitReason,
-          exitExecutionPolicy:state.version,sourceExitPrice:source.exitPrice,exitObservedAt:state.observedAt,
-          exitSubmittedAt:state.last.submittedAt,exitDelayMs:Math.max(0,state.last.submittedAt-state.sourceClosedAt),
-          exitLimitPrice:state.last.kind==='LIMIT'?Number(state.last.price):null});
-        this.runtime.live.positions[position.symbol]=position;await this.saveCheckpoint(Date.now(),true);
-      },
+      persist:this.sourceExitPersist(position,source),
       inspect:(tag,id)=>client.inspectEntry('LIMIT',position.symbol,tag,id),
       remaining:async()=>{
         const actual=await client.position(position.symbol),signed=Number(actual.size);
@@ -2900,7 +2951,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         enabled:this.runtime.live.requestedEnabled,sourceOpen:this.currentMirrorSource(position.id).status==='OPEN',
         stillAllowed:()=>this.runtime.live.requestedEnabled&&position.status==='OPEN'&&position.exitRequestedAt==null
           &&this.currentMirrorSource(position.id).status==='OPEN'&&Date.now()-snapshot.checkedAt<=30_000,
-        setLeverage:(symbol,target)=>client.setLeverage(symbol,target),
+        setLeverage:(symbol,target)=>{this.liveLeverageConfirmed.delete(symbol);return client.setLeverage(symbol,target);},
         persist:async()=>{
           const key=`${LIVE_PARITY_PREFIX}binding:${position.id}`,
             binding=(this.liveJournal.get(key) as MirrorBinding|undefined)??await this.ctx.storage.get<MirrorBinding>(key);
@@ -3091,7 +3142,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           await this.saveCheckpoint(Date.now(),true);continue;
         }
         try {
-          await client.setLeverage(symbol,intent.leverage);
+          // Latency: Gate keeps per-contract leverage. Skip the round trip only
+          // when THIS executor already confirmed the same value for the same
+          // client and no position is open on the symbol.
+          const levKey=`${symbol}:${intent.leverage}`;
+          if(!(this.liveLeverageConfirmed.get(symbol)===levKey&&this.liveLeverageClient===client&&this.runtime.live.positions[symbol]?.status!=="OPEN")){
+            this.liveLeverageConfirmed.delete(symbol);
+            await client.setLeverage(symbol,intent.leverage);
+            this.liveLeverageClient=client;this.liveLeverageConfirmed.set(symbol,levKey);
+          }else this.liveExecution.leverageSkips=(this.liveExecution.leverageSkips??0)+1;
         } catch (error) {
           const retryable=isGateTransportTimeoutError(error)||!definitiveGateRejection(error);
           const reason=retryable
@@ -3159,7 +3218,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             adverseEntryDriftRate:drift.adverse});
           entry.marketSubmittedAt=submittedAt;
           await this.saveCheckpoint(submittedAt,true);
-          const finalValidatedAt=Date.now(),submissionStillAllowed=()=>{
+          let finalValidatedAt=Date.now();const submissionStillAllowed=()=>{
             if(!this.runtime.live.requestedEnabled
               ||!sameLiveSession(activation,this.runtime.live.activation)
               ||!sourceAfterEnable(source,this.runtime.live.activation,this.forwardState?.startedAt??0)
@@ -3184,9 +3243,57 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           // Keep the current final local safety fence, but use the proven
           // 2026-09-20 REST transport after it passes. This guard runs after
           // signing and immediately before the one network submission.
-          entry.exchangeOrderId = await client.createEntry(intent,submissionStillAllowed);
-          entry.status = "OPEN";
-          const filled=await client.inspectEntry(entry.kind,symbol,entry.tag,entry.exchangeOrderId);
+          // Maker-first for inverse copies: rest at our own side for 2s, then the
+          // exact remainder goes to the existing IOC market order. Never skips.
+          let maker:MakerResult|null=null;
+          if(isInverseLiveReceipt(entry.parity)&&entry.kind==="MARKET"){
+            const totalText=String(intent.body.size).replace(/^-/,""),marketTag=entry.tag,makerTag=makerEntryTag(marketTag);
+            // Persist the maker identity first so any crash/recovery looks for
+            // the maker order, never re-sends a full market order on top of it.
+            entry.tag=makerTag;await this.saveCheckpoint(Date.now(),true);
+            try{
+              maker=await makerFirstEntry({placeMaker:(b,f)=>client.placeMakerEntry(b,f),
+                inspect:async id=>client.inspectEntry("MARKET",symbol,makerTag,id),cancel:id=>client.cancelOrder("MARKET",id)},
+                {symbol,side:entry.side,contractsText:totalText,bestBid:submitQuote.bestBid,bestAsk:submitQuote.bestAsk,
+                  tag:makerTag,beforeSend:submissionStillAllowed});
+            }catch(error){
+              if(error instanceof MakerStateUnknownError){entry.exchangeOrderId=entry.exchangeOrderId??null;throw error;}
+              if(error instanceof GateEntryCancelledError){entry.tag=marketTag;throw error;}
+              throw error;
+            }
+            entry.exchangeOrderId=maker.makerOrderId;
+            if(entry.parity)Object.assign(entry.parity,{makerEntryPolicy:LIVE_MAKER_ENTRY_POLICY,makerOrderId:maker.makerOrderId,
+              makerPrice:maker.makerPrice,makerFilledContracts:maker.filledContracts,makerFillPrice:maker.fillPrice,
+              makerRejected:maker.rejected,makerWaitedMs:maker.waitedMs});
+            await this.saveCheckpoint(Date.now(),true);
+            if(Number(maker.remainingText)>0){
+              intent.body={...intent.body,size:`${entry.side==="SHORT"?"-":""}${maker.remainingText}`};
+              entry.tag=marketTag;finalValidatedAt=Date.now();
+              if(!submissionStillAllowed()){
+                if(maker.filledContracts<=0)throw new GateEntryCancelledError("挂单等待期间源单或会话已变化，订单尚未发送");
+                // Source ended during the wait: keep the already-filled maker
+                // exposure as the entry; the source close follows through on it.
+                entry.tag=makerTag;maker={...maker,remainingText:"0"};
+              }
+            }
+          }
+          let filled:GateLiveOrder|null;
+          if(maker&&Number(maker.remainingText)<=0){
+            entry.status="OPEN";
+            filled=await client.inspectEntry(entry.kind,symbol,entry.tag,entry.exchangeOrderId);
+          }else{
+            // Remainder after a partial maker fill must still be sent: the source
+            // is live and live may never take fewer orders than paper.
+            entry.exchangeOrderId = await client.createEntry(intent,submissionStillAllowed);
+            entry.status = "OPEN";
+            filled=await client.inspectEntry(entry.kind,symbol,entry.tag,entry.exchangeOrderId);
+            if(maker&&maker.filledContracts>0&&filled){
+              const mq=maker.filledContracts,mp=maker.fillPrice??maker.makerPrice,
+                qq=Math.max(0,Math.abs(Number(filled.size))-Math.abs(Number(filled.left))),qp=Number(filled.fill_price);
+              const avg=qq>0&&qp>0?(mq*mp+qq*qp)/(mq+qq):mp;
+              filled={...filled,fill_price:avg,size:Number(maker.remainingText)+mq,left:Math.abs(Number(filled.left))||0,finish_as:"filled"};
+            }
+          }
           const fillPrice=Number(filled?.fill_price);
           if(entry.parity&&Number.isFinite(fillPrice)&&fillPrice>0){
             const actualDrift=liveEntryDriftGuard(source,fillPrice);
