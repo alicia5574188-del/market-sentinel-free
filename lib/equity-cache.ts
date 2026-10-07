@@ -14,7 +14,7 @@ const PREFIX="sentinel:equity-cache:v1:";
 const LIMIT=8_000_000;
 type BrowserStorage=Pick<Storage,"getItem"|"setItem"|"removeItem"|"key"|"length">;
 type Options={fetch?:typeof fetch;now?:()=>number;pause?:()=>Promise<void>;storage?:()=>BrowserStorage|null;legacyStorage?:()=>BrowserStorage|null;
-  endpoint?:string;validCursor?:(s:string)=>boolean};
+  endpoint?:string;busyDelay?:number;validCursor?:(s:string)=>boolean};
 export type EquityHistory={account:number;points:EquityPoint[];cursor:string|null;done:boolean;
   coveredTo:number|null;loaded:boolean;newestCursor:string|null;checkedCycle:number;
   latestAt:number;catchingUp:boolean;loading:boolean;error:string|null;cacheNotice:string|null};
@@ -33,12 +33,12 @@ export class EquityHistoryCache {
   private listeners=new Set<()=>void>();private flight:Promise<void>|null=null;private controller:AbortController|null=null;
   private lastAttempt=-Infinity;private blocked=false;
   private request:typeof fetch;private now:()=>number;private pause:()=>Promise<void>;private storage:()=>BrowserStorage|null;private legacyStorage:()=>BrowserStorage|null;
-  private endpoint:string;private cursorOK:(s:unknown)=>s is string;
+  private endpoint:string;private busyDelay:number;private cursorOK:(s:unknown)=>s is string;
   constructor(options:Options={}){
     this.request=options.fetch??((...args)=>fetch(...args));this.now=options.now??Date.now;
-    this.pause=options.pause??(()=>new Promise(r=>setTimeout(r,700)));this.storage=options.storage??browserStorage;
+    this.pause=options.pause??(()=>new Promise(r=>setTimeout(r,120)));this.storage=options.storage??browserStorage;
     this.legacyStorage=options.legacyStorage??legacyBrowserStorage;
-    this.endpoint=options.endpoint??'/api/forward/equity';
+    this.endpoint=options.endpoint??'/api/forward/equity';this.busyDelay=options.busyDelay??1200;
     this.cursorOK=(s:unknown):s is string=>typeof s==='string'&&(options.validCursor??cursorOK)(s);
   }
   getSnapshot=()=>this.state;
@@ -126,6 +126,7 @@ export class EquityHistoryCache {
   needsHistory(target:number){const s=this.state;return !s.loaded||!s.done&&(s.coveredTo===null||s.coveredTo>target);}
   private async run(target:number,cycle:number,active:()=>boolean,epoch:number){
     // Preserve the last successful projection while fetching; never replace it with an empty chart.
+    let busyRetries=0;
     try{
       for(let n=0;n<32&&active()&&epoch===this.epoch;n++){
         const s=this.state,now=this.now();let mode:"latest"|"after"|"older";
@@ -134,7 +135,7 @@ export class EquityHistoryCache {
         else if(cycle>s.checkedCycle&&now-s.latestAt>=60_000)mode=s.newestCursor?"after":"latest";
         else if(this.needsHistory(target)&&s.cursor)mode="older";
         else break;
-        if(now-this.lastAttempt<600){await this.pause();if(!active()||epoch!==this.epoch)break;}
+        if(now-this.lastAttempt<120){await this.pause();if(!active()||epoch!==this.epoch)break;}
         if(epoch!==this.epoch)break;
         const cursor=mode==="older"?s.cursor:mode==="after"?s.newestCursor:null;
         if(mode==="after"&&!cursor)throw new Error("新增净值游标缺失，请刷新后重试。");
@@ -152,6 +153,7 @@ export class EquityHistoryCache {
             this.blocked=true;
             this.set({...empty(),account:s.account,error:"登录已失效，请重新登录。"});return;
           }
+          if(response.status===429&&busyRetries<3){busyRetries++;n--;await new Promise(r=>setTimeout(r,this.busyDelay));if(!active()||epoch!==this.epoch)return;continue;}
           if(!response.ok)throw new Error(response.status===429?"净值历史读取繁忙；保留已有曲线，稍后继续。":"新增净值暂未取得；已加载历史保留，交易不受图表影响。");
           // Headers can arrive before a stalled body. Keep both the timeout and
           // logout/account-change cancellation alive until JSON has been read.

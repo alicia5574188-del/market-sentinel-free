@@ -97,9 +97,9 @@ test("malformed browser cache falls back safely without synthetic points",()=>{
 });
 test("transient failure preserves history and rapid retries are held for a minute",async()=>{
   const h=host();await h.cache.load(T,T+150*STEP,()=>true);h.time(STEP);let calls=0;
-  const c=new EquityHistoryCache({...h.options,fetch:async()=>{calls++;return new Response("busy",{status:429});}});c.configure(context,"owner");
+  const c=new EquityHistoryCache({...h.options,busyDelay:0,fetch:async()=>{calls++;return new Response("busy",{status:429});}});c.configure(context,"owner");
   await c.load(T,T+151*STEP,()=>true);assert.equal(c.getSnapshot().points.length,150);assert.ok(c.getSnapshot().error);
-  for(let i=0;i<10;i++)await c.load(T,T+151*STEP,()=>true);assert.equal(calls,1);
+  for(let i=0;i<10;i++)await c.load(T,T+151*STEP,()=>true);assert.equal(calls,4);
 });
 test("expired authorization hides projection without erasing history needed after reauthentication",async()=>{
   const h=host();await h.cache.load(T,T+150*STEP,()=>true);h.time(STEP);
