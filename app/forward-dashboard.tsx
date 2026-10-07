@@ -101,7 +101,13 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
         {paperTab==="archive"&&<ArchivePagination page={archive.page} pages={archive.pages} onPage={setPaperPage}/>}</section>}
     </>}
 
-    {tab==="journal"&&<><section className="fr-section"><div className="fr-section-head"><h2>研究快照</h2></div>
+    {tab==="journal"&&<><section className="fr-section"><div className="fr-section-head"><h2>市场原数</h2></div>
+      <p className="fr-note">{(data as {observationTape?:{sentence?:string;lines?:string[]}}|null)?.observationTape?.sentence??"这一拍的原数还没有。"}</p>
+      {((data as {observationTape?:{lines?:string[]}}|null)?.observationTape?.lines??[]).map(line=><p key={line} className="fr-note">{line}</p>)}
+    </section>
+      <section className="fr-section"><div className="fr-section-head"><h2>确认是真是假</h2></div>
+      <p className="fr-note">{(data as {confirmationReality?:{sentence?:string}}|null)?.confirmationReality?.sentence??"还没有足够的已平仓确认。"}</p></section>
+      <section className="fr-section"><div className="fr-section-head"><h2>研究快照</h2></div>
       <button className="fr-button" onClick={exportSnapshot} disabled={exporting}>{exporting?"正在导出…":"导出研究快照 ↗"}</button>{exportStatus&&<p className="fr-note">{exportStatus}</p>}</section>
       <section className="fr-section"><div className="fr-section-head"><h2>运行记录</h2><span>{data?.events.length??0} 条</span></div>
         {(data?.events.length??0)>0?<div className="fr-journal">{data!.events.slice(0,80).map(e=><article key={e.id}><time>{time(e.at)}</time><div><b>{e.kind}</b><p>{e.reason}</p></div></article>)}</div>:<Empty title="暂无运行记录"/>}</section></>}

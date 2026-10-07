@@ -4,6 +4,7 @@ import type {ReviewJournal, TradeReview} from './review-trace.ts';
 import {LIVE_REVIEW_VERSION,compareLiveReview,type LiveReview} from './live-review.ts';
 import {inverseLossResearchView} from './inverse-loss-research.ts';
 import {inverseSoftLossReview,type InverseSourceMark} from './inverse-soft-loss-review.ts';
+import {confirmationRealityView} from './confirmation-reality.ts';
 
 export const REVIEW_SNAPSHOT_VERSION='market-intelligence-review-v2';
 const ARCHIVE_PREFIX='forward-relations:v1:archive:';
@@ -174,6 +175,7 @@ export function finalizeReviewSnapshot(s:ReviewSnapshot):ReviewSnapshot{
   const closed=s.trades.filter(t=>t.status==='CLOSED'&&t.openedAt>=s.meta.accountStartedAt),open=s.trades.filter(t=>t.status==='OPEN');
   s.research.inverseLossExit=inverseLossResearchView(s.trades);
   s.research.inverseSoftLossExit=inverseSoftLossReview(s.trades,Array.isArray(s.research.inverseSourceMarks)?s.research.inverseSourceMarks as InverseSourceMark[]:[],s.meta.exportedAt);
+  s.research.confirmationReality=confirmationRealityView(s.trades,s.meta.exportedAt);
   s.coverage.includedClosed=closed.length;s.coverage.missingClosed=Math.max(0,s.coverage.expectedClosed-closed.length);
   s.coverage.complete=s.coverage.missingClosed===0&&closed.length===s.coverage.expectedClosed&&s.coverage.conflictingTradeIds.length===0;
   const traceMissing=closed.filter(t=>!t.review?.terminal&&!t.inverseCopy?.sourceClosedAt),

@@ -47,6 +47,8 @@ import { evaluateRegimePortfolio, initialRegimePortfolio, normalizeRegimePortfol
 import type { PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
 import {advanceShadowInverse} from '../lib/shadow-inverse.ts';
 import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
+import {confirmationRealityView} from '../lib/confirmation-reality.ts';
+import {observationReading} from '../lib/observation-tape.ts';
 import { ADAPTIVE_ENGINE_VERSION, FORWARD_EXECUTION_BBO_CAP, FORWARD_MINUTE_CONFIRMATION_CAP, closeForwardForReset,
   forwardSummary, forwardEquity, freshQuote, forwardUrgentMinuteSymbols, forwardUrgentQuoteSymbols, forwardWatchSymbols,
   resetForwardAccountPreservingLearning, BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
@@ -1033,6 +1035,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private forwardView(now = Date.now()) {
     return this.forwardState ? { ...forwardSummary(this.forwardState, this.regimeQuotes(now), now),
+      confirmationReality: confirmationRealityView([...this.forwardState.positions, ...this.forwardState.history], now),
+      observationTape: this.forwardState.extremumRegime
+        ? observationReading(this.forwardState.extremumRegime, (this.shadowResearch?.market??[]).map(row=>row.tape).filter((row):row is NonNullable<typeof row>=>!!row))
+        : null,
       liveMirror: this.liveMirrorView(),
       storage: { ...this.forwardState.storage, error: this.forwardError } }
       : { version: FORWARD_VERSION, mode: "RECOVERY_REQUIRED", liveEligible: false, storage: { error: this.forwardError } };

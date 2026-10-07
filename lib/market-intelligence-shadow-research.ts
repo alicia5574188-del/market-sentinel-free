@@ -1,6 +1,7 @@
 import { entryResponseWindowMs } from "./market-intelligence-entry-response.ts";
 import { MARKET_INTELLIGENCE_VERSION, type MarketIntelligenceState } from "./market-intelligence-engine.ts";
 import { PAPER_COST, type Candle, type ForwardState, type Quote, type Trade } from "./forward-relations.ts";
+import { observationTape, type ObservationTape } from "./observation-tape.ts";
 
 export const SHADOW_RESEARCH_VERSION="market-intelligence-shadow-research-v1";
 export const SHADOW_RESPONSE_QUALITY_VERSION="shadow-response-quality-v2";
@@ -31,6 +32,7 @@ export type MarketGeometrySnapshot={
   at:number;label:ShadowGeometryLabel;macro:string;major:string;short:string;shortPhase:string;transitionDirection:string;transitionStage:string|null;
   breadth3:number|null;breadth12:number|null;breadthSlope:number|null;dispersion:number|null;synchrony:number|null;residualBalance:number|null;
   leaderPersistence:number|null;venuePressure:number|null;leadershipRotation:boolean;summary:string;rolling?:RollingGeometryState|null;
+  tape?:ObservationTape;
 };
 export type EntryLocationWindow={
   minutes:number;bars:number;low:number;high:number;rangeRate:number;rangePosition:number;sidePosition:number;
@@ -128,7 +130,8 @@ function marketSnapshot(s:MarketIntelligenceState):MarketGeometrySnapshot{
     shortPhase:s.narrative.short.phase,transitionDirection:s.narrative.transition.direction,transitionStage:s.narrative.transition.stage??null,
     breadth3:i?.breadth3??null,breadth12:i?.breadth12??null,breadthSlope:i?.breadthSlope??null,dispersion:i?.dispersion??null,
     synchrony:i?.synchrony??null,residualBalance:i?.residualBalance??null,leaderPersistence:i?.leaderPersistence??null,
-    venuePressure:i?.venuePressure??null,leadershipRotation:e.some(x=>x.type==="LEADERSHIP_ROTATION"),summary:s.narrative.summary};
+    venuePressure:i?.venuePressure??null,leadershipRotation:e.some(x=>x.type==="LEADERSHIP_ROTATION"),summary:s.narrative.summary,
+    tape:observationTape(s)};
 }
 function fallbackNarrativeAt(s:MarketIntelligenceState,at:number):MarketGeometrySnapshot|null{
   const row=[...(s.history??[])].filter(x=>x.at<=at).sort((a,b)=>b.at-a.at)[0];if(!row)return null;

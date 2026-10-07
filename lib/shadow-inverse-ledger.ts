@@ -1,8 +1,9 @@
 /** Passive inverse PAPER accounting. One early inverse exit: floating gross
- * worse than 5 USDT while the source hold is already soft. No other independent
- * entry, size, or profit rule. */
+ * worse than 5 USDT while the source hold is already soft. New copies pause
+ * only while confirmation-reality says the fresh direction has turned real. */
 import type {ForwardState,Trade,Quote,AuditEvent} from './forward-relations.ts';
 import {inversePaidFeeView} from './paid-fee-view.ts';
+import {inverseEntryHalted} from './confirmation-reality.ts';
 import {SHADOW_FEE_RATE,INVERSE_COST,INVERSE_FEE_POLICY,LIVE_EXECUTION_GAP_RATE,LIVE_EXECUTION_GAP_POLICY,recordedInverseFeeRate,recordedSourceFeeRate,type InverseFeeStamp} from './inverse-fee.ts';
 import {FIXED_ALLOCATION_EQUITY,FIXED_ALLOCATION_POLICY} from './fixed-allocation.ts';
 import type {InverseLossResearch} from './inverse-loss-research.ts';
@@ -42,7 +43,7 @@ export type InverseTrial={version:typeof SHADOW_INVERSE_VERSION;sourceBuild:type
   accountingMode?:typeof MIRROR_ACCOUNTING_MODE;reconciledAt?:number;
   initialComparisonEquity:number;legacyIds:string[];source:ShadowCapsule;totals:InverseTotals;
   curve:{at:number;source:number;inverse:number;theoretical:number}[];droppedCurvePoints:number;lastSourceRevision:number;
-  comparisonFeesAligned?:'both-live-5bp-v1';
+  comparisonFeesAligned?:'both-live-5bp-v1';entryHaltSkipped?:string[];
   swings?:EquitySwing[];swingArm?:{source?:SwingArm;inverse?:SwingArm}};
 export type EquitySwing={at:number;book:'source'|'inverse';kind:'PEAK'|'TROUGH';equity:number};
 export type SwingArm={at:number;equity:number;side:'FLAT'|'HIGH'|'LOW'};
@@ -196,6 +197,10 @@ export function applyInverseSoftLossExits(state:ForwardState,now:number){
 export function applyInverseSourceTrade(state:ForwardState,source:Trade,qIn:Quote|undefined,now:number,manualReset=false){
   const trial=state.inverseTrial;if(!trial)throw new Error('反向账本尚未初始化');
   if(source.openedAt<trial.cutoverAt||trial.legacyIds.includes(source.id))return;
+  if(trial.entryHaltSkipped?.includes(source.id)){
+    if(source.status==='CLOSED')trial.entryHaltSkipped=trial.entryHaltSkipped.filter(id=>id!==source.id);
+    return;
+  }
   const id=inverseId(source.id);let t=state.positions.find(x=>x.id===id)??state.history.find(x=>x.id===id);
   if(t?.status==='CLOSED'){
     if(earlyLoss(t)){bookDetachedSource(state,t,source);return;}
@@ -206,6 +211,17 @@ export function applyInverseSourceTrade(state:ForwardState,source:Trade,qIn:Quot
   const resetFresh=!!qIn&&qIn.fresh&&qIn.observedAt<=now&&now-qIn.observedAt<=10000&&qIn.bestBid>0&&qIn.bestAsk>=qIn.bestBid;
   if(manualReset&&(!t||source.exitReason!=='ACCOUNT_RESET'||reductions.length!==already))throw new Error('手动重置不能补造影子历史成交');
   if(!t){
+    if(inverseEntryHalted([...state.positions,...state.history],now).halted){
+      if(source.status==='OPEN'){
+        const skipped=trial.entryHaltSkipped??[];
+        if(!skipped.includes(source.id))skipped.push(source.id);
+        trial.entryHaltSkipped=skipped.slice(-200);
+        state.revision++;state.events.unshift({id:`a${state.startedAt}-${state.revision}`,at:now,kind:'ENTRY',subject:source.id,
+          reason:`确认已变真，反向停开 ${source.symbol}`});
+        state.events=state.events.slice(0,160);
+      }
+      return;
+    }
     const side=source.side==='LONG'?'SHORT':'LONG',openSpread=bookSpread(qIn,now,source.entryPrice),
       price=executablePrice(source.entryPrice,openSpread,side==='LONG'),
       quantity=source.realization?.initialQuantity??source.quantity,contracts=source.realization?.initialContracts??source.contracts,
@@ -458,7 +474,7 @@ export function assertInverseTrial(state:ForwardState){
     ||t.totals.funding!==0||!(t.totals.spreadDrag>=0))
     throw new Error('影子金融状态损坏；保留原账户，不重置试验');
   for(const source of t.source.positions){
-    if(source.openedAt<t.cutoverAt||t.legacyIds.includes(source.id))continue;
+    if(source.openedAt<t.cutoverAt||t.legacyIds.includes(source.id)||t.entryHaltSkipped?.includes(source.id))continue;
     const mirror=state.positions.find(m=>m.inverseCopy?.sourceId===source.id);
     if(mirror){
       if(!same(mirror.contracts,source.contracts)||(!executableCopy(mirror)&&!same(mirror.entryPrice,mirror.inverseCopy!.sourceEntryPrice)))
