@@ -72,6 +72,7 @@ import { LIVE_TURNOVER_PREFIX, LIVE_TURNOVER_VERSION, initialTurnover, validateT
 import { LIVE_PARITY_VERSION, LIVE_PARITY_PREFIX, buildProportionalMirror, forwardMirrorSources, mirrorPositionRisk,
   sourceLifecycle, mirrorSourceFresh, mirrorCoverage, liveEntryDriftGuard,
   type MirrorSourceTrade, type MirrorReceipt, type MirrorBinding } from "../lib/live-parity.ts";
+import { makerFirstEntry, makerEntryTag, MakerStateUnknownError, LIVE_MAKER_ENTRY_POLICY, type MakerResult } from "../lib/live-maker-entry.ts";
 import {buildReviewSnapshot, readReviewArchivePage} from "../lib/research-snapshot.ts";
 import {liveExitPriceLimit} from '../lib/live-entry-price.ts';
 import {observeLiveAccount,type LiveAccountMark} from '../lib/live-account-view.ts';
@@ -3159,7 +3160,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             adverseEntryDriftRate:drift.adverse});
           entry.marketSubmittedAt=submittedAt;
           await this.saveCheckpoint(submittedAt,true);
-          const finalValidatedAt=Date.now(),submissionStillAllowed=()=>{
+          let finalValidatedAt=Date.now();const submissionStillAllowed=()=>{
             if(!this.runtime.live.requestedEnabled
               ||!sameLiveSession(activation,this.runtime.live.activation)
               ||!sourceAfterEnable(source,this.runtime.live.activation,this.forwardState?.startedAt??0)
@@ -3184,9 +3185,57 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           // Keep the current final local safety fence, but use the proven
           // 2026-09-20 REST transport after it passes. This guard runs after
           // signing and immediately before the one network submission.
-          entry.exchangeOrderId = await client.createEntry(intent,submissionStillAllowed);
-          entry.status = "OPEN";
-          const filled=await client.inspectEntry(entry.kind,symbol,entry.tag,entry.exchangeOrderId);
+          // Maker-first for inverse copies: rest at our own side for 2s, then the
+          // exact remainder goes to the existing IOC market order. Never skips.
+          let maker:MakerResult|null=null;
+          if(isInverseLiveReceipt(entry.parity)&&entry.kind==="MARKET"){
+            const totalText=String(intent.body.size).replace(/^-/,""),marketTag=entry.tag,makerTag=makerEntryTag(marketTag);
+            // Persist the maker identity first so any crash/recovery looks for
+            // the maker order, never re-sends a full market order on top of it.
+            entry.tag=makerTag;await this.saveCheckpoint(Date.now(),true);
+            try{
+              maker=await makerFirstEntry({placeMaker:(b,f)=>client.placeMakerEntry(b,f),
+                inspect:async id=>client.inspectEntry("MARKET",symbol,makerTag,id),cancel:id=>client.cancelOrder("MARKET",id)},
+                {symbol,side:entry.side,contractsText:totalText,bestBid:submitQuote.bestBid,bestAsk:submitQuote.bestAsk,
+                  tag:makerTag,beforeSend:submissionStillAllowed});
+            }catch(error){
+              if(error instanceof MakerStateUnknownError){entry.exchangeOrderId=entry.exchangeOrderId??null;throw error;}
+              if(error instanceof GateEntryCancelledError){entry.tag=marketTag;throw error;}
+              throw error;
+            }
+            entry.exchangeOrderId=maker.makerOrderId;
+            if(entry.parity)Object.assign(entry.parity,{makerEntryPolicy:LIVE_MAKER_ENTRY_POLICY,makerOrderId:maker.makerOrderId,
+              makerPrice:maker.makerPrice,makerFilledContracts:maker.filledContracts,makerFillPrice:maker.fillPrice,
+              makerRejected:maker.rejected,makerWaitedMs:maker.waitedMs});
+            await this.saveCheckpoint(Date.now(),true);
+            if(Number(maker.remainingText)>0){
+              intent.body={...intent.body,size:`${entry.side==="SHORT"?"-":""}${maker.remainingText}`};
+              entry.tag=marketTag;finalValidatedAt=Date.now();
+              if(!submissionStillAllowed()){
+                if(maker.filledContracts<=0)throw new GateEntryCancelledError("挂单等待期间源单或会话已变化，订单尚未发送");
+                // Source ended during the wait: keep the already-filled maker
+                // exposure as the entry; the source close follows through on it.
+                entry.tag=makerTag;maker={...maker,remainingText:"0"};
+              }
+            }
+          }
+          let filled:GateLiveOrder|null;
+          if(maker&&Number(maker.remainingText)<=0){
+            entry.status="OPEN";
+            filled=await client.inspectEntry(entry.kind,symbol,entry.tag,entry.exchangeOrderId);
+          }else{
+            // Remainder after a partial maker fill must still be sent: the source
+            // is live and live may never take fewer orders than paper.
+            entry.exchangeOrderId = await client.createEntry(intent,submissionStillAllowed);
+            entry.status = "OPEN";
+            filled=await client.inspectEntry(entry.kind,symbol,entry.tag,entry.exchangeOrderId);
+            if(maker&&maker.filledContracts>0&&filled){
+              const mq=maker.filledContracts,mp=maker.fillPrice??maker.makerPrice,
+                qq=Math.max(0,Math.abs(Number(filled.size))-Math.abs(Number(filled.left))),qp=Number(filled.fill_price);
+              const avg=qq>0&&qp>0?(mq*mp+qq*qp)/(mq+qq):mp;
+              filled={...filled,fill_price:avg,size:Number(maker.remainingText)+mq,left:Math.abs(Number(filled.left))||0,finish_as:"filled"};
+            }
+          }
           const fillPrice=Number(filled?.fill_price);
           if(entry.parity&&Number.isFinite(fillPrice)&&fillPrice>0){
             const actualDrift=liveEntryDriftGuard(source,fillPrice);
