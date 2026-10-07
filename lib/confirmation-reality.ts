@@ -97,7 +97,7 @@ export function confirmationRealityView(trades:ConfirmationRealityTrade[],now=Da
   const entryHalted=inverseEntryHalted(trades,now).halted;
   const state:ConfirmationReality['state']=realNow?'REAL_MAJORITY':stillCertain?'CERTAINTY':(recentRealShare??1)<=0.30?'FAKE_MAJORITY':'MIXED';
   const sentence=entryHalted
-    ?`条件持续力已从 ${pct(certainty.peakPersistence)} 的高位掉下来，最近 ${recent.length} 笔确认里 ${recent.filter(r=>r.kind==='REAL').length} 笔方向是真的。反向停止开新单。已经开着的单照旧出场。`
+    ?`条件持续力已从 ${pct(certainty.peakPersistence)} 的高位掉下来，最近 ${recent.length} 笔确认里 ${recent.filter(r=>r.kind==='REAL').length} 笔方向是真的。不再反着做，新单顺着确认方向开。已经开着的反向照旧出场。`
     :state==='REAL_MAJORITY'
     ?`最近 ${recent.length} 笔确认里，${recent.filter(r=>r.kind==='REAL').length} 笔方向是真的。这次前面没有「持续力先升到高位再掉下来」，不停开。`
     :state==='CERTAINTY'
@@ -135,5 +135,5 @@ export function inverseEntryHalted(trades:ConfirmationRealityTrade[],now=Date.no
       if(halted&&real<=0.30){halted=false;peak=null;rolled=false;}
     }
   }
-  return {halted,reason:halted?'条件持续力已从高位回落，最近确认多半是真方向，反向停止开新单。':''};
+  return {halted,reason:halted?'条件持续力已从高位回落，最近确认多半是真方向，新单改为顺着确认方向开。':''};
 }

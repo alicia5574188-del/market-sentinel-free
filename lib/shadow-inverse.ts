@@ -53,7 +53,7 @@ export function advanceShadowInverse(input:Parameters<typeof advanceBaseline>[0]
   s.daily=s.daily.slice(-45);
   const halt=inverseEntryHalted([...s.positions,...s.history],input.now);
   s.latestReason=halt.halted
-    ?`${halt.reason}已经开着的单照旧出场。已配对${trial.totals.opened}笔，旧持仓${s.positions.filter(t=>!t.inverseCopy).length}笔单独收尾。`
+    ?`${halt.reason}已经开着的反向照旧出场。已配对${trial.totals.opened}笔。`
     :`影子按2b4fd60f独立决策；模拟只反向跟随。已配对${trial.totals.opened}笔，旧持仓${s.positions.filter(t=>!t.inverseCopy).length}笔单独收尾。`;
   assertInverseTrial(s);
   return{state:s,changed:activated||source.changed||softLoss||beforeFinancial!==JSON.stringify([s.balance,s.resolved,s.positions.map(t=>[t.id,t.stopPrice,t.contracts])]),

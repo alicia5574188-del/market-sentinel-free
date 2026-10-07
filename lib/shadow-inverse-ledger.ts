@@ -23,6 +23,8 @@ export type InverseCopy={version:typeof SHADOW_INVERSE_VERSION;sourceBuild:typeo
   cutoverAt:number;sourceSide:'LONG'|'SHORT';sourceEntryPrice:number;sourceStopPrice:number;sourceTargetPrice:number|null;
   sourceEntryPlan:Trade['entryContext'];sourceExitReason:string|null;sourceExitAudit?:Trade['exitAudit'];
   sourceRemainingContracts:number;fills:InverseFill[];sourceClosedAt:number|null;independentDecisions:false;liveExecution:'PAPER_ONLY';
+  /** WITH_SOURCE: confirmation has turned real, so this copy takes the shadow's own side. Absent means the usual opposite copy. */
+  alignment?:'AGAINST_SOURCE'|'WITH_SOURCE';
   detachedRemainingQuantity?:number;detachedRemainingContracts?:number;detachedSourceSequence?:number;detachedSourceClosed?:boolean;
   /** Research only: quantity/notional the cut inverse would have closed at had it kept following the source. */
   detachedHoldQuantity?:number;detachedHoldNotional?:number;
@@ -211,18 +213,9 @@ export function applyInverseSourceTrade(state:ForwardState,source:Trade,qIn:Quot
   const resetFresh=!!qIn&&qIn.fresh&&qIn.observedAt<=now&&now-qIn.observedAt<=10000&&qIn.bestBid>0&&qIn.bestAsk>=qIn.bestBid;
   if(manualReset&&(!t||source.exitReason!=='ACCOUNT_RESET'||reductions.length!==already))throw new Error('手动重置不能补造影子历史成交');
   if(!t){
-    if(inverseEntryHalted([...state.positions,...state.history],now).halted){
-      if(source.status==='OPEN'){
-        const skipped=trial.entryHaltSkipped??[];
-        if(!skipped.includes(source.id))skipped.push(source.id);
-        trial.entryHaltSkipped=skipped.slice(-200);
-        state.revision++;state.events.unshift({id:`a${state.startedAt}-${state.revision}`,at:now,kind:'ENTRY',subject:source.id,
-          reason:`确认已变真，反向停开 ${source.symbol}`});
-        state.events=state.events.slice(0,160);
-      }
-      return;
-    }
-    const side=source.side==='LONG'?'SHORT':'LONG',openSpread=bookSpread(qIn,now,source.entryPrice),
+    const withSource=source.status==='OPEN'&&inverseEntryHalted([...state.positions,...state.history],now).halted;
+    if(source.status!=='OPEN'&&inverseEntryHalted([...state.positions,...state.history],now).halted)return;
+    const side=withSource?source.side:source.side==='LONG'?'SHORT':'LONG',openSpread=bookSpread(qIn,now,source.entryPrice),
       price=executablePrice(source.entryPrice,openSpread,side==='LONG'),
       quantity=source.realization?.initialQuantity??source.quantity,contracts=source.realization?.initialContracts??source.contracts,
       context=source.entryContext?structuredClone(source.entryContext):undefined;
@@ -233,8 +226,12 @@ export function applyInverseSourceTrade(state:ForwardState,source:Trade,qIn:Quot
         'remainingSpaceRate','pullbackRiskRate','edgeRatio','expectedHoldMinutes','marketFit','regionId','portfolioRiskCharge']);
       for(const k of Object.keys(context))if(!keep.has(k))delete (context as unknown as Record<string,unknown>)[k];
       context.side=side;context.strategyVersion=SHADOW_INVERSE_VERSION;
-      context.reason=`反向复制影子 ${source.id}；原方向${source.side==='LONG'?'多':'空'}，进出场只由影子决定。`;
-      context.thesisId=id;context.thesisSummary=context.reason;context.invalidationSummary='反向浮亏超过5U且影子持仓已软时提前平仓；其余仍只跟随影子退出。';}
+      context.reason=withSource
+        ?`确认已变真，顺着影子 ${source.id} 做${side==='LONG'?'多':'空'}。`
+        :`反向复制影子 ${source.id}；原方向${source.side==='LONG'?'多':'空'}，进出场只由影子决定。`;
+      context.thesisId=id;context.thesisSummary=context.reason;context.invalidationSummary=withSource
+        ?'确认仍为真时顺着影子进出；浮亏超过5U且影子已软、或浮亏到10U，提前平掉这一笔。'
+        :'反向浮亏超过5U且影子持仓已软时提前平仓；其余仍只跟随影子退出。';}
     t={...structuredClone(source),id,side,status:'OPEN',openedAt:now,closedAt:null,entryPrice:price,exitPrice:null,
       quantity,contracts,notional:quantity*price,margin:quantity*price/source.leverage,entryFee:quantity*price*INVERSE_COST.feeRate,
       exitFee:0,fundingAllowance:0,grossPnl:null,netPnl:null,exitReason:null,lastPrice:price,lastQuoteAt:source.lastQuoteAt,
@@ -244,12 +241,13 @@ export function applyInverseSourceTrade(state:ForwardState,source:Trade,qIn:Quot
       inverseCopy:{version:SHADOW_INVERSE_VERSION,sourceBuild:SHADOW_BASELINE_BUILD,sourceId:source.id,cutoverAt:trial.cutoverAt,
         sourceSide:source.side,sourceEntryPrice:source.entryPrice,sourceStopPrice:source.stopPrice,
         sourceTargetPrice:source.entryContext?.winnerPlan?.target??null,sourceEntryPlan:structuredClone(source.entryContext),
-        sourceExitReason:null,sourceRemainingContracts:contracts,sourceClosedAt:null,fills:[],independentDecisions:false,liveExecution:'PAPER_ONLY',pricePolicy:INVERSE_PRICE_POLICY}};
+        sourceExitReason:null,sourceRemainingContracts:contracts,sourceClosedAt:null,fills:[],independentDecisions:false,liveExecution:'PAPER_ONLY',pricePolicy:INVERSE_PRICE_POLICY,
+        alignment:withSource?'WITH_SOURCE':'AGAINST_SOURCE'}};
     delete t.review;delete t.winnerManagement;delete t.positionIntelligence;delete t.realization;delete t.holdValue;
     delete t.liquidityLifecycle;delete t.profitLifecycle;delete t.profitProtection;delete t.profitProtectionMigration;delete t.exitAudit;delete t.exitPlan;
     addFill(state,t,source,'OPEN',quantity,contracts,source.entryPrice,source.openedAt,source.review?.timeline[0]?.quoteAt??source.lastQuoteAt,now,source.entryFee,undefined,openSpread);
     if(!same(frozenFeeOf(t.inverseCopy!.fills[0]!),source.entryFee))throw new Error('影子入场费用不符合固定源账本');
-    trial.totals.opened++;state.positions.push(t);event(state,now,'ENTRY',t,`${source.symbol} 影子反向开仓`);
+    trial.totals.opened++;state.positions.push(t);event(state,now,'ENTRY',t,withSource?`${source.symbol} 确认已变真，顺向开仓`:`${source.symbol} 影子反向开仓`);
   }
   for(const sf of reductions.slice(already)){
     if(sf.quantity<=0||sf.quantity>=t.quantity||sf.contracts<=0||sf.contracts>=t.contracts)throw new Error('反向减仓数量与父单不一致');
@@ -425,7 +423,9 @@ export function migrateInverseSamePrice(state:ForwardState,now:number){
 
 export function assertInverseTrade(t:Trade){
   const i=t.inverseCopy;if(!i)return;
-  if(i.version!==SHADOW_INVERSE_VERSION||i.sourceBuild!==SHADOW_BASELINE_BUILD||t.id!==inverseId(i.sourceId)||t.side===i.sourceSide
+  const withSource=i.alignment==='WITH_SOURCE';
+  if(i.version!==SHADOW_INVERSE_VERSION||i.sourceBuild!==SHADOW_BASELINE_BUILD||t.id!==inverseId(i.sourceId)
+    ||(withSource?t.side!==i.sourceSide:t.side===i.sourceSide)
     ||i.independentDecisions!==false||i.liveExecution!=='PAPER_ONLY'||!Array.isArray(i.fills)||i.fills.length<1||i.fills.length>4
     ||i.fills.some((f,n)=>f.sequence!==n||![f.sourceAt,f.appliedAt,f.quoteAt,f.sourcePrice,f.price,f.quantity,f.contracts,f.sourceGross,f.gross,f.fee,f.sourceFee,f.funding,f.sourceFunding,f.spreadDrag].every(finite)
       ||f.price<=0||f.sourcePrice<=0||f.quantity<=0||f.contracts<=0||f.fee<0||f.funding!==0||f.appliedAt<f.sourceAt||f.quoteAt>f.appliedAt
@@ -486,7 +486,8 @@ export function assertInverseTrial(state:ForwardState){
   }
   for(const mirror of state.positions){if(!mirror.inverseCopy)continue;
     const source=t.source.positions.find(s=>s.id===mirror.inverseCopy!.sourceId);
-    if(!source||source.side===mirror.side||!same(source.quantity,mirror.quantity))throw new Error('反向持仓失去对应影子来源');
+    const withSource=mirror.inverseCopy.alignment==='WITH_SOURCE';
+    if(!source||(withSource?source.side!==mirror.side:source.side===mirror.side)||!same(source.quantity,mirror.quantity))throw new Error('反向持仓失去对应影子来源');
     assertInverseTrade(mirror);
   }
   for(const mirror of state.history)if(mirror.inverseCopy)assertInverseTrade(mirror);

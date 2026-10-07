@@ -41,10 +41,10 @@ test('a real-direction halt skips a new inverse and still lets an open inverse f
   assert.ok(s.positions.some(t=>t.id===inverseId(held.id)));
   for(let i=0;i<12;i++)plant('real-'+i,T+100000+i,0.58,'NORMAL',102);
   const blocked=sourceTrade('blocked',T+300000,0.58,'NORMAL');
-  applyInverseSourceTrade(s,blocked,quote(T+300000),T+300000);
-  assert.equal(s.positions.some(t=>t.id===inverseId(blocked.id)),false);
-  assert.ok(s.inverseTrial!.entryHaltSkipped?.includes(blocked.id));
-  source.positions.push(blocked);
+  source.positions.push(blocked);applyInverseSourceTrade(s,blocked,quote(T+300000),T+300000);
+  const follow=s.positions.find(t=>t.id===inverseId(blocked.id));
+  assert.ok(follow);assert.equal(follow!.side,'LONG');assert.equal(follow!.inverseCopy?.alignment,'WITH_SOURCE');
+  assert.equal(s.inverseTrial!.entryHaltSkipped?.includes(blocked.id),undefined);
   s.inverseTrial!.source=shadowCapsule(source);s.inverseTrial!.lastSourceRevision=source.revision;
   assert.doesNotThrow(()=>assertInverseTrial(s));
   closeSource(held,99,T+400000);applyInverseSourceTrade(s,held,quote(T+400000),T+400000);

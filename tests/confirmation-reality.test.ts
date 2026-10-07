@@ -19,7 +19,7 @@ test('certainty then a rollover stops new inverse entries',()=>{
   assert.equal(view.entryHalted,true);
   assert.equal(view.certainty.seen,true);
   assert.equal(view.rollover.seen,true);
-  assert.match(view.sentence,/停止开新单/);
+  assert.match(view.sentence,/顺着确认方向开/);
 });
 test('ordinary fake confirmations keep opening',()=>{
   const trades=Array.from({length:12},(_,i)=>trade(10+i,i===3?'REAL':'FAKE',.58,'NORMAL'));
