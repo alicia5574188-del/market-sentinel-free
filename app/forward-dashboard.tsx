@@ -193,7 +193,7 @@ function InversePanel({data,onSelect}:{data:View|null;onSelect:(ledger:"inverse"
     {v.liveCostEstimate&&<p className="fr-paid-note" data-testid="live-cost-estimate">按实盘实测成本估算：每笔成交多扣 {(v.liveCostEstimate.gapRate*100).toFixed(2)}% 后，反向净额约 {signed(v.liveCostEstimate.estimatedNet)} U（额外成本合计 {fmt(v.liveCostEstimate.executionGap,2)} U）。仅估算，不改模拟账。</p>}
     {!!v.paidCost?.stalePairs&&<p className="fr-paid-note">{v.paidCost.stalePairs} 组报价待更新，净额使用各自最后记录；缺失价格显示 —。</p>}
     <details><summary>同价镜像对照曲线</summary><p>虚线：影子 · 实线：反向模拟 · 同一成交价、同一当前价，只反方向；净额只扣已发生手续费。共同起点 {fmt(v.initialEquity)} U</p>
-      {v.paidCost&&<p className="fr-paid-note">毛盈亏镜像校验 {fmt(v.paidCost.reconciliation.grossMirrorResidual,6)} U（应为 0） · 两边净额合计 {fmt(v.paidCost.reconciliation.netSum,4)} U ＝ −已扣手续费合计 {fmt(v.paidCost.reconciliation.paidFees,4)} U</p>}
+      {v.paidCost&&<p className="fr-paid-note">毛盈亏镜像校验 {fmt(v.paidCost.reconciliation.grossMirrorResidual,6)} U（旧单应为 0；新单为按真实盘口多付的价差） · 两边净额合计 {fmt(v.paidCost.reconciliation.netSum,4)} U ＝ −已扣手续费合计 {fmt(v.paidCost.reconciliation.paidFees,4)} U</p>}
       <p>切换 {time(v.cutoverAt)} · 旧持仓 {v.legacyOpen} 笔单独收尾</p>
       <svg viewBox="0 0 400 185" width="100%" role="img" aria-label="切换后配对订单的影子与反向模拟对照，缺失处断开">
         {segments.map((rows,k)=><g key={k}><polyline fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray="5 4" points={rows.map(p=>`${x(p.at)},${y(p.source)}`).join(' ')}/>

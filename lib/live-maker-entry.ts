@@ -8,6 +8,8 @@ import type { GateLiveOrder } from "./gate-live.ts";
  * Any state that cannot be confirmed throws, so the caller must NOT send a
  * market order on top of an unknown maker exposure. */
 export const LIVE_MAKER_ENTRY_POLICY = "maker-first-2s-then-market-v1";
+/** Entry maker wait is off: waiting lets the price run away from the inverse leg. Exits may still use maker-first. */
+export const LIVE_MAKER_ENTRY_ENABLED=false;
 export const LIVE_MAKER_WAIT_MS = 2_000;
 
 export type MakerClient = {

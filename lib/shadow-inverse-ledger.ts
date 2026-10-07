@@ -24,7 +24,9 @@ export type InverseCopy={version:typeof SHADOW_INVERSE_VERSION;sourceBuild:typeo
   sourceRemainingContracts:number;fills:InverseFill[];sourceClosedAt:number|null;independentDecisions:false;liveExecution:'PAPER_ONLY';
   detachedRemainingQuantity?:number;detachedRemainingContracts?:number;detachedSourceSequence?:number;detachedSourceClosed?:boolean;
   /** Research only: quantity/notional the cut inverse would have closed at had it kept following the source. */
-  detachedHoldQuantity?:number;detachedHoldNotional?:number};
+  detachedHoldQuantity?:number;detachedHoldNotional?:number;
+  /** Set on copies born after the executable-price cutover: inverse fills at its own executable book side, not the source price. */
+  pricePolicy?:typeof INVERSE_PRICE_POLICY};
 
 /** Market memory is shared once. Every wallet/history-dependent variable is
  * instead supplied by the source's own capsule, never the inverse wallet. */
@@ -47,6 +49,18 @@ const finite=(n:unknown):n is number=>typeof n==='number'&&Number.isFinite(n);
 const same=(a:number,b:number)=>finite(a)&&finite(b)&&Math.abs(a-b)<=1e-7*Math.max(1,Math.abs(a),Math.abs(b));
 export const inverseId=(sourceId:string)=>`iv-${sourceId}`;
 export const INVERSE_SOFT_LOSS_GROSS=5;
+/** New inverse copies fill where a real order can: buy at the ask, sell at the bid.
+ * The source fills one side of the book, so the inverse pays the observed spread on every fill.
+ * Without a fresh book the measured live gap is used instead. Older copies keep same-price accounting. */
+export const INVERSE_PRICE_POLICY='executable-book-v1' as const;
+export const executableCopy=(t:Trade)=>t.inverseCopy?.pricePolicy===INVERSE_PRICE_POLICY;
+export function bookSpread(q:Quote|undefined,now:number,ref:number){
+  return q&&q.fresh&&q.bestBid>0&&q.bestAsk>=q.bestBid&&q.observedAt<=now&&now-q.observedAt<=10_000?q.bestAsk-q.bestBid:ref*LIVE_EXECUTION_GAP_RATE;
+}
+export function executablePrice(sourcePrice:number,spread:number,buy:boolean){
+  const s=finite(spread)&&spread>0?Math.min(spread,sourcePrice*.05):0;
+  return buy?sourcePrice+s:sourcePrice-s;
+}
 /** Hard backstop: cut the inverse leg at this gross floating loss even if the shadow is still strong. */
 export const INVERSE_HARD_LOSS_GROSS=10;
 const earlyLoss=(t:Trade)=>!!t.inverseCopy?.fills.some(f=>f.earlySoftLoss);
@@ -82,15 +96,17 @@ function comparisonSourceFee(quantity:number,price:number,frozenFee:number){
 }
 const frozenFeeOf=(f:InverseFill)=>f.frozenSourceFee??f.sourceFee;
 function addFill(state:ForwardState,t:Trade,source:Trade,kind:InverseFill['kind'],quantity:number,contracts:number,
-  sourcePrice:number,sourceAt:number,sourceQuoteAt:number,now:number,chargedSourceFee:number,administrative?:InverseFill['administrative']){
+  sourcePrice:number,sourceAt:number,sourceQuoteAt:number,now:number,chargedSourceFee:number,administrative?:InverseFill['administrative'],spread=0){
   if(sourceAt!==now)throw new Error('反向复制禁止用当前事件伪造历史成交');
   if(!finite(sourcePrice)||sourcePrice<=0||!finite(sourceQuoteAt)||sourceQuoteAt>sourceAt)throw new Error('影子成交回执无效');
-  const i=t.inverseCopy!,isOpen=kind==='OPEN',price=sourcePrice,
-    sourceGross=isOpen?0:dir(source.side)*quantity*(sourcePrice-source.entryPrice),gross=sourceGross===0?0:-sourceGross,
-    sourceFee=comparisonSourceFee(quantity,price,chargedSourceFee),fee=quantity*price*INVERSE_COST.feeRate,
+  const i=t.inverseCopy!,isOpen=kind==='OPEN',exec=executableCopy(t),
+    price=exec?executablePrice(sourcePrice,spread,isOpen?t.side==='LONG':t.side==='SHORT'):sourcePrice,
+    sourceGross=isOpen?0:dir(source.side)*quantity*(sourcePrice-source.entryPrice),
+    gross=isOpen?0:exec?dir(t.side)*quantity*(price-t.entryPrice):sourceGross===0?0:-sourceGross,
+    sourceFee=comparisonSourceFee(quantity,sourcePrice,chargedSourceFee),fee=quantity*price*INVERSE_COST.feeRate,
     days=Math.max(0,sourceAt-source.openedAt)/86_400_000,
     sourceFunding=isOpen?0:quantity*source.entryPrice*SOURCE_FUNDING_ALLOWANCE_PER_DAY*days,
-    funding=0,spreadDrag=0,
+    funding=0,spreadDrag=quantity*Math.abs(price-sourcePrice),
     fill:InverseFill={sequence:i.fills.length,kind,sourceAt,appliedAt:now,sourceQuoteAt,quoteAt:sourceQuoteAt,
       sourcePrice,price,quantity,contracts,sourceGross,gross,sourceFee,fee,sourceFunding,funding,spreadDrag,
       feePolicy:INVERSE_FEE_POLICY,feeRate:INVERSE_COST.feeRate,sourceFeeRate:INVERSE_COST.feeRate,sourceFeePolicy:INVERSE_FEE_POLICY,
@@ -186,7 +202,8 @@ export function applyInverseSourceTrade(state:ForwardState,source:Trade,qIn:Quot
   const resetFresh=!!qIn&&qIn.fresh&&qIn.observedAt<=now&&now-qIn.observedAt<=10000&&qIn.bestBid>0&&qIn.bestAsk>=qIn.bestBid;
   if(manualReset&&(!t||source.exitReason!=='ACCOUNT_RESET'||reductions.length!==already))throw new Error('手动重置不能补造影子历史成交');
   if(!t){
-    const side=source.side==='LONG'?'SHORT':'LONG',price=source.entryPrice,
+    const side=source.side==='LONG'?'SHORT':'LONG',openSpread=bookSpread(qIn,now,source.entryPrice),
+      price=executablePrice(source.entryPrice,openSpread,side==='LONG'),
       quantity=source.realization?.initialQuantity??source.quantity,contracts=source.realization?.initialContracts??source.contracts,
       context=source.entryContext?structuredClone(source.entryContext):undefined;
     if(context){
@@ -207,16 +224,16 @@ export function applyInverseSourceTrade(state:ForwardState,source:Trade,qIn:Quot
       inverseCopy:{version:SHADOW_INVERSE_VERSION,sourceBuild:SHADOW_BASELINE_BUILD,sourceId:source.id,cutoverAt:trial.cutoverAt,
         sourceSide:source.side,sourceEntryPrice:source.entryPrice,sourceStopPrice:source.stopPrice,
         sourceTargetPrice:source.entryContext?.winnerPlan?.target??null,sourceEntryPlan:structuredClone(source.entryContext),
-        sourceExitReason:null,sourceRemainingContracts:contracts,sourceClosedAt:null,fills:[],independentDecisions:false,liveExecution:'PAPER_ONLY'}};
+        sourceExitReason:null,sourceRemainingContracts:contracts,sourceClosedAt:null,fills:[],independentDecisions:false,liveExecution:'PAPER_ONLY',pricePolicy:INVERSE_PRICE_POLICY}};
     delete t.review;delete t.winnerManagement;delete t.positionIntelligence;delete t.realization;delete t.holdValue;
     delete t.liquidityLifecycle;delete t.profitLifecycle;delete t.profitProtection;delete t.profitProtectionMigration;delete t.exitAudit;delete t.exitPlan;
-    addFill(state,t,source,'OPEN',quantity,contracts,source.entryPrice,source.openedAt,source.review?.timeline[0]?.quoteAt??source.lastQuoteAt,now,source.entryFee);
+    addFill(state,t,source,'OPEN',quantity,contracts,source.entryPrice,source.openedAt,source.review?.timeline[0]?.quoteAt??source.lastQuoteAt,now,source.entryFee,undefined,openSpread);
     if(!same(frozenFeeOf(t.inverseCopy!.fills[0]!),source.entryFee))throw new Error('影子入场费用不符合固定源账本');
     trial.totals.opened++;state.positions.push(t);event(state,now,'ENTRY',t,`${source.symbol} 影子反向开仓`);
   }
   for(const sf of reductions.slice(already)){
     if(sf.quantity<=0||sf.quantity>=t.quantity||sf.contracts<=0||sf.contracts>=t.contracts)throw new Error('反向减仓数量与父单不一致');
-    const f=addFill(state,t,source,'REDUCE',sf.quantity,sf.contracts,sf.price,sf.at,sf.quoteAt,now,sf.fee),
+    const f=addFill(state,t,source,'REDUCE',sf.quantity,sf.contracts,sf.price,sf.at,sf.quoteAt,now,sf.fee,undefined,bookSpread(qIn,now,sf.price)),
       r=t.realization??{version:'partial-realization-v1' as const,initialQuantity:t.quantity,initialContracts:t.contracts,
         initialNotional:t.notional,initialMargin:t.margin,initialRisk:t.plannedRisk,initialEntryFee:t.entryFee,gross:0,fees:0,funding:0,sequence:0,fills:[]};
     if(!same(f.sourceGross,sf.gross)||!same(frozenFeeOf(f),sf.fee)||!same(f.sourceFunding,sf.funding))throw new Error('影子减仓实际回执与配对数量费用不一致');
@@ -234,7 +251,7 @@ export function applyInverseSourceTrade(state:ForwardState,source:Trade,qIn:Quot
     const sq=source.exitAudit?.evidence?.quoteAt,
       f=addFill(state,t,source,'CLOSE',t.quantity,t.contracts,source.exitPrice!,source.closedAt!,finite(sq)?sq:source.lastQuoteAt,now,
         source.exitFee!-(source.realization?.fees??0),
-        manualReset?(resetFresh?'ACCOUNT_RESET_QUOTE':'ACCOUNT_RESET_SAVED_MARK'):undefined),r=t.realization;
+        manualReset?(resetFresh?'ACCOUNT_RESET_QUOTE':'ACCOUNT_RESET_SAVED_MARK'):undefined,bookSpread(qIn,now,source.exitPrice!)),r=t.realization;
     t.status='CLOSED';t.closedAt=now;t.exitPrice=f.price;t.lastPrice=f.price;t.lastQuoteAt=f.quoteAt;
     t.grossPnl=(r?.gross??0)+f.gross;t.exitFee=(r?.fees??0)+f.fee;t.fundingAllowance=0;
     t.netPnl=t.grossPnl-t.entryFee-t.exitFee;t.exitReason=manualReset?'ACCOUNT_RESET':'SHADOW_SOURCE_EXIT';
@@ -248,12 +265,13 @@ export function applyInverseSourceTrade(state:ForwardState,source:Trade,qIn:Quot
   }else if(!same(t.contracts,source.contracts)||!same(t.quantity,source.quantity))throw new Error('影子与反向剩余数量不一致');
   assertInverseTrade(t);
 }
-export function markInversePositions(state:ForwardState,_quotes:Record<string,Quote>,now:number){
+export function markInversePositions(state:ForwardState,quotes:Record<string,Quote>,now:number){
   const trial=state.inverseTrial;if(!trial)return;
   for(const t of state.positions){if(!t.inverseCopy)continue;
     const source=trial.source.positions.find(s=>s.id===t.inverseCopy!.sourceId);
     if(!source||!finite(source.lastPrice)||source.lastPrice<=0||!finite(source.lastQuoteAt)||source.lastQuoteAt>now)continue;
-    t.lastPrice=source.lastPrice;t.lastQuoteAt=source.lastQuoteAt;
+    t.lastPrice=executableCopy(t)?executablePrice(source.lastPrice,bookSpread(quotes[t.symbol],now,source.lastPrice),t.side==='SHORT'):source.lastPrice;
+    t.lastQuoteAt=source.lastQuoteAt;
     const signed=dir(t.side)*(t.lastPrice/t.entryPrice-1);t.favorable=Math.max(t.favorable,signed);t.adverse=Math.max(t.adverse,-signed);
     t.peakPnlRate=t.favorable;if(!t.firstProfitAt&&signed>SHADOW_FEE_RATE*2)t.firstProfitAt=now;
   }
@@ -261,11 +279,12 @@ export function markInversePositions(state:ForwardState,_quotes:Record<string,Qu
 export function inverseTrialSummary(state:ForwardState,quotes:Record<string,Quote>,now:number){
   const v=state.inverseTrial;if(!v)return null;const a=v.totals,paid=inversePaidFeeView(state,quotes,now)!;
   const sourceNet=paid.source.netPnl??0,inverseNet=paid.inverse.netPnl??0;
-  const tradedNotional=INVERSE_COST.feeRate>0?a.fees/INVERSE_COST.feeRate:0,
+  const execFees=[...state.positions,...state.history].filter(executableCopy).reduce((n,t)=>n+t.inverseCopy!.fills.reduce((m,f)=>m+f.fee,0),0),
+    tradedNotional=INVERSE_COST.feeRate>0?Math.max(0,a.fees-execFees)/INVERSE_COST.feeRate:0,
     executionGap=tradedNotional*LIVE_EXECUTION_GAP_RATE,
     liveCostEstimate={policy:LIVE_EXECUTION_GAP_POLICY,gapRate:LIVE_EXECUTION_GAP_RATE,tradedNotional,executionGap,
       estimatedNet:inverseNet-executionGap,
-      scope:'Estimate only: applies the measured 6bp live adverse gap to inverse traded notional. Paper books are unchanged.'};
+      scope:'Estimate only: applies the measured 6bp live adverse gap to same-price inverse notional. Copies under executable-book-v1 already pay the real spread in their books.'};
   return{paidCost:paid,liveCostEstimate,version:v.version,sourceBuild:v.sourceBuild,cutoverAt:v.cutoverAt,accountingMode:v.accountingMode??null,
     allocationPolicy:FIXED_ALLOCATION_POLICY,allocationEquity:FIXED_ALLOCATION_EQUITY,
     feePolicy:INVERSE_FEE_POLICY,feeRate:INVERSE_COST.feeRate,sourceFeeRate:INVERSE_COST.feeRate,
@@ -273,7 +292,7 @@ export function inverseTrialSummary(state:ForwardState,quotes:Record<string,Quot
     sourceEquity:v.initialComparisonEquity+sourceNet,inverseEquity:v.initialComparisonEquity+inverseNet,
     theoreticalSamePriceEquity:v.initialComparisonEquity+inverseNet,sourceNet,inverseNet,
     sourceFees:a.sourceFees,inverseFees:a.fees,sourceFunding:a.sourceFunding,inverseFunding:0,
-    realizedSpreadDrag:0,settledAttributionResidual:paid.reconciliation.grossMirrorResidual??0,pairedOpened:a.opened,pairedClosed:a.closed,
+    realizedSpreadDrag:a.spreadDrag,pricePolicy:INVERSE_PRICE_POLICY,settledAttributionResidual:paid.reconciliation.grossMirrorResidual??0,pairedOpened:a.opened,pairedClosed:a.closed,
     pairedOpen:state.positions.filter(t=>t.inverseCopy).length,reductions:a.reductions,
     legacyOpen:state.positions.filter(t=>!t.inverseCopy).length,stalePositions:paid.stalePairs,
     sourceDecisionBalance:v.source.balance,sourceDecisionResolved:v.source.resolved,
@@ -390,7 +409,8 @@ export function assertInverseTrade(t:Trade){
     ||i.independentDecisions!==false||i.liveExecution!=='PAPER_ONLY'||!Array.isArray(i.fills)||i.fills.length<1||i.fills.length>4
     ||i.fills.some((f,n)=>f.sequence!==n||![f.sourceAt,f.appliedAt,f.quoteAt,f.sourcePrice,f.price,f.quantity,f.contracts,f.sourceGross,f.gross,f.fee,f.sourceFee,f.funding,f.sourceFunding,f.spreadDrag].every(finite)
       ||f.price<=0||f.sourcePrice<=0||f.quantity<=0||f.contracts<=0||f.fee<0||f.funding!==0||f.appliedAt<f.sourceAt||f.quoteAt>f.appliedAt
-      ||!same(f.price,f.sourcePrice)||(!f.earlySoftLoss&&!same(f.gross,-f.sourceGross))||!same(f.spreadDrag,0)))
+      ||(executableCopy(t)?!same(f.spreadDrag,f.quantity*Math.abs(f.price-f.sourcePrice))
+        :(!same(f.price,f.sourcePrice)||(!f.earlySoftLoss&&!same(f.gross,-f.sourceGross))||!same(f.spreadDrag,0)))))
     throw new Error('反向配对账本格式错误；必须同价、反方向、仅实际手续费');
   const first=i.fills[0]!,exits=i.fills.slice(1),initial=t.realization?.initialQuantity??t.quantity;
   if(first.kind!=='OPEN'||!same(first.quantity,initial)||!same(first.fee,t.entryFee)||!same(first.price,t.entryPrice)
@@ -437,7 +457,7 @@ export function assertInverseTrial(state:ForwardState){
     if(source.openedAt<t.cutoverAt||t.legacyIds.includes(source.id))continue;
     const mirror=state.positions.find(m=>m.inverseCopy?.sourceId===source.id);
     if(mirror){
-      if(!same(mirror.contracts,source.contracts)||!same(mirror.entryPrice,mirror.inverseCopy!.sourceEntryPrice))
+      if(!same(mirror.contracts,source.contracts)||(!executableCopy(mirror)&&!same(mirror.entryPrice,mirror.inverseCopy!.sourceEntryPrice)))
         throw new Error('已提交影子与反向持仓配对缺失');
       continue;
     }
