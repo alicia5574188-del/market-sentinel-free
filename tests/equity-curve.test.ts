@@ -109,8 +109,9 @@ test("different concurrent reads are bounded instead of piling up archive buffer
   let release!:(x:Map<string,unknown>)=>void;const s={list:()=>new Promise<Map<string,unknown>>(r=>release=r)};
   const reader=new EquityReader(),first=reader.read(s as any,context,null,T+STEP);
   const same=reader.read(s as any,context,null,T+STEP);
-  await assert.rejects(reader.read(s as any,context,key(1),T+STEP),/CURVE_BUSY/);
-  release(new Map());assert.deepEqual(await first,await same);
+  let lists=0;const queued=reader.read({list:async()=>{lists++;return new Map();}} as any,context,key(1),T+STEP);
+  await Promise.resolve();assert.equal(lists,0);
+  release(new Map());assert.deepEqual(await first,await same);await queued;assert.equal(lists,1);
 });
 test("original atomic source archives yield real chart points without a source schema change",async()=>{
   const s=initialForward(T);const now=T+STEP;const next=advanceForward({state:s,now,paths:{},quotes:{},contracts:{}}).state;
