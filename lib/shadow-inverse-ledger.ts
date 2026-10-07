@@ -47,6 +47,8 @@ const finite=(n:unknown):n is number=>typeof n==='number'&&Number.isFinite(n);
 const same=(a:number,b:number)=>finite(a)&&finite(b)&&Math.abs(a-b)<=1e-7*Math.max(1,Math.abs(a),Math.abs(b));
 export const inverseId=(sourceId:string)=>`iv-${sourceId}`;
 export const INVERSE_SOFT_LOSS_GROSS=5;
+/** Hard backstop: cut the inverse leg at this gross floating loss even if the shadow is still strong. */
+export const INVERSE_HARD_LOSS_GROSS=10;
 const earlyLoss=(t:Trade)=>!!t.inverseCopy?.fills.some(f=>f.earlySoftLoss);
 export function shadowCapsule(state:ForwardState):ShadowCapsule{
   const row={...state} as Record<string,unknown>;delete row.inverseTrial;
@@ -142,7 +144,8 @@ export function applyInverseSoftLossExits(state:ForwardState,now:number){
     if(!source||source.status!=='OPEN')continue;
     if(!finite(t.lastPrice)||t.lastPrice<=0||!finite(t.lastQuoteAt)||t.lastQuoteAt>now||now-t.lastQuoteAt>10_000)continue;
     const gross=dir(t.side)*t.quantity*(t.lastPrice-t.entryPrice);
-    if(!(gross<-INVERSE_SOFT_LOSS_GROSS)||!sourceHoldSoft(source,now))continue;
+    const hardCap=gross<-INVERSE_HARD_LOSS_GROSS;
+    if(!(gross<-INVERSE_SOFT_LOSS_GROSS)||(!hardCap&&!sourceHoldSoft(source,now)))continue;
     const i=t.inverseCopy,quantity=t.quantity,contracts=t.contracts,price=t.lastPrice,quoteAt=t.lastQuoteAt,
       fee=quantity*price*INVERSE_COST.feeRate,
       fill:InverseFill={sequence:i.fills.length,kind:'CLOSE',sourceAt:now,appliedAt:now,earlySoftLoss:true,
@@ -157,7 +160,7 @@ export function applyInverseSoftLossExits(state:ForwardState,now:number){
     i.detachedRemainingQuantity=quantity;i.detachedRemainingContracts=contracts;i.detachedSourceSequence=source.realization?.sequence??0;
     i.detachedSourceClosed=false;i.sourceRemainingContracts=source.contracts;
     t.exitAudit={trigger:t.exitReason,at:now,evidence:{authority:SHADOW_INVERSE_VERSION,sourceId:source.id,sourceReason:null,
-      administrative:false,sourceClosedAt:null,sourceBuild:SHADOW_BASELINE_BUILD,quoteAt,
+      administrative:false,hardLossCap:hardCap,sourceClosedAt:null,sourceBuild:SHADOW_BASELINE_BUILD,quoteAt,
       gross,rule:'inverse-soft-loss-5u'}};
     if(r){t.quantity=r.initialQuantity;t.contracts=r.initialContracts;t.notional=r.initialNotional;t.margin=r.initialMargin;t.plannedRisk=r.initialRisk;}
     state.positions=state.positions.filter(x=>x.id!==t.id);state.history.unshift(t);state.history=state.history.slice(0,240);
