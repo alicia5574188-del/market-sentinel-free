@@ -46,7 +46,7 @@ function filledOf(order: GateLiveOrder) {
 
 export async function makerFirstEntry(client: MakerClient, input: {
   symbol: string; side: "LONG" | "SHORT"; contractsText: string; bestBid: number; bestAsk: number; tag: string;
-  beforeSend: () => boolean; waitMs?: number; pollMs?: number; sleep?: (ms: number) => Promise<void>; now?: () => number;
+  beforeSend: () => boolean; reduceOnly?: boolean; waitMs?: number; pollMs?: number; sleep?: (ms: number) => Promise<void>; now?: () => number;
 }): Promise<MakerResult> {
   const sleep = input.sleep ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)));
   const now = input.now ?? Date.now, waitMs = input.waitMs ?? LIVE_MAKER_WAIT_MS, pollMs = input.pollMs ?? 400;
@@ -57,7 +57,7 @@ export async function makerFirstEntry(client: MakerClient, input: {
     ({ ...base, makerOrderId, filledContracts: 0, fillPrice: null, remainingText: input.contractsText, rejected });
   if (!(price > 0) || !Number.isFinite(price)) return full(true);
   const body = { contract: input.symbol, size: `${input.side === "SHORT" ? "-" : ""}${input.contractsText}`,
-    price: String(price), tif: "poc", text: input.tag, reduce_only: false };
+    price: String(price), tif: "poc", text: input.tag, reduce_only: !!input.reduceOnly };
   let id: string | null;
   try { id = await client.placeMaker(body, input.beforeSend); }
   catch (error) {
