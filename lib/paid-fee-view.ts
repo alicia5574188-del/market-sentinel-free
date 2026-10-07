@@ -35,7 +35,15 @@ export function pairedPaidView(t:Trade,_q?:Quote,now=t.lastQuoteAt,source?:Trade
   const sourceEntry=first.sourcePrice,sourceEntryFees=copy.fills.filter(f=>f.kind==='OPEN').reduce((n,f)=>n+f.sourceFee,0),
     sourceExitFees=exits.reduce((n,f)=>n+f.sourceFee,0),sourceRealized=exits.reduce((n,f)=>n+f.sourceGross,0),
     sourceFloating=closed?0:sharedPrice===null?null:direction(copy.sourceSide)*t.quantity*(sharedPrice-sourceEntry);
+  const exec=i.pricePolicy==='executable-book-v1',invPrice=closed?last.price:sourceValid&&positive(t.lastPrice)?t.lastPrice:null;
   function leg(isSource:boolean):PaidLeg{
+    if(!isSource&&exec){
+      const entryFees=copy.fills.filter(f=>f.kind==='OPEN').reduce((n,f)=>n+f.fee,0),exitFees=exits.reduce((n,f)=>n+f.fee,0),
+        realizedGross=exits.reduce((n,f)=>n+f.gross,0),floatingGross=closed?0:invPrice===null?null:direction(t.side)*t.quantity*(invPrice-t.entryPrice),
+        grossPnl=floatingGross===null?null:realizedGross+floatingGross,fees=entryFees+exitFees;
+      return{side:t.side,entryPrice:t.entryPrice,price:invPrice,quoteAt:sharedQuoteAt,realizedGross,floatingGross,grossPnl,entryFees,exitFees,fees,
+        netPnl:grossPnl===null?null:grossPnl-fees,estimatedExitFee:closed?0:invPrice===null?null:t.quantity*invPrice*INVERSE_COST.feeRate};
+    }
     const side=isSource?copy.sourceSide:t.side,entryPrice=sourceEntry,
       entryFees=isSource?sourceEntryFees:copy.fills.filter(f=>f.kind==='OPEN').reduce((n,f)=>n+f.fee,0),
       exitFees=isSource?sourceExitFees:exits.reduce((n,f)=>n+f.fee,0),
@@ -70,7 +78,7 @@ export function inversePaidFeeView(state:ForwardState,_quotes:Record<string,Quot
     detachedFloating+=direction(source.side)*source.quantity*(price-source.entryPrice);
   }
   const pairedFloating=sourceFloating,floating=pairedFloating===null||detachedStale?null:pairedFloating+detachedFloating,
-    inverseFloating=pairedFloating===null?null:-pairedFloating,
+    inverseFloating=sumKnown(rows.map(r=>r.inverse.floatingGross)),
     sourceGross=floating===null?null:a.sourceGross+floating,
     inverseGross=inverseFloating===null?null:a.gross+inverseFloating,
     source={realizedGross:a.sourceGross,floatingGross:floating,grossPnl:sourceGross,fees:a.sourceFees,

@@ -9,7 +9,7 @@ export const isInverseLiveReceipt=(receipt?:{sourceRole?:string})=>receipt?.sour
 export function liveProtectionPrice(t:Trade) {
   if(!t.inverseCopy)return t.stopPrice;
   const i=t.inverseCopy;
-  if(i.sourceSide===t.side||i.sourceEntryPrice!==t.entryPrice)
+  if(i.sourceSide===t.side||(i.pricePolicy!=='executable-book-v1'&&i.sourceEntryPrice!==t.entryPrice))
     throw new Error('反向实盘源身份或方向无效');
   return null;
 }

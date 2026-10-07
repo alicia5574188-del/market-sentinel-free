@@ -30,7 +30,7 @@ function pair(side:'LONG'|'SHORT',now:number){
   const state=initialForward(now-100000);state.inverseTrial=newInverseTrial(state,now,1000);
   const source=sourceDecisionState(state),t=sourceTrade(side,now);
   source.positions=[t];source.balance-=.7;source.fees+=.7;
-  applyInverseSourceTrade(state,t,undefined,now);state.inverseTrial.source=shadowCapsule(source);
+  applyInverseSourceTrade(state,t,{bestBid:t.entryPrice,bestAsk:t.entryPrice,observedAt:now,fresh:true},now);state.inverseTrial.source=shadowCapsule(source);
   return{state,t,inverse:state.positions[0]!};
 }
 for(const side of ['LONG','SHORT'] as const)test(`inverse of ${side} keeps exact source identity and has no independent native stop`,()=>{
@@ -394,7 +394,13 @@ test('noninverse legacy native stop creation remains intact',async()=>{
   assert.equal(h.calls.stops.length,1);assert.equal(h.calls.stops[0].price,98);assert.equal(h.calls.closes,0);
 });
 
-test('inverse live entry tries maker first; a full maker fill opens the position without any market order',async()=>{
+test('inverse live entry no longer waits on a maker order: it goes straight to one market order',async()=>{
+  const h=await harness('LONG');const g=h.gate as any;
+  g.placeMakerEntry=async()=>{h.calls.makers++;throw new Error('entry maker must stay off');};
+  await h.stream.syncLive(Date.now());
+  assert.equal(h.calls.makers,0);assert.equal(h.calls.entries,1);assert.equal(h.positions.length,1);
+});
+test.skip('legacy: inverse live entry tries maker first; a full maker fill opens the position without any market order',async()=>{
   const h=await harness('LONG');const g=h.gate as any;
   g.placeMakerEntry=async(body:any)=>{h.calls.makers++;assert.equal(body.tif,'poc');assert.ok(String(body.text).startsWith('t-ms-e-'));
     h.positions.push({contract:'TEST_USDT',size:String(body.size),entry_price:body.price,leverage:'5',margin:'1',unrealised_pnl:'0',mark_price:body.price});

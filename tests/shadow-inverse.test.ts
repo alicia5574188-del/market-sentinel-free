@@ -474,3 +474,23 @@ test('live cost estimate applies the measured 6bp gap to traded notional without
   assert.ok(est.estimatedNet<summary.inverseNet);
   assertInverseTrial(s);
 });
+
+test('new inverse copies fill at their own executable book side and pay the spread on entry and exit',()=>{
+  const {s,source,t}=fixture('LONG',.2),inv=s.positions.find(x=>x.inverseCopy)!;
+  assert.equal(t.entryPrice,100.2);assert.equal(inv.side,'SHORT');assert.equal(inv.inverseCopy!.pricePolicy,'executable-book-v1');
+  near(inv.entryPrice,100);near(inv.inverseCopy!.fills[0]!.sourcePrice,100.2);near(inv.inverseCopy!.fills[0]!.spreadDrag,2);
+  near(inv.entryFee,10*100*INVERSE_COST.feeRate);
+  markInversePositions(s,{TEST_USDT:quote(100.5,100.7,T+1000)},T+1000);
+  // Unchanged source mark, but the inverse short is marked where it could buy back: source mark + spread.
+  near(inv.lastPrice,t.lastPrice+.2);
+  const later=T+60_000;sourceClose(source,t,101,later);
+  applyInverseSourceTrade(s,t,quote(101,101.2,later),later);
+  const closed=s.history.find(x=>x.id===inv.id)!,last=closed.inverseCopy!.fills.at(-1)!;
+  near(closed.exitPrice!,101.2);near(last.gross,-12);near(last.sourceGross,8);near(last.spreadDrag,2);
+  assertInverseTrade(closed);
+});
+test('without a fresh book the inverse copy falls back to the measured live gap, never the source price',()=>{
+  const s=initialForward(T-B);s.inverseTrial=newInverseTrial(s,T,1000);const source=structuredClone(sourceDecisionState(s)),t=trade('source-1','SHORT',T,100);
+  sourceOpen(source,t);applyInverseSourceTrade(s,t,undefined,T);
+  const inv=s.positions.find(x=>x.inverseCopy)!;assert.equal(inv.side,'LONG');near(inv.entryPrice,100*(1+LIVE_EXECUTION_GAP_RATE));assertInverseTrade(inv);
+});

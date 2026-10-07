@@ -74,7 +74,7 @@ import { LIVE_PARITY_VERSION, LIVE_PARITY_PREFIX, buildProportionalMirror, forwa
   type MirrorSourceTrade, type MirrorReceipt, type MirrorBinding } from "../lib/live-parity.ts";
 // Inverse closes that merely follow the shadow are not protective; they may rest 2s.
 const MAKER_EXIT_REASONS=new Set(["SHADOW_SOURCE_EXIT"]);
-import { makerFirstEntry, makerEntryTag, MakerStateUnknownError, LIVE_MAKER_ENTRY_POLICY, type MakerResult } from "../lib/live-maker-entry.ts";
+import { makerFirstEntry, makerEntryTag, MakerStateUnknownError, LIVE_MAKER_ENTRY_POLICY, LIVE_MAKER_ENTRY_ENABLED, type MakerResult } from "../lib/live-maker-entry.ts";
 import {buildReviewSnapshot, readReviewArchivePage} from "../lib/research-snapshot.ts";
 import {liveExitPriceLimit} from '../lib/live-entry-price.ts';
 import {observeLiveAccount,type LiveAccountMark} from '../lib/live-account-view.ts';
@@ -3246,7 +3246,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           // Maker-first for inverse copies: rest at our own side for 2s, then the
           // exact remainder goes to the existing IOC market order. Never skips.
           let maker:MakerResult|null=null;
-          if(isInverseLiveReceipt(entry.parity)&&entry.kind==="MARKET"){
+          if(LIVE_MAKER_ENTRY_ENABLED&&isInverseLiveReceipt(entry.parity)&&entry.kind==="MARKET"){
             const totalText=String(intent.body.size).replace(/^-/,""),marketTag=entry.tag,makerTag=makerEntryTag(marketTag);
             // Persist the maker identity first so any crash/recovery looks for
             // the maker order, never re-sends a full market order on top of it.
