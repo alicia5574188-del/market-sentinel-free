@@ -77,7 +77,8 @@ export function captureInverseLossResearch(state:ForwardState,t:Trade,source:Tra
   if(!finite(quoteAt)||quoteAt>now||!finite(t.lastPrice)||t.lastPrice<=0)return;
   if(terminal){if(fill?.kind!=='CLOSE'||fill.appliedAt!==now||!finite(t.netPnl))return;}
   else if(!q?.fresh||q.observedAt>now||now-q.observedAt>10_000||now-quoteAt>10_000
-    ||q.bestBid<=0||q.bestAsk<q.bestBid||!source||source.lastQuoteAt!==quoteAt||source.lastPrice!==t.lastPrice)return;
+    ||q.bestBid<=0||q.bestAsk<q.bestBid||!source||source.lastQuoteAt!==quoteAt
+    ||(copy.pricePolicy!=='executable-book-v1'&&source.lastPrice!==t.lastPrice))return;
   const existing=copy.lossResearch;
   if(existing?.anchors.terminal!=null)return;
   if(existing?.version===INVERSE_LOSS_RESEARCH_VERSION&&existing.accountStartedAt!==state.startedAt)return;
