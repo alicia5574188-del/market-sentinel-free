@@ -83,7 +83,7 @@ function hours(rows:Row[]){
 }
 
 export type RegimeOpen={id?:string;at:number;persistence:number|null;expansion:Expansion};
-export function bookRegime(trades:ConfirmationRealityTrade[],now=Date.now(),opens?:RegimeOpen[]){
+export function bookRegime(trades:ConfirmationRealityTrade[],now=Date.now(),opens?:RegimeOpen[]):{mode:BookRegimeName;reason:string;pauseUntil:number;followUntil:number}{
   type Ev={at:number;sort:0|1;kind:'open'|'close';persistence:number|null;expansion:Expansion;shadowWin?:boolean};
   const events:Ev[]=[];
   const merged=new Map<string,RegimeOpen>();
@@ -103,22 +103,23 @@ export function bookRegime(trades:ConfirmationRealityTrade[],now=Date.now(),open
   }
   events.sort((a,b)=>a.at-b.at||a.sort-b.sort);
   const buckets=new Map<number,{pers:number[];high:number;n:number}>();
-  let climax:{peak:number;hour:number}|null=null,mode:BookRegimeName='FADE',pauseUntil=0,followUntil=0;
+  const gate:{mode:BookRegimeName;pauseUntil:number;followUntil:number}={mode:'FADE',pauseUntil:0,followUntil:0};
+  let climax:{peak:number;hour:number}|null=null;
   const recent:boolean[]=[];
   const wins=()=>recent.length>=RECENT?recent.filter(Boolean).length/RECENT:0;
   function advance(at:number){
-    if(mode==='PAUSE'&&at>=pauseUntil){
-      if(wins()>0.5){mode='FOLLOW';followUntil=pauseUntil+FOLLOW_MS;}
-      else mode='FADE';
+    if(gate.mode==='PAUSE'&&at>=gate.pauseUntil){
+      if(wins()>0.5){gate.mode='FOLLOW';gate.followUntil=gate.pauseUntil+FOLLOW_MS;}
+      else gate.mode='FADE';
     }
-    if(mode==='FOLLOW'&&(at>=followUntil||(recent.length>=RECENT&&wins()<=0.5)))mode='FADE';
+    if(gate.mode==='FOLLOW'&&(at>=gate.followUntil||(recent.length>=RECENT&&wins()<=0.5)))gate.mode='FADE';
   }
   function consider(hour:number,at:number){
     const bucket=buckets.get(hour);if(!bucket||bucket.n<MIN_HOUR||!bucket.pers.length)return;
     const avg=bucket.pers.reduce((a,b)=>a+b,0)/bucket.pers.length,highShare=bucket.high/bucket.n;
     if(!climax&&avg>=CERTAIN_PERSISTENCE&&highShare>=CERTAIN_HIGH_SHARE){climax={peak:avg,hour};return;}
-    if(climax&&hour>climax.hour&&mode==='FADE'&&at>=pauseUntil&&(climax.peak-avg>=ROLLOVER||highShare<0.3)){
-      mode='PAUSE';pauseUntil=at+PAUSE_MS;followUntil=0;climax=null;
+    if(climax&&hour>climax.hour&&gate.mode==='FADE'&&at>=gate.pauseUntil&&(climax.peak-avg>=ROLLOVER||highShare<0.3)){
+      gate.mode='PAUSE';gate.pauseUntil=at+PAUSE_MS;gate.followUntil=0;climax=null;
     }
   }
   for(const e of events){
@@ -129,6 +130,7 @@ export function bookRegime(trades:ConfirmationRealityTrade[],now=Date.now(),open
     buckets.set(hour,bucket);consider(hour,e.at);
   }
   advance(now);
+  const mode=gate.mode,pauseUntil=gate.pauseUntil,followUntil=gate.followUntil;
   const reason=mode==='PAUSE'?'持续力已从高位掉下来，新单先停 6 小时，不改顺着做。'
     :mode==='FOLLOW'?'停开结束，最近 12 笔影子赢面过半，这两小时顺着做。':'';
   return {mode,reason,pauseUntil,followUntil};
