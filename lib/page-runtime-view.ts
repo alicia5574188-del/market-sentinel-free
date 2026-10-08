@@ -21,5 +21,16 @@ export function pageForwardView<T>(view:T):T{
   if(Array.isArray(v.positions))v.positions=v.positions.map(pageTrade);
   if(Array.isArray(v.history))v.history=v.history.map(pageTrade);
   if('entryOpportunities' in v)delete v.entryOpportunities;
+  delete v.shadowInverse;delete v.confirmationReality;delete v.latestReason;delete v.events;
+  if(v.boundaries&&typeof v.boundaries==='object'){
+    const boundaries={...(v.boundaries as Row)};
+    if(typeof boundaries.accounting==='string'&&boundaries.accounting.includes('影子'))boundaries.accounting='正向按研究层成交记账。反向账在后台单独保存。';
+    v.boundaries=boundaries;
+  }
+  if(v.cost&&typeof v.cost==='object'){
+    const cost={...(v.cost as Row)};
+    if(typeof cost.assumption==='string'&&cost.assumption.includes('影子'))cost.assumption='正向按研究层成交记账。';
+    v.cost=cost;
+  }
   return v as T;
 }

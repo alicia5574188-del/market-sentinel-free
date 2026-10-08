@@ -289,14 +289,14 @@ export function LivePositionCard({position:p,runtime,now}:{position:LivePosition
       </dl>
     <details className="fr-details"><summary>详情</summary>
       <dl><Pair label="持仓时长" value={holdingTime(p.entryAt,open?now:p.exitAt??0)}/><Pair label="名义金额" value={`${num(p.notional)} U`}/>
-        <Pair label="合约数量" value={contractText(Math.abs(p.exchangeSize))}/><Pair label={p.parity?.sourceRole==='INVERSE_PAPER'?"退出方式":"保护止损"} value={p.parity?.sourceRole==='INVERSE_PAPER'?"跟随影子订单":num(p.stopPrice??p.currentStop,5)}/></dl>
+        <Pair label="合约数量" value={contractText(Math.abs(p.exchangeSize))}/><Pair label={p.parity?.sourceRole==='INVERSE_PAPER'?"退出方式":"保护止损"} value={p.parity?.sourceRole==='INVERSE_PAPER'?"跟随出场":num(p.stopPrice??p.currentStop,5)}/></dl>
       <CompareBlock position={p} runtime={runtime} now={now}/>
       {!open&&settlement&&<dl><Pair label="仓位盈亏" value={`${signed(settlement.pricePnl)} U`}/><Pair label="手续费收支" value={`${signed(settlement.fees)} U`}/><Pair label="资金费收支" value={`${signed(settlement.funding)} U`}/><Pair label="交易所平仓时间" value={time(settlement.closedAt)}/></dl>}
       {p.exitReason&&<p className="fr-trade-reason">退出原因：{p.exitReason}</p>}
       {p.parity&&<><p className="fr-note">源单 {p.parity.sourceId} · 规则 {p.parity.sourceRuleId}<br/>固定比例 {num(p.parity.ratio,6)} · 目标名义额 {num(p.parity.targetNotional)} U · 源单杠杆 {num(p.parity.sourceLeverage,0)}×<br/>
       首次复制盘口 {num(p.parity.copyQuotePrice,5)} · 提交盘口 {num(p.parity.submitQuotePrice,5)} · Gate成交 {num(p.parity.exchangeEntryPrice??p.entryPrice,5)}<br/>
       首次识别 {latency(p.parity.copyDelayMs)} · 提交 {latency(p.parity.submitDelayMs)}{p.parity.discrepancy?` · ${p.parity.discrepancy}`:""}
-      {p.parity.exitExecutionPolicy&&<><br/>影子出场 {num(p.parity.sourceExitPrice,5)} · 出场提交延迟 {latency(p.parity.exitDelayMs)}</>}</p>
+      {p.parity.exitExecutionPolicy&&<><br/>出场 {num(p.parity.sourceExitPrice,5)} · 出场提交延迟 {latency(p.parity.exitDelayMs)}</>}</p>
       <a className="fr-text-button" href={`/api/live/source?id=${encodeURIComponent(p.parity.sourceId)}`} target="_blank" rel="noreferrer">查看完整模拟源单映射 ↗</a></>}
     </details>
   </article>;

@@ -6,6 +6,7 @@ import {captureTradeReviews} from './review-trace.ts';
 import {SHADOW_BASELINE_BUILD,SHARED_MARKET_KEYS,shadowCapsule,sourceDecisionState,newInverseTrial,
   applyInverseSourceTrade,applyInverseSoftLossExits,markInversePositions,recordInverseCurve,assertInverseTrial} from './shadow-inverse-ledger.ts';
 import {bookRegime} from './confirmation-reality.ts';
+import {noteForwardStudy} from './forward-study.ts';
 import {beijingDayKey} from './beijing-time.ts';
 import {FIXED_ALLOCATION_EQUITY} from './fixed-allocation.ts';
 
@@ -47,6 +48,7 @@ export function advanceShadowInverse(input:Parameters<typeof advanceBaseline>[0]
     trial.detachedSourceIds=trial.detachedSourceIds.filter(id=>open.has(id));
     if(!trial.detachedSourceIds.length)delete trial.detachedSourceIds;
   }
+  noteForwardStudy(trial,input.now);
   markInversePositions(s,input.quotes,input.now);
   const softLoss=applyInverseSoftLossExits(s,input.now);
   recordInverseCurve(s,input.quotes,input.now);

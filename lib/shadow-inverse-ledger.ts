@@ -47,6 +47,7 @@ export type InverseTrial={version:typeof SHADOW_INVERSE_VERSION;sourceBuild:type
   curve:{at:number;source:number;inverse:number;theoretical:number}[];droppedCurvePoints:number;lastSourceRevision:number;
   comparisonFeesAligned?:'both-live-5bp-v1';entryHaltSkipped?:string[];detachedSourceIds?:string[];regimeOpens?:RegimeOpen[];
   regimeClock?:{pauseUntil:number;followUntil:number};
+  forwardStudy?:import('./forward-study.ts').ForwardStudy;
   swings?:EquitySwing[];swingArm?:{source?:SwingArm;inverse?:SwingArm}};
 export type EquitySwing={at:number;book:'source'|'inverse';kind:'PEAK'|'TROUGH';equity:number};
 export type SwingArm={at:number;equity:number;side:'FLAT'|'HIGH'|'LOW'};
