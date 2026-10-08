@@ -38,6 +38,22 @@ test("owner PAPER reset remains isolated, confirmed and unavailable to members",
   assert.match(cache,/if\(this\.key!==key\)/);
 });
 
+test("desk clean ledger runs once, deletes old archives, and will not run while live is on",()=>{
+  const worker=readFileSync(new URL("../worker/index-clean.ts",import.meta.url),"utf8");
+  const method=worker.slice(worker.indexOf("private async adoptDeskCleanLedger"),worker.indexOf("private async sweepRetiredPaperArchives"));
+  assert.match(method,/requestedEnabled\|\|live\.operational/);
+  assert.match(method,/freshDeskLedger\(previous,now\)/);
+  assert.match(method,/DESK_CLEAN_EPOCH/);
+  assert.match(method,/DELETE FROM paper_events/);
+  assert.match(method,/DELETE FROM paper_positions/);
+  assert.doesNotMatch(method,/requestedEnabled\s*=\s*true|setLiveMode\(/);
+  const sweep=worker.slice(worker.indexOf("private async sweepRetiredPaperArchives"),worker.indexOf("private async resetPaperAccount"));
+  assert.match(sweep,/storage\.delete\(keys\)/);
+  const advance=worker.slice(worker.indexOf("private async advanceForwardNow"),worker.indexOf("private async refreshRegimeHourly"));
+  assert.match(advance,/adoptDeskCleanLedger\(now\)/);
+  assert.doesNotMatch(advance,/prepareForwardReset|initialMultiTurnForward\(/);
+});
+
 
 test("PAPER reset Safari DOMException is Chinese and never replayed",async()=>{
   const original=globalThis.fetch;let calls=0;

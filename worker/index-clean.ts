@@ -45,7 +45,7 @@ import { evaluateRegimePortfolio, initialRegimePortfolio, normalizeRegimePortfol
   REGIME_EXECUTION_UNIVERSE, REGIME_HOURLY_REQUIRED_CANDLES, REGIME_PORTFOLIO_VERSION, REGIME_STRATEGIES, REGIME_SYSTEMS, REGIME_UNIVERSE,
   type RegimePortfolioState } from "../lib/regime-portfolio.ts";
 import type { PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
-import {advanceShadowInverse} from '../lib/shadow-inverse.ts';
+import {advanceShadowInverse,freshDeskLedger,DESK_CLEAN_EPOCH,DESK_CLEAN_BEFORE} from '../lib/shadow-inverse.ts';
 import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
 import {confirmationRealityView} from '../lib/confirmation-reality.ts';
 import {observationReading} from '../lib/observation-tape.ts';
@@ -551,6 +551,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private reviewJournalLastWrite=0;
   private reviewDiagnosticError:string|null=null;
   private forwardBusy = false;
+  private deskCleanArmed = false;
+  private deskCleanSettled = false;
   private forwardLastAttemptAt = 0;
   private forwardProtectionBudget: ProtectionWriteBudget | null = null;
   private forwardCompression: Awaited<ReturnType<typeof prepareForwardWrite>>["compression"] | null = null;
@@ -644,6 +646,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     super(ctx, env);
     // A separate member namespace reuses the verified executor, never the market loop.
     if (executionOnly) return;
+    this.deskCleanArmed = true;
     ctx.blockConcurrencyWhile(async () => {
       const saved = await ctx.storage.get<Checkpoint>("checkpoint");
       if (saved?.authoritySchemaVersion === AUTHORITY_SCHEMA_VERSION) {
@@ -1257,6 +1260,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.forwardBusy = true;
     try {
       await this.ensureAdaptiveAccount(now);
+      await this.adoptDeskCleanLedger(now);
       const state=this.forwardState!;
       const dataCycleDue=allowDataCycle&&(!state.lastCycleAt
         ||Math.floor((now-90_000)/BAR_MS)>Math.floor((state.lastCycleAt-90_000)/BAR_MS));
@@ -1915,6 +1919,65 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.live.lastError = null;
     await this.saveCheckpoint(Date.now(), true);
     return { ok: true, credential: await credentialMetadata(this.env.DB) };
+  }
+
+  private async adoptDeskCleanLedger(now:number){
+    if(!this.deskCleanArmed||this.deskCleanSettled||!this.forwardState)return;
+    const epochKey=`${FORWARD_STORAGE}desk-clean-epoch`,sweepKey=`${FORWARD_STORAGE}desk-clean-sweep-before`;
+    const saved=await this.ctx.storage.get<string>(epochKey);
+    if(saved===DESK_CLEAN_EPOCH){
+      if(!(await this.sweepRetiredPaperArchives(sweepKey)))this.deskCleanSettled=true;
+      return;
+    }
+    const live=this.runtime.live;
+    if(live.requestedEnabled||live.operational
+      ||Object.values(live.positions).some(position=>position?.status==="OPEN")
+      ||Object.values(live.entries).some(entry=>entry&&!["FILLED","CANCELLED"].includes(entry.status)))return;
+    const previous=this.forwardState;
+    if(!(previous.startedAt<DESK_CLEAN_BEFORE)){this.deskCleanSettled=true;return;}
+    const next=freshDeskLedger(previous,now);
+    next.storage={persistedAt:now,error:null,layout:FORWARD_PAGED_STATE_VERSION,sampleIntegrity:"raw-sha256"};
+    const prepared=await prepareForwardWrite(previous.storage.persistedAt?previous:null,next,now,{compact:true});
+    const protection=await this.ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
+    const checkpoint=prepareForwardProtectionWrite(next).entries[FORWARD_PROTECTION_STORAGE] as Record<string,unknown>|undefined;
+    if(checkpoint)prepared.entries[FORWARD_PROTECTION_STORAGE]=protection?.writeBudget!==undefined?{...checkpoint,writeBudget:protection.writeBudget}:checkpoint;
+    prepared.entries[epochKey]=DESK_CLEAN_EPOCH;
+    prepared.entries[sweepKey]=next.startedAt;
+    prepared.writes+=(checkpoint?1:0)+2;
+    const reservation=this.reserveCriticalWrites(prepared.writes);
+    try{
+      await this.ctx.storage.transaction(async transaction=>{await transaction.put(prepared.entries);});
+      reservation.finish(true);
+    }finally{reservation.finish(false);}
+    next.storage.layout=FORWARD_PAGED_STATE_VERSION;next.storage.sampleIntegrity="raw-sha256";
+    this.forwardCompression=prepared.compression;this.forwardState=next;this.forwardError=null;
+    this.forwardProtectionBudget=readProtectionWriteBudget(protection?.writeBudget);
+    this.mirrorClosures.clear();
+    this.reviewJournal=initialReviewJournal(next.startedAt,now);this.reviewJournalLoaded=true;this.reviewDiagnosticError=null;
+    try{
+      await this.env.DB.batch([
+        this.env.DB.prepare("DELETE FROM paper_events").bind(),
+        this.env.DB.prepare("DELETE FROM paper_positions").bind(),
+      ]);
+    }catch{/* legacy order tables are optional; the forward book is already the new 1000U ledger */}
+    if(!(await this.sweepRetiredPaperArchives(sweepKey)))this.deskCleanSettled=true;
+  }
+
+  /** True when another batch of pre-cutover archive rows may remain. */
+  private async sweepRetiredPaperArchives(sweepKey:string){
+    const before=await this.ctx.storage.get<number>(sweepKey);
+    if(!(typeof before==="number"&&before>0))return false;
+    const prefix=`${FORWARD_STORAGE}archive:`,end=`${prefix}${String(before).padStart(16,"0")}`;
+    const rows=await this.ctx.storage.list<unknown>({prefix,end,limit:32});
+    const keys=[...rows.keys()];
+    if(!keys.length){
+      const reservation=this.reserveNonAlarmWrites(1,256);if(!reservation)return true;
+      try{await this.ctx.storage.delete(sweepKey);reservation.finish(true);}finally{reservation.finish(false);}
+      return false;
+    }
+    const reservation=this.reserveNonAlarmWrites(keys.length,256);if(!reservation)return true;
+    try{await this.ctx.storage.delete(keys);reservation.finish(true);}finally{reservation.finish(false);}
+    return true;
   }
 
   private async resetPaperAccount() {

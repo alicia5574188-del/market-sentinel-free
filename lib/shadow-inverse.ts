@@ -1,7 +1,7 @@
 /** One source strategy evaluation, one passive inverse application, one atomic
  * durable state. No private exchange calls and no inverse-to-source feedback. */
 import {advanceForward as advanceBaseline} from './shadow-baseline/forward-relations.ts';
-import {normalizeForward,drainLegacyForwardPositions,forwardEquity,type ForwardState} from './forward-relations.ts';
+import {normalizeForward,drainLegacyForwardPositions,forwardEquity,resetForwardAccountPreservingLearning,type ForwardState} from './forward-relations.ts';
 import {captureTradeReviews} from './review-trace.ts';
 import {SHADOW_BASELINE_BUILD,SHARED_MARKET_KEYS,shadowCapsule,sourceDecisionState,newInverseTrial,
   applyInverseSourceTrade,applyInverseSoftLossExits,applyDeskOrderExits,markInversePositions,recordInverseCurve,assertInverseTrial} from './shadow-inverse-ledger.ts';
@@ -72,4 +72,20 @@ export function advanceShadowInverse(input:Parameters<typeof advanceBaseline>[0]
   assertInverseTrial(s);
   return{state:s,changed:activated||source.changed||softLoss||deskExit||researchChanged||beforeFinancial!==JSON.stringify([s.balance,s.resolved,s.positions.map(t=>[t.id,t.stopPrice,t.contracts])]),
     protectionChanged:source.protectionChanged};
+}
+
+export const DESK_CLEAN_EPOCH='desk-clean-2026-10-08' as const;
+/** Books opened before this still belong to the pre-desk ledger. */
+export const DESK_CLEAN_BEFORE=Date.parse('2026-10-08T06:30:00Z');
+
+/** Delete the old order book and both wallets. Market memory and the research
+ * desk stay, so the next order still follows the current decision. */
+export function freshDeskLedger(previous:ForwardState,now:number):ForwardState{
+  const desk=previous.inverseTrial?.researchDesk;
+  const next=resetForwardAccountPreservingLearning(previous,now);
+  next.inverseTrial=newInverseTrial(next,now,next.initialEquity);
+  if(desk)next.inverseTrial.researchDesk=ensureResearchDesk(structuredClone(desk));
+  next.latestReason='旧订单和旧账本已删除。模拟账户从1000U重新开始，决策样本保留，新单按当前决策开。';
+  assertInverseTrial(next);
+  return next;
 }

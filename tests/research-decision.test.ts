@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {initialForward,type Trade,type Quote} from '../lib/forward-relations.ts';
 import {newInverseTrial,applyInverseSourceTrade,applyDeskOrderExits,applyInverseSoftLossExits,assertInverseTrial,shadowCapsule,sourceDecisionState} from '../lib/shadow-inverse-ledger.ts';
+import {freshDeskLedger} from '../lib/shadow-inverse.ts';
 import {attachProposal,beijingSession,classifyClaim,ensureResearchDesk,observeResearch,readNarrative,refreshStance,sampleStance,
   CLAIM_HORIZON_MS,HOLD_HORIZON_MS,RESEARCH_DESK_VERSION,ROUND_TRIP_COST,type ResearchClaim,type ResearchDesk} from '../lib/research-decision.ts';
 
@@ -163,4 +164,24 @@ test('changing stance does not close a copy that is already open',()=>{
   assert.equal(s.positions.find(row=>row.inverseCopy?.sourceId===t.id)?.side,'LONG');
   s.inverseTrial!.source=shadowCapsule(source);s.inverseTrial!.lastSourceRevision=source.revision;
   assert.doesNotThrow(()=>assertInverseTrial(s));
+});
+test('a fresh desk ledger drops the old book and keeps the current decision',()=>{
+  const s=initialForward(US-60_000);
+  s.balance=723.42;s.resolved=717;s.wins=254;s.fees=182;s.turnover=9000;s.grossPnl=-100;
+  s.inverseTrial=newInverseTrial(s,US-60_000,1000);
+  s.inverseTrial.researchDesk=ensureResearchDesk(undefined);
+  s.inverseTrial.researchDesk.stance='REVERSE';
+  s.inverseTrial.researchDesk.note='美盘样本已够';
+  s.inverseTrial.researchDesk.claims.push(claim('keep','CONTINUE',false,US-1000,'US'));
+  s.relationEngine.observations=12;
+  const next=freshDeskLedger(s,US);
+  assert.equal(next.balance,1000);assert.equal(next.initialEquity,1000);
+  assert.equal(next.resolved,0);assert.equal(next.wins,0);assert.equal(next.fees,0);assert.equal(next.turnover,0);
+  assert.equal(next.positions.length,0);assert.equal(next.history.length,0);assert.equal(next.startedAt,US);
+  assert.equal(next.inverseTrial!.researchDesk!.stance,'REVERSE');
+  assert.equal(next.inverseTrial!.researchDesk!.claims[0]!.id,'keep');
+  assert.equal(next.inverseTrial!.totals.opened,0);assert.equal(next.inverseTrial!.curve[0]!.inverse,1000);
+  assert.equal(next.relationEngine.observations,12);
+  assert.match(next.latestReason,/1000U/);
+  assert.doesNotThrow(()=>assertInverseTrial(next));
 });
