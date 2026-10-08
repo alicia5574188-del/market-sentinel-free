@@ -1,5 +1,5 @@
 import {RESEARCH_PLAN_VERSION,researchPlanContext,type PlanResearchDecision} from './research-plan.ts';
-import {assertInverseTrade,assertInverseTrial,inverseTrialSummary,sourceDecisionState,shadowCapsule,applyInverseSourceTrade,migrateInverseSamePrice,alignComparisonSourceFees,INVERSE_COST,type InverseCopy,type InverseTrial} from './shadow-inverse-ledger.ts';
+import {assertInverseTrade,assertInverseTrial,inverseTrialSummary,sourceDecisionState,shadowCapsule,applyInverseSourceTrade,migrateInverseSamePrice,alignComparisonSourceFees,retainDetachedSourceIds,INVERSE_COST,type InverseCopy,type InverseTrial} from './shadow-inverse-ledger.ts';
 import {advanceWinnerManagement, trendCore, WINNER_POLICY_VERSION, type WinnerPlan, type WinnerManagement} from "./winner-policy.ts";
 import {realizeTradeSlice, realizedContribution, remainingTradeFraction, assertTradeRealization, type TradeRealization} from "./trade-realization.ts";
 import {winnerEventHeadroom, recordWinnerRiskLoss, type WinnerRiskLedger} from "./winner-risk.ts";
@@ -322,7 +322,7 @@ function normalizeEntryValidations(value:unknown,now:number){
 }
 export function normalizeForward(v:ForwardState|null|undefined,now:number):ForwardState{
   if(!v)return initialForward(now);
-  migrateInverseSamePrice(v,now);alignComparisonSourceFees(v);assertInverseTrial(v);
+  migrateInverseSamePrice(v,now);alignComparisonSourceFees(v);retainDetachedSourceIds(v);assertInverseTrial(v);
   if(v.version!==FORWARD_VERSION||!Number.isFinite(v.balance)||!Array.isArray(v.positions)||!Array.isArray(v.history)||v.liveEligible!==false)
     throw new Error("前向账户存储格式异常；保留原数据，禁止自动重置");
   const base=initialForward(v.startedAt>0?v.startedAt:now);

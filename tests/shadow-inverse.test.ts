@@ -464,6 +464,43 @@ test('a soft source hold cuts only the inverse once floating gross is worse than
   assert.equal(summary.independentDecisions,false);
 });
 
+test('dropping a soft-loss receipt from the saved window still loads and does not open a second copy',async()=>{
+  const intel={version:'test',updatedAt:T+60_000,decision:'REVIEW',phase:'DECAYING',reviewSince:null,reviewBars:0,lastCompletedBar:T,
+    entryAdvantage:0,currentAdvantage:0,advantageChange:0,remainingSpaceRate:.01,expectedPullbackRate:.01,continuationRatio:1.1,
+    holdValueScore:70,exitValueScore:30,dataConfidence:80,counterfactualNewEntry:false,supportFamilies:[],concernFamilies:['FLOW'],
+    assessments:[],reasons:[],concerns:[],summary:'test'} as NonNullable<Trade['positionIntelligence']>;
+  const pack=fixture('LONG'),now=T+60_000;
+  pack.t.lastPrice=101;pack.t.lastQuoteAt=now;pack.t.positionIntelligence=intel;retainSource(pack.s,pack.source);
+  const inv=pack.s.positions[0]!;inv.lastPrice=101;inv.lastQuoteAt=now;
+  assert.equal(applyInverseSoftLossExits(pack.s,now),true);
+  const sourceId=pack.t.id;
+  assert.ok(pack.s.inverseTrial!.detachedSourceIds?.includes(sourceId));
+  const broken=structuredClone(pack.s);
+  broken.history=broken.history.filter(t=>!t.inverseCopy?.fills?.some(f=>f.earlySoftLoss));
+  delete broken.inverseTrial!.detachedSourceIds;
+  assert.throws(()=>assertInverseTrial(broken),/配对缺失/);
+  const loaded=normalizeForward(broken,now+1);
+  assert.doesNotThrow(()=>assertInverseTrial(loaded));
+  assert.ok(loaded.inverseTrial!.detachedSourceIds?.includes(sourceId));
+  assert.equal(loaded.positions.some(t=>t.inverseCopy),false);
+  applyInverseSourceTrade(loaded,pack.t,quote(101,101,now+2),now+2);
+  assert.equal(loaded.positions.some(t=>t.inverseCopy),false);
+  const pads=Array.from({length:120},(_,i)=>{
+    const row=structuredClone(pack.s.history[0]!);
+    row.id=`pad-${i}`;delete row.inverseCopy;row.closedAt=now+10+i;return row;
+  });
+  pack.s.history=[...pads,...pack.s.history];pack.s.storage.persistedAt=T;
+  const write=await prepareForwardWrite(null,pack.s,now+50,{compact:true});
+  const restored=await readForwardStore({get:async<V>(k:string)=>structuredClone(new Map(Object.entries(write.entries)).get(k)) as V|undefined},now+51);
+  const kept=restored.history.find(t=>t.inverseCopy?.sourceId===sourceId&&t.inverseCopy.fills.some(f=>f.earlySoftLoss));
+  assert.ok(kept);assertInverseTrial(restored);
+  const src=restored.inverseTrial!.source.positions.find(t=>t.id===sourceId)!;
+  sourceClose(restored.inverseTrial!.source as ForwardState,src,102,now+60_000);
+  applyInverseSourceTrade(restored,src,quote(102,102,now+60_000),now+60_000);
+  assert.equal(kept.inverseCopy!.detachedSourceClosed,true);
+  assert.equal(restored.positions.some(t=>t.inverseCopy?.sourceId===sourceId),false);
+});
+
 test('live cost estimate no longer adds the 6bp gap to executable-book copies, which already pay the spread',()=>{
   const {s,source,t}=fixture('LONG');
   sourceClose(source,t,110,T+60_000);retainSource(s,source);

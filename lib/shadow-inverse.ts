@@ -42,6 +42,11 @@ export function advanceShadowInverse(input:Parameters<typeof advanceBaseline>[0]
     trial.entryHaltSkipped=trial.entryHaltSkipped.filter(id=>open.has(id));
     if(!trial.entryHaltSkipped.length)delete trial.entryHaltSkipped;
   }
+  if(trial.detachedSourceIds?.length){
+    const open=new Set(trial.source.positions.map(p=>p.id));
+    trial.detachedSourceIds=trial.detachedSourceIds.filter(id=>open.has(id));
+    if(!trial.detachedSourceIds.length)delete trial.detachedSourceIds;
+  }
   markInversePositions(s,input.quotes,input.now);
   const softLoss=applyInverseSoftLossExits(s,input.now);
   recordInverseCurve(s,input.quotes,input.now);

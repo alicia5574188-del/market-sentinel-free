@@ -45,7 +45,7 @@ export type InverseTrial={version:typeof SHADOW_INVERSE_VERSION;sourceBuild:type
   accountingMode?:typeof MIRROR_ACCOUNTING_MODE;reconciledAt?:number;
   initialComparisonEquity:number;legacyIds:string[];source:ShadowCapsule;totals:InverseTotals;
   curve:{at:number;source:number;inverse:number;theoretical:number}[];droppedCurvePoints:number;lastSourceRevision:number;
-  comparisonFeesAligned?:'both-live-5bp-v1';entryHaltSkipped?:string[];regimeOpens?:RegimeOpen[];
+  comparisonFeesAligned?:'both-live-5bp-v1';entryHaltSkipped?:string[];detachedSourceIds?:string[];regimeOpens?:RegimeOpen[];
   regimeClock?:{pauseUntil:number;followUntil:number};
   swings?:EquitySwing[];swingArm?:{source?:SwingArm;inverse?:SwingArm}};
 export type EquitySwing={at:number;book:'source'|'inverse';kind:'PEAK'|'TROUGH';equity:number};
@@ -70,6 +70,40 @@ export function executablePrice(sourcePrice:number,spread:number,buy:boolean){
 /** Hard backstop: cut the inverse leg at this gross floating loss even if the shadow is still strong. */
 export const INVERSE_HARD_LOSS_GROSS=10;
 const earlyLoss=(t:Trade)=>!!t.inverseCopy?.fills.some(f=>f.earlySoftLoss);
+function noteDetachedSource(state:ForwardState,sourceId:string){
+  const trial=state.inverseTrial;if(!trial)return;
+  const ids=trial.detachedSourceIds??[];
+  if(!ids.includes(sourceId))ids.push(sourceId);
+  trial.detachedSourceIds=ids.slice(-400);
+}
+function keepInverseHistory(state:ForwardState,closed:Trade){
+  const open=new Set(state.inverseTrial?.source.positions.map(p=>p.id)??[]);
+  const detached=(t:Trade)=>!!t.inverseCopy?.fills?.some(f=>f.earlySoftLoss)&&open.has(t.inverseCopy!.sourceId);
+  const rows=[closed,...state.history.filter(t=>t.id!==closed.id)];
+  const head=rows.slice(0,240),seen=new Set(head.map(t=>t.id));
+  state.history=[...head,...rows.filter(t=>detached(t)&&!seen.has(t.id))];
+}
+/** Saved books keep only the hot close window. An inverse leg cut at 5U/10U
+ * while its source is still open must stay paired after that window drops the
+ * receipt. No second copy is opened and no fill is invented. */
+export function retainDetachedSourceIds(state:ForwardState){
+  const trial=state.inverseTrial;if(!trial)return;
+  const open=new Set(trial.source.positions.map(p=>p.id));
+  const ids=new Set((trial.detachedSourceIds??[]).filter(id=>open.has(id)));
+  for(const row of state.history){
+    const id=row.inverseCopy?.sourceId;
+    if(id&&open.has(id)&&row.inverseCopy?.fills?.some(f=>f.earlySoftLoss))ids.add(id);
+  }
+  const skipped=new Set(trial.entryHaltSkipped??[]);
+  for(const source of trial.source.positions){
+    if(source.openedAt<trial.cutoverAt||trial.legacyIds.includes(source.id)||skipped.has(source.id)||ids.has(source.id))continue;
+    if(state.positions.some(m=>m.inverseCopy?.sourceId===source.id))continue;
+    if(state.history.some(m=>m.inverseCopy?.sourceId===source.id&&m.inverseCopy.fills.some(f=>f.earlySoftLoss)))continue;
+    ids.add(source.id);
+  }
+  if(ids.size)trial.detachedSourceIds=[...ids].slice(-400);
+  else delete trial.detachedSourceIds;
+}
 export function shadowCapsule(state:ForwardState):ShadowCapsule{
   const row={...state} as Record<string,unknown>;delete row.inverseTrial;
   for(const k of SHARED_MARKET_KEYS)delete row[k];
@@ -187,7 +221,8 @@ export function applyInverseSoftLossExits(state:ForwardState,now:number){
       administrative:false,hardLossCap:hardCap,sourceClosedAt:null,sourceBuild:SHADOW_BASELINE_BUILD,quoteAt,
       gross,rule:'inverse-soft-loss-5u'}};
     if(r){t.quantity=r.initialQuantity;t.contracts=r.initialContracts;t.notional=r.initialNotional;t.margin=r.initialMargin;t.plannedRisk=r.initialRisk;}
-    state.positions=state.positions.filter(x=>x.id!==t.id);state.history.unshift(t);state.history=state.history.slice(0,240);
+    noteDetachedSource(state,source.id);
+    state.positions=state.positions.filter(x=>x.id!==t.id);keepInverseHistory(state,t);
     state.resolved++;if((t.netPnl??0)>0)state.wins++;trial.totals.closed++;
     event(state,now,'EXIT',t,`${t.symbol} 反向浮亏超过5U且影子已软，提前平仓`);
     assertInverseTrade(t);changed=true;
@@ -214,6 +249,10 @@ export function applyInverseSourceTrade(state:ForwardState,source:Trade,qIn:Quot
   const resetFresh=!!qIn&&qIn.fresh&&qIn.observedAt<=now&&now-qIn.observedAt<=10000&&qIn.bestBid>0&&qIn.bestAsk>=qIn.bestBid;
   if(manualReset&&(!t||source.exitReason!=='ACCOUNT_RESET'||reductions.length!==already))throw new Error('手动重置不能补造影子历史成交');
   if(!t){
+    if(trial.detachedSourceIds?.includes(source.id)){
+      if(source.status==='CLOSED')trial.detachedSourceIds=trial.detachedSourceIds.filter(id=>id!==source.id);
+      return;
+    }
     const openingExpansion=source.entryContext?.environmentProfitExpansion;
     const opening:RegimeOpen={id:source.id,at:source.openedAt,
       persistence:finite(source.entryContext?.environmentPersistenceScore)?source.entryContext!.environmentPersistenceScore!:null,
@@ -303,7 +342,7 @@ export function applyInverseSourceTrade(state:ForwardState,source:Trade,qIn:Quot
     t.exitAudit={trigger:t.exitReason,at:now,evidence:{authority:SHADOW_INVERSE_VERSION,sourceId:source.id,sourceReason:source.exitReason,administrative:manualReset,
       sourceClosedAt:source.closedAt,sourceBuild:SHADOW_BASELINE_BUILD,quoteAt:f.quoteAt}};
     if(r){t.quantity=r.initialQuantity;t.contracts=r.initialContracts;t.notional=r.initialNotional;t.margin=r.initialMargin;t.plannedRisk=r.initialRisk;}
-    state.positions=state.positions.filter(x=>x.id!==id);state.history.unshift(t);state.history=state.history.slice(0,240);
+    state.positions=state.positions.filter(x=>x.id!==id);keepInverseHistory(state,t);
     state.resolved++;if(t.netPnl>0)state.wins++;trial.totals.closed++;event(state,now,'EXIT',t,`${source.symbol} 跟随影子平仓`);
   }else if(!same(t.contracts,source.contracts)||!same(t.quantity,source.quantity))throw new Error('影子与反向剩余数量不一致');
   assertInverseTrade(t);
@@ -499,7 +538,7 @@ export function assertInverseTrial(state:ForwardState){
     ||t.totals.funding!==0||!(t.totals.spreadDrag>=0))
     throw new Error('影子金融状态损坏；保留原账户，不重置试验');
   for(const source of t.source.positions){
-    if(source.openedAt<t.cutoverAt||t.legacyIds.includes(source.id)||t.entryHaltSkipped?.includes(source.id))continue;
+    if(source.openedAt<t.cutoverAt||t.legacyIds.includes(source.id)||t.entryHaltSkipped?.includes(source.id)||t.detachedSourceIds?.includes(source.id))continue;
     const mirror=state.positions.find(m=>m.inverseCopy?.sourceId===source.id);
     if(mirror){
       if(!same(mirror.contracts,source.contracts)||(!executableCopy(mirror)&&!same(mirror.entryPrice,mirror.inverseCopy!.sourceEntryPrice)))
