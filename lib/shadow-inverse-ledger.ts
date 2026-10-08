@@ -1,9 +1,10 @@
-/** Passive inverse PAPER accounting. One early inverse exit: floating gross
- * worse than 5 USDT while the source hold is already soft. New copies pause
- * only while confirmation-reality says the fresh direction has turned real. */
+/** Passive decision-account accounting. The engine proposes. Research scores the
+ * proposal 30 minutes later by price. The desk stance chooses the next order's
+ * side. New copies use desk exits; copies already open keep the old 5U/10U path. */
 import type {ForwardState,Trade,Quote,AuditEvent} from './forward-relations.ts';
 import {inversePaidFeeView} from './paid-fee-view.ts';
-import {bookRegime,type RegimeOpen} from './confirmation-reality.ts';
+import {type RegimeOpen} from './confirmation-reality.ts';
+import {DESK_ORDER_POLICY,ROUND_TRIP_COST,CLAIM_HORIZON_MS,HOLD_HORIZON_MS,attachProposal,ensureResearchDesk,readNarrative} from './research-decision.ts';
 import {SHADOW_FEE_RATE,INVERSE_COST,INVERSE_FEE_POLICY,LIVE_EXECUTION_GAP_RATE,LIVE_EXECUTION_GAP_POLICY,recordedInverseFeeRate,recordedSourceFeeRate,type InverseFeeStamp} from './inverse-fee.ts';
 import {FIXED_ALLOCATION_EQUITY,FIXED_ALLOCATION_POLICY} from './fixed-allocation.ts';
 import type {InverseLossResearch} from './inverse-loss-research.ts';
@@ -23,8 +24,12 @@ export type InverseCopy={version:typeof SHADOW_INVERSE_VERSION;sourceBuild:typeo
   cutoverAt:number;sourceSide:'LONG'|'SHORT';sourceEntryPrice:number;sourceStopPrice:number;sourceTargetPrice:number|null;
   sourceEntryPlan:Trade['entryContext'];sourceExitReason:string|null;sourceExitAudit?:Trade['exitAudit'];
   sourceRemainingContracts:number;fills:InverseFill[];sourceClosedAt:number|null;independentDecisions:false;liveExecution:'PAPER_ONLY';
-  /** WITH_SOURCE: confirmation has turned real, so this copy takes the shadow's own side. Absent means the usual opposite copy. */
+  /** WITH_SOURCE: this copy takes the proposal's own side. Absent or AGAINST means the opposite copy. */
   alignment?:'AGAINST_SOURCE'|'WITH_SOURCE';
+  /** desk-v1 copies use the research exit. Older copies keep 5U-if-source-soft, 10U, and the source exit. */
+  orderPolicy?:typeof DESK_ORDER_POLICY;
+  /** Frozen source stop at entry. A later source stop move does not move this. */
+  confirmExtreme?:number;
   detachedRemainingQuantity?:number;detachedRemainingContracts?:number;detachedSourceSequence?:number;detachedSourceClosed?:boolean;
   /** Research only: quantity/notional the cut inverse would have closed at had it kept following the source. */
   detachedHoldQuantity?:number;detachedHoldNotional?:number;
@@ -48,6 +53,7 @@ export type InverseTrial={version:typeof SHADOW_INVERSE_VERSION;sourceBuild:type
   comparisonFeesAligned?:'both-live-5bp-v1';entryHaltSkipped?:string[];detachedSourceIds?:string[];regimeOpens?:RegimeOpen[];
   regimeClock?:{pauseUntil:number;followUntil:number};
   forwardStudy?:import('./forward-study.ts').ForwardStudy;
+  researchDesk?:import('./research-decision.ts').ResearchDesk;
   swings?:EquitySwing[];swingArm?:{source?:SwingArm;inverse?:SwingArm}};
 export type EquitySwing={at:number;book:'source'|'inverse';kind:'PEAK'|'TROUGH';equity:number};
 export type SwingArm={at:number;equity:number;side:'FLAT'|'HIGH'|'LOW'};
@@ -204,7 +210,9 @@ export function applyInverseSoftLossExits(state:ForwardState,now:number){
     if(!finite(t.lastPrice)||t.lastPrice<=0||!finite(t.lastQuoteAt)||t.lastQuoteAt>now||now-t.lastQuoteAt>10_000)continue;
     const gross=dir(t.side)*t.quantity*(t.lastPrice-t.entryPrice);
     const hardCap=gross<-INVERSE_HARD_LOSS_GROSS;
-    if(!(gross<-INVERSE_SOFT_LOSS_GROSS)||(!hardCap&&!sourceHoldSoft(source,now)))continue;
+    const desk=t.inverseCopy.orderPolicy===DESK_ORDER_POLICY;
+    const soft=gross<-INVERSE_SOFT_LOSS_GROSS&&sourceHoldSoft(source,now);
+    if(desk?!hardCap:!hardCap&&!soft)continue;
     const i=t.inverseCopy,quantity=t.quantity,contracts=t.contracts,price=t.lastPrice,quoteAt=t.lastQuoteAt,
       fee=quantity*price*INVERSE_COST.feeRate,
       fill:InverseFill={sequence:i.fills.length,kind:'CLOSE',sourceAt:now,appliedAt:now,earlySoftLoss:true,
@@ -263,32 +271,27 @@ export function applyInverseSourceTrade(state:ForwardState,source:Trade,qIn:Quot
       if(source.status==='CLOSED')trial.detachedSourceIds=trial.detachedSourceIds.filter(id=>id!==source.id);
       return;
     }
-    const openingExpansion=source.entryContext?.environmentProfitExpansion;
-    const opening:RegimeOpen={id:source.id,at:source.openedAt,
-      persistence:finite(source.entryContext?.environmentPersistenceScore)?source.entryContext!.environmentPersistenceScore!:null,
-      expansion:openingExpansion==='HIGH'||openingExpansion==='NORMAL'||openingExpansion==='LOW'?openingExpansion:null};
-    if(source.status==='OPEN'){
-      const rows=trial.regimeOpens??[];
-      if(!rows.some(row=>row.id===source.id))rows.push(opening);
-      trial.regimeOpens=rows.slice(-180);
-    }
-    const decision=bookRegime([...state.positions,...state.history],now,trial.regimeOpens);
-    const clock=trial.regimeClock??{pauseUntil:0,followUntil:0};
-    if(decision.mode==='PAUSE')clock.pauseUntil=Math.max(clock.pauseUntil,decision.pauseUntil);
-    trial.regimeClock=clock;
-    const regime=decision.mode==='FADE'&&now<clock.pauseUntil?'PAUSE':decision.mode;
-    if(regime==='PAUSE'){
+    const desk=ensureResearchDesk(trial.researchDesk);
+    trial.researchDesk=desk;
+    const narrative=readNarrative({major:state.extremumRegime?.narrative?.major?.bias,short:state.extremumRegime?.narrative?.short?.bias,
+      breadth3:state.extremumRegime?.internals?.breadth3});
+    const entryMid=qIn&&qIn.fresh&&qIn.bestBid>0&&qIn.bestAsk>=qIn.bestBid&&qIn.observedAt<=now&&now-qIn.observedAt<=10_000
+      ?(qIn.bestBid+qIn.bestAsk)/2:source.entryPrice;
+    attachProposal(desk,{id:source.id,symbol:source.symbol,openedAt:source.openedAt,engineSide:source.side,
+      slow:narrative.slow,fast:narrative.fast,entryMid,confirmExtreme:finite(source.stopPrice)?source.stopPrice:null});
+    const stance=desk.stance??'FORWARD';
+    if(stance==='FLAT'){
       if(source.status==='OPEN'){
         const skipped=trial.entryHaltSkipped??[];
         if(!skipped.includes(source.id))skipped.push(source.id);
         trial.entryHaltSkipped=skipped.slice(-200);
         state.revision++;state.events.unshift({id:`a${state.startedAt}-${state.revision}`,at:now,kind:'ENTRY',subject:source.id,
-          reason:`持续力已从高位掉下来，先停开 ${source.symbol}`});
+          reason:`这一时段先停开 ${source.symbol}`});
         state.events=state.events.slice(0,160);
       }
       return;
     }
-    const withSource=regime==='FOLLOW'&&source.status==='OPEN';
+    const withSource=stance!=='REVERSE';
     const side=withSource?source.side:source.side==='LONG'?'SHORT':'LONG',openSpread=bookSpread(qIn,now,source.entryPrice),
       price=executablePrice(source.entryPrice,openSpread,side==='LONG'),
       quantity=source.realization?.initialQuantity??source.quantity,contracts=source.realization?.initialContracts??source.contracts,
@@ -301,27 +304,26 @@ export function applyInverseSourceTrade(state:ForwardState,source:Trade,qIn:Quot
       for(const k of Object.keys(context))if(!keep.has(k))delete (context as unknown as Record<string,unknown>)[k];
       context.side=side;context.strategyVersion=SHADOW_INVERSE_VERSION;
       context.reason=withSource
-        ?`确认已变真，顺着影子 ${source.id} 做${side==='LONG'?'多':'空'}。`
-        :`反向复制影子 ${source.id}；原方向${source.side==='LONG'?'多':'空'}，进出场只由影子决定。`;
-      context.thesisId=id;context.thesisSummary=context.reason;context.invalidationSummary=withSource
-        ?'确认仍为真时顺着影子进出；浮亏超过5U且影子已软、或浮亏到10U，提前平掉这一笔。'
-        :'反向浮亏超过5U且影子持仓已软时提前平仓；其余仍只跟随影子退出。';}
+        ?`决策是正向，跟提案做${side==='LONG'?'多':'空'}。`
+        :`决策是反向，跟提案反着做${side==='LONG'?'多':'空'}。`;
+      context.thesisId=id;context.thesisSummary=context.reason;context.invalidationSummary='打穿进场确认位、30分钟没走出成本、利润回吐一半、满90分钟，或提案平仓，就出场。浮亏到10U也出场。';}
     t={...structuredClone(source),id,side,status:'OPEN',openedAt:now,closedAt:null,entryPrice:price,exitPrice:null,
       quantity,contracts,notional:quantity*price,margin:quantity*price/source.leverage,entryFee:quantity*price*INVERSE_COST.feeRate,
       exitFee:0,fundingAllowance:0,grossPnl:null,netPnl:null,exitReason:null,lastPrice:price,lastQuoteAt:source.lastQuoteAt,
       plannedRisk:source.realization?.initialRisk??source.plannedRisk,favorable:0,adverse:0,firstProfitAt:null,profitFloorRate:0,peakPnlRate:0,
-      entryContext:context,rule:{...source.rule,id,side,reason:context?.reason??'影子反向复制'},
+      entryContext:context,rule:{...source.rule,id,side,reason:context?.reason??'跟提案开仓'},
       exitControl:{policy:SHADOW_INVERSE_VERSION,armedAt:null,armedQuoteAt:null,maxObservationGapMs:30000,maxQuoteAgeMs:10000},
       inverseCopy:{version:SHADOW_INVERSE_VERSION,sourceBuild:SHADOW_BASELINE_BUILD,sourceId:source.id,cutoverAt:trial.cutoverAt,
         sourceSide:source.side,sourceEntryPrice:source.entryPrice,sourceStopPrice:source.stopPrice,
         sourceTargetPrice:source.entryContext?.winnerPlan?.target??null,sourceEntryPlan:structuredClone(source.entryContext),
         sourceExitReason:null,sourceRemainingContracts:contracts,sourceClosedAt:null,fills:[],independentDecisions:false,liveExecution:'PAPER_ONLY',pricePolicy:INVERSE_PRICE_POLICY,
-        alignment:withSource?'WITH_SOURCE':'AGAINST_SOURCE'}};
+        orderPolicy:DESK_ORDER_POLICY,alignment:withSource?'WITH_SOURCE':'AGAINST_SOURCE',
+        ...(finite(source.stopPrice)&&source.stopPrice>0?{confirmExtreme:source.stopPrice}:{})}};
     delete t.review;delete t.winnerManagement;delete t.positionIntelligence;delete t.realization;delete t.holdValue;
     delete t.liquidityLifecycle;delete t.profitLifecycle;delete t.profitProtection;delete t.profitProtectionMigration;delete t.exitAudit;delete t.exitPlan;
     addFill(state,t,source,'OPEN',quantity,contracts,source.entryPrice,source.openedAt,source.review?.timeline[0]?.quoteAt??source.lastQuoteAt,now,source.entryFee,undefined,openSpread);
     if(!same(frozenFeeOf(t.inverseCopy!.fills[0]!),source.entryFee))throw new Error('影子入场费用不符合固定源账本');
-    trial.totals.opened++;state.positions.push(t);event(state,now,'ENTRY',t,withSource?`${source.symbol} 确认已变真，顺向开仓`:`${source.symbol} 影子反向开仓`);
+    trial.totals.opened++;state.positions.push(t);event(state,now,'ENTRY',t,withSource?`${source.symbol} 正向开仓`:`${source.symbol} 反向开仓`);
   }
   for(const sf of reductions.slice(already)){
     if(sf.quantity<=0||sf.quantity>=t.quantity||sf.contracts<=0||sf.contracts>=t.contracts)throw new Error('反向减仓数量与父单不一致');
@@ -356,6 +358,56 @@ export function applyInverseSourceTrade(state:ForwardState,source:Trade,qIn:Quot
     state.resolved++;if(t.netPnl>0)state.wins++;trial.totals.closed++;event(state,now,'EXIT',t,`${source.symbol} 跟随影子平仓`);
   }else if(!same(t.contracts,source.contracts)||!same(t.quantity,source.quantity))throw new Error('影子与反向剩余数量不一致');
   assertInverseTrade(t);
+}
+const DESK_EXIT_TEXT:Record<string,string>={
+  DESK_SWEEP_EXIT:'打穿进场确认位，提前平仓',
+  DESK_NO_PROGRESS_EXIT:'30分钟没走出成本，提前平仓',
+  DESK_GIVEBACK_EXIT:'利润回吐一半，提前平仓',
+  DESK_HORIZON_EXIT:'满90分钟，提前平仓',
+};
+/** New desk copies only. Legacy copies are left to the 5U/10U path and the source exit. */
+export function applyDeskOrderExits(state:ForwardState,quotes:Record<string,Quote>,now:number){
+  const trial=state.inverseTrial;if(!trial)return false;
+  let changed=false;
+  for(const t of [...state.positions]){
+    const copy=t.inverseCopy;
+    if(!copy||t.status!=='OPEN'||copy.orderPolicy!==DESK_ORDER_POLICY)continue;
+    const source=trial.source.positions.find(s=>s.id===copy.sourceId);
+    if(!source||source.status!=='OPEN')continue;
+    if(!finite(t.lastPrice)||t.lastPrice<=0||!finite(t.entryPrice)||t.entryPrice<=0||!finite(t.lastQuoteAt)||t.lastQuoteAt>now||now-t.lastQuoteAt>10_000)continue;
+    const q=quotes[t.symbol];
+    const mid=q&&q.fresh&&q.bestBid>0&&q.bestAsk>=q.bestBid&&q.observedAt<=now&&now-q.observedAt<=10_000?(q.bestBid+q.bestAsk)/2:null;
+    const extreme=copy.confirmExtreme;
+    let reason:string|null=null;
+    if(mid!=null&&finite(extreme)&&extreme>0&&(copy.sourceSide==='LONG'?mid<=extreme:mid>=extreme))reason='DESK_SWEEP_EXIT';
+    const age=now-t.openedAt,current=dir(t.side)*(t.lastPrice/t.entryPrice-1),peak=Math.max(finite(t.favorable)?t.favorable:0,current);
+    if(!reason&&age>=HOLD_HORIZON_MS)reason='DESK_HORIZON_EXIT';
+    if(!reason&&peak>=ROUND_TRIP_COST&&current<=peak/2)reason='DESK_GIVEBACK_EXIT';
+    if(!reason&&age>=CLAIM_HORIZON_MS&&peak<ROUND_TRIP_COST)reason='DESK_NO_PROGRESS_EXIT';
+    if(!reason)continue;
+    const i=copy,quantity=t.quantity,contracts=t.contracts,price=t.lastPrice,quoteAt=t.lastQuoteAt,
+      gross=dir(t.side)*quantity*(price-t.entryPrice),fee=quantity*price*INVERSE_COST.feeRate,
+      fill:InverseFill={sequence:i.fills.length,kind:'CLOSE',sourceAt:now,appliedAt:now,earlySoftLoss:true,
+        sourceQuoteAt:quoteAt,quoteAt,sourcePrice:price,price,quantity,contracts,sourceGross:0,gross,sourceFee:0,fee,
+        sourceFunding:0,funding:0,spreadDrag:0,feePolicy:INVERSE_FEE_POLICY,feeRate:INVERSE_COST.feeRate};
+    i.fills.push(fill);const a=trial.totals,r=t.realization;
+    a.gross+=gross;a.fees+=fee;a.detachedGross=(a.detachedGross??0)+gross;a.detachedFees=(a.detachedFees??0)+fee;
+    state.balance+=gross-fee;state.grossPnl+=gross;state.fees+=fee;state.turnover+=quantity*price;
+    t.status='CLOSED';t.closedAt=now;t.exitPrice=price;t.lastPrice=price;t.lastQuoteAt=quoteAt;
+    t.grossPnl=(r?.gross??0)+gross;t.exitFee=(r?.fees??0)+fee;t.fundingAllowance=0;
+    t.netPnl=t.grossPnl-t.entryFee-t.exitFee;t.exitReason=reason;
+    i.detachedRemainingQuantity=quantity;i.detachedRemainingContracts=contracts;i.detachedSourceSequence=source.realization?.sequence??0;
+    i.detachedSourceClosed=false;i.sourceRemainingContracts=source.contracts;
+    t.exitAudit={trigger:reason,at:now,evidence:{authority:SHADOW_INVERSE_VERSION,sourceId:source.id,sourceReason:null,
+      administrative:false,hardLossCap:false,sourceClosedAt:null,sourceBuild:SHADOW_BASELINE_BUILD,quoteAt,gross,rule:reason}};
+    if(r){t.quantity=r.initialQuantity;t.contracts=r.initialContracts;t.notional=r.initialNotional;t.margin=r.initialMargin;t.plannedRisk=r.initialRisk;}
+    noteDetachedSource(state,source.id);
+    state.positions=state.positions.filter(x=>x.id!==t.id);keepInverseHistory(state,t);
+    state.resolved++;if((t.netPnl??0)>0)state.wins++;trial.totals.closed++;
+    event(state,now,'EXIT',t,`${t.symbol} ${DESK_EXIT_TEXT[reason]??'提前平仓'}`);
+    assertInverseTrade(t);changed=true;
+  }
+  return changed;
 }
 export function markInversePositions(state:ForwardState,quotes:Record<string,Quote>,now:number){
   const trial=state.inverseTrial;if(!trial)return;

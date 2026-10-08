@@ -23,7 +23,10 @@ const signed=(v:number|null|undefined,d=2)=>typeof v==="number"&&Number.isFinite
 const time=(v?:number|null)=>v?new Date(v).toLocaleString("zh-CN",{timeZone:BEIJING_TIME_ZONE,month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}):"—";
 const duration=(start:number,end:number|null|undefined,now:number)=>{const m=Math.floor(Math.max(0,(end??now)-start)/60000);return m<1?"<1分钟":m>=60?`${Math.floor(m/60)}小时${m%60}分`:`${m}分钟`;};
 const modeName=(mode:string)=>({RELATIVE:"相对异类",REVERSAL:"结构转变",CONTINUATION:"市场延续",SWING:"旧峰谷兼容",TREND_PULLBACK:"旧回调兼容",IMPULSE:"旧推进兼容",RELATION:"旧关系兼容",BREAKOUT:"旧突破兼容",RETEST:"旧回踩兼容",FAILED_BREAKOUT:"旧失败突破兼容",RANGE:"旧区域兼容",SHOCK:"旧突变兼容"}[mode]??mode);
-const exitName=(reason:string|null)=>reason?({SHADOW_SOURCE_EXIT:"研究层出场",INVERSE_SOFT_LOSS_EXIT:"浮亏到线，提前平仓",WINNER_STRUCTURE_EXIT:"有效结构保护",WINNER_THESIS_EXIT:"持续推动失效",RANGE_CENTER_EXIT:"回归目标兑现",STRUCTURE_STOP:"结构止损",PROFIT_GIVEBACK:"利润保护",THESIS_INVALIDATED:"交易假设失效",RELATIVE_EDGE_GONE:"相对优势消失",NO_POSITIVE_FEEDBACK:"长时间未获得正向反馈",MAX_HOLD:"最大持仓时间",ENTRY_FEEDBACK_FAILED:"旧入场反馈失败",OPPOSITE_EXTREMUM:"旧相反峰谷",TREND_DEATH:"旧趋势死亡",EXTREMUM_PROFIT_EXIT:"旧极值退出",NO_PROGRESS:"旧无进展",MARKET_FLIP:"旧市场翻转",RELATION_DEGRADED:"旧关系降级",SAMPLE_PATH_DIVERGED:"旧样本路径失配",SAMPLE_EDGE_EXHAUSTED:"旧样本优势耗尽",SAMPLE_MAX_HOLD:"旧样本最大持仓",TIME_DECAY:"旧持仓超时",OPPORTUNITY_REPLACED:"更优机会替换",STRUCTURAL_INTERRUPT_REVERSAL:"旧极端结构反转",SHOCK_REENTRY:"旧突变重新回区",FAST_STRUCTURE_FAILURE:"旧强结构快速失效",ACCOUNT_RESET:"手动重置"}[reason]??reason):"—";
+const exitName=(reason:string|null)=>reason?({SHADOW_SOURCE_EXIT:"提案平仓",INVERSE_SOFT_LOSS_EXIT:"浮亏到线，提前平仓",DESK_SWEEP_EXIT:"打穿确认位",DESK_NO_PROGRESS_EXIT:"30分钟没走出成本",DESK_GIVEBACK_EXIT:"利润回吐一半",DESK_HORIZON_EXIT:"满90分钟",WINNER_STRUCTURE_EXIT:"有效结构保护",WINNER_THESIS_EXIT:"持续推动失效",RANGE_CENTER_EXIT:"回归目标兑现",STRUCTURE_STOP:"结构止损",PROFIT_GIVEBACK:"利润保护",THESIS_INVALIDATED:"交易假设失效",RELATIVE_EDGE_GONE:"相对优势消失",NO_POSITIVE_FEEDBACK:"长时间未获得正向反馈",MAX_HOLD:"最大持仓时间",ENTRY_FEEDBACK_FAILED:"旧入场反馈失败",OPPOSITE_EXTREMUM:"旧相反峰谷",TREND_DEATH:"旧趋势死亡",EXTREMUM_PROFIT_EXIT:"旧极值退出",NO_PROGRESS:"旧无进展",MARKET_FLIP:"旧市场翻转",RELATION_DEGRADED:"旧关系降级",SAMPLE_PATH_DIVERGED:"旧样本路径失配",SAMPLE_EDGE_EXHAUSTED:"旧样本优势耗尽",SAMPLE_MAX_HOLD:"旧样本最大持仓",TIME_DECAY:"旧持仓超时",OPPORTUNITY_REPLACED:"更优机会替换",STRUCTURAL_INTERRUPT_REVERSAL:"旧极端结构反转",SHOCK_REENTRY:"旧突变重新回区",FAST_STRUCTURE_FAILURE:"旧强结构快速失效",ACCOUNT_RESET:"手动重置"}[reason]??reason):"—";
+const stanceName=(stance?:string)=>stance==="REVERSE"?"反向":stance==="FLAT"?"先停":"正向";
+const sessionName=(session?:string)=>session==="ASIA"?"亚盘":session==="EUROPE"?"欧盘":session==="US"?"美盘":"—";
+const claimName=(kind?:string)=>kind==="CONTINUE"?"延续":kind==="SUSPECT"?"可疑":"不投票";
 
 export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,livePanel,liveSystemPanel,liveEnabled,liveOverview,accountPanel,memberName,cacheScope="owner"}:{
   data:View|null;healthy:boolean;statusLabel?:string;feedAt:number|null;error:string|null;livePanel:ReactNode;liveSystemPanel?:ReactNode;
@@ -50,6 +53,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
 
   const desk=data?.forwardDesk??null,positions=data?.positions??[];
   const usingDesk=!!desk&&!liveEnabled;
+  const stanceLabel=stanceName(desk?.stance);
   const paperFloating=usingDesk?desk.floating:positions.reduce((n,t)=>n+(t.status==="OPEN"?remainingPaidNetPnl(t,t.lastPrice):0),0);
   const held=usingDesk?desk.openCount:positions.length;
   const systemStatus=statusLabel==="后台运行中"?"正常":statusLabel?.startsWith("后台运行中 · ")?statusLabel.slice(8):statusLabel??(healthy?"正常":"行情恢复中");
@@ -63,8 +67,8 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
     <header className="fr-compact-header"><b>哨兵 · 市场智能系统</b><span className={healthy?"fr-positive":""} role="status">{systemStatus}</span><span>实盘{liveEnabled?liveOverview?.operational?"运行中":"核对中":"关闭"}{memberName?` · ${memberName}`:""}</span></header>
 
     {tab==="overview"&&<>
-      <section className="fr-equity fr-overview-equity" data-testid="overview-equity-first" aria-label={liveEnabled?"实盘账户权益":usingDesk?"正向权益":"模拟账户权益"}>
-        <small>{liveEnabled?"实盘账户权益":usingDesk?"正向权益":"模拟账户权益"} · USDT</small><strong>{fmt(accountEquity)}</strong>
+      <section className="fr-equity fr-overview-equity" data-testid="overview-equity-first" aria-label={liveEnabled?"实盘账户权益":usingDesk?`${stanceLabel}权益`:"模拟账户权益"}>
+        <small>{liveEnabled?"实盘账户权益":usingDesk?`${stanceLabel}权益`:"模拟账户权益"} · USDT</small><strong>{fmt(accountEquity)}</strong>
         <div className={(accountPnl??0)>=0?"fr-positive":"fr-negative"}>{signed(accountPnl)} <span>U · {signed(accountPnl!=null&&accountBase?accountPnl/accountBase*100:null)}%{liveEnabled?" · 观察期交易盈亏":""}</span></div>
         <footer><span>{liveEnabled?"实盘观察基准":"起点"} {fmt(accountBase,liveEnabled?2:0)}</span><span>{liveEnabled?"观察期回撤":"最大回撤"} {fmt(drawdown)}%</span></footer>
         <p>更新 {time(liveEnabled?liveOverview?.lastSyncAt:data?.updatedAt)}{liveEnabled&&(!liveOverview?.lastSyncAt||now-liveOverview.lastSyncAt>30000)?" · 实盘数据待更新":!liveEnabled&&(usingDesk?desk.stale:data?.stalePositions)?" · 持仓估值待更新":""}</p>
@@ -72,9 +76,9 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       </section>
       <section className="fr-stats">
         <Stat label="当前持仓" value={liveEnabled?`${actual?.positionCount??liveOverview?.positionCount??"—"} 笔`:data?`${held} 笔`:"—"} note={liveEnabled?`保证金 ${fmt(actual?.margin)} U`:usingDesk?`已平 ${fmt(desk.resolved,0)} 笔`:`保证金 ${fmt(positions.reduce((n,t)=>n+t.margin,0))} U`}/>
-        <Stat label="浮动盈亏" value={`${signed(liveEnabled?actual?.floating:data?paperFloating:null)} U`} note={liveEnabled?"Gate实际未实现盈亏":usingDesk?"正向持仓浮动":`计划风险 ${fmt(data?.equity?positions.reduce((n,t)=>n+t.plannedRisk,0)/data.equity*100:null,1)}%`}/>
-        <Stat label={usingDesk?"已记下样本":"已完成"} value={usingDesk?`${desk.study.recorded} 笔`:data?`${fmt(data.resolved,0)} 笔`:"—"} note={usingDesk?`赢 ${desk.study.recordedWins} 笔`:"订单记录"}/>
-        <Stat label={liveEnabled?"可用保证金":"已扣手续费"} value={`${fmt(liveEnabled?liveOverview?.available:usingDesk?desk.fees:data?.fees)} U`} note={liveEnabled?"Gate实际可用余额":usingDesk?"正向成交费用":`成交额 ${fmt(data?.turnover)} U`}/>
+        <Stat label="浮动盈亏" value={`${signed(liveEnabled?actual?.floating:data?paperFloating:null)} U`} note={liveEnabled?"Gate实际未实现盈亏":usingDesk?"持仓浮动":`计划风险 ${fmt(data?.equity?positions.reduce((n,t)=>n+t.plannedRisk,0)/data.equity*100:null,1)}%`}/>
+        <Stat label="已完成" value={usingDesk?`${fmt(desk.resolved,0)} 笔`:data?`${fmt(data.resolved,0)} 笔`:"—"} note={usingDesk?`赢 ${fmt(desk.wins,0)} 笔`:"订单记录"}/>
+        <Stat label={liveEnabled?"可用保证金":"已扣手续费"} value={`${fmt(liveEnabled?liveOverview?.available:usingDesk?desk.fees:data?.fees)} U`} note={liveEnabled?"Gate实际可用余额":usingDesk?"决策账户成交费用":`成交额 ${fmt(data?.turnover)} U`}/>
       </section>
       {liveEnabled&&<section className="fr-section"><div className="fr-section-head"><h2>实盘复制</h2></div>
         <p>已复制 {liveOverview?.copied??"—"} / 应复制 {liveOverview?.eligible??"—"} · 未跟上 {liveOverview?.missing??"—"}。成交和持仓以实盘页为准。</p></section>}
@@ -84,7 +88,15 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
     </>}
 
     {tab==="research"&&<>
-      <section className="fr-section"><div className="fr-section-head"><h2>市场原数</h2></div>
+      <section className="fr-section" data-testid="research-claims"><div className="fr-section-head"><h2>研究裁决</h2><span>{desk?.research?`${desk.research.unsettled} 笔未到期`:"等待提案"}</span></div>
+        <p>每笔提案先记下读法。过 30 分钟，用价格判断对错，不看这笔后来怎么平的。</p>
+        <p className="fr-note">慢方向和这一拍同向，并且和提案同向，记成延续。两边打架，或者都和提案相反，记成可疑。有一边没方向，就不投票。</p>
+        {desk?.research&&desk.research.claims.length>0?<div className="fr-study-list">{desk.research.claims.map(c=>{
+          const verdict=!c.settled?"未到期":c.kind==="SKIP"?"不投票":c.correct?"对了":"错了";
+          return <p key={c.id}><span>{c.symbol.replace("_"," / ")} · {c.engineSide==="LONG"?"多":"空"} · {claimName(c.kind)} · {sessionName(c.session)}</span><b>{verdict}{c.swept?" · 已打穿确认位":""}</b></p>;
+        })}</div>:<p className="fr-note">还没有记下提案。</p>}
+      </section>
+      <section className="fr-section"><div className="fr-section-head"><h2>行情状态</h2><span>不决定正反</span></div>
         <p className="fr-note">{tape?.sentence??"这一拍的原数还没有。"}</p>
         {(tape?.lines??[]).map(line=><p key={line} className="fr-note">{line}</p>)}
       </section>
@@ -116,42 +128,37 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
 }
 
 function DecisionPage({data}:{data:View|null}){
-  const study=data?.forwardDesk?.study;
-  return <>
-    <section className="fr-section" data-testid="decision-stance">
-      <div className="fr-section-head"><h2>当前决策</h2><span>正向</span></div>
-      <p>研究层定方向，订单跟同一边做。</p>
-      <p className="fr-note">反向账在后台单独记，这页不看。现在不自动切换。</p>
-    </section>
-    <section className="fr-section" data-testid="forward-study">
-      <div className="fr-section-head"><h2>正向样本</h2><span>{study?`${study.recorded} 笔`:"0 笔"}</span></div>
-      {study&&study.recorded>0?<>
-        <div className="fr-three"><div><small>已记下</small><b>{study.recorded} 笔</b></div><div><small>赢面</small><b>{study.recorded?`${Math.round(study.recordedWins/study.recorded*100)}%`:"—"}</b></div><div><small>净额</small><b className={study.recordedNet>=0?"fr-positive":"fr-negative"}>{signed(study.recordedNet)} U</b></div></div>
-        <p className="fr-note">{study.note}</p>
-        <p className="fr-note">{study.coverage}</p>
-        <div className="fr-study-list">{study.groups.map(g=><p key={g.label}><span>{g.label}</span><b>{g.n} 笔 · 赢 {g.wins} · {signed(g.net)} U</b></p>)}</div>
-        {study.recent.length>0&&<div className="fr-study-list">{study.recent.slice(0,5).map(row=><p key={row.id}><span>{row.symbol.replace("_"," / ")} · {row.side==="LONG"?"多":"空"} · {row.tag}</span><b className={row.net>=0?"fr-positive":"fr-negative"}>{signed(row.net)} U</b></p>)}</div>}
-      </>: <p className="fr-note">正向样本还没记下。记账跑过一轮就会出现。</p>}
-    </section>
-  </>;
+  const desk=data?.forwardDesk??null,research=desk?.research,stance=stanceName(desk?.stance);
+  const headline=desk?.stance==="REVERSE"?"新单跟提案反着做。":desk?.stance==="FLAT"?"这一时段先不开新单。":"新单跟提案同一边。";
+  return <section className="fr-section" data-testid="decision-stance">
+    <div className="fr-section-head"><h2>当前决策</h2><span>{stance}</span></div>
+    <p>{headline}</p>
+    <p className="fr-note">同一时段里，延续和可疑都够 20 笔才改方向。延续大多打错，而且可疑反着读大多对，才改成反向，并保持接下来 20 笔。两种读法都在亏，就先停开。不够 20 笔，新单继续正向。已经开着的单不改。</p>
+    {research&&<div className="fr-three"><div><small>这一时段</small><b>{sessionName(research.session)}</b></div><div><small>延续打错</small><b>{research.continueN<20?`${research.continueN}/20`:`${research.continueWrong}/20`}</b></div><div><small>可疑反着读对</small><b>{research.suspectN<20?`${research.suspectN}/20`:`${research.suspectRight}/20`}</b></div></div>}
+    {research?.note&&<p className="fr-note">{research.note}</p>}
+    <p className="fr-note">新单和提案一样大。先停的时候不开新单，也不把后面的单加大。出场看确认位、30 分钟、利润回吐、90 分钟和提案自己平仓，谁先到听谁。浮亏到 10U 也走。旧单仍按原来的出场。</p>
+  </section>;
 }
 function ForwardCurve({desk}:{desk:Desk}){
+  const label=desk.stance==="REVERSE"?"反向净值":desk.stance==="FLAT"?"账户净值":"正向净值";
   const points=desk.curve.length?desk.curve:[{at:0,equity:desk.initialEquity}];
   const lo=Math.min(desk.initialEquity,...points.map(p=>p.equity)),hi=Math.max(desk.initialEquity,...points.map(p=>p.equity));
   const range=Math.max(1e-6,hi-lo),first=points[0]!.at,last=Math.max(first+1,points.at(-1)!.at);
   const x=(at:number)=>12+(at-first)/(last-first)*376,y=(n:number)=>164-(n-lo)/range*140;
-  return <section className="fr-section" data-testid="forward-equity-curve" aria-label="正向净值">
-    <div className="fr-section-head"><h2>正向净值</h2><span>{points.length} 点</span></div>
-    <svg viewBox="0 0 400 185" width="100%" role="img" aria-label="正向净值曲线">
+  return <section className="fr-section" data-testid="forward-equity-curve" aria-label={label}>
+    <div className="fr-section-head"><h2>{label}</h2><span>{points.length} 点</span></div>
+    <svg viewBox="0 0 400 185" width="100%" role="img" aria-label={label}>
       <polyline fill="none" className="eq-curve" points={points.map(p=>`${x(p.at)},${y(p.equity)}`).join(" ")}/>
       <text x="12" y="14" fill="currentColor" fontSize="10">{fmt(hi)} U</text><text x="12" y="180" fill="currentColor" fontSize="10">{fmt(lo)} U</text>
     </svg>
-    <div className="fr-three"><div><small>已扣手续费</small><b>{fmt(desk.fees)} U</b></div><div><small>浮动盈亏</small><b>{signed(desk.floating)} U</b></div><div><small>研究层平仓</small><b>{fmt(desk.resolved,0)}</b></div></div>
+    <div className="fr-three"><div><small>已扣手续费</small><b>{fmt(desk.fees)} U</b></div><div><small>浮动盈亏</small><b>{signed(desk.floating)} U</b></div><div><small>已平仓</small><b>{fmt(desk.resolved,0)}</b></div></div>
   </section>;
 }
 function ForwardOrders({desk,now}:{desk:Desk;now:number}){
+  const label=stanceName(desk.stance);
   return <section className="fr-section" data-testid="forward-orders">
-    <div className="fr-section-head"><h2>正向持仓</h2><span>{desk.open.length} 笔</span></div>
+    <div className="fr-section-head"><h2>{label}持仓</h2><span>{desk.open.length} 笔</span></div>
+    <p className="fr-note">新单跟当前决策，一笔提案一笔单，金额不变。先停才不开，也不把后面的单加大。已经开着的单不改方向。</p>
     {desk.open.length?desk.open.map(o=><article className="fr-order" key={o.id}><header><div><b>{o.symbol.replace("_"," / ")}</b><small>{o.side==="LONG"?"多":"空"}{o.plan?` · ${o.plan}`:""} · {fmt(o.leverage,0)}× · {duration(o.openedAt,null,now)}</small></div><b className={(o.net??0)>=0?"fr-positive":"fr-negative"}>{signed(o.net)} U</b></header>
       <small>入场 {fmt(o.entryPrice,6)} · 现价 {fmt(o.price,6)} · {time(o.openedAt)}</small></article>):<Empty title="当前没有持仓"/>}
     {desk.recent.length>0&&<><div className="fr-section-head"><h2>最近平仓</h2><span>{desk.recent.length} 笔</span></div>

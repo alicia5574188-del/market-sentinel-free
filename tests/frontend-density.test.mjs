@@ -262,8 +262,8 @@ test("orders page shows the forward book and does not render a shadow ledger",()
   assert.match(html,/正向权益/);assert.match(html,/640\.50/);assert.match(html,/BTC \/ USDT/);assert.match(html,/\+1\.20 U/);
   assert.doesNotMatch(html,/影子|影子订单|shadow-orders-panel|shadow-inverse-comparison/);
   buttons.find(b=>Array.isArray(b.children)&&b.children[1]?.props?.children==="决策").onClick();html=draw();
-  assert.match(html,/当前决策/);assert.match(html,/正向/);assert.match(html,/高持续/);assert.match(html,/不自动切/);
-  assert.match(html,/反向账在后台单独记/);
+  assert.match(html,/当前决策/);assert.match(html,/正向/);assert.match(html,/20 笔/);
+  assert.doesNotMatch(html,/高持续|不自动切|反向账在后台/);
   assert.doesNotMatch(html,/影子|影子订单/);
   for(const file of ["app/forward-dashboard.tsx","app/market-intelligence-execution.tsx","app/live-console.tsx"])
     assert.doesNotMatch(read(file),/影子/);

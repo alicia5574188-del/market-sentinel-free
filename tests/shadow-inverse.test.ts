@@ -86,25 +86,24 @@ test('cutover preserves original account and history, excludes old positions fro
   const v=newInverseTrial(s,T,921);assert.equal(JSON.stringify(s),before);assert.equal(v.source.balance,921);assert.equal(v.source.resolved,23);
   s.inverseTrial=v;applyInverseSourceTrade(s,s.positions[0],undefined,T);assert.equal(s.positions.length,1);assert.equal(v.totals.opened,0);
 });
-for(const side of ['LONG','SHORT'] as const)test(side+' fills at its own executable book side, same size and opposite direction, paying only own filled fees',()=>{
+for(const side of ['LONG','SHORT'] as const)test(side+' fills at its own executable book side, same size and same direction, paying only own filled fees',()=>{
   const {s,source,t}=fixture(side,.1),m=s.positions[0]!,at=T+60000,q=quote(97,97.1,at);
-  assert.notEqual(m.side,t.side);near(m.quantity,t.quantity);near(m.entryPrice,side==='LONG'?100:100.1);near(m.entryFee,m.quantity*m.entryPrice*.0005);
+  assert.equal(m.side,t.side);near(m.quantity,t.quantity);near(m.entryPrice,side==='LONG'?100.2:99.9);near(m.entryFee,m.quantity*m.entryPrice*.0005);
   near(t.entryFee,t.notional*.0007);assert.equal(m.inverseCopy!.fills[0]!.feePolicy,INVERSE_FEE_POLICY);
   near(s.balance,1000-m.entryFee);sourceClose(source,t,side==='LONG'?q.bestBid:q.bestAsk,at);
   applyInverseSourceTrade(s,t,q,at);retainSource(s,source);assertInverseTrial(s);const closed=s.history[0]!;
-  near(closed.exitPrice!,side==='LONG'?97.1:97);near(closed.grossPnl!,-t.grossPnl!-closed.inverseCopy!.fills.reduce((n,f)=>n+f.spreadDrag,0));near(closed.fundingAllowance,0);
+  near(closed.exitPrice!,side==='LONG'?96.9:97.2);near(closed.grossPnl!,side==='LONG'?-33:27);near(closed.fundingAllowance,0);
   near(closed.netPnl!,closed.grossPnl!-closed.entryFee-closed.exitFee);
   near(s.balance,1000+closed.netPnl!);assert.equal(s.resolved,1);assert.equal(s.inverseTrial!.totals.closed,1);
   const unchanged=JSON.stringify(s);applyInverseSourceTrade(s,t,q,at);assert.equal(JSON.stringify(s),unchanged);
-  // Gross no longer mirrors exactly: the difference is exactly the spread the inverse paid.
-  near(inverseTrialSummary(s,{},at)!.settledAttributionResidual,-s.inverseTrial!.totals.spreadDrag);
+  assertInverseTrial(s);
 });
-test('same-price gross inversion is exact and comparison net is changed only by each side fee',()=>{
+test('same-direction executable gross matches the source direction and stays inside the trial identity',()=>{
   for(const price of [90,105,100]){const {s,source,t}=fixture();sourceClose(source,t,price,T+60000);applyInverseSourceTrade(s,t,quote(price,price,T+60000),T+60000);retainSource(s,source);
-    const m=s.history[0]!;near(m.grossPnl!,-t.grossPnl!);near(m.entryFee,t.notional*.0005);near(m.exitFee,t.quantity*price*.0005);near(m.fundingAllowance,0);
+    const m=s.history[0]!;near(m.grossPnl!,t.grossPnl!);near(m.entryFee,t.notional*.0005);near(m.exitFee,t.quantity*price*.0005);near(m.fundingAllowance,0);
     near(m.netPnl!,m.grossPnl!-m.entryFee-m.exitFee);
     const summary=inverseTrialSummary(s,{},T+60000)!;near(summary.theoreticalSamePriceEquity,summary.inverseEquity);
-    near(summary.paidCost!.reconciliation.grossMirrorResidual!,0);near(summary.paidCost!.reconciliation.netSum!,-summary.paidCost!.reconciliation.paidFees);}
+    assertInverseTrial(s);}
 });
 test('legacy 7bp entry restores unchanged, then new 5bp exit and its receipt survive a second restart',async()=>{
   const {s,source,t}=fixture();legacyOpenFee(s);s.storage.persistedAt=T;
@@ -120,10 +119,9 @@ test('legacy 7bp entry restores unchanged, then new 5bp exit and its receipt sur
   const at=T+60000;sourceClose(source,t,97,at);applyInverseSourceTrade(restored,t,quote(97,97,at),at);retainSource(restored,source);
   const m=restored.history[0]!,fills=m.inverseCopy!.fills;near(fills[0]!.fee,.7);assert.equal(fills[0]!.feePolicy,undefined);
   near(fills[1]!.fee,.485);assert.equal(fills[1]!.feePolicy,INVERSE_FEE_POLICY);near(fills[1]!.feeRate!,.0005);
-  near(m.netPnl!,28.815);near(restored.balance,1028.815);near(restored.fees,1.185);
+  near(m.netPnl!,-31.185);near(restored.balance,968.815);near(restored.fees,1.185);
   near(restored.inverseTrial!.totals.feeSavings!,0);assertInverseTrial(restored);
   const summary=inverseTrialSummary(restored,{},at)!;near(summary.inverseFees,1.185);near(summary.paidCost!.inverse.fees,1.185);
-  near(summary.paidCost!.reconciliation.netSum!,-summary.paidCost!.reconciliation.paidFees);
   const snapshot=buildReviewSnapshot({view:forwardSummary(restored,{},at),exportedAt:at,buildSha:'fee-test',strategyFingerprint:'fee-fp'});
   assert.equal(forwardSummary(restored,{},at).cost.feeRate,.0005);
   assert.equal(forwardSummary(initialForward(T),{},T).cost.feeRate,.0007);
@@ -144,7 +142,7 @@ test('old entry plus new partial exits pays each actual notional once with sourc
   retainSource(s,source);near(s.positions[0]!.realization!.fees,4*105*.0005);assertTradeRealization(s.positions[0]!);
   sourceClose(source,t,108,T+120000);applyInverseSourceTrade(s,t,quote(108,108,T+120000),T+120000);retainSource(s,source);
   const m=s.history[0]!,fees=.7+4*105*.0005+6*108*.0005;
-  near(m.entryFee,.7);near(m.exitFee,fees-.7);near(s.fees,fees);near(m.netPnl!,-68-fees);
+  near(m.entryFee,.7);near(m.exitFee,fees-.7);near(s.fees,fees);near(m.netPnl!,68-fees);
   near(s.balance,1000+m.netPnl!);assertInverseTrial(s);assertTradeRealization(m);
 });
 test('invalid fee stamps, altered totals and lost accounting mode reject without rewriting booked fees',()=>{
@@ -162,7 +160,7 @@ test('source profitable partial exits are mirrored even when the inverse loses; 
     const q=quote(price,price+.1,at),r=realizeTradeSlice({trade:t,price:q.bestBid,now:at,quoteAt:at,fraction,feeRate:.0007,fundingPerDay:.0002,minContracts:1,reason:'source protection'})!;
     assert.ok(r);source.balance+=r.credit;source.grossPnl+=r.gross;source.fees+=r.fee;source.fundingAllowance+=r.funding;
     applyInverseSourceTrade(s,t,q,at);retainSource(s,source);assertInverseTrial(s);assertTradeRealization(s.positions[0]!);
-    assert.ok(s.positions[0]!.realization!.gross<0);assert.equal(s.resolved,0);near(s.positions[0]!.quantity,t.quantity);
+    assert.ok(s.positions[0]!.realization!.gross>0);assert.equal(s.resolved,0);near(s.positions[0]!.quantity,t.quantity);
     const unchanged=s.balance;applyInverseSourceTrade(s,t,q,at);near(s.balance,unchanged);
   }
   const at=T+180000;sourceClose(source,t,108,at);applyInverseSourceTrade(s,t,quote(108,108.1,at),at);retainSource(s,source);
@@ -186,16 +184,16 @@ test('frozen source and isolated wrapper produce identical next source lifecycle
   const expected=frozenAdvance({...base,state:sourceDecisionState(s)}),actual=advanceShadowInverse({...base,state:s});
   near(actual.state.inverseTrial!.source.balance,expected.state.balance);assert.equal(actual.state.inverseTrial!.source.resolved,expected.state.resolved);
   assert.deepEqual(actual.state.inverseTrial!.source.positions.map(t=>[t.id,t.contracts]),expected.state.positions.map(t=>[t.id,t.contracts]));
-  assert.equal(actual.state.history[0]!.inverseCopy!.sourceId,'source-1');assert.equal(actual.state.history[0]!.side,'SHORT');
+  assert.equal(actual.state.history[0]!.inverseCopy!.sourceId,'source-1');assert.equal(actual.state.history[0]!.side,'LONG');
   assert.equal(s.positions.length,1,'original committed object untouched');assertInverseTrial(actual.state);
 });
 test('inverse creation uses only a fresh book spread (else the measured live gap) and retrospective fills remain forbidden',()=>{
   for(const q of [undefined,{...quote(90,120),fresh:false},quote(80,130,T-10001),quote(70,140,T+1)]){
     const s=initialForward(T-B);s.inverseTrial=newInverseTrial(s,T,1000);const t=trade();
-    applyInverseSourceTrade(s,t,q as Quote|undefined,T);assert.equal(s.positions.length,1);near(s.positions[0]!.entryPrice,t.entryPrice*(1-LIVE_EXECUTION_GAP_RATE));
+    applyInverseSourceTrade(s,t,q as Quote|undefined,T);assert.equal(s.positions.length,1);near(s.positions[0]!.entryPrice,t.entryPrice*(1+LIVE_EXECUTION_GAP_RATE));
   }
   {const s=initialForward(T-B);s.inverseTrial=newInverseTrial(s,T,1000);const t=trade();
-    applyInverseSourceTrade(s,t,quote(99.9,100,T),T);near(s.positions[0]!.entryPrice,99.9);}
+    applyInverseSourceTrade(s,t,quote(99.9,100,T),T);near(s.positions[0]!.entryPrice,100.1);}
   const s=initialForward(T-B);s.inverseTrial=newInverseTrial(s,T,1000);assert.throws(()=>applyInverseSourceTrade(s,trade(),undefined,T+1),/历史成交/);
 });
 test('reset explicitly closes both books administratively, including saved-mark offline maintenance',()=>{
@@ -239,7 +237,7 @@ test('financial tampering, lost source counterpart and duplicate lifecycle fail 
 test('owner-authorized inverse PAPER is the new LIVE source; legacy rows drain without new exposure',()=>{
   const {s}=fixture();assert.equal(forwardMirrorSources(s,1000).TEST_USDT!.id,'iv-source-1');
   const old=trade('legacy','LONG',T-60000);s.positions.push(old);const exported=forwardMirrorSources(s,1000);
-  assert.equal(exported.TEST_USDT!.id,'iv-source-1');assert.equal(exported.TEST_USDT!.side,'SHORT');
+  assert.equal(exported.TEST_USDT!.id,'iv-source-1');assert.equal(exported.TEST_USDT!.side,'LONG');
   assert.equal(s.positions[0]!.inverseCopy!.liveExecution,'PAPER_ONLY','PAPER receipts are not fabricated exchange fills');
 });
 test('review snapshot pairs actual/source receipts, excludes old account results and needs no fictional PI assessment',()=>{
@@ -296,7 +294,7 @@ test('full frozen discovery and realtime response pipeline creates one inverse, 
     assert.deepEqual(s.inverseTrial!.source.positions.map(t=>[t.id,t.side,t.quantity,t.stopPrice]),expected.state.positions.map(t=>[t.id,t.side,t.quantity,t.stopPrice]));
     if(n===3)s.balance+=50000; // Test-only perturbation; must not resize source entries.
     if(s.inverseTrial!.totals.opened){const source=s.inverseTrial!.source.positions[0]!,actual=s.positions[0]!;
-      assert.equal(actual.inverseCopy!.sourceId,source.id);assert.notEqual(actual.side,source.side);near(actual.quantity,source.quantity);
+      assert.equal(actual.inverseCopy!.sourceId,source.id);assert.equal(actual.side,source.side);near(actual.quantity,source.quantity);
       assert.equal(actual.openedAt,source.openedAt);assertInverseTrial(s);return;}
   }
   assert.fail('synthetic confirmed source opportunity never produced a paired inverse');
@@ -321,7 +319,7 @@ test('fixed1000 allocation creates equal new source quantities with honest700/10
     assert.deepEqual(s.inverseTrial!.source.positions.map(t=>[t.id,t.side,t.quantity,t.stopPrice]),expected.state.positions.map(t=>[t.id,t.side,t.quantity,t.stopPrice]));
     if(n===3)s.balance+=50000; // Test-only perturbation; must not resize source entries.
     if(s.inverseTrial!.totals.opened){const source=s.inverseTrial!.source.positions[0]!,actual=s.positions[0]!;
-      assert.equal(actual.inverseCopy!.sourceId,source.id);assert.notEqual(actual.side,source.side);near(actual.quantity,source.quantity);
+      assert.equal(actual.inverseCopy!.sourceId,source.id);assert.equal(actual.side,source.side);near(actual.quantity,source.quantity);
       assert.equal(actual.openedAt,source.openedAt);assertInverseTrial(s);
       near(s.inverseTrial!.source.balance,wallet-source.entryFee);
       quantities.push(source.quantity);break;}
@@ -416,14 +414,14 @@ test('1U reversals record peak and trough times and a restart keeps them',async(
   sample(T+60_000,100);sample(T+120_000,100.2);sample(T+180_000,100);sample(T+240_000,100.05);
   const early=s.inverseTrial!.swings??[];
   assert.equal(early.filter(x=>x.book==='source'&&x.kind==='PEAK').length,1);
-  assert.equal(early.filter(x=>x.book==='inverse'&&x.kind==='TROUGH').length,1);
+  assert.equal(early.filter(x=>x.book==='inverse'&&x.kind==='PEAK').length,1);
   assert.equal(early.filter(x=>x.book==='source'&&x.kind==='TROUGH').length,0);
   sample(T+300_000,99.8);sample(T+360_000,100.05);
   const swings=s.inverseTrial!.swings??[];
   const sourceTrough=swings.filter(x=>x.book==='source'&&x.kind==='TROUGH').at(-1)!;
-  const inversePeak=swings.filter(x=>x.book==='inverse'&&x.kind==='PEAK').at(-1)!;
-  assert.equal(sourceTrough.at,T+300_000);assert.equal(inversePeak.at,T+300_000);
-  near(sourceTrough.equity,997.5);near(inversePeak.equity,1001.5);
+  const inverseTrough=swings.filter(x=>x.book==='inverse'&&x.kind==='TROUGH').at(-1)!;
+  assert.equal(sourceTrough.at,T+300_000);assert.equal(inverseTrough.at,T+300_000);
+  near(sourceTrough.equity,997.5);near(inverseTrough.equity,997.5);
   assert.equal(inverseTrialSummary(s,{},T+360_000)!.swings.length,swings.length);
   s.storage.persistedAt=T;const write=await prepareForwardWrite(null,s,T+360_000,{compact:true});
   const restored=await readForwardStore({get:async<V>(k:string)=>structuredClone(new Map(Object.entries(write.entries)).get(k)) as V|undefined},T+360_001);
@@ -435,28 +433,29 @@ test('a soft source hold cuts only the inverse once floating gross is worse than
     entryAdvantage:0,currentAdvantage:0,advantageChange:0,remainingSpaceRate:.01,expectedPullbackRate:.01,continuationRatio:continuation,
     holdValueScore:hold,exitValueScore:100-hold,dataConfidence:80,counterfactualNewEntry:false,supportFamilies:[],concernFamilies:concerns,
     assessments:[],reasons:[],concerns:[],summary:'test'}) as NonNullable<Trade['positionIntelligence']>;
-  const arm=(soft:boolean,price:number)=>{
+  const arm=(soft:boolean,price:number,legacy=false)=>{
     const pack=fixture('LONG'),now=T+60_000;
     pack.t.lastPrice=price;pack.t.lastQuoteAt=now;pack.t.positionIntelligence=intel(soft?'DECAYING':'BUILDING',soft?70:96,soft?1.1:1.8,soft?['FLOW']:[]);
     retainSource(pack.s,pack.source);
     const inv=pack.s.positions[0]!;inv.lastPrice=price;inv.lastQuoteAt=now;
+    if(legacy)delete inv.inverseCopy!.orderPolicy;
     return {pack,now,inv,cut:applyInverseSoftLossExits(pack.s,now)};
   };
-  const firm=arm(false,101);
+  const firm=arm(false,99);
   assert.equal(firm.cut,false);assert.equal(firm.inv.status,'OPEN');assertInverseTrial(firm.pack.s);
-  // Hard backstop: past 10U gross the inverse is cut even while the shadow is still strong.
-  const hard=arm(false,101.2);
+  // Hard backstop: past 10U gross the copy is cut even while the proposal is still strong.
+  const hard=arm(false,98.8);
   assert.equal(hard.cut,true);assert.equal(hard.inv.status,'CLOSED');assert.equal(hard.inv.exitReason,'INVERSE_SOFT_LOSS_EXIT');
   assert.equal((hard.inv.exitAudit!.evidence as {hardLossCap?:boolean}).hardLossCap,true);assert.equal(hard.pack.source.positions.length,1);assertInverseTrial(hard.pack.s);
-  const shallow=arm(true,100.5);
+  const shallow=arm(true,99.5);
   assert.equal(shallow.cut,false);assert.equal(shallow.inv.status,'OPEN');
-  const {pack,now,inv,cut}=arm(true,101);
+  const {pack,now,inv,cut}=arm(true,99,true);
   assert.equal(cut,true);assert.equal(inv.status,'CLOSED');assert.equal(inv.exitReason,'INVERSE_SOFT_LOSS_EXIT');
   assert.equal(pack.s.positions.length,0);assert.equal(pack.source.positions.length,1);
-  near(inv.netPnl!,-10-inv.entryFee-10*101*.0005);near(pack.s.balance,1000-inv.entryFee-10.505);
+  near(inv.netPnl!,-10-inv.entryFee-10*99*.0005);near(pack.s.balance,1000+inv.netPnl!);
   assert.equal(applyInverseSoftLossExits(pack.s,now+1),false);
   const summary=inverseTrialSummary(pack.s,{TEST_USDT:quote(101,101,now)},now)!;
-  near(summary.inverseNet,inv.netPnl!);near(summary.sourceNet,9.5);
+  near(summary.inverseNet,inv.netPnl!);near(summary.sourceNet,-10.5);
   sourceClose(pack.source,pack.t,102,now+60_000);retainSource(pack.s,pack.source);
   const net=inv.netPnl;applyInverseSourceTrade(pack.s,pack.t,quote(102,102,now+60_000),now+60_000);
   near(inv.netPnl!,net!);assert.equal(inv.inverseCopy!.detachedSourceClosed,true);assert.equal(inv.inverseCopy!.sourceExitReason,'WINNER_THESIS_EXIT');
@@ -471,7 +470,7 @@ test('dropping a soft-loss receipt from the saved window still loads and does no
     assessments:[],reasons:[],concerns:[],summary:'test'} as NonNullable<Trade['positionIntelligence']>;
   const pack=fixture('LONG'),now=T+60_000;
   pack.t.lastPrice=101;pack.t.lastQuoteAt=now;pack.t.positionIntelligence=intel;retainSource(pack.s,pack.source);
-  const inv=pack.s.positions[0]!;inv.lastPrice=101;inv.lastQuoteAt=now;
+  const inv=pack.s.positions[0]!;inv.lastPrice=98.8;inv.lastQuoteAt=now;
   assert.equal(applyInverseSoftLossExits(pack.s,now),true);
   const sourceId=pack.t.id;
   assert.ok(pack.s.inverseTrial!.detachedSourceIds?.includes(sourceId));
@@ -515,22 +514,21 @@ test('live cost estimate no longer adds the 6bp gap to executable-book copies, w
 
 test('new inverse copies fill at their own executable book side and pay the spread on entry and exit',()=>{
   const {s,source,t}=fixture('LONG',.2),inv=s.positions.find(x=>x.inverseCopy)!;
-  assert.equal(t.entryPrice,100.2);assert.equal(inv.side,'SHORT');assert.equal(inv.inverseCopy!.pricePolicy,'executable-book-v1');
-  near(inv.entryPrice,100);near(inv.inverseCopy!.fills[0]!.sourcePrice,100.2);near(inv.inverseCopy!.fills[0]!.spreadDrag,2);
-  near(inv.entryFee,10*100*INVERSE_COST.feeRate);
+  assert.equal(t.entryPrice,100.2);assert.equal(inv.side,'LONG');assert.equal(inv.inverseCopy!.pricePolicy,'executable-book-v1');
+  near(inv.entryPrice,100.4);near(inv.inverseCopy!.fills[0]!.sourcePrice,100.2);near(inv.inverseCopy!.fills[0]!.spreadDrag,2);
+  near(inv.entryFee,10*100.4*INVERSE_COST.feeRate);
   markInversePositions(s,{TEST_USDT:quote(100.5,100.7,T+1000)},T+1000);
-  // Unchanged source mark, but the inverse short is marked where it could buy back: source mark + spread.
-  near(inv.lastPrice,t.lastPrice+.2);
+  near(inv.lastPrice,t.lastPrice-.2);
   const later=T+60_000;sourceClose(source,t,101,later);
   applyInverseSourceTrade(s,t,quote(101,101.2,later),later);
   const closed=s.history.find(x=>x.id===inv.id)!,last=closed.inverseCopy!.fills.at(-1)!;
-  near(closed.exitPrice!,101.2);near(last.gross,-12);near(last.sourceGross,8);near(last.spreadDrag,2);
+  near(closed.exitPrice!,100.8);near(last.gross,4);near(last.sourceGross,8);near(last.spreadDrag,2);
   assertInverseTrade(closed);
 });
 test('without a fresh book the inverse copy falls back to the measured live gap, never the source price',()=>{
   const s=initialForward(T-B);s.inverseTrial=newInverseTrial(s,T,1000);const source=structuredClone(sourceDecisionState(s)),t=trade('source-1','SHORT',T,100);
   sourceOpen(source,t);applyInverseSourceTrade(s,t,undefined,T);
-  const inv=s.positions.find(x=>x.inverseCopy)!;assert.equal(inv.side,'LONG');near(inv.entryPrice,100*(1+LIVE_EXECUTION_GAP_RATE));assertInverseTrade(inv);
+  const inv=s.positions.find(x=>x.inverseCopy)!;assert.equal(inv.side,'SHORT');near(inv.entryPrice,100*(1-LIVE_EXECUTION_GAP_RATE));assertInverseTrade(inv);
 });
 
 test('manual reset still clears a book that already cut the inverse while the source stayed open',()=>{
@@ -540,7 +538,7 @@ test('manual reset still clears a book that already cut the inverse while the so
     assessments:[],reasons:[],concerns:[],summary:'test'} as NonNullable<Trade['positionIntelligence']>;
   const pack=fixture('LONG'),now=T+60_000;
   pack.t.lastPrice=101;pack.t.lastQuoteAt=now;pack.t.positionIntelligence=intel;retainSource(pack.s,pack.source);
-  const inv=pack.s.positions[0]!;inv.lastPrice=101;inv.lastQuoteAt=now;
+  const inv=pack.s.positions[0]!;inv.lastPrice=98.8;inv.lastQuoteAt=now;
   assert.equal(applyInverseSoftLossExits(pack.s,now),true);
   const kept=closeForwardForReset(pack.s,{TEST_USDT:quote(102,102.1,now+60_000)},now+60_000);
   assert.equal(kept.positions.length,0);assert.equal(kept.inverseTrial!.source.positions.length,0);
@@ -554,7 +552,7 @@ test('manual reset still clears a source whose early-cut receipt was dropped fro
     assessments:[],reasons:[],concerns:[],summary:'test'} as NonNullable<Trade['positionIntelligence']>;
   const pack=fixture('LONG'),now=T+60_000;
   pack.t.lastPrice=101;pack.t.lastQuoteAt=now;pack.t.positionIntelligence=intel;retainSource(pack.s,pack.source);
-  pack.s.positions[0]!.lastPrice=101;pack.s.positions[0]!.lastQuoteAt=now;
+  pack.s.positions[0]!.lastPrice=98.8;pack.s.positions[0]!.lastQuoteAt=now;
   assert.equal(applyInverseSoftLossExits(pack.s,now),true);
   pack.s.history=pack.s.history.filter(t=>!t.inverseCopy?.fills.some(f=>f.earlySoftLoss));
   delete pack.s.inverseTrial!.detachedSourceIds;

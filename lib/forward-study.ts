@@ -2,6 +2,7 @@
  * Hot history is trimmed; these aggregates are not. Nothing here places a trade. */
 import type {ForwardState,Quote,Trade} from './forward-relations.ts';
 import {inverseTrialSummary,type InverseTrial} from './shadow-inverse-ledger.ts';
+import {researchDeskView,type DeskResearchView,type DeskStance} from './research-decision.ts';
 
 export const FORWARD_STUDY_VERSION='forward-study-v1' as const;
 const ROW_CAP=160;
@@ -31,9 +32,10 @@ export type ForwardStudyView={
   recent:{id:string;symbol:string;side:'LONG'|'SHORT';closedAt:number;net:number;hour:number;tag:string}[];
 };
 export type ForwardDesk={
-  stance:'FORWARD';equity:number|null;initialEquity:number;netPnl:number|null;maxDrawdown:number|null;
+  stance:DeskStance;equity:number|null;initialEquity:number;netPnl:number|null;maxDrawdown:number|null;
   fees:number;floating:number|null;stale:boolean;openCount:number;resolved:number;wins:number;
   open:ForwardOrder[];recent:ForwardOrder[];curve:{at:number;equity:number}[];study:ForwardStudyView;
+  research:DeskResearchView;
 };
 
 const finite=(n:unknown):n is number=>typeof n==='number'&&Number.isFinite(n);
@@ -160,27 +162,29 @@ export function forwardDeskView(state:ForwardState,quotes:Record<string,Quote>,n
   const trial=state.inverseTrial;if(!trial?.source)return null;
   const summary=inverseTrialSummary(state,quotes,now);if(!summary)return null;
   const stale=(summary.stalePositions??0)>0;
-  const last=trial.curve?.at(-1)?.source;
-  const equity=stale?(finite(last)?last:null):summary.sourceEquity;
+  const stance:DeskStance=trial.researchDesk?.stance??'FORWARD';
+  const last=trial.curve?.at(-1)?.inverse;
+  const equity=stale?(finite(last)?last:null):summary.inverseEquity;
   const netPnl=equity==null?null:equity-summary.initialEquity;
-  const floating=stale?null:summary.paidCost?.source.floatingGross??null;
+  const floating=stale?null:summary.paidCost?.inverse.floatingGross??null;
   let peak=summary.initialEquity,dd=0;
   for(const point of trial.curve??[]){
-    if(!(point.source>0))continue;
-    if(point.source>peak)peak=point.source;
-    dd=Math.max(dd,1-point.source/peak);
+    if(!(point.inverse>0))continue;
+    if(point.inverse>peak)peak=point.inverse;
+    dd=Math.max(dd,1-point.inverse/peak);
   }
   if(equity!=null&&equity>0){if(equity>peak)peak=equity;dd=Math.max(dd,1-equity/peak);}
-  const curve=(trial.curve??[]).map(point=>({at:point.at,equity:point.source}));
+  const curve=(trial.curve??[]).map(point=>({at:point.at,equity:point.inverse}));
   if(!stale&&equity!=null&&(curve.at(-1)?.at??0)<now)curve.push({at:now,equity});
   const study=usable(trial.forwardStudy)?trial.forwardStudy:empty(now);
-  const closed=trial.source.history.filter(t=>t.status==='CLOSED'&&t.exitReason!=='ACCOUNT_RESET')
+  const closed=state.history.filter(t=>t.inverseCopy&&t.status==='CLOSED'&&t.exitReason!=='ACCOUNT_RESET')
     .sort((a,b)=>(b.closedAt??0)-(a.closedAt??0)).slice(0,8);
-  return {stance:'FORWARD',equity,initialEquity:summary.initialEquity,netPnl,maxDrawdown:peak>0?dd:null,
-    fees:summary.sourceFees,floating,stale,openCount:trial.source.positions.length,
-    resolved:trial.source.resolved??0,wins:trial.source.wins??0,
-    open:trial.source.positions.map(t=>orderOf(t,'OPEN')).sort((a,b)=>b.openedAt-a.openedAt),
+  return {stance,equity,initialEquity:summary.initialEquity,netPnl,maxDrawdown:peak>0?dd:null,
+    fees:summary.inverseFees,floating,stale,openCount:state.positions.filter(t=>t.inverseCopy).length,
+    resolved:state.resolved,wins:state.wins,
+    open:state.positions.filter(t=>t.inverseCopy).map(t=>orderOf(t,'OPEN')).sort((a,b)=>b.openedAt-a.openedAt),
     recent:closed.map(t=>orderOf(t,'CLOSED')),
     curve:curve.length>240?curve.slice(-240):curve,
-    study:describeForwardStudy(study,trial.source.resolved??study.total.n)};
+    study:describeForwardStudy(study,trial.source.resolved??study.total.n),
+    research:researchDeskView(trial.researchDesk,now)};
 }

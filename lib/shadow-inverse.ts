@@ -4,8 +4,8 @@ import {advanceForward as advanceBaseline} from './shadow-baseline/forward-relat
 import {normalizeForward,drainLegacyForwardPositions,forwardEquity,type ForwardState} from './forward-relations.ts';
 import {captureTradeReviews} from './review-trace.ts';
 import {SHADOW_BASELINE_BUILD,SHARED_MARKET_KEYS,shadowCapsule,sourceDecisionState,newInverseTrial,
-  applyInverseSourceTrade,applyInverseSoftLossExits,markInversePositions,recordInverseCurve,assertInverseTrial} from './shadow-inverse-ledger.ts';
-import {bookRegime} from './confirmation-reality.ts';
+  applyInverseSourceTrade,applyInverseSoftLossExits,applyDeskOrderExits,markInversePositions,recordInverseCurve,assertInverseTrial} from './shadow-inverse-ledger.ts';
+import {ensureResearchDesk,observeResearch} from './research-decision.ts';
 import {noteForwardStudy} from './forward-study.ts';
 import {beijingDayKey} from './beijing-time.ts';
 import {FIXED_ALLOCATION_EQUITY} from './fixed-allocation.ts';
@@ -18,7 +18,7 @@ export function advanceShadowInverse(input:Parameters<typeof advanceBaseline>[0]
     // old-version signals. The same market tick rebuilds baseline candidates.
     s.entryValidations={};
     s.revision++;s.events.unshift({id:`a${s.startedAt}-${s.revision}`,at:input.now,kind:'START',subject:'shadow-inverse-v1',
-      reason:'影子决策固定2b4fd60f；新单反向复制，旧账户与旧持仓保留'});
+      reason:'研究提案固定；新单按决策开仓，已经开着的单按原来的出场'});
   }
   const sourceBefore=sourceDecisionState(s),source=advanceBaseline({...input,state:sourceBefore,allocationEquity:FIXED_ALLOCATION_EQUITY}),trial=s.inverseTrial!;
   // Observers cannot influence source decisions; baseline entries carry the
@@ -26,6 +26,9 @@ export function advanceShadowInverse(input:Parameters<typeof advanceBaseline>[0]
   try{captureTradeReviews(sourceBefore,source.state,input.now,SHADOW_BASELINE_BUILD,
     '8dbebcae5e0ca7b48c939e66dc98fce02b35dbed99e41d2dcf950e9008ee4f24',input.quotes);}catch{/* optional diagnostic */}
   for(const key of SHARED_MARKET_KEYS)Object.assign(s,{[key]:structuredClone(source.state[key])});
+  trial.researchDesk=ensureResearchDesk(trial.researchDesk);
+  let researchChanged=false;
+  try{researchChanged=observeResearch(trial.researchDesk,input.quotes,input.now);}catch{researchChanged=false;}
   // Existing visible holdings are neither reversed retroactively nor force
   // closed. They drain under the pre-cutover controller, isolated from sizing.
   const beforeFinancial=JSON.stringify([s.balance,s.resolved,s.positions.map(t=>[t.id,t.stopPrice,t.contracts])]);
@@ -51,6 +54,7 @@ export function advanceShadowInverse(input:Parameters<typeof advanceBaseline>[0]
   noteForwardStudy(trial,input.now);
   markInversePositions(s,input.quotes,input.now);
   const softLoss=applyInverseSoftLossExits(s,input.now);
+  const deskExit=applyDeskOrderExits(s,input.quotes,input.now);
   recordInverseCurve(s,input.quotes,input.now);
   const mark=forwardEquity(s,input.quotes,input.now);s.peakEquity=Math.max(s.peakEquity,mark.equity);
   s.maxDrawdown=Math.max(s.maxDrawdown,1-mark.equity/Math.max(s.peakEquity,1));
@@ -58,14 +62,14 @@ export function advanceShadowInverse(input:Parameters<typeof advanceBaseline>[0]
   if(daily?.day===day){daily.lastAt=input.now;daily.endEquity=mark.equity;}
   else s.daily.push({day,firstAt:input.now,lastAt:input.now,startEquity:mark.equity,endEquity:mark.equity,exactBoundary:false});
   s.daily=s.daily.slice(-45);
-  const decision=bookRegime([...s.positions,...s.history],input.now,trial.regimeOpens);
-  const mode=decision.mode==='FADE'&&input.now<(trial.regimeClock?.pauseUntil??0)?'PAUSE':decision.mode;
-  s.latestReason=mode==='PAUSE'
-    ?`${decision.reason||'持续力已从高位掉下来，新单先停 6 小时，不改顺着做。'}已经开着的单照旧出场。已配对${trial.totals.opened}笔。`
-    :mode==='FOLLOW'
-    ?`${decision.reason}已配对${trial.totals.opened}笔。`
-    :`影子按2b4fd60f独立决策；模拟只反向跟随。已配对${trial.totals.opened}笔，旧持仓${s.positions.filter(t=>!t.inverseCopy).length}笔单独收尾。`;
+  const stance=trial.researchDesk?.stance??'FORWARD';
+  const note=trial.researchDesk?.note||'';
+  s.latestReason=stance==='FLAT'
+    ?`${note}新单先停。已经开着的按各自出场。已记下${trial.totals.opened}笔。`
+    :stance==='REVERSE'
+    ?`${note}新单反着做。已记下${trial.totals.opened}笔。`
+    :`${note}新单跟提案同一边。已记下${trial.totals.opened}笔。`;
   assertInverseTrial(s);
-  return{state:s,changed:activated||source.changed||softLoss||beforeFinancial!==JSON.stringify([s.balance,s.resolved,s.positions.map(t=>[t.id,t.stopPrice,t.contracts])]),
+  return{state:s,changed:activated||source.changed||softLoss||deskExit||researchChanged||beforeFinancial!==JSON.stringify([s.balance,s.resolved,s.positions.map(t=>[t.id,t.stopPrice,t.contracts])]),
     protectionChanged:source.protectionChanged};
 }
