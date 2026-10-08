@@ -33,10 +33,11 @@ export type ForwardStudyView={
   recent:{id:string;symbol:string;side:'LONG'|'SHORT';closedAt:number;net:number;hour:number;tag:string}[];
 };
 export type ForwardDesk={
-  stance:DeskStance;book?:'needle-v1';equity:number|null;initialEquity:number;netPnl:number|null;maxDrawdown:number|null;
+  stance:DeskStance;book?:'needle-v1'|'brain-v1';equity:number|null;initialEquity:number;netPnl:number|null;maxDrawdown:number|null;
   fees:number;floating:number|null;stale:boolean;openCount:number;resolved:number;wins:number;
   open:ForwardOrder[];recent:ForwardOrder[];curve:{at:number;equity:number}[];study:ForwardStudyView;
-  research:DeskResearchView;
+  research:DeskResearchView;brainNote?:string;
+  brainIdeas?:{symbol:string;side:'LONG'|'SHORT';kind:'FADE'|'LEAD'|'CATCH';why:string;wrong:string}[];
 };
 
 const finite=(n:unknown):n is number=>typeof n==='number'&&Number.isFinite(n);
@@ -154,25 +155,27 @@ function orderOf(t:Trade,status:'OPEN'|'CLOSED'):ForwardOrder{
     const base=t.realization?.initialQuantity??t.quantity;
     net=gross-(finite(t.entryFee)?t.entryFee*(base>0?t.quantity/base:1):0)+(t.realization?t.realization.gross-t.realization.fees-t.realization.funding:0);
   }
-  const plan=t.entryContext?.tradePlan;
+  const plan=t.entryContext?.strategyVersion==='brain-v1'
+    ?t.entryContext.mode==='CONTINUATION'?'领头':t.entryContext.mode==='RELATIVE'?'掉队':'单币失败'
+    :t.entryContext?.tradePlan?(PLAN[t.entryContext.tradePlan]??null):null;
   return {id:t.id,symbol:t.symbol,side:t.side,status,entryPrice:t.entryPrice,price,openedAt:t.openedAt,
     closedAt:status==='CLOSED'?t.closedAt:null,net,leverage:t.leverage,margin:t.margin,
-    plan:plan?(PLAN[plan]??null):null};
+    plan:plan?(PLAN[plan]??plan):null};
 }
 export function forwardDeskView(state:ForwardState,quotes:Record<string,Quote>,now:number):ForwardDesk|null{
   const trial=state.inverseTrial;if(!trial?.source)return null;
   const summary=inverseTrialSummary(state,quotes,now);if(!summary)return null;
-  const needle=trial.paperPolicy==='needle-v1';
-  const needleTrade=(t:Trade)=>t.exitControl?.policy==='needle-v1';
+  const own=trial.paperPolicy==='needle-v1'||trial.paperPolicy==='brain-v1';
+  const ownTrade=(t:Trade)=>t.exitControl?.policy===trial.paperPolicy;
   const summaryStale=(summary.stalePositions??0)>0;
-  const mark=needle?forwardEquity(state,quotes,now):null;
-  const stale=needle?(mark!.stalePositions??0)>0:summaryStale;
+  const mark=own?forwardEquity(state,quotes,now):null;
+  const stale=own?(mark!.stalePositions??0)>0:summaryStale;
   const stance:DeskStance=trial.researchDesk?.stance??'FORWARD';
   const last=trial.curve?.at(-1)?.inverse;
-  const equity=stale?(finite(last)?last:null):needle?mark!.equity:summary.inverseEquity;
-  const initial=needle?state.initialEquity:summary.initialEquity;
+  const equity=stale?(finite(last)?last:null):own?mark!.equity:summary.inverseEquity;
+  const initial=own?state.initialEquity:summary.initialEquity;
   const netPnl=equity==null?null:equity-initial;
-  const floating=stale?null:needle?mark!.floating:summary.paidCost?.inverse.floatingGross??null;
+  const floating=stale?null:own?mark!.floating:summary.paidCost?.inverse.floatingGross??null;
   let peak=initial,dd=0;
   for(const point of trial.curve??[]){
     if(!(point.inverse>0))continue;
@@ -183,15 +186,17 @@ export function forwardDeskView(state:ForwardState,quotes:Record<string,Quote>,n
   const curve=(trial.curve??[]).map(point=>({at:point.at,equity:point.inverse}));
   if(!stale&&equity!=null&&(curve.at(-1)?.at??0)<now)curve.push({at:now,equity});
   const study=usable(trial.forwardStudy)?trial.forwardStudy:empty(now);
-  const closed=(needle?state.history.filter(needleTrade):state.history.filter(t=>t.inverseCopy&&t.status==='CLOSED'&&t.exitReason!=='ACCOUNT_RESET'))
+  const closed=(own?state.history.filter(ownTrade):state.history.filter(t=>t.inverseCopy&&t.status==='CLOSED'&&t.exitReason!=='ACCOUNT_RESET'))
     .filter(t=>t.status==='CLOSED').sort((a,b)=>(b.closedAt??0)-(a.closedAt??0)).slice(0,8);
-  const openRows=needle?state.positions.filter(needleTrade):state.positions.filter(t=>t.inverseCopy);
-  return {stance,book:needle?'needle-v1':undefined,equity,initialEquity:initial,netPnl,maxDrawdown:peak>0?dd:null,
-    fees:needle?state.fees:summary.inverseFees,floating,stale,openCount:openRows.length,
-    resolved:needle?state.resolved:state.resolved,wins:state.wins,
+  const openRows=own?state.positions.filter(ownTrade):state.positions.filter(t=>t.inverseCopy);
+  return {stance,book:trial.paperPolicy==='brain-v1'?'brain-v1':trial.paperPolicy==='needle-v1'?'needle-v1':undefined,equity,initialEquity:initial,netPnl,maxDrawdown:peak>0?dd:null,
+    fees:own?state.fees:summary.inverseFees,floating,stale,openCount:openRows.length,
+    resolved:own?state.resolved:state.resolved,wins:state.wins,
     open:openRows.map(t=>orderOf(t,'OPEN')).sort((a,b)=>b.openedAt-a.openedAt),
     recent:closed.map(t=>orderOf(t,'CLOSED')),
     curve:curve.length>240?curve.slice(-240):curve,
     study:describeForwardStudy(study,trial.source.resolved??study.total.n),
-    research:researchDeskView(trial.researchDesk,now)};
+    research:researchDeskView(trial.researchDesk,now),
+    brainNote:trial.paperPolicy==='brain-v1'?trial.brainNote:undefined,
+    brainIdeas:trial.paperPolicy==='brain-v1'?trial.brainIdeas??[]:undefined};
 }
