@@ -28,6 +28,7 @@ function sourceTrade(side:'LONG'|'SHORT',now:number):Trade {
 }
 function pair(side:'LONG'|'SHORT',now:number){
   const state=initialForward(now-100000);state.inverseTrial=newInverseTrial(state,now,1000);
+  state.inverseTrial.researchDesk={version:'research-desk-v1',stance:'REVERSE',claims:[],note:''};
   const source=sourceDecisionState(state),t=sourceTrade(side,now);
   source.positions=[t];source.balance-=.7;source.fees+=.7;
   applyInverseSourceTrade(state,t,{bestBid:t.entryPrice,bestAsk:t.entryPrice,observedAt:now,fresh:true},now);state.inverseTrial.source=shadowCapsule(source);

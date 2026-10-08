@@ -17,6 +17,7 @@ const pi=(at:number,decision='HOLD'):PositionIntelligenceState=>({updatedAt:at,d
   concernFamilies:['FLOW'],assessments:[{family:'RELATIVE',stance:'SUPPORT',severity:.8},{family:'FLOW',stance:'CONCERN',severity:.4}],exitBasis:null} as PositionIntelligenceState);
 function fixture(side:'LONG'|'SHORT'='LONG'){
   const s=initialForward(T-300000);s.inverseTrial=newInverseTrial(s,T,1000);
+  s.inverseTrial.researchDesk={version:'research-desk-v1',stance:'REVERSE',claims:[],note:''};
   const source=sourceDecisionState(s),t={id:'source',symbol:'TEST_USDT',side,status:'OPEN',openedAt:T,closedAt:null,
     entryPrice:100,exitPrice:null,quantity:10,contracts:100,quantoMultiplier:.1,notional:1000,leverage:10,margin:100,plannedRisk:20,
     stopPrice:side==='LONG'?98:102,armPrice:110,favorable:0,adverse:0,lastPrice:100,lastQuoteAt:T,entryFee:.7,exitFee:0,fundingAllowance:0,
