@@ -532,3 +532,34 @@ test('without a fresh book the inverse copy falls back to the measured live gap,
   sourceOpen(source,t);applyInverseSourceTrade(s,t,undefined,T);
   const inv=s.positions.find(x=>x.inverseCopy)!;assert.equal(inv.side,'LONG');near(inv.entryPrice,100*(1+LIVE_EXECUTION_GAP_RATE));assertInverseTrade(inv);
 });
+
+test('manual reset still clears a book that already cut the inverse while the source stayed open',()=>{
+  const intel={version:'test',updatedAt:T+60_000,decision:'REVIEW',phase:'DECAYING',reviewSince:null,reviewBars:0,lastCompletedBar:T,
+    entryAdvantage:0,currentAdvantage:0,advantageChange:0,remainingSpaceRate:.01,expectedPullbackRate:.01,continuationRatio:1.1,
+    holdValueScore:70,exitValueScore:30,dataConfidence:80,counterfactualNewEntry:false,supportFamilies:[],concernFamilies:['FLOW'],
+    assessments:[],reasons:[],concerns:[],summary:'test'} as NonNullable<Trade['positionIntelligence']>;
+  const pack=fixture('LONG'),now=T+60_000;
+  pack.t.lastPrice=101;pack.t.lastQuoteAt=now;pack.t.positionIntelligence=intel;retainSource(pack.s,pack.source);
+  const inv=pack.s.positions[0]!;inv.lastPrice=101;inv.lastQuoteAt=now;
+  assert.equal(applyInverseSoftLossExits(pack.s,now),true);
+  const kept=closeForwardForReset(pack.s,{TEST_USDT:quote(102,102.1,now+60_000)},now+60_000);
+  assert.equal(kept.positions.length,0);assert.equal(kept.inverseTrial!.source.positions.length,0);
+  const next=resetForwardAccountPreservingLearning(pack.s,now+60_001);
+  assert.equal(next.balance,1000);assert.equal(next.positions.length,0);assert.equal(next.inverseTrial,undefined);
+});
+test('manual reset still clears a source whose early-cut receipt was dropped from the saved window',()=>{
+  const intel={version:'test',updatedAt:T+60_000,decision:'REVIEW',phase:'DECAYING',reviewSince:null,reviewBars:0,lastCompletedBar:T,
+    entryAdvantage:0,currentAdvantage:0,advantageChange:0,remainingSpaceRate:.01,expectedPullbackRate:.01,continuationRatio:1.1,
+    holdValueScore:70,exitValueScore:30,dataConfidence:80,counterfactualNewEntry:false,supportFamilies:[],concernFamilies:['FLOW'],
+    assessments:[],reasons:[],concerns:[],summary:'test'} as NonNullable<Trade['positionIntelligence']>;
+  const pack=fixture('LONG'),now=T+60_000;
+  pack.t.lastPrice=101;pack.t.lastQuoteAt=now;pack.t.positionIntelligence=intel;retainSource(pack.s,pack.source);
+  pack.s.positions[0]!.lastPrice=101;pack.s.positions[0]!.lastQuoteAt=now;
+  assert.equal(applyInverseSoftLossExits(pack.s,now),true);
+  pack.s.history=pack.s.history.filter(t=>!t.inverseCopy?.fills.some(f=>f.earlySoftLoss));
+  delete pack.s.inverseTrial!.detachedSourceIds;
+  const kept=closeForwardForReset(pack.s,{},now+60_000);
+  assert.equal(kept.positions.length,0);assert.equal(kept.inverseTrial!.source.positions.length,0);
+  const next=resetForwardAccountPreservingLearning(pack.s,now+60_001);
+  assert.equal(next.balance,1000);assert.equal(next.inverseTrial,undefined);
+});

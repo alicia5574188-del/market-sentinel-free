@@ -247,7 +247,16 @@ export function applyInverseSourceTrade(state:ForwardState,source:Trade,qIn:Quot
   }
   const reductions=source.realization?.fills??[],already=t?.realization?.sequence??0;
   const resetFresh=!!qIn&&qIn.fresh&&qIn.observedAt<=now&&now-qIn.observedAt<=10000&&qIn.bestBid>0&&qIn.bestAsk>=qIn.bestBid;
-  if(manualReset&&(!t||source.exitReason!=='ACCOUNT_RESET'||reductions.length!==already))throw new Error('手动重置不能补造影子历史成交');
+  // No inverse leg exists: a pause, or an early cut whose receipt was already
+  // dropped from the saved window. Reset must not invent that history.
+  if(manualReset&&!t){
+    if(source.status==='CLOSED'&&trial.detachedSourceIds?.includes(source.id)){
+      trial.detachedSourceIds=trial.detachedSourceIds.filter(id=>id!==source.id);
+      if(!trial.detachedSourceIds.length)delete trial.detachedSourceIds;
+    }
+    return;
+  }
+  if(manualReset&&(source.exitReason!=='ACCOUNT_RESET'||reductions.length!==already))throw new Error('手动重置不能补造影子历史成交');
   if(!t){
     if(trial.detachedSourceIds?.includes(source.id)){
       if(source.status==='CLOSED')trial.detachedSourceIds=trial.detachedSourceIds.filter(id=>id!==source.id);
