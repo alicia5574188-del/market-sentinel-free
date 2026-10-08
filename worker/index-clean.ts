@@ -1035,7 +1035,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private forwardView(now = Date.now()) {
     return this.forwardState ? { ...forwardSummary(this.forwardState, this.regimeQuotes(now), now),
-      confirmationReality: confirmationRealityView([...this.forwardState.positions, ...this.forwardState.history], now),
+      confirmationReality: confirmationRealityView([...this.forwardState.positions, ...this.forwardState.history], now, {
+        opens: this.forwardState.inverseTrial?.regimeOpens, pauseUntil: this.forwardState.inverseTrial?.regimeClock?.pauseUntil}),
       observationTape: this.forwardState.extremumRegime
         ? observationReading(this.forwardState.extremumRegime, (this.shadowResearch?.market??[]).map(row=>row.tape).filter((row):row is NonNullable<typeof row>=>!!row))
         : null,

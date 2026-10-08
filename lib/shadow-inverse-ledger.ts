@@ -3,7 +3,7 @@
  * only while confirmation-reality says the fresh direction has turned real. */
 import type {ForwardState,Trade,Quote,AuditEvent} from './forward-relations.ts';
 import {inversePaidFeeView} from './paid-fee-view.ts';
-import {inverseEntryHalted} from './confirmation-reality.ts';
+import {bookRegime,type RegimeOpen} from './confirmation-reality.ts';
 import {SHADOW_FEE_RATE,INVERSE_COST,INVERSE_FEE_POLICY,LIVE_EXECUTION_GAP_RATE,LIVE_EXECUTION_GAP_POLICY,recordedInverseFeeRate,recordedSourceFeeRate,type InverseFeeStamp} from './inverse-fee.ts';
 import {FIXED_ALLOCATION_EQUITY,FIXED_ALLOCATION_POLICY} from './fixed-allocation.ts';
 import type {InverseLossResearch} from './inverse-loss-research.ts';
@@ -45,7 +45,8 @@ export type InverseTrial={version:typeof SHADOW_INVERSE_VERSION;sourceBuild:type
   accountingMode?:typeof MIRROR_ACCOUNTING_MODE;reconciledAt?:number;
   initialComparisonEquity:number;legacyIds:string[];source:ShadowCapsule;totals:InverseTotals;
   curve:{at:number;source:number;inverse:number;theoretical:number}[];droppedCurvePoints:number;lastSourceRevision:number;
-  comparisonFeesAligned?:'both-live-5bp-v1';entryHaltSkipped?:string[];
+  comparisonFeesAligned?:'both-live-5bp-v1';entryHaltSkipped?:string[];regimeOpens?:RegimeOpen[];
+  regimeClock?:{pauseUntil:number;followUntil:number};
   swings?:EquitySwing[];swingArm?:{source?:SwingArm;inverse?:SwingArm}};
 export type EquitySwing={at:number;book:'source'|'inverse';kind:'PEAK'|'TROUGH';equity:number};
 export type SwingArm={at:number;equity:number;side:'FLAT'|'HIGH'|'LOW'};
@@ -213,8 +214,32 @@ export function applyInverseSourceTrade(state:ForwardState,source:Trade,qIn:Quot
   const resetFresh=!!qIn&&qIn.fresh&&qIn.observedAt<=now&&now-qIn.observedAt<=10000&&qIn.bestBid>0&&qIn.bestAsk>=qIn.bestBid;
   if(manualReset&&(!t||source.exitReason!=='ACCOUNT_RESET'||reductions.length!==already))throw new Error('手动重置不能补造影子历史成交');
   if(!t){
-    const withSource=source.status==='OPEN'&&inverseEntryHalted([...state.positions,...state.history],now).halted;
-    if(source.status!=='OPEN'&&inverseEntryHalted([...state.positions,...state.history],now).halted)return;
+    const openingExpansion=source.entryContext?.environmentProfitExpansion;
+    const opening:RegimeOpen={id:source.id,at:source.openedAt,
+      persistence:finite(source.entryContext?.environmentPersistenceScore)?source.entryContext!.environmentPersistenceScore!:null,
+      expansion:openingExpansion==='HIGH'||openingExpansion==='NORMAL'||openingExpansion==='LOW'?openingExpansion:null};
+    if(source.status==='OPEN'){
+      const rows=trial.regimeOpens??[];
+      if(!rows.some(row=>row.id===source.id))rows.push(opening);
+      trial.regimeOpens=rows.slice(-180);
+    }
+    const decision=bookRegime([...state.positions,...state.history],now,trial.regimeOpens);
+    const clock=trial.regimeClock??{pauseUntil:0,followUntil:0};
+    if(decision.mode==='PAUSE')clock.pauseUntil=Math.max(clock.pauseUntil,decision.pauseUntil);
+    trial.regimeClock=clock;
+    const regime=decision.mode==='FADE'&&now<clock.pauseUntil?'PAUSE':decision.mode;
+    if(regime==='PAUSE'){
+      if(source.status==='OPEN'){
+        const skipped=trial.entryHaltSkipped??[];
+        if(!skipped.includes(source.id))skipped.push(source.id);
+        trial.entryHaltSkipped=skipped.slice(-200);
+        state.revision++;state.events.unshift({id:`a${state.startedAt}-${state.revision}`,at:now,kind:'ENTRY',subject:source.id,
+          reason:`持续力已从高位掉下来，先停开 ${source.symbol}`});
+        state.events=state.events.slice(0,160);
+      }
+      return;
+    }
+    const withSource=regime==='FOLLOW'&&source.status==='OPEN';
     const side=withSource?source.side:source.side==='LONG'?'SHORT':'LONG',openSpread=bookSpread(qIn,now,source.entryPrice),
       price=executablePrice(source.entryPrice,openSpread,side==='LONG'),
       quantity=source.realization?.initialQuantity??source.quantity,contracts=source.realization?.initialContracts??source.contracts,

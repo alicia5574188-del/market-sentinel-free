@@ -5,7 +5,7 @@ import {normalizeForward,drainLegacyForwardPositions,forwardEquity,type ForwardS
 import {captureTradeReviews} from './review-trace.ts';
 import {SHADOW_BASELINE_BUILD,SHARED_MARKET_KEYS,shadowCapsule,sourceDecisionState,newInverseTrial,
   applyInverseSourceTrade,applyInverseSoftLossExits,markInversePositions,recordInverseCurve,assertInverseTrial} from './shadow-inverse-ledger.ts';
-import {inverseEntryHalted} from './confirmation-reality.ts';
+import {bookRegime} from './confirmation-reality.ts';
 import {beijingDayKey} from './beijing-time.ts';
 import {FIXED_ALLOCATION_EQUITY} from './fixed-allocation.ts';
 
@@ -51,9 +51,12 @@ export function advanceShadowInverse(input:Parameters<typeof advanceBaseline>[0]
   if(daily?.day===day){daily.lastAt=input.now;daily.endEquity=mark.equity;}
   else s.daily.push({day,firstAt:input.now,lastAt:input.now,startEquity:mark.equity,endEquity:mark.equity,exactBoundary:false});
   s.daily=s.daily.slice(-45);
-  const halt=inverseEntryHalted([...s.positions,...s.history],input.now);
-  s.latestReason=halt.halted
-    ?`${halt.reason}已经开着的反向照旧出场。已配对${trial.totals.opened}笔。`
+  const decision=bookRegime([...s.positions,...s.history],input.now,trial.regimeOpens);
+  const mode=decision.mode==='FADE'&&input.now<(trial.regimeClock?.pauseUntil??0)?'PAUSE':decision.mode;
+  s.latestReason=mode==='PAUSE'
+    ?`${decision.reason||'持续力已从高位掉下来，新单先停 6 小时，不改顺着做。'}已经开着的单照旧出场。已配对${trial.totals.opened}笔。`
+    :mode==='FOLLOW'
+    ?`${decision.reason}已配对${trial.totals.opened}笔。`
     :`影子按2b4fd60f独立决策；模拟只反向跟随。已配对${trial.totals.opened}笔，旧持仓${s.positions.filter(t=>!t.inverseCopy).length}笔单独收尾。`;
   assertInverseTrial(s);
   return{state:s,changed:activated||source.changed||softLoss||beforeFinancial!==JSON.stringify([s.balance,s.resolved,s.positions.map(t=>[t.id,t.stopPrice,t.contracts])]),

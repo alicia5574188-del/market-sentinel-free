@@ -79,7 +79,8 @@ function positionWatch(t:View["positions"][number]){
 }
 
 function bookModeOf(data:View|null){
-  return {withSource:!!(data as {confirmationReality?:{entryHalted?:boolean}}|null)?.confirmationReality?.entryHalted};
+  const regime=(data as {confirmationReality?:{regime?:"FADE"|"PAUSE"|"FOLLOW"}}|null)?.confirmationReality?.regime??"FADE";
+  return {withSource:regime==="FOLLOW",paused:regime==="PAUSE"};
 }
 
 export default function MarketIntelligenceExecution({data,now:_,liveEnabled,liveOverview}:{
@@ -114,7 +115,7 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
           {observed.length?observed.map(o=><p key={o.id}><b>{o.symbol.replace("_"," / ")} · {side(o.side)} · {tradePlanName(o.tradePlan)}</b><br/>
             {o.eligible&&!waitingByCandidate.has(o.id)?"条件已成立，等待执行队列。":observeReason(o,liquidity?.symbols?.[o.symbol])}</p>):<p>暂无重点观察标的。</p>}
         </div></article>
-        <article><time>等待执行 · {waitingValidations.length}{data?.shadowInverse?(bookModeOf(data).withSource?" · 新单顺着确认":" · 新单反着确认"):""}</time><div>
+        <article><time>等待执行 · {waitingValidations.length}{data?.shadowInverse?(bookModeOf(data).paused?" · 新单先停":bookModeOf(data).withSource?" · 新单顺着确认":" · 新单反着确认"):""}</time><div>
           {waitingValidations.map(v=>{const o=v.frozenOpportunity??opportunities.find(x=>x.id===v.candidateId);return <p key={v.id}><b>{v.symbol.replace("_"," / ")} · {side(v.side)} · {tradePlanName(o?.tradePlan)}</b><br/>
             {waitingReason(v,o)}{o?.winnerPlan&&<><br/><small>{planText(o.winnerPlan)}</small></>}</p>})}
           {!waitingValidations.length&&<p>暂无已武装计划。</p>}

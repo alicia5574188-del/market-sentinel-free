@@ -84,8 +84,8 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       <PaperEquitySection data={data} healthy={healthy} cache={equityCache} cacheScope={cacheScope}/>
       {liveEnabled&&<LiveEquityCurve head={liveOverview?.equityCurve} mark={actual} enabled={liveEnabled} sessionAt={liveOverview?.sessionAt??0} cacheScope={cacheScope} now={now}/>}
       <section className="fr-section"><div className="fr-section-head"><h2>{data?.shadowInverse?"接下来会这样下":"当前最优机会"}</h2><span>{eligible.length} 个可参与</span></div>
-        {data?.shadowInverse&&<p className="fr-paid-note">{mode.withSource?"现在顺着做：确认做多，模拟做多；确认做空，模拟做空。":"现在反着做：确认做多，模拟做空；确认做空，模拟做多。"}</p>}
-        <OpportunityGrid rows={opportunities.slice(0,6)} switched={!!data?.shadowInverse} withSource={mode.withSource}/></section>
+        {data?.shadowInverse&&<p className="fr-paid-note">{mode.regime==="PAUSE"?"现在先不开新单。已经开着的单照旧平。":mode.withSource?"现在顺着做：确认做多，模拟做多；确认做空，模拟做空。只做这一小段。":"现在反着做：确认做多，模拟做空；确认做空，模拟做多。"}</p>}
+        <OpportunityGrid rows={opportunities.slice(0,6)} switched={!!data?.shadowInverse} paused={mode.regime==="PAUSE"} withSource={mode.withSource}/></section>
     </>}
 
     {tab==="execution"&&<MarketIntelligenceExecution data={data} now={now} liveEnabled={liveEnabled} liveOverview={liveOverview}/>}
@@ -138,9 +138,9 @@ function PaperEquitySection({data,healthy,cache,cacheScope}:{data:View|null;heal
   </section>;
 }
 
-function OpportunityGrid({rows,details=false,switched=false,withSource=false}:{rows:NonNullable<View["opportunities"]>;details?:boolean;switched?:boolean;withSource?:boolean}){
+function OpportunityGrid({rows,details=false,switched=false,paused=false,withSource=false}:{rows:NonNullable<View["opportunities"]>;details?:boolean;switched?:boolean;paused?:boolean;withSource?:boolean}){
   if(!rows.length)return <Empty title="暂无已确认机会"/>;
-  const plan=(side:"LONG"|"SHORT")=>!switched?(side==="LONG"?"做多":"做空"):withSource?(side==="LONG"?"确认做多 → 模拟做多":"确认做空 → 模拟做空"):(side==="LONG"?"确认做多 → 模拟做空":"确认做空 → 模拟做多");
+  const plan=(side:"LONG"|"SHORT")=>!switched?(side==="LONG"?"做多":"做空"):paused?"这小时先不开":withSource?(side==="LONG"?"确认做多 → 模拟做多":"确认做空 → 模拟做空"):(side==="LONG"?"确认做多 → 模拟做空":"确认做空 → 模拟做多");
   return <div className="fr-scoreboard">{rows.map((o,index)=><details className={`fr-score-row ${o.eligible?"is-eligible":""}`} key={o.id} open={false}>
     <summary><span className="fr-score-rank">#{index+1}</span><span className="fr-score-value">{fmt(o.score,0)}</span><span className="fr-score-symbol"><b>{o.symbol.replace("_"," / ")}</b><small>{plan(o.side)} · {modeName(o.mode)}</small></span>
       <span><small>方向</small><b>{fmt(o.directionStrength,0)}</b></span><span><small>净空间</small><b>{fmt(o.netRemainingSpaceRate*100,2)}%</b></span><span><small>空间/回调</small><b>{fmt(o.edgeRatio,2)}×</b></span><em>{o.eligible?(o.premium?"高级":o.reserve?"补位":"主机会"):"观察"}</em></summary>
@@ -222,12 +222,12 @@ function ModeBanner({mode,withOpen,againstOpen}:{mode:BookMode;withOpen:number;a
     <div className="fr-mode-pills"><span>持仓里反着做 {againstOpen}</span><span>顺着做 {withOpen}</span></div>
   </section>;
 }
-type BookMode={withSource:boolean;label:string;line:string};
+type BookMode={regime:"FADE"|"PAUSE"|"FOLLOW";withSource:boolean;label:string;line:string};
 function bookMode(data:View|null):BookMode{
-  const halted=!!(data as {confirmationReality?:{entryHalted?:boolean}}|null)?.confirmationReality?.entryHalted;
-  return halted
-    ?{withSource:true,label:"顺着做",line:"确认方向现在多半是真的。新单跟确认走。已经反着做的单照旧平。"}
-    :{withSource:false,label:"反着做",line:"确认一出来，新单做反方向。"};
+  const regime=(data as {confirmationReality?:{regime?:"FADE"|"PAUSE"|"FOLLOW"}}|null)?.confirmationReality?.regime??"FADE";
+  if(regime==="PAUSE")return {regime,withSource:false,label:"先停开",line:"持续力从高位掉下来了。新单先停 6 小时，不改顺着做。已经开着的单照旧平。"};
+  if(regime==="FOLLOW")return {regime,withSource:true,label:"顺着做",line:"影子最近重新连赢。这两小时跟着确认走，时间一到就回到反着做。"};
+  return {regime,withSource:false,label:"反着做",line:"确认一出来，新单做反方向。"};
 }
 function Metric({label,value}:{label:string;value:string}){return <span><small>{label}</small><b>{value}</b></span>;}
 function Stat({label,value,note}:{label:string;value:string;note?:string}){return <article><small>{label}</small><strong>{value}</strong>{note&&<p>{note}</p>}</article>;}
