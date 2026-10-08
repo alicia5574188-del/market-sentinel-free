@@ -54,6 +54,8 @@ export type InverseTrial={version:typeof SHADOW_INVERSE_VERSION;sourceBuild:type
   regimeClock?:{pauseUntil:number;followUntil:number};
   forwardStudy?:import('./forward-study.ts').ForwardStudy;
   researchDesk?:import('./research-decision.ts').ResearchDesk;
+  /** needle-v1 ignores proposal opens. Absent keeps the proposal copy. */
+  paperPolicy?:'needle-v1';needleSeen?:string[];needleCooldown?:Record<string,number>;
   swings?:EquitySwing[];swingArm?:{source?:SwingArm;inverse?:SwingArm}};
 export type EquitySwing={at:number;book:'source'|'inverse';kind:'PEAK'|'TROUGH';equity:number};
 export type SwingArm={at:number;equity:number;side:'FLAT'|'HIGH'|'LOW'};
@@ -269,6 +271,14 @@ export function applyInverseSourceTrade(state:ForwardState,source:Trade,qIn:Quot
   if(!t){
     if(trial.detachedSourceIds?.includes(source.id)){
       if(source.status==='CLOSED')trial.detachedSourceIds=trial.detachedSourceIds.filter(id=>id!==source.id);
+      return;
+    }
+    if(trial.paperPolicy==='needle-v1'){
+      if(source.status==='OPEN'){
+        const skipped=trial.entryHaltSkipped??[];
+        if(!skipped.includes(source.id))skipped.push(source.id);
+        trial.entryHaltSkipped=skipped.slice(-200);
+      }
       return;
     }
     const desk=ensureResearchDesk(trial.researchDesk);

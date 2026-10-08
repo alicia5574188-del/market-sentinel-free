@@ -6,6 +6,7 @@ import {captureTradeReviews} from './review-trace.ts';
 import {SHADOW_BASELINE_BUILD,SHARED_MARKET_KEYS,shadowCapsule,sourceDecisionState,newInverseTrial,
   applyInverseSourceTrade,applyInverseSoftLossExits,applyDeskOrderExits,markInversePositions,recordInverseCurve,assertInverseTrial} from './shadow-inverse-ledger.ts';
 import {ensureResearchDesk,observeResearch} from './research-decision.ts';
+import {applyNeedleBook,NEEDLE_POLICY,NEEDLE_EPOCH,NEEDLE_BEFORE} from './needle-book.ts';
 import {noteForwardStudy} from './forward-study.ts';
 import {beijingDayKey} from './beijing-time.ts';
 import {FIXED_ALLOCATION_EQUITY} from './fixed-allocation.ts';
@@ -55,7 +56,12 @@ export function advanceShadowInverse(input:Parameters<typeof advanceBaseline>[0]
   markInversePositions(s,input.quotes,input.now);
   const softLoss=applyInverseSoftLossExits(s,input.now);
   const deskExit=applyDeskOrderExits(s,input.quotes,input.now);
+  const needle=applyNeedleBook(s,input.minutePaths,input.quotes,input.contracts,input.now);
   recordInverseCurve(s,input.quotes,input.now);
+  if(trial.paperPolicy===NEEDLE_POLICY){
+    const eq=forwardEquity(s,input.quotes,input.now).equity,last=trial.curve.at(-1);
+    if(last&&input.now-last.at<60_000)last.inverse=eq;
+  }
   const mark=forwardEquity(s,input.quotes,input.now);s.peakEquity=Math.max(s.peakEquity,mark.equity);
   s.maxDrawdown=Math.max(s.maxDrawdown,1-mark.equity/Math.max(s.peakEquity,1));
   const day=beijingDayKey(input.now),daily=s.daily.at(-1);
@@ -64,13 +70,16 @@ export function advanceShadowInverse(input:Parameters<typeof advanceBaseline>[0]
   s.daily=s.daily.slice(-45);
   const stance=trial.researchDesk?.stance??'FORWARD';
   const note=trial.researchDesk?.note||'';
-  s.latestReason=stance==='FLAT'
+  const needleOpen=s.positions.filter(t=>t.exitControl?.policy===NEEDLE_POLICY).length;
+  s.latestReason=trial.paperPolicy===NEEDLE_POLICY
+    ?`只做收回来的针。向上做空，向下做多。现在 ${needleOpen} 笔。`
+    :stance==='FLAT'
     ?`${note}新单先停。已经开着的按各自出场。已记下${trial.totals.opened}笔。`
     :stance==='REVERSE'
     ?`${note}新单反着做。已记下${trial.totals.opened}笔。`
     :`${note}新单跟提案同一边。已记下${trial.totals.opened}笔。`;
   assertInverseTrial(s);
-  return{state:s,changed:activated||source.changed||softLoss||deskExit||researchChanged||beforeFinancial!==JSON.stringify([s.balance,s.resolved,s.positions.map(t=>[t.id,t.stopPrice,t.contracts])]),
+  return{state:s,changed:activated||source.changed||softLoss||deskExit||needle||researchChanged||beforeFinancial!==JSON.stringify([s.balance,s.resolved,s.positions.map(t=>[t.id,t.stopPrice,t.contracts])]),
     protectionChanged:source.protectionChanged};
 }
 
@@ -89,3 +98,16 @@ export function freshDeskLedger(previous:ForwardState,now:number):ForwardState{
   assertInverseTrial(next);
   return next;
 }
+
+/** One clean paper book for the needle rules. Drops proposal copies. */
+export function freshNeedleLedger(previous:ForwardState,now:number):ForwardState{
+  const next=resetForwardAccountPreservingLearning(previous,now);
+  next.lastExitAt={};
+  next.inverseTrial=newInverseTrial(next,now,next.initialEquity);
+  next.inverseTrial.paperPolicy=NEEDLE_POLICY;
+  next.latestReason='模拟账户从1000U按针的规则重新开始。不再跟着提案开仓。';
+  assertInverseTrial(next);
+  return next;
+}
+
+export {NEEDLE_EPOCH,NEEDLE_BEFORE};

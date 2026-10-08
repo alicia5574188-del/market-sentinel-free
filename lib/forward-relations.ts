@@ -463,6 +463,12 @@ function equityMark(s:ForwardState,quotes:Record<string,Quote>,now:number){
       // Entry fee has already been debited from balance; future close fee is not paid yet.
       floating+=dir(t.side)*t.quantity*(px-t.entryPrice);continue;
     }
+    if(t.exitControl?.policy==='needle-v1'){
+      const q=quotes[t.symbol],fresh=freshQuote(q,now),px=fresh?(t.side==='LONG'?q!.bestBid:q!.bestAsk):t.lastPrice;
+      if(!fresh||!(px>0))stale++;
+      else floating+=dir(t.side)*t.quantity*(px-t.entryPrice);
+      continue;
+    }
     const q=quotes[t.symbol],fresh=freshQuote(q,now),px=fresh?midpoint(q):t.lastPrice;if(!fresh)stale++;
     floating+=dir(t.side)*t.quantity*(px-t.entryPrice)-t.quantity*px*PAPER_COST.feeRate;
   }
@@ -813,7 +819,7 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
 
 function markAndManage(s:ForwardState,quotes:Record<string,Quote>,now:number){
   const candidates=new Map(s.opportunities.filter(o=>!isIntelligenceOpportunity(o)).map(o=>[o.symbol,o])),relationById=new Map(s.relationEngine.rules.map(r=>[r.id,r])),closed=new Set<string>();
-  for(const t of s.positions){if(t.inverseCopy||t.entryContext?.strategyVersion===MARKET_INTELLIGENCE_VERSION)continue;const q=quotes[t.symbol];if(!freshQuote(q,now))continue;const px=t.side==="LONG"?q!.bestBid:q!.bestAsk,d=dir(t.side);
+  for(const t of s.positions){if(t.inverseCopy||t.entryContext?.strategyVersion===MARKET_INTELLIGENCE_VERSION||t.exitControl?.policy==='needle-v1')continue;const q=quotes[t.symbol];if(!freshQuote(q,now))continue;const px=t.side==="LONG"?q!.bestBid:q!.bestAsk,d=dir(t.side);
     t.lastPrice=px;t.lastQuoteAt=q!.observedAt;const signed=d*(px/t.entryPrice-1),favorable=Math.max(0,signed),adverse=Math.max(0,-signed);
     t.favorable=Math.max(t.favorable,favorable);t.adverse=Math.max(t.adverse,adverse);t.peakPnlRate=Math.max(t.peakPnlRate??0,favorable);
     if(!t.firstProfitAt&&favorable>=ROUND_TRIP_COST*.6)t.firstProfitAt=now;

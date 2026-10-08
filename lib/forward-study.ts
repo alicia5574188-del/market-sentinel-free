@@ -1,6 +1,7 @@
 /** Durable record of the research book's own closes.
  * Hot history is trimmed; these aggregates are not. Nothing here places a trade. */
 import type {ForwardState,Quote,Trade} from './forward-relations.ts';
+import {forwardEquity} from './forward-relations.ts';
 import {inverseTrialSummary,type InverseTrial} from './shadow-inverse-ledger.ts';
 import {researchDeskView,type DeskResearchView,type DeskStance} from './research-decision.ts';
 
@@ -32,7 +33,7 @@ export type ForwardStudyView={
   recent:{id:string;symbol:string;side:'LONG'|'SHORT';closedAt:number;net:number;hour:number;tag:string}[];
 };
 export type ForwardDesk={
-  stance:DeskStance;equity:number|null;initialEquity:number;netPnl:number|null;maxDrawdown:number|null;
+  stance:DeskStance;book?:'needle-v1';equity:number|null;initialEquity:number;netPnl:number|null;maxDrawdown:number|null;
   fees:number;floating:number|null;stale:boolean;openCount:number;resolved:number;wins:number;
   open:ForwardOrder[];recent:ForwardOrder[];curve:{at:number;equity:number}[];study:ForwardStudyView;
   research:DeskResearchView;
@@ -161,13 +162,18 @@ function orderOf(t:Trade,status:'OPEN'|'CLOSED'):ForwardOrder{
 export function forwardDeskView(state:ForwardState,quotes:Record<string,Quote>,now:number):ForwardDesk|null{
   const trial=state.inverseTrial;if(!trial?.source)return null;
   const summary=inverseTrialSummary(state,quotes,now);if(!summary)return null;
-  const stale=(summary.stalePositions??0)>0;
+  const needle=trial.paperPolicy==='needle-v1';
+  const needleTrade=(t:Trade)=>t.exitControl?.policy==='needle-v1';
+  const summaryStale=(summary.stalePositions??0)>0;
+  const mark=needle?forwardEquity(state,quotes,now):null;
+  const stale=needle?(mark!.stalePositions??0)>0:summaryStale;
   const stance:DeskStance=trial.researchDesk?.stance??'FORWARD';
   const last=trial.curve?.at(-1)?.inverse;
-  const equity=stale?(finite(last)?last:null):summary.inverseEquity;
-  const netPnl=equity==null?null:equity-summary.initialEquity;
-  const floating=stale?null:summary.paidCost?.inverse.floatingGross??null;
-  let peak=summary.initialEquity,dd=0;
+  const equity=stale?(finite(last)?last:null):needle?mark!.equity:summary.inverseEquity;
+  const initial=needle?state.initialEquity:summary.initialEquity;
+  const netPnl=equity==null?null:equity-initial;
+  const floating=stale?null:needle?mark!.floating:summary.paidCost?.inverse.floatingGross??null;
+  let peak=initial,dd=0;
   for(const point of trial.curve??[]){
     if(!(point.inverse>0))continue;
     if(point.inverse>peak)peak=point.inverse;
@@ -177,12 +183,13 @@ export function forwardDeskView(state:ForwardState,quotes:Record<string,Quote>,n
   const curve=(trial.curve??[]).map(point=>({at:point.at,equity:point.inverse}));
   if(!stale&&equity!=null&&(curve.at(-1)?.at??0)<now)curve.push({at:now,equity});
   const study=usable(trial.forwardStudy)?trial.forwardStudy:empty(now);
-  const closed=state.history.filter(t=>t.inverseCopy&&t.status==='CLOSED'&&t.exitReason!=='ACCOUNT_RESET')
-    .sort((a,b)=>(b.closedAt??0)-(a.closedAt??0)).slice(0,8);
-  return {stance,equity,initialEquity:summary.initialEquity,netPnl,maxDrawdown:peak>0?dd:null,
-    fees:summary.inverseFees,floating,stale,openCount:state.positions.filter(t=>t.inverseCopy).length,
-    resolved:state.resolved,wins:state.wins,
-    open:state.positions.filter(t=>t.inverseCopy).map(t=>orderOf(t,'OPEN')).sort((a,b)=>b.openedAt-a.openedAt),
+  const closed=(needle?state.history.filter(needleTrade):state.history.filter(t=>t.inverseCopy&&t.status==='CLOSED'&&t.exitReason!=='ACCOUNT_RESET'))
+    .filter(t=>t.status==='CLOSED').sort((a,b)=>(b.closedAt??0)-(a.closedAt??0)).slice(0,8);
+  const openRows=needle?state.positions.filter(needleTrade):state.positions.filter(t=>t.inverseCopy);
+  return {stance,book:needle?'needle-v1':undefined,equity,initialEquity:initial,netPnl,maxDrawdown:peak>0?dd:null,
+    fees:needle?state.fees:summary.inverseFees,floating,stale,openCount:openRows.length,
+    resolved:needle?state.resolved:state.resolved,wins:state.wins,
+    open:openRows.map(t=>orderOf(t,'OPEN')).sort((a,b)=>b.openedAt-a.openedAt),
     recent:closed.map(t=>orderOf(t,'CLOSED')),
     curve:curve.length>240?curve.slice(-240):curve,
     study:describeForwardStudy(study,trial.source.resolved??study.total.n),

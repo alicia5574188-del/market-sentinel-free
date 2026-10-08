@@ -53,7 +53,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
 
   const desk=data?.forwardDesk??null,positions=data?.positions??[];
   const usingDesk=!!desk&&!liveEnabled;
-  const stanceLabel=stanceName(desk?.stance);
+  const stanceLabel=desk?.book==="needle-v1"?"账户":stanceName(desk?.stance);
   const paperFloating=usingDesk?desk.floating:positions.reduce((n,t)=>n+(t.status==="OPEN"?remainingPaidNetPnl(t,t.lastPrice):0),0);
   const held=usingDesk?desk.openCount:positions.length;
   const systemStatus=statusLabel==="后台运行中"?"正常":statusLabel?.startsWith("后台运行中 · ")?statusLabel.slice(8):statusLabel??(healthy?"正常":"行情恢复中");
@@ -87,7 +87,10 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       {desk&&<ForwardOrders desk={desk} now={now}/>}
     </>}
 
-    {tab==="research"&&<>
+    {tab==="research"&&desk?.book==="needle-v1"&&<section className="fr-section" data-testid="research-claims"><div className="fr-section-head"><h2>研究</h2></div>
+      <p>只看最近 30 根 1 分钟线，和当前买一卖一。一根线冲出这 30 分钟的高点或低点，收盘又回到里面，就记成一根针。研究只记这件事，不开单。</p>
+    </section>}
+    {tab==="research"&&desk?.book!=="needle-v1"&&<>
       <section className="fr-section" data-testid="research-claims"><div className="fr-section-head"><h2>研究裁决</h2><span>{desk?.research?`${desk.research.unsettled} 笔未到期`:"等待提案"}</span></div>
         <p>每笔提案先记下读法。过 30 分钟，用价格判断对错，不看这笔后来怎么平的。</p>
         <p className="fr-note">慢方向和这一拍同向，并且和提案同向，记成延续。两边打架，或者都和提案相反，记成可疑。有一边没方向，就不投票。</p>
@@ -129,6 +132,12 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
 
 function DecisionPage({data}:{data:View|null}){
   const desk=data?.forwardDesk??null,research=desk?.research,stance=stanceName(desk?.stance);
+  if(desk?.book==="needle-v1")return <section className="fr-section" data-testid="decision-stance">
+    <div className="fr-section-head"><h2>当前决策</h2><span>针</span></div>
+    <p>不跟提案开仓。向上的针做空，向下的针做多。</p>
+    <p className="fr-note">针尖离进场价不到 0.25%，或超过 0.6%，不开。这个币半小时内刚止损过，不开。同时最多 3 笔。</p>
+    <p className="fr-note">不顺的单短拿：打穿针尖就走，5 分钟没走出 0.15% 就走，浮亏到 4U 也走。顺的单长拿：不到 0.8% 不因小赚离场。到了以后吐回一半再走。最长 90 分钟。</p>
+  </section>;
   const headline=desk?.stance==="REVERSE"?"新单跟提案反着做。":desk?.stance==="FLAT"?"这一时段先不开新单。":"新单跟提案同一边。";
   return <section className="fr-section" data-testid="decision-stance">
     <div className="fr-section-head"><h2>当前决策</h2><span>{stance}</span></div>
@@ -140,7 +149,7 @@ function DecisionPage({data}:{data:View|null}){
   </section>;
 }
 function ForwardCurve({desk}:{desk:Desk}){
-  const label=desk.stance==="REVERSE"?"反向净值":desk.stance==="FLAT"?"账户净值":"正向净值";
+  const label=desk.book==="needle-v1"?"账户净值":stanceName(desk.stance)==="反向"?"反向净值":desk.stance==="FLAT"?"账户净值":"正向净值";
   const points=desk.curve.length?desk.curve:[{at:0,equity:desk.initialEquity}];
   const lo=Math.min(desk.initialEquity,...points.map(p=>p.equity)),hi=Math.max(desk.initialEquity,...points.map(p=>p.equity));
   const range=Math.max(1e-6,hi-lo),first=points[0]!.at,last=Math.max(first+1,points.at(-1)!.at);
@@ -155,7 +164,7 @@ function ForwardCurve({desk}:{desk:Desk}){
   </section>;
 }
 function ForwardOrders({desk,now}:{desk:Desk;now:number}){
-  const label=stanceName(desk.stance);
+  const label=desk.book==="needle-v1"?"账户":stanceName(desk.stance);
   return <section className="fr-section" data-testid="forward-orders">
     <div className="fr-section-head"><h2>{label}持仓</h2><span>{desk.open.length} 笔</span></div>
     <p className="fr-note">新单跟当前决策，一笔提案一笔单，金额不变。先停才不开，也不把后面的单加大。已经开着的单不改方向。</p>

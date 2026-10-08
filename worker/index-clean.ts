@@ -45,7 +45,7 @@ import { evaluateRegimePortfolio, initialRegimePortfolio, normalizeRegimePortfol
   REGIME_EXECUTION_UNIVERSE, REGIME_HOURLY_REQUIRED_CANDLES, REGIME_PORTFOLIO_VERSION, REGIME_STRATEGIES, REGIME_SYSTEMS, REGIME_UNIVERSE,
   type RegimePortfolioState } from "../lib/regime-portfolio.ts";
 import type { PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
-import {advanceShadowInverse,freshDeskLedger,DESK_CLEAN_EPOCH,DESK_CLEAN_BEFORE} from '../lib/shadow-inverse.ts';
+import {advanceShadowInverse,freshDeskLedger,freshNeedleLedger,DESK_CLEAN_EPOCH,DESK_CLEAN_BEFORE,NEEDLE_EPOCH,NEEDLE_BEFORE} from '../lib/shadow-inverse.ts';
 import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
 import {confirmationRealityView} from '../lib/confirmation-reality.ts';
 import {observationReading} from '../lib/observation-tape.ts';
@@ -553,6 +553,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private forwardBusy = false;
   private deskCleanArmed = false;
   private deskCleanSettled = false;
+  private needleArmed = false;
+  private needleSettled = false;
   private forwardLastAttemptAt = 0;
   private forwardProtectionBudget: ProtectionWriteBudget | null = null;
   private forwardCompression: Awaited<ReturnType<typeof prepareForwardWrite>>["compression"] | null = null;
@@ -647,6 +649,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     // A separate member namespace reuses the verified executor, never the market loop.
     if (executionOnly) return;
     this.deskCleanArmed = true;
+    this.needleArmed = true;
     ctx.blockConcurrencyWhile(async () => {
       const saved = await ctx.storage.get<Checkpoint>("checkpoint");
       if (saved?.authoritySchemaVersion === AUTHORITY_SCHEMA_VERSION) {
@@ -1261,6 +1264,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     try {
       await this.ensureAdaptiveAccount(now);
       await this.adoptDeskCleanLedger(now);
+      await this.adoptNeedleLedger(now);
       const state=this.forwardState!;
       const dataCycleDue=allowDataCycle&&(!state.lastCycleAt
         ||Math.floor((now-90_000)/BAR_MS)>Math.floor((state.lastCycleAt-90_000)/BAR_MS));
@@ -1961,6 +1965,49 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       ]);
     }catch{/* legacy order tables are optional; the forward book is already the new 1000U ledger */}
     if(!(await this.sweepRetiredPaperArchives(sweepKey)))this.deskCleanSettled=true;
+  }
+
+  /** One switch onto the needle book. Live on, or an already-new book, is left alone. */
+  private async adoptNeedleLedger(now:number){
+    if(!this.needleArmed||this.needleSettled||!this.forwardState)return;
+    const epochKey=`${FORWARD_STORAGE}needle-book-epoch`,sweepKey=`${FORWARD_STORAGE}needle-book-sweep-before`;
+    const saved=await this.ctx.storage.get<string>(epochKey);
+    if(saved===NEEDLE_EPOCH){
+      if(!(await this.sweepRetiredPaperArchives(sweepKey)))this.needleSettled=true;
+      return;
+    }
+    const live=this.runtime.live;
+    if(live.requestedEnabled||live.operational
+      ||Object.values(live.positions).some(position=>position?.status==="OPEN")
+      ||Object.values(live.entries).some(entry=>entry&&!["FILLED","CANCELLED"].includes(entry.status)))return;
+    const previous=this.forwardState;
+    if(previous.inverseTrial?.paperPolicy==='needle-v1'||!(previous.startedAt<NEEDLE_BEFORE)){this.needleSettled=true;return;}
+    const next=freshNeedleLedger(previous,now);
+    next.storage={persistedAt:now,error:null,layout:FORWARD_PAGED_STATE_VERSION,sampleIntegrity:"raw-sha256"};
+    const prepared=await prepareForwardWrite(previous.storage.persistedAt?previous:null,next,now,{compact:true});
+    const protection=await this.ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
+    const checkpoint=prepareForwardProtectionWrite(next).entries[FORWARD_PROTECTION_STORAGE] as Record<string,unknown>|undefined;
+    if(checkpoint)prepared.entries[FORWARD_PROTECTION_STORAGE]=protection?.writeBudget!==undefined?{...checkpoint,writeBudget:protection.writeBudget}:checkpoint;
+    prepared.entries[epochKey]=NEEDLE_EPOCH;
+    prepared.entries[sweepKey]=next.startedAt;
+    prepared.writes+=(checkpoint?1:0)+2;
+    const reservation=this.reserveCriticalWrites(prepared.writes);
+    try{
+      await this.ctx.storage.transaction(async transaction=>{await transaction.put(prepared.entries);});
+      reservation.finish(true);
+    }finally{reservation.finish(false);}
+    next.storage.layout=FORWARD_PAGED_STATE_VERSION;next.storage.sampleIntegrity="raw-sha256";
+    this.forwardCompression=prepared.compression;this.forwardState=next;this.forwardError=null;
+    this.forwardProtectionBudget=readProtectionWriteBudget(protection?.writeBudget);
+    this.mirrorClosures.clear();
+    this.reviewJournal=initialReviewJournal(next.startedAt,now);this.reviewJournalLoaded=true;this.reviewDiagnosticError=null;
+    try{
+      await this.env.DB.batch([
+        this.env.DB.prepare("DELETE FROM paper_events").bind(),
+        this.env.DB.prepare("DELETE FROM paper_positions").bind(),
+      ]);
+    }catch{/* legacy order tables are optional */}
+    if(!(await this.sweepRetiredPaperArchives(sweepKey)))this.needleSettled=true;
   }
 
   /** True when another batch of pre-cutover archive rows may remain. */
