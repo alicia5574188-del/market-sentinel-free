@@ -54,10 +54,16 @@ export type InverseTrial={version:typeof SHADOW_INVERSE_VERSION;sourceBuild:type
   regimeClock?:{pauseUntil:number;followUntil:number};
   forwardStudy?:import('./forward-study.ts').ForwardStudy;
   researchDesk?:import('./research-decision.ts').ResearchDesk;
-  /** brain-v1 ignores proposal opens. Absent keeps the proposal copy. needle-v1 is the retired wick book. */
-  paperPolicy?:'needle-v1'|'brain-v1';needleSeen?:string[];needleCooldown?:Record<string,number>;
+  /** Own paper books ignore proposal opens. Absent keeps the proposal copy. */
+  paperPolicy?:'needle-v1'|'brain-v1'|'score-v1';needleSeen?:string[];needleCooldown?:Record<string,number>;
   brainSeen?:string[];brainNote?:string;brainIdeas?:{symbol:string;side:'LONG'|'SHORT';kind:'FADE'|'LEAD'|'CATCH';why:string;wrong:string}[];
+  /** score-v1: one result per half-hour window. Not one result per coin. */
+  scoreNote?:string;scoreSkip?:number;scoreSamples?:ScoreSample[];scoreOpen?:ScoreWindow|null;
   swings?:EquitySwing[];swingArm?:{source?:SwingArm;inverse?:SwingArm}};
+export type ScoreHit=[number,number,number,number];
+export type ScoreCoin={symbol:string;residual:number;ref:number;dir:1|-1;up:ScoreHit;dn:ScoreHit};
+export type ScoreWindow={start:number;coins:ScoreCoin[]};
+export type ScoreSample={start:number;n:number;med:[number,number,number,number]};
 export type EquitySwing={at:number;book:'source'|'inverse';kind:'PEAK'|'TROUGH';equity:number};
 export type SwingArm={at:number;equity:number;side:'FLAT'|'HIGH'|'LOW'};
 const dir=(side:'LONG'|'SHORT')=>side==='LONG'?1:-1;
@@ -274,7 +280,7 @@ export function applyInverseSourceTrade(state:ForwardState,source:Trade,qIn:Quot
       if(source.status==='CLOSED')trial.detachedSourceIds=trial.detachedSourceIds.filter(id=>id!==source.id);
       return;
     }
-    if(trial.paperPolicy==='needle-v1'||trial.paperPolicy==='brain-v1'){
+    if(trial.paperPolicy==='needle-v1'||trial.paperPolicy==='brain-v1'||trial.paperPolicy==='score-v1'){
       if(source.status==='OPEN'){
         const skipped=trial.entryHaltSkipped??[];
         if(!skipped.includes(source.id))skipped.push(source.id);

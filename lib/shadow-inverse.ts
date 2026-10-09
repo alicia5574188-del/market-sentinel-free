@@ -8,6 +8,7 @@ import {SHADOW_BASELINE_BUILD,SHARED_MARKET_KEYS,shadowCapsule,sourceDecisionSta
 import {ensureResearchDesk,observeResearch} from './research-decision.ts';
 import {applyNeedleBook,NEEDLE_POLICY,NEEDLE_EPOCH,NEEDLE_BEFORE} from './needle-book.ts';
 import {applyBrainBook,BRAIN_POLICY,BRAIN_EPOCH,BRAIN_BEFORE} from './research-brain.ts';
+import {applyScoreBook,SCORE_POLICY,SCORE_EPOCH,SCORE_BEFORE} from './score-book.ts';
 import {noteForwardStudy} from './forward-study.ts';
 import {beijingDayKey} from './beijing-time.ts';
 import {FIXED_ALLOCATION_EQUITY} from './fixed-allocation.ts';
@@ -59,8 +60,9 @@ export function advanceShadowInverse(input:Parameters<typeof advanceBaseline>[0]
   const deskExit=applyDeskOrderExits(s,input.quotes,input.now);
   const needle=applyNeedleBook(s,input.minutePaths,input.quotes,input.contracts,input.now);
   const brain=applyBrainBook(s,input.paths,input.minutePaths,input.quotes,input.contracts,input.now);
+  const score=applyScoreBook(s,input.paths,input.minutePaths,input.quotes,input.contracts,input.now);
   recordInverseCurve(s,input.quotes,input.now);
-  if(trial.paperPolicy===NEEDLE_POLICY||trial.paperPolicy===BRAIN_POLICY){
+  if(trial.paperPolicy===NEEDLE_POLICY||trial.paperPolicy===BRAIN_POLICY||trial.paperPolicy===SCORE_POLICY){
     const eq=forwardEquity(s,input.quotes,input.now).equity,last=trial.curve.at(-1);
     if(last&&input.now-last.at<60_000)last.inverse=eq;
   }
@@ -74,7 +76,10 @@ export function advanceShadowInverse(input:Parameters<typeof advanceBaseline>[0]
   const note=trial.researchDesk?.note||'';
   const needleOpen=s.positions.filter(t=>t.exitControl?.policy===NEEDLE_POLICY).length;
   const brainOpen=s.positions.filter(t=>t.exitControl?.policy===BRAIN_POLICY).length;
-  s.latestReason=trial.paperPolicy===BRAIN_POLICY
+  const scoreOpen=s.positions.filter(t=>t.exitControl?.policy===SCORE_POLICY).length;
+  s.latestReason=trial.paperPolicy===SCORE_POLICY
+    ?`${trial.scoreNote||'研究还没有记下足够的半小时。'}现在 ${scoreOpen} 笔。`
+    :trial.paperPolicy===BRAIN_POLICY
     ?`${trial.brainNote||'研究还没有整盘结论。'}决策现在 ${brainOpen} 笔。`
     :trial.paperPolicy===NEEDLE_POLICY
     ?`只做收回来的针。向上做空，向下做多。现在 ${needleOpen} 笔。`
@@ -84,7 +89,7 @@ export function advanceShadowInverse(input:Parameters<typeof advanceBaseline>[0]
     ?`${note}新单反着做。已记下${trial.totals.opened}笔。`
     :`${note}新单跟提案同一边。已记下${trial.totals.opened}笔。`;
   assertInverseTrial(s);
-  return{state:s,changed:activated||source.changed||softLoss||deskExit||needle||brain||researchChanged||beforeFinancial!==JSON.stringify([s.balance,s.resolved,s.positions.map(t=>[t.id,t.stopPrice,t.contracts])]),
+  return{state:s,changed:activated||source.changed||softLoss||deskExit||needle||brain||score||researchChanged||beforeFinancial!==JSON.stringify([s.balance,s.resolved,s.positions.map(t=>[t.id,t.stopPrice,t.contracts])]),
     protectionChanged:source.protectionChanged};
 }
 
@@ -126,4 +131,15 @@ export function freshBrainLedger(previous:ForwardState,now:number):ForwardState{
   return next;
 }
 
-export {NEEDLE_EPOCH,NEEDLE_BEFORE,BRAIN_EPOCH,BRAIN_BEFORE};
+/** One clean paper book. Half-hour scores decide the side. Proposal copies are dropped. */
+export function freshScoreLedger(previous:ForwardState,now:number):ForwardState{
+  const next=resetForwardAccountPreservingLearning(previous,now);
+  next.lastExitAt={};
+  next.inverseTrial=newInverseTrial(next,now,next.initialEquity);
+  next.inverseTrial.paperPolicy=SCORE_POLICY;
+  next.latestReason='模拟账户从1000U重新开始。先按半小时记分，核对通过才下单。';
+  assertInverseTrial(next);
+  return next;
+}
+
+export {NEEDLE_EPOCH,NEEDLE_BEFORE,BRAIN_EPOCH,BRAIN_BEFORE,SCORE_EPOCH,SCORE_BEFORE};
