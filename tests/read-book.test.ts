@@ -122,7 +122,8 @@ test('the wave is held through a small fluctuation and closed when the reading e
   applyReadBook(s,paths,{},m.quotes,m.contracts,ended);
   assert.equal(s.positions.length,0);
   assert.ok(s.history.every(t=>t.exitReason==='READ_THESIS_EXIT'));
-  assert.equal(s.inverseTrial?.readNextAt,ended+60*60_000);
+  assert.equal(s.inverseTrial?.readNextAt,undefined);
+  assert.equal(s.inverseTrial?.readWave,undefined);
 });
 
 test('a 1.2% stop closes, and the same stretch is not immediately reopened',()=>{

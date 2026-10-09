@@ -148,7 +148,7 @@ function DecisionPage({data}:{data:View|null}){
   if(desk?.book==="read-v1")return <section className="fr-section" data-testid="decision-stance">
     <div className="fr-section-head"><h2>当前决策</h2><span>一拨</span></div>
     <p>研究说接下来有方向，价差吃得起，价格也没追出去，才做这一拨。刚跟上的才做，已经冲远的不追。拿住，直到这段判断结束。</p>
-    <p className="fr-note">不拆成频繁的小碎单。小波动不平。打到 1.2% 才当止损。整本亏的是方向、手续费却很小，就把这个判断反过来。亏的和手续费差不多，就停，不反。</p>
+    <p className="fr-note">不拆成频繁的小碎单。小波动不平。方向还在就拿着。这段结束了，下一笔可以开，不因为平了一笔就把新仓停住。打到 1.2% 才当止损。整本亏的是方向、手续费却很小，就把这个判断反过来。亏的和手续费差不多，就停，不反。</p>
   </section>;
   if(desk?.book==="score-v1")return <section className="fr-section" data-testid="decision-stance">
     <div className="fr-section-head"><h2>当前决策</h2><span>核对通过才做</span></div>

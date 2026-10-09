@@ -27,7 +27,7 @@ const EFF_PUSH=.35;
 const EFF_CHOP=.25;
 const BREAK_PAD=.0015;
 const SPIKE=.008;
-const COOL=60*60_000;
+const FILL_WINDOW=10*60_000;
 const BAR=300_000;
 
 type Meta=Contract&{volume24hUsd?:number};
@@ -35,7 +35,7 @@ type Side='LONG'|'SHORT';
 type Call='CONTINUE'|'BACK'|'NONE'|'WAIT';
 type Row={symbol:string;newer:number;older:number;eff:number;close:number;brokeUp:boolean;brokeDown:boolean;inside:boolean;spike:Side|null;excess:number};
 export type ReadName={symbol:string;side:Side;close:number;why:string};
-export type ReadView={call:Call;side:Side|null;episode:string;note:string;names:ReadName[];bar:number};
+export type ReadView={call:Call;side:Side|null;episode:string;note:string;names:ReadName[];bar:number;chop:boolean};
 
 const finite=(n:unknown):n is number=>typeof n==='number'&&Number.isFinite(n);
 const dirOf=(side:Side)=>side==='LONG'?1:-1;
@@ -112,7 +112,7 @@ export function readMarket(paths:Record<string,Candle[]>|undefined,contracts:Rec
       brokeUp:last.close>olderHigh*(1+BREAK_PAD),brokeDown:last.close<olderLow*(1-BREAK_PAD),
       inside:last.close<=olderHigh&&last.close>=olderLow,spike:spike?.side??null,excess:spike?.excess??0});
   }
-  const empty=(note:string):ReadView=>({call:'WAIT',side:null,episode:`W:${bar}`,note,names:[],bar});
+  const empty=(note:string):ReadView=>({call:'WAIT',side:null,episode:`W:${bar}`,note,names:[],bar,chop:false});
   if(rows.length<MIN_NAMES)return empty('最近这段能看完的币不够，先不判断。');
   const nowAgree=agree(rows,'newer'),thenAgree=agree(rows,'older');
   const oldSide=thenAgree.side;
@@ -140,15 +140,15 @@ export function readMarket(paths:Record<string,Candle[]>|undefined,contracts:Rec
     const note=names.length
       ?`最近这截比前一截更齐，价格还在走出新位置。接下来顺着${way}，做刚跟上的，不追已经冲远的。`
       :`最近这截更齐，也在走出新位置。刚跟上的币不够，不追已经冲远的。`;
-    return {call:'CONTINUE',side,episode:`C:${side}:${bar}`,note,names,bar};
+    return {call:'CONTINUE',side,episode:`C:${side}:${bar}`,note,names,bar,chop:false};
   }
   const fades=rows.filter(r=>r.spike).sort((a,b)=>b.excess-a.excess||a.symbol.localeCompare(b.symbol)).slice(0,MAX_NAMES);
   if(fades.length){
     const names=fades.map(r=>({symbol:r.symbol,side:r.spike!,close:r.close,why:`${r.symbol.replace(/_USDT$/,'')}冲出去又收回来，看它回到大家那边。`}));
-    return {call:'BACK',side:null,episode:`B:${names.map(n=>n.symbol).join(',')}`,note:`${names.map(n=>n.symbol.replace(/_USDT$/,'')).join('、')}冲出去又收回来。接下来看它们回到大家那边，不拿整盘做方向。`,names,bar};
+    return {call:'BACK',side:null,episode:`B:${names.map(n=>n.symbol).join(',')}`,note:`${names.map(n=>n.symbol.replace(/_USDT$/,'')).join('、')}冲出去又收回来。接下来看它们回到大家那边，不拿整盘做方向。`,names,bar,chop:false};
   }
-  if(rotating&&overlap)return {call:'NONE',side:null,episode:`N:${bar}`,note:'领头在换，价格还在原来的区间里重复。接下来没有整盘方向。',names:[],bar};
-  return empty('这一段还对不上。没有越走越齐，也不是在原地换人。先不判断。');
+  if(rotating&&overlap)return {call:'NONE',side:null,episode:`N:${bar}`,note:'领头在换，价格还在原来的区间里重复。接下来没有整盘方向。',names:[],bar,chop:true};
+  return {call:'WAIT',side:null,episode:`W:${bar}`,note:'这一段还对不上。没有越走越齐，也不是在原地换人。先不判断。',names:[],bar,chop:overlap};
 }
 
 function rule(side:Side,now:number,reason:string):Rule{
@@ -205,20 +205,30 @@ function exitNow(state:ForwardState,minutePaths:Record<string,Candle[]>|undefine
       const price=t.side==='LONG'?Math.min(quotePx,t.stopPrice):Math.max(quotePx,t.stopPrice);
       closeRead(state,t,price,now,'READ_STOP_EXIT');changed=true;continue;
     }
-    const thesis=t.entryContext?.thesisId??'',kind=thesis.slice(0,1),researchSide=thesis.split(':')[1] as Side|undefined;
-    const still=kind==='B'
-      ?view.call==='BACK'&&!!researchSide&&view.names.some(n=>n.symbol===t.symbol&&n.side===researchSide)
-      :view.call==='CONTINUE'&&view.side===researchSide;
-    if(still||!(view.bar*1000>t.openedAt))continue;
+    const researchSide=(t.entryContext?.thesisId??'').split(':')[1] as Side|undefined;
+    const fade=(t.entryContext?.thesisId??'').startsWith('B:');
+    const ended=fade
+      ?view.call==='NONE'||(view.call==='CONTINUE'&&!!view.side&&view.side!==researchSide)
+      :view.chop||(view.call==='CONTINUE'&&!!view.side&&view.side!==researchSide);
+    if(!ended||!(view.bar*1000>t.openedAt))continue;
     closeRead(state,t,quotePx,now,'READ_THESIS_EXIT');changed=true;
   }
   return changed;
 }
+function waveKey(view:ReadView){
+  if(view.call==='CONTINUE'&&view.side)return `C:${view.side}`;
+  if(view.call==='BACK'&&view.names.length)return `B:${view.names.map(n=>n.symbol).sort().join(',')}`;
+  return '';
+}
 function openWave(state:ForwardState,view:ReadView,quotes:Record<string,Quote>,contracts:Record<string,Meta>|undefined,now:number){
   const trial=state.inverseTrial!;
-  if(ownOpen(state).length||view.names.length===0)return false;
-  if((trial.readNextAt??0)>now)return false;
-  if(trial.readWave===view.episode)return false;
+  const key=waveKey(view);
+  const open=ownOpen(state);
+  if(!key||view.names.length===0)return false;
+  if(open.length){
+    const started=Math.min(...open.map(t=>t.openedAt));
+    if(trial.readWave!==key||open.length>=MAX_NAMES||now-started>FILL_WINDOW)return false;
+  }else if(trial.readWave===key)return false;
   const mode=modeOf(state);
   if(mode==='STOP'){trial.readMode='STOP';return false;}
   let changed=false,equity=state.balance;
@@ -231,7 +241,7 @@ function openWave(state:ForwardState,view:ReadView,quotes:Record<string,Quote>,c
   const held=new Set(state.positions.map(t=>t.symbol));
   let opened=0;
   for(const name of view.names){
-    if(held.has(name.symbol)||opened>=MAX_NAMES)continue;
+    if(held.has(name.symbol)||(trial.readSpent??[]).includes(name.symbol)||opened>=MAX_NAMES)continue;
     const q=quotes[name.symbol],contract=contracts?.[name.symbol];
     if(!fresh(q,now)||!contract||!(contract.quantoMultiplier>0))continue;
     const mid=(q!.bestBid+q!.bestAsk)/2,spread=(q!.bestAsk-q!.bestBid)/mid;
@@ -266,7 +276,11 @@ function openWave(state:ForwardState,view:ReadView,quotes:Record<string,Quote>,c
     state.revision++;state.events.unshift({id:`c${state.startedAt}-${state.revision}`,at:now,kind:'ENTRY',subject:id,reason:why});
     state.events=state.events.slice(0,160);
   }
-  if(opened){trial.readWave=view.episode;if(mode==='REVERSE')trial.readMode='REVERSE';}
+  if(opened){
+    trial.readWave=key;
+    trial.readSpent=[...new Set([...(trial.readSpent??[]),...view.names.filter(n=>held.has(n.symbol)).map(n=>n.symbol)])];
+    if(mode==='REVERSE')trial.readMode='REVERSE';
+  }
   return changed;
 }
 
@@ -274,10 +288,11 @@ export function applyReadBook(state:ForwardState,paths:Record<string,Candle[]>|u
   const trial=state.inverseTrial;
   if(!trial||trial.paperPolicy!==READ_POLICY)return false;
   const view=readMarket(paths,contracts,now);
-  const before=ownOpen(state).length;
   let changed=exitNow(state,minutePaths,quotes,view,now);
-  if(before>0&&!ownOpen(state).length){trial.readNextAt=now+COOL;changed=true;}
-  if(!ownOpen(state).length&&openWave(state,view,quotes,contracts as Record<string,Meta>|undefined,now))changed=true;
+  if(!ownOpen(state).length&&view.call!=='CONTINUE'&&view.call!=='BACK'&&(trial.readWave||trial.readSpent?.length)){
+    trial.readWave=undefined;trial.readSpent=undefined;changed=true;
+  }
+  if(openWave(state,view,quotes,contracts as Record<string,Meta>|undefined,now))changed=true;
   const mode=modeOf(state);
   const tail=mode==='STOP'
     ?'账上的亏和手续费差不多，先停，不反。'

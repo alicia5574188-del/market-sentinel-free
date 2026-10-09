@@ -60,7 +60,7 @@ export type InverseTrial={version:typeof SHADOW_INVERSE_VERSION;sourceBuild:type
   /** score-v1: one result per half-hour window. Not one result per coin. */
   scoreNote?:string;scoreSkip?:number;scoreSamples?:ScoreSample[];scoreOpen?:ScoreWindow|null;
   /** read-v1: one reading of the current stretch. Not a window score. */
-  readNote?:string;readWave?:string;readNextAt?:number;readGross?:number;readFee?:number;readClosed?:number;readMode?:'FOLLOW'|'REVERSE'|'STOP';
+  readNote?:string;readWave?:string;readSpent?:string[];readNextAt?:number;readGross?:number;readFee?:number;readClosed?:number;readMode?:'FOLLOW'|'REVERSE'|'STOP';
   swings?:EquitySwing[];swingArm?:{source?:SwingArm;inverse?:SwingArm}};
 export type ScoreHit=[number,number,number,number];
 export type ScoreCoin={symbol:string;residual:number;ref:number;dir:1|-1;up:ScoreHit;dn:ScoreHit};
