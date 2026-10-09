@@ -6,7 +6,7 @@ import type {Candle, Contract, ForwardState, Quote, Rule, Trade} from './forward
 import {INVERSE_COST} from './shadow-inverse-ledger.ts';
 
 export const BRAIN_POLICY='brain-v1' as const;
-export const BRAIN_EPOCH='brain-book-2026-10-09' as const;
+export const BRAIN_EPOCH='brain-book-2026-10-09b' as const;
 /** Books opened before this, and any needle book, switch once. Live on is left alone. */
 export const BRAIN_BEFORE=Date.parse('2026-10-09T12:00:00Z');
 

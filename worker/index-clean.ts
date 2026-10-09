@@ -45,7 +45,7 @@ import { evaluateRegimePortfolio, initialRegimePortfolio, normalizeRegimePortfol
   REGIME_EXECUTION_UNIVERSE, REGIME_HOURLY_REQUIRED_CANDLES, REGIME_PORTFOLIO_VERSION, REGIME_STRATEGIES, REGIME_SYSTEMS, REGIME_UNIVERSE,
   type RegimePortfolioState } from "../lib/regime-portfolio.ts";
 import type { PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
-import {advanceShadowInverse,freshDeskLedger,freshNeedleLedger,freshBrainLedger,freshScoreLedger,freshReadLedger,DESK_CLEAN_EPOCH,DESK_CLEAN_BEFORE,NEEDLE_EPOCH,NEEDLE_BEFORE,BRAIN_EPOCH,BRAIN_BEFORE,SCORE_EPOCH,SCORE_BEFORE,READ_EPOCH,READ_BEFORE} from '../lib/shadow-inverse.ts';
+import {advanceShadowInverse,freshDeskLedger,freshNeedleLedger,freshBrainLedger,freshScoreLedger,DESK_CLEAN_EPOCH,DESK_CLEAN_BEFORE,NEEDLE_EPOCH,NEEDLE_BEFORE,BRAIN_EPOCH,BRAIN_BEFORE,SCORE_EPOCH,SCORE_BEFORE} from '../lib/shadow-inverse.ts';
 import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
 import {confirmationRealityView} from '../lib/confirmation-reality.ts';
 import {observationReading} from '../lib/observation-tape.ts';
@@ -2036,8 +2036,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       ||Object.values(live.positions).some(position=>position?.status==="OPEN")
       ||Object.values(live.entries).some(entry=>entry&&!["FILLED","CANCELLED"].includes(entry.status)))return;
     const previous=this.forwardState;
-    const needle=previous.inverseTrial?.paperPolicy==='needle-v1';
-    if(previous.inverseTrial?.paperPolicy==='brain-v1'||(!needle&&!(previous.startedAt<BRAIN_BEFORE))){this.brainSettled=true;return;}
+    const policy=previous.inverseTrial?.paperPolicy;
+    if(policy==='brain-v1'){this.brainSettled=true;return;}
+    if(policy!=='read-v1'&&policy!=='score-v1'&&policy!=='needle-v1'&&!(previous.startedAt<BRAIN_BEFORE)){this.brainSettled=true;return;}
     const next=freshBrainLedger(previous,now);
     next.storage={persistedAt:now,error:null,layout:FORWARD_PAGED_STATE_VERSION,sampleIntegrity:"raw-sha256"};
     const prepared=await prepareForwardWrite(previous.storage.persistedAt?previous:null,next,now,{compact:true});
@@ -2111,50 +2112,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if(!(await this.sweepRetiredPaperArchives(sweepKey)))this.scoreSettled=true;
   }
 
-  /** One switch onto the stretch reading. Live on, or an already-new book, is left alone. */
+  /** Retired. The stretch book must not replace the research book. */
   private async adoptReadLedger(now:number){
-    if(!this.readArmed||this.readSettled||!this.forwardState)return;
-    const epochKey=`${FORWARD_STORAGE}read-book-epoch`,sweepKey=`${FORWARD_STORAGE}read-book-sweep-before`;
-    const saved=await this.ctx.storage.get<string>(epochKey);
-    const onRead=this.forwardState.inverseTrial?.paperPolicy==='read-v1';
-    if(saved===READ_EPOCH&&onRead){
-      if(!(await this.sweepRetiredPaperArchives(sweepKey)))this.readSettled=true;
-      return;
-    }
-    const live=this.runtime.live;
-    if(live.requestedEnabled||live.operational
-      ||Object.values(live.positions).some(position=>position?.status==="OPEN")
-      ||Object.values(live.entries).some(entry=>entry&&!["FILLED","CANCELLED"].includes(entry.status)))return;
-    const previous=this.forwardState;
-    const policy=previous.inverseTrial?.paperPolicy;
-    if(policy==='read-v1'){this.readSettled=true;return;}
-    if(policy!=='score-v1'&&policy!=='brain-v1'&&policy!=='needle-v1'&&!(previous.startedAt<READ_BEFORE)){this.readSettled=true;return;}
-    const next=freshReadLedger(previous,now);
-    next.storage={persistedAt:now,error:null,layout:FORWARD_PAGED_STATE_VERSION,sampleIntegrity:"raw-sha256"};
-    const prepared=await prepareForwardWrite(previous.storage.persistedAt?previous:null,next,now,{compact:true});
-    const protection=await this.ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
-    const checkpoint=prepareForwardProtectionWrite(next).entries[FORWARD_PROTECTION_STORAGE] as Record<string,unknown>|undefined;
-    if(checkpoint)prepared.entries[FORWARD_PROTECTION_STORAGE]=protection?.writeBudget!==undefined?{...checkpoint,writeBudget:protection.writeBudget}:checkpoint;
-    prepared.entries[epochKey]=READ_EPOCH;
-    prepared.entries[sweepKey]=next.startedAt;
-    prepared.writes+=(checkpoint?1:0)+2;
-    const reservation=this.reserveCriticalWrites(prepared.writes);
-    try{
-      await this.ctx.storage.transaction(async transaction=>{await transaction.put(prepared.entries);});
-      reservation.finish(true);
-    }finally{reservation.finish(false);}
-    next.storage.layout=FORWARD_PAGED_STATE_VERSION;next.storage.sampleIntegrity="raw-sha256";
-    this.forwardCompression=prepared.compression;this.forwardState=next;this.forwardError=null;
-    this.forwardProtectionBudget=readProtectionWriteBudget(protection?.writeBudget);
-    this.mirrorClosures.clear();
-    this.reviewJournal=initialReviewJournal(next.startedAt,now);this.reviewJournalLoaded=true;this.reviewDiagnosticError=null;
-    try{
-      await this.env.DB.batch([
-        this.env.DB.prepare("DELETE FROM paper_events").bind(),
-        this.env.DB.prepare("DELETE FROM paper_positions").bind(),
-      ]);
-    }catch{/* legacy order tables are optional */}
-    if(!(await this.sweepRetiredPaperArchives(sweepKey)))this.readSettled=true;
+    void now;
+    this.readSettled=true;
   }
 
   /** True when another batch of pre-cutover archive rows may remain. */
@@ -2198,7 +2159,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // impossible; closeForwardForReset safely falls back to the last saved mark.
       const closed=closeForwardForReset(previous,this.regimeQuotes(now),now);
       const wiped=resetForwardAccountPreservingLearning(previous,now);
-      const next=freshReadLedger(wiped,now);
+      const next=freshBrainLedger(wiped,now);
 
       stage="准备新账户";
       const prepared=await prepareForwardReset(previous,closed,next,now);
