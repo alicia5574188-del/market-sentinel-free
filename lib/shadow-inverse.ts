@@ -10,6 +10,7 @@ import {applyNeedleBook,NEEDLE_POLICY,NEEDLE_EPOCH,NEEDLE_BEFORE} from './needle
 import {applyBrainBook,BRAIN_POLICY,BRAIN_EPOCH,BRAIN_BEFORE} from './research-brain.ts';
 import {applyScoreBook,SCORE_POLICY,SCORE_EPOCH,SCORE_BEFORE} from './score-book.ts';
 import {applyReadBook,READ_POLICY,READ_EPOCH,READ_BEFORE} from './read-book.ts';
+import {applyStretchBook,STRETCH_POLICY} from './stretch-book.ts';
 import {noteForwardStudy} from './forward-study.ts';
 import {beijingDayKey} from './beijing-time.ts';
 import {FIXED_ALLOCATION_EQUITY} from './fixed-allocation.ts';
@@ -65,8 +66,9 @@ export function advanceShadowInverse(input:Parameters<typeof advanceBaseline>[0]
   const brain=applyBrainBook(s,input.paths,input.minutePaths,input.quotes,input.contracts,input.now);
   const score=applyScoreBook(s,input.paths,input.minutePaths,input.quotes,input.contracts,input.now);
   const read=applyReadBook(s,input.paths,input.minutePaths,input.quotes,input.contracts,input.now);
+  const stretch=applyStretchBook(s,input.paths,input.quotes,input.contracts,input.now);
   recordInverseCurve(s,input.quotes,input.now);
-  if(trial.paperPolicy===NEEDLE_POLICY||trial.paperPolicy===BRAIN_POLICY||trial.paperPolicy===SCORE_POLICY||trial.paperPolicy===READ_POLICY){
+  if(trial.paperPolicy===NEEDLE_POLICY||trial.paperPolicy===BRAIN_POLICY||trial.paperPolicy===SCORE_POLICY||trial.paperPolicy===READ_POLICY||trial.paperPolicy===STRETCH_POLICY){
     const eq=forwardEquity(s,input.quotes,input.now).equity,last=trial.curve.at(-1);
     if(last&&input.now-last.at<60_000)last.inverse=eq;
   }
@@ -82,7 +84,10 @@ export function advanceShadowInverse(input:Parameters<typeof advanceBaseline>[0]
   const brainOpen=s.positions.filter(t=>t.exitControl?.policy===BRAIN_POLICY).length;
   const scoreOpen=s.positions.filter(t=>t.exitControl?.policy===SCORE_POLICY).length;
   const readOpen=s.positions.filter(t=>t.exitControl?.policy===READ_POLICY).length;
-  s.latestReason=trial.paperPolicy==='reverse-v1'
+  const stretchOpen=s.positions.filter(t=>t.exitControl?.policy===STRETCH_POLICY).length;
+  s.latestReason=trial.paperPolicy===STRETCH_POLICY
+    ?`${trial.stretchNote||'大盘这两小时还没有走出一段。'}现在 ${stretchOpen} 笔。`
+    :trial.paperPolicy==='reverse-v1'
     ?`只跟提案反着做。现在 ${s.positions.filter(t=>t.inverseCopy?.alignment==='AGAINST_SOURCE').length} 笔。`
     :trial.paperPolicy===READ_POLICY
     ?`${trial.readNote||'最近这段还没有看完。'}现在 ${readOpen} 笔。`
@@ -98,7 +103,7 @@ export function advanceShadowInverse(input:Parameters<typeof advanceBaseline>[0]
     ?`${note}新单反着做。已记下${trial.totals.opened}笔。`
     :`${note}新单跟提案同一边。已记下${trial.totals.opened}笔。`;
   assertInverseTrial(s);
-  return{state:s,changed:activated||source.changed||softLoss||deskExit||needle||brain||score||read||researchChanged||beforeFinancial!==JSON.stringify([s.balance,s.resolved,s.positions.map(t=>[t.id,t.stopPrice,t.contracts])]),
+  return{state:s,changed:activated||source.changed||softLoss||deskExit||needle||brain||score||read||stretch||researchChanged||beforeFinancial!==JSON.stringify([s.balance,s.resolved,s.positions.map(t=>[t.id,t.stopPrice,t.contracts])]),
     protectionChanged:source.protectionChanged};
 }
 
@@ -129,7 +134,18 @@ export function freshNeedleLedger(previous:ForwardState,now:number):ForwardState
   return next;
 }
 
-/** Standalone reverse book. Every new proposal is copied on the opposite side. */
+/** One clean paper book. BTC's two-hour stretch, then at most two larger orders. */
+export function freshStretchLedger(previous:ForwardState,now:number):ForwardState{
+  const next=resetForwardAccountPreservingLearning(previous,now);
+  next.lastExitAt={};
+  next.inverseTrial=newInverseTrial(next,now,next.initialEquity);
+  next.inverseTrial.paperPolicy=STRETCH_POLICY;
+  next.latestReason='模拟账户从1000U重新开始。大盘走出一段才做，每笔按权益的2倍。';
+  assertInverseTrial(next);
+  return next;
+}
+
+/** One clean paper book that copies each proposal on the opposite side. */
 export const REVERSE_EPOCH='reverse-standalone-2026-10-10' as const;
 export function freshReverseLedger(previous:ForwardState,now:number):ForwardState{
   const next=resetForwardAccountPreservingLearning(previous,now);

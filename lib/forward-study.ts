@@ -35,10 +35,10 @@ export type ForwardStudyView={
   recent:{id:string;symbol:string;side:'LONG'|'SHORT';closedAt:number;net:number;hour:number;tag:string}[];
 };
 export type ForwardDesk={
-  stance:DeskStance;book?:'needle-v1'|'brain-v1'|'score-v1'|'read-v1'|'reverse-v1';equity:number|null;initialEquity:number;netPnl:number|null;maxDrawdown:number|null;
+  stance:DeskStance;book?:'needle-v1'|'brain-v1'|'score-v1'|'read-v1'|'reverse-v1'|'stretch-v1';equity:number|null;initialEquity:number;netPnl:number|null;maxDrawdown:number|null;
   fees:number;floating:number|null;stale:boolean;openCount:number;resolved:number;wins:number;
   open:ForwardOrder[];recent:ForwardOrder[];curve:{at:number;equity:number}[];study:ForwardStudyView;
-  research:DeskResearchView;brainNote?:string;scoreNote?:string;readNote?:string;work?:WorkSheet;
+  research:DeskResearchView;brainNote?:string;scoreNote?:string;readNote?:string;stretchNote?:string;work?:WorkSheet;
   brainIdeas?:{symbol:string;side:'LONG'|'SHORT';kind:'FADE'|'LEAD'|'CATCH';why:string;wrong:string}[];
 };
 
@@ -161,6 +161,8 @@ function orderOf(t:Trade,status:'OPEN'|'CLOSED'):ForwardOrder{
     ?t.entryContext.mode==='REVERSAL'?'回来':'跟上'
     :t.entryContext?.strategyVersion==='score-v1'
     ?t.entryContext.mode==='REVERSAL'?'收回':'顺着'
+    :t.entryContext?.strategyVersion==='stretch-v1'
+    ?'跟着大盘'
     :t.entryContext?.strategyVersion==='brain-v1'
     ?t.entryContext.mode==='CONTINUATION'?'领头':t.entryContext.mode==='RELATIVE'?'掉队':'单币失败'
     :t.entryContext?.tradePlan?(PLAN[t.entryContext.tradePlan]??null):null;
@@ -174,7 +176,7 @@ function money(n:number){
 }
 function exitWait(t:Trade){
   const version=t.entryContext?.strategyVersion,stop=money(t.stopPrice);
-  if(version==='reverse-v1')return '跟提案反着拿。打穿确认位、30分钟没走出成本、利润回吐一半、满90分钟、提案自己平仓，或者浮亏到10U，就走。';
+  if(version==='stretch-v1')return t.entryContext?.invalidationSummary??'错了走到 0.5% 就走。对了到过 0.8% 再吐回一半走。两小时还没到 0.8% 也走。';
   if(version==='brain-v1'){
     const lead=t.entryContext?.mode==='CONTINUATION',lag=t.entryContext?.mode==='RELATIVE';
     return `${lead?'领头':lag?'掉队':'单币失败'}。想错了就走：价格${t.side==='LONG'?'落到':'涨到'} ${stop}。想对了：浮盈到过 0.8% 再吐回一半才走。还没到 0.8%，满 ${lead?45:30} 分钟走。${lag?'整盘不再是进场时那一边，也走。':''}`;
@@ -187,7 +189,7 @@ function exitWait(t:Trade){
 export function forwardDeskView(state:ForwardState,quotes:Record<string,Quote>,now:number):ForwardDesk|null{
   const trial=state.inverseTrial;if(!trial?.source)return null;
   const summary=inverseTrialSummary(state,quotes,now);if(!summary)return null;
-  const own=trial.paperPolicy==='needle-v1'||trial.paperPolicy==='brain-v1'||trial.paperPolicy==='score-v1'||trial.paperPolicy==='read-v1';
+  const own=trial.paperPolicy==='needle-v1'||trial.paperPolicy==='brain-v1'||trial.paperPolicy==='score-v1'||trial.paperPolicy==='read-v1'||trial.paperPolicy==='stretch-v1';
   const ownTrade=(t:Trade)=>t.exitControl?.policy===trial.paperPolicy;
   const summaryStale=(summary.stalePositions??0)>0;
   const mark=own?forwardEquity(state,quotes,now):null;
@@ -211,7 +213,7 @@ export function forwardDeskView(state:ForwardState,quotes:Record<string,Quote>,n
   const closed=(own?state.history.filter(ownTrade):state.history.filter(t=>t.inverseCopy&&t.status==='CLOSED'&&t.exitReason!=='ACCOUNT_RESET'))
     .filter(t=>t.status==='CLOSED').sort((a,b)=>(b.closedAt??0)-(a.closedAt??0)).slice(0,8);
   const openRows=own?state.positions.filter(ownTrade):state.positions.filter(t=>t.inverseCopy);
-  return {stance,book:trial.paperPolicy==='reverse-v1'?'reverse-v1':trial.paperPolicy==='read-v1'?'read-v1':trial.paperPolicy==='score-v1'?'score-v1':trial.paperPolicy==='brain-v1'?'brain-v1':trial.paperPolicy==='needle-v1'?'needle-v1':undefined,equity,initialEquity:initial,netPnl,maxDrawdown:peak>0?dd:null,
+  return {stance,book:trial.paperPolicy==='stretch-v1'?'stretch-v1':trial.paperPolicy==='reverse-v1'?'reverse-v1':trial.paperPolicy==='read-v1'?'read-v1':trial.paperPolicy==='score-v1'?'score-v1':trial.paperPolicy==='brain-v1'?'brain-v1':trial.paperPolicy==='needle-v1'?'needle-v1':undefined,equity,initialEquity:initial,netPnl,maxDrawdown:peak>0?dd:null,
     fees:own?state.fees:summary.inverseFees,floating,stale,openCount:openRows.length,
     resolved:own?state.resolved:state.resolved,wins:state.wins,
     open:openRows.map(t=>orderOf(t,'OPEN')).sort((a,b)=>b.openedAt-a.openedAt),
@@ -222,6 +224,7 @@ export function forwardDeskView(state:ForwardState,quotes:Record<string,Quote>,n
     brainNote:trial.paperPolicy==='brain-v1'?trial.brainNote:undefined,
     scoreNote:trial.paperPolicy==='score-v1'?trial.scoreNote:undefined,
     readNote:trial.paperPolicy==='read-v1'?trial.readNote:undefined,
-    work:trial.paperPolicy==='brain-v1'||trial.paperPolicy==='read-v1'?trial.work:undefined,
+    stretchNote:trial.paperPolicy==='stretch-v1'?trial.stretchNote:undefined,
+    work:trial.paperPolicy==='brain-v1'||trial.paperPolicy==='read-v1'||trial.paperPolicy==='stretch-v1'?trial.work:undefined,
     brainIdeas:trial.paperPolicy==='brain-v1'?trial.brainIdeas??[]:undefined};
 }

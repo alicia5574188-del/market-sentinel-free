@@ -16,7 +16,7 @@ test("owner PAPER reset remains isolated, confirmed and unavailable to members",
   assert.match(ownerAction,/RESET_PAPER/);
   assert.match(resetMethod,/runtime\.live\.requestedEnabled\|\|this\.runtime\.live\.operational/);
   assert.match(resetMethod,/resetForwardAccountPreservingLearning\(previous,now\)/);
-  assert.match(resetMethod,/freshReverseLedger\(wiped,now\)/);
+  assert.match(resetMethod,/freshStretchLedger\(wiped,now\)/);
   assert.match(worker,/prepareForwardReset\(previous,closed,next,now\)/);
   assert.doesNotMatch(resetMethod,/行情不新鲜/);
   assert.match(resetMethod,/for\(const\[key,value\]of Object\.entries\(prepared\.archiveEntries\)\)await transaction\.put\(key,value\)/);
