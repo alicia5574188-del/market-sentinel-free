@@ -21,6 +21,7 @@ const WICK_MIN=.002;
 const TIP_MIN=.0015;
 const TIP_MAX=.007;
 const CLOSE_CHASE=.0035;
+const NOISE=.0025;
 const LEAD_MIN=.001;
 const LEAD_MAX=.005;
 const WINNER=.008;
@@ -238,11 +239,11 @@ export function applyBrainBook(state:ForwardState,paths:Record<string,Candle[]>|
     t.lastPrice=px;t.lastQuoteAt=q!.observedAt;
     if(signed>t.favorable){t.favorable=signed;t.peakPnlRate=signed;changed=true;}
     t.adverse=Math.max(t.adverse,-signed);
-    const wrong=t.side==='LONG'?px<=t.stopPrice:px>=t.stopPrice;
+    const through=t.side==='LONG'?px<=t.stopPrice:px>=t.stopPrice;
     const since=t.entryContext?.thesisSince??t.openedAt;
     const kind=kindOf(t);
     let reason:string|null=null;
-    if(wrong)reason='BRAIN_WRONG_EXIT';
+    if(through&&-signed>=NOISE)reason='BRAIN_WRONG_EXIT';
     else if(t.favorable>=WINNER&&signed<=t.favorable/2)reason='BRAIN_GIVEBACK_EXIT';
     else if(kind==='CATCH'&&market.sample>=SAMPLE_MIN&&t.entryContext?.clusterId&&t.entryContext.clusterId!==market.tone)reason='BRAIN_MARKET_EXIT';
     else if(t.favorable<WINNER&&now-since>=STALE[kind])reason='BRAIN_STALE_EXIT';
@@ -279,6 +280,9 @@ export function applyBrainBook(state:ForwardState,paths:Record<string,Candle[]>|
     const fromClose=Math.abs(price-idea.close)/price;
     const chase=idea.kind==='CATCH'?fromClose>.002:idea.kind==='LEAD'?(dist<LEAD_MIN||dist>LEAD_MAX):(dist<TIP_MIN||dist>TIP_MAX||fromClose>CLOSE_CHASE);
     if(!(gap>0)||chase){remember(state,idea.key);notePass(state,idea,market,price,`${name} 现价已经离开写下的位置`,now);changed=true;skipped.push(`${name} 现价已经离开写下的位置，不追。`);continue;}
+    const exitPx=side==='LONG'?q!.bestBid:q!.bestAsk;
+    const room=side==='LONG'?(exitPx-stop)/exitPx:(stop-exitPx)/exitPx;
+    if(!(room>=NOISE)){remember(state,idea.key);notePass(state,idea,market,price,`${name} 离出场价太近，价差就会打掉`,now);changed=true;skipped.push(`${name} 卖出价离止损不到 0.25%，价差自己就会打掉，不做。`);continue;}
     const leverage=Math.min(LEVERAGE,Math.max(1,contract.leverageMax||LEVERAGE));
     const mult=contract.quantoMultiplier,min=Math.max(1,Math.ceil(contract.minContracts??1));
     const contractsN=Math.floor(NOTIONAL/(price*mult));

@@ -123,6 +123,21 @@ test('a wrong idea exits now, a noise profit stays, a real move can give back ha
   assert.equal(stale.history[0]?.exitReason,'BRAIN_STALE_EXIT');
 });
 
+test('the spread is not treated as the idea being wrong',()=>{
+  const names=['B_USDT','C_USDT','D_USDT','E_USDT','F_USDT','G_USDT'];
+  const leadPaths={...pack(names,100.2),AAA_USDT:path(100.4,{open:100,high:100.42,low:99.98})};
+  const near=book();
+  applyBrainBook(near,leadPaths,{},{AAA_USDT:quote(100.1,100.16)},{AAA_USDT:contract},T);
+  assert.equal(near.positions.length,0);
+  const held=book();
+  applyBrainBook(held,leadPaths,{},{AAA_USDT:quote(100.38,100.4)},{AAA_USDT:contract},T);
+  assert.equal(held.positions.length,1);
+  const entry=held.positions[0]!.entryPrice;
+  held.positions[0]!.stopPrice=entry*.999;
+  applyBrainBook(held,leadPaths,{},{AAA_USDT:quote(entry*.9988,entry*.9992,T+5000)},{AAA_USDT:contract},T+5000);
+  assert.equal(held.positions[0]?.status,'OPEN');
+});
+
 test('a skipped idea is marked once more after 30 minutes',()=>{
   const s=book();
   s.inverseTrial!.brainPasses=[{id:'A:fade:1',at:T,symbol:'AAA_USDT',side:'SHORT',kind:'FADE',tone:'SPLIT',age:'ONGOING',crowd:'NONE',price:100,whyNot:'价差太大'}];
