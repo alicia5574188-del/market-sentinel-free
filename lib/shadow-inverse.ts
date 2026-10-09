@@ -5,7 +5,7 @@ import {normalizeForward,drainLegacyForwardPositions,forwardEquity,resetForwardA
 import {captureTradeReviews} from './review-trace.ts';
 import {SHADOW_BASELINE_BUILD,SHARED_MARKET_KEYS,shadowCapsule,sourceDecisionState,newInverseTrial,
   applyInverseSourceTrade,applyInverseSoftLossExits,applyDeskOrderExits,markInversePositions,recordInverseCurve,assertInverseTrial} from './shadow-inverse-ledger.ts';
-import {ensureResearchDesk,observeResearch,beijingSession} from './research-decision.ts';
+import {ensureResearchDesk,observeResearch} from './research-decision.ts';
 import {applyNeedleBook,NEEDLE_POLICY,NEEDLE_EPOCH,NEEDLE_BEFORE} from './needle-book.ts';
 import {applyBrainBook,BRAIN_POLICY,BRAIN_EPOCH,BRAIN_BEFORE} from './research-brain.ts';
 import {applyScoreBook,SCORE_POLICY,SCORE_EPOCH,SCORE_BEFORE} from './score-book.ts';
@@ -32,7 +32,9 @@ export function advanceShadowInverse(input:Parameters<typeof advanceBaseline>[0]
   for(const key of SHARED_MARKET_KEYS)Object.assign(s,{[key]:structuredClone(source.state[key])});
   trial.researchDesk=ensureResearchDesk(trial.researchDesk);
   let researchChanged=false;
-  try{researchChanged=observeResearch(trial.researchDesk,input.quotes,input.now);}catch{researchChanged=false;}
+  if(trial.paperPolicy!=='reverse-v1'){
+    try{researchChanged=observeResearch(trial.researchDesk,input.quotes,input.now);}catch{researchChanged=false;}
+  }
   // Existing visible holdings are neither reversed retroactively nor force
   // closed. They drain under the pre-cutover controller, isolated from sizing.
   const beforeFinancial=JSON.stringify([s.balance,s.resolved,s.positions.map(t=>[t.id,t.stopPrice,t.contracts])]);
@@ -80,7 +82,9 @@ export function advanceShadowInverse(input:Parameters<typeof advanceBaseline>[0]
   const brainOpen=s.positions.filter(t=>t.exitControl?.policy===BRAIN_POLICY).length;
   const scoreOpen=s.positions.filter(t=>t.exitControl?.policy===SCORE_POLICY).length;
   const readOpen=s.positions.filter(t=>t.exitControl?.policy===READ_POLICY).length;
-  s.latestReason=trial.paperPolicy===READ_POLICY
+  s.latestReason=trial.paperPolicy==='reverse-v1'
+    ?`只跟提案反着做。现在 ${s.positions.filter(t=>t.inverseCopy?.alignment==='AGAINST_SOURCE').length} 笔。`
+    :trial.paperPolicy===READ_POLICY
     ?`${trial.readNote||'最近这段还没有看完。'}现在 ${readOpen} 笔。`
     :trial.paperPolicy===SCORE_POLICY
     ?`${trial.scoreNote||'研究还没有记下足够的半小时。'}现在 ${scoreOpen} 笔。`
@@ -125,16 +129,16 @@ export function freshNeedleLedger(previous:ForwardState,now:number):ForwardState
   return next;
 }
 
-/** One clean paper book that copies each proposal on the opposite side. */
-export const REVERSE_EPOCH='reverse-book-2026-10-10' as const;
+/** Standalone reverse book. Every new proposal is copied on the opposite side. */
+export const REVERSE_EPOCH='reverse-standalone-2026-10-10' as const;
 export function freshReverseLedger(previous:ForwardState,now:number):ForwardState{
   const next=resetForwardAccountPreservingLearning(previous,now);
   next.lastExitAt={};
   next.inverseTrial=newInverseTrial(next,now,next.initialEquity);
-  next.inverseTrial.researchDesk={version:'research-desk-v1',stance:'REVERSE',
-    latch:{stance:'REVERSE',session:beijingSession(now),since:now,need:20},claims:[],
-    note:'新单跟提案反着做。这个方向再看 20 笔才重判。'};
-  next.latestReason='模拟账户从1000U重新开始。新单跟提案反着做。';
+  next.inverseTrial.paperPolicy='reverse-v1';
+  next.inverseTrial.researchDesk={version:'research-desk-v1',stance:'REVERSE',claims:[],
+    note:'这套不看样本。每一笔提案都反着做。'};
+  next.latestReason='模拟账户从1000U重新开始。只跟提案反着做。';
   assertInverseTrial(next);
   return next;
 }

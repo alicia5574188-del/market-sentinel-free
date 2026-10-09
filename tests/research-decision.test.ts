@@ -123,6 +123,20 @@ function open(){
   s.inverseTrial.source=shadowCapsule(source);s.inverseTrial.lastSourceRevision=source.revision;
   return {s,source,t};
 }
+test('the standalone reverse book takes the other side and ignores a forward desk',()=>{
+  const s=initialForward(T-300000);
+  s.inverseTrial=newInverseTrial(s,T,1000);
+  s.inverseTrial.paperPolicy='reverse-v1';
+  s.inverseTrial.researchDesk={version:RESEARCH_DESK_VERSION,stance:'FORWARD',claims:[],note:'先正向'};
+  const t=trade('source-r');
+  applyInverseSourceTrade(s,t,quote(100,100.02,T),T);
+  assert.equal(s.positions.length,1);
+  assert.equal(s.positions[0]!.side,'SHORT');
+  assert.equal(s.positions[0]!.inverseCopy?.alignment,'AGAINST_SOURCE');
+  assert.equal(s.positions[0]!.entryContext?.strategyVersion,'reverse-v1');
+  assert.equal(s.inverseTrial.researchDesk?.claims.length??0,0);
+  assert.equal(s.inverseTrial.researchDesk?.stance,'FORWARD');
+});
 test('new copies exit on a sweep, a dead 30 minutes, a giveback, or 90 minutes, and old copies do not',()=>{
   const swept=open();
   const inv=swept.s.positions[0]!;inv.lastPrice=97;inv.lastQuoteAt=T+60_000;

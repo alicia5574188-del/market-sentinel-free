@@ -2136,8 +2136,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       ||Object.values(live.positions).some(position=>position?.status==="OPEN")
       ||Object.values(live.entries).some(entry=>entry&&!["FILLED","CANCELLED"].includes(entry.status)))return;
     const previous=this.forwardState;
-    const policy=previous.inverseTrial?.paperPolicy;
-    if(!policy&&previous.inverseTrial?.researchDesk?.stance==='REVERSE'){this.reverseSettled=true;return;}
+    if(previous.inverseTrial?.paperPolicy==='reverse-v1'){this.reverseSettled=true;return;}
     const next=freshReverseLedger(previous,now);
     next.storage={persistedAt:now,error:null,layout:FORWARD_PAGED_STATE_VERSION,sampleIntegrity:"raw-sha256"};
     const prepared=await prepareForwardWrite(previous.storage.persistedAt?previous:null,next,now,{compact:true});

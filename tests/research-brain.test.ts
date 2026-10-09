@@ -170,6 +170,6 @@ test('a brain book does not open a proposal copy, and a reset starts at 1000',()
   assert.equal(next.inverseTrial?.paperPolicy,BRAIN_POLICY);
   const back=freshReverseLedger(next,T+2000);
   assert.equal(back.balance,1000);assert.equal(back.resolved,0);assert.equal(back.positions.length,0);
-  assert.equal(back.inverseTrial?.paperPolicy,undefined);
+  assert.equal(back.inverseTrial?.paperPolicy,'reverse-v1');
   assert.equal(back.inverseTrial?.researchDesk?.stance,'REVERSE');
 });

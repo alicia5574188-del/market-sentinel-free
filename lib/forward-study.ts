@@ -35,7 +35,7 @@ export type ForwardStudyView={
   recent:{id:string;symbol:string;side:'LONG'|'SHORT';closedAt:number;net:number;hour:number;tag:string}[];
 };
 export type ForwardDesk={
-  stance:DeskStance;book?:'needle-v1'|'brain-v1'|'score-v1'|'read-v1';equity:number|null;initialEquity:number;netPnl:number|null;maxDrawdown:number|null;
+  stance:DeskStance;book?:'needle-v1'|'brain-v1'|'score-v1'|'read-v1'|'reverse-v1';equity:number|null;initialEquity:number;netPnl:number|null;maxDrawdown:number|null;
   fees:number;floating:number|null;stale:boolean;openCount:number;resolved:number;wins:number;
   open:ForwardOrder[];recent:ForwardOrder[];curve:{at:number;equity:number}[];study:ForwardStudyView;
   research:DeskResearchView;brainNote?:string;scoreNote?:string;readNote?:string;work?:WorkSheet;
@@ -174,6 +174,7 @@ function money(n:number){
 }
 function exitWait(t:Trade){
   const version=t.entryContext?.strategyVersion,stop=money(t.stopPrice);
+  if(version==='reverse-v1')return '跟提案反着拿。打穿确认位、30分钟没走出成本、利润回吐一半、满90分钟、提案自己平仓，或者浮亏到10U，就走。';
   if(version==='brain-v1'){
     const lead=t.entryContext?.mode==='CONTINUATION',lag=t.entryContext?.mode==='RELATIVE';
     return `${lead?'领头':lag?'掉队':'单币失败'}。想错了就走：价格${t.side==='LONG'?'落到':'涨到'} ${stop}。想对了：浮盈到过 0.8% 再吐回一半才走。还没到 0.8%，满 ${lead?45:30} 分钟走。${lag?'整盘不再是进场时那一边，也走。':''}`;
@@ -210,7 +211,7 @@ export function forwardDeskView(state:ForwardState,quotes:Record<string,Quote>,n
   const closed=(own?state.history.filter(ownTrade):state.history.filter(t=>t.inverseCopy&&t.status==='CLOSED'&&t.exitReason!=='ACCOUNT_RESET'))
     .filter(t=>t.status==='CLOSED').sort((a,b)=>(b.closedAt??0)-(a.closedAt??0)).slice(0,8);
   const openRows=own?state.positions.filter(ownTrade):state.positions.filter(t=>t.inverseCopy);
-  return {stance,book:trial.paperPolicy==='read-v1'?'read-v1':trial.paperPolicy==='score-v1'?'score-v1':trial.paperPolicy==='brain-v1'?'brain-v1':trial.paperPolicy==='needle-v1'?'needle-v1':undefined,equity,initialEquity:initial,netPnl,maxDrawdown:peak>0?dd:null,
+  return {stance,book:trial.paperPolicy==='reverse-v1'?'reverse-v1':trial.paperPolicy==='read-v1'?'read-v1':trial.paperPolicy==='score-v1'?'score-v1':trial.paperPolicy==='brain-v1'?'brain-v1':trial.paperPolicy==='needle-v1'?'needle-v1':undefined,equity,initialEquity:initial,netPnl,maxDrawdown:peak>0?dd:null,
     fees:own?state.fees:summary.inverseFees,floating,stale,openCount:openRows.length,
     resolved:own?state.resolved:state.resolved,wins:state.wins,
     open:openRows.map(t=>orderOf(t,'OPEN')).sort((a,b)=>b.openedAt-a.openedAt),

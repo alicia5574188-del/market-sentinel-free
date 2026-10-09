@@ -55,7 +55,7 @@ export type InverseTrial={version:typeof SHADOW_INVERSE_VERSION;sourceBuild:type
   forwardStudy?:import('./forward-study.ts').ForwardStudy;
   researchDesk?:import('./research-decision.ts').ResearchDesk;
   /** Own paper books ignore proposal opens. Absent keeps the proposal copy. */
-  paperPolicy?:'needle-v1'|'brain-v1'|'score-v1'|'read-v1';needleSeen?:string[];needleCooldown?:Record<string,number>;
+  paperPolicy?:'needle-v1'|'brain-v1'|'score-v1'|'read-v1'|'reverse-v1';needleSeen?:string[];needleCooldown?:Record<string,number>;
   brainSeen?:string[];brainNote?:string;brainIdeas?:{symbol:string;side:'LONG'|'SHORT';kind:'FADE'|'LEAD'|'CATCH';why:string;wrong:string}[];
   brainPasses?:{id:string;at:number;symbol:string;side:'LONG'|'SHORT';kind:'FADE'|'LEAD'|'CATCH';tone:'TOGETHER_UP'|'TOGETHER_DOWN'|'SPLIT';age:'STARTED'|'ONGOING'|'DONE'|'QUIET';crowd:'LONG'|'SHORT'|'NONE';price:number;whyNot:string;laterAt?:number;laterPrice?:number;laterMove?:number}[];
   work?:import('./forward-study.ts').WorkSheet;
@@ -292,27 +292,31 @@ export function applyInverseSourceTrade(state:ForwardState,source:Trade,qIn:Quot
       }
       return;
     }
-    const desk=ensureResearchDesk(trial.researchDesk);
-    trial.researchDesk=desk;
-    const narrative=readNarrative({major:state.extremumRegime?.narrative?.major?.bias,short:state.extremumRegime?.narrative?.short?.bias,
-      breadth3:state.extremumRegime?.internals?.breadth3});
-    const entryMid=qIn&&qIn.fresh&&qIn.bestBid>0&&qIn.bestAsk>=qIn.bestBid&&qIn.observedAt<=now&&now-qIn.observedAt<=10_000
-      ?(qIn.bestBid+qIn.bestAsk)/2:source.entryPrice;
-    attachProposal(desk,{id:source.id,symbol:source.symbol,openedAt:source.openedAt,engineSide:source.side,
-      slow:narrative.slow,fast:narrative.fast,entryMid,confirmExtreme:finite(source.stopPrice)?source.stopPrice:null});
-    const stance=desk.stance??'FORWARD';
-    if(stance==='FLAT'){
-      if(source.status==='OPEN'){
-        const skipped=trial.entryHaltSkipped??[];
-        if(!skipped.includes(source.id))skipped.push(source.id);
-        trial.entryHaltSkipped=skipped.slice(-200);
-        state.revision++;state.events.unshift({id:`a${state.startedAt}-${state.revision}`,at:now,kind:'ENTRY',subject:source.id,
-          reason:`这一时段先停开 ${source.symbol}`});
-        state.events=state.events.slice(0,160);
+    const standalone=trial.paperPolicy==='reverse-v1';
+    let withSource=!standalone;
+    if(!standalone){
+      const desk=ensureResearchDesk(trial.researchDesk);
+      trial.researchDesk=desk;
+      const narrative=readNarrative({major:state.extremumRegime?.narrative?.major?.bias,short:state.extremumRegime?.narrative?.short?.bias,
+        breadth3:state.extremumRegime?.internals?.breadth3});
+      const entryMid=qIn&&qIn.fresh&&qIn.bestBid>0&&qIn.bestAsk>=qIn.bestBid&&qIn.observedAt<=now&&now-qIn.observedAt<=10_000
+        ?(qIn.bestBid+qIn.bestAsk)/2:source.entryPrice;
+      attachProposal(desk,{id:source.id,symbol:source.symbol,openedAt:source.openedAt,engineSide:source.side,
+        slow:narrative.slow,fast:narrative.fast,entryMid,confirmExtreme:finite(source.stopPrice)?source.stopPrice:null});
+      const stance=desk.stance??'FORWARD';
+      if(stance==='FLAT'){
+        if(source.status==='OPEN'){
+          const skipped=trial.entryHaltSkipped??[];
+          if(!skipped.includes(source.id))skipped.push(source.id);
+          trial.entryHaltSkipped=skipped.slice(-200);
+          state.revision++;state.events.unshift({id:`a${state.startedAt}-${state.revision}`,at:now,kind:'ENTRY',subject:source.id,
+            reason:`这一时段先停开 ${source.symbol}`});
+          state.events=state.events.slice(0,160);
+        }
+        return;
       }
-      return;
+      withSource=stance!=='REVERSE';
     }
-    const withSource=stance!=='REVERSE';
     const side=withSource?source.side:source.side==='LONG'?'SHORT':'LONG',openSpread=bookSpread(qIn,now,source.entryPrice),
       price=executablePrice(source.entryPrice,openSpread,side==='LONG'),
       quantity=source.realization?.initialQuantity??source.quantity,contracts=source.realization?.initialContracts??source.contracts,
@@ -323,10 +327,10 @@ export function applyInverseSourceTrade(state:ForwardState,source:Trade,qIn:Quot
       const keep=new Set(['version','capturedAt','timeframe','side','mode','reserve','reason','entryScore','directionStrength','spaceScore','positionScore','executionScore',
         'remainingSpaceRate','pullbackRiskRate','edgeRatio','expectedHoldMinutes','marketFit','regionId','portfolioRiskCharge']);
       for(const k of Object.keys(context))if(!keep.has(k))delete (context as unknown as Record<string,unknown>)[k];
-      context.side=side;context.strategyVersion=SHADOW_INVERSE_VERSION;
-      context.reason=withSource
-        ?`决策是正向，跟提案做${side==='LONG'?'多':'空'}。`
-        :`决策是反向，跟提案反着做${side==='LONG'?'多':'空'}。`;
+      context.side=side;context.strategyVersion=standalone?'reverse-v1':SHADOW_INVERSE_VERSION;
+      context.reason=standalone||!withSource
+        ?`跟提案反着做${side==='LONG'?'多':'空'}。`
+        :`决策是正向，跟提案做${side==='LONG'?'多':'空'}。`;
       context.thesisId=id;context.thesisSummary=context.reason;context.invalidationSummary='打穿进场确认位、30分钟没走出成本、利润回吐一半、满90分钟，或提案平仓，就出场。浮亏到10U也出场。';}
     t={...structuredClone(source),id,side,status:'OPEN',openedAt:now,closedAt:null,entryPrice:price,exitPrice:null,
       quantity,contracts,notional:quantity*price,margin:quantity*price/source.leverage,entryFee:quantity*price*INVERSE_COST.feeRate,
