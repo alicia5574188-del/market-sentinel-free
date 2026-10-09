@@ -4,6 +4,7 @@
  * until that reading ends. Live is never eligible. */
 import type {Candle, Contract, ForwardState, Quote, Rule, Trade} from './forward-relations.ts';
 import {INVERSE_COST} from './shadow-inverse-ledger.ts';
+import type {WorkLine,WorkSheet} from './forward-study.ts';
 
 export const READ_POLICY='read-v1' as const;
 export const READ_EPOCH='read-book-2026-10-09' as const;
@@ -35,7 +36,7 @@ type Side='LONG'|'SHORT';
 type Call='CONTINUE'|'BACK'|'NONE'|'WAIT';
 type Row={symbol:string;newer:number;older:number;eff:number;close:number;brokeUp:boolean;brokeDown:boolean;inside:boolean;spike:Side|null;excess:number};
 export type ReadName={symbol:string;side:Side;close:number;why:string};
-export type ReadView={call:Call;side:Side|null;episode:string;note:string;names:ReadName[];bar:number;chop:boolean};
+export type ReadView={call:Call;side:Side|null;episode:string;note:string;names:ReadName[];bar:number;chop:boolean;lines:WorkLine[]};
 
 const finite=(n:unknown):n is number=>typeof n==='number'&&Number.isFinite(n);
 const dirOf=(side:Side)=>side==='LONG'?1:-1;
@@ -112,8 +113,8 @@ export function readMarket(paths:Record<string,Candle[]>|undefined,contracts:Rec
       brokeUp:last.close>olderHigh*(1+BREAK_PAD),brokeDown:last.close<olderLow*(1-BREAK_PAD),
       inside:last.close<=olderHigh&&last.close>=olderLow,spike:spike?.side??null,excess:spike?.excess??0});
   }
-  const empty=(note:string):ReadView=>({call:'WAIT',side:null,episode:`W:${bar}`,note,names:[],bar,chop:false});
-  if(rows.length<MIN_NAMES)return empty('最近这段能看完的币不够，先不判断。');
+  const empty=(note:string,lines:WorkLine[]):ReadView=>({call:'WAIT',side:null,episode:`W:${bar}`,note,names:[],bar,chop:false,lines});
+  if(rows.length<MIN_NAMES)return empty('最近这段能看完的币不够，先不判断。',[{name:'1. 取数',data:'最近 48 根已收盘的 5 分钟线。前 24 根是上一截，后 24 根是这一截。成交额不到 100 万 U 的不看。',said:`只看完 ${rows.length} 个，少于 ${MIN_NAMES} 个，先不判断。`}]);
   const nowAgree=agree(rows,'newer'),thenAgree=agree(rows,'older');
   const oldSide=thenAgree.side;
   const oldLead=oldSide?rows.filter(r=>(oldSide==='LONG'?r.older>FLAT:r.older<-FLAT)).sort((a,b)=>Math.abs(b.older)-Math.abs(a.older)).slice(0,3).map(r=>r.symbol):[];
@@ -128,6 +129,13 @@ export function readMarket(paths:Record<string,Candle[]>|undefined,contracts:Rec
   const newDown=dnShare>=.5&&eff>=EFF_PUSH&&move<=-MOVE_MIN;
   const overlap=insideShare>=.6||eff<EFF_CHOP;
   const side:Side|null=newUp?'LONG':newDown?'SHORT':null;
+  const lines:WorkLine[]=[
+    {name:'1. 取数',data:'最近 48 根已收盘的 5 分钟线。前 24 根是上一截，后 24 根是这一截。成交额不到 100 万 U 的不看。最新一根超过 15 分钟没收盘更新的也不看。',said:`这一拍看完 ${rows.length} 个币。`},
+    {name:'2. 越走越齐没有',data:'这一截里，涨跌超过 0.15% 的币至少占一半，同向至少 62%，而且比上一截的同向比例再高 8 个百分点，才算越走越齐。',said:`上一截同向 ${(thenAgree.agree*100).toFixed(0)}%（${thenAgree.n} 个有方向）。这一截同向 ${(nowAgree.agree*100).toFixed(0)}%（${nowAgree.n} 个）。${aligning?'越走越齐。':'还没有越走越齐。'}`},
+    {name:'3. 有没有走出新位置',data:'至少一半的币收盘突破上一截的高点或低点，这一截效率至少 0.35，中位涨跌至少 0.60%，才算走出新位置。',said:`往上突破 ${(upShare*100).toFixed(0)}%，往下突破 ${(dnShare*100).toFixed(0)}%，效率 ${eff.toFixed(2)}，中位涨跌 ${(move*100).toFixed(2)}%。${side==='LONG'?'走出新高。':side==='SHORT'?'走出新低。':'还没有走出新位置。'}`},
+    {name:'4. 是不是在原地换人',data:'收在上一截高低点里面的占 60% 以上，或者效率低于 0.25，算还在原地。上一截的领头这一截留下不到 45%，或者这一截同向不到 55%，算领头在换。',said:`还在里面的占 ${(insideShare*100).toFixed(0)}%。领头留下 ${(keep*100).toFixed(0)}%。${rotating&&overlap?'在原地换人。':overlap?'还在原地，领头没换干净。':rotating?'领头在换，但价格不在原地。':'不是原地换人。'}`},
+    {name:'5. 有没有冲出去又收回来',data:'这一截里冲出至少 0.80%，高点或低点不在最后一根，而且已经收回那一冲的一半以上。',said:rows.filter(r=>r.spike).length?`${rows.filter(r=>r.spike).map(r=>r.symbol.replace(/_USDT$/,'')).slice(0,6).join('、')} 收回来了。`:'没有。'},
+  ];
   if(aligning&&side&&side===nowAgree.side){
     const followers=rows.filter(r=>(side==='LONG'?r.newer>=FLAT:r.newer<=-FLAT));
     const drop=Math.max(1,Math.ceil(followers.length*.3));
@@ -140,15 +148,15 @@ export function readMarket(paths:Record<string,Candle[]>|undefined,contracts:Rec
     const note=names.length
       ?`最近这截比前一截更齐，价格还在走出新位置。接下来顺着${way}，做刚跟上的，不追已经冲远的。`
       :`最近这截更齐，也在走出新位置。刚跟上的币不够，不追已经冲远的。`;
-    return {call:'CONTINUE',side,episode:`C:${side}:${bar}`,note,names,bar,chop:false};
+    return {call:'CONTINUE',side,episode:`C:${side}:${bar}`,note,names,bar,chop:false,lines};
   }
   const fades=rows.filter(r=>r.spike).sort((a,b)=>b.excess-a.excess||a.symbol.localeCompare(b.symbol)).slice(0,MAX_NAMES);
   if(fades.length){
     const names=fades.map(r=>({symbol:r.symbol,side:r.spike!,close:r.close,why:`${r.symbol.replace(/_USDT$/,'')}冲出去又收回来，看它回到大家那边。`}));
-    return {call:'BACK',side:null,episode:`B:${names.map(n=>n.symbol).join(',')}`,note:`${names.map(n=>n.symbol.replace(/_USDT$/,'')).join('、')}冲出去又收回来。接下来看它们回到大家那边，不拿整盘做方向。`,names,bar,chop:false};
+    return {call:'BACK',side:null,episode:`B:${names.map(n=>n.symbol).join(',')}`,note:`${names.map(n=>n.symbol.replace(/_USDT$/,'')).join('、')}冲出去又收回来。接下来看它们回到大家那边，不拿整盘做方向。`,names,bar,chop:false,lines};
   }
-  if(rotating&&overlap)return {call:'NONE',side:null,episode:`N:${bar}`,note:'领头在换，价格还在原来的区间里重复。接下来没有整盘方向。',names:[],bar,chop:true};
-  return {call:'WAIT',side:null,episode:`W:${bar}`,note:'这一段还对不上。没有越走越齐，也不是在原地换人。先不判断。',names:[],bar,chop:overlap};
+  if(rotating&&overlap)return {call:'NONE',side:null,episode:`N:${bar}`,note:'领头在换，价格还在原来的区间里重复。接下来没有整盘方向。',names:[],bar,chop:true,lines};
+  return {call:'WAIT',side:null,episode:`W:${bar}`,note:'这一段还对不上。没有越走越齐，也不是在原地换人。先不判断。',names:[],bar,chop:overlap,lines};
 }
 
 function rule(side:Side,now:number,reason:string):Rule{
@@ -301,5 +309,17 @@ export function applyReadBook(state:ForwardState,paths:Record<string,Candle[]>|u
     :ownOpen(state).length?`这一拨拿着，直到判断结束。现在 ${ownOpen(state).length} 笔。`:'有判断才做一拨，不拆成小碎单。';
   const note=`${view.note}${tail}`;
   if(trial.readNote!==note){trial.readNote=note;changed=true;}
+  const names=view.names.map(n=>`${n.symbol.replace(/_USDT$/,'')} ${n.side==='LONG'?'做多':'做空'}`).join('、');
+  const work:WorkSheet={subject:'研究最近四个小时走到哪了：币有没有越走越齐，价格有没有走出新位置，有没有币冲出去又收回来。然后判断接下来是顺着走、回到原处，还是没有方向。',
+    method:'只用刚收盘的 5 分钟线，分成前后两截对比。不看账户以前赚没赚，也不攒够多少窗才下判断。',
+    lines:view.lines,
+    waiting:mode==='STOP'?`已平 ${trial.readClosed??0} 笔。价格盈亏 ${((trial.readGross??0)).toFixed(2)} U，手续费 ${(trial.readFee??0).toFixed(2)} U，两者差不多，先不开，也不反着做。`
+      :mode==='REVERSE'?'整本亏的是方向，手续费不到亏损的五分之一。下一次判断按反方向做。'
+      :ownOpen(state).length?`已经拿着 ${ownOpen(state).length} 笔。开出后 10 分钟内可以补到最多 4 笔。现在在等这段判断结束，或者价格打到 1.2%。`
+      :view.names.length?'名单有了。在等价差不超过 0.040%，而且现价没有比这一截收盘价追出 0.30%。同一段刚做过的币不马上再做。'
+      :view.call==='NONE'?'在等下一段。现在领头在换，价格还在原来的区间里，不做。'
+      :'在等币越走越齐并且走出新位置，或者等一个冲出去又收回一半以上的币。',
+    preparing:view.names.length?`准备${view.call==='BACK'?'做收回来的':'顺着做刚跟上的'}：${names}。每笔大约 400U。`:'没有准备开的单。'};
+  if(JSON.stringify(trial.work)!==JSON.stringify(work)){trial.work=work;changed=true;}
   return changed;
 }

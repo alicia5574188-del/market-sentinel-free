@@ -23,9 +23,11 @@ export type ForwardStudy={
   expansions:Record<string,ForwardStudyCell>;environments:Record<string,ForwardStudyCell>;
   total:ForwardStudyCell;
 };
+export type WorkLine={name:string;data:string;said:string};
+export type WorkSheet={subject:string;method:string;lines:WorkLine[];waiting:string;preparing:string};
 export type ForwardOrder={
   id:string;symbol:string;side:'LONG'|'SHORT';status:'OPEN'|'CLOSED';entryPrice:number;price:number|null;
-  openedAt:number;closedAt:number|null;net:number|null;leverage:number;margin:number;plan:string|null;
+  openedAt:number;closedAt:number|null;net:number|null;leverage:number;margin:number;plan:string|null;waiting:string|null;
 };
 export type ForwardStudyView={
   recorded:number;recordedWins:number;recordedNet:number;sourceResolved:number;startedAt:number;ready:boolean;
@@ -36,7 +38,7 @@ export type ForwardDesk={
   stance:DeskStance;book?:'needle-v1'|'brain-v1'|'score-v1'|'read-v1';equity:number|null;initialEquity:number;netPnl:number|null;maxDrawdown:number|null;
   fees:number;floating:number|null;stale:boolean;openCount:number;resolved:number;wins:number;
   open:ForwardOrder[];recent:ForwardOrder[];curve:{at:number;equity:number}[];study:ForwardStudyView;
-  research:DeskResearchView;brainNote?:string;scoreNote?:string;readNote?:string;
+  research:DeskResearchView;brainNote?:string;scoreNote?:string;readNote?:string;work?:WorkSheet;
   brainIdeas?:{symbol:string;side:'LONG'|'SHORT';kind:'FADE'|'LEAD'|'CATCH';why:string;wrong:string}[];
 };
 
@@ -164,7 +166,22 @@ function orderOf(t:Trade,status:'OPEN'|'CLOSED'):ForwardOrder{
     :t.entryContext?.tradePlan?(PLAN[t.entryContext.tradePlan]??null):null;
   return {id:t.id,symbol:t.symbol,side:t.side,status,entryPrice:t.entryPrice,price,openedAt:t.openedAt,
     closedAt:status==='CLOSED'?t.closedAt:null,net,leverage:t.leverage,margin:t.margin,
-    plan:plan?(PLAN[plan]??plan):null};
+    plan:plan?(PLAN[plan]??plan):null,waiting:status==='OPEN'?exitWait(t):null};
+}
+function money(n:number){
+  if(!(n>0))return '—';
+  return n>=100?n.toFixed(2):n>=1?n.toFixed(4):n.toFixed(6);
+}
+function exitWait(t:Trade){
+  const version=t.entryContext?.strategyVersion,stop=money(t.stopPrice);
+  if(version==='brain-v1'){
+    const lead=t.entryContext?.mode==='CONTINUATION',lag=t.entryContext?.mode==='RELATIVE';
+    return `${lead?'领头':lag?'掉队':'单币失败'}。想错了就走：价格${t.side==='LONG'?'落到':'涨到'} ${stop}。想对了：浮盈到过 0.8% 再吐回一半才走。还没到 0.8%，满 ${lead?45:30} 分钟走。${lag?'整盘不再是进场时那一边，也走。':''}`;
+  }
+  if(version==='read-v1')return `这一拨的方向还在就拿着。整盘没方向了，或者改成反方向，就走。价格${t.side==='LONG'?'落到':'涨到'} ${stop}（入场的 1.2%）也走。`;
+  if(version==='score-v1')return `到止损 ${stop}、到目标，或者满 30 分钟，谁先到谁走。`;
+  if(version==='needle-v1')return `打穿针尖 ${stop} 就走。5 分钟没走出 0.15%，或浮亏到 4U，也走。到过 0.8% 再吐回一半走。最长 90 分钟。`;
+  return t.entryContext?.invalidationSummary??null;
 }
 export function forwardDeskView(state:ForwardState,quotes:Record<string,Quote>,now:number):ForwardDesk|null{
   const trial=state.inverseTrial;if(!trial?.source)return null;
@@ -204,5 +221,6 @@ export function forwardDeskView(state:ForwardState,quotes:Record<string,Quote>,n
     brainNote:trial.paperPolicy==='brain-v1'?trial.brainNote:undefined,
     scoreNote:trial.paperPolicy==='score-v1'?trial.scoreNote:undefined,
     readNote:trial.paperPolicy==='read-v1'?trial.readNote:undefined,
+    work:trial.paperPolicy==='brain-v1'||trial.paperPolicy==='read-v1'?trial.work:undefined,
     brainIdeas:trial.paperPolicy==='brain-v1'?trial.brainIdeas??[]:undefined};
 }

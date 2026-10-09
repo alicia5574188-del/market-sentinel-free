@@ -57,6 +57,7 @@ export type InverseTrial={version:typeof SHADOW_INVERSE_VERSION;sourceBuild:type
   /** Own paper books ignore proposal opens. Absent keeps the proposal copy. */
   paperPolicy?:'needle-v1'|'brain-v1'|'score-v1'|'read-v1';needleSeen?:string[];needleCooldown?:Record<string,number>;
   brainSeen?:string[];brainNote?:string;brainIdeas?:{symbol:string;side:'LONG'|'SHORT';kind:'FADE'|'LEAD'|'CATCH';why:string;wrong:string}[];
+  work?:import('./forward-study.ts').WorkSheet;
   /** score-v1: one result per half-hour window. Not one result per coin. */
   scoreNote?:string;scoreSkip?:number;scoreSamples?:ScoreSample[];scoreOpen?:ScoreWindow|null;
   /** read-v1: one reading of the current stretch. Not a window score. */

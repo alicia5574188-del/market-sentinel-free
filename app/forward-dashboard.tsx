@@ -87,18 +87,10 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       {desk&&<ForwardOrders desk={desk} now={now}/>}
     </>}
 
-    {tab==="research"&&desk?.book==="read-v1"&&<section className="fr-section" data-testid="research-claims"><div className="fr-section-head"><h2>研究</h2></div>
-      <p>{desk.readNote||"最近这段还没有看完。"}</p>
-      <p className="fr-note">启动就把最近几个小时看完。币是不是越走越齐，价格是不是走出新位置，有没有币冲出去又收回来。看完就判断接下来怎样。新的K线来了再看一遍，不攒窗口，也不拿过去赚没赚过当判断。</p>
-    </section>}
+    {tab==="research"&&(desk?.book==="read-v1"||desk?.book==="brain-v1")&&<WorkResearch work={desk.work} note={desk.book==="brain-v1"?desk.brainNote:desk.readNote} ideas={desk.book==="brain-v1"?desk.brainIdeas:[ ]}/>}
     {tab==="research"&&desk?.book==="score-v1"&&<section className="fr-section" data-testid="research-claims"><div className="fr-section-head"><h2>研究</h2></div>
       <p>{desk.scoreNote||"还没有记下半小时。"}</p>
       <p className="fr-note">每一窗半小时。看哪些币比大多数币偏了至少 0.5%。这些币合成一个结果，不把每个币当成一条证据。前二十窗选止损、目标和方向，后二十窗扣完费用仍赚钱，才交给决策。够格的币中位数不到 6 个，不做。</p>
-    </section>}
-    {tab==="research"&&desk?.book==="brain-v1"&&<section className="fr-section" data-testid="research-claims"><div className="fr-section-head"><h2>研究</h2></div>
-      <p>{desk.brainNote||"这一拍还没有整盘结论。"}</p>
-      <p className="fr-note">先看整盘是一起走还是各走各的，这波刚开始还是已经走远，资金费率有没有挤在一边。再看哪个币不一样。研究只给思路，不开单。</p>
-      {(desk.brainIdeas??[]).length?(desk.brainIdeas??[]).map(idea=><p key={`${idea.symbol}-${idea.kind}`}><span>{idea.symbol.replace("_"," / ")} · {idea.side==="LONG"?"多":"空"} · {idea.kind==="FADE"?"单币失败":idea.kind==="LEAD"?"领头":"掉队"}</span><b>{idea.why}想错了：{idea.wrong}</b></p>):<p className="fr-note">这一拍没有够格的思路。</p>}
     </section>}
     {tab==="research"&&desk?.book==="needle-v1"&&<section className="fr-section" data-testid="research-claims"><div className="fr-section-head"><h2>研究</h2></div>
       <p>只看最近 30 根 1 分钟线，和当前买一卖一。一根线冲出这 30 分钟的高点或低点，收盘又回到里面，就记成一根针。研究只记这件事，不开单。</p>
@@ -143,8 +135,27 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   </main>;
 }
 
+function WorkResearch({work,note,ideas}:{work:Desk["work"];note?:string;ideas?:Desk["brainIdeas"]}){
+  return <section className="fr-section" data-testid="research-claims">
+    <div className="fr-section-head"><h2>在研究什么</h2></div>
+    <p>{work?.subject??note??"这一拍的步骤还没有写出来。"}</p>
+    {work&&<><div className="fr-section-head"><h2>用的方法</h2></div><p>{work.method}</p>
+      <div className="fr-section-head"><h2>这一拍的步骤</h2><span>{work.lines.length} 步</span></div>
+      {work.lines.map(line=><p key={line.name}><span>{line.name}</span><b>{line.data}</b><b>{line.said}</b></p>)}
+    </>}
+    {!!ideas?.length&&<><div className="fr-section-head"><h2>写出的思路</h2><span>{ideas.length} 条</span></div>
+      {ideas.map(idea=><p key={`${idea.symbol}-${idea.kind}`}><span>{idea.symbol.replace("_"," / ")} · {idea.side==="LONG"?"多":"空"} · {idea.kind==="FADE"?"单币失败":idea.kind==="LEAD"?"领头":"掉队"}</span><b>{idea.why}想错了：{idea.wrong}</b></p>)}
+    </>}
+  </section>;
+}
 function DecisionPage({data}:{data:View|null}){
   const desk=data?.forwardDesk??null,research=desk?.research,stance=stanceName(desk?.stance);
+  if((desk?.book==="read-v1"||desk?.book==="brain-v1")&&desk.work)return <section className="fr-section" data-testid="decision-stance">
+    <div className="fr-section-head"><h2>现在在等</h2></div>
+    <p>{desk.work.waiting}</p>
+    <div className="fr-section-head"><h2>准备做</h2></div>
+    <p>{desk.work.preparing}</p>
+  </section>;
   if(desk?.book==="read-v1")return <section className="fr-section" data-testid="decision-stance">
     <div className="fr-section-head"><h2>当前决策</h2><span>一拨</span></div>
     <p>研究说接下来有方向，价差吃得起，价格也没追出去，才做这一拨。刚跟上的才做，已经冲远的不追。拿住，直到这段判断结束。</p>
@@ -196,9 +207,11 @@ function ForwardOrders({desk,now}:{desk:Desk;now:number}){
   const label=desk.book==="needle-v1"||desk.book==="brain-v1"||desk.book==="score-v1"||desk.book==="read-v1"?"账户":stanceName(desk.stance);
   return <section className="fr-section" data-testid="forward-orders">
     <div className="fr-section-head"><h2>{label}持仓</h2><span>{desk.open.length} 笔</span></div>
-    <p className="fr-note">{desk.book==="read-v1"?"有判断才做一拨，拿住，直到判断结束。不拆小碎单。整本亏的是方向才反过来。亏和手续费差不多就停。":desk.book==="score-v1"?"核对通过才开。单笔大约 400U。同一币不叠仓。保证金到权益一半就停。到止损、到目标或满三十分钟就走。":desk.book==="brain-v1"?"研究给出思路，决策决定做不做。同一币不叠仓。保证金到权益一半就停开新单，没有个数上限。":desk.book==="needle-v1"?"只做收回来的针。向上做空，向下做多。":"新单跟当前决策，一笔提案一笔单，金额不变。先停才不开，也不把后面的单加大。已经开着的单不改方向。"}</p>
+    {!desk.work&&desk.book!=="brain-v1"&&desk.book!=="read-v1"&&<p className="fr-note">{desk.book==="score-v1"?"核对通过才开。单笔大约 400U。同一币不叠仓。保证金到权益一半就停。到止损、到目标或满三十分钟就走。":desk.book==="needle-v1"?"只做收回来的针。向上做空，向下做多。":"新单跟当前决策，一笔提案一笔单，金额不变。先停才不开，也不把后面的单加大。已经开着的单不改方向。"}</p>}
     {desk.open.length?desk.open.map(o=><article className="fr-order" key={o.id}><header><div><b>{o.symbol.replace("_"," / ")}</b><small>{o.side==="LONG"?"多":"空"}{o.plan?` · ${o.plan}`:""} · {fmt(o.leverage,0)}× · {duration(o.openedAt,null,now)}</small></div><b className={(o.net??0)>=0?"fr-positive":"fr-negative"}>{signed(o.net)} U</b></header>
-      <small>入场 {fmt(o.entryPrice,6)} · 现价 {fmt(o.price,6)} · {time(o.openedAt)}</small></article>):<Empty title="当前没有持仓"/>}
+      <small>入场 {fmt(o.entryPrice,6)} · 现价 {fmt(o.price,6)} · {time(o.openedAt)}</small>
+      {o.waiting&&<p className="fr-note">出场在等：{o.waiting}</p>}
+      </article>):<Empty title="当前没有持仓"/>}
     {desk.recent.length>0&&<><div className="fr-section-head"><h2>最近平仓</h2><span>{desk.recent.length} 笔</span></div>
       {desk.recent.map(o=><article className="fr-order" key={o.id}><header><div><b>{o.symbol.replace("_"," / ")}</b><small>{o.side==="LONG"?"多":"空"}{o.plan?` · ${o.plan}`:""}</small></div><b className={(o.net??0)>=0?"fr-positive":"fr-negative"}>{signed(o.net)} U</b></header>
         <small>{time(o.openedAt)} → {time(o.closedAt)}</small></article>)}</>}

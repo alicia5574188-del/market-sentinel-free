@@ -2,8 +2,9 @@
  * Ideas are not orders. A failed solo push, a leader, or a laggard is a sentence
  * with a wrong-if price. Decision fades chase, stacks nothing on one coin, and
  * stops new opens only when margin is already half of equity. */
-import type {Candle, Contract, ForwardState, Quote, Rule, Trade} from './forward-relations.ts';
 import {INVERSE_COST} from './shadow-inverse-ledger.ts';
+import type {Candle, Contract, ForwardState, Quote, Rule, Trade} from './forward-relations.ts';
+import type {WorkSheet} from './forward-study.ts';
 
 export const BRAIN_POLICY='brain-v1' as const;
 export const BRAIN_EPOCH='brain-book-2026-10-09b' as const;
@@ -40,7 +41,7 @@ export type MarketTone='TOGETHER_UP'|'TOGETHER_DOWN'|'SPLIT';
 export type MoveAge='STARTED'|'ONGOING'|'DONE'|'QUIET';
 export type Crowd='LONG'|'SHORT'|'NONE';
 export type IdeaKind='FADE'|'LEAD'|'CATCH';
-export type MarketRead={at:number;tone:MarketTone;age:MoveAge;crowd:Crowd;sample:number;move:number;sentence:string};
+export type MarketRead={at:number;tone:MarketTone;age:MoveAge;crowd:Crowd;sample:number;move:number;sentence:string;up:number;down:number;flat:number;fund:number;fundN:number};
 export type Idea={symbol:string;kind:IdeaKind;side:'LONG'|'SHORT';key:string;bar:number;stop:number;close:number;why:string;wrong:string;tone:MarketTone};
 type Meta=Contract&{fundingRate?:number;volume24hUsd?:number};
 type Move={ret:number;last:number;high:number;low:number;bar:number;close:number;open:number;highBar:number;lowBar:number};
@@ -87,7 +88,7 @@ export function readMarket(paths:Record<string,Candle[]>|undefined,contracts:Rec
   const crowd:Crowd=funds.length>=4&&fundMedian>=CROWD?'LONG':funds.length>=4&&fundMedian<=-CROWD?'SHORT':'NONE';
   const sentence=sample<SAMPLE_MIN?'能看的币不够，先不给思路。'
     :`整盘${tone==='TOGETHER_UP'?'一起涨':tone==='TOGETHER_DOWN'?'一起跌':'各走各的'}${tone==='SPLIT'?'':age==='STARTED'?'，这波刚开始':age==='DONE'?'，这波已经走得比较远':'，这波还在走'}。${crowd==='LONG'?'资金费率挤在做多一边。':crowd==='SHORT'?'资金费率挤在做空一边。':'资金费率没有挤在一边。'}`;
-  return {at:now,tone,age,crowd,sample,move,sentence};
+  return {at:now,tone,age,crowd,sample,move,sentence,up,down,flat,fund:fundMedian,fundN:funds.length};
 }
 
 function failed(barHigh:number,barLow:number,close:number,high:number,low:number):'UP'|'DOWN'|null{
@@ -155,6 +156,28 @@ export function proposeIdeas(paths:Record<string,Candle[]>|undefined,minutePaths
   return ideas.sort((a,b)=>rank[a.kind]-rank[b.kind]||a.symbol.localeCompare(b.symbol));
 }
 
+function coin(symbol:string){return symbol.replace(/_USDT$/,'');}
+function ageText(age:MoveAge){return age==='STARTED'?'刚开始':age==='DONE'?'已经走远':age==='QUIET'?'安静':'还在走';}
+function brainWork(market:MarketRead,ideas:Idea[],skipped:string[],opened:number,blocked:string):WorkSheet{
+  const tone=market.tone==='TOGETHER_UP'?'一起涨':market.tone==='TOGETHER_DOWN'?'一起跌':'各走各的';
+  const crowd=market.crowd==='LONG'?'挤在做多':market.crowd==='SHORT'?'挤在做空':'没有挤在一边';
+  const listed=ideas.slice(0,6).map(idea=>`${coin(idea.symbol)} ${idea.side==='LONG'?'做多':'做空'}·${idea.kind==='FADE'?'失败':idea.kind==='LEAD'?'领头':'掉队'}`).join('、');
+  const preparing=ideas.length?ideas.slice(0,4).map(idea=>`${coin(idea.symbol)} ${idea.side==='LONG'?'做多':'做空'}：${idea.why}错了就走：${idea.wrong}`).join(' '):'没有准备开的单。';
+  const waiting=market.sample<SAMPLE_MIN?`在等至少 ${SAMPLE_MIN} 个币有完整的 5 分钟。现在只有 ${market.sample} 个。`
+    :blocked?blocked
+    :ideas.length===0?'在等单币对上一种情况：自己冲出又收回，或者整盘刚开始时有币先破位，或者整盘在走但有币还没动。'
+    :opened>0?`这一拍按思路做了 ${opened} 笔。同一条思路不重复做。`
+    :skipped.slice(0,3).join(' ')||'思路写出来了，这一拍没有一笔同时过了价差和位置。';
+  return {subject:'研究整盘这一小波是不是一起走、走到哪了，再找和整盘不一样的单币。研究只写思路，不开单。',
+    method:'用刚收盘的 K 线。5 分钟看整盘、领头和掉队。1 分钟看单币是不是自己冲出去又收回来。不看账户以前赚没赚。',
+    lines:[
+      {name:'1. 取数',data:'每个币取最近 7 根已收盘的 5 分钟线，再取最近 1 根已收盘的 1 分钟线。24 小时成交额不到 100 万 U 的不看。',said:`这一拍看完 ${market.sample} 个币。`},
+      {name:'2. 整盘同不同向',data:'有方向的币至少 6 个，而且一边至少是另一边的 2 倍、占有方向的币至少 65%，才叫一起走。否则是各走各的。',said:`上涨 ${market.up} 个，下跌 ${market.down} 个，几乎没动 ${market.flat} 个。所以是${tone}。`},
+      {name:'3. 这波走到哪',data:'一起走时，中位幅度不到 0.40% 且最近一根还在动，算刚开始。到了 0.80% 算走远。各走各的时候，最近一根中位波动不到 0.20% 算安静。',said:`中位幅度 ${(market.move*100).toFixed(2)}%。现在是${ageText(market.age)}。`},
+      {name:'4. 资金费率',data:'至少 4 个币有费率，中位数绝对值到 0.015%，才算挤在一边。',said:`有费率 ${market.fundN} 个，中位数 ${(market.fund*100).toFixed(4)}%。${crowd}。`},
+      {name:'5. 写出思路',data:'单币冲出至少 0.20% 又收回，而且整盘没有一起往那边走，记成失败。整盘刚开始、费率没挤满、先破位 0.10% 到 0.60%，记成领头。整盘在走、这个币 7 根涨跌不到 0.12%，记成掉队。',said:listed?`写出 ${ideas.length} 条：${listed}。`:'这一拍没有写出来。'},
+    ],waiting,preparing};
+}
 function rule(side:'LONG'|'SHORT',now:number,reason:string):Rule{
   return {id:`brain-${side}`,signature:BRAIN_POLICY,parentId:null,version:1,createdAt:now,expiresAt:now+6*60*60_000,
     status:'EXPERIMENTAL',conditions:[],side,horizon:180,stopRate:TIP_MAX,armRate:WINNER,givebackRate:.5,
@@ -219,12 +242,15 @@ export function applyBrainBook(state:ForwardState,paths:Record<string,Candle[]>|
   }
   let used=state.positions.filter(isBrainTrade).reduce((n,t)=>n+t.margin,0);
   const held=new Set(state.positions.map(t=>t.symbol));
+  const skipped:string[]=[];
+  let opened=0,blocked='';
   for(const idea of ideas){
+    const name=coin(idea.symbol);
     if(held.has(idea.symbol)||trial.brainSeen?.includes(idea.key))continue;
     const q=quotes[idea.symbol],contract=meta?.[idea.symbol];
-    if(!fresh(q,now)||!contract||!(contract.quantoMultiplier>0))continue;
+    if(!fresh(q,now)||!contract||!(contract.quantoMultiplier>0)){skipped.push(`${name} 还没有新鲜的买一卖一，先等报价。`);continue;}
     const spread=(q!.bestAsk-q!.bestBid)/((q!.bestAsk+q!.bestBid)/2);
-    if(!(spread>=0)||spread>SPREAD_MAX||(idea.kind==='CATCH'&&spread>CATCH_SPREAD)){remember(state,idea.key);changed=true;continue;}
+    if(!(spread>=0)||spread>SPREAD_MAX||(idea.kind==='CATCH'&&spread>CATCH_SPREAD)){remember(state,idea.key);changed=true;skipped.push(`${name} 价差 ${(spread*100).toFixed(3)}%，超过 ${idea.kind==='CATCH'?'0.080':'0.120'}%，不做。`);continue;}
     const side=idea.side,price=side==='LONG'?q!.bestAsk:q!.bestBid;
     let stop=idea.stop;
     if(idea.kind==='CATCH')stop=price*(1-dirOf(side)*CATCH_STOP);
@@ -232,15 +258,15 @@ export function applyBrainBook(state:ForwardState,paths:Record<string,Candle[]>|
     const dist=gap/price;
     const fromClose=Math.abs(price-idea.close)/price;
     const chase=idea.kind==='CATCH'?fromClose>.002:idea.kind==='LEAD'?(dist<LEAD_MIN||dist>LEAD_MAX):(dist<TIP_MIN||dist>TIP_MAX||fromClose>CLOSE_CHASE);
-    if(!(gap>0)||chase){remember(state,idea.key);changed=true;continue;}
+    if(!(gap>0)||chase){remember(state,idea.key);changed=true;skipped.push(`${name} 现价已经离开写下的位置，不追。`);continue;}
     const leverage=Math.min(LEVERAGE,Math.max(1,contract.leverageMax||LEVERAGE));
     const mult=contract.quantoMultiplier,min=Math.max(1,Math.ceil(contract.minContracts??1));
     const contractsN=Math.floor(NOTIONAL/(price*mult));
-    if(contractsN<min){remember(state,idea.key);changed=true;continue;}
+    if(contractsN<min){remember(state,idea.key);changed=true;skipped.push(`${name} 按大约 400U 排不下最小张数。`);continue;}
     const quantity=contractsN*mult,notional=quantity*price;
-    if(notional<80||notional>480){remember(state,idea.key);changed=true;continue;}
+    if(notional<80||notional>480){remember(state,idea.key);changed=true;skipped.push(`${name} 算出来不是大约 400U。`);continue;}
     const margin=notional/leverage;
-    if(!(equity>0)||used+margin>equity*MARGIN_CAP)break;
+    if(!(equity>0)||used+margin>equity*MARGIN_CAP){blocked=`保证金已用 ${used.toFixed(0)} U，权益一半是 ${(equity*.5).toFixed(0)} U。${name} 在等仓位腾出来。`;break;}
     const entryFee=notional*FEE,mode=idea.kind==='LEAD'?'CONTINUATION':idea.kind==='CATCH'?'RELATIVE':'REVERSAL';
     const id=`br-${now.toString(36)}-${idea.symbol.replace(/[^A-Z0-9]/g,'').slice(0,24)}-${side[0]}`;
     const t:Trade={id,symbol:idea.symbol,side,rule:rule(side,now,idea.why),openedAt:now,closedAt:null,status:'OPEN',
@@ -256,9 +282,11 @@ export function applyBrainBook(state:ForwardState,paths:Record<string,Candle[]>|
         strategyVersion:BRAIN_POLICY,thesisId:idea.key,thesisSince:idea.bar*1000,clusterId:idea.tone,thesisSummary:idea.why,
         invalidationSummary:idea.wrong}};
     state.balance-=entryFee;state.fees+=entryFee;state.turnover+=notional;
-    state.positions.push(t);remember(state,idea.key);held.add(idea.symbol);used+=t.margin;changed=true;
+    state.positions.push(t);remember(state,idea.key);held.add(idea.symbol);used+=t.margin;opened++;changed=true;
     state.revision++;state.events.unshift({id:`b${state.startedAt}-${state.revision}`,at:now,kind:'ENTRY',subject:id,reason:idea.why});
     state.events=state.events.slice(0,160);
   }
+  const work=brainWork(market,ideas,skipped,opened,blocked);
+  if(JSON.stringify(trial.work)!==JSON.stringify(work)){trial.work=work;changed=true;}
   return changed;
 }
