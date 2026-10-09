@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {initialForward, type Candle, type Quote, type Trade} from '../lib/forward-relations.ts';
 import {applyBrainBook, BRAIN_POLICY, readMarket} from '../lib/research-brain.ts';
-import {freshBrainLedger} from '../lib/shadow-inverse.ts';
+import {freshBrainLedger,freshReverseLedger} from '../lib/shadow-inverse.ts';
 import {applyInverseSourceTrade, assertInverseTrial, newInverseTrial, shadowCapsule, sourceDecisionState} from '../lib/shadow-inverse-ledger.ts';
 
 const T=1_791_500_000_000;
@@ -168,4 +168,8 @@ test('a brain book does not open a proposal copy, and a reset starts at 1000',()
   const next=freshBrainLedger(s,T+1000);
   assert.equal(next.balance,1000);assert.equal(next.resolved,0);assert.equal(next.positions.length,0);
   assert.equal(next.inverseTrial?.paperPolicy,BRAIN_POLICY);
+  const back=freshReverseLedger(next,T+2000);
+  assert.equal(back.balance,1000);assert.equal(back.resolved,0);assert.equal(back.positions.length,0);
+  assert.equal(back.inverseTrial?.paperPolicy,undefined);
+  assert.equal(back.inverseTrial?.researchDesk?.stance,'REVERSE');
 });

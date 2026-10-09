@@ -5,7 +5,7 @@ import {normalizeForward,drainLegacyForwardPositions,forwardEquity,resetForwardA
 import {captureTradeReviews} from './review-trace.ts';
 import {SHADOW_BASELINE_BUILD,SHARED_MARKET_KEYS,shadowCapsule,sourceDecisionState,newInverseTrial,
   applyInverseSourceTrade,applyInverseSoftLossExits,applyDeskOrderExits,markInversePositions,recordInverseCurve,assertInverseTrial} from './shadow-inverse-ledger.ts';
-import {ensureResearchDesk,observeResearch} from './research-decision.ts';
+import {ensureResearchDesk,observeResearch,beijingSession} from './research-decision.ts';
 import {applyNeedleBook,NEEDLE_POLICY,NEEDLE_EPOCH,NEEDLE_BEFORE} from './needle-book.ts';
 import {applyBrainBook,BRAIN_POLICY,BRAIN_EPOCH,BRAIN_BEFORE} from './research-brain.ts';
 import {applyScoreBook,SCORE_POLICY,SCORE_EPOCH,SCORE_BEFORE} from './score-book.ts';
@@ -121,6 +121,20 @@ export function freshNeedleLedger(previous:ForwardState,now:number):ForwardState
   next.inverseTrial=newInverseTrial(next,now,next.initialEquity);
   next.inverseTrial.paperPolicy=NEEDLE_POLICY;
   next.latestReason='模拟账户从1000U按针的规则重新开始。不再跟着提案开仓。';
+  assertInverseTrial(next);
+  return next;
+}
+
+/** One clean paper book that copies each proposal on the opposite side. */
+export const REVERSE_EPOCH='reverse-book-2026-10-10' as const;
+export function freshReverseLedger(previous:ForwardState,now:number):ForwardState{
+  const next=resetForwardAccountPreservingLearning(previous,now);
+  next.lastExitAt={};
+  next.inverseTrial=newInverseTrial(next,now,next.initialEquity);
+  next.inverseTrial.researchDesk={version:'research-desk-v1',stance:'REVERSE',
+    latch:{stance:'REVERSE',session:beijingSession(now),since:now,need:20},claims:[],
+    note:'新单跟提案反着做。这个方向再看 20 笔才重判。'};
+  next.latestReason='模拟账户从1000U重新开始。新单跟提案反着做。';
   assertInverseTrial(next);
   return next;
 }

@@ -110,7 +110,7 @@ function describe(desk:ResearchDesk,now:number){
   const settled=desk.claims.filter(c=>finite(c.settledAt));
   const left=latch?Math.max(0,latch.need-settled.filter(c=>(c.settledAt??0)>latch.since).length):null;
   const sample=cont.length<DECISION_BLOCK||sus.length<DECISION_BLOCK
-    ?`${name}延续 ${cont.length}/20、可疑 ${sus.length}/20，样本不够，新单继续正向。`
+    ?`${name}延续 ${cont.length}/20、可疑 ${sus.length}/20，样本不够，新单继续${desk.stance==='REVERSE'?'反向':desk.stance==='FLAT'?'停开':'正向'}。`
     :`${name}延续错了 ${cont.filter(c=>c.correct!==true).length}/20，可疑反着读对了 ${sus.filter(c=>c.correct===true).length}/20。`;
   const hold=left!=null&&left>0?`这个方向再看 ${left} 笔才重判。`:'';
   return (sample+hold).slice(0,180);
