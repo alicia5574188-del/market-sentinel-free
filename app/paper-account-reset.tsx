@@ -24,7 +24,7 @@ export default function PaperAccountReset({auth,runtime,onReset}:{auth:AuthSessi
       const result=await operatorRequest<ResetResult>("/api/paper/reset","POST",{confirm:"RESET_PAPER"});
       if(!result.ok||result.equity!==1000)throw new Error("服务器没有确认新的1000U模拟账户，未发布重置结果。");
       setConfirming(false);
-      setNotice("模拟账户已原子重置为1000U；Forward Relation学习样本和关系状态已保留。");
+      setNotice("模拟账户已原子重置为1000U；Forward Relation学习样本和关系状态已保留。研究仍是现在这套，不会回到跟着提案开仓。");
       // Server confirmation is authoritative. A Safari/UI refresh problem after
       // success must never be misreported as a failed financial reset.
       try{onReset();}catch{/* periodic runtime refresh will reconcile the page */}
@@ -38,7 +38,7 @@ export default function PaperAccountReset({auth,runtime,onReset}:{auth:AuthSessi
     {notice&&<div className="fr-notice" role="status">{notice}</div>}
     {!confirming?<button className="fr-button" type="button" disabled={busy} onClick={()=>{setError(null);setNotice(null);setConfirming(true);}}>重置模拟账户</button>
       :<div className="fr-form">
-        <p className="fr-error"><b>确认重置？</b><br/>当前模拟账户的余额、持仓和本轮交易记录会结束，新账户从1000U重新开始；市场学习样本会保留。该操作不能撤销。</p>
+        <p className="fr-error"><b>确认重置？</b><br/>当前模拟账户的余额、持仓和本轮交易记录会结束，新账户从1000U重新开始；市场学习样本会保留。研究仍按现在这套看盘，不回到跟着提案开仓。该操作不能撤销。</p>
         {blocked&&<p className="fr-note">当前不能重置：请先关闭实盘，并确认没有本系统实盘持仓或待成交订单。</p>}
         <div className="fr-owner-session">
           <button className="fr-button" type="button" disabled={busy||blocked} onClick={()=>void reset()}>{busy?"正在原子重置…":"确认重置为1000U"}</button>

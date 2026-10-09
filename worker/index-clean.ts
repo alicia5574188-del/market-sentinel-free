@@ -2116,7 +2116,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if(!this.readArmed||this.readSettled||!this.forwardState)return;
     const epochKey=`${FORWARD_STORAGE}read-book-epoch`,sweepKey=`${FORWARD_STORAGE}read-book-sweep-before`;
     const saved=await this.ctx.storage.get<string>(epochKey);
-    if(saved===READ_EPOCH){
+    const onRead=this.forwardState.inverseTrial?.paperPolicy==='read-v1';
+    if(saved===READ_EPOCH&&onRead){
       if(!(await this.sweepRetiredPaperArchives(sweepKey)))this.readSettled=true;
       return;
     }
@@ -2196,7 +2197,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // preferred, but a missing quote must never make account maintenance
       // impossible; closeForwardForReset safely falls back to the last saved mark.
       const closed=closeForwardForReset(previous,this.regimeQuotes(now),now);
-      const next=resetForwardAccountPreservingLearning(previous,now);
+      const wiped=resetForwardAccountPreservingLearning(previous,now);
+      const next=freshReadLedger(wiped,now);
 
       stage="准备新账户";
       const prepared=await prepareForwardReset(previous,closed,next,now);
