@@ -18,6 +18,23 @@ const view=(trades:Trade[],resolved:number)=>({startedAt:T,updatedAt:T+30000,pol
 const snapshot=(trades:Trade[],resolved=trades.length)=>buildReviewSnapshot({view:view(trades,resolved),exportedAt:T+60000,buildSha:'build',strategyFingerprint:'policy'});
 const quote=(p:number,at:number):Quote=>({bestBid:p,bestAsk:p+.01,observedAt:at,fresh:true,entryReady:true});
 
+test('brain closes group by the entry reading, and skipped ideas stay in the file',()=>{
+  const closed=trade('lead',{favorable:.01,notional:400,grossPnl:-8,netPnl:-8.4,entryFee:.2,exitFee:.2,exitReason:'BRAIN_WRONG_EXIT',
+    entryContext:{version:'adaptive-ten-entry-v1',capturedAt:T,timeframe:'5m',side:'LONG',mode:'CONTINUATION',reserve:false,reason:'领头',
+      entryScore:0,directionStrength:0,spaceScore:0,positionScore:0,executionScore:0,remainingSpaceRate:0,pullbackRiskRate:0,edgeRatio:0,
+      expectedHoldMinutes:45,marketFit:0,regionId:null,strategyVersion:'brain-v1',clusterId:'TOGETHER_UP',researchMoveAge:'STARTED',researchCrowd:'NONE'}});
+  const s=buildReviewSnapshot({view:{...view([closed],1),researchPasses:[{symbol:'BBB',laterMove:.01},{symbol:'CCC'}]},exportedAt:T+60000,buildSha:null,strategyFingerprint:null});
+  const idea=s.summary.byResearchIdea as Record<string,{closedCount:number;grossPnl:number;fees:number;netPnl:number;bestFavorableU:number}>;
+  assert.equal(idea['领头'].closedCount,1);assert.equal(idea['领头'].grossPnl,-8);assert.equal(idea['领头'].fees,.4);
+  assert.equal(idea['领头'].netPnl,-8.4);assert.equal(idea['领头'].bestFavorableU,4);
+  assert.equal((s.summary.byResearchTone as Record<string,{closedCount:number}>)['一起涨'].closedCount,1);
+  assert.equal((s.summary.byResearchAge as Record<string,{closedCount:number}>)['刚开始'].closedCount,1);
+  assert.equal((s.summary.byResearchCrowd as Record<string,{closedCount:number}>)['费率没有'].closedCount,1);
+  assert.equal((s.summary.byResearchExit as Record<string,{closedCount:number}>)['想错了'].closedCount,1);
+  const skipped=s.summary.researchPasses as {skipped:number;laterKnown:number;pendingLater:number;laterWithIdea:number};
+  assert.equal(skipped.skipped,2);assert.equal(skipped.laterKnown,1);assert.equal(skipped.pendingLater,1);assert.equal(skipped.laterWithIdea,1);
+  assert.equal((s.research.passes as unknown[]).length,2);
+});
 test('account aggregate is not confused with the included trade window; records are unique',()=>{
   const a=trade(),s=snapshot([a],160);assert.equal(s.coverage.missingClosed,159);assert.equal(s.coverage.complete,false);
   assert.equal((s.summary.includedClosedPerformance as {netPnl:number}).netPnl,.8593);assert.equal(s.account.netPnl,-7);

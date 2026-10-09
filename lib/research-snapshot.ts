@@ -87,9 +87,38 @@ function performance(rows:Trade[]){
     topWinnerIds:best.filter(t=>t.netPnl!>0).map(t=>t.id),netWithoutLargestWinner:net-Math.max(0,best[0]?.netPnl??0),
     firstOpenedAt:rows.length?Math.min(...rows.map(t=>t.openedAt)):null,lastClosedAt:rows.length?Math.max(...rows.map(t=>t.closedAt??0)):null};
 }
+function researchPerformance(rows:Trade[]){
+  const priced=rows.filter(t=>finite(t.netPnl));
+  const peaks=rows.map(t=>(finite(t.favorable)?t.favorable:0)*(finite(t.notional)?t.notional:0));
+  return {closedCount:rows.length,grossPnl:sum(rows,'grossPnl'),fees:sum(rows,'entryFee')+sum(rows,'exitFee'),
+    netPnl:sum(priced,'netPnl'),bestFavorableU:peaks.length?Math.max(...peaks):0};
+}
+function researchGrouped(rows:Trade[],key:(t:Trade)=>string){
+  const groups=new Map<string,Trade[]>();
+  for(const row of rows){const name=key(row);groups.set(name,[...(groups.get(name)??[]),row]);}
+  return Object.fromEntries([...groups].map(([name,list])=>[name,researchPerformance(list)]));
+}
+const researchKind=(t:Trade)=>t.entryContext?.mode==='CONTINUATION'?'领头':t.entryContext?.mode==='RELATIVE'?'掉队':t.entryContext?.mode==='REVERSAL'?'失败针':'未标思路';
+const researchTone=(t:Trade)=>t.entryContext?.clusterId==='TOGETHER_UP'?'一起涨':t.entryContext?.clusterId==='TOGETHER_DOWN'?'一起跌':t.entryContext?.clusterId==='SPLIT'?'各走各的':'未标整盘';
+const researchAge=(t:Trade)=>t.entryContext?.researchMoveAge==='STARTED'?'刚开始':t.entryContext?.researchMoveAge==='ONGOING'?'还在走':t.entryContext?.researchMoveAge==='DONE'?'已经走远':t.entryContext?.researchMoveAge==='QUIET'?'安静':'未标走到哪';
+const researchCrowd=(t:Trade)=>t.entryContext?.researchCrowd==='LONG'?'费率挤多':t.entryContext?.researchCrowd==='SHORT'?'费率挤空':t.entryContext?.researchCrowd==='NONE'?'费率没有':'未标费率';
+const researchExit=(t:Trade)=>({BRAIN_WRONG_EXIT:'想错了',BRAIN_GIVEBACK_EXIT:'利润吐回',BRAIN_STALE_EXIT:'时间到了',BRAIN_MARKET_EXIT:'整盘散了'} as Record<string,string>)[t.exitReason??'']??t.exitReason??'未标出场';
+function passSummary(rows:ObjectRow[]){
+  const later=rows.filter(row=>finite(row.laterMove));
+  return {skipped:rows.length,laterKnown:later.length,pendingLater:rows.length-later.length,
+    laterWithIdea:later.filter(row=>Number(row.laterMove)>0).length,
+    laterAgainstIdea:later.filter(row=>Number(row.laterMove)<=0).length};
+}
 function grouped(rows:Trade[],key:(t:Trade)=>string){
   const groups=new Map<string,Trade[]>();for(const row of rows){const k=key(row);groups.set(k,[...(groups.get(k)??[]),row]);}
   return Object.fromEntries([...groups].map(([k,r])=>[k,performance(r)]));
+}
+function researchSummary(closed:Trade[],passes:ObjectRow[]){
+  const brain=closed.filter(t=>t.entryContext?.strategyVersion==='brain-v1');
+  if(!brain.length&&!passes.length)return {};
+  return {byResearchIdea:researchGrouped(brain,researchKind),byResearchTone:researchGrouped(brain,researchTone),
+    byResearchAge:researchGrouped(brain,researchAge),byResearchCrowd:researchGrouped(brain,researchCrowd),
+    byResearchExit:researchGrouped(brain,researchExit),researchPasses:passSummary(passes)};
 }
 export function checkpointCoverage(row:ObjectRow,at:number){
   const start=Number(row.startedAt),checkpoints=arr<ObjectRow>(row.checkpoints),unavailable=arr<number>(row.unavailableCheckpoints);
@@ -126,6 +155,7 @@ export function buildReviewSnapshot(input:{view:ObjectRow;buildSha:string|null;s
       tradeQuality:currentShadow,retiredTrades:arr(rawShadow.retiredTrades),priorAccount:{excludedShadowCount:olderShadow.length+arr(rawShadow.retiredTrades).length,excludedShadowTradeIds:olderShadow.map(t=>t.tradeId),
         excludedOpenRecords:olderShadow.filter(t=>t.status==='OPEN').length,status:'ISOLATED_NOT_ASSUMED_CLOSED'},
       postExit:post.map(r=>({...r,checkpointCoverage:checkpointCoverage(r,input.exportedAt)})),
+      passes:arr(v.researchPasses),
       rejectedOpportunities:rejected.map(r=>({...r,checkpointCoverage:checkpointCoverage(r,input.exportedAt),
         blockerScope:r.blockerScope??'LEGACY_AGGREGATE_NOT_CANDIDATE_CAUSE'})),
       sampling:rawCounter.sampling??null,
@@ -198,6 +228,7 @@ export function finalizeReviewSnapshot(s:ReviewSnapshot):ReviewSnapshot{
     byEntryStrategyFingerprint:grouped(closed,t=>t.review?.entryStrategyFingerprint??'UNKNOWN_LEGACY'),
     byEntryBuild:grouped(closed,t=>t.review?.entryBuildSha??'UNKNOWN_LEGACY'),
     byExitBuild:grouped(closed,t=>t.review?.exitBuildSha??'UNKNOWN_LEGACY'),
+    ...researchSummary(closed,arr<ObjectRow>(s.research.passes)),
     activeCount:open.length,exitTraceMissing:traceMissing.length,positionAssessmentMissing:piMissing.length,
     inverseLossArchiveMissing:closed.filter(t=>t.inverseCopy?.lossResearchHotOmitted&&!t.inverseCopy.lossResearch).length,
     counterfactualMaturity:maturity,liveAssessment:ownerOff?'OWNER_OFF_NOT_A_COPY_FAILURE':(s.runtime.liveAssessment??'SEE_SCOPED_LIVE_EVIDENCE'),

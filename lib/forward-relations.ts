@@ -125,7 +125,7 @@ export type EntryContext={
   entryResponse?:{version:string;startedAt:number;confirmedAt:number;elapsedMs:number;samples:number;advanceRate:number;bestAdvanceRate:number;
     maxAdverseRate:number;supportFamilies:string[];fastLane:boolean};
   clusterId?:string;thesisId?:string;marketNarrativeId?:string;thesisSummary?:string;invalidationSummary?:string;entryResidual?:number;entryRelativeStrength?:number;
-  thesisSince?:number;thesisBars?:number;
+  thesisSince?:number;thesisBars?:number;researchMoveAge?:'STARTED'|'ONGOING'|'DONE'|'QUIET';researchCrowd?:'LONG'|'SHORT'|'NONE';
   marketEvolutionPhase?:MarketEvolutionState["phase"];opportunityLifecyclePhase?:OpportunityLifecyclePhase;
   extendedConfirmation?:boolean;environment?:MarketEnvironment;playbook?:EnvironmentPlaybook;routeAlignment?:RouteAlignment;
   environmentRiskScale?:number;environmentProbe?:boolean;environmentReason?:string;
@@ -1632,6 +1632,7 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
     entryValidation:{waiting:validations.filter(v=>v.status==="WAITING").length,cancelled:validations.filter(v=>v.status==="CANCELLED").length,
       records:validations.slice(0,6)},
     marketCount:s.selectedSymbols.length,markets:s.selectedSymbols,latestReason:s.latestReason,entryDiagnostics:s.entryDiagnostics,
+    ...(s.inverseTrial?.brainPasses?.length?{researchPasses:s.inverseTrial.brainPasses}:{}),
     fitDiagnostics:s.fitDiagnostics,storage:s.storage,targetPositions:null,positionLimit:null,executionBboCapacity:FORWARD_EXECUTION_BBO_CAP,
     minuteConfirmationCapacity:FORWARD_MINUTE_CONFIRMATION_CAP,seatCount:s.positions.length,eligibleCount:eligible.length,
     reserveCount:reserve.length,premiumCount:eligible.filter(o=>o.premium).length,

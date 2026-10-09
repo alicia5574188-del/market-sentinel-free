@@ -63,6 +63,7 @@ test('decision does not chase, does not stack one coin, and does not stop at thr
   applyBrainBook(ran,paths,{},{A_USDT:quote(99.4,99.43),H_USDT:q(100.05),I_USDT:q(100.05),J_USDT:q(100.05)},contracts,T);
   assert.equal(ran.positions.some(t=>t.symbol==='A_USDT'),false);
   assert.equal(ran.positions.length,3);
+  assert.equal(ran.inverseTrial?.brainPasses?.some(row=>row.symbol==='A_USDT'&&row.whyNot.includes('离开')),true);
   const heavy=book();
   applyBrainBook(heavy,{...pack(names.slice(0,3),100.4),...pack(names.slice(3),99.6),A_USDT:wick('A')},{},{A_USDT:q(100.05)},{A_USDT:contract},T);
   const held=structuredClone(heavy.positions[0]!);
@@ -80,6 +81,9 @@ test('a fresh turn follows the leader, and a committed market buys the coin that
   applyBrainBook(lead,leadPaths,{},{AAA_USDT:quote(100.38,100.4)},{AAA_USDT:contract},T);
   assert.equal(lead.positions.length,1);assert.equal(lead.positions[0]!.side,'LONG');
   assert.equal(lead.positions[0]!.entryContext?.mode,'CONTINUATION');
+  assert.equal(lead.positions[0]!.entryContext?.clusterId,'TOGETHER_UP');
+  assert.equal(lead.positions[0]!.entryContext?.researchMoveAge,'STARTED');
+  assert.equal(lead.positions[0]!.entryContext?.researchCrowd,'NONE');
   const catchPaths={...pack(names,100.5),ZZ_USDT:path(100)};
   const caught=book();
   applyBrainBook(caught,catchPaths,{},{ZZ_USDT:quote(100,100.02)},{ZZ_USDT:contract},T);
@@ -117,6 +121,16 @@ test('a wrong idea exits now, a noise profit stays, a real move can give back ha
   const due=(stale.positions[0]!.entryContext!.thesisSince??T)+30*60_000+1000;
   applyBrainBook(stale,{},{},{AAA_USDT:quote(100.1,100.13,due)},{},due);
   assert.equal(stale.history[0]?.exitReason,'BRAIN_STALE_EXIT');
+});
+
+test('a skipped idea is marked once more after 30 minutes',()=>{
+  const s=book();
+  s.inverseTrial!.brainPasses=[{id:'A:fade:1',at:T,symbol:'AAA_USDT',side:'SHORT',kind:'FADE',tone:'SPLIT',age:'ONGOING',crowd:'NONE',price:100,whyNot:'价差太大'}];
+  const due=T+31*60_000,barTime=(T+30*60_000-300_000)/1000;
+  applyBrainBook(s,{AAA_USDT:[{time:barTime,open:100,high:101,low:99,close:99,volume:1}]},{},{},{},due);
+  const row=s.inverseTrial!.brainPasses![0]!;
+  assert.equal(row.laterPrice,99);
+  assert.ok((row.laterMove??0)>0);
 });
 
 test('a brain book does not open a proposal copy, and a reset starts at 1000',()=>{

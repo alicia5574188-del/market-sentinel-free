@@ -189,6 +189,25 @@ function remember(state:ForwardState,key:string){
   if(!seen.includes(key))seen.push(key);
   state.inverseTrial!.brainSeen=seen.slice(-800);
 }
+function notePass(state:ForwardState,idea:Idea,market:MarketRead,price:number,whyNot:string,now:number){
+  const trial=state.inverseTrial!;
+  const rows=trial.brainPasses??[];
+  if(rows.some(row=>row.id===idea.key))return;
+  rows.push({id:idea.key,at:now,symbol:idea.symbol,side:idea.side,kind:idea.kind,tone:market.tone,age:market.age,crowd:market.crowd,price,whyNot});
+  trial.brainPasses=rows.slice(-200);
+}
+function settlePasses(state:ForwardState,paths:Record<string,Candle[]>|undefined,now:number){
+  let changed=false;
+  for(const row of state.inverseTrial?.brainPasses??[]){
+    if(row.laterPrice!=null||now-row.at<30*60_000)continue;
+    const due=row.at+30*60_000;
+    const bar=done(paths?.[row.symbol],now,300).find(item=>item.time*1000+300_000>=due);
+    if(!bar||!(bar.close>0)||!(row.price>0))continue;
+    row.laterAt=bar.time*1000+300_000;row.laterPrice=bar.close;
+    row.laterMove=(bar.close/row.price-1)*(row.side==='LONG'?1:-1);changed=true;
+  }
+  return changed;
+}
 function kindOf(t:Trade):IdeaKind{
   return t.entryContext?.mode==='CONTINUATION'?'LEAD':t.entryContext?.mode==='RELATIVE'?'CATCH':'FADE';
 }
@@ -211,6 +230,7 @@ export function applyBrainBook(state:ForwardState,paths:Record<string,Candle[]>|
   const meta=contracts as Record<string,Meta>|undefined;
   let changed=false;
   const market=readMarket(paths,meta,now);
+  if(settlePasses(state,paths,now))changed=true;
   for(const t of [...state.positions]){
     if(!isBrainTrade(t)||t.status!=='OPEN')continue;
     const q=quotes[t.symbol];if(!fresh(q,now))continue;
@@ -250,7 +270,7 @@ export function applyBrainBook(state:ForwardState,paths:Record<string,Candle[]>|
     const q=quotes[idea.symbol],contract=meta?.[idea.symbol];
     if(!fresh(q,now)||!contract||!(contract.quantoMultiplier>0)){skipped.push(`${name} 还没有新鲜的买一卖一，先等报价。`);continue;}
     const spread=(q!.bestAsk-q!.bestBid)/((q!.bestAsk+q!.bestBid)/2);
-    if(!(spread>=0)||spread>SPREAD_MAX||(idea.kind==='CATCH'&&spread>CATCH_SPREAD)){remember(state,idea.key);changed=true;skipped.push(`${name} 价差 ${(spread*100).toFixed(3)}%，超过 ${idea.kind==='CATCH'?'0.080':'0.120'}%，不做。`);continue;}
+    if(!(spread>=0)||spread>SPREAD_MAX||(idea.kind==='CATCH'&&spread>CATCH_SPREAD)){remember(state,idea.key);notePass(state,idea,market,idea.close,`${name} 价差太大`,now);changed=true;skipped.push(`${name} 价差 ${(spread*100).toFixed(3)}%，超过 ${idea.kind==='CATCH'?'0.080':'0.120'}%，不做。`);continue;}
     const side=idea.side,price=side==='LONG'?q!.bestAsk:q!.bestBid;
     let stop=idea.stop;
     if(idea.kind==='CATCH')stop=price*(1-dirOf(side)*CATCH_STOP);
@@ -258,13 +278,13 @@ export function applyBrainBook(state:ForwardState,paths:Record<string,Candle[]>|
     const dist=gap/price;
     const fromClose=Math.abs(price-idea.close)/price;
     const chase=idea.kind==='CATCH'?fromClose>.002:idea.kind==='LEAD'?(dist<LEAD_MIN||dist>LEAD_MAX):(dist<TIP_MIN||dist>TIP_MAX||fromClose>CLOSE_CHASE);
-    if(!(gap>0)||chase){remember(state,idea.key);changed=true;skipped.push(`${name} 现价已经离开写下的位置，不追。`);continue;}
+    if(!(gap>0)||chase){remember(state,idea.key);notePass(state,idea,market,price,`${name} 现价已经离开写下的位置`,now);changed=true;skipped.push(`${name} 现价已经离开写下的位置，不追。`);continue;}
     const leverage=Math.min(LEVERAGE,Math.max(1,contract.leverageMax||LEVERAGE));
     const mult=contract.quantoMultiplier,min=Math.max(1,Math.ceil(contract.minContracts??1));
     const contractsN=Math.floor(NOTIONAL/(price*mult));
-    if(contractsN<min){remember(state,idea.key);changed=true;skipped.push(`${name} 按大约 400U 排不下最小张数。`);continue;}
+    if(contractsN<min){remember(state,idea.key);notePass(state,idea,market,price,`${name} 排不下最小张数`,now);changed=true;skipped.push(`${name} 按大约 400U 排不下最小张数。`);continue;}
     const quantity=contractsN*mult,notional=quantity*price;
-    if(notional<80||notional>480){remember(state,idea.key);changed=true;skipped.push(`${name} 算出来不是大约 400U。`);continue;}
+    if(notional<80||notional>480){remember(state,idea.key);notePass(state,idea,market,price,`${name} 名义金额不是大约 400U`,now);changed=true;skipped.push(`${name} 算出来不是大约 400U。`);continue;}
     const margin=notional/leverage;
     if(!(equity>0)||used+margin>equity*MARGIN_CAP){blocked=`保证金已用 ${used.toFixed(0)} U，权益一半是 ${(equity*.5).toFixed(0)} U。${name} 在等仓位腾出来。`;break;}
     const entryFee=notional*FEE,mode=idea.kind==='LEAD'?'CONTINUATION':idea.kind==='CATCH'?'RELATIVE':'REVERSAL';
@@ -279,7 +299,7 @@ export function applyBrainBook(state:ForwardState,paths:Record<string,Candle[]>|
       entryContext:{version:'adaptive-ten-entry-v1',capturedAt:now,timeframe:'5m',side,mode,reserve:false,reason:idea.why,
         entryScore:0,directionStrength:0,spaceScore:0,positionScore:0,executionScore:0,remainingSpaceRate:WINNER,
         pullbackRiskRate:dist,edgeRatio:0,expectedHoldMinutes:30,marketFit:0,regionId:null,portfolioRiskCharge:notional*dist,
-        strategyVersion:BRAIN_POLICY,thesisId:idea.key,thesisSince:idea.bar*1000,clusterId:idea.tone,thesisSummary:idea.why,
+        strategyVersion:BRAIN_POLICY,thesisId:idea.key,thesisSince:idea.bar*1000,clusterId:market.tone,researchMoveAge:market.age,researchCrowd:market.crowd,thesisSummary:idea.why,
         invalidationSummary:idea.wrong}};
     state.balance-=entryFee;state.fees+=entryFee;state.turnover+=notional;
     state.positions.push(t);remember(state,idea.key);held.add(idea.symbol);used+=t.margin;opened++;changed=true;
