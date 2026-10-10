@@ -238,7 +238,7 @@ export function applyLsrBook(state:ForwardState,paths:Record<string,Candle[]>|un
     changed=true;
   }
   const opened:string[]=[];
-  let cancelled=0;
+  let cancelled=0,placedNow=0,fallbackNow=0,spreadSum=0,midSum=0;
   const dailyStopped=(trial.lsrDayNet??0)<=-DAILY_LOSS;
   const blocked=dailyStopped?'今天已亏到 100U，不再开新单。':'';
   const resting=(trial.lsrWork??[]).filter(order=>now-order.at<=MAKER_MS+2_500);
@@ -321,7 +321,9 @@ export function applyLsrBook(state:ForwardState,paths:Record<string,Candle[]>|un
       if(!pend.some(item=>item.s===row.symbol&&now-item.at<LABEL_MS))pend.push({s:row.symbol,at:now,mid:(q!.bestBid+q!.bestAsk)/2,x:row.x});
       trial.lsrPend=pend.slice(-400);
       const bid=q!.bestBid,ask=q!.bestAsk,mid=(bid+ask)/2,touch=side==='LONG'?bid:ask,fallback=price===touch;
-      pushLog(state,{ts:now,level:'INFO',cat:'EXEC',symbol:row.symbol,event:'order_placing',reason:fallback?'四分之一价差会碰到对手价，退回买一或卖一':'往价差里挂了四分之一',fields:{side,price,bid:Number(bid.toFixed(8)),ask:Number(ask.toFixed(8)),spread_bps:Number(((ask-bid)/Math.max(mid,1e-12)*10_000).toFixed(2)),submitted:price,post_only_rejected:false,fallback_used:fallback,volZ:Number(row.volZ.toFixed(2)),retZ:Number(row.retZ.toFixed(2))}});
+      const spreadBps=(ask-bid)/Math.max(mid,1e-12)*10_000,vsMid=(side==='LONG'?price-mid:mid-price)/Math.max(mid,1e-12)*10_000;
+      placedNow++;fallbackNow+=fallback?1:0;spreadSum+=spreadBps;midSum+=vsMid;
+      pushLog(state,{ts:now,level:'INFO',cat:'EXEC',symbol:row.symbol,event:'order_placing',reason:fallback?'四分之一价差会碰到对手价，退回买一或卖一':'往价差里挂了四分之一',fields:{side,price,bid:Number(bid.toFixed(8)),ask:Number(ask.toFixed(8)),spread_bps:Number(spreadBps.toFixed(2)),submitted:price,submitted_vs_mid_bps:Number(vsMid.toFixed(2)),post_only_rejected:false,fallback_used:fallback,volZ:Number(row.volZ.toFixed(2)),retZ:Number(row.retZ.toFixed(2))}});
       changed=true;
     }
   }
@@ -334,6 +336,9 @@ export function applyLsrBook(state:ForwardState,paths:Record<string,Candle[]>|un
   if(rows.length>0&&rows.every(row=>row.layer==='stale'))funnel.stale++;
   funnel.signals+=signals.length;funnel.rested+=fresh.filter(order=>order.at===now).length;funnel.filled+=opened.length;funnel.cancelled+=cancelled;
   trial.lsrFunnel=funnel;
+  const exec=trial.lsrExec??{signals:0,placed:0,fallback:0,spreadSum:0,midSum:0};
+  exec.signals+=signals.length;exec.placed+=placedNow;exec.fallback+=fallbackNow;exec.spreadSum+=spreadSum;exec.midSum+=midSum;
+  trial.lsrExec=exec;
   const lastScan=[...(trial.lsrLog??[])].reverse().find(event=>event.event==='scan_done');
   if(!lastScan||now-lastScan.ts>=60_000)pushLog(state,{ts:now,level:'INFO',cat:'STRAT',symbol:null,event:'scan_done',reason:rows[0]?.why??'这一拍没有币',
     fields:{universe:rows.length,signals:signals.length,learn:trial.lsrLearn?.length??0,model:(trial.lsrLearn?.length??0)>=TRAIN_MIN}});
@@ -380,8 +385,6 @@ export function lsrLogBook(state:ForwardState,quotes:Record<string,Quote>,now:nu
   const mark=forwardEquity(state,quotes,now);
   const prior=trial?.lsrPriorNet??0,counter=trial?.lsrClosedNet??0,rowSum=closed.reduce((n,row)=>n+(row.net_pnl??0),0);
   const bridge=Number((counter-rowSum).toFixed(4));
-  const lumps:LsrPositionRow[]=[];
-  if(Math.abs(prior)>=0.0001)lumps.push({id:'prior-ledger',symbol:'PRIOR',side:'LONG',entry:0,exit:0,qty:0,notional:0,gross_pnl:prior,fee:0,net_pnl:prior,holdSec:0,exit_reason:'prior',gapBps:null,opened_at:trial?.lsrPriorAt??0,closed_at:trial?.lsrPriorAt??0,trace:'prior-before-full-ledger'});
-  if(Math.abs(bridge)>=0.0001)lumps.push({id:'bridge-ledger',symbol:'BRIDGE',side:'LONG',entry:0,exit:0,qty:0,notional:0,gross_pnl:bridge,fee:0,net_pnl:bridge,holdSec:0,exit_reason:'prior',gapBps:null,opened_at:0,closed_at:0,trace:'counted-before-each-row-was-kept'});
-  return {positions:[...lumps,...closed,...open],fills,curve:trial?.lsrCurve??[],equity:mark.equity,initial:state.initialEquity,closedNet:Number((prior+counter).toFixed(4))};
+  return {positions:[...closed,...open],fills,curve:trial?.lsrCurve??[],equity:mark.equity,initial:state.initialEquity,
+    closedNet:Number(rowSum.toFixed(4)),priorAdjustment:Number((prior+bridge).toFixed(4)),exec:trial?.lsrExec??null};
 }

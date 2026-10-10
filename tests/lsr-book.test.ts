@@ -55,7 +55,7 @@ test('a sharp drop rests inside the spread and fills after six seconds at the st
   assert.ok(gap<-5,`gap ${gap}`);
   const packed=lsrLogBook(s,{ETH_USDT:quote(bid,bid+0.0002,at+8_000)},at+8_000);
   const file=buildRunLogExport({events:s.inverseTrial?.lsrLog??[],funnel:s.inverseTrial?.lsrFunnel??null,health:{},gate:{},exportedAt:at+8_000,liveEnabled:false,
-    positions:packed.positions,fills:packed.fills,curve:packed.curve,equity:packed.equity,initial:packed.initial,closedNet:packed.closedNet});
+    positions:packed.positions,fills:packed.fills,curve:packed.curve,equity:packed.equity,initial:packed.initial,closedNet:packed.closedNet,priorAdjustment:packed.priorAdjustment,exec:packed.exec});
   assert.equal(file.version,'lsr-run-log-v2');
   assert.equal(file.positions.length,1);
   assert.equal(file.fills.length,2);
@@ -104,10 +104,11 @@ test('cash lost before the full ledger stays as one prior row',()=>{
   applyLsrBook(s,{ETH_USDT:bars()},{ETH_USDT:quote(100,100.02,T)},{ETH_USDT:contract},T);
   const packed=lsrLogBook(s,{ETH_USDT:quote(100,100.02,T)},T);
   const file=buildRunLogExport({events:[],funnel:null,health:{},gate:{},exportedAt:T,liveEnabled:false,
-    positions:packed.positions,fills:packed.fills,curve:packed.curve,equity:packed.equity,initial:packed.initial,closedNet:packed.closedNet});
+    positions:packed.positions,fills:packed.fills,curve:packed.curve,equity:packed.equity,initial:packed.initial,closedNet:packed.closedNet,priorAdjustment:packed.priorAdjustment,exec:packed.exec});
   assert.ok(Math.abs(file.invariants.identity_error??99)<0.5,`identity ${file.invariants.identity_error}`);
   assert.equal(file.invariants.checks.positions_sum_match,true);
   assert.equal(file.invariants.checks.fees_match,true);
-  const prior=file.positions.find(row=>row.id==='prior-ledger');
-  assert.ok(prior&&Math.abs((prior.net_pnl??0)-(-20.1754))<0.01,`prior ${prior?.net_pnl}`);
+  assert.ok(Math.abs(file.invariants.prior_adjustment-(-26.84))<0.02,`prior ${file.invariants.prior_adjustment}`);
+  assert.equal(file.positions.some(row=>row.exit_reason==='prior'),false);
+  assert.equal(file.invariants.closed_pnl_sum,0);
 });

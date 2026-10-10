@@ -31,7 +31,7 @@ export type ForwardOrder={
   stop:number|null;target:number|null;exit:string|null;
 };
 export type LsrBoard={
-  scans:number;signals:number;filled:number;cancelled:number;closed:number;wins:number;closedNet:number;
+  scans:number;signals:number;filled:number;cancelled:number;closed:number;wins:number;closedNet:number;priorNet:number;
   trend:number;exhaustion:number;sweep:number;micro:number;stale:number;spread:number;price:number;
   resting:{symbol:string;side:'LONG'|'SHORT';price:number}[];
   verdict:string;
@@ -201,7 +201,7 @@ function exitWait(t:Trade){
 function lsrBoardOf(trial:InverseTrial):LsrBoard{
   const f=trial.lsrFunnel;
   const board:LsrBoard={scans:f?.scans??0,signals:f?.signals??0,filled:f?.filled??0,cancelled:f?.cancelled??0,
-    closed:f?.closed??0,wins:f?.wins??0,closedNet:trial.lsrClosedNet??0,trend:f?.trend??0,exhaustion:f?.exhaustion??0,sweep:f?.sweep??0,
+    closed:f?.closed??0,wins:f?.wins??0,closedNet:trial.lsrClosedNet??0,priorNet:trial.lsrPriorNet??0,trend:f?.trend??0,exhaustion:f?.exhaustion??0,sweep:f?.sweep??0,
     micro:f?.micro??0,stale:f?.stale??0,spread:f?.spread??0,price:f?.priceCheck??0,
     resting:(trial.lsrWork??[]).map(order=>({symbol:order.s,side:order.side,price:order.price})),verdict:''};
   const stuck=[['趋势',board.trend],['放量',board.exhaustion],['扫单',board.sweep],['往回摆',board.micro],['价差',board.spread],['行情过期',board.stale],['价格对不上',board.price]]
