@@ -145,7 +145,7 @@ export function freshLsrLedger(previous:ForwardState,now:number):ForwardState{
   next.lastExitAt={};
   next.inverseTrial=newInverseTrial(next,now,next.initialEquity);
   next.inverseTrial.paperPolicy=LSR_POLICY;
-  next.latestReason='模拟账户从1000U重新开始。急跌做多，急涨做空。每笔约100U，挂买一或卖一。';
+  next.latestReason='模拟账户从1000U重新开始。急跌做多，急涨做空。弱信号约 300U，强信号约 400U。';
   assertInverseTrial(next);
   return next;
 }

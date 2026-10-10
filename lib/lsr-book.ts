@@ -3,7 +3,7 @@
  * Paper and the live switch share this book. Live is not turned on here. */
 import type {Candle, Contract, ForwardState, Quote, Rule, Trade} from './forward-relations.ts';
 import type {WorkSheet} from './forward-study.ts';
-import {appendRunLog,emptyFunnel,rememberRow,traceOf,type LsrPositionRow,type RunEvent} from './run-log.ts';
+import {appendRunLog,emptyFunnel,placesFromEvents,rememberRow,traceOf,type LsrPlace,type LsrPositionRow,type RunEvent} from './run-log.ts';
 import {forwardEquity,freshQuote} from './forward-relations.ts';
 
 export const LSR_POLICY='lsr-v1' as const;
@@ -24,11 +24,11 @@ const STALE_MS=2_000;
 const COOL_MS=45_000;
 const MAKER_MS=6_000;
 const MIN_N=30;
-const NOTIONAL=100;
-const SMALL_NOTIONAL=70;
-const MAX_OPEN=10;
-const MAX_EXPOSURE=800;
-const MAX_ONE=150;
+const NOTIONAL=400;
+const SMALL_NOTIONAL=300;
+const MAX_OPEN=8;
+const MAX_EXPOSURE=3_000;
+const MAX_ONE=500;
 const DAILY_LOSS=100;
 const VOLUME_CAP=400_000;
 const TRAIN_MIN=800;
@@ -131,7 +131,7 @@ export function readLsr(paths:Record<string,Candle[]>|undefined,quotes:Record<st
     if(tier){
       const model=pass(x);
       if(!model.ok){tier=null;layer='micro';why+=`模型概率 ${((model.p??0)*100).toFixed(0)}%，不到 50%，不做。`;}
-      else {layer='signal';why+=`${tier==='large'?'强信号，100U':'弱信号，70U'}。${side==='LONG'?'急跌做多':'急涨做空'}。${model.p==null?'研究样本还不够 800，先按规则。':`模型 ${(model.p*100).toFixed(0)}%。`}`;}
+      else {layer='signal';why+=`${tier==='large'?'强信号，400U':'弱信号，300U'}。${side==='LONG'?'急跌做多':'急涨做空'}。${model.p==null?'研究样本还不够 800，先按规则。':`模型 ${(model.p*100).toFixed(0)}%。`}`;}
     }
     rows.push({symbol,side:tier?side:null,tier,layer,volZ,retZ,why,x});
   }
@@ -201,6 +201,7 @@ export function applyLsrBook(state:ForwardState,paths:Record<string,Candle[]>|un
   if(!trial||trial.paperPolicy!==LSR_POLICY)return false;
   const meta=contracts as Record<string,Meta>|undefined;
   let changed=false;
+  if(!trial.lsrPlacesReady){trial.lsrPlaces=placesFromEvents(trial.lsrLog??[]);trial.lsrPlacesReady=true;changed=true;}
   const samples=(trial.lsrMp??[]).filter(row=>now-row.at<=20*60_000);
   for(const [symbol,q] of Object.entries(quotes)){
     if(!bookFresh(q,now))continue;
@@ -238,7 +239,7 @@ export function applyLsrBook(state:ForwardState,paths:Record<string,Candle[]>|un
     changed=true;
   }
   const opened:string[]=[];
-  let cancelled=0,placedNow=0,fallbackNow=0,spreadSum=0,midSum=0;
+  let cancelled=0;
   const dailyStopped=(trial.lsrDayNet??0)<=-DAILY_LOSS;
   const blocked=dailyStopped?'今天已亏到 100U，不再开新单。':'';
   const resting=(trial.lsrWork??[]).filter(order=>now-order.at<=MAKER_MS+2_500);
@@ -257,7 +258,7 @@ export function applyLsrBook(state:ForwardState,paths:Record<string,Candle[]>|un
       if(held.has(order.s))continue;
       const contract=meta?.[order.s];
       if(!contract||!(contract.quantoMultiplier>0))continue;
-      const notionalWanted=order.why.includes('70U')?SMALL_NOTIONAL:NOTIONAL;
+      const notionalWanted=order.why.includes('300U')?SMALL_NOTIONAL:NOTIONAL;
       const price=order.price,mult=contract.quantoMultiplier,min=Math.max(1,Math.ceil(contract.minContracts??1));
       const contractsN=Math.max(min,Math.floor(notionalWanted/(price*mult)));
       const quantity=contractsN*mult,notional=quantity*price;
@@ -312,18 +313,25 @@ export function applyLsrBook(state:ForwardState,paths:Record<string,Candle[]>|un
         continue;
       }
       const spread=q!.bestAsk-q!.bestBid;
-      let price=side==='LONG'?q!.bestBid+spread*.25:q!.bestAsk-spread*.25;
-      if(side==='LONG'&&!(price<q!.bestAsk))price=q!.bestBid;
-      if(side==='SHORT'&&!(price>q!.bestBid))price=q!.bestAsk;
+      const bid=q!.bestBid,ask=q!.bestAsk,mid=(bid+ask)/2;
+      let price=side==='LONG'?bid+spread*0.5:ask-spread*0.5;
+      const crosses=side==='LONG'?price>=ask:price<=bid;
+      let fallback=false,rejected=false;
+      if(crosses){
+        const touch=side==='LONG'?bid:ask;
+        if(side==='LONG'?touch>=ask:touch<=bid)rejected=true;
+        else {price=touch;fallback=true;}
+      }
+      const spreadBps=(ask-bid)/Math.max(mid,1e-12)*10_000,vsMid=(side==='LONG'?price-mid:mid-price)/Math.max(mid,1e-12)*10_000;
+      const stat:LsrPlace={spreadBps,vsMid,fallback,rejected};
+      trial.lsrPlaces=rememberRow(trial.lsrPlaces,stat);
+      pushLog(state,{ts:now,level:rejected?'WARN':'INFO',cat:'EXEC',symbol:row.symbol,event:'order_placing',reason:rejected?'挂价会马上成交，post_only 拒绝':fallback?'一半价差会碰到对手价，退回买一或卖一':'挂在价差中间',fields:{side,price,bid:Number(bid.toFixed(8)),ask:Number(ask.toFixed(8)),spread_bps:Number(spreadBps.toFixed(2)),submitted:price,submitted_vs_mid_bps:Number(vsMid.toFixed(2)),post_only_rejected:rejected,fallback_used:fallback,volZ:Number(row.volZ.toFixed(2)),retZ:Number(row.retZ.toFixed(2))}});
+      if(rejected){cancelled++;changed=true;continue;}
       fresh.push({s:row.symbol,side,price,at:now,key:`${row.symbol}:${now}:${side}`,why:row.why,bar:0});
       trial.lsrCool={...trial.lsrCool,[row.symbol]:now};
       const pend=trial.lsrPend??[];
-      if(!pend.some(item=>item.s===row.symbol&&now-item.at<LABEL_MS))pend.push({s:row.symbol,at:now,mid:(q!.bestBid+q!.bestAsk)/2,x:row.x});
+      if(!pend.some(item=>item.s===row.symbol&&now-item.at<LABEL_MS))pend.push({s:row.symbol,at:now,mid,x:row.x});
       trial.lsrPend=pend.slice(-400);
-      const bid=q!.bestBid,ask=q!.bestAsk,mid=(bid+ask)/2,touch=side==='LONG'?bid:ask,fallback=price===touch;
-      const spreadBps=(ask-bid)/Math.max(mid,1e-12)*10_000,vsMid=(side==='LONG'?price-mid:mid-price)/Math.max(mid,1e-12)*10_000;
-      placedNow++;fallbackNow+=fallback?1:0;spreadSum+=spreadBps;midSum+=vsMid;
-      pushLog(state,{ts:now,level:'INFO',cat:'EXEC',symbol:row.symbol,event:'order_placing',reason:fallback?'四分之一价差会碰到对手价，退回买一或卖一':'往价差里挂了四分之一',fields:{side,price,bid:Number(bid.toFixed(8)),ask:Number(ask.toFixed(8)),spread_bps:Number(spreadBps.toFixed(2)),submitted:price,submitted_vs_mid_bps:Number(vsMid.toFixed(2)),post_only_rejected:false,fallback_used:fallback,volZ:Number(row.volZ.toFixed(2)),retZ:Number(row.retZ.toFixed(2))}});
       changed=true;
     }
   }
@@ -336,21 +344,18 @@ export function applyLsrBook(state:ForwardState,paths:Record<string,Candle[]>|un
   if(rows.length>0&&rows.every(row=>row.layer==='stale'))funnel.stale++;
   funnel.signals+=signals.length;funnel.rested+=fresh.filter(order=>order.at===now).length;funnel.filled+=opened.length;funnel.cancelled+=cancelled;
   trial.lsrFunnel=funnel;
-  const exec=trial.lsrExec??{signals:0,placed:0,fallback:0,spreadSum:0,midSum:0};
-  exec.signals+=signals.length;exec.placed+=placedNow;exec.fallback+=fallbackNow;exec.spreadSum+=spreadSum;exec.midSum+=midSum;
-  trial.lsrExec=exec;
   const lastScan=[...(trial.lsrLog??[])].reverse().find(event=>event.event==='scan_done');
   if(!lastScan||now-lastScan.ts>=60_000)pushLog(state,{ts:now,level:'INFO',cat:'STRAT',symbol:null,event:'scan_done',reason:rows[0]?.why??'这一拍没有币',
     fields:{universe:rows.length,signals:signals.length,learn:trial.lsrLearn?.length??0,model:(trial.lsrLearn?.length??0)>=TRAIN_MIN}});
   const ranked=[...rows].sort((a,b)=>Math.abs(b.retZ)-Math.abs(a.retZ)).slice(0,4);
   const learned=trial.lsrLearn?.length??0;
   const work:WorkSheet={subject:'急跌做多，急涨做空。规则先选，研究模型后决定做不做。',
-    method:'每 2 秒看一次真实行情。最近 30 下的涨跌 z、最近 30 根 5 分钟的成交量 z。弱信号 z 到 1 和 1.2，下 70U。强信号 z 到 2.5 和 3，下 100U。价差超过 8 bps 不做。同一币 45 秒内不重复。挂在买一和卖一之间四分之一的位置，仍是挂单。6 秒没打到就撤。同一币 5 分钟内撤了 3 次，再停 5 分钟。止盈 0.30%。止损 0.20%。实盘止损是触发后按市价平，所以模拟也按对手价再差 0.05% 成交，不按止损价。最长 15 分钟。样本够 800 条后，模型概率不到 50% 不做。',
+    method:'每 2 秒看一次真实行情。最近 30 下的涨跌 z、最近 30 根 5 分钟的成交量 z。弱信号 z 到 1 和 1.2，下 300U。强信号 z 到 2.5 和 3，下 400U。价差超过 8 bps 不做。同一币 45 秒内不重复。挂在买一和卖一的正中间，仍是挂单。这个价要是会马上成交，就退回买一或卖一；买卖价已经粘在一起就直接拒绝，不成交。6 秒没打到就撤。同一币 5 分钟内撤了 3 次，再停 5 分钟。止盈 0.30%。止损 0.20%。实盘止损是触发后按市价平，所以模拟也按对手价再差 0.05% 成交，不按止损价。最长 15 分钟。同时最多 8 笔，总名义 3000U。样本够 800 条后，模型概率不到 50% 不做。',
     lines:[
       {name:'1. 涨跌',data:'最近 30 下报价。最后一下偏跌就准备做多，偏涨就准备做空。',said:ranked[0]?ranked.map(row=>`${coin(row.symbol)} 涨跌 z ${row.retZ.toFixed(1)}`).join('；'):'报价还不够 30 下。'},
       {name:'2. 放量',data:'最近 30 根已收盘 5 分钟。这一根成交量 z 弱信号要到 1.2，强信号要到 3。',said:ranked[0]?ranked.map(row=>`${coin(row.symbol)} 量 z ${row.volZ.toFixed(1)}${row.tier==='large'?'，强':row.tier==='small'?'，弱':''}`).join('；'):'5 分钟还不够 30 根。'},
       {name:'3. 研究',data:'每笔信号记下当时的特征。5 分钟后看价格有没有走出手续费。够 800 条才训练，之后概率不到 50% 不做。',said:learned<TRAIN_MIN?`已有 ${learned} / 800 条。现在先按规则做。`:`模型已在用。不够的概率记在「模型拦住」。`},
-      {name:'4. 风控',data:'同时最多 10 笔。总名义 800U。今天亏到 100U 停。今天成交额 40 万 U 停。手续费按挂单 0.02% 算。赢是指这一笔扣完开平手续费还大于 0。今天已平净利不等于账户盈亏，账户还要算上还没平的浮动。',said:blocked||`今天已平净利 ${((trial.lsrDayNet??0)).toFixed(2)} U。成交额 ${((trial.lsrDayVol??0)).toFixed(0)} U。挂单 ${trial.lsrWork?.length??0} 笔。`}],
+      {name:'4. 风控',data:'同时最多 8 笔。单笔最多 500U。总名义 3000U。今天亏到 100U 停。今天成交额 40 万 U 停。手续费按挂单 0.02% 算。赢是指这一笔扣完开平手续费还大于 0。今天已平净利不等于账户盈亏，账户还要算上还没平的浮动。',said:blocked||`今天已平净利 ${((trial.lsrDayNet??0)).toFixed(2)} U。成交额 ${((trial.lsrDayVol??0)).toFixed(0)} U。挂单 ${trial.lsrWork?.length??0} 笔。`}],
     waiting:blocked||(trial.lsrWork?.length?'挂单还在，6 秒内价格打到才成交。':signals.length?'有信号，正在往价差里挂。': '在等涨跌和放量同时极端。'),
     preparing:opened.length?`这一拍开了 ${opened.join('，')}。`:'这一拍没有开仓。'};
   const note=opened.length?`开了 ${opened.length} 笔。`:(signals[0]?.why??ranked[0]?.why??'这一拍没有信号。');
@@ -385,6 +390,8 @@ export function lsrLogBook(state:ForwardState,quotes:Record<string,Quote>,now:nu
   const mark=forwardEquity(state,quotes,now);
   const prior=trial?.lsrPriorNet??0,counter=trial?.lsrClosedNet??0,rowSum=closed.reduce((n,row)=>n+(row.net_pnl??0),0);
   const bridge=Number((counter-rowSum).toFixed(4));
+  const logged=placesFromEvents(trial?.lsrLog??[]);
+  const stored=trial?.lsrPlaces??[];
   return {positions:[...closed,...open],fills,curve:trial?.lsrCurve??[],equity:mark.equity,initial:state.initialEquity,
-    closedNet:Number(rowSum.toFixed(4)),priorAdjustment:Number((prior+bridge).toFixed(4)),exec:trial?.lsrExec??null};
+    closedNet:Number(rowSum.toFixed(4)),priorAdjustment:Number((prior+bridge).toFixed(4)),places:stored.length>=logged.length?stored:logged};
 }

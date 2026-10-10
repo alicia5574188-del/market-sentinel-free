@@ -10,6 +10,17 @@ const CAP=300;
 export function appendRunLog(log:RunEvent[]|undefined,event:RunEvent){return [...(log??[]),event].slice(-CAP);}
 export function traceOf(now:number){return `scan-${Math.floor(now/2_000).toString(36)}`;}
 
+export type LsrPlace={spreadBps:number;vsMid:number;fallback:boolean;rejected:boolean};
+export function placeFromEvent(fields:RunEvent['fields']):LsrPlace|null{
+  if(typeof fields.spread_bps!=='number')return null;
+  let vsMid=fields.submitted_vs_mid_bps;
+  if(typeof vsMid!=='number'&&typeof fields.bid==='number'&&typeof fields.ask==='number'&&typeof fields.submitted==='number'){
+    const mid=(fields.bid+fields.ask)/2;
+    vsMid=mid>0?(fields.side==='SHORT'?(mid-fields.submitted)/mid*10_000:(fields.submitted-mid)/mid*10_000):0;
+  }
+  return {spreadBps:fields.spread_bps,vsMid:typeof vsMid==='number'?vsMid:0,fallback:fields.fallback_used===true,rejected:fields.post_only_rejected===true};
+}
+export function placesFromEvents(events:RunEvent[]){return events.filter(event=>event.event==='order_placing').map(event=>placeFromEvent(event.fields)).filter((row):row is LsrPlace=>row!=null);}
 export type LsrFill={ts:number;symbol:string;side:'LONG'|'SHORT';price:number;qty:number;notional:number;fee:number;tag:'open'|'close';trace:string;waitMs:number|null;limit:number|null};
 export type LsrPositionRow={id:string;symbol:string;side:'LONG'|'SHORT';entry:number;exit:number|null;qty:number;notional:number;gross_pnl:number|null;fee:number;net_pnl:number|null;holdSec:number;exit_reason:'stop'|'tp'|'time'|'prior'|null;gapBps:number|null;opened_at:number;closed_at:number|null;trace:string};
 export type LsrCurvePoint={ts:number;equity:number;closed_pnl:number;unrealized_pnl:number;positions:number};
@@ -18,7 +29,7 @@ export function rememberRow<T>(rows:T[]|undefined,row:T){return [...(rows??[]),r
 
 export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null;health:{sources?:{source:string;fresh?:boolean;failures?:number;lastError?:string|null;rows?:number}[];healthySources?:number};gate:{connected?:boolean;lastError?:string|null;freshBooks?:number};exportedAt:number;liveEnabled:boolean;
   positions?:LsrPositionRow[];fills?:LsrFill[];curve?:LsrCurvePoint[];equity?:number|null;initial?:number|null;closedNet?:number|null;priorAdjustment?:number|null;
-  exec?:{signals:number;placed:number;fallback:number;spreadSum:number;midSum:number}|null}){
+  places?:LsrPlace[]|null}){
   const funnel=input.funnel??emptyFunnel('');
   const strategy={signal_not_triggered:funnel.trend+funnel.exhaustion+funnel.sweep+funnel.micro+funnel.spread,
     signal_triggered_no_fill:funnel.cancelled};
@@ -39,10 +50,10 @@ export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null
   let gap=true;for(let i=1;i<curve.length;i++)if(Math.abs(curve[i]!.equity-curve[i-1]!.equity)>=5)gap=false;
   const logs=[...input.events];
   if(gaps.length<10)logs.push({ts:input.exportedAt,level:'WARN',cat:'PNL',symbol:null,event:'stop_sample_short',reason:`止损样本 ${gaps.length} 笔，不到 10 笔，止损统计先别当真。`,fields:{count:gaps.length},trace:traceOf(input.exportedAt)});
-  const rejectedN=input.events.filter(event=>event.event==='order_placing'&&event.fields.post_only_rejected===true).length;
-  const exec=input.exec??{signals:0,placed:0,fallback:0,spreadSum:0,midSum:0};
+  const rows=(input.places&&input.places.length?input.places:placesFromEvents(input.events));
+  const fallbackN=rows.filter(row=>row.fallback).length,rejectedN=rows.filter(row=>row.rejected).length;
   const body={version:'lsr-run-log-v2' as const,exportedAt:input.exportedAt,liveEnabled:input.liveEnabled,
-    howToRead:'恒等式是 权益 = 初始 + prior_adjustment + closed_pnl_sum + unrealized_pnl。prior_adjustment 是旧账，只加一次，不算进已平净利，也不算胜率。fallback_rate = 退回买一或卖一的次数 / 这段时间的信号数。avg_spread_bps 是下单时的价差。avg_submitted_vs_mid_bps 是提交价离中间价多远，负数表示还在自己这边。这三个数从本版上线后才开始记。',
+    howToRead:'恒等式是 权益 = 初始 + prior_adjustment + closed_pnl_sum + unrealized_pnl。prior_adjustment 是旧账，不算进已平净利。execution_quality.placed 是本会话全部挂单，不是最近一两笔。fallback_rate = 退回买一或卖一的次数 / placed。avg_submitted_vs_mid_bps 为负表示还在自己这边。',
     funnel,sourceHealth:input.health,gate:input.gate,
     breakdown:{strategy_issues:strategy,runtime_issues:runtime,
       verdict:runtime.data_stale+runtime.price_disagreement+runtime.ws_disconnect+runtime.order_rejected>strategy.signal_not_triggered&&runtime.data_stale+runtime.ws_disconnect>0?'先看运行':'先看策略'},
@@ -55,10 +66,10 @@ export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null
       cancel_rate:funnel.signals>0?Number((funnel.cancelled/funnel.signals).toFixed(4)):0,
       order_timeout_ms:6000,avg_wait_ms:waits.length?Number((waits.reduce((n,v)=>n+v,0)/waits.length).toFixed(1)):0,
       avg_slippage_bps:slips.length?Number((slips.reduce((n,v)=>n+v,0)/slips.length).toFixed(2)):0,
-      placed:exec.placed,fallback_used:exec.fallback,post_only_rejected:rejectedN,
-      fallback_rate:exec.signals>0?Number((exec.fallback/exec.signals).toFixed(4)):0,
-      avg_spread_bps:exec.placed>0?Number((exec.spreadSum/exec.placed).toFixed(2)):0,
-      avg_submitted_vs_mid_bps:exec.placed>0?Number((exec.midSum/exec.placed).toFixed(2)):0},
+      placed:rows.length,fallback_used:fallbackN,post_only_rejected:rejectedN,
+      fallback_rate:rows.length?Number((fallbackN/rows.length).toFixed(4)):0,
+      avg_spread_bps:rows.length?Number((rows.reduce((n,row)=>n+row.spreadBps,0)/rows.length).toFixed(2)):0,
+      avg_submitted_vs_mid_bps:rows.length?Number((rows.reduce((n,row)=>n+row.vsMid,0)/rows.length).toFixed(2)):0},
     stop_loss_stats:{count:gaps.length,gapbps_min:gaps[0]??0,gapbps_median:at(.5),gapbps_p90:at(.9),gapbps_max:gaps.at(-1)??0,gapbps_values:gaps},
     positions,fills,equity_curve:curve};
   if(JSON.stringify(body).length>20_000_000)body.equity_curve=curve.filter((_,i)=>i%5===0);
