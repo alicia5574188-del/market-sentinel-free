@@ -97,3 +97,17 @@ test('three misses in five minutes stop the next order',()=>{
   applyLsrBook(s,paths,{ETH_USDT:quote(99,99.02,at)},{ETH_USDT:contract},at);
   assert.equal(s.inverseTrial?.lsrWork?.length??0,0);
 });
+test('cash lost before the full ledger stays as one prior row',()=>{
+  const s=book();
+  s.balance=973.16;
+  s.inverseTrial!.lsrClosedNet=-6.6646;
+  applyLsrBook(s,{ETH_USDT:bars()},{ETH_USDT:quote(100,100.02,T)},{ETH_USDT:contract},T);
+  const packed=lsrLogBook(s,{ETH_USDT:quote(100,100.02,T)},T);
+  const file=buildRunLogExport({events:[],funnel:null,health:{},gate:{},exportedAt:T,liveEnabled:false,
+    positions:packed.positions,fills:packed.fills,curve:packed.curve,equity:packed.equity,initial:packed.initial,closedNet:packed.closedNet});
+  assert.ok(Math.abs(file.invariants.identity_error??99)<0.5,`identity ${file.invariants.identity_error}`);
+  assert.equal(file.invariants.checks.positions_sum_match,true);
+  assert.equal(file.invariants.checks.fees_match,true);
+  const prior=file.positions.find(row=>row.id==='prior-ledger');
+  assert.ok(prior&&Math.abs((prior.net_pnl??0)-(-20.1754))<0.01,`prior ${prior?.net_pnl}`);
+});

@@ -11,7 +11,7 @@ export function appendRunLog(log:RunEvent[]|undefined,event:RunEvent){return [..
 export function traceOf(now:number){return `scan-${Math.floor(now/2_000).toString(36)}`;}
 
 export type LsrFill={ts:number;symbol:string;side:'LONG'|'SHORT';price:number;qty:number;notional:number;fee:number;tag:'open'|'close';trace:string;waitMs:number|null;limit:number|null};
-export type LsrPositionRow={id:string;symbol:string;side:'LONG'|'SHORT';entry:number;exit:number|null;qty:number;notional:number;gross_pnl:number|null;fee:number;net_pnl:number|null;holdSec:number;exit_reason:'stop'|'tp'|'time'|null;gapBps:number|null;opened_at:number;closed_at:number|null;trace:string};
+export type LsrPositionRow={id:string;symbol:string;side:'LONG'|'SHORT';entry:number;exit:number|null;qty:number;notional:number;gross_pnl:number|null;fee:number;net_pnl:number|null;holdSec:number;exit_reason:'stop'|'tp'|'time'|'prior'|null;gapBps:number|null;opened_at:number;closed_at:number|null;trace:string};
 export type LsrCurvePoint={ts:number;equity:number;closed_pnl:number;unrealized_pnl:number;positions:number};
 const ROW_CAP=8_000;
 export function rememberRow<T>(rows:T[]|undefined,row:T){return [...(rows??[]),row].slice(-ROW_CAP);}
@@ -38,8 +38,10 @@ export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null
   let gap=true;for(let i=1;i<curve.length;i++)if(Math.abs(curve[i]!.equity-curve[i-1]!.equity)>=5)gap=false;
   const logs=[...input.events];
   if(gaps.length<10)logs.push({ts:input.exportedAt,level:'WARN',cat:'PNL',symbol:null,event:'stop_sample_short',reason:`止损样本 ${gaps.length} 笔，不到 10 笔，止损统计先别当真。`,fields:{count:gaps.length},trace:traceOf(input.exportedAt)});
+  const placed=input.events.filter(event=>event.event==='order_placing');
+  const fallbackN=placed.filter(event=>event.fields.fallback_used===true).length,rejectedN=placed.filter(event=>event.fields.post_only_rejected===true).length;
   const body={version:'lsr-run-log-v2' as const,exportedAt:input.exportedAt,liveEnabled:input.liveEnabled,
-    howToRead:'先看 invariants.identity_error，超过 0.5 就是账没对上。再看 execution_quality.fill_rate 和 stop_loss_stats。positions、fills 是全量。',
+    howToRead:'先看 invariants.identity_error。PRIOR 那一行是完整逐笔开始前已经进了现金、但单笔已经不在记录里的盈亏，不要再加一次。挂单日志里 fallback_used 为真，就是四分之一价差没挂上、退回了买一或卖一。模拟盘不会向交易所发 post_only，所以 post_only_rejected 一直是 false。',
     funnel,sourceHealth:input.health,gate:input.gate,
     breakdown:{strategy_issues:strategy,runtime_issues:runtime,
       verdict:runtime.data_stale+runtime.price_disagreement+runtime.ws_disconnect+runtime.order_rejected>strategy.signal_not_triggered&&runtime.data_stale+runtime.ws_disconnect>0?'先看运行':'先看策略'},
@@ -51,7 +53,9 @@ export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null
       fill_rate:funnel.signals>0?Number((funnel.filled/funnel.signals).toFixed(4)):0,
       cancel_rate:funnel.signals>0?Number((funnel.cancelled/funnel.signals).toFixed(4)):0,
       order_timeout_ms:6000,avg_wait_ms:waits.length?Number((waits.reduce((n,v)=>n+v,0)/waits.length).toFixed(1)):0,
-      avg_slippage_bps:slips.length?Number((slips.reduce((n,v)=>n+v,0)/slips.length).toFixed(2)):0},
+      avg_slippage_bps:slips.length?Number((slips.reduce((n,v)=>n+v,0)/slips.length).toFixed(2)):0,
+      placed:placed.length,fallback_used:fallbackN,post_only_rejected:rejectedN,
+      fallback_rate:placed.length?Number((fallbackN/placed.length).toFixed(4)):0},
     stop_loss_stats:{count:gaps.length,gapbps_min:gaps[0]??0,gapbps_median:at(.5),gapbps_p90:at(.9),gapbps_max:gaps.at(-1)??0,gapbps_values:gaps},
     positions,fills,equity_curve:curve};
   if(JSON.stringify(body).length>20_000_000)body.equity_curve=curve.filter((_,i)=>i%5===0);

@@ -4,7 +4,7 @@
 import type {Candle, Contract, ForwardState, Quote, Rule, Trade} from './forward-relations.ts';
 import type {WorkSheet} from './forward-study.ts';
 import {appendRunLog,emptyFunnel,rememberRow,traceOf,type LsrPositionRow,type RunEvent} from './run-log.ts';
-import {forwardEquity} from './forward-relations.ts';
+import {forwardEquity,freshQuote} from './forward-relations.ts';
 
 export const LSR_POLICY='lsr-v1' as const;
 export const LSR_EPOCH='lsr-flow-2026-10-10' as const;
@@ -320,7 +320,8 @@ export function applyLsrBook(state:ForwardState,paths:Record<string,Candle[]>|un
       const pend=trial.lsrPend??[];
       if(!pend.some(item=>item.s===row.symbol&&now-item.at<LABEL_MS))pend.push({s:row.symbol,at:now,mid:(q!.bestBid+q!.bestAsk)/2,x:row.x});
       trial.lsrPend=pend.slice(-400);
-      pushLog(state,{ts:now,level:'INFO',cat:'EXEC',symbol:row.symbol,event:'order_placing',reason:row.tier==='large'?'强信号，挂 100U':'弱信号，挂 70U',fields:{side,price,volZ:Number(row.volZ.toFixed(2)),retZ:Number(row.retZ.toFixed(2))}});
+      const bid=q!.bestBid,ask=q!.bestAsk,mid=(bid+ask)/2,touch=side==='LONG'?bid:ask,fallback=price===touch;
+      pushLog(state,{ts:now,level:'INFO',cat:'EXEC',symbol:row.symbol,event:'order_placing',reason:fallback?'四分之一价差会碰到对手价，退回买一或卖一':'往价差里挂了四分之一',fields:{side,price,bid:Number(bid.toFixed(8)),ask:Number(ask.toFixed(8)),spread_bps:Number(((ask-bid)/Math.max(mid,1e-12)*10_000).toFixed(2)),submitted:price,post_only_rejected:false,fallback_used:fallback,volZ:Number(row.volZ.toFixed(2)),retZ:Number(row.retZ.toFixed(2))}});
       changed=true;
     }
   }
@@ -350,8 +351,9 @@ export function applyLsrBook(state:ForwardState,paths:Record<string,Candle[]>|un
   const note=opened.length?`开了 ${opened.length} 笔。`:(signals[0]?.why??ranked[0]?.why??'这一拍没有信号。');
   const mark=forwardEquity(state,quotes,now),openNow=state.positions.filter(isLsrTrade);
   const unreal=mark.floating-openNow.reduce((n,t)=>n+t.entryFee,0);
+  if(trial.lsrPriorNet==null){trial.lsrPriorNet=Number((mark.equity-state.initialEquity-(trial.lsrClosedNet??0)-unreal).toFixed(4));trial.lsrPriorAt=now;changed=true;}
   if(now-(trial.lsrCurve?.at(-1)?.ts??0)>=60_000){
-    trial.lsrCurve=rememberRow(trial.lsrCurve,{ts:now,equity:Number(mark.equity.toFixed(4)),closed_pnl:Number((trial.lsrClosedNet??0).toFixed(4)),unrealized_pnl:Number(unreal.toFixed(4)),positions:openNow.length});
+    trial.lsrCurve=rememberRow(trial.lsrCurve,{ts:now,equity:Number(mark.equity.toFixed(4)),closed_pnl:Number(((trial.lsrPriorNet??0)+(trial.lsrClosedNet??0)).toFixed(4)),unrealized_pnl:Number(unreal.toFixed(4)),positions:openNow.length});
     changed=true;
   }
   if(trial.lsrNote!==note||JSON.stringify(trial.work)!==JSON.stringify(work)||trial.lsrLog?.at(-1)?.ts===now||funnel.scans%15===0){trial.lsrNote=note;trial.work=work;changed=true;}
@@ -362,31 +364,24 @@ export function applyLsrBook(state:ForwardState,paths:Record<string,Candle[]>|un
 export function lsrLogBook(state:ForwardState,quotes:Record<string,Quote>,now:number){
   const trial=state.inverseTrial;
   const closed=trial?.lsrRows??[];
-  const known=new Set(closed.map(row=>row.id));
-  const recovered=state.history.filter(t=>isLsrTrade(t)&&t.status==='CLOSED'&&!known.has(t.id)).map(rowFromTrade);
   const open:LsrPositionRow[]=state.positions.filter(isLsrTrade).map(t=>{
-    const q=quotes[t.symbol],fresh=!!q&&now-q.observedAt<=STALE_MS&&q.bestBid>0&&q.bestAsk>=q.bestBid;
-    const px=fresh?(t.side==='LONG'?q!.bestBid:q!.bestAsk):t.lastPrice;
+    const q=quotes[t.symbol],fresh=freshQuote(q,now),px=fresh?(t.side==='LONG'?q!.bestBid:q!.bestAsk):t.lastPrice;
     return {id:t.id,symbol:t.symbol,side:t.side,entry:t.entryPrice,exit:null,qty:t.quantity,notional:t.notional,
-      gross_pnl:Number((dirOf(t.side)*t.quantity*(px-t.entryPrice)).toFixed(6)),fee:t.entryFee,net_pnl:null,
+      gross_pnl:px>0?Number((dirOf(t.side)*t.quantity*(px-t.entryPrice)).toFixed(6)):0,fee:t.entryFee,net_pnl:null,
       holdSec:Math.round((now-t.openedAt)/1000),exit_reason:null,gapBps:null,opened_at:t.openedAt,closed_at:null,trace:traceOf(t.openedAt)};
   });
   const fills=[...(trial?.lsrFills??[])];
   const seen=new Set(fills.map(row=>`${row.tag}:${row.trace}`));
-  for(const row of [...recovered,...closed]){
+  for(const row of closed){
     if(!seen.has(`open:${row.trace}`))fills.push({ts:row.opened_at,symbol:row.symbol,side:row.side,price:row.entry,qty:row.qty,notional:row.notional,fee:row.notional*FEE,tag:'open',trace:row.trace,waitMs:null,limit:row.entry});
     if(row.exit!=null&&!seen.has(`close:${row.trace}`))fills.push({ts:row.closed_at??row.opened_at,symbol:row.symbol,side:row.side,price:row.exit,qty:row.qty,notional:row.qty*row.exit,fee:Math.max(0,row.fee-row.notional*FEE),tag:'close',trace:row.trace,waitMs:null,limit:row.exit_reason==='stop'?row.entry*(row.side==='LONG'?1-STOP:1+STOP):null});
   }
   for(const row of open){if(!seen.has(`open:${row.trace}`))fills.push({ts:row.opened_at,symbol:row.symbol,side:row.side,price:row.entry,qty:row.qty,notional:row.notional,fee:row.fee,tag:'open',trace:row.trace,waitMs:null,limit:row.entry});}
   const mark=forwardEquity(state,quotes,now);
-  const extra=recovered.reduce((n,row)=>n+(row.net_pnl??0),0);
-  return {positions:[...recovered,...closed,...open],fills,curve:trial?.lsrCurve??[],equity:mark.equity,initial:state.initialEquity,closedNet:(trial?.lsrClosedNet??0)+extra};
-}
-function rowFromTrade(t:Trade):LsrPositionRow{
-  const exit:LsrPositionRow['exit_reason']=t.exitReason==='LSR_SL_EXIT'?'stop':t.exitReason==='LSR_TP_EXIT'?'tp':t.exitReason==='LSR_TIME_EXIT'?'time':null;
-  const price=t.exitPrice??t.entryPrice;
-  const gap=exit==='stop'&&t.stopPrice>0?Math.abs((price-t.stopPrice)/t.stopPrice*10_000):null;
-  return {id:t.id,symbol:t.symbol,side:t.side,entry:t.entryPrice,exit:t.exitPrice,qty:t.quantity,notional:t.notional,
-    gross_pnl:t.grossPnl,fee:t.entryFee+(t.exitFee??0),net_pnl:t.netPnl,holdSec:Math.round(((t.closedAt??t.openedAt)-t.openedAt)/1000),
-    exit_reason:exit,gapBps:gap==null?null:Number(gap.toFixed(2)),opened_at:t.openedAt,closed_at:t.closedAt,trace:traceOf(t.openedAt)};
+  const prior=trial?.lsrPriorNet??0,counter=trial?.lsrClosedNet??0,rowSum=closed.reduce((n,row)=>n+(row.net_pnl??0),0);
+  const bridge=Number((counter-rowSum).toFixed(4));
+  const lumps:LsrPositionRow[]=[];
+  if(Math.abs(prior)>=0.0001)lumps.push({id:'prior-ledger',symbol:'PRIOR',side:'LONG',entry:0,exit:0,qty:0,notional:0,gross_pnl:prior,fee:0,net_pnl:prior,holdSec:0,exit_reason:'prior',gapBps:null,opened_at:trial?.lsrPriorAt??0,closed_at:trial?.lsrPriorAt??0,trace:'prior-before-full-ledger'});
+  if(Math.abs(bridge)>=0.0001)lumps.push({id:'bridge-ledger',symbol:'BRIDGE',side:'LONG',entry:0,exit:0,qty:0,notional:0,gross_pnl:bridge,fee:0,net_pnl:bridge,holdSec:0,exit_reason:'prior',gapBps:null,opened_at:0,closed_at:0,trace:'counted-before-each-row-was-kept'});
+  return {positions:[...lumps,...closed,...open],fills,curve:trial?.lsrCurve??[],equity:mark.equity,initial:state.initialEquity,closedNet:Number((prior+counter).toFixed(4))};
 }

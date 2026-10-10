@@ -72,7 +72,7 @@ export type InverseTrial={version:typeof SHADOW_INVERSE_VERSION;sourceBuild:type
   lsrLearn?:{x:number[];y:number}[];lsrPend?:{s:string;at:number;mid:number;x:number[]}[];
   lsrLast?:{s:string;side:'LONG'|'SHORT';at:number}[];
   lsrWork?:{s:string;side:'LONG'|'SHORT';price:number;at:number;key:string;why:string;bar:number}[];
-  lsrDay?:string;lsrDayNet?:number;lsrClosedNet?:number;lsrLosses?:number;lsrPauseUntil?:number;
+  lsrDay?:string;lsrDayNet?:number;lsrClosedNet?:number;lsrPriorNet?:number;lsrPriorAt?:number;lsrLosses?:number;lsrPauseUntil?:number;
   lsrLog?:import('./run-log.ts').RunEvent[];lsrFunnel?:import('./run-log.ts').RunFunnel;
   lsrRows?:import('./run-log.ts').LsrPositionRow[];lsrFills?:import('./run-log.ts').LsrFill[];lsrCurve?:import('./run-log.ts').LsrCurvePoint[];
   swings?:EquitySwing[];swingArm?:{source?:SwingArm;inverse?:SwingArm}};
