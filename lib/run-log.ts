@@ -23,8 +23,7 @@ export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null
     signal_triggered_no_fill:funnel.cancelled};
   const runtime={data_stale:funnel.stale,price_disagreement:funnel.priceCheck,
     ws_disconnect:input.gate.connected===false?1:0,order_rejected:input.events.filter(e=>e.event==='order_rejected').length};
-  const positions=input.positions??[],fills=input.fills??[];
-  let curve=input.curve??[];
+  const positions=input.positions??[],fills=input.fills??[],curve=input.curve??[];
   const closed=positions.filter(row=>row.net_pnl!=null);
   const closedPnl=closed.reduce((n,row)=>n+(row.net_pnl??0),0);
   const unrealized=positions.filter(row=>row.net_pnl==null).reduce((n,row)=>n+(row.gross_pnl??0)-row.fee,0);
