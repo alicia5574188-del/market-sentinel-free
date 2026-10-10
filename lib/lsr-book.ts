@@ -3,7 +3,7 @@
  * Paper and the live switch share this book. Live is not turned on here. */
 import type {Candle, Contract, ForwardState, Quote, Rule, Trade} from './forward-relations.ts';
 import type {WorkSheet} from './forward-study.ts';
-import {appendRunLog,emptyFunnel,rememberRow,traceOf,type RunEvent} from './run-log.ts';
+import {appendRunLog,emptyFunnel,rememberRow,traceOf,type LsrPositionRow,type RunEvent} from './run-log.ts';
 import {forwardEquity} from './forward-relations.ts';
 
 export const LSR_POLICY='lsr-v1' as const;
@@ -364,7 +364,7 @@ export function lsrLogBook(state:ForwardState,quotes:Record<string,Quote>,now:nu
   const closed=trial?.lsrRows??[];
   const known=new Set(closed.map(row=>row.id));
   const recovered=state.history.filter(t=>isLsrTrade(t)&&t.status==='CLOSED'&&!known.has(t.id)).map(rowFromTrade);
-  const open=state.positions.filter(isLsrTrade).map(t=>{
+  const open:LsrPositionRow[]=state.positions.filter(isLsrTrade).map(t=>{
     const q=quotes[t.symbol],fresh=!!q&&now-q.observedAt<=STALE_MS&&q.bestBid>0&&q.bestAsk>=q.bestBid;
     const px=fresh?(t.side==='LONG'?q!.bestBid:q!.bestAsk):t.lastPrice;
     return {id:t.id,symbol:t.symbol,side:t.side,entry:t.entryPrice,exit:null,qty:t.quantity,notional:t.notional,
@@ -382,8 +382,8 @@ export function lsrLogBook(state:ForwardState,quotes:Record<string,Quote>,now:nu
   const extra=recovered.reduce((n,row)=>n+(row.net_pnl??0),0);
   return {positions:[...recovered,...closed,...open],fills,curve:trial?.lsrCurve??[],equity:mark.equity,initial:state.initialEquity,closedNet:(trial?.lsrClosedNet??0)+extra};
 }
-function rowFromTrade(t:Trade){
-  const exit=t.exitReason==='LSR_SL_EXIT'?'stop':t.exitReason==='LSR_TP_EXIT'?'tp':t.exitReason==='LSR_TIME_EXIT'?'time':null;
+function rowFromTrade(t:Trade):LsrPositionRow{
+  const exit:LsrPositionRow['exit_reason']=t.exitReason==='LSR_SL_EXIT'?'stop':t.exitReason==='LSR_TP_EXIT'?'tp':t.exitReason==='LSR_TIME_EXIT'?'time':null;
   const price=t.exitPrice??t.entryPrice;
   const gap=exit==='stop'&&t.stopPrice>0?Math.abs((price-t.stopPrice)/t.stopPrice*10_000):null;
   return {id:t.id,symbol:t.symbol,side:t.side,entry:t.entryPrice,exit:t.exitPrice,qty:t.quantity,notional:t.notional,
