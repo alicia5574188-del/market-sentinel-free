@@ -23,7 +23,7 @@ const signed=(v:number|null|undefined,d=2)=>typeof v==="number"&&Number.isFinite
 const time=(v?:number|null)=>v?new Date(v).toLocaleString("zh-CN",{timeZone:BEIJING_TIME_ZONE,month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}):"—";
 const duration=(start:number,end:number|null|undefined,now:number)=>{const m=Math.floor(Math.max(0,(end??now)-start)/60000);return m<1?"<1分钟":m>=60?`${Math.floor(m/60)}小时${m%60}分`:`${m}分钟`;};
 const modeName=(mode:string)=>({RELATIVE:"相对异类",REVERSAL:"结构转变",CONTINUATION:"市场延续",SWING:"旧峰谷兼容",TREND_PULLBACK:"旧回调兼容",IMPULSE:"旧推进兼容",RELATION:"旧关系兼容",BREAKOUT:"旧突破兼容",RETEST:"旧回踩兼容",FAILED_BREAKOUT:"旧失败突破兼容",RANGE:"旧区域兼容",SHOCK:"旧突变兼容"}[mode]??mode);
-const exitName=(reason:string|null)=>reason?({SHADOW_SOURCE_EXIT:"提案平仓",INVERSE_SOFT_LOSS_EXIT:"浮亏到线，提前平仓",DESK_SWEEP_EXIT:"打穿确认位",DESK_NO_PROGRESS_EXIT:"30分钟没走出成本",DESK_GIVEBACK_EXIT:"利润回吐一半",DESK_HORIZON_EXIT:"满90分钟",WINNER_STRUCTURE_EXIT:"有效结构保护",WINNER_THESIS_EXIT:"持续推动失效",RANGE_CENTER_EXIT:"回归目标兑现",STRUCTURE_STOP:"结构止损",PROFIT_GIVEBACK:"利润保护",THESIS_INVALIDATED:"交易假设失效",RELATIVE_EDGE_GONE:"相对优势消失",NO_POSITIVE_FEEDBACK:"长时间未获得正向反馈",MAX_HOLD:"最大持仓时间",ENTRY_FEEDBACK_FAILED:"旧入场反馈失败",OPPOSITE_EXTREMUM:"旧相反峰谷",TREND_DEATH:"旧趋势死亡",EXTREMUM_PROFIT_EXIT:"旧极值退出",NO_PROGRESS:"旧无进展",MARKET_FLIP:"旧市场翻转",RELATION_DEGRADED:"旧关系降级",SAMPLE_PATH_DIVERGED:"旧样本路径失配",SAMPLE_EDGE_EXHAUSTED:"旧样本优势耗尽",SAMPLE_MAX_HOLD:"旧样本最大持仓",TIME_DECAY:"旧持仓超时",OPPORTUNITY_REPLACED:"更优机会替换",STRUCTURAL_INTERRUPT_REVERSAL:"旧极端结构反转",SHOCK_REENTRY:"旧突变重新回区",FAST_STRUCTURE_FAILURE:"旧强结构快速失效",ACCOUNT_RESET:"手动重置",STRETCH_WRONG_EXIT:"反向到了 0.5%",STRETCH_GIVEBACK_EXIT:"利润吐回一半",STRETCH_TIME_EXIT:"满两小时"}[reason]??reason):"—";
+const exitName=(reason:string|null)=>reason?({SHADOW_SOURCE_EXIT:"提案平仓",INVERSE_SOFT_LOSS_EXIT:"浮亏到线，提前平仓",DESK_SWEEP_EXIT:"打穿确认位",DESK_NO_PROGRESS_EXIT:"30分钟没走出成本",DESK_GIVEBACK_EXIT:"利润回吐一半",DESK_HORIZON_EXIT:"满90分钟",WINNER_STRUCTURE_EXIT:"有效结构保护",WINNER_THESIS_EXIT:"持续推动失效",RANGE_CENTER_EXIT:"回归目标兑现",STRUCTURE_STOP:"结构止损",PROFIT_GIVEBACK:"利润保护",THESIS_INVALIDATED:"交易假设失效",RELATIVE_EDGE_GONE:"相对优势消失",NO_POSITIVE_FEEDBACK:"长时间未获得正向反馈",MAX_HOLD:"最大持仓时间",ENTRY_FEEDBACK_FAILED:"旧入场反馈失败",OPPOSITE_EXTREMUM:"旧相反峰谷",TREND_DEATH:"旧趋势死亡",EXTREMUM_PROFIT_EXIT:"旧极值退出",NO_PROGRESS:"旧无进展",MARKET_FLIP:"旧市场翻转",RELATION_DEGRADED:"旧关系降级",SAMPLE_PATH_DIVERGED:"旧样本路径失配",SAMPLE_EDGE_EXHAUSTED:"旧样本优势耗尽",SAMPLE_MAX_HOLD:"旧样本最大持仓",TIME_DECAY:"旧持仓超时",OPPORTUNITY_REPLACED:"更优机会替换",STRUCTURAL_INTERRUPT_REVERSAL:"旧极端结构反转",SHOCK_REENTRY:"旧突变重新回区",FAST_STRUCTURE_FAILURE:"旧强结构快速失效",ACCOUNT_RESET:"手动重置",STRETCH_WRONG_EXIT:"反向到了 0.5%",STRETCH_GIVEBACK_EXIT:"利润吐回一半",STRETCH_TIME_EXIT:"满两小时",LSR_TP_EXIT:"止盈 0.30%",LSR_SL_EXIT:"止损 0.20%",LSR_BE_EXIT:"回到成本",LSR_TIME_EXIT:"满三分钟还不赚",LSR_REVERSE_EXIT:"出现反向信号"}[reason]??reason):"—";
 const stanceName=(stance?:string)=>stance==="REVERSE"?"反向":stance==="FLAT"?"先停":"正向";
 const sessionName=(session?:string)=>session==="ASIA"?"亚盘":session==="EUROPE"?"欧盘":session==="US"?"美盘":"—";
 const claimName=(kind?:string)=>kind==="CONTINUE"?"延续":kind==="SUSPECT"?"可疑":"不投票";
@@ -53,7 +53,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
 
   const desk=data?.forwardDesk??null,positions=data?.positions??[];
   const usingDesk=!!desk&&!liveEnabled;
-  const stanceLabel=desk?.book==="stretch-v1"?"新账":desk?.book==="reverse-v1"?"反向":desk?.book==="needle-v1"||desk?.book==="brain-v1"||desk?.book==="score-v1"||desk?.book==="read-v1"?"账户":stanceName(desk?.stance);
+  const stanceLabel=desk?.book==="lsr-v1"?"衰竭":desk?.book==="stretch-v1"?"新账":desk?.book==="reverse-v1"?"反向":desk?.book==="needle-v1"||desk?.book==="brain-v1"||desk?.book==="score-v1"||desk?.book==="read-v1"?"账户":stanceName(desk?.stance);
   const paperFloating=usingDesk?desk.floating:positions.reduce((n,t)=>n+(t.status==="OPEN"?remainingPaidNetPnl(t,t.lastPrice):0),0);
   const held=usingDesk?desk.openCount:positions.length;
   const systemStatus=statusLabel==="后台运行中"?"正常":statusLabel?.startsWith("后台运行中 · ")?statusLabel.slice(8):statusLabel??(healthy?"正常":"行情恢复中");
@@ -87,7 +87,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       {desk&&<ForwardOrders desk={desk} now={now}/>}
     </>}
 
-    {tab==="research"&&(desk?.book==="read-v1"||desk?.book==="brain-v1"||desk?.book==="stretch-v1")&&<WorkResearch work={desk.work} note={desk.book==="stretch-v1"?desk.stretchNote:desk.book==="brain-v1"?desk.brainNote:desk.readNote} ideas={desk.book==="brain-v1"?desk.brainIdeas:[ ]}/>}
+    {tab==="research"&&(desk?.book==="read-v1"||desk?.book==="brain-v1"||desk?.book==="stretch-v1"||desk?.book==="lsr-v1")&&<WorkResearch work={desk.work} note={desk.book==="lsr-v1"?desk.lsrNote:desk.book==="stretch-v1"?desk.stretchNote:desk.book==="brain-v1"?desk.brainNote:desk.readNote} ideas={desk.book==="brain-v1"?desk.brainIdeas:[ ]}/>}
     {tab==="research"&&desk?.book==="score-v1"&&<section className="fr-section" data-testid="research-claims"><div className="fr-section-head"><h2>研究</h2></div>
       <p>{desk.scoreNote||"还没有记下半小时。"}</p>
       <p className="fr-note">每一窗半小时。看哪些币比大多数币偏了至少 0.5%。这些币合成一个结果，不把每个币当成一条证据。前二十窗选止损、目标和方向，后二十窗扣完费用仍赚钱，才交给决策。够格的币中位数不到 6 个，不做。</p>
@@ -99,7 +99,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       <p>不研究行情，也不给提案打分。提案那边每开一笔，这里就开一笔相反的。金额和提案一样。</p>
       <p className="fr-note">出场沿用上次那套：打穿确认位、30 分钟没走出成本、利润回吐一半、满 90 分钟、提案自己平仓，或者浮亏到 10U。不会因为样本不够改回跟提案同一边。</p>
     </section>}
-    {tab==="research"&&desk?.book!=="needle-v1"&&desk?.book!=="brain-v1"&&desk?.book!=="score-v1"&&desk?.book!=="read-v1"&&desk?.book!=="reverse-v1"&&desk?.book!=="stretch-v1"&&<>
+    {tab==="research"&&desk?.book!=="needle-v1"&&desk?.book!=="brain-v1"&&desk?.book!=="score-v1"&&desk?.book!=="read-v1"&&desk?.book!=="reverse-v1"&&desk?.book!=="stretch-v1"&&desk?.book!=="lsr-v1"&&<>
       <section className="fr-section" data-testid="research-claims"><div className="fr-section-head"><h2>研究裁决</h2><span>{desk?.research?`${desk.research.unsettled} 笔未到期`:"等待提案"}</span></div>
         <p>每笔提案先记下读法。过 30 分钟，用价格判断对错，不看这笔后来怎么平的。</p>
         <p className="fr-note">慢方向和这一拍同向，并且和提案同向，记成延续。两边打架，或者都和提案相反，记成可疑。有一边没方向，就不投票。</p>
@@ -154,7 +154,7 @@ function WorkResearch({work,note,ideas}:{work:Desk["work"];note?:string;ideas?:D
 }
 function DecisionPage({data}:{data:View|null}){
   const desk=data?.forwardDesk??null,research=desk?.research,stance=stanceName(desk?.stance);
-  if((desk?.book==="read-v1"||desk?.book==="brain-v1"||desk?.book==="stretch-v1")&&desk.work)return <section className="fr-section" data-testid="decision-stance">
+  if((desk?.book==="read-v1"||desk?.book==="brain-v1"||desk?.book==="stretch-v1"||desk?.book==="lsr-v1")&&desk.work)return <section className="fr-section" data-testid="decision-stance">
     <div className="fr-section-head"><h2>现在在等</h2></div>
     <p>{desk.work.waiting}</p>
     <div className="fr-section-head"><h2>准备做</h2></div>
@@ -198,7 +198,7 @@ function DecisionPage({data}:{data:View|null}){
   </section>;
 }
 function ForwardCurve({desk}:{desk:Desk}){
-  const label=desk.book==="stretch-v1"?"新账净值":desk.book==="reverse-v1"?"反向净值":desk.book==="needle-v1"||desk.book==="brain-v1"||desk.book==="score-v1"||desk.book==="read-v1"?"账户净值":stanceName(desk.stance)==="反向"?"反向净值":desk.stance==="FLAT"?"账户净值":"正向净值";
+  const label=desk.book==="lsr-v1"?"衰竭净值":desk.book==="stretch-v1"?"新账净值":desk.book==="reverse-v1"?"反向净值":desk.book==="needle-v1"||desk.book==="brain-v1"||desk.book==="score-v1"||desk.book==="read-v1"?"账户净值":stanceName(desk.stance)==="反向"?"反向净值":desk.stance==="FLAT"?"账户净值":"正向净值";
   const points=desk.curve.length?desk.curve:[{at:0,equity:desk.initialEquity}];
   const lo=Math.min(desk.initialEquity,...points.map(p=>p.equity)),hi=Math.max(desk.initialEquity,...points.map(p=>p.equity));
   const range=Math.max(1e-6,hi-lo),first=points[0]!.at,last=Math.max(first+1,points.at(-1)!.at);
@@ -213,7 +213,7 @@ function ForwardCurve({desk}:{desk:Desk}){
   </section>;
 }
 function ForwardOrders({desk,now}:{desk:Desk;now:number}){
-  const label=desk.book==="stretch-v1"?"新账":desk.book==="reverse-v1"?"反向":desk.book==="needle-v1"||desk.book==="brain-v1"||desk.book==="score-v1"||desk.book==="read-v1"?"账户":stanceName(desk.stance);
+  const label=desk.book==="lsr-v1"?"衰竭":desk.book==="stretch-v1"?"新账":desk.book==="reverse-v1"?"反向":desk.book==="needle-v1"||desk.book==="brain-v1"||desk.book==="score-v1"||desk.book==="read-v1"?"账户":stanceName(desk.stance);
   return <section className="fr-section" data-testid="forward-orders">
     <div className="fr-section-head"><h2>{label}持仓</h2><span>{desk.open.length} 笔</span></div>
     {!desk.work&&desk.book!=="brain-v1"&&desk.book!=="read-v1"&&<p className="fr-note">{desk.book==="score-v1"?"核对通过才开。单笔大约 400U。同一币不叠仓。保证金到权益一半就停。到止损、到目标或满三十分钟就走。":desk.book==="needle-v1"?"只做收回来的针。向上做空，向下做多。":"新单跟当前决策，一笔提案一笔单，金额不变。先停才不开，也不把后面的单加大。已经开着的单不改方向。"}</p>}

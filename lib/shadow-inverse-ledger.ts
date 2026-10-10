@@ -55,7 +55,7 @@ export type InverseTrial={version:typeof SHADOW_INVERSE_VERSION;sourceBuild:type
   forwardStudy?:import('./forward-study.ts').ForwardStudy;
   researchDesk?:import('./research-decision.ts').ResearchDesk;
   /** Own paper books ignore proposal opens. Absent keeps the proposal copy. */
-  paperPolicy?:'needle-v1'|'brain-v1'|'score-v1'|'read-v1'|'reverse-v1'|'stretch-v1';needleSeen?:string[];needleCooldown?:Record<string,number>;
+  paperPolicy?:'needle-v1'|'brain-v1'|'score-v1'|'read-v1'|'reverse-v1'|'stretch-v1'|'lsr-v1';needleSeen?:string[];needleCooldown?:Record<string,number>;
   brainSeen?:string[];brainNote?:string;brainIdeas?:{symbol:string;side:'LONG'|'SHORT';kind:'FADE'|'LEAD'|'CATCH';why:string;wrong:string}[];
   brainPasses?:{id:string;at:number;symbol:string;side:'LONG'|'SHORT';kind:'FADE'|'LEAD'|'CATCH';tone:'TOGETHER_UP'|'TOGETHER_DOWN'|'SPLIT';age:'STARTED'|'ONGOING'|'DONE'|'QUIET';crowd:'LONG'|'SHORT'|'NONE';price:number;whyNot:string;laterAt?:number;laterPrice?:number;laterMove?:number}[];
   work?:import('./forward-study.ts').WorkSheet;
@@ -65,6 +65,11 @@ export type InverseTrial={version:typeof SHADOW_INVERSE_VERSION;sourceBuild:type
   readNote?:string;readWave?:string;readSpent?:string[];readNextAt?:number;readGross?:number;readFee?:number;readClosed?:number;readMode?:'FOLLOW'|'REVERSE'|'STOP';
   /** stretch-v1: BTC's two-hour stretch, then at most two larger followers. */
   stretchNote?:string;stretchSeen?:string[];
+  /** lsr-v1: fade a completed 15-minute extreme after an 8-second sweep. */
+  lsrNote?:string;lsrSeen?:string[];lsrMp?:{s:string;at:number;mp:number;bid:number;ask:number}[];
+  lsrLast?:{s:string;side:'LONG'|'SHORT';at:number}[];
+  lsrWork?:{s:string;side:'LONG'|'SHORT';price:number;at:number;key:string;why:string;bar:number}[];
+  lsrDay?:string;lsrDayNet?:number;lsrLosses?:number;lsrPauseUntil?:number;
   swings?:EquitySwing[];swingArm?:{source?:SwingArm;inverse?:SwingArm}};
 export type ScoreHit=[number,number,number,number];
 export type ScoreCoin={symbol:string;residual:number;ref:number;dir:1|-1;up:ScoreHit;dn:ScoreHit};
@@ -286,7 +291,7 @@ export function applyInverseSourceTrade(state:ForwardState,source:Trade,qIn:Quot
       if(source.status==='CLOSED')trial.detachedSourceIds=trial.detachedSourceIds.filter(id=>id!==source.id);
       return;
     }
-    if(trial.paperPolicy==='needle-v1'||trial.paperPolicy==='brain-v1'||trial.paperPolicy==='score-v1'||trial.paperPolicy==='read-v1'||trial.paperPolicy==='stretch-v1'){
+    if(trial.paperPolicy==='needle-v1'||trial.paperPolicy==='brain-v1'||trial.paperPolicy==='score-v1'||trial.paperPolicy==='read-v1'||trial.paperPolicy==='stretch-v1'||trial.paperPolicy==='lsr-v1'){
       if(source.status==='OPEN'){
         const skipped=trial.entryHaltSkipped??[];
         if(!skipped.includes(source.id))skipped.push(source.id);

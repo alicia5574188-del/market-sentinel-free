@@ -11,6 +11,7 @@ import {applyBrainBook,BRAIN_POLICY,BRAIN_EPOCH,BRAIN_BEFORE} from './research-b
 import {applyScoreBook,SCORE_POLICY,SCORE_EPOCH,SCORE_BEFORE} from './score-book.ts';
 import {applyReadBook,READ_POLICY,READ_EPOCH,READ_BEFORE} from './read-book.ts';
 import {applyStretchBook,STRETCH_POLICY} from './stretch-book.ts';
+import {applyLsrBook,LSR_POLICY} from './lsr-book.ts';
 import {noteForwardStudy} from './forward-study.ts';
 import {beijingDayKey} from './beijing-time.ts';
 import {FIXED_ALLOCATION_EQUITY} from './fixed-allocation.ts';
@@ -67,8 +68,9 @@ export function advanceShadowInverse(input:Parameters<typeof advanceBaseline>[0]
   const score=applyScoreBook(s,input.paths,input.minutePaths,input.quotes,input.contracts,input.now);
   const read=applyReadBook(s,input.paths,input.minutePaths,input.quotes,input.contracts,input.now);
   const stretch=applyStretchBook(s,input.paths,input.quotes,input.contracts,input.now);
+  const lsr=applyLsrBook(s,input.paths,input.quotes,input.contracts,input.now);
   recordInverseCurve(s,input.quotes,input.now);
-  if(trial.paperPolicy===NEEDLE_POLICY||trial.paperPolicy===BRAIN_POLICY||trial.paperPolicy===SCORE_POLICY||trial.paperPolicy===READ_POLICY||trial.paperPolicy===STRETCH_POLICY){
+  if(trial.paperPolicy===NEEDLE_POLICY||trial.paperPolicy===BRAIN_POLICY||trial.paperPolicy===SCORE_POLICY||trial.paperPolicy===READ_POLICY||trial.paperPolicy===STRETCH_POLICY||trial.paperPolicy===LSR_POLICY){
     const eq=forwardEquity(s,input.quotes,input.now).equity,last=trial.curve.at(-1);
     if(last&&input.now-last.at<60_000)last.inverse=eq;
   }
@@ -85,7 +87,10 @@ export function advanceShadowInverse(input:Parameters<typeof advanceBaseline>[0]
   const scoreOpen=s.positions.filter(t=>t.exitControl?.policy===SCORE_POLICY).length;
   const readOpen=s.positions.filter(t=>t.exitControl?.policy===READ_POLICY).length;
   const stretchOpen=s.positions.filter(t=>t.exitControl?.policy===STRETCH_POLICY).length;
-  s.latestReason=trial.paperPolicy===STRETCH_POLICY
+  const lsrOpen=s.positions.filter(t=>t.exitControl?.policy===LSR_POLICY).length;
+  s.latestReason=trial.paperPolicy===LSR_POLICY
+    ?`${trial.lsrNote||'还没有走出极端的 15 分钟。'}现在 ${lsrOpen} 笔。`
+    :trial.paperPolicy===STRETCH_POLICY
     ?`${trial.stretchNote||'大盘这两小时还没有走出一段。'}现在 ${stretchOpen} 笔。`
     :trial.paperPolicy==='reverse-v1'
     ?`只跟提案反着做。现在 ${s.positions.filter(t=>t.inverseCopy?.alignment==='AGAINST_SOURCE').length} 笔。`
@@ -103,7 +108,7 @@ export function advanceShadowInverse(input:Parameters<typeof advanceBaseline>[0]
     ?`${note}新单反着做。已记下${trial.totals.opened}笔。`
     :`${note}新单跟提案同一边。已记下${trial.totals.opened}笔。`;
   assertInverseTrial(s);
-  return{state:s,changed:activated||source.changed||softLoss||deskExit||needle||brain||score||read||stretch||researchChanged||beforeFinancial!==JSON.stringify([s.balance,s.resolved,s.positions.map(t=>[t.id,t.stopPrice,t.contracts])]),
+  return{state:s,changed:activated||source.changed||softLoss||deskExit||needle||brain||score||read||stretch||lsr||researchChanged||beforeFinancial!==JSON.stringify([s.balance,s.resolved,s.positions.map(t=>[t.id,t.stopPrice,t.contracts])]),
     protectionChanged:source.protectionChanged};
 }
 
@@ -130,6 +135,17 @@ export function freshNeedleLedger(previous:ForwardState,now:number):ForwardState
   next.inverseTrial=newInverseTrial(next,now,next.initialEquity);
   next.inverseTrial.paperPolicy=NEEDLE_POLICY;
   next.latestReason='模拟账户从1000U按针的规则重新开始。不再跟着提案开仓。';
+  assertInverseTrial(next);
+  return next;
+}
+
+/** Fade completed spikes. Five positions at most. Does not copy proposals. */
+export function freshLsrLedger(previous:ForwardState,now:number):ForwardState{
+  const next=resetForwardAccountPreservingLearning(previous,now);
+  next.lastExitAt={};
+  next.inverseTrial=newInverseTrial(next,now,next.initialEquity);
+  next.inverseTrial.paperPolicy=LSR_POLICY;
+  next.latestReason='模拟账户从1000U重新开始。急跌做多，急涨做空。挂在买一或卖一。';
   assertInverseTrial(next);
   return next;
 }
