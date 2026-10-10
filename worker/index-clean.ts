@@ -47,7 +47,7 @@ import { evaluateRegimePortfolio, initialRegimePortfolio, normalizeRegimePortfol
 import type { PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
 import {advanceShadowInverse,freshDeskLedger,freshNeedleLedger,freshBrainLedger,freshScoreLedger,freshReverseLedger,freshStretchLedger,freshLsrLedger,DESK_CLEAN_EPOCH,DESK_CLEAN_BEFORE,NEEDLE_EPOCH,NEEDLE_BEFORE,BRAIN_EPOCH,BRAIN_BEFORE,SCORE_EPOCH,SCORE_BEFORE,REVERSE_EPOCH} from '../lib/shadow-inverse.ts';
 import {STRETCH_EPOCH} from '../lib/stretch-book.ts';
-import {LSR_EPOCH} from '../lib/lsr-book.ts';
+import {LSR_EPOCH,lsrLogBook} from '../lib/lsr-book.ts';
 import {buildRunLogExport} from '../lib/run-log.ts';
 import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
 import {confirmationRealityView} from '../lib/confirmation-reality.ts';
@@ -4357,7 +4357,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(!this.forwardState||!this.authorityReady)return json({error:"权威账户尚未恢复，不能导出空账户"},503);
       if(url.searchParams.get("kind")==="log"){
         const exportedAt=Date.now(),trial=this.forwardState.inverseTrial,hub=this.marketHub.status(exportedAt),gate=this.gateStream.status(exportedAt);
-        return json(buildRunLogExport({events:trial?.lsrLog??[],funnel:trial?.lsrFunnel??null,health:hub,gate,exportedAt,liveEnabled:this.runtime.live.requestedEnabled}));
+        const book=lsrLogBook(this.forwardState,this.forwardQuotes(exportedAt),exportedAt);
+        return json(buildRunLogExport({events:trial?.lsrLog??[],funnel:trial?.lsrFunnel??null,health:hub,gate,exportedAt,liveEnabled:this.runtime.live.requestedEnabled,
+          positions:book.positions,fills:book.fills,curve:book.curve,equity:book.equity,initial:book.initial,closedNet:book.closedNet}));
       }
       if(url.searchParams.get("page")==="archive"){
         const startedAt=Number(url.searchParams.get("accountStartedAt")),asOf=Number(url.searchParams.get("asOf"));

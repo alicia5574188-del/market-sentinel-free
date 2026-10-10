@@ -3,7 +3,8 @@
  * Paper and the live switch share this book. Live is not turned on here. */
 import type {Candle, Contract, ForwardState, Quote, Rule, Trade} from './forward-relations.ts';
 import type {WorkSheet} from './forward-study.ts';
-import {appendRunLog,emptyFunnel,traceOf,type RunEvent} from './run-log.ts';
+import {appendRunLog,emptyFunnel,rememberRow,traceOf,type RunEvent} from './run-log.ts';
+import {forwardEquity} from './forward-relations.ts';
 
 export const LSR_POLICY='lsr-v1' as const;
 export const LSR_EPOCH='lsr-flow-2026-10-10' as const;
@@ -161,6 +162,12 @@ function closeLsr(state:ForwardState,t:Trade,price:number,now:number,reason:stri
   if(trial.lsrFunnel){trial.lsrFunnel.closed++;if(net>0)trial.lsrFunnel.wins++;}
   state.positions=state.positions.filter(x=>x.id!==t.id);
   state.history=[t,...state.history.filter(x=>x.id!==t.id)].slice(0,240);
+  const exit=reason==='LSR_SL_EXIT'?'stop':reason==='LSR_TP_EXIT'?'tp':'time';
+  const gap=exit==='stop'&&touch&&t.stopPrice>0?Math.abs((price-t.stopPrice)/t.stopPrice*10_000):null;
+  trial.lsrRows=rememberRow(trial.lsrRows,{id:t.id,symbol:t.symbol,side:t.side,entry:t.entryPrice,exit:price,qty:t.quantity,notional:t.notional,
+    gross_pnl:Number(gross.toFixed(6)),fee:Number((t.entryFee+exitFee).toFixed(6)),net_pnl:Number(net.toFixed(6)),holdSec:Math.round((now-t.openedAt)/1000),
+    exit_reason:exit,gapBps:gap==null?null:Number(gap.toFixed(2)),opened_at:t.openedAt,closed_at:now,trace:traceOf(t.openedAt)});
+  trial.lsrFills=rememberRow(trial.lsrFills,{ts:now,symbol:t.symbol,side:t.side,price,qty:t.quantity,notional:t.quantity*price,fee:Number(exitFee.toFixed(6)),tag:'close',trace:traceOf(t.openedAt),waitMs:null,limit:exit==='stop'?t.stopPrice:null});
   const gapBps=touch&&t.stopPrice>0?(price-t.stopPrice)/t.stopPrice*10_000:null;
   pushLog(state,{ts:now,level:'INFO',cat:'PNL',symbol:t.symbol,event:'position_closed',reason,
     fields:{side:t.side,gross:Number(gross.toFixed(4)),fee:Number((t.entryFee+exitFee).toFixed(4)),net:Number(net.toFixed(4)),holdSec:Math.round((now-t.openedAt)/1000),
@@ -279,6 +286,7 @@ export function applyLsrBook(state:ForwardState,paths:Record<string,Candle[]>|un
       state.balance-=t.entryFee;state.fees+=t.entryFee;state.turnover+=notional;
       trial.lsrDayVol=(trial.lsrDayVol??0)+notional;
       state.positions.push(t);held.add(order.s);equity-=t.entryFee;opened.push(`${name} ${side==='LONG'?'多':'空'} ${notional.toFixed(0)}U`);changed=true;
+      trial.lsrFills=rememberRow(trial.lsrFills,{ts:now,symbol:order.s,side,price,qty:quantity,notional,fee:Number(t.entryFee.toFixed(6)),tag:'open',trace:traceOf(now),waitMs:now-order.at,limit:order.price});
       pushLog(state,{ts:now,level:'INFO',cat:'EXEC',symbol:order.s,event:'order_filled',reason:'挂单价被打到',fields:{side,price,notional:Number(notional.toFixed(2))}});
       pushLog(state,{ts:now,level:'INFO',cat:'PNL',symbol:order.s,event:'position_opened',reason:why,fields:{side,entry:price,stop:Number(stop.toFixed(6)),tp:Number(tp.toFixed(6))}});
       state.revision++;state.events.unshift({id:`l${state.startedAt}-${state.revision}`,at:now,kind:'ENTRY',subject:id,reason:why});
@@ -340,6 +348,45 @@ export function applyLsrBook(state:ForwardState,paths:Record<string,Candle[]>|un
     waiting:blocked||(trial.lsrWork?.length?'挂单还在，6 秒内价格打到才成交。':signals.length?'有信号，正在往价差里挂。': '在等涨跌和放量同时极端。'),
     preparing:opened.length?`这一拍开了 ${opened.join('，')}。`:'这一拍没有开仓。'};
   const note=opened.length?`开了 ${opened.length} 笔。`:(signals[0]?.why??ranked[0]?.why??'这一拍没有信号。');
+  const mark=forwardEquity(state,quotes,now),openNow=state.positions.filter(isLsrTrade);
+  const unreal=mark.floating-openNow.reduce((n,t)=>n+t.entryFee,0);
+  if(now-(trial.lsrCurve?.at(-1)?.ts??0)>=60_000){
+    trial.lsrCurve=rememberRow(trial.lsrCurve,{ts:now,equity:Number(mark.equity.toFixed(4)),closed_pnl:Number((trial.lsrClosedNet??0).toFixed(4)),unrealized_pnl:Number(unreal.toFixed(4)),positions:openNow.length});
+    changed=true;
+  }
   if(trial.lsrNote!==note||JSON.stringify(trial.work)!==JSON.stringify(work)||trial.lsrLog?.at(-1)?.ts===now||funnel.scans%15===0){trial.lsrNote=note;trial.work=work;changed=true;}
   return changed;
+}
+
+/** Closed rows are kept whole. Open rows are marked at export so the identity can be checked. */
+export function lsrLogBook(state:ForwardState,quotes:Record<string,Quote>,now:number){
+  const trial=state.inverseTrial;
+  const closed=trial?.lsrRows??[];
+  const known=new Set(closed.map(row=>row.id));
+  const recovered=state.history.filter(t=>isLsrTrade(t)&&t.status==='CLOSED'&&!known.has(t.id)).map(rowFromTrade);
+  const open=state.positions.filter(isLsrTrade).map(t=>{
+    const q=quotes[t.symbol],fresh=!!q&&now-q.observedAt<=STALE_MS&&q.bestBid>0&&q.bestAsk>=q.bestBid;
+    const px=fresh?(t.side==='LONG'?q!.bestBid:q!.bestAsk):t.lastPrice;
+    return {id:t.id,symbol:t.symbol,side:t.side,entry:t.entryPrice,exit:null,qty:t.quantity,notional:t.notional,
+      gross_pnl:Number((dirOf(t.side)*t.quantity*(px-t.entryPrice)).toFixed(6)),fee:t.entryFee,net_pnl:null,
+      holdSec:Math.round((now-t.openedAt)/1000),exit_reason:null,gapBps:null,opened_at:t.openedAt,closed_at:null,trace:traceOf(t.openedAt)};
+  });
+  const fills=[...(trial?.lsrFills??[])];
+  const seen=new Set(fills.map(row=>`${row.tag}:${row.trace}`));
+  for(const row of [...recovered,...closed]){
+    if(!seen.has(`open:${row.trace}`))fills.push({ts:row.opened_at,symbol:row.symbol,side:row.side,price:row.entry,qty:row.qty,notional:row.notional,fee:row.notional*FEE,tag:'open',trace:row.trace,waitMs:null,limit:row.entry});
+    if(row.exit!=null&&!seen.has(`close:${row.trace}`))fills.push({ts:row.closed_at??row.opened_at,symbol:row.symbol,side:row.side,price:row.exit,qty:row.qty,notional:row.qty*row.exit,fee:Math.max(0,row.fee-row.notional*FEE),tag:'close',trace:row.trace,waitMs:null,limit:row.exit_reason==='stop'?row.entry*(row.side==='LONG'?1-STOP:1+STOP):null});
+  }
+  for(const row of open){if(!seen.has(`open:${row.trace}`))fills.push({ts:row.opened_at,symbol:row.symbol,side:row.side,price:row.entry,qty:row.qty,notional:row.notional,fee:row.fee,tag:'open',trace:row.trace,waitMs:null,limit:row.entry});}
+  const mark=forwardEquity(state,quotes,now);
+  const extra=recovered.reduce((n,row)=>n+(row.net_pnl??0),0);
+  return {positions:[...recovered,...closed,...open],fills,curve:trial?.lsrCurve??[],equity:mark.equity,initial:state.initialEquity,closedNet:(trial?.lsrClosedNet??0)+extra};
+}
+function rowFromTrade(t:Trade){
+  const exit=t.exitReason==='LSR_SL_EXIT'?'stop':t.exitReason==='LSR_TP_EXIT'?'tp':t.exitReason==='LSR_TIME_EXIT'?'time':null;
+  const price=t.exitPrice??t.entryPrice;
+  const gap=exit==='stop'&&t.stopPrice>0?Math.abs((price-t.stopPrice)/t.stopPrice*10_000):null;
+  return {id:t.id,symbol:t.symbol,side:t.side,entry:t.entryPrice,exit:t.exitPrice,qty:t.quantity,notional:t.notional,
+    gross_pnl:t.grossPnl,fee:t.entryFee+(t.exitFee??0),net_pnl:t.netPnl,holdSec:Math.round(((t.closedAt??t.openedAt)-t.openedAt)/1000),
+    exit_reason:exit,gapBps:gap==null?null:Number(gap.toFixed(2)),opened_at:t.openedAt,closed_at:t.closedAt,trace:traceOf(t.openedAt)};
 }

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {initialForward, type Candle, type Quote} from '../lib/forward-relations.ts';
-import {applyLsrBook} from '../lib/lsr-book.ts';
+import {applyLsrBook,lsrLogBook} from '../lib/lsr-book.ts';
+import {buildRunLogExport} from '../lib/run-log.ts';
 import {freshLsrLedger} from '../lib/shadow-inverse.ts';
 import {newInverseTrial} from '../lib/shadow-inverse-ledger.ts';
 import {forwardEquity} from '../lib/forward-relations.ts';
@@ -52,6 +53,17 @@ test('a sharp drop rests inside the spread and fills after six seconds at the st
   assert.ok(Math.abs((s.history[0]?.exitPrice??0)-fill)<1e-6);
   const gap=((s.history[0]?.exitPrice??0)-stop)/stop*10_000;
   assert.ok(gap<-5,`gap ${gap}`);
+  const packed=lsrLogBook(s,{ETH_USDT:quote(bid,bid+0.0002,at+8_000)},at+8_000);
+  const file=buildRunLogExport({events:s.inverseTrial?.lsrLog??[],funnel:s.inverseTrial?.lsrFunnel??null,health:{},gate:{},exportedAt:at+8_000,liveEnabled:false,
+    positions:packed.positions,fills:packed.fills,curve:packed.curve,equity:packed.equity,initial:packed.initial,closedNet:packed.closedNet});
+  assert.equal(file.version,'lsr-run-log-v2');
+  assert.equal(file.positions.length,1);
+  assert.equal(file.fills.length,2);
+  assert.equal(file.stop_loss_stats.count,1);
+  assert.ok(file.stop_loss_stats.gapbps_median>5);
+  assert.ok(Math.abs(file.invariants.identity_error??99)<0.5);
+  assert.equal(file.invariants.checks.fees_match,true);
+  assert.ok(file.logs.some(row=>row.event==='stop_sample_short'));
 });
 test('an untouched maker is cancelled, a wide spread is skipped, and a new book starts at 1000',()=>{
   const s=book(),paths=warm(s);

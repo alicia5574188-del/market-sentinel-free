@@ -463,7 +463,13 @@ function equityMark(s:ForwardState,quotes:Record<string,Quote>,now:number){
       // Entry fee has already been debited from balance; future close fee is not paid yet.
       floating+=dir(t.side)*t.quantity*(px-t.entryPrice);continue;
     }
-    if(t.exitControl?.policy==='needle-v1'||t.exitControl?.policy==='brain-v1'||t.exitControl?.policy==='score-v1'||t.exitControl?.policy==='read-v1'||t.exitControl?.policy==='lsr-v1'){
+    if(t.exitControl?.policy==='lsr-v1'){
+      const q=quotes[t.symbol],fresh=freshQuote(q,now),px=fresh?(t.side==='LONG'?q!.bestBid:q!.bestAsk):t.lastPrice;
+      if(!fresh||!(px>0))stale++;
+      if(px>0)floating+=dir(t.side)*t.quantity*(px-t.entryPrice);
+      continue;
+    }
+    if(t.exitControl?.policy==='needle-v1'||t.exitControl?.policy==='brain-v1'||t.exitControl?.policy==='score-v1'||t.exitControl?.policy==='read-v1'){
       const q=quotes[t.symbol],fresh=freshQuote(q,now),px=fresh?(t.side==='LONG'?q!.bestBid:q!.bestAsk):t.lastPrice;
       if(!fresh||!(px>0))stale++;
       else floating+=dir(t.side)*t.quantity*(px-t.entryPrice);
