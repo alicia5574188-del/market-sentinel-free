@@ -49,7 +49,7 @@ test('a two-hour BTC rise opens one large follower and ignores a chase',()=>{
   assert.match(JSON.stringify(chased.inverseTrial!.work),/不追/);
 });
 test('a flat BTC tape opens nothing, and a stop, giveback, or two hours exits',()=>{
-  const flat={BTC_USDT:path(100,100.2),ETH_USDT:path(50,51)};
+  const flat={BTC_USDT:path(100,100.2),ETH_USDT:path(50,50.2)};
   const quiet=book();
   applyStretchBook(quiet,flat,{ETH_USDT:quote(51,51.01)},{ETH_USDT:contract,BTC_USDT:contract},T);
   assert.equal(quiet.positions.length,0);
@@ -91,4 +91,14 @@ test('the new book starts at 1000 and does not copy a proposal',()=>{
       priorResponse:null,recentResponse:0,standardError:0,reason:'x',mutation:'CREATE',grammar:'x',liveEligible:false}} as Trade;
   applyInverseSourceTrade(next,source,quote(50,50.01),T);
   assert.equal(next.positions.length,0);
+});
+test('a quiet BTC tape still takes a coin that moved, and skips one that already ran too far',()=>{
+  const quiet={BTC_USDT:path(100,100.2),ADA_USDT:path(10,10.15),NEAR_USDT:path(5,5.22)};
+  const s=book();
+  const read=readStretch(quiet,{BTC_USDT:contract,ADA_USDT:contract,NEAR_USDT:contract},T);
+  assert.equal(read.dir,'UP');
+  assert.deepEqual(read.names.map(row=>row.symbol),['ADA_USDT']);
+  applyStretchBook(s,quiet,{ADA_USDT:quote(10.15,10.152),NEAR_USDT:quote(5.22,5.222)},{ADA_USDT:contract,NEAR_USDT:contract,BTC_USDT:contract},T);
+  assert.deepEqual(s.positions.map(t=>t.symbol),['ADA_USDT']);
+  assert.equal(s.positions[0]?.side,'LONG');
 });

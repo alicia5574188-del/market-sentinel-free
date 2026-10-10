@@ -12,8 +12,9 @@ const BTC='BTC_USDT';
 const FEE=INVERSE_COST.feeRate;
 const LEVERAGE=5;
 const NOTIONAL_MULT=2;
-const MARKET_MOVE=.008;
-const COIN_MOVE=.01;
+const MARKET_MOVE=.0025;
+const COIN_MIN=.008;
+const COIN_MAX=.025;
 const SPREAD_MAX=.0008;
 const CHASE=.004;
 const STOP=.005;
@@ -75,20 +76,26 @@ export function readStretch(paths:Record<string,Candle[]>|undefined,contracts:Re
   const recent=window.slice(-2);
   const dir:Dir|null=ret>=MARKET_MOVE&&recent.every(bar=>bar.close>start)?'UP'
     :ret<=-MARKET_MOVE&&recent.every(bar=>bar.close<start)?'DOWN':null;
-  if(!dir)skipped.push(`BTC 这两小时 ${pct(ret)}，没有走出 0.8%，或者最后两根已经收回去了。`);
-  const names:{symbol:string;ret:number;close:number}[]=[];
-  if(dir){
-    for(const symbol of Object.keys(paths??{}).sort()){
-      if(!liquid(contracts?.[symbol]))continue;
-      const own=windowOf(paths?.[symbol],now);if(!own)continue;
-      const move=own[7]!.close/own[0]!.open-1;
-      if(dir==='UP'?move<COIN_MOVE:move>-COIN_MOVE)continue;
-      names.push({symbol,ret:move,close:own[7]!.close});
-    }
-    names.sort((a,b)=>Math.abs(b.ret)-Math.abs(a.ret));
-    if(!names.length)skipped.push('没有币跟着走出 1.0%。');
+  const found:{symbol:string;ret:number;close:number;dir:Dir}[]=[];
+  for(const symbol of Object.keys(paths??{}).sort()){
+    if(!liquid(contracts?.[symbol]))continue;
+    const own=windowOf(paths?.[symbol],now);if(!own)continue;
+    const move=own[7]!.close/own[0]!.open-1;
+    const tail=own.slice(-2),open=own[0]!.open;
+    const up=move>=COIN_MIN&&move<=COIN_MAX&&tail.every(bar=>bar.close>open);
+    const down=move<=-COIN_MIN&&move>=-COIN_MAX&&tail.every(bar=>bar.close<open);
+    if(!up&&!down)continue;
+    const way:Dir=up?'UP':'DOWN';
+    if(dir&&way!==dir)continue;
+    found.push({symbol,ret:move,close:own[7]!.close,dir:way});
   }
-  return {at:now,dir,btc:ret,bar:window[7]!.time,bars:8,close,names,skipped};
+  found.sort((a,b)=>Math.abs(b.ret)-Math.abs(a.ret));
+  const lead=found[0];
+  const names=dir||!lead?found:found.filter(row=>row.dir===lead.dir);
+  const trade:Dir|null=dir??lead?.dir??null;
+  if(!trade)skipped.push(`BTC 这两小时 ${pct(ret)}。没有币走出 0.8% 到 2.5%。`);
+  else if(!names.length)skipped.push(dir?'没有币跟着走出 0.8% 到 2.5%。':'走出来的币已经超过 2.5%，不追。');
+  return {at:now,dir:trade,btc:ret,bar:window[7]!.time,bars:8,close,names,skipped};
 }
 
 function rule(side:'LONG'|'SHORT',now:number,reason:string):Rule{
@@ -114,13 +121,12 @@ function closeStretch(state:ForwardState,t:Trade,price:number,now:number,reason:
   state.events=state.events.slice(0,160);
 }
 function sheet(read:StretchRead,waiting:string,preparing:string):WorkSheet{
-  const side=read.dir==='UP'?'涨':read.dir==='DOWN'?'跌':'没有方向';
   const listed=read.names.slice(0,6).map(row=>`${coin(row.symbol)} ${pct(row.ret)}`).join('，');
   return {subject:'看大盘这两小时走出没有，再看哪个币跟着走。',
-    method:'用已经收盘的 5 分钟线合成 15 分钟。BTC 最近 8 根涨跌到 0.8%，而且最后两根没收回去，才有方向。币要同一个方向并且至少 1.0%。价差超过 0.08% 不做，现价又跑出信号收盘价 0.4% 不追。同时最多两笔，每笔名义是当时权益的 2 倍。',
+    method:'用已经收盘的 5 分钟线合成 15 分钟。BTC 最近 8 根涨跌到 0.25%，最后两根没收回去，就算有方向。币要同一个方向，并且自己走出 0.8% 到 2.5%。大盘没有方向时，币自己走出这一段也可以做。已经超过 2.5% 的不追。价差超过 0.08% 不做，现价又跑出信号收盘价 0.4% 不追。同时最多两笔，每笔名义是当时权益的 2 倍。',
     lines:[
-      {name:'1. 大盘',data:'BTC 最近 8 根已收盘的 15 分钟。涨跌不到 0.8%，或者最后两根把这段收回去了，就不做。',said:read.btc==null?`15 分钟只有 ${read.bars} 根，不够。`:`BTC ${pct(read.btc)}，方向是${side}。`},
-      {name:'2. 跟着走的币',data:'同一个方向，这两小时自己至少 1.0%。按走出多少从大到小排，最多拿两个。24 小时成交额不到 100 万 U 的不看。',said:listed?`够格 ${read.names.length} 个：${listed}。`:'这一拍没有够格的币。'},
+      {name:'1. 大盘',data:'BTC 最近 8 根已收盘的 15 分钟。涨跌到 0.25% 才叫有方向。不到就看币自己。',said:read.btc==null?`15 分钟只有 ${read.bars} 根，不够。`:`BTC ${pct(read.btc)}。${Math.abs(read.btc)>=MARKET_MOVE?'大盘有方向。':'大盘这阵没有方向。'}`},
+      {name:'2. 跟着走的币',data:'同一个方向时，币自己要走出 0.8% 到 2.5%。大盘没方向时，谁走出这一段就用谁的方向，只跟一边。按走出多少从大到小，最多拿两个。',said:listed?`够格 ${read.names.length} 个：${listed}。`:'这一拍没有够格的币。'},
       {name:'3. 这一拍不做的',data:'价差大于 0.08%，或者现价比信号收盘价又顺向跑了 0.4%，就跳过。',said:read.skipped[0]??'没有因为价差或追价跳过。'},
     ],waiting,preparing};
 }
@@ -199,7 +205,7 @@ export function applyStretchBook(state:ForwardState,paths:Record<string,Candle[]
     }
   }
   const openCount=state.positions.filter(isStretchTrade).length;
-  const waiting=!read.dir?'在等 BTC 这两小时走出 0.8%，而且最后两根不收回去。'
+  const waiting=!read.dir?'在等有币走出 0.8% 到 2.5%。大盘只要 0.25% 就算有方向，没有方向也可以做币自己的这段。'
     :openCount>=MAX_OPEN?'两笔都在。等其中一笔走了，下一根 15 分钟才看新的。'
     :'这一根 15 分钟已经看过。下一根收盘再看还有没有新的币。';
   const preparing=opened.length?`这一拍开了 ${opened.join('，')}。`
