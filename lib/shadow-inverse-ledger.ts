@@ -67,7 +67,7 @@ export type InverseTrial={version:typeof SHADOW_INVERSE_VERSION;sourceBuild:type
   stretchNote?:string;stretchSeen?:string[];
   /** lsr-v1: fade a completed 15-minute extreme after an 8-second sweep. */
   lsrNote?:string;lsrSeen?:string[];lsrMp?:{s:string;at:number;mp:number;bid:number;ask:number}[];
-  lsrCool?:Record<string,number>;lsrDayVol?:number;
+  lsrCool?:Record<string,number>;lsrDayVol?:number;lsrMiss?:{s:string;at:number}[];
   lsrW?:number[];lsrMean?:number[];lsrStd?:number[];lsrFitAt?:number;
   lsrLearn?:{x:number[];y:number}[];lsrPend?:{s:string;at:number;mid:number;x:number[]}[];
   lsrLast?:{s:string;side:'LONG'|'SHORT';at:number}[];

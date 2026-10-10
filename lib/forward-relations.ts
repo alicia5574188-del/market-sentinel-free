@@ -463,7 +463,7 @@ function equityMark(s:ForwardState,quotes:Record<string,Quote>,now:number){
       // Entry fee has already been debited from balance; future close fee is not paid yet.
       floating+=dir(t.side)*t.quantity*(px-t.entryPrice);continue;
     }
-    if(t.exitControl?.policy==='needle-v1'||t.exitControl?.policy==='brain-v1'||t.exitControl?.policy==='score-v1'||t.exitControl?.policy==='read-v1'){
+    if(t.exitControl?.policy==='needle-v1'||t.exitControl?.policy==='brain-v1'||t.exitControl?.policy==='score-v1'||t.exitControl?.policy==='read-v1'||t.exitControl?.policy==='lsr-v1'){
       const q=quotes[t.symbol],fresh=freshQuote(q,now),px=fresh?(t.side==='LONG'?q!.bestBid:q!.bestAsk):t.lastPrice;
       if(!fresh||!(px>0))stale++;
       else floating+=dir(t.side)*t.quantity*(px-t.entryPrice);
@@ -819,7 +819,7 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
 
 function markAndManage(s:ForwardState,quotes:Record<string,Quote>,now:number){
   const candidates=new Map(s.opportunities.filter(o=>!isIntelligenceOpportunity(o)).map(o=>[o.symbol,o])),relationById=new Map(s.relationEngine.rules.map(r=>[r.id,r])),closed=new Set<string>();
-  for(const t of s.positions){if(t.inverseCopy||t.entryContext?.strategyVersion===MARKET_INTELLIGENCE_VERSION||t.exitControl?.policy==='needle-v1'||t.exitControl?.policy==='brain-v1'||t.exitControl?.policy==='score-v1'||t.exitControl?.policy==='read-v1')continue;const q=quotes[t.symbol];if(!freshQuote(q,now))continue;const px=t.side==="LONG"?q!.bestBid:q!.bestAsk,d=dir(t.side);
+  for(const t of s.positions){if(t.inverseCopy||t.entryContext?.strategyVersion===MARKET_INTELLIGENCE_VERSION||t.exitControl?.policy==='needle-v1'||t.exitControl?.policy==='brain-v1'||t.exitControl?.policy==='score-v1'||t.exitControl?.policy==='read-v1'||t.exitControl?.policy==='lsr-v1')continue;const q=quotes[t.symbol];if(!freshQuote(q,now))continue;const px=t.side==="LONG"?q!.bestBid:q!.bestAsk,d=dir(t.side);
     t.lastPrice=px;t.lastQuoteAt=q!.observedAt;const signed=d*(px/t.entryPrice-1),favorable=Math.max(0,signed),adverse=Math.max(0,-signed);
     t.favorable=Math.max(t.favorable,favorable);t.adverse=Math.max(t.adverse,adverse);t.peakPnlRate=Math.max(t.peakPnlRate??0,favorable);
     if(!t.firstProfitAt&&favorable>=ROUND_TRIP_COST*.6)t.firstProfitAt=now;
@@ -1587,7 +1587,7 @@ export function forwardUrgentQuoteSymbols(s:ForwardState,now:number,entrySymbols
   const premium=s.opportunities.filter(o=>o.premium&&o.eligible&&o.expiresAt>now&&keep(o.symbol)).sort(opportunityCompare);
   const normal=s.opportunities.filter(o=>!o.premium&&o.eligible&&o.expiresAt>now&&keep(o.symbol)).sort(opportunityCompare);
   const watched=Object.values(s.extremumRegime.symbols).filter(r=>keep(r.symbol)&&r.watchScore>=58).sort((a,b)=>b.watchScore-a.watchScore);
-  return[...new Set([...(s.inverseTrial?.source.positions.map(t=>t.symbol)??[]),...s.positions.map(t=>t.symbol),...armed.map(v=>v.symbol),...premium.map(o=>o.symbol),...normal.map(o=>o.symbol),...watched.map(r=>r.symbol)])];
+  return[...new Set([...(s.inverseTrial?.source.positions.map(t=>t.symbol)??[]),...(s.inverseTrial?.lsrWork?.map(order=>order.s)??[]),...s.positions.map(t=>t.symbol),...armed.map(v=>v.symbol),...premium.map(o=>o.symbol),...normal.map(o=>o.symbol),...watched.map(r=>r.symbol)])];
 }
 export function forwardUrgentMinuteSymbols(s:ForwardState,entrySymbols?:Iterable<string>){
   const allowed=entrySymbols?new Set(entrySymbols):undefined,keep=(x:string)=>!allowed||allowed.has(x),

@@ -37,6 +37,12 @@ export const mexcSymbol=(gate:string)=>gate.endsWith("_USDT")?gate:null;
 const canonicalHtx=(external:string)=>external.endsWith("-USDT")?external.slice(0,-5)+"_USDT":null;
 export const htxSymbol=(gate:string)=>gate.endsWith("_USDT")?gate.slice(0,-5)+"-USDT":null;
 
+function bounded<T>(task:Promise<T>,ms:number){
+  return new Promise<T>((resolve,reject)=>{
+    const timer=setTimeout(()=>reject(new Error("The operation was aborted due to timeout")),ms);
+    task.then(value=>{clearTimeout(timer);resolve(value);},error=>{clearTimeout(timer);reject(error);});
+  });
+}
 async function json<T>(url:string,timeoutMs:number):Promise<T>{
   const response=await fetch(url,{headers:{Accept:"application/json"},signal:AbortSignal.timeout(timeoutMs)});
   if(!response.ok){await response.body?.cancel().catch(()=>undefined);throw new Error(`market source ${response.status}`);}
@@ -82,7 +88,7 @@ export class MarketDataHub{
     const mexcDue=now>=this.health.MEXC.nextRetryAt,htxDue=now>=this.health.HTX.nextRetryAt;
     const [bybit,okx,kucoin,mexc,htx]=await Promise.allSettled([
       this.fetchBybit(now),this.fetchOkx(now),this.fetchKucoin(now),
-      mexcDue?this.fetchMexc(now):Promise.resolve(null),htxDue?this.fetchHtx(now):Promise.resolve(null),
+      mexcDue?bounded(this.fetchMexc(now),500):Promise.resolve(null),htxDue?bounded(this.fetchHtx(now),500):Promise.resolve(null),
     ]);
     if(bybit.status==="fulfilled"){this.bybit=bybit.value;this.ok("BYBIT",now,bybit.value.size);}else this.fail("BYBIT",now,bybit.reason);
     if(okx.status==="fulfilled"){this.okx=okx.value;this.ok("OKX",now,okx.value.size);}else this.fail("OKX",now,okx.reason);
@@ -99,7 +105,8 @@ export class MarketDataHub{
     failures:0,lastError:null,rows,nextRetryAt:0};}
   private fail(source:MarketSource,now:number,error:unknown){const prior=this.health[source],message=error instanceof Error?error.message.slice(0,160):"unknown",
     failures=Math.min(99,prior.failures+1),isWaf=(source==="MEXC"||source==="HTX")&&/market source (403|429)/.test(message),
-    backoffMs=isWaf?Math.min(20*60_000,60_000*2**Math.min(4,Math.max(0,failures-1))):0;
+    isTimeout=/timeout|aborted/i.test(message),
+    backoffMs=isWaf?Math.min(20*60_000,60_000*2**Math.min(4,Math.max(0,failures-1))):(source==="MEXC"||source==="HTX")&&isTimeout&&failures>=3?60_000:0;
     this.health[source]={...prior,lastFailureAt:now,failures,lastError:message,nextRetryAt:backoffMs?now+backoffMs:0};}
 
   private async fetchBybit(now:number){

@@ -85,7 +85,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       </section>
       {liveEnabled&&<section className="fr-section"><div className="fr-section-head"><h2>实盘复制</h2></div>
         <p>已复制 {liveOverview?.copied??"—"} / 应复制 {liveOverview?.eligible??"—"} · 未跟上 {liveOverview?.missing??"—"}。成交和持仓以实盘页为准。</p></section>}
-      {desk?.book==="lsr-v1"&&<LsrPulse note={desk.lsrNote} board={desk.lsrBoard}/>}
+      {desk?.book==="lsr-v1"&&<LsrPulse note={desk.lsrNote} board={desk.lsrBoard} net={desk.netPnl} floating={desk.floating}/>}
       {desk?<ForwardCurve desk={desk}/>:<PaperEquitySection data={data} healthy={healthy} cache={equityCache} cacheScope={cacheScope}/>}
       {liveEnabled&&<LiveEquityCurve head={liveOverview?.equityCurve} mark={actual} enabled={liveEnabled} sessionAt={liveOverview?.sessionAt??0} cacheScope={cacheScope} now={now}/>}
       {desk&&<ForwardOrders desk={desk} now={now}/>}
@@ -145,11 +145,13 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   </main>;
 }
 
-function LsrPulse({note,board}:{note?:string;board?:Desk["lsrBoard"]}){
+function LsrPulse({note,board,net,floating}:{note?:string;board?:Desk["lsrBoard"];net:number|null;floating:number|null}){
+  const realized=net!=null&&floating!=null?net-floating:null;
   return <section className="fr-section lsr-pulse" data-testid="lsr-pulse">
     <div className="fr-section-head"><h2>这一拍</h2></div>
     <b>{board?.verdict??note??"还没有记下一拍。"}</b>
     <p className="fr-note">{note??"扫描还没写出结果。"}</p>
+    <p className="fr-note">账户盈亏 {signed(net)} U = 已平净利 {signed(realized)} U + 还没平的浮动 {signed(floating)} U。赢的意思是这一笔扣完开仓和平仓手续费还大于 0，不是账户已经赚钱。</p>
     <div className="lsr-counts">
       <div><small>扫描</small><b>{fmt(board?.scans??0,0)}</b></div>
       <div><small>出信号</small><b>{fmt(board?.signals??0,0)}</b></div>
