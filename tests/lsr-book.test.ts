@@ -5,24 +5,15 @@ import {applyLsrBook} from '../lib/lsr-book.ts';
 import {freshLsrLedger} from '../lib/shadow-inverse.ts';
 import {newInverseTrial} from '../lib/shadow-inverse-ledger.ts';
 
-const end=Math.floor(1_791_500_000/900)*900-900;
-const T=(end+900)*1000+1_000;
+const T=1_791_600_000_000;
 const contract={quantoMultiplier:1,leverageMax:20,maintenanceRate:.005,minContracts:1,volume24hUsd:5_000_000};
-function quote(bid:number,ask:number,at:number,imbalance=0):Quote{
-  return {bestBid:bid,bestAsk:ask,observedAt:at,fresh:true,sourceCount:2,disagreementRate:0,bookImbalance:imbalance};
+function quote(bid:number,ask:number,at:number):Quote{
+  return {bestBid:bid,bestAsk:ask,observedAt:at,fresh:true,sourceCount:2,disagreementRate:0};
 }
-function dump():Candle[]{
-  const start=end-21*900,bars:Candle[]=[];
-  for(let i=0;i<22;i++){
-    const flat=100*(1+(i%2?.0002:-.0001));
-    for(let k=0;k<3;k++){
-      const time=start+i*900+k*300,last=i===21&&k===2,mid=i===21&&k===1;
-      const open=i===21?(k===0?100:k===1?99.8:99.6):flat;
-      const close=last?97:mid?99.6:i===21?99.8:flat;
-      bars.push({time,open,high:Math.max(open,close)+.01,low:Math.min(open,close)-.01,close,volume:last?80:1});
-    }
-  }
-  return bars;
+function bars():Candle[]{
+  const sec=Math.floor(T/1000),out:Candle[]=[];
+  for(let i=40;i>=1;i--)out.push({time:sec-i*300-300,open:100,high:100,low:100,close:100,volume:i===1?5_000:10});
+  return out;
 }
 function book(){
   const s=initialForward(T-60_000);
@@ -31,43 +22,51 @@ function book(){
   s.balance=1000;
   return s;
 }
-const bids=[100,99.6,99.3,99.95];
-test('a strong sweep rests a maker and fills only when the next scan trades through it',()=>{
-  const s=book(),paths={ETH_USDT:dump()};
-  let placed=0;
-  for(let i=0;i<bids.length;i++){
-    const at=T+i*2_000;
-    applyLsrBook(s,paths,{ETH_USDT:quote(bids[i]!,bids[i]!+.02,at,i===3?.5:0)},{ETH_USDT:contract},at);
-    placed=s.inverseTrial?.lsrWork?.length??0;
-  }
+function warm(s:ReturnType<typeof book>,bid=100,ask=100.02){
+  const paths={ETH_USDT:bars()};
+  for(let i=0;i<31;i++)applyLsrBook(s,paths,{ETH_USDT:quote(bid,ask,T+i*2_000)},{ETH_USDT:contract},T+i*2_000);
+  return paths;
+}
+test('a sharp drop rests 100U at the bid and fills only after three seconds',()=>{
+  const s=book(),paths=warm(s);
+  const at=T+31*2_000;
+  applyLsrBook(s,paths,{ETH_USDT:quote(99,99.02,at)},{ETH_USDT:contract},at);
   assert.equal(s.positions.length,0);
-  assert.equal(placed,1);
-  const limit=s.inverseTrial!.lsrWork![0]!.price;
-  assert.equal(limit,99.95);
-  const at=T+8_000;
-  applyLsrBook(s,paths,{ETH_USDT:quote(99.9,99.92,at,.5)},{ETH_USDT:contract},at);
+  assert.equal(s.inverseTrial?.lsrWork?.length,1);
+  assert.equal(s.inverseTrial!.lsrWork![0]!.price,99);
+  assert.match(s.inverseTrial!.lsrWork![0]!.why,/100U/);
+  applyLsrBook(s,paths,{ETH_USDT:quote(98.9,98.99,at+3_000)},{ETH_USDT:contract},at+3_000);
   const t=s.positions[0];
   assert.equal(t?.side,'LONG');
-  assert.ok(s.inverseTrial?.lsrLog?.some(event=>event.cat==='EXEC'&&event.event==='order_filled'));
-  assert.ok(s.inverseTrial?.lsrLog?.some(event=>event.cat==='STRAT'&&event.event==='scan_done'));
-  assert.ok((s.inverseTrial?.lsrFunnel?.signals??0)>0);
-  assert.equal(t?.entryPrice,limit);
-  assert.ok(t&&t.notional>350&&t.notional<=500,`notional ${t?.notional}`);
+  assert.equal(t?.entryPrice,99);
+  assert.ok(t&&t.notional>=70&&t.notional<=150,`notional ${t?.notional}`);
   assert.ok(Math.abs(t!.stopPrice/t!.entryPrice-.998)<1e-9);
-  assert.equal(s.inverseTrial?.lsrWork?.length??0,0);
-  applyLsrBook(s,paths,{ETH_USDT:quote(limit*1.004,limit*1.0042,at+2_000)},{ETH_USDT:contract},at+2_000);
+  assert.ok(Math.abs((t!.armPrice??0)/t!.entryPrice-1.003)<1e-9);
+  applyLsrBook(s,paths,{ETH_USDT:quote(99*1.004,99*1.0042,at+5_000)},{ETH_USDT:contract},at+5_000);
   assert.equal(s.history[0]?.exitReason,'LSR_TP_EXIT');
 });
-test('an untouched maker is cancelled on the next scan, and a new book starts at 1000',()=>{
-  const s=book(),paths={ETH_USDT:dump()};
-  for(let i=0;i<bids.length;i++){
-    const at=T+i*2_000;
-    applyLsrBook(s,paths,{ETH_USDT:quote(bids[i]!,bids[i]!+.02,at,i===3?.5:0)},{ETH_USDT:contract},at);
-  }
-  applyLsrBook(s,paths,{ETH_USDT:quote(100.2,100.22,T+8_000,.5)},{ETH_USDT:contract},T+8_000);
+test('an untouched maker is cancelled, a wide spread is skipped, and a new book starts at 1000',()=>{
+  const s=book(),paths=warm(s);
+  const at=T+31*2_000;
+  applyLsrBook(s,paths,{ETH_USDT:quote(99,99.02,at)},{ETH_USDT:contract},at);
+  applyLsrBook(s,paths,{ETH_USDT:quote(99.2,99.22,at+3_000)},{ETH_USDT:contract},at+3_000);
   assert.equal(s.positions.length,0);
-  assert.notEqual(s.inverseTrial?.lsrWork?.[0]?.price,99.95);
+  assert.equal(s.inverseTrial?.lsrWork?.length??0,0);
+  const wide=book();
+  const widePaths=warm(wide);
+  applyLsrBook(wide,widePaths,{ETH_USDT:quote(99,99.3,T+31*2_000)},{ETH_USDT:contract},T+31*2_000);
+  assert.equal(wide.inverseTrial?.lsrWork?.length??0,0);
   const next=freshLsrLedger(s,T);
   assert.equal(next.balance,1000);
   assert.equal(next.inverseTrial?.paperPolicy,'lsr-v1');
+});
+test('a falling bitcoin blocks a long',()=>{
+  const s=book(),paths={ETH_USDT:bars(),BTC_USDT:bars()};
+  for(let i=0;i<31;i++){
+    const at=T+i*2_000;
+    applyLsrBook(s,paths,{ETH_USDT:quote(100,100.02,at),BTC_USDT:quote(100,100.02,at)},{ETH_USDT:contract,BTC_USDT:contract},at);
+  }
+  const at=T+31*2_000;
+  applyLsrBook(s,paths,{ETH_USDT:quote(99,99.02,at),BTC_USDT:quote(97,97.02,at)},{ETH_USDT:contract,BTC_USDT:contract},at);
+  assert.equal(s.inverseTrial?.lsrWork?.length??0,0);
 });

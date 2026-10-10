@@ -188,7 +188,7 @@ function money(n:number){
 }
 function exitWait(t:Trade){
   const version=t.entryContext?.strategyVersion,stop=money(t.stopPrice);
-  if(version==='lsr-v1')return t.entryContext?.invalidationSummary??'止盈 0.30%。止损 0.20%，按对手价走。浮盈 0.12% 改到成本。满 3 分钟还不赚就走。';
+  if(version==='lsr-v1')return t.entryContext?.invalidationSummary??'止盈 0.30%。止损 0.20%，按对手价走。最长拿 15 分钟。';
   if(version==='brain-v1'){
     const lead=t.entryContext?.mode==='CONTINUATION',lag=t.entryContext?.mode==='RELATIVE';
     return `${lead?'领头':lag?'掉队':'单币失败'}。想错了就走：价格${t.side==='LONG'?'落到':'涨到'} ${stop}。想对了：浮盈到过 0.8% 再吐回一半才走。还没到 0.8%，满 ${lead?45:30} 分钟走。${lag?'整盘不再是进场时那一边，也走。':''}`;

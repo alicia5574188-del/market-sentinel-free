@@ -2233,7 +2233,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       ||Object.values(live.positions).some(position=>position?.status==="OPEN")
       ||Object.values(live.entries).some(entry=>entry&&!["FILLED","CANCELLED"].includes(entry.status)))return;
     const previous=this.forwardState;
-    if(previous.inverseTrial?.paperPolicy==='lsr-v1'){this.lsrSettled=true;return;}
     const next=freshLsrLedger(previous,now);
     next.storage={persistedAt:now,error:null,layout:FORWARD_PAGED_STATE_VERSION,sampleIntegrity:"raw-sha256"};
     const prepared=await prepareForwardWrite(previous.storage.persistedAt?previous:null,next,now,{compact:true});
