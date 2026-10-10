@@ -31,7 +31,7 @@ export type ForwardOrder={
   stop:number|null;target:number|null;exit:string|null;
 };
 export type LsrBoard={
-  scans:number;signals:number;filled:number;cancelled:number;closed:number;wins:number;
+  scans:number;signals:number;filled:number;cancelled:number;closed:number;wins:number;closedNet:number;
   trend:number;exhaustion:number;sweep:number;micro:number;stale:number;spread:number;price:number;
   resting:{symbol:string;side:'LONG'|'SHORT';price:number}[];
   verdict:string;
@@ -188,7 +188,7 @@ function money(n:number){
 }
 function exitWait(t:Trade){
   const version=t.entryContext?.strategyVersion,stop=money(t.stopPrice);
-  if(version==='lsr-v1')return t.entryContext?.invalidationSummary??'止盈 0.30%。止损 0.20%，按对手价走。最长拿 15 分钟。';
+  if(version==='lsr-v1')return t.entryContext?.invalidationSummary??'止盈 0.30%。止损 0.20%，触发后按对手价再让 0.05% 走。最长拿 15 分钟。';
   if(version==='brain-v1'){
     const lead=t.entryContext?.mode==='CONTINUATION',lag=t.entryContext?.mode==='RELATIVE';
     return `${lead?'领头':lag?'掉队':'单币失败'}。想错了就走：价格${t.side==='LONG'?'落到':'涨到'} ${stop}。想对了：浮盈到过 0.8% 再吐回一半才走。还没到 0.8%，满 ${lead?45:30} 分钟走。${lag?'整盘不再是进场时那一边，也走。':''}`;
@@ -201,7 +201,7 @@ function exitWait(t:Trade){
 function lsrBoardOf(trial:InverseTrial):LsrBoard{
   const f=trial.lsrFunnel;
   const board:LsrBoard={scans:f?.scans??0,signals:f?.signals??0,filled:f?.filled??0,cancelled:f?.cancelled??0,
-    closed:f?.closed??0,wins:f?.wins??0,trend:f?.trend??0,exhaustion:f?.exhaustion??0,sweep:f?.sweep??0,
+    closed:f?.closed??0,wins:f?.wins??0,closedNet:trial.lsrClosedNet??0,trend:f?.trend??0,exhaustion:f?.exhaustion??0,sweep:f?.sweep??0,
     micro:f?.micro??0,stale:f?.stale??0,spread:f?.spread??0,price:f?.priceCheck??0,
     resting:(trial.lsrWork??[]).map(order=>({symbol:order.s,side:order.side,price:order.price})),verdict:''};
   const stuck=[['趋势',board.trend],['放量',board.exhaustion],['扫单',board.sweep],['往回摆',board.micro],['价差',board.spread],['行情过期',board.stale],['价格对不上',board.price]]

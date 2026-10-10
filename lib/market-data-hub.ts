@@ -106,7 +106,7 @@ export class MarketDataHub{
   private fail(source:MarketSource,now:number,error:unknown){const prior=this.health[source],message=error instanceof Error?error.message.slice(0,160):"unknown",
     failures=Math.min(99,prior.failures+1),isWaf=(source==="MEXC"||source==="HTX")&&/market source (403|429)/.test(message),
     isTimeout=/timeout|aborted/i.test(message),
-    backoffMs=isWaf?Math.min(20*60_000,60_000*2**Math.min(4,Math.max(0,failures-1))):(source==="MEXC"||source==="HTX")&&isTimeout&&failures>=3?60_000:0;
+    backoffMs=isWaf?Math.min(20*60_000,60_000*2**Math.min(4,Math.max(0,failures-1))):(source==="MEXC"||source==="HTX")&&isTimeout&&failures>=3?300_000:0;
     this.health[source]={...prior,lastFailureAt:now,failures,lastError:message,nextRetryAt:backoffMs?now+backoffMs:0};}
 
   private async fetchBybit(now:number){

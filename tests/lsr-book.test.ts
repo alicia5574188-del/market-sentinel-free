@@ -46,9 +46,12 @@ test('a sharp drop rests inside the spread and fills after six seconds at the st
   assert.ok(t&&t.notional>=70&&t.notional<=150,`notional ${t?.notional}`);
   const marked=forwardEquity(s,{ETH_USDT:quote(limit,limit+0.02,at+6_000)},at+6_000);
   assert.ok(Math.abs(marked.equity-(1000-t!.entryFee))<0.02,`equity ${marked.equity}`);
-  applyLsrBook(s,paths,{ETH_USDT:quote(limit*0.99,limit*0.9902,at+8_000)},{ETH_USDT:contract},at+8_000);
+  const stop=limit*0.998,bid=limit*0.99,fill=Math.min(stop,bid*(1-0.0005));
+  applyLsrBook(s,paths,{ETH_USDT:quote(bid,bid+0.0002,at+8_000)},{ETH_USDT:contract},at+8_000);
   assert.equal(s.history[0]?.exitReason,'LSR_SL_EXIT');
-  assert.ok(Math.abs((s.history[0]?.exitPrice??0)-limit*0.998)<1e-6);
+  assert.ok(Math.abs((s.history[0]?.exitPrice??0)-fill)<1e-6);
+  const gap=((s.history[0]?.exitPrice??0)-stop)/stop*10_000;
+  assert.ok(gap<-5,`gap ${gap}`);
 });
 test('an untouched maker is cancelled, a wide spread is skipped, and a new book starts at 1000',()=>{
   const s=book(),paths=warm(s);

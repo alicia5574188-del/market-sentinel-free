@@ -146,12 +146,13 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
 }
 
 function LsrPulse({note,board,net,floating}:{note?:string;board?:Desk["lsrBoard"];net:number|null;floating:number|null}){
-  const realized=net!=null&&floating!=null?net-floating:null;
+  const closed=board?.closedNet??(net!=null&&floating!=null?net-floating:null);
+  const openMark=net!=null&&closed!=null?net-closed:floating;
   return <section className="fr-section lsr-pulse" data-testid="lsr-pulse">
     <div className="fr-section-head"><h2>这一拍</h2></div>
     <b>{board?.verdict??note??"还没有记下一拍。"}</b>
     <p className="fr-note">{note??"扫描还没写出结果。"}</p>
-    <p className="fr-note">账户盈亏 {signed(net)} U = 已平净利 {signed(realized)} U + 还没平的浮动 {signed(floating)} U。赢的意思是这一笔扣完开仓和平仓手续费还大于 0，不是账户已经赚钱。</p>
+    <p className="fr-note">账户盈亏 {signed(net)} U = 已平净利 {signed(closed)} U + 还没平的 {signed(openMark)} U。已平净利扣了开仓和平仓各 0.02%。赢是指这一笔扣完这两笔手续费还大于 0。</p>
     <div className="lsr-counts">
       <div><small>扫描</small><b>{fmt(board?.scans??0,0)}</b></div>
       <div><small>出信号</small><b>{fmt(board?.signals??0,0)}</b></div>

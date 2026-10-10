@@ -147,7 +147,7 @@ function pushLog(state:ForwardState,event:Omit<RunEvent,'trace'>){
   const trial=state.inverseTrial;if(!trial)return;
   trial.lsrLog=appendRunLog(trial.lsrLog,{...event,trace:traceOf(event.ts)});
 }
-function closeLsr(state:ForwardState,t:Trade,price:number,now:number,reason:string){
+function closeLsr(state:ForwardState,t:Trade,price:number,now:number,reason:string,touch?:number){
   const trial=state.inverseTrial!,gross=dirOf(t.side)*t.quantity*(price-t.entryPrice),exitFee=t.quantity*price*FEE,net=gross-t.entryFee-exitFee;
   t.status='CLOSED';t.closedAt=now;t.exitPrice=price;t.lastPrice=price;t.lastQuoteAt=now;
   t.exitFee=exitFee;t.grossPnl=gross;t.netPnl=net;t.exitReason=reason;t.fundingAllowance=0;
@@ -156,12 +156,15 @@ function closeLsr(state:ForwardState,t:Trade,price:number,now:number,reason:stri
   const day=dayKey(now);
   if(trial.lsrDay!==day){trial.lsrDay=day;trial.lsrDayNet=0;trial.lsrDayVol=0;}
   trial.lsrDayNet=(trial.lsrDayNet??0)+net;
+  trial.lsrClosedNet=(trial.lsrClosedNet??0)+net;
   trial.lsrDayVol=(trial.lsrDayVol??0)+t.quantity*price;
   if(trial.lsrFunnel){trial.lsrFunnel.closed++;if(net>0)trial.lsrFunnel.wins++;}
   state.positions=state.positions.filter(x=>x.id!==t.id);
   state.history=[t,...state.history.filter(x=>x.id!==t.id)].slice(0,240);
+  const gapBps=touch&&t.stopPrice>0?(price-t.stopPrice)/t.stopPrice*10_000:null;
   pushLog(state,{ts:now,level:'INFO',cat:'PNL',symbol:t.symbol,event:'position_closed',reason,
-    fields:{side:t.side,gross:Number(gross.toFixed(4)),fee:Number((t.entryFee+exitFee).toFixed(4)),net:Number(net.toFixed(4)),holdSec:Math.round((now-t.openedAt)/1000)}});
+    fields:{side:t.side,gross:Number(gross.toFixed(4)),fee:Number((t.entryFee+exitFee).toFixed(4)),net:Number(net.toFixed(4)),holdSec:Math.round((now-t.openedAt)/1000),
+      stop:reason==='LSR_SL_EXIT'?Number(t.stopPrice.toFixed(8)):null,touch:touch??null,fill:Number(price.toFixed(8)),gapBps:gapBps==null?null:Number(gapBps.toFixed(2))}});
   state.revision++;state.events.unshift({id:`l${state.startedAt}-${state.revision}`,at:now,kind:'EXIT',subject:t.id,reason});
   state.events=state.events.slice(0,160);
 }
@@ -223,8 +226,8 @@ export function applyLsrBook(state:ForwardState,paths:Record<string,Candle[]>|un
     const tooOld=now-t.openedAt>=HOLD_MS;
     if(!hitStop&&!hitTp&&!tooOld)continue;
     const touch=t.side==='LONG'?q!.bestBid:q!.bestAsk;
-    const price=hitStop?t.stopPrice:hitTp?t.armPrice??touch:touch;
-    closeLsr(state,t,price,now,hitStop?'LSR_SL_EXIT':hitTp?'LSR_TP_EXIT':'LSR_TIME_EXIT');
+    const price=hitStop?(t.side==='LONG'?Math.min(t.stopPrice,touch*(1-.0005)):Math.max(t.stopPrice,touch*(1+.0005))):hitTp?t.armPrice??touch:touch;
+    closeLsr(state,t,price,now,hitStop?'LSR_SL_EXIT':hitTp?'LSR_TP_EXIT':'LSR_TIME_EXIT',hitStop?touch:undefined);
     changed=true;
   }
   const opened:string[]=[];
@@ -272,7 +275,7 @@ export function applyLsrBook(state:ForwardState,paths:Record<string,Candle[]>|un
           entryScore:0,directionStrength:0,spaceScore:0,positionScore:0,executionScore:0,remainingSpaceRate:TP,
           pullbackRiskRate:STOP,edgeRatio:TP/STOP,expectedHoldMinutes:15,marketFit:0,regionId:null,portfolioRiskCharge:notional*STOP,
           strategyVersion:LSR_POLICY,thesisId:order.key,thesisSince:now,thesisSummary:why,
-          invalidationSummary:`止盈 ${tp.toFixed(6)}（0.30%）。止损 ${stop.toFixed(6)}（0.20%）。最长 15 分钟。`}};
+          invalidationSummary:`止盈 ${tp.toFixed(6)}（0.30%）。止损 ${stop.toFixed(6)}（0.20%）。止损按对手价再让 0.05%，不按止损价。最长 15 分钟。`}};
       state.balance-=t.entryFee;state.fees+=t.entryFee;state.turnover+=notional;
       trial.lsrDayVol=(trial.lsrDayVol??0)+notional;
       state.positions.push(t);held.add(order.s);equity-=t.entryFee;opened.push(`${name} ${side==='LONG'?'多':'空'} ${notional.toFixed(0)}U`);changed=true;
@@ -328,7 +331,7 @@ export function applyLsrBook(state:ForwardState,paths:Record<string,Candle[]>|un
   const ranked=[...rows].sort((a,b)=>Math.abs(b.retZ)-Math.abs(a.retZ)).slice(0,4);
   const learned=trial.lsrLearn?.length??0;
   const work:WorkSheet={subject:'急跌做多，急涨做空。规则先选，研究模型后决定做不做。',
-    method:'每 2 秒看一次真实行情。最近 30 下的涨跌 z、最近 30 根 5 分钟的成交量 z。弱信号 z 到 1 和 1.2，下 70U。强信号 z 到 2.5 和 3，下 100U。价差超过 8 bps 不做。同一币 45 秒内不重复。挂在买一和卖一之间四分之一的位置，仍是挂单。6 秒没打到就撤。同一币 5 分钟内撤了 3 次，再停 5 分钟。止盈 0.30%，止损 0.20%，止损按止损价算，不按跳空后的价格。最长 15 分钟。样本够 800 条后，模型概率不到 50% 不做。',
+    method:'每 2 秒看一次真实行情。最近 30 下的涨跌 z、最近 30 根 5 分钟的成交量 z。弱信号 z 到 1 和 1.2，下 70U。强信号 z 到 2.5 和 3，下 100U。价差超过 8 bps 不做。同一币 45 秒内不重复。挂在买一和卖一之间四分之一的位置，仍是挂单。6 秒没打到就撤。同一币 5 分钟内撤了 3 次，再停 5 分钟。止盈 0.30%。止损 0.20%。实盘止损是触发后按市价平，所以模拟也按对手价再差 0.05% 成交，不按止损价。最长 15 分钟。样本够 800 条后，模型概率不到 50% 不做。',
     lines:[
       {name:'1. 涨跌',data:'最近 30 下报价。最后一下偏跌就准备做多，偏涨就准备做空。',said:ranked[0]?ranked.map(row=>`${coin(row.symbol)} 涨跌 z ${row.retZ.toFixed(1)}`).join('；'):'报价还不够 30 下。'},
       {name:'2. 放量',data:'最近 30 根已收盘 5 分钟。这一根成交量 z 弱信号要到 1.2，强信号要到 3。',said:ranked[0]?ranked.map(row=>`${coin(row.symbol)} 量 z ${row.volZ.toFixed(1)}${row.tier==='large'?'，强':row.tier==='small'?'，弱':''}`).join('；'):'5 分钟还不够 30 根。'},
