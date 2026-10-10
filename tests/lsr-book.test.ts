@@ -48,6 +48,9 @@ test('a strong sweep rests a maker and fills only when the next scan trades thro
   applyLsrBook(s,paths,{ETH_USDT:quote(99.9,99.92,at,.5)},{ETH_USDT:contract},at);
   const t=s.positions[0];
   assert.equal(t?.side,'LONG');
+  assert.ok(s.inverseTrial?.lsrLog?.some(event=>event.cat==='EXEC'&&event.event==='order_filled'));
+  assert.ok(s.inverseTrial?.lsrLog?.some(event=>event.cat==='STRAT'&&event.event==='scan_done'));
+  assert.ok((s.inverseTrial?.lsrFunnel?.signals??0)>0);
   assert.equal(t?.entryPrice,limit);
   assert.ok(t&&t.notional>350&&t.notional<=500,`notional ${t?.notional}`);
   assert.ok(Math.abs(t!.stopPrice/t!.entryPrice-.998)<1e-9);

@@ -13,7 +13,6 @@ import MarketIntelligenceExecution from "./market-intelligence-execution.tsx";
 import "./account-first.css";
 import "./paid-fee.css";
 import {remainingPaidNetPnl,tradePaidNetPnl,pairedPaidView,type PaidPair} from "../lib/paid-fee-view.ts";
-import {collectReviewSnapshot} from "../lib/research-snapshot.ts";
 
 type View=ReturnType<typeof forwardSummary>;
 type Desk=NonNullable<View["forwardDesk"]>;
@@ -46,9 +45,13 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   const select=(next:Tab)=>{scroll.current[tab]=window.scrollY;if(next==="live"||(next==="paper"&&liveEnabled))setLiveMounted(true);setTab(next);};
   const fontVars:Record<string,string>={};for(let px=10;px<=64;px++)fontVars[`--fr-fs${px}`]=`${(px*fontScale/100).toFixed(2)}px`;
   const exportSnapshot=async()=>{if(exporting)return;setExporting(true);setExportStatus(null);try{
-    const snapshot=await collectReviewSnapshot(fetch,(n,total)=>setExportStatus(`正在读取订单 ${n}/${total}`));
-    const blob=new Blob([JSON.stringify(snapshot)],{type:"application/json"}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`market-intelligence-review-${beijingDayKey()}.json`;
-    document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);setExportStatus(snapshot.version==="market-intelligence-review-v2"&&(!snapshot.coverage.complete||snapshot.liveReview?.coverage.error||snapshot.liveReview?.coverage.limitReached||snapshot.runtime.liveReviewError)?"已导出；缺失或未核对的数据已在快照中标明。":"已开始下载。");
+    const response=await fetch("/api/forward/export?kind=log",{cache:"no-store",credentials:"same-origin"});
+    if(!response.ok)throw new Error("log");
+    const log=await response.json() as {version?:string;funnel?:{scans?:number;signals?:number;filled?:number;trend?:number;exhaustion?:number;stale?:number};breakdown?:{verdict?:string}};
+    const blob=new Blob([JSON.stringify(log,null,2)],{type:"application/json"}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`lsr-run-log-${beijingDayKey()}.json`;
+    document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    const f=log.funnel;
+    setExportStatus(log.version==="lsr-run-log-v1"?`已开始下载。${log.breakdown?.verdict??""}。扫描 ${f?.scans??0} 次，信号 ${f?.signals??0}，成交 ${f?.filled??0}，没走出趋势 ${f?.trend??0}，数据过期 ${f?.stale??0}。`:"已开始下载。");
   }catch{setExportStatus("导出失败，请重试。");}finally{setExporting(false);}};
 
   const desk=data?.forwardDesk??null,positions=data?.positions??[];
@@ -126,8 +129,9 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
 
     {tab==="settings"&&<>
       {accountPanel}{liveSystemPanel}
-      <section className="fr-section"><div className="fr-section-head"><h2>研究快照</h2></div>
-        <button className="fr-button" onClick={exportSnapshot} disabled={exporting}>{exporting?"正在导出…":"导出研究快照 ↗"}</button>{exportStatus&&<p className="fr-note">{exportStatus}</p>}</section>
+      <section className="fr-section"><div className="fr-section-head"><h2>运行日志</h2></div>
+        <p className="fr-note">一个文件。没做单看策略计数，挂了没成交看 EXEC，行情断了看 DATA。策略和运行分开记。</p>
+        <button className="fr-button" onClick={exportSnapshot} disabled={exporting}>{exporting?"正在导出…":"导出运行日志 ↗"}</button>{exportStatus&&<p className="fr-note">{exportStatus}</p>}</section>
       <section className="fr-section fr-font-control"><div className="fr-section-head"><h2>界面字号</h2><b>{fontScale}%</b></div>
         <div className="fr-font-options">{[70,80,90,100,110].map(value=><button key={value} className={fontScale===value?"selected":""} onClick={()=>{setFontScale(value);try{localStorage.setItem("sentinel-ui-font-scale-v1",String(value));}catch{}}}>{value}%</button>)}</div></section>
     </>}

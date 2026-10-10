@@ -4,6 +4,7 @@
 import {INVERSE_COST} from './shadow-inverse-ledger.ts';
 import type {Candle, Contract, ForwardState, Quote, Rule, Trade} from './forward-relations.ts';
 import type {WorkSheet} from './forward-study.ts';
+import {appendRunLog,emptyFunnel,traceOf,type RunEvent} from './run-log.ts';
 
 export const LSR_POLICY='lsr-v1' as const;
 export const LSR_EPOCH='lsr-book-2026-10-10' as const;
@@ -36,7 +37,7 @@ const VOLUME_MIN=1_000_000;
 type Meta=Contract&{volume24hUsd?:number};
 type Bar={time:number;open:number;high:number;low:number;close:number;volume:number};
 type Side='LONG'|'SHORT';
-type Row={symbol:string;side:Side|null;strong:boolean;ret:number;p95:number;volZ:number;retZ:number;why:string;bar:number;close:number};
+type Row={symbol:string;side:Side|null;strong:boolean;layer:string;ret:number;p95:number;volZ:number;retZ:number;why:string;bar:number;close:number};
 type Sample={s:string;at:number;mp:number;bid:number;ask:number};
 type Working={s:string;side:Side;price:number;at:number;key:string;why:string;bar:number};
 const finite=(n:unknown):n is number=>typeof n==='number'&&Number.isFinite(n);
@@ -96,7 +97,7 @@ export function readLsr(paths:Record<string,Candle[]>|undefined,quotes:Record<st
     const fives=closed5(paths?.[symbol],now);
     const bars=fifteens(fives);
     if(bars.length<BARS+1||fives.length<BARS+2){
-      rows.push({symbol,side:null,strong:false,ret:0,p95:0,volZ:0,retZ:0,bar:0,close:0,why:`${coin(symbol)} 已收盘的 15 分钟不够 ${BARS} 根。`});
+      rows.push({symbol,side:null,strong:false,layer:'bars',ret:0,p95:0,volZ:0,retZ:0,bar:0,close:0,why:`${coin(symbol)} 已收盘的 15 分钟不够 ${BARS} 根。`});
       continue;
     }
     const history=bars.slice(-BARS-1,-1),current=bars.at(-1)!;
@@ -123,20 +124,20 @@ export function readLsr(paths:Record<string,Candle[]>|undefined,quotes:Record<st
     const sweepLong=window.length>=MIN_POINTS&&Math.min(...bids)<window[0]!.bid&&window.at(-1)!.bid>Math.min(...bids);
     const sweepShort=window.length>=MIN_POINTS&&Math.max(...asks)>window[0]!.ask&&window.at(-1)!.ask<Math.max(...asks);
     const strong=volZ>=STRONG_VOL&&Math.abs(retZ)>=STRONG_RET;
-    let side:Side|null=null,why=`${coin(symbol)} 这一根 15 分钟 ${pct(ret)}，95% 分位是 ${pct(band)}。`;
+    let side:Side|null=null,layer='trend',why=`${coin(symbol)} 这一根 15 分钟 ${pct(ret)}，95% 分位是 ${pct(band)}。`;
     if(!trend)why+=`没有急到分位外面。量 z ${volZ.toFixed(1)}，涨跌 z ${retZ.toFixed(1)}。`;
-    else if(volZ<VOL_Z||Math.abs(retZ)<RET_Z)why+=`方向有了，但 5 分钟量 z ${volZ.toFixed(1)}、涨跌 z ${retZ.toFixed(1)}，还没到 3 和 2.5。`;
-    else if(trend==='LONG'&&!sweepLong)why+=`急跌了，近 8 秒的买一还没有扫出新低再停住。现在 ${window.length} 个点。`;
-    else if(trend==='SHORT'&&!sweepShort)why+=`急涨了，近 8 秒的卖一还没有扫出新高再停住。现在 ${window.length} 个点。`;
-    else if(stale)why+='Gate 买一卖一超过 2 秒，先跳过。';
-    else if(!(spread<=SPREAD_MAX))why+=`价差 ${(spread*100).toFixed(3)}%，超过 0.05%。`;
-    else if(disagree)why+='外部交易所价格差超过 1.5%，这根不用。';
-    else if(ma==null)why+=`microprice 8 秒里要有 4 个点，现在 ${window.length} 个。`;
-    else if(!bounced)why+='microprice 还没有往回摆。';
-    else if(trend==='LONG'&&!(retZ<=-RET_Z))why+='15 分钟在跌，5 分钟涨跌 z 不够负。';
-    else if(trend==='SHORT'&&!(retZ>=RET_Z))why+='15 分钟在涨，5 分钟涨跌 z 不够正。';
-    else {side=trend;why=`${coin(symbol)} 15 分钟 ${pct(ret)}，超过分位 ${pct(band)}。5 分钟量 z ${volZ.toFixed(1)}，涨跌 z ${retZ.toFixed(1)}。${strong?'强信号，这一次就挂。':'弱信号，要连续两次才挂。'}`;}
-    rows.push({symbol,side,strong,ret,p95:band,volZ,retZ,why,bar:last5.time,close:last5.close});
+    else if(volZ<VOL_Z||Math.abs(retZ)<RET_Z){layer='exhaustion';why+=`方向有了，但 5 分钟量 z ${volZ.toFixed(1)}、涨跌 z ${retZ.toFixed(1)}，还没到 3 和 2.5。`;}
+    else if(trend==='LONG'&&!sweepLong){layer='sweep';why+=`急跌了，近 8 秒的买一还没有扫出新低再停住。现在 ${window.length} 个点。`;}
+    else if(trend==='SHORT'&&!sweepShort){layer='sweep';why+=`急涨了，近 8 秒的卖一还没有扫出新高再停住。现在 ${window.length} 个点。`;}
+    else if(stale){layer='stale';why+='Gate 买一卖一超过 2 秒，先跳过。';}
+    else if(!(spread<=SPREAD_MAX)){layer='spread';why+=`价差 ${(spread*100).toFixed(3)}%，超过 0.05%。`;}
+    else if(disagree){layer='price';why+='外部交易所价格差超过 1.5%，这根不用。';}
+    else if(ma==null){layer='micro';why+=`microprice 8 秒里要有 4 个点，现在 ${window.length} 个。`;}
+    else if(!bounced){layer='micro';why+='microprice 还没有往回摆。';}
+    else if(trend==='LONG'&&!(retZ<=-RET_Z)){layer='exhaustion';why+='15 分钟在跌，5 分钟涨跌 z 不够负。';}
+    else if(trend==='SHORT'&&!(retZ>=RET_Z)){layer='exhaustion';why+='15 分钟在涨，5 分钟涨跌 z 不够正。';}
+    else {side=trend;layer='signal';why=`${coin(symbol)} 15 分钟 ${pct(ret)}，超过分位 ${pct(band)}。5 分钟量 z ${volZ.toFixed(1)}，涨跌 z ${retZ.toFixed(1)}。${strong?'强信号，这一次就挂。':'弱信号，要连续两次才挂。'}`;}
+    rows.push({symbol,side,strong,layer,ret,p95:band,volZ,retZ,why,bar:last5.time,close:last5.close});
   }
   return rows;
 }
@@ -146,6 +147,10 @@ function rule(side:Side,now:number,reason:string):Rule{
     status:'EXPERIMENTAL',conditions:[],side,horizon:3,stopRate:STOP,armRate:TP,givebackRate:0,
     exitMode:'HORIZON',samples:0,trainGroups:0,checkGroups:0,estimatedNetRate:0,priorResponse:null,recentResponse:0,
     standardError:0,reason,mutation:'CREATE',grammar:LSR_POLICY,liveEligible:false};
+}
+function pushLog(state:ForwardState,event:Omit<RunEvent,'trace'>){
+  const trial=state.inverseTrial;if(!trial)return;
+  trial.lsrLog=appendRunLog(trial.lsrLog,{...event,trace:traceOf(event.ts)});
 }
 function remember(state:ForwardState,key:string){
   const seen=state.inverseTrial!.lsrSeen??[];
@@ -162,9 +167,12 @@ function closeLsr(state:ForwardState,t:Trade,price:number,now:number,reason:stri
   if(trial.lsrDay!==day){trial.lsrDay=day;trial.lsrDayNet=0;}
   trial.lsrDayNet=(trial.lsrDayNet??0)+net;
   trial.lsrLosses=net<0?(trial.lsrLosses??0)+1:0;
+  if(trial.lsrFunnel){trial.lsrFunnel.closed++;if(net>0)trial.lsrFunnel.wins++;}
   if((trial.lsrLosses??0)>=LOSS_PAUSE)trial.lsrPauseUntil=now+PAUSE_MS;
   state.positions=state.positions.filter(x=>x.id!==t.id);
   state.history=[t,...state.history.filter(x=>x.id!==t.id)].slice(0,240);
+  pushLog(state,{ts:now,level:'INFO',cat:'PNL',symbol:t.symbol,event:'position_closed',reason,
+    fields:{side:t.side,net:Number(net.toFixed(4)),holdSec:Math.round((now-t.openedAt)/1000)}});
   state.revision++;state.events.unshift({id:`l${state.startedAt}-${state.revision}`,at:now,kind:'EXIT',subject:t.id,reason});
   state.events=state.events.slice(0,160);
 }
@@ -223,16 +231,21 @@ export function applyLsrBook(state:ForwardState,paths:Record<string,Candle[]>|un
   const held=new Set(state.positions.filter(isLsrTrade).map(t=>t.symbol));
   let used=state.positions.filter(isLsrTrade).reduce((n,t)=>n+t.margin,0);
   const opened:string[]=[];
+  let cancelled=0;
   const blocked=paused?`连亏 ${LOSS_PAUSE} 笔，暂停到 ${new Date((trial.lsrPauseUntil??now)+8*3_600_000).toISOString().slice(11,16)} 北京时间。`
     :dailyStopped?'今天已亏到权益的 2%，不再开新单。':'';
   const resting=(trial.lsrWork??[]).filter(order=>now-order.at<=MAKER_MS);
   const kept:Working[]=[];
+  if(blocked&&resting.length){
+    pushLog(state,{ts:now,level:'WARN',cat:'RISK',symbol:null,event:'trade_blocked',reason:blocked,fields:{resting:resting.length}});
+    cancelled+=resting.length;
+  }
   if(!blocked){
     for(const order of resting){
       if(now-order.at<1_000){kept.push(order);continue;}
       const q=quotes[order.s];
       const through=!!q&&bookFresh(q,now)&&(order.side==='LONG'?q.bestBid<order.price:q.bestAsk>order.price);
-      if(!through)continue;
+      if(!through){cancelled++;pushLog(state,{ts:now,level:'WARN',cat:'EXEC',symbol:order.s,event:'order_timeout_cancelled',reason:'下一次扫描没打到挂单价',fields:{price:order.price,waitMs:now-order.at}});continue;}
       if(held.has(order.s)||state.positions.filter(isLsrTrade).length>=MAX_OPEN)continue;
       const contract=meta?.[order.s];
       if(!contract||!(contract.quantoMultiplier>0))continue;
@@ -260,6 +273,8 @@ export function applyLsrBook(state:ForwardState,paths:Record<string,Candle[]>|un
           invalidationSummary:`止盈 ${tp.toFixed(6)}（0.30%）。止损 ${stop.toFixed(6)}（0.20%），到了按对手价走。浮盈 0.12% 把止损改到成本。满 3 分钟还不赚就走。出现反向信号也走。`}};
       state.balance-=t.entryFee;state.fees+=t.entryFee;state.turnover+=notional;
       state.positions.push(t);remember(state,order.key);held.add(order.s);used+=margin;equity-=t.entryFee;opened.push(`${name} ${side==='LONG'?'多':'空'} ${notional.toFixed(0)}U`);changed=true;
+      pushLog(state,{ts:now,level:'INFO',cat:'EXEC',symbol:order.s,event:'order_filled',reason:'挂单价被打到',fields:{side,price,notional:Number(notional.toFixed(2))}});
+      pushLog(state,{ts:now,level:'INFO',cat:'PNL',symbol:order.s,event:'position_opened',reason:why,fields:{side,entry:price,stop:Number(stop.toFixed(6)),tp:Number(tp.toFixed(6))}});
       state.revision++;state.events.unshift({id:`l${state.startedAt}-${state.revision}`,at:now,kind:'ENTRY',subject:id,reason:why});
       state.events=state.events.slice(0,160);
     }
@@ -276,11 +291,22 @@ export function applyLsrBook(state:ForwardState,paths:Record<string,Candle[]>|un
       const q=quotes[row.symbol];
       if(!bookFresh(q,now))continue;
       fresh.push({s:row.symbol,side,price:side==='LONG'?q!.bestBid:q!.bestAsk,at:now,key,why:row.why,bar:row.bar});
+      pushLog(state,{ts:now,level:'INFO',cat:'EXEC',symbol:row.symbol,event:'order_placing',reason:row.strong?'强信号，挂买一或卖一':'弱信号连续两次，挂买一或卖一',fields:{side,price:side==='LONG'?q!.bestBid:q!.bestAsk,volZ:Number(row.volZ.toFixed(2)),retZ:Number(row.retZ.toFixed(2))}});
       changed=true;
     }
   }
   trial.lsrWork=fresh.slice(0,MAX_OPEN);
   trial.lsrLast=signals.map(row=>({s:row.symbol,side:row.side!,at:now}));
+  const funnel=trial.lsrFunnel?.day===day?trial.lsrFunnel:emptyFunnel(day);
+  funnel.scans++;funnel.universe=rows.length;
+  for(const row of rows){if(row.layer==='stale')funnel.stale++;else if(row.layer==='spread')funnel.spread++;else if(row.layer==='price')funnel.priceCheck++;
+    else if(row.layer==='trend')funnel.trend++;else if(row.layer==='exhaustion')funnel.exhaustion++;else if(row.layer==='sweep')funnel.sweep++;else if(row.layer==='micro')funnel.micro++;}
+  funnel.signals+=signals.length;funnel.rested+=fresh.filter(order=>order.at===now).length;funnel.filled+=opened.length;funnel.cancelled+=cancelled;
+  trial.lsrFunnel=funnel;
+  const lastScan=[...(trial.lsrLog??[])].reverse().find(event=>event.event==='scan_done');
+  if(!lastScan||now-lastScan.ts>=60_000)pushLog(state,{ts:now,level:'INFO',cat:'STRAT',symbol:null,event:'scan_done',reason:rows[0]?.why??'这一拍没有币',
+    fields:{universe:rows.length,signals:signals.length,stale:funnel.stale,spread:funnel.spread,trend:funnel.trend,exhaustion:funnel.exhaustion,sweep:funnel.sweep,micro:funnel.micro}});
+  if(blocked){const lastRisk=[...(trial.lsrLog??[])].reverse().find(event=>event.event==='trade_blocked');if(!lastRisk||now-lastRisk.ts>=60_000)pushLog(state,{ts:now,level:'WARN',cat:'RISK',symbol:null,event:'trade_blocked',reason:blocked,fields:{paused,dailyStopped}});}
   const ranked=[...rows].sort((a,b)=>Math.abs(b.retZ)-Math.abs(a.retZ)).slice(0,4);
   const work:WorkSheet={subject:'找刚走极端、又开始收回来的币，逆着这一下做。',
     method:'每 2 秒看一次。15 分钟这一根要到近 20 根绝对涨跌的 95% 分位外面。5 分钟量 z 至少 3、涨跌 z 绝对值至少 2.5。近 8 秒的买一或卖一要先扫出去再停住，microprice 用这 8 秒至少 4 个点，并且已经往回摆。量 z 到 4 且涨跌 z 到 3.5 是强信号，这一次就挂。弱信号要连续两次。挂在买一或卖一，下一次扫描打到挂单价才成交，没打到就撤。不跨价。',
@@ -292,6 +318,6 @@ export function applyLsrBook(state:ForwardState,paths:Record<string,Candle[]>|un
     waiting:blocked||(trial.lsrWork?.length?'挂单还在，下一次扫描价格打到才成交。':signals.length?'有信号。弱的要再确认一次，强的这一次就挂。':'在等 15 分钟走出极端，并且 8 秒内扫完又停住。'),
     preparing:opened.length?`这一拍开了 ${opened.join('，')}。`:'这一拍没有开仓。'};
   const note=opened.length?`开了 ${opened.length} 笔。`:(signals[0]?.why??ranked[0]?.why??'这一拍没有信号。');
-  if(trial.lsrNote!==note||JSON.stringify(trial.work)!==JSON.stringify(work)){trial.lsrNote=note;trial.work=work;changed=true;}
+  if(trial.lsrNote!==note||JSON.stringify(trial.work)!==JSON.stringify(work)||trial.lsrLog?.at(-1)?.ts===now||funnel.scans%15===0){trial.lsrNote=note;trial.work=work;changed=true;}
   return changed;
 }
