@@ -28,6 +28,13 @@ export type WorkSheet={subject:string;method:string;lines:WorkLine[];waiting:str
 export type ForwardOrder={
   id:string;symbol:string;side:'LONG'|'SHORT';status:'OPEN'|'CLOSED';entryPrice:number;price:number|null;
   openedAt:number;closedAt:number|null;net:number|null;leverage:number;margin:number;plan:string|null;waiting:string|null;
+  stop:number|null;target:number|null;exit:string|null;
+};
+export type LsrBoard={
+  scans:number;signals:number;filled:number;cancelled:number;closed:number;wins:number;
+  trend:number;exhaustion:number;sweep:number;micro:number;stale:number;spread:number;price:number;
+  resting:{symbol:string;side:'LONG'|'SHORT';price:number}[];
+  verdict:string;
 };
 export type ForwardStudyView={
   recorded:number;recordedWins:number;recordedNet:number;sourceResolved:number;startedAt:number;ready:boolean;
@@ -38,7 +45,7 @@ export type ForwardDesk={
   stance:DeskStance;book?:'needle-v1'|'brain-v1'|'score-v1'|'read-v1'|'reverse-v1'|'stretch-v1'|'lsr-v1';equity:number|null;initialEquity:number;netPnl:number|null;maxDrawdown:number|null;
   fees:number;floating:number|null;stale:boolean;openCount:number;resolved:number;wins:number;
   open:ForwardOrder[];recent:ForwardOrder[];curve:{at:number;equity:number}[];study:ForwardStudyView;
-  research:DeskResearchView;brainNote?:string;scoreNote?:string;readNote?:string;stretchNote?:string;lsrNote?:string;work?:WorkSheet;
+  research:DeskResearchView;brainNote?:string;scoreNote?:string;readNote?:string;stretchNote?:string;lsrNote?:string;work?:WorkSheet;lsrBoard?:LsrBoard;
   brainIdeas?:{symbol:string;side:'LONG'|'SHORT';kind:'FADE'|'LEAD'|'CATCH';why:string;wrong:string}[];
 };
 
@@ -170,7 +177,10 @@ function orderOf(t:Trade,status:'OPEN'|'CLOSED'):ForwardOrder{
     :t.entryContext?.tradePlan?(PLAN[t.entryContext.tradePlan]??null):null;
   return {id:t.id,symbol:t.symbol,side:t.side,status,entryPrice:t.entryPrice,price,openedAt:t.openedAt,
     closedAt:status==='CLOSED'?t.closedAt:null,net,leverage:t.leverage,margin:t.margin,
-    plan:plan?(PLAN[plan]??plan):null,waiting:status==='OPEN'?exitWait(t):null};
+    plan:plan?(PLAN[plan]??plan):null,waiting:status==='OPEN'?exitWait(t):null,
+    stop:finite(t.stopPrice)?t.stopPrice:null,
+    target:t.entryContext?.strategyVersion==='lsr-v1'&&t.entryPrice>0?t.entryPrice*(t.side==='LONG'?1.003:0.997):null,
+    exit:t.exitReason??null};
 }
 function money(n:number){
   if(!(n>0))return '—';
@@ -187,6 +197,21 @@ function exitWait(t:Trade){
   if(version==='score-v1')return `到止损 ${stop}、到目标，或者满 30 分钟，谁先到谁走。`;
   if(version==='needle-v1')return `打穿针尖 ${stop} 就走。5 分钟没走出 0.15%，或浮亏到 4U，也走。到过 0.8% 再吐回一半走。最长 90 分钟。`;
   return t.entryContext?.invalidationSummary??null;
+}
+function lsrBoardOf(trial:InverseTrial):LsrBoard{
+  const f=trial.lsrFunnel;
+  const board:LsrBoard={scans:f?.scans??0,signals:f?.signals??0,filled:f?.filled??0,cancelled:f?.cancelled??0,
+    closed:f?.closed??0,wins:f?.wins??0,trend:f?.trend??0,exhaustion:f?.exhaustion??0,sweep:f?.sweep??0,
+    micro:f?.micro??0,stale:f?.stale??0,spread:f?.spread??0,price:f?.priceCheck??0,
+    resting:(trial.lsrWork??[]).map(order=>({symbol:order.s,side:order.side,price:order.price})),verdict:''};
+  const stuck=[['趋势',board.trend],['放量',board.exhaustion],['扫单',board.sweep],['往回摆',board.micro],['价差',board.spread],['行情过期',board.stale],['价格对不上',board.price]]
+    .sort((a,b)=>Number(b[1])-Number(a[1]));
+  board.verdict=board.scans===0?'还没有记下一拍。'
+    :board.signals===0?`还没出信号。最多卡在${stuck[0]?.[0]??'趋势'}。`
+    :board.filled===0&&board.cancelled>0?`出过信号。挂单没被打到，撤了 ${board.cancelled} 次。`
+    :board.filled>0?`成交 ${board.filled} 笔，已平 ${board.closed} 笔，赢 ${board.wins} 笔。`
+    :`出过 ${board.signals} 个信号，还在等价格打到挂单价。`;
+  return board;
 }
 export function forwardDeskView(state:ForwardState,quotes:Record<string,Quote>,now:number):ForwardDesk|null{
   const trial=state.inverseTrial;if(!trial?.source)return null;
@@ -228,6 +253,7 @@ export function forwardDeskView(state:ForwardState,quotes:Record<string,Quote>,n
     readNote:trial.paperPolicy==='read-v1'?trial.readNote:undefined,
     stretchNote:trial.paperPolicy==='stretch-v1'?trial.stretchNote:undefined,
     lsrNote:trial.paperPolicy==='lsr-v1'?trial.lsrNote:undefined,
+    lsrBoard:trial.paperPolicy==='lsr-v1'?lsrBoardOf(trial):undefined,
     work:trial.paperPolicy==='brain-v1'||trial.paperPolicy==='read-v1'||trial.paperPolicy==='stretch-v1'||trial.paperPolicy==='lsr-v1'?trial.work:undefined,
     brainIdeas:trial.paperPolicy==='brain-v1'?trial.brainIdeas??[]:undefined};
 }

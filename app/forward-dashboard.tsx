@@ -85,12 +85,14 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       </section>
       {liveEnabled&&<section className="fr-section"><div className="fr-section-head"><h2>实盘复制</h2></div>
         <p>已复制 {liveOverview?.copied??"—"} / 应复制 {liveOverview?.eligible??"—"} · 未跟上 {liveOverview?.missing??"—"}。成交和持仓以实盘页为准。</p></section>}
+      {desk?.book==="lsr-v1"&&<LsrPulse note={desk.lsrNote} board={desk.lsrBoard}/>}
       {desk?<ForwardCurve desk={desk}/>:<PaperEquitySection data={data} healthy={healthy} cache={equityCache} cacheScope={cacheScope}/>}
       {liveEnabled&&<LiveEquityCurve head={liveOverview?.equityCurve} mark={actual} enabled={liveEnabled} sessionAt={liveOverview?.sessionAt??0} cacheScope={cacheScope} now={now}/>}
       {desk&&<ForwardOrders desk={desk} now={now}/>}
     </>}
 
-    {tab==="research"&&(desk?.book==="read-v1"||desk?.book==="brain-v1"||desk?.book==="stretch-v1"||desk?.book==="lsr-v1")&&<WorkResearch work={desk.work} note={desk.book==="lsr-v1"?desk.lsrNote:desk.book==="stretch-v1"?desk.stretchNote:desk.book==="brain-v1"?desk.brainNote:desk.readNote} ideas={desk.book==="brain-v1"?desk.brainIdeas:[ ]}/>}
+    {tab==="research"&&desk?.book==="lsr-v1"&&<LsrResearch work={desk.work} note={desk.lsrNote}/>}
+    {tab==="research"&&(desk?.book==="read-v1"||desk?.book==="brain-v1"||desk?.book==="stretch-v1")&&<WorkResearch work={desk.work} note={desk.book==="stretch-v1"?desk.stretchNote:desk.book==="brain-v1"?desk.brainNote:desk.readNote} ideas={desk.book==="brain-v1"?desk.brainIdeas:[ ]}/>}
     {tab==="research"&&desk?.book==="score-v1"&&<section className="fr-section" data-testid="research-claims"><div className="fr-section-head"><h2>研究</h2></div>
       <p>{desk.scoreNote||"还没有记下半小时。"}</p>
       <p className="fr-note">每一窗半小时。看哪些币比大多数币偏了至少 0.5%。这些币合成一个结果，不把每个币当成一条证据。前二十窗选止损、目标和方向，后二十窗扣完费用仍赚钱，才交给决策。够格的币中位数不到 6 个，不做。</p>
@@ -118,7 +120,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       <MarketIntelligenceExecution data={data} now={now} liveEnabled={liveEnabled} liveOverview={liveOverview}/>
     </>}
 
-    {tab==="decision"&&<DecisionPage data={data}/>}
+    {tab==="decision"&&<DecisionPage data={data} now={now}/>}
 
     {tab==="paper"&&liveEnabled&&<section className="fr-section" data-testid="paper-live-mirror"><p>本账户实盘成交、持仓和结算记录。</p></section>}
     {tab==="paper"&&!liveEnabled&&<section className="fr-section"><div className="fr-section-head"><h2>订单</h2></div>
@@ -143,6 +145,49 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   </main>;
 }
 
+function LsrPulse({note,board}:{note?:string;board?:Desk["lsrBoard"]}){
+  return <section className="fr-section lsr-pulse" data-testid="lsr-pulse">
+    <div className="fr-section-head"><h2>这一拍</h2></div>
+    <b>{board?.verdict??note??"还没有记下一拍。"}</b>
+    <p className="fr-note">{note??"扫描还没写出结果。"}</p>
+    <div className="lsr-counts">
+      <div><small>扫描</small><b>{fmt(board?.scans??0,0)}</b></div>
+      <div><small>出信号</small><b>{fmt(board?.signals??0,0)}</b></div>
+      <div><small>成交</small><b>{fmt(board?.filled??0,0)}</b></div>
+      <div><small>挂了没打到</small><b>{fmt(board?.cancelled??0,0)}</b></div>
+    </div>
+  </section>;
+}
+function LsrResearch({work,note}:{work:Desk["work"];note?:string}){
+  return <section className="fr-section" data-testid="research-claims">
+    <div className="fr-section-head"><h2>四关都过才挂单</h2></div>
+    <p>{note??work?.subject??"这一拍还没有结果。"}</p>
+    <p className="fr-note">急跌做多，急涨做空。15 分钟要急到分位外面，5 分钟要放量，近 8 秒要扫完再停住，盘口还要往回摆。</p>
+    {(work?.lines??[]).map(line=><article className="lsr-gate" key={line.name}><h3>{line.name}</h3><p>{line.said}</p><p className="fr-note">{line.data}</p></article>)}
+    {!work&&<p className="fr-note">步骤还没有写出来。</p>}
+  </section>;
+}
+function LsrDecision({desk,now}:{desk:Desk;now:number}){
+  const work=desk.work,board=desk.lsrBoard;
+  return <section className="fr-section" data-testid="decision-stance">
+    <div className="fr-section-head"><h2>现在在等</h2></div>
+    <p>{work?.waiting??"在等四关都过。"}</p>
+    {!!board?.resting.length&&<div className="lsr-rest">{board.resting.map(order=><p key={`${order.symbol}-${order.side}`}>挂着 {order.symbol.replace("_"," / ")} {order.side==="LONG"?"多":"空"}，价 {fmt(order.price,6)}。下一次扫描打到这个价才成交。</p>)}</div>}
+    <div className="fr-section-head"><h2>这一拍准备做</h2></div>
+    <p>{work?.preparing??"这一拍没有开仓。"}</p>
+    <div className="fr-section-head"><h2>持仓在等什么出场</h2><span>{desk.open.length} 笔</span></div>
+    {desk.open.length?desk.open.map(order=><article className="lsr-hold" key={order.id}>
+      <header><b>{order.symbol.replace("_"," / ")} {order.side==="LONG"?"多":"空"}</b><b className={(order.net??0)>=0?"fr-positive":"fr-negative"}>{signed(order.net)} U</b></header>
+      <p>已拿 {duration(order.openedAt,null,now)}。进场 {fmt(order.entryPrice,6)}，现价 {fmt(order.price,6)}。</p>
+      <div className="lsr-exit">
+        <span>止盈 {fmt(order.target,6)}</span>
+        <span>止损 {fmt(order.stop,6)}</span>
+        <span>满 3 分钟还不赚</span>
+        <span>赚到 0.12% 后回到成本</span>
+      </div>
+    </article>):<p className="fr-note">没有持仓。开了以后只等四件事：涨到止盈 0.30%，打到止损 0.20%，赚到 0.12% 后回到成本，或者满 3 分钟还不赚。</p>}
+  </section>;
+}
 function WorkResearch({work,note,ideas}:{work:Desk["work"];note?:string;ideas?:Desk["brainIdeas"]}){
   return <section className="fr-section" data-testid="research-claims">
     <div className="fr-section-head"><h2>在研究什么</h2></div>
@@ -156,9 +201,10 @@ function WorkResearch({work,note,ideas}:{work:Desk["work"];note?:string;ideas?:D
     </>}
   </section>;
 }
-function DecisionPage({data}:{data:View|null}){
+function DecisionPage({data,now}:{data:View|null;now:number}){
   const desk=data?.forwardDesk??null,research=desk?.research,stance=stanceName(desk?.stance);
-  if((desk?.book==="read-v1"||desk?.book==="brain-v1"||desk?.book==="stretch-v1"||desk?.book==="lsr-v1")&&desk.work)return <section className="fr-section" data-testid="decision-stance">
+  if(desk?.book==="lsr-v1")return <LsrDecision desk={desk} now={now}/>;
+  if((desk?.book==="read-v1"||desk?.book==="brain-v1"||desk?.book==="stretch-v1")&&desk.work)return <section className="fr-section" data-testid="decision-stance">
     <div className="fr-section-head"><h2>现在在等</h2></div>
     <p>{desk.work.waiting}</p>
     <div className="fr-section-head"><h2>准备做</h2></div>
@@ -227,7 +273,7 @@ function ForwardOrders({desk,now}:{desk:Desk;now:number}){
       </article>):<Empty title="当前没有持仓"/>}
     {desk.recent.length>0&&<><div className="fr-section-head"><h2>最近平仓</h2><span>{desk.recent.length} 笔</span></div>
       {desk.recent.map(o=><article className="fr-order" key={o.id}><header><div><b>{o.symbol.replace("_"," / ")}</b><small>{o.side==="LONG"?"多":"空"}{o.plan?` · ${o.plan}`:""}</small></div><b className={(o.net??0)>=0?"fr-positive":"fr-negative"}>{signed(o.net)} U</b></header>
-        <small>{time(o.openedAt)} → {time(o.closedAt)}</small></article>)}</>}
+        <small>{time(o.openedAt)} → {time(o.closedAt)}{o.exit?` · ${exitName(o.exit)}`:""}</small></article>)}</>}
   </section>;
 }
 function PaperEquitySection({data,healthy,cache,cacheScope}:{data:View|null;healthy:boolean;cache:EquityHistoryCache;cacheScope:string}){
