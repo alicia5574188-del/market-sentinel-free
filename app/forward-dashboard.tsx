@@ -273,6 +273,10 @@ function WorkResearch({work,note,ideas}:{work:Desk["work"];note?:string;ideas?:D
 }
 function DecisionPage({data,now}:{data:View|null;now:number}){
   const desk=data?.forwardDesk??null,research=desk?.research,stance=stanceName(desk?.stance);
+  if(!desk?.book)return <section className="fr-section" data-testid="decision-stance">
+    <div className="fr-section-head"><h2>没有策略</h2></div>
+    <p>策略系统已清空。行情和账户还在。新策略接上之前不会下单，重置也不会把旧策略装回来。</p>
+  </section>;
   if(desk?.book==="lsr-v1")return <LsrDecision desk={desk} now={now}/>;
   if((desk?.book==="read-v1"||desk?.book==="brain-v1"||desk?.book==="stretch-v1")&&desk.work)return <section className="fr-section" data-testid="decision-stance">
     <div className="fr-section-head"><h2>现在在等</h2></div>
@@ -333,6 +337,10 @@ function ForwardCurve({desk}:{desk:Desk}){
   </section>;
 }
 function ForwardOrders({desk,now}:{desk:Desk;now:number}){
+  if(!desk.book)return <section className="fr-section" data-testid="forward-orders">
+    <div className="fr-section-head"><h2>订单</h2><span>0 笔</span></div>
+    <p className="fr-note">没有策略，所以没有订单。</p>
+  </section>;
   const live=desk.liveResearch,rows=live?.experiment?.rows??[];
   if(desk.book==="lsr-v1")return <section className="fr-section" data-testid="forward-orders">
     <div className="fr-section-head"><h2>实验订单</h2><span>{rows.length} 笔</span></div>

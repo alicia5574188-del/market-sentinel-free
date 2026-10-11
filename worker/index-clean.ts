@@ -45,12 +45,11 @@ import { evaluateRegimePortfolio, initialRegimePortfolio, normalizeRegimePortfol
   REGIME_EXECUTION_UNIVERSE, REGIME_HOURLY_REQUIRED_CANDLES, REGIME_PORTFOLIO_VERSION, REGIME_STRATEGIES, REGIME_SYSTEMS, REGIME_UNIVERSE,
   type RegimePortfolioState } from "../lib/regime-portfolio.ts";
 import type { PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
-import {advanceShadowInverse,freshDeskLedger,freshNeedleLedger,freshBrainLedger,freshScoreLedger,freshReverseLedger,freshStretchLedger,freshLsrLedger,DESK_CLEAN_EPOCH,DESK_CLEAN_BEFORE,NEEDLE_EPOCH,NEEDLE_BEFORE,BRAIN_EPOCH,BRAIN_BEFORE,SCORE_EPOCH,SCORE_BEFORE,REVERSE_EPOCH} from '../lib/shadow-inverse.ts';
-import {STRETCH_EPOCH} from '../lib/stretch-book.ts';
-import {LSR_EPOCH,lsrLogBook} from '../lib/lsr-book.ts';
+import {lsrLogBook} from '../lib/lsr-book.ts';
 import {runLiveResearch,reviewResearchLog,RESEARCH_MAJORS,type ResearchSnap,type LiveResearchView,type ResearchLogRow} from '../lib/live-research.ts';
-import {applyResearchExperiment,experimentReport,holdMsOf,type RxSignal} from '../lib/research-experiment.ts';
-import {applyNewDesk,DESK_EPOCH,deskIdentity,deskLogPositions,freshNewDesk,type DeskSignal} from '../lib/new-desk.ts';
+import {experimentReport} from '../lib/research-experiment.ts';
+import {deskIdentity, deskLogPositions} from '../lib/new-desk.ts';
+import {emptyStrategyAccount, STRATEGY_EPOCH} from '../lib/strategy-slot.ts';
 import {buildRunLogExport} from '../lib/run-log.ts';
 import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
 import {confirmationRealityView} from '../lib/confirmation-reality.ts';
@@ -1389,103 +1388,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.forwardBusy = true;
     try {
       await this.ensureAdaptiveAccount(now);
-      await this.adoptDeskCleanLedger(now);
-      await this.adoptNeedleLedger(now);
-      await this.adoptBrainLedger(now);
-      await this.adoptScoreLedger(now);
-      await this.adoptReadLedger(now);
-      await this.adoptReverseLedger(now);
-      await this.adoptStretchLedger(now);
-      await this.adoptLsrLedger(now);
-      await this.adoptNewDesk(now);
-      const armed=false;
-      const state=this.forwardState!;
-      const dataCycleDue=allowDataCycle&&(!state.lastCycleAt
-        ||Math.floor((now-90_000)/BAR_MS)>Math.floor((state.lastCycleAt-90_000)/BAR_MS));
-      const rxWaiting=!!state.inverseTrial?.desk?.orders.some(row=>row.status==='pending');
-      const urgent=this.forwardUrgentSymbols(now).length>0||state.positions.length>0||rxWaiting;
-      const quoteCadence=urgent?LOOP_MS:5_000;
-      if(!dataCycleDue&&now-state.lastQuoteCycleAt<quoteCadence){
-        this.forwardLastAttemptAt=state.lastQuoteCycleAt;return;
-      }
-      this.forwardLastAttemptAt=now;
-      const previous = state,reviewEvents:ReviewEvent[]=[],executionQuotes=this.forwardQuotes(now);
-      const next = advanceShadowInverse({ state: previous, now, paths: this.strategyCandles,minutePaths:this.forwardMinutePaths(),
-        daily:this.turnDailyCandles,quotes:executionQuotes,analysisQuotes:this.forwardAnalysisQuotes(now),contracts:this.regimeContracts(),
-        entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue,
-        research:{rolling:this.shadowResearch.market[0]?.rolling??null},reviewTrace:event=>{if(reviewEvents.length<128)reviewEvents.push(event);} });
-      if(next.state.inverseTrial?.paperPolicy==='desk-v1'){
-        const research=this.liveResearchView(now),decision=research.decision;
-        const signal:DeskSignal|null=decision?{at:research.ts,symbol:decision.symbol,side:decision.planSide,confidence:decision.confidence,
-          reasoning:[decision.headline,...decision.why].join(' ').slice(0,280),stop:decision.stop,tp1:decision.tp1,tp2:decision.tp2,
-          holdMs:holdMsOf(decision.holdText),funding:research.context?.funding??0,corr1h:research.context?.symbol===decision.symbol?research.context.corr1h??null:null,
-          context:research.context?`15分钟 ${(research.context.ret15m*100).toFixed(2)}%，1小时 ${(research.context.ret1h*100).toFixed(2)}%`: '',
-          analogy:research.analogy?`${research.analogy.count} 个相似场面，跌的占 ${(research.analogy.downPct*100).toFixed(0)}%`:''}:null;
-        if(applyNewDesk(next.state,signal,executionQuotes,this.regimeContracts(),now))next.changed=true;
-      }else if(next.state.inverseTrial?.paperPolicy==='lsr-v1'){
-        const research=this.liveResearchView(now),decision=research.decision;
-        const signal:RxSignal|null=decision?{at:research.ts,symbol:decision.symbol,side:decision.planSide,confidence:decision.confidence,
-          reasoning:[decision.headline,...decision.why].join(' ').slice(0,280),stop:decision.stop,tp1:decision.tp1,tp2:decision.tp2,
-          holdMs:holdMsOf(decision.holdText),funding:research.context?.funding??0,corr1h:research.context?.symbol===decision.symbol?research.context.corr1h??null:null,
-          context:research.context?`15分钟 ${(research.context.ret15m*100).toFixed(2)}%，1小时 ${(research.context.ret1h*100).toFixed(2)}%`: '',
-          analogy:research.analogy?`${research.analogy.count} 个相似场面，跌的占 ${(research.analogy.downPct*100).toFixed(0)}%`:''}:null;
-        if(applyResearchExperiment(next.state,signal,executionQuotes,this.regimeContracts(),now)||armed)next.changed=true;
-      }
-      try{captureTradeReviews(previous,next.state,now,FORWARD_BUILD_SHA,STRATEGY_FINGERPRINT,executionQuotes);}
-      catch{this.reviewDiagnosticError="TRADE_REVIEW_CAPTURE_FAILED";}
-      if (next.changed || !previous.storage.persistedAt) {
-        next.state.storage = { persistedAt: now, error: null };
-        const prepared = await prepareForwardWrite(previous.storage.persistedAt ? previous : null, next.state, now, {compact:true});
-        // Retain authoritative parent exits even when the hot PAPER history
-        // rotates while Gate is unreachable. This is one write per bound exit,
-        // in the same atomic commit, not a new strategy/account or per-tick log.
-        const bound=new Set([...Object.values(this.runtime.live.entries).flatMap(e=>e?.mirrorSourceId?[e.mirrorSourceId]:[]),
-          ...Object.values(this.runtime.live.positions).flatMap(p=>p?.mirrorSourceId?[p.mirrorSourceId]:[])]);
-        const closures=next.state.history.filter(t=>bound.has(t.id)&&!this.mirrorClosures.has(t.id));
-        for(const t of closures)prepared.entries[`${LIVE_PARITY_PREFIX}source-close:${t.id}`]=structuredClone(t);
-        prepared.writes+=closures.length;
-        // All extra persistence consumes the existing non-alarm write reserve.
-        const reservation=this.reserveCriticalWrites(prepared.writes);
-        try {await this.ctx.storage.transaction(async transaction => { await transaction.put(prepared.entries); });reservation.finish(true);}
-        finally {reservation.finish(false);}
-        next.state.storage.layout=FORWARD_PAGED_STATE_VERSION;next.state.storage.sampleIntegrity="raw-sha256";
-        this.forwardCompression=prepared.compression;
-        for(const t of closures)this.mirrorClosures.set(t.id,structuredClone(t));
-      } else if (next.protectionChanged) {
-        // Only a new decision-relevant peak/confirmation requests this compact
-        // write. Ordinary quote/audit changes do not write or create archives.
-        // Keep the same base persistedAt: it fences this overlay to the last
-        // full financial commit, which remains the sole account authority.
-        const prepared=prepareForwardProtectionWrite(next.state);
-        // Resource counters survive a new financial generation and process
-        // restart. They share the checkpoint key/atomic commit, NOT the exit
-        // budget. A peak can no longer steal the final financial commit rows.
-        const usage=await this.ctx.storage.transaction(async transaction => {
-          const saved=await transaction.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
-          const writeBudget=nextProtectionWriteBudget(saved?.writeBudget,now);
-          await transaction.put({[FORWARD_PROTECTION_STORAGE]:{
-            ...prepared.entries[FORWARD_PROTECTION_STORAGE],writeBudget}});
-          return writeBudget;
-        });
-        this.forwardProtectionBudget=usage;
-      }
-      // A PAPER fill/rule update or critical protection update becomes visible
-      // only after its atomic commit. A failed write retains the old authority.
-      this.forwardState = next.state;
-      this.forwardError = null;
-      try{
-        const known=new Set(this.reviewJournal.candidates.map(r=>r.id));
-        const discovered:ReviewEvent[]=next.state.opportunities.filter(o=>!known.has(o.id)).map(o=>({at:now,id:o.id,symbol:o.symbol,
-          stage:"CANDIDATE_OBSERVED",side:o.side,reason:o.eligible?"STRATEGY_ELIGIBLE":"STRATEGY_NOT_ELIGIBLE",price:o.price,plan:o.tradePlan,expiresAt:o.expiresAt}));
-        appendReviewEvents(this.reviewJournal,[...discovered,...reviewEvents].map(e=>({...e,
-          buildSha:FORWARD_BUILD_SHA,strategyFingerprint:STRATEGY_FINGERPRINT,
-          ...(next.state.inverseTrial?{decisionBuildSha:SHADOW_BASELINE_BUILD,accountRole:'SHADOW_SOURCE' as const,
-            pairedTradeId:e.tradeId?inverseId(e.tradeId):undefined}:{})})),now);
-      }catch{this.reviewDiagnosticError="CANDIDATE_REVIEW_CAPTURE_FAILED";}
-      // Both realtime and candle lanes dispatch the SAME committed source.
-      // Mark-only observations do not schedule more private reads.
-      const lifecycle=(s:ForwardState)=>JSON.stringify(s.positions.map(t=>[t.id,t.contracts,t.inverseCopy?null:t.stopPrice]).sort());
-      if(lifecycle(previous)!==lifecycle(next.state))this.dispatchCommittedLiveSource();
+      await this.adoptEmptyStrategy(now);
+      void allowDataCycle;
+      return;
     } catch (error) { this.forwardError = safeError(error); }
     finally { this.forwardBusy = false; }
   }
@@ -2077,333 +1982,24 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return { ok: true, credential: await credentialMetadata(this.env.DB) };
   }
 
-  private async adoptDeskCleanLedger(now:number){
-    if(!this.deskCleanArmed||this.deskCleanSettled||!this.forwardState)return;
-    const epochKey=`${FORWARD_STORAGE}desk-clean-epoch`,sweepKey=`${FORWARD_STORAGE}desk-clean-sweep-before`;
-    const saved=await this.ctx.storage.get<string>(epochKey);
-    if(saved===DESK_CLEAN_EPOCH){
-      if(!(await this.sweepRetiredPaperArchives(sweepKey)))this.deskCleanSettled=true;
-      return;
-    }
-    const live=this.runtime.live;
-    if(live.requestedEnabled||live.operational
-      ||Object.values(live.positions).some(position=>position?.status==="OPEN")
-      ||Object.values(live.entries).some(entry=>entry&&!["FILLED","CANCELLED"].includes(entry.status)))return;
-    const previous=this.forwardState;
-    if(!(previous.startedAt<DESK_CLEAN_BEFORE)){this.deskCleanSettled=true;return;}
-    const next=freshDeskLedger(previous,now);
-    next.storage={persistedAt:now,error:null,layout:FORWARD_PAGED_STATE_VERSION,sampleIntegrity:"raw-sha256"};
-    const prepared=await prepareForwardWrite(previous.storage.persistedAt?previous:null,next,now,{compact:true});
-    const protection=await this.ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
-    const checkpoint=prepareForwardProtectionWrite(next).entries[FORWARD_PROTECTION_STORAGE] as Record<string,unknown>|undefined;
-    if(checkpoint)prepared.entries[FORWARD_PROTECTION_STORAGE]=protection?.writeBudget!==undefined?{...checkpoint,writeBudget:protection.writeBudget}:checkpoint;
-    prepared.entries[epochKey]=DESK_CLEAN_EPOCH;
-    prepared.entries[sweepKey]=next.startedAt;
-    prepared.writes+=(checkpoint?1:0)+2;
-    const reservation=this.reserveCriticalWrites(prepared.writes);
-    try{
-      await this.ctx.storage.transaction(async transaction=>{await transaction.put(prepared.entries);});
-      reservation.finish(true);
-    }finally{reservation.finish(false);}
-    next.storage.layout=FORWARD_PAGED_STATE_VERSION;next.storage.sampleIntegrity="raw-sha256";
-    this.forwardCompression=prepared.compression;this.forwardState=next;this.forwardError=null;
-    this.forwardProtectionBudget=readProtectionWriteBudget(protection?.writeBudget);
-    this.mirrorClosures.clear();
-    this.reviewJournal=initialReviewJournal(next.startedAt,now);this.reviewJournalLoaded=true;this.reviewDiagnosticError=null;
-    try{
-      await this.env.DB.batch([
-        this.env.DB.prepare("DELETE FROM paper_events").bind(),
-        this.env.DB.prepare("DELETE FROM paper_positions").bind(),
-      ]);
-    }catch{/* legacy order tables are optional; the forward book is already the new 1000U ledger */}
-    if(!(await this.sweepRetiredPaperArchives(sweepKey)))this.deskCleanSettled=true;
-  }
-
-  /** One switch onto the needle book. Live on, or an already-new book, is left alone. */
-  private async adoptNeedleLedger(now:number){
-    if(!this.needleArmed||this.needleSettled||!this.forwardState)return;
-    const epochKey=`${FORWARD_STORAGE}needle-book-epoch`,sweepKey=`${FORWARD_STORAGE}needle-book-sweep-before`;
-    const saved=await this.ctx.storage.get<string>(epochKey);
-    if(saved===NEEDLE_EPOCH){
-      if(!(await this.sweepRetiredPaperArchives(sweepKey)))this.needleSettled=true;
-      return;
-    }
-    const live=this.runtime.live;
-    if(live.requestedEnabled||live.operational
-      ||Object.values(live.positions).some(position=>position?.status==="OPEN")
-      ||Object.values(live.entries).some(entry=>entry&&!["FILLED","CANCELLED"].includes(entry.status)))return;
-    const previous=this.forwardState;
-    if(previous.inverseTrial?.paperPolicy==='needle-v1'||!(previous.startedAt<NEEDLE_BEFORE)){this.needleSettled=true;return;}
-    const next=freshNeedleLedger(previous,now);
-    next.storage={persistedAt:now,error:null,layout:FORWARD_PAGED_STATE_VERSION,sampleIntegrity:"raw-sha256"};
-    const prepared=await prepareForwardWrite(previous.storage.persistedAt?previous:null,next,now,{compact:true});
-    const protection=await this.ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
-    const checkpoint=prepareForwardProtectionWrite(next).entries[FORWARD_PROTECTION_STORAGE] as Record<string,unknown>|undefined;
-    if(checkpoint)prepared.entries[FORWARD_PROTECTION_STORAGE]=protection?.writeBudget!==undefined?{...checkpoint,writeBudget:protection.writeBudget}:checkpoint;
-    prepared.entries[epochKey]=NEEDLE_EPOCH;
-    prepared.entries[sweepKey]=next.startedAt;
-    prepared.writes+=(checkpoint?1:0)+2;
-    const reservation=this.reserveCriticalWrites(prepared.writes);
-    try{
-      await this.ctx.storage.transaction(async transaction=>{await transaction.put(prepared.entries);});
-      reservation.finish(true);
-    }finally{reservation.finish(false);}
-    next.storage.layout=FORWARD_PAGED_STATE_VERSION;next.storage.sampleIntegrity="raw-sha256";
-    this.forwardCompression=prepared.compression;this.forwardState=next;this.forwardError=null;
-    this.forwardProtectionBudget=readProtectionWriteBudget(protection?.writeBudget);
-    this.mirrorClosures.clear();
-    this.reviewJournal=initialReviewJournal(next.startedAt,now);this.reviewJournalLoaded=true;this.reviewDiagnosticError=null;
-    try{
-      await this.env.DB.batch([
-        this.env.DB.prepare("DELETE FROM paper_events").bind(),
-        this.env.DB.prepare("DELETE FROM paper_positions").bind(),
-      ]);
-    }catch{/* legacy order tables are optional */}
-    if(!(await this.sweepRetiredPaperArchives(sweepKey)))this.needleSettled=true;
-  }
-
-  /** One switch onto the research book. Live on, or an already-new book, is left alone. */
-  private async adoptBrainLedger(now:number){
-    if(!this.brainArmed||this.brainSettled||!this.forwardState)return;
-    const epochKey=`${FORWARD_STORAGE}brain-book-epoch`,sweepKey=`${FORWARD_STORAGE}brain-book-sweep-before`;
-    const saved=await this.ctx.storage.get<string>(epochKey);
-    if(saved===BRAIN_EPOCH){
-      if(!(await this.sweepRetiredPaperArchives(sweepKey)))this.brainSettled=true;
-      return;
-    }
-    const live=this.runtime.live;
-    if(live.requestedEnabled||live.operational
-      ||Object.values(live.positions).some(position=>position?.status==="OPEN")
-      ||Object.values(live.entries).some(entry=>entry&&!["FILLED","CANCELLED"].includes(entry.status)))return;
-    const previous=this.forwardState;
-    const policy=previous.inverseTrial?.paperPolicy;
-    if(policy==='brain-v1'){this.brainSettled=true;return;}
-    if(policy!=='read-v1'&&policy!=='score-v1'&&policy!=='needle-v1'&&!(previous.startedAt<BRAIN_BEFORE)){this.brainSettled=true;return;}
-    const next=freshBrainLedger(previous,now);
-    next.storage={persistedAt:now,error:null,layout:FORWARD_PAGED_STATE_VERSION,sampleIntegrity:"raw-sha256"};
-    const prepared=await prepareForwardWrite(previous.storage.persistedAt?previous:null,next,now,{compact:true});
-    const protection=await this.ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
-    const checkpoint=prepareForwardProtectionWrite(next).entries[FORWARD_PROTECTION_STORAGE] as Record<string,unknown>|undefined;
-    if(checkpoint)prepared.entries[FORWARD_PROTECTION_STORAGE]=protection?.writeBudget!==undefined?{...checkpoint,writeBudget:protection.writeBudget}:checkpoint;
-    prepared.entries[epochKey]=BRAIN_EPOCH;
-    prepared.entries[sweepKey]=next.startedAt;
-    prepared.writes+=(checkpoint?1:0)+2;
-    const reservation=this.reserveCriticalWrites(prepared.writes);
-    try{
-      await this.ctx.storage.transaction(async transaction=>{await transaction.put(prepared.entries);});
-      reservation.finish(true);
-    }finally{reservation.finish(false);}
-    next.storage.layout=FORWARD_PAGED_STATE_VERSION;next.storage.sampleIntegrity="raw-sha256";
-    this.forwardCompression=prepared.compression;this.forwardState=next;this.forwardError=null;
-    this.forwardProtectionBudget=readProtectionWriteBudget(protection?.writeBudget);
-    this.mirrorClosures.clear();
-    this.reviewJournal=initialReviewJournal(next.startedAt,now);this.reviewJournalLoaded=true;this.reviewDiagnosticError=null;
-    try{
-      await this.env.DB.batch([
-        this.env.DB.prepare("DELETE FROM paper_events").bind(),
-        this.env.DB.prepare("DELETE FROM paper_positions").bind(),
-      ]);
-    }catch{/* legacy order tables are optional */}
-    if(!(await this.sweepRetiredPaperArchives(sweepKey)))this.brainSettled=true;
-  }
-
-  /** One switch onto the half-hour score book. Live on, or an already-new book, is left alone. */
-  private async adoptScoreLedger(now:number){
-    if(!this.scoreArmed||this.scoreSettled||!this.forwardState)return;
-    const epochKey=`${FORWARD_STORAGE}score-book-epoch`,sweepKey=`${FORWARD_STORAGE}score-book-sweep-before`;
-    const saved=await this.ctx.storage.get<string>(epochKey);
-    if(saved===SCORE_EPOCH){
-      if(!(await this.sweepRetiredPaperArchives(sweepKey)))this.scoreSettled=true;
-      return;
-    }
-    const live=this.runtime.live;
-    if(live.requestedEnabled||live.operational
-      ||Object.values(live.positions).some(position=>position?.status==="OPEN")
-      ||Object.values(live.entries).some(entry=>entry&&!["FILLED","CANCELLED"].includes(entry.status)))return;
-    const previous=this.forwardState;
-    const policy=previous.inverseTrial?.paperPolicy;
-    if(policy==='score-v1'){this.scoreSettled=true;return;}
-    if(policy!=='brain-v1'&&policy!=='needle-v1'&&!(previous.startedAt<SCORE_BEFORE)){this.scoreSettled=true;return;}
-    const next=freshScoreLedger(previous,now);
-    next.storage={persistedAt:now,error:null,layout:FORWARD_PAGED_STATE_VERSION,sampleIntegrity:"raw-sha256"};
-    const prepared=await prepareForwardWrite(previous.storage.persistedAt?previous:null,next,now,{compact:true});
-    const protection=await this.ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
-    const checkpoint=prepareForwardProtectionWrite(next).entries[FORWARD_PROTECTION_STORAGE] as Record<string,unknown>|undefined;
-    if(checkpoint)prepared.entries[FORWARD_PROTECTION_STORAGE]=protection?.writeBudget!==undefined?{...checkpoint,writeBudget:protection.writeBudget}:checkpoint;
-    prepared.entries[epochKey]=SCORE_EPOCH;
-    prepared.entries[sweepKey]=next.startedAt;
-    prepared.writes+=(checkpoint?1:0)+2;
-    const reservation=this.reserveCriticalWrites(prepared.writes);
-    try{
-      await this.ctx.storage.transaction(async transaction=>{await transaction.put(prepared.entries);});
-      reservation.finish(true);
-    }finally{reservation.finish(false);}
-    next.storage.layout=FORWARD_PAGED_STATE_VERSION;next.storage.sampleIntegrity="raw-sha256";
-    this.forwardCompression=prepared.compression;this.forwardState=next;this.forwardError=null;
-    this.forwardProtectionBudget=readProtectionWriteBudget(protection?.writeBudget);
-    this.mirrorClosures.clear();
-    this.reviewJournal=initialReviewJournal(next.startedAt,now);this.reviewJournalLoaded=true;this.reviewDiagnosticError=null;
-    try{
-      await this.env.DB.batch([
-        this.env.DB.prepare("DELETE FROM paper_events").bind(),
-        this.env.DB.prepare("DELETE FROM paper_positions").bind(),
-      ]);
-    }catch{/* legacy order tables are optional */}
-    if(!(await this.sweepRetiredPaperArchives(sweepKey)))this.scoreSettled=true;
-  }
-
-  /** Retired. The stretch book must not replace the research book. */
-  private async adoptReadLedger(now:number){
-    void now;
-    this.readSettled=true;
-  }
-
-  /** One switch back to copying each proposal on the opposite side. Live on is left alone. */
-  private async adoptReverseLedger(now:number){
-    if(!this.reverseArmed||this.reverseSettled||!this.forwardState)return;
-    const epochKey=`${FORWARD_STORAGE}reverse-book-epoch`,sweepKey=`${FORWARD_STORAGE}reverse-book-sweep-before`;
-    const saved=await this.ctx.storage.get<string>(epochKey);
-    if(saved===REVERSE_EPOCH){
-      if(!(await this.sweepRetiredPaperArchives(sweepKey)))this.reverseSettled=true;
-      return;
-    }
-    const live=this.runtime.live;
-    if(live.requestedEnabled||live.operational
-      ||Object.values(live.positions).some(position=>position?.status==="OPEN")
-      ||Object.values(live.entries).some(entry=>entry&&!["FILLED","CANCELLED"].includes(entry.status)))return;
-    const previous=this.forwardState;
-    if(previous.inverseTrial?.paperPolicy==='reverse-v1'){this.reverseSettled=true;return;}
-    const next=freshReverseLedger(previous,now);
-    next.storage={persistedAt:now,error:null,layout:FORWARD_PAGED_STATE_VERSION,sampleIntegrity:"raw-sha256"};
-    const prepared=await prepareForwardWrite(previous.storage.persistedAt?previous:null,next,now,{compact:true});
-    const protection=await this.ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
-    const checkpoint=prepareForwardProtectionWrite(next).entries[FORWARD_PROTECTION_STORAGE] as Record<string,unknown>|undefined;
-    if(checkpoint)prepared.entries[FORWARD_PROTECTION_STORAGE]=protection?.writeBudget!==undefined?{...checkpoint,writeBudget:protection.writeBudget}:checkpoint;
-    prepared.entries[epochKey]=REVERSE_EPOCH;
-    prepared.entries[sweepKey]=next.startedAt;
-    prepared.writes+=(checkpoint?1:0)+2;
-    const reservation=this.reserveCriticalWrites(prepared.writes);
-    try{
-      await this.ctx.storage.transaction(async transaction=>{await transaction.put(prepared.entries);});
-      reservation.finish(true);
-    }finally{reservation.finish(false);}
-    next.storage.layout=FORWARD_PAGED_STATE_VERSION;next.storage.sampleIntegrity="raw-sha256";
-    this.forwardCompression=prepared.compression;this.forwardState=next;this.forwardError=null;
-    this.forwardProtectionBudget=readProtectionWriteBudget(protection?.writeBudget);
-    this.mirrorClosures.clear();
-    this.reviewJournal=initialReviewJournal(next.startedAt,now);this.reviewJournalLoaded=true;this.reviewDiagnosticError=null;
-    try{
-      await this.env.DB.batch([
-        this.env.DB.prepare("DELETE FROM paper_events").bind(),
-        this.env.DB.prepare("DELETE FROM paper_positions").bind(),
-      ]);
-    }catch{/* legacy order tables are optional */}
-    if(!(await this.sweepRetiredPaperArchives(sweepKey)))this.reverseSettled=true;
-  }
-
-  /** One switch onto the two-hour stretch book. Live on is left alone. */
-  private async adoptStretchLedger(now:number){
-    if(!this.stretchArmed||this.stretchSettled||!this.forwardState)return;
-    const epochKey=`${FORWARD_STORAGE}stretch-book-epoch`,sweepKey=`${FORWARD_STORAGE}stretch-book-sweep-before`;
-    const saved=await this.ctx.storage.get<string>(epochKey);
-    if(saved===STRETCH_EPOCH){
-      if(!(await this.sweepRetiredPaperArchives(sweepKey)))this.stretchSettled=true;
-      return;
-    }
-    const live=this.runtime.live;
-    if(live.requestedEnabled||live.operational
-      ||Object.values(live.positions).some(position=>position?.status==="OPEN")
-      ||Object.values(live.entries).some(entry=>entry&&!["FILLED","CANCELLED"].includes(entry.status)))return;
-    const previous=this.forwardState;
-    if(previous.inverseTrial?.paperPolicy==='stretch-v1'){this.stretchSettled=true;return;}
-    const next=freshStretchLedger(previous,now);
-    next.storage={persistedAt:now,error:null,layout:FORWARD_PAGED_STATE_VERSION,sampleIntegrity:"raw-sha256"};
-    const prepared=await prepareForwardWrite(previous.storage.persistedAt?previous:null,next,now,{compact:true});
-    const protection=await this.ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
-    const checkpoint=prepareForwardProtectionWrite(next).entries[FORWARD_PROTECTION_STORAGE] as Record<string,unknown>|undefined;
-    if(checkpoint)prepared.entries[FORWARD_PROTECTION_STORAGE]=protection?.writeBudget!==undefined?{...checkpoint,writeBudget:protection.writeBudget}:checkpoint;
-    prepared.entries[epochKey]=STRETCH_EPOCH;
-    prepared.entries[sweepKey]=next.startedAt;
-    prepared.writes+=(checkpoint?1:0)+2;
-    const reservation=this.reserveCriticalWrites(prepared.writes);
-    try{
-      await this.ctx.storage.transaction(async transaction=>{await transaction.put(prepared.entries);});
-      reservation.finish(true);
-    }finally{reservation.finish(false);}
-    next.storage.layout=FORWARD_PAGED_STATE_VERSION;next.storage.sampleIntegrity="raw-sha256";
-    this.forwardCompression=prepared.compression;this.forwardState=next;this.forwardError=null;
-    this.forwardProtectionBudget=readProtectionWriteBudget(protection?.writeBudget);
-    this.mirrorClosures.clear();
-    this.reviewJournal=initialReviewJournal(next.startedAt,now);this.reviewJournalLoaded=true;this.reviewDiagnosticError=null;
-    try{
-      await this.env.DB.batch([
-        this.env.DB.prepare("DELETE FROM paper_events").bind(),
-        this.env.DB.prepare("DELETE FROM paper_positions").bind(),
-      ]);
-    }catch{/* legacy order tables are optional */}
-    if(!(await this.sweepRetiredPaperArchives(sweepKey)))this.stretchSettled=true;
-  }
-
-  /** One switch onto the exhaustion fade book. Live on is left alone. */
-  private async adoptLsrLedger(now:number){
-    if(!this.lsrArmed||this.lsrSettled||!this.forwardState)return;
-    const epochKey=`${FORWARD_STORAGE}lsr-book-epoch`,sweepKey=`${FORWARD_STORAGE}lsr-book-sweep-before`;
-    const saved=await this.ctx.storage.get<string>(epochKey);
-    if(saved===LSR_EPOCH){
-      if(!(await this.sweepRetiredPaperArchives(sweepKey)))this.lsrSettled=true;
-      return;
-    }
-    const live=this.runtime.live;
-    if(live.requestedEnabled||live.operational
-      ||Object.values(live.positions).some(position=>position?.status==="OPEN")
-      ||Object.values(live.entries).some(entry=>entry&&!["FILLED","CANCELLED"].includes(entry.status)))return;
-    const previous=this.forwardState;
-    const next=freshLsrLedger(previous,now);
-    next.storage={persistedAt:now,error:null,layout:FORWARD_PAGED_STATE_VERSION,sampleIntegrity:"raw-sha256"};
-    const prepared=await prepareForwardWrite(previous.storage.persistedAt?previous:null,next,now,{compact:true});
-    const protection=await this.ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
-    const checkpoint=prepareForwardProtectionWrite(next).entries[FORWARD_PROTECTION_STORAGE] as Record<string,unknown>|undefined;
-    if(checkpoint)prepared.entries[FORWARD_PROTECTION_STORAGE]=protection?.writeBudget!==undefined?{...checkpoint,writeBudget:protection.writeBudget}:checkpoint;
-    prepared.entries[epochKey]=LSR_EPOCH;
-    prepared.entries[sweepKey]=next.startedAt;
-    prepared.writes+=(checkpoint?1:0)+2;
-    const reservation=this.reserveCriticalWrites(prepared.writes);
-    try{
-      await this.ctx.storage.transaction(async transaction=>{await transaction.put(prepared.entries);});
-      reservation.finish(true);
-    }finally{reservation.finish(false);}
-    next.storage.layout=FORWARD_PAGED_STATE_VERSION;next.storage.sampleIntegrity="raw-sha256";
-    this.forwardCompression=prepared.compression;this.forwardState=next;this.forwardError=null;
-    this.forwardProtectionBudget=readProtectionWriteBudget(protection?.writeBudget);
-    this.mirrorClosures.clear();
-    this.reviewJournal=initialReviewJournal(next.startedAt,now);this.reviewJournalLoaded=true;this.reviewDiagnosticError=null;
-    try{
-      await this.env.DB.batch([
-        this.env.DB.prepare("DELETE FROM paper_events").bind(),
-        this.env.DB.prepare("DELETE FROM paper_positions").bind(),
-      ]);
-    }catch{/* legacy order tables are optional */}
-    if(!(await this.sweepRetiredPaperArchives(sweepKey)))this.lsrSettled=true;
-  }
-
-  /** Replace the paper book once. Old strategies stop here. The wallet starts at 1000 again. */
-  private async adoptNewDesk(now:number){
+  /** Clear the paper book once. No old strategy is installed. */
+  private async adoptEmptyStrategy(now:number){
     if(this.newDeskSettled||!this.forwardState)return;
-    const epochKey=`${FORWARD_STORAGE}new-desk-epoch`;
+    const epochKey=`${FORWARD_STORAGE}strategy-slot-epoch`;
     const saved=await this.ctx.storage.get<string>(epochKey);
-    if(saved===DESK_EPOCH){this.newDeskSettled=true;return;}
+    if(saved===STRATEGY_EPOCH||this.forwardState.inverseTrial?.strategySlot==='empty'){this.newDeskSettled=true;return;}
     const live=this.runtime.live;
     if(live.requestedEnabled||live.operational
       ||Object.values(live.positions).some(position=>position?.status==="OPEN")
       ||Object.values(live.entries).some(entry=>entry&&!["FILLED","CANCELLED"].includes(entry.status)))return;
     const previous=this.forwardState;
-    const next=freshNewDesk(previous,now);
+    const next=emptyStrategyAccount(previous,now);
     next.storage={persistedAt:now,error:null,layout:FORWARD_PAGED_STATE_VERSION,sampleIntegrity:"raw-sha256"};
     const prepared=await prepareForwardWrite(previous.storage.persistedAt?previous:null,next,now,{compact:true});
     const protection=await this.ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
     const checkpoint=prepareForwardProtectionWrite(next).entries[FORWARD_PROTECTION_STORAGE] as Record<string,unknown>|undefined;
     if(checkpoint)prepared.entries[FORWARD_PROTECTION_STORAGE]=protection?.writeBudget!==undefined?{...checkpoint,writeBudget:protection.writeBudget}:checkpoint;
-    prepared.entries[epochKey]=DESK_EPOCH;
+    prepared.entries[epochKey]=STRATEGY_EPOCH;
     prepared.writes+=(checkpoint?1:0)+1;
     const reservation=this.reserveCriticalWrites(prepared.writes);
     try{
@@ -2459,7 +2055,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // impossible; closeForwardForReset safely falls back to the last saved mark.
       const closed=closeForwardForReset(previous,this.regimeQuotes(now),now);
       const wiped=resetForwardAccountPreservingLearning(previous,now);
-      const next=freshNewDesk(wiped,now);
+      const next=emptyStrategyAccount(wiped,now);
 
       stage="准备新账户";
       const prepared=await prepareForwardReset(previous,closed,next,now);

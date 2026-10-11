@@ -79,6 +79,7 @@ export type InverseTrial={version:typeof SHADOW_INVERSE_VERSION;sourceBuild:type
   lsrRows?:import('./run-log.ts').LsrPositionRow[];lsrFills?:import('./run-log.ts').LsrFill[];lsrCurve?:import('./run-log.ts').LsrCurvePoint[];
   rx?:import('./research-experiment.ts').RxBook;
   desk?:import('./new-desk.ts').DeskBook;
+  strategySlot?:'empty';
   swings?:EquitySwing[];swingArm?:{source?:SwingArm;inverse?:SwingArm}};
 export type ScoreHit=[number,number,number,number];
 export type ScoreCoin={symbol:string;residual:number;ref:number;dir:1|-1;up:ScoreHit;dn:ScoreHit};

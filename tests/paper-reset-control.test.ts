@@ -16,7 +16,8 @@ test("owner PAPER reset remains isolated, confirmed and unavailable to members",
   assert.match(ownerAction,/RESET_PAPER/);
   assert.match(resetMethod,/runtime\.live\.requestedEnabled\|\|this\.runtime\.live\.operational/);
   assert.match(resetMethod,/resetForwardAccountPreservingLearning\(previous,now\)/);
-  assert.match(resetMethod,/freshNewDesk\(wiped,now\)/);
+  assert.match(resetMethod,/emptyStrategyAccount\(wiped,now\)/);
+  assert.doesNotMatch(resetMethod,/freshLsrLedger|freshNewDesk|freshNeedleLedger|adoptLsrLedger|adoptNewDesk/);
   assert.match(worker,/prepareForwardReset\(previous,closed,next,now\)/);
   assert.doesNotMatch(resetMethod,/行情不新鲜/);
   assert.match(resetMethod,/for\(const\[key,value\]of Object\.entries\(prepared\.archiveEntries\)\)await transaction\.put\(key,value\)/);
@@ -39,20 +40,17 @@ test("owner PAPER reset remains isolated, confirmed and unavailable to members",
   assert.match(cache,/if\(this\.key!==key\)/);
 });
 
-test("desk clean ledger runs once, deletes old archives, and will not run while live is on",()=>{
+test("startup clears the strategy once and does not install an old book",()=>{
   const worker=readFileSync(new URL("../worker/index-clean.ts",import.meta.url),"utf8");
-  const method=worker.slice(worker.indexOf("private async adoptDeskCleanLedger"),worker.indexOf("private async sweepRetiredPaperArchives"));
+  const method=worker.slice(worker.indexOf("private async adoptEmptyStrategy"),worker.indexOf("private async sweepRetiredPaperArchives"));
   assert.match(method,/requestedEnabled\|\|live\.operational/);
-  assert.match(method,/freshDeskLedger\(previous,now\)/);
-  assert.match(method,/DESK_CLEAN_EPOCH/);
-  assert.match(method,/DELETE FROM paper_events/);
-  assert.match(method,/DELETE FROM paper_positions/);
+  assert.match(method,/emptyStrategyAccount\(previous,now\)/);
+  assert.match(method,/STRATEGY_EPOCH/);
+  assert.doesNotMatch(method,/freshDeskLedger|freshLsrLedger|freshNewDesk|applyNewDesk|applyResearchExperiment/);
   assert.doesNotMatch(method,/requestedEnabled\s*=\s*true|setLiveMode\(/);
-  const sweep=worker.slice(worker.indexOf("private async sweepRetiredPaperArchives"),worker.indexOf("private async resetPaperAccount"));
-  assert.match(sweep,/storage\.delete\(keys\)/);
   const advance=worker.slice(worker.indexOf("private async advanceForwardNow"),worker.indexOf("private async refreshRegimeHourly"));
-  assert.match(advance,/adoptDeskCleanLedger\(now\)/);
-  assert.doesNotMatch(advance,/prepareForwardReset|initialMultiTurnForward\(/);
+  assert.match(advance,/adoptEmptyStrategy\(now\)/);
+  assert.doesNotMatch(advance,/adoptDeskCleanLedger|adoptLsrLedger|adoptNewDesk|advanceShadowInverse|applyNewDesk|applyResearchExperiment/);
 });
 
 
