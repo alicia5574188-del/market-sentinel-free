@@ -55,6 +55,22 @@ test('fake-breakout fade opens once and the log is v3', async () => {
   assert.ok(Math.abs(log.invariants.identity_error) < 0.5);
 });
 
+test('a single closed pin opens, a close that stays outside does not', async () => {
+  const pin = flat(60);
+  const last = pin.at(-1)!;
+  pin[pin.length - 1] = { ...last, high: 110, low: 99, close: 100 };
+  const opened = await runThesisCycle(null, [market(pin)], last.ts, 1000);
+  assert.equal(opened.view.open.length, 1);
+  assert.equal(opened.view.open[0]?.side, 'SHORT');
+
+  const broke = flat(60);
+  const tip = broke.at(-1)!;
+  broke[broke.length - 1] = { ...tip, high: 110, low: 100, close: 108 };
+  const held = await runThesisCycle(null, [market(broke)], tip.ts, 1000);
+  assert.equal(held.view.open.length, 0);
+  assert.match(held.view.rows[0]?.detail ?? '', /没收回/);
+});
+
 test('no fresh market still says the strategy is attached', async () => {
   const view = (await runThesisCycle(null, [], T0, 1000)).view;
   assert.match(view.note, /策略已接上/);

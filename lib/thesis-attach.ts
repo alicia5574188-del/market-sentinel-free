@@ -154,7 +154,8 @@ function bindThesis(prev: ThesisAttached | null, markets: ThesisMarket[], now: n
 
 export async function exportAttachedLog(prev: ThesisAttached, markets: ThesisMarket[], now: number) {
   const { system } = bindThesis(prev, markets, now, prev.initialEquity);
-  return system.exportLog();
+  const log = await system.exportLog();
+  return { ...log, decisions: prev.view?.rows ?? [] };
 }
 
 export async function runThesisCycle(

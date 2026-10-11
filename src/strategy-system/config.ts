@@ -19,6 +19,8 @@ export const CONFIG = {
   // 假突破和破位两个条件都永不成立。
   range: {
     lookback: 50,
+    // 开仓看最近 12 根已经收完的 1 小时 K。50 根高点太远，几小时几乎扫不到，所以一直不开。
+    breakoutLookback: 12,
     shelfExclude: 3,
     breakoutExclude: 2,
   },

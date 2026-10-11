@@ -39,7 +39,7 @@ export function decide(
         action: { type: 'OPEN', direction: sig.side, reason: sig.reason },
         thesisScore: 0,
         thesisState: 'ALIVE',
-        detail: 'new fake breakout',
+        detail: sig.reason,
         factors: [],
         triggerNotes: [],
         newContext: { thesisState: 'ALIVE', thesisStateAt: now, regime: 'RANGE' },
@@ -49,7 +49,7 @@ export function decide(
       action: { type: 'HOLD' },
       thesisScore: 0,
       thesisState: ctx.thesisState,
-      detail: 'no signal',
+      detail: noBreakDetail(snap),
       factors: [],
       triggerNotes: [],
       newContext: ctx,
@@ -108,15 +108,33 @@ export function decide(
 function detectFakeBreakout(snap: MarketSnapshot): { side: 'LONG' | 'SHORT'; reason: string } | null {
   const candles = snap.candles['1h'] ?? [];
   if (candles.length < CONFIG.minCandles1h) return null;
-  const range = calcRange(candles, CONFIG.range.lookback, CONFIG.range.breakoutExclude);
   const last = candles[candles.length - 1];
   const prev = candles[candles.length - 2];
-  if (!last || !prev || range.high === 0) return null;
-  if (prev.high > range.high && last.close < range.high) {
-    return { side: 'SHORT', reason: `上破${range.high.toFixed(1)}后收回` };
+  if (!last || !prev) return null;
+  const pinShelf = calcRange(candles, CONFIG.range.breakoutLookback, 1);
+  const twoShelf = calcRange(candles, CONFIG.range.breakoutLookback, CONFIG.range.breakoutExclude);
+  if (!(pinShelf.high > pinShelf.low) || !(twoShelf.high > twoShelf.low)) return null;
+  // 同一根已收完的 K：影线扫出区间，收盘回到里面。这是插针，以前只认「前一根扫、后一根收」，单根永远不开。
+  if (last.high > pinShelf.high && last.close < pinShelf.high && last.close > pinShelf.low) {
+    return { side: 'SHORT', reason: `上破${pinShelf.high.toFixed(1)}后收回` };
   }
-  if (prev.low < range.low && last.close > range.low) {
-    return { side: 'LONG', reason: `下破${range.low.toFixed(1)}后收回` };
+  if (last.low < pinShelf.low && last.close > pinShelf.low && last.close < pinShelf.high) {
+    return { side: 'LONG', reason: `下破${pinShelf.low.toFixed(1)}后收回` };
+  }
+  if (prev.high > twoShelf.high && last.close < twoShelf.high && last.close > twoShelf.low) {
+    return { side: 'SHORT', reason: `前一根上破${twoShelf.high.toFixed(1)}后收回` };
+  }
+  if (prev.low < twoShelf.low && last.close > twoShelf.low && last.close < twoShelf.high) {
+    return { side: 'LONG', reason: `前一根下破${twoShelf.low.toFixed(1)}后收回` };
   }
   return null;
+}
+
+function noBreakDetail(snap: MarketSnapshot): string {
+  const candles = snap.candles['1h'] ?? [];
+  if (candles.length < CONFIG.minCandles1h) return `1小时K只有${candles.length}根`;
+  const last = candles[candles.length - 1];
+  const shelf = calcRange(candles, CONFIG.range.breakoutLookback, 1);
+  if (!last || !(shelf.high > shelf.low)) return '没有收完的1小时K';
+  return `没收回：高${last.high.toFixed(1)} 低${last.low.toFixed(1)} 收${last.close.toFixed(1)}，12小时区间${shelf.low.toFixed(1)}-${shelf.high.toFixed(1)}`;
 }
