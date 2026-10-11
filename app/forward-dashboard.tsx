@@ -56,7 +56,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
 
   const desk=data?.forwardDesk??null,positions=data?.positions??[];
   const usingDesk=!!desk&&!liveEnabled;
-  const stanceLabel=desk?.book==="lsr-v1"?"衰竭":desk?.book==="stretch-v1"?"新账":desk?.book==="reverse-v1"?"反向":desk?.book==="needle-v1"||desk?.book==="brain-v1"||desk?.book==="score-v1"||desk?.book==="read-v1"?"账户":stanceName(desk?.stance);
+  const stanceLabel=desk?.book==="lsr-v1"?"实验":desk?.book==="stretch-v1"?"新账":desk?.book==="reverse-v1"?"反向":desk?.book==="needle-v1"||desk?.book==="brain-v1"||desk?.book==="score-v1"||desk?.book==="read-v1"?"账户":stanceName(desk?.stance);
   const paperFloating=usingDesk?desk.floating:positions.reduce((n,t)=>n+(t.status==="OPEN"?remainingPaidNetPnl(t,t.lastPrice):0),0);
   const held=usingDesk?desk.openCount:positions.length;
   const systemStatus=statusLabel==="后台运行中"?"正常":statusLabel?.startsWith("后台运行中 · ")?statusLabel.slice(8):statusLabel??(healthy?"正常":"行情恢复中");
@@ -85,7 +85,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       </section>
       {liveEnabled&&<section className="fr-section"><div className="fr-section-head"><h2>实盘复制</h2></div>
         <p>已复制 {liveOverview?.copied??"—"} / 应复制 {liveOverview?.eligible??"—"} · 未跟上 {liveOverview?.missing??"—"}。成交和持仓以实盘页为准。</p></section>}
-      {desk?.book==="lsr-v1"&&<LsrPulse note={desk.lsrNote} board={desk.lsrBoard} net={desk.netPnl} floating={desk.floating}/>}
+      {desk?.book==="lsr-v1"&&<LsrPulse desk={desk}/>}
       {desk?<ForwardCurve desk={desk}/>:<PaperEquitySection data={data} healthy={healthy} cache={equityCache} cacheScope={cacheScope}/>}
       {liveEnabled&&<LiveEquityCurve head={liveOverview?.equityCurve} mark={actual} enabled={liveEnabled} sessionAt={liveOverview?.sessionAt??0} cacheScope={cacheScope} now={now}/>}
       {desk&&<ForwardOrders desk={desk} now={now}/>}
@@ -145,21 +145,13 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   </main>;
 }
 
-function LsrPulse({note,board,net,floating}:{note?:string;board?:Desk["lsrBoard"];net:number|null;floating:number|null}){
-  const prior=board?.priorNet??0;
-  const closed=board?.closedNet??(net!=null&&floating!=null?net-floating-prior:null);
-  const openMark=net!=null&&closed!=null?net-prior-closed:floating;
+function LsrPulse({desk}:{desk:Desk}){
+  const exp=desk.liveResearch?.experiment;
   return <section className="fr-section lsr-pulse" data-testid="lsr-pulse">
-    <div className="fr-section-head"><h2>这一拍</h2></div>
-    <b>{board?.verdict??note??"还没有记下一拍。"}</b>
-    <p className="fr-note">{note??"扫描还没写出结果。"}</p>
-    <p className="fr-note">账户盈亏 {signed(net)} U = 旧账 {signed(prior)} U + 已平净利 {signed(closed)} U + 还没平的 {signed(openMark)} U。旧账只计一次，不算进已平，也不算赢了几笔。已平净利扣了开仓和平仓各 0.02%。</p>
-    <div className="lsr-counts">
-      <div><small>扫描</small><b>{fmt(board?.scans??0,0)}</b></div>
-      <div><small>出信号</small><b>{fmt(board?.signals??0,0)}</b></div>
-      <div><small>成交</small><b>{fmt(board?.filled??0,0)}</b></div>
-      <div><small>挂了没打到</small><b>{fmt(board?.cancelled??0,0)}</b></div>
-    </div>
+    <div className="fr-section-head"><h2>实验</h2><span>{exp?.running?"在跑":exp?"已停止":"还没开始"}</span></div>
+    <b>{exp?.status??"实验还没记上第一笔。"}</b>
+    <p className="fr-note">决策 {exp?.decisions??0} 次，开成 {exp?.opened??0} 笔，6 秒没成交 {exp?.cancelled??0} 笔，还在场上 {exp?.stillOpen??0} 笔。</p>
+    <p className="fr-note">费用合计 {fmt(exp?.fees.total,4)} U。开仓手续费 {fmt(exp?.fees.openFee,4)}，平仓手续费 {fmt(exp?.fees.closeFee,4)}，滑点 {fmt(exp?.fees.slippage,4)}，资金费 {fmt(exp?.fees.funding,4)}。</p>
   </section>;
 }
 function LsrResearch({desk,now}:{desk:Desk;now:number}){
@@ -260,7 +252,7 @@ function LsrDecision({desk,now}:{desk:Desk;now:number}){
       <div className="lsr-exit">
         <span>第一目标 {order.target==null?"还没写":fmt(order.target,6)}</span>
         <span>止损 {order.stop==null?"还没写":fmt(order.stop,6)}</span>
-        <span>{order.plan==="研究"?"按研究层出场":"老单，最长 15 分钟"}</span>
+        <span>{order.plan==="研究"?"按研究层的时间出场":"旧单，按原来的 15 分钟"}</span>
       </div>
       {order.waiting&&<p>{order.waiting}</p>}
     </article>):<p className="fr-note">没有持仓。成交以后等五件事：第一目标、第二目标、止损、研究层给的持仓时间，或者 30 秒检查发现看错了。</p>}
@@ -326,7 +318,7 @@ function DecisionPage({data,now}:{data:View|null;now:number}){
   </section>;
 }
 function ForwardCurve({desk}:{desk:Desk}){
-  const label=desk.book==="lsr-v1"?"衰竭净值":desk.book==="stretch-v1"?"新账净值":desk.book==="reverse-v1"?"反向净值":desk.book==="needle-v1"||desk.book==="brain-v1"||desk.book==="score-v1"||desk.book==="read-v1"?"账户净值":stanceName(desk.stance)==="反向"?"反向净值":desk.stance==="FLAT"?"账户净值":"正向净值";
+  const label=desk.book==="lsr-v1"?"实验净值":desk.book==="stretch-v1"?"新账净值":desk.book==="reverse-v1"?"反向净值":desk.book==="needle-v1"||desk.book==="brain-v1"||desk.book==="score-v1"||desk.book==="read-v1"?"账户净值":stanceName(desk.stance)==="反向"?"反向净值":desk.stance==="FLAT"?"账户净值":"正向净值";
   const points=desk.curve.length?desk.curve:[{at:0,equity:desk.initialEquity}];
   const lo=Math.min(desk.initialEquity,...points.map(p=>p.equity)),hi=Math.max(desk.initialEquity,...points.map(p=>p.equity));
   const range=Math.max(1e-6,hi-lo),first=points[0]!.at,last=Math.max(first+1,points.at(-1)!.at);

@@ -171,7 +171,7 @@ function orderOf(t:Trade,status:'OPEN'|'CLOSED'):ForwardOrder{
     :t.entryContext?.strategyVersion==='score-v1'
     ?t.entryContext.mode==='REVERSAL'?'收回':'顺着'
     :t.entryContext?.strategyVersion==='lsr-v1'
-    ?'衰竭'
+    ?'旧单'
     :t.entryContext?.strategyVersion==='rx-v1'
     ?'研究'
     :t.entryContext?.strategyVersion==='stretch-v1'

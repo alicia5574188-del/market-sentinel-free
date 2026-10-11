@@ -240,7 +240,19 @@ export function applyLsrBook(state:ForwardState,paths:Record<string,Candle[]>|un
   }
   if(trial.rx?.on){
     if(trial.lsrWork?.length){trial.lsrWork=[];changed=true;}
+    const book=trial.rx,pending=book.orders.filter(row=>row.status==='open'||row.status==='pending').length;
+    const cost=book.openFee+book.closeFee+book.openSlippage+book.closeSlippage+book.fundingFee;
+    const work:WorkSheet={subject:'研究层给出方向，就按 500U 正向做。老策略不再开新单。',
+      method:'不看四关。把握再低也做。挂在买卖中间价，6 秒没成交就撤。出场用研究层的止损、两个目标、持仓时间。看错的条件每 30 秒查一次。权益到 0 才停开新单。',
+      lines:[
+        {name:'1. 研究',data:'研究层大约每 30 秒给一个方向。',said:`已记 ${book.decisionsN} 次决策。`},
+        {name:'2. 开单',data:'方向是做多或做空就挂 500U。同一币可以连续开，不设仓位上限。',said:`开成 ${book.openedN} 笔，6 秒没成交 ${book.cancelledN} 笔。`},
+        {name:'3. 出场',data:'第一目标、第二目标、止损、研究层给的时间，或者看错了。',said:`还在场上 ${pending} 笔。`},
+        {name:'4. 费用',data:'开仓 0.02% 加 1bp。止盈同样。止损和市价平 0.05% 加 10bp。资金费另记。',said:`费用合计 ${cost.toFixed(4)} U。`}],
+      waiting:book.stoppedAt?(book.stopReason??'权益到 0，不再开新单。'):'等下一次研究。给出方向就挂 500U。',
+      preparing:'这一拍按研究层的方向做，不是老的四关。'};
     trial.lsrNote='老策略不再开新单。研究实验在记账。';
+    if(JSON.stringify(trial.work)!==JSON.stringify(work)){trial.work=work;changed=true;}
     return changed;
   }
   const opened:string[]=[];
