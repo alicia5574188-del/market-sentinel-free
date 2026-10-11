@@ -273,7 +273,7 @@ function WorkResearch({work,note,ideas}:{work:Desk["work"];note?:string;ideas?:D
 }
 function DecisionPage({data,now}:{data:View|null;now:number}){
   const desk=data?.forwardDesk??null,research=desk?.research,stance=stanceName(desk?.stance);
-  if(!desk?.book)return <section className="fr-section" data-testid="decision-stance">
+  if(!desk?.book&&!desk?.open?.length)return <section className="fr-section" data-testid="decision-stance">
     <div className="fr-section-head"><h2>没有策略</h2></div>
     <p>策略系统已清空。行情和账户还在。新策略接上之前不会下单，重置也不会把旧策略装回来。</p>
   </section>;
@@ -337,7 +337,7 @@ function ForwardCurve({desk}:{desk:Desk}){
   </section>;
 }
 function ForwardOrders({desk,now}:{desk:Desk;now:number}){
-  if(!desk.book)return <section className="fr-section" data-testid="forward-orders">
+  if(!desk.book&&desk.open.length===0)return <section className="fr-section" data-testid="forward-orders">
     <div className="fr-section-head"><h2>订单</h2><span>0 笔</span></div>
     <p className="fr-note">没有策略，所以没有订单。</p>
   </section>;
