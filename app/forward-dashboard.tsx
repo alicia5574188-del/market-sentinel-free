@@ -57,38 +57,40 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
 
   const desk=data?.forwardDesk??null,positions=data?.positions??[];
   const thesis=(data as (View & {thesis?:ThesisPublic|null}) | null)?.thesis??null;
-  const paperFloating=positions.reduce((n,t)=>n+(t.status==="OPEN"?remainingPaidNetPnl(t,t.lastPrice):0),0);
-  const held=positions.length;
+  const usingDesk=!!desk&&!liveEnabled&&(!!desk.book||desk.open.length>0);
+  const stanceLabel=desk?.book==="lsr-v1"?"实验":desk?.book==="stretch-v1"?"新账":desk?.book==="reverse-v1"?"反向":desk?.book==="needle-v1"||desk?.book==="brain-v1"||desk?.book==="score-v1"||desk?.book==="read-v1"?"账户":stanceName(desk?.stance);
+  const paperFloating=usingDesk?desk.floating:positions.reduce((n,t)=>n+(t.status==="OPEN"?remainingPaidNetPnl(t,t.lastPrice):0),0);
+  const held=usingDesk?desk.openCount:positions.length;
   const systemStatus=statusLabel==="后台运行中"?"正常":statusLabel?.startsWith("后台运行中 · ")?statusLabel.slice(8):statusLabel??(healthy?"正常":"行情恢复中");
-  const actual=liveOverview?.accountMark,accountEquity=liveEnabled?liveOverview?.equity:data?.equity,
-    accountPnl=liveEnabled?actual?.tradingPnl:data?.netPnl,
-    accountBase=liveEnabled?actual?.initialEquity:data?.initialEquity;
-  const drawdown=liveEnabled?(actual?actual.maxDrawdown*100:null):data?data.maxDrawdown*100:null;
+  const actual=liveOverview?.accountMark,accountEquity=liveEnabled?liveOverview?.equity:usingDesk?desk.equity:data?.equity,
+    accountPnl=liveEnabled?actual?.tradingPnl:usingDesk?desk.netPnl:data?.netPnl,
+    accountBase=liveEnabled?actual?.initialEquity:usingDesk?desk.initialEquity:data?.initialEquity;
+  const drawdown=liveEnabled?(actual?actual.maxDrawdown*100:null):usingDesk?(desk.maxDrawdown==null?null:desk.maxDrawdown*100):data?data.maxDrawdown*100:null;
   const tape=(data as {observationTape?:{sentence?:string;lines?:string[]}}|null)?.observationTape;
   const nav:[Tab,string,string][]=[["overview","⇄","订单"],["research","⌘","研究"],["decision","◉","决策"],["live","◈","实盘"],["settings","⊙","系统"]];
   return <main className="fr-app" style={fontVars as CSSProperties} data-ui-version="market-intelligence-v1">
     <header className="fr-compact-header"><b>哨兵 · 市场智能系统</b><span className={healthy?"fr-positive":""} role="status">{systemStatus}</span><span>实盘{liveEnabled?liveOverview?.operational?"运行中":"核对中":"关闭"}{memberName?` · ${memberName}`:""}</span></header>
 
     {tab==="overview"&&<>
-      <section className="fr-equity fr-overview-equity" data-testid="overview-equity-first" aria-label={liveEnabled?"实盘账户权益":"模拟账户权益"}>
-        <small>{liveEnabled?"实盘账户权益":"模拟账户权益"} · USDT</small><strong>{fmt(accountEquity)}</strong>
+      <section className="fr-equity fr-overview-equity" data-testid="overview-equity-first" aria-label={liveEnabled?"实盘账户权益":usingDesk?`${stanceLabel}权益`:"模拟账户权益"}>
+        <small>{liveEnabled?"实盘账户权益":usingDesk?`${stanceLabel}权益`:"模拟账户权益"} · USDT</small><strong>{fmt(accountEquity)}</strong>
         <div className={(accountPnl??0)>=0?"fr-positive":"fr-negative"}>{signed(accountPnl)} <span>U · {signed(accountPnl!=null&&accountBase?accountPnl/accountBase*100:null)}%{liveEnabled?" · 观察期交易盈亏":""}</span></div>
         <footer><span>{liveEnabled?"实盘观察基准":"起点"} {fmt(accountBase,liveEnabled?2:0)}</span><span>{liveEnabled?"观察期回撤":"最大回撤"} {fmt(drawdown)}%</span></footer>
-        <p>更新 {time(liveEnabled?liveOverview?.lastSyncAt:data?.updatedAt)}{liveEnabled&&(!liveOverview?.lastSyncAt||now-liveOverview.lastSyncAt>30000)?" · 实盘数据待更新":!liveEnabled&&data?.stalePositions?" · 持仓估值待更新":""}</p>
+        <p>更新 {time(liveEnabled?liveOverview?.lastSyncAt:data?.updatedAt)}{liveEnabled&&(!liveOverview?.lastSyncAt||now-liveOverview.lastSyncAt>30000)?" · 实盘数据待更新":!liveEnabled&&(usingDesk?desk.stale:data?.stalePositions)?" · 持仓估值待更新":""}</p>
         {liveEnabled&&<p>基准 {time(actual?.startedAt)} · 全合约账户，含手工持仓；交易盈亏待交易所流水字段齐全后确认。净值变化 {signed(actual?.capitalChange)} U（含出入金）。</p>}
       </section>
       <section className="fr-stats">
-        <Stat label="当前持仓" value={liveEnabled?`${actual?.positionCount??liveOverview?.positionCount??"—"} 笔`:data?`${held} 笔`:"—"} note={liveEnabled?`保证金 ${fmt(actual?.margin)} U`:`保证金 ${fmt(positions.reduce((n,t)=>n+t.margin,0))} U`}/>
-        <Stat label="浮动盈亏" value={`${signed(liveEnabled?actual?.floating:data?paperFloating:null)} U`} note={liveEnabled?"Gate实际未实现盈亏":`计划风险 ${fmt(data?.equity?positions.reduce((n,t)=>n+t.plannedRisk,0)/data.equity*100:null,1)}%`}/>
-        <Stat label="已完成" value={data?`${fmt(data.resolved,0)} 笔`:"—"} note="订单记录"/>
-        <Stat label={liveEnabled?"可用保证金":"已扣手续费"} value={`${fmt(liveEnabled?liveOverview?.available:data?.fees)} U`} note={liveEnabled?"Gate实际可用余额":`成交额 ${fmt(data?.turnover)} U`}/>
+        <Stat label="当前持仓" value={liveEnabled?`${actual?.positionCount??liveOverview?.positionCount??"—"} 笔`:data?`${held} 笔`:"—"} note={liveEnabled?`保证金 ${fmt(actual?.margin)} U`:usingDesk?`已平 ${fmt(desk.resolved,0)} 笔`:`保证金 ${fmt(positions.reduce((n,t)=>n+t.margin,0))} U`}/>
+        <Stat label="浮动盈亏" value={`${signed(liveEnabled?actual?.floating:data?paperFloating:null)} U`} note={liveEnabled?"Gate实际未实现盈亏":usingDesk?"持仓浮动":`计划风险 ${fmt(data?.equity?positions.reduce((n,t)=>n+t.plannedRisk,0)/data.equity*100:null,1)}%`}/>
+        <Stat label="已完成" value={usingDesk?`${fmt(desk.resolved,0)} 笔`:data?`${fmt(data.resolved,0)} 笔`:"—"} note={usingDesk?`赢 ${fmt(desk.wins,0)} 笔`:"订单记录"}/>
+        <Stat label={liveEnabled?"可用保证金":"已扣手续费"} value={`${fmt(liveEnabled?liveOverview?.available:usingDesk?desk.fees:data?.fees)} U`} note={liveEnabled?"Gate实际可用余额":usingDesk?"决策账户成交费用":`成交额 ${fmt(data?.turnover)} U`}/>
       </section>
       {liveEnabled&&<section className="fr-section"><div className="fr-section-head"><h2>实盘复制</h2></div>
         <p>已复制 {liveOverview?.copied??"—"} / 应复制 {liveOverview?.eligible??"—"} · 未跟上 {liveOverview?.missing??"—"}。成交和持仓以实盘页为准。</p></section>}
       {desk?.book==="lsr-v1"&&<LsrPulse desk={desk}/>}
-      {desk?.book?<ForwardCurve desk={desk}/>:<PaperEquitySection data={data} healthy={healthy} cache={equityCache} cacheScope={cacheScope}/>}
+      {usingDesk?<ForwardCurve desk={desk}/>:<PaperEquitySection data={data} healthy={healthy} cache={equityCache} cacheScope={cacheScope}/>}
       {liveEnabled&&<LiveEquityCurve head={liveOverview?.equityCurve} mark={actual} enabled={liveEnabled} sessionAt={liveOverview?.sessionAt??0} cacheScope={cacheScope} now={now}/>}
-      {desk?.book?<ForwardOrders desk={desk} now={now}/>:<section className="fr-section" data-testid="forward-orders"><div className="fr-section-head"><h2>持仓</h2><span>{positions.length} 笔</span></div><TradeList trades={positions} now={now} empty="当前没有持仓。市场智能这一拍还没有通过开仓门槛。"/></section>}
+      {usingDesk?<ForwardOrders desk={desk} now={now}/>:<section className="fr-section" data-testid="forward-orders"><div className="fr-section-head"><h2>持仓</h2><span>{positions.length} 笔</span></div><TradeList trades={positions} now={now} empty="当前没有持仓。市场智能这一拍还没有通过开仓门槛。"/></section>}
     </>}
 
     {tab==="research"&&desk?.book==="lsr-v1"&&<LsrResearch desk={desk} now={now}/>}
@@ -289,8 +291,7 @@ function DecisionPage({data,now,thesis}:{data:View|null;now:number;thesis:Thesis
     const eligible=data?.opportunities.filter(row=>row.eligible&&row.expiresAt>now).length??0;
     return <section className="fr-section" data-testid="decision-stance">
       <div className="fr-section-head"><h2>市场智能</h2><span>{eligible} 个可参与</span></div>
-      <p>{data?.latestReason||"这一拍还没有新的全市场结论。"}</p>
-      <p className="fr-note">持仓 {data?.positions.length??0} 笔。实盘关闭，这里只记模拟。门槛不过就不下单，不会改用旧策略。</p>
+      <p>可参与机会 {eligible} 个。实盘关闭，这里只记模拟。门槛不过就不下单，不会改用旧策略。</p>
       {thesis&&<p className="fr-note">{thesis.note}</p>}
     </section>;
   }

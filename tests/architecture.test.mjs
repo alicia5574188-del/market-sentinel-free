@@ -74,6 +74,15 @@ test("runtime cannot reset PAPER during a strategy revision",async()=>{
   assert.doesNotMatch(advance,/prepareForwardReset|initialMultiTurnForward\(/);
 });
 
+test("the worker entry cycle cannot return before advanceForward",async()=>{
+  const worker=await read("worker/index-clean.ts");
+  const advance=worker.slice(worker.indexOf("private async advanceForwardNow"),worker.indexOf("private async refreshRegimeHourly"));
+  assert.match(advance,/adoptEmptyStrategy\(now\)/);
+  assert.match(advance,/advanceForward\(/);
+  assert.ok(advance.indexOf("advanceForward(")>advance.indexOf("adoptEmptyStrategy(now)"),
+    "empty-strategy registration must not replace the market-intelligence cycle");
+});
+
 test("LIVE execution infrastructure stays isolated and serialized after PAPER commit",async()=>{
   const [worker,parity,live,member]=await Promise.all([read("worker/index-clean.ts"),read("lib/live-parity.ts"),read("lib/gate-live.ts"),read("worker/member-executor.ts")]);
   assert.match(live,/class GateLiveClient/);assert.match(member,/forwardMirrorSources/);
