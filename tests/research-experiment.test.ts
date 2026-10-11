@@ -76,6 +76,30 @@ test('the run does not stop at two hours, and it does stop when equity is gone',
   assert.match(experimentReport(broke.inverseTrial?.rx)?.status ?? '', /权益到 0/);
 });
 
+test('a close taken by the old manager is copied onto the experiment book so the cash still adds up', () => {
+  const state = book();
+  applyResearchExperiment(state, signal(T), {SOL_USDT: quote(100, 100.02, T)}, {SOL_USDT: contract}, T);
+  applyResearchExperiment(state, null, {SOL_USDT: quote(99.99, 100, T + 6_000)}, {SOL_USDT: contract}, T + 6_000);
+  const trade = state.positions[0];
+  assert.ok(trade);
+  const exit = 99.5;
+  const gross = trade.quantity * (exit - trade.entryPrice);
+  const exitFee = trade.quantity * exit * 0.0007;
+  state.balance += gross - exitFee;
+  trade.status = 'CLOSED'; trade.exitPrice = exit; trade.closedAt = T + 7_000; trade.grossPnl = gross; trade.netPnl = gross - trade.entryFee - exitFee;
+  state.history = [trade];
+  state.positions = [];
+  applyResearchExperiment(state, null, {SOL_USDT: quote(99.4, 99.5, T + 8_000)}, {SOL_USDT: contract}, T + 8_000);
+  const order = state.inverseTrial?.rx?.orders[0];
+  assert.equal(order?.status, 'closed');
+  assert.equal(order?.exitReason, 'external');
+  const packed = lsrLogBook(state, {SOL_USDT: quote(99.4, 99.5, T + 8_000)}, T + 8_000);
+  const file = buildRunLogExport({events: packed.events, funnel: packed.funnel, health: {}, gate: {}, exportedAt: T + 8_000, liveEnabled: false,
+    positions: packed.positions, fills: packed.fills, curve: packed.curve, equity: packed.equity, initial: packed.initial, closedNet: packed.closedNet, priorAdjustment: packed.priorAdjustment, places: packed.places});
+  assert.equal(file.positions.filter(row => row.exit == null).length, 0);
+  assert.ok(Math.abs(file.invariants.identity_error ?? 99) < 0.05, `identity ${file.invariants.identity_error}`);
+});
+
 test('an experiment fill is in the log, so the cash change is not an unexplained gap', () => {
   const state = book();
   applyResearchExperiment(state, signal(T), {SOL_USDT: quote(100, 100.02, T)}, {SOL_USDT: contract}, T);

@@ -825,7 +825,7 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
 
 function markAndManage(s:ForwardState,quotes:Record<string,Quote>,now:number){
   const candidates=new Map(s.opportunities.filter(o=>!isIntelligenceOpportunity(o)).map(o=>[o.symbol,o])),relationById=new Map(s.relationEngine.rules.map(r=>[r.id,r])),closed=new Set<string>();
-  for(const t of s.positions){if(t.inverseCopy||t.entryContext?.strategyVersion===MARKET_INTELLIGENCE_VERSION||t.exitControl?.policy==='needle-v1'||t.exitControl?.policy==='brain-v1'||t.exitControl?.policy==='score-v1'||t.exitControl?.policy==='read-v1'||t.exitControl?.policy==='lsr-v1')continue;const q=quotes[t.symbol];if(!freshQuote(q,now))continue;const px=t.side==="LONG"?q!.bestBid:q!.bestAsk,d=dir(t.side);
+  for(const t of s.positions){if(t.inverseCopy||t.entryContext?.strategyVersion===MARKET_INTELLIGENCE_VERSION||t.exitControl?.policy==='needle-v1'||t.exitControl?.policy==='brain-v1'||t.exitControl?.policy==='score-v1'||t.exitControl?.policy==='read-v1'||t.exitControl?.policy==='lsr-v1'||t.exitControl?.policy==='rx-v1')continue;const q=quotes[t.symbol];if(!freshQuote(q,now))continue;const px=t.side==="LONG"?q!.bestBid:q!.bestAsk,d=dir(t.side);
     t.lastPrice=px;t.lastQuoteAt=q!.observedAt;const signed=d*(px/t.entryPrice-1),favorable=Math.max(0,signed),adverse=Math.max(0,-signed);
     t.favorable=Math.max(t.favorable,favorable);t.adverse=Math.max(t.adverse,adverse);t.peakPnlRate=Math.max(t.peakPnlRate??0,favorable);
     if(!t.firstProfitAt&&favorable>=ROUND_TRIP_COST*.6)t.firstProfitAt=now;

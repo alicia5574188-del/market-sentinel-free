@@ -17,7 +17,7 @@ const CHECK_MS = 30_000;
 const STALE_MS = 2_000;
 
 export type RxSide = 'LONG' | 'SHORT';
-export type RxExit = 'tp1' | 'tp2' | 'sl' | 'invalidate' | 'time';
+export type RxExit = 'tp1' | 'tp2' | 'sl' | 'invalidate' | 'time' | 'external';
 export type RxOrder = {
   id: string; decisionAt: number; symbol: string; direction: RxSide; confidence: number;
   entry: number; limit: number; qty: number; notional: number; placedAt: number; openedAt: number | null;
@@ -160,11 +160,35 @@ function fill(state: ForwardState, book: RxBook, order: RxOrder, now: number, qu
   state.events = [{id: `rx${state.startedAt}-${state.revision}`, at: now, kind: 'ENTRY' as const, subject: trade.id, reason: `${order.symbol} ${order.direction} ${order.notional.toFixed(0)}U`}, ...state.events].slice(0, 160);
 }
 
+function reconcileExternalCloses(state: ForwardState, _now: number) {
+  const book = state.inverseTrial?.rx;
+  if (!book) return false;
+  const live = new Set(state.positions.map(row => row.id));
+  let changed = false;
+  for (const order of book.orders) {
+    if (order.status !== 'open' || live.has(order.id)) continue;
+    const trade = state.history.find(row => row.id === order.id);
+    if (!trade?.exitPrice || !trade.closedAt || !(trade.exitPrice > 0)) continue;
+    const gross = typeof trade.grossPnl === 'number' ? trade.grossPnl : dir(order.direction) * order.qty * (trade.exitPrice - order.entry);
+    const recorded = typeof trade.netPnl === 'number' ? trade.netPnl : gross - order.notional * RX_MAKER;
+    const cashNet = recorded - order.notional * RX_OPEN_SLIP;
+    const openFee = order.notional * RX_MAKER, openSlip = order.notional * RX_OPEN_SLIP, total = gross - cashNet;
+    order.status = 'closed'; order.exit = trade.exitPrice; order.closedAt = trade.closedAt; order.exitReason = 'external';
+    order.gross = round(gross, 6); order.net = round(cashNet, 6);
+    order.holdSec = Math.max(0, Math.round((trade.closedAt - (order.openedAt ?? trade.closedAt)) / 1000));
+    book.fees = remember(book.fees, {orderId: order.id, openFee: round(openFee, 6), closeFee: round(total - openFee - openSlip, 6),
+      openSlippage: round(openSlip, 6), closeSlippage: 0, fundingFee: 0, totalCost: round(total, 6),
+      note: '这笔被旧的持仓管理先平掉。现金按那次平仓记。'}, 400);
+    changed = true;
+  }
+  return changed;
+}
+
 export function applyResearchExperiment(state: ForwardState, signal: RxSignal | null, quotes: Record<string, Quote>, contracts: Record<string, Contract> | undefined, now: number) {
   const trial = state.inverseTrial;
   if (!trial?.rx?.on) return false;
   const book = trial.rx;
-  let changed = false;
+  let changed = reconcileExternalCloses(state, now);
   const equity = forwardEquity(state, quotes, now).equity;
   const beforePath = book.path.length;
   markPath(book, equity, now);
@@ -256,12 +280,12 @@ export function experimentReport(book: RxBook | undefined): RxReport | null {
     const wins = rows.filter(row => (row.net ?? 0) > 0).length;
     return {bucket: name, n: rows.length, wins, rate: rate(wins, rows.length)};
   });
-  const exits = ['tp1', 'tp2', 'sl', 'invalidate', 'time'].map(reason => ({reason, n: closed.filter(row => row.exitReason === reason).length}));
+  const exits = ['tp1', 'tp2', 'sl', 'invalidate', 'time', 'external'].map(reason => ({reason, n: closed.filter(row => row.exitReason === reason).length}));
   const total = book.openFee + book.closeFee + book.openSlippage + book.closeSlippage + book.fundingFee;
   const status = book.stoppedAt
     ? `${book.stopReason ?? '已停止'} ${book.orders.some(row => row.status === 'open' || row.status === 'pending') ? '还有单没走完。' : '单已经走完。'}`
     : '正向实验在跑。没有 2 小时截止。权益到 0 才停开新单。';
-  const reasonName = (reason: RxExit | null) => reason === 'tp1' ? '第一目标' : reason === 'tp2' ? '第二目标' : reason === 'sl' ? '止损' : reason === 'invalidate' ? '看错了' : reason === 'time' ? '到时间' : '';
+  const reasonName = (reason: RxExit | null) => reason === 'tp1' ? '第一目标' : reason === 'tp2' ? '第二目标' : reason === 'sl' ? '止损' : reason === 'invalidate' ? '看错了' : reason === 'time' ? '到时间' : reason === 'external' ? '被旧平仓逻辑先平掉' : '';
   const fees = new Map(book.fees.map(row => [row.orderId, row]));
   const rows = [...book.orders].reverse().slice(0, 80).map(row => {
     const fee = fees.get(row.id);
