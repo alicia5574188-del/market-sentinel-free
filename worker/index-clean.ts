@@ -50,6 +50,8 @@ import {runLiveResearch,reviewResearchLog,RESEARCH_MAJORS,type ResearchSnap,type
 import {experimentReport} from '../lib/research-experiment.ts';
 import {deskIdentity, deskLogPositions} from '../lib/new-desk.ts';
 import {emptyStrategyAccount, STRATEGY_EPOCH} from '../lib/strategy-slot.ts';
+import {emptyThesis, exportAttachedLog, runThesisCycle, THESIS_STORAGE_KEY, type ThesisAttached, type ThesisMarket} from '../lib/thesis-attach.ts';
+import type {ThesisPublic} from '../lib/thesis-view.ts';
 import {buildRunLogExport} from '../lib/run-log.ts';
 import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
 import {confirmationRealityView} from '../lib/confirmation-reality.ts';
@@ -580,6 +582,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private lsrArmed = false;
   private lsrSettled = false;
   private newDeskSettled = false;
+  private thesis: ThesisAttached | null = null;
+  private thesisLoaded = false;
+  private thesisPersistedAt = 0;
+  private thesisAckAt = 0;
+  private thesisView: ThesisPublic | null = null;
   private forwardLastAttemptAt = 0;
   private forwardProtectionBudget: ProtectionWriteBudget | null = null;
   private forwardCompression: Awaited<ReturnType<typeof prepareForwardWrite>>["compression"] | null = null;
@@ -1163,6 +1170,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private forwardView(now = Date.now()) {
+    const cycleAt = Math.max(this.forwardState?.lastCycleAt ?? 0, this.thesis?.updatedAt ?? 0) || null;
+    const persistedAt = Math.max(this.forwardState?.storage.persistedAt ?? 0, this.thesisAckAt);
     const view=this.forwardState ? { ...forwardSummary(this.forwardState, this.regimeQuotes(now), now),
       confirmationReality: confirmationRealityView([...this.forwardState.positions, ...this.forwardState.history], now, {
         opens: this.forwardState.inverseTrial?.regimeOpens, pauseUntil: this.forwardState.inverseTrial?.regimeClock?.pauseUntil}),
@@ -1170,8 +1179,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         ? observationReading(this.forwardState.extremumRegime, (this.shadowResearch?.market??[]).map(row=>row.tape).filter((row):row is NonNullable<typeof row>=>!!row))
         : null,
       liveMirror: this.liveMirrorView(),
-      storage: { ...this.forwardState.storage, error: this.forwardError } }
-      : { version: FORWARD_VERSION, mode: "RECOVERY_REQUIRED", liveEligible: false, storage: { error: this.forwardError } };
+      lastCycleAt: cycleAt,
+      thesis: this.thesisView,
+      storage: { ...this.forwardState.storage, persistedAt, error: this.forwardError } }
+      : { version: FORWARD_VERSION, mode: "RECOVERY_REQUIRED", liveEligible: false, lastCycleAt: cycleAt, thesis: this.thesisView, storage: { persistedAt, error: this.forwardError } };
     if("forwardDesk" in view&&view.forwardDesk)view.forwardDesk={...view.forwardDesk,liveResearch:this.liveResearchView(now)};
     return view;
   }
@@ -1193,7 +1204,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       version:FORWARD_VERSION,engineVersion:ADAPTIVE_ENGINE_VERSION,policyVersion:s?.policyVersion??null,
       strategyAuthorityVersion:s?.strategyAuthorityVersion??null,executionVersion:s?.executionVersion??null,
       regionVersion:s?.regionVersion??null,regionLaunchVersion:s?.regionLaunchVersion??null,liveEligible:false,
-      startedAt:s?.startedAt??null,initialEquity:s?.initialEquity??null,balance:s?.balance??null,lastCycleAt:s?.lastCycleAt??null,
+      startedAt:s?.startedAt??null,initialEquity:s?.initialEquity??null,balance:s?.balance??null,
+      lastCycleAt:Math.max(s?.lastCycleAt??0, this.thesis?.updatedAt??0)||null,
       resolved:s?.resolved??0,openCount:s?.positions.length??0,targetPositionCount:null,positionLimit:null,
       executionBboCapacity:FORWARD_EXECUTION_BBO_CAP,minuteConfirmationCapacity:FORWARD_MINUTE_CONFIRMATION_CAP,
       executionVolumeFloorUsd:FORWARD_EXECUTION_VOLUME_FLOOR_USD,learningEligibleMarkets:executionEligibleCount(this.contractCatalog),
@@ -1211,7 +1223,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         }));
         return{waiting:records.filter(v=>v.status==="WAITING").length,cancelled:records.filter(v=>v.status==="CANCELLED").length,records};
       })(),
-      candidateDiagnostics:blocked,storage:{persistedAt:s?.storage.persistedAt??0,layout:s?.storage.layout??null,error:this.forwardError}};
+      candidateDiagnostics:blocked,storage:{persistedAt:Math.max(s?.storage.persistedAt??0, this.thesisAckAt),layout:s?.storage.layout??null,error:this.forwardError}};
   }
 
   protected liveMirrorView() {
@@ -1389,6 +1401,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     try {
       await this.ensureAdaptiveAccount(now);
       await this.adoptEmptyStrategy(now);
+      await this.advanceThesis(now);
       void allowDataCycle;
       return;
     } catch (error) { this.forwardError = safeError(error); }
@@ -1982,6 +1995,83 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return { ok: true, credential: await credentialMetadata(this.env.DB) };
   }
 
+  /** One pass of the attached thesis loop. Old books stay empty. */
+  private async advanceThesis(now: number) {
+    if (!this.thesisLoaded) {
+      try {
+        const saved = await this.ctx.storage.get<ThesisAttached>(THESIS_STORAGE_KEY);
+        if (saved?.version === 'thesis-v1') {
+          this.thesis = saved;
+          this.thesisPersistedAt = saved.updatedAt;
+          this.thesisAckAt = saved.updatedAt;
+          this.thesisView = saved.view ?? null;
+        }
+      } catch { /* a missing blob just starts a new book */ }
+      this.thesisLoaded = true;
+    }
+    if (this.thesis && this.thesisView && now - this.thesis.updatedAt < 5_000) return;
+    const initial = this.forwardState?.initialEquity ?? 1000;
+    try {
+      const next = await runThesisCycle(this.thesis, this.thesisMarkets(now), now, initial);
+      this.thesis = next.state;
+      this.thesisView = next.view;
+    } catch (error) {
+      const failed = this.thesis ?? emptyThesis(initial, now);
+      this.thesis = { ...failed, updatedAt: now, lastError: safeError(error) };
+      this.thesisView = this.thesisView
+        ? { ...this.thesisView, updatedAt: now, note: `策略这一拍失败：${safeError(error)}` }
+        : null;
+    }
+    if (now - this.thesisPersistedAt < 60_000 || !this.thesis) {
+      if (this.thesis && this.thesisPersistedAt > 0) this.thesisAckAt = this.thesis.updatedAt;
+      return;
+    }
+    const reservation = this.reserveNonAlarmWrites(1, 256);
+    if (!reservation) return;
+    try {
+      await this.ctx.storage.put(THESIS_STORAGE_KEY, this.thesis);
+      this.thesisPersistedAt = now;
+      this.thesisAckAt = now;
+      reservation.finish(true);
+    } catch {
+      reservation.finish(false);
+    }
+  }
+
+  private thesisMarkets(now: number): ThesisMarket[] {
+    const quotes = this.regimeQuotes(now);
+    const btc = this.regimeHourly.BTC_USDT ?? [];
+    const btcLast = btc.at(-1);
+    const btcPrev = btc.length > 24 ? btc[btc.length - 25] : btc[0];
+    const btcPrice = quotes.BTC_USDT?.midpoint ?? btcLast?.close ?? 0;
+    const btcChange24h = btcLast && btcPrev && btcPrev.close > 0 ? btcLast.close / btcPrev.close - 1 : 0;
+    const ranked = Object.keys(this.regimeHourly)
+      .filter((symbol) => (this.regimeHourly[symbol]?.length ?? 0) >= 50 && quotes[symbol]?.fresh)
+      .sort((left, right) => (quotes[right]?.observedAt ?? 0) - (quotes[left]?.observedAt ?? 0) || left.localeCompare(right));
+    if (this.regimeHourly.BTC_USDT && quotes.BTC_USDT?.fresh && !ranked.includes('BTC_USDT')) ranked.unshift('BTC_USDT');
+    return ranked.slice(0, 8).flatMap((symbol) => {
+      const rows = this.regimeHourly[symbol] ?? [];
+      const quote = quotes[symbol];
+      const last = rows.at(-1);
+      const price = quote?.midpoint ?? last?.close ?? 0;
+      if (!(price > 0) || !last) return [];
+      return [{
+        symbol,
+        candles: rows.slice(-80).map((row) => ({
+          ts: row.time > 1e12 ? row.time : row.time * 1000,
+          open: row.open, high: row.high, low: row.low, close: row.close, volume: row.volume,
+        })),
+        price,
+        bid: quote?.bestBid ?? price,
+        ask: quote?.bestAsk ?? price,
+        fundingRate: this.runtime.contractMeta[symbol]?.fundingRate ?? 0,
+        volume24h: this.contractCatalog.get(symbol)?.volume24hUsd ?? 0,
+        btcPrice,
+        btcChange24h,
+      }];
+    });
+  }
+
   /** Clear the paper book once. No old strategy is installed. */
   private async adoptEmptyStrategy(now:number){
     if(this.newDeskSettled||!this.forwardState)return;
@@ -2070,12 +2160,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         await this.ctx.storage.transaction(async transaction=>{
           for(const[key,value]of Object.entries(prepared.archiveEntries))await transaction.put(key,value);
           await transaction.put(prepared.accountEntries);
+          await transaction.delete(THESIS_STORAGE_KEY);
         });
         reservation.finish(true);
       }finally{reservation.finish(false);}
 
       prepared.state.storage.layout=FORWARD_PAGED_STATE_VERSION;
       this.forwardCompression=prepared.compression;this.forwardState=prepared.state;this.forwardError=null;
+      this.thesis=null;this.thesisView=null;this.thesisLoaded=true;this.thesisPersistedAt=0;this.thesisAckAt=0;
       this.forwardProtectionBudget=readProtectionWriteBudget(saved?.writeBudget);this.mirrorClosures.clear();
       return{ok:true,equity:1000,forward:forwardSummary(this.forwardState,this.regimeQuotes(now),now)};
     }catch(error){
@@ -4111,6 +4203,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(!this.forwardState||!this.authorityReady)return json({error:"权威账户尚未恢复，不能导出空账户"},503);
       if(url.searchParams.get("kind")==="log"){
         const exportedAt=Date.now(),hub=this.marketHub.status(exportedAt),gate=this.gateStream.status(exportedAt);
+        if(this.thesis?.capture)return json(await exportAttachedLog(this.thesis, this.thesisMarkets(exportedAt), exportedAt));
         const deskOn=!!this.forwardState.inverseTrial?.desk?.on;
         const book=deskOn?null:lsrLogBook(this.forwardState,this.forwardQuotes(exportedAt),exportedAt);
         const deskRows=deskOn?deskLogPositions(this.forwardState,this.forwardQuotes(exportedAt),exportedAt):null;
