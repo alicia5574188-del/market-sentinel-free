@@ -52,6 +52,7 @@ export type RxReport = {
   fees: {openFee: number; closeFee: number; slippage: number; funding: number; total: number; traded: number; share: number | null};
   path: {at: number; equity: number}[];
   recent: {at: number; symbol: string; side: string; status: string; reason: string; net: number | null}[];
+  rows: {id: string; at: number; symbol: string; side: string; status: string; confidence: number; limit: number; entry: number | null; exit: number | null; qty: number; notional: number; stop: number; tp1: number; tp2: number; reason: string; gross: number | null; net: number | null; holdSec: number | null; openFee: number | null; closeFee: number | null; openSlippage: number | null; closeSlippage: number | null; fundingFee: number | null; totalCost: number | null}[];
 };
 
 export function holdMsOf(text: string) {
@@ -258,12 +259,25 @@ export function experimentReport(book: RxBook | undefined): RxReport | null {
   const status = book.stoppedAt
     ? `${book.stopReason ?? '已停止'} ${book.orders.some(row => row.status === 'open' || row.status === 'pending') ? '还有单没走完。' : '单已经走完。'}`
     : '正向实验在跑。没有 2 小时截止。权益到 0 才停开新单。';
+  const reasonName = (reason: RxExit | null) => reason === 'tp1' ? '第一目标' : reason === 'tp2' ? '第二目标' : reason === 'sl' ? '止损' : reason === 'invalidate' ? '看错了' : reason === 'time' ? '到时间' : '';
+  const fees = new Map(book.fees.map(row => [row.orderId, row]));
+  const rows = [...book.orders].reverse().slice(0, 80).map(row => {
+    const fee = fees.get(row.id);
+    return {id: row.id, at: row.openedAt ?? row.placedAt, symbol: row.symbol, side: row.direction === 'LONG' ? '做多' : '做空',
+      status: row.status === 'pending' ? '挂着' : row.status === 'open' ? '持仓' : row.status === 'cancelled' ? '6 秒没成交' : '已平',
+      confidence: round(row.confidence, 3), limit: row.limit, entry: row.openedAt ? row.entry : null, exit: row.exit, qty: row.qty, notional: round(row.notional, 2),
+      stop: row.stop, tp1: row.tp1, tp2: row.tp2, reason: reasonName(row.exitReason), gross: row.gross, net: row.net, holdSec: row.holdSec,
+      openFee: fee ? fee.openFee : row.status === 'open' ? round(row.notional * MAKER, 6) : null,
+      closeFee: fee?.closeFee ?? null, openSlippage: fee ? fee.openSlippage : row.status === 'open' ? round(row.notional * OPEN_SLIP, 6) : null,
+      closeSlippage: fee?.closeSlippage ?? null, fundingFee: fee?.fundingFee ?? null, totalCost: fee?.totalCost ?? null};
+  });
   return {status, running: !book.stoppedAt, startedAt: book.startedAt, stoppedAt: book.stoppedAt,
     decisions: book.decisionsN, opened: book.openedN, cancelled: book.cancelledN, openRate: book.decisionsN ? round(book.openedN / book.decisionsN, 3) : 0,
     stillOpen: book.orders.filter(row => row.status === 'open' || row.status === 'pending').length,
     byConfidence, bySide: tally(row => row.direction === 'LONG' ? '做多' : '做空'), exits,
     fees: {openFee: round(book.openFee, 4), closeFee: round(book.closeFee, 4), slippage: round(book.openSlippage + book.closeSlippage, 4), funding: round(book.fundingFee, 4), total: round(total, 4), traded: round(book.traded, 2), share: book.traded > 0 ? round(total / book.traded, 5) : null},
     path: book.stoppedAt ? book.path : book.path.slice(-8),
-    recent: [...book.orders].reverse().slice(0, 8).map(row => ({at: row.openedAt ?? row.placedAt, symbol: row.symbol, side: row.direction === 'LONG' ? '做多' : '做空', status: row.status === 'pending' ? '挂着' : row.status === 'open' ? '持仓' : row.status === 'cancelled' ? '6 秒没成交' : '已平', reason: row.exitReason ?? '', net: row.net})),
+    recent: rows.slice(0, 8).map(row => ({at: row.at, symbol: row.symbol, side: row.side, status: row.status, reason: row.reason, net: row.net})),
+    rows,
   };
 }

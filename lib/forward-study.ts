@@ -172,6 +172,8 @@ function orderOf(t:Trade,status:'OPEN'|'CLOSED'):ForwardOrder{
     ?t.entryContext.mode==='REVERSAL'?'收回':'顺着'
     :t.entryContext?.strategyVersion==='lsr-v1'
     ?'衰竭'
+    :t.entryContext?.strategyVersion==='rx-v1'
+    ?'研究'
     :t.entryContext?.strategyVersion==='stretch-v1'
     ?'跟着大盘'
     :t.entryContext?.strategyVersion==='brain-v1'
@@ -181,7 +183,7 @@ function orderOf(t:Trade,status:'OPEN'|'CLOSED'):ForwardOrder{
     closedAt:status==='CLOSED'?t.closedAt:null,net,leverage:t.leverage,margin:t.margin,
     plan:plan?(PLAN[plan]??plan):null,waiting:status==='OPEN'?exitWait(t):null,
     stop:finite(t.stopPrice)?t.stopPrice:null,
-    target:t.entryContext?.strategyVersion==='lsr-v1'&&t.entryPrice>0?t.entryPrice*(t.side==='LONG'?1.003:0.997):null,
+    target:t.entryContext?.strategyVersion==='lsr-v1'&&t.entryPrice>0?t.entryPrice*(t.side==='LONG'?1.003:0.997):t.entryContext?.strategyVersion==='rx-v1'&&finite(t.armPrice)?t.armPrice:null,
     exit:t.exitReason??null};
 }
 function money(n:number){
@@ -191,6 +193,7 @@ function money(n:number){
 function exitWait(t:Trade){
   const version=t.entryContext?.strategyVersion,stop=money(t.stopPrice);
   if(version==='lsr-v1')return t.entryContext?.invalidationSummary??'止盈 0.30%。止损 0.20%，触发后按对手价再让 0.05% 走。最长拿 15 分钟。';
+  if(version==='rx-v1')return `${t.entryContext?.invalidationSummary??'第一目标、第二目标、止损。'} 拿到研究层写的时间也走。每 30 秒看一次有没有看错。`;
   if(version==='brain-v1'){
     const lead=t.entryContext?.mode==='CONTINUATION',lag=t.entryContext?.mode==='RELATIVE';
     return `${lead?'领头':lag?'掉队':'单币失败'}。想错了就走：价格${t.side==='LONG'?'落到':'涨到'} ${stop}。想对了：浮盈到过 0.8% 再吐回一半才走。还没到 0.8%，满 ${lead?45:30} 分钟走。${lag?'整盘不再是进场时那一边，也走。':''}`;
@@ -219,7 +222,7 @@ export function forwardDeskView(state:ForwardState,quotes:Record<string,Quote>,n
   const trial=state.inverseTrial;if(!trial?.source)return null;
   const summary=inverseTrialSummary(state,quotes,now);if(!summary)return null;
   const own=trial.paperPolicy==='needle-v1'||trial.paperPolicy==='brain-v1'||trial.paperPolicy==='score-v1'||trial.paperPolicy==='read-v1'||trial.paperPolicy==='stretch-v1'||trial.paperPolicy==='lsr-v1';
-  const ownTrade=(t:Trade)=>t.exitControl?.policy===trial.paperPolicy;
+  const ownTrade=(t:Trade)=>t.exitControl?.policy===trial.paperPolicy||(trial.paperPolicy==='lsr-v1'&&t.exitControl?.policy==='rx-v1');
   const summaryStale=(summary.stalePositions??0)>0;
   const mark=own?forwardEquity(state,quotes,now):null;
   const stale=own?(mark!.stalePositions??0)>0:summaryStale;

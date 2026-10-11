@@ -244,23 +244,26 @@ function LsrResearch({desk,now}:{desk:Desk;now:number}){
   </>;
 }
 function LsrDecision({desk,now}:{desk:Desk;now:number}){
-  const work=desk.work,board=desk.lsrBoard;
+  const live=desk.liveResearch,d=live?.decision,exp=live?.experiment;
+  const pending=exp?.recent.filter(row=>row.status==="挂着")??[];
+  const side=d?.planSide==="LONG"?"做多":d?.planSide==="SHORT"?"做空":"";
   return <section className="fr-section" data-testid="decision-stance">
     <div className="fr-section-head"><h2>现在在等</h2></div>
-    <p>{work?.waiting??"在等四关都过。"}</p>
-    {!!board?.resting.length&&<div className="lsr-rest">{board.resting.map(order=><p key={`${order.symbol}-${order.side}`}>挂着 {order.symbol.replace("_"," / ")} {order.side==="LONG"?"多":"空"}，价 {fmt(order.price,6)}。下一次扫描打到这个价才成交。</p>)}</div>}
+    <p>{exp&&!exp.running?exp.status:pending.length?`挂着 ${pending.length} 笔，等 6 秒内打到买卖中间价。打不到就撤。`:"等下一次研究。研究给出方向，就按 500U 挂出去。老的四关已经不用了。"}</p>
+    {pending.map(row=><p key={`${row.at}-${row.symbol}`}>{row.symbol.replace("_"," / ")} {row.side}，挂着，等成交。</p>)}
     <div className="fr-section-head"><h2>这一拍准备做</h2></div>
-    <p>{work?.preparing??"这一拍没有开仓。"}</p>
+    {d?<p>{d.headline} 这一拍按研究层，准备 {d.symbol.replace("_"," / ")} {side}，大约 500U。止损 {fmt(d.stop,6)}，第一目标 {fmt(d.tp1,6)}，第二目标 {fmt(d.tp2,6)}。</p>:<p>研究这一拍还没有方向。</p>}
     <div className="fr-section-head"><h2>持仓在等什么出场</h2><span>{desk.open.length} 笔</span></div>
     {desk.open.length?desk.open.map(order=><article className="lsr-hold" key={order.id}>
       <header><b>{order.symbol.replace("_"," / ")} {order.side==="LONG"?"多":"空"}</b><b className={(order.net??0)>=0?"fr-positive":"fr-negative"}>{signed(order.net)} U</b></header>
       <p>已拿 {duration(order.openedAt,null,now)}。进场 {fmt(order.entryPrice,6)}，现价 {fmt(order.price,6)}。</p>
       <div className="lsr-exit">
-        <span>止盈 {fmt(order.target,6)}</span>
-        <span>止损 {fmt(order.stop,6)}</span>
-        <span>最长 15 分钟</span>
+        <span>第一目标 {order.target==null?"还没写":fmt(order.target,6)}</span>
+        <span>止损 {order.stop==null?"还没写":fmt(order.stop,6)}</span>
+        <span>{order.plan==="研究"?"按研究层出场":"老单，最长 15 分钟"}</span>
       </div>
-    </article>):<p className="fr-note">没有持仓。开了以后只等三件事：涨到止盈 0.30%，打到止损 0.20%，或者拿满 15 分钟。</p>}
+      {order.waiting&&<p>{order.waiting}</p>}
+    </article>):<p className="fr-note">没有持仓。成交以后等五件事：第一目标、第二目标、止损、研究层给的持仓时间，或者 30 秒检查发现看错了。</p>}
   </section>;
 }
 function WorkResearch({work,note,ideas}:{work:Desk["work"];note?:string;ideas?:Desk["brainIdeas"]}){
@@ -338,7 +341,27 @@ function ForwardCurve({desk}:{desk:Desk}){
   </section>;
 }
 function ForwardOrders({desk,now}:{desk:Desk;now:number}){
-  const label=desk.book==="lsr-v1"?"衰竭":desk.book==="stretch-v1"?"新账":desk.book==="reverse-v1"?"反向":desk.book==="needle-v1"||desk.book==="brain-v1"||desk.book==="score-v1"||desk.book==="read-v1"?"账户":stanceName(desk.stance);
+  const live=desk.liveResearch,rows=live?.experiment?.rows??[];
+  if(desk.book==="lsr-v1")return <section className="fr-section" data-testid="forward-orders">
+    <div className="fr-section-head"><h2>实验订单</h2><span>{rows.length} 笔</span></div>
+    <p className="fr-note">研究层给方向就挂 500U。这里能看到挂单、没成交、持仓和已平，以及手续费、滑点和资金费。</p>
+    {rows.length?rows.map(row=><article className="fr-order" key={row.id}>
+      <header><div><b>{row.symbol.replace("_"," / ")}</b><small>{row.side} · {row.status}{row.reason?` · ${row.reason}`:""} · 把握 {(row.confidence*100).toFixed(0)}%</small></div><b className={(row.net??0)>=0?"fr-positive":"fr-negative"}>{row.net==null?"—":`${signed(row.net)} U`}</b></header>
+      <small>{time(row.at)}{row.holdSec==null?"":` · 拿了 ${Math.round(row.holdSec/60)} 分钟`}</small>
+      <p>挂单价 {fmt(row.limit,6)}{row.entry==null?"":` · 成交 ${fmt(row.entry,6)}`}{row.exit==null?"":` · 出场 ${fmt(row.exit,6)}`} · 名义 {fmt(row.notional,2)} U · 数量 {fmt(row.qty,4)}</p>
+      <p>止损 {fmt(row.stop,6)} · 第一目标 {fmt(row.tp1,6)} · 第二目标 {fmt(row.tp2,6)}</p>
+      <p className="fr-note">{row.openFee==null?"还没成交，手续费还没记。":`开仓手续费 ${fmt(row.openFee,4)} U · 开仓滑点 ${fmt(row.openSlippage,4)} U${row.closeFee==null?" · 平仓费用等出场再记。":` · 平仓手续费 ${fmt(row.closeFee,4)} U · 平仓滑点 ${fmt(row.closeSlippage,4)} U · 资金费 ${fmt(row.fundingFee,4)} U · 费用合计 ${fmt(row.totalCost,4)} U`}`}</p>
+      {row.gross!=null&&<p>毛利 {signed(row.gross)} U · 扣完费用 {signed(row.net)} U</p>}
+    </article>):<Empty title="还没有实验订单"/>}
+    {desk.open.some(o=>o.plan!=="研究")&&<>
+      <div className="fr-section-head"><h2>老策略还没走完的单</h2><span>{desk.open.filter(o=>o.plan!=="研究").length} 笔</span></div>
+      {desk.open.filter(o=>o.plan!=="研究").map(o=><article className="fr-order" key={o.id}><header><div><b>{o.symbol.replace("_"," / ")}</b><small>{o.side==="LONG"?"多":"空"} · 已拿 {duration(o.openedAt,null,now)}</small></div><b className={(o.net??0)>=0?"fr-positive":"fr-negative"}>{signed(o.net)} U</b></header>
+        <small>入场 {fmt(o.entryPrice,6)} · 现价 {fmt(o.price,6)}</small>
+        {o.waiting&&<p className="fr-note">{o.waiting}</p>}
+      </article>)}
+    </>}
+  </section>;
+  const label=desk.book==="stretch-v1"?"新账":desk.book==="reverse-v1"?"反向":desk.book==="needle-v1"||desk.book==="brain-v1"||desk.book==="score-v1"||desk.book==="read-v1"?"账户":stanceName(desk.stance);
   return <section className="fr-section" data-testid="forward-orders">
     <div className="fr-section-head"><h2>{label}持仓</h2><span>{desk.open.length} 笔</span></div>
     {!desk.work&&desk.book!=="brain-v1"&&desk.book!=="read-v1"&&<p className="fr-note">{desk.book==="score-v1"?"核对通过才开。单笔大约 400U。同一币不叠仓。保证金到权益一半就停。到止损、到目标或满三十分钟就走。":desk.book==="needle-v1"?"只做收回来的针。向上做空，向下做多。":"新单跟当前决策，一笔提案一笔单，金额不变。先停才不开，也不把后面的单加大。已经开着的单不改方向。"}</p>}
