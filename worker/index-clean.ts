@@ -48,7 +48,7 @@ import type { PreviousMarketRegimeCandidate } from "../lib/previous-market-regim
 import {advanceShadowInverse,freshDeskLedger,freshNeedleLedger,freshBrainLedger,freshScoreLedger,freshReverseLedger,freshStretchLedger,freshLsrLedger,DESK_CLEAN_EPOCH,DESK_CLEAN_BEFORE,NEEDLE_EPOCH,NEEDLE_BEFORE,BRAIN_EPOCH,BRAIN_BEFORE,SCORE_EPOCH,SCORE_BEFORE,REVERSE_EPOCH} from '../lib/shadow-inverse.ts';
 import {STRETCH_EPOCH} from '../lib/stretch-book.ts';
 import {LSR_EPOCH,lsrLogBook} from '../lib/lsr-book.ts';
-import {runLiveResearch,type ResearchSnap} from '../lib/live-research.ts';
+import {runLiveResearch,RESEARCH_MAJORS,type ResearchSnap,type LiveResearchView} from '../lib/live-research.ts';
 import {buildRunLogExport} from '../lib/run-log.ts';
 import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
 import {confirmationRealityView} from '../lib/confirmation-reality.ts';
@@ -524,7 +524,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private memory: Record<string, SymbolMemory> = {};
   private structureCandles: Record<string, Partial<Record<"1m" | "15m" | "1h" | "4h", Awaited<ReturnType<typeof fetchStructureCandles>>>>> = {};
   private strategyCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
-  private liveResearchCache:{at:number;view:ReturnType<typeof runLiveResearch>}|null=null;
+  private liveResearchCache:{at:number;view:LiveResearchView}|null=null;
+  private researchContextCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
+  private researchLog:{at:number;symbol:string;level:string;confidence:number;btc1h:number|null}[]=[];
+  private researchLogLoaded=false;
+  private researchLogSavedAt=0;
   private forwardMinuteCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
   private forwardMinuteRetryAt = new Map<string,number>();
   private gateStream = new GateStreamingFeed();
@@ -1065,8 +1069,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private liveResearchView(now=Date.now()){
     if(this.liveResearchCache&&now-this.liveResearchCache.at<30_000)return this.liveResearchCache.view;
     const quotes=this.forwardQuotes(now);
+    const candles={...this.strategyCandles};
+    for(const symbol of RESEARCH_MAJORS){
+      const extra=this.researchContextCandles[symbol];
+      if(extra&&extra.length>=31)candles[symbol]=extra;
+    }
     const snaps:ResearchSnap[]=[];
-    for(const [symbol,bars] of Object.entries(this.strategyCandles)){
+    for(const [symbol,bars] of Object.entries(candles)){
       if(bars.length<31)continue;
       const q=quotes[symbol];
       const meta=this.runtime.contractMeta[symbol];
@@ -1079,8 +1088,49 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         m1,m5:bars.map(bar=>({t:bar.time,o:bar.open,h:bar.high,l:bar.low,c:bar.close,v:bar.volume}))});
     }
     const view=runLiveResearch(snaps,now);
+    view.log=this.researchLog.slice(-8);
     this.liveResearchCache={at:now,view};
+    void this.rememberResearch(view);
     return view;
+  }
+
+  private async rememberResearch(view:LiveResearchView){
+    if(!this.researchLogLoaded){
+      this.researchLogLoaded=true;
+      try{
+        const saved=await this.ctx.storage.get<typeof this.researchLog>("live-research-log");
+        if(Array.isArray(saved)){
+          const seen=new Set(this.researchLog.map(row=>row.at));
+          this.researchLog=[...saved.filter(row=>row&&typeof row.at==="number"&&!seen.has(row.at)),...this.researchLog].slice(-300);
+        }
+      }catch{/* a missing log must not block the page */}
+    }
+    const row={at:view.ts,symbol:view.decision?.symbol??view.candidates[0]?.symbol??"",level:view.decision?.level??"观望",confidence:view.decision?.confidence??0,btc1h:view.context?.btc1h??null};
+    const last=this.researchLog.at(-1);
+    if(last&&last.symbol===row.symbol&&last.level===row.level&&row.at-last.at<5*60_000)return;
+    this.researchLog.push(row);
+    if(this.researchLog.length>300)this.researchLog=this.researchLog.slice(-300);
+    if(view.log)view.log.splice(0,view.log.length,...this.researchLog.slice(-8));
+    if(row.at-this.researchLogSavedAt<5*60_000)return;
+    const reservation=this.reserveNonAlarmWrites(1,512);
+    if(!reservation)return;
+    try{await this.ctx.storage.put({"live-research-log":this.researchLog});this.researchLogSavedAt=row.at;reservation.finish(true);}
+    catch{reservation.finish(false);}
+  }
+
+  private async refreshResearchContext(now=Date.now()){
+    const due=RESEARCH_MAJORS.filter(symbol=>{
+      const last=this.researchContextCandles[symbol]?.at(-1);
+      return !last||(last.time+300)*1000<now-60_000;
+    }).slice(0,1);
+    if(!due.length)return 0;
+    const symbol=due[0]!;
+    try{
+      const external=await this.marketHub.candles(symbol,"5m",120);
+      const rows=external?.rows??await fetchStructureCandles(symbol,"5m",120);
+      if(rows.length>=30)this.researchContextCandles[symbol]=rows.slice(-120);
+    }catch{/* keep the previous context candles */}
+    return 1;
   }
 
   private forwardView(now = Date.now()) {
@@ -4237,6 +4287,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         catch(error){this.runtime.radar=failedRadarRuntime(this.runtime.radar,Date.now(),error);}
       }
       subrequests+=await this.refreshAdaptiveCandles(Date.now());
+      subrequests+=await this.refreshResearchContext(Date.now());
       // L0 macro cycle needs real daily history. Warm one market per optional
       // pass from independent public venues so Gate outages cannot blind or
       // stall the ultra-long-horizon narrative.
