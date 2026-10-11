@@ -49,7 +49,8 @@ import {advanceShadowInverse,freshDeskLedger,freshNeedleLedger,freshBrainLedger,
 import {STRETCH_EPOCH} from '../lib/stretch-book.ts';
 import {LSR_EPOCH,lsrLogBook} from '../lib/lsr-book.ts';
 import {runLiveResearch,reviewResearchLog,RESEARCH_MAJORS,type ResearchSnap,type LiveResearchView,type ResearchLogRow} from '../lib/live-research.ts';
-import {armResearchExperiment,applyResearchExperiment,experimentReport,holdMsOf,type RxSignal} from '../lib/research-experiment.ts';
+import {applyResearchExperiment,experimentReport,holdMsOf,type RxSignal} from '../lib/research-experiment.ts';
+import {applyNewDesk,DESK_EPOCH,deskIdentity,deskLogPositions,freshNewDesk,type DeskSignal} from '../lib/new-desk.ts';
 import {buildRunLogExport} from '../lib/run-log.ts';
 import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
 import {confirmationRealityView} from '../lib/confirmation-reality.ts';
@@ -579,6 +580,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private stretchSettled = false;
   private lsrArmed = false;
   private lsrSettled = false;
+  private newDeskSettled = false;
   private forwardLastAttemptAt = 0;
   private forwardProtectionBudget: ProtectionWriteBudget | null = null;
   private forwardCompression: Awaited<ReturnType<typeof prepareForwardWrite>>["compression"] | null = null;
@@ -1395,11 +1397,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       await this.adoptReverseLedger(now);
       await this.adoptStretchLedger(now);
       await this.adoptLsrLedger(now);
-      const armed=this.forwardState?.inverseTrial?.paperPolicy==='lsr-v1'&&armResearchExperiment(this.forwardState,now);
+      await this.adoptNewDesk(now);
+      const armed=false;
       const state=this.forwardState!;
       const dataCycleDue=allowDataCycle&&(!state.lastCycleAt
         ||Math.floor((now-90_000)/BAR_MS)>Math.floor((state.lastCycleAt-90_000)/BAR_MS));
-      const rxWaiting=!!state.inverseTrial?.rx?.orders.some(row=>row.status==='pending');
+      const rxWaiting=!!state.inverseTrial?.desk?.orders.some(row=>row.status==='pending');
       const urgent=this.forwardUrgentSymbols(now).length>0||state.positions.length>0||rxWaiting;
       const quoteCadence=urgent?LOOP_MS:5_000;
       if(!dataCycleDue&&now-state.lastQuoteCycleAt<quoteCadence){
@@ -1411,7 +1414,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         daily:this.turnDailyCandles,quotes:executionQuotes,analysisQuotes:this.forwardAnalysisQuotes(now),contracts:this.regimeContracts(),
         entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue,
         research:{rolling:this.shadowResearch.market[0]?.rolling??null},reviewTrace:event=>{if(reviewEvents.length<128)reviewEvents.push(event);} });
-      if(next.state.inverseTrial?.paperPolicy==='lsr-v1'){
+      if(next.state.inverseTrial?.paperPolicy==='desk-v1'){
+        const research=this.liveResearchView(now),decision=research.decision;
+        const signal:DeskSignal|null=decision?{at:research.ts,symbol:decision.symbol,side:decision.planSide,confidence:decision.confidence,
+          reasoning:[decision.headline,...decision.why].join(' ').slice(0,280),stop:decision.stop,tp1:decision.tp1,tp2:decision.tp2,
+          holdMs:holdMsOf(decision.holdText),funding:research.context?.funding??0,corr1h:research.context?.symbol===decision.symbol?research.context.corr1h??null:null,
+          context:research.context?`15分钟 ${(research.context.ret15m*100).toFixed(2)}%，1小时 ${(research.context.ret1h*100).toFixed(2)}%`: '',
+          analogy:research.analogy?`${research.analogy.count} 个相似场面，跌的占 ${(research.analogy.downPct*100).toFixed(0)}%`:''}:null;
+        if(applyNewDesk(next.state,signal,executionQuotes,this.regimeContracts(),now))next.changed=true;
+      }else if(next.state.inverseTrial?.paperPolicy==='lsr-v1'){
         const research=this.liveResearchView(now),decision=research.decision;
         const signal:RxSignal|null=decision?{at:research.ts,symbol:decision.symbol,side:decision.planSide,confidence:decision.confidence,
           reasoning:[decision.headline,...decision.why].join(' ').slice(0,280),stop:decision.stop,tp1:decision.tp1,tp2:decision.tp2,
@@ -2375,6 +2386,38 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if(!(await this.sweepRetiredPaperArchives(sweepKey)))this.lsrSettled=true;
   }
 
+  /** Replace the paper book once. Old strategies stop here. The wallet starts at 1000 again. */
+  private async adoptNewDesk(now:number){
+    if(this.newDeskSettled||!this.forwardState)return;
+    const epochKey=`${FORWARD_STORAGE}new-desk-epoch`;
+    const saved=await this.ctx.storage.get<string>(epochKey);
+    if(saved===DESK_EPOCH){this.newDeskSettled=true;return;}
+    const live=this.runtime.live;
+    if(live.requestedEnabled||live.operational
+      ||Object.values(live.positions).some(position=>position?.status==="OPEN")
+      ||Object.values(live.entries).some(entry=>entry&&!["FILLED","CANCELLED"].includes(entry.status)))return;
+    const previous=this.forwardState;
+    const next=freshNewDesk(previous,now);
+    next.storage={persistedAt:now,error:null,layout:FORWARD_PAGED_STATE_VERSION,sampleIntegrity:"raw-sha256"};
+    const prepared=await prepareForwardWrite(previous.storage.persistedAt?previous:null,next,now,{compact:true});
+    const protection=await this.ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
+    const checkpoint=prepareForwardProtectionWrite(next).entries[FORWARD_PROTECTION_STORAGE] as Record<string,unknown>|undefined;
+    if(checkpoint)prepared.entries[FORWARD_PROTECTION_STORAGE]=protection?.writeBudget!==undefined?{...checkpoint,writeBudget:protection.writeBudget}:checkpoint;
+    prepared.entries[epochKey]=DESK_EPOCH;
+    prepared.writes+=(checkpoint?1:0)+1;
+    const reservation=this.reserveCriticalWrites(prepared.writes);
+    try{
+      await this.ctx.storage.transaction(async transaction=>{await transaction.put(prepared.entries);});
+      reservation.finish(true);
+    }finally{reservation.finish(false);}
+    next.storage.layout=FORWARD_PAGED_STATE_VERSION;next.storage.sampleIntegrity="raw-sha256";
+    this.forwardCompression=prepared.compression;this.forwardState=next;this.forwardError=null;
+    this.forwardProtectionBudget=readProtectionWriteBudget(protection?.writeBudget);
+    this.mirrorClosures.clear();
+    this.reviewJournal=initialReviewJournal(next.startedAt,now);this.reviewJournalLoaded=true;this.reviewDiagnosticError=null;
+    this.newDeskSettled=true;
+  }
+
   /** True when another batch of pre-cutover archive rows may remain. */
   private async sweepRetiredPaperArchives(sweepKey:string){
     const before=await this.ctx.storage.get<number>(sweepKey);
@@ -2416,7 +2459,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // impossible; closeForwardForReset safely falls back to the last saved mark.
       const closed=closeForwardForReset(previous,this.regimeQuotes(now),now);
       const wiped=resetForwardAccountPreservingLearning(previous,now);
-      const next=freshLsrLedger(wiped,now);
+      const next=freshNewDesk(wiped,now);
 
       stage="准备新账户";
       const prepared=await prepareForwardReset(previous,closed,next,now);
@@ -4472,9 +4515,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(!this.forwardState||!this.authorityReady)return json({error:"权威账户尚未恢复，不能导出空账户"},503);
       if(url.searchParams.get("kind")==="log"){
         const exportedAt=Date.now(),hub=this.marketHub.status(exportedAt),gate=this.gateStream.status(exportedAt);
-        const book=lsrLogBook(this.forwardState,this.forwardQuotes(exportedAt),exportedAt);
-        return json(buildRunLogExport({events:book.events,funnel:book.funnel,health:hub,gate,exportedAt,liveEnabled:this.runtime.live.requestedEnabled,
-          positions:book.positions,fills:book.fills,curve:book.curve,equity:book.equity,initial:book.initial,closedNet:book.closedNet,priorAdjustment:book.priorAdjustment,unreconstructed:book.unreconstructed,unreconstructedN:book.unreconstructedN,places:book.places}));
+        const deskOn=!!this.forwardState.inverseTrial?.desk?.on;
+        const book=deskOn?null:lsrLogBook(this.forwardState,this.forwardQuotes(exportedAt),exportedAt);
+        const deskRows=deskOn?deskLogPositions(this.forwardState,this.forwardQuotes(exportedAt),exportedAt):null;
+        const desk=deskOn?deskIdentity(this.forwardState,this.forwardQuotes(exportedAt),exportedAt):null;
+        return json(buildRunLogExport({events:[],funnel:deskRows?.funnel??book?.funnel??null,health:hub,gate,exportedAt,liveEnabled:this.runtime.live.requestedEnabled,
+          positions:deskRows?deskRows.positions:book?.positions??[],fills:deskRows?deskRows.fills:book?.fills??[],curve:desk?[{ts:exportedAt,equity:desk.equity,closed_pnl:desk.closedPnl,unrealized_pnl:desk.unrealized,positions:desk.open}]:book?.curve??[],equity:desk?desk.equity:book?.equity,initial:desk?desk.initial:book?.initial,closedNet:desk?desk.closedPnl:book?.closedNet,priorAdjustment:desk?0:book?.priorAdjustment,unreconstructed:0,unreconstructedN:0,places:book?.places??[]}));
       }
       if(url.searchParams.get("page")==="archive"){
         const startedAt=Number(url.searchParams.get("accountStartedAt")),asOf=Number(url.searchParams.get("asOf"));

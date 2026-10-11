@@ -40,6 +40,9 @@ export function advanceShadowInverse(input:Parameters<typeof advanceBaseline>[0]
   // Existing visible holdings are neither reversed retroactively nor force
   // closed. They drain under the pre-cutover controller, isolated from sizing.
   const beforeFinancial=JSON.stringify([s.balance,s.resolved,s.positions.map(t=>[t.id,t.stopPrice,t.contracts])]);
+  const deskOnly=trial.paperPolicy==='desk-v1';
+  let softLoss=false,deskExit=false,needle=false,brain=false,score=false,read=false,stretch=false,lsr=false;
+  if(!deskOnly){
   drainLegacyForwardPositions(s,input);
   const subjects=new Set(source.state.events.filter(e=>Number(e.id.split('-').at(-1))>sourceBefore.revision).map(e=>e.subject));
   const rows=new Map([...source.state.history,...source.state.positions].map(t=>[t.id,t]));
@@ -61,14 +64,17 @@ export function advanceShadowInverse(input:Parameters<typeof advanceBaseline>[0]
   }
   noteForwardStudy(trial,input.now);
   markInversePositions(s,input.quotes,input.now);
-  const softLoss=applyInverseSoftLossExits(s,input.now);
-  const deskExit=applyDeskOrderExits(s,input.quotes,input.now);
-  const needle=applyNeedleBook(s,input.minutePaths,input.quotes,input.contracts,input.now);
-  const brain=applyBrainBook(s,input.paths,input.minutePaths,input.quotes,input.contracts,input.now);
-  const score=applyScoreBook(s,input.paths,input.minutePaths,input.quotes,input.contracts,input.now);
-  const read=applyReadBook(s,input.paths,input.minutePaths,input.quotes,input.contracts,input.now);
-  const stretch=applyStretchBook(s,input.paths,input.quotes,input.contracts,input.now);
-  const lsr=applyLsrBook(s,input.paths,input.quotes,input.contracts,input.now);
+  softLoss=applyInverseSoftLossExits(s,input.now);
+  deskExit=applyDeskOrderExits(s,input.quotes,input.now);
+  needle=applyNeedleBook(s,input.minutePaths,input.quotes,input.contracts,input.now);
+  brain=applyBrainBook(s,input.paths,input.minutePaths,input.quotes,input.contracts,input.now);
+  score=applyScoreBook(s,input.paths,input.minutePaths,input.quotes,input.contracts,input.now);
+  read=applyReadBook(s,input.paths,input.minutePaths,input.quotes,input.contracts,input.now);
+  stretch=applyStretchBook(s,input.paths,input.quotes,input.contracts,input.now);
+  lsr=applyLsrBook(s,input.paths,input.quotes,input.contracts,input.now);
+  }else{
+    // The new desk does not copy the baseline book and does not let it close paper positions.
+  }
   recordInverseCurve(s,input.quotes,input.now);
   if(trial.paperPolicy===NEEDLE_POLICY||trial.paperPolicy===BRAIN_POLICY||trial.paperPolicy===SCORE_POLICY||trial.paperPolicy===READ_POLICY||trial.paperPolicy===STRETCH_POLICY||trial.paperPolicy===LSR_POLICY){
     const eq=forwardEquity(s,input.quotes,input.now).equity,last=trial.curve.at(-1);
@@ -88,7 +94,9 @@ export function advanceShadowInverse(input:Parameters<typeof advanceBaseline>[0]
   const readOpen=s.positions.filter(t=>t.exitControl?.policy===READ_POLICY).length;
   const stretchOpen=s.positions.filter(t=>t.exitControl?.policy===STRETCH_POLICY).length;
   const lsrOpen=s.positions.filter(t=>t.exitControl?.policy===LSR_POLICY).length;
-  s.latestReason=trial.paperPolicy===LSR_POLICY
+  s.latestReason=trial.paperPolicy==='desk-v1'
+    ?`新账本。旧策略不再下单。现在 ${s.positions.filter(t=>t.exitControl?.policy==='desk-v1').length} 笔。`
+    :trial.paperPolicy===LSR_POLICY
     ?`${trial.lsrNote||'还没有走出极端的 15 分钟。'}现在 ${lsrOpen} 笔。`
     :trial.paperPolicy===STRETCH_POLICY
     ?`${trial.stretchNote||'大盘这两小时还没有走出一段。'}现在 ${stretchOpen} 笔。`
