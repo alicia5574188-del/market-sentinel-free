@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {runLiveResearch,researchLevel,type ResearchBar,type ResearchSnap} from '../lib/live-research.ts';
+import {runLiveResearch,reviewResearchLog,researchLevel,type ResearchBar,type ResearchSnap} from '../lib/live-research.ts';
 
 function bars(n:number,price:number,volume:number,jump=0):ResearchBar[]{
   const out:ResearchBar[]=[];
@@ -25,6 +25,39 @@ test('missing BTC is reported as missing, not zero',()=>{
   const view=runLiveResearch([snap('ETH_USDT',0),snap('SOL_USDT',0.04)],Date.parse('2026-10-11T00:00:00Z'));
   assert.equal(view.context?.btc1h,null);
   assert.equal(view.context?.corr1h,null);
+});
+
+test('evidence decides the direction, a rise alone does not',()=>{
+  const pumped=snap('SOL_USDT',0.04,1);
+  pumped.funding=0.002;pumped.depthAsk=10;
+  const view=runLiveResearch([snap('BTC_USDT',0),snap('ETH_USDT',0),pumped],Date.parse('2026-10-11T00:00:00Z'));
+  const text=`${view.decision?.observation} ${view.decision?.conclusion} ${view.decision?.evidence.join(" ")}`;
+  assert.equal(text.includes("反方向"),false);
+  assert.equal(view.decision?.conclusion.includes("做空"),true);
+  assert.equal(view.decision?.evidence.length,4);
+});
+
+test('one vote each way is a contradiction and stays on watch',()=>{
+  const pumped=snap('SOL_USDT',0.04,50);
+  pumped.funding=0.002;pumped.depthAsk=10;
+  const view=runLiveResearch([snap('BTC_USDT',0),snap('ETH_USDT',0),pumped],Date.parse('2026-10-11T00:00:00Z'));
+  assert.ok(view.decision?.conflict?.includes("矛盾"));
+  assert.equal(view.decision?.level,"观望");
+  assert.equal(view.decision?.direction,null);
+});
+
+test('a new high says there is no resistance above',()=>{
+  const m5=Array.from({length:80},(_,i)=>{const px=100+i;return {t:1_700_000_000+i*300,o:px,h:px,l:px,c:px,v:10};});
+  const climbed=snap('SOL_USDT',0,10,m5);climbed.last=m5.at(-1)!.c;
+  const view=runLiveResearch([snap('BTC_USDT',0),climbed],Date.parse('2026-10-11T00:00:00Z'));
+  assert.equal(view.context?.resistanceText,"创新高，上方无参考");
+});
+
+test('an hour later, a short that fell is marked right',()=>{
+  const bars=[{t:1_000,o:100,h:100,l:100,c:100,v:1},{t:1_000+3600,o:99,h:99,l:99,c:99,v:1}];
+  const [row]=reviewResearchLog([{at:0,symbol:"SOL_USDT",level:"弱信号",confidence:0.6,btc1h:-0.002,direction:"SHORT",price:100,laterRet:null,verdict:null}],[{symbol:"SOL_USDT",m5:bars}],3_700_000);
+  assert.equal(row?.verdict,"对");
+  assert.ok((row?.laterRet??0)<0);
 });
 
 test('confidence below 55 percent stays on watch',()=>{

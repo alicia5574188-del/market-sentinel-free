@@ -48,7 +48,7 @@ import type { PreviousMarketRegimeCandidate } from "../lib/previous-market-regim
 import {advanceShadowInverse,freshDeskLedger,freshNeedleLedger,freshBrainLedger,freshScoreLedger,freshReverseLedger,freshStretchLedger,freshLsrLedger,DESK_CLEAN_EPOCH,DESK_CLEAN_BEFORE,NEEDLE_EPOCH,NEEDLE_BEFORE,BRAIN_EPOCH,BRAIN_BEFORE,SCORE_EPOCH,SCORE_BEFORE,REVERSE_EPOCH} from '../lib/shadow-inverse.ts';
 import {STRETCH_EPOCH} from '../lib/stretch-book.ts';
 import {LSR_EPOCH,lsrLogBook} from '../lib/lsr-book.ts';
-import {runLiveResearch,RESEARCH_MAJORS,type ResearchSnap,type LiveResearchView} from '../lib/live-research.ts';
+import {runLiveResearch,reviewResearchLog,RESEARCH_MAJORS,type ResearchSnap,type LiveResearchView,type ResearchLogRow} from '../lib/live-research.ts';
 import {buildRunLogExport} from '../lib/run-log.ts';
 import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
 import {confirmationRealityView} from '../lib/confirmation-reality.ts';
@@ -526,7 +526,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private strategyCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
   private liveResearchCache:{at:number;view:LiveResearchView}|null=null;
   private researchContextCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
-  private researchLog:{at:number;symbol:string;level:string;confidence:number;btc1h:number|null}[]=[];
+  private researchLog:ResearchLogRow[]=[];
+  private researchBars:{symbol:string;m5:ResearchSnap["m5"]}[]=[];
   private researchLogLoaded=false;
   private researchLogSavedAt=0;
   private forwardMinuteCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
@@ -1087,7 +1088,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         depthBid,depthAsk,funding:meta?.fundingRate??0,
         m1,m5:bars.map(bar=>({t:bar.time,o:bar.open,h:bar.high,l:bar.low,c:bar.close,v:bar.volume}))});
     }
+    this.researchBars=snaps;
     const view=runLiveResearch(snaps,now);
+    this.researchLog=reviewResearchLog(this.researchLog,snaps,now);
     view.log=this.researchLog.slice(-8);
     this.liveResearchCache={at:now,view};
     void this.rememberResearch(view);
@@ -1104,14 +1107,17 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           this.researchLog=[...saved.filter(row=>row&&typeof row.at==="number"&&!seen.has(row.at)),...this.researchLog].slice(-300);
         }
       }catch{/* a missing log must not block the page */}
+      this.researchLog=reviewResearchLog(this.researchLog,this.researchBars,view.ts);
     }
-    const row={at:view.ts,symbol:view.decision?.symbol??view.candidates[0]?.symbol??"",level:view.decision?.level??"观望",confidence:view.decision?.confidence??0,btc1h:view.context?.btc1h??null};
+    const row:ResearchLogRow={at:view.ts,symbol:view.decision?.symbol??view.candidates[0]?.symbol??"",level:view.decision?.level??"观望",confidence:view.decision?.confidence??0,btc1h:view.context?.btc1h??null,
+      direction:view.decision?.direction??null,price:view.decision?.entry??view.candidates[0]?.last??0,laterRet:null,verdict:null};
     const last=this.researchLog.at(-1);
-    if(last&&last.symbol===row.symbol&&last.level===row.level&&row.at-last.at<5*60_000)return;
-    this.researchLog.push(row);
+    const fresh=!last||last.symbol!==row.symbol||last.level!==row.level||row.at-last.at>=5*60_000;
+    if(fresh)this.researchLog.push(row);
     if(this.researchLog.length>300)this.researchLog=this.researchLog.slice(-300);
     if(view.log)view.log.splice(0,view.log.length,...this.researchLog.slice(-8));
-    if(row.at-this.researchLogSavedAt<5*60_000)return;
+    if(!fresh&&view.ts-this.researchLogSavedAt<5*60_000)return;
+    if(view.ts-this.researchLogSavedAt<5*60_000)return;
     const reservation=this.reserveNonAlarmWrites(1,512);
     if(!reservation)return;
     try{await this.ctx.storage.put({"live-research-log":this.researchLog});this.researchLogSavedAt=row.at;reservation.finish(true);}

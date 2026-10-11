@@ -166,13 +166,23 @@ function LsrResearch({desk}:{desk:Desk}){
   const live=desk.liveResearch,a=live?.context,d=live?.decision,g=live?.analogy;
   const pct=(v?:number|null)=>typeof v==="number"?`${v>=0?"+":""}${(v*100).toFixed(2)}%`:"没接到";
   const num=(v?:number|null,d=2)=>typeof v==="number"?fmt(v,d):"没接到";
+  const simNote=!g||g.count===0?"":g.minSim>=0.95?"最低相似度也在 0.95 以上，0.80 的门槛偏松。":g.minSim<0.85?"最低相似度贴着 0.80，门槛卡在边上。":"最低相似度离门槛还有一段。";
   if(!live)return <section className="fr-section" data-testid="research-claims"><div className="fr-section-head"><h2>研究</h2></div><p>这一拍还没有扫完。</p></section>;
   return <>
     <section className="fr-section" data-testid="research-claims">
       <div className="fr-section-head"><h2>研究层</h2><span>{live.library} 个历史场面</span></div>
       <p>{live.status}</p>
-      <p>横截面扫描：有。上下文：{a?.btc1h==null?"大盘还没接到":"有"}。盘口：有买一到买五。历史类比：只有约 {live.windowHours} 小时。逐笔成交：没有。30 天波动率：没有。</p>
-      <p className="fr-note">每 30 秒扫一次。最近扫描 {time(live.ts)}。排序只看涨跌和放量，盘口不参与排名，免得几十秒换一个币。</p>
+      <p className="fr-note">每 30 秒扫一次。最近扫描 {time(live.ts)}。排序只看涨跌和放量，盘口不参与排名。</p>
+      <details>
+        <summary>现在能用哪些数据</summary>
+        <p>横截面扫描：有。</p>
+        <p>上下文，大盘、相关性和自身走势：{a?.btc1h==null?"大盘还没接到":"有"}。</p>
+        <p>盘口买卖 5 档：有。</p>
+        <p>资金费率：有。</p>
+        <p>历史类比：只有约 {live.windowHours} 小时。</p>
+        <p>逐笔成交：没有。</p>
+        <p>30 天波动率：没有。</p>
+      </details>
     </section>
     <section className="fr-section">
       <div className="fr-section-head"><h2>全市场最异的 5 个</h2></div>
@@ -186,12 +196,12 @@ function LsrResearch({desk}:{desk:Desk}){
         <p>自己：15 分钟 {pct(a.ret15m)}，1 小时 {pct(a.ret1h)}。波动在这段K线里排到 {(a.volRank*100).toFixed(0)}%。</p>
         <p>盘口买/卖 {fmt(a.depthRatio,2)}，价差 {fmt(a.spreadBps,2)} bps，资金费率 {fmt(a.funding*100,4)}%。</p>
         <p className="fr-note">{a.trades}</p>
-        <p>支撑 {a.support.length?a.support.map(p=>fmt(p,6)).join(" / "):"还看不出"}。压力 {a.resistance.length?a.resistance.map(p=>fmt(p,6)).join(" / "):"还看不出"}。</p>
+        <p>支撑 {a.supportText}。压力 {a.resistanceText}。</p>
       </>:<p>还没有上下文。</p>}
     </section>
     <section className="fr-section">
       <div className="fr-section-head"><h2>像现在的老场面</h2><span>{g?.enough?`${g.count} 个`:"不足"}</span></div>
-      <p className="fr-note">相似只比 4 个数：15 分钟涨跌、1 小时涨跌、和 BTC 近 1 小时的相关性、相对 BTC。低于 {fmt((g?.threshold??0.8),2)} 的直接丢掉，不凑数。不满 5 个就写不足。</p>
+      <p className="fr-note">低于 {fmt(g?.threshold??0.8,2)} 的直接丢掉。{g&&g.count>0?`最高相似度 ${fmt(g.maxSim,2)}，最低 ${fmt(g.minSim,2)}。${simNote}`:"过线的还没有。"}</p>
       {g&&g.count>0?<>
         {!g.enough&&<p>相似场景不足，仅供参考。现在只有 {g.count} 个过线。</p>}
         <p>之后 1 小时继续跌 {g.down} 个（{(g.downPct*100).toFixed(0)}%），往上涨 {g.up} 个，横着 {g.flat} 个。</p>
@@ -202,9 +212,13 @@ function LsrResearch({desk}:{desk:Desk}){
     <section className="fr-section">
       <div className="fr-section-head"><h2>研究判断</h2><span>{d?`${d.level} ${(d.confidence*100).toFixed(0)}%`:"还没有"}</span></div>
       {d?<>
-        {d.level==="观望"?<p>方向不明确，观望。不给方向，也不给进场和止损。</p>:d.level==="弱信号"?<p>弱信号，方向是{d.direction==="LONG"?"做多":"做空"}。还不到给出完整计划的程度。</p>:<p>方向是{d.direction==="LONG"?"做多":"做空"}。</p>}
-        {d.reasoning.map(line=><p key={line}>{line}</p>)}
-        {d.level==="计划"&&<>
+        <p><b>观察。</b>{d.observation}</p>
+        <p><b>证据。</b></p>
+        {d.evidence.map(line=><p key={line}>{line}</p>)}
+        {d.conflict&&<p>{d.conflict}</p>}
+        <p><b>结论。</b>{d.conclusion}</p>
+        {d.level==="弱信号"&&<p>这是弱信号，不给进场和止损。</p>}
+        {d.level==="计划"&&d.direction&&<>
           <p>参考进场 {fmt(d.entry,6)}。止损 {fmt(d.stop,6)}。第一目标 {fmt(d.tp1,6)}。第二目标 {fmt(d.tp2,6)}。</p>
           <p>{d.stopWhy}</p>
           <p>什么情况算看错：{d.invalidate.join("；")}。</p>
@@ -214,7 +228,7 @@ function LsrResearch({desk}:{desk:Desk}){
     </section>
     <section className="fr-section">
       <div className="fr-section-head"><h2>判断记录</h2><span>最多留 300 条</span></div>
-      {live.log?.length?live.log.map(row=><p key={row.at} className="fr-note">{time(row.at)} {row.symbol.replace("_"," / ")} {row.level} {(row.confidence*100).toFixed(0)}% BTC 1 小时 {pct(row.btc1h)}</p>):<p className="fr-note">刚开始记。同一币、同一个结论，5 分钟内不重复记。</p>}
+      {live.log?.length?live.log.map(row=><p key={row.at} className="fr-note">{time(row.at)} {row.symbol.replace("_"," / ")} {row.level} {(row.confidence*100).toFixed(0)}%。1 小时后 {row.verdict??"还没到"}{typeof row.laterRet==="number"?`（${pct(row.laterRet)}）`:""}</p>):<p className="fr-note">刚开始记。同一币、同一个结论，5 分钟内不重复记。满 1 小时才写对错。</p>}
     </section>
   </>;
 }
