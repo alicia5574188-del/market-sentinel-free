@@ -3,6 +3,7 @@
 import type {ForwardState,Quote,Trade} from './forward-relations.ts';
 import {forwardEquity} from './forward-relations.ts';
 import {inverseTrialSummary,type InverseTrial} from './shadow-inverse-ledger.ts';
+import {type LiveResearchView} from './live-research.ts';
 import {researchDeskView,type DeskResearchView,type DeskStance} from './research-decision.ts';
 
 export const FORWARD_STUDY_VERSION='forward-study-v1' as const;
@@ -47,6 +48,7 @@ export type ForwardDesk={
   open:ForwardOrder[];recent:ForwardOrder[];curve:{at:number;equity:number}[];study:ForwardStudyView;
   research:DeskResearchView;brainNote?:string;scoreNote?:string;readNote?:string;stretchNote?:string;lsrNote?:string;work?:WorkSheet;lsrBoard?:LsrBoard;
   brainIdeas?:{symbol:string;side:'LONG'|'SHORT';kind:'FADE'|'LEAD'|'CATCH';why:string;wrong:string}[];
+  liveResearch?:LiveResearchView;
 };
 
 const finite=(n:unknown):n is number=>typeof n==='number'&&Number.isFinite(n);

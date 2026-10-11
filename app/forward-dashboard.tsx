@@ -91,7 +91,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       {desk&&<ForwardOrders desk={desk} now={now}/>}
     </>}
 
-    {tab==="research"&&desk?.book==="lsr-v1"&&<LsrResearch work={desk.work} note={desk.lsrNote}/>}
+    {tab==="research"&&desk?.book==="lsr-v1"&&<LsrResearch desk={desk}/>}
     {tab==="research"&&(desk?.book==="read-v1"||desk?.book==="brain-v1"||desk?.book==="stretch-v1")&&<WorkResearch work={desk.work} note={desk.book==="stretch-v1"?desk.stretchNote:desk.book==="brain-v1"?desk.brainNote:desk.readNote} ideas={desk.book==="brain-v1"?desk.brainIdeas:[ ]}/>}
     {tab==="research"&&desk?.book==="score-v1"&&<section className="fr-section" data-testid="research-claims"><div className="fr-section-head"><h2>研究</h2></div>
       <p>{desk.scoreNote||"还没有记下半小时。"}</p>
@@ -162,14 +162,49 @@ function LsrPulse({note,board,net,floating}:{note?:string;board?:Desk["lsrBoard"
     </div>
   </section>;
 }
-function LsrResearch({work,note}:{work:Desk["work"];note?:string}){
-  return <section className="fr-section" data-testid="research-claims">
-    <div className="fr-section-head"><h2>四关都过才挂单</h2></div>
-    <p>{note??work?.subject??"这一拍还没有结果。"}</p>
-    <p className="fr-note">急跌做多，急涨做空。这一拍的涨跌要极端，5 分钟还要放量。研究样本够 800 条以后，模型认为后面赚不过手续费的不做。</p>
-    {(work?.lines??[]).map(line=><article className="lsr-gate" key={line.name}><h3>{line.name}</h3><p>{line.said}</p><p className="fr-note">{line.data}</p></article>)}
-    {!work&&<p className="fr-note">步骤还没有写出来。</p>}
-  </section>;
+function LsrResearch({desk}:{desk:Desk}){
+  const live=desk.liveResearch,a=live?.context,d=live?.decision,g=live?.analogy;
+  const pct=(v?:number|null)=>typeof v==="number"?`${v>=0?"+":""}${(v*100).toFixed(2)}%`:"—";
+  if(!live)return <section className="fr-section" data-testid="research-claims"><div className="fr-section-head"><h2>研究</h2></div><p>这一拍还没有扫完。</p></section>;
+  return <>
+    <section className="fr-section" data-testid="research-claims">
+      <div className="fr-section-head"><h2>研究层</h2><span>{live.library} 个历史场面</span></div>
+      <p>{live.status}</p>
+      <p className="fr-note">每 30 秒扫一次。用的是已经收下的 5 分钟K线，大约 {live.windowHours} 小时，不是 30 天。最近扫描 {time(live.ts)}。</p>
+    </section>
+    <section className="fr-section">
+      <div className="fr-section-head"><h2>全市场最异的 5 个</h2></div>
+      {live.candidates.length?live.candidates.map(c=><p key={c.symbol}><b>{c.rank}. {c.symbol.replace("_"," / ")}</b> 评分 {fmt(c.score,2)}，5 分钟 z {fmt(c.retZ5m,2)}，量 z {fmt(c.volZ5m,2)}，现价 {fmt(c.last,6)}</p>):<p>还没有排出来。</p>}
+    </section>
+    <section className="fr-section">
+      <div className="fr-section-head"><h2>{a?`${a.symbol.replace("_"," / ")} 的上下文`:"上下文"}</h2></div>
+      {a?<>
+        <p>大盘：BTC 近 1 小时 {pct(a.btc1h)}，这段K线 {pct(a.btcWindow)}。主流币近 1 小时 {pct(a.majors1h)}。现在看成{a.regime}。</p>
+        <p>和 BTC：近 1 小时 {fmt(a.corr1h,2)}，更长一段 {fmt(a.corrWindow,2)}。{a.decoupled?"已经和原来的关系脱开。":"没有脱开。"}</p>
+        <p>自己：15 分钟 {pct(a.ret15m)}，1 小时 {pct(a.ret1h)}。波动在这段K线里排到 {(a.volRank*100).toFixed(0)}%。</p>
+        <p>盘口买/卖 {fmt(a.depthRatio,2)}，价差 {fmt(a.spreadBps,2)} bps，资金费率 {fmt(a.funding*100,4)}%。</p>
+        <p className="fr-note">{a.trades}</p>
+        <p>支撑 {a.support.length?a.support.map(p=>fmt(p,6)).join(" / "):"还看不出"}。压力 {a.resistance.length?a.resistance.map(p=>fmt(p,6)).join(" / "):"还看不出"}。</p>
+      </>:<p>还没有上下文。</p>}
+    </section>
+    <section className="fr-section">
+      <div className="fr-section-head"><h2>像现在的老场面</h2><span>{g?`${g.count} 个`:"不够"}</span></div>
+      {g?<>
+        <p>之后 1 小时继续跌 {g.down} 个（{(g.downPct*100).toFixed(0)}%），往上涨 {g.up} 个，横着 {g.flat} 个。</p>
+        <p>平均最多顺涨 {pct(g.mfe1h)}，最多回落 {pct(g.mae1h)}。往后这段最好 {pct(g.best4h)}，最差 {pct(g.worst4h)}。</p>
+        {g.refs.map(row=><p key={`${row.symbol}-${row.o1h}`} className="fr-note">{row.symbol.replace("_"," / ")} 相似度 {fmt(row.similarity,2)}，1 小时后 {pct(row.o1h)}</p>)}
+      </>:<p>相似场面不到 20 个。K线只有最近这段，类比先空着。</p>}
+    </section>
+    <section className="fr-section">
+      <div className="fr-section-head"><h2>研究判断</h2><span>{d?`${d.direction==="LONG"?"做多":"做空"} ${(d.confidence*100).toFixed(0)}%`:"还没有"}</span></div>
+      {d?<>
+        {d.reasoning.map(line=><p key={line}>{line}</p>)}
+        <p>参考进场 {fmt(d.entry,6)}。止损 {fmt(d.stop,6)}。第一目标 {fmt(d.tp1,6)}。第二目标 {fmt(d.tp2,6)}。</p>
+        <p>什么情况算看错：{d.invalidate.join("；")}。</p>
+        <p className="fr-note">这是研究页上的判断，不会下单。</p>
+      </>:<p>还没有判断。</p>}
+    </section>
+  </>;
 }
 function LsrDecision({desk,now}:{desk:Desk;now:number}){
   const work=desk.work,board=desk.lsrBoard;

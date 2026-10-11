@@ -48,6 +48,7 @@ import type { PreviousMarketRegimeCandidate } from "../lib/previous-market-regim
 import {advanceShadowInverse,freshDeskLedger,freshNeedleLedger,freshBrainLedger,freshScoreLedger,freshReverseLedger,freshStretchLedger,freshLsrLedger,DESK_CLEAN_EPOCH,DESK_CLEAN_BEFORE,NEEDLE_EPOCH,NEEDLE_BEFORE,BRAIN_EPOCH,BRAIN_BEFORE,SCORE_EPOCH,SCORE_BEFORE,REVERSE_EPOCH} from '../lib/shadow-inverse.ts';
 import {STRETCH_EPOCH} from '../lib/stretch-book.ts';
 import {LSR_EPOCH,lsrLogBook} from '../lib/lsr-book.ts';
+import {runLiveResearch,type ResearchSnap} from '../lib/live-research.ts';
 import {buildRunLogExport} from '../lib/run-log.ts';
 import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
 import {confirmationRealityView} from '../lib/confirmation-reality.ts';
@@ -523,6 +524,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private memory: Record<string, SymbolMemory> = {};
   private structureCandles: Record<string, Partial<Record<"1m" | "15m" | "1h" | "4h", Awaited<ReturnType<typeof fetchStructureCandles>>>>> = {};
   private strategyCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
+  private liveResearchCache:{at:number;view:ReturnType<typeof runLiveResearch>}|null=null;
   private forwardMinuteCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
   private forwardMinuteRetryAt = new Map<string,number>();
   private gateStream = new GateStreamingFeed();
@@ -1060,8 +1062,29 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       hourly: this.regimeHourly, quotes: this.regimeQuotes(now), contracts: this.regimeContracts(), now, allowNewEntries: false });
   }
 
+  private liveResearchView(now=Date.now()){
+    if(this.liveResearchCache&&now-this.liveResearchCache.at<30_000)return this.liveResearchCache.view;
+    const quotes=this.forwardQuotes(now);
+    const snaps:ResearchSnap[]=[];
+    for(const [symbol,bars] of Object.entries(this.strategyCandles)){
+      if(bars.length<31)continue;
+      const q=quotes[symbol];
+      const meta=this.runtime.contractMeta[symbol];
+      const book=meta?this.gateStream.book(symbol,this.runtime.tickSize[symbol]??1e-8,meta.quantoMultiplier,now):null;
+      const depthBid=book?.bids.slice(0,5).reduce((n,row)=>n+row.size,0)??0;
+      const depthAsk=book?.asks.slice(0,5).reduce((n,row)=>n+row.size,0)??0;
+      const m1=(this.forwardMinuteCandles?.[symbol]??[]).map(bar=>({t:bar.time,o:bar.open,h:bar.high,l:bar.low,c:bar.close,v:bar.volume}));
+      snaps.push({symbol,bid:q?.bestBid??0,ask:q?.bestAsk??0,last:q?((q.bestBid+q.bestAsk)/2):(bars.at(-1)?.close??0),
+        depthBid,depthAsk,funding:meta?.fundingRate??0,
+        m1,m5:bars.map(bar=>({t:bar.time,o:bar.open,h:bar.high,l:bar.low,c:bar.close,v:bar.volume}))});
+    }
+    const view=runLiveResearch(snaps,now);
+    this.liveResearchCache={at:now,view};
+    return view;
+  }
+
   private forwardView(now = Date.now()) {
-    return this.forwardState ? { ...forwardSummary(this.forwardState, this.regimeQuotes(now), now),
+    const view=this.forwardState ? { ...forwardSummary(this.forwardState, this.regimeQuotes(now), now),
       confirmationReality: confirmationRealityView([...this.forwardState.positions, ...this.forwardState.history], now, {
         opens: this.forwardState.inverseTrial?.regimeOpens, pauseUntil: this.forwardState.inverseTrial?.regimeClock?.pauseUntil}),
       observationTape: this.forwardState.extremumRegime
@@ -1070,6 +1093,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       liveMirror: this.liveMirrorView(),
       storage: { ...this.forwardState.storage, error: this.forwardError } }
       : { version: FORWARD_VERSION, mode: "RECOVERY_REQUIRED", liveEligible: false, storage: { error: this.forwardError } };
+    if("forwardDesk" in view&&view.forwardDesk)view.forwardDesk={...view.forwardDesk,liveResearch:this.liveResearchView(now)};
+    return view;
   }
 
   private forwardHealth() {
