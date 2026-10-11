@@ -1,7 +1,7 @@
 /** Paper-only experiment. Research decides the side. This file only places and exits.
  * It never turns on live trading. The run stops when equity is at or below zero, not on a clock. */
 import type {Contract, ForwardState, Quote, Rule, Trade} from './forward-relations.ts';
-import {forwardEquity} from './forward-relations.ts';
+import {forwardEquity, freshQuote} from './forward-relations.ts';
 
 export const RX_POLICY = 'rx-v1';
 const NOTIONAL = 500;
@@ -17,7 +17,7 @@ const CHECK_MS = 30_000;
 const STALE_MS = 2_000;
 
 export type RxSide = 'LONG' | 'SHORT';
-export type RxExit = 'tp1' | 'tp2' | 'sl' | 'invalidate' | 'time' | 'external';
+export type RxExit = 'tp1' | 'tp2' | 'sl' | 'invalidate' | 'time' | 'external' | 'dropped';
 export type RxOrder = {
   id: string; decisionAt: number; symbol: string; direction: RxSide; confidence: number;
   entry: number; limit: number; qty: number; notional: number; placedAt: number; openedAt: number | null;
@@ -44,6 +44,7 @@ export type RxBook = {
   decisionsN: number; openedN: number; cancelledN: number;
   openFee: number; closeFee: number; openSlippage: number; closeSlippage: number; fundingFee: number; traded: number;
   path: {at: number; equity: number}[];
+  unreconstructedNet?: number | null; unreconstructedN?: number;
 };
 export type RxReport = {
   status: string; running: boolean; startedAt: number; stoppedAt: number | null;
@@ -72,7 +73,8 @@ const bucketOf = (c: number) => c < 0.4 ? buckets[0]! : c < 0.5 ? buckets[1]! : 
 
 export function emptyRx(now: number): RxBook {
   return {on: true, startedAt: now, stoppedAt: null, stopReason: null, decisions: [], orders: [], fees: [], seenAt: 0,
-    decisionsN: 0, openedN: 0, cancelledN: 0, openFee: 0, closeFee: 0, openSlippage: 0, closeSlippage: 0, fundingFee: 0, traded: 0, path: []};
+    decisionsN: 0, openedN: 0, cancelledN: 0, openFee: 0, closeFee: 0, openSlippage: 0, closeSlippage: 0, fundingFee: 0, traded: 0, path: [],
+    unreconstructedNet: null, unreconstructedN: 0};
 }
 
 export function armResearchExperiment(state: ForwardState, now: number) {
@@ -160,7 +162,7 @@ function fill(state: ForwardState, book: RxBook, order: RxOrder, now: number, qu
   state.events = [{id: `rx${state.startedAt}-${state.revision}`, at: now, kind: 'ENTRY' as const, subject: trade.id, reason: `${order.symbol} ${order.direction} ${order.notional.toFixed(0)}U`}, ...state.events].slice(0, 160);
 }
 
-function reconcileExternalCloses(state: ForwardState, _now: number) {
+function reconcileExternalCloses(state: ForwardState, quotes: Record<string, Quote>, now: number) {
   const book = state.inverseTrial?.rx;
   if (!book) return false;
   const live = new Set(state.positions.map(row => row.id));
@@ -181,6 +183,29 @@ function reconcileExternalCloses(state: ForwardState, _now: number) {
       note: '这笔被旧的持仓管理先平掉。现金按那次平仓记。'}, 400);
     changed = true;
   }
+  const phantoms = book.orders.filter(order => order.status === 'open' && !live.has(order.id));
+  if (phantoms.length && book.unreconstructedNet == null) {
+    const equity = forwardEquity(state, quotes, now).equity;
+    const closedNet = book.orders.filter(order => order.status === 'closed' && order.net != null).reduce((n, order) => n + (order.net ?? 0), 0);
+    let liveUnreal = 0;
+    for (const order of book.orders) {
+      if (order.status !== 'open' || !live.has(order.id)) continue;
+      const trade = state.positions.find(row => row.id === order.id);
+      const q = quotes[order.symbol];
+      const px = freshQuote(q, now) ? (order.direction === 'LONG' ? q!.bestBid : q!.bestAsk) : (trade?.lastPrice ?? order.entry);
+      liveUnreal += dir(order.direction) * order.qty * (px - order.entry) - order.notional * (RX_MAKER + RX_OPEN_SLIP);
+    }
+    const prior = state.inverseTrial?.lsrPriorNet ?? 0;
+    const lsrNet = state.inverseTrial?.lsrClosedNet ?? 0;
+    book.unreconstructedNet = round(equity - state.initialEquity - prior - lsrNet - closedNet - liveUnreal, 4);
+    book.unreconstructedN = phantoms.length;
+    for (const order of phantoms) {
+      order.status = 'closed'; order.exitReason = 'dropped'; order.closedAt = now; order.exit = order.entry;
+      order.gross = null; order.net = null;
+      order.holdSec = Math.max(0, Math.round((now - (order.openedAt ?? now)) / 1000));
+    }
+    changed = true;
+  }
   return changed;
 }
 
@@ -188,7 +213,7 @@ export function applyResearchExperiment(state: ForwardState, signal: RxSignal | 
   const trial = state.inverseTrial;
   if (!trial?.rx?.on) return false;
   const book = trial.rx;
-  let changed = reconcileExternalCloses(state, now);
+  let changed = reconcileExternalCloses(state, quotes, now);
   const equity = forwardEquity(state, quotes, now).equity;
   const beforePath = book.path.length;
   markPath(book, equity, now);
@@ -285,7 +310,7 @@ export function experimentReport(book: RxBook | undefined): RxReport | null {
   const status = book.stoppedAt
     ? `${book.stopReason ?? '已停止'} ${book.orders.some(row => row.status === 'open' || row.status === 'pending') ? '还有单没走完。' : '单已经走完。'}`
     : '正向实验在跑。没有 2 小时截止。权益到 0 才停开新单。';
-  const reasonName = (reason: RxExit | null) => reason === 'tp1' ? '第一目标' : reason === 'tp2' ? '第二目标' : reason === 'sl' ? '止损' : reason === 'invalidate' ? '看错了' : reason === 'time' ? '到时间' : reason === 'external' ? '被旧平仓逻辑先平掉' : '';
+  const reasonName = (reason: RxExit | null) => reason === 'tp1' ? '第一目标' : reason === 'tp2' ? '第二目标' : reason === 'sl' ? '止损' : reason === 'invalidate' ? '看错了' : reason === 'time' ? '到时间' : reason === 'external' ? '被旧平仓逻辑先平掉' : reason === 'dropped' ? '平仓记录被裁掉，净利在合计里' : '';
   const fees = new Map(book.fees.map(row => [row.orderId, row]));
   const rows = [...book.orders].reverse().slice(0, 80).map(row => {
     const fee = fees.get(row.id);

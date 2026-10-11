@@ -22,13 +22,14 @@ export function placeFromEvent(fields:RunEvent['fields']):LsrPlace|null{
 }
 export function placesFromEvents(events:RunEvent[]){return events.filter(event=>event.event==='order_placing').map(event=>placeFromEvent(event.fields)).filter((row):row is LsrPlace=>row!=null);}
 export type LsrFill={ts:number;symbol:string;side:'LONG'|'SHORT';price:number;qty:number;notional:number;fee:number;tag:'open'|'close';trace:string;waitMs:number|null;limit:number|null};
-export type LsrPositionRow={id:string;symbol:string;side:'LONG'|'SHORT';entry:number;exit:number|null;qty:number;notional:number;gross_pnl:number|null;fee:number;net_pnl:number|null;holdSec:number;exit_reason:'stop'|'tp'|'time'|'prior'|'tp1'|'tp2'|'sl'|'invalidate'|'external'|null;gapBps:number|null;opened_at:number;closed_at:number|null;trace:string};
+export type LsrPositionRow={id:string;symbol:string;side:'LONG'|'SHORT';entry:number;exit:number|null;qty:number;notional:number;gross_pnl:number|null;fee:number;net_pnl:number|null;holdSec:number;exit_reason:'stop'|'tp'|'time'|'prior'|'tp1'|'tp2'|'sl'|'invalidate'|'external'|'dropped'|null;gapBps:number|null;opened_at:number;closed_at:number|null;trace:string};
 export type LsrCurvePoint={ts:number;equity:number;closed_pnl:number;unrealized_pnl:number;positions:number};
 const ROW_CAP=8_000;
 export function rememberRow<T>(rows:T[]|undefined,row:T){return [...(rows??[]),row].slice(-ROW_CAP);}
 
 export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null;health:{sources?:{source:string;fresh?:boolean;failures?:number;lastError?:string|null;rows?:number}[];healthySources?:number};gate:{connected?:boolean;lastError?:string|null;freshBooks?:number};exportedAt:number;liveEnabled:boolean;
   positions?:LsrPositionRow[];fills?:LsrFill[];curve?:LsrCurvePoint[];equity?:number|null;initial?:number|null;closedNet?:number|null;priorAdjustment?:number|null;
+  unreconstructed?:number|null;unreconstructedN?:number|null;
   places?:LsrPlace[]|null}){
   const funnel=input.funnel??emptyFunnel('');
   const strategy={signal_not_triggered:funnel.trend+funnel.exhaustion+funnel.sweep+funnel.micro+funnel.spread,
@@ -39,8 +40,8 @@ export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null
   const closed=positions.filter(row=>row.net_pnl!=null);
   const closedPnl=closed.reduce((n,row)=>n+(row.net_pnl??0),0);
   const unrealized=positions.filter(row=>row.net_pnl==null).reduce((n,row)=>n+(row.gross_pnl??0)-row.fee,0);
-  const equity=input.equity??null,initial=input.initial??null,prior=input.priorAdjustment??0;
-  const identity=equity!=null&&initial!=null?equity-(initial+prior+closedPnl+unrealized):null;
+  const equity=input.equity??null,initial=input.initial??null,prior=input.priorAdjustment??0,unreconstructed=input.unreconstructed??0;
+  const identity=equity!=null&&initial!=null?equity-(initial+prior+closedPnl+unrealized+unreconstructed):null;
   const fillFee=fills.reduce((n,row)=>n+row.fee,0),positionFee=positions.reduce((n,row)=>n+row.fee,0);
   const waits=fills.filter(row=>row.tag==='open'&&row.waitMs!=null).map(row=>row.waitMs??0);
   const slips=fills.filter(row=>row.tag==='open'&&row.limit!=null&&row.limit>0).map(row=>{
@@ -53,7 +54,7 @@ export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null
   const rows=(input.places&&input.places.length?input.places:placesFromEvents(input.events));
   const fallbackN=rows.filter(row=>row.fallback).length,rejectedN=rows.filter(row=>row.rejected).length;
   const body={version:'lsr-run-log-v2' as const,exportedAt:input.exportedAt,liveEnabled:input.liveEnabled,
-    howToRead:'恒等式是 权益 = 初始 + prior_adjustment + closed_pnl_sum + unrealized_pnl。prior_adjustment 是旧账，不算进已平净利。实验单和老策略单都在 positions 里。上一份日志如果 positions 是空的、identity_error 却很大，是导出没记实验单，不是钱被删了。',
+    howToRead:'恒等式是 权益 = 初始 + prior_adjustment + closed_pnl_sum + unrealized_pnl + 裁掉的平仓合计。裁掉的平仓合计只记一次，是热历史里已经找不到逐笔记录的现金。不算进胜率。',
     funnel,sourceHealth:input.health,gate:input.gate,
     breakdown:{strategy_issues:strategy,runtime_issues:runtime,
       verdict:runtime.data_stale+runtime.price_disagreement+runtime.ws_disconnect+runtime.order_rejected>strategy.signal_not_triggered&&runtime.data_stale+runtime.ws_disconnect>0?'先看运行':'先看策略'},
@@ -76,7 +77,8 @@ export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null
       {step:'旧账 prior_adjustment，只记一次，不算进已平',amount:Number(prior.toFixed(4))},
       {step:'已平净利，含实验单',amount:Number(closedPnl.toFixed(4))},
       {step:'还没平的浮盈，已扣掉开仓手续费和开仓滑点',amount:Number(unrealized.toFixed(4))},
-      {step:'上面几项加出来的权益',amount:initial==null?null:Number((initial+prior+closedPnl+unrealized).toFixed(4))},
+      {step:`平仓记录被裁掉的 ${input.unreconstructedN??0} 笔，合计现金，不算进胜率`,amount:Number(unreconstructed.toFixed(4))},
+      {step:'上面几项加出来的权益',amount:initial==null?null:Number((initial+prior+closedPnl+unrealized+unreconstructed).toFixed(4))},
       {step:'账户实际权益',amount:equity},
       {step:'对不上的差额。接近 0 才算账平了',amount:identity==null?null:Number(identity.toFixed(4))},
     ],

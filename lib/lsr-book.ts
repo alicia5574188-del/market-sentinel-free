@@ -424,7 +424,8 @@ export function lsrLogBook(state:ForwardState,quotes:Record<string,Quote>,now:nu
   if(!curve.length||now-(curve.at(-1)?.ts??0)>=60_000)curve.push({ts:now,equity:Number(mark.equity.toFixed(4)),closed_pnl:Number(rowSum.toFixed(4)),unrealized_pnl:Number(openMark.toFixed(4)),positions:positions.filter(row=>row.exit==null).length});
   return {positions,fills,curve,equity:mark.equity,initial:state.initialEquity,
     closedNet:Number(rowSum.toFixed(4)),priorAdjustment:Number((prior+bridge).toFixed(4)),places:stored.length>=logged.length?stored:logged,
-    funnel:rx.funnel??trial?.lsrFunnel??null,events:[...(trial?.lsrLog??[]),...rx.events]};
+    funnel:rx.funnel??trial?.lsrFunnel??null,events:[...(trial?.lsrLog??[]),...rx.events],
+    unreconstructed:trial?.rx?.unreconstructedNet??0,unreconstructedN:trial?.rx?.unreconstructedN??0};
 }
 
 function rxRows(state:ForwardState,quotes:Record<string,Quote>,now:number){
@@ -435,19 +436,19 @@ function rxRows(state:ForwardState,quotes:Record<string,Quote>,now:number){
   if(!book)return {rows,fills,events,funnel:null as RunFunnel|null};
   const fees=new Map(book.fees.map(row=>[row.orderId,row]));
   for(const order of book.orders){
-    if(order.status==='pending'||order.status==='cancelled'||!order.openedAt)continue;
+    if(order.status==='pending'||order.status==='cancelled'||!order.openedAt||order.net==null&&order.status==='closed')continue;
     const fee=fees.get(order.id);
     const openCost=fee?fee.openFee+fee.openSlippage:order.notional*(RX_MAKER+RX_OPEN_SLIP);
     const trace=`rx-${order.id}`;
-    if(order.status==='closed'&&order.exit!=null&&order.closedAt){
+    if(order.status==='closed'&&order.exit!=null&&order.closedAt&&order.net!=null){
       const total=fee?.totalCost??Math.max(0,(order.gross??0)-(order.net??0));
       rows.push({id:order.id,symbol:order.symbol,side:order.direction,entry:order.entry,exit:order.exit,qty:order.qty,notional:order.notional,
         gross_pnl:order.gross,fee:Number(total.toFixed(6)),net_pnl:order.net,holdSec:order.holdSec??0,exit_reason:order.exitReason,gapBps:null,
         opened_at:order.openedAt,closed_at:order.closedAt,trace});
       fills.push({ts:order.openedAt,symbol:order.symbol,side:order.direction,price:order.entry,qty:order.qty,notional:order.notional,fee:Number(openCost.toFixed(6)),tag:'open',trace,waitMs:null,limit:order.limit});
       fills.push({ts:order.closedAt,symbol:order.symbol,side:order.direction,price:order.exit,qty:order.qty,notional:order.qty*order.exit,fee:Number((total-openCost).toFixed(6)),tag:'close',trace,waitMs:null,limit:order.exit});
-    }else if(order.status==='open'){
-      const q=quotes[order.symbol],fresh=bookFresh(q,now),px=fresh?(order.direction==='LONG'?q!.bestBid:q!.bestAsk):order.entry;
+    }else if(order.status==='open'&&state.positions.some(t=>t.id===order.id)){
+      const trade=state.positions.find(t=>t.id===order.id),q=quotes[order.symbol],px=freshQuote(q,now)?(order.direction==='LONG'?q!.bestBid:q!.bestAsk):(trade?.lastPrice||order.entry);
       const gross=px>0?dirOf(order.direction)*order.qty*(px-order.entry):0;
       rows.push({id:order.id,symbol:order.symbol,side:order.direction,entry:order.entry,exit:null,qty:order.qty,notional:order.notional,
         gross_pnl:Number(gross.toFixed(6)),fee:Number(openCost.toFixed(6)),net_pnl:null,holdSec:Math.round((now-order.openedAt)/1000),exit_reason:null,gapBps:null,
@@ -456,7 +457,7 @@ function rxRows(state:ForwardState,quotes:Record<string,Quote>,now:number){
     }
   }
   for(const row of book.decisions.slice(-80))events.push({ts:row.at,level:'INFO',cat:'STRAT',symbol:row.symbol,event:row.action==='opened'?'research_order':row.action==='observe'?'research_observe':'research_stopped',reason:row.reasoning,fields:{confidence:row.confidence,side:row.direction??'',order:row.orderId??''},trace:traceOf(row.at)});
-  const closedN=book.orders.filter(row=>row.status==='closed');
+  const closedN=book.orders.filter(row=>row.status==='closed'&&row.net!=null);
   const funnel:RunFunnel|null=book.decisionsN>0?{day:'',scans:book.decisionsN,universe:0,stale:0,spread:0,priceCheck:0,trend:0,exhaustion:0,sweep:0,micro:0,signals:book.decisionsN,rested:book.orders.filter(row=>row.status==='pending').length,filled:book.openedN,cancelled:book.cancelledN,closed:closedN.length,wins:closedN.filter(row=>(row.net??0)>0).length}:null;
   return {rows,fills,events,funnel};
 }

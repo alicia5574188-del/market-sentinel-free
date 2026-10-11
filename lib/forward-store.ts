@@ -103,7 +103,9 @@ function hotProjection(next:ForwardState,includeSamples=true){
       pinnedOpen=new Set(next.inverseTrial?.source.positions.map(p=>p.id)??[]),
       pinned=next.history.filter(t=>!history.some(row=>row.id===t.id)&&!!t.inverseCopy?.fills?.some(f=>f.earlySoftLoss)&&pinnedOpen.has(t.inverseCopy!.sourceId))
         .map(t=>compactClosedTrade(hotTrade(droppedHotReview?withoutReview(t):t),false)),
-      account={...next,positions:next.positions.map(t=>hotTrade(droppedHotReview?withoutReview(t):t)),history:[...history,...pinned],events:next.events.slice(0,eventLimit),
+      pinnedExperiment=next.history.filter(t=>t.exitControl?.policy==='rx-v1'&&!history.some(row=>row.id===t.id)&&!pinned.some(row=>row.id===t.id)).slice(-240)
+        .map(t=>compactClosedTrade(hotTrade(droppedHotReview?withoutReview(t):t),false)),
+      account={...next,positions:next.positions.map(t=>hotTrade(droppedHotReview?withoutReview(t):t)),history:[...history,...pinned,...pinnedExperiment],events:next.events.slice(0,eventLimit),
         ...(next.inverseTrial?{inverseTrial:{...next.inverseTrial,source:{...next.inverseTrial.source,
           positions:next.inverseTrial.source.positions.map(withoutReview),
           history:next.inverseTrial.source.history.slice(0,Math.max(32,total)).map(compactShadowClosedTrade),

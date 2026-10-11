@@ -100,6 +100,25 @@ test('a close taken by the old manager is copied onto the experiment book so the
   assert.ok(Math.abs(file.invariants.identity_error ?? 99) < 0.05, `identity ${file.invariants.identity_error}`);
 });
 
+test('a filled order with no position and no history is one cash total, not a live mark', () => {
+  const state = book();
+  applyResearchExperiment(state, signal(T), {SOL_USDT: quote(100, 100.02, T)}, {SOL_USDT: contract}, T);
+  applyResearchExperiment(state, null, {SOL_USDT: quote(99.99, 100, T + 6_000)}, {SOL_USDT: contract}, T + 6_000);
+  assert.equal(state.positions.length, 1);
+  state.positions = [];
+  state.history = [];
+  applyResearchExperiment(state, null, {SOL_USDT: quote(90, 90.02, T + 8_000)}, {SOL_USDT: contract}, T + 8_000);
+  const order = state.inverseTrial?.rx?.orders[0];
+  assert.equal(order?.exitReason, 'dropped');
+  assert.equal(order?.net, null);
+  assert.equal(state.inverseTrial?.rx?.unreconstructedN, 1);
+  const packed = lsrLogBook(state, {SOL_USDT: quote(90, 90.02, T + 8_000)}, T + 8_000);
+  const file = buildRunLogExport({events: packed.events, funnel: packed.funnel, health: {}, gate: {}, exportedAt: T + 8_000, liveEnabled: false,
+    positions: packed.positions, fills: packed.fills, curve: packed.curve, equity: packed.equity, initial: packed.initial, closedNet: packed.closedNet, priorAdjustment: packed.priorAdjustment, unreconstructed: packed.unreconstructed, unreconstructedN: packed.unreconstructedN, places: packed.places});
+  assert.equal(file.positions.length, 0);
+  assert.ok(Math.abs(file.invariants.identity_error ?? 99) < 0.05, `identity ${file.invariants.identity_error} unreconstructed ${packed.unreconstructed}`);
+});
+
 test('an experiment fill is in the log, so the cash change is not an unexplained gap', () => {
   const state = book();
   applyResearchExperiment(state, signal(T), {SOL_USDT: quote(100, 100.02, T)}, {SOL_USDT: contract}, T);
