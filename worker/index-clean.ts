@@ -56,7 +56,7 @@ import {buildRunLogExport} from '../lib/run-log.ts';
 import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
 import {confirmationRealityView} from '../lib/confirmation-reality.ts';
 import {observationReading} from '../lib/observation-tape.ts';
-import { ADAPTIVE_ENGINE_VERSION, FORWARD_EXECUTION_BBO_CAP, FORWARD_MINUTE_CONFIRMATION_CAP, closeForwardForReset,
+import { ADAPTIVE_ENGINE_VERSION, FORWARD_EXECUTION_BBO_CAP, FORWARD_MINUTE_CONFIRMATION_CAP, advanceForward, closeForwardForReset,
   forwardSummary, forwardEquity, freshQuote, forwardUrgentMinuteSymbols, forwardUrgentQuoteSymbols, forwardWatchSymbols,
   resetForwardAccountPreservingLearning, BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
 import { FORWARD_EXECUTION_VOLUME_FLOOR_USD, forwardExecutionUniverseEligible, selectAnchorOpportunityUniverse } from "../lib/multi-turn-universe.ts";
@@ -1402,8 +1402,56 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       await this.ensureAdaptiveAccount(now);
       await this.adoptEmptyStrategy(now);
       await this.advanceThesis(now);
-      void allowDataCycle;
-      return;
+      const state=this.forwardState!;
+      const dataCycleDue=allowDataCycle&&(!state.lastCycleAt
+        ||Math.floor((now-90_000)/BAR_MS)>Math.floor((state.lastCycleAt-90_000)/BAR_MS));
+      const urgent=this.forwardUrgentSymbols(now).length>0||state.positions.length>0;
+      const quoteCadence=urgent?LOOP_MS:5_000;
+      if(!dataCycleDue&&now-state.lastQuoteCycleAt<quoteCadence){
+        this.forwardLastAttemptAt=state.lastQuoteCycleAt;return;
+      }
+      this.forwardLastAttemptAt=now;
+      const previous = state,reviewEvents:ReviewEvent[]=[],executionQuotes=this.forwardQuotes(now);
+      const next = advanceForward({ state: previous, now, paths: this.strategyCandles,minutePaths:this.forwardMinutePaths(),
+        daily:this.turnDailyCandles,quotes:executionQuotes,analysisQuotes:this.forwardAnalysisQuotes(now),contracts:this.regimeContracts(),
+        entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue,
+        research:{rolling:this.shadowResearch.market[0]?.rolling??null},reviewTrace:event=>{if(reviewEvents.length<128)reviewEvents.push(event);} });
+      try{captureTradeReviews(previous,next.state,now,FORWARD_BUILD_SHA,STRATEGY_FINGERPRINT,executionQuotes);}
+      catch{this.reviewDiagnosticError="TRADE_REVIEW_CAPTURE_FAILED";}
+      if (next.changed || !previous.storage.persistedAt) {
+        next.state.storage = { persistedAt: now, error: null };
+        const prepared = await prepareForwardWrite(previous.storage.persistedAt ? previous : null, next.state, now, {compact:true});
+        const bound=new Set([...Object.values(this.runtime.live.entries).flatMap(e=>e?.mirrorSourceId?[e.mirrorSourceId]:[]),
+          ...Object.values(this.runtime.live.positions).flatMap(p=>p?.mirrorSourceId?[p.mirrorSourceId]:[])]);
+        const closures=next.state.history.filter(t=>bound.has(t.id)&&!this.mirrorClosures.has(t.id));
+        for(const t of closures)prepared.entries[`${LIVE_PARITY_PREFIX}source-close:${t.id}`]=structuredClone(t);
+        prepared.writes+=closures.length;
+        const reservation=this.reserveCriticalWrites(prepared.writes);
+        try {await this.ctx.storage.transaction(async transaction => { await transaction.put(prepared.entries); });reservation.finish(true);}
+        finally {reservation.finish(false);}
+        next.state.storage.layout=FORWARD_PAGED_STATE_VERSION;next.state.storage.sampleIntegrity="raw-sha256";
+        this.forwardCompression=prepared.compression;
+        for(const t of closures)this.mirrorClosures.set(t.id,structuredClone(t));
+      } else if (next.protectionChanged) {
+        const prepared=prepareForwardProtectionWrite(next.state);
+        const usage=await this.ctx.storage.transaction(async transaction => {
+          const saved=await transaction.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
+          const writeBudget=nextProtectionWriteBudget(saved?.writeBudget,now);
+          await transaction.put({[FORWARD_PROTECTION_STORAGE]:{
+            ...prepared.entries[FORWARD_PROTECTION_STORAGE],writeBudget}});
+          return writeBudget;
+        });
+        this.forwardProtectionBudget=usage;
+      }
+      this.forwardState = next.state;
+      this.forwardError = null;
+      try{
+        const known=new Set(this.reviewJournal.candidates.map(r=>r.id));
+        const discovered:ReviewEvent[]=next.state.opportunities.filter(o=>!known.has(o.id)).map(o=>({at:now,id:o.id,symbol:o.symbol,
+          stage:"CANDIDATE_OBSERVED",side:o.side,reason:o.eligible?"STRATEGY_ELIGIBLE":"STRATEGY_NOT_ELIGIBLE",price:o.price,plan:o.tradePlan,expiresAt:o.expiresAt}));
+        appendReviewEvents(this.reviewJournal,[...discovered,...reviewEvents].map(e=>({...e,
+          buildSha:FORWARD_BUILD_SHA,strategyFingerprint:STRATEGY_FINGERPRINT})),now);
+      }catch{this.reviewDiagnosticError="CANDIDATE_REVIEW_CAPTURE_FAILED";}
     } catch (error) { this.forwardError = safeError(error); }
     finally { this.forwardBusy = false; }
   }

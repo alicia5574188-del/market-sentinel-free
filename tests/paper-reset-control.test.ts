@@ -50,6 +50,7 @@ test("startup clears the strategy once and does not install an old book",()=>{
   assert.doesNotMatch(method,/requestedEnabled\s*=\s*true|setLiveMode\(/);
   const advance=worker.slice(worker.indexOf("private async advanceForwardNow"),worker.indexOf("private async refreshRegimeHourly"));
   assert.match(advance,/adoptEmptyStrategy\(now\)/);
+  assert.match(advance,/advanceForward\(/);
   assert.doesNotMatch(advance,/adoptDeskCleanLedger|adoptLsrLedger|adoptNewDesk|advanceShadowInverse|applyNewDesk|applyResearchExperiment/);
 });
 
