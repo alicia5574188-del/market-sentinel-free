@@ -28,7 +28,7 @@ function render(path,props,extra={},component="default"){
     module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX
   }}).outputText;
   const imports={
-    react:React,"react/jsx-runtime":jsxRuntime,
+    react:{...React,useState(initial){return React.useState(initial==="execution"?"paper":initial);}},"react/jsx-runtime":jsxRuntime,
     "../lib/trade-realization.ts":realizationModule.exports,
     "../lib/paid-fee-view.ts":paidModule.exports,
     "../lib/research-snapshot.ts":{collectReviewSnapshot(){throw new Error("render must not export");}},
@@ -104,14 +104,13 @@ test('LIVE ON without account confirmation does not substitute simulated equity 
   assert.match(equity,/<strong>—<\/strong>/);assert.doesNotMatch(equity,/922\.82|-77\.18|\+0\.00/);
   assert.match(html,/paper-equity-curve/);assert.match(html,/curve-fixture/);
 });
-test('LIVE ON simulated page keeps the native order panel without either overview curve',()=>{
+test('LIVE ON simulated page keeps the paper account and does not mount the live order panel',()=>{
   const data=account();
   const html=render('app/forward-dashboard.tsx',{...dashboardProps(data),liveEnabled:true,livePanel:'REAL_ORDER_PANEL'},
-    {react:{...React,useState:value=>React.useState(value==='overview'?'paper':value)},
+    {react:{...React,useState:value=>React.useState(value==='execution'?'paper':value)},
       './equity-curve.tsx':{default:props=>{assert.strictEqual(props.data,data);return jsxRuntime.jsx('div',{'data-testid':'curve-fixture'});}}});
-  assert.match(html,/paper-live-mirror/);assert.match(html,/REAL_ORDER_PANEL/);
-  assert.doesNotMatch(html,/paper-equity-curve|模拟净值|curve-fixture|live-equity-curve/);
-  assert.doesNotMatch(html,/模拟权益|暂无已平仓记录|当前没有模拟持仓|shadow-inverse-comparison/);
+  assert.match(html,/curve-fixture/);
+  assert.doesNotMatch(html,/REAL_ORDER_PANEL|shadow-inverse-comparison/);
 });
 test('overview passes actual LIVE session and account observations to its separate curve',()=>{
   const mark={sessionAt:123,accountUser:'gate-fixture'},head={sessionAt:123,lastEquity:456};
@@ -253,7 +252,7 @@ test("orders page shows the forward book and does not render a shadow ledger",()
       note:"这些分组留给以后定正反切换。现在仍然只做正向，不自动切。",coverage:"记下的平仓，就是现在还能核对到的全部。",
       groups:[{label:"高持续",n:10,wins:3,net:-15}],recent:[]}};
   const states=[],refs=[],buttons=[];let cursor=0,refCursor=0;
-  const hooks={...React,useState(initial){const i=cursor++;if(!(i in states))states[i]=typeof initial==="function"?initial():initial;return[states[i],value=>{states[i]=typeof value==="function"?value(states[i]):value;}];},
+  const hooks={...React,useState(initial){const i=cursor++;if(!(i in states))states[i]=initial==="execution"?"paper":typeof initial==="function"?initial():initial;return[states[i],value=>{states[i]=typeof value==="function"?value(states[i]):value;}];},
     useRef(initial){const i=refCursor++;return refs[i]??(refs[i]={current:initial});},useEffect(){},useLayoutEffect(){}};
   const capture=fn=>(type,props,...rest)=>{if(type==="button")buttons.push(props);return fn(type,props,...rest);};
   const draw=()=>{cursor=0;refCursor=0;buttons.length=0;return render("app/forward-dashboard.tsx",dashboardProps(data),
@@ -261,10 +260,7 @@ test("orders page shows the forward book and does not render a shadow ledger",()
   let html=draw();
   assert.match(html,/正向权益/);assert.match(html,/640\.50/);assert.match(html,/BTC \/ USDT/);assert.match(html,/\+1\.20 U/);
   assert.doesNotMatch(html,/影子|影子订单|shadow-orders-panel|shadow-inverse-comparison/);
-  buttons.find(b=>Array.isArray(b.children)&&b.children[1]?.props?.children==="决策").onClick();html=draw();
-  assert.match(html,/当前决策/);assert.match(html,/正向/);assert.match(html,/20 笔/);
-  assert.doesNotMatch(html,/高持续|不自动切|反向账在后台/);
-  assert.doesNotMatch(html,/影子|影子订单/);
+  assert.doesNotMatch(html,/策略已接上|假突破/);
   for(const file of ["app/forward-dashboard.tsx","app/market-intelligence-execution.tsx","app/live-console.tsx"])
     assert.doesNotMatch(read(file),/影子/);
 });
@@ -282,7 +278,7 @@ test('LIVE OFF hides saved native curve and cached native statistics while prese
 test('the order tab is the forward book, and live orders stay on the live page',()=>{
   const data=account();
   const states=[],refs=[],buttons=[];let cursor=0,refCursor=0;
-  const hooks={...React,useState(initial){const i=cursor++;if(!(i in states))states[i]=typeof initial==='function'?initial():initial;return[states[i],value=>{states[i]=typeof value==='function'?value(states[i]):value;}];},
+  const hooks={...React,useState(initial){const i=cursor++;if(!(i in states))states[i]=initial==="execution"?"paper":typeof initial==='function'?initial():initial;return[states[i],value=>{states[i]=typeof value==='function'?value(states[i]):value;}];},
     useRef(initial){const i=refCursor++;return refs[i]??(refs[i]={current:initial});},useEffect(){},useLayoutEffect(){}};
   const capture=fn=>(type,props,...rest)=>{if(type==='button')buttons.push(props);return fn(type,props,...rest);};
   const draw=()=>{cursor=0;refCursor=0;buttons.length=0;return render('app/forward-dashboard.tsx',{...dashboardProps(data),liveEnabled:true,livePanel:'NATIVE_ORDER_PANEL',liveOverview:{equity:321.09,positionCount:1}},

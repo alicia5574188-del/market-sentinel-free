@@ -1401,7 +1401,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     try {
       await this.ensureAdaptiveAccount(now);
       await this.adoptEmptyStrategy(now);
-      await this.advanceThesis(now);
       const state=this.forwardState!;
       const dataCycleDue=allowDataCycle&&(!state.lastCycleAt
         ||Math.floor((now-90_000)/BAR_MS)>Math.floor((state.lastCycleAt-90_000)/BAR_MS));

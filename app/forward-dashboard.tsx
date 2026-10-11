@@ -4,8 +4,6 @@ import {realizedNetPnl,initialTradeNotional,remainingTradeFraction} from "../lib
 import {useEffect,useLayoutEffect,useRef,useState,type CSSProperties,type ReactNode} from "react";
 import {BEIJING_TIME_ZONE,beijingDayKey} from "../lib/beijing-time.ts";
 import {type Trade,type forwardSummary} from "../lib/forward-relations.ts";
-import {recordWindows,archivePage} from "../lib/record-view.ts";
-import {ArchivePagination} from "./record-controls.tsx";
 import EquityCurve from "./equity-curve.tsx";
 import LiveEquityCurve from "./live-equity-curve.tsx";
 import {EquityHistoryCache} from "../lib/equity-cache.ts";
@@ -17,7 +15,7 @@ import type {ThesisPublic} from "../lib/thesis-view.ts";
 
 type View=ReturnType<typeof forwardSummary>;
 type Desk=NonNullable<View["forwardDesk"]>;
-type Tab="overview"|"research"|"decision"|"paper"|"live"|"settings";
+type Tab="execution"|"paper"|"live"|"settings";
 const fmt=(v:number|null|undefined,d=2)=>typeof v==="number"&&Number.isFinite(v)?v.toLocaleString("en-US",{minimumFractionDigits:d,maximumFractionDigits:d}):"—";
 const signed=(v:number|null|undefined,d=2)=>typeof v==="number"&&Number.isFinite(v)?`${v>=0?"+":""}${fmt(v,d)}`:"—";
 const time=(v?:number|null)=>v?new Date(v).toLocaleString("zh-CN",{timeZone:BEIJING_TIME_ZONE,month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}):"—";
@@ -36,11 +34,10 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
 }){
   const [equityCache]=useState(()=>new EquityHistoryCache());
   useEffect(()=>()=>equityCache.cancel(),[equityCache]);
-  const [tab,setTab]=useState<Tab>("overview"),[now,setNow]=useState(0),[liveMounted,setLiveMounted]=useState(false);
-  const [fontScale,setFontScale]=useState(()=>{if(typeof window==="undefined")return 92;try{const saved=Number(localStorage.getItem("sentinel-ui-font-scale-v1"));return saved>=70&&saved<=110?saved:92;}catch{return 92;}}),
-    [paperTab,setPaperTab]=useState<"account"|"positions"|"history"|"archive">("account"),[paperPage,setPaperPage]=useState(0);
+  const [tab,setTab]=useState<Tab>("execution"),[now,setNow]=useState(0),[liveMounted,setLiveMounted]=useState(false);
+  const [fontScale,setFontScale]=useState(()=>{if(typeof window==="undefined")return 92;try{const saved=Number(localStorage.getItem("sentinel-ui-font-scale-v1"));return saved>=70&&saved<=110?saved:92;}catch{return 92;}});
   const [exporting,setExporting]=useState(false),[exportStatus,setExportStatus]=useState<string|null>(null);
-  const scroll=useRef<Record<Tab,number>>({overview:0,research:0,decision:0,paper:0,live:0,settings:0});
+  const scroll=useRef<Record<Tab,number>>({execution:0,paper:0,live:0,settings:0});
   useEffect(()=>{const id=setInterval(()=>setNow(Date.now()),1000);return()=>clearInterval(id);},[]);
   useLayoutEffect(()=>{window.scrollTo({top:tab==="live"?0:scroll.current[tab]??0,behavior:"auto"});},[tab]);
   const select=(next:Tab)=>{scroll.current[tab]=window.scrollY;if(next==="live"||(next==="paper"&&liveEnabled))setLiveMounted(true);setTab(next);};
@@ -56,7 +53,6 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   }catch{setExportStatus("导出失败，请重试。");}finally{setExporting(false);}};
 
   const desk=data?.forwardDesk??null,positions=data?.positions??[];
-  const thesis=(data as (View & {thesis?:ThesisPublic|null}) | null)?.thesis??null;
   const usingDesk=!!desk&&!liveEnabled&&(!!desk.book||desk.open.length>0);
   const stanceLabel=desk?.book==="lsr-v1"?"实验":desk?.book==="stretch-v1"?"新账":desk?.book==="reverse-v1"?"反向":desk?.book==="needle-v1"||desk?.book==="brain-v1"||desk?.book==="score-v1"||desk?.book==="read-v1"?"账户":stanceName(desk?.stance);
   const paperFloating=usingDesk?desk.floating:positions.reduce((n,t)=>n+(t.status==="OPEN"?remainingPaidNetPnl(t,t.lastPrice):0),0);
@@ -66,12 +62,13 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
     accountPnl=liveEnabled?actual?.tradingPnl:usingDesk?desk.netPnl:data?.netPnl,
     accountBase=liveEnabled?actual?.initialEquity:usingDesk?desk.initialEquity:data?.initialEquity;
   const drawdown=liveEnabled?(actual?actual.maxDrawdown*100:null):usingDesk?(desk.maxDrawdown==null?null:desk.maxDrawdown*100):data?data.maxDrawdown*100:null;
-  const tape=(data as {observationTape?:{sentence?:string;lines?:string[]}}|null)?.observationTape;
-  const nav:[Tab,string,string][]=[["overview","⇄","订单"],["research","⌘","研究"],["decision","◉","决策"],["live","◈","实盘"],["settings","⊙","系统"]];
+  const nav:[Tab,string,string][]=[["execution","◉","执行"],["paper","⇄","模拟"],["live","◈","实盘"],["settings","⊙","系统"]];
   return <main className="fr-app" style={fontVars as CSSProperties} data-ui-version="market-intelligence-v1">
     <header className="fr-compact-header"><b>哨兵 · 市场智能系统</b><span className={healthy?"fr-positive":""} role="status">{systemStatus}</span><span>实盘{liveEnabled?liveOverview?.operational?"运行中":"核对中":"关闭"}{memberName?` · ${memberName}`:""}</span></header>
 
-    {tab==="overview"&&<>
+    {tab==="execution"&&<MarketIntelligenceExecution data={data} now={now} liveEnabled={liveEnabled} liveOverview={liveOverview}/>}
+
+    {tab==="paper"&&<>
       <section className="fr-equity fr-overview-equity" data-testid="overview-equity-first" aria-label={liveEnabled?"实盘账户权益":usingDesk?`${stanceLabel}权益`:"模拟账户权益"}>
         <small>{liveEnabled?"实盘账户权益":usingDesk?`${stanceLabel}权益`:"模拟账户权益"} · USDT</small><strong>{fmt(accountEquity)}</strong>
         <div className={(accountPnl??0)>=0?"fr-positive":"fr-negative"}>{signed(accountPnl)} <span>U · {signed(accountPnl!=null&&accountBase?accountPnl/accountBase*100:null)}%{liveEnabled?" · 观察期交易盈亏":""}</span></div>
@@ -93,45 +90,6 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       {usingDesk?<ForwardOrders desk={desk} now={now}/>:<section className="fr-section" data-testid="forward-orders"><div className="fr-section-head"><h2>持仓</h2><span>{positions.length} 笔</span></div><TradeList trades={positions} now={now} empty="当前没有持仓。市场智能这一拍还没有通过开仓门槛。"/></section>}
     </>}
 
-    {tab==="research"&&desk?.book==="lsr-v1"&&<LsrResearch desk={desk} now={now}/>}
-    {tab==="research"&&(desk?.book==="read-v1"||desk?.book==="brain-v1"||desk?.book==="stretch-v1")&&<WorkResearch work={desk.work} note={desk.book==="stretch-v1"?desk.stretchNote:desk.book==="brain-v1"?desk.brainNote:desk.readNote} ideas={desk.book==="brain-v1"?desk.brainIdeas:[ ]}/>}
-    {tab==="research"&&desk?.book==="score-v1"&&<section className="fr-section" data-testid="research-claims"><div className="fr-section-head"><h2>研究</h2></div>
-      <p>{desk.scoreNote||"还没有记下半小时。"}</p>
-      <p className="fr-note">每一窗半小时。看哪些币比大多数币偏了至少 0.5%。这些币合成一个结果，不把每个币当成一条证据。前二十窗选止损、目标和方向，后二十窗扣完费用仍赚钱，才交给决策。够格的币中位数不到 6 个，不做。</p>
-    </section>}
-    {tab==="research"&&desk?.book==="needle-v1"&&<section className="fr-section" data-testid="research-claims"><div className="fr-section-head"><h2>研究</h2></div>
-      <p>只看最近 30 根 1 分钟线，和当前买一卖一。一根线冲出这 30 分钟的高点或低点，收盘又回到里面，就记成一根针。研究只记这件事，不开单。</p>
-    </section>}
-    {tab==="research"&&desk?.book==="reverse-v1"&&<section className="fr-section" data-testid="research-claims"><div className="fr-section-head"><h2>这套在做什么</h2></div>
-      <p>不研究行情，也不给提案打分。提案那边每开一笔，这里就开一笔相反的。金额和提案一样。</p>
-      <p className="fr-note">出场沿用上次那套：打穿确认位、30 分钟没走出成本、利润回吐一半、满 90 分钟、提案自己平仓，或者浮亏到 10U。不会因为样本不够改回跟提案同一边。</p>
-    </section>}
-    {tab==="research"&&desk?.book!=="needle-v1"&&desk?.book!=="brain-v1"&&desk?.book!=="score-v1"&&desk?.book!=="read-v1"&&desk?.book!=="reverse-v1"&&desk?.book!=="stretch-v1"&&desk?.book!=="lsr-v1"&&<>
-      {thesis&&<ThesisPanel thesis={thesis}/>}
-      <section className="fr-section" data-testid="research-claims"><div className="fr-section-head"><h2>研究裁决</h2><span>{desk?.research?`${desk.research.unsettled} 笔未到期`:"等待提案"}</span></div>
-        <p>每笔提案先记下读法。过 30 分钟，用价格判断对错，不看这笔后来怎么平的。</p>
-        <p className="fr-note">慢方向和这一拍同向，并且和提案同向，记成延续。两边打架，或者都和提案相反，记成可疑。有一边没方向，就不投票。</p>
-        {desk?.research&&desk.research.claims.length>0?<div className="fr-study-list">{desk.research.claims.map(c=>{
-          const verdict=!c.settled?"未到期":c.kind==="SKIP"?"不投票":c.correct?"对了":"错了";
-          return <p key={c.id}><span>{c.symbol.replace("_"," / ")} · {c.engineSide==="LONG"?"多":"空"} · {claimName(c.kind)} · {sessionName(c.session)}</span><b>{verdict}{c.swept?" · 已打穿确认位":""}</b></p>;
-        })}</div>:thesis?<p className="fr-note">旧提案本是空的。下单只看上面的策略，不看这些提案。</p>:<p className="fr-note">还没有记下提案。</p>}
-      </section>
-      <section className="fr-section"><div className="fr-section-head"><h2>行情状态</h2><span>不决定正反</span></div>
-        <p className="fr-note">{tape?.sentence??"这一拍的原数还没有。"}</p>
-        {(tape?.lines??[]).map(line=><p key={line} className="fr-note">{line}</p>)}
-      </section>
-      <MarketIntelligenceExecution data={data} now={now} liveEnabled={liveEnabled} liveOverview={liveOverview}/>
-    </>}
-
-    {tab==="decision"&&<DecisionPage data={data} now={now} thesis={thesis}/>}
-
-    {tab==="paper"&&liveEnabled&&<section className="fr-section" data-testid="paper-live-mirror"><p>本账户实盘成交、持仓和结算记录。</p></section>}
-    {tab==="paper"&&!liveEnabled&&<section className="fr-section"><div className="fr-section-head"><h2>订单</h2></div>
-      <nav className="fr-live-tabs fr-paper-tabs">{([["account","账户"],["positions","持仓"],["history","记录"],["archive","归档"]] as const).map(([id,label])=><button key={id} className={paperTab===id?"selected":""} onClick={()=>setPaperTab(id)}>{label}</button>)}</nav>
-      <TradeList trades={paperTab==="history"||paperTab==="archive"?[]:positions} now={now} empty="当前没有持仓"/>
-      {(paperTab==="history"||paperTab==="archive")&&<ArchivePagination page={archivePage(recordWindows(data?.history??[],t=>t.closedAt??0).archive,paperPage).page} pages={1} onPage={setPaperPage}/>}
-    </section>}
-
     {tab==="settings"&&<>
       {accountPanel}{liveSystemPanel}
       <section className="fr-section"><div className="fr-section-head"><h2>运行日志</h2></div>
@@ -141,10 +99,10 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
         <div className="fr-font-options">{[70,80,90,100,110].map(value=><button key={value} className={fontScale===value?"selected":""} onClick={()=>{setFontScale(value);try{localStorage.setItem("sentinel-ui-font-scale-v1",String(value));}catch{}}}>{value}%</button>)}</div></section>
     </>}
 
-    {(liveMounted||(tab==="paper"&&liveEnabled))&&<div className="fr-live-panel-host" hidden={tab!=="live"&&!(tab==="paper"&&liveEnabled)}>{livePanel}</div>}
+    {liveMounted&&<div className="fr-live-panel-host" hidden={tab!=="live"}>{livePanel}</div>}
     {(error||data?.storage.error)&&<aside className="fr-error" role="alert"><b>运行提示</b><p>{data?.storage.error??error}</p></aside>}
     <footer className="fr-footer"><span>行情更新 {time(feedAt)}</span><span>{data?.engineVersion??data?.version??"—"} · 北京时间</span></footer>
-    <nav className="fr-nav">{nav.map(([id,icon,label])=><button key={id} className={id===tab?"selected":""} onClick={()=>select(id)}><span>{icon}</span><b>{label}</b>{id==="overview"&&(liveEnabled?(liveOverview?.positionCount??0):held)>0&&<i>{liveEnabled?liveOverview?.positionCount:held}</i>}</button>)}</nav>
+    <nav className="fr-nav">{nav.map(([id,icon,label])=><button key={id} className={id===tab?"selected":""} onClick={()=>select(id)}><span>{icon}</span><b>{label}</b>{id==="execution"&&(liveEnabled?(liveOverview?.positionCount??0):held)>0&&<i>{liveEnabled?liveOverview?.positionCount:held}</i>}</button>)}</nav>
   </main>;
 }
 
