@@ -35,7 +35,8 @@ test("multi-source analysis is non-blocking while Gate stays execution-only",asy
   assert.match(hub,/Cached rows remain/);
   assert.match(hub,/interval:"1m"\|"5m"\|"1d"/);
   assert.match(worker,/Gate public websocket is execution-only/);assert.match(worker,/private marketHub = new MarketDataHub/);
-  assert.match(worker,/daily:this\.turnDailyCandles/);
+  assert.match(worker,/adoptEmptyStrategy\(now\)/);
+  assert.doesNotMatch(worker.slice(worker.indexOf("private async advanceForwardNow"),worker.indexOf("private async refreshRegimeHourly")),/advanceShadowInverse|applyNewDesk|applyResearchExperiment|applyLsrBook/);
   const optional=worker.slice(worker.indexOf("private launchOptionalWork"),worker.indexOf("async alarm("));
   assert.match(optional,/refreshTurnDaily\(Date\.now\(\)\)/);
   const daily=worker.slice(worker.indexOf("private async refreshTurnDaily"),worker.indexOf("private async maybeWriteStrategyRuntimeLog"));
