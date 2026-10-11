@@ -91,7 +91,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       {desk&&<ForwardOrders desk={desk} now={now}/>}
     </>}
 
-    {tab==="research"&&desk?.book==="lsr-v1"&&<LsrResearch desk={desk}/>}
+    {tab==="research"&&desk?.book==="lsr-v1"&&<LsrResearch desk={desk} now={now}/>}
     {tab==="research"&&(desk?.book==="read-v1"||desk?.book==="brain-v1"||desk?.book==="stretch-v1")&&<WorkResearch work={desk.work} note={desk.book==="stretch-v1"?desk.stretchNote:desk.book==="brain-v1"?desk.brainNote:desk.readNote} ideas={desk.book==="brain-v1"?desk.brainIdeas:[ ]}/>}
     {tab==="research"&&desk?.book==="score-v1"&&<section className="fr-section" data-testid="research-claims"><div className="fr-section-head"><h2>研究</h2></div>
       <p>{desk.scoreNote||"还没有记下半小时。"}</p>
@@ -162,73 +162,71 @@ function LsrPulse({note,board,net,floating}:{note?:string;board?:Desk["lsrBoard"
     </div>
   </section>;
 }
-function LsrResearch({desk}:{desk:Desk}){
+function LsrResearch({desk,now}:{desk:Desk;now:number}){
   const live=desk.liveResearch,a=live?.context,d=live?.decision,g=live?.analogy;
-  const pct=(v?:number|null)=>typeof v==="number"?`${v>=0?"+":""}${(v*100).toFixed(2)}%`:"没接到";
-  const num=(v?:number|null,d=2)=>typeof v==="number"?fmt(v,d):"没接到";
-  const simNote=!g||g.count===0?"":g.minSim>=0.95?"最低相似度也在 0.95 以上，0.80 的门槛偏松。":g.minSim<0.85?"最低相似度贴着 0.80，门槛卡在边上。":"最低相似度离门槛还有一段。";
+  const coin=(symbol?:string)=>symbol?symbol.replace("_"," / "):"";
+  const side=(value?:"LONG"|"SHORT"|null)=>value==="LONG"?"做多":value==="SHORT"?"做空":"还没定";
+  const left=live?Math.max(0,Math.ceil((live.nextAt-now)/1000)):0;
   if(!live)return <section className="fr-section" data-testid="research-claims"><div className="fr-section-head"><h2>研究</h2></div><p>这一拍还没有扫完。</p></section>;
   return <>
     <section className="fr-section" data-testid="research-claims">
-      <div className="fr-section-head"><h2>研究层</h2><span>{live.library} 个历史场面</span></div>
-      <p>{live.status}</p>
-      <p className="fr-note">每 30 秒扫一次。最近扫描 {time(live.ts)}。排序只看涨跌和放量，盘口不参与排名。</p>
-      <details>
-        <summary>现在能用哪些数据</summary>
-        <p>横截面扫描：有。</p>
-        <p>上下文，大盘、相关性和自身走势：{a?.btc1h==null?"大盘还没接到":"有"}。</p>
-        <p>盘口买卖 5 档：有。</p>
-        <p>资金费率：有。</p>
-        <p>历史类比：只有约 {live.windowHours} 小时。</p>
-        <p>逐笔成交：没有。</p>
-        <p>30 天波动率：没有。</p>
-      </details>
+      <div className="fr-section-head"><h2>研究层正在运行</h2></div>
+      <p>现在：{live.status}</p>
+      <p>上一轮 {time(live.ts)}。扫了 {live.scanned} 个币，其中 {live.found} 个明显异常。</p>
+      <p>下一轮 {time(live.nextAt)}，还差 {left} 秒。</p>
+      <p>今天扫了 {live.today?.scans??0} 次，看过 {live.today?.symbols??0} 个异动币。做多 {live.today?.long??0} 次，做空 {live.today?.short??0} 次，观望 {live.today?.watch??0} 次。</p>
+      <p className="fr-note">这些话都写在研究页上，不会下单。</p>
     </section>
     <section className="fr-section">
-      <div className="fr-section-head"><h2>全市场最异的 5 个</h2></div>
-      {live.candidates.length?live.candidates.map(c=><p key={c.symbol}><b>{c.rank}. {c.symbol.replace("_"," / ")}</b> 评分 {fmt(c.score,2)}，5 分钟 z {fmt(c.retZ5m,2)}，量 z {fmt(c.volZ5m,2)}，现价 {fmt(c.last,6)}</p>):<p>还没有排出来。</p>}
+      <div className="fr-section-head"><h2>全市场最异常的 5 个</h2></div>
+      {live.candidates.length?live.candidates.map(c=><p key={c.symbol}><b>{c.rank}. {coin(c.symbol)}</b><br/>{c.priceWords}<br/>{c.volumeWords}<br/>现价 {fmt(c.last,6)}</p>):<p>还没有排出来。</p>}
     </section>
     <section className="fr-section">
-      <div className="fr-section-head"><h2>{a?`${a.symbol.replace("_"," / ")} 的上下文`:"上下文"}</h2></div>
-      {a?<>
-        <p>大盘：BTC 近 1 小时 {pct(a.btc1h)}，这段K线 {pct(a.btcWindow)}。主流币近 1 小时 {pct(a.majors1h)}。现在看成{a.regime}。</p>
-        <p>和 BTC：近 1 小时 {num(a.corr1h)}，更长一段 {num(a.corrWindow)}。{a.corr1h==null?"相关性没算出来。":a.decoupled?"已经和原来的关系脱开。":"没有脱开。"}</p>
-        <p>自己：15 分钟 {pct(a.ret15m)}，1 小时 {pct(a.ret1h)}。波动在这段K线里排到 {(a.volRank*100).toFixed(0)}%。</p>
-        <p>盘口买/卖 {fmt(a.depthRatio,2)}，价差 {fmt(a.spreadBps,2)} bps，资金费率 {fmt(a.funding*100,4)}%。</p>
-        <p className="fr-note">{a.trades}</p>
-        <p>支撑 {a.supportText}。压力 {a.resistanceText}。</p>
-      </>:<p>还没有上下文。</p>}
+      <div className="fr-section-head"><h2>{a?`${coin(a.symbol)} 现在什么处境`:"现在什么处境"}</h2></div>
+      {a?a.sections.map(section=><p key={section.title}><b>{section.title}</b><br/>{section.body}<br/>{section.conclusion}</p>):<p>还没有。</p>}
     </section>
     <section className="fr-section">
-      <div className="fr-section-head"><h2>像现在的老场面</h2><span>{g?.enough?`${g.count} 个`:"不足"}</span></div>
-      <p className="fr-note">低于 {fmt(g?.threshold??0.8,2)} 的直接丢掉。{g&&g.count>0?`最高相似度 ${fmt(g.maxSim,2)}，最低 ${fmt(g.minSim,2)}。${simNote}`:"过线的还没有。"}</p>
-      {g&&g.count>0?<>
-        {!g.enough&&<p>相似场景不足，仅供参考。现在只有 {g.count} 个过线。</p>}
-        <p>之后 1 小时继续跌 {g.down} 个（{(g.downPct*100).toFixed(0)}%），往上涨 {g.up} 个，横着 {g.flat} 个。</p>
-        <p>平均最多顺涨 {pct(g.mfe1h)}，最多回落 {pct(g.mae1h)}。往后这段最好 {pct(g.best4h)}，最差 {pct(g.worst4h)}。</p>
-        {g.refs.map(row=><p key={`${row.symbol}-${row.similarity}-${row.o1h}`} className="fr-note">{row.symbol.replace("_"," / ")} 相似度 {fmt(row.similarity,2)}，1 小时后 {pct(row.o1h)}</p>)}
-      </>:<p>过线的场面不够，这一格先空着。</p>}
-    </section>
-    <section className="fr-section">
-      <div className="fr-section-head"><h2>研究判断</h2><span>{d?`${d.level} ${(d.confidence*100).toFixed(0)}%`:"还没有"}</span></div>
-      {d?<>
-        <p><b>观察。</b>{d.observation}</p>
-        <p><b>证据。</b></p>
-        {d.evidence.map(line=><p key={line}>{line}</p>)}
-        {d.conflict&&<p>{d.conflict}</p>}
-        <p><b>结论。</b>{d.conclusion}</p>
-        {d.level==="弱信号"&&<p>这是弱信号，不给进场和止损。</p>}
-        {d.level==="计划"&&d.direction&&<>
-          <p>参考进场 {fmt(d.entry,6)}。止损 {fmt(d.stop,6)}。第一目标 {fmt(d.tp1,6)}。第二目标 {fmt(d.tp2,6)}。</p>
-          <p>{d.stopWhy}</p>
-          <p>什么情况算看错：{d.invalidate.join("；")}。</p>
+      <div className="fr-section-head"><h2>历史上类似的情况</h2><span>{g?.enough?`${g.count} 个`:"不够"}</span></div>
+      {g?<>
+        <p>{g.story}</p>
+        {g.count>0&&<>
+          <p>之后 1 小时：涨 {g.up} 次（{g.count?(g.up/g.count*100).toFixed(0):0}%），横着 {g.flat} 次（{g.count?(g.flat/g.count*100).toFixed(0):0}%），跌 {g.down} 次（{(g.downPct*100).toFixed(0)}%）。</p>
+          <p>{g.lean}</p>
+          {g.refs.slice(0,3).map((row,i)=><p key={`${row.symbol}-${row.similarity}-${row.o1h}`} className="fr-note">{i+1}. {coin(row.symbol)} 相似度 {(row.similarity*100).toFixed(0)}%，之后 1 小时 {row.o1h>=0?"涨":"跌"}了 {Math.abs(row.o1h*100).toFixed(2)}%</p>)}
+          {g.caution&&<p>{g.caution}</p>}
+          <p className="fr-note">最高相似度 {fmt(g.maxSim,2)}，最低 {fmt(g.minSim,2)}。低于 {fmt(g.threshold,2)} 的不算。{g.minSim>=0.95?"最低也很高，标准偏松。":g.minSim>0&&g.minSim<0.85?"最低贴着门槛。":""}</p>
         </>}
-        <p className="fr-note">这是研究页上的判断，不会下单。</p>
+      </>:<p>还没有。</p>}
+    </section>
+    <section className="fr-section">
+      <div className="fr-section-head"><h2>研究判断</h2><span>{d?d.level:"还没有"}</span></div>
+      {d?<>
+        <p><b>{d.headline}</b></p>
+        {d.why.map(line=><p key={line}>{line}</p>)}
+        <p><b>{d.level==="明确信号"?"打算这样做":"如果非要做，会是这样"}</b></p>
+        <p>方向：{side(d.planSide)}</p>
+        <p>进场价 {fmt(d.entry,6)}</p>
+        <p>止损价 {fmt(d.stop,6)}（-{(d.stopPct*100).toFixed(2)}%）</p>
+        <p>第一目标 {fmt(d.tp1,6)}（+{(d.tp1Pct*100).toFixed(2)}%）</p>
+        <p>第二目标 {fmt(d.tp2,6)}（+{(d.tp2Pct*100).toFixed(2)}%）</p>
+        <p>最长持仓 {d.holdText}</p>
+        <p>{d.stopWhy}</p>
+        <p>什么情况算看错：{d.invalidate.join("；")}。</p>
+        {d.level==="观望"&&d.waitFor.length>0&&<>
+          <p><b>等什么才动手</b></p>
+          {d.waitFor.map(line=><p key={line}>{line}</p>)}
+        </>}
+        <p className="fr-note">上面是研究层的打算，不会下单。</p>
       </>:<p>还没有判断。</p>}
     </section>
     <section className="fr-section">
       <div className="fr-section-head"><h2>判断记录</h2><span>最多留 300 条</span></div>
-      {live.log?.length?live.log.map(row=><p key={row.at} className="fr-note">{time(row.at)} {row.symbol.replace("_"," / ")} {row.level} {(row.confidence*100).toFixed(0)}%。1 小时后 {row.verdict??"还没到"}{typeof row.laterRet==="number"?`（${pct(row.laterRet)}）`:""}</p>):<p className="fr-note">刚开始记。同一币、同一个结论，5 分钟内不重复记。满 1 小时才写对错。</p>}
+      {live.log?.length?live.log.map(row=>{
+        const later=!row.verdict?"1 小时后：等数据"
+          :row.verdict==="当时没给方向"?"1 小时后：当时没给方向"
+          :`1 小时后：实际${typeof row.laterRet==="number"?`${row.laterRet>=0?"涨":"跌"}了 ${Math.abs(row.laterRet*100).toFixed(2)}%`:""} ｜ 判断${row.verdict==="对"?"对":row.verdict==="错"?"错":"不明确"}`;
+        return <p key={row.at} className="fr-note">{time(row.at)} {coin(row.symbol)} {row.level==="计划"?"明确信号":row.level}。{later}</p>;
+      }):<p className="fr-note">刚开始记。同一币、同一个结论，5 分钟内不重复记。</p>}
     </section>
   </>;
 }

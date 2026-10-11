@@ -530,6 +530,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private researchBars:{symbol:string;m5:ResearchSnap["m5"]}[]=[];
   private researchLogLoaded=false;
   private researchLogSavedAt=0;
+  private researchToday:{day:string;scans:number;symbols:string[]}={day:"",scans:0,symbols:[]};
   private forwardMinuteCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
   private forwardMinuteRetryAt = new Map<string,number>();
   private gateStream = new GateStreamingFeed();
@@ -1090,6 +1091,17 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
     this.researchBars=snaps;
     const view=runLiveResearch(snaps,now);
+    const day=new Date(now+8*3_600_000).toISOString().slice(0,10);
+    if(this.researchToday.day!==day)this.researchToday={day,scans:0,symbols:[]};
+    this.researchToday.scans+=1;
+    const subject=view.candidates[0]?.symbol;
+    if(subject&&!this.researchToday.symbols.includes(subject))this.researchToday.symbols.push(subject);
+    const todayRows=this.researchLog.filter(row=>new Date(row.at+8*3_600_000).toISOString().slice(0,10)===day);
+    view.today={scans:this.researchToday.scans,symbols:this.researchToday.symbols.length,
+      long:todayRows.filter(row=>row.direction==="LONG"&&row.level!=="观望").length,
+      short:todayRows.filter(row=>row.direction==="SHORT"&&row.level!=="观望").length,
+      watch:todayRows.filter(row=>row.level==="观望"||row.direction==null).length};
+    view.status=subject?`上一轮看完 ${subject.replace("_"," / ")}，等下一次扫描。`:"这一轮还没有排出异动。";
     this.researchLog=reviewResearchLog(this.researchLog,snaps,now);
     view.log=this.researchLog.slice(-8);
     this.liveResearchCache={at:now,view};
@@ -1107,8 +1119,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           this.researchLog=[...saved.filter(row=>row&&typeof row.at==="number"&&!seen.has(row.at)),...this.researchLog].slice(-300);
         }
       }catch{/* a missing log must not block the page */}
-      this.researchLog=reviewResearchLog(this.researchLog,this.researchBars,view.ts);
+        const savedDay=await this.ctx.storage.get<typeof this.researchToday>("live-research-day");
+        if(savedDay&&savedDay.day===new Date(view.ts+8*3_600_000).toISOString().slice(0,10)){
+          this.researchToday={day:savedDay.day,scans:savedDay.scans+this.researchToday.scans,symbols:[...new Set([...savedDay.symbols,...this.researchToday.symbols])]};
+          if(view.today)view.today={...view.today,scans:this.researchToday.scans,symbols:this.researchToday.symbols.length};
+        }
     }
+    this.researchLog=reviewResearchLog(this.researchLog,this.researchBars,view.ts);
     const row:ResearchLogRow={at:view.ts,symbol:view.decision?.symbol??view.candidates[0]?.symbol??"",level:view.decision?.level??"观望",confidence:view.decision?.confidence??0,btc1h:view.context?.btc1h??null,
       direction:view.decision?.direction??null,price:view.decision?.entry??view.candidates[0]?.last??0,laterRet:null,verdict:null};
     const last=this.researchLog.at(-1);
@@ -1118,9 +1135,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if(view.log)view.log.splice(0,view.log.length,...this.researchLog.slice(-8));
     if(!fresh&&view.ts-this.researchLogSavedAt<5*60_000)return;
     if(view.ts-this.researchLogSavedAt<5*60_000)return;
-    const reservation=this.reserveNonAlarmWrites(1,512);
+    const reservation=this.reserveNonAlarmWrites(2,512);
     if(!reservation)return;
-    try{await this.ctx.storage.put({"live-research-log":this.researchLog});this.researchLogSavedAt=row.at;reservation.finish(true);}
+    try{await this.ctx.storage.put({"live-research-log":this.researchLog,"live-research-day":this.researchToday});this.researchLogSavedAt=row.at;reservation.finish(true);}
     catch{reservation.finish(false);}
   }
 

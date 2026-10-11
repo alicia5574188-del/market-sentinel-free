@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {runLiveResearch,reviewResearchLog,researchLevel,type ResearchBar,type ResearchSnap} from '../lib/live-research.ts';
+import {runLiveResearch,reviewResearchLog,researchLevel,priceWords,type ResearchBar,type ResearchSnap} from '../lib/live-research.ts';
 
 function bars(n:number,price:number,volume:number,jump=0):ResearchBar[]{
   const out:ResearchBar[]=[];
@@ -50,7 +50,7 @@ test('a new high says there is no resistance above',()=>{
   const m5=Array.from({length:80},(_,i)=>{const px=100+i;return {t:1_700_000_000+i*300,o:px,h:px,l:px,c:px,v:10};});
   const climbed=snap('SOL_USDT',0,10,m5);climbed.last=m5.at(-1)!.c;
   const view=runLiveResearch([snap('BTC_USDT',0),climbed],Date.parse('2026-10-11T00:00:00Z'));
-  assert.equal(view.context?.resistanceText,"创新高，上方无参考");
+  assert.equal(view.context?.resistanceText,"创新高，上面没有现成的压力");
 });
 
 test('an hour later, a short that fell is marked right',()=>{
@@ -65,7 +65,18 @@ test('confidence below 55 percent stays on watch',()=>{
   assert.equal(researchLevel(0.52),'观望');
   assert.equal(researchLevel(0.55),'弱信号');
   assert.equal(researchLevel(0.64),'弱信号');
-  assert.equal(researchLevel(0.65),'计划');
+  assert.equal(researchLevel(0.65),'明确信号');
+});
+
+test('a strong move is described as a multiple of normal, and a watch still shows a plan',()=>{
+  assert.equal(priceWords(2.59),'价格比平时猛 2.6 倍（明显偏强）');
+  const pumped=snap('SOL_USDT',0.04,50);
+  pumped.funding=0.002;pumped.depthAsk=10;
+  const view=runLiveResearch([snap('BTC_USDT',0),snap('ETH_USDT',0),pumped],Date.parse('2026-10-11T00:00:00Z'));
+  assert.equal(view.decision?.level,'观望');
+  assert.ok(view.decision?.entry&&view.decision.entry>0);
+  assert.ok(view.decision?.planSide==='LONG'||view.decision?.planSide==='SHORT');
+  assert.equal(view.decision?.headline.includes('反方向'),false);
 });
 
 test('BTC hour return uses the last hour of its own candles',()=>{
