@@ -45,14 +45,12 @@ import { evaluateRegimePortfolio, initialRegimePortfolio, normalizeRegimePortfol
   REGIME_EXECUTION_UNIVERSE, REGIME_HOURLY_REQUIRED_CANDLES, REGIME_PORTFOLIO_VERSION, REGIME_STRATEGIES, REGIME_SYSTEMS, REGIME_UNIVERSE,
   type RegimePortfolioState } from "../lib/regime-portfolio.ts";
 import type { PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
-import {lsrLogBook} from '../lib/lsr-book.ts';
 import {runLiveResearch,reviewResearchLog,RESEARCH_MAJORS,type ResearchSnap,type LiveResearchView,type ResearchLogRow} from '../lib/live-research.ts';
 import {experimentReport} from '../lib/research-experiment.ts';
-import {deskIdentity, deskLogPositions} from '../lib/new-desk.ts';
 import {emptyStrategyAccount, STRATEGY_EPOCH} from '../lib/strategy-slot.ts';
-import {emptyThesis, exportAttachedLog, runThesisCycle, THESIS_STORAGE_KEY, type ThesisAttached, type ThesisMarket} from '../lib/thesis-attach.ts';
+import {emptyThesis, runThesisCycle, THESIS_STORAGE_KEY, type ThesisAttached, type ThesisMarket} from '../lib/thesis-attach.ts';
 import type {ThesisPublic} from '../lib/thesis-view.ts';
-import {buildRunLogExport} from '../lib/run-log.ts';
+import {buildRunLogExport,accountLogBook} from '../lib/run-log.ts';
 import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
 import {confirmationRealityView} from '../lib/confirmation-reality.ts';
 import {observationReading} from '../lib/observation-tape.ts';
@@ -4250,13 +4248,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(!this.forwardState||!this.authorityReady)return json({error:"权威账户尚未恢复，不能导出空账户"},503);
       if(url.searchParams.get("kind")==="log"){
         const exportedAt=Date.now(),hub=this.marketHub.status(exportedAt),gate=this.gateStream.status(exportedAt);
-        if(this.thesis?.capture)return json(await exportAttachedLog(this.thesis, this.thesisMarkets(exportedAt), exportedAt));
-        const deskOn=!!this.forwardState.inverseTrial?.desk?.on;
-        const book=deskOn?null:lsrLogBook(this.forwardState,this.forwardQuotes(exportedAt),exportedAt);
-        const deskRows=deskOn?deskLogPositions(this.forwardState,this.forwardQuotes(exportedAt),exportedAt):null;
-        const desk=deskOn?deskIdentity(this.forwardState,this.forwardQuotes(exportedAt),exportedAt):null;
-        return json(buildRunLogExport({events:[],funnel:deskRows?.funnel??book?.funnel??null,health:hub,gate,exportedAt,liveEnabled:this.runtime.live.requestedEnabled,
-          positions:deskRows?deskRows.positions:book?.positions??[],fills:deskRows?deskRows.fills:book?.fills??[],curve:desk?[{ts:exportedAt,equity:desk.equity,closed_pnl:desk.closedPnl,unrealized_pnl:desk.unrealized,positions:desk.open}]:book?.curve??[],equity:desk?desk.equity:book?.equity,initial:desk?desk.initial:book?.initial,closedNet:desk?desk.closedPnl:book?.closedNet,priorAdjustment:desk?0:book?.priorAdjustment,unreconstructed:0,unreconstructedN:0,places:book?.places??[]}));
+        const book=accountLogBook(this.forwardState,this.forwardQuotes(exportedAt),exportedAt);
+        return json(buildRunLogExport({events:[],funnel:book.funnel,health:hub,gate,exportedAt,liveEnabled:this.runtime.live.requestedEnabled,
+          positions:book.positions,fills:book.fills,curve:book.curve,equity:book.equity,initial:book.initial,closedNet:book.closedNet,
+          priorAdjustment:book.priorAdjustment,unreconstructed:book.unreconstructed,unreconstructedN:book.unreconstructedN,places:book.places}));
       }
       if(url.searchParams.get("page")==="archive"){
         const startedAt=Number(url.searchParams.get("accountStartedAt")),asOf=Number(url.searchParams.get("asOf"));

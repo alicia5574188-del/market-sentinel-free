@@ -1,4 +1,6 @@
 /** One export. Strategy decisions and runtime faults stay in different categories. */
+import type {ForwardState,Quote,Trade} from './forward-relations.ts';
+import {PAPER_COST,freshQuote,forwardEquity} from './forward-relations.ts';
 export type LogCat='STRAT'|'EXEC'|'DATA'|'RISK'|'SYS'|'PNL';
 export type RunEvent={ts:number;level:'DEBUG'|'INFO'|'WARN'|'ERROR';cat:LogCat;symbol:string|null;event:string;reason:string|null;
   fields:Record<string,number|string|boolean|null>;trace:string};
@@ -54,7 +56,7 @@ export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null
   const rows=(input.places&&input.places.length?input.places:placesFromEvents(input.events));
   const fallbackN=rows.filter(row=>row.fallback).length,rejectedN=rows.filter(row=>row.rejected).length;
   const body={version:'lsr-run-log-v2' as const,exportedAt:input.exportedAt,liveEnabled:input.liveEnabled,
-    howToRead:'恒等式是 权益 = 初始 + prior_adjustment + closed_pnl_sum + unrealized_pnl + 裁掉的平仓合计。裁掉的平仓合计只记一次，是热历史里已经找不到逐笔记录的现金。不算进胜率。',
+    howToRead:'这是当前市场智能模拟账户。权益 = 初始 + 已平净利 + 未平（价格盈亏 − 开仓费 − 预计平仓费）。不是已经停掉的实验漏斗。',
     funnel,sourceHealth:input.health,gate:input.gate,
     breakdown:{strategy_issues:strategy,runtime_issues:runtime,
       verdict:runtime.data_stale+runtime.price_disagreement+runtime.ws_disconnect+runtime.order_rejected>strategy.signal_not_triggered&&runtime.data_stale+runtime.ws_disconnect>0?'先看运行':'先看策略'},
@@ -86,3 +88,62 @@ export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null
   if(JSON.stringify(body).length>20_000_000)body.equity_curve=curve.filter((_,i)=>i%5===0);
   return body;
 }
+
+/** The phone export. Rows are the live paper account, not a retired experiment book. */
+export function accountLogBook(state:ForwardState,quotes:Record<string,Quote>,now:number){
+  const openRows:LsrPositionRow[]=[];
+  const closedRows:LsrPositionRow[]=[];
+  const fills:LsrFill[]=[];
+  for(const t of state.history){
+    const row=closedAccountRow(t);
+    closedRows.push(row);
+    fills.push({ts:t.openedAt,symbol:t.symbol,side:t.side,price:t.entryPrice,qty:t.quantity,notional:t.notional,fee:row.fee,tag:'open',trace:row.trace,waitMs:null,limit:t.entryPrice});
+  }
+  let unrealized=0;
+  for(const t of state.positions){
+    const marked=openMark(state,t,quotes,now);
+    const row:LsrPositionRow={id:t.id,symbol:t.symbol,side:t.side,entry:t.entryPrice,exit:null,qty:t.quantity,notional:t.notional,
+      gross_pnl:round4(marked.gross+marked.realized),fee:round4(t.entryFee+marked.exitReserve),net_pnl:null,
+      holdSec:Math.max(0,Math.round((now-t.openedAt)/1000)),exit_reason:null,gapBps:null,opened_at:t.openedAt,closed_at:null,trace:t.id};
+    openRows.push(row);
+    unrealized+=row.gross_pnl!-row.fee;
+    fills.push({ts:t.openedAt,symbol:t.symbol,side:t.side,price:t.entryPrice,qty:t.quantity,notional:t.notional,fee:row.fee,tag:'open',trace:row.trace,waitMs:null,limit:t.entryPrice});
+  }
+  const mark=forwardEquity(state,quotes,now);
+  const closedNet=closedRows.reduce((n,row)=>n+(row.net_pnl??0),0);
+  const funnel=emptyFunnel('');
+  const eligible=state.opportunities.filter(o=>o.eligible&&o.expiresAt>now).length;
+  funnel.universe=new Set([...state.positions,...state.history].map(t=>t.symbol)).size;
+  funnel.scans=state.positions.length+state.history.length+state.opportunities.length;
+  funnel.signals=eligible;
+  funnel.filled=state.positions.length+state.history.length;
+  funnel.closed=state.history.length;
+  funnel.wins=state.history.filter(t=>(t.netPnl??0)>0).length;
+  return {positions:[...closedRows,...openRows],fills,curve:[{ts:now,equity:round4(mark.equity),closed_pnl:round4(closedNet),unrealized_pnl:round4(unrealized),positions:openRows.length}],
+    equity:mark.equity,initial:state.initialEquity,closedNet:round4(closedNet),priorAdjustment:0,places:[] as LsrPlace[],funnel,
+    unreconstructed:0,unreconstructedN:0};
+}
+function closedAccountRow(t:Trade):LsrPositionRow{
+  return {id:t.id,symbol:t.symbol,side:t.side,entry:t.entryPrice,exit:t.exitPrice,qty:t.quantity,notional:t.notional,
+    gross_pnl:t.grossPnl,fee:round4(t.entryFee+t.exitFee+t.fundingAllowance),net_pnl:t.netPnl,
+    holdSec:t.closedAt==null?0:Math.max(0,Math.round((t.closedAt-t.openedAt)/1000)),exit_reason:null,gapBps:null,
+    opened_at:t.openedAt,closed_at:t.closedAt,trace:t.id};
+}
+function openMark(state:ForwardState,t:Trade,quotes:Record<string,Quote>,now:number){
+  const q=quotes[t.symbol],fresh=freshQuote(q,now),policy=t.exitControl?.policy;
+  const realized=t.realization?t.realization.gross-t.realization.fees-t.realization.funding:0;
+  let px=t.lastPrice,reserveExit=false;
+  if(t.inverseCopy){
+    const source=state.inverseTrial?.source.positions.find(x=>x.id===t.inverseCopy!.sourceId);
+    const valid=!!source&&source.lastPrice>0&&source.lastQuoteAt<=now;
+    px=valid?source.lastPrice:t.lastPrice;
+  }else if(policy==='lsr-v1'||policy==='rx-v1'||policy==='desk-v1'||policy==='needle-v1'||policy==='brain-v1'||policy==='score-v1'||policy==='read-v1'){
+    px=fresh?(t.side==='LONG'?q!.bestBid:q!.bestAsk):t.lastPrice;
+  }else{
+    px=fresh?(q!.bestBid+q!.bestAsk)/2:t.lastPrice;
+    reserveExit=true;
+  }
+  const gross=px>0?(t.side==='LONG'?1:-1)*t.quantity*(px-t.entryPrice):0;
+  return {gross,realized,exitReserve:reserveExit&&px>0?t.quantity*px*PAPER_COST.feeRate:0};
+}
+function round4(n:number){return Number(n.toFixed(4));}
