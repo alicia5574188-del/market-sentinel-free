@@ -5,9 +5,11 @@ import {forwardEquity} from './forward-relations.ts';
 
 export const RX_POLICY = 'rx-v1';
 const NOTIONAL = 500;
-const MAKER = 0.0002;
+export const RX_MAKER = 0.0002;
+export const RX_OPEN_SLIP = 0.0001;
+const MAKER = RX_MAKER;
 const TAKER = 0.0005;
-const OPEN_SLIP = 0.0001;
+const OPEN_SLIP = RX_OPEN_SLIP;
 const TP_SLIP = 0.0001;
 const STOP_SLIP = 0.001;
 const WAIT_MS = 6_000;

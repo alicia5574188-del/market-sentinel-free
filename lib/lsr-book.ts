@@ -3,7 +3,8 @@
  * Paper and the live switch share this book. Live is not turned on here. */
 import type {Candle, Contract, ForwardState, Quote, Rule, Trade} from './forward-relations.ts';
 import type {WorkSheet} from './forward-study.ts';
-import {appendRunLog,emptyFunnel,placesFromEvents,rememberRow,traceOf,type LsrPlace,type LsrPositionRow,type RunEvent} from './run-log.ts';
+import {appendRunLog,emptyFunnel,placesFromEvents,rememberRow,traceOf,type LsrPlace,type LsrPositionRow,type RunEvent,type RunFunnel} from './run-log.ts';
+import {RX_MAKER,RX_OPEN_SLIP,RX_POLICY} from './research-experiment.ts';
 import {forwardEquity,freshQuote} from './forward-relations.ts';
 
 export const LSR_POLICY='lsr-v1' as const;
@@ -252,6 +253,13 @@ export function applyLsrBook(state:ForwardState,paths:Record<string,Candle[]>|un
       waiting:book.stoppedAt?(book.stopReason??'权益到 0，不再开新单。'):'等下一次研究。给出方向就挂 500U。',
       preparing:'这一拍按研究层的方向做，不是老的四关。'};
     trial.lsrNote='老策略不再开新单。研究实验在记账。';
+    const mark=forwardEquity(state,quotes,now);
+    if(now-(trial.lsrCurve?.at(-1)?.ts??0)>=60_000){
+      const closedNet=book.orders.filter(row=>row.status==='closed').reduce((n,row)=>n+(row.net??0),0);
+      const unreal=mark.equity-state.initialEquity-(trial.lsrPriorNet??0)-closedNet;
+      trial.lsrCurve=rememberRow(trial.lsrCurve,{ts:now,equity:Number(mark.equity.toFixed(4)),closed_pnl:Number(closedNet.toFixed(4)),unrealized_pnl:Number(unreal.toFixed(4)),positions:state.positions.filter(t=>t.exitControl?.policy===RX_POLICY).length});
+      changed=true;
+    }
     if(JSON.stringify(trial.work)!==JSON.stringify(work)){trial.work=work;changed=true;}
     return changed;
   }
@@ -397,7 +405,8 @@ export function lsrLogBook(state:ForwardState,quotes:Record<string,Quote>,now:nu
       gross_pnl:px>0?Number((dirOf(t.side)*t.quantity*(px-t.entryPrice)).toFixed(6)):0,fee:t.entryFee,net_pnl:null,
       holdSec:Math.round((now-t.openedAt)/1000),exit_reason:null,gapBps:null,opened_at:t.openedAt,closed_at:null,trace:traceOf(t.openedAt)};
   });
-  const fills=[...(trial?.lsrFills??[])];
+  const rx=rxRows(state,quotes,now);
+  const fills=[...(trial?.lsrFills??[]),...rx.fills];
   const seen=new Set(fills.map(row=>`${row.tag}:${row.trace}`));
   for(const row of closed){
     if(!seen.has(`open:${row.trace}`))fills.push({ts:row.opened_at,symbol:row.symbol,side:row.side,price:row.entry,qty:row.qty,notional:row.notional,fee:row.notional*FEE,tag:'open',trace:row.trace,waitMs:null,limit:row.entry});
@@ -405,10 +414,49 @@ export function lsrLogBook(state:ForwardState,quotes:Record<string,Quote>,now:nu
   }
   for(const row of open){if(!seen.has(`open:${row.trace}`))fills.push({ts:row.opened_at,symbol:row.symbol,side:row.side,price:row.entry,qty:row.qty,notional:row.notional,fee:row.fee,tag:'open',trace:row.trace,waitMs:null,limit:row.entry});}
   const mark=forwardEquity(state,quotes,now);
-  const prior=trial?.lsrPriorNet??0,counter=trial?.lsrClosedNet??0,rowSum=closed.reduce((n,row)=>n+(row.net_pnl??0),0);
-  const bridge=Number((counter-rowSum).toFixed(4));
+  const positions=[...closed,...open,...rx.rows];
+  const prior=trial?.lsrPriorNet??0,counter=trial?.lsrClosedNet??0,rowSum=positions.filter(row=>row.net_pnl!=null).reduce((n,row)=>n+(row.net_pnl??0),0);
+  const bridge=Number((counter-closed.reduce((n,row)=>n+(row.net_pnl??0),0)).toFixed(4));
   const logged=placesFromEvents(trial?.lsrLog??[]);
   const stored=trial?.lsrPlaces??[];
-  return {positions:[...closed,...open],fills,curve:trial?.lsrCurve??[],equity:mark.equity,initial:state.initialEquity,
-    closedNet:Number(rowSum.toFixed(4)),priorAdjustment:Number((prior+bridge).toFixed(4)),places:stored.length>=logged.length?stored:logged};
+  const curve=[...(trial?.lsrCurve??[])];
+  const openMark=positions.filter(row=>row.net_pnl==null).reduce((n,row)=>n+(row.gross_pnl??0)-row.fee,0);
+  if(!curve.length||now-(curve.at(-1)?.ts??0)>=60_000)curve.push({ts:now,equity:Number(mark.equity.toFixed(4)),closed_pnl:Number(rowSum.toFixed(4)),unrealized_pnl:Number(openMark.toFixed(4)),positions:positions.filter(row=>row.exit==null).length});
+  return {positions,fills,curve,equity:mark.equity,initial:state.initialEquity,
+    closedNet:Number(rowSum.toFixed(4)),priorAdjustment:Number((prior+bridge).toFixed(4)),places:stored.length>=logged.length?stored:logged,
+    funnel:rx.funnel??trial?.lsrFunnel??null,events:[...(trial?.lsrLog??[]),...rx.events]};
+}
+
+function rxRows(state:ForwardState,quotes:Record<string,Quote>,now:number){
+  const book=state.inverseTrial?.rx;
+  const rows:LsrPositionRow[]=[];
+  const fills:import('./run-log.ts').LsrFill[]=[];
+  const events:RunEvent[]=[];
+  if(!book)return {rows,fills,events,funnel:null as RunFunnel|null};
+  const fees=new Map(book.fees.map(row=>[row.orderId,row]));
+  for(const order of book.orders){
+    if(order.status==='pending'||order.status==='cancelled'||!order.openedAt)continue;
+    const fee=fees.get(order.id);
+    const openCost=fee?fee.openFee+fee.openSlippage:order.notional*(RX_MAKER+RX_OPEN_SLIP);
+    const trace=`rx-${order.id}`;
+    if(order.status==='closed'&&order.exit!=null&&order.closedAt){
+      const total=fee?.totalCost??Math.max(0,(order.gross??0)-(order.net??0));
+      rows.push({id:order.id,symbol:order.symbol,side:order.direction,entry:order.entry,exit:order.exit,qty:order.qty,notional:order.notional,
+        gross_pnl:order.gross,fee:Number(total.toFixed(6)),net_pnl:order.net,holdSec:order.holdSec??0,exit_reason:order.exitReason,gapBps:null,
+        opened_at:order.openedAt,closed_at:order.closedAt,trace});
+      fills.push({ts:order.openedAt,symbol:order.symbol,side:order.direction,price:order.entry,qty:order.qty,notional:order.notional,fee:Number(openCost.toFixed(6)),tag:'open',trace,waitMs:null,limit:order.limit});
+      fills.push({ts:order.closedAt,symbol:order.symbol,side:order.direction,price:order.exit,qty:order.qty,notional:order.qty*order.exit,fee:Number((total-openCost).toFixed(6)),tag:'close',trace,waitMs:null,limit:order.exit});
+    }else if(order.status==='open'){
+      const q=quotes[order.symbol],fresh=bookFresh(q,now),px=fresh?(order.direction==='LONG'?q!.bestBid:q!.bestAsk):order.entry;
+      const gross=px>0?dirOf(order.direction)*order.qty*(px-order.entry):0;
+      rows.push({id:order.id,symbol:order.symbol,side:order.direction,entry:order.entry,exit:null,qty:order.qty,notional:order.notional,
+        gross_pnl:Number(gross.toFixed(6)),fee:Number(openCost.toFixed(6)),net_pnl:null,holdSec:Math.round((now-order.openedAt)/1000),exit_reason:null,gapBps:null,
+        opened_at:order.openedAt,closed_at:null,trace});
+      fills.push({ts:order.openedAt,symbol:order.symbol,side:order.direction,price:order.entry,qty:order.qty,notional:order.notional,fee:Number(openCost.toFixed(6)),tag:'open',trace,waitMs:null,limit:order.limit});
+    }
+  }
+  for(const row of book.decisions.slice(-80))events.push({ts:row.at,level:'INFO',cat:'STRAT',symbol:row.symbol,event:row.action==='opened'?'research_order':row.action==='observe'?'research_observe':'research_stopped',reason:row.reasoning,fields:{confidence:row.confidence,side:row.direction??'',order:row.orderId??''},trace:traceOf(row.at)});
+  const closedN=book.orders.filter(row=>row.status==='closed');
+  const funnel:RunFunnel|null=book.decisionsN>0?{day:'',scans:book.decisionsN,universe:0,stale:0,spread:0,priceCheck:0,trend:0,exhaustion:0,sweep:0,micro:0,signals:book.decisionsN,rested:book.orders.filter(row=>row.status==='pending').length,filled:book.openedN,cancelled:book.cancelledN,closed:closedN.length,wins:closedN.filter(row=>(row.net??0)>0).length}:null;
+  return {rows,fills,events,funnel};
 }

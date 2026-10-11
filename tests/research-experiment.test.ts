@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {initialForward, type Quote} from '../lib/forward-relations.ts';
-import {applyLsrBook} from '../lib/lsr-book.ts';
+import {applyLsrBook,lsrLogBook} from '../lib/lsr-book.ts';
+import {buildRunLogExport} from '../lib/run-log.ts';
 import {applyResearchExperiment, armResearchExperiment, experimentReport, type RxSignal} from '../lib/research-experiment.ts';
 import {newInverseTrial} from '../lib/shadow-inverse-ledger.ts';
 
@@ -73,6 +74,21 @@ test('the run does not stop at two hours, and it does stop when equity is gone',
   assert.equal(broke.inverseTrial?.rx?.stoppedAt, T);
   assert.equal(broke.inverseTrial?.rx?.orders.length, 0);
   assert.match(experimentReport(broke.inverseTrial?.rx)?.status ?? '', /权益到 0/);
+});
+
+test('an experiment fill is in the log, so the cash change is not an unexplained gap', () => {
+  const state = book();
+  applyResearchExperiment(state, signal(T), {SOL_USDT: quote(100, 100.02, T)}, {SOL_USDT: contract}, T);
+  applyResearchExperiment(state, null, {SOL_USDT: quote(99.99, 100, T + 6_000)}, {SOL_USDT: contract}, T + 6_000);
+  applyResearchExperiment(state, null, {SOL_USDT: quote(89, 89.02, T + 10_000)}, {SOL_USDT: contract}, T + 10_000);
+  const packed = lsrLogBook(state, {SOL_USDT: quote(89, 89.02, T + 10_000)}, T + 10_000);
+  const file = buildRunLogExport({events: packed.events, funnel: packed.funnel, health: {}, gate: {}, exportedAt: T + 10_000, liveEnabled: false,
+    positions: packed.positions, fills: packed.fills, curve: packed.curve, equity: packed.equity, initial: packed.initial, closedNet: packed.closedNet, priorAdjustment: packed.priorAdjustment, places: packed.places});
+  assert.equal(file.positions.length, 1);
+  assert.equal(file.positions[0]?.exit_reason, 'sl');
+  assert.ok((file.funnel.filled ?? 0) >= 1);
+  assert.ok(Math.abs(file.invariants.identity_error ?? 99) < 0.05, `identity ${file.invariants.identity_error}`);
+  assert.equal(file.invariants.checks.positions_sum_match, true);
 });
 
 test('the old book opens nothing once the experiment is on', () => {

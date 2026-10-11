@@ -4471,9 +4471,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (path === "/forward-export" && request.method === "GET") {
       if(!this.forwardState||!this.authorityReady)return json({error:"权威账户尚未恢复，不能导出空账户"},503);
       if(url.searchParams.get("kind")==="log"){
-        const exportedAt=Date.now(),trial=this.forwardState.inverseTrial,hub=this.marketHub.status(exportedAt),gate=this.gateStream.status(exportedAt);
+        const exportedAt=Date.now(),hub=this.marketHub.status(exportedAt),gate=this.gateStream.status(exportedAt);
         const book=lsrLogBook(this.forwardState,this.forwardQuotes(exportedAt),exportedAt);
-        return json(buildRunLogExport({events:trial?.lsrLog??[],funnel:trial?.lsrFunnel??null,health:hub,gate,exportedAt,liveEnabled:this.runtime.live.requestedEnabled,
+        return json(buildRunLogExport({events:book.events,funnel:book.funnel,health:hub,gate,exportedAt,liveEnabled:this.runtime.live.requestedEnabled,
           positions:book.positions,fills:book.fills,curve:book.curve,equity:book.equity,initial:book.initial,closedNet:book.closedNet,priorAdjustment:book.priorAdjustment,places:book.places}));
       }
       if(url.searchParams.get("page")==="archive"){
