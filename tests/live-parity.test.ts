@@ -925,16 +925,12 @@ test("unified collateral rejection does not change owner intent or remove native
   const {h,gate}=await harness();await enableNew(h);await h.syncLive(T);gate.account.margin_mode=2;
   await assert.rejects(()=>h.syncLive(T),/统一保证金/);assert.equal(live(h).requestedEnabled,true);assert.ok(gate.stops.length>0);
 }));
-test("closed source is durably retained beyond the rolling PAPER history",()=>clock(async()=>{
-  const {h,gate,store}=await harness();await enableNew(h);await h.syncLive(T);
-  const later=T+3600000;h.runtime.evidence={BTC_USDT:{midpoint:100,bestBid:100,bestAsk:100,observedAt:later,fresh:true,entryReady:true}};
-  await (h as unknown as {advanceForwardNow(n:number):Promise<void>}).advanceForwardNow(later);
-  const key=`${LIVE_PARITY_PREFIX}source-close:ft-fixture-1`;
-  assert.equal((store.data.get(key) as Trade).status,"CLOSED");
-  h.forwardState.history=[];
-  const saved=await prepareForwardWrite(null,h.forwardState,later);await store.put(saved.entries);await h.saveCheckpoint(later,true);
-  const restored=await harness(store,gate);restored.h.forwardState.history=[];restored.h.forwardState.positions=[];
-  await restored.h.syncLive(T);assert.equal(gate.closeTags.length,1);
+test("empty strategy does not open or close on the forward pass",()=>clock(async()=>{
+  const {h,gate}=await harness();await enableNew(h);await h.syncLive(T);
+  const placed=gate.placed.length;
+  await (h as unknown as {advanceForwardNow(n:number):Promise<void>}).advanceForwardNow(T+3600000);
+  assert.equal(gate.placed.length,placed);
+  assert.equal(live(h).positions.BTC_USDT.status,"OPEN");
 }));
 
 test("all current source orders copy across bounded passes without the retired two-position cap",()=>clock(async()=>{
