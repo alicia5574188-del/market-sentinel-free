@@ -238,6 +238,11 @@ export function applyLsrBook(state:ForwardState,paths:Record<string,Candle[]>|un
     closeLsr(state,t,price,now,hitStop?'LSR_SL_EXIT':hitTp?'LSR_TP_EXIT':'LSR_TIME_EXIT',hitStop?touch:undefined);
     changed=true;
   }
+  if(trial.rx?.on){
+    if(trial.lsrWork?.length){trial.lsrWork=[];changed=true;}
+    trial.lsrNote='老策略不再开新单。研究实验在记账。';
+    return changed;
+  }
   const opened:string[]=[];
   let cancelled=0;
   const dailyStopped=(trial.lsrDayNet??0)<=-DAILY_LOSS;

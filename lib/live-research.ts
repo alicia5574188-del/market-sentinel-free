@@ -24,6 +24,7 @@ export type LiveResearchView={
   context:LiveContext|null;analogy:LiveAnalogy|null;decision:LiveDecision|null;
   scanned:number;found:number;nextAt:number;
   today?:{scans:number;symbols:number;long:number;short:number;watch:number};
+  experiment?:import('./research-experiment.ts').RxReport|null;
   log?:ResearchLogRow[];
 };
 

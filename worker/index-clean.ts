@@ -49,6 +49,7 @@ import {advanceShadowInverse,freshDeskLedger,freshNeedleLedger,freshBrainLedger,
 import {STRETCH_EPOCH} from '../lib/stretch-book.ts';
 import {LSR_EPOCH,lsrLogBook} from '../lib/lsr-book.ts';
 import {runLiveResearch,reviewResearchLog,RESEARCH_MAJORS,type ResearchSnap,type LiveResearchView,type ResearchLogRow} from '../lib/live-research.ts';
+import {armResearchExperiment,applyResearchExperiment,experimentReport,holdMsOf,type RxSignal} from '../lib/research-experiment.ts';
 import {buildRunLogExport} from '../lib/run-log.ts';
 import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
 import {confirmationRealityView} from '../lib/confirmation-reality.ts';
@@ -1069,7 +1070,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private liveResearchView(now=Date.now()){
-    if(this.liveResearchCache&&now-this.liveResearchCache.at<30_000)return this.liveResearchCache.view;
+    if(this.liveResearchCache&&now-this.liveResearchCache.at<30_000){
+      this.liveResearchCache.view.experiment=experimentReport(this.forwardState?.inverseTrial?.rx);
+      return this.liveResearchCache.view;
+    }
     const quotes=this.forwardQuotes(now);
     const candles={...this.strategyCandles};
     for(const symbol of RESEARCH_MAJORS){
@@ -1104,6 +1108,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     view.status=subject?`上一轮看完 ${subject.replace("_"," / ")}，等下一次扫描。`:"这一轮还没有排出异动。";
     this.researchLog=reviewResearchLog(this.researchLog,snaps,now);
     view.log=this.researchLog.slice(-8);
+    view.experiment=experimentReport(this.forwardState?.inverseTrial?.rx);
     this.liveResearchCache={at:now,view};
     void this.rememberResearch(view);
     return view;
@@ -1390,10 +1395,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       await this.adoptReverseLedger(now);
       await this.adoptStretchLedger(now);
       await this.adoptLsrLedger(now);
+      const armed=this.forwardState?.inverseTrial?.paperPolicy==='lsr-v1'&&armResearchExperiment(this.forwardState,now);
       const state=this.forwardState!;
       const dataCycleDue=allowDataCycle&&(!state.lastCycleAt
         ||Math.floor((now-90_000)/BAR_MS)>Math.floor((state.lastCycleAt-90_000)/BAR_MS));
-      const urgent=this.forwardUrgentSymbols(now).length>0||state.positions.length>0;
+      const rxWaiting=!!state.inverseTrial?.rx?.orders.some(row=>row.status==='pending');
+      const urgent=this.forwardUrgentSymbols(now).length>0||state.positions.length>0||rxWaiting;
       const quoteCadence=urgent?LOOP_MS:5_000;
       if(!dataCycleDue&&now-state.lastQuoteCycleAt<quoteCadence){
         this.forwardLastAttemptAt=state.lastQuoteCycleAt;return;
@@ -1404,6 +1411,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         daily:this.turnDailyCandles,quotes:executionQuotes,analysisQuotes:this.forwardAnalysisQuotes(now),contracts:this.regimeContracts(),
         entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue,
         research:{rolling:this.shadowResearch.market[0]?.rolling??null},reviewTrace:event=>{if(reviewEvents.length<128)reviewEvents.push(event);} });
+      if(next.state.inverseTrial?.paperPolicy==='lsr-v1'){
+        const research=this.liveResearchView(now),decision=research.decision;
+        const signal:RxSignal|null=decision?{at:research.ts,symbol:decision.symbol,side:decision.planSide,confidence:decision.confidence,
+          reasoning:[decision.headline,...decision.why].join(' ').slice(0,280),stop:decision.stop,tp1:decision.tp1,tp2:decision.tp2,
+          holdMs:holdMsOf(decision.holdText),funding:research.context?.funding??0,corr1h:research.context?.symbol===decision.symbol?research.context.corr1h??null:null,
+          context:research.context?`15分钟 ${(research.context.ret15m*100).toFixed(2)}%，1小时 ${(research.context.ret1h*100).toFixed(2)}%`: '',
+          analogy:research.analogy?`${research.analogy.count} 个相似场面，跌的占 ${(research.analogy.downPct*100).toFixed(0)}%`:''}:null;
+        if(applyResearchExperiment(next.state,signal,executionQuotes,this.regimeContracts(),now)||armed)next.changed=true;
+      }
       try{captureTradeReviews(previous,next.state,now,FORWARD_BUILD_SHA,STRATEGY_FINGERPRINT,executionQuotes);}
       catch{this.reviewDiagnosticError="TRADE_REVIEW_CAPTURE_FAILED";}
       if (next.changed || !previous.storage.persistedAt) {

@@ -228,6 +228,19 @@ function LsrResearch({desk,now}:{desk:Desk;now:number}){
         return <p key={row.at} className="fr-note">{time(row.at)} {coin(row.symbol)} {row.level==="计划"?"明确信号":row.level}。{later}</p>;
       }):<p className="fr-note">刚开始记。同一币、同一个结论，5 分钟内不重复记。</p>}
     </section>
+    <section className="fr-section" data-testid="research-experiment">
+      <div className="fr-section-head"><h2>实验</h2><span>{!live.experiment?'还没开始':live.experiment.running?'在跑':'已停止'}</span></div>
+      {!live.experiment?<p>正向实验还没记上第一笔。</p>:<>
+        <p>{live.experiment.status}</p>
+        <p>决策 {live.experiment.decisions} 次，开成 {live.experiment.opened} 笔，开单率 {(live.experiment.openRate*100).toFixed(0)}%。6 秒没成交 {live.experiment.cancelled} 笔。还在场上 {live.experiment.stillOpen} 笔。</p>
+        <p>做多做空：{live.experiment.bySide.length?live.experiment.bySide.map(row=>`${row.side} ${row.n} 笔，赢 ${row.wins} 笔${row.rate==null?'':`，胜率 ${(row.rate*100).toFixed(0)}%`}`).join('。'):'还没有平仓。'}</p>
+        <p>出场：{live.experiment.exits.map(row=>`${row.reason} ${row.n}`).join('，')}。</p>
+        <p>按把握分档：{live.experiment.byConfidence.filter(row=>row.n>0).map(row=>`${row.bucket} ${row.n} 笔，胜率 ${row.rate==null?'—':`${(row.rate*100).toFixed(0)}%`}`).join('。')||'还没有平仓。'}</p>
+        <p>费用：开仓手续费 {fmt(live.experiment.fees.openFee,4)} U，平仓手续费 {fmt(live.experiment.fees.closeFee,4)} U，滑点 {fmt(live.experiment.fees.slippage,4)} U，资金费 {fmt(live.experiment.fees.funding,4)} U。合计 {fmt(live.experiment.fees.total,4)} U{live.experiment.fees.share==null?'':`，占成交额 ${(live.experiment.fees.share*100).toFixed(3)}%`}。</p>
+        {live.experiment.path.length>0&&<p className="fr-note">权益：{live.experiment.path.map(row=>`${time(row.at)} ${fmt(row.equity,2)}`).join(' → ')}</p>}
+        {live.experiment.recent.map(row=><p key={`${row.at}-${row.symbol}-${row.status}`} className="fr-note">{time(row.at)} {row.symbol.replace('_',' / ')} {row.side} {row.status}{row.reason?` ${row.reason}`:''}{row.net==null?'':` ${row.net>=0?'+':''}${fmt(row.net,2)} U`}</p>)}
+      </>}
+    </section>
   </>;
 }
 function LsrDecision({desk,now}:{desk:Desk;now:number}){
