@@ -1,5 +1,6 @@
 /** Observation only. Never changes an order, a stop, or the account. */
 import type {ForwardState, Quote} from './forward-relations.ts';
+import type {EntryLocation} from './entry-place.ts';
 
 export const TRADE_PATH_KEY='market-intelligence:trade-paths:v1';
 export const TRADE_PATH_VERSION='trade-path-v1' as const;
@@ -13,7 +14,7 @@ const HOLD_MINUTES=[5,15,30,45,60,90,120,180];
 export type PathPoint=[number,number,number];
 export type TradePath={
   id:string;symbol:string;side:'LONG'|'SHORT';entry:number;qty:number;notional:number;entryFee:number;openedAt:number;
-  exit:number|null;exitAt:number|null;net:number|null;hold:PathPoint[];after:PathPoint[];
+  exit:number|null;exitAt:number|null;net:number|null;hold:PathPoint[];after:PathPoint[];entryLocation?:EntryLocation|null;
 };
 export type TradePathBook={version:typeof TRADE_PATH_VERSION;accountStartedAt:number;trades:TradePath[]};
 
@@ -34,7 +35,7 @@ export function observeTradePaths(book:TradePathBook,state:ForwardState,executio
     let row=byId.get(t.id);
     if(!row){
       row={id:t.id,symbol:t.symbol,side:t.side,entry:t.entryPrice,qty:t.quantity,notional:t.notional,entryFee:t.entryFee,openedAt:t.openedAt,
-        exit:null,exitAt:null,net:null,hold:[],after:[]};
+        exit:null,exitAt:null,net:null,hold:[],after:[],entryLocation:t.entryContext?.entryLocation??null};
       book.trades.unshift(row);byId.set(t.id,row);changed=true;
     }
     if(t.status==='CLOSED'&&row.exit==null&&t.exitPrice!=null&&t.closedAt!=null){
@@ -79,7 +80,7 @@ function note(points:PathPoint[],minute:number,price:number){
 export type PathExport={
   id:string;symbol:string;side:'LONG'|'SHORT';entry:number;exit:number|null;openedAt:number;closedAt:number|null;
   maxFavorablePct:number;maxAdversePct:number;bestHoldMin:number|null;direction:string;
-  hold:PathPoint[];after:PathPoint[];
+  hold:PathPoint[];after:PathPoint[];entryLocation:EntryLocation|null;
 };
 export function exportTradePaths(book:TradePathBook):PathExport[]{
   return book.trades.map(row=>{
@@ -87,7 +88,7 @@ export function exportTradePaths(book:TradePathBook):PathExport[]{
     return {id:row.id,symbol:row.symbol,side:row.side,entry:row.entry,exit:row.exit,openedAt:row.openedAt,closedAt:row.exitAt,
       maxFavorablePct:round(peak.favorable*100),maxAdversePct:round(peak.adverse*100),bestHoldMin:peak.minute,
       direction:peak.favorable>=COST_RATE?'进场后走出过成本':'进场后没有走出成本',
-      hold:row.hold,after:row.after};
+      hold:row.hold,after:row.after,entryLocation:row.entryLocation??null};
   });
 }
 

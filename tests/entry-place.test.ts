@@ -14,6 +14,7 @@ test("a long fills in the upper middle and a short fills in the lower middle",()
   highs[5]=120;lows[6]=80;
   const rows=daily(highs,lows,closes);
   assert.equal(placeEntry({side:"LONG",price:110,now,daily:rows,invalidation:100}).action,"ALLOW");
+  assert.equal(placeEntry({side:"LONG",price:110,now,daily:rows,invalidation:100}).location.cycles[0]?.zone,"中间偏上");
   assert.equal(placeEntry({side:"SHORT",price:90,now,daily:rows,invalidation:100}).action,"ALLOW");
   assert.match(placeEntry({side:"LONG",price:90,now,daily:rows,invalidation:80}).reason,/中间偏上/);
   assert.match(placeEntry({side:"SHORT",price:110,now,daily:rows,invalidation:120}).reason,/中间偏下/);

@@ -18,6 +18,8 @@ test('each order keeps the hold path and the hour after exit',()=>{
   const state=initialForward(now);
   const book=emptyTradePathBook(state.startedAt);
   state.positions.push(open('a','LONG',100));
+  state.positions[0]!.entryContext={version:'adaptive-ten-entry-v1',capturedAt:now,timeframe:'5m',side:'LONG',mode:'CONTINUATION',reason:'',entryScore:1,directionStrength:1,spaceScore:1,positionScore:1,executionScore:1,remainingSpaceRate:1,pullbackRiskRate:1,edgeRatio:1,expectedHoldMinutes:30,marketFit:1,regionId:null,
+    entryLocation:{cycles:[{scale:'日线',pos:0.72,zone:'中间偏上',highTouches:0,lowTouches:0,priorHigh:120,priorLow:80}]}};
   assert.equal(observeTradePaths(book,state,{ETH_USDT:quote(100,100.1,now)},{},now),true);
   assert.equal(observeTradePaths(book,state,{ETH_USDT:quote(99.5,99.6,now+20_000)},{},now+20_000),true);
   assert.equal(book.trades[0]?.hold.length,1);
@@ -31,6 +33,7 @@ test('each order keeps the hold path and the hour after exit',()=>{
   const exported=exportTradePaths(book);
   assert.equal(exported[0]?.bestHoldMin,1);
   assert.equal(exported[0]?.direction,'进场后走出过成本');
+  assert.equal(exported[0]?.entryLocation?.cycles[0]?.zone,'中间偏上');
 });
 test('a profitable holding rule is reported, and a book that never pays says the entry is wrong',()=>{
   const book=emptyTradePathBook(now);
