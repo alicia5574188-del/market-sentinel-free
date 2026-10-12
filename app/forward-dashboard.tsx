@@ -2,7 +2,7 @@
 import {realizedNetPnl,initialTradeNotional,remainingTradeFraction} from "../lib/trade-realization.ts";
 
 import {useEffect,useLayoutEffect,useRef,useState,type CSSProperties,type ReactNode} from "react";
-import {BEIJING_TIME_ZONE,beijingDayKey} from "../lib/beijing-time.ts";
+import {BEIJING_TIME_ZONE} from "../lib/beijing-time.ts";
 import {type Trade,type forwardSummary} from "../lib/forward-relations.ts";
 import EquityCurve from "./equity-curve.tsx";
 import LiveEquityCurve from "./live-equity-curve.tsx";
@@ -43,13 +43,15 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   const select=(next:Tab)=>{scroll.current[tab]=window.scrollY;if(next==="live"||(next==="paper"&&liveEnabled))setLiveMounted(true);setTab(next);};
   const fontVars:Record<string,string>={};for(let px=10;px<=64;px++)fontVars[`--fr-fs${px}`]=`${(px*fontScale/100).toFixed(2)}px`;
   const exportSnapshot=async()=>{if(exporting)return;setExporting(true);setExportStatus(null);try{
-    const response=await fetch("/api/forward/export?kind=log",{cache:"no-store",credentials:"same-origin"});
+    const response=await fetch(`/api/forward/export?kind=log&t=${Date.now()}`,{cache:"no-store",credentials:"same-origin"});
     if(!response.ok)throw new Error("log");
-    const log=await response.json() as {version?:string;funnel?:{scans?:number;signals?:number;filled?:number;trend?:number;exhaustion?:number;stale?:number};breakdown?:{verdict?:string}};
-    const blob=new Blob([JSON.stringify(log,null,2)],{type:"application/json"}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`lsr-run-log-${beijingDayKey()}.json`;
+    const log=await response.json() as {version?:string;exportedAt?:number;positions?:unknown[];funnel?:{scans?:number;signals?:number;filled?:number;trend?:number;exhaustion?:number;stale?:number};breakdown?:{verdict?:string}};
+    const at=log.exportedAt??Date.now();
+    const stamp=new Date(at+8*60*60*1000).toISOString().replace(/[-:]/g,"").slice(0,15);
+    const blob=new Blob([JSON.stringify(log,null,2)],{type:"application/json"}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`lsr-run-log-${stamp}.json`;
     document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
-    const f=log.funnel;
-    setExportStatus(log.version==="lsr-run-log-v3"?`已开始下载。这是当前策略账，不是旧漏斗。` :log.version==="lsr-run-log-v1"?`已开始下载。${log.breakdown?.verdict??""}。扫描 ${f?.scans??0} 次，信号 ${f?.signals??0}，成交 ${f?.filled??0}，没走出趋势 ${f?.trend??0}，数据过期 ${f?.stale??0}。`:"已开始下载。");
+    const n=log.positions?.length??0;
+    setExportStatus(`已开始下载 ${a.download}。里面 ${n} 笔。`);
   }catch{setExportStatus("导出失败，请重试。");}finally{setExporting(false);}};
 
   const desk=data?.forwardDesk??null,positions=data?.positions??[];
