@@ -19,6 +19,7 @@ import { evaluatePositionIntelligence, POSITION_INTELLIGENCE_VERSION,
   type PositionIntelligenceState } from "./position-intelligence-engine.ts";
 import {capturePositionBaseline} from "./position-evidence-contract.ts";
 import { beijingDayKey } from "./beijing-time.ts";
+import { placeEntry } from "./entry-place.ts";
 import { ENTRY_RESPONSE_VERSION, entryResponseWindowMs, evaluateEntryResponse,
   type EntryResponseDecision } from "./market-intelligence-entry-response.ts";
 import { deriveMarketEvolution, deriveOpportunityLifecycle, extendedEntryConfirmationReady,
@@ -1267,7 +1268,8 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
 }
 
 function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<string,Contract>,
-  minutePaths:Record<string,Candle[]>|undefined,paths:Record<string,Candle[]>|undefined,now:number,equity:number,trace?:(event:ReviewEvent)=>void){
+  minutePaths:Record<string,Candle[]>|undefined,paths:Record<string,Candle[]>|undefined,now:number,equity:number,trace?:(event:ReviewEvent)=>void,
+  daily?:Record<string,Candle[]>){
   const opportunities=new Map(s.opportunities.map(o=>[o.id,o])),waiting=Object.values(s.entryValidations)
     .filter(v=>v.status==="WAITING").sort((a,b)=>{
       const ao=a.frozenOpportunity??opportunities.get(a.candidateId),bo=b.frozenOpportunity??opportunities.get(b.candidateId);
@@ -1407,6 +1409,14 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
       reject(validation.reason);continue;
     }
 
+    const placed=placeEntry({side:validation.side,price,now,fiveMinute:paths?.[validation.symbol],daily:daily?.[validation.symbol],
+      minute:minutePaths?.[validation.symbol],invalidation:frozenInvalidation??(Number.isFinite(o.winnerPlan?.initialStop)?o.winnerPlan!.initialStop!:null)});
+    if(placed.action==="WAIT"){
+      const cap=(validation.authorizedAt??validation.startedAt)+45*60_000;
+      if(validation.expiresAt<cap)validation.expiresAt=cap;
+      validation.phase="RETEST_WAIT";validation.reason=placed.reason;reject(placed.reason);continue;
+    }
+
     const meta=contracts[o.symbol];if(!meta){reject("等待合约规格");continue;}
     const last=s.lastExitAt[o.symbol]??0,lastSide=s.lastSide[o.symbol];
     if(now-last<15*60_000&&lastSide===o.side){validation.status="CANCELLED";validation.reason="同币同方向假设尚未重置";reject(validation.reason);continue;}
@@ -1516,7 +1526,7 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
   // lane). Once authorized, its frozen identity is handed to the critical 2s
   // execution clock; research refreshes can no longer make it disappear.
   if(marketReady)seedEntryResponses(s,input.quotes,input.now,trace);
-  const opened=marketReady?advanceEntryResponses(s,input.quotes,input.contracts,input.minutePaths,input.paths,input.now,mark.equity,trace):0;
+  const opened=marketReady?advanceEntryResponses(s,input.quotes,input.contracts,input.minutePaths,input.paths,input.now,mark.equity,trace,input.daily):0;
 
   const states=Object.values(s.extremumRegime.symbols),longReady=states.filter(x=>x.longScore>=62).length,
     shortReady=states.filter(x=>x.shortScore>=62).length,divergent=states.filter(x=>x.regime==="DIVERGENT").length,
