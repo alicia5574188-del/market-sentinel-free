@@ -113,7 +113,7 @@ export function searchHolding(book:TradePathBook){
 
 function simulate(row:TradePath,tpPct:number,slPct:number,holdMin:number){
   const dir=row.side==='LONG'?1:-1,tp=tpPct/100,sl=slPct/100;
-  let exit=row.hold.at(-1)!,reason:'open';
+  let exit=row.hold.at(-1)!,reason:'sl'|'tp'|'time'|'open'='open';
   for(const point of row.hold){
     const worst=Math.min(signed(dir,row.entry,point[1]),signed(dir,row.entry,point[2]));
     const best=Math.max(signed(dir,row.entry,point[1]),signed(dir,row.entry,point[2]));
