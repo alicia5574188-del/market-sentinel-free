@@ -19,7 +19,6 @@ import { evaluatePositionIntelligence, POSITION_INTELLIGENCE_VERSION,
   type PositionIntelligenceState } from "./position-intelligence-engine.ts";
 import {capturePositionBaseline} from "./position-evidence-contract.ts";
 import { beijingDayKey } from "./beijing-time.ts";
-import { placeEntry, type EntryLocation } from "./entry-place.ts";
 import { ENTRY_RESPONSE_VERSION, entryResponseWindowMs, evaluateEntryResponse,
   type EntryResponseDecision } from "./market-intelligence-entry-response.ts";
 import { deriveMarketEvolution, deriveOpportunityLifecycle, extendedEntryConfirmationReady,
@@ -137,7 +136,6 @@ export type EntryContext={
   liquidityInvalidationPrice?:number|null;rapidLiquidityAuthorization?:boolean;
   baseEntryScore?:number;environmentScore?:number;
   futureResearchAction?:EntryHypothesisGuidance["action"];futureResearchReason?:string;futureHypothesisIds?:string[];
-  entryLocation?:EntryLocation;
 };
 import type {ReviewEvent, TradeReview} from "./review-trace.ts";
 
@@ -972,7 +970,7 @@ export function applyOpportunityResearch(s:ForwardState,o:Opportunity,now:number
 }
 
 function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:number,equity:number,
-  response?:{validation:EntryValidation;decision:EntryResponseDecision},minutePath?:Candle[],entryLocation?:EntryLocation){
+  response?:{validation:EntryValidation;decision:EntryResponseDecision},minutePath?:Candle[]){
   if(!isIntelligenceOpportunity(o))return"新策略身份缺失";
   const appliedResearch=applyOpportunityResearch(s,o,now);
   if(appliedResearch?.entryAction==="CONFIRM_MORE"&&!response)return "研究要求本币实时响应确认，不能由兼容入口跳过";
@@ -1060,8 +1058,7 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
         liquidityOriginLower:o.liquidityOriginLower,liquidityOriginUpper:o.liquidityOriginUpper,
         liquidityTargetLower:o.liquidityTargetLower,liquidityTargetUpper:o.liquidityTargetUpper,
         liquidityInvalidationPrice:frozenInvalidation,rapidLiquidityAuthorization:!!o.rapidLiquidityAuthorization,
-        futureResearchAction:o.futureResearchAction,futureResearchReason:o.futureResearchReason,futureHypothesisIds:o.futureHypothesisIds,
-        entryLocation},
+        futureResearchAction:o.futureResearchAction,futureResearchReason:o.futureResearchReason,futureHypothesisIds:o.futureHypothesisIds},
       forecast:{remainingNetRate:remainingNet,quality:o.score/100,sizingEquity:equity}};
   // Use the very same position assessment before financial admission. A single
   // concern or slow response is not a veto; only converged independent failure
@@ -1270,8 +1267,7 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
 }
 
 function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<string,Contract>,
-  minutePaths:Record<string,Candle[]>|undefined,paths:Record<string,Candle[]>|undefined,now:number,equity:number,trace?:(event:ReviewEvent)=>void,
-  daily?:Record<string,Candle[]>){
+  minutePaths:Record<string,Candle[]>|undefined,paths:Record<string,Candle[]>|undefined,now:number,equity:number,trace?:(event:ReviewEvent)=>void){
   const opportunities=new Map(s.opportunities.map(o=>[o.id,o])),waiting=Object.values(s.entryValidations)
     .filter(v=>v.status==="WAITING").sort((a,b)=>{
       const ao=a.frozenOpportunity??opportunities.get(a.candidateId),bo=b.frozenOpportunity??opportunities.get(b.candidateId);
@@ -1411,18 +1407,10 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
       reject(validation.reason);continue;
     }
 
-    const placed=placeEntry({side:validation.side,price,now,fiveMinute:paths?.[validation.symbol],daily:daily?.[validation.symbol],
-      minute:minutePaths?.[validation.symbol],invalidation:frozenInvalidation??(Number.isFinite(o.winnerPlan?.initialStop)?o.winnerPlan!.initialStop!:null)});
-    if(placed.action==="WAIT"){
-      const cap=(validation.authorizedAt??validation.startedAt)+45*60_000;
-      if(validation.expiresAt<cap)validation.expiresAt=cap;
-      validation.phase="RETEST_WAIT";validation.reason=placed.reason;reject(placed.reason);continue;
-    }
-
     const meta=contracts[o.symbol];if(!meta){reject("等待合约规格");continue;}
     const last=s.lastExitAt[o.symbol]??0,lastSide=s.lastSide[o.symbol];
     if(now-last<15*60_000&&lastSide===o.side){validation.status="CANCELLED";validation.reason="同币同方向假设尚未重置";reject(validation.reason);continue;}
-    const error=openIntelligenceTrade(s,o,q!,meta,now,equity,{validation,decision},minutePaths?.[o.symbol],placed.location);
+    const error=openIntelligenceTrade(s,o,q!,meta,now,equity,{validation,decision},minutePaths?.[o.symbol]);
     if(error){
       if(error.startsWith("实时成交性价比")||error.startsWith("实时入场已消耗剩余空间")||error.startsWith("入场与持仓证据冲突")){
         if(error.startsWith("入场与持仓证据冲突")){validation.supportSamples=0;validation.oppositionSamples=0;}
@@ -1528,7 +1516,7 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
   // lane). Once authorized, its frozen identity is handed to the critical 2s
   // execution clock; research refreshes can no longer make it disappear.
   if(marketReady)seedEntryResponses(s,input.quotes,input.now,trace);
-  const opened=marketReady?advanceEntryResponses(s,input.quotes,input.contracts,input.minutePaths,input.paths,input.now,mark.equity,trace,input.daily):0;
+  const opened=marketReady?advanceEntryResponses(s,input.quotes,input.contracts,input.minutePaths,input.paths,input.now,mark.equity,trace):0;
 
   const states=Object.values(s.extremumRegime.symbols),longReady=states.filter(x=>x.longScore>=62).length,
     shortReady=states.filter(x=>x.shortScore>=62).length,divergent=states.filter(x=>x.regime==="DIVERGENT").length,
