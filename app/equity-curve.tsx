@@ -49,7 +49,7 @@ export default function EquityCurve({data,healthy,fixture,cache,cacheScope="owne
     }
     void load();
     const timer=setInterval(()=>void load(),60_000);
-    const visible=()=>{if(document.hidden){if(resume)clearTimeout(resume);}else void load();};
+    const visible=()=>{if(document.hidden){if(resume)clearTimeout(resume);}else{store.retry();void load();}};
     document.addEventListener("visibilitychange",visible);
     return()=>{stopped=true;clearInterval(timer);if(resume)clearTimeout(resume);document.removeEventListener("visibilitychange",visible);};
   },[store,account,range,loadBatch,fixture,oldestRequest,cacheScope]);
@@ -109,6 +109,6 @@ export default function EquityCurve({data,healthy,fixture,cache,cacheScope="owne
     <div className="eq-controls"><button onClick={()=>jump(0)}>起点</button><button disabled={offset<2} onClick={()=>jump(Math.max(0,offset-width*.8))}>‹ 较早</button><button disabled={offset>=canvasWidth-width-2} onClick={()=>jump(Math.min(canvasWidth-width,offset+width*.8))}>较新 ›</button><button onClick={()=>jump(canvasWidth-width)}>最新</button></div>
     {history.cacheNotice&&<p className="eq-load" role="status">{history.cacheNotice}</p>}
     <div className="eq-extremes"><span>窗口记录高点 <b>{peak?number(peak.equity):"—"} U</b></span><span>窗口记录低点 <b>{trough?number(trough.equity):"—"} U</b></span></div>
-    {(loading||error||needsMore)&&<div className="eq-load" role="status"><span>{error??(loading?(history.catchingUp?"正在补充新增净值，历史曲线已保留…":"正在补充尚未读取的历史…"):"当前窗口历史尚未读取完整")}</span>{!loading&&<button onClick={()=>{setOldestRequest(old=>Math.min(old??Infinity,Math.max(account,visibleStart-DAY_MS)));setLoadBatch(n=>n+1);}}>继续加载</button>}</div>}
+    {(loading||error||needsMore)&&<div className="eq-load" role="status"><span>{error??(loading?(history.catchingUp?"正在补充新增净值，历史曲线已保留…":"正在补充尚未读取的历史…"):"当前窗口历史尚未读取完整")}</span>{!loading&&<button onClick={()=>{store.retry();setOldestRequest(old=>Math.min(old??Infinity,Math.max(account,visibleStart-DAY_MS)));setLoadBatch(n=>n+1);}}>继续加载</button>}</div>}
   </div>;
 }

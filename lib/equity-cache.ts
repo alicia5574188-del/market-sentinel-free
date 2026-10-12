@@ -23,6 +23,12 @@ const empty=():EquityHistory=>({account:0,points:[],cursor:null,done:false,cover
 const browserStorage=()=>{try{return typeof window==="undefined"?null:window.localStorage;}catch{return null;}};
 const legacyBrowserStorage=()=>{try{return typeof window==="undefined"?null:window.sessionStorage;}catch{return null;}};
 const cursorOK=(s:unknown):s is string=>typeof s==="string"&&/^forward-relations:v1:archive:\d{16}:\d+(?::part:\d{2})?$/.test(s);
+function curveReadError(e:unknown){
+  const name=e instanceof Error?e.name:"";
+  const message=e instanceof Error?e.message:"";
+  if(name==="AbortError"||/abort/i.test(message))return "净值历史读取超时，当前曲线已保留。";
+  return message||"净值读取失败；保留已加载曲线。";
+}
 const finite=(n:unknown):n is number=>typeof n==="number"&&Number.isFinite(n);
 export function clearEquityBrowserCache(storage:BrowserStorage|null=browserStorage()){
   try{if(storage)for(let i=storage.length-1;i>=0;i--){const k=storage.key(i);if(k?.startsWith(PREFIX))storage.removeItem(k);}}catch{/* Optional cache, never block logout. */}
@@ -116,13 +122,14 @@ export class EquityHistoryCache {
   load(target:number,cycle:number,active:()=>boolean):Promise<void>{
     if(this.flight)return this.flight.then(()=>this.load(target,cycle,active));
     if(!this.context||this.blocked||!active())return Promise.resolve();
-    if(this.state.error&&this.now()-this.lastAttempt<60_000)return Promise.resolve();
+    if(this.state.error&&this.now()-this.lastAttempt<(this.state.error.includes("读取超时")?5_000:60_000))return Promise.resolve();
     const epoch=this.epoch;
     const work=this.run(target,cycle,active,epoch);
     this.flight=work;
     void work.finally(()=>{if(epoch===this.epoch&&this.flight===work)this.flight=null;});
     return work;
   }
+  retry(){this.lastAttempt=0;}
   needsHistory(target:number){const s=this.state;return !s.loaded||!s.done&&(s.coveredTo===null||s.coveredTo>target);}
   private async run(target:number,cycle:number,active:()=>boolean,epoch:number){
     // Preserve the last successful projection while fetching; never replace it with an empty chart.
@@ -195,7 +202,7 @@ export class EquityHistoryCache {
         this.set(change);this.persist();
         if(n<31&&active()){await this.pause();}
       }
-    }catch(e){if(epoch===this.epoch)this.set({error:e instanceof Error?e.message:"净值读取失败；保留已加载曲线。"});}
+    }catch(e){if(epoch===this.epoch)this.set({error:curveReadError(e)});}
     finally{if(epoch===this.epoch)this.set({loading:false});}
   }
 }

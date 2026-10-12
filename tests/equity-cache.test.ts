@@ -126,6 +126,15 @@ test("logout/cancel invalidates a late response instead of recreating cache",asy
   release(Response.json({version:EQUITY_CURVE_VERSION,context,points:[],nextCursor:null,scannedTo:null,generatedAt:h.now()}));await work;
   assert.equal(c.getSnapshot().points.length,0);assert.equal(h.disk.length,0);
 });
+test("an aborted equity read stays in Chinese and the button can retry immediately",async()=>{
+  const h=host(1);let calls=0;
+  const c=new EquityHistoryCache({...h.options,fetch:async()=>{calls++;throw new DOMException("Fetch is aborted","AbortError");}});
+  c.configure(context,"owner");
+  await c.load(T,T+STEP,()=>true);
+  assert.equal(c.getSnapshot().error,"净值历史读取超时，当前曲线已保留。");
+  await c.load(T,T+STEP,()=>true);assert.equal(calls,1);
+  c.retry();await c.load(T,T+STEP,()=>true);assert.equal(calls,2);
+});
 test("a stalled response body times out, preserves history and permits a later retry",async t=>{
   const h=host(1);await h.cache.load(T,T+STEP,()=>true);h.time(STEP);h.archive.add(2,2);
   t.mock.timers.enable({apis:["setTimeout"]});
