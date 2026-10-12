@@ -51,6 +51,7 @@ import {emptyStrategyAccount, STRATEGY_EPOCH} from '../lib/strategy-slot.ts';
 import {emptyThesis, runThesisCycle, THESIS_STORAGE_KEY, type ThesisAttached, type ThesisMarket} from '../lib/thesis-attach.ts';
 import type {ThesisPublic} from '../lib/thesis-view.ts';
 import {buildRunLogExport,accountLogBook} from '../lib/run-log.ts';
+import {emptyTradePathBook,exportTradePaths,observeTradePaths,restoreTradePathBook,searchHolding,TRADE_PATH_KEY,type TradePathBook} from '../lib/trade-path.ts';
 import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
 import {confirmationRealityView} from '../lib/confirmation-reality.ts';
 import {observationReading} from '../lib/observation-tape.ts';
@@ -561,6 +562,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private reviewJournal=initialReviewJournal(0,Date.now());
   private reviewJournalLoaded=false;
   private reviewJournalLastWrite=0;
+  private tradePaths:TradePathBook=emptyTradePathBook(0);
+  private tradePathsLoaded=false;
+  private tradePathsPending=false;
   private reviewDiagnosticError:string|null=null;
   private forwardBusy = false;
   private deskCleanArmed = false;
@@ -1323,6 +1327,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.liveJournal.set(key,{...existing,receipt:structuredClone(entry.parity)});
   }
 
+  private async ensureTradePaths(){
+    const started=this.forwardState?.startedAt??0;
+    if(this.tradePathsLoaded&&this.tradePaths.accountStartedAt===started)return;
+    try{this.tradePaths=restoreTradePathBook(await this.ctx.storage.get<TradePathBook>(TRADE_PATH_KEY),started);}
+    catch{this.tradePaths=emptyTradePathBook(started);}
+    this.tradePathsLoaded=true;
+  }
+
   private async ensureAdaptiveAccount(now:number){
     if(!this.forwardState)this.forwardState=await readForwardStore(this.ctx.storage,now);
     if(!this.forwardState)throw new Error("PAPER权威账户缺失");
@@ -1341,6 +1353,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       catch{this.reviewJournal=initialReviewJournal(this.forwardState.startedAt,now);this.reviewDiagnosticError="REVIEW_JOURNAL_RESTORE_UNAVAILABLE";}
       this.reviewJournalLoaded=true;
     }
+    await this.ensureTradePaths();
     // normalizeForward already upgrades old records in place. Strategy revisions
     // must never close positions, replace startedAt or create a fresh 1000U ledger.
     return false;
@@ -1415,6 +1428,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         research:{rolling:this.shadowResearch.market[0]?.rolling??null},reviewTrace:event=>{if(reviewEvents.length<128)reviewEvents.push(event);} });
       try{captureTradeReviews(previous,next.state,now,FORWARD_BUILD_SHA,STRATEGY_FINGERPRINT,executionQuotes);}
       catch{this.reviewDiagnosticError="TRADE_REVIEW_CAPTURE_FAILED";}
+      this.tradePathsPending=observeTradePaths(this.tradePaths,next.state,executionQuotes,this.forwardAnalysisQuotes(now),now)||this.tradePathsPending;
       if (next.changed || !previous.storage.persistedAt) {
         next.state.storage = { persistedAt: now, error: null };
         const prepared = await prepareForwardWrite(previous.storage.persistedAt ? previous : null, next.state, now, {compact:true});
@@ -1449,6 +1463,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         appendReviewEvents(this.reviewJournal,[...discovered,...reviewEvents].map(e=>({...e,
           buildSha:FORWARD_BUILD_SHA,strategyFingerprint:STRATEGY_FINGERPRINT})),now);
       }catch{this.reviewDiagnosticError="CANDIDATE_REVIEW_CAPTURE_FAILED";}
+      if(this.tradePathsPending){
+        const reservation=this.reserveNonAlarmWrites(1,512);
+        if(reservation){
+          try{await this.ctx.storage.put(TRADE_PATH_KEY,this.tradePaths);reservation.finish(true);this.tradePathsPending=false;}
+          catch{reservation.finish(false);}
+        }
+      }
     } catch (error) { this.forwardError = safeError(error); }
     finally { this.forwardBusy = false; }
   }
@@ -4249,9 +4270,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(url.searchParams.get("kind")==="log"){
         const exportedAt=Date.now(),hub=this.marketHub.status(exportedAt),gate=this.gateStream.status(exportedAt);
         const book=accountLogBook(this.forwardState,this.forwardQuotes(exportedAt),exportedAt);
-        return json(buildRunLogExport({events:[],funnel:book.funnel,health:hub,gate,exportedAt,liveEnabled:this.runtime.live.requestedEnabled,
+        await this.ensureTradePaths();
+        return json({...buildRunLogExport({events:[],funnel:book.funnel,health:hub,gate,exportedAt,liveEnabled:this.runtime.live.requestedEnabled,
           positions:book.positions,fills:book.fills,curve:book.curve,equity:book.equity,initial:book.initial,closedNet:book.closedNet,
-          priorAdjustment:book.priorAdjustment,unreconstructed:book.unreconstructed,unreconstructedN:book.unreconstructedN,places:book.places}));
+          priorAdjustment:book.priorAdjustment,unreconstructed:book.unreconstructed,unreconstructedN:book.unreconstructedN,places:book.places}),
+          paths:exportTradePaths(this.tradePaths),holding:searchHolding(this.tradePaths)});
       }
       if(url.searchParams.get("page")==="archive"){
         const startedAt=Number(url.searchParams.get("accountStartedAt")),asOf=Number(url.searchParams.get("asOf"));
