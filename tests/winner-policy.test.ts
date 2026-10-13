@@ -58,6 +58,14 @@ test('obstacle reduction needs a later complete post-entry bar, not two seconds 
   assert.equal(c.action,'REDUCE');assert.ok(c.fraction<=.65);const done={...c.state,trimCount:1,lastTrimEvent:c.state.obstacleSince};
   assert.equal(advanceWinnerManagement({...inputs,plan:p,now:T+3*B+2100,rows:[...rows,row(T+2*B,104.5,104.4,104.3,104.7)],previous:done,concernFamilies:['RELATIVE']}).action,'HOLD');
 });
+test('once a trade has traded through cost, a later 0.6% loss closes it',()=>{
+  const {s,t}=fixture();
+  t.firstProfitAt=T;t.favorable=.01;
+  assert.equal(manageWinnerTrade(s,t,quote(99.5,T+B),T+B,{},{}),false);
+  assert.equal(t.status,'OPEN');
+  assert.equal(manageWinnerTrade(s,t,quote(99.4,T+2*B),T+2*B,{},{}),true);
+  assert.equal(t.exitReason,'AFTER_PROFIT_LOSS');
+});
 test('partial realization, then final close: entry fee once, original identity once, money reconciles',()=>{
   const {s,t}=fixture(),n=t.notional,q=t.quantity,fee=t.entryFee;
   const r=realizeTradeSlice({trade:t,price:104,now:T+B,quoteAt:T+B,fraction:.4,feeRate:.0007,fundingPerDay:.0002,minContracts:1,reason:'fixture'});assert.ok(r);assertTradeRealization(t);
