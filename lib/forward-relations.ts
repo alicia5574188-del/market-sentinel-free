@@ -29,7 +29,7 @@ import { advanceMarketHypothesisResearch, entryHypothesisGuidance, initialMarket
   normalizeMarketHypothesisResearch,
   type EntryHypothesisGuidance, type MarketHypothesisResearchState } from "./market-intelligence-hypothesis-research.ts";
 import { ENVIRONMENT_OUTLOOK_VERSION, ENVIRONMENT_ROUTER_VERSION, classifyMarketEnvironment, deriveEnvironmentOutlook,
-  deriveFastEnvironmentSignal, environmentModeFit, marketTravelExpectancy, routeEnvironmentOpportunity,
+  deriveFastEnvironmentSignal, environmentModeFit, routeEnvironmentOpportunity,
   initialEnvironmentPerformanceState, normalizeEnvironmentPerformanceState, recordEnvironmentOutcome,
   type EnvironmentOutlook, type EnvironmentPerformanceState, type EnvironmentPlaybook, type MarketEnvironment, type RouteAlignment
 } from "./market-intelligence-environment-router.ts";
@@ -51,6 +51,10 @@ export const FEATURES=["5分钟方向","路径效率","剩余空间","位置质�
 export const PAPER_COST={feeRate:.0007,slippageRate:.00025,fundingAllowancePerDay:.0002,
   assumption:"双边吃单费各7bp＋滑点各2.5bp＋每日2bp不利资金费占位"};
 const ROUND_TRIP_COST=2*(PAPER_COST.feeRate+PAPER_COST.slippageRate);
+function marketTravelExpectancy(moves:number[]){
+  const rows=moves.filter(v=>Number.isFinite(v)&&v>0).sort((a,b)=>a-b);
+  return rows.length?rows[Math.floor((rows.length-1)/2)]!:0;
+}
 const TOTAL_RISK_RATE=.10,SIDE_RISK_RATE=.065,TOTAL_MARGIN_RATE=.75;
 const FIVE_MINUTE_NEW_RISK_RATE=.015;
 const ENTRY_VALIDATION_CAP=6,CONTINUATION_SIDE_RISK_RATE=.025,EXECUTION_EDGE_FLOOR=1.25;
