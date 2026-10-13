@@ -73,6 +73,12 @@ export function classifyMarketEnvironment(market:MarketIntelligenceState,evoluti
   return"TRANSITION";
 }
 
+/** Median absolute recent move. This is how far the tape is traveling, not a score. */
+export function marketTravelExpectancy(moves:number[]){
+  const rows=moves.filter(v=>Number.isFinite(v)&&v>0).sort((a,b)=>a-b);
+  return rows.length?rows[Math.floor((rows.length-1)/2)]!:0;
+}
+
 function decisionSide(market:MarketIntelligenceState,evolution:MarketEvolutionState){
   const transition=market.narrative.transition,transitionSide=biasSign(transition.direction),
     transitionTrusted=(transition.stage==="BUILDING"||transition.stage==="CONFIRMED")&&(transition.pressure??0)>=32;

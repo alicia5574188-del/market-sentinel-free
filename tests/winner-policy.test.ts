@@ -58,9 +58,23 @@ test('obstacle reduction needs a later complete post-entry bar, not two seconds 
   assert.equal(c.action,'REDUCE');assert.ok(c.fraction<=.65);const done={...c.state,trimCount:1,lastTrimEvent:c.state.obstacleSince};
   assert.equal(advanceWinnerManagement({...inputs,plan:p,now:T+3*B+2100,rows:[...rows,row(T+2*B,104.5,104.4,104.3,104.7)],previous:done,concernFamilies:['RELATIVE']}).action,'HOLD');
 });
+test('a trade exits when it reaches the market expectancy frozen at entry',()=>{
+  const {s,t}=fixture();
+  t.entryContext!.marketExpectancy=.02;
+  assert.equal(manageWinnerTrade(s,t,quote(101.5,T+B),T+B,{},{}),false);
+  assert.equal(t.status,'OPEN');
+  assert.equal(manageWinnerTrade(s,t,quote(102,T+2*B),T+2*B,{},{}),true);
+  assert.equal(t.exitReason,'EXPECTANCY_EXIT');
+});
+test('an expectancy inside the round trip cost does not add an exit',()=>{
+  const {s,t}=fixture();
+  t.entryContext!.marketExpectancy=.001;
+  assert.equal(manageWinnerTrade(s,t,quote(100.2,T+B),T+B,{},{}),false);
+  assert.equal(t.status,'OPEN');
+});
 test('a 5% peak exits after an 0.8 point giveback and not before',()=>{
   const {s,t}=fixture();
-  t.favorable=.05;t.peakPnlRate=.05;t.firstProfitAt=T;
+  t.favorable=.05;t.peakPnlRate=.05;t.firstProfitAt=T;t.entryContext!.marketExpectancy=.08;
   assert.equal(manageWinnerTrade(s,t,quote(104.3,T+B),T+B,{},{}),false);
   assert.equal(t.status,'OPEN');
   assert.equal(manageWinnerTrade(s,t,quote(104.2,T+2*B),T+2*B,{},{}),true);

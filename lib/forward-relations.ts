@@ -29,7 +29,7 @@ import { advanceMarketHypothesisResearch, entryHypothesisGuidance, initialMarket
   normalizeMarketHypothesisResearch,
   type EntryHypothesisGuidance, type MarketHypothesisResearchState } from "./market-intelligence-hypothesis-research.ts";
 import { ENVIRONMENT_OUTLOOK_VERSION, ENVIRONMENT_ROUTER_VERSION, classifyMarketEnvironment, deriveEnvironmentOutlook,
-  deriveFastEnvironmentSignal, environmentModeFit, routeEnvironmentOpportunity,
+  deriveFastEnvironmentSignal, environmentModeFit, marketTravelExpectancy, routeEnvironmentOpportunity,
   initialEnvironmentPerformanceState, normalizeEnvironmentPerformanceState, recordEnvironmentOutcome,
   type EnvironmentOutlook, type EnvironmentPerformanceState, type EnvironmentPlaybook, type MarketEnvironment, type RouteAlignment
 } from "./market-intelligence-environment-router.ts";
@@ -132,6 +132,7 @@ export type EntryContext={
   environmentRiskScale?:number;environmentProbe?:boolean;environmentReason?:string;
   environmentOutlookVersion?:typeof ENVIRONMENT_OUTLOOK_VERSION;environmentModeFit?:number;environmentHorizonMinutes?:15|30|45|60;
   environmentPersistenceScore?:number;environmentTransitionPressure?:number;environmentProfitExpansion?:EnvironmentOutlook["profitExpansion"];
+  marketExpectancy?:number;
   tradePlan?:LiquidityTradePlan;liquidityPlanConfidence?:number;liquidityReason?:string;liquidityTargetRate?:number|null;
   liquidityOriginLower?:number|null;liquidityOriginUpper?:number|null;liquidityTargetLower?:number|null;liquidityTargetUpper?:number|null;
   liquidityInvalidationPrice?:number|null;rapidLiquidityAuthorization?:boolean;
@@ -589,6 +590,12 @@ export function manageWinnerTrade(s:ForwardState,t:Trade,q:Quote,now:number,path
   if(!t.firstProfitAt&&signed>ROUND_TRIP_COST){t.firstProfitAt=now;if(t.entryContext)t.entryContext.postEntryState="CONFIRMED";}
   if(t.favorable>=.05&&t.favorable-signed>=.007999){
     closeTrade(s,t,px,now,"PEAK_GIVEBACK",{authority:"WINNER_PLAN",quoteAt:q.observedAt,protectedStop:t.stopPrice,
+      originalStop:plan.initialStop,trimCount:t.realization?.sequence??0,requestedAction:"EXIT",appliedAction:"EXIT"});
+    return true;
+  }
+  const expectedMove=t.entryContext?.marketExpectancy??0;
+  if(expectedMove>ROUND_TRIP_COST&&signed>=expectedMove-1e-9){
+    closeTrade(s,t,px,now,"EXPECTANCY_EXIT",{authority:"WINNER_PLAN",quoteAt:q.observedAt,protectedStop:t.stopPrice,
       originalStop:plan.initialStop,trimCount:t.realization?.sequence??0,requestedAction:"EXIT",appliedAction:"EXIT"});
     return true;
   }
@@ -1065,6 +1072,7 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
         environmentOutlookVersion:o.environmentOutlook?.version,environmentModeFit:o.environmentModeFit,
         environmentHorizonMinutes:o.environmentOutlook?.horizonMinutes,environmentPersistenceScore:o.environmentOutlook?.persistenceScore,
         environmentTransitionPressure:o.environmentOutlook?.transitionPressure,environmentProfitExpansion:o.environmentOutlook?.profitExpansion,
+        marketExpectancy:marketTravelExpectancy(Object.values(s.extremumRegime.symbols).map(x=>Math.abs(x.actualMove))),
         tradePlan:o.tradePlan,liquidityPlanConfidence:o.liquidityPlanConfidence,liquidityReason:o.liquidityReason,liquidityTargetRate:o.liquidityTargetRate,
         liquidityOriginLower:o.liquidityOriginLower,liquidityOriginUpper:o.liquidityOriginUpper,
         liquidityTargetLower:o.liquidityTargetLower,liquidityTargetUpper:o.liquidityTargetUpper,
