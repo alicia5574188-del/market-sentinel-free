@@ -587,6 +587,11 @@ export function manageWinnerTrade(s:ForwardState,t:Trade,q:Quote,now:number,path
   t.lastPrice=px;t.lastQuoteAt=q.observedAt;t.favorable=Math.max(t.favorable,Math.max(0,signed));t.adverse=Math.max(t.adverse,Math.max(0,-signed));
   t.peakPnlRate=Math.max(t.peakPnlRate??0,t.favorable);
   if(!t.firstProfitAt&&signed>ROUND_TRIP_COST){t.firstProfitAt=now;if(t.entryContext)t.entryContext.postEntryState="CONFIRMED";}
+  if(t.favorable>=.05&&t.favorable-signed>=.007999){
+    closeTrade(s,t,px,now,"PEAK_GIVEBACK",{authority:"WINNER_PLAN",quoteAt:q.observedAt,protectedStop:t.stopPrice,
+      originalStop:plan.initialStop,trimCount:t.realization?.sequence??0,requestedAction:"EXIT",appliedAction:"EXIT"});
+    return true;
+  }
   if(t.firstProfitAt&&signed<=-0.005999){
     closeTrade(s,t,px,now,"AFTER_PROFIT_LOSS",{authority:"WINNER_PLAN",quoteAt:q.observedAt,protectedStop:t.stopPrice,
       originalStop:plan.initialStop,trimCount:t.realization?.sequence??0,requestedAction:"EXIT",appliedAction:"EXIT"});
