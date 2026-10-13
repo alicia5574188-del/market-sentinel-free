@@ -1428,7 +1428,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         research:{rolling:this.shadowResearch.market[0]?.rolling??null},reviewTrace:event=>{if(reviewEvents.length<128)reviewEvents.push(event);} });
       try{captureTradeReviews(previous,next.state,now,FORWARD_BUILD_SHA,STRATEGY_FINGERPRINT,executionQuotes);}
       catch{this.reviewDiagnosticError="TRADE_REVIEW_CAPTURE_FAILED";}
-      this.tradePathsPending=observeTradePaths(this.tradePaths,next.state,executionQuotes,this.forwardAnalysisQuotes(now),now)||this.tradePathsPending;
+      this.tradePathsPending=observeTradePaths(this.tradePaths,next.state,executionQuotes,this.forwardAnalysisQuotes(now),now,this.strategyCandles)||this.tradePathsPending;
       if (next.changed || !previous.storage.persistedAt) {
         next.state.storage = { persistedAt: now, error: null };
         const prepared = await prepareForwardWrite(previous.storage.persistedAt ? previous : null, next.state, now, {compact:true});

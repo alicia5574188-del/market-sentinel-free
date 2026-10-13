@@ -4,6 +4,8 @@ import type {ForwardState, Quote} from './forward-relations.ts';
 export const TRADE_PATH_KEY='market-intelligence:trade-paths:v1';
 export const TRADE_PATH_VERSION='trade-path-v1' as const;
 const AFTER_MINUTES=180;
+const PATH_CAP=240;
+const PRICE_WINDOW_MS=5*60_000;
 const COST_RATE=0.002;
 const FEE_RATE=0.0007;
 const TAKE_PROFITS=[0.4,0.6,0.8,1,1.5,2,3];
@@ -25,7 +27,7 @@ export function restoreTradePathBook(saved:TradePathBook|undefined,accountStarte
   return saved;
 }
 
-export function observeTradePaths(book:TradePathBook,state:ForwardState,execution:Record<string,Quote>,analysis:Record<string,Quote>,now:number){
+export function observeTradePaths(book:TradePathBook,state:ForwardState,execution:Record<string,Quote>,analysis:Record<string,Quote>,now:number,bars?:Record<string,{time:number;high:number;low:number}[]>){
   let changed=false;
   if(book.accountStartedAt!==state.startedAt){book.accountStartedAt=state.startedAt;book.trades=[];changed=true;}
   const byId=new Map(book.trades.map(row=>[row.id,row]));
@@ -37,30 +39,45 @@ export function observeTradePaths(book:TradePathBook,state:ForwardState,executio
         exit:null,exitAt:null,net:null,hold:[],after:[]};
       book.trades.unshift(row);byId.set(t.id,row);changed=true;
     }
+    if(row.hold.length<=1&&rebuildFromBars(row,bars?.[t.symbol],t.closedAt??now))changed=true;
     if(t.status==='CLOSED'&&row.exit==null&&t.exitPrice!=null&&t.closedAt!=null){
       row.exit=t.exitPrice;row.exitAt=t.closedAt;row.net=t.netPnl;row.qty=t.realization?.initialQuantity??row.qty;
       note(row.hold,Math.max(0,Math.floor((t.closedAt-t.openedAt)/60_000)),t.exitPrice);changed=true;
     }
     const live=execution[t.symbol],wide=analysis[t.symbol];
     if(t.status==='OPEN'){
-      const px=executable(t.side,live,now);if(px==null)continue;
+      const px=pathPrice(t.side,live,wide,t.lastPrice,t.lastQuoteAt,now);if(px==null)continue;
       if(note(row.hold,Math.floor((now-t.openedAt)/60_000),px))changed=true;
     }else if(row.exitAt!=null&&now-row.exitAt<=AFTER_MINUTES*60_000){
-      const px=executable(t.side,live,now)??mid(wide,now);if(px==null)continue;
+      const px=pathPrice(t.side,live,wide,0,0,now);if(px==null)continue;
       if(note(row.after,Math.floor((now-row.exitAt)/60_000),px))changed=true;
     }
   }
-  if(book.trades.length>80){book.trades.length=80;changed=true;}
+  if(book.trades.length>PATH_CAP){book.trades.length=PATH_CAP;changed=true;}
   return changed;
 }
 
-function executable(side:'LONG'|'SHORT',q:Quote|undefined,now:number){
-  if(!q||!(q.bestBid>0)||!(q.bestAsk>=q.bestBid)||now-q.observedAt>10_000)return null;
-  return side==='LONG'?q.bestBid:q.bestAsk;
+function pathPrice(side:'LONG'|'SHORT',live:Quote|undefined,wide:Quote|undefined,lastPrice:number,lastQuoteAt:number,now:number){
+  const exec=side==='LONG'?live?.bestBid:live?.bestAsk;
+  if(live&&exec!=null&&exec>0&&live.bestAsk>=live.bestBid&&now-live.observedAt<=PRICE_WINDOW_MS)return exec;
+  if(wide&&wide.bestBid>0&&wide.bestAsk>=wide.bestBid&&now-wide.observedAt<=PRICE_WINDOW_MS)return (wide.bestBid+wide.bestAsk)/2;
+  if(lastPrice>0&&lastQuoteAt>0&&now-lastQuoteAt<=PRICE_WINDOW_MS)return lastPrice;
+  return null;
 }
-function mid(q:Quote|undefined,now:number){
-  if(!q||!(q.bestBid>0)||!(q.bestAsk>=q.bestBid)||now-q.observedAt>60_000)return null;
-  return (q.bestBid+q.bestAsk)/2;
+function barMs(time:number){return time<1e12?time*1000:time;}
+function rebuildFromBars(row:TradePath,bars:{time:number;high:number;low:number}[]|undefined,endAt:number){
+  if(!bars?.length||row.hold.length>1)return false;
+  const points:PathPoint[]=[];
+  for(const bar of bars){
+    const start=barMs(bar.time);
+    if(!(bar.high>0)||!(bar.low>0)||start+300_000<=row.openedAt||start>=endAt)continue;
+    const minute=Math.max(0,Math.floor((Math.max(start,row.openedAt)-row.openedAt)/60_000));
+    const low=Math.min(bar.low,bar.high),high=Math.max(bar.low,bar.high),last=points.at(-1);
+    if(last&&last[0]===minute){last[1]=Math.min(last[1],low);last[2]=Math.max(last[2],high);}
+    else points.push([minute,low,high]);
+  }
+  if(points.length<2)return false;
+  row.hold=points;return true;
 }
 function note(points:PathPoint[],minute:number,price:number){
   if(!Number.isFinite(price)||price<=0||minute<0)return false;

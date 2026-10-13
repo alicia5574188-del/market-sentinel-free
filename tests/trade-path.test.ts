@@ -56,3 +56,25 @@ test('an early exit still leaves the later path available for another exit rule'
   assert.equal(found.profitable,true);
   assert.equal(found.afterMinutes,180);
 });
+test('a quote older than ten seconds and a saved last price still leave the hold path',()=>{
+  const state=initialForward(now);
+  const book=emptyTradePathBook(state.startedAt);
+  const t=open('a','LONG',100);t.lastPrice=101;t.lastQuoteAt=now-30_000;
+  state.positions.push(t);
+  assert.equal(observeTradePaths(book,state,{ETH_USDT:quote(101.2,101.3,now-30_000)},{},now),true);
+  assert.equal(book.trades[0]?.hold.length,1);
+  assert.equal(book.trades[0]?.hold[0]?.[1],101.2);
+});
+test('a one-point exit is rebuilt from the five-minute bars and a real path is left alone',()=>{
+  const state=initialForward(now-20*60_000);
+  const book=emptyTradePathBook(state.startedAt);
+  const t=open('a','LONG',100);t.openedAt=now-20*60_000;t.status='CLOSED';t.closedAt=now;t.exitPrice=101;t.netPnl=1;
+  state.history.unshift(t);
+  const bars=[{time:(now-20*60_000)/1000,high:100.4,low:99.6},{time:(now-10*60_000)/1000,high:103,low:100.8}];
+  observeTradePaths(book,state,{},{},now,{ETH_USDT:bars});
+  assert.ok((book.trades[0]?.hold.length??0)>=2);
+  assert.equal(book.trades[0]?.hold[0]?.[1],99.6);
+  book.trades[0]!.hold.push([30,104,105]);
+  observeTradePaths(book,state,{},{},now,{ETH_USDT:bars});
+  assert.equal(book.trades[0]?.hold.at(-1)?.[0],30);
+});
