@@ -48,3 +48,11 @@ test('a profitable holding rule is reported, and a book that never pays says the
   assert.equal(none.profitable,false);
   assert.match(none.verdict,/入场/);
 });
+test('an early exit still leaves the later path available for another exit rule',()=>{
+  const book=emptyTradePathBook(now);
+  book.trades=[{id:'e',symbol:'ETH_USDT',side:'LONG',entry:100,qty:10,notional:1000,entryFee:0.7,openedAt:now,
+    exit:99.4,exitAt:now+5*60_000,net:-6,hold:[[0,100,100.3],[5,99.4,99.6]],after:[[10,101.6,102]]}];
+  const found=searchHolding(book);
+  assert.equal(found.profitable,true);
+  assert.equal(found.afterMinutes,180);
+});

@@ -3,7 +3,7 @@ import type {ForwardState, Quote} from './forward-relations.ts';
 
 export const TRADE_PATH_KEY='market-intelligence:trade-paths:v1';
 export const TRADE_PATH_VERSION='trade-path-v1' as const;
-const AFTER_MINUTES=60;
+const AFTER_MINUTES=180;
 const COST_RATE=0.002;
 const FEE_RATE=0.0007;
 const TAKE_PROFITS=[0.4,0.6,0.8,1,1.5,2,3];
@@ -93,7 +93,7 @@ export function exportTradePaths(book:TradePathBook):PathExport[]{
 
 export function searchHolding(book:TradePathBook){
   const rows=book.trades.filter(row=>row.hold.length>0);
-  if(!rows.length)return {trades:0,best:null,profitable:false,verdict:'重置之后还没有走出价格路径。新单从下一拍开始记，进场、持仓、出场后 60 分钟都会留下。'};
+  if(!rows.length)return {trades:0,best:null,profitable:false,verdict:'重置之后还没有走出价格路径。新单从下一拍开始记，进场、持仓、出场后 180 分钟都会留下。'};
   let best:{tpPct:number;slPct:number;holdMin:number;net:number;wins:number;trades:number}|null=null;
   for(const tp of TAKE_PROFITS)for(const sl of STOP_LOSSES)for(const holdMin of HOLD_MINUTES){
     let net=0,wins=0,used=0;
@@ -112,18 +112,23 @@ export function searchHolding(book:TradePathBook){
 }
 
 function simulate(row:TradePath,tpPct:number,slPct:number,holdMin:number){
-  const dir=row.side==='LONG'?1:-1,tp=tpPct/100,sl=slPct/100;
-  let exit=row.hold.at(-1)!,reason:'sl'|'tp'|'time'|'open'='open';
-  for(const point of row.hold){
+  const dir=row.side==='LONG'?1:-1,tp=tpPct/100,sl=slPct/100,path=continued(row);
+  let exit=path.at(-1)!,reason:'sl'|'tp'|'time'|'open'='open';
+  for(const point of path){
     const worst=Math.min(signed(dir,row.entry,point[1]),signed(dir,row.entry,point[2]));
     const best=Math.max(signed(dir,row.entry,point[1]),signed(dir,row.entry,point[2]));
     if(worst<=-sl){exit=[point[0],stopPrice(row,sl),stopPrice(row,sl)];reason='sl';break;}
     if(best>=tp){exit=[point[0],tpPrice(row,tp),tpPrice(row,tp)];reason='tp';break;}
     if(point[0]>=holdMin){exit=point;reason='time';break;}
   }
-  if(reason==='open'&&row.exit!=null&&row.exitAt!=null)exit=[Math.floor((row.exitAt-row.openedAt)/60_000),row.exit,row.exit];
+  if(reason==='open'&&row.exit!=null&&row.exitAt!=null&&!row.after.length)exit=[Math.floor((row.exitAt-row.openedAt)/60_000),row.exit,row.exit];
   const price=(exit[1]+exit[2])/2,gross=dir*row.qty*(price-row.entry),fee=row.entryFee+row.qty*price*FEE_RATE;
   return {net:gross-fee,minute:exit[0]};
+}
+function continued(row:TradePath):PathPoint[]{
+  if(row.exitAt==null||!row.after.length)return row.hold;
+  const base=Math.max(0,Math.floor((row.exitAt-row.openedAt)/60_000));
+  return [...row.hold,...row.after.map(([minute,low,high])=>[base+minute,low,high] as PathPoint)];
 }
 function stopPrice(row:TradePath,sl:number){return row.side==='LONG'?row.entry*(1-sl):row.entry*(1+sl);}
 function tpPrice(row:TradePath,tp:number){return row.side==='LONG'?row.entry*(1+tp):row.entry*(1-tp);}

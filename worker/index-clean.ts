@@ -3803,7 +3803,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private forwardAnalysisQuotes(now=Date.now()){
     if(!this.forwardState)return{};
-    const symbols=[...new Set([...this.runtime.liquidUniverse,...Object.keys(this.runtime.evidence??{})])],
+    const recentClosed=(this.forwardState?.history??[]).filter(t=>t.closedAt!=null&&now-t.closedAt<=180*60_000).map(t=>t.symbol);
+    const symbols=[...new Set([...this.runtime.liquidUniverse,...Object.keys(this.runtime.evidence??{}),...recentClosed])],
       out:Record<string,{bestBid:number;bestAsk:number;observedAt:number;fresh:boolean;entryReady?:boolean;sourceCount?:number;disagreementRate?:number;
         sourceBreadth?:number;directionalAgreement?:number;medianShortMove?:number;spreadRate?:number;bookImbalance?:number;
         bidLiquidityChange?:number;askLiquidityChange?:number;liquiditySourceCount?:number}>={};
