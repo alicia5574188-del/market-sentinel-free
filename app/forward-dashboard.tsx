@@ -54,7 +54,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
     setExportStatus(`已开始下载 ${a.download}。里面 ${n} 笔。`);
   }catch{setExportStatus("导出失败，请重试。");}finally{setExporting(false);}};
 
-  const desk=data?.forwardDesk??null,positions=data?.positions??[];
+  const desk=data?.forwardDesk??null,positions=data?.positions??[],history=[...(data?.history??[])].sort((a,b)=>(b.closedAt??0)-(a.closedAt??0));
   const usingDesk=!!desk&&!liveEnabled&&(!!desk.book||desk.open.length>0);
   const stanceLabel=desk?.book==="lsr-v1"?"实验":desk?.book==="stretch-v1"?"新账":desk?.book==="reverse-v1"?"反向":desk?.book==="needle-v1"||desk?.book==="brain-v1"||desk?.book==="score-v1"||desk?.book==="read-v1"?"账户":stanceName(desk?.stance);
   const paperFloating=usingDesk?desk.floating:positions.reduce((n,t)=>n+(t.status==="OPEN"?remainingPaidNetPnl(t,t.lastPrice):0),0);
@@ -89,7 +89,8 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       {desk?.book==="lsr-v1"&&<LsrPulse desk={desk}/>}
       {usingDesk?<ForwardCurve desk={desk}/>:<PaperEquitySection data={data} healthy={healthy} cache={equityCache} cacheScope={cacheScope}/>}
       {liveEnabled&&<LiveEquityCurve head={liveOverview?.equityCurve} mark={actual} enabled={liveEnabled} sessionAt={liveOverview?.sessionAt??0} cacheScope={cacheScope} now={now}/>}
-      {usingDesk?<ForwardOrders desk={desk} now={now}/>:<section className="fr-section" data-testid="forward-orders"><div className="fr-section-head"><h2>持仓</h2><span>{positions.length} 笔</span></div><TradeList trades={positions} now={now} empty="当前没有持仓。市场智能这一拍还没有通过开仓门槛。"/></section>}
+      {usingDesk?<ForwardOrders desk={desk} now={now}/>:<><section className="fr-section" data-testid="forward-orders"><div className="fr-section-head"><h2>持仓</h2><span>{positions.length} 笔</span></div><TradeList trades={positions} now={now} empty="当前没有持仓。"/></section>
+      <section className="fr-section" data-testid="forward-history"><div className="fr-section-head"><h2>历史订单</h2><span>{history.length} 笔</span></div><TradeList trades={history} now={now} empty="还没有已平订单。"/></section></>}
     </>}
 
     {tab==="settings"&&<>
