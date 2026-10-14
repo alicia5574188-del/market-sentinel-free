@@ -58,35 +58,19 @@ test('obstacle reduction needs a later complete post-entry bar, not two seconds 
   assert.equal(c.action,'REDUCE');assert.ok(c.fraction<=.65);const done={...c.state,trimCount:1,lastTrimEvent:c.state.obstacleSince};
   assert.equal(advanceWinnerManagement({...inputs,plan:p,now:T+3*B+2100,rows:[...rows,row(T+2*B,104.5,104.4,104.3,104.7)],previous:done,concernFamilies:['RELATIVE']}).action,'HOLD');
 });
-test('a trade exits when it reaches the market expectancy frozen at entry',()=>{
-  const {s,t}=fixture();
-  t.entryContext!.marketExpectancy=.02;
-  assert.equal(manageWinnerTrade(s,t,quote(101.5,T+B),T+B,{},{}),false);
-  assert.equal(t.status,'OPEN');
-  assert.equal(manageWinnerTrade(s,t,quote(102,T+2*B),T+2*B,{},{}),true);
-  assert.equal(t.exitReason,'EXPECTANCY_EXIT');
-});
-test('an expectancy inside the round trip cost does not add an exit',()=>{
-  const {s,t}=fixture();
-  t.entryContext!.marketExpectancy=.001;
-  assert.equal(manageWinnerTrade(s,t,quote(100.2,T+B),T+B,{},{}),false);
-  assert.equal(t.status,'OPEN');
-});
-test('a 5% peak exits after an 0.8 point giveback and not before',()=>{
-  const {s,t}=fixture();
-  t.favorable=.05;t.peakPnlRate=.05;t.firstProfitAt=T;t.entryContext!.marketExpectancy=.08;
-  assert.equal(manageWinnerTrade(s,t,quote(104.3,T+B),T+B,{},{}),false);
-  assert.equal(t.status,'OPEN');
-  assert.equal(manageWinnerTrade(s,t,quote(104.2,T+2*B),T+2*B,{},{}),true);
-  assert.equal(t.exitReason,'PEAK_GIVEBACK');
-});
-test('once a trade has traded through cost, a later 0.6% loss closes it',()=>{
-  const {s,t}=fixture();
-  t.firstProfitAt=T;t.favorable=.01;
-  assert.equal(manageWinnerTrade(s,t,quote(99.5,T+B),T+B,{},{}),false);
-  assert.equal(t.status,'OPEN');
-  assert.equal(manageWinnerTrade(s,t,quote(99.4,T+2*B),T+2*B,{},{}),true);
-  assert.equal(t.exitReason,'AFTER_PROFIT_LOSS');
+test('expectancy, a five-point giveback, and a later small loss do not add an exit',()=>{
+  const reached=fixture();
+  reached.t.entryContext!.marketExpectancy=.02;
+  assert.equal(manageWinnerTrade(reached.s,reached.t,quote(102,T+2*B),T+2*B,{},{}),false);
+  assert.equal(reached.t.status,'OPEN');
+  const giveback=fixture();
+  giveback.t.favorable=.05;giveback.t.peakPnlRate=.05;giveback.t.firstProfitAt=T;giveback.t.entryContext!.marketExpectancy=.08;
+  assert.equal(manageWinnerTrade(giveback.s,giveback.t,quote(104.2,T+2*B),T+2*B,{},{}),false);
+  assert.equal(giveback.t.status,'OPEN');
+  const loss=fixture();
+  loss.t.firstProfitAt=T;loss.t.favorable=.01;
+  assert.equal(manageWinnerTrade(loss.s,loss.t,quote(99.4,T+2*B),T+2*B,{},{}),false);
+  assert.equal(loss.t.status,'OPEN');
 });
 test('partial realization, then final close: entry fee once, original identity once, money reconciles',()=>{
   const {s,t}=fixture(),n=t.notional,q=t.quantity,fee=t.entryFee;
