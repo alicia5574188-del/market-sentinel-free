@@ -60,10 +60,15 @@ export function bookFromStoredPaths(accountStartedAt:number,index:TradePathIndex
 export function peekPathWrite(book:TradePathBook):PathWrite|null{
   return pendingPathWrites(book,1)[0]??null;
 }
-/** Closed pages go out first, with the index in the same batch, so a restart can still find them. */
-export function pendingPathWrites(book:TradePathBook,limit=4):PathWrite[]{
-  const closed=book.dirty.filter(page=>book.trades.some(row=>(row.page??0)===page&&row.exit!=null));
-  const chosen=(closed.length?closed:book.dirty.slice(0,1)).slice(0,Math.max(1,limit));
+/** Thin and newly closed pages go out first, then every other dirty page. The index is in the same batch. */
+export function pendingPathWrites(book:TradePathBook,limit=8):PathWrite[]{
+  const rank=(page:number)=>{
+    const rows=book.trades.filter(row=>(row.page??0)===page);
+    if(rows.some(row=>row.exit!=null))return 0;
+    if(rows.some(row=>row.hold.length<=1))return 1;
+    return 2;
+  };
+  const chosen=[...book.dirty].sort((a,b)=>rank(a)-rank(b)||book.dirty.indexOf(a)-book.dirty.indexOf(b)).slice(0,Math.max(1,limit));
   const jobs:PathWrite[]=chosen.map(page=>({op:'put',page,value:packPathPage(book.accountStartedAt,page,book.trades.filter(row=>(row.page??0)===page))}));
   if(book.indexDirty&&(jobs.length>0||book.dirty.length===0)){
     const pages=[...new Set(book.trades.map(row=>row.page??0))].sort((a,b)=>a-b);
@@ -102,12 +107,13 @@ export function observeTradePaths(book:TradePathBook,state:ForwardState,executio
     }
     const live=execution[t.symbol],wide=analysis[t.symbol];
     if(t.status==='OPEN'){
-      const px=pathPrice(t.side,live,wide,t.lastPrice,t.lastQuoteAt,now);if(px==null)continue;
-      if(note(row.hold,Math.floor((now-t.openedAt)/60_000),px)){markDirty(book,row.page??0);changed=true;}
+      const px=pathPrice(t.side,live,wide,t.lastPrice,t.lastQuoteAt,now);
+      if(px!=null&&note(row.hold,Math.floor((now-t.openedAt)/60_000),px)){markDirty(book,row.page??0);changed=true;}
     }else if(row.exitAt!=null&&now-row.exitAt<=AFTER_MINUTES*60_000){
-      const px=pathPrice(t.side,live,wide,0,0,now);if(px==null)continue;
-      if(note(row.after,Math.floor((now-row.exitAt)/60_000),px)){markDirty(book,row.page??0);changed=true;}
+      const px=pathPrice(t.side,live,wide,0,0,now);
+      if(px!=null&&note(row.after,Math.floor((now-row.exitAt)/60_000),px)){markDirty(book,row.page??0);changed=true;}
     }
+    if(!row.hold.length&&note(row.hold,0,row.entry)){markDirty(book,row.page??0);changed=true;}
   }
   if(book.trades.length>PATH_CAP){
     const dropped=book.trades.splice(PATH_CAP);

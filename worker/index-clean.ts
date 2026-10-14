@@ -1359,7 +1359,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         }
         this.tradePathsPending=peekPathWrite(this.tradePaths)!=null;
       }
-    }catch{this.tradePaths=emptyTradePathBook(started);}
+    }catch{this.tradePathsLoaded=false;return;}
     this.tradePathsLoaded=true;
   }
 
@@ -1462,6 +1462,29 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     catch{reservation.finish(false);this.reviewDiagnosticError="REVIEW_WRITE_FAILED";}
   }
 
+  private async persistTradePaths(){
+    if(!this.tradePathsLoaded||!this.tradePathsPending)return;
+    const jobs=pendingPathWrites(this.tradePaths,8);
+    if(!jobs.length){this.tradePathsPending=false;return;}
+    const reservation=this.reserveCriticalWrites(jobs.length);
+    try{
+      await this.ctx.storage.transaction(async transaction=>{
+        const entries:Record<string,unknown>={};
+        const deletes:string[]=[];
+        for(const job of jobs){
+          if(job.op==='delete')deletes.push(`${TRADE_PATH_PAGE_PREFIX}${job.page}`);
+          else if(job.op==='put')entries[`${TRADE_PATH_PAGE_PREFIX}${job.page}`]=job.value;
+          else entries[TRADE_PATH_INDEX_KEY]=job.value;
+        }
+        if(Object.keys(entries).length)await transaction.put(entries);
+        for(const key of deletes)await transaction.delete(key);
+      });
+      for(const job of jobs)commitPathWrite(this.tradePaths,job);
+      reservation.finish(true);
+      this.tradePathsPending=peekPathWrite(this.tradePaths)!=null;
+    }catch{reservation.finish(false);}
+  }
+
   private async advanceForwardNow(now: number, allowDataCycle = true) {
     if (this.forwardBusy) return;
     this.forwardBusy = true;
@@ -1474,7 +1497,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const urgent=this.forwardUrgentSymbols(now).length>0||state.positions.length>0;
       const quoteCadence=urgent?LOOP_MS:5_000;
       if(!dataCycleDue&&now-state.lastQuoteCycleAt<quoteCadence){
-        this.forwardLastAttemptAt=state.lastQuoteCycleAt;return;
+        this.forwardLastAttemptAt=state.lastQuoteCycleAt;
+        await this.persistTradePaths();
+        return;
       }
       this.forwardLastAttemptAt=now;
       const previous = state,reviewEvents:ReviewEvent[]=[],executionQuotes=this.forwardQuotes(now);
@@ -1484,7 +1509,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         research:{rolling:this.shadowResearch.market[0]?.rolling??null},reviewTrace:event=>{if(reviewEvents.length<128)reviewEvents.push(event);} });
       try{captureTradeReviews(previous,next.state,now,FORWARD_BUILD_SHA,STRATEGY_FINGERPRINT,executionQuotes);}
       catch{this.reviewDiagnosticError="TRADE_REVIEW_CAPTURE_FAILED";}
-      this.tradePathsPending=observeTradePaths(this.tradePaths,next.state,executionQuotes,this.forwardAnalysisQuotes(now),now,this.strategyCandles)||this.tradePathsPending;
+      if(this.tradePathsLoaded)this.tradePathsPending=observeTradePaths(this.tradePaths,next.state,executionQuotes,this.forwardAnalysisQuotes(now),now,this.strategyCandles)||this.tradePathsPending;
       this.orderJournalPending=observeOrderJournal(this.orderJournal,next.state.history,next.state.startedAt)||this.orderJournalPending;
       if (next.changed || !previous.storage.persistedAt) {
         next.state.storage = { persistedAt: now, error: null };
@@ -1493,9 +1518,22 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           ...Object.values(this.runtime.live.positions).flatMap(p=>p?.mirrorSourceId?[p.mirrorSourceId]:[])]);
         const closures=next.state.history.filter(t=>bound.has(t.id)&&!this.mirrorClosures.has(t.id));
         for(const t of closures)prepared.entries[`${LIVE_PARITY_PREFIX}source-close:${t.id}`]=structuredClone(t);
-        prepared.writes+=closures.length;
+        const pathJobs=this.tradePathsLoaded?pendingPathWrites(this.tradePaths,8):[];
+        const pathDeletes:string[]=[];
+        for(const job of pathJobs){
+          if(job.op==='delete')pathDeletes.push(`${TRADE_PATH_PAGE_PREFIX}${job.page}`);
+          else if(job.op==='put')prepared.entries[`${TRADE_PATH_PAGE_PREFIX}${job.page}`]=job.value;
+          else prepared.entries[TRADE_PATH_INDEX_KEY]=job.value;
+        }
+        prepared.writes+=closures.length+pathJobs.length;
         const reservation=this.reserveCriticalWrites(prepared.writes);
-        try {await this.ctx.storage.transaction(async transaction => { await transaction.put(prepared.entries); });reservation.finish(true);}
+        try {await this.ctx.storage.transaction(async transaction => {
+          await transaction.put(prepared.entries);
+          for(const key of pathDeletes)await transaction.delete(key);
+        });reservation.finish(true);
+          for(const job of pathJobs)commitPathWrite(this.tradePaths,job);
+          this.tradePathsPending=peekPathWrite(this.tradePaths)!=null;
+        }
         finally {reservation.finish(false);}
         next.state.storage.layout=FORWARD_PAGED_STATE_VERSION;next.state.storage.sampleIntegrity="raw-sha256";
         this.forwardCompression=prepared.compression;
@@ -1520,38 +1558,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         appendReviewEvents(this.reviewJournal,[...discovered,...reviewEvents].map(e=>({...e,
           buildSha:FORWARD_BUILD_SHA,strategyFingerprint:STRATEGY_FINGERPRINT})),now);
       }catch{this.reviewDiagnosticError="CANDIDATE_REVIEW_CAPTURE_FAILED";}
-      if(this.tradePathsPending){
-        const jobs=pendingPathWrites(this.tradePaths,4);
-        if(!jobs.length)this.tradePathsPending=false;
-        else{
-          const closed=jobs.some(job=>job.op==='put'&&job.value.trades.some(row=>row.exit!=null));
-          const reservation=closed?this.reserveCriticalWrites(jobs.length):this.reserveNonAlarmWrites(jobs.length,512);
-          if(reservation){
-            try{
-              await this.ctx.storage.transaction(async transaction=>{
-                const entries:Record<string,unknown>={};
-                const deletes:string[]=[];
-                for(const job of jobs){
-                  if(job.op==='delete')deletes.push(`${TRADE_PATH_PAGE_PREFIX}${job.page}`);
-                  else if(job.op==='put')entries[`${TRADE_PATH_PAGE_PREFIX}${job.page}`]=job.value;
-                  else entries[TRADE_PATH_INDEX_KEY]=job.value;
-                }
-                if(Object.keys(entries).length)await transaction.put(entries);
-                for(const key of deletes)await transaction.delete(key);
-              });
-              for(const job of jobs)commitPathWrite(this.tradePaths,job);
-              reservation.finish(true);
-              this.tradePathsPending=peekPathWrite(this.tradePaths)!=null;
-            }catch{reservation.finish(false);}
-          }
-        }
-      }
+      if(this.tradePathsPending)await this.persistTradePaths();
       if(this.orderJournalPending){
-        const reservation=this.reserveNonAlarmWrites(1,512);
-        if(reservation){
-          try{await this.ctx.storage.put(ORDER_JOURNAL_KEY,this.orderJournal);reservation.finish(true);this.orderJournalPending=false;}
-          catch{reservation.finish(false);}
-        }
+        const reservation=this.reserveCriticalWrites(1);
+        try{await this.ctx.storage.put(ORDER_JOURNAL_KEY,this.orderJournal);reservation.finish(true);this.orderJournalPending=false;}
+        catch{reservation.finish(false);}
       }
     } catch (error) { this.forwardError = safeError(error); }
     finally { this.forwardBusy = false; }

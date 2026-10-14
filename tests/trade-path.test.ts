@@ -117,6 +117,13 @@ test('a closed page is stored before an older open page and the index goes with 
   assert.equal(jobs[0]&&commitPathWrite(book,jobs[0]),undefined);
   assert.deepEqual(book.dirty,[0]);
 });
+test('an order with no quote still keeps the entry price on its minute path',()=>{
+  const state=initialForward(now);
+  const book=emptyTradePathBook(state.startedAt);
+  state.positions.push(open('a','LONG',100));
+  assert.equal(observeTradePaths(book,state,{},{},now),true);
+  assert.deepEqual(book.trades[0]?.hold,[ [0,100,100] ]);
+});
 test('the path book keeps the newest 1200 orders',()=>{
   const book=emptyTradePathBook(now);
   for(let i=1200;i>=0;i--){
