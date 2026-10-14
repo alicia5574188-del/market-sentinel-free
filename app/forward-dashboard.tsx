@@ -94,10 +94,11 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
     </>}
 
     {tab==="settings"&&<>
-      {accountPanel}{liveSystemPanel}
+      {accountPanel}
       <section className="fr-section"><div className="fr-section-head"><h2>运行日志</h2></div>
         <p className="fr-note">一个文件。没做单看策略计数，挂了没成交看 EXEC，行情断了看 DATA。策略和运行分开记。</p>
         <button className="fr-button" onClick={exportSnapshot} disabled={exporting}>{exporting?"正在导出…":"导出运行日志 ↗"}</button>{exportStatus&&<p className="fr-note">{exportStatus}</p>}</section>
+      {liveSystemPanel}
       <section className="fr-section fr-font-control"><div className="fr-section-head"><h2>界面字号</h2><b>{fontScale}%</b></div>
         <div className="fr-font-options">{[70,80,90,100,110].map(value=><button key={value} className={fontScale===value?"selected":""} onClick={()=>{setFontScale(value);try{localStorage.setItem("sentinel-ui-font-scale-v1",String(value));}catch{}}}>{value}%</button>)}</div></section>
     </>}
