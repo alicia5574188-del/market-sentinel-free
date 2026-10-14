@@ -58,7 +58,7 @@ export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null
   const rows=(input.places&&input.places.length?input.places:placesFromEvents(input.events));
   const fallbackN=rows.filter(row=>row.fallback).length,rejectedN=rows.filter(row=>row.rejected).length;
   const body={version:'lsr-run-log-v2' as const,exportedAt:input.exportedAt,liveEnabled:input.liveEnabled,
-    howToRead:'这是当前市场智能模拟账户。权益 = 初始 + 已平净利 + 未平（价格盈亏 − 开仓费 − 预计平仓费）。不是已经停掉的实验漏斗。已平订单单独留档，不随热历史裁掉。每一笔记进场和出场当时的行情判定与演化阶段。',
+    howToRead:'这是当前市场智能模拟账户。权益 = 初始 + 已平净利 + 未平（价格盈亏 − 开仓费 − 预计平仓费）。不是已经停掉的实验漏斗。已平订单单独留档，不随热历史裁掉。每一笔记进场和出场当时的行情判定与演化阶段。分钟路径最多留 1200 笔，按页分开存，一次只写改过的那一页。',
     reviewPlan:[
       '先看进场和出场时的行情判定、演化阶段。',
       '同一种行情下再看方向。',

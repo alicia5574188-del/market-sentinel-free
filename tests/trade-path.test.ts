@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {initialForward, type Quote, type Trade} from '../lib/forward-relations.ts';
-import {emptyTradePathBook, exportTradePaths, observeTradePaths, searchHolding, type TradePath} from '../lib/trade-path.ts';
+import {adoptLegacyPaths, bookFromStoredPaths, commitPathWrite, emptyTradePathBook, exportTradePaths, observeTradePaths, peekPathWrite, searchHolding, type TradePath} from '../lib/trade-path.ts';
 
 const now=1_791_770_000_000;
 function quote(bid:number,ask:number,at=now):Quote{
@@ -77,4 +77,41 @@ test('a one-point exit is rebuilt from the five-minute bars and a real path is l
   book.trades[0]!.hold.push([30,104,105]);
   observeTradePaths(book,state,{},{},now,{ETH_USDT:bars});
   assert.equal(book.trades[0]?.hold.at(-1)?.[0],30);
+});
+test('new orders stay on their own page and a write touches only that page',()=>{
+  const state=initialForward(now);
+  const book=emptyTradePathBook(state.startedAt);
+  for(let i=0;i<5;i++)state.positions.push({...open('p'+i,'LONG',100+i),id:'p'+i,openedAt:now+i});
+  observeTradePaths(book,state,{ETH_USDT:quote(100,100.1)},{},now);
+  const first=book.trades.find(row=>row.id==='p0');
+  assert.equal(first?.page,0);
+  assert.equal(book.trades.find(row=>row.id==='p4')?.page,1);
+  const job=peekPathWrite(book);
+  assert.equal(job?.op,'put');
+  if(job?.op!=='put')return;
+  assert.equal(job.value.trades.length<=4,true);
+  assert.equal(job.value.trades.some(row=>row.page!==job.page),false);
+  commitPathWrite(book,job);
+  const stored=bookFromStoredPaths(state.startedAt,{version:'trade-path-v2',accountStartedAt:state.startedAt,pages:[job.page]},[job.value]);
+  assert.equal(stored.trades.length,job.value.trades.length);
+});
+test('a legacy book is split without moving an older order onto a new page',()=>{
+  const legacy=emptyTradePathBook(now);
+  legacy.trades=Array.from({length:5},(_,index)=>({id:'t'+index,symbol:'ETH_USDT',side:'LONG' as const,entry:100,qty:1,notional:100,entryFee:0.07,openedAt:now-index,
+    exit:null,exitAt:null,net:null,hold:[[0,100,100]] as [number,number,number][],after:[]}));
+  const book=adoptLegacyPaths(legacy,now);
+  assert.equal(book.trades[0]?.page,1);
+  assert.equal(book.trades[4]?.page,0);
+  assert.equal(peekPathWrite(book)?.op,'put');
+});
+test('the path book keeps the newest 1200 orders',()=>{
+  const book=emptyTradePathBook(now);
+  for(let i=1200;i>=0;i--){
+    const state=initialForward(now);
+    state.history=[{...open('h'+i,'SHORT',50),id:'h'+i,status:'CLOSED',openedAt:now-i,closedAt:now,exitPrice:49,netPnl:-1} as Trade];
+    observeTradePaths(book,state,{},{},now);
+  }
+  assert.equal(book.trades.length,1200);
+  assert.equal(book.trades.some(row=>row.id==='h1200'),false);
+  assert.equal(book.trades.some(row=>row.id==='h0'),true);
 });

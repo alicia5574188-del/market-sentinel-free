@@ -2,9 +2,14 @@
 import type {ForwardState, Quote} from './forward-relations.ts';
 
 export const TRADE_PATH_KEY='market-intelligence:trade-paths:v1';
+export const TRADE_PATH_INDEX_KEY='market-intelligence:trade-paths:v2';
+export const TRADE_PATH_PAGE_PREFIX='market-intelligence:trade-paths:v2:';
 export const TRADE_PATH_VERSION='trade-path-v1' as const;
+export const TRADE_PATH_PAGE_VERSION='trade-path-v2' as const;
 const AFTER_MINUTES=180;
-const PATH_CAP=240;
+const PATH_CAP=1200;
+const PATH_PAGE_SIZE=4;
+const PAGE_BYTE_BUDGET=96_000;
 const PRICE_WINDOW_MS=5*60_000;
 const COST_RATE=0.002;
 const FEE_RATE=0.0007;
@@ -15,48 +20,128 @@ const HOLD_MINUTES=[5,15,30,45,60,90,120,180];
 export type PathPoint=[number,number,number];
 export type TradePath={
   id:string;symbol:string;side:'LONG'|'SHORT';entry:number;qty:number;notional:number;entryFee:number;openedAt:number;
-  exit:number|null;exitAt:number|null;net:number|null;hold:PathPoint[];after:PathPoint[];
+  exit:number|null;exitAt:number|null;net:number|null;hold:PathPoint[];after:PathPoint[];page?:number;
 };
-export type TradePathBook={version:typeof TRADE_PATH_VERSION;accountStartedAt:number;trades:TradePath[]};
+export type TradePathBook={
+  version:typeof TRADE_PATH_VERSION;accountStartedAt:number;trades:TradePath[];
+  dirty:number[];drop:number[];indexDirty:boolean;
+};
+export type TradePathPage={version:typeof TRADE_PATH_PAGE_VERSION;accountStartedAt:number;page:number;trades:TradePath[]};
+export type TradePathIndex={version:typeof TRADE_PATH_PAGE_VERSION;accountStartedAt:number;pages:number[]};
+export type PathWrite={op:'put';page:number;value:TradePathPage}|{op:'delete';page:number}|{op:'index';value:TradePathIndex};
 
 export function emptyTradePathBook(accountStartedAt:number):TradePathBook{
-  return {version:TRADE_PATH_VERSION,accountStartedAt,trades:[]};
+  return {version:TRADE_PATH_VERSION,accountStartedAt,trades:[],dirty:[],drop:[],indexDirty:false};
 }
 export function restoreTradePathBook(saved:TradePathBook|undefined,accountStartedAt:number){
   if(!saved||saved.version!==TRADE_PATH_VERSION||saved.accountStartedAt!==accountStartedAt||!Array.isArray(saved.trades))return emptyTradePathBook(accountStartedAt);
-  return saved;
+  return {version:TRADE_PATH_VERSION,accountStartedAt,trades:saved.trades,dirty:[],drop:[],indexDirty:false};
+}
+export function adoptLegacyPaths(saved:TradePathBook|undefined,accountStartedAt:number){
+  const book=restoreTradePathBook(saved,accountStartedAt);
+  const count=book.trades.length;
+  book.trades.forEach((row,index)=>{row.page=Math.floor((count-1-index)/PATH_PAGE_SIZE);});
+  book.dirty=[...new Set(book.trades.map(row=>row.page??0))];
+  book.indexDirty=book.trades.length>0;
+  return book;
+}
+export function bookFromStoredPaths(accountStartedAt:number,index:TradePathIndex,pages:Iterable<TradePathPage|undefined>){
+  const book=emptyTradePathBook(accountStartedAt);
+  const byPage=new Map<number,TradePath[]>();
+  for(const page of pages){
+    if(!page||page.version!==TRADE_PATH_PAGE_VERSION||page.accountStartedAt!==accountStartedAt||!Array.isArray(page.trades))continue;
+    byPage.set(page.page,page.trades);
+  }
+  for(const page of [...index.pages].sort((a,b)=>b-a)){
+    const rows=byPage.get(page);if(rows)book.trades.push(...rows);
+  }
+  return book;
+}
+export function peekPathWrite(book:TradePathBook):PathWrite|null{
+  const page=book.dirty[0];
+  if(page!=null)return {op:'put',page,value:packPathPage(book.accountStartedAt,page,book.trades.filter(row=>(row.page??0)===page))};
+  if(book.indexDirty){
+    const pages=[...new Set(book.trades.map(row=>row.page??0))].sort((a,b)=>a-b);
+    return {op:'index',value:{version:TRADE_PATH_PAGE_VERSION,accountStartedAt:book.accountStartedAt,pages}};
+  }
+  const drop=book.drop[0];
+  return drop==null?null:{op:'delete',page:drop};
+}
+export function commitPathWrite(book:TradePathBook,job:PathWrite){
+  if(job.op==='put')book.dirty.shift();
+  else if(job.op==='index')book.indexDirty=false;
+  else book.drop.shift();
 }
 
 export function observeTradePaths(book:TradePathBook,state:ForwardState,execution:Record<string,Quote>,analysis:Record<string,Quote>,now:number,bars?:Record<string,{time:number;high:number;low:number}[]>){
   let changed=false;
-  if(book.accountStartedAt!==state.startedAt){book.accountStartedAt=state.startedAt;book.trades=[];changed=true;}
+  if(book.accountStartedAt!==state.startedAt){book.accountStartedAt=state.startedAt;book.trades=[];book.dirty=[];book.indexDirty=true;changed=true;}
   const byId=new Map(book.trades.map(row=>[row.id,row]));
   for(const t of [...state.positions,...state.history]){
     if(t.inverseCopy)continue;
     let row=byId.get(t.id);
     if(!row){
+      const page=nextPathPage(book);
       row={id:t.id,symbol:t.symbol,side:t.side,entry:t.entryPrice,qty:t.quantity,notional:t.notional,entryFee:t.entryFee,openedAt:t.openedAt,
-        exit:null,exitAt:null,net:null,hold:[],after:[]};
-      book.trades.unshift(row);byId.set(t.id,row);changed=true;
+        exit:null,exitAt:null,net:null,hold:[],after:[],page};
+      if(!book.trades.some(item=>(item.page??0)===page))book.indexDirty=true;
+      book.trades.unshift(row);byId.set(t.id,row);markDirty(book,page);changed=true;
     }
-    if(row.hold.length<=1&&rebuildFromBars(row,bars?.[t.symbol],t.closedAt??now))changed=true;
+    if(row.hold.length<=1&&rebuildFromBars(row,bars?.[t.symbol],t.closedAt??now)){markDirty(book,row.page??0);changed=true;}
     if(t.status==='CLOSED'&&row.exit==null&&t.exitPrice!=null&&t.closedAt!=null){
       row.exit=t.exitPrice;row.exitAt=t.closedAt;row.net=t.netPnl;row.qty=t.realization?.initialQuantity??row.qty;
-      note(row.hold,Math.max(0,Math.floor((t.closedAt-t.openedAt)/60_000)),t.exitPrice);changed=true;
+      note(row.hold,Math.max(0,Math.floor((t.closedAt-t.openedAt)/60_000)),t.exitPrice);markDirty(book,row.page??0);changed=true;
     }
     const live=execution[t.symbol],wide=analysis[t.symbol];
     if(t.status==='OPEN'){
       const px=pathPrice(t.side,live,wide,t.lastPrice,t.lastQuoteAt,now);if(px==null)continue;
-      if(note(row.hold,Math.floor((now-t.openedAt)/60_000),px))changed=true;
+      if(note(row.hold,Math.floor((now-t.openedAt)/60_000),px)){markDirty(book,row.page??0);changed=true;}
     }else if(row.exitAt!=null&&now-row.exitAt<=AFTER_MINUTES*60_000){
       const px=pathPrice(t.side,live,wide,0,0,now);if(px==null)continue;
-      if(note(row.after,Math.floor((now-row.exitAt)/60_000),px))changed=true;
+      if(note(row.after,Math.floor((now-row.exitAt)/60_000),px)){markDirty(book,row.page??0);changed=true;}
     }
   }
-  if(book.trades.length>PATH_CAP){book.trades.length=PATH_CAP;changed=true;}
+  if(book.trades.length>PATH_CAP){
+    const dropped=book.trades.splice(PATH_CAP);
+    for(const page of new Set(dropped.map(row=>row.page??0))){
+      if(book.trades.some(row=>(row.page??0)===page))markDirty(book,page);
+      else retirePage(book,page);
+    }
+    changed=true;
+  }
   return changed;
 }
 
+function nextPathPage(book:TradePathBook){
+  if(!book.trades.length)return 0;
+  let max=0,count=0;
+  for(const row of book.trades){
+    const page=row.page??0;
+    if(page>max){max=page;count=1;}
+    else if(page===max)count++;
+  }
+  return count>=PATH_PAGE_SIZE?max+1:max;
+}
+function markDirty(book:TradePathBook,page:number){if(!book.dirty.includes(page))book.dirty.push(page);}
+function retirePage(book:TradePathBook,page:number){
+  book.dirty=book.dirty.filter(item=>item!==page);
+  if(!book.drop.includes(page))book.drop.push(page);
+  book.indexDirty=true;
+}
+function packPathPage(accountStartedAt:number,page:number,trades:TradePath[]):TradePathPage{
+  const copy=trades.map(row=>({...row,hold:row.hold.map(point=>[...point] as PathPoint),after:row.after.map(point=>[...point] as PathPoint)}));
+  for(let guard=0;guard<8&&roughBytes(copy)>PAGE_BYTE_BUDGET;guard++){
+    const row=copy.reduce((left,right)=>left.hold.length+left.after.length>=right.hold.length+right.after.length?left:right);
+    if(row.hold.length>60)row.hold=thin(row.hold);
+    else if(row.after.length>60)row.after=thin(row.after);
+    else break;
+  }
+  return {version:TRADE_PATH_PAGE_VERSION,accountStartedAt,page,trades:copy};
+}
+function roughBytes(trades:TradePath[]){
+  return trades.reduce((sum,row)=>sum+160+(row.hold.length+row.after.length)*24,80);
+}
+function thin(points:PathPoint[]){return points.filter((_,index)=>index===0||index===points.length-1||index%2===0);}
 function pathPrice(side:'LONG'|'SHORT',live:Quote|undefined,wide:Quote|undefined,lastPrice:number,lastQuoteAt:number,now:number){
   const exec=side==='LONG'?live?.bestBid:live?.bestAsk;
   if(live&&exec!=null&&exec>0&&live.bestAsk>=live.bestBid&&now-live.observedAt<=PRICE_WINDOW_MS)return exec;

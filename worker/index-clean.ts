@@ -51,7 +51,7 @@ import {emptyStrategyAccount, STRATEGY_EPOCH} from '../lib/strategy-slot.ts';
 import {emptyThesis, runThesisCycle, THESIS_STORAGE_KEY, type ThesisAttached, type ThesisMarket} from '../lib/thesis-attach.ts';
 import type {ThesisPublic} from '../lib/thesis-view.ts';
 import {buildRunLogExport,accountLogBook} from '../lib/run-log.ts';
-import {emptyTradePathBook,exportTradePaths,observeTradePaths,restoreTradePathBook,searchHolding,TRADE_PATH_KEY,type TradePathBook} from '../lib/trade-path.ts';
+import {adoptLegacyPaths,bookFromStoredPaths,commitPathWrite,emptyTradePathBook,exportTradePaths,observeTradePaths,peekPathWrite,searchHolding,TRADE_PATH_INDEX_KEY,TRADE_PATH_KEY,TRADE_PATH_PAGE_PREFIX,type TradePathBook,type TradePathIndex,type TradePathPage} from '../lib/trade-path.ts';
 import {emptyOrderJournal,observeOrderJournal,ORDER_JOURNAL_KEY,restoreOrderJournal,type OrderJournal} from '../lib/order-journal.ts';
 import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
 import {confirmationRealityView} from '../lib/confirmation-reality.ts';
@@ -1334,8 +1334,27 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private async ensureTradePaths(){
     const started=this.forwardState?.startedAt??0;
     if(this.tradePathsLoaded&&this.tradePaths.accountStartedAt===started)return;
-    try{this.tradePaths=restoreTradePathBook(await this.ctx.storage.get<TradePathBook>(TRADE_PATH_KEY),started);}
-    catch{this.tradePaths=emptyTradePathBook(started);}
+    try{
+      const index=await this.ctx.storage.get<TradePathIndex>(TRADE_PATH_INDEX_KEY);
+      if(index?.version==='trade-path-v2'&&index.accountStartedAt===started&&Array.isArray(index.pages)){
+        const pages:TradePathPage[]=[];
+        for(let offset=0;offset<index.pages.length;offset+=80){
+          const keys=index.pages.slice(offset,offset+80).map(page=>`${TRADE_PATH_PAGE_PREFIX}${page}`);
+          const found=await (this.ctx.storage.get as unknown as (keys:string[])=>Promise<Map<string,TradePathPage>>)(keys);
+          for(const value of found.values())if(value)pages.push(value);
+        }
+        this.tradePaths=bookFromStoredPaths(started,index,pages);
+      }else{
+        const legacy=await this.ctx.storage.get<TradePathBook>(TRADE_PATH_KEY);
+        this.tradePaths=adoptLegacyPaths(legacy,started);
+        if(index?.version==='trade-path-v2'&&Array.isArray(index.pages)){
+          const live=new Set(this.tradePaths.trades.map(row=>row.page??0));
+          this.tradePaths.drop=index.pages.filter(page=>!live.has(page));
+          this.tradePaths.indexDirty=true;
+        }
+        this.tradePathsPending=peekPathWrite(this.tradePaths)!=null;
+      }
+    }catch{this.tradePaths=emptyTradePathBook(started);}
     this.tradePathsLoaded=true;
   }
 
@@ -1478,10 +1497,19 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           buildSha:FORWARD_BUILD_SHA,strategyFingerprint:STRATEGY_FINGERPRINT})),now);
       }catch{this.reviewDiagnosticError="CANDIDATE_REVIEW_CAPTURE_FAILED";}
       if(this.tradePathsPending){
-        const reservation=this.reserveNonAlarmWrites(1,512);
-        if(reservation){
-          try{await this.ctx.storage.put(TRADE_PATH_KEY,this.tradePaths);reservation.finish(true);this.tradePathsPending=false;}
-          catch{reservation.finish(false);}
+        const job=peekPathWrite(this.tradePaths);
+        if(!job)this.tradePathsPending=false;
+        else{
+          const reservation=this.reserveNonAlarmWrites(1,512);
+          if(reservation){
+            try{
+              if(job.op==='delete')await this.ctx.storage.delete(`${TRADE_PATH_PAGE_PREFIX}${job.page}`);
+              else if(job.op==='put')await this.ctx.storage.put(`${TRADE_PATH_PAGE_PREFIX}${job.page}`,job.value);
+              else await this.ctx.storage.put(TRADE_PATH_INDEX_KEY,job.value);
+              commitPathWrite(this.tradePaths,job);reservation.finish(true);
+              this.tradePathsPending=peekPathWrite(this.tradePaths)!=null;
+            }catch{reservation.finish(false);}
+          }
         }
       }
       if(this.orderJournalPending){
