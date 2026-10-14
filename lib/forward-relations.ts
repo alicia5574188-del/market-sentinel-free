@@ -155,6 +155,7 @@ export type Trade={
   leverage:number;margin:number;plannedRisk:number;stopPrice:number;armPrice:number;favorable:number;adverse:number;
   lastPrice:number;lastQuoteAt:number;entryFee:number;exitFee:number;fundingAllowance:number;grossPnl:number|null;netPnl:number|null;
   exitReason:string|null;relationFailureBars:number;lastRelationBar:number;execution:"REAL_QUOTE_PAPER_MODEL";liveEligible:false;
+  exitRegime?:{stage:MarketEnvironment;phase:MarketEvolutionState["phase"]};
   entryContext?:EntryContext;forecast?:{remainingNetRate:number;quality:number;sizingEquity:number};exitPlan?:RelationExitProfile;
   firstProfitAt?:number|null;holdScore?:number;profitFloorRate?:number;expectedHoldMinutes?:number;peakPnlRate?:number;
   exitControl?:{policy:string;armedAt:number|null;armedQuoteAt:number|null;maxObservationGapMs:number;maxQuoteAgeMs:number};
@@ -497,6 +498,7 @@ function closeTrade(s:ForwardState,t:Trade,price:number,now:number,reason:string
   const funding=t.notional*PAPER_COST.fundingAllowancePerDay*Math.max(0,now-t.openedAt)/86_400_000,
     net=gross-t.entryFee-exitFee-funding+realizedContribution(t),r=t.realization,remainingNotional=t.notional;
   t.status="CLOSED";t.closedAt=now;t.exitPrice=price;t.exitFee=exitFee+(r?.fees??0);t.fundingAllowance=funding+(r?.funding??0);t.grossPnl=gross+(r?.gross??0);t.netPnl=net;t.exitReason=reason;
+  if(reason!=="ACCOUNT_RESET")t.exitRegime={stage:s.environmentContext.environment,phase:s.environmentContext.phase};
   t.exitAudit={trigger:reason,at:now,...(evidence?{evidence}:{})};s.balance+=gross-exitFee-funding;s.grossPnl+=gross;s.fees+=exitFee;s.fundingAllowance+=funding;
   s.resolved++;if(net>0)s.wins++;s.turnover+=remainingNotional;t.lastQuoteAt=now;t.lastPrice=price;s.lastExitAt[t.symbol]=now;
   if(r){t.quantity=r.initialQuantity;t.contracts=r.initialContracts;t.notional=r.initialNotional;t.margin=r.initialMargin;t.plannedRisk=r.initialRisk;}

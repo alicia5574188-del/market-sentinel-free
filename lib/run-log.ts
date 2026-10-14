@@ -1,6 +1,7 @@
 /** One export. Strategy decisions and runtime faults stay in different categories. */
 import type {ForwardState,Quote,Trade} from './forward-relations.ts';
 import type {EntryStructure} from './entry-structure.ts';
+import {orderRecord, type OrderJournal, type OrderRecord} from './order-journal.ts';
 import {PAPER_COST,freshQuote,forwardEquity} from './forward-relations.ts';
 export type LogCat='STRAT'|'EXEC'|'DATA'|'RISK'|'SYS'|'PNL';
 export type RunEvent={ts:number;level:'DEBUG'|'INFO'|'WARN'|'ERROR';cat:LogCat;symbol:string|null;event:string;reason:string|null;
@@ -25,7 +26,7 @@ export function placeFromEvent(fields:RunEvent['fields']):LsrPlace|null{
 }
 export function placesFromEvents(events:RunEvent[]){return events.filter(event=>event.event==='order_placing').map(event=>placeFromEvent(event.fields)).filter((row):row is LsrPlace=>row!=null);}
 export type LsrFill={ts:number;symbol:string;side:'LONG'|'SHORT';price:number;qty:number;notional:number;fee:number;tag:'open'|'close';trace:string;waitMs:number|null;limit:number|null};
-export type LsrPositionRow={id:string;symbol:string;side:'LONG'|'SHORT';entry:number;exit:number|null;qty:number;notional:number;gross_pnl:number|null;fee:number;net_pnl:number|null;holdSec:number;exit_reason:'stop'|'tp'|'time'|'prior'|'tp1'|'tp2'|'sl'|'invalidate'|'external'|'dropped'|null;gapBps:number|null;opened_at:number;closed_at:number|null;trace:string;entry_structure?:EntryStructure|null;market_stage?:string|null;market_expectancy?:number|null};
+export type LsrPositionRow={id:string;symbol:string;side:'LONG'|'SHORT';entry:number;exit:number|null;qty:number;notional:number;gross_pnl:number|null;fee:number;net_pnl:number|null;holdSec:number;exit_reason:'stop'|'tp'|'time'|'prior'|'tp1'|'tp2'|'sl'|'invalidate'|'external'|'dropped'|null;gapBps:number|null;opened_at:number;closed_at:number|null;trace:string;entry_structure?:EntryStructure|null;market_stage?:string|null;market_expectancy?:number|null;entry_phase?:string|null;exit_stage?:string|null;exit_phase?:string|null;exit_trigger?:string|null};
 export type LsrCurvePoint={ts:number;equity:number;closed_pnl:number;unrealized_pnl:number;positions:number};
 const ROW_CAP=8_000;
 export function rememberRow<T>(rows:T[]|undefined,row:T){return [...(rows??[]),row].slice(-ROW_CAP);}
@@ -57,12 +58,12 @@ export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null
   const rows=(input.places&&input.places.length?input.places:placesFromEvents(input.events));
   const fallbackN=rows.filter(row=>row.fallback).length,rejectedN=rows.filter(row=>row.rejected).length;
   const body={version:'lsr-run-log-v2' as const,exportedAt:input.exportedAt,liveEnabled:input.liveEnabled,
-    howToRead:'这是当前市场智能模拟账户。权益 = 初始 + 已平净利 + 未平（价格盈亏 − 开仓费 − 预计平仓费）。不是已经停掉的实验漏斗。复盘四条：先看方向；再看走过成本后最终亏损时该在回撤多少出局；再看每个浮盈阶段从高点回撤多少出局；最后看各行情阶段的期望幅度该不该各自出局。',
+    howToRead:'这是当前市场智能模拟账户。权益 = 初始 + 已平净利 + 未平（价格盈亏 − 开仓费 − 预计平仓费）。不是已经停掉的实验漏斗。已平订单单独留档，不随热历史裁掉。每一笔记进场和出场当时的行情判定与演化阶段。',
     reviewPlan:[
-      '先看方向。',
+      '先看进场和出场时的行情判定、演化阶段。',
+      '同一种行情下再看方向。',
       '走过成本后最终亏损的，看回撤到多少出局。',
       '每一个浮盈阶段，看从高点回撤多少出局。',
-      '按进场时的行情阶段看期望幅度，各阶段的出局点分开判断。',
     ],
     funnel,sourceHealth:input.health,gate:input.gate,
     breakdown:{strategy_issues:strategy,runtime_issues:runtime,
@@ -97,14 +98,20 @@ export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null
 }
 
 /** The phone export. Rows are the live paper account, not a retired experiment book. */
-export function accountLogBook(state:ForwardState,quotes:Record<string,Quote>,now:number){
+export function accountLogBook(state:ForwardState,quotes:Record<string,Quote>,now:number,journal?:OrderJournal){
   const openRows:LsrPositionRow[]=[];
   const closedRows:LsrPositionRow[]=[];
+  const seen=new Set<string>();
   const fills:LsrFill[]=[];
+  const pushClosed=(row:LsrPositionRow)=>{
+    if(seen.has(row.id))return;
+    seen.add(row.id);closedRows.push(row);
+    fills.push({ts:row.opened_at,symbol:row.symbol,side:row.side,price:row.entry,qty:row.qty,notional:row.notional,fee:row.fee,tag:'open',trace:row.trace,waitMs:null,limit:row.entry});
+  };
+  for(const saved of journal?.rows??[])pushClosed(fromRecord(saved));
   for(const t of state.history){
-    const row=closedAccountRow(t);
-    closedRows.push(row);
-    fills.push({ts:t.openedAt,symbol:t.symbol,side:t.side,price:t.entryPrice,qty:t.quantity,notional:t.notional,fee:row.fee,tag:'open',trace:row.trace,waitMs:null,limit:t.entryPrice});
+    if(t.inverseCopy||t.exitReason==='ACCOUNT_RESET')continue;
+    pushClosed(closedAccountRow(t));
   }
   let unrealized=0;
   for(const t of state.positions){
@@ -112,7 +119,8 @@ export function accountLogBook(state:ForwardState,quotes:Record<string,Quote>,no
     const row:LsrPositionRow={id:t.id,symbol:t.symbol,side:t.side,entry:t.entryPrice,exit:null,qty:t.quantity,notional:t.notional,
       gross_pnl:round4(marked.gross+marked.realized),fee:round4(t.entryFee+marked.exitReserve),net_pnl:null,
       holdSec:Math.max(0,Math.round((now-t.openedAt)/1000)),exit_reason:null,gapBps:null,opened_at:t.openedAt,closed_at:null,trace:t.id,
-      entry_structure:t.entryContext?.entryStructure??null,market_stage:t.entryContext?.environment??null,market_expectancy:t.entryContext?.marketExpectancy??null};
+      entry_structure:t.entryContext?.entryStructure??null,market_stage:t.entryContext?.environment??null,market_expectancy:t.entryContext?.marketExpectancy??null,
+      entry_phase:t.entryContext?.marketEvolutionPhase??null,exit_stage:null,exit_phase:null,exit_trigger:null};
     openRows.push(row);
     unrealized+=row.gross_pnl!-row.fee;
     fills.push({ts:t.openedAt,symbol:t.symbol,side:t.side,price:t.entryPrice,qty:t.quantity,notional:t.notional,fee:row.fee,tag:'open',trace:row.trace,waitMs:null,limit:t.entryPrice});
@@ -124,19 +132,24 @@ export function accountLogBook(state:ForwardState,quotes:Record<string,Quote>,no
   funnel.universe=new Set([...state.positions,...state.history].map(t=>t.symbol)).size;
   funnel.scans=state.positions.length+state.history.length+state.opportunities.length;
   funnel.signals=eligible;
-  funnel.filled=state.positions.length+state.history.length;
-  funnel.closed=state.history.length;
-  funnel.wins=state.history.filter(t=>(t.netPnl??0)>0).length;
+  funnel.filled=openRows.length+closedRows.length;
+  funnel.closed=closedRows.length;
+  funnel.wins=closedRows.filter(row=>(row.net_pnl??0)>0).length;
   return {positions:[...closedRows,...openRows],fills,curve:[{ts:now,equity:round4(mark.equity),closed_pnl:round4(closedNet),unrealized_pnl:round4(unrealized),positions:openRows.length}],
     equity:mark.equity,initial:state.initialEquity,closedNet:round4(closedNet),priorAdjustment:0,places:[] as LsrPlace[],funnel,
     unreconstructed:0,unreconstructedN:0};
 }
 function closedAccountRow(t:Trade):LsrPositionRow{
+  const recorded=orderRecord(t);
   return {id:t.id,symbol:t.symbol,side:t.side,entry:t.entryPrice,exit:t.exitPrice,qty:t.quantity,notional:t.notional,
     gross_pnl:t.grossPnl,fee:round4(t.entryFee+t.exitFee+t.fundingAllowance),net_pnl:t.netPnl,
     holdSec:t.closedAt==null?0:Math.max(0,Math.round((t.closedAt-t.openedAt)/1000)),exit_reason:null,gapBps:null,
-    opened_at:t.openedAt,closed_at:t.closedAt,trace:t.id,entry_structure:t.entryContext?.entryStructure??null,
-    market_stage:t.entryContext?.environment??null,market_expectancy:t.entryContext?.marketExpectancy??null};
+    opened_at:t.openedAt,closed_at:t.closedAt,trace:t.id,entry_structure:recorded.entry_structure,market_stage:recorded.entry_stage,
+    market_expectancy:recorded.market_expectancy,entry_phase:recorded.entry_phase,exit_stage:recorded.exit_stage,
+    exit_phase:recorded.exit_phase,exit_trigger:recorded.exit_trigger};
+}
+function fromRecord(row:OrderRecord):LsrPositionRow{
+  return {...row,exit_reason:null,gapBps:null,trace:row.id,market_stage:row.entry_stage};
 }
 function openMark(state:ForwardState,t:Trade,quotes:Record<string,Quote>,now:number){
   const q=quotes[t.symbol],fresh=freshQuote(q,now),policy=t.exitControl?.policy;
