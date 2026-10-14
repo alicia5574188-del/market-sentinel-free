@@ -51,7 +51,7 @@ import {emptyStrategyAccount, STRATEGY_EPOCH} from '../lib/strategy-slot.ts';
 import {emptyThesis, runThesisCycle, THESIS_STORAGE_KEY, type ThesisAttached, type ThesisMarket} from '../lib/thesis-attach.ts';
 import type {ThesisPublic} from '../lib/thesis-view.ts';
 import {buildRunLogExport,accountLogBook} from '../lib/run-log.ts';
-import {adoptLegacyPaths,bookFromStoredPaths,commitPathWrite,emptyTradePathBook,exportTradePaths,observeTradePaths,peekPathWrite,searchHolding,TRADE_PATH_INDEX_KEY,TRADE_PATH_KEY,TRADE_PATH_PAGE_PREFIX,type TradePathBook,type TradePathIndex,type TradePathPage} from '../lib/trade-path.ts';
+import {adoptLegacyPaths,bookFromStoredPaths,commitPathWrite,emptyTradePathBook,exportTradePaths,observeTradePaths,peekPathWrite,pendingPathWrites,searchHolding,TRADE_PATH_INDEX_KEY,TRADE_PATH_KEY,TRADE_PATH_PAGE_PREFIX,type TradePathBook,type TradePathIndex,type TradePathPage} from '../lib/trade-path.ts';
 import {emptyOrderJournal,observeOrderJournal,ORDER_JOURNAL_KEY,restoreOrderJournal,type OrderJournal} from '../lib/order-journal.ts';
 import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
 import {confirmationRealityView} from '../lib/confirmation-reality.ts';
@@ -1343,7 +1343,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           const found=await (this.ctx.storage.get as unknown as (keys:string[])=>Promise<Map<string,TradePathPage>>)(keys);
           for(const value of found.values())if(value)pages.push(value);
         }
-        this.tradePaths=bookFromStoredPaths(started,index,pages);
+        const known=new Set(index.pages);
+        let orphans:TradePathPage[]=[];
+        try{orphans=await this.orphanTradePathPages(started,known);}catch{orphans=[];}
+        const pageNumbers=[...new Set([...index.pages,...orphans.map(page=>page.page)])];
+        this.tradePaths=bookFromStoredPaths(started,{...index,pages:pageNumbers},[...pages,...orphans]);
+        if(orphans.length){this.tradePaths.indexDirty=true;this.tradePathsPending=true;}
       }else{
         const legacy=await this.ctx.storage.get<TradePathBook>(TRADE_PATH_KEY);
         this.tradePaths=adoptLegacyPaths(legacy,started);
@@ -1356,6 +1361,25 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }
     }catch{this.tradePaths=emptyTradePathBook(started);}
     this.tradePathsLoaded=true;
+  }
+
+  private async orphanTradePathPages(started:number,known:Set<number>){
+    const pages:TradePathPage[]=[];
+    let cursor:string|undefined;
+    for(let guard=0;guard<20;guard++){
+      const rows=await this.ctx.storage.list<TradePathPage>({prefix:TRADE_PATH_PAGE_PREFIX,limit:40,...(cursor?{startAfter:cursor}:{})});
+      if(!rows.size)break;
+      for(const [key,value] of rows){
+        cursor=key;
+        const page=Number(key.slice(TRADE_PATH_PAGE_PREFIX.length));
+        if(!Number.isInteger(page)||known.has(page))continue;
+        if(value?.version==='trade-path-v2'&&value.accountStartedAt===started&&Array.isArray(value.trades)){
+          pages.push(value);known.add(page);
+        }
+      }
+      if(rows.size<40)break;
+    }
+    return pages;
   }
 
   private async ensureOrderJournal(){
@@ -1497,16 +1521,26 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           buildSha:FORWARD_BUILD_SHA,strategyFingerprint:STRATEGY_FINGERPRINT})),now);
       }catch{this.reviewDiagnosticError="CANDIDATE_REVIEW_CAPTURE_FAILED";}
       if(this.tradePathsPending){
-        const job=peekPathWrite(this.tradePaths);
-        if(!job)this.tradePathsPending=false;
+        const jobs=pendingPathWrites(this.tradePaths,4);
+        if(!jobs.length)this.tradePathsPending=false;
         else{
-          const reservation=this.reserveNonAlarmWrites(1,512);
+          const closed=jobs.some(job=>job.op==='put'&&job.value.trades.some(row=>row.exit!=null));
+          const reservation=closed?this.reserveCriticalWrites(jobs.length):this.reserveNonAlarmWrites(jobs.length,512);
           if(reservation){
             try{
-              if(job.op==='delete')await this.ctx.storage.delete(`${TRADE_PATH_PAGE_PREFIX}${job.page}`);
-              else if(job.op==='put')await this.ctx.storage.put(`${TRADE_PATH_PAGE_PREFIX}${job.page}`,job.value);
-              else await this.ctx.storage.put(TRADE_PATH_INDEX_KEY,job.value);
-              commitPathWrite(this.tradePaths,job);reservation.finish(true);
+              await this.ctx.storage.transaction(async transaction=>{
+                const entries:Record<string,unknown>={};
+                const deletes:string[]=[];
+                for(const job of jobs){
+                  if(job.op==='delete')deletes.push(`${TRADE_PATH_PAGE_PREFIX}${job.page}`);
+                  else if(job.op==='put')entries[`${TRADE_PATH_PAGE_PREFIX}${job.page}`]=job.value;
+                  else entries[TRADE_PATH_INDEX_KEY]=job.value;
+                }
+                if(Object.keys(entries).length)await transaction.put(entries);
+                for(const key of deletes)await transaction.delete(key);
+              });
+              for(const job of jobs)commitPathWrite(this.tradePaths,job);
+              reservation.finish(true);
               this.tradePathsPending=peekPathWrite(this.tradePaths)!=null;
             }catch{reservation.finish(false);}
           }

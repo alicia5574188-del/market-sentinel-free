@@ -58,18 +58,26 @@ export function bookFromStoredPaths(accountStartedAt:number,index:TradePathIndex
   return book;
 }
 export function peekPathWrite(book:TradePathBook):PathWrite|null{
-  const page=book.dirty[0];
-  if(page!=null)return {op:'put',page,value:packPathPage(book.accountStartedAt,page,book.trades.filter(row=>(row.page??0)===page))};
-  if(book.indexDirty){
+  return pendingPathWrites(book,1)[0]??null;
+}
+/** Closed pages go out first, with the index in the same batch, so a restart can still find them. */
+export function pendingPathWrites(book:TradePathBook,limit=4):PathWrite[]{
+  const closed=book.dirty.filter(page=>book.trades.some(row=>(row.page??0)===page&&row.exit!=null));
+  const chosen=(closed.length?closed:book.dirty.slice(0,1)).slice(0,Math.max(1,limit));
+  const jobs:PathWrite[]=chosen.map(page=>({op:'put',page,value:packPathPage(book.accountStartedAt,page,book.trades.filter(row=>(row.page??0)===page))}));
+  if(book.indexDirty&&(jobs.length>0||book.dirty.length===0)){
     const pages=[...new Set(book.trades.map(row=>row.page??0))].sort((a,b)=>a-b);
-    return {op:'index',value:{version:TRADE_PATH_PAGE_VERSION,accountStartedAt:book.accountStartedAt,pages}};
+    jobs.push({op:'index',value:{version:TRADE_PATH_PAGE_VERSION,accountStartedAt:book.accountStartedAt,pages}});
   }
+  if(jobs.length)return jobs;
   const drop=book.drop[0];
-  return drop==null?null:{op:'delete',page:drop};
+  return drop==null?[]:[{op:'delete',page:drop}];
 }
 export function commitPathWrite(book:TradePathBook,job:PathWrite){
-  if(job.op==='put')book.dirty.shift();
-  else if(job.op==='index')book.indexDirty=false;
+  if(job.op==='put'){
+    const at=book.dirty.indexOf(job.page);
+    if(at>=0)book.dirty.splice(at,1);
+  }else if(job.op==='index')book.indexDirty=false;
   else book.drop.shift();
 }
 

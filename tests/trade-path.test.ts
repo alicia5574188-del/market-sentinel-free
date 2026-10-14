@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {initialForward, type Quote, type Trade} from '../lib/forward-relations.ts';
-import {adoptLegacyPaths, bookFromStoredPaths, commitPathWrite, emptyTradePathBook, exportTradePaths, observeTradePaths, peekPathWrite, searchHolding, type TradePath} from '../lib/trade-path.ts';
+import {adoptLegacyPaths, bookFromStoredPaths, commitPathWrite, emptyTradePathBook, exportTradePaths, observeTradePaths, pendingPathWrites, peekPathWrite, searchHolding, type TradePath} from '../lib/trade-path.ts';
 
 const now=1_791_770_000_000;
 function quote(bid:number,ask:number,at=now):Quote{
@@ -103,6 +103,19 @@ test('a legacy book is split without moving an older order onto a new page',()=>
   assert.equal(book.trades[0]?.page,1);
   assert.equal(book.trades[4]?.page,0);
   assert.equal(peekPathWrite(book)?.op,'put');
+});
+test('a closed page is stored before an older open page and the index goes with it',()=>{
+  const book=emptyTradePathBook(now);
+  const row=(id:string,page:number,exit:number|null):TradePath=>({id,symbol:'ETH_USDT',side:'LONG',entry:100,qty:1,notional:100,entryFee:0.07,openedAt:now,
+    exit,exitAt:exit==null?null:now,net:exit==null?null:1,hold:[[0,100,100]],after:[],page});
+  book.trades=[row('open',0,null),row('closed',1,99)];
+  book.dirty=[0,1];book.indexDirty=true;
+  const jobs=pendingPathWrites(book,4);
+  assert.equal(jobs[0]?.op,'put');
+  assert.equal(jobs[0]?.op==='put'?jobs[0].page:-1,1);
+  assert.equal(jobs.at(-1)?.op,'index');
+  assert.equal(jobs[0]&&commitPathWrite(book,jobs[0]),undefined);
+  assert.deepEqual(book.dirty,[0]);
 });
 test('the path book keeps the newest 1200 orders',()=>{
   const book=emptyTradePathBook(now);
