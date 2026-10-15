@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
-import {transitionEntryDecision,transitionExitReason} from "../lib/transition-rule.ts";
+import {settledTransitionEntry,transitionEntryDecision,transitionExitReason} from "../lib/transition-rule.ts";
 import type {EntryStructure,ZoneNote} from "../lib/entry-structure.ts";
 
 const zone=(place:ZoneNote["place"],distancePct:number):ZoneNote=>({place,center:1,lower:1,upper:1,distancePct,touches:1});
@@ -38,6 +38,33 @@ test("transition skips when the level in front cannot be measured",()=>{
   assert.equal(transitionEntryDecision(structure({support:zone("下方",0.2)}),"LONG").action,"SKIP");
 });
 
+test("settled transition fades short only on the narrow long setup",()=>{
+  const zone=(distancePct:number,touches=1)=>({place:"上方" as const,center:1,lower:1,upper:1,distancePct,touches});
+  const yes=settledTransitionEntry(structure({resistance:zone(0.5,1)}),"LONG",0.005);
+  assert.equal(yes.side,"SHORT");
+  assert.equal(yes.fade,true);
+  assert.equal(yes.stopRate,0.015);
+  assert.equal(yes.holdMin,45);
+  assert.equal(yes.touches,1);
+  assert.equal(yes.expectancy,0.005);
+  const edges=[
+    settledTransitionEntry(structure({resistance:zone(0.29,1)}),"LONG",0.005),
+    settledTransitionEntry(structure({resistance:zone(0.8,1)}),"LONG",0.005),
+    settledTransitionEntry(structure({resistance:zone(0.5,2)}),"LONG",0.005),
+    settledTransitionEntry(structure({resistance:zone(0.5,1)}),"LONG",0.0039),
+    settledTransitionEntry(structure({resistance:zone(0.5,1)}),"LONG",0.008),
+    settledTransitionEntry(structure({support:{place:"下方",center:1,lower:1,upper:1,distancePct:0.4,touches:1}}),"SHORT",0.005),
+    settledTransitionEntry(structure({}),"LONG",0.005),
+  ];
+  for(const row of edges){
+    assert.equal(row.fade,false);
+    assert.equal(row.stopRate,0.008);
+    assert.equal(row.holdMin,60);
+  }
+  assert.equal(edges[5]!.side,"SHORT");
+  assert.equal(edges[6]!.side,"LONG");
+});
+
 test("transition exit is only the stop or the time, never an expectancy target",()=>{
   assert.equal(transitionExitReason({signedRate:-0.015,ageMin:1,stopRate:0.015,holdMin:45}),"TRANSITION_STOP");
   assert.equal(transitionExitReason({signedRate:0.02,ageMin:45,stopRate:0.008,holdMin:45}),"TRANSITION_TIME");
@@ -50,8 +77,10 @@ test("live entry and exit wires transition only, and leaves the original shock e
   const core=readFileSync(new URL("../lib/forward-relations.ts",import.meta.url),"utf8");
   const advance=core.slice(core.indexOf("function advanceEntryResponses"),core.indexOf("export function fillForwardPortfolio"));
   assert.match(advance,/entryRuleForEnvironment/);
+  assert.match(advance,/settledTransitionEntry/);
   assert.match(advance,/transitionEntryDecision/);
   assert.match(advance,/ruleMode==="transition"/);
+  assert.match(advance,/ruleMode==="shock-room"/);
   const manage=core.slice(core.indexOf("function manageIntelligenceTrades"),core.indexOf("function markAndManage"));
   const transitionAt=manage.indexOf("transitionRule");
   const winnerAt=manage.indexOf("manageWinnerTrade");

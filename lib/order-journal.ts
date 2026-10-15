@@ -11,6 +11,7 @@ export type OrderRecord={
   gross_pnl:number|null;fee:number;net_pnl:number|null;holdSec:number;opened_at:number;closed_at:number|null;
   exit_trigger:string|null;entry_stage:string|null;entry_phase:string|null;exit_stage:string|null;exit_phase:string|null;
   market_expectancy:number|null;entry_structure:EntryStructure|null;entry_rule?:string|null;
+  entry_signal?:'LONG'|'SHORT'|null;entry_fade?:boolean|null;entry_room_pct?:number|null;entry_room_touches?:number|null;
 };
 export type OrderJournal={version:typeof ORDER_JOURNAL_VERSION;accountStartedAt:number;rows:OrderRecord[]};
 
@@ -29,7 +30,15 @@ export function orderRecord(t:Trade):OrderRecord{
     entry_stage:t.entryContext?.environment??null,entry_phase:t.entryContext?.marketEvolutionPhase??null,
     exit_stage:t.exitRegime?.stage??null,exit_phase:t.exitRegime?.phase??null,
     market_expectancy:t.entryContext?.marketExpectancy??null,entry_structure:t.entryContext?.entryStructure??null,
-    entry_rule:t.entryContext?.shockRoom?"SHOCK_EPISODE":t.entryContext?.transitionRule?"TRANSITION_ROOM":null};
+    entry_rule:t.entryContext?.shockRoom?"SHOCK_EPISODE":t.entryContext?.transitionRule?"TRANSITION_ROOM":null,
+    ...entryDecision(t)};
+}
+function entryDecision(t:Trade):Pick<OrderRecord,'entry_signal'|'entry_fade'|'entry_room_pct'|'entry_room_touches'>{
+  const rule=t.entryContext?.transitionRule??t.entryContext?.shockRoom;
+  if(!rule)return {entry_signal:null,entry_fade:null,entry_room_pct:null,entry_room_touches:null};
+  return {entry_signal:rule.signalSide,entry_fade:rule.fade===true,
+    entry_room_pct:typeof rule.roomPct==="number"?rule.roomPct:null,
+    entry_room_touches:typeof rule.touches==="number"?rule.touches:null};
 }
 export function observeOrderJournal(book:OrderJournal,history:Trade[],accountStartedAt:number){
   let changed=false;

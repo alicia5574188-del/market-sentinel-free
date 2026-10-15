@@ -20,7 +20,7 @@ import { evaluatePositionIntelligence, POSITION_INTELLIGENCE_VERSION,
 import {capturePositionBaseline} from "./position-evidence-contract.ts";
 import { beijingDayKey } from "./beijing-time.ts";
 import { readEntryStructure, type EntryStructure } from "./entry-structure.ts";
-import { transitionEntryDecision, transitionExitReason, type TransitionEntry } from "./transition-rule.ts";
+import { settledTransitionEntry, transitionEntryDecision, transitionExitReason, type TransitionEntry } from "./transition-rule.ts";
 import { advanceShockEpisode, entryRuleForEnvironment, initialShockEpisode, normalizeShockEpisode, type ShockEpisode } from "./shock-episode.ts";
 import { ENTRY_RESPONSE_VERSION, entryResponseWindowMs, evaluateEntryResponse,
   type EntryResponseDecision } from "./market-intelligence-entry-response.ts";
@@ -1466,11 +1466,13 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
     const ruleMode=entryRuleForEnvironment(s.environmentContext.environment,s.shockEpisode);
     let transition:TransitionEntry|null=null;
     let shockRoom:TransitionEntry|null=null;
-    if(ruleMode!=="original"){
+    if(ruleMode==="transition"){
+      const expectancy=marketTravelExpectancy(Object.values(s.extremumRegime.symbols).map(x=>Math.abs(x.actualMove)));
+      transition=settledTransitionEntry(structure,validation.side,expectancy);
+    }else if(ruleMode==="shock-room"){
       const decided=transitionEntryDecision(structure,validation.side);
       if(decided.action==="SKIP"){validation.status="CANCELLED";validation.reason=decided.reason;reject(validation.reason);continue;}
-      if(ruleMode==="transition")transition=decided.entry;
-      else shockRoom=decided.entry;
+      shockRoom=decided.entry;
     }
     const error=openIntelligenceTrade(s,o,q!,meta,now,equity,{validation,decision},minutePaths?.[o.symbol],structure,transition,shockRoom);
     if(error){
