@@ -49,11 +49,13 @@ test("transition exit is only the stop or the time, never an expectancy target",
 test("live entry and exit wires transition only, and leaves the original shock exits in place",()=>{
   const core=readFileSync(new URL("../lib/forward-relations.ts",import.meta.url),"utf8");
   const advance=core.slice(core.indexOf("function advanceEntryResponses"),core.indexOf("export function fillForwardPortfolio"));
-  assert.match(advance,/o\.environment==="TRANSITION"/);
+  assert.match(advance,/entryRuleForEnvironment/);
   assert.match(advance,/transitionEntryDecision/);
+  assert.match(advance,/ruleMode==="transition"/);
   const manage=core.slice(core.indexOf("function manageIntelligenceTrades"),core.indexOf("function markAndManage"));
   const transitionAt=manage.indexOf("transitionRule");
   const winnerAt=manage.indexOf("manageWinnerTrade");
   assert.ok(transitionAt>=0&&winnerAt>transitionAt);
   assert.equal(manage.includes("EXPECTANCY_EXIT"),false);
+  assert.equal(manage.includes("shockRoom"),false);
 });

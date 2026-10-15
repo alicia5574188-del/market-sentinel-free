@@ -10,7 +10,7 @@ export type OrderRecord={
   id:string;symbol:string;side:'LONG'|'SHORT';entry:number;exit:number|null;qty:number;notional:number;
   gross_pnl:number|null;fee:number;net_pnl:number|null;holdSec:number;opened_at:number;closed_at:number|null;
   exit_trigger:string|null;entry_stage:string|null;entry_phase:string|null;exit_stage:string|null;exit_phase:string|null;
-  market_expectancy:number|null;entry_structure:EntryStructure|null;
+  market_expectancy:number|null;entry_structure:EntryStructure|null;entry_rule?:string|null;
 };
 export type OrderJournal={version:typeof ORDER_JOURNAL_VERSION;accountStartedAt:number;rows:OrderRecord[]};
 
@@ -28,7 +28,8 @@ export function orderRecord(t:Trade):OrderRecord{
     opened_at:t.openedAt,closed_at:t.closedAt,exit_trigger:t.exitReason,
     entry_stage:t.entryContext?.environment??null,entry_phase:t.entryContext?.marketEvolutionPhase??null,
     exit_stage:t.exitRegime?.stage??null,exit_phase:t.exitRegime?.phase??null,
-    market_expectancy:t.entryContext?.marketExpectancy??null,entry_structure:t.entryContext?.entryStructure??null};
+    market_expectancy:t.entryContext?.marketExpectancy??null,entry_structure:t.entryContext?.entryStructure??null,
+    entry_rule:t.entryContext?.shockRoom?"SHOCK_EPISODE":t.entryContext?.transitionRule?"TRANSITION_ROOM":null};
 }
 export function observeOrderJournal(book:OrderJournal,history:Trade[],accountStartedAt:number){
   let changed=false;
