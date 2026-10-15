@@ -1004,8 +1004,8 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
   const appliedResearch=applyOpportunityResearch(s,o,now);
   if(appliedResearch?.entryAction==="CONFIRM_MORE"&&!response)return "研究要求本币实时响应确认，不能由兼容入口跳过";
   if(s.positions.some(t=>t.symbol===o.symbol))return"同币已有持仓，禁止重复开仓";
-  let side=o.side,d=dir(side),price=side==="LONG"?q.bestAsk:q.bestBid,
-    consumed=Math.max(0,d*(price/Math.max(o.price,1e-9)-1)),remainingNet=o.netRemainingSpaceRate-consumed,
+  let side=o.side,d=dir(side),price=side==="LONG"?q.bestAsk:q.bestBid;
+  const consumed=Math.max(0,d*(price/Math.max(o.price,1e-9)-1)),remainingNet=o.netRemainingSpaceRate-consumed,
     executionValue=executionValueAtQuote({remainingNetRate:remainingNet,pullbackRiskRate:o.pullbackRiskRate}),
     requiresLiquidityStop=!o.winnerPlan&&(o.tradePlan==="LIQUIDITY_MIGRATION"||o.tradePlan==="LIQUIDITY_REJECTION"||o.tradePlan==="FAMILY_TURN"),
     frozenInvalidation=Number.isFinite(o.liquidityInvalidationPrice)?o.liquidityInvalidationPrice!:null;
