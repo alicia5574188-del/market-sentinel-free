@@ -3194,7 +3194,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         continue; // the journal owns this close, including partial/unknown results
       }
       if (!position.exitRequestedAt && (position.parity?sourceClosed:liveMirrorExitRequired(position.id, selectedTrade))) {
-        const chase=!position.parity||liveStopShouldChase({exitReason:lifecycle?.trade?.exitReason,stop:position.stopPrice,
+        const chase=!position.parity||!this.runtime.live.requestedEnabled||liveStopShouldChase({exitReason:lifecycle?.trade?.exitReason,stop:position.stopPrice,
           closedAt:lifecycle?.trade?.closedAt,now});
         if(!chase){
           this.recordLiveAudit({ observedAt: now, symbol, planId: position.id, stage: "EXIT_REQUEST", level: "INFO",
