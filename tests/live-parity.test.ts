@@ -56,9 +56,11 @@ test("source identity and ALL strategy/order fields are retained without netting
   shock.entryContext={environment:"SHOCK"} as Trade["entryContext"];
   fade.entryContext={environment:"TRANSITION"} as Trade["entryContext"];
   trend.entryContext={environment:"TREND"} as Trade["entryContext"];
-  s.positions=[shock,fade,trend];
+  const openedInShock={...trade("opened","DOGE_USDT"),entryContext:{environment:"TRANSITION",stageNote:{liveStage:"SHOCK"}} as Trade["entryContext"]};
+  s.positions=[shock,fade,trend,openedInShock];
   const selected=forwardMirrorSources(s,1000);
-  assert.equal(selected.BTC_USDT.id,"shock");assert.equal(selected.SOL_USDT.id,"trend");assert.equal(selected.ETH_USDT,undefined);
+  assert.equal(selected.BTC_USDT.id,"shock");assert.equal(selected.SOL_USDT.id,"trend");
+  assert.equal(selected.DOGE_USDT.id,"opened");assert.equal(selected.ETH_USDT,undefined);
 });
 test("a future same-symbol multi-leg source cannot silently become a single net position",()=>{
   const s=initialForward(T);s.positions=[trade(),trade("ft-2")];assert.throws(()=>forwardMirrorSources(s,1000),/净额/);

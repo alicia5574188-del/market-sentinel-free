@@ -68,10 +68,11 @@ export function validateMirrorSource(t: Trade) {
 
 /** Adapter fields only support the existing reconciler. Full source JSON is
  * retained in a binding. The arm price is NOT a take-profit command. */
-export function copyableLiveSource(t: {unopened?:boolean;inverseCopy?:unknown;status?:string;entryContext?:{environment?:string}|null}) {
+export function copyableLiveSource(t: {unopened?:boolean;inverseCopy?:unknown;status?:string;entryContext?:{environment?:string;stageNote?:{liveStage?:string}|null}|null}) {
   if (t.unopened || t.status !== "OPEN") return false;
   if (t.inverseCopy) return true;
-  const stage = t.entryContext?.environment;
+  // 开仓闸门用的是当时的市场阶段。机会自带的 environment 经常仍是过渡，不能拿来决定复不复制。
+  const stage = t.entryContext?.stageNote?.liveStage || t.entryContext?.environment;
   if (!stage) return true;
   return stage === "SHOCK" || stage === "TREND";
 }
