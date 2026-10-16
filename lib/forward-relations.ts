@@ -615,6 +615,11 @@ export function manageWinnerTrade(s:ForwardState,t:Trade,q:Quote,now:number,path
     originalRisk=Math.abs(plan.initialStop/t.entryPrice-1);
   t.lastPrice=px;t.lastQuoteAt=q.observedAt;t.favorable=Math.max(t.favorable,Math.max(0,signed));t.adverse=Math.max(t.adverse,Math.max(0,-signed));
   t.peakPnlRate=Math.max(t.peakPnlRate??0,t.favorable);
+  const stage=t.entryContext?.environment;
+  if((stage==="SHOCK"||stage==="TREND")&&t.favorable>=.10&&t.favorable-signed>=.015){
+    closeTrade(s,t,px,now,"PEAK_GIVEBACK",{authority:"SHOCK_TREND_GIVEBACK",peakRate:t.favorable,signedRate:signed,armRate:.10,givebackRate:.015,quoteAt:q.observedAt});
+    return true;
+  }
   if(!t.firstProfitAt&&signed>ROUND_TRIP_COST){t.firstProfitAt=now;if(t.entryContext)t.entryContext.postEntryState="CONFIRMED";}
   const position=evaluatePositionIntelligence({now,openedAt:t.openedAt,side:t.side,signedRate:signed,peakFavorableRate:t.favorable,
     ageMin:(now-t.openedAt)/60000,firstProfit:!!t.firstProfitAt,expectedHoldMinutes:t.expectedHoldMinutes??180,

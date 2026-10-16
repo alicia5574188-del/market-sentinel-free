@@ -58,6 +58,25 @@ test('obstacle reduction needs a later complete post-entry bar, not two seconds 
   assert.equal(c.action,'REDUCE');assert.ok(c.fraction<=.65);const done={...c.state,trimCount:1,lastTrimEvent:c.state.obstacleSince};
   assert.equal(advanceWinnerManagement({...inputs,plan:p,now:T+3*B+2100,rows:[...rows,row(T+2*B,104.5,104.4,104.3,104.7)],previous:done,concernFamilies:['RELATIVE']}).action,'HOLD');
 });
+test('shock and trend lock a 1.5 point giveback only after a 10 point peak',()=>{
+  const armed=fixture();
+  armed.t.entryContext!.environment="SHOCK";
+  armed.t.favorable=.16;armed.t.peakPnlRate=.16;
+  assert.equal(manageWinnerTrade(armed.s,armed.t,quote(114.6,T+2*B),T+2*B,{},{}),false);
+  assert.equal(armed.t.status,"OPEN");
+  assert.equal(manageWinnerTrade(armed.s,armed.t,quote(114.4,T+3*B),T+3*B,{},{}),true);
+  assert.equal(armed.t.exitReason,"PEAK_GIVEBACK");
+  const early=fixture();
+  early.t.entryContext!.environment="TREND";
+  early.t.favorable=.09;early.t.peakPnlRate=.09;
+  assert.equal(manageWinnerTrade(early.s,early.t,quote(107,T+2*B),T+2*B,{},{}),false);
+  assert.equal(early.t.status,"OPEN");
+  const other=fixture();
+  other.t.entryContext!.environment="TRANSITION";
+  other.t.favorable=.16;other.t.peakPnlRate=.16;
+  assert.equal(manageWinnerTrade(other.s,other.t,quote(114,T+2*B),T+2*B,{},{}),false);
+  assert.equal(other.t.status,"OPEN");
+});
 test('expectancy, a five-point giveback, and a later small loss do not add an exit',()=>{
   const reached=fixture();
   reached.t.entryContext!.marketExpectancy=.02;
