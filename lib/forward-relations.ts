@@ -61,7 +61,7 @@ function marketTravelExpectancy(moves:number[]){
 const TOTAL_RISK_RATE=.10,SIDE_RISK_RATE=.065,TOTAL_MARGIN_RATE=.75;
 const FIVE_MINUTE_NEW_RISK_RATE=.015;
 /** 只在同步爆发或趋势开仓，名义仓位按原计算放大这么多倍。 */
-const EXPANSION_SIZE=3;
+const EXPANSION_SIZE=6;
 const ENTRY_VALIDATION_CAP=6,CONTINUATION_SIDE_RISK_RATE=.025,EXECUTION_EDGE_FLOOR=1.25;
 const ROTATION_GAP=10,ROTATION_COOLDOWN_MS=2*60_000;
 const HISTORY_LIMIT=240,EVENT_LIMIT=160,CONSUMED_THESIS_LIMIT=512,CONSUMED_THESIS_TTL_MS=7*24*60*60_000;
@@ -173,6 +173,8 @@ export type Trade={
     checkpointBand:number;mode:"STRONG_TREND"|"HEALTHY_TREND"|"NORMAL"|"WEAKENING";peakR:number;updatedAt:number};
   profitProtectionMigration?:{version:string;state:"CURRENT"|"GUARDED"|"DEFERRED";updatedAt:number;baselineFavorable:number};
   exitAudit?:{trigger:string;at:number;detail?:string;evidence?:Record<string,string|number|boolean|null>;research?:PlanResearchDecision};
+  /** 研究层不是同步爆发或趋势，所以没进账户。只留档供复盘，不改余额。 */
+  unopened?:boolean;
   holdValue?:{action:"HOLD"|"REVIEW"|"EXIT_PROFIT"|"EXIT_RISK";pullbackRiskRate:number;bestHoldMinutes:number;score:number};
   positionIntelligence?:PositionIntelligenceState;
   liquidityLifecycle?:{currentPlan:LiquidityTradePlan;upgradedAt:number|null;reason:string;
@@ -200,7 +202,7 @@ export type ForwardState={
   winnerRisk?:WinnerRiskLedger;
   version:string;engineVersion:string;startedAt:number;revision:number;lastCycleAt:number;lastQuoteCycleAt:number;lastCandleAt:number;
   balance:number;initialEquity:number;peakEquity:number;maxDrawdown:number;resolved:number;wins:number;grossPnl:number;fees:number;
-  fundingAllowance:number;turnover:number;positions:Trade[];history:Trade[];events:AuditEvent[];daily:Daily[];
+  fundingAllowance:number;turnover:number;positions:Trade[];history:Trade[];unopenedTrades?:Trade[];events:AuditEvent[];daily:Daily[];
   selectedSymbols:string[];opportunities:Opportunity[];regions:Record<string,Region>;relationEngine:RelationEngineState;extremumRegime:MarketIntelligenceState;
   familyExperiment:FamilyExperimentState;structuralInterrupt:StructuralInterruptState;
   hypothesisResearch:MarketHypothesisResearchState;environmentPerformance:EnvironmentPerformanceState;
@@ -233,7 +235,7 @@ function blankPulse(now:number):MarketPulse{return{at:now,up:0,down:0,neutral:0,
 export function initialForward(now:number):ForwardState{
   const s:ForwardState={version:FORWARD_VERSION,engineVersion:ADAPTIVE_ENGINE_VERSION,startedAt:now,revision:0,lastCycleAt:0,lastQuoteCycleAt:0,lastCandleAt:0,
     balance:1000,initialEquity:1000,peakEquity:1000,maxDrawdown:0,resolved:0,wins:0,grossPnl:0,fees:0,fundingAllowance:0,turnover:0,
-    positions:[],history:[],events:[],daily:[],selectedSymbols:[],opportunities:[],regions:{},relationEngine:initialRelationEngine(now),
+    positions:[],history:[],unopenedTrades:[],events:[],daily:[],selectedSymbols:[],opportunities:[],regions:{},relationEngine:initialRelationEngine(now),
     extremumRegime:initialMarketIntelligenceState(now),
     familyExperiment:initialFamilyExperimentState(),structuralInterrupt:initialStructuralInterruptState(),
     hypothesisResearch:initialMarketHypothesisResearch(now),environmentPerformance:initialEnvironmentPerformanceState(),
@@ -354,6 +356,8 @@ export function normalizeForward(v:ForwardState|null|undefined,now:number):Forwa
     ||v.executionVersion!==ADAPTIVE_ENGINE_VERSION;
   const relationEngine=normalizeRelationEngine(v.relationEngine,now);
   const positions=v.positions.map(t=>normalizeTrade(t,now)),history=v.history.map(t=>normalizeTrade(t,now)).slice(0,HISTORY_LIMIT);
+  const unopenedRaw=Array.isArray(old.unopenedTrades)?old.unopenedTrades.map(t=>normalizeTrade(t,now)):[];
+  const unopenedTrades=[...unopenedRaw.filter(t=>t.status==="OPEN"),...unopenedRaw.filter(t=>t.status!=="OPEN").slice(0,800)];
   for(const t of positions){
     if(!t.entryContext?.relationFamilyId&&t.entryContext?.relationRuleId){
       const rule=relationEngine.rules.find(r=>r.id===t.entryContext?.relationRuleId);
@@ -369,7 +373,7 @@ export function normalizeForward(v:ForwardState|null|undefined,now:number):Forwa
     peakEquity:Math.max(safe(v.peakEquity,1000),safe(v.balance,1000)),maxDrawdown:Math.max(0,safe(v.maxDrawdown)),
     resolved:Math.max(0,Math.floor(safe(v.resolved))),wins:Math.max(0,Math.floor(safe(v.wins))),grossPnl:safe(v.grossPnl),
     fees:Math.max(0,safe(v.fees)),fundingAllowance:Math.max(0,safe(v.fundingAllowance)),turnover:Math.max(0,safe(v.turnover)),
-    positions,history,
+    positions,history,unopenedTrades,
     events:Array.isArray(v.events)?v.events.slice(0,EVENT_LIMIT):base.events,daily:Array.isArray(v.daily)?v.daily:[],
     selectedSymbols:Array.isArray(v.selectedSymbols)?v.selectedSymbols:[],opportunities:upgrading?[]:(Array.isArray(v.opportunities)?v.opportunities:[]),
     regions:v.regions&&typeof v.regions==="object"?v.regions:{},relationEngine,
@@ -515,8 +519,10 @@ function closeTrade(s:ForwardState,t:Trade,price:number,now:number,reason:string
     net=gross-t.entryFee-exitFee-funding+realizedContribution(t),r=t.realization,remainingNotional=t.notional;
   t.status="CLOSED";t.closedAt=now;t.exitPrice=price;t.exitFee=exitFee+(r?.fees??0);t.fundingAllowance=funding+(r?.funding??0);t.grossPnl=gross+(r?.gross??0);t.netPnl=net;t.exitReason=reason;
   if(reason!=="ACCOUNT_RESET")t.exitRegime={stage:s.environmentContext.environment,phase:s.environmentContext.phase};
-  t.exitAudit={trigger:reason,at:now,...(evidence?{evidence}:{})};s.balance+=gross-exitFee-funding;s.grossPnl+=gross;s.fees+=exitFee;s.fundingAllowance+=funding;
-  s.resolved++;if(net>0)s.wins++;s.turnover+=remainingNotional;t.lastQuoteAt=now;t.lastPrice=price;s.lastExitAt[t.symbol]=now;
+  t.exitAudit={trigger:reason,at:now,...(evidence?{evidence}:{})};t.lastQuoteAt=now;t.lastPrice=price;
+  if(t.unopened)return;
+  s.balance+=gross-exitFee-funding;s.grossPnl+=gross;s.fees+=exitFee;s.fundingAllowance+=funding;
+  s.resolved++;if(net>0)s.wins++;s.turnover+=remainingNotional;s.lastExitAt[t.symbol]=now;
   if(r){t.quantity=r.initialQuantity;t.contracts=r.initialContracts;t.notional=r.initialNotional;t.margin=r.initialMargin;t.plannedRisk=r.initialRisk;}
   if(t.entryContext?.winnerPlan&&reason!=="ACCOUNT_RESET"){
     s.winnerRisk??={};const p=t.entryContext.winnerPlan;
@@ -676,7 +682,7 @@ function manageTransitionTrade(s:ForwardState,t:Trade,q:Quote,now:number){
 function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now:number,minutePaths:Record<string,Candle[]>|undefined,
   marketEvolution:MarketEvolutionState,environmentOutlook:EnvironmentOutlook,paths?:Record<string,Candle[]>,contracts?:Record<string,Contract>){
   const closed=new Set<string>();
-  for(const t of s.positions){
+  for(const t of [...s.positions,...(s.unopenedTrades??[]).filter(row=>row.status==="OPEN")]){
     if(t.inverseCopy)continue;
     if(t.entryContext?.strategyVersion!==MARKET_INTELLIGENCE_VERSION)continue;
     const q=quotes[t.symbol];if(!freshQuote(q,now))continue;
@@ -1013,7 +1019,7 @@ export function applyOpportunityResearch(s:ForwardState,o:Opportunity,now:number
 }
 
 function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:number,equity:number,
-  response?:{validation:EntryValidation;decision:EntryResponseDecision},minutePath?:Candle[],entryStructure?:EntryStructure,transition?:TransitionEntry|null,shockRoom?:TransitionEntry|null){
+  response?:{validation:EntryValidation;decision:EntryResponseDecision},minutePath?:Candle[],entryStructure?:EntryStructure,transition?:TransitionEntry|null,shockRoom?:TransitionEntry|null,note=false){
   if(!isIntelligenceOpportunity(o))return"新策略身份缺失";
   const appliedResearch=applyOpportunityResearch(s,o,now);
   if(appliedResearch?.entryAction==="CONFIRM_MORE"&&!response)return "研究要求本币实时响应确认，不能由兼容入口跳过";
@@ -1060,15 +1066,15 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
     eventHeadroom=o.winnerPlan?winnerEventHeadroom(s.winnerRisk??{},o.winnerPlan.riskGroup,o.winnerPlan.eventAt,equity,eventOpenRisk).headroom*expansion:Infinity,
     headroom=Math.min(totalHeadroom,sideHeadroom,cycleHeadroom,continuationHeadroom,eventHeadroom),
     riskRate=o.winnerPlan?.intent==="RANGE"?.003:o.premium?.0065:.0055,environmentRiskScale=Math.max(.70,Math.min(1,o.environmentRiskScale??1)),
-    wantedRisk=equity*riskRate*environmentRiskScale*expansion,riskBudget=Math.min(wantedRisk,headroom);
-  if(riskBudget<equity*(o.winnerPlan?.intent==="RANGE"?.0015:.0035))return"剩余风险预算不足以形成有效仓位";
+    wantedRisk=equity*riskRate*environmentRiskScale*expansion,riskBudget=note?wantedRisk:Math.min(wantedRisk,headroom);
+  if(!note&&riskBudget<equity*(o.winnerPlan?.intent==="RANGE"?.0015:.0035))return"剩余风险预算不足以形成有效仓位";
   const rawNotional=riskBudget/(stopRate+ROUND_TRIP_COST),targetNotional=Math.min(rawNotional,equity*.70*expansion),
     leverage=Math.max(1,Math.min(10,Math.floor(contract.leverageMax||10))),mult=Math.max(contract.quantoMultiplier,1e-12),
     minContracts=Math.max(1,Math.ceil(contract.minContracts??(Number(contract.orderSizeMin??1)||1))),
     contracts=Math.floor(targetNotional/(price*mult));
   if(contracts<minContracts)return"低于最小模拟合约数量";
   const quantity=contracts*mult,notional=quantity*price,margin=notional/leverage,totalMargin=s.positions.reduce((n,t)=>n+t.margin,0);
-  if(totalMargin+margin>equity*TOTAL_MARGIN_RATE*expansion)return"组合保证金已满";
+  if(!note&&totalMargin+margin>equity*TOTAL_MARGIN_RATE*expansion)return"组合保证金已满";
   const roomFlipped=!!shockRoom&&shockRoom.side!==o.side;
   const winnerPlan=o.winnerPlan?structuredClone(o.winnerPlan):undefined;
   if(winnerPlan&&roomFlipped){
@@ -1140,6 +1146,18 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
       marketStateAgeMs:Math.max(0,now-s.extremumRegime.updatedAt),costRate:ROUND_TRIP_COST});
   if(entryAssessment.entryConflict)return "入场与持仓证据冲突，等待回调/新响应";
   t.positionIntelligence=entryAssessment;
+  if(note){
+    t.unopened=true;
+    s.unopenedTrades??=[];
+    if(s.unopenedTrades.some(row=>row.status==="OPEN"&&row.symbol===o.symbol))return"同币已有未开单记录";
+    s.unopenedTrades.unshift(t);
+    const done=s.unopenedTrades.filter(row=>row.status==="CLOSED");
+    if(done.length>800){
+      const keep=new Set(done.slice(0,800).map(row=>row.id));
+      s.unopenedTrades=s.unopenedTrades.filter(row=>row.status==="OPEN"||keep.has(row.id));
+    }
+    return null;
+  }
   s.positions.push(t);s.balance-=entryFee;s.fees+=entryFee;s.turnover+=notional;s.lastEntryAt[o.symbol]=now;s.lastSide[o.symbol]=side;
   rememberConsumedThesis(s,o.thesisId,now);
   event(s,now,"ENTRY",id,`${o.symbol} ${side} ${o.mode} 评分${o.score.toFixed(0)}`,
@@ -1475,8 +1493,12 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
     const structure=readEntryStructure({price,now,bars:paths?.[validation.symbol],bookImbalance:q!.bookImbalance??null});
     const stage=s.environmentContext.environment;
     if(stage!=="SHOCK"&&stage!=="TREND"){
-      validation.reason="只有同步爆发或趋势才开新单";
-      reject(validation.reason);continue;
+      const noted=openIntelligenceTrade(s,o,q!,meta,now,equity,{validation,decision},minutePaths?.[o.symbol],structure,null,null,true);
+      if(!noted||noted.startsWith("同币已有未开")){
+        validation.status="CANCELLED";validation.reason="只有同步爆发或趋势才开新单，这笔只留档";
+        delete s.entryValidations[validation.id];
+      }
+      reject(noted??"只有同步爆发或趋势才开新单，这笔只留档");continue;
     }
     const error=openIntelligenceTrade(s,o,q!,meta,now,equity,{validation,decision},minutePaths?.[o.symbol],structure,null,null);
     if(error){
@@ -1665,7 +1687,7 @@ export function forwardUrgentQuoteSymbols(s:ForwardState,now:number,entrySymbols
   const premium=s.opportunities.filter(o=>o.premium&&o.eligible&&o.expiresAt>now&&keep(o.symbol)).sort(opportunityCompare);
   const normal=s.opportunities.filter(o=>!o.premium&&o.eligible&&o.expiresAt>now&&keep(o.symbol)).sort(opportunityCompare);
   const watched=Object.values(s.extremumRegime.symbols).filter(r=>keep(r.symbol)&&r.watchScore>=58).sort((a,b)=>b.watchScore-a.watchScore);
-  return[...new Set([...(s.inverseTrial?.source.positions.map(t=>t.symbol)??[]),...(s.inverseTrial?.lsrWork?.map(order=>order.s)??[]),...s.positions.map(t=>t.symbol),...armed.map(v=>v.symbol),...premium.map(o=>o.symbol),...normal.map(o=>o.symbol),...watched.map(r=>r.symbol)])];
+  return[...new Set([...(s.inverseTrial?.source.positions.map(t=>t.symbol)??[]),...(s.inverseTrial?.lsrWork?.map(order=>order.s)??[]),...s.positions.map(t=>t.symbol),...(s.unopenedTrades??[]).filter(t=>t.status==="OPEN").map(t=>t.symbol),...armed.map(v=>v.symbol),...premium.map(o=>o.symbol),...normal.map(o=>o.symbol),...watched.map(r=>r.symbol)])];
 }
 export function forwardUrgentMinuteSymbols(s:ForwardState,entrySymbols?:Iterable<string>){
   const allowed=entrySymbols?new Set(entrySymbols):undefined,keep=(x:string)=>!allowed||allowed.has(x),

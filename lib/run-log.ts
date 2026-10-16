@@ -34,7 +34,7 @@ export function rememberRow<T>(rows:T[]|undefined,row:T){return [...(rows??[]),r
 export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null;health:{sources?:{source:string;fresh?:boolean;failures?:number;lastError?:string|null;rows?:number}[];healthySources?:number};gate:{connected?:boolean;lastError?:string|null;freshBooks?:number};exportedAt:number;liveEnabled:boolean;
   positions?:LsrPositionRow[];fills?:LsrFill[];curve?:LsrCurvePoint[];equity?:number|null;initial?:number|null;closedNet?:number|null;priorAdjustment?:number|null;
   unreconstructed?:number|null;unreconstructedN?:number|null;
-  places?:LsrPlace[]|null}){
+  places?:LsrPlace[]|null;notOpened?:LsrPositionRow[]|null}){
   const funnel=input.funnel??emptyFunnel('');
   const strategy={signal_not_triggered:funnel.trend+funnel.exhaustion+funnel.sweep+funnel.micro+funnel.spread,
     signal_triggered_no_fill:funnel.cancelled};
@@ -58,7 +58,7 @@ export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null
   const rows=(input.places&&input.places.length?input.places:placesFromEvents(input.events));
   const fallbackN=rows.filter(row=>row.fallback).length,rejectedN=rows.filter(row=>row.rejected).length;
   const body={version:'lsr-run-log-v2' as const,exportedAt:input.exportedAt,liveEnabled:input.liveEnabled,
-    howToRead:'这是当前市场智能模拟账户。权益 = 初始 + 已平净利 + 未平（价格盈亏 − 开仓费 − 预计平仓费）。不是已经停掉的实验漏斗。已平订单单独留档，不随热历史裁掉。每一笔记进场和出场当时的行情判定与演化阶段。分钟路径最多留 1200 笔，按页分开存，一次只写改过的那一页。',
+    howToRead:'这是当前市场智能模拟账户。权益 = 初始 + 已平净利 + 未平（价格盈亏 − 开仓费 − 预计平仓费）。不是已经停掉的实验漏斗。已平订单单独留档，不随热历史裁掉。每一笔记进场和出场当时的行情判定与演化阶段。分钟路径最多留 1200 笔，按页分开存，一次只写改过的那一页。not_opened 是没开进账户的单，只供复盘，不进权益。同步爆发和趋势的新单仓位是原来的 6 倍。',
     reviewPlan:[
       '先看进场和出场时的行情判定、演化阶段。',
       '同一种行情下再看方向。',
@@ -92,7 +92,7 @@ export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null
       {step:'账户实际权益',amount:equity},
       {step:'对不上的差额。接近 0 才算账平了',amount:identity==null?null:Number(identity.toFixed(4))},
     ],
-    positions,fills,equity_curve:curve};
+    positions,fills,equity_curve:curve,not_opened:input.notOpened??[]};
   if(JSON.stringify(body).length>20_000_000)body.equity_curve=curve.filter((_,i)=>i%5===0);
   return body;
 }
@@ -143,9 +143,27 @@ export function accountLogBook(state:ForwardState,quotes:Record<string,Quote>,no
   funnel.filled=openRows.length+closedRows.length;
   funnel.closed=closedRows.length;
   funnel.wins=closedRows.filter(row=>(row.net_pnl??0)>0).length;
+  const notOpened=(state.unopenedTrades??[]).map(t=>{
+    if(t.status==="CLOSED")return closedAccountRow(t);
+    const marked=openMark(state,t,quotes,now);
+    const row:LsrPositionRow={id:t.id,symbol:t.symbol,side:t.side,entry:t.entryPrice,exit:null,qty:t.quantity,notional:t.notional,
+      gross_pnl:round4(marked.gross+marked.realized),fee:round4(t.entryFee+marked.exitReserve),net_pnl:null,
+      holdSec:Math.max(0,Math.round((now-t.openedAt)/1000)),exit_reason:null,gapBps:null,opened_at:t.openedAt,closed_at:null,trace:t.id,
+      entry_structure:t.entryContext?.entryStructure??null,market_stage:t.entryContext?.environment??null,market_expectancy:t.entryContext?.marketExpectancy??null,
+      entry_phase:t.entryContext?.marketEvolutionPhase??null,exit_stage:null,exit_phase:null,exit_trigger:null,
+      entry_rule:"NOT_OPENED",
+      entry_signal:(t.entryContext?.transitionRule??t.entryContext?.shockRoom)?.signalSide??null,
+      entry_fade:(t.entryContext?.transitionRule??t.entryContext?.shockRoom)?.fade??null,
+      entry_room_pct:(t.entryContext?.transitionRule??t.entryContext?.shockRoom)?.roomPct??null,
+      entry_room_touches:(t.entryContext?.transitionRule??t.entryContext?.shockRoom)?.touches??null,
+      live_stage:t.entryContext?.stageNote?.liveStage??null,prior_stage:t.entryContext?.stageNote?.priorStage??null,
+      stage_age_min:t.entryContext?.stageNote?.stageAgeMin??null,minutes_since_shock:t.entryContext?.stageNote?.minutesSinceShock??null,
+      shock_push:t.entryContext?.stageNote?.shockPush??null,sync_drop:t.entryContext?.stageNote?.syncDrop??null};
+    return row;
+  });
   return {positions:[...closedRows,...openRows],fills,curve:[{ts:now,equity:round4(mark.equity),closed_pnl:round4(closedNet),unrealized_pnl:round4(unrealized),positions:openRows.length}],
     equity:mark.equity,initial:state.initialEquity,closedNet:round4(closedNet),priorAdjustment:0,places:[] as LsrPlace[],funnel,
-    unreconstructed:0,unreconstructedN:0};
+    unreconstructed:0,unreconstructedN:0,notOpened};
 }
 function closedAccountRow(t:Trade):LsrPositionRow{
   const recorded=orderRecord(t);

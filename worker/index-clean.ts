@@ -4369,7 +4369,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         await this.ensureOrderJournal();
         return json({...buildRunLogExport({events:[],funnel:book.funnel,health:hub,gate,exportedAt,liveEnabled:this.runtime.live.requestedEnabled,
           positions:book.positions,fills:book.fills,curve:book.curve,equity:book.equity,initial:book.initial,closedNet:book.closedNet,
-          priorAdjustment:book.priorAdjustment,unreconstructed:book.unreconstructed,unreconstructedN:book.unreconstructedN,places:book.places}),
+          priorAdjustment:book.priorAdjustment,unreconstructed:book.unreconstructed,unreconstructedN:book.unreconstructedN,places:book.places,notOpened:book.notOpened}),
           paths:exportTradePaths(this.tradePaths),holding:searchHolding(this.tradePaths)});
       }
       if(url.searchParams.get("page")==="archive"){

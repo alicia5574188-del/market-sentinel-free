@@ -31,7 +31,7 @@ export function orderRecord(t:Trade):OrderRecord{
     entry_stage:t.entryContext?.environment??null,entry_phase:t.entryContext?.marketEvolutionPhase??null,
     exit_stage:t.exitRegime?.stage??null,exit_phase:t.exitRegime?.phase??null,
     market_expectancy:t.entryContext?.marketExpectancy??null,entry_structure:t.entryContext?.entryStructure??null,
-    entry_rule:t.entryContext?.shockRoom?"SHOCK_EPISODE":t.entryContext?.transitionRule?"TRANSITION_ROOM":null,
+    entry_rule:t.unopened?"NOT_OPENED":t.entryContext?.shockRoom?"SHOCK_EPISODE":t.entryContext?.transitionRule?"TRANSITION_ROOM":null,
     ...entryDecision(t),...stageFields(t)};
 }
 function stageFields(t:Trade):Pick<OrderRecord,'live_stage'|'prior_stage'|'stage_age_min'|'minutes_since_shock'|'shock_push'|'sync_drop'>{

@@ -76,7 +76,8 @@ test("transition exit is only the stop or the time, never an expectancy target",
 test("live entries no longer use the transition or shock-room rules",()=>{
   const core=readFileSync(new URL("../lib/forward-relations.ts",import.meta.url),"utf8");
   const advance=core.slice(core.indexOf("function advanceEntryResponses"),core.indexOf("export function fillForwardPortfolio"));
-  assert.match(advance,/只有同步爆发或趋势才开新单/);
+  assert.match(advance,/只有同步爆发或趋势才开新单，这笔只留档/);
+  assert.match(advance,/openIntelligenceTrade\([\s\S]*?true\)/);
   assert.doesNotMatch(advance,/settledTransitionEntry/);
   assert.doesNotMatch(advance,/transitionEntryDecision/);
   assert.doesNotMatch(advance,/ruleMode==="transition"/);

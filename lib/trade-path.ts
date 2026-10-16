@@ -90,7 +90,7 @@ export function observeTradePaths(book:TradePathBook,state:ForwardState,executio
   let changed=false;
   if(book.accountStartedAt!==state.startedAt){book.accountStartedAt=state.startedAt;book.trades=[];book.dirty=[];book.indexDirty=true;changed=true;}
   const byId=new Map(book.trades.map(row=>[row.id,row]));
-  for(const t of [...state.positions,...state.history]){
+  for(const t of [...state.positions,...state.history,...(state.unopenedTrades??[])]){
     if(t.inverseCopy)continue;
     let row=byId.get(t.id);
     if(!row){

@@ -53,6 +53,6 @@ test("new entries open only in shock or trend, on the original side, at three ti
   assert.doesNotMatch(entries,/settledTransitionEntry/);
   const open=core.slice(core.indexOf("function openIntelligenceTrade"),core.indexOf("export function extremeResidualConfirmationProfile"));
   assert.match(open,/environment==="SHOCK"\|\|s\.environmentContext\.environment==="TREND"\?EXPANSION_SIZE:1/);
-  assert.match(core,/const EXPANSION_SIZE=3/);
+  assert.match(core,/const EXPANSION_SIZE=6/);
   assert.match(core,/next\.shockEpisode=structuredClone\(prior\.shockEpisode\)/);
 });
