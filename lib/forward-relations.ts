@@ -1015,8 +1015,6 @@ export function applyOpportunityResearch(s:ForwardState,o:Opportunity,now:number
 function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:number,equity:number,
   response?:{validation:EntryValidation;decision:EntryResponseDecision},minutePath?:Candle[],entryStructure?:EntryStructure,transition?:TransitionEntry|null,shockRoom?:TransitionEntry|null){
   if(!isIntelligenceOpportunity(o))return"新策略身份缺失";
-  const stage=s.environmentContext.environment;
-  if(stage!=="SHOCK"&&stage!=="TREND")return"只有同步爆发或趋势才开新单";
   const appliedResearch=applyOpportunityResearch(s,o,now);
   if(appliedResearch?.entryAction==="CONFIRM_MORE"&&!response)return "研究要求本币实时响应确认，不能由兼容入口跳过";
   if(s.positions.some(t=>t.symbol===o.symbol))return"同币已有持仓，禁止重复开仓";
@@ -1052,24 +1050,25 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
   }
   const sameCluster=s.positions.find(t=>t.side===side&&o.clusterId&&t.entryContext?.clusterId===o.clusterId);
   if(sameCluster)return"同相关组已有同方向主仓";
-  const continuation=o.mode==="CONTINUATION"&&(o.tradePlan==="LIQUIDITY_MIGRATION"||o.winnerPlan?.intent==="TREND"),
-    totalHeadroom=equity*(TOTAL_RISK_RATE*EXPANSION_SIZE-.001)-existingRisk(s),
-    sideHeadroom=equity*(SIDE_RISK_RATE*EXPANSION_SIZE-.0005)-existingRisk(s,side),
-    cycleHeadroom=equity*FIVE_MINUTE_NEW_RISK_RATE*EXPANSION_SIZE-cycleRiskAdded(s,s.lastCandleAt),
-    continuationHeadroom=continuation?equity*CONTINUATION_SIDE_RISK_RATE*EXPANSION_SIZE-continuationRisk(s,side):Infinity,
+  const expansion=s.environmentContext.environment==="SHOCK"||s.environmentContext.environment==="TREND"?EXPANSION_SIZE:1,
+    continuation=o.mode==="CONTINUATION"&&(o.tradePlan==="LIQUIDITY_MIGRATION"||o.winnerPlan?.intent==="TREND"),
+    totalHeadroom=equity*(TOTAL_RISK_RATE*expansion-.001)-existingRisk(s),
+    sideHeadroom=equity*(SIDE_RISK_RATE*expansion-.0005)-existingRisk(s,side),
+    cycleHeadroom=equity*FIVE_MINUTE_NEW_RISK_RATE*expansion-cycleRiskAdded(s,s.lastCandleAt),
+    continuationHeadroom=continuation?equity*CONTINUATION_SIDE_RISK_RATE*expansion-continuationRisk(s,side):Infinity,
     eventOpenRisk=o.winnerPlan?s.positions.filter(t=>t.entryContext?.winnerPlan?.riskGroup===o.winnerPlan!.riskGroup).reduce((n,t)=>n+riskCharge(t),0):0,
-    eventHeadroom=o.winnerPlan?winnerEventHeadroom(s.winnerRisk??{},o.winnerPlan.riskGroup,o.winnerPlan.eventAt,equity,eventOpenRisk).headroom*EXPANSION_SIZE:Infinity,
+    eventHeadroom=o.winnerPlan?winnerEventHeadroom(s.winnerRisk??{},o.winnerPlan.riskGroup,o.winnerPlan.eventAt,equity,eventOpenRisk).headroom*expansion:Infinity,
     headroom=Math.min(totalHeadroom,sideHeadroom,cycleHeadroom,continuationHeadroom,eventHeadroom),
     riskRate=o.winnerPlan?.intent==="RANGE"?.003:o.premium?.0065:.0055,environmentRiskScale=Math.max(.70,Math.min(1,o.environmentRiskScale??1)),
-    wantedRisk=equity*riskRate*environmentRiskScale*EXPANSION_SIZE,riskBudget=Math.min(wantedRisk,headroom);
+    wantedRisk=equity*riskRate*environmentRiskScale*expansion,riskBudget=Math.min(wantedRisk,headroom);
   if(riskBudget<equity*(o.winnerPlan?.intent==="RANGE"?.0015:.0035))return"剩余风险预算不足以形成有效仓位";
-  const rawNotional=riskBudget/(stopRate+ROUND_TRIP_COST),targetNotional=Math.min(rawNotional,equity*.70*EXPANSION_SIZE),
+  const rawNotional=riskBudget/(stopRate+ROUND_TRIP_COST),targetNotional=Math.min(rawNotional,equity*.70*expansion),
     leverage=Math.max(1,Math.min(10,Math.floor(contract.leverageMax||10))),mult=Math.max(contract.quantoMultiplier,1e-12),
     minContracts=Math.max(1,Math.ceil(contract.minContracts??(Number(contract.orderSizeMin??1)||1))),
     contracts=Math.floor(targetNotional/(price*mult));
   if(contracts<minContracts)return"低于最小模拟合约数量";
   const quantity=contracts*mult,notional=quantity*price,margin=notional/leverage,totalMargin=s.positions.reduce((n,t)=>n+t.margin,0);
-  if(totalMargin+margin>equity*TOTAL_MARGIN_RATE*EXPANSION_SIZE)return"组合保证金已满";
+  if(totalMargin+margin>equity*TOTAL_MARGIN_RATE*expansion)return"组合保证金已满";
   const roomFlipped=!!shockRoom&&shockRoom.side!==o.side;
   const winnerPlan=o.winnerPlan?structuredClone(o.winnerPlan):undefined;
   if(winnerPlan&&roomFlipped){
