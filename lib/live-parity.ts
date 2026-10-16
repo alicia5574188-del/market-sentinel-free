@@ -84,6 +84,7 @@ export function forwardMirrorSources(state: ForwardState, sourceEquity: number):
     // 同步爆发和趋势进实盘，名义按实盘权益/模拟权益缩放。过渡、轮动和没开的单不进。
     // 已经存在的反向单仍可跟随，避免把已绑定的实盘仓丢掉；当前账户不再新开反向单。
     if(!copyableLiveSource(t))continue;
+    if(!t.inverseCopy&&state.positions.some(other=>other.symbol===t.symbol&&other.status==="OPEN"&&other.inverseCopy))continue;
     validateMirrorSource(t);
     const protection=liveProtectionPrice(t);
     if (out[t.symbol]) throw new Error(`${t.symbol} 出现多条逻辑持仓；禁止静默净额合并，须先升级逐腿执行适配器`);
