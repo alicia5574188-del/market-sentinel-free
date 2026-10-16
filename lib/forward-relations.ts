@@ -267,9 +267,51 @@ function normalizeRule(t:Partial<Trade>,now:number):Rule{
     mutation:"CREATE",grammar:ADAPTIVE_ENGINE_VERSION,liveEligible:false,
     authority:r?.authority==="STRUCTURAL_INTERRUPT"?"STRUCTURAL_INTERRUPT":r?.authority==="FORWARD_RELATION"?"FORWARD_RELATION":"ADAPTIVE_TEN",turnTimeframe:"5m"};
 }
+function sameMoney(a:number,b:number){return Number.isFinite(a)&&Number.isFinite(b)&&Math.abs(a-b)<=1e-7*Math.max(1,Math.abs(a),Math.abs(b));}
+/** A not-opened note or a finished row can store a partial whose remaining size
+ * was never restored. Put the parent size back. Cash already booked stays. */
+function restoreRealizationParent(t:Trade){
+  const r=t.realization;if(!r||!(t.entryPrice>0))return false;
+  t.quantity=r.initialQuantity;t.contracts=r.initialContracts;t.plannedRisk=r.initialRisk;
+  const identity=t.quantity*t.entryPrice;
+  t.notional=sameMoney(r.initialNotional,identity)?r.initialNotional:identity;
+  t.margin=sameMoney(t.notional,r.initialNotional)?r.initialMargin:t.notional/Math.max(t.leverage||1,1);
+  if(!sameMoney(t.entryFee,r.initialEntryFee))t.entryFee=r.initialEntryFee;
+  return true;
+}
+function alignSavedRealization(t:Trade){
+  if(!t.realization)return;
+  try{assertTradeRealization(t);return;}
+  catch(error){if(!(error instanceof Error)||!error.message.includes("部分兑现账本与剩余仓位不一致"))throw error;}
+  const r=t.realization,filledQty=r.fills.reduce((n,f)=>n+f.quantity,0),filledContracts=r.fills.reduce((n,f)=>n+f.contracts,0);
+  const sums=r.version==="partial-realization-v1"&&Array.isArray(r.fills)&&r.fills.length>=1&&r.fills.length<=2&&r.sequence===r.fills.length
+    &&r.fills.every((f,i)=>f.sequence===i+1&&f.quantity>0&&f.contracts>0)
+    &&sameMoney(r.fills.reduce((n,f)=>n+f.gross,0),r.gross)&&sameMoney(r.fills.reduce((n,f)=>n+f.fee,0),r.fees)
+    &&sameMoney(r.fills.reduce((n,f)=>n+f.funding,0),r.funding)
+    &&filledQty<=r.initialQuantity+1e-8&&filledContracts<=r.initialContracts+1e-8&&filledContracts<=r.initialContracts*.65+1e-6;
+  if(t.status==="CLOSED"){
+    if(sums)restoreRealizationParent(t);
+    try{assertTradeRealization(t);}catch{delete t.realization;}
+    return;
+  }
+  const sizeMatches=sameMoney(t.quantity,r.initialQuantity-filledQty)&&sameMoney(t.contracts,r.initialContracts-filledContracts);
+  if(!t.unopened){
+    if(!sizeMatches)throw new Error(`部分兑现账本与剩余仓位不一致；保留原账户（${t.symbol} 仍持仓）`);
+    t.notional=t.quantity*t.entryPrice;t.margin=t.notional/Math.max(t.leverage||1,1);
+    if(!sameMoney(t.entryFee,r.initialEntryFee))t.entryFee=r.initialEntryFee;
+    assertTradeRealization(t);return;
+  }
+  if(sizeMatches){
+    t.notional=t.quantity*t.entryPrice;t.margin=t.notional/Math.max(t.leverage||1,1);
+    if(!sameMoney(t.entryFee,r.initialEntryFee))t.entryFee=r.initialEntryFee;
+    try{assertTradeRealization(t);return;}catch{/* the note is not a live position */}
+  }
+  delete t.realization;
+}
 function normalizeTrade(raw:Trade,now:number):Trade{
   const t=structuredClone(raw) as Trade,tick=Math.max(1e-9,safe(t.entryPrice,1)),side=t.side==="SHORT"?"SHORT":"LONG";
   assertInverseTrade(t);
+  alignSavedRealization(t);
   assertTradeRealization(t);
   t.side=side;t.rule=normalizeRule(t,now);t.status=t.status==="CLOSED"?"CLOSED":"OPEN";
   t.openedAt=safe(t.openedAt,now);t.closedAt=t.status==="CLOSED"?safe(t.closedAt,now):null;
@@ -535,10 +577,10 @@ function closeTrade(s:ForwardState,t:Trade,price:number,now:number,reason:string
   t.status="CLOSED";t.closedAt=now;t.exitPrice=price;t.exitFee=exitFee+(r?.fees??0);t.fundingAllowance=funding+(r?.funding??0);t.grossPnl=gross+(r?.gross??0);t.netPnl=net;t.exitReason=reason;
   if(reason!=="ACCOUNT_RESET")t.exitRegime={stage:s.environmentContext.environment,phase:s.environmentContext.phase};
   t.exitAudit={trigger:reason,at:now,...(evidence?{evidence}:{})};t.lastQuoteAt=now;t.lastPrice=price;
-  if(t.unopened)return;
+  if(t.unopened){restoreRealizationParent(t);return;}
   s.balance+=gross-exitFee-funding;s.grossPnl+=gross;s.fees+=exitFee;s.fundingAllowance+=funding;
   s.resolved++;if(net>0)s.wins++;s.turnover+=remainingNotional;s.lastExitAt[t.symbol]=now;
-  if(r){t.quantity=r.initialQuantity;t.contracts=r.initialContracts;t.notional=r.initialNotional;t.margin=r.initialMargin;t.plannedRisk=r.initialRisk;}
+  if(r)restoreRealizationParent(t);
   if(t.entryContext?.winnerPlan&&reason!=="ACCOUNT_RESET"){
     s.winnerRisk??={};const p=t.entryContext.winnerPlan;
     recordWinnerRiskLoss(s.winnerRisk,p.riskGroup,p.eventAt,net,now);
@@ -675,6 +717,8 @@ export function manageWinnerTrade(s:ForwardState,t:Trade,q:Quote,now:number,path
     return true;
   }
   if(outcome.action==="REDUCE"){
+    if(t.unopened){outcome.state.reductionResult="NOT_EXECUTED_UNOPENED";}
+    else{
     const minContracts=contract?.minContracts??Number(contract?.orderSizeMin??0),
       result=realizeTradeSlice({trade:t,price:px,now,quoteAt:q.observedAt,fraction:outcome.fraction,
         feeRate:PAPER_COST.feeRate,fundingPerDay:PAPER_COST.fundingAllowancePerDay,minContracts,reason:outcome.reason});
@@ -684,6 +728,7 @@ export function manageWinnerTrade(s:ForwardState,t:Trade,q:Quote,now:number,path
       event(s,now,"PROTECTION",t.id,"受阻后部分兑现；保留原父单与趋势仓",{action:"PARTIAL_EXIT",contracts:result.contracts,
         remainingContracts:t.contracts,sequence:t.realization!.sequence,quoteAt:q.observedAt,realizedGross:result.gross});
     }else outcome.state.reductionResult="NOT_EXECUTED_SIZE_OR_NET_COST";
+    }
   }
   return false;
 }

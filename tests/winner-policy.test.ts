@@ -135,6 +135,18 @@ test('remaining size and loss budget survive source-store round trip; corrupted 
   const broken=structuredClone(s);broken.positions[0]!.contracts++;
   assert.throws(()=>normalizeForward(broken,T+B),/兑现/);
 });
+test('a not-opened partial closed without restoring size loads again and does not move cash',()=>{
+  const {s,t}=fixture();
+  const result=realizeTradeSlice({trade:t,price:104,now:T+B,quoteAt:T+B,fraction:.4,feeRate:.0007,fundingPerDay:.0002,minContracts:1,reason:'fixture'})!;
+  assert.ok(result);
+  const initialQty=t.realization!.initialQuantity,booked=s.balance;
+  t.unopened=true;t.status='CLOSED';t.closedAt=T+B;
+  s.positions=[];s.unopenedTrades=[t];
+  const n=normalizeForward(structuredClone(s),T+2*B);
+  assert.equal(n.balance,booked);assert.equal(n.positions.length,0);
+  const row=n.unopenedTrades![0]!;
+  assert.equal(row.quantity,initialQty);assertTradeRealization(row);
+});
 test('compact protection restoration cannot loosen a new runner stop or repeat an already completed trim',()=>{
   const {s,t}=fixture();t.winnerManagement={...advanceWinnerManagement({...inputs,price:104.5}).state,trimCount:1,lastTrimEvent:T+B};t.stopPrice=t.winnerManagement.protectedStop;
   const later=structuredClone(s);later.positions[0]!.stopPrice=103;later.positions[0]!.winnerManagement!.protectedStop=103;

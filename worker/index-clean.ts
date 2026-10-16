@@ -784,13 +784,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }
       catch (error) {
         this.forwardError = safeError(error);
-        // The owner asked to abandon this unread later-system ledger. The reset
-        // control cannot run until the account loads, so this one incompatibility
-        // is cleared here. A later mismatch still stops instead of rewriting itself.
-        if(/部分兑现账本与剩余仓位不一致/.test(this.forwardError)){
-          try{await this.resetPaperAccount();}
-          catch(resetError){this.forwardError=safeError(resetError);}
-        }
       }
       // Owner intent has its own durable record. Background checkpoints and
       // deployments cannot replace a later OFF with an earlier in-flight ON.
