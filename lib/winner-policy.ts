@@ -179,3 +179,49 @@ export function advanceWinnerManagement(input:{side:'LONG'|'SHORT';price:number;
   m.reason=obstacle?'本币推进受阻，等待新的有效价格确认':m.research?.reason??'保留趋势持仓；已有成本优势不由重新入场评分否决';
   return{state:m,action:'HOLD' as const,fraction:0,reason:m.reason};
 }
+
+/** No fixed profit percent. A meaningful new high clears 0.4 of the 5-minute
+ * range already printed by this trade. Exit only after the pause since that
+ * high exceeds any pause this same trade has already recovered from, and the
+ * open giveback exceeds two of those ranges. The range is causal: a later
+ * spike cannot relabel earlier pushes. */
+export function rhythmBreakDecision(input:{side:'LONG'|'SHORT';entryPrice:number;openedAt:number;now:number;price:number;
+  minutes:CandleLike[]|undefined;cost:number}){
+  const none={exit:false as const},entry=input.entryPrice,d=sign(input.side);
+  if(!(entry>0)||!(input.price>0)||!(input.cost>0)||!(input.now>=input.openedAt))return none;
+  const unique=new Map<number,CandleLike>();
+  for(const r of input.minutes??[]){
+    if(![r.time,r.high,r.low].every(Number.isFinite)||!(r.time>0)||!(r.low>0)||r.high<r.low)continue;
+    if(r.time*1000<input.openedAt||r.time*1000+60_000>input.now)continue;
+    unique.set(r.time,r);
+  }
+  const bars=[...unique.values()].sort((a,b)=>a.time-b.time);
+  const fav=(px:number)=>d*(px/entry-1);
+  let peak=-Infinity,peakAt=0,marked=-1,atr=0;const gaps:number[]=[],trs:number[]=[];
+  let bucket:number|null=null,hi=0,lo=0,prevHi=0,prevLo=0,havePrev=false;
+  const closeBucket=()=>{
+    if(bucket==null)return;
+    const tr=(havePrev?Math.max(hi-lo,Math.abs(hi-prevHi),Math.abs(lo-prevLo)):hi-lo)/entry;
+    trs.push(tr);const recent=trs.slice(-6);atr=recent.reduce((s,x)=>s+x,0)/recent.length;
+    prevHi=hi;prevLo=lo;havePrev=true;bucket=null;
+  };
+  const mark=(rate:number,atMin:number)=>{
+    if(!(atr>0)||trs.length<4){if(rate>peak){peak=rate;peakAt=atMin;}}
+    else if(rate>peak+atr*.4){if(marked>=0)gaps.push(atMin-marked);marked=atMin;peak=rate;peakAt=atMin;}
+    else if(rate>peak){peak=rate;peakAt=atMin;}
+  };
+  for(const b of bars){
+    const key=Math.floor(b.time/300)*300;
+    if(bucket==null){bucket=key;hi=b.high;lo=b.low;}
+    else if(key!==bucket){closeBucket();bucket=key;hi=b.high;lo=b.low;}
+    else{hi=Math.max(hi,b.high);lo=Math.min(lo,b.low);}
+    mark(fav(input.side==='LONG'?b.high:b.low),(b.time*1000-input.openedAt)/60_000);
+  }
+  if(bucket!=null&&input.now>=(bucket+300)*1000)closeBucket();
+  mark(fav(input.price),(input.now-input.openedAt)/60_000);
+  if(gaps.length<3||!(atr>0))return none;
+  const longest=Math.max(...gaps),stall=(input.now-input.openedAt)/60_000-peakAt,signed=fav(input.price),giveback=peak-signed;
+  if(stall>longest&&giveback>atr*2&&signed>input.cost)
+    return{exit:true as const,peakRate:peak,stallMin:stall,longestMin:longest,atr,giveback};
+  return none;
+}

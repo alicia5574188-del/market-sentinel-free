@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {WINNER_POLICY_VERSION as V,trendCore,selectWinnerOpportunity,reactionGeometry,advanceWinnerManagement,type WinnerPlan} from '../lib/winner-policy.ts';
+import {WINNER_POLICY_VERSION as V,trendCore,selectWinnerOpportunity,reactionGeometry,advanceWinnerManagement,rhythmBreakDecision,type WinnerPlan} from '../lib/winner-policy.ts';
 import type {MarketSymbolState,CandleLike} from '../lib/market-intelligence-engine.ts';
 import {realizeTradeSlice,assertTradeRealization,realizedContribution} from '../lib/trade-realization.ts';
 import {initialForward,normalizeForward,fillForwardPortfolio,manageWinnerTrade,forwardEquity,type Opportunity} from '../lib/forward-relations.ts';
@@ -76,6 +76,34 @@ test('shock and trend lock a 1.5 point giveback only after a 10 point peak',()=>
   other.t.favorable=.16;other.t.peakPnlRate=.16;
   assert.equal(manageWinnerTrade(other.s,other.t,quote(114,T+2*B),T+2*B,{},{}),false);
   assert.equal(other.t.status,"OPEN");
+});
+function rhythmPath(stall:number){
+  const px:number[]=[];let price=100;
+  for(let i=0;i<40;i++){if(i%4===0)price+=.35;px.push(price);}
+  for(let i=0;i<stall;i++)px.push(price-.2-i*.12);
+  return px.map((value,i)=>({time:(T+i*60_000)/1000,open:value,high:value+.05,low:value-.05,close:value,volume:1}));
+}
+test('a shock or trend exit follows this trade’s own push rhythm, at the live quote',()=>{
+  const stalled=rhythmPath(12),last=stalled.at(-1)!,now=last.time*1000+60_000;
+  const broken=rhythmBreakDecision({side:'LONG',entryPrice:100,openedAt:T,now,price:last.close,minutes:stalled,cost:.0019});
+  assert.equal(broken.exit,true);
+  const brief=rhythmPath(3),end=brief.at(-1)!;
+  assert.equal(rhythmBreakDecision({side:'LONG',entryPrice:100,openedAt:T,now:end.time*1000+60_000,price:end.close,minutes:brief,cost:.0019}).exit,false);
+  const trend=fixture();
+  trend.t.entryContext!.environment="TREND";
+  assert.equal(manageWinnerTrade(trend.s,trend.t,quote(last.close,now),now,{},{TEST_USDT:stalled}),true);
+  assert.equal(trend.t.exitReason,"RHYTHM_BREAK");
+  assert.equal(trend.t.exitPrice,last.close);
+  const transition=fixture();
+  transition.t.entryContext!.environment="TRANSITION";
+  assert.equal(manageWinnerTrade(transition.s,transition.t,quote(last.close,now),now,{},{TEST_USDT:stalled}),false);
+  assert.equal(transition.t.status,"OPEN");
+  const stamped=fixture();
+  stamped.t.entryContext!.environment="TRANSITION";
+  stamped.t.entryContext!.stageNote={liveStage:"TREND",priorStage:"TRANSITION",stageAgeMin:4,minutesSinceShock:null,shockPush:0,syncDrop:null};
+  assert.equal(manageWinnerTrade(stamped.s,stamped.t,quote(last.close,now),now,{},{TEST_USDT:stalled}),true);
+  assert.equal(stamped.t.exitReason,"RHYTHM_BREAK");
+  assert.equal(stamped.t.exitPrice,last.close);
 });
 test('expectancy, a five-point giveback, and a later small loss do not add an exit',()=>{
   const reached=fixture();

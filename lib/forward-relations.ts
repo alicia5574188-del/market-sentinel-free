@@ -1,7 +1,7 @@
 import {RESEARCH_PLAN_VERSION,researchPlanContext,type PlanResearchDecision} from './research-plan.ts';
 import {assertInverseTrade,assertInverseTrial,inverseTrialSummary,sourceDecisionState,shadowCapsule,applyInverseSourceTrade,migrateInverseSamePrice,alignComparisonSourceFees,retainDetachedSourceIds,INVERSE_COST,type InverseCopy,type InverseTrial} from './shadow-inverse-ledger.ts';
 import {forwardDeskView,noteForwardStudy} from './forward-study.ts';
-import {advanceWinnerManagement, trendCore, WINNER_POLICY_VERSION, type WinnerPlan, type WinnerManagement} from "./winner-policy.ts";
+import {advanceWinnerManagement, rhythmBreakDecision, trendCore, WINNER_POLICY_VERSION, type WinnerPlan, type WinnerManagement} from "./winner-policy.ts";
 import {realizeTradeSlice, realizedContribution, remainingTradeFraction, assertTradeRealization, type TradeRealization} from "./trade-realization.ts";
 import {winnerEventHeadroom, recordWinnerRiskLoss, type WinnerRiskLedger} from "./winner-risk.ts";
 import { familyExperimentSummary, initialFamilyExperimentState, isFamilyFailure,
@@ -676,6 +676,14 @@ export function manageWinnerTrade(s:ForwardState,t:Trade,q:Quote,now:number,path
   if((stage==="SHOCK"||stage==="TREND")&&t.favorable>=.10&&t.favorable-signed>=.015){
     closeTrade(s,t,px,now,"PEAK_GIVEBACK",{authority:"SHOCK_TREND_GIVEBACK",peakRate:t.favorable,signedRate:signed,armRate:.10,givebackRate:.015,quoteAt:q.observedAt});
     return true;
+  }
+  const liveStage=t.entryContext?.stageNote?.liveStage;
+  if((liveStage==="SHOCK"||liveStage==="TREND"||stage==="SHOCK"||stage==="TREND")){
+    const rhythm=rhythmBreakDecision({side:t.side,entryPrice:t.entryPrice,openedAt:t.openedAt,now,price:px,minutes:minutePaths?.[t.symbol],cost:ROUND_TRIP_COST});
+    if(rhythm.exit){
+      closeTrade(s,t,px,now,"RHYTHM_BREAK",{authority:"OWN_RHYTHM",peakRate:rhythm.peakRate,stallMin:rhythm.stallMin,longestMin:rhythm.longestMin,atr:rhythm.atr,giveback:rhythm.giveback,quoteAt:q.observedAt});
+      return true;
+    }
   }
   if(!t.firstProfitAt&&signed>ROUND_TRIP_COST){t.firstProfitAt=now;if(t.entryContext)t.entryContext.postEntryState="CONFIRMED";}
   const position=evaluatePositionIntelligence({now,openedAt:t.openedAt,side:t.side,signedRate:signed,peakFavorableRate:t.favorable,
