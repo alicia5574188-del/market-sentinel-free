@@ -515,6 +515,13 @@ function updateDaily(s:ForwardState,now:number,equity:number){
   const key=dayKey(now),row=s.daily.at(-1);if(!row||row.day!==key)s.daily.push({day:key,firstAt:now,lastAt:now,startEquity:equity,endEquity:equity,exactBoundary:false});
   else{row.lastAt=now;row.endEquity=equity;}s.daily=s.daily.slice(-45);
 }
+/** A resting stop was already in the book. A later quote can be far through it
+ * only because the loop saw the price late. Fill at the stop plus the normal
+ * paper slippage, and keep a quote that is still better than that. */
+function restingStopFill(side:"LONG"|"SHORT",stop:number,quote:number){
+  const slipped=stop*(1-dir(side)*PAPER_COST.slippageRate);
+  return side==="LONG"?Math.max(quote,slipped):Math.min(quote,slipped);
+}
 function closeTrade(s:ForwardState,t:Trade,price:number,now:number,reason:string,evidence?:Record<string,string|number|boolean|null>){
   const gross=dir(t.side)*t.quantity*(price-t.entryPrice),exitFee=t.quantity*price*PAPER_COST.feeRate;
   const funding=t.notional*PAPER_COST.fundingAllowancePerDay*Math.max(0,now-t.openedAt)/86_400_000,
@@ -653,8 +660,9 @@ export function manageWinnerTrade(s:ForwardState,t:Trade,q:Quote,now:number,path
   t.holdValue={action:outcome.action==="EXIT"?(signed>ROUND_TRIP_COST?"EXIT_PROFIT":"EXIT_RISK"):position.decision==="REVIEW"?"REVIEW":"HOLD",
     score:t.holdScore,pullbackRiskRate:position.expectedPullbackRate,bestHoldMinutes:t.expectedHoldMinutes??180};
   if(outcome.action==="EXIT"){
-    closeTrade(s,t,px,now,outcome.reason,{authority:"WINNER_PLAN",quoteAt:q.observedAt,protectedStop:t.stopPrice,
-      originalStop:plan.initialStop,trimCount:t.realization?.sequence??0,
+    const fill=outcome.reason==="WINNER_STRUCTURE_EXIT"?restingStopFill(t.side,t.stopPrice,px):px;
+    closeTrade(s,t,fill,now,outcome.reason,{authority:"WINNER_PLAN",quoteAt:q.observedAt,protectedStop:t.stopPrice,
+      originalStop:plan.initialStop,trimCount:t.realization?.sequence??0,quote:px,
       requestedAction:outcome.action,appliedAction:"EXIT"});
     if(t.exitAudit&&outcome.state.research)t.exitAudit.research=structuredClone(outcome.state.research);
     return true;
