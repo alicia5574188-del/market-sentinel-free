@@ -515,12 +515,18 @@ function updateDaily(s:ForwardState,now:number,equity:number){
   const key=dayKey(now),row=s.daily.at(-1);if(!row||row.day!==key)s.daily.push({day:key,firstAt:now,lastAt:now,startEquity:equity,endEquity:equity,exactBoundary:false});
   else{row.lastAt=now;row.endEquity=equity;}s.daily=s.daily.slice(-45);
 }
-/** A resting stop was already in the book. A later quote can be far through it
- * only because the loop saw the price late. Fill at the stop plus the normal
- * paper slippage, and keep a quote that is still better than that. */
-function restingStopFill(side:"LONG"|"SHORT",stop:number,quote:number){
-  const slipped=stop*(1-dir(side)*PAPER_COST.slippageRate);
-  return side==="LONG"?Math.max(quote,slipped):Math.min(quote,slipped);
+/** Same 0.1% as the live limit. A resting limit fills there only when this
+ * minute actually traded through the stop, or the previous executable quote
+ * was already inside that band. Otherwise the quote is the fill. */
+function executableProtectionFill(side:"LONG"|"SHORT",stop:number,quote:number,prior:number,bar?:Candle){
+  const d=dir(side);
+  if(!(stop>0)||d*(quote-stop)>0)return quote;
+  const limit=stop*(1-d*0.001);
+  const extreme=bar?side==="LONG"?bar.low:bar.high:NaN;
+  const barTraded=!!bar&&bar.open>0&&d*(bar.open-stop)>=0&&d*(extreme-stop)<=0;
+  const tight=prior>0&&d*(prior-stop)>=0&&Math.abs(prior-stop)/stop<=0.0015;
+  if(!barTraded&&!tight)return quote;
+  return side==="LONG"?Math.max(quote,limit):Math.min(quote,limit);
 }
 function closeTrade(s:ForwardState,t:Trade,price:number,now:number,reason:string,evidence?:Record<string,string|number|boolean|null>){
   const gross=dir(t.side)*t.quantity*(price-t.entryPrice),exitFee=t.quantity*price*PAPER_COST.feeRate;
@@ -621,7 +627,7 @@ export function liquidityInvalidationDecision(input:{
 export function manageWinnerTrade(s:ForwardState,t:Trade,q:Quote,now:number,paths:Record<string,Candle[]>|undefined,minutePaths:Record<string,Candle[]>|undefined,contract?:Contract){
   const plan=t.entryContext?.winnerPlan;if(!plan)return false;
   const px=t.side==="LONG"?q.bestBid:q.bestAsk,d=dir(t.side),signed=d*(px/t.entryPrice-1),symbol=s.extremumRegime.symbols[t.symbol],
-    originalRisk=Math.abs(plan.initialStop/t.entryPrice-1);
+    originalRisk=Math.abs(plan.initialStop/t.entryPrice-1),prior=t.lastPrice;
   t.lastPrice=px;t.lastQuoteAt=q.observedAt;t.favorable=Math.max(t.favorable,Math.max(0,signed));t.adverse=Math.max(t.adverse,Math.max(0,-signed));
   t.peakPnlRate=Math.max(t.peakPnlRate??0,t.favorable);
   const stage=t.entryContext?.environment;
@@ -660,7 +666,8 @@ export function manageWinnerTrade(s:ForwardState,t:Trade,q:Quote,now:number,path
   t.holdValue={action:outcome.action==="EXIT"?(signed>ROUND_TRIP_COST?"EXIT_PROFIT":"EXIT_RISK"):position.decision==="REVIEW"?"REVIEW":"HOLD",
     score:t.holdScore,pullbackRiskRate:position.expectedPullbackRate,bestHoldMinutes:t.expectedHoldMinutes??180};
   if(outcome.action==="EXIT"){
-    const fill=outcome.reason==="WINNER_STRUCTURE_EXIT"?restingStopFill(t.side,t.stopPrice,px):px;
+    const bar=minutePaths?.[t.symbol]?.at(-1);
+    const fill=outcome.reason==="WINNER_STRUCTURE_EXIT"?executableProtectionFill(t.side,t.stopPrice,px,prior,bar):px;
     closeTrade(s,t,fill,now,outcome.reason,{authority:"WINNER_PLAN",quoteAt:q.observedAt,protectedStop:t.stopPrice,
       originalStop:plan.initialStop,trimCount:t.realization?.sequence??0,quote:px,
       requestedAction:outcome.action,appliedAction:"EXIT"});

@@ -91,13 +91,17 @@ test('expectancy, a five-point giveback, and a later small loss do not add an ex
   assert.equal(manageWinnerTrade(loss.s,loss.t,quote(99.4,T+2*B),T+2*B,{},{}),false);
   assert.equal(loss.t.status,'OPEN');
 });
-test('a resting profit stop fills at the stop, not at a quote already through it',()=>{
+test('a profit stop fills near the stop only when the minute traded through it',()=>{
   const {s,t}=fixture();
-  t.stopPrice=104;t.favorable=.06;t.profitFloorRate=.04;
-  assert.equal(manageWinnerTrade(s,t,quote(102,T+2*B),T+2*B,{},{}),true);
+  t.stopPrice=104;t.favorable=.06;t.lastPrice=105;
+  const bar={time:(T+60_000)/1000,open:105,high:105.2,low:102,close:102,volume:1};
+  assert.equal(manageWinnerTrade(s,t,quote(102,T+2*B),T+2*B,{},{TEST_USDT:[bar]}),true);
   assert.equal(t.exitReason,'WINNER_STRUCTURE_EXIT');
-  assert.ok(Math.abs(t.exitPrice!-104*(1-.00025))<1e-8);
-  assert.ok(Math.abs((t.exitPrice!/t.entryPrice-1)-(t.profitFloorRate??0))<.001);
+  assert.ok(Math.abs(t.exitPrice!-104*.999)<1e-8);
+  const missed=fixture();
+  missed.t.stopPrice=104;missed.t.favorable=.06;missed.t.lastPrice=102.5;
+  assert.equal(manageWinnerTrade(missed.s,missed.t,quote(102,T+2*B),T+2*B,{},{}),true);
+  assert.equal(missed.t.exitPrice,102);
 });
 test('partial realization, then final close: entry fee once, original identity once, money reconciles',()=>{
   const {s,t}=fixture(),n=t.notional,q=t.quantity,fee=t.entryFee;
@@ -108,9 +112,8 @@ test('partial realization, then final close: entry fee once, original identity o
   const remaining=t.quantity,remainingNotional=t.notional;
   assert.equal(manageWinnerTrade(s,t,quote(98,T+2*B),T+2*B,{},{}),true);
   assert.equal(t.exitReason,"WINNER_STRUCTURE_EXIT");
-  const px=99*(1-.00025);
-  assert.ok(Math.abs(t.exitPrice!-px)<1e-8);
-  const net=r.gross+remaining*(px-100)-fee-r.fee-remaining*px*.0007-r.funding-remainingNotional*.0002*(2*B)/86400000;
+  assert.equal(t.exitPrice,98);
+  const net=r.gross+remaining*(98-100)-fee-r.fee-remaining*98*.0007-r.funding-remainingNotional*.0002*(2*B)/86400000;
   assert.ok(Math.abs(t.netPnl!-net)<1e-8);assert.ok(Math.abs(s.balance-(1000+net))<1e-8);
   assert.equal(s.resolved,1);assert.equal(s.history.length,1);assert.equal(t.notional,n);assert.equal(t.quantity,q);assertTradeRealization(t);
   assert.ok(Math.abs(s.grossPnl-t.grossPnl!)<1e-8);assert.ok(Math.abs(s.fees-(fee+t.exitFee))<1e-8);

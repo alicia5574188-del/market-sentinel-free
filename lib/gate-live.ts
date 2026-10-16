@@ -524,15 +524,35 @@ export function liveStopPriceForTick(side: Side, currentStop: number, tickSize?:
   return Number((roundedUnits * tickSize).toFixed(tickDecimals(tickSize)));
 }
 
+/** The exchange stop is a limit, not a market chase. 0.1% through the trigger
+ * is enough for the book to match, and still next to the protection price. */
+export const LIVE_STOP_LIMIT_THROUGH = 0.001;
+
+export function liveStopLimitPrice(side: Side, trigger: number, tickSize?: number) {
+  const raw = side === "LONG" ? trigger * (1 - LIVE_STOP_LIMIT_THROUGH) : trigger * (1 + LIVE_STOP_LIMIT_THROUGH);
+  return liveStopPriceForTick(side, raw, tickSize);
+}
+
+/** A stop exit already has a resting limit. Don't replace it with a market
+ * order while that limit can still fill. Chase only after the quote is
+ * through the limit, or the limit has had 15 seconds and is still open. */
+export function liveStopShouldChase(input:{exitReason:string|null|undefined;stop:number|null|undefined;closedAt:number|null|undefined;now:number}){
+  if(input.exitReason!=="WINNER_STRUCTURE_EXIT"||!(input.stop&&input.stop>0))return true;
+  return input.now-(input.closedAt??input.now)>=15_000;
+}
+
 export function buildLiveStopIntent(position: { id: string; symbol: string; side: Side; currentStop: number }, tickSize?: number) {
   const price = liveStopPriceForTick(position.side, position.currentStop, tickSize);
-  const priceText = tickSize && tickSize > 0 ? price.toFixed(tickDecimals(tickSize)) : String(price);
-  const tag = shortTag("s", `${position.id}:${price.toPrecision(12)}`);
+  const limit = liveStopLimitPrice(position.side, price, tickSize);
+  const decimals = tickSize && tickSize > 0 ? tickDecimals(tickSize) : null;
+  const priceText = decimals!=null ? price.toFixed(decimals) : String(price);
+  const limitText = decimals!=null ? limit.toFixed(decimals) : String(limit);
+  const tag = shortTag("s", `${position.id}:${price.toPrecision(12)}:limit`);
   return {
     tag,
     price,
     body: {
-      initial: { contract: position.symbol, size: 0, price: "0", tif: "ioc", close: true, reduce_only: true, text: tag },
+      initial: { contract: position.symbol, size: 0, price: limitText, tif: "gtc", close: true, reduce_only: true, text: tag },
       trigger: { strategy_type: 0, price_type: 0, price: priceText, rule: position.side === "LONG" ? 2 : 1, expiration: GATE_TRIGGER_DAY_SECONDS * GATE_TRIGGER_MAX_DAYS },
     },
   } satisfies LiveStopIntent;

@@ -17,7 +17,7 @@ import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem
 import { buildBankruptcyReport, diagnoseClosedPosition, paperCycleSummary, recordCycleTrade, startPaperCycle,
   PAPER_INITIAL_EQUITY, type BankruptcyReport, type PaperCycle } from "../lib/paper-cycle.ts";
 import { runtimeReady, type RuntimeHealthShape } from "../lib/runtime-health.ts";
-import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, gateMarkedEquity, gatePositionValuation, isGateReadTimeoutError, isGateTransportTimeoutError, LiveEntrySizingError, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveOrder, type GateLiveOrderSnapshot, type GateLiveSnapshot, type LiveEntrySizingCode } from "../lib/gate-live.ts";
+import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, gateMarkedEquity, gatePositionValuation, isGateReadTimeoutError, isGateTransportTimeoutError, LiveEntrySizingError, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, liveStopShouldChase, loadGateLiveClient, type GateLiveOrder, type GateLiveOrderSnapshot, type GateLiveSnapshot, type LiveEntrySizingCode } from "../lib/gate-live.ts";
 import { LIVE_SESSION_VERSION, establishLiveScale, reconcileLiveScale, startLiveSession, sourceAfterEnable, sameLiveSession, fenceLiveSourcePolicy, type LiveSession } from "../lib/live-session.ts";
 import {liveProtectionPrice,isInverseLiveReceipt,INVERSE_LIVE_EXIT_POLICY} from '../lib/live-source-policy.ts';
 import {quantizeMirrorNotional,type GateSizeRules,type SizeDiagnostic} from "../lib/gate-quantity.ts";
@@ -2717,7 +2717,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
     const tick=this.runtime.tickSize[position.symbol]??position.currentStop*1e-8;
     const stop=buildLiveStopIntent(position,tick);
-    if(existing&&position.stopOrderId&&position.stopPrice!=null&&Math.abs(position.stopPrice-stop.price)<tick*.5)return;
+    if(existing&&position.stopOrderId&&position.stopTag===stop.tag&&position.stopPrice!=null&&Math.abs(position.stopPrice-stop.price)<tick*.5)return;
 
     if(existing&&position.stopOrderId){
       position.replacementStopTag=stop.tag;
@@ -3194,12 +3194,19 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         continue; // the journal owns this close, including partial/unknown results
       }
       if (!position.exitRequestedAt && (position.parity?sourceClosed:liveMirrorExitRequired(position.id, selectedTrade))) {
+        const chase=!position.parity||liveStopShouldChase({exitReason:lifecycle?.trade?.exitReason,stop:position.stopPrice,
+          closedAt:lifecycle?.trade?.closedAt,now});
+        if(!chase){
+          this.recordLiveAudit({ observedAt: now, symbol, planId: position.id, stage: "EXIT_REQUEST", level: "INFO",
+            reason: `模拟已在保护价退出，实盘限价止损仍可成交，这一拍不改市价去追` });
+        }else{
         position.exitRequestedAt = now;
         position.exitReason = sourceClosed?lifecycle!.trade!.exitReason??"PAPER_SOURCE_EXIT":"PAPER_PORTFOLIO_EXIT";
         this.recordLiveAudit({ observedAt: now, symbol, planId: position.id, stage: "EXIT_REQUEST", level: "INFO",
           reason: `模拟源单 ${position.id} 已退出，实盘跟随同一决定：${position.exitReason}` });
         await this.saveCheckpoint(Date.now(),true);
         position.exitOrderId=await client.closePosition(symbol, liveExitTag(position.id));
+        }
       } else if (!position.exitRequestedAt && (position.parity?lifecycle?.status==="OPEN":selectedTrade)) {
         position.currentStop = position.parity?liveProtectionPrice(lifecycle!.trade!)??lifecycle!.trade!.stopPrice:arenaProtectionStop(selectedTrade!);
         if(isInverseLiveReceipt(position.parity))position.parity!.sourceAllocationRiskRate=lifecycle!.trade!.plannedRisk/lifecycle!.trade!.notional;

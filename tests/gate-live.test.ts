@@ -114,7 +114,7 @@ test("protective stop is close-only and cannot reverse the account", () => {
   const stop = buildLiveStopIntent({ id: "position-1", symbol: "SOL_USDT", side: "LONG", currentStop: 99 });
   const initial = stop.body.initial as { size: number; price: string; close: boolean; reduce_only: boolean };
   const trigger = stop.body.trigger as { rule: number; price: string };
-  assert.deepEqual(initial, { contract: "SOL_USDT", size: 0, price: "0", tif: "ioc", close: true, reduce_only: true, text: stop.tag });
+  assert.deepEqual(initial, { contract: "SOL_USDT", size: 0, price: String(99 * .999), tif: "gtc", close: true, reduce_only: true, text: stop.tag });
   assert.equal(trigger.rule, 2);
   assert.equal(trigger.price, "99");
   assert.equal((stop.body.trigger as { expiration: number }).expiration, 86_400 * 30);
