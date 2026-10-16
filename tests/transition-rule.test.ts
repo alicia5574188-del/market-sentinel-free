@@ -73,14 +73,14 @@ test("transition exit is only the stop or the time, never an expectancy target",
   assert.equal(winner.includes("EXPECTANCY_EXIT"),false);
 });
 
-test("live entry and exit wires transition only, and leaves the original shock exits in place",()=>{
+test("live entries no longer use the transition or shock-room rules",()=>{
   const core=readFileSync(new URL("../lib/forward-relations.ts",import.meta.url),"utf8");
   const advance=core.slice(core.indexOf("function advanceEntryResponses"),core.indexOf("export function fillForwardPortfolio"));
-  assert.match(advance,/entryRuleForEnvironment/);
-  assert.match(advance,/settledTransitionEntry/);
-  assert.match(advance,/transitionEntryDecision/);
-  assert.match(advance,/ruleMode==="transition"/);
-  assert.match(advance,/ruleMode==="shock-room"/);
+  assert.match(advance,/只有同步爆发或趋势才开新单/);
+  assert.doesNotMatch(advance,/settledTransitionEntry/);
+  assert.doesNotMatch(advance,/transitionEntryDecision/);
+  assert.doesNotMatch(advance,/ruleMode==="transition"/);
+  assert.doesNotMatch(advance,/ruleMode==="shock-room"/);
   const manage=core.slice(core.indexOf("function manageIntelligenceTrades"),core.indexOf("function markAndManage"));
   const transitionAt=manage.indexOf("transitionRule");
   const winnerAt=manage.indexOf("manageWinnerTrade");

@@ -42,15 +42,18 @@ test("another shock inside the settle window keeps the same episode",()=>{
   assert.equal(again.transitionSince,null);
 });
 
-test("the live entry path uses the episode and does not give those trades the transition exit",()=>{
+test("new entries open only in shock or trend, on the original side, at three times size",()=>{
   const core=readFileSync(new URL("../lib/forward-relations.ts",import.meta.url),"utf8");
   const advance=core.slice(core.indexOf("export function advanceForward"),core.indexOf("export function closeForwardForReset"));
   assert.match(advance,/advanceShockEpisode\(/);
   const entries=core.slice(core.indexOf("function advanceEntryResponses"),core.indexOf("export function fillForwardPortfolio"));
-  assert.match(entries,/entryRuleForEnvironment/);
-  assert.match(entries,/shockRoom=decided\.entry/);
+  assert.match(entries,/stage!=="SHOCK"&&stage!=="TREND"/);
+  assert.doesNotMatch(entries,/entryRuleForEnvironment/);
+  assert.doesNotMatch(entries,/shockRoom=decided\.entry/);
+  assert.doesNotMatch(entries,/settledTransitionEntry/);
   const open=core.slice(core.indexOf("function openIntelligenceTrade"),core.indexOf("export function extremeResidualConfirmationProfile"));
-  assert.match(open,/shockRoom\.side!==o\.side/);
-  assert.doesNotMatch(open,/transitionRule:shockRoom/);
+  assert.match(open,/只有同步爆发或趋势才开新单/);
+  assert.match(open,/EXPANSION_SIZE/);
+  assert.match(core,/const EXPANSION_SIZE=3/);
   assert.match(core,/next\.shockEpisode=structuredClone\(prior\.shockEpisode\)/);
 });

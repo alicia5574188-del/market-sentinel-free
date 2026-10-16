@@ -20,8 +20,8 @@ import { evaluatePositionIntelligence, POSITION_INTELLIGENCE_VERSION,
 import {capturePositionBaseline} from "./position-evidence-contract.ts";
 import { beijingDayKey } from "./beijing-time.ts";
 import { readEntryStructure, type EntryStructure } from "./entry-structure.ts";
-import { settledTransitionEntry, transitionEntryDecision, transitionExitReason, type TransitionEntry } from "./transition-rule.ts";
-import { advanceShockEpisode, entryRuleForEnvironment, initialShockEpisode, normalizeShockEpisode, type ShockEpisode } from "./shock-episode.ts";
+import { transitionExitReason, type TransitionEntry } from "./transition-rule.ts";
+import { advanceShockEpisode, initialShockEpisode, normalizeShockEpisode, type ShockEpisode } from "./shock-episode.ts";
 import { advanceStageChronicle, initialStageChronicle, normalizeStageChronicle, stageStamp, type StageChronicle, type StageStamp } from "./stage-chronicle.ts";
 import { ENTRY_RESPONSE_VERSION, entryResponseWindowMs, evaluateEntryResponse,
   type EntryResponseDecision } from "./market-intelligence-entry-response.ts";
@@ -60,6 +60,8 @@ function marketTravelExpectancy(moves:number[]){
 }
 const TOTAL_RISK_RATE=.10,SIDE_RISK_RATE=.065,TOTAL_MARGIN_RATE=.75;
 const FIVE_MINUTE_NEW_RISK_RATE=.015;
+/** 只在同步爆发或趋势开仓，名义仓位按原计算放大这么多倍。 */
+const EXPANSION_SIZE=3;
 const ENTRY_VALIDATION_CAP=6,CONTINUATION_SIDE_RISK_RATE=.025,EXECUTION_EDGE_FLOOR=1.25;
 const ROTATION_GAP=10,ROTATION_COOLDOWN_MS=2*60_000;
 const HISTORY_LIMIT=240,EVENT_LIMIT=160,CONSUMED_THESIS_LIMIT=512,CONSUMED_THESIS_TTL_MS=7*24*60*60_000;
@@ -1013,6 +1015,8 @@ export function applyOpportunityResearch(s:ForwardState,o:Opportunity,now:number
 function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:number,equity:number,
   response?:{validation:EntryValidation;decision:EntryResponseDecision},minutePath?:Candle[],entryStructure?:EntryStructure,transition?:TransitionEntry|null,shockRoom?:TransitionEntry|null){
   if(!isIntelligenceOpportunity(o))return"新策略身份缺失";
+  const stage=s.environmentContext.environment;
+  if(stage!=="SHOCK"&&stage!=="TREND")return"只有同步爆发或趋势才开新单";
   const appliedResearch=applyOpportunityResearch(s,o,now);
   if(appliedResearch?.entryAction==="CONFIRM_MORE"&&!response)return "研究要求本币实时响应确认，不能由兼容入口跳过";
   if(s.positions.some(t=>t.symbol===o.symbol))return"同币已有持仓，禁止重复开仓";
@@ -1049,23 +1053,23 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
   const sameCluster=s.positions.find(t=>t.side===side&&o.clusterId&&t.entryContext?.clusterId===o.clusterId);
   if(sameCluster)return"同相关组已有同方向主仓";
   const continuation=o.mode==="CONTINUATION"&&(o.tradePlan==="LIQUIDITY_MIGRATION"||o.winnerPlan?.intent==="TREND"),
-    totalHeadroom=equity*(TOTAL_RISK_RATE-.001)-existingRisk(s),
-    sideHeadroom=equity*(SIDE_RISK_RATE-.0005)-existingRisk(s,side),
-    cycleHeadroom=equity*FIVE_MINUTE_NEW_RISK_RATE-cycleRiskAdded(s,s.lastCandleAt),
-    continuationHeadroom=continuation?equity*CONTINUATION_SIDE_RISK_RATE-continuationRisk(s,side):Infinity,
+    totalHeadroom=equity*(TOTAL_RISK_RATE*EXPANSION_SIZE-.001)-existingRisk(s),
+    sideHeadroom=equity*(SIDE_RISK_RATE*EXPANSION_SIZE-.0005)-existingRisk(s,side),
+    cycleHeadroom=equity*FIVE_MINUTE_NEW_RISK_RATE*EXPANSION_SIZE-cycleRiskAdded(s,s.lastCandleAt),
+    continuationHeadroom=continuation?equity*CONTINUATION_SIDE_RISK_RATE*EXPANSION_SIZE-continuationRisk(s,side):Infinity,
     eventOpenRisk=o.winnerPlan?s.positions.filter(t=>t.entryContext?.winnerPlan?.riskGroup===o.winnerPlan!.riskGroup).reduce((n,t)=>n+riskCharge(t),0):0,
-    eventHeadroom=o.winnerPlan?winnerEventHeadroom(s.winnerRisk??{},o.winnerPlan.riskGroup,o.winnerPlan.eventAt,equity,eventOpenRisk).headroom:Infinity,
+    eventHeadroom=o.winnerPlan?winnerEventHeadroom(s.winnerRisk??{},o.winnerPlan.riskGroup,o.winnerPlan.eventAt,equity,eventOpenRisk).headroom*EXPANSION_SIZE:Infinity,
     headroom=Math.min(totalHeadroom,sideHeadroom,cycleHeadroom,continuationHeadroom,eventHeadroom),
     riskRate=o.winnerPlan?.intent==="RANGE"?.003:o.premium?.0065:.0055,environmentRiskScale=Math.max(.70,Math.min(1,o.environmentRiskScale??1)),
-    wantedRisk=equity*riskRate*environmentRiskScale,riskBudget=Math.min(wantedRisk,headroom);
+    wantedRisk=equity*riskRate*environmentRiskScale*EXPANSION_SIZE,riskBudget=Math.min(wantedRisk,headroom);
   if(riskBudget<equity*(o.winnerPlan?.intent==="RANGE"?.0015:.0035))return"剩余风险预算不足以形成有效仓位";
-  const rawNotional=riskBudget/(stopRate+ROUND_TRIP_COST),targetNotional=Math.min(rawNotional,equity*.70),
+  const rawNotional=riskBudget/(stopRate+ROUND_TRIP_COST),targetNotional=Math.min(rawNotional,equity*.70*EXPANSION_SIZE),
     leverage=Math.max(1,Math.min(10,Math.floor(contract.leverageMax||10))),mult=Math.max(contract.quantoMultiplier,1e-12),
     minContracts=Math.max(1,Math.ceil(contract.minContracts??(Number(contract.orderSizeMin??1)||1))),
     contracts=Math.floor(targetNotional/(price*mult));
   if(contracts<minContracts)return"低于最小模拟合约数量";
   const quantity=contracts*mult,notional=quantity*price,margin=notional/leverage,totalMargin=s.positions.reduce((n,t)=>n+t.margin,0);
-  if(totalMargin+margin>equity*TOTAL_MARGIN_RATE)return"组合保证金已满";
+  if(totalMargin+margin>equity*TOTAL_MARGIN_RATE*EXPANSION_SIZE)return"组合保证金已满";
   const roomFlipped=!!shockRoom&&shockRoom.side!==o.side;
   const winnerPlan=o.winnerPlan?structuredClone(o.winnerPlan):undefined;
   if(winnerPlan&&roomFlipped){
@@ -1470,18 +1474,12 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
     const last=s.lastExitAt[o.symbol]??0,lastSide=s.lastSide[o.symbol];
     if(now-last<15*60_000&&lastSide===o.side){validation.status="CANCELLED";validation.reason="同币同方向假设尚未重置";reject(validation.reason);continue;}
     const structure=readEntryStructure({price,now,bars:paths?.[validation.symbol],bookImbalance:q!.bookImbalance??null});
-    const ruleMode=entryRuleForEnvironment(s.environmentContext.environment,s.shockEpisode);
-    let transition:TransitionEntry|null=null;
-    let shockRoom:TransitionEntry|null=null;
-    if(ruleMode==="transition"){
-      const expectancy=marketTravelExpectancy(Object.values(s.extremumRegime.symbols).map(x=>Math.abs(x.actualMove)));
-      transition=settledTransitionEntry(structure,validation.side,expectancy);
-    }else if(ruleMode==="shock-room"){
-      const decided=transitionEntryDecision(structure,validation.side);
-      if(decided.action==="SKIP"){validation.status="CANCELLED";validation.reason=decided.reason;reject(validation.reason);continue;}
-      shockRoom=decided.entry;
+    const stage=s.environmentContext.environment;
+    if(stage!=="SHOCK"&&stage!=="TREND"){
+      validation.reason="只有同步爆发或趋势才开新单";
+      reject(validation.reason);continue;
     }
-    const error=openIntelligenceTrade(s,o,q!,meta,now,equity,{validation,decision},minutePaths?.[o.symbol],structure,transition,shockRoom);
+    const error=openIntelligenceTrade(s,o,q!,meta,now,equity,{validation,decision},minutePaths?.[o.symbol],structure,null,null);
     if(error){
       if(error.startsWith("实时成交性价比")||error.startsWith("实时入场已消耗剩余空间")||error.startsWith("入场与持仓证据冲突")){
         if(error.startsWith("入场与持仓证据冲突")){validation.supportSamples=0;validation.oppositionSamples=0;}
