@@ -58,6 +58,8 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   const stanceLabel=desk?.book==="lsr-v1"?"实验":desk?.book==="stretch-v1"?"新账":desk?.book==="reverse-v1"?"反向":desk?.book==="needle-v1"||desk?.book==="brain-v1"||desk?.book==="score-v1"||desk?.book==="read-v1"?"账户":stanceName(desk?.stance);
   const paperFloating=usingDesk?desk.floating:positions.reduce((n,t)=>n+(t.status==="OPEN"?remainingPaidNetPnl(t,t.lastPrice):0),0);
   const held=usingDesk?desk.openCount:positions.length;
+  const paperHeld=positions.filter(t=>!t.inverseCopy).length;
+  const liveHeld=liveOverview?.positionCount??0;
   const systemStatus=statusLabel==="后台运行中"?"正常":statusLabel?.startsWith("后台运行中 · ")?statusLabel.slice(8):statusLabel??(healthy?"正常":"行情恢复中");
   const accountEquity=usingDesk?desk.equity:data?.equity,
     accountPnl=usingDesk?desk.netPnl:data?.netPnl,
@@ -101,7 +103,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
     {liveMounted&&<div className="fr-live-panel-host" hidden={tab!=="live"}>{livePanel}</div>}
     {(error||data?.storage.error)&&<aside className="fr-error" role="alert"><b>运行提示</b><p>{data?.storage.error??error}</p></aside>}
     <footer className="fr-footer"><span>行情更新 {time(feedAt)}</span><span>{data?.engineVersion??data?.version??"—"} · 北京时间</span></footer>
-    <nav className="fr-nav">{nav.map(([id,icon,label])=><button key={id} className={id===tab?"selected":""} onClick={()=>select(id)}><span>{icon}</span><b>{label}</b>{id==="execution"&&held>0&&<i>{held}</i>}</button>)}</nav>
+    <nav className="fr-nav">{nav.map(([id,icon,label])=><button key={id} className={id===tab?"selected":""} onClick={()=>select(id)}><span>{icon}</span><b>{label}</b>{id==="paper"&&paperHeld>0&&<i>{paperHeld}</i>}{id==="live"&&liveHeld>0&&<i>{liveHeld}</i>}</button>)}</nav>
   </main>;
 }
 
