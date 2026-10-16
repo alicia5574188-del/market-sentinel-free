@@ -82,7 +82,7 @@ test("missing account stays unknown and operational errors remain visible",()=>{
   assert.match(html,/role="alert"/);assert.match(html,/fixture storage unavailable/);
 });
 
-test('LIVE ON uses exchange equity and floating while preserving the separate original PAPER curve',()=>{
+test('LIVE ON keeps the simulation page on the paper account',()=>{
   const data={...account(),equity:9876.54,netPnl:8876.54};
   const html=render('app/forward-dashboard.tsx',{...dashboardProps(data),cacheScope:'member:curve-owner',liveEnabled:true,
     liveOverview:{equity:101.23,available:80,positionCount:1,accountMark:{initialEquity:110,tradingPnl:-8.77,
@@ -91,18 +91,17 @@ test('LIVE ON uses exchange equity and floating while preserving the separate or
       assert.strictEqual(props.data,data);assert.equal(props.cacheScope,'member:curve-owner');assert.ok(props.cache);
       return jsxRuntime.jsx('div',{'data-testid':'curve-fixture',children:'PAPER_CURVE_9876.54'});
     }}});
-  assert.match(html,/101\.23/);assert.match(html,/-3\.21 U/);assert.match(html,/-8\.77/);
-  const equity=html.match(/<section[^>]*data-testid="overview-equity-first"[\s\S]*?<\/section>/)?.[0];
-  assert.doesNotMatch(equity,/9,876\.54|8,876\.54|PAPER_CURVE/);
+  assert.match(html,/9,876\.54/);assert.match(html,/\+8,876\.54/);
+  assert.doesNotMatch(html,/101\.23|-3\.21 U|未跟上 2|含出入金|实盘账户权益|live-curve-fixture/);
   assert.match(html,/data-testid="paper-equity-curve"[\s\S]*模拟净值[\s\S]*PAPER_CURVE_9876\.54/);
   assert.equal(html.split('data-testid="curve-fixture"').length-1,1);
-  assert.match(html,/未跟上 2/);assert.match(html,/含出入金/);
 });
-test('LIVE ON without account confirmation does not substitute simulated equity or zero PnL',()=>{
+test('LIVE ON without a live account still shows the paper equity',()=>{
   const html=render('app/forward-dashboard.tsx',{...dashboardProps(account()),liveEnabled:true});
   const equity=html.match(/<section[^>]*data-testid="overview-equity-first"[\s\S]*?<\/section>/)?.[0];
-  assert.match(equity,/<strong>—<\/strong>/);assert.doesNotMatch(equity,/922\.82|-77\.18|\+0\.00/);
+  assert.match(equity,/922\.82/);assert.match(equity,/-77\.18/);
   assert.match(html,/paper-equity-curve/);assert.match(html,/curve-fixture/);
+  assert.doesNotMatch(html,/实盘账户权益|live-curve-fixture/);
 });
 test('LIVE ON simulated page keeps the paper account and does not mount the live order panel',()=>{
   const data=account();
@@ -112,17 +111,14 @@ test('LIVE ON simulated page keeps the paper account and does not mount the live
   assert.match(html,/curve-fixture/);
   assert.doesNotMatch(html,/REAL_ORDER_PANEL|shadow-inverse-comparison/);
 });
-test('overview passes actual LIVE session and account observations to its separate curve',()=>{
+test('the simulation page does not mount the live curve or the live order panel',()=>{
   const mark={sessionAt:123,accountUser:'gate-fixture'},head={sessionAt:123,lastEquity:456};
-  const html=render('app/forward-dashboard.tsx',{...dashboardProps(account()),liveEnabled:true,cacheScope:'member:private',
+  const html=render('app/forward-dashboard.tsx',{...dashboardProps(account()),liveEnabled:true,livePanel:'REAL_ORDER_PANEL',cacheScope:'member:private',
     liveOverview:{equity:456,accountMark:mark,equityCurve:head,sessionAt:123}},
-    {'./live-equity-curve.tsx':{default:props=>{
-      assert.strictEqual(props.head,head);assert.strictEqual(props.mark,mark);assert.equal(props.sessionAt,123);
-      assert.equal(props.cacheScope,'member:private');assert.equal(props.enabled,true);
-      return jsxRuntime.jsx('div',{'data-testid':'live-curve-fixture'});
-    }}});
+    {'./live-equity-curve.tsx':{default:()=>jsxRuntime.jsx('div',{'data-testid':'live-curve-fixture'})}});
   assert.equal(html.split('data-testid="curve-fixture"').length-1,1);
-  assert.equal(html.split('data-testid="live-curve-fixture"').length-1,1);
+  assert.equal(html.split('data-testid="live-curve-fixture"').length-1,0);
+  assert.doesNotMatch(html,/REAL_ORDER_PANEL/);
 });
 test('real LIVE curve hides old-session data while awaiting the new baseline and uses native scoped history',()=>{
   const T=1790760000000,head={version:liveEquity.LIVE_EQUITY_VERSION,sessionAt:T,accountUser:'gate-test',startedAt:T,
@@ -284,8 +280,8 @@ test('the order tab is the forward book, and live orders stay on the live page',
   const draw=()=>{cursor=0;refCursor=0;buttons.length=0;return render('app/forward-dashboard.tsx',{...dashboardProps(data),liveEnabled:true,livePanel:'NATIVE_ORDER_PANEL',liveOverview:{equity:321.09,positionCount:1}},
     {react:hooks,'react/jsx-runtime':{...jsxRuntime,jsx:capture(jsxRuntime.jsx),jsxs:capture(jsxRuntime.jsxs)}});};
   let html=draw();
-  assert.match(html,/321\.09/);
-  assert.doesNotMatch(html,/影子|影子订单|shadow-orders-panel/);
+  assert.match(html,/922\.82/);
+  assert.doesNotMatch(html,/321\.09|NATIVE_ORDER_PANEL|影子|影子订单|shadow-orders-panel/);
   buttons.find(b=>Array.isArray(b.children)&&b.children[1]?.props?.children==='实盘').onClick();html=draw();
   assert.match(html,/NATIVE_ORDER_PANEL/);
   assert.doesNotMatch(html,/shadow-orders-panel/);

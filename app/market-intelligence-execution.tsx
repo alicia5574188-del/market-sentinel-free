@@ -74,8 +74,8 @@ function positionWatch(t:View["positions"][number]){
   return t.positionIntelligence?.summary??"观察原入场理由是否仍成立。";
 }
 
-export default function MarketIntelligenceExecution({data,now:_,liveEnabled,liveOverview}:{
-  data:View|null;now:number;liveEnabled:boolean;liveOverview?:{operational:boolean;lastSyncAt:number|null;positionCount:number};
+export default function MarketIntelligenceExecution({data,now:_}:{
+  data:View|null;now:number;liveEnabled?:boolean;liveOverview?:{operational:boolean;lastSyncAt:number|null;positionCount:number};
 }){
   const mi=data?.marketIntelligence,n=mi?.narrative,liquidity=mi?.liquidity,
     opportunities=[...(data?.opportunities??[])].sort((a,b)=>Number(b.eligible)-Number(a.eligible)||b.score-a.score),
@@ -116,7 +116,6 @@ export default function MarketIntelligenceExecution({data,now:_,liveEnabled,live
             {positionWatch(t)}{t.entryContext?.winnerPlan&&<><br/><small>{planText(t.entryContext.winnerPlan,t.stopPrice)}</small></>}</p>):<p>暂无持仓。</p>}
         </div></article>
       </div>
-      <p className="fr-note">实盘 {liveEnabled?(liveOverview?.operational?"运行中":"等待核对"):"关闭"}{liveEnabled?' · 成交、实际持仓及盈亏以同步账户为准':''}</p>
     </section>
   </div>;
 }
