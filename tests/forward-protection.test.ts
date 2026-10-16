@@ -142,7 +142,13 @@ test("an unknown exit policy cannot silently overwrite a source account",()=>{
   const s=account();s.exitPolicyUpgrade!.policy="unknown";assert.throws(()=>step(s,10000,100),/未知/);
 });
 test("full new exit metadata and original geometry survive the LIVE adapter and binding",()=>{
-  const s=account(),t=s.positions[0],view=forwardMirrorSources(s,1000);
+  const s=account(),t=s.positions[0];
+  t.entryContext={version:"adaptive-ten-entry-v1",capturedAt:T,timeframe:"5m",side:t.side,mode:"RELATIVE",reserve:false,
+    reason:"fixture",entryScore:80,directionStrength:80,spaceScore:80,positionScore:80,executionScore:80,
+    remainingSpaceRate:.01,pullbackRiskRate:.01,edgeRatio:1,expectedHoldMinutes:60,marketFit:80,regionId:null,
+    portfolioRiskCharge:t.plannedRisk,strategyVersion:"market-intelligence-v1",regime:"DIVERGENT",confirmationStage:"READY",
+    sourceCount:4,disagreementRate:0,postEntryState:"PENDING",environment:"TREND"};
+  const view=forwardMirrorSources(s,1000);
   assert.deepEqual(view.BTC_USDT.forwardSource,t);const r=buildProportionalMirror({source:t,sourceEquity:1000,equity:100,
     available:100,entryPrice:100,quantoMultiplier:.001,leverageMax:20,maintenanceRate:.005,openRisk:0,
     sameDirectionRisk:0,openMargin:0,openNotional:0,now:T+1000,policy:s.policyVersion!,

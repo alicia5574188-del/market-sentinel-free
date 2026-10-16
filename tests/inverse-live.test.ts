@@ -55,14 +55,14 @@ test('inverse copying does not require fabricated native geometry but still vali
   inverse.inverseCopy!.sourceSide=inverse.side;assert.throws(()=>liveProtectionPrice(inverse),/方向无效/);
 });
 test('source policy migration excludes old inverse rows, preserves enable/scale, and fences in-flight intents',()=>{
-  const {state,inverse}=pair('LONG',T),old={...startLiveSession(T-2000,initialForward(T-100000)),scaleRatio:.1};
+  const {state,inverse}=pair('LONG',T),old={...startLiveSession(T-2000,initialForward(T-100000)),scaleRatio:.1,sourcePolicy:'inverse-paper-live-v1'};
   const fenced=fenceLiveSourcePolicy(old,state,T+1000);
   assert.equal(fenced.enabledAt,old.enabledAt);assert.equal(fenced.scaleRatio,.1);assert.equal(fenced.sourceStartedAt,old.sourceStartedAt);
   assert.equal(sourceAfterEnable(inverse,fenced,state.startedAt),false);assert.equal(sameLiveSession(old,fenced),false);
   assert.equal(fenceLiveSourcePolicy(fenced,state,T+2000),fenced);
   assert.equal(sourceAfterEnable({...inverse,id:'new',openedAt:T+2000},fenced,state.startedAt),true);
   const off=mirrorCoverage(state,{requestedEnabled:false,activation:fenced,entries:{},positions:{},entrySkips:{}},null);
-  assert.equal(off.accountRole,'INVERSE_PAPER');assert.equal(off.rows[0]!.status,'OWNER_OFF');
+  assert.equal(off.accountRole,'SHOCK_TREND_PAPER');assert.equal(off.rows[0]!.status,'OWNER_OFF');
 });
 async function harness(side:'LONG'|'SHORT') {
   const now=Date.now(),{state,t,inverse}=pair(side,now-100),data=new Map<string,unknown>(),jobs:Promise<unknown>[]=[];

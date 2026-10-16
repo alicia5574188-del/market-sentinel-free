@@ -29,7 +29,7 @@ function source(){
     expectedHoldMinutes:180,marketFit:84,regionId:null,regionQuality:null,reason:"Market Intelligence LIVE同源测试事件",
     strategyVersion:MARKET_INTELLIGENCE_VERSION,regime:"DIVERGENT",confirmationStage:"READY",sourceCount:4,disagreementRate:.0003,
     clusterId:"corr:BTC_USDT",thesisId:"fixture-thesis",thesisSummary:"BTC在当前相关组中是最优多头表达",
-    invalidationSummary:"持续弱于相关组或结构止损时失效",residual:.006,relativeStrength:.72,dataConfidence:92};
+    invalidationSummary:"持续弱于相关组或结构止损时失效",residual:.006,relativeStrength:.72,dataConfidence:92,environment:"SHOCK"};
   s.opportunities=[opportunity];s.lastCandleAt=now;
   fillForwardPortfolio(s,{BTC_USDT:q(price,now)},{BTC_USDT:contract},now,1000,false);
   assert.equal(s.positions.length,1);return{s,trade:s.positions[0]!,now,price};

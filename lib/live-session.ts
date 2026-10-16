@@ -6,14 +6,14 @@ export type LiveSession = { version: typeof LIVE_SESSION_VERSION; enabledAt: num
   scaleRatio?: number; scaleSourceEquity?: number; scaleLiveEquity?: number; scaleAt?: number;
   scaleRebasedAt?: number; scaleRebaseFrom?: number; scaleRebaseReason?:"ANCHOR_MISMATCH"|"LIVE_CAPITAL_INCREASE" };
 type SourceAccount = { startedAt: number; positions: { id: string; openedAt: number }[];inverseTrial?:unknown };
-export const liveSourcePolicy=(s:SourceAccount|null)=>s?.inverseTrial?'inverse-paper-live-v1':'current-paper-live-v1';
+export const liveSourcePolicy=(_s:SourceAccount|null)=>'shock-trend-proportional-v1' as const;
 export function startLiveSession(now: number, source: SourceAccount | null, migration = false): LiveSession {
   return { version: LIVE_SESSION_VERSION, enabledAt: now, sourceStartedAt: source?.startedAt ?? null,
     excludedSourceIds: source?.positions.map(t => t.id) ?? [], migration,sourcePolicy:liveSourcePolicy(source),sourcePolicyAt:now };
 }
 export function fenceLiveSourcePolicy(session:LiveSession,source:SourceAccount,now:number):LiveSession {
   const policy=liveSourcePolicy(source);
-  if(session.sourcePolicy===policy||(!session.sourcePolicy&&policy==='current-paper-live-v1'))return session;
+  if(session.sourcePolicy===policy)return session;
   return {...session,sourcePolicy:policy,sourcePolicyAt:now,
     excludedSourceIds:[...new Set([...session.excludedSourceIds,...source.positions.map(t=>t.id)])]};
 }

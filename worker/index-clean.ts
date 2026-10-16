@@ -2434,7 +2434,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           return this.runtime.live.activation;
         this.runtime.live.activation=fenced;
         this.recordLiveAudit({observedAt:now,symbol:null,planId:null,stage:'LIVE_CONTROL',level:'INFO',
-          reason:'实盘复制源已接入当前反向模拟；已有源单不补开，已绑定实盘继续原生命周期，所有者开关保持不变'});
+          reason:'实盘复制源已改成当前模拟的同步爆发和趋势，名义按实盘权益相对模拟权益的比例。已有源单不补开，已绑定实盘继续原来的生命周期，所有者开关保持不变'});
         return fenced;
       }
     }
@@ -3436,8 +3436,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         if(paperMark.stalePositions)throw new LiveEntrySizingError("ECONOMICS",symbol,"模拟账户当前估值不完整，不能确定复制比例");
         const inverse=!!trade.forwardSource.inverseCopy;
         const scaled=inverse?this.runtime.live.activation:await this.ensureLiveSessionScale(paperMark.equity,equity,Date.now());
-        // Freeze the native account capital anchor once. Profits and ordinary
-        // OFF/ON never compound future copies; actual-equity gates still apply.
+        // 同步爆发和趋势按当时锁定的实盘权益/模拟权益缩放名义，不按模拟单原名义一比一。
         if(inverse){
           const prior=this.runtime.live.fixedBasis,basis=fixedLiveBasis(prior,equity,
             String(snapshot.account.user??this.runtime.live.turnoverAccountKey??'program-account'),Date.now());

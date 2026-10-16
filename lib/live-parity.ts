@@ -68,14 +68,22 @@ export function validateMirrorSource(t: Trade) {
 
 /** Adapter fields only support the existing reconciler. Full source JSON is
  * retained in a binding. The arm price is NOT a take-profit command. */
+export function copyableLiveSource(t: {unopened?:boolean;inverseCopy?:unknown;status?:string;entryContext?:{environment?:string}|null}) {
+  if (t.unopened || t.status !== "OPEN") return false;
+  if (t.inverseCopy) return true;
+  const stage = t.entryContext?.environment;
+  if (!stage) return true;
+  return stage === "SHOCK" || stage === "TREND";
+}
+
 export function forwardMirrorSources(state: ForwardState, sourceEquity: number): Record<string, MirrorSourceTrade> {
   if (!state || !Array.isArray(state.positions) || !Array.isArray(state.history) || !positive(sourceEquity))
     throw new Error("当前模拟账户不可用，实盘复制等待恢复，不回退到旧策略");
   const out: Record<string, MirrorSourceTrade> = {};
   for (const t of state.positions) {
-    // The current visible inverse account is the NEW source. Existing legacy
-    // LIVE positions still use sourceLifecycle; drain rows cannot add exposure.
-    if(state.inverseTrial&&!t.inverseCopy)continue;
+    // 同步爆发和趋势进实盘，名义按实盘权益/模拟权益缩放。过渡、轮动和没开的单不进。
+    // 已经存在的反向单仍可跟随，避免把已绑定的实盘仓丢掉；当前账户不再新开反向单。
+    if(!copyableLiveSource(t))continue;
     validateMirrorSource(t);
     const protection=liveProtectionPrice(t);
     if (out[t.symbol]) throw new Error(`${t.symbol} 出现多条逻辑持仓；禁止静默净额合并，须先升级逐腿执行适配器`);
@@ -268,7 +276,7 @@ export function mirrorCoverage(state:ForwardState|null,live:{requestedEnabled:bo
     const p=live.positions[t.symbol],e=live.entries[t.symbol],skip=live.entrySkips[t.symbol];
     const copied=p?.status==="OPEN"&&p.id===t.id,endedEarly=p?.status==="CLOSED"&&p.id===t.id;
     const pending=e?.planId===t.id&&["SUBMITTING","OPEN","ERROR"].includes(e.status);
-    const currentSource=!state?.inverseTrial||!!t.inverseCopy;
+    const currentSource=copyableLiveSource(t);
     const eligible=currentSource&&live.requestedEnabled&&sourceAfterEnable(t,live.activation,state!.startedAt);
     const skipStatus=skip?.planId!==t.id?null:skip.code==="MIN_CONTRACT"?"BLOCKED_MIN_SIZE"
       :skip.code==="RETRYING"?"RETRYING":skip.code==="SOURCE_ENDED_EARLY"?"SOURCE_ENDED_EARLY":"BLOCKED";
@@ -284,7 +292,7 @@ export function mirrorCoverage(state:ForwardState|null,live:{requestedEnabled:bo
   const valued=actual.filter(p=>typeof p?.exchangeUnrealisedPnl==="number"&&Number.isFinite(p.exchangeUnrealisedPnl)&&!!p.exchangePnlAt);
   const inverseHeld=actual.filter(p=>isInverseLiveReceipt(p?.parity));
   return {version:LIVE_PARITY_VERSION,source:LIVE_PARITY_SOURCE,connected:!!state&&!sourceError,ownerControlled:true,
-    accountRole:state?.inverseTrial?'INVERSE_PAPER':'CURRENT_PAPER',
+    accountRole:'SHOCK_TREND_PAPER',
     nativeProtectionPolicy:state?.inverseTrial?INVERSE_LIVE_EXIT_POLICY:null,
     leveragePolicy:state?.inverseTrial?INVERSE_LIVE_LEVERAGE_POLICY:null,
     leverageAdjustment:{managed:inverseHeld.length,

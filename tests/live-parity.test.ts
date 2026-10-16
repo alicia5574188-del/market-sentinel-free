@@ -40,7 +40,7 @@ function extremumTrade(id="ft-extremum-1",symbol="BTC_USDT",side:"LONG"|"SHORT"=
     remainingSpaceRate:.009,pullbackRiskRate:.01,edgeRatio:.9,expectedHoldMinutes:30,marketFit:86,regionId:null,
     portfolioRiskCharge:t.plannedRisk,strategyVersion:LEGACY_EXTREMUM_REGIME_VERSION,regime:long?"TREND_UP":"TREND_DOWN",
     topPressure:long?25:58,bottomPressure:long?58:25,upSurvival:long?84:16,downSurvival:long?16:84,
-    confirmationStage:"READY",sourceCount:4,disagreementRate:.0002,postEntryState:"PENDING"};
+    confirmationStage:"READY",sourceCount:4,disagreementRate:.0002,postEntryState:"PENDING",environment:"TREND"};
   return t;
 }
 function request(t=trade()):Parameters<typeof buildProportionalMirror>[0]{return {source:t,sourceEquity:1000,equity:100,available:100,entryPrice:100,
@@ -52,6 +52,13 @@ test("source identity and ALL strategy/order fields are retained without netting
   const a=forwardMirrorSources(s,1000);assert.equal(Object.keys(a).length,2);
   for(const t of s.positions){assert.equal(a[t.symbol].id,t.id);assert.deepEqual(a[t.symbol].forwardSource,t);
     assert.equal(a[t.symbol].activeStopPrice,t.stopPrice);assert.equal(a[t.symbol].targetPrice,t.armPrice);}
+  const shock=trade("shock","BTC_USDT"),fade=trade("fade","ETH_USDT"),trend=trade("trend","SOL_USDT");
+  shock.entryContext={environment:"SHOCK"} as Trade["entryContext"];
+  fade.entryContext={environment:"TRANSITION"} as Trade["entryContext"];
+  trend.entryContext={environment:"TREND"} as Trade["entryContext"];
+  s.positions=[shock,fade,trend];
+  const selected=forwardMirrorSources(s,1000);
+  assert.equal(selected.BTC_USDT.id,"shock");assert.equal(selected.SOL_USDT.id,"trend");assert.equal(selected.ETH_USDT,undefined);
 });
 test("a future same-symbol multi-leg source cannot silently become a single net position",()=>{
   const s=initialForward(T);s.positions=[trade(),trade("ft-2")];assert.throws(()=>forwardMirrorSources(s,1000),/净额/);
