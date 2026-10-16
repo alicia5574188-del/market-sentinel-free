@@ -72,9 +72,10 @@ export function copyableLiveSource(t: {unopened?:boolean;inverseCopy?:unknown;st
   if (t.unopened || t.status !== "OPEN") return false;
   if (t.inverseCopy) return true;
   // 开仓闸门用的是当时的市场阶段。机会自带的 environment 经常仍是过渡，不能拿来决定复不复制。
-  const stage = t.entryContext?.stageNote?.liveStage || t.entryContext?.environment;
-  if (!stage) return true;
-  return stage === "SHOCK" || stage === "TREND";
+  const live = t.entryContext?.stageNote?.liveStage;
+  const route = t.entryContext?.environment;
+  if (!live && !route) return true;
+  return live === "SHOCK" || live === "TREND" || route === "SHOCK" || route === "TREND";
 }
 
 export function forwardMirrorSources(state: ForwardState, sourceEquity: number): Record<string, MirrorSourceTrade> {
