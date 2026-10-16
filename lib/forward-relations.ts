@@ -153,6 +153,8 @@ export type EntryContext={
   shockRoom?:TransitionEntry;
   /** 进场时研究层阶段怎么接上的。只留档，不参与开仓或出场。 */
   stageNote?:StageStamp;
+  /** 进场时能看到的方向细节。只留档，不参与开仓或出场。 */
+  entryRead?:EntryRead;
 };
 import type {ReviewEvent, TradeReview} from "./review-trace.ts";
 
@@ -1023,6 +1025,39 @@ export function applyOpportunityResearch(s:ForwardState,o:Opportunity,now:number
   return context;
 }
 
+export type EntryRead={
+  trendSide:"LONG"|"SHORT"|null;
+  withTrend:boolean|null;
+  book:number|null;
+  residual:number|null;
+  relativeStrength:number|null;
+  move30:number|null;
+  sync:number|null;
+  breadth:number|null;
+};
+
+/** 开仓前这个币已经顺着这笔方向走过多少。正数是已经走出，没有够长的分钟线就空着。 */
+export function priorMoveInDirection(path:{time:number;close:number}[]|undefined,price:number,side:"LONG"|"SHORT",now:number,minutes=30){
+  if(!path?.length||!(price>0))return null;
+  const target=now/1000-minutes*60;
+  let close:number|null=null;
+  for(const bar of path){
+    if(!(bar.time<=target)||!(bar.close>0))continue;
+    close=bar.close;
+  }
+  if(close==null)return null;
+  const raw=price/close-1;
+  return Math.round((side==="LONG"?raw:-raw)*10_000)/10_000;
+}
+function entryQuality(s:ForwardState,o:Opportunity,q:Quote,side:"LONG"|"SHORT",price:number,now:number,minutePath?:Candle[]):EntryRead{
+  const trendSide=s.environmentContext.trendSide??null;
+  const num=(value:number|null|undefined)=>typeof value==="number"&&Number.isFinite(value)?Math.round(value*10_000)/10_000:null;
+  return {trendSide,withTrend:trendSide==null?null:side===trendSide,
+    book:num(q.bookImbalance),residual:num(o.residual),relativeStrength:num(o.relativeStrength),
+    move30:priorMoveInDirection(minutePath,price,side,now,30),
+    sync:num(s.extremumRegime.internals?.synchrony),breadth:num(s.extremumRegime.internals?.breadth12)};
+}
+
 function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:number,equity:number,
   response?:{validation:EntryValidation;decision:EntryResponseDecision},minutePath?:Candle[],entryStructure?:EntryStructure,transition?:TransitionEntry|null,shockRoom?:TransitionEntry|null,note=false){
   if(!isIntelligenceOpportunity(o))return"新策略身份缺失";
@@ -1131,7 +1166,8 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
         liquidityInvalidationPrice:storedInvalidation,rapidLiquidityAuthorization:!!o.rapidLiquidityAuthorization,
         futureResearchAction:o.futureResearchAction,futureResearchReason:o.futureResearchReason,futureHypothesisIds:o.futureHypothesisIds,
         entryStructure,transitionRule:transition??undefined,shockRoom:shockRoom??undefined,
-        stageNote:stageStamp(s.stageChronicle,s.extremumRegime.internals?.synchrony,now)},
+        stageNote:stageStamp(s.stageChronicle,s.extremumRegime.internals?.synchrony,now),
+        entryRead:entryQuality(s,o,q,side,price,now,minutePath)},
       forecast:{remainingNetRate:remainingNet,quality:o.score/100,sizingEquity:equity}};
   // Use the very same position assessment before financial admission. A single
   // concern or slow response is not a veto; only converged independent failure

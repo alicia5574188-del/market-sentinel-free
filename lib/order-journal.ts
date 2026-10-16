@@ -13,6 +13,8 @@ export type OrderRecord={
   market_expectancy:number|null;entry_structure:EntryStructure|null;entry_rule?:string|null;
   entry_signal?:'LONG'|'SHORT'|null;entry_fade?:boolean|null;entry_room_pct?:number|null;entry_room_touches?:number|null;
   live_stage?:string|null;prior_stage?:string|null;stage_age_min?:number|null;minutes_since_shock?:number|null;shock_push?:number|null;sync_drop?:number|null;
+  trend_side?:'LONG'|'SHORT'|null;with_trend?:boolean|null;book?:number|null;residual?:number|null;relative_strength?:number|null;
+  move30?:number|null;sync?:number|null;breadth?:number|null;
 };
 export type OrderJournal={version:typeof ORDER_JOURNAL_VERSION;accountStartedAt:number;rows:OrderRecord[]};
 
@@ -32,13 +34,19 @@ export function orderRecord(t:Trade):OrderRecord{
     exit_stage:t.exitRegime?.stage??null,exit_phase:t.exitRegime?.phase??null,
     market_expectancy:t.entryContext?.marketExpectancy??null,entry_structure:t.entryContext?.entryStructure??null,
     entry_rule:t.unopened?"NOT_OPENED":t.entryContext?.shockRoom?"SHOCK_EPISODE":t.entryContext?.transitionRule?"TRANSITION_ROOM":null,
-    ...entryDecision(t),...stageFields(t)};
+    ...entryDecision(t),...stageFields(t),...qualityFields(t)};
 }
 function stageFields(t:Trade):Pick<OrderRecord,'live_stage'|'prior_stage'|'stage_age_min'|'minutes_since_shock'|'shock_push'|'sync_drop'>{
   const note=t.entryContext?.stageNote;
   if(!note)return {live_stage:null,prior_stage:null,stage_age_min:null,minutes_since_shock:null,shock_push:null,sync_drop:null};
   return {live_stage:note.liveStage,prior_stage:note.priorStage,stage_age_min:note.stageAgeMin,
     minutes_since_shock:note.minutesSinceShock,shock_push:note.shockPush,sync_drop:note.syncDrop};
+}
+export function qualityFields(t:Trade):Pick<OrderRecord,'trend_side'|'with_trend'|'book'|'residual'|'relative_strength'|'move30'|'sync'|'breadth'>{
+  const read=t.entryContext?.entryRead;
+  if(!read)return {trend_side:null,with_trend:null,book:null,residual:null,relative_strength:null,move30:null,sync:null,breadth:null};
+  return {trend_side:read.trendSide,with_trend:read.withTrend,book:read.book,residual:read.residual,
+    relative_strength:read.relativeStrength,move30:read.move30,sync:read.sync,breadth:read.breadth};
 }
 function entryDecision(t:Trade):Pick<OrderRecord,'entry_signal'|'entry_fade'|'entry_room_pct'|'entry_room_touches'>{
   const rule=t.entryContext?.transitionRule??t.entryContext?.shockRoom;

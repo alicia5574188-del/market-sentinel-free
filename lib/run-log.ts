@@ -1,7 +1,7 @@
 /** One export. Strategy decisions and runtime faults stay in different categories. */
 import type {ForwardState,Quote,Trade} from './forward-relations.ts';
 import type {EntryStructure} from './entry-structure.ts';
-import {orderRecord, type OrderJournal, type OrderRecord} from './order-journal.ts';
+import {orderRecord, qualityFields, type OrderJournal, type OrderRecord} from './order-journal.ts';
 import {PAPER_COST,freshQuote,forwardEquity} from './forward-relations.ts';
 export type LogCat='STRAT'|'EXEC'|'DATA'|'RISK'|'SYS'|'PNL';
 export type RunEvent={ts:number;level:'DEBUG'|'INFO'|'WARN'|'ERROR';cat:LogCat;symbol:string|null;event:string;reason:string|null;
@@ -26,7 +26,7 @@ export function placeFromEvent(fields:RunEvent['fields']):LsrPlace|null{
 }
 export function placesFromEvents(events:RunEvent[]){return events.filter(event=>event.event==='order_placing').map(event=>placeFromEvent(event.fields)).filter((row):row is LsrPlace=>row!=null);}
 export type LsrFill={ts:number;symbol:string;side:'LONG'|'SHORT';price:number;qty:number;notional:number;fee:number;tag:'open'|'close';trace:string;waitMs:number|null;limit:number|null};
-export type LsrPositionRow={id:string;symbol:string;side:'LONG'|'SHORT';entry:number;exit:number|null;qty:number;notional:number;gross_pnl:number|null;fee:number;net_pnl:number|null;holdSec:number;exit_reason:'stop'|'tp'|'time'|'prior'|'tp1'|'tp2'|'sl'|'invalidate'|'external'|'dropped'|null;gapBps:number|null;opened_at:number;closed_at:number|null;trace:string;entry_structure?:EntryStructure|null;market_stage?:string|null;market_expectancy?:number|null;entry_phase?:string|null;exit_stage?:string|null;exit_phase?:string|null;exit_trigger?:string|null;entry_rule?:string|null;entry_signal?:'LONG'|'SHORT'|null;entry_fade?:boolean|null;entry_room_pct?:number|null;entry_room_touches?:number|null;live_stage?:string|null;prior_stage?:string|null;stage_age_min?:number|null;minutes_since_shock?:number|null;shock_push?:number|null;sync_drop?:number|null};
+export type LsrPositionRow={id:string;symbol:string;side:'LONG'|'SHORT';entry:number;exit:number|null;qty:number;notional:number;gross_pnl:number|null;fee:number;net_pnl:number|null;holdSec:number;exit_reason:'stop'|'tp'|'time'|'prior'|'tp1'|'tp2'|'sl'|'invalidate'|'external'|'dropped'|null;gapBps:number|null;opened_at:number;closed_at:number|null;trace:string;entry_structure?:EntryStructure|null;market_stage?:string|null;market_expectancy?:number|null;entry_phase?:string|null;exit_stage?:string|null;exit_phase?:string|null;exit_trigger?:string|null;entry_rule?:string|null;entry_signal?:'LONG'|'SHORT'|null;entry_fade?:boolean|null;entry_room_pct?:number|null;entry_room_touches?:number|null;live_stage?:string|null;prior_stage?:string|null;stage_age_min?:number|null;minutes_since_shock?:number|null;shock_push?:number|null;sync_drop?:number|null;trend_side?:'LONG'|'SHORT'|null;with_trend?:boolean|null;book?:number|null;residual?:number|null;relative_strength?:number|null;move30?:number|null;sync?:number|null;breadth?:number|null};
 export type LsrCurvePoint={ts:number;equity:number;closed_pnl:number;unrealized_pnl:number;positions:number};
 const ROW_CAP=8_000;
 export function rememberRow<T>(rows:T[]|undefined,row:T){return [...(rows??[]),row].slice(-ROW_CAP);}
@@ -58,10 +58,10 @@ export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null
   const rows=(input.places&&input.places.length?input.places:placesFromEvents(input.events));
   const fallbackN=rows.filter(row=>row.fallback).length,rejectedN=rows.filter(row=>row.rejected).length;
   const body={version:'lsr-run-log-v2' as const,exportedAt:input.exportedAt,liveEnabled:input.liveEnabled,
-    howToRead:'这是当前市场智能模拟账户。权益 = 初始 + 已平净利 + 未平（价格盈亏 − 开仓费 − 预计平仓费）。不是已经停掉的实验漏斗。已平订单单独留档，不随热历史裁掉。每一笔记进场和出场当时的行情判定与演化阶段。分钟路径最多留 1200 笔，按页分开存，一次只写改过的那一页。not_opened 是没开进账户的单，只供复盘，不进权益。同步爆发和趋势的新单仓位是原来的 6 倍。',
+    howToRead:'这是当前市场智能模拟账户。权益 = 初始 + 已平净利 + 未平（价格盈亏 − 开仓费 − 预计平仓费）。不是已经停掉的实验漏斗。已平订单单独留档，不随热历史裁掉。每一笔记进场和出场当时的行情判定与演化阶段。分钟路径最多留 1200 笔，按页分开存，一次只写改过的那一页。not_opened 是没开进账户的单，只供复盘，不进权益。同步爆发和趋势的新单仓位是原来的 6 倍。进场另外记下全市场方向、这笔是否顺向、盘口、残差、相对强度、开仓前 30 分钟这个币已经顺着这笔走过的幅度、同步度和广度。这些只用于复盘，不参与开仓。',
     reviewPlan:[
-      '先看进场和出场时的行情判定、演化阶段。',
-      '同一种行情下再看方向。',
+      '先看爆发和趋势里开出的单：方向对不对，最后落袋多少。',
+      '再看没开、但路径上浮盈到过 5% 的单。对照进场时的全市场方向、是否顺向、盘口、开仓前 30 分钟已走过的幅度。样本够了再决定要不要开。',
       '走过成本后最终亏损的，看回撤到多少出局。',
       '每一个浮盈阶段，看从高点回撤多少出局。',
     ],
@@ -128,7 +128,8 @@ export function accountLogBook(state:ForwardState,quotes:Record<string,Quote>,no
       entry_room_touches:(t.entryContext?.transitionRule??t.entryContext?.shockRoom)?.touches??null,
       live_stage:t.entryContext?.stageNote?.liveStage??null,prior_stage:t.entryContext?.stageNote?.priorStage??null,
       stage_age_min:t.entryContext?.stageNote?.stageAgeMin??null,minutes_since_shock:t.entryContext?.stageNote?.minutesSinceShock??null,
-      shock_push:t.entryContext?.stageNote?.shockPush??null,sync_drop:t.entryContext?.stageNote?.syncDrop??null};
+      shock_push:t.entryContext?.stageNote?.shockPush??null,sync_drop:t.entryContext?.stageNote?.syncDrop??null,
+      ...qualityFields(t)};
     openRows.push(row);
     unrealized+=row.gross_pnl!-row.fee;
     fills.push({ts:t.openedAt,symbol:t.symbol,side:t.side,price:t.entryPrice,qty:t.quantity,notional:t.notional,fee:row.fee,tag:'open',trace:row.trace,waitMs:null,limit:t.entryPrice});
@@ -158,7 +159,8 @@ export function accountLogBook(state:ForwardState,quotes:Record<string,Quote>,no
       entry_room_touches:(t.entryContext?.transitionRule??t.entryContext?.shockRoom)?.touches??null,
       live_stage:t.entryContext?.stageNote?.liveStage??null,prior_stage:t.entryContext?.stageNote?.priorStage??null,
       stage_age_min:t.entryContext?.stageNote?.stageAgeMin??null,minutes_since_shock:t.entryContext?.stageNote?.minutesSinceShock??null,
-      shock_push:t.entryContext?.stageNote?.shockPush??null,sync_drop:t.entryContext?.stageNote?.syncDrop??null};
+      shock_push:t.entryContext?.stageNote?.shockPush??null,sync_drop:t.entryContext?.stageNote?.syncDrop??null,
+      ...qualityFields(t)};
     return row;
   });
   return {positions:[...closedRows,...openRows],fills,curve:[{ts:now,equity:round4(mark.equity),closed_pnl:round4(closedNet),unrealized_pnl:round4(unrealized),positions:openRows.length}],
@@ -176,7 +178,9 @@ function closedAccountRow(t:Trade):LsrPositionRow{
     entry_signal:recorded.entry_signal??null,entry_fade:recorded.entry_fade??null,
     entry_room_pct:recorded.entry_room_pct??null,entry_room_touches:recorded.entry_room_touches??null,
     live_stage:recorded.live_stage??null,prior_stage:recorded.prior_stage??null,stage_age_min:recorded.stage_age_min??null,
-    minutes_since_shock:recorded.minutes_since_shock??null,shock_push:recorded.shock_push??null,sync_drop:recorded.sync_drop??null};
+    minutes_since_shock:recorded.minutes_since_shock??null,shock_push:recorded.shock_push??null,sync_drop:recorded.sync_drop??null,
+    trend_side:recorded.trend_side??null,with_trend:recorded.with_trend??null,book:recorded.book??null,residual:recorded.residual??null,
+    relative_strength:recorded.relative_strength??null,move30:recorded.move30??null,sync:recorded.sync??null,breadth:recorded.breadth??null};
 }
 function fromRecord(row:OrderRecord):LsrPositionRow{
   return {...row,exit_reason:null,gapBps:null,trace:row.id,market_stage:row.entry_stage};
