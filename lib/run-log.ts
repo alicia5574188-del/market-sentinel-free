@@ -26,7 +26,7 @@ export function placeFromEvent(fields:RunEvent['fields']):LsrPlace|null{
 }
 export function placesFromEvents(events:RunEvent[]){return events.filter(event=>event.event==='order_placing').map(event=>placeFromEvent(event.fields)).filter((row):row is LsrPlace=>row!=null);}
 export type LsrFill={ts:number;symbol:string;side:'LONG'|'SHORT';price:number;qty:number;notional:number;fee:number;tag:'open'|'close';trace:string;waitMs:number|null;limit:number|null};
-export type LsrPositionRow={id:string;symbol:string;side:'LONG'|'SHORT';entry:number;exit:number|null;qty:number;notional:number;gross_pnl:number|null;fee:number;net_pnl:number|null;holdSec:number;exit_reason:'stop'|'tp'|'time'|'prior'|'tp1'|'tp2'|'sl'|'invalidate'|'external'|'dropped'|null;gapBps:number|null;opened_at:number;closed_at:number|null;trace:string;entry_structure?:EntryStructure|null;market_stage?:string|null;market_expectancy?:number|null;entry_phase?:string|null;exit_stage?:string|null;exit_phase?:string|null;exit_trigger?:string|null;entry_rule?:string|null;entry_signal?:'LONG'|'SHORT'|null;entry_fade?:boolean|null;entry_room_pct?:number|null;entry_room_touches?:number|null};
+export type LsrPositionRow={id:string;symbol:string;side:'LONG'|'SHORT';entry:number;exit:number|null;qty:number;notional:number;gross_pnl:number|null;fee:number;net_pnl:number|null;holdSec:number;exit_reason:'stop'|'tp'|'time'|'prior'|'tp1'|'tp2'|'sl'|'invalidate'|'external'|'dropped'|null;gapBps:number|null;opened_at:number;closed_at:number|null;trace:string;entry_structure?:EntryStructure|null;market_stage?:string|null;market_expectancy?:number|null;entry_phase?:string|null;exit_stage?:string|null;exit_phase?:string|null;exit_trigger?:string|null;entry_rule?:string|null;entry_signal?:'LONG'|'SHORT'|null;entry_fade?:boolean|null;entry_room_pct?:number|null;entry_room_touches?:number|null;live_stage?:string|null;prior_stage?:string|null;stage_age_min?:number|null;minutes_since_shock?:number|null;shock_push?:number|null;sync_drop?:number|null};
 export type LsrCurvePoint={ts:number;equity:number;closed_pnl:number;unrealized_pnl:number;positions:number};
 const ROW_CAP=8_000;
 export function rememberRow<T>(rows:T[]|undefined,row:T){return [...(rows??[]),row].slice(-ROW_CAP);}
@@ -125,7 +125,10 @@ export function accountLogBook(state:ForwardState,quotes:Record<string,Quote>,no
       entry_signal:(t.entryContext?.transitionRule??t.entryContext?.shockRoom)?.signalSide??null,
       entry_fade:(t.entryContext?.transitionRule??t.entryContext?.shockRoom)?.fade??null,
       entry_room_pct:(t.entryContext?.transitionRule??t.entryContext?.shockRoom)?.roomPct??null,
-      entry_room_touches:(t.entryContext?.transitionRule??t.entryContext?.shockRoom)?.touches??null};
+      entry_room_touches:(t.entryContext?.transitionRule??t.entryContext?.shockRoom)?.touches??null,
+      live_stage:t.entryContext?.stageNote?.liveStage??null,prior_stage:t.entryContext?.stageNote?.priorStage??null,
+      stage_age_min:t.entryContext?.stageNote?.stageAgeMin??null,minutes_since_shock:t.entryContext?.stageNote?.minutesSinceShock??null,
+      shock_push:t.entryContext?.stageNote?.shockPush??null,sync_drop:t.entryContext?.stageNote?.syncDrop??null};
     openRows.push(row);
     unrealized+=row.gross_pnl!-row.fee;
     fills.push({ts:t.openedAt,symbol:t.symbol,side:t.side,price:t.entryPrice,qty:t.quantity,notional:t.notional,fee:row.fee,tag:'open',trace:row.trace,waitMs:null,limit:t.entryPrice});
@@ -153,7 +156,9 @@ function closedAccountRow(t:Trade):LsrPositionRow{
     market_expectancy:recorded.market_expectancy,entry_phase:recorded.entry_phase,exit_stage:recorded.exit_stage,
     exit_phase:recorded.exit_phase,exit_trigger:recorded.exit_trigger,entry_rule:recorded.entry_rule??null,
     entry_signal:recorded.entry_signal??null,entry_fade:recorded.entry_fade??null,
-    entry_room_pct:recorded.entry_room_pct??null,entry_room_touches:recorded.entry_room_touches??null};
+    entry_room_pct:recorded.entry_room_pct??null,entry_room_touches:recorded.entry_room_touches??null,
+    live_stage:recorded.live_stage??null,prior_stage:recorded.prior_stage??null,stage_age_min:recorded.stage_age_min??null,
+    minutes_since_shock:recorded.minutes_since_shock??null,shock_push:recorded.shock_push??null,sync_drop:recorded.sync_drop??null};
 }
 function fromRecord(row:OrderRecord):LsrPositionRow{
   return {...row,exit_reason:null,gapBps:null,trace:row.id,market_stage:row.entry_stage};

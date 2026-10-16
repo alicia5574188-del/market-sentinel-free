@@ -22,6 +22,7 @@ import { beijingDayKey } from "./beijing-time.ts";
 import { readEntryStructure, type EntryStructure } from "./entry-structure.ts";
 import { settledTransitionEntry, transitionEntryDecision, transitionExitReason, type TransitionEntry } from "./transition-rule.ts";
 import { advanceShockEpisode, entryRuleForEnvironment, initialShockEpisode, normalizeShockEpisode, type ShockEpisode } from "./shock-episode.ts";
+import { advanceStageChronicle, initialStageChronicle, normalizeStageChronicle, stageStamp, type StageChronicle, type StageStamp } from "./stage-chronicle.ts";
 import { ENTRY_RESPONSE_VERSION, entryResponseWindowMs, evaluateEntryResponse,
   type EntryResponseDecision } from "./market-intelligence-entry-response.ts";
 import { deriveMarketEvolution, deriveOpportunityLifecycle, extendedEntryConfirmationReady,
@@ -148,6 +149,8 @@ export type EntryContext={
   transitionRule?:TransitionEntry;
   /** 爆发段里按空间规则选定的方向。只决定进场方向，不接管出场。 */
   shockRoom?:TransitionEntry;
+  /** 进场时研究层阶段怎么接上的。只留档，不参与开仓或出场。 */
+  stageNote?:StageStamp;
 };
 import type {ReviewEvent, TradeReview} from "./review-trace.ts";
 
@@ -202,6 +205,7 @@ export type ForwardState={
   environmentContext:{version:typeof ENVIRONMENT_ROUTER_VERSION;environment:MarketEnvironment;phase:MarketEvolutionState["phase"];
     trendSide:"LONG"|"SHORT"|null;updatedAt:number;reason:string;outlook?:EnvironmentOutlook};
   shockEpisode?:ShockEpisode;
+  stageChronicle?:StageChronicle;
   entryValidations:Record<string,EntryValidation>;
   marketPulse:MarketPulse;lastEntryAt:Record<string,number>;lastExitAt:Record<string,number>;lastSide:Record<string,"LONG"|"SHORT">;
   consumedTheses:Record<string,number>;
@@ -234,6 +238,7 @@ export function initialForward(now:number):ForwardState{
     environmentContext:{version:ENVIRONMENT_ROUTER_VERSION,environment:"TRANSITION",phase:"TRANSITIONAL",
       trendSide:null,updatedAt:now,reason:"环境路由正在建立稳定市场分类。"},
     shockEpisode:initialShockEpisode(),
+    stageChronicle:initialStageChronicle(now),
     entryValidations:{},marketPulse:blankPulse(now),
     lastEntryAt:{},lastExitAt:{},lastSide:{},consumedTheses:{},lastRotationAt:0,latestReason:"Market Intelligence V1 已启动：从整个市场关系、分化与跨交易所共识中持续寻找异类机会。",
     entryDiagnostics:{at:now,matched:0,opened:0,reasons:{}},storage:{persistedAt:0,error:null},liveEligible:false,
@@ -375,6 +380,7 @@ export function normalizeForward(v:ForwardState|null|undefined,now:number):Forwa
     environmentContext:(old as {environmentContext?:ForwardState["environmentContext"]}).environmentContext?.version===ENVIRONMENT_ROUTER_VERSION
       ?structuredClone((old as {environmentContext:ForwardState["environmentContext"]}).environmentContext):base.environmentContext,
     shockEpisode:normalizeShockEpisode((old as {shockEpisode?:unknown}).shockEpisode),
+    stageChronicle:normalizeStageChronicle((old as {stageChronicle?:unknown}).stageChronicle,now),
     entryValidations:normalizeEntryValidations((old as {entryValidations?:unknown}).entryValidations,now),
     marketPulse:v.marketPulse?.bias? v.marketPulse:blankPulse(now),lastEntryAt:v.lastEntryAt??{},lastExitAt:v.lastExitAt??{},lastSide:v.lastSide??{},
     consumedTheses:normalizeConsumedTheses((old as {consumedTheses?:unknown}).consumedTheses,history,positions,now),
@@ -1110,7 +1116,8 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
         liquidityTargetLower:o.liquidityTargetLower,liquidityTargetUpper:o.liquidityTargetUpper,
         liquidityInvalidationPrice:storedInvalidation,rapidLiquidityAuthorization:!!o.rapidLiquidityAuthorization,
         futureResearchAction:o.futureResearchAction,futureResearchReason:o.futureResearchReason,futureHypothesisIds:o.futureHypothesisIds,
-        entryStructure,transitionRule:transition??undefined,shockRoom:shockRoom??undefined},
+        entryStructure,transitionRule:transition??undefined,shockRoom:shockRoom??undefined,
+        stageNote:stageStamp(s.stageChronicle,s.extremumRegime.internals?.synchrony,now)},
       forecast:{remainingNetRate:remainingNet,quality:o.score/100,sizingEquity:equity}};
   // Use the very same position assessment before financial admission. A single
   // concern or slow response is not a veto; only converged independent failure
@@ -1568,6 +1575,7 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
     trendSide:marketEvolution.trendSide,updatedAt:outlookDue?input.now:s.environmentContext.updatedAt,
     reason:environmentOutlook.reason,outlook:environmentOutlook};
   s.shockEpisode=advanceShockEpisode(s.shockEpisode,currentEnvironment,input.now);
+  s.stageChronicle=advanceStageChronicle(s.stageChronicle,currentEnvironment,s.extremumRegime.internals?.synchrony,s.shockEpisode.active,input.now);
   if(marketReady)annotateLifecycleOpportunities(s,marketEvolution,environmentOutlook);
   manageIntelligenceTrades(s,input.quotes,input.now,input.minutePaths,marketEvolution,environmentOutlook,input.paths,input.contracts);
   // Positions opened before cutover keep their frozen lifecycle and cannot gain
@@ -1649,6 +1657,7 @@ export function resetForwardAccountPreservingLearning(previous:ForwardState,now:
   next.environmentPerformance=structuredClone(prior.environmentPerformance);
   next.environmentContext=structuredClone(prior.environmentContext);
   next.shockEpisode=structuredClone(prior.shockEpisode);
+  next.stageChronicle=structuredClone(prior.stageChronicle);
   next.observations=next.relationEngine.observations;next.measured=next.relationEngine.measured;next.invalidated=next.relationEngine.invalidated;
   next.latestReason="模拟账户资金已重置为1000U；保留 Market Intelligence 市场叙事、证据、相关组和异常生命周期，当前5m不会因重置重复开仓。";
   return next;
