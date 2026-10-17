@@ -16,6 +16,9 @@ const read=path=>readFileSync(new URL(`../${path}`,import.meta.url),"utf8");
 const realizationModule={exports:{}};
 const realizationSource=ts.transpileModule(read("lib/trade-realization.ts"),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
 runInNewContext(`(function(require,module,exports){${realizationSource}\n})`,{})(name=>{throw new Error(`pure accounting imported ${name}`);},realizationModule,realizationModule.exports);
+const coinPathModule={exports:{}};
+const coinPathSource=ts.transpileModule(read("lib/coin-path.ts"),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
+runInNewContext(`(function(require,module,exports){${coinPathSource}\n})`,{})(name=>{throw new Error(`coin path imported ${name}`);},coinPathModule,coinPathModule.exports);
 const paidModule={exports:{}};
 const paidSource=ts.transpileModule(read("lib/paid-fee-view.ts"),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
 runInNewContext(`(function(require,module,exports){${paidSource}\n})`,{})(name=>{
@@ -30,6 +33,7 @@ function render(path,props,extra={},component="default"){
   const imports={
     react:{...React,useState(initial){return React.useState(initial==="execution"?"paper":initial);}},"react/jsx-runtime":jsxRuntime,
     "../lib/trade-realization.ts":realizationModule.exports,
+    "../lib/coin-path.ts":coinPathModule.exports,
     "../lib/paid-fee-view.ts":paidModule.exports,
     "../lib/research-snapshot.ts":{collectReviewSnapshot(){throw new Error("render must not export");}},
     "../lib/beijing-time.ts":{BEIJING_TIME_ZONE:"Asia/Shanghai",beijingDayKey:()=>"2026-09-30"},
