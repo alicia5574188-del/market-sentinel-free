@@ -58,7 +58,7 @@ export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null
   const rows=(input.places&&input.places.length?input.places:placesFromEvents(input.events));
   const fallbackN=rows.filter(row=>row.fallback).length,rejectedN=rows.filter(row=>row.rejected).length;
   const body={version:'lsr-run-log-v2' as const,exportedAt:input.exportedAt,liveEnabled:input.liveEnabled,
-    howToRead:'这是当前市场智能模拟账户。权益 = 初始 + 已平净利 + 未平（价格盈亏 − 开仓费 − 预计平仓费）。不是已经停掉的实验漏斗。已平订单单独留档，不随热历史裁掉。每一笔记进场和出场当时的行情判定与演化阶段。分钟路径最多留 1200 笔，按页分开存，一次只写改过的那一页。not_opened 是没开进账户的单，只供复盘，不进权益。同步爆发和趋势的新单仓位是原来的 6 倍。进场另外记下全市场方向、这笔是否顺向、盘口、残差、相对强度、开仓前 30 分钟这个币已经顺着这笔走过的幅度、同步度和广度。研究层另外给每个准备交易的币打上它自己的 5 分钟走势：近几个小时是上涨、下跌还是震荡，最近两根是不是暴涨或暴跌，以及这笔单是顺着背景还是只顺着刚发生的异动。这些只用于复盘，不参与开仓。',
+    howToRead:'这是当前市场智能模拟账户。权益 = 初始 + 已平净利 + 未平（价格盈亏 − 开仓费 − 预计平仓费）。不是已经停掉的实验漏斗。已平订单单独留档，不随热历史裁掉。每一笔记进场和出场当时的行情判定与演化阶段。分钟路径最多留 1200 笔，按页分开存，一次只写改过的那一页。not_opened 是没开进账户的单，只供复盘，不进权益。同步爆发和趋势的新单仓位是原来的 6 倍。进场另外记下全市场方向、这笔是否顺向、盘口、残差、相对强度、开仓前 30 分钟这个币已经顺着这笔走过的幅度、同步度和广度。研究层另外给每个准备交易的币记下两句：前面这段后半段比前半段高或低多少、有没有慢慢抬或慢慢压，以及进场前同一方向连着走了几根、一共走了多少。这些只用于复盘，不参与开仓。',
     reviewPlan:[
       '先看爆发和趋势里开出的单：方向对不对，最后落袋多少。',
       '再看没开、但路径上浮盈到过 5% 的单。对照进场时的全市场方向、是否顺向、盘口、开仓前 30 分钟已走过的幅度。样本够了再决定要不要开。',

@@ -4,7 +4,6 @@ import {realizedNetPnl,initialTradeNotional,remainingTradeFraction} from "../lib
 import {useEffect,useLayoutEffect,useRef,useState,type CSSProperties,type ReactNode} from "react";
 import {BEIJING_TIME_ZONE} from "../lib/beijing-time.ts";
 import {type Trade,type forwardSummary} from "../lib/forward-relations.ts";
-import {coinPathVersus} from "../lib/coin-path.ts";
 import EquityCurve from "./equity-curve.tsx";
 import {EquityHistoryCache} from "../lib/equity-cache.ts";
 import MarketIntelligenceExecution from "./market-intelligence-execution.tsx";
@@ -41,12 +40,8 @@ function entryFacts(t:Trade){
   if(ctx.environment&&note?.liveStage&&ctx.environment!==note.liveStage)
     lines.push(`这个机会出现时标成${stageName(ctx.environment)}，那是更早的标记。开仓那一刻盘面已经是${stageName(note.liveStage)}，所以开了。`);
   const path=ctx.coinPath;
-  if(path?.label){
-    const move:string[]=[];
-    if(path.backgroundPct!=null)move.push(`这段背景 ${signed(path.backgroundPct)}%`);
-    if(path.recentPct!=null&&path.recent!=="NONE"&&path.recent!=="UNKNOWN")move.push(`最近两根 ${signed(path.recentPct)}%`);
-    lines.push(`开仓走势：${path.label}。${coinPathVersus(path,t.side)}${move.length?`。${move.join("，")}`:""}。`);
-  }else lines.push("开仓走势：这笔开的时候还没记下。");
+  if(path?.label)lines.push(`开仓走势：${path.label}`);
+  else lines.push("开仓走势：这笔开的时候还没记下。");
   const read=ctx.entryRead;
   if(read){
     const prior:string[]=[];
