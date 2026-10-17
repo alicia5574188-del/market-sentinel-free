@@ -1,10 +1,11 @@
 /** One export. Strategy decisions and runtime faults stay in different categories. */
 import type {ForwardState,Quote,Trade} from './forward-relations.ts';
 import type {EntryStructure} from './entry-structure.ts';
-import {orderRecord, pathFields, qualityFields, signalFields, type OrderJournal, type OrderRecord} from './order-journal.ts';
+import {orderRecord, pathFields, qualityFields, signalFields, snapFields, gapFields, type OrderJournal, type OrderRecord} from './order-journal.ts';
 import {PAPER_COST,freshQuote,forwardEquity} from './forward-relations.ts';
 import {readStageTimeline} from './stage-chronicle.ts';
 import {type LiveFillNote} from './live-fill-note.ts';
+import {summarizeEquity, type EquityMinute} from './equity-minutes.ts';
 export type LogCat='STRAT'|'EXEC'|'DATA'|'RISK'|'SYS'|'PNL';
 export type RunEvent={ts:number;level:'DEBUG'|'INFO'|'WARN'|'ERROR';cat:LogCat;symbol:string|null;event:string;reason:string|null;
   fields:Record<string,number|string|boolean|null>;trace:string};
@@ -28,7 +29,7 @@ export function placeFromEvent(fields:RunEvent['fields']):LsrPlace|null{
 }
 export function placesFromEvents(events:RunEvent[]){return events.filter(event=>event.event==='order_placing').map(event=>placeFromEvent(event.fields)).filter((row):row is LsrPlace=>row!=null);}
 export type LsrFill={ts:number;symbol:string;side:'LONG'|'SHORT';price:number;qty:number;notional:number;fee:number;tag:'open'|'close';trace:string;waitMs:number|null;limit:number|null};
-export type LsrPositionRow={id:string;symbol:string;side:'LONG'|'SHORT';entry:number;exit:number|null;qty:number;notional:number;gross_pnl:number|null;fee:number;net_pnl:number|null;holdSec:number;exit_reason:'stop'|'tp'|'time'|'prior'|'tp1'|'tp2'|'sl'|'invalidate'|'external'|'dropped'|null;gapBps:number|null;opened_at:number;closed_at:number|null;trace:string;entry_structure?:EntryStructure|null;market_stage?:string|null;market_expectancy?:number|null;entry_phase?:string|null;exit_stage?:string|null;exit_phase?:string|null;exit_trigger?:string|null;entry_rule?:string|null;entry_signal?:'LONG'|'SHORT'|null;entry_fade?:boolean|null;entry_room_pct?:number|null;entry_room_touches?:number|null;live_stage?:string|null;prior_stage?:string|null;stage_age_min?:number|null;minutes_since_shock?:number|null;shock_push?:number|null;sync_drop?:number|null;trend_side?:'LONG'|'SHORT'|null;with_trend?:boolean|null;book?:number|null;residual?:number|null;relative_strength?:number|null;move30?:number|null;sync?:number|null;breadth?:number|null;coin_background?:string|null;coin_recent?:string|null;coin_label?:string|null;coin_versus?:string|null;coin_background_pct?:number|null;coin_recent_pct?:number|null;coin_window_min?:number|null;signal_n?:number|null;signal_gap_min?:number|null;entry_spread_bps?:number|null};
+export type LsrPositionRow={id:string;symbol:string;side:'LONG'|'SHORT';entry:number;exit:number|null;qty:number;notional:number;gross_pnl:number|null;fee:number;net_pnl:number|null;holdSec:number;exit_reason:'stop'|'tp'|'time'|'prior'|'tp1'|'tp2'|'sl'|'invalidate'|'external'|'dropped'|null;gapBps:number|null;opened_at:number;closed_at:number|null;trace:string;entry_structure?:EntryStructure|null;market_stage?:string|null;market_expectancy?:number|null;entry_phase?:string|null;exit_stage?:string|null;exit_phase?:string|null;exit_trigger?:string|null;entry_rule?:string|null;entry_signal?:'LONG'|'SHORT'|null;entry_fade?:boolean|null;entry_room_pct?:number|null;entry_room_touches?:number|null;live_stage?:string|null;prior_stage?:string|null;stage_age_min?:number|null;minutes_since_shock?:number|null;shock_push?:number|null;sync_drop?:number|null;trend_side?:'LONG'|'SHORT'|null;with_trend?:boolean|null;book?:number|null;residual?:number|null;relative_strength?:number|null;move30?:number|null;sync?:number|null;breadth?:number|null;coin_background?:string|null;coin_recent?:string|null;coin_label?:string|null;coin_versus?:string|null;coin_background_pct?:number|null;coin_recent_pct?:number|null;coin_window_min?:number|null;signal_n?:number|null;signal_gap_min?:number|null;entry_spread_bps?:number|null;signal_n_symbol?:number|null;prev_side?:'LONG'|'SHORT'|null;prev_gap_min?:number|null;prev_net_pct?:number|null;prev_mfe_pct?:number|null;shock_seen?:boolean|null;mode?:string|null;trade_plan?:string|null;intent?:string|null;long_score?:number|null;short_score?:number|null;residual_z?:number|null;score?:number|null;stop_price?:number|null;planned_hold_min?:number|null;volume24h_usd?:number|null;funding_rate?:number|null;trend_score?:number|null;factor_30m_pct?:number|null;gap_applicable?:boolean|null;tally_since?:number|null};
 export type LsrCurvePoint={ts:number;equity:number;closed_pnl:number;unrealized_pnl:number;positions:number};
 const ROW_CAP=8_000;
 export function rememberRow<T>(rows:T[]|undefined,row:T){return [...(rows??[]),row].slice(-ROW_CAP);}
@@ -36,7 +37,7 @@ export function rememberRow<T>(rows:T[]|undefined,row:T){return [...(rows??[]),r
 export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null;health:{sources?:{source:string;fresh?:boolean;failures?:number;lastError?:string|null;rows?:number}[];healthySources?:number};gate:{connected?:boolean;lastError?:string|null;freshBooks?:number};exportedAt:number;liveEnabled:boolean;
   positions?:LsrPositionRow[];fills?:LsrFill[];curve?:LsrCurvePoint[];equity?:number|null;initial?:number|null;closedNet?:number|null;priorAdjustment?:number|null;
   unreconstructed?:number|null;unreconstructedN?:number|null;
-  places?:LsrPlace[]|null;notOpened?:LsrPositionRow[]|null;stageTimeline?:ReturnType<typeof readStageTimeline>|null;liveFills?:LiveFillNote[]|null}){
+  places?:LsrPlace[]|null;notOpened?:LsrPositionRow[]|null;stageTimeline?:ReturnType<typeof readStageTimeline>|null;liveFills?:LiveFillNote[]|null;equityMinutes?:EquityMinute[]|null;tallySince?:number|null}){
   const funnel=input.funnel??emptyFunnel('');
   const strategy={signal_not_triggered:funnel.trend+funnel.exhaustion+funnel.sweep+funnel.micro+funnel.spread,
     signal_triggered_no_fill:funnel.cancelled};
@@ -59,8 +60,12 @@ export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null
   if(gaps.length<10)logs.push({ts:input.exportedAt,level:'WARN',cat:'PNL',symbol:null,event:'stop_sample_short',reason:`止损样本 ${gaps.length} 笔，不到 10 笔，止损统计先别当真。`,fields:{count:gaps.length},trace:traceOf(input.exportedAt)});
   const rows=(input.places&&input.places.length?input.places:placesFromEvents(input.events));
   const fallbackN=rows.filter(row=>row.fallback).length,rejectedN=rows.filter(row=>row.rejected).length;
+  const minutes=input.equityMinutes??[];
+  const timeline=input.stageTimeline??[];
+  const tallySince=input.tallySince??null;
+  const withTally=<T extends object>(rows:T[])=>rows.map(row=>({...row,tally_since:tallySince}));
   const body={version:'lsr-run-log-v2' as const,exportedAt:input.exportedAt,liveEnabled:input.liveEnabled,
-    howToRead:'这是当前市场智能模拟账户。权益 = 初始 + 已平净利 + 未平（价格盈亏 − 开仓费 − 预计平仓费）。不是已经停掉的实验漏斗。已平订单单独留档，不随热历史裁掉。每一笔记进场和出场当时的行情判定与演化阶段。分钟路径最多留 1200 笔，按页分开存，一次只写改过的那一页。not_opened 是没开进账户的单，只供复盘，不进权益。同步爆发和趋势的新单仓位是原来的 6 倍。进场另外记下全市场方向、这笔是否顺向、盘口、残差、相对强度、开仓前 30 分钟这个币已经顺着这笔走过的幅度、同步度和广度。研究层另外给每个准备交易的币记下两句：前面这段后半段比前半段高或低多少、有没有慢慢抬或慢慢压，以及进场前同一方向连着走了几根、一共走了多少。这些只用于复盘，不参与开仓。stageTimeline 是行情阶段每次切换的时间线：at 这段开始，until 这段结束，最后一条的 until 是导出时间且 open 为 true 表示还没结束。stage 是这段的名字，prior 是上一段，trendSide 是切过来那一刻写下的全市场方向，min 是这段多少分钟。以前没记下的切换补不回来。这条线不参与开仓或出场。paths 里 hold 加 after 覆盖信号之后 6 小时，一分钟一个点，到点就停，不再往下记。signal_n 是同币同方向第几次信号，signal_gap_min 是距上一笔多少分钟，entry_spread_bps 是写下这一笔时的买卖价差。这三项从本次部署之后的新信号才有。liveFills 是实盘真实成交：exchangePrice 是交易所成交价，bid、ask、spreadBps 是提交时的盘口。没开实盘就是空的。这些都不参与开仓或出场。',
+    howToRead:'这是当前市场智能模拟账户。权益 = 初始 + 已平净利 + 未平（价格盈亏 − 开仓费 − 预计平仓费）。不是已经停掉的实验漏斗。已平订单单独留档，不随热历史裁掉。每一笔记进场和出场当时的行情判定与演化阶段。分钟路径最多留 1200 笔，按页分开存，一次只写改过的那一页。not_opened 是没开进账户的单，只供复盘，不进权益。同步爆发和趋势的新单仓位是原来的 6 倍。进场另外记下全市场方向、这笔是否顺向、盘口、残差、相对强度、开仓前 30 分钟这个币已经顺着这笔走过的幅度、同步度和广度。研究层另外给每个准备交易的币记下两句：前面这段后半段比前半段高或低多少、有没有慢慢抬或慢慢压，以及进场前同一方向连着走了几根、一共走了多少。这些只用于复盘，不参与开仓。stageTimeline 是行情阶段每次切换的时间线：at 这段开始，until 这段结束，最后一条的 until 是导出时间且 open 为 true 表示还没结束。stage 是这段的名字，prior 是上一段，trendSide 是切过来那一刻写下的全市场方向，min 是这段多少分钟。以前没记下的切换补不回来。这条线不参与开仓或出场。paths 里 hold 加 after 覆盖信号之后 6 小时，一分钟一个点，到点就停，不再往下记。signal_n 是同币同方向第几次信号，signal_gap_min 是距上一笔多少分钟，entry_spread_bps 是写下这一笔时的买卖价差。这三项从本次部署之后的新信号才有。liveFills 是实盘真实成交：exchangePrice 是交易所成交价，bid、ask、spreadBps 是提交时的盘口，leg 区分开仓和平仓。没开实盘就是空的。equity_minutes 是每分钟一条的权益，和上面那条只有一个点的 equity_curve 分开，避免把记账校验弄乱。curve_since、timeline_since、tally_since 分别是这三样从哪一刻开始有。entry_signal、entry_fade、entry_room_pct、entry_room_touches 已经不用，空着是正常的。minutes_since_shock 在还没出现过同步爆发时也是空的，用 shock_seen 区分。trend_score 是短期方向分，有正负，全市场方向为空时也有。factor_30m_pct 是进场时全市场等权 30 分钟收益，单位是百分比。equity_minutes 最多带最近 8 个北京时间日。liveFills 的 fee、fee_rate、role 只有对上已经拉回来的 Gate 成交才有值。这些都不参与开仓或出场。',
     reviewPlan:[
       '先看爆发和趋势里开出的单：方向对不对，最后落袋多少。',
       '再看没开、但路径上浮盈到过 5% 的单。对照进场时的全市场方向、是否顺向、盘口、开仓前 30 分钟已走过的幅度。样本够了再决定要不要开。',
@@ -94,7 +99,12 @@ export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null
       {step:'账户实际权益',amount:equity},
       {step:'对不上的差额。接近 0 才算账平了',amount:identity==null?null:Number(identity.toFixed(4))},
     ],
-    positions,fills,equity_curve:curve,not_opened:input.notOpened??[],stageTimeline:input.stageTimeline??[],liveFills:input.liveFills??[]};
+    positions:withTally(positions),fills,equity_curve:curve,equity_minutes:minutes,...summarizeEquity(minutes),
+    not_opened:withTally(input.notOpened??[]),stageTimeline:timeline,timeline_since:timeline[0]?.at??null,
+    tally_since:input.tallySince??null,liveFills:input.liveFills??[],
+    fieldNotes:{entry_signal:'deprecated',entry_fade:'deprecated',entry_room_pct:'deprecated',entry_room_touches:'deprecated',
+      minutes_since_shock:'空值并且 shock_seen 为 false，表示到这笔为止还没出现过同步爆发',
+      equity_curve:'只有导出这一刻的一个点，用来对账。分钟序列在 equity_minutes。'}};
   if(JSON.stringify(body).length>20_000_000)body.equity_curve=curve.filter((_,i)=>i%5===0);
   return body;
 }
@@ -131,7 +141,8 @@ export function accountLogBook(state:ForwardState,quotes:Record<string,Quote>,no
       live_stage:t.entryContext?.stageNote?.liveStage??null,prior_stage:t.entryContext?.stageNote?.priorStage??null,
       stage_age_min:t.entryContext?.stageNote?.stageAgeMin??null,minutes_since_shock:t.entryContext?.stageNote?.minutesSinceShock??null,
       shock_push:t.entryContext?.stageNote?.shockPush??null,sync_drop:t.entryContext?.stageNote?.syncDrop??null,
-      ...qualityFields(t),...pathFields(t),...signalFields(t)};
+      shock_seen:t.entryContext?.stageNote?t.entryContext.stageNote.liveStage==="SHOCK"||t.entryContext.stageNote.minutesSinceShock!=null:null,
+      ...qualityFields(t),...pathFields(t),...signalFields(t),...snapFields(t),...gapFields(t)};
     openRows.push(row);
     unrealized+=row.gross_pnl!-row.fee;
     fills.push({ts:t.openedAt,symbol:t.symbol,side:t.side,price:t.entryPrice,qty:t.quantity,notional:t.notional,fee:row.fee,tag:'open',trace:row.trace,waitMs:null,limit:t.entryPrice});
@@ -162,18 +173,20 @@ export function accountLogBook(state:ForwardState,quotes:Record<string,Quote>,no
       live_stage:t.entryContext?.stageNote?.liveStage??null,prior_stage:t.entryContext?.stageNote?.priorStage??null,
       stage_age_min:t.entryContext?.stageNote?.stageAgeMin??null,minutes_since_shock:t.entryContext?.stageNote?.minutesSinceShock??null,
       shock_push:t.entryContext?.stageNote?.shockPush??null,sync_drop:t.entryContext?.stageNote?.syncDrop??null,
-      ...qualityFields(t),...pathFields(t),...signalFields(t)};
+      shock_seen:t.entryContext?.stageNote?t.entryContext.stageNote.liveStage==="SHOCK"||t.entryContext.stageNote.minutesSinceShock!=null:null,
+      ...qualityFields(t),...pathFields(t),...signalFields(t),...snapFields(t),...gapFields(t)};
     return row;
   });
   return {positions:[...closedRows,...openRows],fills,curve:[{ts:now,equity:round4(mark.equity),closed_pnl:round4(closedNet),unrealized_pnl:round4(unrealized),positions:openRows.length}],
     equity:mark.equity,initial:state.initialEquity,closedNet:round4(closedNet),priorAdjustment:0,places:[] as LsrPlace[],funnel,
-    unreconstructed:0,unreconstructedN:0,notOpened,stageTimeline:readStageTimeline(state.stageChronicle,now)};
+    unreconstructed:0,unreconstructedN:0,notOpened,stageTimeline:readStageTimeline(state.stageChronicle,now),
+    tallySince:state.signalTallyMeta?.from??null};
 }
 function closedAccountRow(t:Trade):LsrPositionRow{
   const recorded=orderRecord(t);
   return {id:t.id,symbol:t.symbol,side:t.side,entry:t.entryPrice,exit:t.exitPrice,qty:t.quantity,notional:t.notional,
     gross_pnl:t.grossPnl,fee:round4(t.entryFee+t.exitFee+t.fundingAllowance),net_pnl:t.netPnl,
-    holdSec:t.closedAt==null?0:Math.max(0,Math.round((t.closedAt-t.openedAt)/1000)),exit_reason:null,gapBps:null,
+    holdSec:t.closedAt==null?0:Math.max(0,Math.round((t.closedAt-t.openedAt)/1000)),exit_reason:null,
     opened_at:t.openedAt,closed_at:t.closedAt,trace:t.id,entry_structure:recorded.entry_structure,market_stage:recorded.entry_stage,
     market_expectancy:recorded.market_expectancy,entry_phase:recorded.entry_phase,exit_stage:recorded.exit_stage,
     exit_phase:recorded.exit_phase,exit_trigger:recorded.exit_trigger,entry_rule:recorded.entry_rule??null,
@@ -186,10 +199,18 @@ function closedAccountRow(t:Trade):LsrPositionRow{
     coin_background:recorded.coin_background??null,coin_recent:recorded.coin_recent??null,coin_label:recorded.coin_label??null,
     coin_versus:recorded.coin_versus??null,coin_background_pct:recorded.coin_background_pct??null,
     coin_recent_pct:recorded.coin_recent_pct??null,coin_window_min:recorded.coin_window_min??null,
-    signal_n:recorded.signal_n??null,signal_gap_min:recorded.signal_gap_min??null,entry_spread_bps:recorded.entry_spread_bps??null};
+    signal_n:recorded.signal_n??null,signal_gap_min:recorded.signal_gap_min??null,entry_spread_bps:recorded.entry_spread_bps??null,
+    signal_n_symbol:recorded.signal_n_symbol??null,prev_side:recorded.prev_side??null,prev_gap_min:recorded.prev_gap_min??null,
+    prev_net_pct:recorded.prev_net_pct??null,prev_mfe_pct:recorded.prev_mfe_pct??null,shock_seen:recorded.shock_seen??null,
+    mode:recorded.mode??null,trade_plan:recorded.trade_plan??null,intent:recorded.intent??null,
+    long_score:recorded.long_score??null,short_score:recorded.short_score??null,residual_z:recorded.residual_z??null,
+    score:recorded.score??null,stop_price:recorded.stop_price??null,planned_hold_min:recorded.planned_hold_min??null,
+    volume24h_usd:recorded.volume24h_usd??null,funding_rate:recorded.funding_rate??null,trend_score:recorded.trend_score??null,
+    factor_30m_pct:recorded.factor_30m_pct??null,
+    gapBps:recorded.gap_bps??null,gap_applicable:recorded.gap_applicable??false};
 }
 function fromRecord(row:OrderRecord):LsrPositionRow{
-  return {...row,exit_reason:null,gapBps:null,trace:row.id,market_stage:row.entry_stage};
+  return {...row,exit_reason:null,gapBps:row.gap_bps??null,gap_applicable:row.gap_applicable??false,trace:row.id,market_stage:row.entry_stage};
 }
 function openMark(state:ForwardState,t:Trade,quotes:Record<string,Quote>,now:number){
   const q=quotes[t.symbol],fresh=freshQuote(q,now),policy=t.exitControl?.policy;

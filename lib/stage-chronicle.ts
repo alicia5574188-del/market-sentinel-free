@@ -2,11 +2,18 @@
 export const STAGE_CHRONICLE_VERSION="stage-chronicle-v1";
 
 export type StageName="SHOCK"|"TREND"|"ROTATION"|"TRANSITION";
+export type StageSnap={
+  sync:number|null;breadth:number|null;expansion:number|null;aligned_flow:number|null;
+  pressure:number|null;persistence:number|null;btc:number|null;eth:number|null;factor:number|null;
+};
+export type StageFwd={btc_pct:number|null;eth_pct:number|null;factor_pct:number|null;at:number};
 export type StageChange={
   at:number;
   stage:StageName;
   prior:StageName|null;
   trendSide:"LONG"|"SHORT"|null;
+  snap?:StageSnap;
+  fwd?:{m30?:StageFwd;m60?:StageFwd;m120?:StageFwd};
 };
 
 export type StageChronicle={
@@ -60,9 +67,30 @@ function readChanges(raw:unknown,fallback:StageChange):StageChange[]{
   for(const item of raw){
     const row=item as Partial<StageChange>|null;
     if(!row||typeof row.at!=="number"||!Number.isFinite(row.at))continue;
-    rows.push(changeAt(row.at,asStage(row.stage),row.prior==null?null:asStage(row.prior),asSide(row.trendSide)));
+    const next=changeAt(row.at,asStage(row.stage),row.prior==null?null:asStage(row.prior),asSide(row.trendSide));
+    if(row.snap)next.snap=cleanSnap(row.snap);
+    if(row.fwd)next.fwd=cleanFwd(row.fwd);
+    rows.push(next);
   }
   return (rows.length?rows:[fallback]).slice(-CHANGE_CAP);
+}
+function numOrNull(value:unknown){
+  return typeof value==="number"&&Number.isFinite(value)?value:null;
+}
+function cleanSnap(raw:StageSnap):StageSnap{
+  return {sync:numOrNull(raw.sync),breadth:numOrNull(raw.breadth),expansion:numOrNull(raw.expansion),
+    aligned_flow:numOrNull(raw.aligned_flow),pressure:numOrNull(raw.pressure),persistence:numOrNull(raw.persistence),
+    btc:numOrNull(raw.btc),eth:numOrNull(raw.eth),factor:numOrNull(raw.factor)};
+}
+function cleanLeg(raw:StageFwd|undefined):StageFwd|undefined{
+  if(!raw||typeof raw.at!=="number")return undefined;
+  return {btc_pct:numOrNull(raw.btc_pct),eth_pct:numOrNull(raw.eth_pct),factor_pct:numOrNull(raw.factor_pct),at:raw.at};
+}
+function cleanFwd(raw:NonNullable<StageChange["fwd"]>):NonNullable<StageChange["fwd"]>{
+  const fwd:NonNullable<StageChange["fwd"]>={};
+  const m30=cleanLeg(raw.m30),m60=cleanLeg(raw.m60),m120=cleanLeg(raw.m120);
+  if(m30)fwd.m30=m30;if(m60)fwd.m60=m60;if(m120)fwd.m120=m120;
+  return fwd;
 }
 
 export function normalizeStageChronicle(raw:unknown,now:number):StageChronicle{
@@ -146,6 +174,49 @@ export function readStageTimeline(chronicle:StageChronicle|null|undefined,now:nu
   return changes.map((item,i)=>{
     const until=i+1<changes.length?changes[i+1]!.at:now;
     return {at:item.at,until,min:mins(Math.max(0,until-item.at)),stage:item.stage,prior:item.prior,
-      trendSide:item.trendSide,open:i===changes.length-1};
+      trendSide:item.trendSide,open:i===changes.length-1,snap:item.snap??null,fwd:item.fwd??null};
   });
+}
+
+/** 只填刚写下、还没有快照的那一条。不改阶段时钟。 */
+export function attachStageSnap(chronicle:StageChronicle,snap:StageSnap,now:number):StageChronicle{
+  const last=chronicle.changes.at(-1);
+  if(!last||last.snap||Math.abs(last.at-now)>5_000)return chronicle;
+  const changes=chronicle.changes.slice(0,-1).concat({...last,snap:cleanSnap(snap)});
+  return {...chronicle,changes};
+}
+
+function pct(nowPx:number|null,thenPx:number|null){
+  if(nowPx==null||thenPx==null||!(thenPx>0))return null;
+  return Math.round((nowPx/thenPx-1)*10_000)/100;
+}
+/** 价格的几何平均。两时点相除就是这段的等权收益，名字集合变了会失真。不满 8 个币不算市场。 */
+export function equalWeightPriceIndex(mids:number[]){
+  const ok=mids.filter(v=>typeof v==="number"&&v>0&&Number.isFinite(v));
+  if(ok.length<8)return null;
+  return Math.exp(ok.reduce((n,v)=>n+Math.log(v),0)/ok.length);
+}
+/** 等权平均收益，单位是百分比。不满 8 个币返回空。 */
+export function equalWeightReturnPct(returns:number[]){
+  const ok=returns.filter(v=>typeof v==="number"&&Number.isFinite(v));
+  if(ok.length<8)return null;
+  return Math.round(ok.reduce((n,v)=>n+v,0)/ok.length*10_000)/100;
+}
+/** 切换后 30/60/120 分钟，把大盘相对切换时的涨跌补上。只写记录。 */
+export function fillStageForward(chronicle:StageChronicle|null|undefined,btc:number|null,eth:number|null,factor:number|null,now:number):StageChronicle{
+  const row=normalizeStageChronicle(chronicle,now);
+  let changed=false;
+  const slots=[{key:"m30" as const,minutes:30},{key:"m60" as const,minutes:60},{key:"m120" as const,minutes:120}];
+  const changes=row.changes.map(item=>{
+    if(!item.snap)return item;
+    let fwd=item.fwd?{...item.fwd}:{};
+    let next=item;
+    for(const slot of slots){
+      if(fwd[slot.key]||item.at+slot.minutes*60_000>now)continue;
+      fwd={...fwd,[slot.key]:{btc_pct:pct(btc,item.snap.btc),eth_pct:pct(eth,item.snap.eth),factor_pct:pct(factor,item.snap.factor),at:now}};
+      next={...next,fwd};changed=true;
+    }
+    return next;
+  });
+  return changed?{...row,changes}:row;
 }

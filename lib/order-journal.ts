@@ -19,6 +19,11 @@ export type OrderRecord={
   coin_background?:string|null;coin_recent?:string|null;coin_label?:string|null;coin_versus?:string|null;
   coin_background_pct?:number|null;coin_recent_pct?:number|null;coin_window_min?:number|null;
   signal_n?:number|null;signal_gap_min?:number|null;entry_spread_bps?:number|null;
+  signal_n_symbol?:number|null;prev_side?:'LONG'|'SHORT'|null;prev_gap_min?:number|null;prev_net_pct?:number|null;prev_mfe_pct?:number|null;
+  shock_seen?:boolean|null;
+  mode?:string|null;trade_plan?:string|null;intent?:string|null;long_score?:number|null;short_score?:number|null;residual_z?:number|null;
+  score?:number|null;stop_price?:number|null;planned_hold_min?:number|null;volume24h_usd?:number|null;funding_rate?:number|null;trend_score?:number|null;factor_30m_pct?:number|null;
+  gap_bps?:number|null;gap_applicable?:boolean|null;
 };
 export type OrderJournal={version:typeof ORDER_JOURNAL_VERSION;accountStartedAt:number;rows:OrderRecord[]};
 
@@ -38,13 +43,14 @@ export function orderRecord(t:Trade):OrderRecord{
     exit_stage:t.exitRegime?.stage??null,exit_phase:t.exitRegime?.phase??null,
     market_expectancy:t.entryContext?.marketExpectancy??null,entry_structure:t.entryContext?.entryStructure??null,
     entry_rule:t.unopened?"NOT_OPENED":t.entryContext?.shockRoom?"SHOCK_EPISODE":t.entryContext?.transitionRule?"TRANSITION_ROOM":null,
-    ...entryDecision(t),...stageFields(t),...qualityFields(t),...pathFields(t),...signalFields(t)};
+    ...entryDecision(t),...stageFields(t),...qualityFields(t),...pathFields(t),...signalFields(t),...snapFields(t),...gapFields(t)};
 }
-function stageFields(t:Trade):Pick<OrderRecord,'live_stage'|'prior_stage'|'stage_age_min'|'minutes_since_shock'|'shock_push'|'sync_drop'>{
+function stageFields(t:Trade):Pick<OrderRecord,'live_stage'|'prior_stage'|'stage_age_min'|'minutes_since_shock'|'shock_push'|'sync_drop'|'shock_seen'>{
   const note=t.entryContext?.stageNote;
-  if(!note)return {live_stage:null,prior_stage:null,stage_age_min:null,minutes_since_shock:null,shock_push:null,sync_drop:null};
+  if(!note)return {live_stage:null,prior_stage:null,stage_age_min:null,minutes_since_shock:null,shock_push:null,sync_drop:null,shock_seen:null};
+  const seen=note.liveStage==="SHOCK"||note.minutesSinceShock!=null;
   return {live_stage:note.liveStage,prior_stage:note.priorStage,stage_age_min:note.stageAgeMin,
-    minutes_since_shock:note.minutesSinceShock,shock_push:note.shockPush,sync_drop:note.syncDrop};
+    minutes_since_shock:note.minutesSinceShock,shock_push:note.shockPush,sync_drop:note.syncDrop,shock_seen:seen};
 }
 export function qualityFields(t:Trade):Pick<OrderRecord,'trend_side'|'with_trend'|'book'|'residual'|'relative_strength'|'move30'|'sync'|'breadth'>{
   const read=t.entryContext?.entryRead;
@@ -58,11 +64,30 @@ export function pathFields(t:Trade):Pick<OrderRecord,'coin_background'|'coin_rec
   return {coin_background:path.background,coin_recent:path.recent,coin_label:path.label,coin_versus:coinPathVersus(path,t.side),
     coin_background_pct:path.backgroundPct,coin_recent_pct:path.recentPct,coin_window_min:path.windowMin};
 }
-export function signalFields(t:Trade):Pick<OrderRecord,'signal_n'|'signal_gap_min'|'entry_spread_bps'>{
-  const n=t.signalRepeat?.n,gap=t.signalRepeat?.gapMin,spread=t.entrySpreadBps;
+export function signalFields(t:Trade):Pick<OrderRecord,'signal_n'|'signal_gap_min'|'entry_spread_bps'|'signal_n_symbol'|'prev_side'|'prev_gap_min'|'prev_net_pct'|'prev_mfe_pct'>{
+  const row=t.signalRepeat,spread=t.entrySpreadBps;
+  const n=row?.n,gap=row?.gapMin;
   return {signal_n:typeof n==="number"&&n>=1?n:null,
     signal_gap_min:typeof gap==="number"&&Number.isFinite(gap)?gap:null,
-    entry_spread_bps:typeof spread==="number"&&Number.isFinite(spread)?spread:null};
+    entry_spread_bps:typeof spread==="number"&&Number.isFinite(spread)?spread:null,
+    signal_n_symbol:typeof row?.nSymbol==="number"&&row.nSymbol>=1?row.nSymbol:null,
+    prev_side:row?.prevSide==="LONG"||row?.prevSide==="SHORT"?row.prevSide:null,
+    prev_gap_min:typeof row?.prevGapMin==="number"&&Number.isFinite(row.prevGapMin)?row.prevGapMin:null,
+    prev_net_pct:typeof row?.prevNetPct==="number"&&Number.isFinite(row.prevNetPct)?row.prevNetPct:null,
+    prev_mfe_pct:typeof row?.prevMfePct==="number"&&Number.isFinite(row.prevMfePct)?row.prevMfePct:null};
+}
+export function snapFields(t:Trade):Pick<OrderRecord,'mode'|'trade_plan'|'intent'|'long_score'|'short_score'|'residual_z'|'score'|'stop_price'|'planned_hold_min'|'volume24h_usd'|'funding_rate'|'trend_score'|'factor_30m_pct'>{
+  const snap=t.entryContext?.entrySnap;
+  const empty={mode:null,trade_plan:null,intent:null,long_score:null,short_score:null,residual_z:null,score:null,stop_price:null,planned_hold_min:null,volume24h_usd:null,funding_rate:null,trend_score:null,factor_30m_pct:null};
+  if(!snap)return empty;
+  return {...empty,...snap};
+}
+const STOP_EXIT=/STOP|INVALIDAT|HARD_RISK/;
+export function gapFields(t:Trade):Pick<OrderRecord,'gap_bps'|'gap_applicable'>{
+  const exit=t.exitPrice,stop=t.stopPrice,reason=t.exitReason??"";
+  if(t.status!=="CLOSED"||!STOP_EXIT.test(reason)||!(exit&&exit>0)||!(stop&&stop>0))return {gap_bps:null,gap_applicable:false};
+  const signed=(exit-stop)/stop*10_000*(t.side==="LONG"?1:-1);
+  return {gap_bps:Number(signed.toFixed(2)),gap_applicable:true};
 }
 function entryDecision(t:Trade):Pick<OrderRecord,'entry_signal'|'entry_fade'|'entry_room_pct'|'entry_room_touches'>{
   const rule=t.entryContext?.transitionRule??t.entryContext?.shockRoom;

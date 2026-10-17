@@ -81,8 +81,9 @@ import { LIVE_TURNOVER_PREFIX, LIVE_TURNOVER_VERSION, initialTurnover, validateT
 import { LIVE_PARITY_VERSION, LIVE_PARITY_PREFIX, buildProportionalMirror, forwardMirrorSources, mirrorPositionRisk,
   sourceLifecycle, mirrorSourceFresh, mirrorCoverage, liveEntryDriftGuard,
   type MirrorSourceTrade, type MirrorReceipt, type MirrorBinding } from "../lib/live-parity.ts";
-import { rememberLiveFill, normalizeLiveFills, type LiveFillNote } from "../lib/live-fill-note.ts";
+import { rememberLiveFill, normalizeLiveFills, applyConfirmedFillCosts, type LiveFillNote } from "../lib/live-fill-note.ts";
 import { quoteSpreadBps } from "../lib/signal-repeat.ts";
+import { collectEquityMinutes, equityMinuteKey, mergeEquityMinutes, sampleEquity, type EquityMinute } from "../lib/equity-minutes.ts";
 // Inverse closes that merely follow the shadow are not protective; they may rest 2s.
 const MAKER_EXIT_REASONS=new Set(["SHADOW_SOURCE_EXIT"]);
 import { makerFirstEntry, makerEntryTag, MakerStateUnknownError, LIVE_MAKER_ENTRY_POLICY, LIVE_MAKER_ENTRY_ENABLED, type MakerResult } from "../lib/live-maker-entry.ts";
@@ -572,6 +573,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private orderJournal:OrderJournal=emptyOrderJournal(0);
   private orderJournalLoaded=false;
   private orderJournalPending=false;
+  private lastEqMinAt=0;
+  private eqMinBuf:EquityMinute[]=[];
   private reviewDiagnosticError:string|null=null;
   private forwardBusy = false;
   private deskCleanArmed = false;
@@ -1319,17 +1322,60 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return{bestBid,bestAsk,observedAt:book.observedAt,source:"rest" as const};
   }
 
-  private noteLiveFill(sourceId:string,symbol:string,side:Side,parity:MirrorReceipt|undefined){
+  private async noteEquityMinute(now:number){
+    const state=this.forwardState;
+    if(!state||now-this.lastEqMinAt<60_000)return;
+    this.lastEqMinAt=now;
+    const positions=state.positions.filter(row=>!row.inverseCopy);
+    this.eqMinBuf.push(sampleEquity({now,balance:state.balance,initial:state.initialEquity,
+      liveEquity:typeof this.runtime.live.equity==="number"?this.runtime.live.equity:null,
+      symbols:positions.map(row=>row.symbol),
+      positions:positions.map(row=>({side:row.side,entryPrice:row.entryPrice,quantity:row.quantity,notional:row.notional,margin:row.margin,lastPrice:row.lastPrice})),
+      quotes:this.forwardQuotes(now)}));
+    if(this.eqMinBuf.length<5)return;
+    const batch=this.eqMinBuf.splice(0,this.eqMinBuf.length);
+    const byDay=new Map<string,EquityMinute[]>();
+    for(const row of batch){const key=equityMinuteKey(row.ts);const list=byDay.get(key)??[];list.push(row);byDay.set(key,list);}
+    const reservation=this.reserveNonAlarmWrites(byDay.size,256);
+    if(!reservation){this.eqMinBuf.unshift(...batch);if(this.eqMinBuf.length>30)this.eqMinBuf.splice(0,this.eqMinBuf.length-30);return;}
     try{
-      const px=parity?.exchangeEntryPrice;
+      const entries:Record<string,EquityMinute[]>={};
+      for(const [key,rows] of byDay){
+        const prev=await this.ctx.storage.get<EquityMinute[]>(key);
+        entries[key]=mergeEquityMinutes(prev,rows);
+      }
+      await this.ctx.storage.put(entries);
+      reservation.finish(true);
+    }catch{
+      reservation.finish(false);
+      this.eqMinBuf.unshift(...batch);
+      if(this.eqMinBuf.length>30)this.eqMinBuf.splice(0,this.eqMinBuf.length-30);
+    }
+  }
+  private async readEquityMinutes(now:number){
+    const rows=await this.ctx.storage.list<EquityMinute[]>({prefix:"log:eqmin:",limit:8,reverse:true});
+    const groups:EquityMinute[][]=[];
+    for(const value of rows.values())if(Array.isArray(value))groups.push(value.filter(row=>row&&row.ts<=now));
+    groups.push(this.eqMinBuf.filter(row=>row.ts<=now));
+    return collectEquityMinutes(groups);
+  }
+
+  private noteLiveFill(sourceId:string,symbol:string,side:Side,parity:MirrorReceipt|undefined,extra?:{leg?:"ENTRY"|"EXIT";exchangePrice?:number;paperPrice?:number|null;at?:number}){
+    try{
+      const px=extra?.exchangePrice??parity?.exchangeEntryPrice;
       if(!(typeof px==="number"&&px>0))return;
       const bid=typeof parity?.submitBid==="number"&&parity.submitBid>0?parity.submitBid:null;
       const ask=typeof parity?.submitAsk==="number"&&parity.submitAsk>0?parity.submitAsk:null;
+      const paper=extra?.paperPrice??(typeof parity?.sourceEntryPrice==="number"&&parity.sourceEntryPrice>0?parity.sourceEntryPrice:null);
+      const leg=extra?.leg??"ENTRY";
+      const at=extra?.at??(typeof parity?.exchangeEntryAt==="number"&&parity.exchangeEntryAt>0?parity.exchangeEntryAt:Date.now());
+      const slip=paper&&paper>0?Number(((px/paper-1)*10_000*(side==="LONG"?1:-1)*(leg==="EXIT"?-1:1)).toFixed(2)):null;
       this.runtime.live.fills=rememberLiveFill(this.runtime.live.fills,{
-        sourceId,symbol,side,
-        paperPrice:typeof parity?.sourceEntryPrice==="number"&&parity.sourceEntryPrice>0?parity.sourceEntryPrice:null,
-        exchangePrice:px,bid,ask,spreadBps:bid!=null&&ask!=null?quoteSpreadBps(bid,ask):null,
-        at:typeof parity?.exchangeEntryAt==="number"&&parity.exchangeEntryAt>0?parity.exchangeEntryAt:Date.now()});
+        sourceId,symbol,side,leg,paperPrice:paper,exchangePrice:px,bid,ask,
+        spreadBps:bid!=null&&ask!=null?quoteSpreadBps(bid,ask):null,slip_bps:slip,
+        fee:null,fee_rate:null,role:null,submit_at:typeof parity?.submittedAt==="number"?parity.submittedAt:null,
+        at,latency_ms:typeof parity?.submitDelayMs==="number"?parity.submitDelayMs:null,
+        paper_at:typeof parity?.sourceOpenedAt==="number"?parity.sourceOpenedAt:null});
     }catch{/* 记下成交不能打断下单 */}
   }
 
@@ -1574,6 +1620,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         try{await this.ctx.storage.put(ORDER_JOURNAL_KEY,this.orderJournal);reservation.finish(true);this.orderJournalPending=false;}
         catch{reservation.finish(false);}
       }
+      try{await this.noteEquityMinute(now);}catch{/* 权益分钟线写失败不能挡住这一轮 */}
     } catch (error) { this.forwardError = safeError(error); }
     finally { this.forwardBusy = false; }
   }
@@ -2050,6 +2097,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const previous=this.turnoverState!;const window=nextFillWindow(previous,now);if(!window)return;
     this.runtime.subrequestCount++;
     const rows=await this.turnoverRows(await client.confirmedFills(window.from,window.to,window.offset));
+    try{this.runtime.live.fills=applyConfirmedFillCosts(this.runtime.live.fills,rows);}catch{/* 费用只补在成交备注上，失败不影响成交额 */}
     if(this.liveClient!==client||this.turnoverAccountUser!==accountUser||this.turnoverAccountKey!==key)return;
     const multipliers=Object.fromEntries([...this.contractCatalog].map(([symbol,m])=>[symbol,m.quantoMultiplier]));
     for(const [symbol,m]of Object.entries(this.runtime.contractMeta))multipliers[symbol]=m.quantoMultiplier;
@@ -3294,6 +3342,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           ...(lifecycle.status==="CLOSED"?{sourceAtClose:structuredClone(lifecycle.trade)}:{}),actual:closed});
         this.liveJournal.set(`${LIVE_PARITY_PREFIX}closed:${String(now).padStart(16,"0")}:${position.id}`,
           {version:LIVE_PARITY_VERSION,position:closed});
+        if(verified)this.noteLiveFill(position.id,symbol,position.side,position.parity,{leg:"EXIT",exchangePrice:verifiedPrice,
+          paperPrice:typeof position.parity?.sourceExitPrice==="number"?position.parity.sourceExitPrice:null,at:now});
       }
       this.runtime.live.positions[symbol]=closed;
       this.recordLiveAudit({ observedAt: now, symbol, planId: position.id, stage: "POSITION_CLOSED", level: "INFO",
@@ -4389,7 +4439,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         await this.ensureOrderJournal();
         return json({...buildRunLogExport({events:[],funnel:book.funnel,health:hub,gate,exportedAt,liveEnabled:this.runtime.live.requestedEnabled,
           positions:book.positions,fills:book.fills,curve:book.curve,equity:book.equity,initial:book.initial,closedNet:book.closedNet,
-          priorAdjustment:book.priorAdjustment,unreconstructed:book.unreconstructed,unreconstructedN:book.unreconstructedN,places:book.places,notOpened:book.notOpened,stageTimeline:book.stageTimeline,liveFills:normalizeLiveFills(this.runtime.live.fills)}),
+          priorAdjustment:book.priorAdjustment,unreconstructed:book.unreconstructed,unreconstructedN:book.unreconstructedN,places:book.places,notOpened:book.notOpened,stageTimeline:book.stageTimeline,liveFills:normalizeLiveFills(this.runtime.live.fills),equityMinutes:await this.readEquityMinutes(exportedAt),tallySince:book.tallySince}),
           paths:exportTradePaths(this.tradePaths),holding:searchHolding(this.tradePaths)});
       }
       if(url.searchParams.get("page")==="archive"){
