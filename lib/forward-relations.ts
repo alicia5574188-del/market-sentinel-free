@@ -20,6 +20,7 @@ import { evaluatePositionIntelligence, POSITION_INTELLIGENCE_VERSION,
 import {capturePositionBaseline} from "./position-evidence-contract.ts";
 import { beijingDayKey } from "./beijing-time.ts";
 import { readEntryStructure, type EntryStructure } from "./entry-structure.ts";
+import { readCoinPath, type CoinPath } from "./coin-path.ts";
 import { transitionExitReason, type TransitionEntry } from "./transition-rule.ts";
 import { advanceShockEpisode, initialShockEpisode, normalizeShockEpisode, type ShockEpisode } from "./shock-episode.ts";
 import { advanceStageChronicle, initialStageChronicle, normalizeStageChronicle, stageStamp, type StageChronicle, type StageStamp } from "./stage-chronicle.ts";
@@ -118,6 +119,8 @@ export type Opportunity={
   liquidityInvalidationPrice?:number|null;liquidityInvalidationRate?:number|null;
   rapidLiquidityAuthorization?:boolean;rapidLiquidityReason?:string|null;
   futureResearchAction?:EntryHypothesisGuidance["action"];futureResearchReason?:string;futureHypothesisIds?:string[];
+  /** 研究层给这个币打的自身走势。只留档，不参与开仓。 */
+  coinPath?:CoinPath;
 };
 export type MarketPulse={at:number;up:number;down:number;neutral:number;bias:"UP"|"DOWN"|"MIXED";strength:number;expansion:number};
 
@@ -155,6 +158,8 @@ export type EntryContext={
   stageNote?:StageStamp;
   /** 进场时能看到的方向细节。只留档，不参与开仓或出场。 */
   entryRead?:EntryRead;
+  /** 进场时这个币自己的 5 分钟走势。只留档，不参与开仓或出场。 */
+  coinPath?:CoinPath;
 };
 import type {ReviewEvent, TradeReview} from "./review-trace.ts";
 
@@ -1235,7 +1240,8 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
         futureResearchAction:o.futureResearchAction,futureResearchReason:o.futureResearchReason,futureHypothesisIds:o.futureHypothesisIds,
         entryStructure,transitionRule:transition??undefined,shockRoom:shockRoom??undefined,
         stageNote:stageStamp(s.stageChronicle,s.extremumRegime.internals?.synchrony,now),
-        entryRead:entryQuality(s,o,q,side,price,now,minutePath)},
+        entryRead:entryQuality(s,o,q,side,price,now,minutePath),
+        coinPath:o.coinPath},
       forecast:{remainingNetRate:remainingNet,quality:o.score/100,sizingEquity:equity}};
   // Use the very same position assessment before financial admission. A single
   // concern or slow response is not a veto; only converged independent failure
@@ -1600,6 +1606,8 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
     const last=s.lastExitAt[o.symbol]??0,lastSide=s.lastSide[o.symbol];
     if(now-last<15*60_000&&lastSide===o.side){validation.status="CANCELLED";validation.reason="同币同方向假设尚未重置";reject(validation.reason);continue;}
     const structure=readEntryStructure({price,now,bars:paths?.[validation.symbol],bookImbalance:q!.bookImbalance??null});
+    const freshPath=readCoinPath({bars:paths?.[validation.symbol],now});
+    if(freshPath.background!=="UNKNOWN")o.coinPath=freshPath;
     const stage=s.environmentContext.environment;
     if(stage!=="SHOCK"&&stage!=="TREND"){
       const noted=openIntelligenceTrade(s,o,q!,meta,now,equity,{validation,decision},minutePaths?.[o.symbol],structure,null,null,true);

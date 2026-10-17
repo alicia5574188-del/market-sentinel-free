@@ -1,6 +1,7 @@
 import {selectWinnerOpportunity, WINNER_POLICY_VERSION, type WinnerPlan} from "./winner-policy.ts";
 import {buildMarketLiquidityResearch,initialMarketLiquidityResearch,
   type MarketLiquidityResearch} from "./market-intelligence-liquidity.ts";
+import {readCoinPath, type CoinPath} from "./coin-path.ts";
 /**
  * Market Intelligence V1
  *
@@ -58,6 +59,8 @@ export type IntelligenceOpportunity={
   liquidityOriginLower:number|null;liquidityOriginUpper:number|null;liquidityTargetLower:number|null;liquidityTargetUpper:number|null;
   liquidityInvalidationPrice:number|null;liquidityInvalidationRate:number|null;
   rapidLiquidityAuthorization:boolean;rapidLiquidityReason:string|null;
+  /** 这个币自己最近一段 5 分钟走势。研究层打上，不参与开仓。 */
+  coinPath?:CoinPath;
 };
 
 const clip=(v:number,a=0,b=1)=>Math.max(a,Math.min(b,v));
@@ -350,7 +353,8 @@ export function buildMarketIntelligence(input:{paths:Record<string,CandleLike[]>
       liquidityReason:wp.origin?`价格反应区 ${wp.origin.lower}–${wp.origin.upper}，量价重心估计 ${wp.origin.center}；OHLCV代理，不是已观测挂单。`:"价格反应区未知，不剥夺独立趋势资格。",
       liquidityTargetRate:wp.target==null?null:chosen.gross,liquidityOriginLower:wp.origin?.lower??null,liquidityOriginUpper:wp.origin?.upper??null,
       liquidityTargetLower:wp.target,liquidityTargetUpper:wp.target,liquidityInvalidationPrice:wp.initialStop,
-      liquidityInvalidationRate:chosen.stopRate,rapidLiquidityAuthorization:false,rapidLiquidityReason:null});
+      liquidityInvalidationRate:chosen.stopRate,rapidLiquidityAuthorization:false,rapidLiquidityReason:null,
+      coinPath:readCoinPath({bars:paths[row.symbol],now:input.now})});
   }
   const groupBest=new Map<string,IntelligenceOpportunity>();for(const o of opportunities.filter(x=>x.eligible)){const key=`${o.clusterId}:${o.side}`,old=groupBest.get(key);if(!old||o.score>old.score)groupBest.set(key,o);}
   for(const o of opportunities){if(!o.eligible)continue;const best=groupBest.get(`${o.clusterId}:${o.side}`);if(best&&best.id!==o.id){o.eligible=false;o.reason+=` 同一高相关组已有更优表达 ${best.symbol.replace("_USDT","")}，本币保持观察。`;}}

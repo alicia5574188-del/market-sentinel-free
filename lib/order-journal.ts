@@ -1,6 +1,7 @@
 /** Closed-order archive. The hot account only keeps a short history; this book keeps the review rows. */
 import type {EntryStructure} from './entry-structure.ts';
 import type {Trade} from './forward-relations.ts';
+import {coinPathVersus} from './coin-path.ts';
 
 export const ORDER_JOURNAL_KEY='market-intelligence:order-journal:v1';
 export const ORDER_JOURNAL_VERSION='order-journal-v1' as const;
@@ -15,6 +16,8 @@ export type OrderRecord={
   live_stage?:string|null;prior_stage?:string|null;stage_age_min?:number|null;minutes_since_shock?:number|null;shock_push?:number|null;sync_drop?:number|null;
   trend_side?:'LONG'|'SHORT'|null;with_trend?:boolean|null;book?:number|null;residual?:number|null;relative_strength?:number|null;
   move30?:number|null;sync?:number|null;breadth?:number|null;
+  coin_background?:string|null;coin_recent?:string|null;coin_label?:string|null;coin_versus?:string|null;
+  coin_background_pct?:number|null;coin_recent_pct?:number|null;coin_window_min?:number|null;
 };
 export type OrderJournal={version:typeof ORDER_JOURNAL_VERSION;accountStartedAt:number;rows:OrderRecord[]};
 
@@ -34,7 +37,7 @@ export function orderRecord(t:Trade):OrderRecord{
     exit_stage:t.exitRegime?.stage??null,exit_phase:t.exitRegime?.phase??null,
     market_expectancy:t.entryContext?.marketExpectancy??null,entry_structure:t.entryContext?.entryStructure??null,
     entry_rule:t.unopened?"NOT_OPENED":t.entryContext?.shockRoom?"SHOCK_EPISODE":t.entryContext?.transitionRule?"TRANSITION_ROOM":null,
-    ...entryDecision(t),...stageFields(t),...qualityFields(t)};
+    ...entryDecision(t),...stageFields(t),...qualityFields(t),...pathFields(t)};
 }
 function stageFields(t:Trade):Pick<OrderRecord,'live_stage'|'prior_stage'|'stage_age_min'|'minutes_since_shock'|'shock_push'|'sync_drop'>{
   const note=t.entryContext?.stageNote;
@@ -47,6 +50,12 @@ export function qualityFields(t:Trade):Pick<OrderRecord,'trend_side'|'with_trend
   if(!read)return {trend_side:null,with_trend:null,book:null,residual:null,relative_strength:null,move30:null,sync:null,breadth:null};
   return {trend_side:read.trendSide,with_trend:read.withTrend,book:read.book,residual:read.residual,
     relative_strength:read.relativeStrength,move30:read.move30,sync:read.sync,breadth:read.breadth};
+}
+export function pathFields(t:Trade):Pick<OrderRecord,'coin_background'|'coin_recent'|'coin_label'|'coin_versus'|'coin_background_pct'|'coin_recent_pct'|'coin_window_min'>{
+  const path=t.entryContext?.coinPath;
+  if(!path)return {coin_background:null,coin_recent:null,coin_label:null,coin_versus:null,coin_background_pct:null,coin_recent_pct:null,coin_window_min:null};
+  return {coin_background:path.background,coin_recent:path.recent,coin_label:path.label,coin_versus:coinPathVersus(path,t.side),
+    coin_background_pct:path.backgroundPct,coin_recent_pct:path.recentPct,coin_window_min:path.windowMin};
 }
 function entryDecision(t:Trade):Pick<OrderRecord,'entry_signal'|'entry_fade'|'entry_room_pct'|'entry_room_touches'>{
   const rule=t.entryContext?.transitionRule??t.entryContext?.shockRoom;

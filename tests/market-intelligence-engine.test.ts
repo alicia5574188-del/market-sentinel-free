@@ -37,6 +37,8 @@ test("Market Intelligence keeps one same-direction primary inside a highly corre
   const keys=eligible.map(o=>o.clusterId+":"+o.side);
   assert.equal(new Set(keys).size,keys.length);
   assert.ok(r.state.symbols.ETH_USDT!.residual>r.state.symbols.BTC_USDT!.residual);
+  assert.equal(r.opportunities[0]?.coinPath?.cycle,"5m");
+  assert.notEqual(r.opportunities[0]?.coinPath?.background,"UNKNOWN");
 });
 
 test("market narrative is stateful and does not mechanically flip on one weaker refresh",()=>{
