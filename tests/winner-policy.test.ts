@@ -96,6 +96,12 @@ test('between 5 and 10 points, shock and trend exit after a 0.8 point giveback',
   transition.t.favorable=.06;transition.t.peakPnlRate=.06;
   assert.equal(manageWinnerTrade(transition.s,transition.t,quote(105.2,T+2*B),T+2*B,{},{}),false);
   assert.equal(transition.t.status,"OPEN");
+  const live=fixture();
+  live.t.entryContext!.environment="TRANSITION";
+  live.t.entryContext!.stageNote={liveStage:"TREND",priorStage:"TRANSITION",stageAgeMin:4,minutesSinceShock:null,shockPush:0,syncDrop:null};
+  live.t.favorable=.06;live.t.peakPnlRate=.06;
+  assert.equal(manageWinnerTrade(live.s,live.t,quote(105.2,T+2*B),T+2*B,{},{}),true);
+  assert.equal(live.t.exitReason,"PEAK_GIVEBACK");
 });
 function rhythmPath(stall:number){
   const px:number[]=[];let price=100;

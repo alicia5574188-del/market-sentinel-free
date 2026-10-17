@@ -677,7 +677,8 @@ export function manageWinnerTrade(s:ForwardState,t:Trade,q:Quote,now:number,path
     originalRisk=Math.abs(plan.initialStop/t.entryPrice-1),prior=t.lastPrice;
   t.lastPrice=px;t.lastQuoteAt=q.observedAt;t.favorable=Math.max(t.favorable,Math.max(0,signed));t.adverse=Math.max(t.adverse,Math.max(0,-signed));
   t.peakPnlRate=Math.max(t.peakPnlRate??0,t.favorable);
-  const stage=t.entryContext?.environment,shockTrend=stage==="SHOCK"||stage==="TREND";
+  const stage=t.entryContext?.environment,live=t.entryContext?.stageNote?.liveStage,
+    shockTrend=stage==="SHOCK"||stage==="TREND"||live==="SHOCK"||live==="TREND";
   // 到过 10% 只听 1.5 个点。5% 到 10% 之间才听 0.8 个点。没碰到就走原来的出场。
   if(shockTrend&&t.favorable>=.10&&t.favorable-signed>=.015){
     closeTrade(s,t,px,now,"PEAK_GIVEBACK",{authority:"SHOCK_TREND_GIVEBACK",peakRate:t.favorable,signedRate:signed,armRate:.10,givebackRate:.015,quoteAt:q.observedAt});

@@ -33,12 +33,13 @@ function entryFacts(t:Trade){
   const ctx=t.entryContext;
   if(!ctx||t.inverseCopy)return [];
   const lines:string[]=[];
-  const note=ctx.stageNote;
+  const note=ctx.stageNote,board=note?.liveStage??ctx.environment;
   const bits:string[]=[];
-  if(note?.liveStage&&note.liveStage!==ctx.environment)bits.push(`当时盘面阶段是${stageName(note.liveStage)}`);
   if(note?.priorStage)bits.push(`上一阶段是${stageName(note.priorStage)}`);
   if(typeof note?.stageAgeMin==="number")bits.push(`这一阶段已经 ${Math.round(note.stageAgeMin)} 分钟`);
-  lines.push(`开仓环境：${stageName(ctx.environment)}${bits.length?`。${bits.join("，")}`:""}。`);
+  lines.push(`开仓时盘面：${stageName(board)}${bits.length?`。${bits.join("，")}`:""}。只有同步爆发或趋势才会真正开仓。`);
+  if(ctx.environment&&note?.liveStage&&ctx.environment!==note.liveStage)
+    lines.push(`这个机会出现时标成${stageName(ctx.environment)}，那是更早的标记。开仓那一刻盘面已经是${stageName(note.liveStage)}，所以开了。`);
   const path=ctx.coinPath;
   if(path?.label){
     const move:string[]=[];
@@ -55,10 +56,10 @@ function entryFacts(t:Trade){
     if(prior.length)lines.push(`开仓前：${prior.join("。")}。`);
   }
   if(ctx.strategyVersion==="market-intelligence-v1"){
-    const extra=ctx.environment==="SHOCK"||ctx.environment==="TREND";
+    const extra=ctx.environment==="SHOCK"||ctx.environment==="TREND"||note?.liveStage==="SHOCK"||note?.liveStage==="TREND";
     lines.push(extra
       ?"额外出场：浮盈到过 5% 还没到 10%，从高点吐回 0.8 个点就走。到过 10%，改成吐回 1.5 个点才走。没碰到仍走原来的结构。"
-      :"额外出场：这笔开仓不是爆发或趋势，不使用 5% 和 10% 那两条，仍走原来的结构。");
+      :"额外出场：开仓时盘面不是爆发或趋势，不使用 5% 和 10% 那两条，仍走原来的结构。");
   }
   return lines;
 }
@@ -410,8 +411,9 @@ export function TradeCard({trade:t,now,paid}:{trade:Trade;now:number;paid?:PaidP
   const pair=t.inverseCopy?(paid?.status===t.status?paid:pairedPaidView(t,undefined,now||t.lastQuoteAt)):null;
   const px=pair?pair.inverse.price:open?t.lastPrice:t.exitPrice??t.lastPrice;
   const pnl=pair?pair.inverse.netPnl:open?openTradeNetPnl(t,px??t.lastPrice):t.netPnl,rate=pnl!==null&&initialTradeNotional(t)>0?pnl/initialTradeNotional(t):null,ctx=t.entryContext;
-  const plan=t.inverseCopy?.alignment==="WITH_SOURCE"?"正向":t.inverseCopy?"反向":ctx?.winnerPlan?(ctx.winnerPlan.intent==="TREND"?"计划是独立趋势":"计划是边缘回归"):ctx?(ctx.reserve?"低风险 · ":"")+modeName(ctx.mode):"兼容持仓";
-  const where=t.inverseCopy?"":ctx?.environment?`环境是${stageName(ctx.environment)}`:ctx?.strategyVersion==="market-intelligence-v1"?"开仓环境没记下":ctx?.relationHorizon?`${ctx.relationHorizon}分钟旧关系`:"";
+  const plan=t.inverseCopy?.alignment==="WITH_SOURCE"?"正向":t.inverseCopy?"反向":ctx?.winnerPlan?(ctx.winnerPlan.intent==="TREND"?"这笔做的是这个币自己的趋势":"这笔做的是回到区间"):ctx?(ctx.reserve?"低风险 · ":"")+modeName(ctx.mode):"兼容持仓";
+  const board=ctx?.stageNote?.liveStage??ctx?.environment;
+  const where=t.inverseCopy?"":board?`开仓时盘面是${stageName(board)}`:ctx?.strategyVersion==="market-intelligence-v1"?"开仓盘面没记下":ctx?.relationHorizon?`${ctx.relationHorizon}分钟旧关系`:"";
   const facts=entryFacts(t);
   return <details className={`fr-position-row${t.inverseCopy?" fr-inverse-row":""}${t.inverseCopy?.alignment==="WITH_SOURCE"?" is-with":""}`}><summary><span className="fr-position-primary"><b>{t.symbol.replace("_"," / ")}</b><small>{t.side==="LONG"?"多单":"空单"} · {plan}{where?` · ${where}`:""} · {fmt(t.leverage,0)}×</small>
     <b className={(pnl??0)>=0?"fr-positive":"fr-negative"}>{signed(pnl)} U</b><small>{signed(rate===null?null:rate*100,3)}% · {duration(t.openedAt,t.closedAt,now)}</small>{pair&&<small>已扣手续费 {fmt(pair.inverse.fees,4)} U{!pair.quoteFresh?" · 估值待更新":""}</small>}</span>
