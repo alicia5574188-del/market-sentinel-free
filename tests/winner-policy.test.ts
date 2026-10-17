@@ -69,13 +69,33 @@ test('shock and trend lock a 1.5 point giveback only after a 10 point peak',()=>
   const early=fixture();
   early.t.entryContext!.environment="TREND";
   early.t.favorable=.09;early.t.peakPnlRate=.09;
-  assert.equal(manageWinnerTrade(early.s,early.t,quote(107,T+2*B),T+2*B,{},{}),false);
+  assert.equal(manageWinnerTrade(early.s,early.t,quote(108.3,T+2*B),T+2*B,{},{}),false);
   assert.equal(early.t.status,"OPEN");
   const other=fixture();
   other.t.entryContext!.environment="TRANSITION";
   other.t.favorable=.16;other.t.peakPnlRate=.16;
   assert.equal(manageWinnerTrade(other.s,other.t,quote(114,T+2*B),T+2*B,{},{}),false);
   assert.equal(other.t.status,"OPEN");
+});
+test('between 5 and 10 points, shock and trend exit after a 0.8 point giveback',()=>{
+  const armed=fixture();
+  armed.t.entryContext!.environment="TREND";
+  armed.t.favorable=.06;armed.t.peakPnlRate=.06;
+  assert.equal(manageWinnerTrade(armed.s,armed.t,quote(105.3,T+2*B),T+2*B,{},{}),false);
+  assert.equal(armed.t.status,"OPEN");
+  assert.equal(manageWinnerTrade(armed.s,armed.t,quote(105.2,T+3*B),T+3*B,{},{}),true);
+  assert.equal(armed.t.exitReason,"PEAK_GIVEBACK");
+  assert.equal(armed.t.exitAudit?.evidence?.givebackRate,.008);
+  const runner=fixture();
+  runner.t.entryContext!.environment="SHOCK";
+  runner.t.favorable=.11;runner.t.peakPnlRate=.11;
+  assert.equal(manageWinnerTrade(runner.s,runner.t,quote(110.2,T+2*B),T+2*B,{},{}),false);
+  assert.equal(runner.t.status,"OPEN");
+  const transition=fixture();
+  transition.t.entryContext!.environment="TRANSITION";
+  transition.t.favorable=.06;transition.t.peakPnlRate=.06;
+  assert.equal(manageWinnerTrade(transition.s,transition.t,quote(105.2,T+2*B),T+2*B,{},{}),false);
+  assert.equal(transition.t.status,"OPEN");
 });
 function rhythmPath(stall:number){
   const px:number[]=[];let price=100;
