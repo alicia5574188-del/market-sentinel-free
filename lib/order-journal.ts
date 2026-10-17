@@ -18,6 +18,7 @@ export type OrderRecord={
   move30?:number|null;sync?:number|null;breadth?:number|null;
   coin_background?:string|null;coin_recent?:string|null;coin_label?:string|null;coin_versus?:string|null;
   coin_background_pct?:number|null;coin_recent_pct?:number|null;coin_window_min?:number|null;
+  signal_n?:number|null;signal_gap_min?:number|null;entry_spread_bps?:number|null;
 };
 export type OrderJournal={version:typeof ORDER_JOURNAL_VERSION;accountStartedAt:number;rows:OrderRecord[]};
 
@@ -37,7 +38,7 @@ export function orderRecord(t:Trade):OrderRecord{
     exit_stage:t.exitRegime?.stage??null,exit_phase:t.exitRegime?.phase??null,
     market_expectancy:t.entryContext?.marketExpectancy??null,entry_structure:t.entryContext?.entryStructure??null,
     entry_rule:t.unopened?"NOT_OPENED":t.entryContext?.shockRoom?"SHOCK_EPISODE":t.entryContext?.transitionRule?"TRANSITION_ROOM":null,
-    ...entryDecision(t),...stageFields(t),...qualityFields(t),...pathFields(t)};
+    ...entryDecision(t),...stageFields(t),...qualityFields(t),...pathFields(t),...signalFields(t)};
 }
 function stageFields(t:Trade):Pick<OrderRecord,'live_stage'|'prior_stage'|'stage_age_min'|'minutes_since_shock'|'shock_push'|'sync_drop'>{
   const note=t.entryContext?.stageNote;
@@ -56,6 +57,12 @@ export function pathFields(t:Trade):Pick<OrderRecord,'coin_background'|'coin_rec
   if(!path)return {coin_background:null,coin_recent:null,coin_label:null,coin_versus:null,coin_background_pct:null,coin_recent_pct:null,coin_window_min:null};
   return {coin_background:path.background,coin_recent:path.recent,coin_label:path.label,coin_versus:coinPathVersus(path,t.side),
     coin_background_pct:path.backgroundPct,coin_recent_pct:path.recentPct,coin_window_min:path.windowMin};
+}
+export function signalFields(t:Trade):Pick<OrderRecord,'signal_n'|'signal_gap_min'|'entry_spread_bps'>{
+  const n=t.signalRepeat?.n,gap=t.signalRepeat?.gapMin,spread=t.entrySpreadBps;
+  return {signal_n:typeof n==="number"&&n>=1?n:null,
+    signal_gap_min:typeof gap==="number"&&Number.isFinite(gap)?gap:null,
+    entry_spread_bps:typeof spread==="number"&&Number.isFinite(spread)?spread:null};
 }
 function entryDecision(t:Trade):Pick<OrderRecord,'entry_signal'|'entry_fade'|'entry_room_pct'|'entry_room_touches'>{
   const rule=t.entryContext?.transitionRule??t.entryContext?.shockRoom;

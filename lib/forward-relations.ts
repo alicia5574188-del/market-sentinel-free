@@ -24,6 +24,7 @@ import { readCoinPath, type CoinPath } from "./coin-path.ts";
 import { transitionExitReason, type TransitionEntry } from "./transition-rule.ts";
 import { advanceShockEpisode, initialShockEpisode, normalizeShockEpisode, type ShockEpisode } from "./shock-episode.ts";
 import { advanceStageChronicle, initialStageChronicle, normalizeStageChronicle, stageStamp, type StageChronicle, type StageStamp } from "./stage-chronicle.ts";
+import { normalizeSignalTally, quoteSpreadBps, rememberSignalRepeat, type SignalRepeat, type SignalTally } from "./signal-repeat.ts";
 import { ENTRY_RESPONSE_VERSION, entryResponseWindowMs, evaluateEntryResponse,
   type EntryResponseDecision } from "./market-intelligence-entry-response.ts";
 import { deriveMarketEvolution, deriveOpportunityLifecycle, extendedEntryConfirmationReady,
@@ -182,6 +183,9 @@ export type Trade={
   exitAudit?:{trigger:string;at:number;detail?:string;evidence?:Record<string,string|number|boolean|null>;research?:PlanResearchDecision};
   /** 研究层不是同步爆发或趋势，所以没进账户。只留档供复盘，不改余额。 */
   unopened?:boolean;
+  /** 同币同方向第几次信号，以及距上一笔多少分钟。只在写下这一笔时定死。 */
+  signalRepeat?:SignalRepeat;
+  entrySpreadBps?:number|null;
   holdValue?:{action:"HOLD"|"REVIEW"|"EXIT_PROFIT"|"EXIT_RISK";pullbackRiskRate:number;bestHoldMinutes:number;score:number};
   positionIntelligence?:PositionIntelligenceState;
   liquidityLifecycle?:{currentPlan:LiquidityTradePlan;upgradedAt:number|null;reason:string;
@@ -217,6 +221,7 @@ export type ForwardState={
     trendSide:"LONG"|"SHORT"|null;updatedAt:number;reason:string;outlook?:EnvironmentOutlook};
   shockEpisode?:ShockEpisode;
   stageChronicle?:StageChronicle;
+  signalTally?:Record<string,SignalTally>;
   entryValidations:Record<string,EntryValidation>;
   marketPulse:MarketPulse;lastEntryAt:Record<string,number>;lastExitAt:Record<string,number>;lastSide:Record<string,"LONG"|"SHORT">;
   consumedTheses:Record<string,number>;
@@ -250,6 +255,7 @@ export function initialForward(now:number):ForwardState{
       trendSide:null,updatedAt:now,reason:"环境路由正在建立稳定市场分类。"},
     shockEpisode:initialShockEpisode(),
     stageChronicle:initialStageChronicle(now),
+    signalTally:{},
     entryValidations:{},marketPulse:blankPulse(now),
     lastEntryAt:{},lastExitAt:{},lastSide:{},consumedTheses:{},lastRotationAt:0,latestReason:"Market Intelligence V1 已启动：从整个市场关系、分化与跨交易所共识中持续寻找异类机会。",
     entryDiagnostics:{at:now,matched:0,opened:0,reasons:{}},storage:{persistedAt:0,error:null},liveEligible:false,
@@ -339,7 +345,14 @@ function normalizeTrade(raw:Trade,now:number):Trade{
     const sizingEquity=safe(t.forecast?.sizingEquity),floor=sizingEquity*(t.entryContext.reserve===true?.003:.006);
     if(floor>0)t.entryContext.portfolioRiskCharge=Math.max(t.plannedRisk,floor);
   }
-  t.peakPnlRate=Math.max(0,safe(t.peakPnlRate,t.favorable));return t;
+  t.peakPnlRate=Math.max(0,safe(t.peakPnlRate,t.favorable));
+  const repeat=t.signalRepeat;
+  if(repeat&&typeof repeat.n==="number"&&repeat.n>=1&&Number.isFinite(repeat.n)){
+    const gap=repeat.gapMin;
+    t.signalRepeat={n:Math.min(1_000_000,Math.floor(repeat.n)),gapMin:typeof gap==="number"&&Number.isFinite(gap)&&gap>=0?gap:null};
+  }else delete t.signalRepeat;
+  t.entrySpreadBps=typeof t.entrySpreadBps==="number"&&Number.isFinite(t.entrySpreadBps)&&t.entrySpreadBps>=0?t.entrySpreadBps:null;
+  return t;
 }
 function normalizeConsumedTheses(value:unknown,history:Trade[],positions:Trade[],now:number){
   const rows=new Map<string,number>();
@@ -436,6 +449,7 @@ export function normalizeForward(v:ForwardState|null|undefined,now:number):Forwa
       ?structuredClone((old as {environmentContext:ForwardState["environmentContext"]}).environmentContext):base.environmentContext,
     shockEpisode:normalizeShockEpisode((old as {shockEpisode?:unknown}).shockEpisode),
     stageChronicle:normalizeStageChronicle((old as {stageChronicle?:unknown}).stageChronicle,now),
+    signalTally:normalizeSignalTally((old as {signalTally?:unknown}).signalTally),
     entryValidations:normalizeEntryValidations((old as {entryValidations?:unknown}).entryValidations,now),
     marketPulse:v.marketPulse?.bias? v.marketPulse:blankPulse(now),lastEntryAt:v.lastEntryAt??{},lastExitAt:v.lastExitAt??{},lastSide:v.lastSide??{},
     consumedTheses:normalizeConsumedTheses((old as {consumedTheses?:unknown}).consumedTheses,history,positions,now),
@@ -1271,6 +1285,10 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
     t.unopened=true;
     s.unopenedTrades??=[];
     if(s.unopenedTrades.some(row=>row.status==="OPEN"&&row.symbol===o.symbol))return"同币已有未开单记录";
+    try{
+      const remembered=rememberSignalRepeat(s.signalTally,o.symbol,side,now);
+      s.signalTally=remembered.tally;t.signalRepeat=remembered.repeat;t.entrySpreadBps=quoteSpreadBps(q.bestBid,q.bestAsk);
+    }catch{/* 记下次数失败也不能挡住这张单 */}
     s.unopenedTrades.unshift(t);
     const done=s.unopenedTrades.filter(row=>row.status==="CLOSED");
     if(done.length>800){
@@ -1279,6 +1297,10 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
     }
     return null;
   }
+  try{
+    const remembered=rememberSignalRepeat(s.signalTally,o.symbol,side,now);
+    s.signalTally=remembered.tally;t.signalRepeat=remembered.repeat;t.entrySpreadBps=quoteSpreadBps(q.bestBid,q.bestAsk);
+  }catch{/* 记下次数失败也不能挡住这张单 */}
   s.positions.push(t);s.balance-=entryFee;s.fees+=entryFee;s.turnover+=notional;s.lastEntryAt[o.symbol]=now;s.lastSide[o.symbol]=side;
   rememberConsumedThesis(s,o.thesisId,now);
   event(s,now,"ENTRY",id,`${o.symbol} ${side} ${o.mode} 评分${o.score.toFixed(0)}`,

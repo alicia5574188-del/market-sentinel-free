@@ -6,7 +6,7 @@ export const TRADE_PATH_INDEX_KEY='market-intelligence:trade-paths:v2';
 export const TRADE_PATH_PAGE_PREFIX='market-intelligence:trade-paths:v2:';
 export const TRADE_PATH_VERSION='trade-path-v1' as const;
 export const TRADE_PATH_PAGE_VERSION='trade-path-v2' as const;
-const AFTER_MINUTES=180;
+const AFTER_MINUTES=360;
 const PATH_CAP=1200;
 const PATH_PAGE_SIZE=4;
 const PAGE_BYTE_BUDGET=96_000;
@@ -107,9 +107,11 @@ export function observeTradePaths(book:TradePathBook,state:ForwardState,executio
     }
     const live=execution[t.symbol],wide=analysis[t.symbol];
     if(t.status==='OPEN'){
-      const px=pathPrice(t.side,live,wide,t.lastPrice,t.lastQuoteAt,now);
-      if(px!=null&&note(row.hold,Math.floor((now-t.openedAt)/60_000),px)){markDirty(book,row.page??0);changed=true;}
-    }else if(row.exitAt!=null&&now-row.exitAt<=AFTER_MINUTES*60_000){
+      if(now-row.openedAt<=AFTER_MINUTES*60_000){
+        const px=pathPrice(t.side,live,wide,t.lastPrice,t.lastQuoteAt,now);
+        if(px!=null&&note(row.hold,Math.floor((now-t.openedAt)/60_000),px)){markDirty(book,row.page??0);changed=true;}
+      }
+    }else if(row.exitAt!=null&&now>=row.exitAt&&now-row.openedAt<=AFTER_MINUTES*60_000){
       const px=pathPrice(t.side,live,wide,0,0,now);
       if(px!=null&&note(row.after,Math.floor((now-row.exitAt)/60_000),px)){markDirty(book,row.page??0);changed=true;}
     }
@@ -187,7 +189,8 @@ function note(points:PathPoint[],minute:number,price:number){
     last[1]=low;last[2]=high;return true;
   }
   if(last&&minute<last[0])return false;
-  if(points.length>=240&&minute%5!==0)return false;
+  if(points.length>=400)return false;
+  if(minute>AFTER_MINUTES)return false;
   points.push([minute,price,price]);
   return true;
 }
@@ -209,7 +212,7 @@ export function exportTradePaths(book:TradePathBook):PathExport[]{
 
 export function searchHolding(book:TradePathBook){
   const rows=book.trades.filter(row=>row.hold.length>0);
-  if(!rows.length)return {trades:0,best:null,profitable:false,verdict:'重置之后还没有走出价格路径。新单从下一拍开始记，进场、持仓、出场后 180 分钟都会留下。'};
+  if(!rows.length)return {trades:0,best:null,profitable:false,verdict:'重置之后还没有走出价格路径。新单从下一拍开始记，从信号起 6 小时的每一分钟都会留下，到点就停。'};
   let best:{tpPct:number;slPct:number;holdMin:number;net:number;wins:number;trades:number}|null=null;
   for(const tp of TAKE_PROFITS)for(const sl of STOP_LOSSES)for(const holdMin of HOLD_MINUTES){
     let net=0,wins=0,used=0;

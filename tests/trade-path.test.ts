@@ -54,7 +54,7 @@ test('an early exit still leaves the later path available for another exit rule'
     exit:99.4,exitAt:now+5*60_000,net:-6,hold:[[0,100,100.3],[5,99.4,99.6]],after:[[10,101.6,102]]}];
   const found=searchHolding(book);
   assert.equal(found.profitable,true);
-  assert.equal(found.afterMinutes,180);
+  assert.equal(found.afterMinutes,360);
 });
 test('a quote older than ten seconds and a saved last price still leave the hold path',()=>{
   const state=initialForward(now);
@@ -134,4 +134,24 @@ test('the path book keeps the newest 1200 orders',()=>{
   assert.equal(book.trades.length,1200);
   assert.equal(book.trades.some(row=>row.id==='h1200'),false);
   assert.equal(book.trades.some(row=>row.id==='h0'),true);
+});
+test('a signal keeps every minute for six hours from the entry and then stops',()=>{
+  const state=initialForward(now);
+  const book=emptyTradePathBook(state.startedAt);
+  state.positions.push(open('a','LONG',100));
+  const at=(min:number)=>now+min*60_000;
+  observeTradePaths(book,state,{ETH_USDT:quote(100,100.1,at(0))},{},at(0));
+  observeTradePaths(book,state,{ETH_USDT:quote(101,101.1,at(359))},{},at(359));
+  assert.equal(book.trades[0]?.hold.at(-1)?.[0],359);
+  const before=book.trades[0]?.hold.length??0;
+  observeTradePaths(book,state,{ETH_USDT:quote(102,102.1,at(361))},{},at(361));
+  assert.equal(book.trades[0]?.hold.length,before);
+  const t=state.positions.pop()!;
+  t.status='CLOSED';t.exitPrice=101;t.closedAt=at(10);t.netPnl=1;state.history.unshift(t);
+  const closed=emptyTradePathBook(state.startedAt);
+  observeTradePaths(closed,state,{ETH_USDT:quote(103,103.1,at(200))},{},at(200));
+  assert.equal(closed.trades[0]?.after.at(-1)?.[0],190);
+  const after=closed.trades[0]?.after.length??0;
+  observeTradePaths(closed,state,{ETH_USDT:quote(104,104.1,at(370))},{},at(370));
+  assert.equal(closed.trades[0]?.after.length,after);
 });

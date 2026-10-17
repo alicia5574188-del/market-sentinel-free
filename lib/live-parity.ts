@@ -40,6 +40,7 @@ export type MirrorReceipt = {
   sourceQuoteAt?: number; copyQuoteAt?: number; copyQuotePrice?: number; copyDelayMs?: number;
   allowedAdverseEntryDriftRate?: number; adverseEntryDriftRate?: number;
   submitQuoteAt?: number; submitQuotePrice?: number; submittedAt?: number; submitDelayMs?: number;
+  submitBid?: number; submitAsk?: number;
   exchangeEntryPrice?: number; exchangeEntryAt?: number; exchangeEntryDriftRate?: number;
   sourceRole?: 'INVERSE_PAPER'; nativeProtectionPolicy?:typeof INVERSE_LIVE_POLICY|typeof INVERSE_LIVE_EXIT_POLICY;
   nativeProtectionPrice?:number|null; shadowSourceId?:string;
