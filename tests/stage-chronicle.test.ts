@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
-import {advanceStageChronicle,initialStageChronicle,stageStamp} from "../lib/stage-chronicle.ts";
+import {advanceStageChronicle,initialStageChronicle,normalizeStageChronicle,readStageTimeline,stageStamp} from "../lib/stage-chronicle.ts";
 import {SHOCK_EPISODE_SETTLE_MS,advanceShockEpisode,initialShockEpisode} from "../lib/shock-episode.ts";
 
 test("a stage change records the previous stage and resets the age",()=>{
@@ -63,4 +63,27 @@ test("the chronicle is recorded on the fill and is not an entry or exit input",(
   const manage=core.slice(core.indexOf("function manageIntelligenceTrades"),core.indexOf("function markAndManage"));
   assert.equal(manage.includes("stageNote"),false);
   assert.match(core,/next\.stageChronicle=structuredClone\(prior\.stageChronicle\)/);
+});
+
+test("a stage change is appended once and an older chronicle without a list keeps its current segment",()=>{
+  const start=advanceStageChronicle(initialStageChronicle(0),"TRANSITION",0.4,false,0);
+  const same=advanceStageChronicle(start,"TRANSITION",0.2,false,5*60_000,"SHORT");
+  assert.equal(same.changes.length,1);
+  const trend=advanceStageChronicle(same,"TREND",0.7,true,8*60_000,"SHORT");
+  assert.equal(trend.changes.length,2);
+  assert.equal(trend.changes[1]?.stage,"TREND");
+  assert.equal(trend.changes[1]?.prior,"TRANSITION");
+  assert.equal(trend.changes[1]?.trendSide,"SHORT");
+  const later=advanceStageChronicle(trend,"TREND",0.6,true,11*60_000,"LONG");
+  assert.equal(later.changes[1]?.trendSide,"SHORT");
+  const rows=readStageTimeline(later,11*60_000);
+  assert.equal(rows[0]?.until,8*60_000);
+  assert.equal(rows[0]?.open,false);
+  assert.equal(rows[1]?.open,true);
+  assert.equal(rows[1]?.min,3);
+  const old=normalizeStageChronicle({version:"stage-chronicle-v1",stage:"SHOCK",stageSince:4_000,previousStage:"TRANSITION",
+    lastShockEndedAt:null,push:1,roundActive:true,syncPeak:0.8},9_000);
+  assert.equal(old.changes.length,1);
+  assert.equal(old.changes[0]?.at,4_000);
+  assert.equal(old.changes[0]?.stage,"SHOCK");
 });

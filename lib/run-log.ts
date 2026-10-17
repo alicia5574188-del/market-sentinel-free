@@ -3,6 +3,7 @@ import type {ForwardState,Quote,Trade} from './forward-relations.ts';
 import type {EntryStructure} from './entry-structure.ts';
 import {orderRecord, pathFields, qualityFields, type OrderJournal, type OrderRecord} from './order-journal.ts';
 import {PAPER_COST,freshQuote,forwardEquity} from './forward-relations.ts';
+import {readStageTimeline} from './stage-chronicle.ts';
 export type LogCat='STRAT'|'EXEC'|'DATA'|'RISK'|'SYS'|'PNL';
 export type RunEvent={ts:number;level:'DEBUG'|'INFO'|'WARN'|'ERROR';cat:LogCat;symbol:string|null;event:string;reason:string|null;
   fields:Record<string,number|string|boolean|null>;trace:string};
@@ -34,7 +35,7 @@ export function rememberRow<T>(rows:T[]|undefined,row:T){return [...(rows??[]),r
 export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null;health:{sources?:{source:string;fresh?:boolean;failures?:number;lastError?:string|null;rows?:number}[];healthySources?:number};gate:{connected?:boolean;lastError?:string|null;freshBooks?:number};exportedAt:number;liveEnabled:boolean;
   positions?:LsrPositionRow[];fills?:LsrFill[];curve?:LsrCurvePoint[];equity?:number|null;initial?:number|null;closedNet?:number|null;priorAdjustment?:number|null;
   unreconstructed?:number|null;unreconstructedN?:number|null;
-  places?:LsrPlace[]|null;notOpened?:LsrPositionRow[]|null}){
+  places?:LsrPlace[]|null;notOpened?:LsrPositionRow[]|null;stageTimeline?:ReturnType<typeof readStageTimeline>|null}){
   const funnel=input.funnel??emptyFunnel('');
   const strategy={signal_not_triggered:funnel.trend+funnel.exhaustion+funnel.sweep+funnel.micro+funnel.spread,
     signal_triggered_no_fill:funnel.cancelled};
@@ -58,7 +59,7 @@ export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null
   const rows=(input.places&&input.places.length?input.places:placesFromEvents(input.events));
   const fallbackN=rows.filter(row=>row.fallback).length,rejectedN=rows.filter(row=>row.rejected).length;
   const body={version:'lsr-run-log-v2' as const,exportedAt:input.exportedAt,liveEnabled:input.liveEnabled,
-    howToRead:'这是当前市场智能模拟账户。权益 = 初始 + 已平净利 + 未平（价格盈亏 − 开仓费 − 预计平仓费）。不是已经停掉的实验漏斗。已平订单单独留档，不随热历史裁掉。每一笔记进场和出场当时的行情判定与演化阶段。分钟路径最多留 1200 笔，按页分开存，一次只写改过的那一页。not_opened 是没开进账户的单，只供复盘，不进权益。同步爆发和趋势的新单仓位是原来的 6 倍。进场另外记下全市场方向、这笔是否顺向、盘口、残差、相对强度、开仓前 30 分钟这个币已经顺着这笔走过的幅度、同步度和广度。研究层另外给每个准备交易的币记下两句：前面这段后半段比前半段高或低多少、有没有慢慢抬或慢慢压，以及进场前同一方向连着走了几根、一共走了多少。这些只用于复盘，不参与开仓。',
+    howToRead:'这是当前市场智能模拟账户。权益 = 初始 + 已平净利 + 未平（价格盈亏 − 开仓费 − 预计平仓费）。不是已经停掉的实验漏斗。已平订单单独留档，不随热历史裁掉。每一笔记进场和出场当时的行情判定与演化阶段。分钟路径最多留 1200 笔，按页分开存，一次只写改过的那一页。not_opened 是没开进账户的单，只供复盘，不进权益。同步爆发和趋势的新单仓位是原来的 6 倍。进场另外记下全市场方向、这笔是否顺向、盘口、残差、相对强度、开仓前 30 分钟这个币已经顺着这笔走过的幅度、同步度和广度。研究层另外给每个准备交易的币记下两句：前面这段后半段比前半段高或低多少、有没有慢慢抬或慢慢压，以及进场前同一方向连着走了几根、一共走了多少。这些只用于复盘，不参与开仓。stageTimeline 是行情阶段每次切换的时间线：at 这段开始，until 这段结束，最后一条的 until 是导出时间且 open 为 true 表示还没结束。stage 是这段的名字，prior 是上一段，trendSide 是切过来那一刻写下的全市场方向，min 是这段多少分钟。以前没记下的切换补不回来。这条线不参与开仓或出场。',
     reviewPlan:[
       '先看爆发和趋势里开出的单：方向对不对，最后落袋多少。',
       '再看没开、但路径上浮盈到过 5% 的单。对照进场时的全市场方向、是否顺向、盘口、开仓前 30 分钟已走过的幅度。样本够了再决定要不要开。',
@@ -92,7 +93,7 @@ export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null
       {step:'账户实际权益',amount:equity},
       {step:'对不上的差额。接近 0 才算账平了',amount:identity==null?null:Number(identity.toFixed(4))},
     ],
-    positions,fills,equity_curve:curve,not_opened:input.notOpened??[]};
+    positions,fills,equity_curve:curve,not_opened:input.notOpened??[],stageTimeline:input.stageTimeline??[]};
   if(JSON.stringify(body).length>20_000_000)body.equity_curve=curve.filter((_,i)=>i%5===0);
   return body;
 }
@@ -165,7 +166,7 @@ export function accountLogBook(state:ForwardState,quotes:Record<string,Quote>,no
   });
   return {positions:[...closedRows,...openRows],fills,curve:[{ts:now,equity:round4(mark.equity),closed_pnl:round4(closedNet),unrealized_pnl:round4(unrealized),positions:openRows.length}],
     equity:mark.equity,initial:state.initialEquity,closedNet:round4(closedNet),priorAdjustment:0,places:[] as LsrPlace[],funnel,
-    unreconstructed:0,unreconstructedN:0,notOpened};
+    unreconstructed:0,unreconstructedN:0,notOpened,stageTimeline:readStageTimeline(state.stageChronicle,now)};
 }
 function closedAccountRow(t:Trade):LsrPositionRow{
   const recorded=orderRecord(t);

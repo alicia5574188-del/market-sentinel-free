@@ -1717,7 +1717,7 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
     trendSide:marketEvolution.trendSide,updatedAt:outlookDue?input.now:s.environmentContext.updatedAt,
     reason:environmentOutlook.reason,outlook:environmentOutlook};
   s.shockEpisode=advanceShockEpisode(s.shockEpisode,currentEnvironment,input.now);
-  s.stageChronicle=advanceStageChronicle(s.stageChronicle,currentEnvironment,s.extremumRegime.internals?.synchrony,s.shockEpisode.active,input.now);
+  s.stageChronicle=advanceStageChronicle(s.stageChronicle,currentEnvironment,s.extremumRegime.internals?.synchrony,s.shockEpisode.active,input.now,marketEvolution.trendSide);
   if(marketReady)annotateLifecycleOpportunities(s,marketEvolution,environmentOutlook);
   manageIntelligenceTrades(s,input.quotes,input.now,input.minutePaths,marketEvolution,environmentOutlook,input.paths,input.contracts);
   // Positions opened before cutover keep their frozen lifecycle and cannot gain
