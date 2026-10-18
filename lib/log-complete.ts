@@ -97,6 +97,6 @@ export const RESEARCH_NOTES: Record<string, string> = {
   net_roe_pct: "已平净利 ÷ 保证金（notional ÷ leverage），扣过手续费；exit_move_pct 是出场价相对进场价的顺向幅度",
   path_minutes: "这条路径已经覆盖信号后多少分钟；0–360 分钟每分钟一个点，360–1440 分钟每 15 分钟一个点",
   入场特征: "chg_1h/4h_pct、atr_5m_pct、atr_ratio、vol_surge、dist_high/low_10h_pct、range_pos_10h 来自 5 分钟 K 线；chg_24h_pct、dist_high/low_24h_pct、chg_24h_rank、open_interest、oi_chg_pct 来自全市场行情快照；btc_1h/4h/24h_pct、eth_24h_pct 是大盘；mkt_with_share、mkt_with_strong、coin_move_rank 是全市场 30 分钟同向情况；stop_dist_pct、hour_utc、weekday 来自订单本身",
-  oi_chg_pct: "持仓量相对 60–120 分钟前的快照变化；刚部署的头一个小时没有基准，是空值，oi_anchor_min 是基准距今多少分钟",
+  oi_chg_pct: "持仓量相对 60–135 分钟前那份快照的变化（快照每 15 分钟存一份，重启不丢）；第一次部署后的头一个小时没有基准，是空值。oi_anchor_min 是基准距今多少分钟",
   paths_end: "paths 里 end 是出场那一刻的持仓管理状态（阶段、保护止损、利润地板、回吐比例、出场触发和证据）；peak 是创最高浮盈那一刻的状态；track 是开进账户的单每 30 分钟一次的状态",
 };

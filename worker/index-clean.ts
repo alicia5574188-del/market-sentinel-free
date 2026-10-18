@@ -53,6 +53,7 @@ import type {ThesisPublic} from '../lib/thesis-view.ts';
 import {RESEARCH_NOTES} from '../lib/log-complete.ts';
 import {buildRunLogExport,accountLogBook,closedLogRow,isCompleteTradeRecord,withResearchColumns} from '../lib/run-log.ts';
 import {entryFeatures,type RadarRow} from '../lib/entry-features.ts';
+import {mergeOiRing,noteOiSnapshot,oiAnchor,oiSnapshotKey,OI_SNAPSHOT_PREFIX,type OiRing,type OiSnapshot} from '../lib/oi-anchor.ts';
 import {adoptLegacyPaths,bookFromStoredPaths,commitPathWrite,emptyTradePathBook,exportTradePaths,observeTradePaths,peekPathWrite,pendingPathWrites,pathColumns,pathComplete,pruneGhostPaths,pruneOrphanPaths,searchHolding,TRADE_PATH_INDEX_KEY,TRADE_PATH_KEY,TRADE_PATH_PAGE_PREFIX,type TradePathBook,type TradePathIndex,type TradePathPage} from '../lib/trade-path.ts';
 import {emptyOrderJournal,observeOrderJournal,ORDER_JOURNAL_KEY,restoreOrderJournal,type OrderJournal} from '../lib/order-journal.ts';
 import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
@@ -560,7 +561,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   /** Log only: radar rows by symbol, radar prices as a path fallback, and hourly open-interest anchors. */
   private radarIndex=new Map<string,RadarRow>();
   private radarFallback:Record<string,{px:number;at:number}>={};
-  private oiSlots:{current:{at:number;oi:Map<string,number>}|null;previous:{at:number;oi:Map<string,number>}|null}={current:null,previous:null};
+  private oiRing:OiRing=[];
+  private oiAnchorCache:{at:number;anchor:ReturnType<typeof oiAnchor>}|null=null;
+  private oiRestore:"none"|"loading"|"done"="none";
   private authorityReady = true;
   private authorityView = { positions: {} as RuntimeState["positions"], equity: CANONICAL_PAPER_REFERENCE_EQUITY, equityVersion: 0 };
   protected liveClient: GateLiveClient | null = null;
@@ -1601,11 +1604,28 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const fallback:Record<string,{px:number;at:number}>={};
     for(const row of rows)if(row.last>0)fallback[row.symbol]={px:row.last,at};
     this.radarFallback=fallback;
-    const slot=this.oiSlots;
-    if(!slot.current||at-slot.current.at>=60*60_000){
-      slot.previous=slot.current;
-      slot.current={at,oi:new Map(rows.filter(row=>row.openInterest>0).map(row=>[row.symbol,row.openInterest]))};
+    // Open-interest baseline: a snapshot every 15 minutes, each in its own small key, so a restart keeps the baseline.
+    if(this.oiRestore==="none"){
+      this.oiRestore="loading";
+      void this.ctx.storage.list<OiSnapshot>({prefix:OI_SNAPSHOT_PREFIX,limit:32}).then(stored=>{
+        const merged=mergeOiRing(this.oiRing,[...stored.values()],Date.now());
+        this.oiRing=merged.ring;this.oiAnchorCache=null;
+        if(merged.drop.length)void this.ctx.storage.delete(merged.drop).catch(()=>{});
+      }).catch(()=>{/* 只是记录用的基准，读不到就从现在开始攒 */}).finally(()=>{this.oiRestore="done";});
     }
+    const step=noteOiSnapshot(this.oiRing,rows,at);
+    if(step.put){
+      this.oiRing=step.ring;this.oiAnchorCache=null;
+      void this.ctx.storage.put(oiSnapshotKey(step.put.at),step.put).catch(()=>{});
+      if(step.drop.length)void this.ctx.storage.delete(step.drop).catch(()=>{});
+    }
+  }
+  private currentOiAnchor(now:number){
+    const cached=this.oiAnchorCache;
+    if(cached&&now-cached.at<60_000)return cached.anchor;
+    const anchor=oiAnchor(this.oiRing,now);
+    this.oiAnchorCache={at:now,anchor};
+    return anchor;
   }
   /** Log only (stage timeline): BTC/ETH reference prices from the external hub or the fresh radar snapshot. */
   private referenceMids(now:number){
@@ -1619,7 +1639,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   /** Entry features for a record the tick it first appears. Pure reads of data already in memory. */
   private pathCapture(now:number,state:ForwardState){
     const moves=Object.entries(state.extremumRegime?.symbols??{}).map(([symbol,row])=>({symbol,move:row.actualMove}));
-    const anchor=this.oiSlots.previous;
+    let anchor:ReturnType<typeof oiAnchor>=null;try{anchor=this.currentOiAnchor(now);}catch{anchor=null;}
     return {fallback:this.radarFallback,features:(t:import("../lib/forward-relations.ts").Trade)=>entryFeatures({t,now,
       bars5m:this.strategyCandles[t.symbol]??null,radar:this.radarIndex,radarAt:this.gateRadarAt||null,
       oiAnchor:anchor,btcHourly:this.regimeHourly.BTC_USDT??null,ethHourly:this.regimeHourly.ETH_USDT??null,moves})};
