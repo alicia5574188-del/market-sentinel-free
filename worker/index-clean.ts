@@ -562,6 +562,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private radarIndex=new Map<string,RadarRow>();
   private radarFallback:Record<string,{px:number;at:number}>={};
   private oiRing:OiRing=[];
+  /** Log only: ~1/min BTC mids (last ~5 h, memory only) for entry-feature btc_1h/4h. No requests, no storage. */
+  private btcMidRing:{at:number;px:number}[]=[];
   private oiAnchorCache:{at:number;anchor:ReturnType<typeof oiAnchor>}|null=null;
   private oiRestore:"none"|"loading"|"done"="none";
   private authorityReady = true;
@@ -1642,12 +1644,24 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return {BTC_USDT:pick("BTC_USDT"),ETH_USDT:pick("ETH_USDT")};
   }
   /** Entry features for a record the tick it first appears. Pure reads of data already in memory. */
+  private noteBtcMid(now:number){
+    try{
+      const px=this.referenceMids(now).BTC_USDT,last=this.btcMidRing.at(-1);
+      if(px!=null&&px>0&&(!last||now-last.at>=60_000)){
+        this.btcMidRing.push({at:now,px});
+        const cut=now-5*3_600_000-15*60_000;
+        while(this.btcMidRing.length&&(this.btcMidRing[0]!.at<cut||this.btcMidRing.length>360))this.btcMidRing.shift();
+      }
+    }catch{/* log only */}
+  }
   private pathCapture(now:number,state:ForwardState){
+    this.noteBtcMid(now);
     const moves=Object.entries(state.extremumRegime?.symbols??{}).map(([symbol,row])=>({symbol,move:row.actualMove}));
     let anchor:ReturnType<typeof oiAnchor>=null;try{anchor=this.currentOiAnchor(now);}catch{anchor=null;}
     return {fallback:this.radarFallback,features:(t:import("../lib/forward-relations.ts").Trade)=>entryFeatures({t,now,
       bars5m:this.strategyCandles[t.symbol]??null,radar:this.radarIndex,radarAt:this.gateRadarAt||null,
-      oiAnchor:anchor,btcHourly:this.regimeHourly.BTC_USDT??null,ethHourly:this.regimeHourly.ETH_USDT??null,moves})};
+      oiAnchor:anchor,btcHourly:this.regimeHourly.BTC_USDT??null,ethHourly:this.regimeHourly.ETH_USDT??null,
+      btcBars5m:this.strategyCandles.BTC_USDT??null,btcMids:this.btcMidRing,moves})};
   }
 
   private pruneGhostTradePaths(){

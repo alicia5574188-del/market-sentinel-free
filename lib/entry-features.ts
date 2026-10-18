@@ -13,6 +13,10 @@ export type FeatureInput={
   /** Radar open interest from 60-120 minutes ago (rolling hourly anchor). */
   oiAnchor?:{at:number;oi:ReadonlyMap<string,number>}|null;
   btcHourly?:readonly Candle[]|null;ethHourly?:readonly Candle[]|null;
+  /** BTC 5m candles if BTC is in the worker's 5m set (used only when fresh). */
+  btcBars5m?:readonly Candle[]|null;
+  /** In-memory BTC mid samples (~1/min, oldest first) from quotes the worker already holds. */
+  btcMids?:readonly {at:number;px:number}[]|null;
   /** Regime per-coin ~30-minute moves (fractions). */
   moves?:readonly {symbol:string;move:number}[]|null;
 };
@@ -22,9 +26,26 @@ const pct=(now:number|null|undefined,then:number|null|undefined)=>now!=null&&the
 const mean=(xs:number[])=>xs.length?xs.reduce((a,b)=>a+b,0)/xs.length:null;
 
 function closeAgo(bars:readonly Candle[],n:number){return bars.length>n?bars[bars.length-1-n]!.close:null;}
-function hourlyChange(bars:readonly Candle[]|null|undefined,hours:number){
+function hourlyChange(bars:readonly Candle[]|null|undefined,hours:number,now?:number){
   if(!bars||bars.length<=hours)return null;
+  // A stored hourly path that is no longer refreshed must not be reported as "now".
+  if(now!=null&&(bars.at(-1)!.time*1000+3_600_000)<now-HOURLY_FRESH_MS)return null;
   return pct(bars.at(-1)!.close,bars[bars.length-1-hours]!.close);
+}
+const HOURLY_FRESH_MS=2*3_600_000,BTC_5M_FRESH_MS=15*60_000,BTC_MID_NOW_MS=3*60_000,BTC_MID_TOL_MS=10*60_000;
+/** BTC % change over the last `hours`, from data current at `now`; null rather than a stale value. */
+export function btcChange(input:Pick<FeatureInput,'now'|'btcBars5m'|'btcMids'|'btcHourly'>,hours:number):number|null{
+  const {now}=input,n=hours*12;
+  const b5=(input.btcBars5m??[]).filter(b=>b&&b.close>0);
+  if(b5.length>n&&(b5.at(-1)!.time*1000+300_000)>=now-BTC_5M_FRESH_MS)return pct(b5.at(-1)!.close,b5[b5.length-1-n]!.close);
+  const mids=(input.btcMids??[]).filter(m=>m&&m.px>0&&Number.isFinite(m.at)&&m.at<=now);
+  const latest=mids.at(-1);
+  if(latest&&now-latest.at<=BTC_MID_NOW_MS){
+    const target=now-hours*3_600_000;let best:{at:number;px:number}|null=null;
+    for(const m of mids)if(!best||Math.abs(m.at-target)<Math.abs(best.at-target))best=m;
+    if(best&&Math.abs(best.at-target)<=BTC_MID_TOL_MS)return pct(latest.px,best.px);
+  }
+  return hourlyChange(input.btcHourly,hours,now);
 }
 
 export function entryFeatures(input:FeatureInput):Record<string,number|string|boolean|null>{
@@ -70,11 +91,11 @@ export function entryFeatures(input:FeatureInput):Record<string,number|string|bo
   out.oi_chg_pct=me&&anchorOi?pct(me.openInterest,anchorOi):null;
   out.oi_anchor_min=me&&anchorOi&&input.oiAnchor?Math.round((now-input.oiAnchor.at)/60_000):null;
   // BTC / ETH context
-  out.btc_1h_pct=hourlyChange(input.btcHourly,1);
-  out.btc_4h_pct=hourlyChange(input.btcHourly,4);
+  try{out.btc_1h_pct=btcChange(input,1);}catch{out.btc_1h_pct=null;}
+  try{out.btc_4h_pct=btcChange(input,4);}catch{out.btc_4h_pct=null;}
   const btcRadar=radarOk?input.radar!.get('BTC_USDT'):undefined,ethRadar=radarOk?input.radar!.get('ETH_USDT'):undefined;
-  out.btc_24h_pct=btcRadar?r4(btcRadar.change24hRate*100):hourlyChange(input.btcHourly,24);
-  out.eth_24h_pct=ethRadar?r4(ethRadar.change24hRate*100):hourlyChange(input.ethHourly,24);
+  out.btc_24h_pct=btcRadar?r4(btcRadar.change24hRate*100):hourlyChange(input.btcHourly,24,now);
+  out.eth_24h_pct=ethRadar?r4(ethRadar.change24hRate*100):hourlyChange(input.ethHourly,24,now);
   // how many coins move the same way (regime ~30-minute moves)
   const moves=(input.moves??[]).filter(row=>Number.isFinite(row.move));
   if(moves.length>=8){

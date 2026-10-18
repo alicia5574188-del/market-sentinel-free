@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {initialForward, type Quote, type Trade} from '../lib/forward-relations.ts';
-import {entryFeatures, type RadarRow} from '../lib/entry-features.ts';
+import {btcChange, entryFeatures, type RadarRow} from '../lib/entry-features.ts';
 import {emptyTradePathBook, exportTradePaths, FEATURE_FRESH_MS, observeTradePaths, pathColumns, pathComplete, pathLabel, type TradePath} from '../lib/trade-path.ts';
 import {withResearchColumns} from '../lib/run-log.ts';
 import {equalWeightReturnSince, fillStageForward} from '../lib/stage-chronicle.ts';
@@ -45,6 +45,31 @@ test('entry features come from the trade, 5m candles, radar, BTC hourly and regi
   // stale radar: radar fields are empty, candles still fill
   const stale=entryFeatures({t,now,bars5m:bars(120),radar,radarAt:now-10*60_000,moves:[]});
   assert.equal(stale.chg_24h_pct,null);assert.equal(stale.mkt_with_share,null);assert.ok(stale.chg_1h_pct!=null);
+});
+
+test('btc_1h/4h follow BTC at each entry time; a stale stored hourly path is never reported',()=>{
+  const t=open('b','LONG',100);
+  // stored hourly path that stopped refreshing 7 h ago (the frozen 0.4661 / 0.674 bug)
+  const staleHourly=Array.from({length:30},(_,i)=>({time:Math.floor(now/1000)-7*3600-(30-i)*3600,open:1,high:1,low:1,close:80000+i*10,volume:1}));
+  const frozen=entryFeatures({t,now,btcHourly:staleHourly});
+  assert.equal(frozen.btc_1h_pct,null);assert.equal(frozen.btc_4h_pct,null);
+  // in-memory BTC mids, one per minute for 5 h: 82000 falling 1 per minute
+  const mids=Array.from({length:301},(_,i)=>({at:now-(300-i)*60_000,px:82000-i}));
+  const a=entryFeatures({t,now,btcHourly:staleHourly,btcMids:mids});
+  assert.equal(a.btc_1h_pct,Math.round((81700/81760-1)*1e6)/1e4);
+  assert.equal(a.btc_4h_pct,Math.round((81700/81940-1)*1e6)/1e4);
+  // an hour later, with more samples, the value changes (was constant before the fix)
+  const later=now+60*60_000,more=[...mids,...Array.from({length:60},(_,i)=>({at:now+(i+1)*60_000,px:81700+(i+1)*5}))];
+  const b=entryFeatures({t:{...t,openedAt:later},now:later,btcMids:more});
+  assert.equal(b.btc_1h_pct,Math.round((82000/81700-1)*1e6)/1e4);
+  assert.notEqual(b.btc_4h_pct,a.btc_4h_pct);
+  // ring without a sample near "4 h ago" (e.g. right after a restart): null, not a guess
+  assert.equal(btcChange({now,btcMids:mids.slice(-90)},4),null);
+  assert.ok(btcChange({now,btcMids:mids.slice(-90)},1)!=null);
+  // fresh BTC 5m candles win when present
+  assert.equal(btcChange({now,btcBars5m:bars(60,100,1),btcMids:mids},1),Math.round((159/147-1)*1e6)/1e4);
+  // garbage input never throws
+  assert.equal(btcChange({now,btcMids:[{at:NaN,px:-1}] as never},1),null);
 });
 
 test('path label: leveraged ROE (price % x leverage), reached_roe_5, 24h tail and the after-exit shift',()=>{
