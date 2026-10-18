@@ -1,0 +1,31 @@
+name: Binance Gate Selective Passive Research
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/research-binance-gate-selective-passive.py'
+      - '.github/workflows/binance-gate-selective-passive.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax check
+        run: python3 -m py_compile scripts/research-binance-gate-selective-passive.py
+      - name: Run synchronized cross-venue passive screen
+        env:
+          RESEARCH_OUTPUT: /tmp/binance-gate-selective-passive.json
+        run: python3 scripts/research-binance-gate-selective-passive.py
+      - name: Print result
+        run: jq '{research,decision,protocol,validPreHours,invalidPreHours,preQualifiedConfigs,evaluationOpened,evaluationSurvivors,topDiagnostics,sha256}' /tmp/binance-gate-selective-passive.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binance-gate-selective-passive
+          path: /tmp/binance-gate-selective-passive.json
+          retention-days: 7
