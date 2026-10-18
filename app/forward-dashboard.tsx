@@ -9,6 +9,7 @@ import {EquityHistoryCache} from "../lib/equity-cache.ts";
 import MarketIntelligenceExecution from "./market-intelligence-execution.tsx";
 import "./account-first.css";
 import "./paid-fee.css";
+import "./pages.css";
 import {remainingPaidNetPnl,tradePaidNetPnl,pairedPaidView,type PaidPair} from "../lib/paid-fee-view.ts";
 import type {ThesisPublic} from "../lib/thesis-view.ts";
 import {OrderCard,exitShort,exitPlain,priceText,type OrderFact} from "./order-card.tsx";
@@ -76,6 +77,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   const [tab,setTab]=useState<Tab>("execution"),[now,setNow]=useState(0),[liveMounted,setLiveMounted]=useState(false);
   const [fontScale,setFontScale]=useState(()=>{if(typeof window==="undefined")return 92;try{const saved=Number(localStorage.getItem("sentinel-ui-font-scale-v1"));return saved>=70&&saved<=110?saved:92;}catch{return 92;}});
   const [exporting,setExporting]=useState(false),[exportStatus,setExportStatus]=useState<string|null>(null);
+  const [historyShown,setHistoryShown]=useState(10);
   const scroll=useRef<Record<Tab,number>>({execution:0,paper:0,live:0,settings:0});
   useEffect(()=>{const id=setInterval(()=>setNow(Date.now()),1000);return()=>clearInterval(id);},[]);
   useLayoutEffect(()=>{window.scrollTo({top:tab==="live"?0:scroll.current[tab]??0,behavior:"auto"});},[tab]);
@@ -105,44 +107,58 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
     accountPnl=usingDesk?desk.netPnl:data?.netPnl,
     accountBase=usingDesk?desk.initialEquity:data?.initialEquity;
   const drawdown=usingDesk?(desk.maxDrawdown==null?null:desk.maxDrawdown*100):data?data.maxDrawdown*100:null;
+  const liveText=liveEnabled?liveOverview?.operational?"运行中":"核对中":"关闭";
   const nav:[Tab,string,string][]=[["execution","◉","执行"],["paper","⇄","模拟"],["live","◈","实盘"],["settings","⊙","系统"]];
   return <main className="fr-app" style={fontVars as CSSProperties} data-ui-version="market-intelligence-v1">
-    <header className="fr-compact-header"><b>哨兵 · 市场智能系统</b><span className={healthy?"fr-positive":""} role="status">{systemStatus}</span><span>实盘{liveEnabled?liveOverview?.operational?"运行中":"核对中":"关闭"}{memberName?` · ${memberName}`:""}</span></header>
+    <header className="fr-compact-header pg-head"><b>哨兵 · 市场智能系统</b><span>
+      <i className={`pg-pill ${healthy?"is-ok":"is-warn"}`} role="status">{systemStatus}</i>
+      <i className={`pg-pill ${liveEnabled?liveOverview?.operational?"is-ok":"is-warn":"is-off"}`}>实盘{liveText}</i>
+      {memberName&&<i className="pg-pill is-plain">{memberName}</i>}</span></header>
 
-    {tab==="execution"&&<MarketIntelligenceExecution data={data} now={now} liveEnabled={liveEnabled} liveOverview={liveOverview}/>}
+    {tab==="execution"&&<MarketIntelligenceExecution data={data} now={now} liveEnabled={liveEnabled} liveOverview={liveOverview}
+      healthy={healthy} systemStatus={systemStatus} feedAt={feedAt} floating={data?paperFloating:null} onOpenOrders={()=>select("paper")}/>}
 
-    {tab==="paper"&&<>
+    {tab==="paper"&&<div className="pg-paper">
       <section className="fr-equity fr-overview-equity" data-testid="overview-equity-first" aria-label={usingDesk?`${stanceLabel}权益`:"模拟账户权益"}>
         <small>{usingDesk?`${stanceLabel}权益`:"模拟账户权益"} · USDT</small><strong>{fmt(accountEquity)}</strong>
         <div className={(accountPnl??0)>=0?"fr-positive":"fr-negative"}>{signed(accountPnl)} <span>U · {signed(accountPnl!=null&&accountBase?accountPnl/accountBase*100:null)}%</span></div>
-        <footer><span>起点 {fmt(accountBase,0)}</span><span>最大回撤 {fmt(drawdown)}%</span></footer>
+        <footer><span>起点 {fmt(accountBase,0)} U</span><span>最大回撤 {fmt(drawdown)}%</span></footer>
         <p>更新 {time(data?.updatedAt)}{(usingDesk?desk.stale:data?.stalePositions)?" · 持仓估值待更新":""}</p>
       </section>
       <section className="fr-stats">
-        <Stat label="当前持仓" value={data?`${held} 笔`:"—"} note={usingDesk?`已平 ${fmt(desk.resolved,0)} 笔`:`保证金 ${fmt(positions.reduce((n,t)=>n+t.margin,0))} U`}/>
-        <Stat label="浮动盈亏" value={`${signed(data?paperFloating:null)} U`} note={usingDesk?"持仓浮动":`计划风险 ${fmt(data?.equity?positions.reduce((n,t)=>n+t.plannedRisk,0)/data.equity*100:null,1)}%`}/>
-        <Stat label="已完成" value={usingDesk?`${fmt(desk.resolved,0)} 笔`:data?`${fmt(data.resolved,0)} 笔`:"—"} note={usingDesk?`赢 ${fmt(desk.wins,0)} 笔`:"订单记录"}/>
-        <Stat label="已扣手续费" value={`${fmt(usingDesk?desk.fees:data?.fees)} U`} note={usingDesk?"决策账户成交费用":`成交额 ${fmt(data?.turnover)} U`}/>
+        <Stat label="当前持仓" value={data?`${held} 笔`:"—"} note={usingDesk?`已平 ${fmt(desk.resolved,0)} 笔`:`保证金 ${fmt(positions.reduce((n,t)=>n+t.margin,0),0)} U`}/>
+        <Stat label="浮动盈亏" value={`${signed(data?paperFloating:null)} U`} note="已扣开仓费"/>
+        <Stat label="已完成" value={usingDesk?`${fmt(desk.resolved,0)} 笔`:data?`${fmt(data.resolved,0)} 笔`:"—"} note={winNote(usingDesk?desk.wins:data?.wins,usingDesk?desk.resolved:data?.resolved)}/>
+        <Stat label="已扣手续费" value={`${fmt(usingDesk?desk.fees:data?.fees)} U`} note={usingDesk?"决策账户成交费用":`成交额 ${fmt(data?.turnover,0)} U`}/>
       </section>
       {desk?.book==="lsr-v1"&&<LsrPulse desk={desk}/>}
       {usingDesk?<ForwardCurve desk={desk}/>:<PaperEquitySection data={data} healthy={healthy} cache={equityCache} cacheScope={cacheScope}/>}
       {usingDesk?<ForwardOrders desk={desk} now={now}/>:<><section className="fr-section" data-testid="forward-orders"><div className="fr-section-head"><h2>持仓</h2><span>{positions.length} 笔</span></div><TradeList trades={positions} now={now} empty="当前没有持仓。"/></section>
-      <section className="fr-section" data-testid="forward-history"><div className="fr-section-head"><h2>历史订单</h2><span>{history.length} 笔</span></div><TradeList trades={history} now={now} empty="还没有已平订单。"/></section></>}
-    </>}
+      <section className="fr-section" data-testid="forward-history"><div className="fr-section-head"><h2>历史订单</h2><span>{history.length} 笔</span></div><TradeList trades={history.slice(0,historyShown)} now={now} empty="还没有已平订单。"/>
+        {history.length>historyShown&&<button type="button" className="pg-link" onClick={()=>setHistoryShown(n=>n+20)}>再显示 {Math.min(20,history.length-historyShown)} 笔（还有 {history.length-historyShown} 笔）</button>}</section></>}
+    </div>}
 
-    {tab==="settings"&&<>
-      {accountPanel}
+    {tab==="settings"&&<div className="pg-system">
+      <section className="pg-card" data-testid="system-status">
+        <header><small>系统状态</small><i className={`pg-pill ${healthy?"is-ok":"is-warn"}`}>{systemStatus}</i></header>
+        <dl className="pg-kv">
+          <div><dt>行情更新</dt><dd>{time(feedAt)}</dd></div>
+          <div><dt>实盘</dt><dd>{liveText}</dd></div>
+          <div><dt>策略版本</dt><dd>{data?.engineVersion??data?.version??"—"}</dd></div>
+          <div><dt>数据保存</dt><dd className={data?.storage?.error?"fr-negative":data?"fr-positive":undefined}>{data?data.storage?.error?"异常":"正常":"—"}</dd></div>
+        </dl>
+      </section>
       <section className="fr-section"><div className="fr-section-head"><h2>运行日志</h2></div>
-        <p className="fr-note">一个文件。没做单看策略计数，挂了没成交看 EXEC，行情断了看 DATA。策略和运行分开记。</p>
+        <p className="fr-note">开仓、没开仓的候选、行情和执行记录都在这一个文件里，复盘就用它。</p>
         <button className="fr-button" onClick={exportSnapshot} disabled={exporting}>{exporting?"正在导出…":"导出运行日志 ↗"}</button>{exportStatus&&<p className="fr-note">{exportStatus}</p>}</section>
       {liveSystemPanel}
+      {accountPanel}
       <section className="fr-section fr-font-control"><div className="fr-section-head"><h2>界面字号</h2><b>{fontScale}%</b></div>
         <div className="fr-font-options">{[70,80,90,100,110].map(value=><button key={value} className={fontScale===value?"selected":""} onClick={()=>{setFontScale(value);try{localStorage.setItem("sentinel-ui-font-scale-v1",String(value));}catch{}}}>{value}%</button>)}</div></section>
-    </>}
+    </div>}
 
     {liveMounted&&<div className="fr-live-panel-host" hidden={tab!=="live"}>{livePanel}</div>}
     {(error||data?.storage.error)&&<aside className="fr-error" role="alert"><b>运行提示</b><p>{data?.storage.error??error}</p></aside>}
-    <footer className="fr-footer"><span>行情更新 {time(feedAt)}</span><span>{data?.engineVersion??data?.version??"—"} · 北京时间</span></footer>
     <nav className="fr-nav">{nav.map(([id,icon,label])=><button key={id} className={id===tab?"selected":""} onClick={()=>select(id)}><span>{icon}</span><b>{label}</b>{id==="paper"&&paperHeld>0&&<i>{paperHeld}</i>}{id==="live"&&liveHeld>0&&<i>{liveHeld}</i>}</button>)}</nav>
   </main>;
 }
@@ -395,7 +411,6 @@ function PaperEquitySection({data,healthy,cache,cacheScope}:{data:View|null;heal
   return <section className="fr-section" data-testid="paper-equity-curve" aria-label="原模拟账户净值">
     <div className="fr-section-head"><h2>模拟净值</h2><span>账户曲线</span></div>
     <EquityCurve data={data} healthy={healthy} cache={cache} cacheScope={cacheScope}/>
-    <div className="fr-three"><div><small>模拟累计成交额</small><b>{fmt(data?.turnover)} U</b></div><div><small>模拟已扣手续费</small><b>{fmt(data?.fees)} U</b></div><div><small>模拟完成订单</small><b>{fmt(data?.resolved,0)}</b></div></div>
   </section>;
 }
 function TradeList({trades,now,empty}:{trades:Trade[];now:number;empty:string}){
@@ -456,5 +471,6 @@ export function TradeCard({trade:t,now,paid}:{trade:Trade;now:number;paid?:PaidP
     notes={t.realization&&<p className="oc-note">{t.inverseCopy?"已减仓":"已部分兑现"} {t.realization.sequence} 次 · 已实现净额 {signed(realizedNetPnl(t))} U · 剩余 {fmt(open?remainingTradeFraction(t)*100:0,0)}%</p>}
     detail={detail}/>;
 }
+const winNote=(wins?:number|null,total?:number|null)=>typeof wins==="number"&&typeof total==="number"&&total>0?`赢 ${fmt(wins,0)} 笔 · 胜率 ${fmt(wins/total*100,0)}%`:"还没有平仓";
 function Stat({label,value,note}:{label:string;value:string;note?:string}){return <article><small>{label}</small><strong>{value}</strong>{note&&<p>{note}</p>}</article>;}
 function Empty({title}:{title:string}){return <div className="fr-empty"><h3>{title}</h3></div>;}

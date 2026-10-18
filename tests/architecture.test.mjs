@@ -115,7 +115,9 @@ test("execution page exposes the same narrative used by strategy decisions",asyn
     read("app/forward-dashboard.tsx"),read("app/market-intelligence-execution.tsx"),read(".github/workflows/sentinel-v2-ci.yml"),read("wrangler.jsonc")
   ]);
   assert.match(dashboard,/哨兵 · 市场智能系统/);assert.match(dashboard,/MarketIntelligenceExecution/);assert.match(dashboard,/market-intelligence-v1/);
-  for(const text of["市场作战总览","当前市场","正在发生","接下来可能","正在观察","等待执行","正在持仓"])assert.match(execution,new RegExp(text));
+  for(const text of["当前市场","正在发生","接下来可能","正在持仓","最近成交"])assert.match(execution,new RegExp(text));
+  // Not-opened and waiting candidates are kept in the run log/export only; the execution page does not read them.
+  assert.doesNotMatch(execution,/entryValidation|waitingValidations|observeReason/);
   assert.match(workflow,/market-intelligence-v1/);
   assert.match(workflow,/marketIntelligenceTracked >= 20/);assert.match(workflow,/marketIntelligenceCoverage\.dailyMarkets >= 3/);
   assert.match(execution,/hypothesisResearch\?\.active/);
@@ -429,10 +431,8 @@ test("opportunity capture reserves execution capacity and all formal plans use l
   const minute=core.slice(core.indexOf("export function forwardUrgentMinuteSymbols"),core.indexOf("export function forwardWatchSymbols"));
   assert.match(minute,/\.\.\.armed,\.\.\.research,\.\.\.positions/);
   assert.match(worker,/freshImpulse\.slice\(0,3\),\.\.\.fixed/);
-  assert.match(execution,/等待执行 · \{waitingValidations\.length\}/);
-  assert.doesNotMatch(execution,/preparedWithoutValidation/);
-  assert.match(execution,/waitingValidations=entryValidations\.filter\(v=>v\.status==="WAITING"&&!heldSymbols\.has\(v\.symbol\)\)/);
-  assert.match(execution,/v\.frozenOpportunity\?\?opportunities\.find/,"frozen execution geometry takes precedence over current research maps");
+  // Waiting/armed plans stay in the run log only; the execution page no longer lists them.
+  assert.doesNotMatch(execution,/preparedWithoutValidation|entryValidation/);
 });
 
 test("duplicate-symbol execution is blocked at ranking, live validation and final open authority",async()=>{
@@ -445,9 +445,8 @@ test("duplicate-symbol execution is blocked at ranking, live validation and fina
   assert.match(ranked,/!s\.positions\.some\(t=>t\.symbol===o\.symbol\)/);
   assert.match(advance,/同币已有持仓，取消重复执行等待/);
   assert.match(open,/同币已有持仓，禁止重复开仓/);
-  assert.match(execution,/heldSymbols=new Set\(positions\.map\(t=>t\.symbol\)\)/);
-  assert.match(execution,/!heldSymbols\.has\(v\.symbol\)/);
-  assert.match(execution,/!heldSymbols\.has\(o\.symbol\)/);
+  // The execution page shows only held positions; candidates (and their duplicate filtering) are not displayed.
+  assert.doesNotMatch(execution,/data\?\.opportunities\?\?\[\]|entryValidation/);
 });
 
 test("formal liquidity plans survive shallow realtime conflict as retest instead of instant cancellation",async()=>{
@@ -458,13 +457,10 @@ test("formal liquidity plans survive shallow realtime conflict as retest instead
   assert.match(advance,/validation\.phase=\"RETEST_WAIT\"/);
 });
 
-test("execution command center summarizes active entry waits without a separate execution board",async()=>{
+test("execution page leaves not-opened and waiting candidates to the run log",async()=>{
   const execution=await read("app/market-intelligence-execution.tsx");
-  assert.match(execution,/等待执行/);
-  assert.match(execution,/v\.phase==="RETEST_WAIT".*等回调重启/);
-  assert.match(execution,/v\.stableThesis.*已武装/);
-  assert.match(execution,/\{waitingReason\(v,o\)\}/);
-  assert.match(execution,/waitingValidations\.map/);
+  assert.doesNotMatch(execution,/waitingValidations|waitingReason|observeReason|等回调重启|已武装/);
+  assert.match(execution,/没开仓的候选只记在运行日志里/);
   assert.doesNotMatch(execution,/入场执行状态|候选榜前8名|本假设已取消/);
 });
 
@@ -553,7 +549,7 @@ test("LIVE page exposes recoverable copy status without a fixed realtime-copy wi
   assert.doesNotMatch(ui,/超过实时复制窗口/);
   assert.match(ui,/copyPending/);
   assert.match(ui,/SUBMISSION_UNCONFIRMED/);
-  assert.match(ui,/mirror\?\.rows\.filter/);
+  assert.match(ui,/\(mirror\?\.rows\?\?\[\]\)\.filter/);
   assert.match(ui,/r\.reason\?\?r\.status/);
   assert.match(ui,/confirmEnable&&!enabled/);
 });

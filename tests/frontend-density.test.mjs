@@ -170,16 +170,18 @@ test("partial realizations are not counted as floating and entry fees are alloca
   assert.doesNotMatch(html,/<small>浮动盈亏<\/small><strong>\+90\.54 U<\/strong>/);
 });
 
-test("execution retains actionable waiting and position reasons without repeated philosophy",()=>{
+test("execution shows market, positions and recent fills; not-opened and waiting candidates stay in the run log only",()=>{
   const data={...account(),marketIntelligence:{updatedAt:1790761200000,narrative:{major:{bias:"BULLISH"},short:{bias:"BULLISH"},plan:"NEVER_RENDER_PHILOSOPHY"},
     liquidity:{market:{ready:true,testingShare:.3},symbols:{}}},
     environmentRouter:{phase:"TRANSITIONAL",currentEnvironment:"TRANSITION",outlook:{transitionPressure:.5,horizonMinutes:45}},
     opportunities:[{id:"observed",symbol:"BTC_USDT",side:"LONG",eligible:true,score:80,tradePlan:"LIQUIDITY_MIGRATION"}],
     entryValidation:{records:[{id:"waiting",candidateId:"frozen",symbol:"ETH_USDT",side:"LONG",status:"WAITING",phase:"RETEST_WAIT",frozenOpportunity:{tradePlan:"LIQUIDITY_MIGRATION"}}]},
-    positions:[{id:"held",symbol:"SUI_USDT",side:"SHORT",entryContext:{tradePlan:"FAMILY_TURN"},positionIntelligence:{decision:"REVIEW",concerns:["fixture position concern"]}}]};
+    positions:[{id:"held",symbol:"SUI_USDT",side:"SHORT",entryContext:{tradePlan:"FAMILY_TURN"},positionIntelligence:{decision:"REVIEW",concerns:["fixture position concern"]}}],
+    history:[{id:"done",status:"CLOSED",symbol:"PONS_USDT",side:"SHORT",openedAt:1790752298000,closedAt:1790761200000,netPnl:78.36,exitReason:"WINNER_STRUCTURE_EXIT"}]};
   const html=render("app/market-intelligence-execution.tsx",{data,now:1790761200000,liveEnabled:false});
-  for(const text of ["正在发生","接下来可能","BTC / USDT","ETH / USDT","等回调重启","SUI / USDT","重点复核","fixture position concern"])assert.ok(html.includes(text),text);
-  assert.equal(html.split("ETH / USDT").length-1,1);
+  for(const text of ["正在发生","接下来可能","SUI","重点复核","fixture position concern","最近成交","PONS","+78.36 U","碰到保护位","关闭"])assert.ok(html.includes(text),text);
+  // Not-opened candidates and armed/waiting plans are recorded in the run log, not on this page.
+  for(const text of ["BTC","ETH","等回调重启","等待执行 ·","正在观察 ·"])assert.ok(!html.includes(text),text);
   assert.doesNotMatch(html,/NEVER_RENDER_PHILOSOPHY|一个板块只回答|每笔持仓只显示|这次页面精简/);
 });
 
@@ -251,14 +253,13 @@ test("reference card and static manuals are removed, not hidden; cache and contr
   assert.match(read("app/paper-account-reset.tsx"),/该操作不能撤销/);
 });
 
-test("waiting and holding views use the frozen order area, not a newer conflicting map",()=>{
+test("holding view uses the frozen order area, not a newer conflicting map",()=>{
   const frozen={version:"winner-preservation-v1",researchVersion:"research-plan-v1",intent:"TREND",initialStop:99,
     origin:{lower:100,upper:104,center:102},target:null},current={...frozen,origin:{lower:200,upper:204,center:202}};
   const data={...account(),opportunities:[{id:"same",symbol:"SUI_USDT",side:"LONG",eligible:true,score:88,tradePlan:"WINNER_TREND",winnerPlan:current}],
-    entryValidation:{records:[{id:"same",candidateId:"same",symbol:"SUI_USDT",side:"LONG",status:"WAITING",phase:"ARMED",stableThesis:true,
-      frozenOpportunity:{tradePlan:"WINNER_TREND",winnerPlan:frozen}}]}};
+    positions:[{id:"held",symbol:"SUI_USDT",side:"LONG",status:"OPEN",stopPrice:101,entryContext:{tradePlan:"WINNER_TREND",winnerPlan:frozen},winnerManagement:{reason:"fixture hold"}}]};
   const html=render("app/market-intelligence-execution.tsx",{data,now:1790761200000,liveEnabled:false});
-  assert.match(html,/本单参考区 100–104/);assert.doesNotMatch(html,/本单参考区 200–204/);
+  assert.match(html,/本单参考区 100–104 · 当前保护 101/);assert.doesNotMatch(html,/本单参考区 200–204/);
 });
 
 test("inverse cards show only their own exact-price net and paid fees without an unfilled close charge",()=>{

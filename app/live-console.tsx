@@ -11,7 +11,7 @@ import {OrderCard,exitShort,exitPlain,priceText,type OrderFact} from "./order-ca
 type HistoryView={history:LivePosition[];checkedAt:number|null;error:string|null;pending:number;updating:boolean};
 type Props = { auth: AuthSession|null; runtime: OperatorRuntime|null; onSession: (session:AuthSession)=>void;
   onLive: (live:LiveRuntime)=>void; onRefresh: ()=>void; view?:"trade"|"system" };
-type Section = "account" | "positions" | "history" | "archive";
+type Section = "positions" | "history" | "archive";
 
 export default function LiveConsole(props:Props) {
   // Account changes replace all private form/history state, even when a parent
@@ -25,7 +25,7 @@ function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade
   useEffect(()=>{const epoch=responseEpoch.current;epoch.value++;return()=>{epoch.value++;};},[]);
   // A newly opened LIVE tab starts with account equity, not an old scroll offset.
   useEffect(()=>{window.scrollTo({top:0,behavior:"auto"});},[]);
-  const [section,setSection]=useState<Section>("account"),[clock,setClock]=useState(0);
+  const [section,setSection]=useState<Section>("positions"),[clock,setClock]=useState(0);
   const [password,setPassword]=useState(""),[apiKey,setApiKey]=useState(""),[apiSecret,setApiSecret]=useState("");
   const [credential,setCredential]=useState<CredentialStatus|null>(null),[verification,setVerification]=useState<CredentialVerification|null>(null);
   const [busy,setBusy]=useState<string|null>(null),[error,setError]=useState<string|null>(null),[notice,setNotice]=useState<string|null>(null);
@@ -107,7 +107,7 @@ function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade
   const accountMark=live?.accountMark?.sessionAt===(live?.activation?.enabledAt??0)?live.accountMark:null;
   const floating=accountMark?.floating??(live&&marks.every(m=>m.pnl!==null)?marks.reduce((sum,m)=>sum+(m.pnl??0),0):null);
   const audits=[...(live?.auditEvents??[])].sort((a,b)=>b.observedAt-a.observedAt);
-  const tabs:[Section,string][]=[["account","账户"],["positions","持仓"],["history","记录"],["archive","归档"]];
+  const tabs:[Section,string][]=[["positions","持仓"],["history","记录"],["archive","归档"]];
   const copied=mirror?.eligibleCopiedCount??0,eligible=mirror?.eligibleSourceCount??0,missing=mirror?.eligibleMissingCount??0;
   const skipRows=Object.values(live?.entrySkips??{}).filter((row):row is NonNullable<typeof row>=>!!row);
   const copyFailed=Boolean(mirror?.error)||skipRows.some(row=>["ENTRY_REJECTED","LEVERAGE_REJECTED"].includes(row.code));
@@ -130,85 +130,81 @@ function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade
       </form></section></div>;
 
   if(view==="system")return <div className="fr-live fr-live-system" data-testid="live-system-console">
-    <div className="fr-live-heading"><h1>账户与实盘管理</h1><span>{auth.username} · 实盘{liveStatus}</span></div>
     {error&&<div className="fr-error" role="alert"><b>操作未完成</b><p>{error}</p></div>}
     {notice&&<div className="fr-notice" role="status">{notice}</div>}
-    <section className="fr-section"><div className="fr-section-head"><h2>模拟 → 实盘</h2><span className={copyHealthy?"fr-positive":missing||mirror?.error?"fr-negative":""}>{copyLabel}</span></div>
-      <div className="fr-four"><Metric label="应跟随" value={num(mirror?.eligibleSourceCount,0)}/><Metric label="已复制" value={num(mirror?.eligibleCopiedCount,0)}/><Metric label="待确认" value={num(mirror?.pendingCount,0)}/><Metric label="最低量阻塞" value={num(mirror?.minimumSizeBlockedCount,0)}/></div>
-      {mirror?.error&&<p className="fr-error">{mirror.error}</p>}
-      {mirror?.rows.filter(r=>r.status!=="COPIED"&&r.status!=="EXCLUDED_BEFORE_ENABLE").map(r=><p className="fr-diagnostic-row" key={r.sourceId}><b>{r.symbol.replace("_"," / ")}</b><span>{r.reason??r.status}</span></p>)}
-      <p className="fr-note">跟随起点 {time(mirror?.enabledAt)}</p>
-    </section>
-    <section className="fr-section"><div className="fr-section-head"><h2>实盘累计成交额</h2><span>已确认成交</span></div>
-      <div className="fr-four"><Metric label="系统标记成交" value={`${num(live?.turnover?.systemTagged)} U`}/><Metric label="系统已扣费用" value={`${num(live?.turnover?.systemTaggedFees)} U`}/><Metric label="全账户成交（含手工）" value={`${num(live?.turnover?.total)} U`}/><Metric label="核对成交明细" value={num(live?.turnover?.fillCount,0)}/></div>
-      <p className="fr-note">核对至 {time(live?.turnover?.checkedThrough)}</p>
-      {live?.turnover?.error&&<p className="fr-error">{live.turnover.error}</p>}
-    </section>
-    <section className="fr-section"><div className="fr-section-head"><h2>最近执行记录</h2><span>最近10条</span></div>
-      {audits.length?<div className="fr-journal">{audits.slice(0,10).map(e=><article key={e.id}><time>{time(e.observedAt)}</time><div><b>{e.symbol?.replace("_"," / ")??"实盘控制"} · {e.stage}</b><p>{e.reason}</p></div></article>)}</div>:<p className="fr-note">暂无执行记录。</p>}
-      {Object.values(live?.entrySkips??{}).map(e=>e&&<div key={e.planId} className="fr-error"><b>{e.symbol} · 未成交</b><p>{e.reason}</p>{e.sizing&&<p>比例目标 {contractText(e.sizing.targetContracts)} 张 / {num(e.sizing.targetNotional,4)} U；交易所最低 {contractText(e.sizing.minimumContracts)} 张 / {num(e.sizing.minimumNotional,4)} U；严格比例至少需实盘权益约 {num(e.sizing.requiredLiveEquity,2)} U。</p>}</div>)}
-    </section>
     <section className="fr-section"><div className="fr-section-head"><h2>Gate API</h2><button type="button" className="fr-text-button" onClick={onRefresh}>刷新状态 ↻</button></div>
       <div className="fr-setting"><div><h3>API状态</h3>{credential?.keyHint&&<p>{credential.keyHint}</p>}</div><b>{credential?credential.configured?"已保存":"未配置":"读取中"}</b></div>
       <div className="fr-setting"><div><h3>最近账户核对</h3>{live?.lastError&&!isTransientLiveReadError(live.lastError)&&<p>{live.lastError}</p>}</div><b>{time(live?.lastSyncAt)}</b></div>
-      <form className="fr-form" onSubmit={saveCredential}><label>API Key<input type="password" autoComplete="off" spellCheck={false} value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder="填写新的Gate API Key" disabled={enabled}/></label>
-        <label>API Secret<input type="password" autoComplete="new-password" spellCheck={false} value={apiSecret} onChange={e=>setApiSecret(e.target.value)} placeholder="填写新的Gate API Secret" disabled={enabled}/></label>
-        {enabled&&<p className="fr-note">关闭实盘后才能更换 API。</p>}
-        <button className="fr-button" type="submit" disabled={Boolean(busy)||enabled||apiKey.trim().length<8||apiSecret.trim().length<8}>{busy==="credential"?"验证中…":credential?.configured?"验证并更换 API":"验证并保存 API"}</button></form>
+      <details className="pg-fold" open={credential?credential.configured!==true:false}><summary>{credential?.configured?"更换 API":"填写 API"}</summary><div className="pg-fold-body">
+        <form className="fr-form" onSubmit={saveCredential}><label>API Key<input type="password" autoComplete="off" spellCheck={false} value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder="填写新的Gate API Key" disabled={enabled}/></label>
+          <label>API Secret<input type="password" autoComplete="new-password" spellCheck={false} value={apiSecret} onChange={e=>setApiSecret(e.target.value)} placeholder="填写新的Gate API Secret" disabled={enabled}/></label>
+          {enabled&&<p className="fr-note">关闭实盘后才能更换 API。</p>}
+          <button className="fr-button" type="submit" disabled={Boolean(busy)||enabled||apiKey.trim().length<8||apiSecret.trim().length<8}>{busy==="credential"?"验证中…":credential?.configured?"验证并更换 API":"验证并保存 API"}</button></form>
+        {credential?.configured&&<button className="fr-text-button danger" type="button" disabled={Boolean(busy)||enabled||positions.length>0||entries.length>0} onClick={()=>setConfirmDelete(true)}>删除已保存 API</button>}
+      </div></details>
       {verification&&<p className="fr-notice">验证：权益 {num(verification.equity)} U · 持仓 {verification.positions} · 普通挂单 {verification.orders} · 条件单 {verification.conditionalOrders}</p>}
-      {credential?.configured&&<button className="fr-text-button danger" type="button" disabled={Boolean(busy)||enabled||positions.length>0||entries.length>0} onClick={()=>setConfirmDelete(true)}>删除已保存 API</button>}
       {confirmDelete&&<div className="fr-inline-confirm"><h3>删除API会移除这组连接凭据</h3><p>服务器只有在实盘关闭、Gate无持仓和挂单时才允许删除。</p>
         <div className="fr-action-row"><button className="fr-button danger" type="button" disabled={Boolean(busy)||enabled||positions.length>0||entries.length>0} onClick={deleteCredential}>确认删除 API</button><button className="fr-button secondary" type="button" disabled={Boolean(busy)} onClick={()=>setConfirmDelete(false)}>保留 API</button></div></div>}
     </section>
+    <section className="fr-section"><div className="fr-section-head"><h2>模拟 → 实盘跟单</h2><span className={copyHealthy?"fr-positive":missing||mirror?.error?"fr-negative":""}>{copyLabel}</span></div>
+      <div className="fr-four"><Metric label="应跟随" value={num(mirror?.eligibleSourceCount,0)}/><Metric label="已复制" value={num(mirror?.eligibleCopiedCount,0)}/><Metric label="待确认" value={num(mirror?.pendingCount,0)}/><Metric label="最低量阻塞" value={num(mirror?.minimumSizeBlockedCount,0)}/></div>
+      {mirror?.error&&<p className="fr-error">{mirror.error}</p>}
+      {(mirror?.rows??[]).filter(r=>r.status!=="COPIED"&&r.status!=="EXCLUDED_BEFORE_ENABLE").map(r=><p className="fr-diagnostic-row" key={r.sourceId}><b>{r.symbol.replace("_"," / ")}</b><span>{r.reason??r.status}</span></p>)}
+      <p className="fr-note">跟随起点 {time(mirror?.enabledAt)}</p>
+    </section>
+    <details className="pg-fold"><summary>实盘累计成交额<small>{num(live?.turnover?.systemTagged)} U</small></summary><div className="pg-fold-body">
+      <div className="fr-four"><Metric label="系统标记成交" value={`${num(live?.turnover?.systemTagged)} U`}/><Metric label="系统已扣费用" value={`${num(live?.turnover?.systemTaggedFees)} U`}/><Metric label="全账户成交（含手工）" value={`${num(live?.turnover?.total)} U`}/><Metric label="核对成交明细" value={num(live?.turnover?.fillCount,0)}/></div>
+      <p className="fr-note">核对至 {time(live?.turnover?.checkedThrough)}</p>
+      {live?.turnover?.error&&<p className="fr-error">{live.turnover.error}</p>}
+    </div></details>
+    <details className="pg-fold" open={skipRows.length>0}><summary>最近执行记录<small>{skipRows.length?`${skipRows.length} 笔未成交 · `:""}{Math.min(10,audits.length)} 条</small></summary><div className="pg-fold-body">
+      {audits.length?<div className="fr-journal">{audits.slice(0,10).map(e=><article key={e.id}><time>{time(e.observedAt)}</time><div><b>{e.symbol?.replace("_"," / ")??"实盘控制"} · {e.stage}</b><p>{e.reason}</p></div></article>)}</div>:<p className="fr-note">暂无执行记录。</p>}
+      {skipRows.map(e=><div key={e.planId} className="fr-error"><b>{e.symbol} · 未成交</b><p>{e.reason}</p>{e.sizing&&<p>比例目标 {contractText(e.sizing.targetContracts)} 张 / {num(e.sizing.targetNotional,4)} U；交易所最低 {contractText(e.sizing.minimumContracts)} 张 / {num(e.sizing.minimumNotional,4)} U；严格比例至少需实盘权益约 {num(e.sizing.requiredLiveEquity,2)} U。</p>}</div>)}
+    </div></details>
     <div className="fr-owner-session"><span>● {auth.username} · 已登录</span><button className="fr-text-button" type="button" disabled={Boolean(busy)} onClick={logout}>退出登录</button></div>
   </div>;
 
-  return <div className="fr-live" data-testid="native-live-console">
-    <div className="fr-live-heading"><h1>实盘账户</h1><span>{liveStatus}</span></div>
-    <section className="fr-stats fr-live-summary" data-testid="live-equity-first"><LiveStat title="实盘账户权益" value={`${num(live?.equity)} U`}/>
-      <LiveStat title="可用保证金" value={`${num(live?.available)} U`}/>
-      <LiveStat title={accountMark?"全账户浮动盈亏":"程序持仓浮动盈亏"} value={`${signed(floating)} U`}/>
-      <LiveStat title="当前持仓" value={live?`${positions.length} 笔`:"—"} detail={entries.length?`待执行 ${entries.length} 笔`:undefined}/></section>
-    {accountMark&&<p className="fr-note">全账户权益及浮盈含手工持仓；下方只列程序绑定订单。数据核对 {time(accountMark.at)}{clock-accountMark.at>30000?' · 待更新，保留上次真实数据':''}</p>}
-    <div className="fr-account-line"><span>实盘成交额 {num(live?.turnover?.sessionSystemTagged)} U · 已扣费用 {num(live?.turnover?.sessionSystemTaggedFees)} U</span><b className={copyHealthy?"fr-positive":missing||mirror?.error?"fr-negative":""}>复制一致性 {copyLabel}</b></div>
-    <p className="fr-note">Gate成交核对至 {time(live?.turnover?.checkedThrough)}{live?.turnover?.catchingUp?" · 正在补齐":""} · 账户核对 {time(live?.lastSyncAt)}</p>
+  const statusTone=!enabled?"is-off":copyFailed?"is-bad":copyPending||!live?.operational?"is-warn":"is-ok";
+  return <div className="fr-live pg-live" data-testid="native-live-console">
+    <section className="pg-card" data-testid="live-equity-first">
+      <header><small>实盘账户权益 · USDT</small><i className={`pg-pill ${statusTone}`}>{liveStatus}</i></header>
+      <strong className="pg-big">{num(live?.equity)}</strong>
+      <dl className="pg-kv">
+        <div><dt>可用保证金</dt><dd>{num(live?.available)} U</dd></div>
+        <div><dt>{accountMark?"全账户浮动盈亏":"程序持仓浮动"}</dt><dd className={typeof floating==="number"&&floating!==0?floating>0?"fr-positive":"fr-negative":undefined}>{signed(floating)} U</dd></div>
+        <div><dt>当前持仓</dt><dd>{live?`${positions.length} 笔`:"—"}{entries.length?` · 待执行 ${entries.length}`:""}</dd></div>
+        <div><dt>复制一致性</dt><dd className={copyHealthy?"fr-positive":missing||mirror?.error?"fr-negative":undefined}>{copyLabel}</dd></div>
+      </dl>
+      <div className="pg-meta"><span>账户核对 <b>{time(live?.lastSyncAt)}</b></span>{accountMark&&<span>全账户数据含手工持仓</span>}</div>
+    </section>
+    <section id="live-control" className="fr-section fr-live-switch-panel" aria-label="实盘交易开关">
+      <div><span className="fr-overline">实盘交易开关</span><h2>{liveSwitchStatus}</h2></div>
+      <button type="button" className={`fr-switch ${enabled?"is-enabled":""}`} role="switch" aria-label="实盘交易开关"
+        aria-checked={enabled} disabled={!canControl||Boolean(busy)||(!enabled&&!credential?.configured)}
+        onClick={()=>enabled?setMode(false):setConfirmEnable(true)}><span/><b>{busy==="mode"?"核对中":enabled?"开启":"关闭"}</b></button>
+      {confirmEnable&&!enabled&&<div className="fr-inline-confirm" role="group" aria-label="确认开启实盘">
+        <h3>确认只跟随开启后的新模拟单？</h3><p>开启前已有模拟持仓不会补开。新订单按固定比例复制；实际数量、成交价和费用以Gate回报为准。</p>
+        <div className="fr-action-row"><button className="fr-button" type="button" disabled={!canEnable} onClick={()=>setMode(true)}>确认开启实盘</button>
+          <button className="fr-button secondary" type="button" disabled={Boolean(busy)} onClick={()=>setConfirmEnable(false)}>取消</button></div></div>}
+    </section>
     {(enabled||positions.length>0||entries.length>0)&&live?.lastError&&!isTransientLiveReadError(live.lastError)
       &&<p className="fr-error" role="status">执行提示：{live.lastError}</p>}
     {error&&<div className="fr-error" role="alert"><b>操作未完成</b><p>{error}</p></div>}
     {notice&&<div className="fr-notice" role="status">{notice}</div>}
-    <nav className="fr-live-tabs fr-live-record-tabs" aria-label="实盘子导航">{tabs.map(([id,title])=><button type="button" key={id} aria-current={section===id?"page":undefined}
-      className={section===id?"selected":""} onClick={()=>setSection(id)}>{title}</button>)}</nav>
+    {(missing>0||mirror?.error)&&<section className="fr-section fr-parity-alert"><div className="fr-section-head"><h2>复制需要核对</h2><span>{missing} 笔</span></div>
+      {(mirror?.rows??[]).filter(r=>r.status!=="COPIED"&&r.status!=="EXCLUDED_BEFORE_ENABLE").slice(0,4).map(r=><p className="fr-diagnostic-row" key={r.sourceId}><b>{r.symbol.replace("_"," / ")}</b><span>{r.reason??r.status}</span></p>)}
+    </section>}
+    <nav className="pg-seg fr-live-record-tabs" aria-label="实盘子导航">{tabs.map(([id,title])=><button type="button" key={id} aria-current={section===id?"page":undefined}
+      className={section===id?"selected":""} onClick={()=>setSection(id)}>{title}{id==="positions"&&live&&<small>{positions.length+entries.length}</small>}</button>)}</nav>
 
-    {section==="account"&&<>
-      <section className="fr-section fr-live-holdings" data-testid="live-holdings-first">
-        <div className="fr-section-head"><h2>当前持仓</h2><span>{positions.length} 笔</span></div>
-        {!live?<LiveEmpty title="正在读取实盘账户"/>:!positions.length?<LiveEmpty title="当前没有实盘持仓" text={entries.length?`有 ${entries.length} 笔待执行订单。`:undefined} />:
-          <div className="oc-list">{positions.map(p=><LivePositionCard key={p.id} position={p} runtime={runtime} now={clock}/>)}</div>}
-        {!!entries.length&&<button type="button" className="fr-text-button" onClick={()=>setSection("positions")}>查看 {entries.length} 笔待执行订单 →</button>}
-      </section>
-      <section id="live-control" className="fr-section fr-live-switch-panel" aria-label="实盘交易开关">
-        <div><span className="fr-overline">实盘交易开关</span><h2>{liveSwitchStatus}</h2></div>
-        <button type="button" className={`fr-switch ${enabled?"is-enabled":""}`} role="switch" aria-label="实盘交易开关"
-          aria-checked={enabled} disabled={!canControl||Boolean(busy)||(!enabled&&!credential?.configured)}
-          onClick={()=>enabled?setMode(false):setConfirmEnable(true)}><span/><b>{busy==="mode"?"核对中":enabled?"开启":"关闭"}</b></button>
-        {confirmEnable&&!enabled&&<div className="fr-inline-confirm" role="group" aria-label="确认开启实盘">
-          <h3>确认只跟随开启后的新模拟单？</h3><p>开启前已有模拟持仓不会补开。新订单按固定比例复制；实际数量、成交价和费用以Gate回报为准。</p>
-          <div className="fr-action-row"><button className="fr-button" type="button" disabled={!canEnable} onClick={()=>setMode(true)}>确认开启实盘</button>
-            <button className="fr-button secondary" type="button" disabled={Boolean(busy)} onClick={()=>setConfirmEnable(false)}>取消</button></div></div>}
-      </section>
-      {(missing>0||mirror?.error)&&<section className="fr-section fr-parity-alert"><div className="fr-section-head"><h2>复制需要核对</h2><span>{missing} 笔</span></div>
-        {mirror?.rows.filter(r=>r.status!=="COPIED"&&r.status!=="EXCLUDED_BEFORE_ENABLE").slice(0,4).map(r=><p className="fr-diagnostic-row" key={r.sourceId}><b>{r.symbol.replace("_"," / ")}</b><span>{r.reason??r.status}</span></p>)}
-      </section>}
-    </>}
-
-    {section==="positions"&&<section className="fr-section"><div className="fr-section-head"><h2>当前持仓与待执行</h2></div>
+    {section==="positions"&&<section className="fr-section fr-live-holdings" data-testid="live-holdings-first">
       {!live?<LiveEmpty title="正在读取实盘账户"/>:
-        !positions.length&&!entries.length?<LiveEmpty title="当前没有实盘持仓或待执行订单"/>:
+        !positions.length&&!entries.length?<LiveEmpty title="当前没有实盘持仓" text={enabled?undefined:"实盘已关闭，不会下单。"}/>:
         <div className="oc-list">{positions.map(p=><LivePositionCard key={p.id} position={p} runtime={runtime} now={clock}/>)}
-          {entries.map(e=>e&&<article className="fr-trade" key={e.planId}><header><div><small>待执行 · {e.side==="LONG"?"多单":"空单"}</small><h3>{e.symbol.replace("_"," / ")}</h3></div><strong>等待Gate</strong></header>
-            <dl><Pair label="源单入场价" value={num(e.parity?.sourceEntryPrice,5)}/><Pair label="入场限价" value={num(e.parity?.entryLimitPrice??e.parity?.copyQuotePrice??e.trigger,5)}/>
-              <Pair label="保证金 / 杠杆" value={`${num(e.margin)} U / ${num(e.leverage,0)}×`}/></dl>
-            <p className="fr-note">{e.lastError??`服务器状态：${e.status}`}</p></article>)}</div>}
+          {entries.map(e=>e&&<article className="pg-row" key={e.planId}>
+            <div className="oc-line"><span className="oc-name"><b>{e.symbol.split("_")[0]}</b><small>/{e.symbol.split("_")[1]??"USDT"}</small><i className={`oc-side ${e.side==="LONG"?"is-long":"is-short"}`}>{e.side==="LONG"?"多":"空"}</i><i className="oc-live">待执行</i></span><b className="oc-pnl">等待Gate</b></div>
+            <div className="oc-line oc-sub"><span>源单 {num(e.parity?.sourceEntryPrice,5)} · 限价 {num(e.parity?.entryLimitPrice??e.parity?.copyQuotePrice??e.trigger,5)}</span><span>{num(e.margin)} U / {num(e.leverage,0)}×</span></div>
+            <p className="pg-plan">{e.lastError??`服务器状态：${e.status}`}</p></article>)}</div>}
     </section>}
 
     {(section==="history"||section==="archive")&&<section className="fr-section" data-testid={section==="history"?"live-history":"live-archive"}>
@@ -218,11 +214,20 @@ function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade
       {!!historyView?.pending&&<p className="fr-note">{historyView.pending}条Gate结算待核对。</p>}
       {section==="archive"&&<ArchivePagination page={archive.page} pages={archive.pages} onPage={setArchiveIndex}/>}
     </section>}
+
+    <details className="pg-fold"><summary>成交与核对明细</summary><div className="pg-fold-body">
+      <dl className="pg-kv">
+        <div><dt>本次实盘成交额</dt><dd>{num(live?.turnover?.sessionSystemTagged)} U</dd></div>
+        <div><dt>本次已扣费用</dt><dd>{num(live?.turnover?.sessionSystemTaggedFees)} U</dd></div>
+        <div><dt>Gate成交核对至</dt><dd>{time(live?.turnover?.checkedThrough)}{live?.turnover?.catchingUp?" · 正在补齐":""}</dd></div>
+        <div><dt>账户核对</dt><dd>{time(live?.lastSyncAt)}</dd></div>
+      </dl>
+      <p>成交额和费用只算本系统标记的订单。</p>
+      {accountMark&&<p>全账户权益及浮盈含手工持仓；上方只列程序绑定订单。数据核对 {time(accountMark.at)}{clock-accountMark.at>30000?" · 待更新，保留上次真实数据":""}</p>}
+    </div></details>
   </div>;
 }
-function Pair({label,value}:{label:string;value:string}){return<div><dt>{label}</dt><dd>{value}</dd></div>;}
 function Metric({label,value}:{label:string;value:string}){return<div><small>{label}</small><b>{value}</b></div>;}
-function LiveStat({title,value,detail}:{title:string;value:string;detail?:string}){return<article><small>{title}</small><strong>{value}</strong>{detail&&<p>{detail}</p>}</article>;}
 function LiveEmpty({title,text}:{title:string;text?:string}){return<div className="fr-empty"><h3>{title}</h3>{text&&<p>{text}</p>}</div>;}
 function latency(value:number|undefined){return typeof value==="number"&&Number.isFinite(value)?value<1000?`${Math.round(value)} ms`:`${(value/1000).toFixed(2)} s`:"—";}
 function paperSource(position:LivePosition,runtime:OperatorRuntime|null){

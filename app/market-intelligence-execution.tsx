@@ -2,9 +2,17 @@
 
 import {BEIJING_TIME_ZONE} from "../lib/beijing-time.ts";
 import {type forwardSummary} from "../lib/forward-relations.ts";
+import {tradePaidNetPnl} from "../lib/paid-fee-view.ts";
+import {exitShort} from "./order-card.tsx";
+import "./pages.css";
 
+/* 执行页：第一眼只回答四件事——现在是什么市场、实盘开没开、手上有什么仓、刚刚做了什么。
+ * 没开仓的候选和等待触发的计划只记在运行日志里，这里不读也不显示（数据本身一条不少）。 */
 type View=ReturnType<typeof forwardSummary>;
+type Trade=View["positions"][number];
+type LiveOverview={operational:boolean;lastSyncAt:number|null;positionCount:number};
 const bias=(v?:string)=>v==="BULLISH"?"偏多":v==="BEARISH"?"偏空":v?"中性":"待确认";
+const biasTone=(v?:string)=>v==="BULLISH"?" is-long":v==="BEARISH"?" is-short":"";
 const evolution=(v?:string)=>({
   ROTATIONAL:"轮动/震荡",TREND_FORMING:"趋势正在形成",EXPANDING:"方向正在扩张",STABLE_TREND:"稳定趋势",
   DECAYING:"趋势正在衰退",TRANSITIONAL:"状态正在切换"
@@ -13,12 +21,14 @@ const environmentName=(v?:string)=>({TREND:"趋势环境",TRANSITION:"过渡环�
 const tradePlanName=(v?:string)=>({
   WINNER_TREND:"独立趋势",RANGE_REVERSION:"边缘回归",LIQUIDITY_MIGRATION:"流动性迁移",LIQUIDITY_REJECTION:"离开失败回归",FAMILY_TURN:"家族提前转折",OBSERVE_ONLY:"只观察"
 }[v??""]??"历史计划");
-const liquidityState=(v?:string)=>({
-  INSIDE:"仍在原区域",TESTING:"正在尝试离开",ACCEPTED:"离开已被接受",REJECTED:"离开失败并回归"
-}[v??""]??"流动性状态待确认");
-const side=(v?:string)=>v==="LONG"?"做多":v==="SHORT"?"做空":"方向观察";
-const clock=(v?:number)=>v?new Date(v).toLocaleTimeString("zh-CN",{timeZone:BEIJING_TIME_ZONE,hour12:false}):"—";
+const clock=(v?:number|null)=>v?new Date(v).toLocaleTimeString("zh-CN",{timeZone:BEIJING_TIME_ZONE,hour12:false}):"—";
+const stamp=(v?:number|null)=>v?new Date(v).toLocaleString("zh-CN",{timeZone:BEIJING_TIME_ZONE,month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false}):"—";
 const pressure=(v?:number)=>typeof v!=="number"?"待确认":v>=.65?"高":v>=.45?"上升中":"低";
+const fmt=(v:number|null|undefined,d=2)=>typeof v==="number"&&Number.isFinite(v)?v.toLocaleString("en-US",{minimumFractionDigits:d,maximumFractionDigits:d}):"—";
+const signed=(v:number|null|undefined,d=2)=>typeof v==="number"&&Number.isFinite(v)?`${v>=0?"+":""}${fmt(v,d)}`:"—";
+const tone=(v:number|null|undefined)=>typeof v!=="number"||!Number.isFinite(v)||v===0?"":v>0?"fr-positive":"fr-negative";
+const held=(start?:number|null,end?:number|null)=>{if(!start||!end)return "";const m=Math.floor(Math.max(0,end-start)/60000);return m<1?"<1分钟":m>=60?`${Math.floor(m/60)}小时${m%60}分`:`${m}分钟`;};
+const safePnl=(t:Trade)=>{try{return tradePaidNetPnl(t);}catch{return null;}};
 
 function marketChangeText(data:View|null){
   const n=data?.marketIntelligence?.narrative;
@@ -37,24 +47,7 @@ function planText(p:View["opportunities"][number]["winnerPlan"],stop?:number){
   const fmt=(v:number)=>Number(v.toPrecision(7)).toString(),a=p.origin;
   return `${a?`本单参考区 ${fmt(a.lower)}–${fmt(a.upper)}`:"本单区域未知"} · ${stop==null?"失败价":"当前保护"} ${fmt(stop??p.initialStop)}${p.intent==="RANGE"&&p.target!=null?` · 回归目标 ${fmt(p.target)}`:""}`;
 }
-
-function observeReason(o:View["opportunities"][number],state?:{departure?:{state?:string}}){
-  const current=liquidityState(state?.departure?.state);
-  if(o.winnerPlan)return o.winnerPlan.intent==="TREND"?"观察独立推进与回调承接；区域只辅助位置，不必等待整体突破。":"观察边缘拒绝后的回归；目标为原量价重心，不默认横穿区域。";
-  if(o.tradePlan==="LIQUIDITY_MIGRATION")return`${current}；等待持续站稳及足够目标空间。`;
-  if(o.tradePlan==="LIQUIDITY_REJECTION")return`${current}；等待重新回到区域内及足够回归空间。`;
-  if(o.tradePlan==="FAMILY_TURN")return`${current}；等待相关币共同转向与本币结构确认。`;
-  return`${current}；尚无确认的入场计划。`;
-}
-
-function waitingReason(v:NonNullable<View["entryValidation"]>["records"][number],o?:View["opportunities"][number]){
-  if(v.phase==="RETEST_WAIT")return"等回调重启；当前位置不追价。";
-  if(o?.winnerPlan?.entryResearch?.entryAction==="CONFIRM_MORE")return"研究预警持续；补足本币实时响应，不追价。";
-  if(v.stableThesis)return"已武装；等待实时价格确认。";
-  return v.reason??(o?.tradePlan==="LIQUIDITY_MIGRATION"?"等待迁移持续确认。":"等待执行条件完成。");
-}
-
-function positionAction(t:View["positions"][number]){
+function positionAction(t:Trade){
   if(t.winnerManagement?.research){
     const m=t.winnerManagement;
     return m.appliedAction==="EXIT"?"准备退出":m.appliedAction==="REDUCE"?"已部分兑现":m.research!.level==="MARKET_CAUTION"?"预警但继续持有":m.research!.level==="LOCAL_REVIEW"||m.research!.level==="PROTECT"?"复核本币变化":"继续持有";
@@ -62,8 +55,7 @@ function positionAction(t:View["positions"][number]){
   const d=t.positionIntelligence?.decision;
   return d==="EXIT"?"准备退出":d==="REVIEW"?"重点复核":"继续持有";
 }
-
-function positionWatch(t:View["positions"][number]){
+function positionWatch(t:Trade){
   if(t.winnerManagement)return t.winnerManagement.reason;
   const plan=t.liquidityLifecycle?.currentPlan??t.entryContext?.tradePlan,concern=t.positionIntelligence?.concerns?.[0];
   if(concern)return concern;
@@ -73,49 +65,66 @@ function positionWatch(t:View["positions"][number]){
   if(plan==="FAMILY_TURN")return"观察相关币是否持续共同转向。";
   return t.positionIntelligence?.summary??"观察原入场理由是否仍成立。";
 }
+function Coin({symbol,side}:{symbol:string;side:string}){
+  const [base,quote]=(symbol??"").split("_");
+  return <span className="oc-name"><b>{base}</b>{quote&&<small>/{quote}</small>}<i className={`oc-side ${side==="LONG"?"is-long":"is-short"}`}>{side==="LONG"?"多":"空"}</i></span>;
+}
 
-export default function MarketIntelligenceExecution({data,now:_}:{
-  data:View|null;now:number;liveEnabled?:boolean;liveOverview?:{operational:boolean;lastSyncAt:number|null;positionCount:number};
+export default function MarketIntelligenceExecution({data,now,liveEnabled=false,liveOverview,healthy,systemStatus,feedAt,floating,onOpenOrders}:{
+  data:View|null;now:number;liveEnabled?:boolean;liveOverview?:LiveOverview;
+  healthy?:boolean;systemStatus?:string;feedAt?:number|null;floating?:number|null;onOpenOrders?:()=>void;
 }){
-  const mi=data?.marketIntelligence,n=mi?.narrative,liquidity=mi?.liquidity,
-    opportunities=[...(data?.opportunities??[])].sort((a,b)=>Number(b.eligible)-Number(a.eligible)||b.score-a.score),
+  const mi=data?.marketIntelligence,n=mi?.narrative,
     positions=[...(data?.positions??[])].filter(t=>!t.inverseCopy),
-    heldSymbols=new Set(positions.map(t=>t.symbol)),
-    entryValidations=data?.entryValidation?.records??[],
-    waitingValidations=entryValidations.filter(v=>v.status==="WAITING"&&!heldSymbols.has(v.symbol)),
-    waitingByCandidate=new Map(waitingValidations.map(v=>[v.candidateId,v])),
-    queuedForAuthorization=opportunities.filter(o=>o.eligible&&!heldSymbols.has(o.symbol)&&!waitingByCandidate.has(o.id)),
-    observed=[...queuedForAuthorization,...opportunities.filter(o=>!o.eligible&&!heldSymbols.has(o.symbol)&&!waitingByCandidate.has(o.id))].slice(0,8),
-    currentEvolution=data?.environmentRouter?.phase??opportunities.find(o=>o.marketEvolutionPhase)?.marketEvolutionPhase,
+    recent=[...(data?.history??[])].filter(t=>!t.inverseCopy).sort((a,b)=>(b.closedAt??0)-(a.closedAt??0)).slice(0,5),
+    currentEvolution=data?.environmentRouter?.phase??data?.opportunities?.find(o=>o.marketEvolutionPhase)?.marketEvolutionPhase,
     currentEnvironment=data?.environmentRouter?.currentEnvironment,
-    outlook=data?.environmentRouter?.outlook;
+    outlook=data?.environmentRouter?.outlook,
+    clockNow=now||data?.updatedAt||0;
+  const liveText=!liveEnabled?"关闭":liveOverview?.operational?"运行中":"核对中";
+  const liveNote=!liveEnabled?"只跑模拟，不下单":`实盘持仓 ${liveOverview?.positionCount??0} 笔`;
 
-  return <div className="fr-execution-page">
-    <section className="fr-section fr-exec-primary">
-      <div className="fr-section-head"><h2>市场作战总览</h2><span>研究更新 {clock(mi?.updatedAt)}</span></div>
-      <div className="fr-exec-market-hero"><div><small>当前市场</small>
-        <strong>{environmentName(currentEnvironment)} · {evolution(currentEvolution)}</strong></div>
-        <p>大方向{bias(n?.major.bias)} · 短期{bias(n?.short.bias)}</p></div>
-      <div className="fr-command-snapshot" data-testid="market-command-summary">
-        <div><small>正在发生</small><b>{marketChangeText(data)}</b></div>
-        <div><small>接下来可能</small><b>{nextMarketText(data)}</b></div>
-        <div><small>转变压力</small><b>{pressure(outlook?.transitionPressure)}{outlook?.horizonMinutes?` · 观察窗口 ${outlook.horizonMinutes} 分钟`:""}</b></div>
+  return <div className="fr-execution-page pg-exec">
+    <section className="pg-card" data-testid="market-command-summary">
+      <header><small>当前市场</small><time>更新 {clock(mi?.updatedAt)}</time></header>
+      <strong className="pg-title">{environmentName(currentEnvironment)} · {evolution(currentEvolution)}</strong>
+      <div className="pg-chips">
+        <span className={`pg-chip${biasTone(n?.major.bias)}`}><small>大方向</small>{bias(n?.major.bias)}</span>
+        <span className={`pg-chip${biasTone(n?.short.bias)}`}><small>短期</small>{bias(n?.short.bias)}</span>
+        <span className="pg-chip"><small>转变压力</small>{pressure(outlook?.transitionPressure)}</span>
       </div>
-      <div className="fr-journal">
-        <article><time>正在观察 · {observed.length}</time><div>
-          {observed.length?observed.map(o=><p key={o.id}><b>{o.symbol.replace("_"," / ")} · {side(o.side)} · {tradePlanName(o.tradePlan)}</b><br/>
-            {o.eligible&&!waitingByCandidate.has(o.id)?"条件已成立，等待执行队列。":observeReason(o,liquidity?.symbols?.[o.symbol])}</p>):<p>暂无重点观察标的。</p>}
-        </div></article>
-        <article><time>等待执行 · {waitingValidations.length}</time><div>
-          {waitingValidations.map(v=>{const o=v.frozenOpportunity??opportunities.find(x=>x.id===v.candidateId);return <p key={v.id}><b>{v.symbol.replace("_"," / ")} · {side(v.side)} · {tradePlanName(o?.tradePlan)}</b><br/>
-            {waitingReason(v,o)}{o?.winnerPlan&&<><br/><small>{planText(o.winnerPlan)}</small></>}</p>})}
-          {!waitingValidations.length&&<p>暂无已武装计划。</p>}
-        </div></article>
-        <article><time>正在持仓 · {positions.length}</time><div>
-          {positions.length?positions.map(t=><p key={t.id}><b>{t.symbol.replace("_"," / ")} · {side(t.side)} · {tradePlanName(t.liquidityLifecycle?.currentPlan??t.entryContext?.tradePlan)} · {positionAction(t)}</b><br/>
-            {positionWatch(t)}{t.entryContext?.winnerPlan&&<><br/><small>{planText(t.entryContext.winnerPlan,t.stopPrice)}</small></>}</p>):<p>暂无持仓。</p>}
-        </div></article>
+      <div className="pg-lines">
+        <p><span>正在发生</span>{marketChangeText(data)}</p>
+        <p><span>接下来可能</span>{nextMarketText(data)}{outlook?.horizonMinutes?`（观察窗口 ${outlook.horizonMinutes} 分钟）`:""}</p>
       </div>
     </section>
+
+    <div className="pg-tiles" data-testid="execution-status">
+      <div><small>实盘</small><b className={liveEnabled&&liveOverview?.operational?"fr-positive":undefined}>{liveText}</b><p>{liveNote}</p></div>
+      <div><small>模拟持仓</small><b>{data?`${positions.length} 笔`:"—"}</b><p className={tone(floating)}>{positions.length?`浮动 ${signed(floating)} U`:"空仓"}</p></div>
+      <div><small>系统</small><b className={healthy?"fr-positive":healthy===false?"fr-negative":undefined}>{systemStatus??"—"}</b><p>行情 {clock(feedAt)}</p></div>
+    </div>
+
+    <div className="pg-desk">
+      <section className="pg-section" data-testid="execution-positions">
+        <h2>正在持仓<small>{positions.length} 笔</small></h2>
+        {positions.length?<div className="pg-list">{positions.map(t=>{const pnl=safePnl(t);return <article className="pg-row" key={t.id}>
+          <div className="oc-line"><Coin symbol={t.symbol} side={t.side}/><b className={`oc-pnl ${tone(pnl)}`}>{signed(pnl)} U</b></div>
+          <div className="oc-line oc-sub"><span>{tradePlanName(t.liquidityLifecycle?.currentPlan??t.entryContext?.tradePlan)} · 已拿 {held(t.openedAt,clockNow)||"—"}</span><i className="pg-tag">{positionAction(t)}</i></div>
+          <p className="pg-watch">{positionWatch(t)}</p>
+          {t.entryContext?.winnerPlan&&<p className="pg-plan">{planText(t.entryContext.winnerPlan,t.stopPrice)}</p>}
+        </article>;})}</div>:<div className="pg-empty">现在空仓。条件成立时会自动开仓。</div>}
+      </section>
+
+      <section className="pg-section" data-testid="execution-recent">
+        <h2>最近成交<small>最新 {recent.length} 笔</small></h2>
+        {recent.length?<div className="pg-recent">{recent.map(t=><div key={t.id}>
+          <span><Coin symbol={t.symbol} side={t.side}/><small>{exitShort(t.exitReason,"已平仓")} · {stamp(t.closedAt)}</small></span>
+          <strong className={tone(t.netPnl)}>{signed(t.netPnl)} U<small>{held(t.openedAt,t.closedAt)}</small></strong>
+        </div>)}</div>:<div className="pg-empty">还没有已平订单。</div>}
+        {onOpenOrders&&<button type="button" className="pg-link" onClick={onOpenOrders}>查看全部模拟订单 →</button>}
+      </section>
+    </div>
+    <p className="pg-foot">没开仓的候选只记在运行日志里，这里不再显示；导出运行日志即可复盘。</p>
   </div>;
 }
