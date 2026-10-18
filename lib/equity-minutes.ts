@@ -4,6 +4,8 @@ import {beijingDayKey} from "./beijing-time.ts";
 export type EquityMinute={
   ts:number;equity:number;realized:number;unrealized:number;
   open_notional:number;margin:number;positions:number;live_equity:number|null;
+  /** true = no tick ran in this minute; the values are the next real sample's (the nearest later mark). */
+  filled?:true;
 };
 export const EQ_MIN_PREFIX="log:eqmin:";
 const DAY_CAP=1_500;
@@ -59,4 +61,31 @@ export function summarizeEquity(points:EquityMinute[]){
   return {max_drawdown_u:Number(maxDd.toFixed(4)),
     max_drawdown_pct:peak>0?Number((maxDd/peak*100).toFixed(4)):null,
     max_drawdown_from:from,max_drawdown_to:to,peak_equity:Number(peak.toFixed(4)),curve_since:points[0]!.ts};
+}
+
+/** Longest run of missed minutes that is filled in. Longer stalls stay visible as gaps. */
+export const EQ_FILL_MAX_MIN=15;
+/**
+ * Points to record for `sample` given the last recorded minute of this process.
+ * Same minute already recorded: nothing. Minutes skipped since (no tick reached them): filled from this sample and
+ * flagged `filled`, up to EQ_FILL_MAX_MIN. No last minute (fresh process): just the sample, so a restart stays a gap.
+ */
+export function equityMinuteStep(lastTs:number|null,sample:EquityMinute,maxFill=EQ_FILL_MAX_MIN):EquityMinute[]{
+  if(lastTs!=null&&sample.ts<=lastTs)return [];
+  const out:EquityMinute[]=[];
+  if(lastTs!=null&&lastTs>0){
+    const missing=Math.round((sample.ts-lastTs)/60_000)-1;
+    if(missing>0&&missing<=maxFill)for(let i=1;i<=missing;i++)out.push({...sample,ts:lastTs+i*60_000,filled:true});
+  }
+  out.push(sample);
+  return out;
+}
+/** Minute steps longer than one minute in the exported series (restarts, deploys, stalls). */
+export function equityGaps(points:readonly EquityMinute[]){
+  const gaps:{after:number;before:number;missing_min:number}[]=[];
+  for(let i=1;i<points.length;i++){
+    const step=points[i]!.ts-points[i-1]!.ts;
+    if(step>60_000)gaps.push({after:points[i-1]!.ts,before:points[i]!.ts,missing_min:Math.round(step/60_000)-1});
+  }
+  return gaps;
 }

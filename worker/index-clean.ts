@@ -86,7 +86,7 @@ import { LIVE_PARITY_VERSION, LIVE_PARITY_PREFIX, buildProportionalMirror, forwa
   type MirrorSourceTrade, type MirrorReceipt, type MirrorBinding } from "../lib/live-parity.ts";
 import { rememberLiveFill, normalizeLiveFills, applyConfirmedFillCosts, type LiveFillNote } from "../lib/live-fill-note.ts";
 import { quoteSpreadBps } from "../lib/signal-repeat.ts";
-import { collectEquityMinutes, equityMinuteKey, mergeEquityMinutes, sampleEquity, type EquityMinute } from "../lib/equity-minutes.ts";
+import { collectEquityMinutes, equityGaps, equityMinuteKey, equityMinuteStep, mergeEquityMinutes, sampleEquity, type EquityMinute } from "../lib/equity-minutes.ts";
 import { emptyReviewLogCursor, prepareIncompletePrune, prepareReviewLogWrite, readArchivedUnopened, readReviewLog, restoreReviewLog, reviewLogOffload, type ReviewLogCursor } from "../lib/review-log-store.ts";
 // Inverse closes that merely follow the shadow are not protective; they may rest 2s.
 const MAKER_EXIT_REASONS=new Set(["SHADOW_SOURCE_EXIT"]);
@@ -1358,14 +1358,19 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private async noteEquityMinute(now:number){
     const state=this.forwardState;
-    if(!state||now-this.lastEqMinAt<60_000)return;
-    this.lastEqMinAt=now;
+    // One point per clock minute: the first tick inside a new minute writes it. (A 60-second throttle from the last
+    // write drifted later each time and skipped a whole minute every so often.)
+    const minute=Math.floor(now/60_000)*60_000;
+    if(!state||minute<=this.lastEqMinAt)return;
     const positions=state.positions.filter(row=>!row.inverseCopy);
-    this.eqMinBuf.push(sampleEquity({now,balance:state.balance,initial:state.initialEquity,
+    const sample=sampleEquity({now,balance:state.balance,initial:state.initialEquity,
       liveEquity:typeof this.runtime.live.equity==="number"?this.runtime.live.equity:null,
       symbols:positions.map(row=>row.symbol),
       positions:positions.map(row=>({side:row.side,entryPrice:row.entryPrice,quantity:row.quantity,notional:row.notional,margin:row.margin,lastPrice:row.lastPrice})),
-      quotes:this.forwardQuotes(now)}));
+      quotes:this.forwardQuotes(now)});
+    // Minutes no tick reached in this process are filled from this mark and flagged; a fresh process starts clean.
+    this.eqMinBuf.push(...equityMinuteStep(this.lastEqMinAt>0?this.lastEqMinAt:null,sample));
+    this.lastEqMinAt=minute;
     if(this.eqMinBuf.length<5)return;
     const batch=this.eqMinBuf.splice(0,this.eqMinBuf.length);
     const byDay=new Map<string,EquityMinute[]>();
@@ -4661,7 +4666,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         const keep=(id:string)=>shown.has(id);
         const columnsOf=(id:string)=>{try{return pathColumns(pathById.get(id));}catch{return null;}};
         return json({...file,positions:withResearchColumns(file.positions,columnsOf),not_opened:withResearchColumns(file.not_opened,columnsOf),
-          equity_minutes_since:state.startedAt,researchNotes:RESEARCH_NOTES,archive_read:{rows:archived.read,missing:archived.missing},path_check:pathsReady,
+          equity_minutes_since:state.startedAt,equity_gaps:(()=>{try{return equityGaps(file.equity_minutes);}catch{return [];}})(),
+          equity_filled_min:file.equity_minutes.filter(row=>row.filled).length,researchNotes:RESEARCH_NOTES,archive_read:{rows:archived.read,missing:archived.missing},path_check:pathsReady,
           paths:exportTradePaths(this.tradePaths,keep),holding:searchHolding(this.tradePaths,keep)});
       }
       if(url.searchParams.get("page")==="archive"){

@@ -98,5 +98,7 @@ export const RESEARCH_NOTES: Record<string, string> = {
   path_minutes: "这条路径已经覆盖信号后多少分钟；0–360 分钟每分钟一个点，360–1440 分钟每 15 分钟一个点",
   入场特征: "chg_1h/4h_pct、atr_5m_pct、atr_ratio、vol_surge、dist_high/low_10h_pct、range_pos_10h 来自 5 分钟 K 线；chg_24h_pct、dist_high/low_24h_pct、chg_24h_rank、open_interest、oi_chg_pct 来自全市场行情快照；btc_1h/4h/24h_pct、eth_24h_pct 是大盘；mkt_with_share、mkt_with_strong、coin_move_rank 是全市场 30 分钟同向情况；stop_dist_pct、hour_utc、weekday 来自订单本身",
   oi_chg_pct: "持仓量相对 60–135 分钟前那份快照的变化（快照每 15 分钟存一份，重启不丢）；第一次部署后的头一个小时没有基准，是空值。oi_anchor_min 是基准距今多少分钟",
+  equity_gaps: "equity_minutes 里超过 1 分钟的断档：after 是断档前最后一分钟，before 是断档后第一分钟，missing_min 是缺几分钟。部署或重启时进程停着，这段没有行情可记，不补假数",
+  filled: "equity_minutes 里 filled 为 true 的分钟：程序在跑但这一分钟没有轮到记录，用紧接着那一次真实记录的数值补上（最多连补 15 分钟）。equity_filled_min 是一共补了多少分钟",
   paths_end: "paths 里 end 是出场那一刻的持仓管理状态（阶段、保护止损、利润地板、回吐比例、出场触发和证据）；peak 是创最高浮盈那一刻的状态；track 是开进账户的单每 30 分钟一次的状态",
 };
