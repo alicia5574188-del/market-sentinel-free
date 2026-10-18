@@ -84,6 +84,7 @@ import { LIVE_PARITY_VERSION, LIVE_PARITY_PREFIX, buildProportionalMirror, forwa
 import { rememberLiveFill, normalizeLiveFills, applyConfirmedFillCosts, type LiveFillNote } from "../lib/live-fill-note.ts";
 import { quoteSpreadBps } from "../lib/signal-repeat.ts";
 import { collectEquityMinutes, equityMinuteKey, mergeEquityMinutes, sampleEquity, type EquityMinute } from "../lib/equity-minutes.ts";
+import { emptyReviewLogCursor, prepareReviewLogWrite, readReviewLog, restoreReviewLog, reviewLogOffload, type ReviewLogCursor } from "../lib/review-log-store.ts";
 // Inverse closes that merely follow the shadow are not protective; they may rest 2s.
 const MAKER_EXIT_REASONS=new Set(["SHADOW_SOURCE_EXIT"]);
 import { makerFirstEntry, makerEntryTag, MakerStateUnknownError, LIVE_MAKER_ENTRY_POLICY, LIVE_MAKER_ENTRY_ENABLED, type MakerResult } from "../lib/live-maker-entry.ts";
@@ -575,6 +576,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private orderJournalPending=false;
   private lastEqMinAt=0;
   private eqMinBuf:EquityMinute[]=[];
+  /** Review-only logs kept outside the hot forward JSON. Null readyFor = not restored, so nothing is offloaded. */
+  private reviewLogCursor:ReviewLogCursor=emptyReviewLogCursor();
+  private reviewLogReadyFor:number|null=null;
+  private reviewLogBooted=false;
+  private reviewLogError:string|null=null;
+  private reviewLogRetryAt=0;
   private reviewDiagnosticError:string|null=null;
   private forwardBusy = false;
   private deskCleanArmed = false;
@@ -1352,6 +1359,44 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(this.eqMinBuf.length>30)this.eqMinBuf.splice(0,this.eqMinBuf.length-30);
     }
   }
+  /** Once per process: put the cold review logs back into memory. Failure leaves everything hot (old behaviour). */
+  private async ensureReviewLog(){
+    const state=this.forwardState;
+    if(!state||this.reviewLogReadyFor===state.startedAt)return;
+    if(this.reviewLogBooted){
+      // Account reset/new slot: a new account starts its own cold index; the old account's keys are left untouched.
+      this.reviewLogCursor={...emptyReviewLogCursor(),startedAt:state.startedAt};this.reviewLogReadyFor=state.startedAt;return;
+    }
+    if(Date.now()<this.reviewLogRetryAt)return;
+    try{
+      const log=await readReviewLog(this.ctx.storage,state.startedAt);
+      const latest=(t:Record<string,{at:number}>|null|undefined)=>Object.values(t??{}).reduce((n,row)=>Math.max(n,row?.at??0),0);
+      // A tally rebuilt from history at load can never be newer than the cold copy written before each save.
+      if(log.tally&&latest(log.tally)<latest(state.signalTally))log.tally=null;
+      restoreReviewLog(state,log);
+      this.reviewLogCursor=log.cursor;this.reviewLogReadyFor=state.startedAt;this.reviewLogBooted=true;this.reviewLogError=null;
+    }catch(error){this.reviewLogError=`REVIEW_LOG_RESTORE:${safeError(error)}`;this.reviewLogRetryAt=Date.now()+60_000;}
+  }
+  /** Log writes only. Separate from the financial transaction; a failure is recorded and never thrown. */
+  private async persistReviewLog(state:ForwardState,now:number){
+    try{
+      await this.ensureReviewLog();
+      if(this.reviewLogReadyFor!==state.startedAt)return;
+      const plan=prepareReviewLogWrite(state,now,this.reviewLogCursor);
+      if(!plan.writes)return;
+      const reservation=this.reserveNonAlarmWrites(plan.writes,256);
+      if(!reservation)return;
+      try{
+        if(Object.keys(plan.entries).length)await this.ctx.storage.put(plan.entries);
+        if(plan.deletes.length)await this.ctx.storage.delete(plan.deletes);
+        reservation.finish(true);this.reviewLogCursor=plan.cursor;this.reviewLogError=null;
+      }finally{reservation.finish(false);}
+    }catch(error){this.reviewLogError=`REVIEW_LOG_WRITE:${safeError(error)}`;}
+  }
+  private hotReviewOffload(state:ForwardState){
+    try{return this.reviewLogReadyFor===state.startedAt?reviewLogOffload(state,this.reviewLogCursor):undefined;}
+    catch{return undefined;}
+  }
   private async readEquityMinutes(now:number){
     const rows=await this.ctx.storage.list<EquityMinute[]>({prefix:"log:eqmin:",limit:8,reverse:true});
     const groups:EquityMinute[][]=[];
@@ -1449,6 +1494,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private async ensureAdaptiveAccount(now:number){
     if(!this.forwardState)this.forwardState=await readForwardStore(this.ctx.storage,now);
     if(!this.forwardState)throw new Error("PAPER权威账户缺失");
+    await this.ensureReviewLog();
     if(!this.counterfactualResearchLoaded){
       try{this.counterfactualResearch=await readCounterfactualResearch(this.ctx.storage,now);}
       catch{this.counterfactualResearch=initialCounterfactualResearch(now);}
@@ -1569,7 +1615,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.orderJournalPending=observeOrderJournal(this.orderJournal,next.state.history,next.state.startedAt)||this.orderJournalPending;
       if (next.changed || !previous.storage.persistedAt) {
         next.state.storage = { persistedAt: now, error: null };
-        const prepared = await prepareForwardWrite(previous.storage.persistedAt ? previous : null, next.state, now, {compact:true});
+        // Review logs first, in their own keys and their own try/catch. Only what is proven durable leaves the hot JSON.
+        await this.persistReviewLog(next.state,now);
+        const prepared = await prepareForwardWrite(previous.storage.persistedAt ? previous : null, next.state, now, {compact:true,offload:this.hotReviewOffload(next.state)});
         const bound=new Set([...Object.values(this.runtime.live.entries).flatMap(e=>e?.mirrorSourceId?[e.mirrorSourceId]:[]),
           ...Object.values(this.runtime.live.positions).flatMap(p=>p?.mirrorSourceId?[p.mirrorSourceId]:[])]);
         const closures=next.state.history.filter(t=>bound.has(t.id)&&!this.mirrorClosures.has(t.id));
@@ -4434,6 +4482,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(!this.forwardState||!this.authorityReady)return json({error:"权威账户尚未恢复，不能导出空账户"},503);
       if(url.searchParams.get("kind")==="log"){
         const exportedAt=Date.now(),hub=this.marketHub.status(exportedAt),gate=this.gateStream.status(exportedAt);
+        await this.ensureReviewLog();
         const book=accountLogBook(this.forwardState,this.forwardQuotes(exportedAt),exportedAt,this.orderJournal);
         await this.ensureTradePaths();
         await this.ensureOrderJournal();
@@ -4530,7 +4579,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           cap:NON_ALARM_WRITE_CAP,pendingWrites:this.nonAlarmPendingWrites??0,criticalWrites:this.runtime.criticalWrites,
           criticalPendingWrites:this.criticalPendingWrites??0,financialAdmission:"independent-of-optional-cap",
           criticalProtection:protectionWriteBudgetView(this.forwardProtectionBudget,Date.now()),
-          previous:this.runtime.resourceRollovers?.at(-1)??null,forwardCompression:this.forwardCompression},
+          previous:this.runtime.resourceRollovers?.at(-1)??null,forwardCompression:this.forwardCompression,
+          reviewLog:{readyFor:this.reviewLogReadyFor,coldUnopened:this.reviewLogCursor.coldIds.length,error:this.reviewLogError}},
         forward: this.forwardHealth(),
         legacyRetired: true,
         mode: this.runtime.mode,

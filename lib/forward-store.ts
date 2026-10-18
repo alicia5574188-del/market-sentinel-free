@@ -89,7 +89,10 @@ function archivePositionSummary(t:Trade){
     notional:t.notional,margin:t.margin,plannedRisk:t.plannedRisk,stopPrice:t.stopPrice,profitFloorRate:t.profitFloorRate??0,
     thesisId:t.entryContext?.thesisId??null,tradePlan:t.liquidityLifecycle?.currentPlan??t.entryContext?.tradePlan??null};
 }
-function hotProjection(next:ForwardState,includeSamples=true){
+/** Which review-only logs are already durable in their own keys (see review-log-store.ts).
+ * Only those are left out of the hot JSON; anything not yet durable stays hot, so nothing is lost. */
+export type HotReviewOffload={stageDurable:boolean;tallyDurable:boolean;coldUnopenedIds:ReadonlySet<string>};
+function hotProjection(next:ForwardState,includeSamples=true,offload?:HotReviewOffload){
   let full=Math.min(FORWARD_HOT_HISTORY_FULL,next.history.length),
     total=Math.min(FORWARD_HOT_HISTORY_TOTAL,next.history.length),
     eventLimit=Math.min(FORWARD_HOT_EVENT_LIMIT,next.events.length),
@@ -120,7 +123,16 @@ function hotProjection(next:ForwardState,includeSamples=true){
         storage:{...next.storage,layout:paged?FORWARD_PAGED_STATE_VERSION:next.storage.layout,
           ...(paged?{sampleIntegrity:"raw-sha256" as const}:{})},
         relationEngine:{...next.relationEngine,samples}} as unknown as ForwardStateWithRecovery;
-    delete account.__legacySampleRecovery;delete account.__persistedSampleManifest;return account;
+    delete account.__legacySampleRecovery;delete account.__persistedSampleManifest;
+    if(offload){
+      // Review-only. The stage header (stage, stageSince, push, syncPeak...) stays hot because stageNote is read
+      // at entry; only the change list moves out. The current change is kept so a cold read failure still has one.
+      if(offload.stageDurable&&account.stageChronicle)account.stageChronicle={...account.stageChronicle,changes:account.stageChronicle.changes.slice(-1)};
+      if(offload.tallyDurable){delete account.signalTally;delete account.signalTallyMeta;}
+      if(offload.coldUnopenedIds.size&&account.unopenedTrades)
+        account.unopenedTrades=account.unopenedTrades.filter(t=>!(t.status==="CLOSED"&&offload.coldUnopenedIds.has(t.id)));
+    }
+    return account;
   };
   let account=build(),raw=encodeJson(account);
   // Optional review bytes must yield BEFORE any existing history or market-memory
@@ -146,6 +158,12 @@ function hotProjection(next:ForwardState,includeSamples=true){
     targetBytes:FORWARD_ACCOUNT_TARGET_BYTES}};
 }
 const encodeJson=(value:unknown)=>new TextEncoder().encode(JSON.stringify(value));
+/** Measurement only (scripts/measure-hot-state.ts). Same projection the save uses. */
+export function hotProjectionForMeasure(next:ForwardState,_now:number,offload?:HotReviewOffload){return hotProjection(next,false,offload);}
+function largestFields(account:unknown,n=6){
+  try{return Object.entries(account as Record<string,unknown>).map(([k,v])=>[k,JSON.stringify(v)?.length??0] as const)
+    .sort((a,b)=>b[1]-a[1]).slice(0,n).map(([k,v])=>`${k}=${v}`).join(",");}catch{return"";}
+}
 function sampleBuckets(samples:RelationMeasurement[]){
   const out=new Map<string,RelationMeasurement[]>();
   let priorHour="",shard=-1;
@@ -364,7 +382,7 @@ export function prepareForwardProtectionWrite(next:ForwardState){
   return {entries:{[FORWARD_PROTECTION_STORAGE]:checkpoint},writes:1};
 }
 
-export async function prepareForwardWrite(previous:ForwardState|null,next:ForwardState,now:number,options:{compact?:boolean}={}){
+export async function prepareForwardWrite(previous:ForwardState|null,next:ForwardState,now:number,options:{compact?:boolean;offload?:HotReviewOffload}={}){
   // Two commits can land in the same millisecond. The equity chart keys marks
   // by this timestamp, so the later commit steps one millisecond instead of
   // publishing a second amount at the time already saved.
@@ -379,10 +397,10 @@ export async function prepareForwardWrite(previous:ForwardState|null,next:Forwar
   delete recoveryState.__legacySampleRecovery;delete recoveryState.__persistedSampleManifest;
   const pages=await encodeSamplePages(next.relationEngine.samples),manifest:ForwardSampleManifest={version:FORWARD_PAGED_STATE_VERSION,
     count:next.relationEngine.samples.length,pages:pages.map(page=>page.meta)},manifestSha256=await digest(encodeJson(manifest));
-  const hot=hotProjection(next,false),raw=hot.raw,
+  const hot=hotProjection(next,false,options.offload),raw=hot.raw,
     accountBudgetBytes=next.inverseTrial?FORWARD_PAIRED_ACCOUNT_MAX_BYTES:FORWARD_ACCOUNT_MAX_BYTES;
   if(raw.length>accountBudgetBytes)
-    throw new Error(`Forward活跃金融状态超过已声明账户预算（${raw.length}/${accountBudgetBytes}字节）；拒绝截断当前持仓或资金状态`);
+    throw new Error(`Forward活跃金融状态超过已声明账户预算（${raw.length}/${accountBudgetBytes}字节）；拒绝截断当前持仓或资金状态；最大字段：${largestFields(hot.account)}`);
   const compressed=await gzip(raw),useGzip=compressed.length<raw.length,bytes=useGzip?compressed:raw;
   if(bytes.length>MAX_STATE_BYTES)
     throw new Error("Forward压缩账户超过分片总预算；拒绝写入不能恢复的金融状态");
@@ -483,6 +501,8 @@ export async function prepareForwardWrite(previous:ForwardState|null,next:Forwar
     storedBytes:bytes.length,chunks:count,sampleCount:manifest.count,samplePages:manifest.pages.length,changedSamplePages,
     accountBudgetBytes,
     utilization:raw.length/accountBudgetBytes,...hot.meta,
+    ...(raw.length>accountBudgetBytes*.75?{largestFields:largestFields(hot.account)}:{}),
+    ...(options.offload?{hotOffload:{stage:options.offload.stageDurable,tally:options.offload.tallyDurable,coldUnopened:options.offload.coldUnopenedIds.size}}:{}),
     ...(options.compact?{inlineHead:inline,chunkBytes}:{})}};
 }
 
