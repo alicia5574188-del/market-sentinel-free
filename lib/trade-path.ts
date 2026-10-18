@@ -128,6 +128,60 @@ export function observeTradePaths(book:TradePathBook,state:ForwardState,executio
   return changed;
 }
 
+/**
+ * Ghost paths: rows written for a signal that never reached a saved account. When a forward save fails the account
+ * rolls back to the last saved state, but the path row observed on the unsaved state stays, and the next tick
+ * records the same signal again under a new id. Those rows join no export row and only take PATH_CAP slots.
+ *
+ * A row is a ghost only when BOTH hold:
+ *  - its id is not owned by any account row the export joins (positions, history, not-opened incl. cold-restored,
+ *    and the closed-order journal);
+ *  - it opened at or after `cutoff`: the latest of the oldest retained openedAt of each non-empty capped set
+ *    (closed not-opened rows, closed trades). Capped sets evict oldest-first, so inside that window each of them
+ *    still holds every row it ever had, and an unknown id cannot be a row that merely aged out. Older rows are
+ *    left alone. Open rows are never evicted; they own ids but do not move the cutoff.
+ * The caller must pass `complete:true` only when every owner set is fully loaded for this account; otherwise,
+ * or when anything looks inconsistent, nothing is removed.
+ */
+export type PathOwnerSet={capped:boolean;rows:readonly {id:string;openedAt:number}[]};
+export type PathOwnerSets={startedAt:number;complete:boolean;sets:readonly PathOwnerSet[]};
+export const GHOST_PRUNE_LIMIT=64;
+export function ghostPathPlan(book:TradePathBook,owners:PathOwnerSets){
+  if(!owners.complete||book.accountStartedAt!==owners.startedAt)return null;
+  const ids=new Set<string>();let cutoff=-Infinity;
+  for(const set of owners.sets){
+    let oldest=Infinity;
+    for(const row of set.rows){
+      if(!row||typeof row.id!=='string'||!Number.isFinite(row.openedAt))return null;
+      ids.add(row.id);oldest=Math.min(oldest,row.openedAt);
+    }
+    if(set.capped&&set.rows.length)cutoff=Math.max(cutoff,oldest);
+  }
+  // No owner rows at all: nothing to compare against, so nothing can be called a ghost.
+  if(!ids.size)return null;
+  return {ids,cutoff};
+}
+/** Removes at most `limit` ghost rows. Storage follows through the normal dirty/retire page writes. */
+export function pruneGhostPaths(book:TradePathBook,owners:PathOwnerSets,limit=GHOST_PRUNE_LIMIT){
+  const plan=ghostPathPlan(book,owners);
+  if(!plan)return {removed:0,remaining:0,cutoff:null as number|null};
+  const ghost=(row:TradePath)=>!plan.ids.has(row.id)&&Number.isFinite(row.openedAt)&&row.openedAt>=plan.cutoff;
+  const doomed=new Set<TradePath>();let remaining=0;
+  for(const row of book.trades){
+    if(!ghost(row))continue;
+    if(doomed.size<Math.max(0,limit))doomed.add(row);else remaining++;
+  }
+  if(!doomed.size)return {removed:0,remaining,cutoff:plan.cutoff};
+  const pages=new Set([...doomed].map(row=>row.page??0));
+  book.trades=book.trades.filter(row=>!doomed.has(row));
+  for(const page of pages){
+    if(book.trades.some(row=>(row.page??0)===page))markDirty(book,page);
+    else retirePage(book,page);
+  }
+  book.indexDirty=true;
+  return {removed:doomed.size,remaining,cutoff:plan.cutoff};
+}
+
 function nextPathPage(book:TradePathBook){
   if(!book.trades.length)return 0;
   let max=0,count=0;

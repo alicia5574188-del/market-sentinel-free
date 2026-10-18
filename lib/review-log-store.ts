@@ -112,19 +112,24 @@ export type ReviewLog = {
   meta: SignalTallyMeta | null;
   unopened: Trade[];
   cursor: ReviewLogCursor;
+  /** True only when the cold not-opened index and every row it lists were read. A read error or a listed
+   * row that is missing makes it false, so callers never treat a partial set as the whole account. */
+  unopenedComplete: boolean;
 };
 
 export async function readReviewLog(storage: Reader, startedAt: number): Promise<ReviewLog> {
   const stage = await readParted<{ version: string; changes: StageChange[] }>(storage, REVIEW_STAGE_KEY).catch(() => null);
   const tally = await readParted<{ version: string; tally: Record<string, SignalTally>; meta: SignalTallyMeta | null }>(storage, REVIEW_TALLY_KEY).catch(() => null);
-  const index = await storage.get<{ version: string; ids: string[] }>(unopenedIndexKey(startedAt)).catch(() => undefined);
+  let unopenedComplete = true;
+  const index = await storage.get<{ version: string; ids: string[] }>(unopenedIndexKey(startedAt)).catch(() => { unopenedComplete = false; return undefined; });
+  if (index !== undefined && index !== null && !Array.isArray(index.ids)) unopenedComplete = false;
   const ids = Array.isArray(index?.ids) ? index!.ids.filter(id => typeof id === "string").slice(0, UNOPENED_COLD_CAP) : [];
   const rows: Trade[] = [];
   const durable: string[] = [];
   for (let i = 0; i < ids.length; i += 64) {
     const batch = ids.slice(i, i + 64);
     const got = await Promise.all(batch.map(id => storage.get<Trade>(unopenedRowKey(startedAt, id)).catch(() => undefined)));
-    got.forEach((t, j) => { if (t && t.id === batch[j]) { rows.push(t); durable.push(t.id); } });
+    got.forEach((t, j) => { if (t && t.id === batch[j]) { rows.push(t); durable.push(t.id); } else unopenedComplete = false; });
   }
   return {
     changes: Array.isArray(stage?.changes) ? stage!.changes : null,
@@ -132,6 +137,7 @@ export async function readReviewLog(storage: Reader, startedAt: number): Promise
     meta: tally?.meta ?? null,
     unopened: rows,
     cursor: { stageDigest: null, tallyDigest: null, startedAt, coldIds: durable },
+    unopenedComplete,
   };
 }
 

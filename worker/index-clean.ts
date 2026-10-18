@@ -51,7 +51,7 @@ import {emptyStrategyAccount, STRATEGY_EPOCH} from '../lib/strategy-slot.ts';
 import {emptyThesis, runThesisCycle, THESIS_STORAGE_KEY, type ThesisAttached, type ThesisMarket} from '../lib/thesis-attach.ts';
 import type {ThesisPublic} from '../lib/thesis-view.ts';
 import {buildRunLogExport,accountLogBook} from '../lib/run-log.ts';
-import {adoptLegacyPaths,bookFromStoredPaths,commitPathWrite,emptyTradePathBook,exportTradePaths,observeTradePaths,peekPathWrite,pendingPathWrites,searchHolding,TRADE_PATH_INDEX_KEY,TRADE_PATH_KEY,TRADE_PATH_PAGE_PREFIX,type TradePathBook,type TradePathIndex,type TradePathPage} from '../lib/trade-path.ts';
+import {adoptLegacyPaths,bookFromStoredPaths,commitPathWrite,emptyTradePathBook,exportTradePaths,observeTradePaths,peekPathWrite,pendingPathWrites,pruneGhostPaths,searchHolding,TRADE_PATH_INDEX_KEY,TRADE_PATH_KEY,TRADE_PATH_PAGE_PREFIX,type TradePathBook,type TradePathIndex,type TradePathPage} from '../lib/trade-path.ts';
 import {emptyOrderJournal,observeOrderJournal,ORDER_JOURNAL_KEY,restoreOrderJournal,type OrderJournal} from '../lib/order-journal.ts';
 import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
 import {confirmationRealityView} from '../lib/confirmation-reality.ts';
@@ -573,6 +573,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private tradePathsPending=false;
   private orderJournal:OrderJournal=emptyOrderJournal(0);
   private orderJournalLoaded=false;
+  /** False when the journal read threw and was replaced by an empty one, so its id set is not the whole account. */
+  private orderJournalComplete=false;
   private orderJournalPending=false;
   private lastEqMinAt=0;
   private eqMinBuf:EquityMinute[]=[];
@@ -582,6 +584,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private reviewLogBooted=false;
   private reviewLogError:string|null=null;
   private reviewLogRetryAt=0;
+  /** True only when every cold not-opened row listed in the index came back on restore. */
+  private reviewLogComplete=false;
+  private ghostPathsRemoved=0;
+  private ghostPathsRemaining=0;
+  private ghostPathError:string|null=null;
   private reviewDiagnosticError:string|null=null;
   private forwardBusy = false;
   private deskCleanArmed = false;
@@ -1365,7 +1372,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if(!state||this.reviewLogReadyFor===state.startedAt)return;
     if(this.reviewLogBooted){
       // Account reset/new slot: a new account starts its own cold index; the old account's keys are left untouched.
-      this.reviewLogCursor={...emptyReviewLogCursor(),startedAt:state.startedAt};this.reviewLogReadyFor=state.startedAt;return;
+      this.reviewLogCursor={...emptyReviewLogCursor(),startedAt:state.startedAt};this.reviewLogReadyFor=state.startedAt;this.reviewLogComplete=true;return;
     }
     if(Date.now()<this.reviewLogRetryAt)return;
     try{
@@ -1375,6 +1382,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(log.tally&&latest(log.tally)<latest(state.signalTally))log.tally=null;
       restoreReviewLog(state,log);
       this.reviewLogCursor=log.cursor;this.reviewLogReadyFor=state.startedAt;this.reviewLogBooted=true;this.reviewLogError=null;
+      this.reviewLogComplete=log.unopenedComplete;
     }catch(error){this.reviewLogError=`REVIEW_LOG_RESTORE:${safeError(error)}`;this.reviewLogRetryAt=Date.now()+60_000;}
   }
   /** Log writes only. Separate from the financial transaction; a failure is recorded and never thrown. */
@@ -1486,8 +1494,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private async ensureOrderJournal(){
     const started=this.forwardState?.startedAt??0;
     if(this.orderJournalLoaded&&this.orderJournal.accountStartedAt===started)return;
-    try{this.orderJournal=restoreOrderJournal(await this.ctx.storage.get<OrderJournal>(ORDER_JOURNAL_KEY),started);}
-    catch{this.orderJournal=emptyOrderJournal(started);}
+    try{this.orderJournal=restoreOrderJournal(await this.ctx.storage.get<OrderJournal>(ORDER_JOURNAL_KEY),started);this.orderJournalComplete=true;}
+    catch{this.orderJournal=emptyOrderJournal(started);this.orderJournalComplete=false;}
     this.orderJournalLoaded=true;
   }
 
@@ -1562,6 +1570,31 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const saved={...this.reviewJournal,persistedAt:now};
     try{await this.ctx.storage.put(REVIEW_JOURNAL_KEY,saved);this.reviewJournal.persistedAt=now;reservation.finish(true);this.reviewDiagnosticError=null;}
     catch{reservation.finish(false);this.reviewDiagnosticError="REVIEW_WRITE_FAILED";}
+  }
+
+  /**
+   * Log-only cleanup of path rows whose signal never reached a saved account (see pruneGhostPaths). Runs only after a
+   * successful forward tick, and only when every owner id set is fully loaded for this account: the account itself,
+   * the cold not-opened rows (review log restored and complete), the closed-order journal and the path book.
+   * Anything missing or inconsistent means nothing is removed. Never throws.
+   */
+  private pruneGhostTradePaths(){
+    try{
+      const state=this.forwardState;
+      if(!state||!this.authorityReady||this.forwardError)return;
+      if(!state.storage?.persistedAt||state.storage.error)return;
+      if(this.reviewLogReadyFor!==state.startedAt||!this.reviewLogComplete)return;
+      if(!this.tradePathsLoaded||this.tradePaths.accountStartedAt!==state.startedAt)return;
+      if(!this.orderJournalLoaded||!this.orderJournalComplete||this.orderJournal.accountStartedAt!==state.startedAt)return;
+      const unopened=state.unopenedTrades??[];
+      const journal=this.orderJournal.rows.map(row=>({id:row.id,openedAt:row.opened_at}));
+      const result=pruneGhostPaths(this.tradePaths,{startedAt:state.startedAt,complete:true,sets:[
+        {capped:false,rows:[...state.positions,...unopened.filter(t=>t.status==="OPEN")]},
+        {capped:true,rows:unopened.filter(t=>t.status!=="OPEN")},
+        {capped:true,rows:[...state.history,...journal]}]});
+      this.ghostPathsRemaining=result.remaining;this.ghostPathError=null;
+      if(result.removed){this.ghostPathsRemoved+=result.removed;this.tradePathsPending=true;}
+    }catch(error){this.ghostPathError=`GHOST_PATH_PRUNE:${safeError(error)}`;}
   }
 
   private async persistTradePaths(){
@@ -1662,6 +1695,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         appendReviewEvents(this.reviewJournal,[...discovered,...reviewEvents].map(e=>({...e,
           buildSha:FORWARD_BUILD_SHA,strategyFingerprint:STRATEGY_FINGERPRINT})),now);
       }catch{this.reviewDiagnosticError="CANDIDATE_REVIEW_CAPTURE_FAILED";}
+      this.pruneGhostTradePaths();
       if(this.tradePathsPending)await this.persistTradePaths();
       if(this.orderJournalPending){
         const reservation=this.reserveCriticalWrites(1);
@@ -4580,7 +4614,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           criticalPendingWrites:this.criticalPendingWrites??0,financialAdmission:"independent-of-optional-cap",
           criticalProtection:protectionWriteBudgetView(this.forwardProtectionBudget,Date.now()),
           previous:this.runtime.resourceRollovers?.at(-1)??null,forwardCompression:this.forwardCompression,
-          reviewLog:{readyFor:this.reviewLogReadyFor,coldUnopened:this.reviewLogCursor.coldIds.length,error:this.reviewLogError}},
+          reviewLog:{readyFor:this.reviewLogReadyFor,coldUnopened:this.reviewLogCursor.coldIds.length,error:this.reviewLogError,complete:this.reviewLogComplete},
+          ghostPaths:{removed:this.ghostPathsRemoved,remaining:this.ghostPathsRemaining,error:this.ghostPathError}},
         forward: this.forwardHealth(),
         legacyRetired: true,
         mode: this.runtime.mode,
