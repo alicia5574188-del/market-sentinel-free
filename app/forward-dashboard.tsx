@@ -11,6 +11,7 @@ import "./account-first.css";
 import "./paid-fee.css";
 import {remainingPaidNetPnl,tradePaidNetPnl,pairedPaidView,type PaidPair} from "../lib/paid-fee-view.ts";
 import type {ThesisPublic} from "../lib/thesis-view.ts";
+import {OrderCard,exitShort,exitPlain,priceText,type OrderFact} from "./order-card.tsx";
 
 type View=ReturnType<typeof forwardSummary>;
 type Desk=NonNullable<View["forwardDesk"]>;
@@ -398,29 +399,62 @@ function PaperEquitySection({data,healthy,cache,cacheScope}:{data:View|null;heal
   </section>;
 }
 function TradeList({trades,now,empty}:{trades:Trade[];now:number;empty:string}){
-  return <section className="fr-section fr-live-holdings">{trades.length?<div className="fr-position-list">{trades.map(t=><TradeCard key={t.id} trade={t} now={now}/>)}</div>:<Empty title={empty}/>}</section>;
+  return trades.length?<div className="oc-list">{trades.map(t=><TradeCard key={t.id} trade={t} now={now}/>)}</div>:<Empty title={empty}/>;
 }
 function openTradeNetPnl(t:Trade,px=t.lastPrice){return tradePaidNetPnl(t,px);}
+const shortTime=(v?:number|null)=>v?new Date(v).toLocaleString("zh-CN",{timeZone:BEIJING_TIME_ZONE,month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false}):"—";
+/** One plain line: which way, what kind of move, what the board was. The full research text stays in the fold. */
+function openReason(t:Trade){
+  const ctx=t.entryContext;
+  if(t.inverseCopy)return t.inverseCopy.alignment==="WITH_SOURCE"?"跟着提案同方向开。":"跟提案反着开。";
+  if(!ctx)return null;
+  const trend=ctx.entryRead?.withTrend===true?"顺着大盘方向":ctx.entryRead?.withTrend===false?"逆着大盘方向":"";
+  const plan=ctx.winnerPlan?(ctx.winnerPlan.intent==="TREND"?"做这个币自己的趋势":"做回到区间"):`${ctx.reserve?"低风险 · ":""}${modeName(ctx.mode)}`;
+  const board=ctx.stageNote?.liveStage??ctx.environment;
+  return `${trend}${t.side==="LONG"?"做多":"做空"}，${plan}${board?`；开仓时盘面是${stageName(board)}`:""}。`;
+}
+function closeReason(t:Trade){
+  if(t.status==="OPEN"||!t.exitReason)return null;
+  if(t.exitReason==="PEAK_GIVEBACK")return `${peakGivebackName(t)}，平仓留住利润。`;
+  return exitPlain(t.exitReason,exitLabel(t));
+}
+const labelled=(line:string)=>{const i=line.indexOf("：");return i>0&&i<8?<p key={line}><b>{line.slice(0,i)}</b>：{line.slice(i+1)}</p>:<p key={line}>{line}</p>;};
 export function TradeCard({trade:t,now,paid}:{trade:Trade;now:number;paid?:PaidPair}){
   const open=t.status==="OPEN";
   const pair=t.inverseCopy?(paid?.status===t.status?paid:pairedPaidView(t,undefined,now||t.lastQuoteAt)):null;
   const px=pair?pair.inverse.price:open?t.lastPrice:t.exitPrice??t.lastPrice;
   const pnl=pair?pair.inverse.netPnl:open?openTradeNetPnl(t,px??t.lastPrice):t.netPnl,rate=pnl!==null&&initialTradeNotional(t)>0?pnl/initialTradeNotional(t):null,ctx=t.entryContext;
-  const plan=t.inverseCopy?.alignment==="WITH_SOURCE"?"正向":t.inverseCopy?"反向":ctx?.winnerPlan?(ctx.winnerPlan.intent==="TREND"?"这笔做的是这个币自己的趋势":"这笔做的是回到区间"):ctx?(ctx.reserve?"低风险 · ":"")+modeName(ctx.mode):"兼容持仓";
   const board=ctx?.stageNote?.liveStage??ctx?.environment;
-  const where=t.inverseCopy?"":board?`开仓时盘面是${stageName(board)}`:ctx?.strategyVersion==="market-intelligence-v1"?"开仓盘面没记下":ctx?.relationHorizon?`${ctx.relationHorizon}分钟旧关系`:"";
-  const facts=entryFacts(t);
-  return <details className={`fr-position-row${t.inverseCopy?" fr-inverse-row":""}${t.inverseCopy?.alignment==="WITH_SOURCE"?" is-with":""}`}><summary><span className="fr-position-primary"><b>{t.symbol.replace("_"," / ")}</b><small>{t.side==="LONG"?"多单":"空单"} · {plan}{where?` · ${where}`:""} · {fmt(t.leverage,0)}×</small>
-    <b className={(pnl??0)>=0?"fr-positive":"fr-negative"}>{signed(pnl)} U</b><small>{signed(rate===null?null:rate*100,3)}% · {duration(t.openedAt,t.closedAt,now)}</small>{pair&&<small>已扣手续费 {fmt(pair.inverse.fees,4)} U{!pair.quoteFresh?" · 估值待更新":""}</small>}</span>
-    <span className="fr-position-entry"><b>{t.inverseCopy?(open?"持仓中":"已跟随出场"):open?`持仓评分 ${fmt(t.holdScore,0)}`:exitLabel(t)}</b><small>最高浮盈 {fmt(t.favorable*100,2)}% · 最大不利 {fmt(t.adverse*100,2)}% · 锁利 {fmt((t.profitFloorRate??0)*100,2)}%</small>
-      <small>{t.inverseCopy?"只扣已经发生的费用":ctx?(ctx.strategyVersion==="market-intelligence-v1"?`入场评分 ${fmt(ctx.entryScore,0)} · 同组 ${(ctx.clusterId?.replace(/^corr:/,"")??"—").replace(/_USDT$/,"")} · ${afterEntryName(ctx.postEntryState)}`:`入场评分 ${fmt(ctx.entryScore,0)} · 旧关系 ${ctx.relationStatus??"—"} ${fmt((ctx.relationHealth??0)*100,0)} · 首次浮赢 ${t.firstProfitAt?time(t.firstProfitAt):"尚未"}`):"历史兼容持仓"}</small></span></summary>
-    <article className="fr-trade fr-trade-unified"><dl><div><dt>入场价</dt><dd>{fmt(t.entryPrice,6)}</dd></div><div><dt>{open?"当前价":"出场价"}</dt><dd>{fmt(px,6)}</dd></div><div><dt>{t.inverseCopy?"出场参考":"当前防守"}</dt><dd>{fmt(t.inverseCopy?.sourceStopPrice??t.stopPrice,6)}</dd></div>
-      <div><dt>名义金额</dt><dd>{fmt(t.notional)} U</dd></div><div><dt>保证金 / 杠杆</dt><dd>{fmt(t.margin)} U / {fmt(t.leverage,0)}×</dd></div><div><dt>计划风险</dt><dd>{fmt(t.plannedRisk)} U</dd></div>
-      <div><dt>进场时间</dt><dd>{time(t.openedAt)}</dd></div><div><dt>平仓时间</dt><dd>{open?"尚未平仓":time(t.closedAt)}</dd></div><div><dt>持仓时长</dt><dd>{duration(t.openedAt,t.closedAt,now)}</dd></div><div><dt>预计持有</dt><dd>{fmt(t.expectedHoldMinutes,0)} 分钟</dd></div></dl>
-      {facts.map(line=><p className="fr-trade-reason" key={line}>{line}</p>)}
-      {t.realization&&<p className="fr-trade-reason">{t.inverseCopy?"已减仓":"已部分兑现"} {t.realization.sequence} 次 · 已实现净额 {signed(realizedNetPnl(t))} U · 剩余 {fmt(open?remainingTradeFraction(t)*100:0,0)}%</p>}
-      {t.winnerManagement&&<p className="fr-trade-reason">持仓计划：{t.winnerManagement.reason}</p>}
-      {ctx&&<p className="fr-trade-reason">入场依据：{ctx.reason}</p>}{t.exitReason&&<p className="fr-trade-reason">退出依据：{exitLabel(t)}</p>}</article></details>;
+  const state=t.inverseCopy?(open?"持仓中":"已跟随出场"):open?"持仓中":t.exitReason==="PEAK_GIVEBACK"?"浮盈回吐":exitShort(t.exitReason,exitLabel(t));
+  const fees=pair?pair.inverse.fees:(t.entryFee??0)+(open?0:t.exitFee??0);
+  const facts:OrderFact[]=[
+    {label:"开仓价",value:priceText(t.entryPrice)},{label:open?"现价":"平仓价",value:priceText(px)},
+    {label:"开仓时间",value:shortTime(t.openedAt)},{label:"平仓时间",value:open?"还在持仓":shortTime(t.closedAt)},
+    {label:"最高浮盈",value:`${fmt(t.favorable*100,2)}%`,tone:t.favorable>0?1:null},{label:"最大浮亏",value:`${fmt(t.adverse*100,2)}%`,tone:t.adverse>0?-1:null},
+    {label:"锁住的利润",value:`${fmt((t.profitFloorRate??0)*100,2)}%`},{label:open?"已扣手续费":"手续费",value:`${fmt(fees,pair?4:2)} U`},
+    {label:"名义金额",value:`${fmt(t.notional)} U`},{label:"保证金",value:`${fmt(t.margin)} U`},
+    {label:t.inverseCopy?"出场参考":"止损位",value:priceText(t.inverseCopy?.sourceStopPrice??t.stopPrice)},
+    {label:"开仓盘面",value:t.inverseCopy?"跟随提案":board?stageName(board):"没记下"},
+  ];
+  const facts2=entryFacts(t);
+  const score=t.inverseCopy?null:ctx?(ctx.strategyVersion==="market-intelligence-v1"?`入场评分 ${fmt(ctx.entryScore,0)} · 同组 ${(ctx.clusterId?.replace(/^corr:/,"")??"—").replace(/_USDT$/,"")} · ${afterEntryName(ctx.postEntryState)}`:`入场评分 ${fmt(ctx.entryScore,0)} · 旧关系 ${ctx.relationStatus??"—"} ${fmt((ctx.relationHealth??0)*100,0)} · 首次浮赢 ${t.firstProfitAt?time(t.firstProfitAt):"尚未"}`):"历史兼容持仓";
+  const detail=<>
+    {open&&!t.inverseCopy&&<p><b>持仓评分</b>：{fmt(t.holdScore,0)}</p>}
+    {score&&<p><b>评分</b>：{score}</p>}
+    {ctx&&<p><b>入场依据</b>：{ctx.reason}</p>}
+    {facts2.map(labelled)}
+    {t.winnerManagement&&<p><b>持仓计划</b>：{t.winnerManagement.reason}</p>}
+    {t.exitReason&&<p><b>退出依据</b>：{exitLabel(t)}</p>}
+    <p><b>风险与时长</b>：计划风险 {fmt(t.plannedRisk)} U · 杠杆 {fmt(t.leverage,0)}× · 预计持有 {fmt(t.expectedHoldMinutes,0)} 分钟 · 实际 {duration(t.openedAt,t.closedAt,now)}</p>
+    <p><b>精确时间</b>：开仓 {time(t.openedAt)} · 平仓 {open?"尚未平仓":time(t.closedAt)}</p>
+    {t.inverseCopy&&<p>只扣已经发生的费用。</p>}
+  </>;
+  return <OrderCard className={t.inverseCopy?`fr-inverse-row${t.inverseCopy.alignment==="WITH_SOURCE"?" is-with":""}`:undefined}
+    symbol={t.symbol} side={t.side} leverage={t.leverage} pnl={pnl} rate={rate} state={state} held={duration(t.openedAt,t.closedAt,now)}
+    extra={pair?<span>已扣手续费 {fmt(pair.inverse.fees,4)} U{!pair.quoteFresh?" · 估值待更新":""}</span>:undefined}
+    facts={facts} why={openReason(t)} out={closeReason(t)}
+    notes={t.realization&&<p className="oc-note">{t.inverseCopy?"已减仓":"已部分兑现"} {t.realization.sequence} 次 · 已实现净额 {signed(realizedNetPnl(t))} U · 剩余 {fmt(open?remainingTradeFraction(t)*100:0,0)}%</p>}
+    detail={detail}/>;
 }
 function Stat({label,value,note}:{label:string;value:string;note?:string}){return <article><small>{label}</small><strong>{value}</strong>{note&&<p>{note}</p>}</article>;}
 function Empty({title}:{title:string}){return <div className="fr-empty"><h3>{title}</h3></div>;}

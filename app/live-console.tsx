@@ -7,6 +7,7 @@ import { OperatorRequestError, operatorRequest, isTransientLiveReadError, number
 
 import {recordWindows,archivePage} from "../lib/record-view.ts";
 import {ArchivePagination} from "./record-controls.tsx";
+import {OrderCard,exitShort,exitPlain,priceText,type OrderFact} from "./order-card.tsx";
 type HistoryView={history:LivePosition[];checkedAt:number|null;error:string|null;pending:number;updating:boolean};
 type Props = { auth: AuthSession|null; runtime: OperatorRuntime|null; onSession: (session:AuthSession)=>void;
   onLive: (live:LiveRuntime)=>void; onRefresh: ()=>void; view?:"trade"|"system" };
@@ -182,10 +183,7 @@ function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade
       <section className="fr-section fr-live-holdings" data-testid="live-holdings-first">
         <div className="fr-section-head"><h2>当前持仓</h2><span>{positions.length} 笔</span></div>
         {!live?<LiveEmpty title="正在读取实盘账户"/>:!positions.length?<LiveEmpty title="当前没有实盘持仓" text={entries.length?`有 ${entries.length} 笔待执行订单。`:undefined} />:
-          <div className="fr-position-list">{positions.map(p=>{const m=livePositionMark(p,runtime,clock);return <details key={p.id} className="fr-position-row"><summary>
-            <span><b>{p.symbol.replace("_"," / ")}</b><small>{p.side==="LONG"?"多单":"空单"} · {num(p.leverage,0)}× · 保证金 {num(m.margin)} U</small></span>
-            <span className={m.pnl==null?"":m.pnl>=0?"fr-positive":"fr-negative"}><b>{m.pnl==null?"待更新":`${signed(m.pnl)} U`}</b><small>{entryDeltaText(p)} · 展开</small></span>
-            </summary><LivePositionCard position={p} runtime={runtime} now={clock}/></details>;})}</div>}
+          <div className="oc-list">{positions.map(p=><LivePositionCard key={p.id} position={p} runtime={runtime} now={clock}/>)}</div>}
         {!!entries.length&&<button type="button" className="fr-text-button" onClick={()=>setSection("positions")}>查看 {entries.length} 笔待执行订单 →</button>}
       </section>
       <section id="live-control" className="fr-section fr-live-switch-panel" aria-label="实盘交易开关">
@@ -206,7 +204,7 @@ function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade
     {section==="positions"&&<section className="fr-section"><div className="fr-section-head"><h2>当前持仓与待执行</h2></div>
       {!live?<LiveEmpty title="正在读取实盘账户"/>:
         !positions.length&&!entries.length?<LiveEmpty title="当前没有实盘持仓或待执行订单"/>:
-        <div className="fr-rule-grid">{positions.map(p=><LivePositionCard key={p.id} position={p} runtime={runtime} now={clock}/>)}
+        <div className="oc-list">{positions.map(p=><LivePositionCard key={p.id} position={p} runtime={runtime} now={clock}/>)}
           {entries.map(e=>e&&<article className="fr-trade" key={e.planId}><header><div><small>待执行 · {e.side==="LONG"?"多单":"空单"}</small><h3>{e.symbol.replace("_"," / ")}</h3></div><strong>等待Gate</strong></header>
             <dl><Pair label="源单入场价" value={num(e.parity?.sourceEntryPrice,5)}/><Pair label="入场限价" value={num(e.parity?.entryLimitPrice??e.parity?.copyQuotePrice??e.trigger,5)}/>
               <Pair label="保证金 / 杠杆" value={`${num(e.margin)} U / ${num(e.leverage,0)}×`}/></dl>
@@ -215,7 +213,7 @@ function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade
 
     {(section==="history"||section==="archive")&&<section className="fr-section" data-testid={section==="history"?"live-history":"live-archive"}>
       <div className="fr-section-head"><h2>{section==="history"?"已平仓实盘记录":"归档记录"}</h2><span>{section==="history"?"最新10条":"更早记录"}</span></div>
-      {(section==="history"?records.recent:archive.items).length?<div className="fr-rule-grid">{(section==="history"?records.recent:archive.items).map(p=><LivePositionCard key={p.id} position={p} runtime={runtime} now={clock}/>)}</div>:<LiveEmpty title="暂无已平仓记录"/>}
+      {(section==="history"?records.recent:archive.items).length?<div className="oc-list">{(section==="history"?records.recent:archive.items).map(p=><LivePositionCard key={p.id} position={p} runtime={runtime} now={clock}/>)}</div>:<LiveEmpty title="暂无已平仓记录"/>}
       {(historyError||historyView?.error)&&<p className="fr-error">{historyError??historyView?.error}</p>}
       {!!historyView?.pending&&<p className="fr-note">{historyView.pending}条Gate结算待核对。</p>}
       {section==="archive"&&<ArchivePagination page={archive.page} pages={archive.pages} onPage={setArchiveIndex}/>}
@@ -233,10 +231,6 @@ function paperSource(position:LivePosition,runtime:OperatorRuntime|null){
 function adverseEntryDelta(position:LivePosition){
   const source=position.parity?.sourceEntryPrice;if(!(source&&position.entryPrice>0))return null;
   const d=position.side==="LONG"?1:-1;return d*(position.entryPrice/source-1);
-}
-function entryDeltaText(position:LivePosition){
-  const v=adverseEntryDelta(position);if(v==null)return "入场偏差 —";
-  return `入场 ${v>0?"+":""}${(v*100).toFixed(3)}%${v>0?" 不利":v<0?" 更优":""}`;
 }
 function comparison(position:LivePosition,runtime:OperatorRuntime|null,now:number){
   const source=paperSource(position,runtime),open=position.status==="OPEN",mark=livePositionMark(position,runtime,now);
@@ -278,26 +272,37 @@ function CompareBlock({position,runtime,now}:{position:LivePosition;runtime:Oper
       <span>复制延迟 <b>{latency(p?.submitDelayMs??p?.copyDelayMs)}</b></span></div>
   </div>;
 }
+const LIVE_OWN_EXITS=new Set(["PAPER_SOURCE_EXIT","PAPER_PORTFOLIO_EXIT","EXCHANGE_FLAT","RISK_CAP_AFTER_FILL","PROTECTIVE_STOP_CREATE_FAILED","PROTECTIVE_STOP_CREATE_UNCONFIRMED"]);
+const shortTime=(v?:number|null)=>{const text=time(v);return text==="—"?text:text.replace(/:\d{2}$/,"");};
+function deltaValue(v:number|null){return v==null?"—":`${v>0?"+":""}${(v*100).toFixed(3)}%${v>0?" 不利":v<0?" 更优":""}`;}
 export function LivePositionCard({position:p,runtime,now}:{position:LivePosition;runtime:OperatorRuntime|null;now:number}){
-  const open=p.status==="OPEN",mark=livePositionMark(p,runtime,now),settlement=p.settlement,pnl=open?mark.pnl:settlement?.pnl??p.realizedPnl;
-  const pnlRate=!open&&pnl!=null&&p.notional>0?pnl/p.notional:null;
-  return <article className="fr-trade fr-trade-unified"><header><div><small>{open?"持仓中":"已平仓"} · {p.side==="LONG"?"多单":"空单"}</small><h3>{p.symbol.replace("_"," / ")}</h3></div>
-    <strong className={pnl==null?"":pnl>=0?"fr-positive":"fr-negative"}>{pnl==null?open?"待更新":"待结算":`${signed(pnl)} U`}<small>{pnlRate==null?"":` · ${signed(pnlRate*100,3)}%`}</small></strong></header>
-    <dl><Pair label="入场价" value={num(p.entryPrice,5)}/><Pair label={open?"当前价格":"出场价"} value={num(open?mark.price:p.exitPrice??settlement?.exitPrice,5)}/>
-      <Pair label="保证金 / 杠杆" value={`${num(open?mark.margin:p.margin)} U / ${num(p.leverage,0)}×`}/><Pair label="入场对比" value={entryDeltaText(p)}/>
-      <Pair label="进场时间" value={time(p.entryAt)}/><Pair label="出场时间" value={open?"持仓中":time(p.exitAt)}/>
-      </dl>
-    <details className="fr-details"><summary>详情</summary>
-      <dl><Pair label="持仓时长" value={holdingTime(p.entryAt,open?now:p.exitAt??0)}/><Pair label="名义金额" value={`${num(p.notional)} U`}/>
-        <Pair label="合约数量" value={contractText(Math.abs(p.exchangeSize))}/><Pair label={p.parity?.sourceRole==='INVERSE_PAPER'?"退出方式":"保护止损"} value={p.parity?.sourceRole==='INVERSE_PAPER'?"跟随出场":num(p.stopPrice??p.currentStop,5)}/></dl>
-      <CompareBlock position={p} runtime={runtime} now={now}/>
-      {!open&&settlement&&<dl><Pair label="仓位盈亏" value={`${signed(settlement.pricePnl)} U`}/><Pair label="手续费收支" value={`${signed(settlement.fees)} U`}/><Pair label="资金费收支" value={`${signed(settlement.funding)} U`}/><Pair label="交易所平仓时间" value={time(settlement.closedAt)}/></dl>}
-      {p.exitReason&&<p className="fr-trade-reason">退出原因：{p.exitReason}</p>}
-      {p.parity&&<><p className="fr-note">源单 {p.parity.sourceId} · 规则 {p.parity.sourceRuleId}<br/>固定比例 {num(p.parity.ratio,6)} · 目标名义额 {num(p.parity.targetNotional)} U · 源单杠杆 {num(p.parity.sourceLeverage,0)}×<br/>
+  const open=p.status==="OPEN",mark=livePositionMark(p,runtime,now),settlement=p.settlement,pnl=open?mark.pnl:settlement?.pnl??p.realizedPnl??null;
+  const rate=pnl!=null&&p.notional>0?pnl/p.notional:null;
+  const c=comparison(p,runtime,now),inverse=p.parity?.sourceRole==='INVERSE_PAPER';
+  const code=p.exitReason??null;
+  const facts:OrderFact[]=[
+    {label:"成交开仓价",value:priceText(p.entryPrice)},{label:open?"现价":"成交平仓价",value:priceText(open?mark.price:p.exitPrice??settlement?.exitPrice)},
+    {label:"开仓时间",value:shortTime(p.entryAt)},{label:"平仓时间",value:open?"还在持仓":shortTime(p.exitAt)},
+    {label:"入场比模拟",value:deltaValue(adverseEntryDelta(p)),tone:c.entryAdverse==null?null:-c.entryAdverse},
+    {label:open?"止损位":"出场比模拟",value:open?(inverse?"跟随出场":priceText(p.stopPrice??p.currentStop)):deltaValue(c.exitAdverse),tone:open||c.exitAdverse==null?null:-c.exitAdverse},
+    ...(!open&&settlement?[{label:"手续费",value:`${signed(settlement.fees)} U`},{label:"资金费",value:`${signed(settlement.funding)} U`}]:[]),
+    {label:"名义金额",value:`${num(p.notional)} U`},{label:"保证金 / 杠杆",value:`${num(open?mark.margin??p.margin:p.margin)} U / ${num(p.leverage,0)}×`},
+  ];
+  const out=open||!code?null:`${exitPlain(code,exitShort(code))}${LIVE_OWN_EXITS.has(code)||!p.parity?"":"（实盘跟着模拟单一起平）"}`;
+  const detail=<>
+    <CompareBlock position={p} runtime={runtime} now={now}/>
+    <p><b>持仓时长</b>：{holdingTime(p.entryAt,open?now:p.exitAt??0)} · <b>合约数量</b>：{contractText(Math.abs(p.exchangeSize))} · <b>{inverse?"退出方式":"保护止损"}</b>：{inverse?"跟随出场":num(p.stopPrice??p.currentStop,5)}</p>
+    {!open&&settlement&&<p><b>Gate 结算</b>：仓位盈亏 {signed(settlement.pricePnl)} U · 手续费收支 {signed(settlement.fees)} U · 资金费收支 {signed(settlement.funding)} U · 交易所平仓 {time(settlement.closedAt)}</p>}
+    <p><b>精确时间</b>：开仓 {time(p.entryAt)} · 平仓 {open?"持仓中":time(p.exitAt)}</p>
+    {code&&<p><b>退出原因代码</b>：{code}</p>}
+    {p.parity&&<><p>源单 {p.parity.sourceId} · 规则 {p.parity.sourceRuleId}<br/>固定比例 {num(p.parity.ratio,6)} · 目标名义额 {num(p.parity.targetNotional)} U · 源单杠杆 {num(p.parity.sourceLeverage,0)}×<br/>
       首次复制盘口 {num(p.parity.copyQuotePrice,5)} · 提交盘口 {num(p.parity.submitQuotePrice,5)} · Gate成交 {num(p.parity.exchangeEntryPrice??p.entryPrice,5)}<br/>
       首次识别 {latency(p.parity.copyDelayMs)} · 提交 {latency(p.parity.submitDelayMs)}{p.parity.discrepancy?` · ${p.parity.discrepancy}`:""}
       {p.parity.exitExecutionPolicy&&<><br/>出场 {num(p.parity.sourceExitPrice,5)} · 出场提交延迟 {latency(p.parity.exitDelayMs)}</>}</p>
       <a className="fr-text-button" href={`/api/live/source?id=${encodeURIComponent(p.parity.sourceId)}`} target="_blank" rel="noreferrer">查看完整模拟源单映射 ↗</a></>}
-    </details>
-  </article>;
+  </>;
+  return <OrderCard live symbol={p.symbol} side={p.side} leverage={p.leverage} pnl={pnl} pnlText={pnl==null?open?"待更新":"待结算":undefined}
+    rate={rate} state={open?"持仓中":exitShort(code,"已平仓")} held={holdingTime(p.entryAt,open?now:p.exitAt??0)}
+    facts={facts} why={p.parity?(inverse?"模拟单开仓后，实盘按固定比例反向跟随。":"模拟单开仓后，实盘按固定比例跟随开仓。"):null} out={out}
+    detail={detail} detailTitle="执行明细"/>;
 }

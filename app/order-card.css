@@ -1,0 +1,49 @@
+/* Shared PAPER/LIVE order card. Collapsed: symbol, side, net result, one status line. Tap: key numbers + two plain reasons. */
+.oc-list{display:grid;gap:10px}
+.oc-card{min-width:0;max-width:100%;border:1px solid #33465c;border-radius:14px;background:#182433;overflow:hidden}
+.oc-card.is-live{border-color:#3d5378;background:#17233a}
+.oc-card>summary{display:grid;gap:4px;padding:13px 15px;list-style:none;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.oc-card>summary::-webkit-details-marker{display:none}
+.oc-line{display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0}
+.oc-name{display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap}
+.oc-name>b{font-size:17px;font-size:var(--fr-fs17,17px);font-weight:650;letter-spacing:.01em;color:var(--fr-ink)}
+.oc-name>small{font-size:13px;font-size:var(--fr-fs13,13px);color:var(--fr-muted);line-height:1.4}
+.oc-name>small.oc-lev{margin-left:2px}
+.oc-side,.oc-live{font-style:normal;font-size:12px;font-size:var(--fr-fs12,12px);font-weight:650;line-height:1;padding:4px 7px;border-radius:6px;white-space:nowrap}
+.oc-side.is-long{background:#1f3e33;color:#8ff0c8}
+.oc-side.is-short{background:#432a2c;color:#ffb8b3}
+.oc-live{background:#24375a;color:#b3cdff;border:1px solid #4a6aa3}
+.oc-pnl{font-size:19px;font-size:var(--fr-fs19,19px);font-weight:700;white-space:nowrap;color:var(--fr-ink)}
+.oc-sub{font-size:13px;font-size:var(--fr-fs13,13px);color:var(--fr-muted);line-height:1.5}
+.oc-sub>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.oc-rate{white-space:nowrap;font-weight:600;display:flex;align-items:center;gap:6px}
+.oc-rate::after{content:"";width:6px;height:6px;border-right:1.5px solid #8ea3bb;border-bottom:1.5px solid #8ea3bb;transform:rotate(45deg) translateY(-2px);transition:transform .15s}
+.oc-card[open]>summary .oc-rate::after{transform:rotate(-135deg) translate(-1px,-1px)}
+.oc-card[open]>summary{border-bottom:1px solid #2c3d52}
+.oc-body{padding:12px 15px 14px}
+.oc-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 14px;margin:0}
+.oc-grid>div{min-width:0}.oc-grid>div.is-wide{grid-column:1/-1}
+.oc-grid dt{font-size:12px;font-size:var(--fr-fs12,12px);color:var(--fr-muted);line-height:1.4}
+.oc-grid dd{margin:2px 0 0;font-size:15px;font-size:var(--fr-fs15,15px);font-weight:600;line-height:1.4;color:var(--fr-ink);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.oc-why{display:grid;gap:6px;margin-top:12px;padding-top:11px;border-top:1px solid #2c3d52}
+.oc-why p{display:grid;grid-template-columns:4.4em minmax(0,1fr);gap:8px;font-size:14px;font-size:var(--fr-fs14,14px);line-height:1.55;color:#d3e0ee}
+.oc-why p>span{color:var(--fr-muted);font-size:13px;font-size:var(--fr-fs13,13px);line-height:1.65}
+.oc-note{margin-top:10px!important;font-size:13px;font-size:var(--fr-fs13,13px);line-height:1.55;color:var(--fr-muted)}
+.oc-more{margin-top:10px;border-top:1px solid #2c3d52}
+.oc-more>summary{display:flex;align-items:center;gap:6px;min-height:40px;font-size:13px;font-size:var(--fr-fs13,13px);font-weight:600;color:#9cc4ef;cursor:pointer;list-style:none}
+.oc-more>summary::-webkit-details-marker{display:none}
+.oc-more>summary::after{content:"▾";font-size:12px;transition:transform .15s}
+.oc-more[open]>summary::after{transform:rotate(180deg)}
+.oc-more-body{display:grid;gap:8px;padding-bottom:2px;font-size:13px;font-size:var(--fr-fs13,13px);line-height:1.6;color:#b6c5d6}
+.oc-more-body>p{margin:0}
+.oc-more-body>p>b{color:#d6e3f1;font-weight:600}
+.oc-more-body .fr-compare{margin:4px 0}
+.oc-more-body .fr-text-button{min-height:36px;font-size:13px;font-size:var(--fr-fs13,13px)}
+@media(max-width:340px){.oc-grid{grid-template-columns:1fr}}
+.oc-more-body .fr-compare{padding:10px}
+.oc-more-body .fr-compare-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+.oc-more-body .fr-compare-grid>div{grid-column:auto!important;padding:8px 10px;border-right:1px solid var(--fr-line);border-top:1px solid var(--fr-line)}
+.oc-more-body .fr-compare-grid>div:nth-child(2n){border-right:0}.oc-more-body .fr-compare-grid>div:nth-child(-n+2){border-top:0}
+.oc-more-body .fr-compare-grid small{font-size:12px;font-size:var(--fr-fs12,12px);margin-bottom:2px}
+.oc-more-body .fr-compare-grid b{font-size:14px;font-size:var(--fr-fs14,14px)}
+.oc-more-body .fr-compare-prices{font-size:13px;font-size:var(--fr-fs13,13px)}

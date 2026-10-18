@@ -22,6 +22,14 @@ runInNewContext(`(function(require,module,exports){${paidSource}\n})`,{})(name=>
   if(name==='./inverse-fee.ts')return inverseFee;
   throw new Error(`pure view imported ${name}`);
 },paidModule,paidModule.exports);
+// The shared order card is a pure presentation module; load the real one, not a fixture.
+const orderCardModule={exports:{}};
+const orderCardSource=ts.transpileModule(read("app/order-card.tsx"),{fileName:"app/order-card.tsx",compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;
+runInNewContext(`(function(require,module,exports){${orderCardSource}\n})`,{})(name=>{
+  if(name.endsWith(".css"))return {};
+  if(name==="react/jsx-runtime")return jsxRuntime;
+  throw new Error(`order card imported ${name}`);
+},orderCardModule,orderCardModule.exports);
 // Render the real presentation modules; network/cache boundaries are inert fixtures.
 function render(path,props,extra={},component="default"){
   const source=ts.transpileModule(read(path),{fileName:path,compilerOptions:{
@@ -36,6 +44,7 @@ function render(path,props,extra={},component="default"){
     "../lib/equity-cache.ts":{EquityHistoryCache:class{cancel(){}}},
     "../lib/record-view.ts":{recordWindows:rows=>({recent:rows.slice(0,10),archive:rows.slice(10)}),archivePage:rows=>({items:rows,page:0,pages:1})},
     "./record-controls.tsx":{ArchivePagination:()=>null},
+    "./order-card.tsx":orderCardModule.exports,
     "./equity-curve.tsx":{default:()=>jsxRuntime.jsx("div",{"data-testid":"curve-fixture"})},
     "./live-equity-curve.tsx":{default:props=>jsxRuntime.jsx('div',{'data-testid':'live-curve-fixture','data-session':props.sessionAt})},
     "./market-intelligence-execution.tsx":{default:()=>null},
@@ -184,7 +193,7 @@ test("live account remains equity-first and rendering cannot enable trading",()=
   assert.ok(html.indexOf("live-equity-first")<html.indexOf("live-control"));
   assert.match(html,/123\.45/);assert.match(html,/aria-checked="false"/);
 });
-test('LIVE open and archived cards keep six primary fields and fold execution attribution',()=>{
+test('LIVE open and archived cards show a one-glance summary, key numbers on tap, and fold execution attribution',()=>{
   const number=value=>typeof value==='number'?value.toFixed(2):'—';
   for(const status of ['OPEN','CLOSED']){
     const position={id:'fixture',symbol:'LONGSYMBOL_USDT',side:'SHORT',status,entryPrice:100.01,exitPrice:99,
@@ -193,13 +202,42 @@ test('LIVE open and archived cards keep six primary fields and fold execution at
     const html=render('app/live-console.tsx',{position,runtime:null,now:1790761200000},
       {'../lib/operator-ui.ts':{numberText:number,signedText:number,operatorTime:()=> '2026/10/01 17:21:23',contractText:number,
         holdingTime:()=> '20分钟',livePositionMark:()=>({pnl:1,margin:100,price:99}),operatorRequest(){throw new Error('network forbidden');}}},'LivePositionCard');
-    const primary=html.slice(0,html.indexOf('<details'));
-    assert.equal((primary.match(/<dt>/g)??[]).length,6);
-    assert.match(primary,/入场对比/);assert.match(primary,/更优/);assert.match(primary,/进场时间/);assert.match(primary,/出场时间/);
-    assert.doesNotMatch(primary,/源信号参考 ↔ 实盘|名义金额|合约数量|SOURCE_CLOSED/);
-    assert.match(html,/<details class="fr-details"><summary>详情<\/summary>/);assert.doesNotMatch(html,/<details[^>]* open/);
-    assert.match(html,/SOURCE_CLOSED/);assert.match(html,/源信号参考 ↔ 实盘/);
+    assert.match(html,/^<details class="oc-card is-live">/);assert.doesNotMatch(html,/<details[^>]* open/);
+    const summary=html.match(/<summary>[\s\S]*?<\/summary>/)?.[0];assert.ok(summary);
+    assert.match(summary,/LONGSYMBOL/);assert.match(summary,/实盘/);assert.match(summary,/空/);assert.match(summary,/10×/);
+    assert.match(summary,status==='OPEN'?/持仓中 · 20分钟/:/已平仓 · 20分钟/);assert.doesNotMatch(summary,/SOURCE_CLOSED/);
+    assert.doesNotMatch(summary,/<dt>|源信号参考|名义金额|合约数量/);
+    const body=html.slice(html.indexOf('</summary>'),html.indexOf('<details class="oc-more">'));
+    const facts=(body.match(/<dt>/g)??[]).length;assert.ok(facts>=6&&facts<=10,`key facts stay compact: ${facts}`);
+    assert.match(body,/入场比模拟/);assert.match(body,/更优/);assert.match(body,/开仓时间/);assert.match(body,/平仓时间/);
+    assert.doesNotMatch(body,/源信号参考 ↔ 实盘|合约数量/);
+    assert.match(html,/<details class="oc-more"><summary>执行明细<\/summary>/);
+    const fold=html.slice(html.indexOf('<details class="oc-more">'));
+    assert.match(fold,/源信号参考 ↔ 实盘/);assert.match(fold,/合约数量/);
+    if(status==='CLOSED')assert.match(fold,/SOURCE_CLOSED/);
   }
+});
+
+test('PAPER cards keep the first glance to symbol, side, result and one status line; research prose is folded',()=>{
+  const t={id:"p1",status:"CLOSED",symbol:"PONS_USDT",side:"SHORT",entryPrice:.2966,exitPrice:.2892,lastPrice:.2892,quantity:11220,notional:3327.85,
+    entryFee:2.33,exitFee:2.34,leverage:10,margin:332.79,plannedRisk:40,openedAt:1790752298000,closedAt:1790761200000,netPnl:78.36,grossPnl:83.03,
+    stopPrice:.3002,expectedHoldMinutes:261,favorable:.0425,adverse:.001,profitFloorRate:.0252,exitReason:"WINNER_STRUCTURE_EXIT",
+    winnerManagement:{reason:"价格触及此前已经建立的有效保护位置"},
+    entryContext:{strategyVersion:"market-intelligence-v1",mode:"RELATIVE",reason:"PONS 做空 · 独立趋势：持续相对优势成立",entryScore:90,clusterId:"corr:PONS_USDT",
+      postEntryState:"CONFIRMED",environment:"TRANSITION",winnerPlan:{intent:"TREND"},stageNote:{liveStage:"TREND",priorStage:"TRANSITION",stageAgeMin:0},
+      coinPath:{label:"前面近8小时已经压成下跌。"},entryRead:{withTrend:true,move30:.0202}}};
+  const html=render("app/forward-dashboard.tsx",{trade:t,now:1790761200000},{},"TradeCard");
+  const summary=html.match(/<summary>[\s\S]*?<\/summary>/)?.[0];assert.ok(summary);
+  assert.match(summary,/PONS/);assert.match(summary,/空/);assert.match(summary,/\+78\.36 U/);assert.match(summary,/碰到保护位 · 2小时28分/);
+  assert.doesNotMatch(summary,/这笔做的是|开仓时盘面|入场评分|同组|最高浮盈|有效结构保护/);
+  const body=html.slice(html.indexOf('</summary>'),html.indexOf('<details class="oc-more">'));
+  for(const label of["开仓价","平仓价","开仓时间","平仓时间","最高浮盈","最大浮亏","锁住的利润","手续费"])assert.match(body,new RegExp(label));
+  assert.match(body,/为什么开<\/span>顺着大盘方向做空，做这个币自己的趋势；开仓时盘面是趋势。/);
+  assert.match(body,/为什么平<\/span>价格回到开仓后设好的保护位，按计划平仓。/);
+  assert.doesNotMatch(body,/额外出场|开仓走势|入场依据|持仓计划/);
+  const fold=html.slice(html.indexOf('<details class="oc-more">'));
+  assert.match(fold,/<summary>详细依据<\/summary>/);
+  for(const text of["额外出场","开仓走势","入场依据","持仓计划","有效结构保护","入场评分 90","同组 PONS","已经走出成本"])assert.match(fold,new RegExp(text));
 });
 
 test("reference card and static manuals are removed, not hidden; cache and controls stay",()=>{

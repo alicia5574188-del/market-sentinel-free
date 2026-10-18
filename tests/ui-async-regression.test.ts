@@ -20,7 +20,8 @@ function component(file:string,request:typeof operator.operatorRequest=operator.
   const imports:Record<string,unknown>={react,"react/jsx-runtime":{jsx,jsxs:jsx},
     "../lib/operator-ui.ts":{...operator,operatorRequest:request},"../lib/record-view.ts":records,
     "../lib/equity-curve.ts":curve,"../lib/equity-cache.ts":cache,"./equity-curve.css":{},
-    "./record-controls.tsx":{ArchivePagination:()=>null}};
+    "./record-controls.tsx":{ArchivePagination:()=>null},
+    "./order-card.tsx":{OrderCard:()=>null,exitShort:(code:string|null)=>code??"—",exitPlain:(code:string|null)=>code,priceText:String}};
   const compiledModule={exports:{} as any};
   const compiled=ts.transpileModule(readFileSync(new URL(`../app/${file}`,import.meta.url),"utf8"),{
     compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX,target:ts.ScriptTarget.ES2022,esModuleInterop:true},
