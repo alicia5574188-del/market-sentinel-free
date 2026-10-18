@@ -30,7 +30,7 @@ export function placeFromEvent(fields:RunEvent['fields']):LsrPlace|null{
 }
 export function placesFromEvents(events:RunEvent[]){return events.filter(event=>event.event==='order_placing').map(event=>placeFromEvent(event.fields)).filter((row):row is LsrPlace=>row!=null);}
 export type LsrFill={ts:number;symbol:string;side:'LONG'|'SHORT';price:number;qty:number;notional:number;fee:number;tag:'open'|'close';trace:string;waitMs:number|null;limit:number|null};
-export type LsrPositionRow={id:string;symbol:string;side:'LONG'|'SHORT';entry:number;exit:number|null;qty:number;notional:number;gross_pnl:number|null;fee:number;net_pnl:number|null;holdSec:number;exit_reason:'stop'|'tp'|'time'|'prior'|'tp1'|'tp2'|'sl'|'invalidate'|'external'|'dropped'|null;gapBps:number|null;opened_at:number;closed_at:number|null;trace:string;entry_structure?:EntryStructure|null;market_stage?:string|null;market_expectancy?:number|null;entry_phase?:string|null;exit_stage?:string|null;exit_phase?:string|null;exit_trigger?:string|null;entry_rule?:string|null;entry_signal?:'LONG'|'SHORT'|null;entry_fade?:boolean|null;entry_room_pct?:number|null;entry_room_touches?:number|null;live_stage?:string|null;prior_stage?:string|null;stage_age_min?:number|null;minutes_since_shock?:number|null;shock_push?:number|null;sync_drop?:number|null;trend_side?:'LONG'|'SHORT'|null;with_trend?:boolean|null;book?:number|null;residual?:number|null;relative_strength?:number|null;move30?:number|null;sync?:number|null;breadth?:number|null;coin_background?:string|null;coin_recent?:string|null;coin_label?:string|null;coin_versus?:string|null;coin_background_pct?:number|null;coin_recent_pct?:number|null;coin_window_min?:number|null;signal_n?:number|null;signal_gap_min?:number|null;entry_spread_bps?:number|null;signal_n_symbol?:number|null;prev_side?:'LONG'|'SHORT'|null;prev_gap_min?:number|null;prev_net_pct?:number|null;prev_mfe_pct?:number|null;shock_seen?:boolean|null;mode?:string|null;trade_plan?:string|null;intent?:string|null;long_score?:number|null;short_score?:number|null;residual_z?:number|null;score?:number|null;stop_price?:number|null;planned_hold_min?:number|null;volume24h_usd?:number|null;funding_rate?:number|null;trend_score?:number|null;factor_30m_pct?:number|null;gap_applicable?:boolean|null;gap_bps?:number|null;tally_since?:number|null};
+export type LsrPositionRow={id:string;symbol:string;side:'LONG'|'SHORT';entry:number;exit:number|null;qty:number;notional:number;gross_pnl:number|null;fee:number;net_pnl:number|null;holdSec:number;exit_reason:'stop'|'tp'|'time'|'prior'|'tp1'|'tp2'|'sl'|'invalidate'|'external'|'dropped'|null;gapBps:number|null;opened_at:number;closed_at:number|null;trace:string;entry_structure?:EntryStructure|null;market_stage?:string|null;market_expectancy?:number|null;entry_phase?:string|null;exit_stage?:string|null;exit_phase?:string|null;exit_trigger?:string|null;entry_rule?:string|null;entry_signal?:'LONG'|'SHORT'|null;entry_fade?:boolean|null;entry_room_pct?:number|null;entry_room_touches?:number|null;live_stage?:string|null;prior_stage?:string|null;stage_age_min?:number|null;minutes_since_shock?:number|null;shock_push?:number|null;sync_drop?:number|null;trend_side?:'LONG'|'SHORT'|null;with_trend?:boolean|null;book?:number|null;residual?:number|null;relative_strength?:number|null;move30?:number|null;sync?:number|null;breadth?:number|null;coin_background?:string|null;coin_recent?:string|null;coin_label?:string|null;coin_versus?:string|null;coin_background_pct?:number|null;coin_recent_pct?:number|null;coin_window_min?:number|null;signal_n?:number|null;signal_gap_min?:number|null;entry_spread_bps?:number|null;signal_n_symbol?:number|null;prev_side?:'LONG'|'SHORT'|null;prev_gap_min?:number|null;prev_net_pct?:number|null;prev_mfe_pct?:number|null;prev_mae_pct?:number|null;leverage?:number|null;shock_seen?:boolean|null;mode?:string|null;trade_plan?:string|null;intent?:string|null;long_score?:number|null;short_score?:number|null;residual_z?:number|null;score?:number|null;stop_price?:number|null;planned_hold_min?:number|null;volume24h_usd?:number|null;funding_rate?:number|null;trend_score?:number|null;factor_30m_pct?:number|null;gap_applicable?:boolean|null;gap_bps?:number|null;tally_since?:number|null};
 export type LsrCurvePoint={ts:number;equity:number;closed_pnl:number;unrealized_pnl:number;positions:number};
 const ROW_CAP=8_000;
 export function rememberRow<T>(rows:T[]|undefined,row:T){return [...(rows??[]),row].slice(-ROW_CAP);}
@@ -153,7 +153,7 @@ export function accountLogBook(state:ForwardState,quotes:Record<string,Quote>,no
     const marked=openMark(state,t,quotes,now);
     const row:LsrPositionRow={id:t.id,symbol:t.symbol,side:t.side,entry:t.entryPrice,exit:null,qty:t.quantity,notional:t.notional,
       gross_pnl:round4(marked.gross+marked.realized),fee:round4(t.entryFee+marked.exitReserve),net_pnl:null,
-      holdSec:Math.max(0,Math.round((now-t.openedAt)/1000)),exit_reason:null,gapBps:null,opened_at:t.openedAt,closed_at:null,trace:t.id,
+      holdSec:Math.max(0,Math.round((now-t.openedAt)/1000)),exit_reason:null,gapBps:null,opened_at:t.openedAt,closed_at:null,trace:t.id,leverage:t.leverage>0?t.leverage:null,
       entry_structure:t.entryContext?.entryStructure??null,market_stage:t.entryContext?.environment??null,market_expectancy:t.entryContext?.marketExpectancy??null,
       entry_phase:t.entryContext?.marketEvolutionPhase??null,exit_stage:null,exit_phase:null,exit_trigger:null,
       entry_rule:t.entryContext?.shockRoom?"SHOCK_EPISODE":t.entryContext?.transitionRule?"TRANSITION_ROOM":null,
@@ -185,7 +185,7 @@ export function accountLogBook(state:ForwardState,quotes:Record<string,Quote>,no
     const marked=openMark(state,t,quotes,now);
     const row:LsrPositionRow={id:t.id,symbol:t.symbol,side:t.side,entry:t.entryPrice,exit:null,qty:t.quantity,notional:t.notional,
       gross_pnl:round4(marked.gross+marked.realized),fee:round4(t.entryFee+marked.exitReserve),net_pnl:null,
-      holdSec:Math.max(0,Math.round((now-t.openedAt)/1000)),exit_reason:null,gapBps:null,opened_at:t.openedAt,closed_at:null,trace:t.id,
+      holdSec:Math.max(0,Math.round((now-t.openedAt)/1000)),exit_reason:null,gapBps:null,opened_at:t.openedAt,closed_at:null,trace:t.id,leverage:t.leverage>0?t.leverage:null,
       entry_structure:t.entryContext?.entryStructure??null,market_stage:t.entryContext?.environment??null,market_expectancy:t.entryContext?.marketExpectancy??null,
       entry_phase:t.entryContext?.marketEvolutionPhase??null,exit_stage:null,exit_phase:null,exit_trigger:null,
       entry_rule:"NOT_OPENED",
@@ -228,7 +228,7 @@ function closedAccountRow(t:Trade):LsrPositionRow{
     coin_recent_pct:recorded.coin_recent_pct??null,coin_window_min:recorded.coin_window_min??null,
     signal_n:recorded.signal_n??null,signal_gap_min:recorded.signal_gap_min??null,entry_spread_bps:recorded.entry_spread_bps??null,
     signal_n_symbol:recorded.signal_n_symbol??null,prev_side:recorded.prev_side??null,prev_gap_min:recorded.prev_gap_min??null,
-    prev_net_pct:recorded.prev_net_pct??null,prev_mfe_pct:recorded.prev_mfe_pct??null,shock_seen:recorded.shock_seen??null,
+    prev_net_pct:recorded.prev_net_pct??null,prev_mfe_pct:recorded.prev_mfe_pct??null,prev_mae_pct:recorded.prev_mae_pct??null,leverage:recorded.leverage??null,shock_seen:recorded.shock_seen??null,
     mode:recorded.mode??null,trade_plan:recorded.trade_plan??null,intent:recorded.intent??null,
     long_score:recorded.long_score??null,short_score:recorded.short_score??null,residual_z:recorded.residual_z??null,
     score:recorded.score??null,stop_price:recorded.stop_price??null,planned_hold_min:recorded.planned_hold_min??null,
@@ -257,3 +257,20 @@ function openMark(state:ForwardState,t:Trade,quotes:Record<string,Quote>,now:num
   return {gross,realized,exitReserve:reserveExit&&px>0?t.quantity*px*PAPER_COST.feeRate:0};
 }
 function round4(n:number){return Number(n.toFixed(4));}
+
+/**
+ * Research columns joined onto exported rows: net price % and net ROE % (price move x leverage, after fees),
+ * then the record's entry features and its 24h path label. Rows keep every existing field; nothing here feeds trading.
+ */
+export function withResearchColumns<T extends {id:string;side:'LONG'|'SHORT';entry:number;exit:number|null;notional:number;net_pnl:number|null;leverage?:number|null}>(
+  rows:T[],columnsOf:(id:string)=>Record<string,number|string|boolean|null>|null):(T&Record<string,unknown>)[]{
+  return rows.map(row=>{
+    const lev=row.leverage!=null&&row.leverage>0?row.leverage:null;
+    const margin=lev&&row.notional>0?row.notional/lev:null;
+    const net_roe_pct=row.net_pnl!=null&&margin?Math.round(row.net_pnl/margin*1e6)/1e4:null;
+    const exit_pct=row.exit!=null&&row.entry>0?Math.round((row.side==='LONG'?row.exit/row.entry-1:1-row.exit/row.entry)*1e6)/1e4:null;
+    const cols=columnsOf(row.id)??{};
+    const {leverage:_l,...rest}=cols;void _l;
+    return {...row,leverage:lev??(typeof cols.leverage==='number'?cols.leverage:null),exit_move_pct:exit_pct,net_roe_pct,...rest};
+  });
+}

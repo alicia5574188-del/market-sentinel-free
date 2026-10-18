@@ -5,6 +5,8 @@ export type StageName="SHOCK"|"TREND"|"ROTATION"|"TRANSITION";
 export type StageSnap={
   sync:number|null;breadth:number|null;expansion:number|null;aligned_flow:number|null;
   pressure:number|null;persistence:number|null;btc:number|null;eth:number|null;factor:number|null;
+  /** 切换时大盘因子（等权全币）最近 30 分钟涨跌 %。有这个键的快照，回填的 factor_pct 是同一批币从切换到现在的等权涨跌。 */
+  factor_30m_pct?:number|null;
 };
 export type StageFwd={btc_pct:number|null;eth_pct:number|null;factor_pct:number|null;at:number};
 export type StageChange={
@@ -80,7 +82,8 @@ function numOrNull(value:unknown){
 function cleanSnap(raw:StageSnap):StageSnap{
   return {sync:numOrNull(raw.sync),breadth:numOrNull(raw.breadth),expansion:numOrNull(raw.expansion),
     aligned_flow:numOrNull(raw.aligned_flow),pressure:numOrNull(raw.pressure),persistence:numOrNull(raw.persistence),
-    btc:numOrNull(raw.btc),eth:numOrNull(raw.eth),factor:numOrNull(raw.factor)};
+    btc:numOrNull(raw.btc),eth:numOrNull(raw.eth),factor:numOrNull(raw.factor),
+    ...("factor_30m_pct" in raw?{factor_30m_pct:numOrNull(raw.factor_30m_pct)}:{})};
 }
 function cleanLeg(raw:StageFwd|undefined):StageFwd|undefined{
   if(!raw||typeof raw.at!=="number")return undefined;
@@ -203,7 +206,29 @@ export function equalWeightReturnPct(returns:number[]){
   return Math.round(ok.reduce((n,v)=>n+v,0)/ok.length*10_000)/100;
 }
 /** 切换后 30/60/120 分钟，把大盘相对切换时的涨跌补上。只写记录。 */
-export function fillStageForward(chronicle:StageChronicle|null|undefined,btc:number|null,eth:number|null,factor:number|null,now:number):StageChronicle{
+/**
+ * Equal-weight return % of every coin whose 5m closes cover both `at` and its latest bar: close of the last bar that
+ * ended at or before `at` versus the latest close. Same coins at both ends. Fewer than 8 coins = null.
+ */
+export function equalWeightReturnSince(paths:Record<string,readonly {time:number;close:number}[]>|null|undefined,at:number){
+  const returns:number[]=[];
+  for(const bars of Object.values(paths??{})){
+    if(!bars?.length)continue;
+    const end=(b:{time:number})=>(b.time<1e12?b.time*1000:b.time)+300_000;
+    let base:number|null=null;
+    for(const b of bars){if(end(b)<=at&&b.close>0)base=b.close;else if(end(b)>at)break;}
+    const last=bars.at(-1)!;
+    if(base==null||!(last.close>0)||end(last)<=at)continue;
+    returns.push(last.close/base-1);
+  }
+  return equalWeightReturnPct(returns);
+}
+/**
+ * `factor`: a function (new snapshots) returning the equal-weight return since the switch, or the legacy index level.
+ * Old snapshots (no factor_30m_pct) keep the legacy ratio only when a number is given; with a function they get null,
+ * because a ratio of two indexes over different coin sets is not a return.
+ */
+export function fillStageForward(chronicle:StageChronicle|null|undefined,btc:number|null,eth:number|null,factor:number|null|((at:number)=>number|null),now:number):StageChronicle{
   const row=normalizeStageChronicle(chronicle,now);
   let changed=false;
   const slots=[{key:"m30" as const,minutes:30},{key:"m60" as const,minutes:60},{key:"m120" as const,minutes:120}];
@@ -213,7 +238,10 @@ export function fillStageForward(chronicle:StageChronicle|null|undefined,btc:num
     let next=item;
     for(const slot of slots){
       if(fwd[slot.key]||item.at+slot.minutes*60_000>now)continue;
-      fwd={...fwd,[slot.key]:{btc_pct:pct(btc,item.snap.btc),eth_pct:pct(eth,item.snap.eth),factor_pct:pct(factor,item.snap.factor),at:now}};
+      const modern="factor_30m_pct" in item.snap;
+      let factorPct:number|null=null;
+      try{factorPct=typeof factor==="function"?(modern?factor(item.at):null):modern?null:pct(factor,item.snap.factor);}catch{factorPct=null;}
+      fwd={...fwd,[slot.key]:{btc_pct:pct(btc,item.snap.btc),eth_pct:pct(eth,item.snap.eth),factor_pct:factorPct,at:now}};
       next={...next,fwd};changed=true;
     }
     return next;

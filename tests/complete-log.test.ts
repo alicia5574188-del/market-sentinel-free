@@ -29,7 +29,7 @@ function trade(i: number, openedAt: number, opt: { status?: "OPEN" | "CLOSED"; l
     stop_price: 98, planned_hold_min: 240, volume24h_usd: 5e7, funding_rate: 0.0001, trend_score: 0.2, factor_30m_pct: -0.3 };
   return {
     id: `t-${i}`, symbol: `S${i % 40}_USDT`, side, openedAt, closedAt: status === "CLOSED" ? openedAt + 30 * 60_000 : null, status,
-    entryPrice: 100, exitPrice: status === "CLOSED" ? 100.5 : null, quantity: 1, notional: 100, stopPrice: 98, lastPrice: 100.5, lastQuoteAt: openedAt,
+    entryPrice: 100, leverage: 8, exitPrice: status === "CLOSED" ? 100.5 : null, quantity: 1, notional: 100, stopPrice: 98, lastPrice: 100.5, lastQuoteAt: openedAt,
     entryFee: 0.07, exitFee: status === "CLOSED" ? 0.07 : 0, fundingAllowance: 0, grossPnl: status === "CLOSED" ? 0.5 : null, netPnl: status === "CLOSED" ? 0.36 : null,
     exitReason: status === "CLOSED" ? "PLAN_INVALIDATED" : null, exitRegime: status === "CLOSED" ? { stage: "TRANSITION", phase: "LATE" } : undefined,
     unopened: opt.unopened ?? true, entryContext: ctx,
@@ -141,7 +141,8 @@ test("cold archive keeps 1200 rows (= PATH_CAP); boot loads only the newest 800 
   assert.ok(JSON.stringify((plan.entries[unopenedIndexKey(s.startedAt)] as { ids: string[] }).ids).length < 112 * 1024, "index fits one value");
 });
 
-const path = (id: string, page = 0): TradePath => ({ id, symbol: "A_USDT", side: "LONG", entry: 1, qty: 1, notional: 1, entryFee: 0, openedAt: T, exit: null, exitAt: null, net: null, hold: [[0, 1, 1]], after: [], page });
+const FEATURES = { leverage: 8, stop_dist_pct: 2, hour_utc: 3, weekday: 1, chg_1h_pct: 0.4, atr_5m_pct: 0.3, dist_high_10h_pct: 1, dist_low_10h_pct: 2, range_pos_10h: 0.6, mkt_with_share: 0.7 };
+const path = (id: string, page = 0): TradePath => ({ id, symbol: "A_USDT", side: "LONG", entry: 1, qty: 1, notional: 1, entryFee: 0, openedAt: T, exit: null, exitAt: null, net: null, hold: [[0, 1, 1]], after: [], page, x: FEATURES });
 
 test("orphan paths (owner record removed) leave the log; owned paths stay; nothing happens unless owners are complete", () => {
   const book = emptyTradePathBook(T);
@@ -179,7 +180,13 @@ test("export with completeOnly shows only complete records; account sums still i
 });
 
 test("a record is complete only with its price path: missing or unfinished path = left out of the export", () => {
-  const closedPath = { ...path("t-1"), exit: 100.5, exitAt: T + 1 };
+  const end = { m: 30, pct: 0.5, stage: null, stop: null, pi: null, pi_phase: null, wm_phase: null, wm_stop: null, wm_action: null, pl_phase: null, pl_action: null,
+    pl_floor: null, pl_giveback: null, pl_trajectory: null, pp_mode: null, pp_floor: null, pp_locked_r: null, hv: null, trigger: "PLAN_INVALIDATED", detail: null,
+    evidence: null, exit_stage: "TRANSITION", peak_pct: 0.6, exit_pct: 0.5, giveback_pct: 0.1 };
+  const closedPath = { ...path("t-1"), exit: 100.5, exitAt: T + 1, end };
+  assert.equal(pathComplete({ ...closedPath, end: null }, true), false, "closed record: path must carry the exit state");
+  assert.equal(pathComplete({ ...path("x"), x: { ...FEATURES, atr_5m_pct: null } }, false), false, "entry features are part of the record");
+  assert.equal(pathComplete({ ...path("x"), x: undefined }, false), false);
   assert.equal(pathComplete(undefined, false), false);
   assert.equal(pathComplete({ ...path("x"), hold: [] }, false), false);
   assert.equal(pathComplete(path("x"), false), true, "open record: entry point is enough so far");

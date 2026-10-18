@@ -19,7 +19,9 @@ export type OrderRecord={
   coin_background?:string|null;coin_recent?:string|null;coin_label?:string|null;coin_versus?:string|null;
   coin_background_pct?:number|null;coin_recent_pct?:number|null;coin_window_min?:number|null;
   signal_n?:number|null;signal_gap_min?:number|null;entry_spread_bps?:number|null;
-  signal_n_symbol?:number|null;prev_side?:'LONG'|'SHORT'|null;prev_gap_min?:number|null;prev_net_pct?:number|null;prev_mfe_pct?:number|null;
+  signal_n_symbol?:number|null;prev_side?:'LONG'|'SHORT'|null;prev_gap_min?:number|null;prev_net_pct?:number|null;prev_mfe_pct?:number|null;prev_mae_pct?:number|null;
+  /** 这笔用的杠杆（没开的单是如果开会用的杠杆）。 */
+  leverage?:number|null;
   shock_seen?:boolean|null;
   mode?:string|null;trade_plan?:string|null;intent?:string|null;long_score?:number|null;short_score?:number|null;residual_z?:number|null;
   score?:number|null;stop_price?:number|null;planned_hold_min?:number|null;volume24h_usd?:number|null;funding_rate?:number|null;trend_score?:number|null;factor_30m_pct?:number|null;
@@ -42,6 +44,7 @@ export function orderRecord(t:Trade):OrderRecord{
     entry_stage:t.entryContext?.environment??null,entry_phase:t.entryContext?.marketEvolutionPhase??null,
     exit_stage:t.exitRegime?.stage??null,exit_phase:t.exitRegime?.phase??null,
     market_expectancy:t.entryContext?.marketExpectancy??null,entry_structure:t.entryContext?.entryStructure??null,
+    leverage:typeof t.leverage==="number"&&t.leverage>0?t.leverage:null,
     entry_rule:t.unopened?"NOT_OPENED":t.entryContext?.shockRoom?"SHOCK_EPISODE":t.entryContext?.transitionRule?"TRANSITION_ROOM":null,
     ...entryDecision(t),...stageFields(t),...qualityFields(t),...pathFields(t),...signalFields(t),...snapFields(t),...gapFields(t)};
 }
@@ -64,7 +67,7 @@ export function pathFields(t:Trade):Pick<OrderRecord,'coin_background'|'coin_rec
   return {coin_background:path.background,coin_recent:path.recent,coin_label:path.label,coin_versus:coinPathVersus(path,t.side),
     coin_background_pct:path.backgroundPct,coin_recent_pct:path.recentPct,coin_window_min:path.windowMin};
 }
-export function signalFields(t:Trade):Pick<OrderRecord,'signal_n'|'signal_gap_min'|'entry_spread_bps'|'signal_n_symbol'|'prev_side'|'prev_gap_min'|'prev_net_pct'|'prev_mfe_pct'>{
+export function signalFields(t:Trade):Pick<OrderRecord,'signal_n'|'signal_gap_min'|'entry_spread_bps'|'signal_n_symbol'|'prev_side'|'prev_gap_min'|'prev_net_pct'|'prev_mfe_pct'|'prev_mae_pct'>{
   const row=t.signalRepeat,spread=t.entrySpreadBps;
   const n=row?.n,gap=row?.gapMin;
   return {signal_n:typeof n==="number"&&n>=1?n:null,
@@ -74,7 +77,8 @@ export function signalFields(t:Trade):Pick<OrderRecord,'signal_n'|'signal_gap_mi
     prev_side:row?.prevSide==="LONG"||row?.prevSide==="SHORT"?row.prevSide:null,
     prev_gap_min:typeof row?.prevGapMin==="number"&&Number.isFinite(row.prevGapMin)?row.prevGapMin:null,
     prev_net_pct:typeof row?.prevNetPct==="number"&&Number.isFinite(row.prevNetPct)?row.prevNetPct:null,
-    prev_mfe_pct:typeof row?.prevMfePct==="number"&&Number.isFinite(row.prevMfePct)?row.prevMfePct:null};
+    prev_mfe_pct:typeof row?.prevMfePct==="number"&&Number.isFinite(row.prevMfePct)?row.prevMfePct:null,
+    prev_mae_pct:typeof row?.prevMaePct==="number"&&Number.isFinite(row.prevMaePct)?row.prevMaePct:null};
 }
 export function snapFields(t:Trade):Pick<OrderRecord,'mode'|'trade_plan'|'intent'|'long_score'|'short_score'|'residual_z'|'score'|'stop_price'|'planned_hold_min'|'volume24h_usd'|'funding_rate'|'trend_score'|'factor_30m_pct'>{
   const snap=t.entryContext?.entrySnap;

@@ -23,7 +23,7 @@ import { readEntryStructure, type EntryStructure } from "./entry-structure.ts";
 import { readCoinPath, type CoinPath } from "./coin-path.ts";
 import { transitionExitReason, type TransitionEntry } from "./transition-rule.ts";
 import { advanceShockEpisode, initialShockEpisode, normalizeShockEpisode, type ShockEpisode } from "./shock-episode.ts";
-import { advanceStageChronicle, attachStageSnap, equalWeightPriceIndex, equalWeightReturnPct, fillStageForward, initialStageChronicle, normalizeStageChronicle, stageStamp, type StageChronicle, type StageSnap, type StageStamp } from "./stage-chronicle.ts";
+import { advanceStageChronicle, attachStageSnap, equalWeightReturnPct, equalWeightReturnSince, fillStageForward, initialStageChronicle, normalizeStageChronicle, stageStamp, type StageChronicle, type StageSnap, type StageStamp } from "./stage-chronicle.ts";
 import { backfillSignalTally, earliestTallyAt, normalizeSignalTally, noteSignalOutcome, quoteSpreadBps, rememberSignalRepeat, type SignalRepeat, type SignalTally, type SignalTallyMeta } from "./signal-repeat.ts";
 import { ENTRY_RESPONSE_VERSION, entryResponseWindowMs, evaluateEntryResponse,
   type EntryResponseDecision } from "./market-intelligence-entry-response.ts";
@@ -365,7 +365,8 @@ function normalizeTrade(raw:Trade,now:number):Trade{
       prevSide:repeat.prevSide==="LONG"||repeat.prevSide==="SHORT"?repeat.prevSide:null,
       prevGapMin:typeof repeat.prevGapMin==="number"&&Number.isFinite(repeat.prevGapMin)&&repeat.prevGapMin>=0?repeat.prevGapMin:null,
       prevNetPct:typeof repeat.prevNetPct==="number"&&Number.isFinite(repeat.prevNetPct)?repeat.prevNetPct:null,
-      prevMfePct:typeof repeat.prevMfePct==="number"&&Number.isFinite(repeat.prevMfePct)?repeat.prevMfePct:null};
+      prevMfePct:typeof repeat.prevMfePct==="number"&&Number.isFinite(repeat.prevMfePct)?repeat.prevMfePct:null,
+      prevMaePct:typeof repeat.prevMaePct==="number"&&Number.isFinite(repeat.prevMaePct)?repeat.prevMaePct:null};
   }else delete t.signalRepeat;
   t.entrySpreadBps=typeof t.entrySpreadBps==="number"&&Number.isFinite(t.entrySpreadBps)&&t.entrySpreadBps>=0?t.entrySpreadBps:null;
   return t;
@@ -1734,7 +1735,9 @@ function nextCandleAt(paths:Record<string,Candle[]>,now:number){
 }
 export function advanceForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;minutePaths?:Record<string,Candle[]>;daily?:Record<string,Candle[]>;
   quotes:Record<string,Quote>;analysisQuotes?:Record<string,Quote>;contracts:Record<string,Contract>;entrySymbols?:Iterable<string>;learningSymbols?:Iterable<string>;allowDataCycle?:boolean;
-  legacyDrainOnly?:boolean;research?:MarketLifecycleResearchContext;reviewTrace?:(event:ReviewEvent)=>void}){
+  legacyDrainOnly?:boolean;research?:MarketLifecycleResearchContext;reviewTrace?:(event:ReviewEvent)=>void;
+  /** Log only (stage timeline snapshot): BTC/ETH prices when the analysis book does not carry them. Never read by a decision. */
+  referenceMids?:Partial<Record<"BTC_USDT"|"ETH_USDT",number|null>>}){
   // An optional observer has no return value or trading authority. A failed logger cannot block a trade.
   const trace=input.reviewTrace?(event:ReviewEvent)=>{try{input.reviewTrace!(event);}catch{/* diagnostics only */}}:undefined;
   const s=normalizeForward(structuredClone(input.state),input.now),
@@ -1793,14 +1796,16 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
     const internals=s.extremumRegime.internals,trendSign=marketEvolution.trendSide==="LONG"?1:marketEvolution.trendSide==="SHORT"?-1:0;
     const book=input.analysisQuotes??input.quotes;
     const midOf=(symbol:string)=>{const q=book[symbol];return q&&q.bestBid>0&&q.bestAsk>=q.bestBid?(q.bestBid+q.bestAsk)/2:null;};
-    const mids:number[]=[];
-    for(const q of Object.values(book))if(q&&q.bestBid>0&&q.bestAsk>=q.bestBid)mids.push((q.bestBid+q.bestAsk)/2);
+    const refMid=(symbol:"BTC_USDT"|"ETH_USDT")=>{const v=input.referenceMids?.[symbol];return typeof v==="number"&&v>0&&Number.isFinite(v)?v:null;};
     const snap:StageSnap={sync:internals?.synchrony??null,breadth:internals?.breadth3??null,expansion:marketEvolution.expansionScore??null,
       aligned_flow:trendSign?trendSign*(internals?.venuePressure??0):null,
       pressure:environmentOutlook.transitionPressure??null,persistence:environmentOutlook.persistenceScore??null,
-      btc:midOf("BTC_USDT"),eth:midOf("ETH_USDT"),factor:equalWeightPriceIndex(mids)};
+      btc:midOf("BTC_USDT")??refMid("BTC_USDT"),eth:midOf("ETH_USDT")??refMid("ETH_USDT"),factor:null,
+      factor_30m_pct:equalWeightReturnPct(Object.values(s.extremumRegime.symbols).map(row=>row.actualMove))};
     s.stageChronicle=attachStageSnap(s.stageChronicle,snap,input.now);
-    s.stageChronicle=fillStageForward(s.stageChronicle,snap.btc,snap.eth,snap.factor,input.now);
+    // Market factor after a switch = equal-weight return of the same coins between the switch and now (5m closes),
+    // not a ratio of two price indexes over different coin sets.
+    s.stageChronicle=fillStageForward(s.stageChronicle,snap.btc,snap.eth,(at:number)=>equalWeightReturnSince(input.paths,at),input.now);
   }catch{/* 阶段快照写失败不能挡住这一轮 */}
   if(marketReady)annotateLifecycleOpportunities(s,marketEvolution,environmentOutlook);
   manageIntelligenceTrades(s,input.quotes,input.now,input.minutePaths,marketEvolution,environmentOutlook,input.paths,input.contracts);

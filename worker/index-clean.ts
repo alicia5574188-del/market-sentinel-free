@@ -50,8 +50,10 @@ import {experimentReport} from '../lib/research-experiment.ts';
 import {emptyStrategyAccount, STRATEGY_EPOCH} from '../lib/strategy-slot.ts';
 import {emptyThesis, runThesisCycle, THESIS_STORAGE_KEY, type ThesisAttached, type ThesisMarket} from '../lib/thesis-attach.ts';
 import type {ThesisPublic} from '../lib/thesis-view.ts';
-import {buildRunLogExport,accountLogBook,closedLogRow,isCompleteTradeRecord} from '../lib/run-log.ts';
-import {adoptLegacyPaths,bookFromStoredPaths,commitPathWrite,emptyTradePathBook,exportTradePaths,observeTradePaths,peekPathWrite,pendingPathWrites,pathComplete,pruneGhostPaths,pruneOrphanPaths,searchHolding,TRADE_PATH_INDEX_KEY,TRADE_PATH_KEY,TRADE_PATH_PAGE_PREFIX,type TradePathBook,type TradePathIndex,type TradePathPage} from '../lib/trade-path.ts';
+import {RESEARCH_NOTES} from '../lib/log-complete.ts';
+import {buildRunLogExport,accountLogBook,closedLogRow,isCompleteTradeRecord,withResearchColumns} from '../lib/run-log.ts';
+import {entryFeatures,type RadarRow} from '../lib/entry-features.ts';
+import {adoptLegacyPaths,bookFromStoredPaths,commitPathWrite,emptyTradePathBook,exportTradePaths,observeTradePaths,peekPathWrite,pendingPathWrites,pathColumns,pathComplete,pruneGhostPaths,pruneOrphanPaths,searchHolding,TRADE_PATH_INDEX_KEY,TRADE_PATH_KEY,TRADE_PATH_PAGE_PREFIX,type TradePathBook,type TradePathIndex,type TradePathPage} from '../lib/trade-path.ts';
 import {emptyOrderJournal,observeOrderJournal,ORDER_JOURNAL_KEY,restoreOrderJournal,type OrderJournal} from '../lib/order-journal.ts';
 import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
 import {confirmationRealityView} from '../lib/confirmation-reality.ts';
@@ -555,6 +557,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private gateRadarCache: Awaited<ReturnType<typeof fetchGateRadarTickers>> = [];
   private gateRadarShortMoves=new Map<string,number>();
   private gateRadarAt=0;
+  /** Log only: radar rows by symbol, radar prices as a path fallback, and hourly open-interest anchors. */
+  private radarIndex=new Map<string,RadarRow>();
+  private radarFallback:Record<string,{px:number;at:number}>={};
+  private oiSlots:{current:{at:number;oi:Map<string,number>}|null;previous:{at:number;oi:Map<string,number>}|null}={current:null,previous:null};
   private authorityReady = true;
   private authorityView = { positions: {} as RuntimeState["positions"], equity: CANONICAL_PAPER_REFERENCE_EQUITY, equityVersion: 0 };
   protected liveClient: GateLiveClient | null = null;
@@ -1589,6 +1595,36 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
    * the cold not-opened rows (review log restored and complete), the closed-order journal and the path book.
    * Anything missing or inconsistent means nothing is removed. Never throws.
    */
+  /** Log only. Re-indexes the radar snapshot the worker already fetched; no request of its own. */
+  private noteRadarForLog(rows:RadarRow[],at:number){
+    this.radarIndex=new Map(rows.map(row=>[row.symbol,row]));
+    const fallback:Record<string,{px:number;at:number}>={};
+    for(const row of rows)if(row.last>0)fallback[row.symbol]={px:row.last,at};
+    this.radarFallback=fallback;
+    const slot=this.oiSlots;
+    if(!slot.current||at-slot.current.at>=60*60_000){
+      slot.previous=slot.current;
+      slot.current={at,oi:new Map(rows.filter(row=>row.openInterest>0).map(row=>[row.symbol,row.openInterest]))};
+    }
+  }
+  /** Log only (stage timeline): BTC/ETH reference prices from the external hub or the fresh radar snapshot. */
+  private referenceMids(now:number){
+    const pick=(symbol:"BTC_USDT"|"ETH_USDT")=>{
+      try{const q=this.marketHub.quote(symbol,now);if(q&&q.mid>0)return q.mid;}catch{/* fall through */}
+      const row=this.radarFallback[symbol];
+      return row&&now-row.at<=120_000?row.px:null;
+    };
+    return {BTC_USDT:pick("BTC_USDT"),ETH_USDT:pick("ETH_USDT")};
+  }
+  /** Entry features for a record the tick it first appears. Pure reads of data already in memory. */
+  private pathCapture(now:number,state:ForwardState){
+    const moves=Object.entries(state.extremumRegime?.symbols??{}).map(([symbol,row])=>({symbol,move:row.actualMove}));
+    const anchor=this.oiSlots.previous;
+    return {fallback:this.radarFallback,features:(t:import("../lib/forward-relations.ts").Trade)=>entryFeatures({t,now,
+      bars5m:this.strategyCandles[t.symbol]??null,radar:this.radarIndex,radarAt:this.gateRadarAt||null,
+      oiAnchor:anchor,btcHourly:this.regimeHourly.BTC_USDT??null,ethHourly:this.regimeHourly.ETH_USDT??null,moves})};
+  }
+
   private pruneGhostTradePaths(){
     try{
       const state=this.forwardState;
@@ -1702,10 +1738,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const next = advanceForward({ state: previous, now, paths: this.strategyCandles,minutePaths:this.forwardMinutePaths(),
         daily:this.turnDailyCandles,quotes:executionQuotes,analysisQuotes:this.forwardAnalysisQuotes(now),contracts:this.regimeContracts(),
         entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue,
-        research:{rolling:this.shadowResearch.market[0]?.rolling??null},reviewTrace:event=>{if(reviewEvents.length<128)reviewEvents.push(event);} });
+        research:{rolling:this.shadowResearch.market[0]?.rolling??null},reviewTrace:event=>{if(reviewEvents.length<128)reviewEvents.push(event);},
+        referenceMids:(()=>{try{return this.referenceMids(now);}catch{return undefined;}})() });
       try{captureTradeReviews(previous,next.state,now,FORWARD_BUILD_SHA,STRATEGY_FINGERPRINT,executionQuotes);}
       catch{this.reviewDiagnosticError="TRADE_REVIEW_CAPTURE_FAILED";}
-      if(this.tradePathsLoaded)this.tradePathsPending=observeTradePaths(this.tradePaths,next.state,executionQuotes,this.forwardAnalysisQuotes(now),now,this.strategyCandles)||this.tradePathsPending;
+      if(this.tradePathsLoaded){
+        let capture;try{capture=this.pathCapture(now,next.state);}catch{capture=undefined;}
+        this.tradePathsPending=observeTradePaths(this.tradePaths,next.state,executionQuotes,this.forwardAnalysisQuotes(now),now,this.strategyCandles,capture)||this.tradePathsPending;
+      }
       this.orderJournalPending=observeOrderJournal(this.orderJournal,next.state.history,next.state.startedAt)||this.orderJournalPending;
       if (next.changed || !previous.storage.persistedAt) {
         next.state.storage = { persistedAt: now, error: null };
@@ -4426,6 +4466,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
               moves=new Map<string,number>();
             for(const row of next){const prior=previous.get(row.symbol);if(prior&&prior>0)moves.set(row.symbol,row.last/prior-1);}
             this.gateRadarCache=next;this.gateRadarShortMoves=moves;this.gateRadarAt=Date.now();subrequests++;
+            try{this.noteRadarForLog(next,this.gateRadarAt);}catch{/* 只是记录用的索引 */}
           }catch{/* stale Gate-only discovery must never block external analysis */}
         }
         try{this.refreshRadar(Date.now());}
@@ -4594,11 +4635,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         const pathById=new Map(this.tradePaths.trades.map(row=>[row.id,row]));
         const file=buildRunLogExport({events:[],funnel:book.funnel,health:hub,gate,exportedAt,liveEnabled:this.runtime.live.requestedEnabled,
           positions:book.positions,fills:book.fills,curve:book.curve,equity:book.equity,initial:book.initial,closedNet:book.closedNet,
-          priorAdjustment:book.priorAdjustment,unreconstructed:book.unreconstructed,unreconstructedN:book.unreconstructedN,places:book.places,notOpened:[...book.notOpened,...archived.rows],stageTimeline:book.stageTimeline,liveFills:normalizeLiveFills(this.runtime.live.fills),equityMinutes:await this.readEquityMinutes(exportedAt),tallySince:book.tallySince,completeOnly:true,
+          priorAdjustment:book.priorAdjustment,unreconstructed:book.unreconstructed,unreconstructedN:book.unreconstructedN,places:book.places,notOpened:[...book.notOpened,...archived.rows],stageTimeline:book.stageTimeline,liveFills:normalizeLiveFills(this.runtime.live.fills),equityMinutes:(await this.readEquityMinutes(exportedAt)).filter(row=>row.ts>=state.startedAt),tallySince:book.tallySince,completeOnly:true,
           pathReady:pathsReady?(id,closed)=>pathComplete(pathById.get(id),closed):undefined});
         const shown=new Set<string>([...file.positions.map(row=>row.id),...file.not_opened.map(row=>row.id)]);
         const keep=(id:string)=>shown.has(id);
-        return json({...file,archive_read:{rows:archived.read,missing:archived.missing},path_check:pathsReady,
+        const columnsOf=(id:string)=>{try{return pathColumns(pathById.get(id));}catch{return null;}};
+        return json({...file,positions:withResearchColumns(file.positions,columnsOf),not_opened:withResearchColumns(file.not_opened,columnsOf),
+          equity_minutes_since:state.startedAt,researchNotes:RESEARCH_NOTES,archive_read:{rows:archived.read,missing:archived.missing},path_check:pathsReady,
           paths:exportTradePaths(this.tradePaths,keep),holding:searchHolding(this.tradePaths,keep)});
       }
       if(url.searchParams.get("page")==="archive"){

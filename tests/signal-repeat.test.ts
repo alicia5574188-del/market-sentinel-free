@@ -70,5 +70,6 @@ test("a stage snapshot is filled thirty minutes later and equity drawdown uses t
   const open=core.slice(core.indexOf("function openIntelligenceTrade"),core.indexOf("export function extremeResidualConfirmationProfile"));
   assert.equal([...open.matchAll(/rememberSignalRepeat\(s\.signalTally,o\.symbol,side,now,t\.id\)/g)].length,2);
   assert.equal([...open.matchAll(/rememberSignalRepeat\(s\.signalTally,o\.symbol,side,now\)/g)].length,0);
-  assert.match(core,/factor:equalWeightPriceIndex\(mids\)/);
+  assert.match(core,/fillStageForward\(s\.stageChronicle,snap\.btc,snap\.eth,\(at:number\)=>equalWeightReturnSince\(input\.paths,at\),input\.now\)/);
+  assert.doesNotMatch(core,/factor:equalWeightPriceIndex\(mids\)/);
 });

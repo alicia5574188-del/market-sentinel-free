@@ -19,7 +19,7 @@ export const LOG_REQUIRED = [
   // decision snapshot
   "mode", "trade_plan", "intent", "long_score", "short_score", "residual_z", "score", "stop_price", "planned_hold_min",
   "volume24h_usd", "funding_rate", "trend_score", "factor_30m_pct",
-  "gap_applicable",
+  "gap_applicable", "leverage",
 ] as const;
 
 /** Must be present once the record is closed (still-observing rows have no exit yet). */
@@ -37,6 +37,7 @@ export const LOG_NULL_BY_DESIGN: Record<string, string> = {
   prev_gap_min: "同上，没有上一笔",
   prev_net_pct: "同上，没有上一笔",
   prev_mfe_pct: "同上，没有上一笔",
+  prev_mae_pct: "同上，没有上一笔",
   coin_recent_pct: "进场前最后一根没有明确方向（coin_recent 为 NONE）时是空值",
   gap_bps: "只有止损出局才算滑点（gap_applicable 为 true），其他出局方式是空值",
   exit: "还在观察中（closed_at 为空）的单没有出场价", closed_at: "还在观察中", gross_pnl: "还在观察中时为浮动值或空值",
@@ -83,3 +84,19 @@ export const LOG_COMPLETE_DEFINITION =
   "信号次数（全市场、这个币）和开单时的价差；决策快照（模式、计划、意图、多空分、残差z、评分、止损价、计划持有、24h成交额、资金费率、趋势分、30分钟因子）。" +
   "已经结束的单还要有出场价、平仓时间、盈亏、出场阶段和出场原因。" +
   "按设计可以为空、不算缺：之前没有阶段/没有上一笔信号/还没出现过同步爆发/全市场没有方向/不是止损出局/还在观察中。";
+
+/** New research columns (entry features + path label). Notes for whoever reads the file. */
+export const RESEARCH_NOTES: Record<string, string> = {
+  浮盈口径: "浮盈一律按杠杆后的 ROE：价格涨跌幅 × leverage。没开进账户的单用它当时会用的杠杆。",
+  leverage: "这一笔用的（或会用的）杠杆倍数",
+  mfe_pct: "信号后 24 小时内最大顺向价格幅度（%）；mae_pct 是最大逆向幅度",
+  mfe_roe_pct: "mfe_pct × leverage；mae_roe_pct 同理；mfe_6h_roe_pct 只看前 6 小时",
+  reached_roe_5: "24 小时内杠杆后浮盈是否到过 5%；reached_roe_5_min 是第几分钟第一次到；reached_roe_10 是 10%；first_roe_5 是 +5% 和 -5%（杠杆后）谁先到：UP、DOWN、BOTH（同一分钟内都到）、NONE（都还没到）",
+  mae_before_mfe_pct: "到最高浮盈之前最深回撤（价格 %）",
+  hold_mfe_pct: "实际持仓期间最大浮盈（价格 %）；exit_giveback_pct 是出场时比最高点少拿了多少（价格 %）",
+  net_roe_pct: "已平净利 ÷ 保证金（notional ÷ leverage），扣过手续费；exit_move_pct 是出场价相对进场价的顺向幅度",
+  path_minutes: "这条路径已经覆盖信号后多少分钟；0–360 分钟每分钟一个点，360–1440 分钟每 15 分钟一个点",
+  入场特征: "chg_1h/4h_pct、atr_5m_pct、atr_ratio、vol_surge、dist_high/low_10h_pct、range_pos_10h 来自 5 分钟 K 线；chg_24h_pct、dist_high/low_24h_pct、chg_24h_rank、open_interest、oi_chg_pct 来自全市场行情快照；btc_1h/4h/24h_pct、eth_24h_pct 是大盘；mkt_with_share、mkt_with_strong、coin_move_rank 是全市场 30 分钟同向情况；stop_dist_pct、hour_utc、weekday 来自订单本身",
+  oi_chg_pct: "持仓量相对 60–120 分钟前的快照变化；刚部署的头一个小时没有基准，是空值，oi_anchor_min 是基准距今多少分钟",
+  paths_end: "paths 里 end 是出场那一刻的持仓管理状态（阶段、保护止损、利润地板、回吐比例、出场触发和证据）；peak 是创最高浮盈那一刻的状态；track 是开进账户的单每 30 分钟一次的状态",
+};

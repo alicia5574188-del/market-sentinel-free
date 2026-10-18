@@ -9,6 +9,8 @@ export type SignalRepeat={
   n:number;gapMin:number|null;
   nSymbol:number|null;prevSide:"LONG"|"SHORT"|null;prevGapMin:number|null;
   prevNetPct:number|null;prevMfePct:number|null;
+  /** 上一笔最大浮亏 %。旧记录没有这个键。 */
+  prevMaePct?:number|null;
 };
 export type SignalTallyMeta={backfilled:boolean;from:number|null};
 const CAP=2_000;
@@ -41,7 +43,8 @@ export function rememberSignalRepeat(tally:Record<string,SignalTally>|null|undef
   }
   return {tally:book,repeat:{n,gapMin,nSymbol,prevSide,prevGapMin,
     prevNetPct:typeof sym?.last_net_pct==="number"?sym.last_net_pct:null,
-    prevMfePct:typeof sym?.last_mfe_pct==="number"?sym.last_mfe_pct:null} satisfies SignalRepeat};
+    prevMfePct:typeof sym?.last_mfe_pct==="number"?sym.last_mfe_pct:null,
+    prevMaePct:typeof sym?.last_mae_pct==="number"?sym.last_mae_pct:null} satisfies SignalRepeat};
 }
 
 export function noteSignalOutcome(tally:Record<string,SignalTally>|null|undefined,row:{id:string;symbol:string;netPct:number|null;mfePct:number|null;maePct:number|null}){
