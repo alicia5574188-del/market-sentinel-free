@@ -50,8 +50,8 @@ import {experimentReport} from '../lib/research-experiment.ts';
 import {emptyStrategyAccount, STRATEGY_EPOCH} from '../lib/strategy-slot.ts';
 import {emptyThesis, runThesisCycle, THESIS_STORAGE_KEY, type ThesisAttached, type ThesisMarket} from '../lib/thesis-attach.ts';
 import type {ThesisPublic} from '../lib/thesis-view.ts';
-import {buildRunLogExport,accountLogBook} from '../lib/run-log.ts';
-import {adoptLegacyPaths,bookFromStoredPaths,commitPathWrite,emptyTradePathBook,exportTradePaths,observeTradePaths,peekPathWrite,pendingPathWrites,pruneGhostPaths,searchHolding,TRADE_PATH_INDEX_KEY,TRADE_PATH_KEY,TRADE_PATH_PAGE_PREFIX,type TradePathBook,type TradePathIndex,type TradePathPage} from '../lib/trade-path.ts';
+import {buildRunLogExport,accountLogBook,closedLogRow,isCompleteTradeRecord} from '../lib/run-log.ts';
+import {adoptLegacyPaths,bookFromStoredPaths,commitPathWrite,emptyTradePathBook,exportTradePaths,observeTradePaths,peekPathWrite,pendingPathWrites,pathComplete,pruneGhostPaths,pruneOrphanPaths,searchHolding,TRADE_PATH_INDEX_KEY,TRADE_PATH_KEY,TRADE_PATH_PAGE_PREFIX,type TradePathBook,type TradePathIndex,type TradePathPage} from '../lib/trade-path.ts';
 import {emptyOrderJournal,observeOrderJournal,ORDER_JOURNAL_KEY,restoreOrderJournal,type OrderJournal} from '../lib/order-journal.ts';
 import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
 import {confirmationRealityView} from '../lib/confirmation-reality.ts';
@@ -84,7 +84,7 @@ import { LIVE_PARITY_VERSION, LIVE_PARITY_PREFIX, buildProportionalMirror, forwa
 import { rememberLiveFill, normalizeLiveFills, applyConfirmedFillCosts, type LiveFillNote } from "../lib/live-fill-note.ts";
 import { quoteSpreadBps } from "../lib/signal-repeat.ts";
 import { collectEquityMinutes, equityMinuteKey, mergeEquityMinutes, sampleEquity, type EquityMinute } from "../lib/equity-minutes.ts";
-import { emptyReviewLogCursor, prepareReviewLogWrite, readReviewLog, restoreReviewLog, reviewLogOffload, type ReviewLogCursor } from "../lib/review-log-store.ts";
+import { emptyReviewLogCursor, prepareIncompletePrune, prepareReviewLogWrite, readArchivedUnopened, readReviewLog, restoreReviewLog, reviewLogOffload, type ReviewLogCursor } from "../lib/review-log-store.ts";
 // Inverse closes that merely follow the shadow are not protective; they may rest 2s.
 const MAKER_EXIT_REASONS=new Set(["SHADOW_SOURCE_EXIT"]);
 import { makerFirstEntry, makerEntryTag, MakerStateUnknownError, LIVE_MAKER_ENTRY_POLICY, LIVE_MAKER_ENTRY_ENABLED, type MakerResult } from "../lib/live-maker-entry.ts";
@@ -589,6 +589,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private ghostPathsRemoved=0;
   private ghostPathsRemaining=0;
   private ghostPathError:string|null=null;
+  private incompleteRowsRemoved=0;
+  private incompleteRowsRemaining:number|null=null;
+  private incompleteRowError:string|null=null;
+  private orphanPathsRemoved=0;
+  private orphanPathsRemaining=0;
   private reviewDiagnosticError:string|null=null;
   private forwardBusy = false;
   private deskCleanArmed = false;
@@ -1600,7 +1605,57 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         {capped:true,rows:[...state.history,...journal]}]});
       this.ghostPathsRemaining=result.remaining;this.ghostPathError=null;
       if(result.removed){this.ghostPathsRemoved+=result.removed;this.tradePathsPending=true;}
+      // Paths that no kept record owns (e.g. the path of an incomplete not-opened row removed below) leave the log too.
+      const owners=new Set<string>([...state.positions,...state.history,...unopened].map(t=>t.id));
+      for(const row of this.orderJournal.rows)owners.add(row.id);
+      for(const id of this.reviewLogCursor.coldIds)owners.add(id);
+      const orphan=pruneOrphanPaths(this.tradePaths,{startedAt:state.startedAt,complete:this.reviewLogCursor.startedAt===state.startedAt,ids:owners});
+      this.orphanPathsRemaining=orphan.remaining;
+      if(orphan.removed){this.orphanPathsRemoved+=orphan.removed;this.tradePathsPending=true;}
     }catch(error){this.ghostPathError=`GHOST_PATH_PRUNE:${safeError(error)}`;}
+  }
+
+  /**
+   * Log-only cleanup: closed not-opened rows that are not complete records (lib/log-complete.ts) leave the run log,
+   * from memory and from the cold archive, a small batch per tick. Runs after a successful forward save, only when
+   * the cold log was fully restored for this account. Never touches OPEN rows, positions, history or the balance,
+   * never throws, never blocks the tick (a failed or deferred write just retries next tick).
+   */
+  private async pruneIncompleteUnopened(){
+    try{
+      const state=this.forwardState;
+      if(!state||!this.authorityReady||this.forwardError)return;
+      if(!state.storage?.persistedAt||state.storage.error)return;
+      if(this.reviewLogReadyFor!==state.startedAt||!this.reviewLogComplete)return;
+      // The price path is part of a complete record, so the path book must be loaded for this account (and not
+      // empty) before anything is judged; otherwise every row would look incomplete.
+      if(!this.tradePathsLoaded||this.tradePaths.accountStartedAt!==state.startedAt||!this.tradePaths.trades.length)return;
+      const paths=new Map(this.tradePaths.trades.map(row=>[row.id,row]));
+      const plan=prepareIncompletePrune(state,this.reviewLogCursor,
+        t=>isCompleteTradeRecord(t)&&pathComplete(paths.get(t.id),t.status==="CLOSED"),undefined,
+        id=>pathComplete(paths.get(id),true));
+      if(!plan){return;}
+      this.incompleteRowsRemaining=plan.ids.size+plan.remaining;
+      if(!plan.ids.size)return;
+      if(plan.writes){
+        const reservation=this.reserveNonAlarmWrites(plan.writes,256);
+        if(!reservation)return;
+        try{
+          await this.ctx.storage.transaction(async transaction=>{
+            if(Object.keys(plan.entries).length)await transaction.put(plan.entries);
+            if(plan.deletes.length)await transaction.delete(plan.deletes);
+          });
+          reservation.finish(true);
+        }finally{reservation.finish(false);}
+      }
+      // Storage is now the truth: never list a deleted row again, even if the cursor or the account object moved on
+      // while awaiting (a listed-but-missing row would mark the cold log incomplete after the next restart).
+      if(this.reviewLogCursor.startedAt===state.startedAt)
+        this.reviewLogCursor={...this.reviewLogCursor,coldIds:this.reviewLogCursor.coldIds.filter(id=>!plan.ids.has(id))};
+      const current=this.forwardState;
+      if(current&&current.startedAt===state.startedAt)current.unopenedTrades=(current.unopenedTrades??[]).filter(t=>!plan.ids.has(t.id));
+      this.incompleteRowsRemoved+=plan.ids.size;this.incompleteRowsRemaining=plan.remaining;this.incompleteRowError=null;
+    }catch(error){this.incompleteRowError=`INCOMPLETE_ROW_PRUNE:${safeError(error)}`;}
   }
 
   private async persistTradePaths(){
@@ -1701,6 +1756,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         appendReviewEvents(this.reviewJournal,[...discovered,...reviewEvents].map(e=>({...e,
           buildSha:FORWARD_BUILD_SHA,strategyFingerprint:STRATEGY_FINGERPRINT})),now);
       }catch{this.reviewDiagnosticError="CANDIDATE_REVIEW_CAPTURE_FAILED";}
+      await this.pruneIncompleteUnopened();
       this.pruneGhostTradePaths();
       if(this.tradePathsPending)await this.persistTradePaths();
       if(this.orderJournalPending){
@@ -4523,13 +4579,27 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(url.searchParams.get("kind")==="log"){
         const exportedAt=Date.now(),hub=this.marketHub.status(exportedAt),gate=this.gateStream.status(exportedAt);
         await this.ensureReviewLog();
-        const book=accountLogBook(this.forwardState,this.forwardQuotes(exportedAt),exportedAt,this.orderJournal);
         await this.ensureTradePaths();
         await this.ensureOrderJournal();
-        return json({...buildRunLogExport({events:[],funnel:book.funnel,health:hub,gate,exportedAt,liveEnabled:this.runtime.live.requestedEnabled,
+        const state=this.forwardState;
+        const book=accountLogBook(state,this.forwardQuotes(exportedAt),exportedAt,this.orderJournal);
+        // Archived not-opened rows older than the in-memory window: read only here, in batches, as export rows.
+        let archived:{rows:ReturnType<typeof closedLogRow>[];read:number;missing:number}={rows:[],read:0,missing:0};
+        if(this.reviewLogReadyFor===state.startedAt&&this.reviewLogCursor.startedAt===state.startedAt){
+          try{archived=await readArchivedUnopened(this.ctx.storage,state.startedAt,this.reviewLogCursor.coldIds,
+            new Set((state.unopenedTrades??[]).map(t=>t.id)),t=>closedLogRow(t));}catch{/* 归档读不到就只导出内存里的 */}
+        }
+        // Paths unreadable right now: records are still judged on their own fields, and the file says the path check was skipped.
+        const pathsReady=this.tradePathsLoaded&&this.tradePaths.accountStartedAt===state.startedAt;
+        const pathById=new Map(this.tradePaths.trades.map(row=>[row.id,row]));
+        const file=buildRunLogExport({events:[],funnel:book.funnel,health:hub,gate,exportedAt,liveEnabled:this.runtime.live.requestedEnabled,
           positions:book.positions,fills:book.fills,curve:book.curve,equity:book.equity,initial:book.initial,closedNet:book.closedNet,
-          priorAdjustment:book.priorAdjustment,unreconstructed:book.unreconstructed,unreconstructedN:book.unreconstructedN,places:book.places,notOpened:book.notOpened,stageTimeline:book.stageTimeline,liveFills:normalizeLiveFills(this.runtime.live.fills),equityMinutes:await this.readEquityMinutes(exportedAt),tallySince:book.tallySince}),
-          paths:exportTradePaths(this.tradePaths),holding:searchHolding(this.tradePaths)});
+          priorAdjustment:book.priorAdjustment,unreconstructed:book.unreconstructed,unreconstructedN:book.unreconstructedN,places:book.places,notOpened:[...book.notOpened,...archived.rows],stageTimeline:book.stageTimeline,liveFills:normalizeLiveFills(this.runtime.live.fills),equityMinutes:await this.readEquityMinutes(exportedAt),tallySince:book.tallySince,completeOnly:true,
+          pathReady:pathsReady?(id,closed)=>pathComplete(pathById.get(id),closed):undefined});
+        const shown=new Set<string>([...file.positions.map(row=>row.id),...file.not_opened.map(row=>row.id)]);
+        const keep=(id:string)=>shown.has(id);
+        return json({...file,archive_read:{rows:archived.read,missing:archived.missing},path_check:pathsReady,
+          paths:exportTradePaths(this.tradePaths,keep),holding:searchHolding(this.tradePaths,keep)});
       }
       if(url.searchParams.get("page")==="archive"){
         const startedAt=Number(url.searchParams.get("accountStartedAt")),asOf=Number(url.searchParams.get("asOf"));
@@ -4621,7 +4691,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           criticalProtection:protectionWriteBudgetView(this.forwardProtectionBudget,Date.now()),
           previous:this.runtime.resourceRollovers?.at(-1)??null,forwardCompression:this.forwardCompression,
           reviewLog:{readyFor:this.reviewLogReadyFor,coldUnopened:this.reviewLogCursor.coldIds.length,error:this.reviewLogError,complete:this.reviewLogComplete},
-          ghostPaths:{removed:this.ghostPathsRemoved,remaining:this.ghostPathsRemaining,error:this.ghostPathError}},
+          ghostPaths:{removed:this.ghostPathsRemoved,remaining:this.ghostPathsRemaining,error:this.ghostPathError},
+          incompleteLog:{rowsRemoved:this.incompleteRowsRemoved,rowsRemaining:this.incompleteRowsRemaining,error:this.incompleteRowError,
+            orphanPathsRemoved:this.orphanPathsRemoved,orphanPathsRemaining:this.orphanPathsRemaining}},
         forward: this.forwardHealth(),
         legacyRetired: true,
         mode: this.runtime.mode,

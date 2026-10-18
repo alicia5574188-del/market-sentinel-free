@@ -14,7 +14,17 @@ export const REVIEW_TALLY_KEY = `${REVIEW_LOG_PREFIX}tally`;
 const UNOPENED_PREFIX = `${REVIEW_LOG_PREFIX}unopened:`;
 /** Closed not-opened rows stay hot while the trade-path recorder still samples them (360 min after open) plus margin. */
 export const UNOPENED_HOT_WINDOW_MS = (360 + 30) * 60_000;
-export const UNOPENED_COLD_CAP = 800;
+/**
+ * How many closed not-opened rows the cold archive keeps (one storage key each, written once). Equal to the
+ * trade-path cap: a record is complete only together with its path, so the run log keeps one limit, 1200 records.
+ * Only the newest UNOPENED_MEMORY_CAP are loaded back into the in-memory account at boot; the rest stay in storage
+ * and are read only by the run-log export, so the per-tick cost does not grow.
+ */
+export const UNOPENED_COLD_CAP = 1200;
+/** Closed not-opened rows kept in the in-memory account (cloned every tick). Same value as the account's own trim. */
+export const UNOPENED_MEMORY_CAP = 800;
+/** Incomplete-row cleanup: at most this many rows per tick. */
+export const INCOMPLETE_PRUNE_LIMIT = 48;
 /** Keep each stored value well under the per-value ceiling the repo already budgets for (112 KiB). */
 const PART_BYTES = 96 * 1024;
 const MAX_ROWS_PER_WRITE = 48;
@@ -94,10 +104,15 @@ export function prepareReviewLogWrite(state: ForwardState, now: number, cursor: 
   const fresh = coldEligibleUnopened(state, now).filter(t => !known.has(t.id)).slice(0, MAX_ROWS_PER_WRITE);
   for (const t of fresh) entries[unopenedRowKey(state.startedAt, t.id)] = structuredClone(t);
   if (fresh.length) {
+    // coldIds is newest first. Archive rows beyond the memory window are not in `state`, so their order is kept as
+    // stored instead of being re-sorted by an unknown time (which would evict them first).
     const byTime = new Map<string, number>();
     for (const t of state.unopenedTrades ?? []) byTime.set(t.id, t.openedAt);
-    const ids = [...fresh.map(t => t.id), ...next.coldIds];
-    ids.sort((a, b) => (byTime.get(b) ?? 0) - (byTime.get(a) ?? 0));
+    const freshIds = new Set(fresh.map(t => t.id));
+    const loaded = next.coldIds.filter(id => byTime.has(id)), archived = next.coldIds.filter(id => !byTime.has(id));
+    const recent = [...fresh.map(t => t.id), ...loaded.filter(id => !freshIds.has(id))];
+    recent.sort((a, b) => (byTime.get(b) ?? 0) - (byTime.get(a) ?? 0));
+    const ids = [...recent, ...archived];
     const keep = ids.slice(0, UNOPENED_COLD_CAP);
     for (const id of ids.slice(UNOPENED_COLD_CAP)) deletes.push(unopenedRowKey(state.startedAt, id));
     next.coldIds = keep;
@@ -126,11 +141,15 @@ export async function readReviewLog(storage: Reader, startedAt: number): Promise
   const ids = Array.isArray(index?.ids) ? index!.ids.filter(id => typeof id === "string").slice(0, UNOPENED_COLD_CAP) : [];
   const rows: Trade[] = [];
   const durable: string[] = [];
-  for (let i = 0; i < ids.length; i += 64) {
-    const batch = ids.slice(i, i + 64);
+  // Only the newest memory window comes back into the account; older archive ids stay listed (they were written
+  // before the index that names them) and are read only by the export.
+  const loadIds = ids.slice(0, UNOPENED_MEMORY_CAP);
+  for (let i = 0; i < loadIds.length; i += 64) {
+    const batch = loadIds.slice(i, i + 64);
     const got = await Promise.all(batch.map(id => storage.get<Trade>(unopenedRowKey(startedAt, id)).catch(() => undefined)));
     got.forEach((t, j) => { if (t && t.id === batch[j]) { rows.push(t); durable.push(t.id); } else unopenedComplete = false; });
   }
+  durable.push(...ids.slice(UNOPENED_MEMORY_CAP));
   return {
     changes: Array.isArray(stage?.changes) ? stage!.changes : null,
     tally: tally?.tally && typeof tally.tally === "object" ? tally.tally : null,
@@ -155,7 +174,53 @@ export function restoreReviewLog(state: ForwardState, log: ReviewLog) {
     const seen = new Set(hot.map(t => t.id));
     const cold = log.unopened.filter(t => !seen.has(t.id)).sort((a, b) => b.openedAt - a.openedAt);
     const merged = [...hot, ...cold];
-    state.unopenedTrades = [...merged.filter(t => t.status === "OPEN"), ...merged.filter(t => t.status !== "OPEN").slice(0, UNOPENED_COLD_CAP)];
+    state.unopenedTrades = [...merged.filter(t => t.status === "OPEN"), ...merged.filter(t => t.status !== "OPEN").slice(0, UNOPENED_MEMORY_CAP)];
   }
   return state;
+}
+
+/**
+ * Run-log export only: archived rows older than the in-memory window, read from storage in small batches and turned
+ * into export rows right away (so at most one batch of full rows is held). Missing keys are skipped.
+ */
+export async function readArchivedUnopened<R>(storage: Reader, startedAt: number, coldIds: readonly string[], skip: ReadonlySet<string>, toRow: (t: Trade) => R | null) {
+  const ids = coldIds.filter(id => !skip.has(id)).slice(0, UNOPENED_COLD_CAP);
+  const rows: R[] = [];
+  let missing = 0;
+  for (let i = 0; i < ids.length; i += 64) {
+    const batch = ids.slice(i, i + 64);
+    const got = await Promise.all(batch.map(id => storage.get<Trade>(unopenedRowKey(startedAt, id)).catch(() => undefined)));
+    got.forEach((t, j) => {
+      if (!t || t.id !== batch[j] || t.status !== "CLOSED") { missing++; return; }
+      const row = toRow(t);
+      if (row != null) rows.push(row);
+    });
+  }
+  return { rows, read: ids.length, missing };
+}
+
+/**
+ * Remove closed not-opened rows that are not complete records (see lib/log-complete.ts) from the run log.
+ * Plans at most `limit` rows. Storage order for the caller: write the new index first, then delete row keys, in one
+ * transaction; adopt `cursor` and drop `ids` from the in-memory account only after it commits. Idempotent: a row
+ * that comes back (crash before the next account save) is planned again. OPEN rows are never touched.
+ */
+export function prepareIncompletePrune(state: ForwardState, cursor: ReviewLogCursor, complete: (t: Trade) => boolean, limit = INCOMPLETE_PRUNE_LIMIT,
+  /** Archived rows (cold, not in memory) are judged by id only: false = incomplete (e.g. its path is gone). */
+  archivedComplete?: (id: string) => boolean) {
+  if (cursor.startedAt !== state.startedAt) return null;
+  const inMemory = new Set((state.unopenedTrades ?? []).map(t => t.id));
+  const bad = [
+    ...(state.unopenedTrades ?? []).filter(t => t.status === "CLOSED" && !complete(t)).map(t => t.id),
+    ...(archivedComplete ? cursor.coldIds.filter(id => !inMemory.has(id) && !archivedComplete(id)) : []),
+  ];
+  if (!bad.length) return { ids: new Set<string>(), entries: {} as Record<string, unknown>, deletes: [] as string[], cursor, writes: 0, remaining: 0 };
+  const doomed = bad.slice(Math.max(0, bad.length - Math.max(0, limit)));
+  const ids = new Set(doomed);
+  const cold = cursor.coldIds.filter(id => ids.has(id));
+  const keep = cursor.coldIds.filter(id => !ids.has(id));
+  const entries: Record<string, unknown> = {};
+  if (cold.length) entries[unopenedIndexKey(state.startedAt)] = { version: "review-unopened-index-v1", ids: keep };
+  const deletes = cold.map(id => unopenedRowKey(state.startedAt, id));
+  return { ids, entries, deletes, cursor: { ...cursor, coldIds: keep }, writes: Object.keys(entries).length + deletes.length, remaining: bad.length - doomed.length };
 }

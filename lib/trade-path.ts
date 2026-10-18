@@ -7,7 +7,8 @@ export const TRADE_PATH_PAGE_PREFIX='market-intelligence:trade-paths:v2:';
 export const TRADE_PATH_VERSION='trade-path-v1' as const;
 export const TRADE_PATH_PAGE_VERSION='trade-path-v2' as const;
 const AFTER_MINUTES=360;
-const PATH_CAP=1200;
+/** Run-log record cap. Same number as the not-opened archive (UNOPENED_COLD_CAP): one limit for records + paths. */
+export const PATH_CAP=1200;
 const PATH_PAGE_SIZE=4;
 const PAGE_BYTE_BUDGET=96_000;
 const PRICE_WINDOW_MS=5*60_000;
@@ -118,12 +119,18 @@ export function observeTradePaths(book:TradePathBook,state:ForwardState,executio
     if(!row.hold.length&&note(row.hold,0,row.entry)){markDirty(book,row.page??0);changed=true;}
   }
   if(book.trades.length>PATH_CAP){
-    const dropped=book.trades.splice(PATH_CAP);
+    // Oldest records go first, but never the path of a record that is still open (a long hold keeps its path).
+    const open=new Set([...state.positions,...(state.unopenedTrades??[])].filter(t=>t.status==='OPEN').map(t=>t.id));
+    const dropped:TradePath[]=[];
+    for(let i=book.trades.length-1;i>=0&&book.trades.length-dropped.length>PATH_CAP;i--)
+      if(!open.has(book.trades[i]!.id))dropped.push(book.trades[i]!);
+    const gone=new Set(dropped);
+    book.trades=book.trades.filter(row=>!gone.has(row));
     for(const page of new Set(dropped.map(row=>row.page??0))){
       if(book.trades.some(row=>(row.page??0)===page))markDirty(book,page);
       else retirePage(book,page);
     }
-    changed=true;
+    if(dropped.length)changed=true;
   }
   return changed;
 }
@@ -180,6 +187,37 @@ export function pruneGhostPaths(book:TradePathBook,owners:PathOwnerSets,limit=GH
   }
   book.indexDirty=true;
   return {removed:doomed.size,remaining,cutoff:plan.cutoff};
+}
+
+/**
+ * Orphan paths: rows whose id is owned by no record the run log keeps (account positions/history, the closed-order
+ * journal, in-memory not-opened rows and every id in the cold not-opened archive). A path alone is not an order
+ * record, so it leaves the log. This is what follows an incomplete not-opened row out of the log after that row is
+ * removed. Account trades keep their paths: the journal (4000) holds more closed trades than PATH_CAP, so an account
+ * trade path always has an owner. Same guards as pruneGhostPaths: `complete` must mean every owner set is loaded.
+ */
+export const ORPHAN_PRUNE_LIMIT=64;
+/** A record's price path is part of a complete record: it must exist with the entry point, and a closed record's
+ * path must carry the exit. */
+export function pathComplete(row:TradePath|undefined,closed:boolean){
+  return !!row&&row.hold.length>0&&(!closed||(row.exit!=null&&row.exitAt!=null));
+}
+export function pruneOrphanPaths(book:TradePathBook,owners:{startedAt:number;complete:boolean;ids:ReadonlySet<string>},limit=ORPHAN_PRUNE_LIMIT){
+  if(!owners.complete||book.accountStartedAt!==owners.startedAt||!owners.ids.size)return {removed:0,remaining:0};
+  const doomed=new Set<TradePath>();let remaining=0;
+  for(const row of book.trades){
+    if(owners.ids.has(row.id))continue;
+    if(doomed.size<Math.max(0,limit))doomed.add(row);else remaining++;
+  }
+  if(!doomed.size)return {removed:0,remaining};
+  const pages=new Set([...doomed].map(row=>row.page??0));
+  book.trades=book.trades.filter(row=>!doomed.has(row));
+  for(const page of pages){
+    if(book.trades.some(row=>(row.page??0)===page))markDirty(book,page);
+    else retirePage(book,page);
+  }
+  book.indexDirty=true;
+  return {removed:doomed.size,remaining};
 }
 
 function nextPathPage(book:TradePathBook){
@@ -254,8 +292,8 @@ export type PathExport={
   maxFavorablePct:number;maxAdversePct:number;bestHoldMin:number|null;direction:string;
   hold:PathPoint[];after:PathPoint[];
 };
-export function exportTradePaths(book:TradePathBook):PathExport[]{
-  return book.trades.map(row=>{
+export function exportTradePaths(book:TradePathBook,keep?:(id:string)=>boolean):PathExport[]{
+  return (keep?book.trades.filter(row=>keep(row.id)):book.trades).map(row=>{
     const peak=extreme(row);
     return {id:row.id,symbol:row.symbol,side:row.side,entry:row.entry,exit:row.exit,openedAt:row.openedAt,closedAt:row.exitAt,
       maxFavorablePct:round(peak.favorable*100),maxAdversePct:round(peak.adverse*100),bestHoldMin:peak.minute,
@@ -264,8 +302,8 @@ export function exportTradePaths(book:TradePathBook):PathExport[]{
   });
 }
 
-export function searchHolding(book:TradePathBook){
-  const rows=book.trades.filter(row=>row.hold.length>0);
+export function searchHolding(book:TradePathBook,keep?:(id:string)=>boolean){
+  const rows=book.trades.filter(row=>row.hold.length>0&&(!keep||keep(row.id)));
   if(!rows.length)return {trades:0,best:null,profitable:false,verdict:'重置之后还没有走出价格路径。新单从下一拍开始记，从信号起 6 小时的每一分钟都会留下，到点就停。'};
   let best:{tpPct:number;slPct:number;holdMin:number;net:number;wins:number;trades:number}|null=null;
   for(const tp of TAKE_PROFITS)for(const sl of STOP_LOSSES)for(const holdMin of HOLD_MINUTES){

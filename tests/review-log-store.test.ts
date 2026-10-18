@@ -4,7 +4,7 @@ import { initialForward, normalizeForward, resetForwardAccountPreservingLearning
 import { prepareForwardWrite, readForwardStore, hotProjectionForMeasure, FORWARD_PAIRED_ACCOUNT_MAX_BYTES } from "../lib/forward-store.ts";
 import { emptyStrategyAccount } from "../lib/strategy-slot.ts";
 import { emptyReviewLogCursor, prepareReviewLogWrite, readReviewLog, restoreReviewLog, reviewLogOffload,
-  unopenedRowKey, UNOPENED_HOT_WINDOW_MS, REVIEW_TALLY_KEY } from "../lib/review-log-store.ts";
+  unopenedRowKey, UNOPENED_HOT_WINDOW_MS, UNOPENED_COLD_CAP, REVIEW_TALLY_KEY } from "../lib/review-log-store.ts";
 import { accountLogBook } from "../lib/run-log.ts";
 import { backfillSignalTally } from "../lib/signal-repeat.ts";
 
@@ -126,12 +126,12 @@ test("account reset keeps the counter and never deletes the old account's cold r
   assert.ok(!Object.keys(plan.entries).some(k=>k.includes(`:${s.startedAt}:`)));
 });
 
-test("cold rows keep the existing 800 closed-row retention",()=>{
+test("cold archive keeps at most UNOPENED_COLD_CAP closed rows",()=>{
   const s=fixture(10);
-  const cursor={...emptyReviewLogCursor(),startedAt:s.startedAt,coldIds:Array.from({length:800},(_,i)=>`old-${i}`)};
+  const cursor={...emptyReviewLogCursor(),startedAt:s.startedAt,coldIds:Array.from({length:UNOPENED_COLD_CAP},(_,i)=>`old-${i}`)};
   s.unopenedTrades!.push(unopened(77777,T-30*3600_000));
   const plan=prepareReviewLogWrite(s,T,cursor);
-  assert.equal(plan.cursor.coldIds.length,800);
+  assert.equal(plan.cursor.coldIds.length,UNOPENED_COLD_CAP);
   assert.ok(plan.deletes.every(k=>k.startsWith("log:review:v1:unopened:")));
   assert.ok(plan.entries[unopenedRowKey(s.startedAt,"un-77777")]);
 });

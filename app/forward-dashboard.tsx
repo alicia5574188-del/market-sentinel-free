@@ -89,7 +89,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
     const log=await response.json() as {version?:string;exportedAt?:number;positions?:unknown[];funnel?:{scans?:number;signals?:number;filled?:number;trend?:number;exhaustion?:number;stale?:number};breakdown?:{verdict?:string}};
     const at=log.exportedAt??Date.now();
     const stamp=new Date(at+8*60*60*1000).toISOString().replace(/[-:]/g,"").slice(0,15);
-    const blob=new Blob([JSON.stringify(log,null,2)],{type:"application/json"}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`lsr-run-log-${stamp}.json`;
+    const blob=new Blob([JSON.stringify(log)],{type:"application/json"}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`lsr-run-log-${stamp}.json`;
     document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
     const n=log.positions?.length??0;
     setExportStatus(`已开始下载 ${a.download}。里面 ${n} 笔。`);

@@ -6,6 +6,7 @@ import {PAPER_COST,freshQuote,forwardEquity} from './forward-relations.ts';
 import {readStageTimeline} from './stage-chronicle.ts';
 import {type LiveFillNote} from './live-fill-note.ts';
 import {summarizeEquity, type EquityMinute} from './equity-minutes.ts';
+import {isCompleteLogRow,exportLogRow,logRowGaps,LOG_COMPLETE_DEFINITION,LOG_NULL_BY_DESIGN} from './log-complete.ts';
 export type LogCat='STRAT'|'EXEC'|'DATA'|'RISK'|'SYS'|'PNL';
 export type RunEvent={ts:number;level:'DEBUG'|'INFO'|'WARN'|'ERROR';cat:LogCat;symbol:string|null;event:string;reason:string|null;
   fields:Record<string,number|string|boolean|null>;trace:string};
@@ -29,7 +30,7 @@ export function placeFromEvent(fields:RunEvent['fields']):LsrPlace|null{
 }
 export function placesFromEvents(events:RunEvent[]){return events.filter(event=>event.event==='order_placing').map(event=>placeFromEvent(event.fields)).filter((row):row is LsrPlace=>row!=null);}
 export type LsrFill={ts:number;symbol:string;side:'LONG'|'SHORT';price:number;qty:number;notional:number;fee:number;tag:'open'|'close';trace:string;waitMs:number|null;limit:number|null};
-export type LsrPositionRow={id:string;symbol:string;side:'LONG'|'SHORT';entry:number;exit:number|null;qty:number;notional:number;gross_pnl:number|null;fee:number;net_pnl:number|null;holdSec:number;exit_reason:'stop'|'tp'|'time'|'prior'|'tp1'|'tp2'|'sl'|'invalidate'|'external'|'dropped'|null;gapBps:number|null;opened_at:number;closed_at:number|null;trace:string;entry_structure?:EntryStructure|null;market_stage?:string|null;market_expectancy?:number|null;entry_phase?:string|null;exit_stage?:string|null;exit_phase?:string|null;exit_trigger?:string|null;entry_rule?:string|null;entry_signal?:'LONG'|'SHORT'|null;entry_fade?:boolean|null;entry_room_pct?:number|null;entry_room_touches?:number|null;live_stage?:string|null;prior_stage?:string|null;stage_age_min?:number|null;minutes_since_shock?:number|null;shock_push?:number|null;sync_drop?:number|null;trend_side?:'LONG'|'SHORT'|null;with_trend?:boolean|null;book?:number|null;residual?:number|null;relative_strength?:number|null;move30?:number|null;sync?:number|null;breadth?:number|null;coin_background?:string|null;coin_recent?:string|null;coin_label?:string|null;coin_versus?:string|null;coin_background_pct?:number|null;coin_recent_pct?:number|null;coin_window_min?:number|null;signal_n?:number|null;signal_gap_min?:number|null;entry_spread_bps?:number|null;signal_n_symbol?:number|null;prev_side?:'LONG'|'SHORT'|null;prev_gap_min?:number|null;prev_net_pct?:number|null;prev_mfe_pct?:number|null;shock_seen?:boolean|null;mode?:string|null;trade_plan?:string|null;intent?:string|null;long_score?:number|null;short_score?:number|null;residual_z?:number|null;score?:number|null;stop_price?:number|null;planned_hold_min?:number|null;volume24h_usd?:number|null;funding_rate?:number|null;trend_score?:number|null;factor_30m_pct?:number|null;gap_applicable?:boolean|null;tally_since?:number|null};
+export type LsrPositionRow={id:string;symbol:string;side:'LONG'|'SHORT';entry:number;exit:number|null;qty:number;notional:number;gross_pnl:number|null;fee:number;net_pnl:number|null;holdSec:number;exit_reason:'stop'|'tp'|'time'|'prior'|'tp1'|'tp2'|'sl'|'invalidate'|'external'|'dropped'|null;gapBps:number|null;opened_at:number;closed_at:number|null;trace:string;entry_structure?:EntryStructure|null;market_stage?:string|null;market_expectancy?:number|null;entry_phase?:string|null;exit_stage?:string|null;exit_phase?:string|null;exit_trigger?:string|null;entry_rule?:string|null;entry_signal?:'LONG'|'SHORT'|null;entry_fade?:boolean|null;entry_room_pct?:number|null;entry_room_touches?:number|null;live_stage?:string|null;prior_stage?:string|null;stage_age_min?:number|null;minutes_since_shock?:number|null;shock_push?:number|null;sync_drop?:number|null;trend_side?:'LONG'|'SHORT'|null;with_trend?:boolean|null;book?:number|null;residual?:number|null;relative_strength?:number|null;move30?:number|null;sync?:number|null;breadth?:number|null;coin_background?:string|null;coin_recent?:string|null;coin_label?:string|null;coin_versus?:string|null;coin_background_pct?:number|null;coin_recent_pct?:number|null;coin_window_min?:number|null;signal_n?:number|null;signal_gap_min?:number|null;entry_spread_bps?:number|null;signal_n_symbol?:number|null;prev_side?:'LONG'|'SHORT'|null;prev_gap_min?:number|null;prev_net_pct?:number|null;prev_mfe_pct?:number|null;shock_seen?:boolean|null;mode?:string|null;trade_plan?:string|null;intent?:string|null;long_score?:number|null;short_score?:number|null;residual_z?:number|null;score?:number|null;stop_price?:number|null;planned_hold_min?:number|null;volume24h_usd?:number|null;funding_rate?:number|null;trend_score?:number|null;factor_30m_pct?:number|null;gap_applicable?:boolean|null;gap_bps?:number|null;tally_since?:number|null};
 export type LsrCurvePoint={ts:number;equity:number;closed_pnl:number;unrealized_pnl:number;positions:number};
 const ROW_CAP=8_000;
 export function rememberRow<T>(rows:T[]|undefined,row:T){return [...(rows??[]),row].slice(-ROW_CAP);}
@@ -37,7 +38,11 @@ export function rememberRow<T>(rows:T[]|undefined,row:T){return [...(rows??[]),r
 export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null;health:{sources?:{source:string;fresh?:boolean;failures?:number;lastError?:string|null;rows?:number}[];healthySources?:number};gate:{connected?:boolean;lastError?:string|null;freshBooks?:number};exportedAt:number;liveEnabled:boolean;
   positions?:LsrPositionRow[];fills?:LsrFill[];curve?:LsrCurvePoint[];equity?:number|null;initial?:number|null;closedNet?:number|null;priorAdjustment?:number|null;
   unreconstructed?:number|null;unreconstructedN?:number|null;
-  places?:LsrPlace[]|null;notOpened?:LsrPositionRow[]|null;stageTimeline?:ReturnType<typeof readStageTimeline>|null;liveFills?:LiveFillNote[]|null;equityMinutes?:EquityMinute[]|null;tallySince?:number|null}){
+  places?:LsrPlace[]|null;notOpened?:LsrPositionRow[]|null;stageTimeline?:ReturnType<typeof readStageTimeline>|null;liveFills?:LiveFillNote[]|null;equityMinutes?:EquityMinute[]|null;tallySince?:number|null;
+  /** Run-log export: only complete records leave (see lib/log-complete.ts). Account sums still use every row. */
+  completeOnly?:boolean;
+  /** With completeOnly: the record's price path is part of a complete record (false = path missing or unfinished). */
+  pathReady?:(id:string,closed:boolean)=>boolean}){
   const funnel=input.funnel??emptyFunnel('');
   const strategy={signal_not_triggered:funnel.trend+funnel.exhaustion+funnel.sweep+funnel.micro+funnel.spread,
     signal_triggered_no_fill:funnel.cancelled};
@@ -64,6 +69,22 @@ export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null
   const timeline=input.stageTimeline??[];
   const tallySince=input.tallySince??null;
   const withTally=<T extends object>(rows:T[])=>rows.map(row=>({...row,tally_since:tallySince}));
+  const completeOnly=input.completeOnly===true;
+  const pathOk=(row:LsrPositionRow)=>!input.pathReady||input.pathReady(row.id,row.closed_at!=null||row.exit!=null);
+  const complete=(row:LsrPositionRow)=>isCompleteLogRow(row as unknown as Record<string,unknown>)&&pathOk(row);
+  const missing=(row:LsrPositionRow)=>[...logRowGaps(row as unknown as Record<string,unknown>),...(pathOk(row)?[]:['price_path'])];
+  const shownPositions=completeOnly?positions.filter(complete):positions;
+  const allNotOpened=input.notOpened??[];
+  const shownNotOpened=completeOnly?allNotOpened.filter(complete):allNotOpened;
+  const shownIds=new Set(shownPositions.map(row=>row.trace));
+  const hiddenPositions=positions.filter(row=>!shownIds.has(row.trace));
+  const clean=<T extends object>(rows:T[]):T[]=>completeOnly?rows.map(row=>exportLogRow(row as unknown as Record<string,unknown>) as unknown as T):rows;
+  const completeness=completeOnly?{definition:LOG_COMPLETE_DEFINITION,
+    positions_shown:shownPositions.length,positions_left_out:hiddenPositions.length,
+    positions_left_out_net:Number(hiddenPositions.reduce((n,row)=>n+(row.net_pnl??0),0).toFixed(4)),
+    positions_left_out_note:'信息不完整的旧单不在 positions 里，但账户本身没删：权益、已平净利、对账都还算着它们。',
+    positions_left_out_missing:hiddenPositions.slice(0,20).map(row=>({id:row.id,missing:missing(row)})),
+    not_opened_shown:shownNotOpened.length,not_opened_left_out:allNotOpened.length-shownNotOpened.length}:null;
   const body={version:'lsr-run-log-v2' as const,exportedAt:input.exportedAt,liveEnabled:input.liveEnabled,
     howToRead:'这是当前市场智能模拟账户。权益 = 初始 + 已平净利 + 未平（价格盈亏 − 开仓费 − 预计平仓费）。不是已经停掉的实验漏斗。已平订单单独留档，不随热历史裁掉。每一笔记进场和出场当时的行情判定与演化阶段。分钟路径最多留 1200 笔，按页分开存，一次只写改过的那一页。not_opened 是没开进账户的单，只供复盘，不进权益。同步爆发和趋势的新单仓位是原来的 6 倍。进场另外记下全市场方向、这笔是否顺向、盘口、残差、相对强度、开仓前 30 分钟这个币已经顺着这笔走过的幅度、同步度和广度。研究层另外给每个准备交易的币记下两句：前面这段后半段比前半段高或低多少、有没有慢慢抬或慢慢压，以及进场前同一方向连着走了几根、一共走了多少。这些只用于复盘，不参与开仓。stageTimeline 是行情阶段每次切换的时间线：at 这段开始，until 这段结束，最后一条的 until 是导出时间且 open 为 true 表示还没结束。stage 是这段的名字，prior 是上一段，trendSide 是切过来那一刻写下的全市场方向，min 是这段多少分钟。以前没记下的切换补不回来。这条线不参与开仓或出场。paths 里 hold 加 after 覆盖信号之后 6 小时，一分钟一个点，到点就停，不再往下记。signal_n 是同币同方向第几次信号，signal_gap_min 是距上一笔多少分钟，entry_spread_bps 是写下这一笔时的买卖价差。这三项从本次部署之后的新信号才有。liveFills 是实盘真实成交：exchangePrice 是交易所成交价，bid、ask、spreadBps 是提交时的盘口，leg 区分开仓和平仓。没开实盘就是空的。equity_minutes 是每分钟一条的权益，和上面那条只有一个点的 equity_curve 分开，避免把记账校验弄乱。curve_since、timeline_since、tally_since 分别是这三样从哪一刻开始有。entry_signal、entry_fade、entry_room_pct、entry_room_touches 已经不用，空着是正常的。minutes_since_shock 在还没出现过同步爆发时也是空的，用 shock_seen 区分。trend_score 是短期方向分，有正负，全市场方向为空时也有。factor_30m_pct 是进场时全市场等权 30 分钟收益，单位是百分比。equity_minutes 最多带最近 8 个北京时间日。liveFills 的 fee、fee_rate、role 只有对上已经拉回来的 Gate 成交才有值。这些都不参与开仓或出场。',
     reviewPlan:[
@@ -99,10 +120,12 @@ export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null
       {step:'账户实际权益',amount:equity},
       {step:'对不上的差额。接近 0 才算账平了',amount:identity==null?null:Number(identity.toFixed(4))},
     ],
-    positions:withTally(positions),fills,equity_curve:curve,equity_minutes:minutes,...summarizeEquity(minutes),
-    not_opened:withTally(input.notOpened??[]),stageTimeline:timeline,timeline_since:timeline[0]?.at??null,
+    ...(completeness?{log_completeness:completeness}:{}),
+    positions:withTally(clean(shownPositions)),fills:completeOnly?fills.filter(row=>shownIds.has(row.trace)):fills,equity_curve:curve,equity_minutes:minutes,...summarizeEquity(minutes),
+    not_opened:withTally(clean(shownNotOpened)),stageTimeline:timeline,timeline_since:timeline[0]?.at??null,
     tally_since:input.tallySince??null,liveFills:input.liveFills??[],
-    fieldNotes:{entry_signal:'deprecated',entry_fade:'deprecated',entry_room_pct:'deprecated',entry_room_touches:'deprecated',
+    fieldNotes:completeOnly?{...LOG_NULL_BY_DESIGN,equity_curve:'只有导出这一刻的一个点，用来对账。分钟序列在 equity_minutes。'}
+      :{entry_signal:'deprecated',entry_fade:'deprecated',entry_room_pct:'deprecated',entry_room_touches:'deprecated',
       minutes_since_shock:'空值并且 shock_seen 为 false，表示到这笔为止还没出现过同步爆发',
       equity_curve:'只有导出这一刻的一个点，用来对账。分钟序列在 equity_minutes。'}};
   if(JSON.stringify(body).length>20_000_000)body.equity_curve=curve.filter((_,i)=>i%5===0);
@@ -182,6 +205,10 @@ export function accountLogBook(state:ForwardState,quotes:Record<string,Quote>,no
     unreconstructed:0,unreconstructedN:0,notOpened,stageTimeline:readStageTimeline(state.stageChronicle,now),
     tallySince:state.signalTallyMeta?.from??null};
 }
+/** A not-opened or account trade as its run-log row, without a quote (closed rows, or open rows for completeness only). */
+export function closedLogRow(t:Trade){return closedAccountRow(t);}
+/** The single completeness predicate applied to a stored trade (not-opened rows are judged by their own status). */
+export function isCompleteTradeRecord(t:Trade){return isCompleteLogRow(closedAccountRow(t) as unknown as Record<string,unknown>,t.status==="CLOSED");}
 function closedAccountRow(t:Trade):LsrPositionRow{
   const recorded=orderRecord(t);
   return {id:t.id,symbol:t.symbol,side:t.side,entry:t.entryPrice,exit:t.exitPrice,qty:t.quantity,notional:t.notional,
@@ -207,10 +234,10 @@ function closedAccountRow(t:Trade):LsrPositionRow{
     score:recorded.score??null,stop_price:recorded.stop_price??null,planned_hold_min:recorded.planned_hold_min??null,
     volume24h_usd:recorded.volume24h_usd??null,funding_rate:recorded.funding_rate??null,trend_score:recorded.trend_score??null,
     factor_30m_pct:recorded.factor_30m_pct??null,
-    gapBps:recorded.gap_bps??null,gap_applicable:recorded.gap_applicable??false};
+    gapBps:recorded.gap_bps??null,gap_bps:recorded.gap_bps??null,gap_applicable:recorded.gap_applicable??false};
 }
 function fromRecord(row:OrderRecord):LsrPositionRow{
-  return {...row,exit_reason:null,gapBps:row.gap_bps??null,gap_applicable:row.gap_applicable??false,trace:row.id,market_stage:row.entry_stage};
+  return {...row,exit_reason:null,gapBps:row.gap_bps??null,gap_bps:row.gap_bps??null,gap_applicable:row.gap_applicable??false,trace:row.id,market_stage:row.entry_stage};
 }
 function openMark(state:ForwardState,t:Trade,quotes:Record<string,Quote>,now:number){
   const q=quotes[t.symbol],fresh=freshQuote(q,now),policy=t.exitControl?.policy;
