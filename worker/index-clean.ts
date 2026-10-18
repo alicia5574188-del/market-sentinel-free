@@ -684,6 +684,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if(!this.liveClient&&this.runtime.live.credentialConfigured)await this.gateLive().catch(()=>undefined);
     const client=this.liveClient,current=this.liveSettlementCurrent();
     const sinceAt=this.liveRecordEpochAt();
+    // Show already-settled records on the first response after a restart: storage reads only, no Gate call.
+    try{await this.historyReader.hydrate({storage:this.ctx.storage,client,now:Date.now(),sinceAt,valid:()=>this.liveClient===client});}catch{/* keep old behaviour */}
     this.historyReader.launch({storage:this.ctx.storage,client,current,now:Date.now(),sinceAt,
       valid:()=>this.liveClient===client,
       reserve:()=>this.runtime.nonAlarmWrites+(this.nonAlarmPendingWrites??0)+256<NON_ALARM_WRITE_CAP,
@@ -694,6 +696,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         finally {reservation.finish(false);}
       },waitUntil:p=>this.ctx.waitUntil(p)});
     return this.historyReader.view(current,sinceAt);
+  }
+  /** Closed records with any settlement already known in memory attached; never fails the caller. */
+  protected decoratedLiveHistory():LivePosition[] {
+    try{return this.historyReader.decorate(this.liveHistory,this.liveClient??null);}catch{return this.liveHistory;}
   }
   protected launchLiveSettlementBackground() {
     if(!this.liveSettlementNeedsRefresh())return;
@@ -4786,7 +4792,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           openPositionExitRequested:Object.values(live.positions).filter(p=>p?.status==="OPEN"&&p.exitRequestedAt).length,
           recentAudit:live.auditEvents.slice(-16).map(e=>({at:e.observedAt,stage:e.stage,level:e.level,gateLabel:e.gateLabel})),
         },
-        ...(path === "/owner-runtime" ? { live:{...live,history:this.liveHistory,mirror:this.liveMirrorView(),
+        ...(path === "/owner-runtime" ? { live:{...live,history:this.decoratedLiveHistory(),mirror:this.liveMirrorView(),
           turnover:turnoverView(this.turnoverState,this.turnoverError,Date.now(),live.activation?.enabledAt??null)} } : {}), liveMode: { requestedEnabled: live.requestedEnabled, operational: live.operational }, outboxLength: outbox.length + bankruptcyOutbox.length,
         oldestOutboxAgeMs: outbox.length ? Math.max(0, Date.now() - (outbox[0].position.exitAt ?? outbox[0].position.entryAt)) : 0,
         authorityReady: this.authorityReady, realtimeReadiness: this.realtimeReadiness(), multiSourceMarket:this.marketHub.status(),
@@ -4812,7 +4818,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (path === "/owner-status" && request.method === "GET") {
       await this.ensureAlarm();
       this.launchTurnoverWork(Date.now());
-      return json({ live:{...this.runtime.live,history:this.liveHistory,mirror:this.liveMirrorView(),
+      return json({ live:{...this.runtime.live,history:this.decoratedLiveHistory(),mirror:this.liveMirrorView(),
         turnover:turnoverView(this.turnoverState,this.turnoverError,Date.now(),this.runtime.live.activation?.enabledAt??null)}, generatedAt: Date.now() });
     }
     if (path === "/credential-status" && request.method === "GET") {

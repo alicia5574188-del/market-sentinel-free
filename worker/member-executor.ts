@@ -225,7 +225,7 @@ export function memberExecutionClass(Base:typeof MarketStream) {
       Object.assign(this.runtime.live,{credentialConfigured:true,equity,available,lastSyncAt:now,lastError:null});await this.saveCheckpoint(now,true);
       return {ok:true,credential:this.credentialView(),verification:{equity,available,positions:0,orders:0,conditionalOrders:0,checkedAt:now}};
     }
-    private async liveView() {return {...this.runtime.live,history:this.liveHistory,mirror:this.liveMirrorView(),turnover:turnoverView(this.turnoverState,this.turnoverError,Date.now())};}
+    private async liveView() {return {...this.runtime.live,history:this.decoratedLiveHistory(),mirror:this.liveMirrorView(),turnover:turnoverView(this.turnoverState,this.turnoverError,Date.now())};}
     private adminState() {
       const openPositions=this.activeLivePositions().length,pendingEntries=this.activeLiveEntries().length;
       return {followStopped:!this.runtime.live.requestedEnabled,openPositions,pendingEntries,

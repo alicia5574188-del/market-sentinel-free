@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { OperatorRequestError, operatorRequest, isTransientLiveReadError, numberText as num, signedText as signed, operatorTime as time, contractText,
   holdingTime, livePositionMark, type AuthSession, type CredentialStatus, type CredentialVerification,
   type LivePosition, type LiveRuntime, type OperatorRuntime } from "../lib/operator-ui.ts";
@@ -12,6 +12,26 @@ type HistoryView={history:LivePosition[];checkedAt:number|null;error:string|null
 type Props = { auth: AuthSession|null; runtime: OperatorRuntime|null; onSession: (session:AuthSession)=>void;
   onLive: (live:LiveRuntime)=>void; onRefresh: ()=>void; view?:"trade"|"system" };
 type Section = "positions" | "history" | "archive";
+/** Device-side copy of records Gate already settled, so a reopened page shows them at once.
+ * Display only: it only fills records the server already lists, never adds one, and any failure is ignored. */
+type SettledMark=Pick<LivePosition,"settlement"|"realizedPnl"|"exitPrice"|"actualExitPriceVerified">;
+const SETTLED_CACHE_LIMIT=80;
+const settledKey=(auth:AuthSession|null)=>`sentinel-live-settled-v1:${auth?.memberId??auth?.username??"owner"}`;
+function readSettled(auth:AuthSession|null):Record<string,SettledMark>{
+  try{if(typeof localStorage==="undefined")return {};const raw=JSON.parse(localStorage.getItem(settledKey(auth))??"null");
+    if(!raw||raw.v!==1||typeof raw.rows!=="object"||!raw.rows)return {};
+    return Object.fromEntries(Object.entries(raw.rows as Record<string,SettledMark>).filter(([,m])=>m&&Number.isFinite(m.settlement?.pnl)&&Number.isFinite(m.realizedPnl)));}
+  catch{return {};}
+}
+function writeSettled(auth:AuthSession|null,rows:Record<string,SettledMark>){
+  try{if(typeof localStorage==="undefined")return;
+    const kept=Object.entries(rows).sort((a,b)=>(b[1].settlement?.closedAt??0)-(a[1].settlement?.closedAt??0)).slice(0,SETTLED_CACHE_LIMIT);
+    localStorage.setItem(settledKey(auth),JSON.stringify({v:1,rows:Object.fromEntries(kept)}));}catch{/* optional cache */}
+}
+function settledOf(rows:readonly LivePosition[]){
+  return Object.fromEntries(rows.flatMap(p=>p.status==="CLOSED"&&p.settlement&&Number.isFinite(p.settlement.pnl)
+    ?[[p.id,{settlement:p.settlement,realizedPnl:p.settlement.pnl,exitPrice:p.exitPrice??p.settlement.exitPrice,actualExitPriceVerified:true} as SettledMark]]:[]));
+}
 
 export default function LiveConsole(props:Props) {
   // Account changes replace all private form/history state, even when a parent
@@ -33,11 +53,22 @@ function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade
   const [archiveIndex,setArchiveIndex]=useState(0),[historyView,setHistoryView]=useState<HistoryView|null>(null),[historyError,setHistoryError]=useState<string|null>(null);
   useEffect(()=>{
     if(view!=="trade"||!auth?.authenticated||(section!=="history"&&section!=="archive"))return;
-    let active=true,reading=false;
-    const load=async()=>{if(reading)return;reading=true;try{const value=await operatorRequest<HistoryView>("/api/live/history");if(active){setHistoryView(value);setHistoryError(null);}}
+    let active=true,reading=false,quick=0,soon:ReturnType<typeof setTimeout>|null=null;
+    const load=async()=>{if(reading)return;reading=true;try{const value=await operatorRequest<HistoryView>("/api/live/history");if(active){setHistoryView(value);setHistoryError(null);
+        // A settlement read is running on the server: look again shortly instead of waiting the full 10s (server-side Gate reads stay throttled).
+        if(value.updating&&value.pending>0&&quick<4){quick++;if(soon)clearTimeout(soon);soon=setTimeout(()=>void load(),2500);}}}
       catch(e){if(active&&!(e instanceof OperatorRequestError&&e.status===0))setHistoryError(e instanceof Error?e.message:"历史记录读取失败");}finally{reading=false;}};
-    void load();const timer=setInterval(()=>void load(),10000);return()=>{active=false;clearInterval(timer);};
+    void load();const timer=setInterval(()=>void load(),10000);return()=>{active=false;clearInterval(timer);if(soon)clearTimeout(soon);};
   },[auth?.authenticated,auth?.memberId,section,view]);
+  // Device copy read once at mount; newly settled records are merged in and written back (external store only).
+  const [deviceSettled]=useState<Record<string,SettledMark>>(()=>readSettled(auth));
+  const stored=useRef(deviceSettled);
+  const settledCache=useMemo(()=>({...deviceSettled,...settledOf(runtime?.live?.history??[]),...settledOf(historyView?.history??[])}),
+    [deviceSettled,runtime?.live?.history,historyView]);
+  useEffect(()=>{
+    if(!Object.keys(settledCache).some(id=>!stored.current[id]))return;
+    stored.current={...stored.current,...settledCache};writeSettled(auth,stored.current);
+  },[settledCache,auth]);
   const submitting=useRef(false);
   useEffect(()=>{const timer=setInterval(()=>setClock(Date.now()),1000);return()=>clearInterval(timer);},[]);
   useEffect(()=>{
@@ -53,7 +84,7 @@ function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade
   const enabled=live?.requestedEnabled??runtime?.liveMode?.requestedEnabled??false;
   const positions=Object.values(live?.positions??{}).filter((p):p is LivePosition=>p?.status==="OPEN");
   const closed=[...new Map([...(live?.history??[]),...Object.values(live?.positions??{}).filter((p):p is LivePosition=>p?.status==="CLOSED"),...(historyView?.history??[])]
-    .map(p=>[p.id,p])).values()].sort((a,b)=>(b.exitAt??0)-(a.exitAt??0));
+    .map(p=>[p.id,p])).values()].map(p=>p.settlement||!settledCache[p.id]?p:{...p,...settledCache[p.id]}).sort((a,b)=>(b.exitAt??0)-(a.exitAt??0));
   const records=recordWindows(closed,p=>p.exitAt??0),archive=archivePage(records.archive,archiveIndex);
   const mirror=live?.mirror??runtime?.liveMirror;
   const entries=Object.values(live?.entries??{}).filter(e=>e&&!["FILLED","CANCELLED","FINISHED","REJECTED"].includes(e.status));
