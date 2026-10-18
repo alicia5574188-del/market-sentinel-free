@@ -1884,8 +1884,11 @@ export function resetForwardAccountPreservingLearning(previous:ForwardState,now:
   next.environmentContext=structuredClone(prior.environmentContext);
   next.shockEpisode=structuredClone(prior.shockEpisode);
   next.stageChronicle=structuredClone(prior.stageChronicle);
-  next.signalTally=structuredClone(prior.signalTally??{});
-  next.signalTallyMeta=prior.signalTallyMeta?{...prior.signalTallyMeta}:{backfilled:false,from:null};
+  // The counter is a log of the live account. With a paired trial `prior` is the frozen source capsule, whose
+  // copy stopped at the trial cutover, so read the account's own counter first.
+  const tallyOwner=previous.signalTally&&Object.keys(previous.signalTally).length?previous:prior;
+  next.signalTally=structuredClone(tallyOwner.signalTally??{});
+  next.signalTallyMeta=tallyOwner.signalTallyMeta?{...tallyOwner.signalTallyMeta}:{backfilled:false,from:null};
   next.observations=next.relationEngine.observations;next.measured=next.relationEngine.measured;next.invalidated=next.relationEngine.invalidated;
   next.latestReason="模拟账户资金已重置为1000U；保留 Market Intelligence 市场叙事、证据、相关组和异常生命周期，当前5m不会因重置重复开仓。";
   return next;
