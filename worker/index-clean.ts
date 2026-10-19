@@ -54,8 +54,10 @@ import {RESEARCH_NOTES} from '../lib/log-complete.ts';
 import {buildRunLogExport,accountLogBook,closedLogRow,isCompleteTradeRecord,withResearchColumns} from '../lib/run-log.ts';
 import {btcChange,entryFeatures,type RadarRow} from '../lib/entry-features.ts';
 import {mergeOiRing,noteOiSnapshot,oiAnchor,oiSnapshotKey,OI_SNAPSHOT_PREFIX,type OiRing,type OiSnapshot} from '../lib/oi-anchor.ts';
-import {adoptLegacyPaths,bookFromStoredPaths,commitPathWrite,emptyTradePathBook,exportTradePaths,observeTradePaths,peekPathWrite,pendingPathWrites,pathColumns,pathComplete,pruneGhostPaths,pruneOrphanPaths,searchHolding,TRADE_PATH_INDEX_KEY,TRADE_PATH_KEY,TRADE_PATH_PAGE_PREFIX,type TradePathBook,type TradePathIndex,type TradePathPage} from '../lib/trade-path.ts';
-import {emptyOrderJournal,observeOrderJournal,ORDER_JOURNAL_KEY,restoreOrderJournal,type OrderJournal} from '../lib/order-journal.ts';
+import {RUN_LOG_EXPORT_KEY,runLogCapacity,type RunLogExportMark} from '../lib/run-log-capacity.ts';
+import {STAGE_CHANGE_CAP} from '../lib/stage-chronicle.ts';
+import {PATH_CAP,adoptLegacyPaths,bookFromStoredPaths,commitPathWrite,emptyTradePathBook,exportTradePaths,observeTradePaths,peekPathWrite,pendingPathWrites,pathColumns,pathComplete,pruneGhostPaths,pruneOrphanPaths,searchHolding,TRADE_PATH_INDEX_KEY,TRADE_PATH_KEY,TRADE_PATH_PAGE_PREFIX,type TradePathBook,type TradePathIndex,type TradePathPage} from '../lib/trade-path.ts';
+import {emptyOrderJournal,observeOrderJournal,ORDER_JOURNAL_CAP,ORDER_JOURNAL_KEY,restoreOrderJournal,type OrderJournal} from '../lib/order-journal.ts';
 import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
 import {confirmationRealityView} from '../lib/confirmation-reality.ts';
 import {observationReading} from '../lib/observation-tape.ts';
@@ -1518,6 +1520,28 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return pages;
   }
 
+  /** Last successful run-log export: one tiny key, written only when an export is served. Display only. */
+  private async noteRunLogExport(at:number,rows:number){
+    const reservation=this.reserveNonAlarmWrites(1,512);if(!reservation)return;
+    try{await this.ctx.storage.put(RUN_LOG_EXPORT_KEY,{at,rows} satisfies RunLogExportMark);reservation.finish(true);}
+    catch{reservation.finish(false);}
+  }
+  /** Run-log progress and the latest export time that keeps records continuous. Reads only; no writes, no Gate. */
+  private async runLogStatus(now:number){
+    let mark:RunLogExportMark|null=null;
+    try{const saved=await this.ctx.storage.get<RunLogExportMark>(RUN_LOG_EXPORT_KEY);mark=saved&&typeof saved.at==="number"?saved:null;}catch{mark=null;}
+    await this.ensureTradePaths();
+    await this.ensureOrderJournal();
+    const state=this.forwardState!,pathsReady=this.tradePathsLoaded&&this.tradePaths.accountStartedAt===state.startedAt;
+    const report=runLogCapacity({now,lastExport:mark,
+      counts:[
+        ...(pathsReady?[{key:"records",label:"订单记录（含价格路径）",cap:PATH_CAP,times:this.tradePaths.trades.map(row=>row.openedAt)}]:[]),
+        ...(this.orderJournalComplete?[{key:"journal",label:"已平订单档案",cap:ORDER_JOURNAL_CAP,times:this.orderJournal.rows.map(row=>row.closed_at??row.opened_at)}]:[]),
+        {key:"stages",label:"行情阶段时间线",cap:STAGE_CHANGE_CAP,times:(state.stageChronicle?.changes??[]).map(row=>row.at)}],
+      windows:[{key:"equity",label:"每分钟权益",days:8,since:state.startedAt}],
+      hot:this.forwardCompression?{rawBytes:this.forwardCompression.rawBytes,budgetBytes:this.forwardCompression.accountBudgetBytes}:null});
+    return {...report,pathsReady};
+  }
   private async ensureOrderJournal(){
     const started=this.forwardState?.startedAt??0;
     if(this.orderJournalLoaded&&this.orderJournal.accountStartedAt===started)return;
@@ -4662,6 +4686,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const actual=Object.values(this.runtime.live.positions).find(p=>p?.id===id)??binding.actual;
       return json({...binding,currentSource:this.currentMirrorSource(id),actual});
     }
+    if (path === "/forward-log-status" && request.method === "GET") {
+      if(!this.forwardState||!this.authorityReady)return json({error:"权威账户尚未恢复"},503);
+      return json(await this.runLogStatus(Date.now()));
+    }
     if (path === "/forward-export" && request.method === "GET") {
       if(!this.forwardState||!this.authorityReady)return json({error:"权威账户尚未恢复，不能导出空账户"},503);
       if(url.searchParams.get("kind")==="log"){
@@ -4687,6 +4715,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         const shown=new Set<string>([...file.positions.map(row=>row.id),...file.not_opened.map(row=>row.id)]);
         const keep=(id:string)=>shown.has(id);
         const columnsOf=(id:string)=>{try{return pathColumns(pathById.get(id));}catch{return null;}};
+        await this.noteRunLogExport(exportedAt,file.positions.length+file.not_opened.length);
         return json({...file,positions:withResearchColumns(file.positions,columnsOf),not_opened:withResearchColumns(file.not_opened,columnsOf),
           equity_minutes_since:state.startedAt,equity_gaps:(()=>{try{return equityGaps(file.equity_minutes);}catch{return [];}})(),
           equity_filled_min:file.equity_minutes.filter(row=>row.filled).length,researchNotes:RESEARCH_NOTES,archive_read:{rows:archived.read,missing:archived.missing},path_check:pathsReady,
@@ -5053,6 +5082,7 @@ const worker = {
           executionIsolation:true,guestProgramAccess:false},topLevelCpuMs: performance.now() - started }, live ? 200 : 503);
     }
     if (url.pathname === "/api/runtime" && request.method === "GET") return runtimeStatus(env, true, await ownerAuthenticated(request, env));
+    if (url.pathname === "/api/forward/log-status" && request.method === "GET") return env.MARKET_STREAM.getByName("primary").fetch("https://market-stream/forward-log-status");
     if (url.pathname === "/api/forward/export" && request.method === "GET") return env.MARKET_STREAM.getByName("primary").fetch(`https://market-stream/forward-export${url.search}`);
     if (url.pathname === "/api/forward/equity" && request.method === "GET") return env.MARKET_STREAM.getByName("primary").fetch(`https://market-stream/forward-equity${url.search}`);
     if (url.pathname === "/api/forward/archive" && request.method === "GET") return env.MARKET_STREAM.getByName("primary").fetch(`https://market-stream/forward-archive${url.search}`);

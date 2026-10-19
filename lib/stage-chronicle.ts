@@ -42,7 +42,8 @@ export type StageStamp={
 };
 
 const STAGES:readonly StageName[]=["SHOCK","TREND","ROTATION","TRANSITION"];
-const CHANGE_CAP=2_000;
+export const STAGE_CHANGE_CAP=2_000;
+const CHANGE_CAP=STAGE_CHANGE_CAP;
 
 function changeAt(now:number,stage:StageName,prior:StageName|null,trendSide:"LONG"|"SHORT"|null):StageChange{
   return {at:now,stage,prior,trendSide};

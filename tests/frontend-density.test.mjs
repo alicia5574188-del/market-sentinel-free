@@ -48,6 +48,7 @@ function render(path,props,extra={},component="default"){
     "./equity-curve.tsx":{default:()=>jsxRuntime.jsx("div",{"data-testid":"curve-fixture"})},
     "./live-equity-curve.tsx":{default:props=>jsxRuntime.jsx('div',{'data-testid':'live-curve-fixture','data-session':props.sessionAt})},
     "./market-intelligence-execution.tsx":{default:()=>null},
+    "./run-log-status.tsx":{default:()=>jsxRuntime.jsx("div",{"data-testid":"run-log-status-fixture"})},
     ...extra
   };
   const fixtureModule={exports:{}};
@@ -324,4 +325,31 @@ test('the order tab is the forward book, and live orders stay on the live page',
   buttons.find(b=>Array.isArray(b.children)&&b.children[1]?.props?.children==='实盘').onClick();html=draw();
   assert.match(html,/NATIVE_ORDER_PANEL/);
   assert.doesNotMatch(html,/shadow-orders-panel/);
+});
+
+test("run-log panel shows storage progress, last export and the latest export time in Beijing time",()=>{
+  const H=3_600_000,now=Date.UTC(2026,9,19,4,0,0);
+  const base={now,lastExportRows:1100,classes:[],hot:{rawBytes:1.2*1048576,budgetBytes:4*1048576,usedPct:30}};
+  const records={key:"records",label:"订单记录（含价格路径）",kind:"count",stored:1200,cap:1200,usedPct:100,sinceBase:842,pendingPct:70.2,ratePerHour:4.6,deadline:now+235*H,overdue:false};
+  const html=render("app/run-log-status.tsx",{status:{...base,lastExportAt:now-26*H,primary:records,binding:records,classes:[records],
+    deadline:now+235*H,hoursLeft:235,safeAt:now+188*H,overdue:false}},{},"RunLogStatusView");
+  assert.match(html,/导出后新增 842 \/ 1,200 条 · 70%/);
+  assert.match(html,/现在共存 1,200 条/);
+  assert.match(html,/is-warn/);
+  assert.match(html,/role="progressbar"/);
+  assert.match(html,/上次导出.*10月18日 10:00/);
+  assert.match(html,/最晚导出.*10月29日 07:00 · 还剩约 9 天 19 小时/);
+  assert.match(html,/建议导出.*10月27日 08:00 前/);
+  assert.match(html,/按最近每小时约 4\.6 条估算/);
+  assert.match(html,/账户热存储 1\.2 \/ 4\.0 MB/);
+  const first=render("app/run-log-status.tsx",{status:{...base,lastExportAt:null,lastExportRows:null,primary:{...records,stored:1200,usedPct:100,sinceBase:1200,pendingPct:100,overdue:true,deadline:now},
+    binding:{...records,overdue:true,deadline:now},deadline:now,hoursLeft:0,safeAt:now,overdue:true}},{},"RunLogStatusView");
+  assert.match(first,/还没有导出记录/);
+  assert.match(first,/已存 1,200 \/ 1,200 条 · 100%/);
+  assert.doesNotMatch(first,/现在共存/);
+  assert.match(first,/现在就导出/);
+  assert.match(first,/is-bad/);
+  const idle=render("app/run-log-status.tsx",{status:{...base,lastExportAt:now-H,primary:{...records,ratePerHour:0,deadline:null},binding:null,deadline:null,hoursLeft:null,safeAt:null,overdue:false}},{},"RunLogStatusView");
+  assert.match(idle,/暂时不用导出/);
+  assert.doesNotMatch(idle,/建议导出/);
 });

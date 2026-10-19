@@ -5,7 +5,8 @@ import {coinPathVersus} from './coin-path.ts';
 
 export const ORDER_JOURNAL_KEY='market-intelligence:order-journal:v1';
 export const ORDER_JOURNAL_VERSION='order-journal-v1' as const;
-const CAP=4_000;
+export const ORDER_JOURNAL_CAP=4_000;
+const CAP=ORDER_JOURNAL_CAP;
 
 export type OrderRecord={
   id:string;symbol:string;side:'LONG'|'SHORT';entry:number;exit:number|null;qty:number;notional:number;

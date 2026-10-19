@@ -7,6 +7,7 @@ import {type Trade,type forwardSummary} from "../lib/forward-relations.ts";
 import EquityCurve from "./equity-curve.tsx";
 import {EquityHistoryCache} from "../lib/equity-cache.ts";
 import MarketIntelligenceExecution from "./market-intelligence-execution.tsx";
+import RunLogStatus from "./run-log-status.tsx";
 import "./account-first.css";
 import "./paid-fee.css";
 import "./pages.css";
@@ -76,7 +77,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   useEffect(()=>()=>equityCache.cancel(),[equityCache]);
   const [tab,setTab]=useState<Tab>("execution"),[now,setNow]=useState(0),[liveMounted,setLiveMounted]=useState(false);
   const [fontScale,setFontScale]=useState(()=>{if(typeof window==="undefined")return 92;try{const saved=Number(localStorage.getItem("sentinel-ui-font-scale-v1"));return saved>=70&&saved<=110?saved:92;}catch{return 92;}});
-  const [exporting,setExporting]=useState(false),[exportStatus,setExportStatus]=useState<string|null>(null);
+  const [exporting,setExporting]=useState(false),[exportStatus,setExportStatus]=useState<string|null>(null),[exportCount,setExportCount]=useState(0);
   const [historyShown,setHistoryShown]=useState(10);
   const scroll=useRef<Record<Tab,number>>({execution:0,paper:0,live:0,settings:0});
   useEffect(()=>{const id=setInterval(()=>setNow(Date.now()),1000);return()=>clearInterval(id);},[]);
@@ -92,7 +93,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
     const blob=new Blob([JSON.stringify(log)],{type:"application/json"}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`lsr-run-log-${stamp}.json`;
     document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
     const n=log.positions?.length??0;
-    setExportStatus(`已开始下载 ${a.download}。里面 ${n} 笔。`);
+    setExportStatus(`已开始下载 ${a.download}。里面 ${n} 笔。`);setExportCount(c=>c+1);
   }catch{setExportStatus("导出失败，请重试。");}finally{setExporting(false);}};
 
   const desk=data?.forwardDesk??null,positions=data?.positions??[],history=[...(data?.history??[])].sort((a,b)=>(b.closedAt??0)-(a.closedAt??0));
@@ -150,6 +151,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       </section>
       <section className="fr-section"><div className="fr-section-head"><h2>运行日志</h2></div>
         <p className="fr-note">开仓、没开仓的候选、行情和执行记录都在这一个文件里，复盘就用它。</p>
+        <RunLogStatus refreshKey={exportCount}/>
         <button className="fr-button" onClick={exportSnapshot} disabled={exporting}>{exporting?"正在导出…":"导出运行日志 ↗"}</button>{exportStatus&&<p className="fr-note">{exportStatus}</p>}</section>
       {liveSystemPanel}
       {accountPanel}
