@@ -26,8 +26,8 @@ export type OrderRecord={
   mode?:string|null;trade_plan?:string|null;intent?:string|null;long_score?:number|null;short_score?:number|null;residual_z?:number|null;
   score?:number|null;stop_price?:number|null;planned_hold_min?:number|null;volume24h_usd?:number|null;funding_rate?:number|null;trend_score?:number|null;factor_30m_pct?:number|null;
   gap_bps?:number|null;gap_applicable?:boolean|null;
-  /** 趋势/爆发开仓规则：btc_follow / washout_flip / washout_long / btc_follow_block / btc_missing_block；其它阶段为空。 */
-  entry_gate?:string|null;gate_signal_side?:'LONG'|'SHORT'|null;gate_btc_1h_pct?:number|null;
+  /** 趋势/爆发开仓规则：btc_follow / washout_flip / washout_long / pumped_short / btc_follow_block / btc_missing_block；其它阶段为空。 */
+  entry_gate?:string|null;gate_signal_side?:'LONG'|'SHORT'|null;gate_btc_1h_pct?:number|null;gate_coin_bg_pct?:number|null;
 };
 export type OrderJournal={version:typeof ORDER_JOURNAL_VERSION;accountStartedAt:number;rows:OrderRecord[]};
 
@@ -88,10 +88,11 @@ export function snapFields(t:Trade):Pick<OrderRecord,'mode'|'trade_plan'|'intent
   if(!snap)return empty;
   return {...empty,...snap};
 }
-export function gateFields(t:Trade):Pick<OrderRecord,'entry_gate'|'gate_signal_side'|'gate_btc_1h_pct'>{
+export function gateFields(t:Trade):Pick<OrderRecord,'entry_gate'|'gate_signal_side'|'gate_btc_1h_pct'|'gate_coin_bg_pct'>{
   const g=t.entryContext?.entryGate;
-  if(!g)return {entry_gate:null,gate_signal_side:null,gate_btc_1h_pct:null};
-  return {entry_gate:g.rule,gate_signal_side:g.signalSide,gate_btc_1h_pct:typeof g.btc1hPct==="number"&&Number.isFinite(g.btc1hPct)?g.btc1hPct:null};
+  if(!g)return {entry_gate:null,gate_signal_side:null,gate_btc_1h_pct:null,gate_coin_bg_pct:null};
+  return {entry_gate:g.rule,gate_signal_side:g.signalSide,gate_btc_1h_pct:typeof g.btc1hPct==="number"&&Number.isFinite(g.btc1hPct)?g.btc1hPct:null,
+    gate_coin_bg_pct:typeof g.coinBgPct==="number"&&Number.isFinite(g.coinBgPct)?g.coinBgPct:null};
 }
 const STOP_EXIT=/STOP|INVALIDAT|HARD_RISK/;
 export function gapFields(t:Trade):Pick<OrderRecord,'gap_bps'|'gap_applicable'>{

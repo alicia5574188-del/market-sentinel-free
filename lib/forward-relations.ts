@@ -1704,7 +1704,9 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
       reject(noted??"只有同步爆发或趋势才开新单，这笔只留档");continue;
     }
     // 趋势/爆发两条开仓规则：BTC 1小时要顺向 0.5%；趋势里 BTC 不动、山寨 30 分钟已跌 1.4% 时做空改做多。
-    const gateInput={stage,side:o.side,btc1hPct,factor30mPct:equalWeightReturnPct(Object.values(s.extremumRegime.symbols).map(row=>row.actualMove))},
+    // 例外：做空时这个币自己 8 小时背景已涨 5% 以上（就是记录里的 coin_background_pct，取自下面存进单子的 o.coinPath），BTC 不顺也放行。
+    const gateInput={stage,side:o.side,btc1hPct,factor30mPct:equalWeightReturnPct(Object.values(s.extremumRegime.symbols).map(row=>row.actualMove)),
+        coinBgPct:o.coinPath?.backgroundPct??null},
       gated=entryGate(gateInput),gateNote=entryGateNote(gateInput,gated);
     if(gated.action==="BLOCK"){
       const noted=openIntelligenceTrade(s,o,q!,meta,now,equity,{validation,decision},minutePaths?.[o.symbol],structure,null,null,true,gateNote);
