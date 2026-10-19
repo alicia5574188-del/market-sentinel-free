@@ -51,7 +51,7 @@ import {emptyStrategyAccount, STRATEGY_EPOCH} from '../lib/strategy-slot.ts';
 import {emptyThesis, runThesisCycle, THESIS_STORAGE_KEY, type ThesisAttached, type ThesisMarket} from '../lib/thesis-attach.ts';
 import type {ThesisPublic} from '../lib/thesis-view.ts';
 import {RESEARCH_NOTES} from '../lib/log-complete.ts';
-import {buildRunLogExport,accountLogBook,closedLogRow,isCompleteTradeRecord,withResearchColumns} from '../lib/run-log.ts';
+import {buildRunLogExport,accountLogBook,closedLogRow,isCompleteTradeRecord,shadowSignalOf,withResearchColumns} from '../lib/run-log.ts';
 import {btcChange,entryFeatures,type RadarRow} from '../lib/entry-features.ts';
 import {mergeOiRing,noteOiSnapshot,oiAnchor,oiSnapshotKey,OI_SNAPSHOT_PREFIX,type OiRing,type OiSnapshot} from '../lib/oi-anchor.ts';
 import {RUN_LOG_EXPORT_KEY,runLogCapacity,type RunLogExportMark} from '../lib/run-log-capacity.ts';
@@ -4808,7 +4808,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           pathReady:pathsReady?(id,closed)=>pathComplete(pathById.get(id),closed):undefined});
         const shown=new Set<string>([...file.positions.map(row=>row.id),...file.not_opened.map(row=>row.id)]);
         const keep=(id:string)=>shown.has(id);
-        const columnsOf=(id:string)=>{try{return pathColumns(pathById.get(id));}catch{return null;}};
+        const columnsOf=(id:string,row:{side:'LONG'|'SHORT';gate_signal_side?:unknown;gate_btc_1h_pct?:unknown})=>{try{return pathColumns(pathById.get(id),shadowSignalOf(row));}catch{return null;}};
         await this.noteRunLogExport(exportedAt,file.positions.length+file.not_opened.length);
         return json({...file,positions:withResearchColumns(file.positions,columnsOf),not_opened:withResearchColumns(file.not_opened,columnsOf),
           equity_minutes_since:state.startedAt,equity_gaps:(()=>{try{return equityGaps(file.equity_minutes);}catch{return [];}})(),

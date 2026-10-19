@@ -36,6 +36,8 @@ export type LsrCurvePoint={ts:number;equity:number;closed_pnl:number;unrealized_
 const ROW_CAP=8_000;
 export function rememberRow<T>(rows:T[]|undefined,row:T){return [...(rows??[]),row].slice(-ROW_CAP);}
 
+/** Export note for the record-only shadow BTC branch columns (lib/shadow-branch.ts). */
+const SHADOW_FIELD_NOTE={shadow_branch:'影子分支，仅记录，不参与任何交易决定：btc1h_aligned_pct >= 0.57 → follow（同向 TP6/SL1），否则 reverse（反向 自身止损/6h）；字段 btc1h_aligned_pct、shadow_side/plan/stop_pct/tp_pct 和回放结果 shadow_exit_reason/exit_min/move_pct/net_pct 只在有价格路径的行里出现（研究列），说明见 researchNotes.影子分支'};
 export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null;health:{sources?:{source:string;fresh?:boolean;failures?:number;lastError?:string|null;rows?:number}[];healthySources?:number};gate:{connected?:boolean;lastError?:string|null;freshBooks?:number};exportedAt:number;liveEnabled:boolean;
   positions?:LsrPositionRow[];fills?:LsrFill[];curve?:LsrCurvePoint[];equity?:number|null;initial?:number|null;closedNet?:number|null;priorAdjustment?:number|null;
   unreconstructed?:number|null;unreconstructedN?:number|null;
@@ -134,8 +136,8 @@ export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null
     account_epoch:resets.length,account_reset_pending:input.pendingResetAt??null,
     not_opened:withTally(clean(shownNotOpened)),stageTimeline:timeline,timeline_since:timeline[0]?.at??null,
     tally_since:input.tallySince??null,liveFills:input.liveFills??[],
-    fieldNotes:completeOnly?{...LOG_NULL_BY_DESIGN,equity_curve:'只有导出这一刻的一个点，用来对账。分钟序列在 equity_minutes。'}
-      :{entry_signal:'deprecated',entry_fade:'deprecated',entry_room_pct:'deprecated',entry_room_touches:'deprecated',
+    fieldNotes:completeOnly?{...LOG_NULL_BY_DESIGN,...SHADOW_FIELD_NOTE,equity_curve:'只有导出这一刻的一个点，用来对账。分钟序列在 equity_minutes。'}
+      :{...SHADOW_FIELD_NOTE,entry_signal:'deprecated',entry_fade:'deprecated',entry_room_pct:'deprecated',entry_room_touches:'deprecated',
       minutes_since_shock:'空值并且 shock_seen 为 false，表示到这笔为止还没出现过同步爆发',
       equity_curve:'只有导出这一刻的一个点，用来对账。分钟序列在 equity_minutes。'}};
   if(JSON.stringify(body).length>20_000_000)body.equity_curve=curve.filter((_,i)=>i%5===0);
@@ -275,14 +277,20 @@ function round4(n:number){return Number(n.toFixed(4));}
  * Research columns joined onto exported rows: net price % and net ROE % (price move x leverage, after fees),
  * then the record's entry features and its 24h path label. Rows keep every existing field; nothing here feeds trading.
  */
+/** Signal for the record-only shadow branch: a TREND/SHOCK gate flip keeps the original signal in gate_signal_side, and
+ * gate_btc_1h_pct is the exact BTC 1h value the gate used (otherwise the entry-feature btc_1h_pct, same function/inputs). */
+export function shadowSignalOf(row:{side:'LONG'|'SHORT';gate_signal_side?:unknown;gate_btc_1h_pct?:unknown}):{side:'LONG'|'SHORT';gateBtc1hPct:number|null}{
+  const side=row.gate_signal_side==='LONG'||row.gate_signal_side==='SHORT'?row.gate_signal_side:row.side;
+  const g=row.gate_btc_1h_pct;return {side,gateBtc1hPct:typeof g==='number'&&Number.isFinite(g)?g:null};
+}
 export function withResearchColumns<T extends {id:string;side:'LONG'|'SHORT';entry:number;exit:number|null;notional:number;net_pnl:number|null;leverage?:number|null}>(
-  rows:T[],columnsOf:(id:string)=>Record<string,number|string|boolean|null>|null):(T&Record<string,unknown>)[]{
+  rows:T[],columnsOf:(id:string,row:T)=>Record<string,number|string|boolean|null>|null):(T&Record<string,unknown>)[]{
   return rows.map(row=>{
     const lev=row.leverage!=null&&row.leverage>0?row.leverage:null;
     const margin=lev&&row.notional>0?row.notional/lev:null;
     const net_roe_pct=row.net_pnl!=null&&margin?Math.round(row.net_pnl/margin*1e6)/1e4:null;
     const exit_pct=row.exit!=null&&row.entry>0?Math.round((row.side==='LONG'?row.exit/row.entry-1:1-row.exit/row.entry)*1e6)/1e4:null;
-    const cols=columnsOf(row.id)??{};
+    const cols=columnsOf(row.id,row)??{};
     const {leverage:_l,...rest}=cols;void _l;
     return {...row,leverage:lev??(typeof cols.leverage==='number'?cols.leverage:null),exit_move_pct:exit_pct,net_roe_pct,...rest};
   });

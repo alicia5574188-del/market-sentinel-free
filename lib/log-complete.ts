@@ -100,5 +100,7 @@ export const RESEARCH_NOTES: Record<string, string> = {
   oi_chg_pct: "持仓量相对 60–135 分钟前那份快照的变化（快照每 15 分钟存一份，重启不丢）；第一次部署后的头一个小时没有基准，是空值。oi_anchor_min 是基准距今多少分钟",
   equity_gaps: "equity_minutes 里超过 1 分钟的断档：after 是断档前最后一分钟，before 是断档后第一分钟，missing_min 是缺几分钟。部署或重启时进程停着，这段没有行情可记，不补假数",
   filled: "equity_minutes 里 filled 为 true 的分钟：程序在跑但这一分钟没有轮到记录，用紧接着那一次真实记录的数值补上（最多连补 15 分钟）。equity_filled_min 是一共补了多少分钟",
+  影子分支: "仅记录，不影响开仓、出场、仓位、止损或实盘跟单。btc1h_aligned_pct = 信号时 BTC 1 小时涨跌幅按信号方向取正负（正 = 顺着信号；趋势/爆发门控单用门控当时那个值 gate_btc_1h_pct，其它用入场特征 btc_1h_pct，同一个函数同一份数据）。>= 0.57 为 follow（顺势）：shadow_side 同信号，shadow_plan TP6/SL1（止盈 6%、止损 1%，最长 24 小时）；否则 reverse（反向）：shadow_side 反过来，shadow_plan own_stop/6h（用这单自己的止损距离，6 小时到点按中价出）。BTC 1 小时缺失或 10-19 00:30（北京）之前的记录（当时 btc_1h_pct 不可靠）全部为空，离线脚本 shadow_backfill.py 可补算。",
+  shadow_exit_reason: "影子结果（仅记录）：由存下的价格路径在导出时回放，不额外存储。TP / SL / TIME；路径还不够判定时为空。保守口径：进场那一分钟只算不利方向，同一根里止损止盈都碰到算止损，到点用该分钟中价。shadow_exit_min 第几分钟出；shadow_move_pct 影子方向的价格幅度 %（不含费用，不是 ROE）；shadow_net_pct 再扣往返成本 0.19% 和资金费预留 0.02%/天",
   paths_end: "paths 里 end 是出场那一刻的持仓管理状态（阶段、保护止损、利润地板、回吐比例、出场触发和证据）；peak 是创最高浮盈那一刻的状态；track 是开进账户的单每 30 分钟一次的状态",
 };

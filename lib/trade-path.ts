@@ -1,4 +1,5 @@
 /** Observation only. Never changes an order, a stop, or the account. */
+import {shadowFields} from './shadow-branch.ts';
 import type {ForwardState, Quote, Trade} from './forward-relations.ts';
 
 export const TRADE_PATH_KEY='market-intelligence:trade-paths:v1';
@@ -449,9 +450,18 @@ export function exportTradePaths(book:TradePathBook,keep?:(id:string)=>boolean):
   });
 }
 /** Per-record research columns for the run-log row: entry features + the 24h label. */
-export function pathColumns(row:TradePath|undefined):Record<string,EntryFeatureValue>|null{
+export function pathColumns(row:TradePath|undefined,signal?:ShadowSignal|null):Record<string,EntryFeatureValue>|null{
   if(!row)return null;
-  return {...(row.x??{}),...pathLabel(row)};
+  return {...(row.x??{}),...pathLabel(row),...shadowColumns(row,signal)};
+}
+/** Signal side (before any gate flip) and, for gated TREND/SHOCK entries, the exact BTC 1h value the gate used. */
+export type ShadowSignal={side?:'LONG'|'SHORT'|null;gateBtc1hPct?:number|null};
+/** Record-only shadow BTC branch (lib/shadow-branch.ts): plan from the entry-time btc_1h_pct/stop_dist_pct, outcome replayed from this path. */
+export function shadowColumns(row:TradePath,signal?:ShadowSignal|null){
+  const exitMin=row.exitAt!=null?Math.max(0,Math.floor((row.exitAt-row.openedAt)/60_000)):null;
+  const points=[...row.hold,...(exitMin==null?[]:row.after.map(p=>[exitMin+p[0],p[1],p[2]] as PathPoint)),...(row.tail??[])].sort((a,b)=>a[0]-b[0]);
+  const gate=signal?.gateBtc1hPct;
+  return shadowFields({signalSide:signal?.side??row.side,btc1hPct:typeof gate==='number'&&Number.isFinite(gate)?gate:row.x?.btc_1h_pct,stopDistPct:row.x?.stop_dist_pct,openedAt:row.openedAt,entry:row.entry,points});
 }
 
 export function searchHolding(book:TradePathBook,keep?:(id:string)=>boolean){

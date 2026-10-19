@@ -11,7 +11,7 @@ import type {ForwardState, Trade} from './forward-relations.ts';
 import type {OrderJournal} from './order-journal.ts';
 import type {EquityMinute} from './equity-minutes.ts';
 import {collectEquityMinutes,equityGaps} from './equity-minutes.ts';
-import {buildRunLogExport,closedLogRow,journalLogRow,withResearchColumns,type LsrPositionRow} from './run-log.ts';
+import {buildRunLogExport,closedLogRow,journalLogRow,shadowSignalOf,withResearchColumns,type LsrPositionRow} from './run-log.ts';
 import {exportTradePaths,pathColumns,pathComplete,PATH_CAP,TAIL_MINUTES,type PathExport,type TradePath,type TradePathBook} from './trade-path.ts';
 import {readStageTimeline} from './stage-chronicle.ts';
 import {RESEARCH_NOTES} from './log-complete.ts';
@@ -106,7 +106,7 @@ export function buildArchiveEntries(input:{due:readonly {path:TradePath;partial:
   const file=buildRunLogExport({events:[],funnel:null,health:{},gate:{},exportedAt:input.now,liveEnabled:false,
     positions,notOpened,tallySince:input.tallySince,completeOnly:true,
     pathReady:(id,closed)=>pathComplete(pathById.get(id),closed)});
-  const columnsOf=(id:string)=>{try{return pathColumns(pathById.get(id));}catch{return null;}};
+  const columnsOf=(id:string,row:{side:'LONG'|'SHORT';gate_signal_side?:unknown;gate_btc_1h_pct?:unknown})=>{try{return pathColumns(pathById.get(id),shadowSignalOf(row));}catch{return null;}};
   const book={trades:[...pathById.values()]} as unknown as TradePathBook;
   const paths=new Map(exportTradePaths(book).map(p=>[p.id,p]));
   const out:ArchiveEntry[]=[];
