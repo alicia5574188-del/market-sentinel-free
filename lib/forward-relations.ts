@@ -63,8 +63,11 @@ function marketTravelExpectancy(moves:number[]){
 }
 const TOTAL_RISK_RATE=.10,SIDE_RISK_RATE=.065,TOTAL_MARGIN_RATE=.75;
 const FIVE_MINUTE_NEW_RISK_RATE=.015;
-/** 只在同步爆发或趋势开仓，名义仓位按原计算放大这么多倍。 */
-const EXPANSION_SIZE=6;
+/** 只在同步爆发或趋势开仓，名义仓位按原计算放大的倍数：同步爆发 10 倍，趋势 5 倍。其它阶段只留档，按 1 倍记。 */
+export const EXPANSION_SIZE={SHOCK:10,TREND:5} as const;
+export function expansionFor(environment:string|null|undefined){
+  return environment==="SHOCK"?EXPANSION_SIZE.SHOCK:environment==="TREND"?EXPANSION_SIZE.TREND:1;
+}
 const ENTRY_VALIDATION_CAP=6,CONTINUATION_SIDE_RISK_RATE=.025,EXECUTION_EDGE_FLOOR=1.25;
 const ROTATION_GAP=10,ROTATION_COOLDOWN_MS=2*60_000;
 const HISTORY_LIMIT=240,EVENT_LIMIT=160,CONSUMED_THESIS_LIMIT=512,CONSUMED_THESIS_TTL_MS=7*24*60*60_000;
@@ -132,7 +135,7 @@ export type EntryContext={
   reason:string;entryScore:number;directionStrength:number;spaceScore:number;positionScore:number;executionScore:number;
   remainingSpaceRate:number;pullbackRiskRate:number;edgeRatio:number;expectedHoldMinutes:number;marketFit:number;
   regionId:string|null;regionLower?:number;regionUpper?:number;regionCenter?:number;
-  relationRuleId?:string;relationStatus?:RelationStatus;relationHorizon?:15|30|45|60;relationHealth?:number;portfolioRiskCharge?:number;
+  relationRuleId?:string;relationStatus?:RelationStatus;relationHorizon?:15|30|45|60;relationHealth?:number;portfolioRiskCharge?:number;sizeMultiple?:number;
   relationFamilyId?:string;relationEvidenceAt?:number;relationLivePathScore?:number;
   interruptEventId?:string;interruptMarketWide?:boolean;interruptBoundary?:number;interruptStrength?:number;
   strategyVersion?:string;regime?:MarketSymbolState["regime"]|"TREND_UP"|"TREND_DOWN"|"SWING"|"WEAKENING";topPressure?:number;bottomPressure?:number;upSurvival?:number;downSurvival?:number;
@@ -1244,7 +1247,7 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
   }
   const sameCluster=s.positions.find(t=>t.side===side&&o.clusterId&&t.entryContext?.clusterId===o.clusterId);
   if(sameCluster)return"同相关组已有同方向主仓";
-  const expansion=s.environmentContext.environment==="SHOCK"||s.environmentContext.environment==="TREND"?EXPANSION_SIZE:1,
+  const expansion=expansionFor(s.environmentContext.environment),
     continuation=o.mode==="CONTINUATION"&&(o.tradePlan==="LIQUIDITY_MIGRATION"||o.winnerPlan?.intent==="TREND"),
     totalHeadroom=equity*(TOTAL_RISK_RATE*expansion-.001)-existingRisk(s),
     sideHeadroom=equity*(SIDE_RISK_RATE*expansion-.0005)-existingRisk(s,side),
@@ -1291,7 +1294,7 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
         entryScore:o.environmentScore??o.score,baseEntryScore:o.score,environmentScore:o.environmentScore??o.score,
         directionStrength:o.directionStrength,spaceScore:o.spaceScore,positionScore:o.positionScore,executionScore:o.executionScore,
         remainingSpaceRate:remainingNet,pullbackRiskRate:o.pullbackRiskRate,edgeRatio:executionValue.edgeRatio,
-        expectedHoldMinutes:horizon,marketFit:o.marketFit,regionId:null,portfolioRiskCharge:riskBudget,strategyVersion:MARKET_INTELLIGENCE_VERSION,
+        expectedHoldMinutes:horizon,marketFit:o.marketFit,regionId:null,portfolioRiskCharge:riskBudget,sizeMultiple:expansion,strategyVersion:MARKET_INTELLIGENCE_VERSION,
         regime:o.regime,confirmationStage:o.confirmationStage,sourceCount:o.sourceCount,disagreementRate:o.disagreementRate,postEntryState:"PENDING",
         entryResponse:response?{version:ENTRY_RESPONSE_VERSION,startedAt:response.validation.startedAt,confirmedAt:now,
           elapsedMs:Math.max(0,now-response.validation.startedAt),samples:response.validation.samples,

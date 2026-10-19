@@ -40,6 +40,7 @@ function entryFacts(t:Trade){
   if(note?.priorStage)bits.push(`上一阶段是${stageName(note.priorStage)}`);
   if(typeof note?.stageAgeMin==="number")bits.push(`这一阶段已经 ${Math.round(note.stageAgeMin)} 分钟`);
   lines.push(`开仓时盘面：${stageName(board)}${bits.length?`。${bits.join("，")}`:""}。只有同步爆发或趋势才会真正开仓。`);
+  if(typeof ctx.sizeMultiple==="number"&&ctx.sizeMultiple>1)lines.push(`仓位：按原计算的 ${ctx.sizeMultiple} 倍开（同步爆发 10 倍，趋势 5 倍）。`);
   if(ctx.environment&&note?.liveStage&&ctx.environment!==note.liveStage)
     lines.push(`这个机会出现时标成${stageName(ctx.environment)}，那是更早的标记。开仓那一刻盘面已经是${stageName(note.liveStage)}，所以开了。`);
   const path=ctx.coinPath;

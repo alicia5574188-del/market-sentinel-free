@@ -42,7 +42,7 @@ test("another shock inside the settle window keeps the same episode",()=>{
   assert.equal(again.transitionSince,null);
 });
 
-test("new entries open only in shock or trend, on the original side, at three times size",()=>{
+test("new entries open only in shock or trend, on the original side, sized 10x in shock and 5x in trend",()=>{
   const core=readFileSync(new URL("../lib/forward-relations.ts",import.meta.url),"utf8");
   const advance=core.slice(core.indexOf("export function advanceForward"),core.indexOf("export function closeForwardForReset"));
   assert.match(advance,/advanceShockEpisode\(/);
@@ -52,7 +52,8 @@ test("new entries open only in shock or trend, on the original side, at three ti
   assert.doesNotMatch(entries,/shockRoom=decided\.entry/);
   assert.doesNotMatch(entries,/settledTransitionEntry/);
   const open=core.slice(core.indexOf("function openIntelligenceTrade"),core.indexOf("export function extremeResidualConfirmationProfile"));
-  assert.match(open,/environment==="SHOCK"\|\|s\.environmentContext\.environment==="TREND"\?EXPANSION_SIZE:1/);
-  assert.match(core,/const EXPANSION_SIZE=6/);
+  assert.match(open,/const expansion=expansionFor\(s\.environmentContext\.environment\)/);
+  assert.match(open,/sizeMultiple:expansion/);
+  assert.match(core,/export const EXPANSION_SIZE=\{SHOCK:10,TREND:5\} as const/);
   assert.match(core,/next\.shockEpisode=structuredClone\(prior\.shockEpisode\)/);
 });
