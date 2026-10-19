@@ -9,6 +9,7 @@ import { LIVE_TURNOVER_PREFIX, validateTurnover, turnoverView, type TurnoverStat
 import { LIVE_SESSION_VERSION, type LiveSession } from "../lib/live-session.ts";
 import { forwardEquity } from "../lib/forward-relations.ts";
 import { gzip, gunzip } from "../lib/storage-codec.ts";
+import { liveSourceIds, memberForwardView } from "../lib/member-view.ts";
 type Identity={id:string;label:string;createdAt:number};
 type Credential={encrypted:EncryptedGateCredentials;keyHint:string;user:string;accountHash:string;savedAt:number};
 const CHECKPOINT="member-execution:v1:checkpoint",IDENTITY="member-execution:v1:identity",CREDENTIAL="member-execution:v1:credential",
@@ -334,8 +335,9 @@ export function memberExecutionClass(Base:typeof MarketStream) {
           const live=await this.liveView(),f=this.feed;
           return json({version:MEMBERS_VERSION,generatedAt:Date.now(),lastSuccessAt:f?.sourceStatus.lastSuccessAt??null,
             state:f?.sourceStatus.state??"RECOVERY_REQUIRED",stale:!!this.forwardError,lastError:this.forwardError,
-            authorityReady:!!f?.healthy,forward:f?.view?{...f.view,liveMirror:this.liveMirrorView()}:null,
-            evidence:this.runtime.evidence,liveMode:{requestedEnabled:live.requestedEnabled,operational:live.operational},live,
+            // Member page = own live copy account only: shared source trimmed to health + the sources of this member's own orders.
+            authorityReady:!!f?.healthy,forward:f?.view?{...memberForwardView(f.view as never,f.state,liveSourceIds(live)),liveMirror:this.liveMirrorView()}:null,
+            evidence:{},liveMode:{requestedEnabled:live.requestedEnabled,operational:live.operational},live,
             liveMirror:this.liveMirrorView(),member:{id,label:this.identity.label,sharedSource:true},legacyRetired:true});
         }
         if(path==="/live-status")return json({live:await this.liveView(),generatedAt:Date.now()});

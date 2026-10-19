@@ -195,14 +195,15 @@ test("actual Worker curve GET reads no Gate and does not mutate source or mode",
   assert.equal(JSON.stringify(engine.forwardState),before);assert.equal(JSON.stringify(engine.runtime),runtime);
   storage.fail=true;const bad=await engine.fetch(new Request("https://internal/forward-equity?cursor=secrets"));assert.equal(bad.status,400);
 });
-test("new chart route requires existing owner/member authorization; guests cannot read",async()=>{
+test("new chart route requires owner authorization; members and guests cannot read",async()=>{
   const ROOT="synthetic-equity-tests-only-no-real-credentials",memberId="m_"+"a".repeat(32);let reads=0;
   const env:any={OWNER_ACCESS_TOKEN:ROOT,MARKET_STREAM:{getByName(){return{fetch:async(url:string)=>{assert.ok(url.includes("/forward-equity"));reads++;return Response.json({chart:true});}};}},
     MEMBERS:{getByName(){return{fetch:async()=>Response.json({id:memberId,version:1,label:"fixture",createdAt:T})};}},MEMBER_EXECUTION:{getByName(){throw new Error("NO MEMBER TRADE LOOP");}}};
   const req=(cookie="")=>new Request("https://test.local/api/forward/equity",{headers:{Cookie:cookie}});
   assert.equal((await worker.fetch(req(),env,{} as never)).status,401);assert.equal(reads,0);
   const owner=ownerSessionCookie(await createOwnerSession(ROOT));assert.equal((await worker.fetch(req(owner),env,{} as never)).status,200);
-  const member=memberCookie(await issueMemberSession(ROOT,memberId,1));assert.equal((await worker.fetch(req(member),env,{} as never)).status,200);assert.equal(reads,2);
+  // The slim member page has no PAPER chart: members are refused before any primary read or member actor is touched.
+  const member=memberCookie(await issueMemberSession(ROOT,memberId,1));assert.equal((await worker.fetch(req(member),env,{} as never)).status,403);assert.equal(reads,1);
 });
 test("advice has no import/call of Gate, switches, orders or source decisions",()=>{
   const code=readFileSync(new URL("../lib/equity-curve.ts",import.meta.url),"utf8");

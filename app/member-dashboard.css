@@ -1,0 +1,3 @@
+/* Member page: two tabs (执行 · 系统). Owner nav keeps its four columns. */
+.fr-nav.fr-nav-two{grid-template-columns:repeat(2,minmax(0,1fr));width:min(calc(100% - 32px),520px)}
+@media(max-width:640px){.fr-nav.fr-nav-two{width:calc(100% - 16px)}}

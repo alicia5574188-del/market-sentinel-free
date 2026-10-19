@@ -20,7 +20,8 @@ export const persistMembers=persistableMembers;
 
 /** At app start: warm what the System tab shows, so opening it needs no wait. Skips keys fresh in memory. */
 export function prefetchSystemPanels(scope:string,owner:boolean){
-  prefetchPanel(scope,PANEL_KEYS.logStatus,fetchLogStatus,persistLogStatus);
+  // The run log and the member list are owner panels; a member page never shows them, so never fetch them for members.
+  if(owner)prefetchPanel(scope,PANEL_KEYS.logStatus,fetchLogStatus,persistLogStatus);
   prefetchPanel(scope,PANEL_KEYS.credential,fetchCredential,persistCredential);
   if(owner)prefetchPanel<{invite?:unknown}>(scope,PANEL_KEYS.members,fetchMembers,persistMembers);
 }

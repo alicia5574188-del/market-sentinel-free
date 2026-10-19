@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import ForwardDashboard from "./forward-dashboard.tsx";
+import MemberDashboard from "./member-dashboard.tsx";
 import LiveConsole from "./live-console.tsx";
 import { LoginGate, MemberAccess } from "./member-access.tsx";
 import PaperAccountReset from "./paper-account-reset.tsx";
@@ -9,6 +10,7 @@ import { runtimeBackendOperational, runtimeStatusLabel } from "../lib/runtime-he
 import { operatorRequest, type AuthSession, type LiveRuntime, type OperatorRuntime } from "../lib/operator-ui.ts";
 import { clearPanels } from "../lib/panel-cache.ts";
 import { prefetchSystemPanels } from "../lib/system-panels.ts";
+import { runtimeRefreshMs } from "../lib/member-view.ts";
 
 const IDENTITY_KEY="sentinel-panel-identity-v1";
 const identityOf=(s:AuthSession)=>s.authenticated?`${s.role??"owner"}:${s.memberId??s.username}`:null;
@@ -21,7 +23,6 @@ function guardPanelCache(session:AuthSession){
 }
 
 const RUNTIME_REQUEST_TIMEOUT_MS = 12_000;
-const RUNTIME_REFRESH_MS = 10_000;
 const RUNTIME_RETRY_MS = 3_000;
 
 export default function Home() {
@@ -29,12 +30,12 @@ export default function Home() {
   const [error,setError] = useState<string|null>(null);
   const [auth,setAuth] = useState<AuthSession|null>(null);
   const [refresh,setRefresh] = useState(0);
-  const epoch=useRef(0),runtimeReadFailures=useRef(0),hasRuntimeSnapshot=useRef(false);
+  const epoch=useRef(0),runtimeReadFailures=useRef(0),hasRuntimeSnapshot=useRef(false),lastRuntime=useRef<OperatorRuntime|null>(null);
   const reload=useCallback(() => { epoch.current++; setRefresh(v=>v+1); },[]);
   const sessionChanged=useCallback((session:AuthSession) => {
     // Closing the app or renewing a login must not erase saved chart history.
     // The authenticated Dashboard unmounts below; no cache is read while logged out.
-    epoch.current++;runtimeReadFailures.current=0;hasRuntimeSnapshot.current=false;guardPanelCache(session);setAuth(session);
+    epoch.current++;runtimeReadFailures.current=0;hasRuntimeSnapshot.current=false;lastRuntime.current=null;guardPanelCache(session);setAuth(session);
     // Warm the System tab (cheap Worker reads, no Gate call) so opening it shows details at once.
     if(session.authenticated)prefetchSystemPanels(session.memberId??"owner",session.role!=="member");
     // Remove private snapshots immediately and invalidate any in-flight response.
@@ -64,7 +65,7 @@ export default function Home() {
         if(response.status===401){if(active&&requestEpoch===epoch.current)sessionChanged({...auth,authenticated:false});return false;}
         if(!response.ok)throw new Error(`HTTP ${response.status}`);
         const value=await response.json() as OperatorRuntime;
-        if(active&&requestEpoch===epoch.current){runtimeReadFailures.current=0;hasRuntimeSnapshot.current=true;setRuntime(value);setError(null);
+        if(active&&requestEpoch===epoch.current){runtimeReadFailures.current=0;hasRuntimeSnapshot.current=true;lastRuntime.current=value;setRuntime(value);setError(null);
           if(auth?.authenticated&&!value.live)sessionChanged({...auth,authenticated:false});}
         return true;
       }catch{
@@ -77,7 +78,8 @@ export default function Home() {
       }
       finally{clearTimeout(timeout);inFlight=false;controller=null;}
     };
-    const cycle=async()=>{const succeeded=await read();if(active&&!document.hidden)timer=setTimeout(cycle,succeeded?RUNTIME_REFRESH_MS:RUNTIME_RETRY_MS);};
+    // Owner: every 10s. Member: 10s while copying or holding, 30s when copy is off and nothing is open.
+    const cycle=async()=>{const succeeded=await read();if(active&&!document.hidden)timer=setTimeout(cycle,succeeded?runtimeRefreshMs(auth.role,lastRuntime.current):RUNTIME_RETRY_MS);};
     const resume=()=>{if(timer)clearTimeout(timer);timer=null;if(document.hidden){controller?.abort();return;}if(!inFlight)void cycle();};
     void cycle();document.addEventListener("visibilitychange",resume);
     window.addEventListener("focus",resume);window.addEventListener("online",resume);window.addEventListener("pageshow",resume);
@@ -85,6 +87,14 @@ export default function Home() {
       window.removeEventListener("focus",resume);window.removeEventListener("online",resume);window.removeEventListener("pageshow",resume);};
   },[refresh,auth,sessionChanged]);
   if(!auth?.authenticated)return <LoginGate auth={auth} onSession={sessionChanged}/>;
+  // Members get their own slim page (own live copy account only); the owner page below is untouched.
+  if(auth.role==="member")return <MemberDashboard key={auth.memberId??"member"} memberName={auth.username}
+    healthy={runtimeBackendOperational(runtime)} statusLabel={runtimeStatusLabel(runtime)} feedAt={runtime?.lastSuccessAt??null}
+    error={runtime?.forward?.storage?.error??error} liveEnabled={runtime?.liveMode?.requestedEnabled??false}
+    liveOperational={runtime?.liveMode?.operational??false}
+    livePositions={Object.values(runtime?.live?.positions??{}).filter(p=>p?.status==="OPEN").length}
+    livePanel={<LiveConsole view="trade" auth={auth} runtime={runtime} onSession={sessionChanged} onLive={liveChanged} onRefresh={reload}/>}
+    liveSystemPanel={<LiveConsole view="system" auth={auth} runtime={runtime} onSession={sessionChanged} onLive={liveChanged} onRefresh={reload}/>}/>;
   return <ForwardDashboard key={auth.memberId??"owner"} cacheScope={auth.memberId??"owner"} data={runtime?.forward?.startedAt?runtime.forward:null}
     healthy={runtimeBackendOperational(runtime)} statusLabel={runtimeStatusLabel(runtime)} feedAt={runtime?.lastSuccessAt??null}
     error={runtime?.forward?.storage?.error??error} liveEnabled={runtime?.liveMode?.requestedEnabled??false}
@@ -98,6 +108,5 @@ export default function Home() {
       missing:runtime?.live?.mirror?.eligibleMissingCount??runtime?.liveMirror?.eligibleMissingCount??null}}
     livePanel={<LiveConsole view="trade" auth={auth} runtime={runtime} onSession={sessionChanged} onLive={liveChanged} onRefresh={reload}/>}
     liveSystemPanel={<LiveConsole view="system" auth={auth} runtime={runtime} onSession={sessionChanged} onLive={liveChanged} onRefresh={reload}/>}
-    accountPanel={<><MemberAccess auth={auth}/><PaperAccountReset auth={auth} runtime={runtime} onReset={reload}/></>}
-    memberName={auth.role==="member"?auth.username:undefined}/>;
+    accountPanel={<><MemberAccess auth={auth}/><PaperAccountReset auth={auth} runtime={runtime} onReset={reload}/></>}/>;
 }

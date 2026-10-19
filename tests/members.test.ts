@@ -501,3 +501,24 @@ test("safe delete refuses while live risk exists, then removes login and release
   assert.equal((await h.rpc("/login",{username:a.username,password:a.password,bucket:"d".repeat(64)})).status,401);
   const listing=await(await h.http("/api/members/admin",owner)).json<any>();assert.equal(listing.members.some((m:any)=>m.id===a.id),false);
 }));
+test("member page: PAPER, run-log, archive and admin endpoints are owner-only and never reach the primary",()=>clock(async()=>{
+  const h=await harness(),a=await h.issue(),cookie=memberCookie(await issueMemberSession(ROOT,a.id,1));
+  const reads=h.events.primaryReads;
+  for(const path of ["/api/forward/equity","/api/forward/export?kind=log","/api/forward/archive","/api/forward/log-status","/api/forward/archive-export?since=0",
+    "/api/members/admin"])assert.equal((await h.http(path,cookie)).status,403,path);
+  for(const [path,body] of [["/api/paper/reset",{confirm:"RESET_PAPER"}],["/api/paper/reset/cancel",{confirm:"CANCEL_PAPER_RESET"}],
+    ["/api/members/invite/rotate",{}],["/api/members/stop",{id:a.id}]] as const)assert.equal((await h.http(path,cookie,body)).status,403,path);
+  assert.equal(h.events.primaryReads,reads);assert.equal(h.events.d1,0);
+  // The member's own copy-trading endpoints stay available.
+  for(const path of ["/api/runtime","/api/live/status","/api/live/history","/api/live/credentials"])assert.equal((await h.http(path,cookie)).status,200,path);
+}));
+test("member runtime carries only health and the PAPER sources of the member's own live orders",()=>clock(async()=>{
+  const h=await harness(),a=await h.issue();h.source.positions=[trade("ft-shared-a"),trade("ft-shared-b")];
+  const m=await h.member(a.id);m.engine.runtime.live.positions={"ft-shared-a":{id:"ft-shared-a",status:"OPEN"}};
+  const value=await(await h.internal(a.id,"/status")).json<any>();
+  assert.deepEqual(value.forward.positions.map((t:any)=>t.id),["ft-shared-a"]);assert.deepEqual(value.forward.history,[]);
+  assert.equal(value.forward.memberProjection,true);assert.equal(value.forward.storage.error,null);assert.equal(typeof value.forward.startedAt,"number");
+  for(const key of ["events","daily","marketIntelligence","hypothesisResearch","opportunities","forwardDesk","balance"])assert.equal(key in value.forward,false,key);
+  assert.deepEqual(Object.keys(value.forward.positions[0]).sort(),["closedAt","entryPrice","exitPrice","id","lastPrice","netPnl","notional","openedAt","side","status","symbol"]);
+  assert.deepEqual(value.evidence,{});assert.ok(value.live);assert.equal(value.member.id,a.id);
+}));

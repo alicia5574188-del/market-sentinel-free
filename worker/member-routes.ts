@@ -118,7 +118,8 @@ export async function memberRoutes(request:Request,env:CloudflareEnv):Promise<Re
     if(!m)return json({error:"请使用主账户或个人登录密钥登录"},401);
     if(!env.MEMBER_EXECUTION)return json({error:"会员执行服务尚未部署"},503);
     if(!rate(m.id))return json({error:"请求过于频繁，请稍后刷新"},429);
-    if(path==="/api/forward/equity"&&request.method==="GET")return env.MARKET_STREAM.getByName("primary").fetch(`https://market-stream/forward-equity${u.search}`);
+    // Members see only their own live copy account: the shared PAPER account, its curve, run log and archive stay owner-only.
+    if(path.startsWith("/api/forward/")||path.startsWith("/api/paper/"))return json({error:"会员页面只显示自己的实盘跟单；模拟账户、运行日志和归档仅主账户可见"},403);
     const internal=new Headers({"x-verified-member":m.id,"x-member-created-at":String(m.createdAt),"x-member-label":encodeURIComponent(m.label)});
     const actor=env.MEMBER_EXECUTION.getByName(`member:${m.id}`);
     const get=(p:string)=>actor.fetch(`https://member-execution${p}`,{headers:internal});
@@ -135,11 +136,6 @@ export async function memberRoutes(request:Request,env:CloudflareEnv):Promise<Re
       const body=path.endsWith("/mode")?{enabled:b.enabled}:request.method==="PUT"?{apiKey:b.apiKey,apiSecret:b.apiSecret,environment:"live"}:{};
       return actor.fetch(`https://member-execution${path.endsWith("/mode")?"/live-mode":"/credentials"}`,{method:request.method,headers:internal,body:JSON.stringify(body)});
     }
-    if(path==="/api/forward/export"&&request.method==="GET") {
-      const r=await get("/status");if(!r.ok)return r;const s=await r.json<{forward:unknown}>();
-      return json({exportedAt:Date.now(),forward:s.forward,liveReviewAvailable:true,scope:"共享模拟策略；不包含主账户或其他会员的实盘数据"});
-    }
-    if(path==="/api/forward/archive"&&request.method==="GET")return env.MARKET_STREAM.getByName("primary").fetch(`https://market-stream/forward-archive${u.search}`);
     return json({error:"会员不能修改共享模拟账户、发放密钥或读取其他人的账户"},403);
   }catch {return json({error:"登录或会员服务暂不可用；不会切换为主账户"},503);}
 }
