@@ -52,7 +52,7 @@ import {emptyThesis, runThesisCycle, THESIS_STORAGE_KEY, type ThesisAttached, ty
 import type {ThesisPublic} from '../lib/thesis-view.ts';
 import {RESEARCH_NOTES} from '../lib/log-complete.ts';
 import {buildRunLogExport,accountLogBook,closedLogRow,isCompleteTradeRecord,withResearchColumns} from '../lib/run-log.ts';
-import {entryFeatures,type RadarRow} from '../lib/entry-features.ts';
+import {btcChange,entryFeatures,type RadarRow} from '../lib/entry-features.ts';
 import {mergeOiRing,noteOiSnapshot,oiAnchor,oiSnapshotKey,OI_SNAPSHOT_PREFIX,type OiRing,type OiSnapshot} from '../lib/oi-anchor.ts';
 import {adoptLegacyPaths,bookFromStoredPaths,commitPathWrite,emptyTradePathBook,exportTradePaths,observeTradePaths,peekPathWrite,pendingPathWrites,pathColumns,pathComplete,pruneGhostPaths,pruneOrphanPaths,searchHolding,TRADE_PATH_INDEX_KEY,TRADE_PATH_KEY,TRADE_PATH_PAGE_PREFIX,type TradePathBook,type TradePathIndex,type TradePathPage} from '../lib/trade-path.ts';
 import {emptyOrderJournal,observeOrderJournal,ORDER_JOURNAL_KEY,restoreOrderJournal,type OrderJournal} from '../lib/order-journal.ts';
@@ -1654,6 +1654,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }
     }catch{/* log only */}
   }
+  /** BTC 1h % for the TREND/SHOCK entry gate: the same inputs and function as the logged btc_1h_pct. Null when not current. */
+  private gateBtc1h(now:number):number|null{
+    try{
+      this.noteBtcMid(now);
+      return btcChange({now,btcBars5m:this.strategyCandles.BTC_USDT??null,btcMids:this.btcMidRing,btcHourly:this.regimeHourly.BTC_USDT??null},1);
+    }catch{return null;}
+  }
   private pathCapture(now:number,state:ForwardState){
     this.noteBtcMid(now);
     const moves=Object.entries(state.extremumRegime?.symbols??{}).map(([symbol,row])=>({symbol,move:row.actualMove}));
@@ -1778,7 +1785,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         daily:this.turnDailyCandles,quotes:executionQuotes,analysisQuotes:this.forwardAnalysisQuotes(now),contracts:this.regimeContracts(),
         entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue,
         research:{rolling:this.shadowResearch.market[0]?.rolling??null},reviewTrace:event=>{if(reviewEvents.length<128)reviewEvents.push(event);},
-        referenceMids:(()=>{try{return this.referenceMids(now);}catch{return undefined;}})() });
+        referenceMids:(()=>{try{return this.referenceMids(now);}catch{return undefined;}})(),
+        btc1hPct:this.gateBtc1h(now) });
       try{captureTradeReviews(previous,next.state,now,FORWARD_BUILD_SHA,STRATEGY_FINGERPRINT,executionQuotes);}
       catch{this.reviewDiagnosticError="TRADE_REVIEW_CAPTURE_FAILED";}
       if(this.tradePathsLoaded){

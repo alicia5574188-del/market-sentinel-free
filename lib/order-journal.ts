@@ -26,6 +26,8 @@ export type OrderRecord={
   mode?:string|null;trade_plan?:string|null;intent?:string|null;long_score?:number|null;short_score?:number|null;residual_z?:number|null;
   score?:number|null;stop_price?:number|null;planned_hold_min?:number|null;volume24h_usd?:number|null;funding_rate?:number|null;trend_score?:number|null;factor_30m_pct?:number|null;
   gap_bps?:number|null;gap_applicable?:boolean|null;
+  /** 趋势/爆发开仓规则：btc_follow / washout_flip / washout_long / btc_follow_block / btc_missing_block；其它阶段为空。 */
+  entry_gate?:string|null;gate_signal_side?:'LONG'|'SHORT'|null;gate_btc_1h_pct?:number|null;
 };
 export type OrderJournal={version:typeof ORDER_JOURNAL_VERSION;accountStartedAt:number;rows:OrderRecord[]};
 
@@ -46,7 +48,7 @@ export function orderRecord(t:Trade):OrderRecord{
     market_expectancy:t.entryContext?.marketExpectancy??null,entry_structure:t.entryContext?.entryStructure??null,
     leverage:typeof t.leverage==="number"&&t.leverage>0?t.leverage:null,
     entry_rule:t.unopened?"NOT_OPENED":t.entryContext?.shockRoom?"SHOCK_EPISODE":t.entryContext?.transitionRule?"TRANSITION_ROOM":null,
-    ...entryDecision(t),...stageFields(t),...qualityFields(t),...pathFields(t),...signalFields(t),...snapFields(t),...gapFields(t)};
+    ...entryDecision(t),...stageFields(t),...qualityFields(t),...pathFields(t),...signalFields(t),...snapFields(t),...gapFields(t),...gateFields(t)};
 }
 function stageFields(t:Trade):Pick<OrderRecord,'live_stage'|'prior_stage'|'stage_age_min'|'minutes_since_shock'|'shock_push'|'sync_drop'|'shock_seen'>{
   const note=t.entryContext?.stageNote;
@@ -85,6 +87,11 @@ export function snapFields(t:Trade):Pick<OrderRecord,'mode'|'trade_plan'|'intent
   const empty={mode:null,trade_plan:null,intent:null,long_score:null,short_score:null,residual_z:null,score:null,stop_price:null,planned_hold_min:null,volume24h_usd:null,funding_rate:null,trend_score:null,factor_30m_pct:null};
   if(!snap)return empty;
   return {...empty,...snap};
+}
+export function gateFields(t:Trade):Pick<OrderRecord,'entry_gate'|'gate_signal_side'|'gate_btc_1h_pct'>{
+  const g=t.entryContext?.entryGate;
+  if(!g)return {entry_gate:null,gate_signal_side:null,gate_btc_1h_pct:null};
+  return {entry_gate:g.rule,gate_signal_side:g.signalSide,gate_btc_1h_pct:typeof g.btc1hPct==="number"&&Number.isFinite(g.btc1hPct)?g.btc1hPct:null};
 }
 const STOP_EXIT=/STOP|INVALIDAT|HARD_RISK/;
 export function gapFields(t:Trade):Pick<OrderRecord,'gap_bps'|'gap_applicable'>{
