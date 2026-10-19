@@ -125,7 +125,7 @@ export function dueStages(state:ForwardState,now:number,watermark:number|null,li
 /** The next whole Beijing day of equity minutes to archive (finished at least 30 minutes ago), or null. */
 export function nextEquityDay(now:number,accountStartedAt:number,watermark:string|null){
   const first=beijingDayKey(accountStartedAt),today=beijingDayKey(now-30*MIN);
-  let day=watermark&&watermark>=first?addDay(watermark):first;
+  const day=watermark&&watermark>=first?addDay(watermark):first;
   if(day>=today)return null;
   return day;
 }

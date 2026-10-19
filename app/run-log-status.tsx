@@ -68,18 +68,22 @@ export function RunLogStatusView({status}:{status:Status|null}){
 
 /** 长期归档：统计 + 三种导出方式 + 分段下载。 */
 export function RunLogArchiveView({archive,initialMode="since",initialPlan=null,initialDone=[]}:{archive:ArchiveInfo;initialMode?:Mode;initialPlan?:Plan|null;initialDone?:number[]}){
-  const now=Date.now();
-  const [mode,setMode]=useState<Mode>(initialMode);
-  const [from,setFrom]=useState(()=>msToBeijingInput(now-7*24*60*60_000)),[to,setTo]=useState(()=>msToBeijingInput(now));
+  const [mode,setModeRaw]=useState<Mode>(initialMode);
+  const [from,setFromRaw]=useState(()=>msToBeijingInput(Date.now()-7*24*60*60_000)),[to,setToRaw]=useState(()=>msToBeijingInput(Date.now()));
   const [plan,setPlan]=useState<Plan|null>(initialPlan),[done,setDone]=useState<number[]>(initialDone);
   const [busy,setBusy]=useState<number|null>(null),[msg,setMsg]=useState<string|null>(null);
+  // A new mode or time range starts from a clean plan (done in the change handlers, not in the effect).
+  const resetFor=(nextMode:Mode)=>{if(initialPlan&&nextMode===initialMode)return;setPlan(null);setDone([]);setMsg(null);};
+  const setMode=(m:Mode)=>{if(m===mode)return;resetFor(m);setModeRaw(m);};
+  const setFrom=(v:string)=>{if(v===from)return;resetFor(mode);setFromRaw(v);};
+  const setTo=(v:string)=>{if(v===to)return;resetFor(mode);setToRaw(v);};
   const range=mode==="range"?{from:beijingInputToMs(from),to:beijingInputToMs(to)}:null;
   const badRange=!!range&&(range.from==null||range.to==null||range.to<=range.from);
   const query=()=>{const q=new URLSearchParams({mode});if(range&&!badRange){q.set("from",String(range.from));q.set("to",String(range.to));}return q;};
   useEffect(()=>{
     if(initialPlan&&mode===initialMode)return;
-    let alive=true;setPlan(null);setDone([]);setMsg(null);
     if(badRange)return;
+    let alive=true;
     const q=query();q.set("count","1");q.set("t",String(Date.now()));
     fetch(`/api/forward/archive-export?${q}`,{cache:"no-store",credentials:"same-origin"})
       .then(async r=>{const body=await r.json() as Plan&{error?:string};if(!r.ok)throw new Error(body.error??"读取失败");if(alive)setPlan({total:body.total,segments:body.segments});})
