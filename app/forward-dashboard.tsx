@@ -67,7 +67,7 @@ function entryFacts(t:Trade){
   }
   return lines;
 }
-const exitName=(reason:string|null)=>reason?({LIQUIDATION:"爆仓",SHADOW_SOURCE_EXIT:"提案平仓",AFTER_PROFIT_LOSS:"浮盈后亏到0.6%就走",PEAK_GIVEBACK:"浮盈回吐到线就走",RHYTHM_BREAK:"自己的推进节奏断了",EXPECTANCY_EXIT:"到了这段行情的期望幅度就走",INVERSE_SOFT_LOSS_EXIT:"浮亏到线，提前平仓",DESK_SWEEP_EXIT:"打穿确认位",DESK_NO_PROGRESS_EXIT:"30分钟没走出成本",DESK_GIVEBACK_EXIT:"利润回吐一半",DESK_HORIZON_EXIT:"满90分钟",WINNER_STRUCTURE_EXIT:"有效结构保护",WINNER_THESIS_EXIT:"持续推动失效",RANGE_CENTER_EXIT:"回归目标兑现",STRUCTURE_STOP:"结构止损",PROFIT_GIVEBACK:"利润保护",THESIS_INVALIDATED:"交易假设失效",RELATIVE_EDGE_GONE:"相对优势消失",NO_POSITIVE_FEEDBACK:"长时间未获得正向反馈",MAX_HOLD:"最大持仓时间",ENTRY_FEEDBACK_FAILED:"旧入场反馈失败",OPPOSITE_EXTREMUM:"旧相反峰谷",TREND_DEATH:"旧趋势死亡",EXTREMUM_PROFIT_EXIT:"旧极值退出",NO_PROGRESS:"旧无进展",MARKET_FLIP:"旧市场翻转",RELATION_DEGRADED:"旧关系降级",SAMPLE_PATH_DIVERGED:"旧样本路径失配",SAMPLE_EDGE_EXHAUSTED:"旧样本优势耗尽",SAMPLE_MAX_HOLD:"旧样本最大持仓",TIME_DECAY:"旧持仓超时",OPPORTUNITY_REPLACED:"更优机会替换",STRUCTURAL_INTERRUPT_REVERSAL:"旧极端结构反转",SHOCK_REENTRY:"旧突变重新回区",FAST_STRUCTURE_FAILURE:"旧强结构快速失效",ACCOUNT_RESET:"手动重置",STRETCH_WRONG_EXIT:"反向到了 0.5%",STRETCH_GIVEBACK_EXIT:"利润吐回一半",STRETCH_TIME_EXIT:"满两小时",LSR_TP_EXIT:"止盈 0.30%",LSR_SL_EXIT:"止损 0.20%",LSR_BE_EXIT:"回到成本",LSR_TIME_EXIT:"满十五分钟",LSR_REVERSE_EXIT:"出现反向信号"}[reason]??reason):"—";
+const exitName=(reason:string|null)=>reason?({LIQUIDATION:"爆仓",S1_TP:"S1 止盈 6%",S1_SL:"S1 止损",S1_TIME_6H:"S1 满 6 小时",S1_TIME_24H:"S1 满 24 小时",SHADOW_SOURCE_EXIT:"提案平仓",AFTER_PROFIT_LOSS:"浮盈后亏到0.6%就走",PEAK_GIVEBACK:"浮盈回吐到线就走",RHYTHM_BREAK:"自己的推进节奏断了",EXPECTANCY_EXIT:"到了这段行情的期望幅度就走",INVERSE_SOFT_LOSS_EXIT:"浮亏到线，提前平仓",DESK_SWEEP_EXIT:"打穿确认位",DESK_NO_PROGRESS_EXIT:"30分钟没走出成本",DESK_GIVEBACK_EXIT:"利润回吐一半",DESK_HORIZON_EXIT:"满90分钟",WINNER_STRUCTURE_EXIT:"有效结构保护",WINNER_THESIS_EXIT:"持续推动失效",RANGE_CENTER_EXIT:"回归目标兑现",STRUCTURE_STOP:"结构止损",PROFIT_GIVEBACK:"利润保护",THESIS_INVALIDATED:"交易假设失效",RELATIVE_EDGE_GONE:"相对优势消失",NO_POSITIVE_FEEDBACK:"长时间未获得正向反馈",MAX_HOLD:"最大持仓时间",ENTRY_FEEDBACK_FAILED:"旧入场反馈失败",OPPOSITE_EXTREMUM:"旧相反峰谷",TREND_DEATH:"旧趋势死亡",EXTREMUM_PROFIT_EXIT:"旧极值退出",NO_PROGRESS:"旧无进展",MARKET_FLIP:"旧市场翻转",RELATION_DEGRADED:"旧关系降级",SAMPLE_PATH_DIVERGED:"旧样本路径失配",SAMPLE_EDGE_EXHAUSTED:"旧样本优势耗尽",SAMPLE_MAX_HOLD:"旧样本最大持仓",TIME_DECAY:"旧持仓超时",OPPORTUNITY_REPLACED:"更优机会替换",STRUCTURAL_INTERRUPT_REVERSAL:"旧极端结构反转",SHOCK_REENTRY:"旧突变重新回区",FAST_STRUCTURE_FAILURE:"旧强结构快速失效",ACCOUNT_RESET:"手动重置",STRETCH_WRONG_EXIT:"反向到了 0.5%",STRETCH_GIVEBACK_EXIT:"利润吐回一半",STRETCH_TIME_EXIT:"满两小时",LSR_TP_EXIT:"止盈 0.30%",LSR_SL_EXIT:"止损 0.20%",LSR_BE_EXIT:"回到成本",LSR_TIME_EXIT:"满十五分钟",LSR_REVERSE_EXIT:"出现反向信号"}[reason]??reason):"—";
 const exitLabel=(t:Trade)=>t.exitReason==="PEAK_GIVEBACK"?peakGivebackName(t):exitName(t.exitReason);
 const stanceName=(stance?:string)=>stance==="REVERSE"?"反向":stance==="FLAT"?"先停":"正向";
 const sessionName=(session?:string)=>session==="ASIA"?"亚盘":session==="EUROPE"?"欧盘":session==="US"?"美盘":"—";
@@ -448,6 +448,14 @@ function openReason(t:Trade){
   const board=ctx.stageNote?.liveStage??ctx.environment;
   return `${trend}${t.side==="LONG"?"做多":"做空"}，${plan}${board?`；开仓时盘面是${stageName(board)}`:""}。`;
 }
+/** S1 tag on the card: 顺势, or 反向 with original→new side. */
+function s1Tag(t:Trade):{tag?:string;tagTitle?:string}{
+  const n=t.entryContext?.s1;if(!n?.branch)return {};
+  const name=(side:"LONG"|"SHORT")=>side==="LONG"?"多":"空";
+  const btc=typeof n.btc==="number"?`BTC 1小时顺向 ${n.btc>=0?"+":""}${n.btc.toFixed(2)}%`:"";
+  if(n.branch==="follow")return {tag:"顺势",tagTitle:`S1 顺势：${btc}（≥0.57%），止盈 6%、止损 1%`};
+  return {tag:`反向 ${name(n.signal)}→${name(n.side)}`,tagTitle:`S1 反向：${btc}（<0.57%），原信号${name(n.signal)}，改做${name(n.side)}，自身止损 ${typeof n.stop==="number"?n.stop.toFixed(2):"—"}%，6 小时到点出`};
+}
 function closeReason(t:Trade){
   if(t.status==="OPEN"||!t.exitReason)return null;
   if(t.exitReason==="PEAK_GIVEBACK")return `${peakGivebackName(t)}，平仓留住利润。`;
@@ -486,7 +494,7 @@ export function TradeCard({trade:t,now,paid}:{trade:Trade;now:number;paid?:PaidP
     {t.inverseCopy&&<p>只扣已经发生的费用。</p>}
   </>;
   return <OrderCard className={t.inverseCopy?`fr-inverse-row${t.inverseCopy.alignment==="WITH_SOURCE"?" is-with":""}`:undefined}
-    symbol={t.symbol} side={t.side} leverage={t.leverage} liquidated={t.exitReason==="LIQUIDATION"} pnl={pnl} rate={rate} state={state} held={duration(t.openedAt,t.closedAt,now)}
+    symbol={t.symbol} side={t.side} leverage={t.leverage} liquidated={t.exitReason==="LIQUIDATION"} {...s1Tag(t)} pnl={pnl} rate={rate} state={state} held={duration(t.openedAt,t.closedAt,now)}
     extra={pair?<span>已扣手续费 {fmt(pair.inverse.fees,4)} U{!pair.quoteFresh?" · 估值待更新":""}</span>:undefined}
     facts={facts} why={openReason(t)} out={closeReason(t)}
     notes={t.realization&&<p className="oc-note">{t.inverseCopy?"已减仓":"已部分兑现"} {t.realization.sequence} 次 · 已实现净额 {signed(realizedNetPnl(t))} U · 剩余 {fmt(open?remainingTradeFraction(t)*100:0,0)}%</p>}

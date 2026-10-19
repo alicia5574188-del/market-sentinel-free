@@ -14,6 +14,7 @@
 .oc-side.is-short{background:#432a2c;color:#ffb8b3}
 .oc-live{background:#24375a;color:#b3cdff;border:1px solid #4a6aa3}
 .oc-liq{font-style:normal;font-size:12px;font-size:var(--fr-fs12,12px);font-weight:700;line-height:1;padding:4px 7px;border-radius:6px;white-space:nowrap;background:#5a1f22;color:#ffd0cc;border:1px solid #a4433f}
+.oc-tag{font-style:normal;font-size:12px;font-size:var(--fr-fs12,12px);font-weight:600;line-height:1;padding:4px 7px;border-radius:6px;white-space:nowrap;background:#1f3550;color:#cfe3ff;border:1px solid #3d6a9e}
 .oc-card.is-liquidated{border-color:#7a3a3a}
 .oc-pnl{font-size:19px;font-size:var(--fr-fs19,19px);font-weight:700;white-space:nowrap;color:var(--fr-ink)}
 .oc-sub{font-size:13px;font-size:var(--fr-fs13,13px);color:var(--fr-muted);line-height:1.5}

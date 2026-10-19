@@ -2,6 +2,7 @@
 import type {EntryStructure} from './entry-structure.ts';
 import type {Trade} from './forward-relations.ts';
 import {coinPathVersus} from './coin-path.ts';
+import {s1Fields as s1Columns,type S1Fields} from './s1-rule.ts';
 
 export const ORDER_JOURNAL_KEY='market-intelligence:order-journal:v1';
 export const ORDER_JOURNAL_VERSION='order-journal-v1' as const;
@@ -29,7 +30,7 @@ export type OrderRecord={
   gap_bps?:number|null;gap_applicable?:boolean|null;
   /** 趋势/爆发开仓规则：btc_follow / washout_flip / washout_long / pumped_short / btc_follow_block / btc_missing_block；其它阶段为空。 */
   entry_gate?:string|null;gate_signal_side?:'LONG'|'SHORT'|null;gate_btc_1h_pct?:number|null;gate_coin_bg_pct?:number|null;
-};
+}&Partial<S1Fields>;
 export type OrderJournal={version:typeof ORDER_JOURNAL_VERSION;accountStartedAt:number;rows:OrderRecord[]};
 
 export function emptyOrderJournal(accountStartedAt:number):OrderJournal{
@@ -48,8 +49,8 @@ export function orderRecord(t:Trade):OrderRecord{
     exit_stage:t.exitRegime?.stage??null,exit_phase:t.exitRegime?.phase??null,
     market_expectancy:t.entryContext?.marketExpectancy??null,entry_structure:t.entryContext?.entryStructure??null,
     leverage:typeof t.leverage==="number"&&t.leverage>0?t.leverage:null,
-    entry_rule:t.unopened?"NOT_OPENED":t.entryContext?.shockRoom?"SHOCK_EPISODE":t.entryContext?.transitionRule?"TRANSITION_ROOM":null,
-    ...entryDecision(t),...stageFields(t),...qualityFields(t),...pathFields(t),...signalFields(t),...snapFields(t),...gapFields(t),...gateFields(t)};
+    entry_rule:entryRuleOf(t),
+    ...entryDecision(t),...stageFields(t),...qualityFields(t),...pathFields(t),...signalFields(t),...snapFields(t),...gapFields(t),...gateFields(t),...s1Fields(t)};
 }
 function stageFields(t:Trade):Pick<OrderRecord,'live_stage'|'prior_stage'|'stage_age_min'|'minutes_since_shock'|'shock_push'|'sync_drop'|'shock_seen'>{
   const note=t.entryContext?.stageNote;
@@ -94,6 +95,17 @@ export function gateFields(t:Trade):Pick<OrderRecord,'entry_gate'|'gate_signal_s
   if(!g)return {entry_gate:null,gate_signal_side:null,gate_btc_1h_pct:null,gate_coin_bg_pct:null};
   return {entry_gate:g.rule,gate_signal_side:g.signalSide,gate_btc_1h_pct:typeof g.btc1hPct==="number"&&Number.isFinite(g.btc1hPct)?g.btc1hPct:null,
     gate_coin_bg_pct:typeof g.coinBgPct==="number"&&Number.isFinite(g.coinBgPct)?g.coinBgPct:null};
+}
+/** entry_rule of a record. An opened S1 trade (TREND/SHOCK) is 'S1'; a not-opened row stays NOT_OPENED (its S1 columns say why). */
+export function entryRuleOf(t:Trade):string|null{
+  if(t.unopened)return "NOT_OPENED";
+  if(t.entryContext?.s1?.branch)return "S1";
+  return t.entryContext?.shockRoom?"SHOCK_EPISODE":t.entryContext?.transitionRule?"TRANSITION_ROOM":null;
+}
+/** S1 columns (btc1h_aligned_pct, s1_branch, original_side, s1_side, s1_plan, s1_stop_pct, s1_tp_pct, s1_exit_reason).
+ * Only trades carrying an S1 note get the keys, so older/other rows (and the stored journal) carry no extra bytes. */
+export function s1Fields(t:Trade):Partial<S1Fields>{
+  return s1Columns(t.entryContext?.s1,t.exitReason,t.status==="CLOSED")??{};
 }
 const STOP_EXIT=/STOP|INVALIDAT|HARD_RISK/;
 export function gapFields(t:Trade):Pick<OrderRecord,'gap_bps'|'gap_applicable'>{

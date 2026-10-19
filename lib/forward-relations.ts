@@ -23,7 +23,8 @@ import { beijingDayKey } from "./beijing-time.ts";
 import { readEntryStructure, type EntryStructure } from "./entry-structure.ts";
 import { readCoinPath, type CoinPath } from "./coin-path.ts";
 import { transitionExitReason, type TransitionEntry } from "./transition-rule.ts";
-import { entryGate, entryGateNote, type EntryGateNote } from "./entry-gate.ts";
+import { type EntryGateNote } from "./entry-gate.ts";
+import { readS1Note, s1Decision, s1Exit, s1Levels, type S1Note } from "./s1-rule.ts";
 import { advanceShockEpisode, initialShockEpisode, normalizeShockEpisode, type ShockEpisode } from "./shock-episode.ts";
 import { advanceStageChronicle, attachStageSnap, equalWeightReturnPct, equalWeightReturnSince, fillStageForward, initialStageChronicle, normalizeStageChronicle, stageStamp, type StageChronicle, type StageSnap, type StageStamp } from "./stage-chronicle.ts";
 import { backfillSignalTally, earliestTallyAt, normalizeSignalTally, noteSignalOutcome, quoteSpreadBps, rememberSignalRepeat, type SignalRepeat, type SignalTally, type SignalTallyMeta } from "./signal-repeat.ts";
@@ -170,6 +171,9 @@ export type EntryContext={
   entrySnap?:EntrySnap;
   /** 趋势/爆发两条开仓规则（BTC 顺向、山寨急跌反手）当时怎么判的。只留档，不参与出场。 */
   entryGate?:EntryGateNote;
+  /** 趋势/爆发的 S1 开平仓方案（lib/s1-rule.ts）：分支、原信号方向、实际方向、BTC 1小时顺向幅度、止损/止盈 %、最长持有分钟。
+   * 带着它（branch 不为空）的单只按 S1 出场（止损/止盈/到时）加逐仓爆仓。 */
+  s1?:S1Note;
 };
 import type {ReviewEvent, TradeReview} from "./review-trace.ts";
 
@@ -853,6 +857,24 @@ function manageTransitionTrade(s:ForwardState,t:Trade,q:Quote,now:number){
   return true;
 }
 
+/** S1 trades: only the S1 plan (stop, take profit for follow, time limit) — liquidation is checked before this. */
+function manageS1Trade(s:ForwardState,t:Trade,q:Quote,now:number,bar?:Candle){
+  const note=readS1Note(t.entryContext?.s1);if(!note?.branch)return false;
+  const px=t.side==="LONG"?q.bestBid:q.bestAsk,d=dir(t.side),signed=d*(px/t.entryPrice-1),prior=t.lastPrice;
+  t.lastPrice=px;t.lastQuoteAt=q.observedAt;
+  t.favorable=Math.max(t.favorable,Math.max(0,signed));t.adverse=Math.max(t.adverse,Math.max(0,-signed));
+  t.peakPnlRate=Math.max(t.peakPnlRate??0,t.favorable);
+  if(!t.firstProfitAt&&signed>ROUND_TRIP_COST)t.firstProfitAt=now;
+  const tpPrice=note.branch==="follow"&&typeof note.tp==="number"?t.entryPrice*(1+d*note.tp/100):null;
+  const code=s1Exit({note,side:t.side,stopPrice:t.stopPrice,tpPrice,openedAt:t.openedAt,now,price:px});
+  if(!code)return false;
+  // 止损按原来的止损成交模型（executableProtectionFill）；止盈是挂在目标价的限价单，按目标价成交；到时按当时盘口。
+  const fill=code==="S1_SL"?executableProtectionFill(t.side,t.stopPrice,px,prior,bar):code==="S1_TP"&&tpPrice!=null?tpPrice:px;
+  closeTrade(s,t,fill,now,code,{authority:"S1_PLAN",branch:note.branch,quoteAt:q.observedAt,quote:px,stopPrice:t.stopPrice,
+    tpPrice,holdMin:note.hold,btc1hAlignedPct:note.btc});
+  return true;
+}
+
 function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now:number,minutePaths:Record<string,Candle[]>|undefined,
   marketEvolution:MarketEvolutionState,environmentOutlook:EnvironmentOutlook,paths?:Record<string,Candle[]>,contracts?:Record<string,Contract>){
   const closed=new Set<string>();
@@ -862,6 +884,11 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
     const q=quotes[t.symbol];if(!freshQuote(q,now))continue;
     // 逐仓爆仓先看：价格已经越过强平价就不可能再按止损价平。正常情况下止损远在强平价之前，这条不会触发。
     if(liquidateIfHit(s,t,q!,now,contracts?.[t.symbol],minutePaths?.[t.symbol]?.at(-1))){closed.add(t.id);continue;}
+    // S1 单（趋势/爆发，上线之后开的）只走 S1 自己的出场：不走回吐、节奏、持仓评分、利润保护这些原来的出场。
+    if(readS1Note(t.entryContext?.s1)?.branch){
+      if(manageS1Trade(s,t,q!,now,minutePaths?.[t.symbol]?.at(-1)))closed.add(t.id);
+      continue;
+    }
     // 只有带过渡出场的单才按空间止损和时间走。爆发段的单不带这套出场，继续走原来的结构止损和理由失效。
     if(t.entryContext?.transitionRule){
       if(manageTransitionTrade(s,t,q!,now))closed.add(t.id);
@@ -1240,7 +1267,7 @@ function entrySnapOf(s:ForwardState,o:Opportunity,contract:Contract,stopPrice:nu
     factor_30m_pct:equalWeightReturnPct(Object.values(s.extremumRegime.symbols).map(row=>row.actualMove))};
 }
 function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:number,equity:number,
-  response?:{validation:EntryValidation;decision:EntryResponseDecision},minutePath?:Candle[],entryStructure?:EntryStructure,transition?:TransitionEntry|null,shockRoom?:TransitionEntry|null,note=false,gate?:EntryGateNote|null){
+  response?:{validation:EntryValidation;decision:EntryResponseDecision},minutePath?:Candle[],entryStructure?:EntryStructure,transition?:TransitionEntry|null,shockRoom?:TransitionEntry|null,note=false,gate?:EntryGateNote|null,s1In?:S1Note|null){
   if(!isIntelligenceOpportunity(o))return"新策略身份缺失";
   const appliedResearch=applyOpportunityResearch(s,o,now);
   if(appliedResearch?.entryAction==="CONFIRM_MORE"&&!response)return "研究要求本币实时响应确认，不能由兼容入口跳过";
@@ -1255,8 +1282,8 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
     :`实时成交性价比已降至 ${executionValue.edgeRatio.toFixed(2)}×，低于1.25×，等待回调/新假设`;
   if((requiresLiquidityStop||o.winnerPlan)&&(frozenInvalidation==null||(side==="LONG"&&frozenInvalidation>=price)||(side==="SHORT"&&frozenInvalidation<=price)))
     return"流动性失效边界已经不在入场价格外侧，当前位置不再执行";
-  const softInvalidationRate=frozenInvalidation!=null?Math.abs(price-frozenInvalidation)/Math.max(price,1e-12):o.stopRate,
-    stopRate=requiresLiquidityStop
+  const softInvalidationRate=frozenInvalidation!=null?Math.abs(price-frozenInvalidation)/Math.max(price,1e-12):o.stopRate;
+  let stopRate=requiresLiquidityStop
       ?Math.min(.035,Math.max(softInvalidationRate*1.35,softInvalidationRate+Math.max(ROUND_TRIP_COST*1.5,o.pullbackRiskRate*.35)))
       :Math.max(.004,o.winnerPlan?softInvalidationRate:o.stopRate);
   let stopPrice=o.winnerPlan?o.winnerPlan.initialStop:price*(1-d*stopRate);
@@ -1279,6 +1306,15 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
     side=gate.side;d=dir(side);price=side==="LONG"?q.bestAsk:q.bestBid;
     stopPrice=price*(1-d*stopRate);
   }
+  // S1（趋势/爆发）：顺势 = 原方向、止损 1%、止盈 6%、最长 24 小时；反向 = 反方向、用这单自己的止损宽度放到另一侧、6 小时到点出。
+  let s1:S1Note|undefined,s1Tp:number|null=null;
+  if(s1In?.branch&&!transition&&!shockRoom){
+    const levels=s1Levels(s1In,Math.abs(price-stopPrice)/Math.max(price,1e-12));
+    if(!levels)return"S1 反向单没有可用的自身止损宽度";
+    side=levels.side;d=dir(side);price=side==="LONG"?q.bestAsk:q.bestBid;
+    stopRate=levels.stopRate;stopPrice=price*(1-d*stopRate);exitHold=levels.holdMin;s1=levels.note;
+    s1Tp=levels.tpRate==null?null:price*(1+d*levels.tpRate);
+  }else if(s1In&&!s1In.branch&&note)s1=s1In;
   const sameCluster=s.positions.find(t=>t.side===side&&o.clusterId&&t.entryContext?.clusterId===o.clusterId);
   if(sameCluster)return"同相关组已有同方向主仓";
   const expansion=expansionFor(s.environmentContext.environment),
@@ -1302,15 +1338,17 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
   if(contracts<minContracts)return"低于最小模拟合约数量";
   const quantity=contracts*mult,notional=quantity*price,margin=notional/leverage,totalMargin=s.positions.reduce((n,t)=>n+t.margin,0);
   if(!note&&totalMargin+margin>equity*TOTAL_MARGIN_RATE*expansion)return"组合保证金已满";
-  const roomFlipped=(!!shockRoom&&shockRoom.side!==o.side)||(!transition&&!shockRoom&&!!gate&&gate.side!==o.side);
+  const roomFlipped=(!!shockRoom&&shockRoom.side!==o.side)||(!transition&&!shockRoom&&!!gate&&gate.side!==o.side)||(!!s1&&s1.side!==o.side);
   const winnerPlan=o.winnerPlan?structuredClone(o.winnerPlan):undefined;
   if(winnerPlan&&roomFlipped){
     winnerPlan.initialStop=stopPrice;
     if(winnerPlan.target!=null&&!(side==="LONG"?winnerPlan.target>price:winnerPlan.target<price))winnerPlan.target=null;
   }
+  // S1 单的保护位/目标就是 S1 的（留档一致；S1 单不走 winnerPlan 出场）。
+  if(winnerPlan&&s1?.branch){winnerPlan.initialStop=stopPrice;winnerPlan.target=s1Tp;}
   const storedInvalidation=!roomFlipped||(frozenInvalidation!=null&&(side==="LONG"?frozenInvalidation<price:frozenInvalidation>price))?frozenInvalidation:null;
   const plannedRisk=notional*(stopRate+ROUND_TRIP_COST),entryFee=notional*PAPER_COST.feeRate,
-    target=winnerPlan?.target??price*(1+d*Math.max(.004,o.targetRate-consumed)),horizon=exitHold,
+    target=s1Tp??winnerPlan?.target??price*(1+d*Math.max(.004,o.targetRate-consumed)),horizon=exitHold,
     id=`mi-${now.toString(36)}-${o.symbol.replace(/[^A-Z0-9]/g,"")}-${side[0]}`,
     rule:Rule={id:o.thesisId??o.id,signature:`MARKET_INTELLIGENCE:${o.clusterId??"solo"}:${o.mode}`,parentId:null,version:1,createdAt:now,
       expiresAt:now+Math.max(180,horizon*2.2)*60_000,status:"EXPERIMENTAL",conditions:[],side,horizon,stopRate,
@@ -1352,7 +1390,7 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
         liquidityTargetLower:o.liquidityTargetLower,liquidityTargetUpper:o.liquidityTargetUpper,
         liquidityInvalidationPrice:storedInvalidation,rapidLiquidityAuthorization:!!o.rapidLiquidityAuthorization,
         futureResearchAction:o.futureResearchAction,futureResearchReason:o.futureResearchReason,futureHypothesisIds:o.futureHypothesisIds,
-        entryStructure,transitionRule:transition??undefined,shockRoom:shockRoom??undefined,entryGate:gate??undefined,
+        entryStructure,transitionRule:transition??undefined,shockRoom:shockRoom??undefined,entryGate:gate??undefined,s1,
         stageNote:stageStamp(s.stageChronicle,s.extremumRegime.internals?.synchrony,now),
         entryRead:entryQuality(s,o,q,side,price,now,minutePath),
         coinPath:o.coinPath},
@@ -1360,8 +1398,10 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
   // Use the very same position assessment before financial admission. A single
   // concern or slow response is not a veto; only converged independent failure
   // with weak holding value contradicts an otherwise approved entry.
-  const positionState=s.extremumRegime.symbols[o.symbol],mark=side==="LONG"?q.bestBid:q.bestAsk,
-    entryAssessment=evaluatePositionIntelligence({now,openedAt:now,side,signedRate:d*(mark/price-1),
+  // S1 单的"入场与持仓证据冲突"仍按原信号方向判（回测的样本就是原方向通过这条的单），不对反过来的方向再判一次。
+  const assessSide=s1?.branch?o.side:side,assessD=dir(assessSide),assessPrice=s1?.branch?(assessSide==="LONG"?q.bestAsk:q.bestBid):price;
+  const positionState=s.extremumRegime.symbols[o.symbol],mark=assessSide==="LONG"?q.bestBid:q.bestAsk,
+    entryAssessment=evaluatePositionIntelligence({now,openedAt:now,side:assessSide,signedRate:assessD*(mark/assessPrice-1),
       peakFavorableRate:0,ageMin:0,firstProfit:false,expectedHoldMinutes:horizon,
       stopRate:Math.max(.004,softInvalidationRate),entryScore:o.environmentScore??o.score,
       entryResidual:o.residual??0,entryRelativeStrength:o.relativeStrength??.5,entryRemainingSpaceRate:remainingNet,
@@ -1371,10 +1411,10 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
         ?{lower:o.liquidityOriginLower,upper:o.liquidityOriginUpper}:null,
       entryTarget:o.liquidityTargetLower!=null&&o.liquidityTargetUpper!=null
         ?{lower:o.liquidityTargetLower,upper:o.liquidityTargetUpper}:null,
-      entryBaseline:capturePositionBaseline(side,positionState,now),entryResponseValidated:!!response,
+      entryBaseline:capturePositionBaseline(assessSide,positionState,now),entryResponseValidated:!!response,
       marketStateAgeMs:Math.max(0,now-s.extremumRegime.updatedAt),costRate:ROUND_TRIP_COST});
   if(entryAssessment.entryConflict)return "入场与持仓证据冲突，等待回调/新响应";
-  t.positionIntelligence=entryAssessment;
+  if(assessSide===side)t.positionIntelligence=entryAssessment;
   if(note){
     t.unopened=true;
     s.unopenedTrades??=[];
@@ -1742,21 +1782,20 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
       }
       reject(noted??"只有同步爆发或趋势才开新单，这笔只留档");continue;
     }
-    // 趋势/爆发两条开仓规则：BTC 1小时要顺向 0.5%；趋势里 BTC 不动、山寨 30 分钟已跌 1.4% 时做空改做多。
-    // 例外：做空时这个币自己 8 小时背景已涨 5% 以上（就是记录里的 coin_background_pct，取自下面存进单子的 o.coinPath），BTC 不顺也放行。
-    const gateInput={stage,side:o.side,btc1hPct,factor30mPct:equalWeightReturnPct(Object.values(s.extremumRegime.symbols).map(row=>row.actualMove)),
-        coinBgPct:o.coinPath?.backgroundPct??null},
-      gated=entryGate(gateInput),gateNote=entryGateNote(gateInput,gated);
-    if(gated.action==="BLOCK"){
-      const noted=openIntelligenceTrade(s,o,q!,meta,now,equity,{validation,decision},minutePaths?.[o.symbol],structure,null,null,true,gateNote);
-      const why=gated.rule==="btc_missing_block"?"BTC 1小时涨跌还拿不到，趋势/爆发先不开，这笔只留档":"BTC 1小时没有顺着这笔走够 0.5%，这笔只留档";
+    // 趋势/爆发开仓规则 S1（lib/s1-rule.ts，替换原来的 BTC 顺向 0.5% / 急跌反手 / 背景大涨做空三条）：
+    // BTC 1小时顺着信号 >= 0.57% 顺势开（止盈 6%、止损 1%），否则反着开（自身止损宽度、6 小时到点出）。BTC 1小时拿不到就不开，只留档。
+    const s1d=s1Decision({stage,signalSide:o.side,btc1hPct});
+    if(s1d.action==="BLOCK"){
+      const noted=openIntelligenceTrade(s,o,q!,meta,now,equity,{validation,decision},minutePaths?.[o.symbol],structure,null,null,true,null,s1d.note);
+      const why="BTC 1小时涨跌还拿不到，趋势/爆发先不开，这笔只留档";
       if(!noted||noted.startsWith("同币已有未开")){
         validation.status="CANCELLED";validation.reason=why;
         delete s.entryValidations[validation.id];
       }
       reject(noted??why);continue;
     }
-    const error=openIntelligenceTrade(s,o,q!,meta,now,equity,{validation,decision},minutePaths?.[o.symbol],structure,null,null,false,gateNote);
+    const s1Note=s1d.action==="OPEN"?s1d.note:null;
+    const error=openIntelligenceTrade(s,o,q!,meta,now,equity,{validation,decision},minutePaths?.[o.symbol],structure,null,null,false,null,s1Note);
     if(error){
       if(error.startsWith("实时成交性价比")||error.startsWith("实时入场已消耗剩余空间")||error.startsWith("入场与持仓证据冲突")){
         if(error.startsWith("入场与持仓证据冲突")){validation.supportSamples=0;validation.oppositionSamples=0;}
@@ -1799,7 +1838,7 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
   legacyDrainOnly?:boolean;research?:MarketLifecycleResearchContext;reviewTrace?:(event:ReviewEvent)=>void;
   /** Log only (stage timeline snapshot): BTC/ETH prices when the analysis book does not carry them. Never read by a decision. */
   referenceMids?:Partial<Record<"BTC_USDT"|"ETH_USDT",number|null>>;
-  /** BTC 1h change in percent, the same value the run log writes as btc_1h_pct. Gates TREND/SHOCK entries (entry-gate.ts); null blocks them. */
+  /** BTC 1h change in percent, the same value the run log writes as btc_1h_pct. Decides TREND/SHOCK entries via the S1 rule (s1-rule.ts); null blocks them. */
   btc1hPct?:number|null}){
   // An optional observer has no return value or trading authority. A failed logger cannot block a trade.
   const trace=input.reviewTrace?(event:ReviewEvent)=>{try{input.reviewTrace!(event);}catch{/* diagnostics only */}}:undefined;
@@ -2051,5 +2090,5 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
       assumption:"对照两边都按实盘吃单0.05%记；冻结影子内部仍用0.07%做决策，反向已扣现金不改"}:PAPER_COST,
     nextCycleAt:s.lastCandleAt+BAR_MS};
 }
-/** Test hook only: the same open path advanceEntryResponses uses (entry-gate flip/note tagging). */
+/** Test hook only: the same open path advanceEntryResponses uses (S1 / entry-gate flip/note tagging). */
 export const openIntelligenceTradeForTest=openIntelligenceTrade;

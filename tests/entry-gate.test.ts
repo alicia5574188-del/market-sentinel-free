@@ -54,13 +54,11 @@ test("gate tag reaches the run log without becoming a required field",()=>{
     assert.ok(!(LOG_REQUIRED_WHEN_CLOSED as readonly string[]).includes(key));
   }
 });
-test("the gate sits only on the TREND/SHOCK open path and uses the logged BTC 1h",()=>{
+test("the old gate no longer decides TREND/SHOCK (replaced by S1, tests/s1-rule.test.ts); the same logged BTC 1h feeds S1",()=>{
   const core=readFileSync(new URL("../lib/forward-relations.ts",import.meta.url),"utf8");
   const advance=core.slice(core.indexOf("function advanceEntryResponses"),core.indexOf("export function fillForwardPortfolio"));
-  const nonTrend=advance.indexOf('if(stage!=="SHOCK"&&stage!=="TREND")'),gate=advance.indexOf("entryGate(gateInput)");
-  assert.ok(nonTrend>0&&gate>nonTrend,"gate runs after the TRANSITION/ROTATION note-only branch");
-  assert.match(advance,/openIntelligenceTrade\([^;]*,true,gateNote\)/);
-  assert.match(advance,/openIntelligenceTrade\([^;]*,false,gateNote\)/);
+  assert.doesNotMatch(advance,/entryGate\(gateInput\)/,"S1 replaces the gate's direction decisions; it is not stacked on top");
+  assert.match(advance,/s1Decision\(\{stage,signalSide:o\.side,btc1hPct\}\)/);
   const worker=readFileSync(new URL("../worker/index-clean.ts",import.meta.url),"utf8");
   assert.match(worker,/btc1hPct:this\.gateBtc1h\(now\)/);
   assert.match(worker,/btcChange\(\{now,btcBars5m:this\.strategyCandles\.BTC_USDT\?\?null,btcMids:this\.btcMidRing,btcHourly:this\.regimeHourly\.BTC_USDT\?\?null\},1\)/);
@@ -153,6 +151,5 @@ test("pumped short: the gate's background value is the one the run log writes as
   assert.equal(row.gate_coin_bg_pct,row.coin_background_pct);
   assert.equal(row.gate_coin_bg_pct,coinPath.backgroundPct);
   const core=readFileSync(new URL("../lib/forward-relations.ts",import.meta.url),"utf8");
-  assert.match(core,/coinBgPct:o\.coinPath\?\.backgroundPct\?\?null/);
   assert.match(core,/coinPath:o\.coinPath\}/);
 });
