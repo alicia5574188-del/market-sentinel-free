@@ -6,6 +6,9 @@ import { OperatorRequestError, operatorRequest, isTransientLiveReadError, number
   type LivePosition, type LiveRuntime, type OperatorRuntime } from "../lib/operator-ui.ts";
 
 import {recordWindows,archivePage} from "../lib/record-view.ts";
+import {usePanel} from "../lib/panel-cache.ts";
+import {PANEL_KEYS,fetchCredential,persistCredential} from "../lib/system-panels.ts";
+import PanelStamp from "./panel-stamp.tsx";
 import {ArchivePagination} from "./record-controls.tsx";
 import {OrderCard,exitShort,exitPlain,priceText,type OrderFact} from "./order-card.tsx";
 type HistoryView={history:LivePosition[];checkedAt:number|null;error:string|null;pending:number;updating:boolean};
@@ -47,8 +50,15 @@ function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade
   useEffect(()=>{window.scrollTo({top:0,behavior:"auto"});},[]);
   const [section,setSection]=useState<Section>("positions"),[clock,setClock]=useState(0);
   const [password,setPassword]=useState(""),[apiKey,setApiKey]=useState(""),[apiSecret,setApiSecret]=useState("");
-  const [credential,setCredential]=useState<CredentialStatus|null>(null),[verification,setVerification]=useState<CredentialVerification|null>(null);
   const [busy,setBusy]=useState<string|null>(null),[error,setError]=useState<string|null>(null),[notice,setNotice]=useState<string|null>(null);
+  // API status (D1 metadata only, no Gate call): cached display, refreshed in the background. Persisted copy has no key hint.
+  const credentialPanel=usePanel<CredentialStatus>(auth?.memberId??"owner",PANEL_KEYS.credential,async()=>{
+    try{return await fetchCredential();}
+    catch(e){if(!(e instanceof OperatorRequestError&&e.status===0)){setError(e instanceof Error?e.message:"读取API状态失败");
+      if(e instanceof OperatorRequestError&&e.status===401&&auth)onSession({...auth,authenticated:false});}throw e;}
+  },{persist:persistCredential,enabled:Boolean(auth?.authenticated)});
+  const credential=credentialPanel.value,setCredential=credentialPanel.set;
+  const [verification,setVerification]=useState<CredentialVerification|null>(null);
   const [confirmEnable,setConfirmEnable]=useState(false),[confirmDelete,setConfirmDelete]=useState(false);
   const [archiveIndex,setArchiveIndex]=useState(0),[historyView,setHistoryView]=useState<HistoryView|null>(null),[historyError,setHistoryError]=useState<string|null>(null);
   useEffect(()=>{
@@ -71,14 +81,6 @@ function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade
   },[settledCache,auth]);
   const submitting=useRef(false);
   useEffect(()=>{const timer=setInterval(()=>setClock(Date.now()),1000);return()=>clearInterval(timer);},[]);
-  useEffect(()=>{
-    let active=true;
-    if(!auth?.authenticated)return;
-    void operatorRequest<{credential:CredentialStatus}>("/api/live/credentials").then(p=>{if(active)setCredential(p.credential);})
-      .catch(e=>{if(active){if(e instanceof OperatorRequestError&&e.status===0)return;
-        setError(e instanceof Error?e.message:"读取API状态失败");if(e instanceof OperatorRequestError&&e.status===401)onSession({...auth,authenticated:false});}});
-    return()=>{active=false;};
-  },[auth,onSession]);
 
   const live=auth?.authenticated?runtime?.live:undefined;
   const enabled=live?.requestedEnabled??runtime?.liveMode?.requestedEnabled??false;
@@ -90,7 +92,7 @@ function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade
   const entries=Object.values(live?.entries??{}).filter(e=>e&&!["FILLED","CANCELLED","FINISHED","REJECTED"].includes(e.status));
   const canControl=Boolean(auth?.authenticated&&live&&runtime);
   const canEnable=canControl&&Boolean(credential?.configured)&&!busy;
-  const clearSensitive=()=>{setHistoryView(null);setHistoryError(null);setPassword("");setApiKey("");setApiSecret("");setCredential(null);setVerification(null);setConfirmEnable(false);setConfirmDelete(false);};
+  const clearSensitive=()=>{setHistoryView(null);setHistoryError(null);setPassword("");setApiKey("");setApiSecret("");setVerification(null);setConfirmEnable(false);setConfirmDelete(false);};
   async function action(name:string,task:(current:()=>boolean)=>Promise<void>){
     if(submitting.current)return;
     const epoch=responseEpoch.current,startedEpoch=epoch.value,current=()=>startedEpoch===epoch.value;
@@ -163,8 +165,9 @@ function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade
   if(view==="system")return <div className="fr-live fr-live-system" data-testid="live-system-console">
     {error&&<div className="fr-error" role="alert"><b>操作未完成</b><p>{error}</p></div>}
     {notice&&<div className="fr-notice" role="status">{notice}</div>}
-    <section className="fr-section"><div className="fr-section-head"><h2>Gate API</h2><button type="button" className="fr-text-button" onClick={onRefresh}>刷新状态 ↻</button></div>
+    <section className="fr-section"><div className="fr-section-head"><h2>Gate API</h2><button type="button" className="fr-text-button" onClick={()=>{onRefresh();void credentialPanel.refresh().catch(()=>undefined);}}>刷新状态 ↻</button></div>
       <div className="fr-setting"><div><h3>API状态</h3>{credential?.keyHint&&<p>{credential.keyHint}</p>}</div><b>{credential?credential.configured?"已保存":"未配置":"读取中"}</b></div>
+      <PanelStamp at={credentialPanel.at} refreshing={credentialPanel.refreshing} failed={credentialPanel.failed}/>
       <div className="fr-setting"><div><h3>最近账户核对</h3>{live?.lastError&&!isTransientLiveReadError(live.lastError)&&<p>{live.lastError}</p>}</div><b>{time(live?.lastSyncAt)}</b></div>
       <details className="pg-fold" open={credential?credential.configured!==true:false}><summary>{credential?.configured?"更换 API":"填写 API"}</summary><div className="pg-fold-body">
         <form className="fr-form" onSubmit={saveCredential}><label>API Key<input type="password" autoComplete="off" spellCheck={false} value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder="填写新的Gate API Key" disabled={enabled}/></label>

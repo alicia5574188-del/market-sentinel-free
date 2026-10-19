@@ -7,6 +7,18 @@ import { LoginGate, MemberAccess } from "./member-access.tsx";
 import PaperAccountReset from "./paper-account-reset.tsx";
 import { runtimeBackendOperational, runtimeStatusLabel } from "../lib/runtime-health.ts";
 import { operatorRequest, type AuthSession, type LiveRuntime, type OperatorRuntime } from "../lib/operator-ui.ts";
+import { clearPanels } from "../lib/panel-cache.ts";
+import { prefetchSystemPanels } from "../lib/system-panels.ts";
+
+const IDENTITY_KEY="sentinel-panel-identity-v1";
+const identityOf=(s:AuthSession)=>s.authenticated?`${s.role??"owner"}:${s.memberId??s.username}`:null;
+/** System-tab snapshots belong to one signed-in identity: logged out or a different account = wipe them. */
+function guardPanelCache(session:AuthSession){
+  const next=identityOf(session);
+  let prev:string|null=null;try{prev=localStorage.getItem(IDENTITY_KEY);}catch{/* optional */}
+  if(!next||prev!==next)clearPanels();
+  try{if(next)localStorage.setItem(IDENTITY_KEY,next);else localStorage.removeItem(IDENTITY_KEY);}catch{/* optional */}
+}
 
 const RUNTIME_REQUEST_TIMEOUT_MS = 12_000;
 const RUNTIME_REFRESH_MS = 10_000;
@@ -22,7 +34,9 @@ export default function Home() {
   const sessionChanged=useCallback((session:AuthSession) => {
     // Closing the app or renewing a login must not erase saved chart history.
     // The authenticated Dashboard unmounts below; no cache is read while logged out.
-    epoch.current++;runtimeReadFailures.current=0;hasRuntimeSnapshot.current=false;setAuth(session);
+    epoch.current++;runtimeReadFailures.current=0;hasRuntimeSnapshot.current=false;guardPanelCache(session);setAuth(session);
+    // Warm the System tab (cheap Worker reads, no Gate call) so opening it shows details at once.
+    if(session.authenticated)prefetchSystemPanels(session.memberId??"owner",session.role!=="member");
     // Remove private snapshots immediately and invalidate any in-flight response.
     setRuntime(null);setError(null);setRefresh(v=>v+1);
   },[]);

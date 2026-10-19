@@ -10,6 +10,8 @@ import * as liveEquity from '../lib/live-equity.ts';
 import * as equityGeometry from '../lib/equity-curve.ts';
 import * as inverseFee from '../lib/inverse-fee.ts';
 import {EquityHistoryCache,EQUITY_CACHE_VERSION} from '../lib/equity-cache.ts';
+import * as panelCache from '../lib/panel-cache.ts';
+import * as systemPanels from '../lib/system-panels.ts';
 
 const read=path=>readFileSync(new URL(`../${path}`,import.meta.url),"utf8");
 // Load the real pure accounting helper, not a favorable mocked PnL formula.
@@ -30,6 +32,15 @@ runInNewContext(`(function(require,module,exports){${orderCardSource}\n})`,{})(n
   if(name==="react/jsx-runtime")return jsxRuntime;
   throw new Error(`order card imported ${name}`);
 },orderCardModule,orderCardModule.exports);
+// The real freshness stamp (pure presentation).
+const panelStampModule={exports:{}};
+const panelStampSource=ts.transpileModule(read("app/panel-stamp.tsx"),{fileName:"app/panel-stamp.tsx",compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;
+runInNewContext(`(function(require,module,exports){${panelStampSource}\n})`,{Intl,Date})(name=>{
+  if(name.endsWith(".css"))return {};
+  if(name==="react/jsx-runtime")return jsxRuntime;
+  if(name==="../lib/beijing-time.ts")return {BEIJING_TIME_ZONE:"Asia/Shanghai"};
+  throw new Error(`panel stamp imported ${name}`);
+},panelStampModule,panelStampModule.exports);
 // Render the real presentation modules; network/cache boundaries are inert fixtures.
 function render(path,props,extra={},component="default"){
   const source=ts.transpileModule(read(path),{fileName:path,compilerOptions:{
@@ -45,6 +56,9 @@ function render(path,props,extra={},component="default"){
     "../lib/record-view.ts":{recordWindows:rows=>({recent:rows.slice(0,10),archive:rows.slice(10)}),archivePage:rows=>({items:rows,page:0,pages:1})},
     "./record-controls.tsx":{ArchivePagination:()=>null},
     "./order-card.tsx":orderCardModule.exports,
+    "./panel-stamp.tsx":panelStampModule.exports,
+    "../lib/panel-cache.ts":panelCache,
+    "../lib/system-panels.ts":systemPanels,
     "./equity-curve.tsx":{default:()=>jsxRuntime.jsx("div",{"data-testid":"curve-fixture"})},
     "./live-equity-curve.tsx":{default:props=>jsxRuntime.jsx('div',{'data-testid':'live-curve-fixture','data-session':props.sessionAt})},
     "./market-intelligence-execution.tsx":{default:()=>null},
@@ -396,4 +410,35 @@ test("order card shows a clear 爆仓 tag and plain reason for a liquidated posi
   assert.match(live,/实盘<\/i>.*爆仓<\/i>/s);
   const normal=render("app/order-card.tsx",{...base,state:"止损"},{},"OrderCard");
   assert.doesNotMatch(normal,/oc-liq|is-liquidated/);
+});
+
+test("System panels render cached details first instead of a loading state",()=>{
+  const scope="fixture-owner";
+  const number=value=>typeof value==="number"?value.toFixed(2):"—";
+  const operatorUi={numberText:number,signedText:number,operatorTime:()=>"—",contractText:number,
+    operatorRequest(){throw new Error("render must not issue requests");},isTransientLiveReadError:()=>false,OperatorRequestError:class extends Error{}};
+  // No cache at all: the only case that may show loading.
+  panelCache.clearPanels();
+  assert.match(render("app/run-log-status.tsx",{refreshKey:0,scope}),/正在读取存储进度/);
+  const status={primary:{key:"orders",label:"订单记录",kind:"count",cap:1200,stored:282,sinceBase:27,pendingPct:2,usedPct:23},binding:null,
+    classes:[],lastExportAt:1790760000000,lastExportRows:255,deadline:null,overdue:false,hoursLeft:null,safeAt:null,now:1790761200000};
+  panelCache.writePanel(scope,systemPanels.PANEL_KEYS.logStatus,status,null,1790761200000);
+  const html=render("app/run-log-status.tsx",{refreshKey:0,scope});
+  assert.doesNotMatch(html,/正在读取存储进度/);
+  assert.match(html,/存储进度/);assert.match(html,/导出后新增 27/);
+  assert.match(html,/data-testid="panel-stamp"/);assert.match(html,/更新于 \d\d:\d\d:\d\d/);
+  // Gate API status from cache, no 读取中.
+  panelCache.writePanel("owner",systemPanels.PANEL_KEYS.credential,{configured:true,environment:"live",keyHint:null,status:"OK",lastVerifiedAt:1,lastError:null},null);
+  const live=render("app/live-console.tsx",{view:"system",auth:{authenticated:true,username:"owner",role:"owner"},
+    runtime:{live:{positions:{},entries:{},history:[],requestedEnabled:false,lastSyncAt:1790761200000},liveMode:{requestedEnabled:false}},
+    onSession(){throw new Error("unexpected session mutation");},onLive(){throw new Error("unexpected live mutation");},onRefresh(){}},
+    {"../lib/operator-ui.ts":operatorUi});
+  assert.match(live,/API状态[\s\S]*已保存/);assert.doesNotMatch(live,/<b>读取中<\/b><\/div><small class="pc-stamp/);
+  // Member list from cache (device copy carries no invite code).
+  panelCache.writePanel("owner",systemPanels.PANEL_KEYS.members,panelCache.persistableMembers({version:"v",authVersion:"a",invite:{code:"SECRET-INVITE",createdAt:1},
+    memberLimit:5,activeLimit:3,activeCount:1,members:[{id:"m1",label:"m1",username:"alice",authVersion:"a",createdAt:1,activatedAt:1,followBlockedAt:null,revokedAt:null,usage:null}]}),null);
+  const members=render("app/member-access.tsx",{auth:{authenticated:true,username:"owner",role:"owner"}},{"../lib/operator-ui.ts":operatorUi},"MemberAccess");
+  assert.match(members,/alice/);assert.match(members,/1 位/);assert.doesNotMatch(members,/SECRET-INVITE/);
+  panelCache.clearPanels();
+  assert.match(render("app/run-log-status.tsx",{refreshKey:0,scope}),/正在读取存储进度/,"logout wipes the cache");
 });

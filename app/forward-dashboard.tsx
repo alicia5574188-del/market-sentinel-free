@@ -8,6 +8,11 @@ import EquityCurve from "./equity-curve.tsx";
 import {EquityHistoryCache} from "../lib/equity-cache.ts";
 import MarketIntelligenceExecution from "./market-intelligence-execution.tsx";
 import RunLogStatus from "./run-log-status.tsx";
+import PanelStamp from "./panel-stamp.tsx";
+import {readPanel,writePanel,type PanelEntry} from "../lib/panel-cache.ts";
+import {PANEL_KEYS} from "../lib/system-panels.ts";
+
+type SystemSnap={healthy:boolean;status:string;feedAt:number|null;live:string;engine:string|null;storageOk:boolean|null};
 import "./account-first.css";
 import "./paid-fee.css";
 import "./pages.css";
@@ -110,6 +115,17 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
     accountBase=usingDesk?desk.initialEquity:data?.initialEquity;
   const drawdown=usingDesk?(desk.maxDrawdown==null?null:desk.maxDrawdown*100):data?data.maxDrawdown*100:null;
   const liveText=liveEnabled?liveOverview?.operational?"运行中":"核对中":"关闭";
+  // System card: the last good values are kept on the device so a fresh app open shows them before the first runtime read.
+  const [systemSnap]=useState<PanelEntry<SystemSnap>|null>(()=>readPanel<SystemSnap>(cacheScope,PANEL_KEYS.systemStatus));
+  const engine=data?.engineVersion??data?.version??null,storageOk=data?!data.storage?.error:null,feedMinute=feedAt==null?null:Math.floor(feedAt/60_000);
+  useEffect(()=>{
+    if(!data)return;
+    writePanel<SystemSnap>(cacheScope,PANEL_KEYS.systemStatus,{healthy,status:systemStatus,feedAt,live:liveText,engine,storageOk},v=>v);
+  // Written once a minute or on any status change, not on every 10s feed tick.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[cacheScope,!!data,healthy,systemStatus,liveText,engine,storageOk,feedMinute]);
+  const card:SystemSnap&{cached:boolean}=data||!systemSnap?{healthy,status:systemStatus,feedAt,live:liveText,engine,storageOk,cached:false}
+    :{...systemSnap.value,cached:true};
   const nav:[Tab,string,string][]=[["execution","◉","执行"],["paper","⇄","模拟"],["live","◈","实盘"],["settings","⊙","系统"]];
   return <main className="fr-app" style={fontVars as CSSProperties} data-ui-version="market-intelligence-v1">
     <header className="fr-compact-header pg-head"><b>哨兵 · 市场智能系统</b><span>
@@ -142,17 +158,18 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
 
     {tab==="settings"&&<div className="pg-system">
       <section className="pg-card" data-testid="system-status">
-        <header><small>系统状态</small><i className={`pg-pill ${healthy?"is-ok":"is-warn"}`}>{systemStatus}</i></header>
+        <header><small>系统状态</small><i className={`pg-pill ${card.healthy?"is-ok":"is-warn"}`}>{card.status}</i></header>
         <dl className="pg-kv">
-          <div><dt>行情更新</dt><dd>{time(feedAt)}</dd></div>
-          <div><dt>实盘</dt><dd>{liveText}</dd></div>
-          <div><dt>策略版本</dt><dd>{data?.engineVersion??data?.version??"—"}</dd></div>
-          <div><dt>数据保存</dt><dd className={data?.storage?.error?"fr-negative":data?"fr-positive":undefined}>{data?data.storage?.error?"异常":"正常":"—"}</dd></div>
+          <div><dt>行情更新</dt><dd>{time(card.feedAt)}</dd></div>
+          <div><dt>实盘</dt><dd>{card.live}</dd></div>
+          <div><dt>策略版本</dt><dd>{card.engine??"—"}</dd></div>
+          <div><dt>数据保存</dt><dd className={card.storageOk===false?"fr-negative":card.storageOk?"fr-positive":undefined}>{card.storageOk==null?"—":card.storageOk?"正常":"异常"}</dd></div>
         </dl>
+        {card.cached&&systemSnap&&<PanelStamp at={systemSnap.at} refreshing={true} failed={false}/>}
       </section>
       <section className="fr-section"><div className="fr-section-head"><h2>运行日志</h2></div>
         <p className="fr-note">开仓、没开仓的候选、行情和执行记录都在这一个文件里，复盘就用它。</p>
-        <RunLogStatus refreshKey={exportCount}/>
+        <RunLogStatus refreshKey={exportCount} scope={cacheScope}/>
         <button className="fr-button" onClick={exportSnapshot} disabled={exporting}>{exporting?"正在导出…":"导出运行日志 ↗"}</button>{exportStatus&&<p className="fr-note">{exportStatus}</p>}</section>
       {liveSystemPanel}
       {accountPanel}

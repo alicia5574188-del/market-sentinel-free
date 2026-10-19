@@ -1,8 +1,11 @@
 "use client";
 /** 运行日志存储进度 + 上次导出 + 最晚导出时间 + 长期归档导出。只读 /api/forward/log-status 和 /api/forward/archive-export，不参与任何交易。 */
-import {useEffect,useState} from "react";
+import {useEffect,useRef,useState} from "react";
 import {BEIJING_TIME_ZONE} from "../lib/beijing-time.ts";
 import type {RunLogCapacity} from "../lib/run-log-capacity.ts";
+import {dropPanel,readPanel,usePanel,writePanel,PANEL_FRESH_MS} from "../lib/panel-cache.ts";
+import {PANEL_KEYS,fetchLogStatus,persistLogStatus} from "../lib/system-panels.ts";
+import PanelStamp from "./panel-stamp.tsx";
 import "./run-log-status.css";
 
 export type ArchiveInfo={healthy:boolean;error:string|null;loaded:boolean;backfillDone:boolean;pending:number;schemaReady?:boolean;
@@ -24,10 +27,12 @@ const when=(v:number|null|undefined)=>{
     .formatToParts(new Date(v)).map(x=>[x.type,x.value]));
   return `${p.month}月${p.day}日 ${p.hour}:${p.minute}`;
 };
+const cacheBuster=()=>String(Date.now());
+const isFresh=(e:{at:number}|null|undefined)=>!!e&&Date.now()-e.at<PANEL_FRESH_MS;
 const hours=(h:number)=>h<1?"不到 1 小时":h<48?`约 ${Math.round(h)} 小时`:`约 ${Math.floor(h/24)} 天 ${Math.round(h%24)} 小时`;
 const mb=(b:number)=>(b/1024/1024).toFixed(1);
 
-export function RunLogStatusView({status}:{status:Status|null}){
+export function RunLogStatusView({status,scope,stamp}:{status:Status|null;scope?:string;stamp?:React.ReactNode}){
   if(!status)return <div className="rl-status" aria-busy="true"><p className="rl-muted">正在读取存储进度…</p></div>;
   const p=status.primary,b=status.binding,exported=status.lastExportAt!=null;
   // After an export the book stays full (oldest go first); what matters is how much room the rows since the export use.
@@ -62,18 +67,24 @@ export function RunLogStatusView({status}:{status:Status|null}){
       {others.map(c=>` ${c.label} ${c.stored}/${c.cap}。`).join("")}
       {status.hot?` 账户热存储 ${mb(status.hot.rawBytes)} / ${mb(status.hot.budgetBytes)} MB（满了会停写，不会删记录）。`:""}
     </p>
-    {archive&&<RunLogArchiveView archive={archive}/>}
+    {stamp}
+    {archive&&<RunLogArchiveView archive={archive} scope={scope}/>}
   </div>;
 }
 
 /** 长期归档：统计 + 三种导出方式 + 分段下载。 */
-export function RunLogArchiveView({archive,initialMode="since",initialPlan=null,initialDone=[]}:{archive:ArchiveInfo;initialMode?:Mode;initialPlan?:Plan|null;initialDone?:number[]}){
+export function RunLogArchiveView({archive,initialMode="since",initialPlan=null,initialDone=[],scope}:{archive:ArchiveInfo;initialMode?:Mode;initialPlan?:Plan|null;initialDone?:number[];scope?:string}){
+  // "接着上次导" count: shown from cache at once, re-counted in the background when older than a minute.
+  const [initialSince]=useState(()=>scope&&!initialPlan&&initialMode==="since"?readPanel<Plan>(scope,PANEL_KEYS.archivePlanSince):null);
+  const cachedSince=useRef(initialSince);
   const [mode,setModeRaw]=useState<Mode>(initialMode);
   const [from,setFromRaw]=useState(()=>msToBeijingInput(Date.now()-7*24*60*60_000)),[to,setToRaw]=useState(()=>msToBeijingInput(Date.now()));
-  const [plan,setPlan]=useState<Plan|null>(initialPlan),[done,setDone]=useState<number[]>(initialDone);
+  const [plan,setPlan]=useState<Plan|null>(()=>initialPlan??initialSince?.value??null),[done,setDone]=useState<number[]>(initialDone);
   const [busy,setBusy]=useState<number|null>(null),[msg,setMsg]=useState<string|null>(null);
   // A new mode or time range starts from a clean plan (done in the change handlers, not in the effect).
-  const resetFor=(nextMode:Mode)=>{if(initialPlan&&nextMode===initialMode)return;setPlan(null);setDone([]);setMsg(null);};
+  const resetFor=(nextMode:Mode)=>{if(initialPlan&&nextMode===initialMode)return;
+    const cached=nextMode==="since"?cachedSince.current:null;
+    setPlan(isFresh(cached)?cached!.value:null);setDone([]);setMsg(null);};
   const setMode=(m:Mode)=>{if(m===mode)return;resetFor(m);setModeRaw(m);};
   const setFrom=(v:string)=>{if(v===from)return;resetFor(mode);setFromRaw(v);};
   const setTo=(v:string)=>{if(v===to)return;resetFor(mode);setToRaw(v);};
@@ -83,10 +94,14 @@ export function RunLogArchiveView({archive,initialMode="since",initialPlan=null,
   useEffect(()=>{
     if(initialPlan&&mode===initialMode)return;
     if(badRange)return;
+    const fromCache=mode==="since"?cachedSince.current:null;
+    if(isFresh(fromCache))return;
     let alive=true;
-    const q=query();q.set("count","1");q.set("t",String(Date.now()));
+    const q=query();q.set("count","1");q.set("t",cacheBuster());
     fetch(`/api/forward/archive-export?${q}`,{cache:"no-store",credentials:"same-origin"})
-      .then(async r=>{const body=await r.json() as Plan&{error?:string};if(!r.ok)throw new Error(body.error??"读取失败");if(alive)setPlan({total:body.total,segments:body.segments});})
+      .then(async r=>{const body=await r.json() as Plan&{error?:string};if(!r.ok)throw new Error(body.error??"读取失败");const next={total:body.total,segments:body.segments};
+        if(mode==="since"&&scope){cachedSince.current=writePanel(scope,PANEL_KEYS.archivePlanSince,next,v=>v);}
+        if(alive)setPlan(next);})
       .catch(e=>{if(alive)setMsg(`读不到归档：${e instanceof Error?e.message:"未知错误"}`);});
     return()=>{alive=false;};
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -102,6 +117,8 @@ export function RunLogArchiveView({archive,initialMode="since",initialPlan=null,
       a.href=href;a.download=body.archive?.file_name??`lsr-run-log-archive-${mode}-seg${k}.json`;document.body.appendChild(a);a.click();a.remove();
       setTimeout(()=>URL.revokeObjectURL(href),5_000);
       setDone(d=>[...d,k]);
+      // The since-cursor moved: the cached count no longer matches the server.
+      if(mode==="since"&&scope){dropPanel(scope,PANEL_KEYS.archivePlanSince);cachedSince.current=null;}
       if(mode==="since"&&body.archive?.cursor_advanced===false)setMsg("文件已下载，但没登录，起点没有往后挪。");
     }catch(e){setMsg(`第 ${k} 段没导出成功：${e instanceof Error?e.message:"未知错误"}${mode==="since"?"（起点没动，可以重试）":""}`);}
     finally{setBusy(null);}
@@ -141,17 +158,12 @@ export function RunLogArchiveView({archive,initialMode="since",initialPlan=null,
   </section>;
 }
 
-export default function RunLogStatus({refreshKey}:{refreshKey:number}){
-  const [status,setStatus]=useState<Status|null>(null),[failed,setFailed]=useState(false);
-  useEffect(()=>{
-    let alive=true;
-    const load=async()=>{try{
-      const r=await fetch(`/api/forward/log-status?t=${Date.now()}`,{cache:"no-store",credentials:"same-origin"});
-      if(!r.ok)throw new Error("status");const next=await r.json() as Status;if(alive){setStatus(next);setFailed(false);}
-    }catch{if(alive)setFailed(true);}};
-    void load();const id=setInterval(load,60_000);
-    return()=>{alive=false;clearInterval(id);};
-  },[refreshKey]);
-  if(failed&&!status)return <div className="rl-status"><p className="rl-muted">存储进度暂时读不到，不影响导出。</p></div>;
-  return <RunLogStatusView status={status}/>;
+export default function RunLogStatus({refreshKey,scope="owner"}:{refreshKey:number;scope?:string}){
+  const panel=usePanel<Status>(scope,PANEL_KEYS.logStatus,fetchLogStatus<Status>,{persist:persistLogStatus,every:60_000});
+  // An export just finished: read the new progress now instead of waiting for the minute tick.
+  const seen=useRef(refreshKey),refresh=panel.refresh;
+  useEffect(()=>{if(seen.current===refreshKey)return;seen.current=refreshKey;void refresh().catch(()=>undefined);},[refreshKey,refresh]);
+  if(panel.failed&&!panel.value)return <div className="rl-status"><p className="rl-muted">存储进度暂时读不到，不影响导出。</p></div>;
+  return <RunLogStatusView status={panel.value} scope={scope}
+    stamp={<PanelStamp at={panel.at} refreshing={panel.refreshing} failed={panel.failed}/>}/>;
 }

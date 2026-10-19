@@ -1,6 +1,9 @@
 "use client";
-import {useEffect,useRef,useState} from "react";
+import {useRef,useState} from "react";
 import {operatorRequest,numberText,operatorTime,type AuthSession} from "../lib/operator-ui.ts";
+import {usePanel} from "../lib/panel-cache.ts";
+import {PANEL_KEYS,fetchMembers,persistMembers} from "../lib/system-panels.ts";
+import PanelStamp from "./panel-stamp.tsx";
 
 type MemberRow={
   id:string;label:string;username:string|null;authVersion:string;createdAt:number;activatedAt:number|null;
@@ -71,16 +74,15 @@ export function LoginGate({auth,onSession}:{auth:AuthSession|null;onSession:(s:A
 }
 
 export function MemberAccess({auth}:{auth:AuthSession}) {
-  const[overview,setOverview]=useState<Overview|null>(null),[busy,setBusy]=useState(false);
+  const isOwner=auth.authenticated&&auth.role!=="member";
+  // Cached member list (device copy has no invite code); refreshed in the background.
+  const panel=usePanel<Overview>(auth.memberId??"owner",PANEL_KEYS.members,fetchMembers<Overview>,{persist:persistMembers,enabled:isOwner});
+  const overview=panel.value;
+  const[busy,setBusy]=useState(false);
   const[error,setError]=useState<string|null>(null),[notice,setNotice]=useState<string|null>(null),[copied,setCopied]=useState(false);
   const[confirmAction,setConfirmAction]=useState<AdminAction|null>(null);
-  const lock=useRef(false),isOwner=auth.authenticated&&auth.role!=="member";
-  const refresh=async()=>{const value=await operatorRequest<Overview>("/api/members/admin");setOverview(value);return value;};
-  useEffect(()=>{if(!isOwner)return;let active=true;
-    void operatorRequest<Overview>("/api/members/admin").then(v=>{if(active)setOverview(v);})
-      .catch(e=>{if(active)setError(e instanceof Error?e.message:"读取失败");});
-    return()=>{active=false;};
-  },[isOwner]);
+  const lock=useRef(false);
+  const refresh=panel.refresh;
   const rotate=async()=>{
     if(lock.current)return;lock.current=true;setBusy(true);setError(null);setNotice(null);setCopied(false);
     try{await operatorRequest("/api/members/invite/rotate","POST",{});await refresh();setNotice("邀请码已手动重置，旧邀请码立即失效。");}
@@ -118,6 +120,7 @@ export function MemberAccess({auth}:{auth:AuthSession}) {
       try{await refresh();}catch(e){setError(e instanceof Error?e.message:"读取失败");}
       finally{lock.current=false;setBusy(false);}
     }}>刷新会员状态 ↻</button>
+    <PanelStamp at={panel.at} refreshing={panel.refreshing} failed={panel.failed}/>
     {notice&&<p className="fr-notice" role="status">{notice}</p>}
     {error&&<p className="fr-error" role="status">{error}</p>}
     <div className="fr-member-list">

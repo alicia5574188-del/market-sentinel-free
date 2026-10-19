@@ -1,0 +1,4 @@
+.pc-stamp{display:flex;align-items:center;gap:6px;margin-top:6px;font-size:11px;line-height:1.4;color:var(--fr-muted,var(--muted));opacity:.75}
+.pc-stamp.is-stale{color:#e7c26b;opacity:1}
+.pc-dot{display:inline-block;width:5px;height:5px;border-radius:50%;background:currentColor;animation:pc-pulse 1s ease-in-out infinite}
+@keyframes pc-pulse{0%,100%{opacity:.25}50%{opacity:1}}
