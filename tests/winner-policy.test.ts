@@ -219,27 +219,27 @@ test('partial contribution excludes entry fee because account already paid it on
   assert.equal(realizedContribution(t),t.realization!.gross-t.realization!.fees-t.realization!.funding);
 });
 
-test('higher paper leverage only shrinks margin: same notional, risk, stop and quantity',()=>{
+test('paper leverage is fixed at 10x (contract max if lower): same notional, risk, stop and quantity at any contract max',()=>{
   const old=fixture(10).t,now=fixture(50).t;
-  assert.equal(old.leverage,10);assert.equal(now.leverage,20);
+  assert.equal(old.leverage,10);assert.equal(now.leverage,10,'no step-up to 20x any more');
   assert.equal(now.notional,old.notional);assert.equal(now.quantity,old.quantity);assert.equal(now.plannedRisk,old.plannedRisk);assert.equal(now.stopPrice,old.stopPrice);
-  assert.ok(Math.abs(now.margin-old.margin/2)<1e-9);
-  assert.equal(fixture(12).t.leverage,12,'never above the contract max');
+  assert.ok(Math.abs(now.margin-old.margin)<1e-9);
+  assert.equal(fixture(8).t.leverage,8,'contract max below 10 → contract max');
 });
 
 test('isolated liquidation: a gap past the liquidation price closes as 爆仓 and loses exactly the isolated margin',async()=>{
   const {liquidateIfHit,tradeLiquidationPrice}=await import('../lib/forward-relations.ts');
   const {closedLogRow}=await import('../lib/run-log.ts');
   const {s,t}=fixture(50);
-  assert.equal(t.leverage,20);assert.equal(t.maintenanceRate,.005);
-  const liq=100*(1-1/20)/(1-.005);
+  assert.equal(t.leverage,10);assert.equal(t.maintenanceRate,.005);
+  const liq=100*(1-1/10)/(1-.005);
   assert.ok(Math.abs(t.liquidationPrice!-liq)<1e-9);assert.equal(tradeLiquidationPrice(t),t.liquidationPrice);
   const balance=s.balance,margin=t.margin;
   // between stop and liquidation: not liquidated, the normal exits handle it
   assert.equal(liquidateIfHit(s,t,quote(97,T+B),T+B,undefined,row(T,97.5,97)),false);
   assert.equal(t.status,'OPEN');
   // the whole minute opened beyond the stop and the liquidation price (gap): liquidated
-  assert.equal(liquidateIfHit(s,t,quote(94,T+B),T+B,undefined,row(T,94.4,94)),true);
+  assert.equal(liquidateIfHit(s,t,quote(90,T+B),T+B,undefined,row(T,90.3,90)),true);
   assert.equal(t.status,'CLOSED');assert.equal(t.exitReason,'LIQUIDATION');assert.ok(Math.abs(t.exitPrice!-liq)<1e-9);
   assert.ok(Math.abs(t.grossPnl!+margin)<1e-9,'gross loss = the full isolated margin');
   assert.equal(t.exitFee,0);
@@ -254,10 +254,10 @@ test('isolated liquidation: the stop still wins when price traded through it fir
   const {s,t}=fixture(50);
   t.lastPrice=99.5;
   // the minute opened above the stop and ran down through it and past liquidation: the resting stop filled first
-  const bar=row(T,99.6,94,93.9,99.7);
-  assert.equal(liquidateIfHit(s,t,quote(94,T+B),T+B,undefined,bar),false);
+  const bar=row(T,99.6,90,89.9,99.7);
+  assert.equal(liquidateIfHit(s,t,quote(90,T+B),T+B,undefined,bar),false);
   assert.equal(t.status,'OPEN');
-  manageWinnerTrade(s,t,quote(94,T+B),T+B,undefined,{TEST_USDT:[bar]});
+  manageWinnerTrade(s,t,quote(90,T+B),T+B,undefined,{TEST_USDT:[bar]});
   assert.equal(t.status,'CLOSED');assert.notEqual(t.exitReason,'LIQUIDATION');
   assert.ok(t.exitPrice!>98.8,`stop fill near the stop, got ${t.exitPrice}`);
 });

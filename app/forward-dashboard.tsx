@@ -45,7 +45,7 @@ function entryFacts(t:Trade){
   if(note?.priorStage)bits.push(`上一阶段是${stageName(note.priorStage)}`);
   if(typeof note?.stageAgeMin==="number")bits.push(`这一阶段已经 ${Math.round(note.stageAgeMin)} 分钟`);
   lines.push(`开仓时盘面：${stageName(board)}${bits.length?`。${bits.join("，")}`:""}。只有同步爆发或趋势才会真正开仓。`);
-  if(typeof ctx.sizeMultiple==="number"&&ctx.sizeMultiple>1)lines.push(`仓位：按原计算的 ${ctx.sizeMultiple} 倍开（同步爆发 10 倍，趋势 5 倍）。`);
+  if(typeof ctx.sizeMultiple==="number"&&ctx.sizeMultiple>1)lines.push(`仓位：按原计算的 ${ctx.sizeMultiple} 倍开（同步爆发和趋势都是 5 倍；10-19 之前同步爆发是 10 倍）。`);
   if(ctx.environment&&note?.liveStage&&ctx.environment!==note.liveStage)
     lines.push(`这个机会出现时标成${stageName(ctx.environment)}，那是更早的标记。开仓那一刻盘面已经是${stageName(note.liveStage)}，所以开了。`);
   const path=ctx.coinPath;
@@ -448,13 +448,19 @@ function openReason(t:Trade){
   const board=ctx.stageNote?.liveStage??ctx.environment;
   return `${trend}${t.side==="LONG"?"做多":"做空"}，${plan}${board?`；开仓时盘面是${stageName(board)}`:""}。`;
 }
-/** S1 tag on the card: 顺势, or 反向 with original→new side. */
+/** S1 tag on the card (legacy, read-only: S1 was withdrawn 10-19): 顺势, or 反向 with original→new side. */
 function s1Tag(t:Trade):{tag?:string;tagTitle?:string}{
-  const n=t.entryContext?.s1;if(!n?.branch)return {};
+  const n=t.entryContext?.s1;if(!n?.branch||(n.signal!=="LONG"&&n.signal!=="SHORT")||(n.side!=="LONG"&&n.side!=="SHORT"))return {};
+  const later=s1LegacyExit(t);
   const name=(side:"LONG"|"SHORT")=>side==="LONG"?"多":"空";
   const btc=typeof n.btc==="number"?`BTC 1小时顺向 ${n.btc>=0?"+":""}${n.btc.toFixed(2)}%`:"";
-  if(n.branch==="follow")return {tag:"顺势",tagTitle:`S1 顺势：${btc}（≥0.57%），止盈 6%、止损 1%`};
-  return {tag:`反向 ${name(n.signal)}→${name(n.side)}`,tagTitle:`S1 反向：${btc}（<0.57%），原信号${name(n.signal)}，改做${name(n.side)}，自身止损 ${typeof n.stop==="number"?n.stop.toFixed(2):"—"}%，6 小时到点出`};
+  if(n.branch==="follow")return {tag:"顺势",tagTitle:`S1 顺势：${btc}（≥0.57%），止盈 6%、止损 1%${later}`};
+  return {tag:`反向 ${name(n.signal)}→${name(n.side)}`,tagTitle:`S1 反向：${btc}（<0.57%），原信号${name(n.signal)}，改做${name(n.side)}，自身止损 ${typeof n.stop==="number"?n.stop.toFixed(2):"—"}%，6 小时到点出${later}`};
+}
+/** S1 was withdrawn: an S1 trade still open, or closed by a non-S1 code, is (was) managed by the earlier exits. */
+function s1LegacyExit(t:Trade){
+  if(t.status==="OPEN")return "。S1 已退回旧规则，这单改按旧出场规则平，止损只收紧不放宽";
+  return t.exitReason&&!t.exitReason.startsWith("S1_")&&t.exitReason!=="LIQUIDATION"?"。S1 已退回旧规则，这单按旧出场规则平的":"";
 }
 function closeReason(t:Trade){
   if(t.status==="OPEN"||!t.exitReason)return null;
