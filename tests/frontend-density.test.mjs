@@ -353,3 +353,34 @@ test("run-log panel shows storage progress, last export and the latest export ti
   assert.match(idle,/暂时不用导出/);
   assert.doesNotMatch(idle,/建议导出/);
 });
+
+test("run-log panel: long-term archive stats, three export modes, segments, and deadline wording follows archive health",()=>{
+  const H=3_600_000,now=Date.UTC(2026,9,19,4,0,0);
+  const records={key:"records",label:"订单记录（含价格路径）",kind:"count",stored:1200,cap:1200,usedPct:100,sinceBase:842,pendingPct:70.2,ratePerHour:4.6,deadline:now+235*H,overdue:false};
+  const archive={healthy:true,error:null,loaded:true,backfillDone:true,pending:3,lastOkAt:now-2*60_000,pendingExport:1240,segmentSize:500,
+    stats:{records:5230,bytes:61*1048576,firstOpenedAt:Date.UTC(2026,7,1,0,0),lastOpenedAt:now-25*H},lastExport:{at:now-3*24*H,mode:"since",rows:500}};
+  const status={now,lastExportRows:1100,classes:[records],hot:null,lastExportAt:now-26*H,primary:records,binding:records,deadline:now+235*H,hoursLeft:235,safeAt:now+188*H,overdue:false};
+  const ok=render("app/run-log-status.tsx",{status:{...status,archive}},{},"RunLogStatusView");
+  assert.match(ok,/长期归档/);
+  assert.match(ok,/rl-pill is-ok[^>]*>正常/);
+  assert.match(ok,/已存.*5,230 条.*约 61\.0 MB/);
+  assert.match(ok,/时间范围.*8月1日 08:00 — 10月18日 11:00/);
+  assert.match(ok,/上次归档导出.*10月16日 12:00.*接着上次导.*500 条/);
+  assert.match(ok,/不用赶了/);
+  assert.doesNotMatch(ok,/建议导出|还剩约/);
+  for(const label of ["接着上次导","按时间段","全部"])assert.match(ok,new RegExp(label));
+  const plan=render("app/run-log-status.tsx",{archive,initialMode:"all",initialPlan:{total:1240,segments:3},initialDone:[1]},{},"RunLogArchiveView");
+  assert.match(plan,/共 <b>1,240<\/b> 条，分 3 段（每段最多 500 条）/);
+  assert.match(plan,/第 1 \/ 3 段 ✓/);assert.match(plan,/第 3 \/ 3 段/);
+  const since=render("app/run-log-status.tsx",{archive,initialMode:"since",initialPlan:{total:1240,segments:3},initialDone:[1]},{},"RunLogArchiveView");
+  assert.equal((since.match(/disabled=""/g)??[]).length,2,"since: only the next segment is clickable");
+  assert.match(since,/成功下载后起点才往后挪/);
+  const range=render("app/run-log-status.tsx",{archive,initialMode:"range",initialPlan:{total:12,segments:1}},{},"RunLogArchiveView");
+  assert.equal((range.match(/type="datetime-local"/g)??[]).length,2);assert.match(range,/北京时间/);
+  const failing=render("app/run-log-status.tsx",{status:{...status,archive:{...archive,healthy:false,error:"D1_ERROR: overloaded"}}},{},"RunLogStatusView");
+  assert.match(failing,/最晚导出.*还剩约 9 天 19 小时/);
+  assert.match(failing,/出错，没在存：D1_ERROR/);
+  assert.match(failing,/rl-pill is-bad/);
+  const behind=render("app/run-log-status.tsx",{status:{...status,archive:{...archive,healthy:false,pending:180}}},{},"RunLogStatusView");
+  assert.match(behind,/还有 180 条没存进去/);assert.match(behind,/建议导出/);
+});

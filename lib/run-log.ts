@@ -207,6 +207,8 @@ export function accountLogBook(state:ForwardState,quotes:Record<string,Quote>,no
 }
 /** A not-opened or account trade as its run-log row, without a quote (closed rows, or open rows for completeness only). */
 export function closedLogRow(t:Trade){return closedAccountRow(t);}
+/** A closed-order journal record as its run-log row (same mapping accountLogBook uses). */
+export function journalLogRow(row:OrderRecord){return fromRecord(row);}
 /** The single completeness predicate applied to a stored trade (not-opened rows are judged by their own status). */
 export function isCompleteTradeRecord(t:Trade){return isCompleteLogRow(closedAccountRow(t) as unknown as Record<string,unknown>,t.status==="CLOSED");}
 function closedAccountRow(t:Trade):LsrPositionRow{

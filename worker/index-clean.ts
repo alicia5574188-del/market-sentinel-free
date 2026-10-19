@@ -55,6 +55,9 @@ import {buildRunLogExport,accountLogBook,closedLogRow,isCompleteTradeRecord,with
 import {btcChange,entryFeatures,type RadarRow} from '../lib/entry-features.ts';
 import {mergeOiRing,noteOiSnapshot,oiAnchor,oiSnapshotKey,OI_SNAPSHOT_PREFIX,type OiRing,type OiSnapshot} from '../lib/oi-anchor.ts';
 import {RUN_LOG_EXPORT_KEY,runLogCapacity,type RunLogExportMark} from '../lib/run-log-capacity.ts';
+import {RunLogArchiver} from '../lib/run-log-archiver.ts';
+import {ARCHIVE_SEGMENT_SIZE,archiveFileName,buildArchiveFile,countArchive,readEquityFor,readMeta,readSegment,readStagesFor,segmentCount,writeMeta,
+  type ArchiveCursor,type ArchiveMode,type D1Like} from '../lib/run-log-archive.ts';
 import {STAGE_CHANGE_CAP} from '../lib/stage-chronicle.ts';
 import {PATH_CAP,adoptLegacyPaths,bookFromStoredPaths,commitPathWrite,emptyTradePathBook,exportTradePaths,observeTradePaths,peekPathWrite,pendingPathWrites,pathColumns,pathComplete,pruneGhostPaths,pruneOrphanPaths,searchHolding,TRADE_PATH_INDEX_KEY,TRADE_PATH_KEY,TRADE_PATH_PAGE_PREFIX,type TradePathBook,type TradePathIndex,type TradePathPage} from '../lib/trade-path.ts';
 import {emptyOrderJournal,observeOrderJournal,ORDER_JOURNAL_CAP,ORDER_JOURNAL_KEY,restoreOrderJournal,type OrderJournal} from '../lib/order-journal.ts';
@@ -89,7 +92,7 @@ import { LIVE_PARITY_VERSION, LIVE_PARITY_PREFIX, buildProportionalMirror, forwa
 import { rememberLiveFill, normalizeLiveFills, applyConfirmedFillCosts, type LiveFillNote } from "../lib/live-fill-note.ts";
 import { quoteSpreadBps } from "../lib/signal-repeat.ts";
 import { collectEquityMinutes, equityGaps, equityMinuteKey, equityMinuteStep, mergeEquityMinutes, sampleEquity, type EquityMinute } from "../lib/equity-minutes.ts";
-import { emptyReviewLogCursor, prepareIncompletePrune, prepareReviewLogWrite, readArchivedUnopened, readReviewLog, restoreReviewLog, reviewLogOffload, type ReviewLogCursor } from "../lib/review-log-store.ts";
+import { emptyReviewLogCursor, prepareIncompletePrune, prepareReviewLogWrite, readArchivedUnopened, readReviewLog, restoreReviewLog, reviewLogOffload, unopenedRowKey, type ReviewLogCursor } from "../lib/review-log-store.ts";
 // Inverse closes that merely follow the shadow are not protective; they may rest 2s.
 const MAKER_EXIT_REASONS=new Set(["SHADOW_SOURCE_EXIT"]);
 import { makerFirstEntry, makerEntryTag, MakerStateUnknownError, LIVE_MAKER_ENTRY_POLICY, LIVE_MAKER_ENTRY_ENABLED, type MakerResult } from "../lib/live-maker-entry.ts";
@@ -566,6 +569,18 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private oiRing:OiRing=[];
   /** Log only: ~1/min BTC mids (last ~5 h, memory only) for entry-feature btc_1h/4h. No requests, no storage. */
   private btcMidRing:{at:number;px:number}[]=[];
+  /** D1 long-term run-log archive (review only). In-memory driver; never writes DO storage. */
+  private runLogArchiver=new RunLogArchiver({
+    db:()=>(this.env as {DB?:unknown}).DB?(this.env.DB as unknown as D1Like):null,
+    readCold:async ids=>{
+      const started=this.forwardState?.startedAt;if(started==null||!ids.length)return [];
+      const found=await (this.ctx.storage.get as unknown as (keys:string[])=>Promise<Map<string,import("../lib/forward-relations.ts").Trade>>)(ids.slice(0,128).map(id=>unopenedRowKey(started,id)));
+      return [...found.values()].filter(Boolean);
+    },
+    readEquityDay:async day=>{const rows=await this.ctx.storage.get<EquityMinute[]>(`log:eqmin:${day}`);return Array.isArray(rows)?rows:null;},
+  });
+  private archiveWork:Promise<void>|null=null;
+  private archivePendingCache:{at:number;cursorKey:string;pending:number;records:number}|null=null;
   private oiAnchorCache:{at:number;anchor:ReturnType<typeof oiAnchor>}|null=null;
   private oiRestore:"none"|"loading"|"done"="none";
   private authorityReady = true;
@@ -4512,6 +4527,64 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.lastError=feedError??this.runtime.d1MirrorError;
   }
 
+  /** D1 run-log archive pass: off the trading clock, non-overlapping, never awaited by a tick. */
+  private launchArchiveWork(now:number){
+    try{
+      if(this.archiveWork||!this.forwardState||!this.authorityReady||this.forwardError)return;
+      if(!this.runLogArchiver.due(now))return;
+      const state=this.forwardState;
+      const task=this.runLogArchiver.step({now,state,
+        book:this.tradePathsLoaded?this.tradePaths:null,journal:this.orderJournalLoaded&&this.orderJournalComplete?this.orderJournal:null}).catch(()=>undefined);
+      this.archiveWork=task;
+      const tracked=task.finally(()=>{if(this.archiveWork===task)this.archiveWork=null;});
+      this.ctx.waitUntil(tracked);
+    }catch{/* 归档只是记录，失败不能碰交易 */}
+  }
+  private archiveView(now:number){
+    return {...this.runLogArchiver.status,healthy:this.runLogArchiver.healthy(now),segmentSize:ARCHIVE_SEGMENT_SIZE};
+  }
+  /** Rows archived since the archive-export cursor. One count per cursor move (or every 6 h); in between, new rows
+   *  are added from the archive's own running total, so an open panel never turns into repeated D1 scans. */
+  private async archivePendingSinceCursor(now:number){
+    const db=this.runLogArchiver.status.schemaReady?(this.env.DB as unknown as D1Like):null;if(!db)return null;
+    const cursor=await readMeta<ArchiveCursor>(db,'export_cursor');
+    const key=cursor?`${cursor.at}:${cursor.id}`:'none';
+    const records=this.runLogArchiver.status.stats.records,c=this.archivePendingCache;
+    if(c&&c.cursorKey===key&&now-c.at<6*60*60_000)return c.pending+Math.max(0,records-c.records);
+    const pending=await countArchive(db,{mode:'since',cursor});
+    this.archivePendingCache={at:now,cursorKey:key,pending,records};
+    return pending;
+  }
+  private async archiveExport(url:URL,owner:boolean){
+    const now=Date.now(),db=this.env.DB as unknown as D1Like;
+    if(!this.runLogArchiver.status.schemaReady)return json({error:"长期归档还没准备好，稍后再试"},503);
+    const raw=url.searchParams.get("mode"),mode:ArchiveMode=raw==="range"?"range":raw==="all"?"all":"since";
+    const num=(v:string|null)=>{const n=Number(v);return v!=null&&v!==""&&Number.isFinite(n)?n:null;};
+    const from=mode==="range"?num(url.searchParams.get("from")):null,to=mode==="range"?num(url.searchParams.get("to")):null;
+    if(mode==="range"&&(from==null||to==null||to<=from))return json({error:"时间段不对"},400);
+    const cursor=mode==="since"?await readMeta<ArchiveCursor>(db,'export_cursor'):null;
+    const query={mode,from,to,cursor};
+    const total=await countArchive(db,query),segments=segmentCount(total);
+    if(url.searchParams.get("count")==="1")return json({mode,from,to,total,segments,size:ARCHIVE_SEGMENT_SIZE,cursor});
+    const segment=mode==="since"?1:Math.max(1,Math.min(Math.max(1,segments),Math.floor(num(url.searchParams.get("segment"))??1)));
+    const rows=await readSegment(db,query,segment);
+    const opened=rows.map(r=>r.opened_at),lo=opened.length?Math.min(...opened):(from??now),hi=opened.length?Math.max(...opened):(to??now);
+    const [stages,equity]=await Promise.all([readStagesFor(db,lo,hi),readEquityFor(db,lo,hi)]);
+    // 'since' always serves the first segment after the cursor; the panel passes label=k/n so file names keep counting up.
+    const label=/^(\d{1,4})\/(\d{1,4})$/.exec(url.searchParams.get("label")??"");
+    const shownSeg=mode==="since"&&label?Number(label[1]):segment,shownSegs=mode==="since"&&label?Math.max(Number(label[2]),shownSeg):segments;
+    const file=buildArchiveFile({rows,stages,equity,exportedAt:now,mode,segment:shownSeg,segments:shownSegs,total,from,to});
+    const name=archiveFileName({mode,segment:shownSeg,segments:shownSegs,from,to,openedFirst:opened.length?lo:null,openedLast:opened.length?hi:null});
+    // The cursor moves only after this segment was built in full, and only for the owner.
+    let advanced=false;
+    if(mode==="since"&&rows.length&&owner){
+      const last=rows.at(-1)!;
+      try{await writeMeta(db,'export_cursor',{at:last.archived_at,id:last.id},now);advanced=true;this.archivePendingCache=null;}catch{advanced=false;}
+    }
+    try{const mark={at:now,mode,rows:rows.length};await writeMeta(db,'last_export',mark,now);this.runLogArchiver.noteExport(mark);}catch{/* 只是显示用 */}
+    return json({...file,archive:{...file.archive,file_name:name,cursor_advanced:advanced,remaining_after:mode==="since"&&advanced?Math.max(0,total-rows.length):null}});
+  }
+
   private launchOptionalWork(now:number,universeDue:boolean) {
     if(this.optionalWork)return;
     const task=(async()=>{
@@ -4633,6 +4706,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }
       this.launchOptionalWork(now, universeDue);
       this.launchTurnoverWork(Date.now());
+      this.launchArchiveWork(Date.now());
     } catch (error) {
       this.runtime.state = "RECONNECTING";
       this.runtime.lastError = safeError(error);
@@ -4688,7 +4762,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
     if (path === "/forward-log-status" && request.method === "GET") {
       if(!this.forwardState||!this.authorityReady)return json({error:"权威账户尚未恢复"},503);
-      return json(await this.runLogStatus(Date.now()));
+      const now=Date.now();
+      let pendingExport:number|null=null;try{pendingExport=await this.archivePendingSinceCursor(now);}catch{pendingExport=null;}
+      return json({...await this.runLogStatus(now),archive:{...this.archiveView(now),pendingExport}});
+    }
+    if (path === "/forward-archive-export" && request.method === "GET") {
+      if(!this.forwardState||!this.authorityReady)return json({error:"权威账户尚未恢复"},503);
+      try{return await this.archiveExport(url,request.headers.get("x-archive-owner")==="1");}
+      catch(error){return json({error:`长期归档读取失败：${safeError(error)}`},503);}
     }
     if (path === "/forward-export" && request.method === "GET") {
       if(!this.forwardState||!this.authorityReady)return json({error:"权威账户尚未恢复，不能导出空账户"},503);
@@ -4811,6 +4892,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           criticalProtection:protectionWriteBudgetView(this.forwardProtectionBudget,Date.now()),
           previous:this.runtime.resourceRollovers?.at(-1)??null,forwardCompression:this.forwardCompression,
           reviewLog:{readyFor:this.reviewLogReadyFor,coldUnopened:this.reviewLogCursor.coldIds.length,error:this.reviewLogError,complete:this.reviewLogComplete},
+          runLogArchive:this.archiveView(Date.now()),
           ghostPaths:{removed:this.ghostPathsRemoved,remaining:this.ghostPathsRemaining,error:this.ghostPathError},
           incompleteLog:{rowsRemoved:this.incompleteRowsRemoved,rowsRemaining:this.incompleteRowsRemaining,error:this.incompleteRowError,
             orphanPathsRemoved:this.orphanPathsRemoved,orphanPathsRemaining:this.orphanPathsRemaining}},
@@ -5082,6 +5164,10 @@ const worker = {
           executionIsolation:true,guestProgramAccess:false},topLevelCpuMs: performance.now() - started }, live ? 200 : 503);
     }
     if (url.pathname === "/api/runtime" && request.method === "GET") return runtimeStatus(env, true, await ownerAuthenticated(request, env));
+    if (url.pathname === "/api/forward/archive-export" && request.method === "GET") {
+      const owner=await ownerAuthenticated(request, env);
+      return env.MARKET_STREAM.getByName("primary").fetch(`https://market-stream/forward-archive-export${url.search}`,{headers:{"x-archive-owner":owner?"1":"0"}});
+    }
     if (url.pathname === "/api/forward/log-status" && request.method === "GET") return env.MARKET_STREAM.getByName("primary").fetch("https://market-stream/forward-log-status");
     if (url.pathname === "/api/forward/export" && request.method === "GET") return env.MARKET_STREAM.getByName("primary").fetch(`https://market-stream/forward-export${url.search}`);
     if (url.pathname === "/api/forward/equity" && request.method === "GET") return env.MARKET_STREAM.getByName("primary").fetch(`https://market-stream/forward-equity${url.search}`);

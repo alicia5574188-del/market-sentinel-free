@@ -12,3 +12,24 @@
 .rl-muted{color:var(--fr-muted)}.rl-good{color:#9fe3c4!important}.rl-bad{color:#ef8a7a!important}
 .rl-sub{font-size:var(--fr-fs12,12px);line-height:1.4}
 .rl-foot{margin:0;font-size:var(--fr-fs12,12px);line-height:1.6}
+.rl-warn{color:#e7c26b!important}
+.rl-archive{display:grid;gap:10px;margin-top:4px;padding-top:12px;border-top:1px solid var(--fr-line,#2c3c4f)}
+.rl-archive-head{display:flex;align-items:baseline;gap:8px;font-size:var(--fr-fs14,14px)}
+.rl-archive-head b{color:var(--fr-ink);font-size:var(--fr-fs16,16px)}
+.rl-archive-head small{font-size:var(--fr-fs12,12px)}
+.rl-pill{margin-left:auto;padding:1px 9px;border-radius:999px;font-size:var(--fr-fs12,12px);border:1px solid currentColor}
+.rl-pill.is-ok{color:#9fe3c4}.rl-pill.is-warn{color:#e7c26b}.rl-pill.is-bad{color:#ef8a7a}
+.rl-seg{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid var(--fr-line,#2c3c4f);border-radius:9px;overflow:hidden}
+.rl-seg button{padding:7px 4px;border:0;background:transparent;color:var(--fr-muted);font:inherit;font-size:var(--fr-fs14,14px);cursor:pointer}
+.rl-seg button+button{border-left:1px solid var(--fr-line,#2c3c4f)}
+.rl-seg button.is-on{background:var(--fr-raised,#1d2a38);color:var(--fr-ink)}
+.rl-range{display:grid;gap:6px}
+.rl-range label{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:var(--fr-fs14,14px);color:var(--fr-muted)}
+.rl-range input{flex:1;max-width:220px;padding:5px 7px;border-radius:7px;border:1px solid var(--fr-line,#2c3c4f);background:var(--fr-raised,#1d2a38);color:var(--fr-ink);font:inherit;color-scheme:dark}
+.rl-range small{font-size:var(--fr-fs12,12px)}
+.rl-plan{margin:0;font-size:var(--fr-fs14,14px);color:var(--fr-ink)}
+.rl-parts{display:flex;flex-wrap:wrap;gap:6px}
+.rl-parts button{padding:6px 11px;border-radius:8px;border:1px solid var(--fr-line,#2c3c4f);background:var(--fr-raised,#1d2a38);color:var(--fr-ink);font:inherit;font-size:var(--fr-fs14,14px);cursor:pointer}
+.rl-parts button:disabled{opacity:.45;cursor:default}
+.rl-parts button.is-done{color:#9fe3c4;border-color:#3d6b58}
+.rl-msg{margin:0;font-size:var(--fr-fs12,12px)}
