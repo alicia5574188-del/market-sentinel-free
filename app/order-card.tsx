@@ -7,6 +7,8 @@ import "./order-card.css";
 export type OrderFact={label:string;value:ReactNode;tone?:number|null;wide?:boolean};
 type Props={
   symbol:string;side:"LONG"|"SHORT";leverage?:number|null;live?:boolean;
+  /** Closed by isolated-margin liquidation: shows a 爆仓 tag next to the side. */
+  liquidated?:boolean;
   pnl:number|null;pnlText?:string;rate:number|null;
   /** Short state shown under the symbol: the plain exit label, or 持仓中. */
   state:string;held:string;extra?:ReactNode;
@@ -30,7 +32,7 @@ const EXIT_SHORT:Record<string,string>={
   RELATIVE_EDGE_GONE:"优势消失",NO_POSITIVE_FEEDBACK:"久无进展",MAX_HOLD:"到时间",RANGE_CENTER_EXIT:"目标到了",ACCOUNT_RESET:"手动重置",
   SHADOW_SOURCE_EXIT:"跟随提案",INVERSE_SOFT_LOSS_EXIT:"浮亏到线",OPPORTUNITY_REPLACED:"换更好的",
   PAPER_SOURCE_EXIT:"跟随模拟平仓",PAPER_PORTFOLIO_EXIT:"跟随模拟调仓",EXCHANGE_FLAT:"交易所已平",RISK_CAP_AFTER_FILL:"超出风险上限",
-  PROTECTIVE_STOP_CREATE_FAILED:"止损没挂上",PROTECTIVE_STOP_CREATE_UNCONFIRMED:"止损未确认",
+  PROTECTIVE_STOP_CREATE_FAILED:"止损没挂上",PROTECTIVE_STOP_CREATE_UNCONFIRMED:"止损未确认",LIQUIDATION:"爆仓",
 };
 /** One plain sentence for "为什么平". Unknown codes fall back to the caller's existing label. */
 const EXIT_PLAIN:Record<string,string>={
@@ -49,19 +51,21 @@ const EXIT_PLAIN:Record<string,string>={
   RISK_CAP_AFTER_FILL:"成交后超过单笔风险上限，立即平掉。",
   PROTECTIVE_STOP_CREATE_FAILED:"止损单没能挂上，为安全直接平仓。",
   PROTECTIVE_STOP_CREATE_UNCONFIRMED:"止损单没得到确认，为安全直接平仓。",
+  LIQUIDATION:"价格越过逐仓强平价，止损没来得及成交，按爆仓平掉，这笔保证金全部亏掉。",
 };
 export const exitShort=(code:string|null|undefined,fallback?:string)=>code?EXIT_SHORT[code]??fallback??code:"—";
 export const exitPlain=(code:string|null|undefined,fallback?:string)=>code?EXIT_PLAIN[code]??fallback??code:null;
 
-export function OrderCard({symbol,side,leverage,live,pnl,pnlText,rate,state,held,extra,facts,why,out,notes,detail,detailTitle="详细依据",className}:Props){
+export function OrderCard({symbol,side,leverage,live,liquidated,pnl,pnlText,rate,state,held,extra,facts,why,out,notes,detail,detailTitle="详细依据",className}:Props){
   const [base,quote]=symbol.split("_");
-  return <details className={`oc-card${live?" is-live":""}${className?` ${className}`:""}`}>
+  return <details className={`oc-card${live?" is-live":""}${liquidated?" is-liquidated":""}${className?` ${className}`:""}`}>
     <summary>
       <span className="oc-line">
         <span className="oc-name"><b>{base}</b>{quote&&<small>/{quote}</small>}
           <i className={`oc-side ${side==="LONG"?"is-long":"is-short"}`}>{side==="LONG"?"多":"空"}</i>
           {leverage!=null&&<small className="oc-lev">{num(leverage,0)}×</small>}
-          {live&&<i className="oc-live">实盘</i>}</span>
+          {live&&<i className="oc-live">实盘</i>}
+          {liquidated&&<i className="oc-liq">爆仓</i>}</span>
         <b className={`oc-pnl${tone(pnl)}`}>{pnlText??`${signedNum(pnl)} U`}</b>
       </span>
       <span className="oc-line oc-sub">

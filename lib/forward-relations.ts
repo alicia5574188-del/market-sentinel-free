@@ -1,3 +1,4 @@
+import {isolatedLiquidationPrice,liquidationHit,maintenanceRateOf,safePaperLeverage} from "./paper-leverage.ts";
 import {RESEARCH_PLAN_VERSION,researchPlanContext,type PlanResearchDecision} from './research-plan.ts';
 import {assertInverseTrade,assertInverseTrial,inverseTrialSummary,sourceDecisionState,shadowCapsule,applyInverseSourceTrade,migrateInverseSamePrice,alignComparisonSourceFees,retainDetachedSourceIds,INVERSE_COST,type InverseCopy,type InverseTrial} from './shadow-inverse-ledger.ts';
 import {forwardDeskView,noteForwardStudy} from './forward-study.ts';
@@ -181,6 +182,8 @@ export type EntrySnap={
 
 export type Trade={
   inverseCopy?:InverseCopy;
+  /** Isolated-margin liquidation price fixed at open, and the maintenance rate used for it. */
+  liquidationPrice?:number|null;maintenanceRate?:number|null;
   winnerManagement?:WinnerManagement;realization?:TradeRealization;
   review?:TradeReview;
   id:string;symbol:string;side:"LONG"|"SHORT";rule:Rule;openedAt:number;closedAt:number|null;status:"OPEN"|"CLOSED";
@@ -624,8 +627,9 @@ function executableProtectionFill(side:"LONG"|"SHORT",stop:number,quote:number,p
   if(!barTraded&&!tight)return quote;
   return side==="LONG"?Math.max(quote,limit):Math.min(quote,limit);
 }
-function closeTrade(s:ForwardState,t:Trade,price:number,now:number,reason:string,evidence?:Record<string,string|number|boolean|null>){
-  const gross=dir(t.side)*t.quantity*(price-t.entryPrice),exitFee=t.quantity*price*PAPER_COST.feeRate;
+function closeTrade(s:ForwardState,t:Trade,price:number,now:number,reason:string,evidence?:Record<string,string|number|boolean|null>,
+  settle?:{gross:number;exitFee:number}){
+  const gross=settle?settle.gross:dir(t.side)*t.quantity*(price-t.entryPrice),exitFee=settle?settle.exitFee:t.quantity*price*PAPER_COST.feeRate;
   const funding=t.notional*PAPER_COST.fundingAllowancePerDay*Math.max(0,now-t.openedAt)/86_400_000,
     net=gross-t.entryFee-exitFee-funding+realizedContribution(t),r=t.realization,remainingNotional=t.notional;
   t.status="CLOSED";t.closedAt=now;t.exitPrice=price;t.exitFee=exitFee+(r?.fees??0);t.fundingAllowance=funding+(r?.funding??0);t.grossPnl=gross+(r?.gross??0);t.netPnl=net;t.exitReason=reason;
@@ -808,6 +812,27 @@ export function manageWinnerTrade(s:ForwardState,t:Trade,q:Quote,now:number,path
   return false;
 }
 
+/** The trade's isolated liquidation price: fixed at open; older trades get it from their leverage and the contract's rate. */
+export function tradeLiquidationPrice(t:Trade,contract?:Contract){
+  if(typeof t.liquidationPrice==="number"&&Number.isFinite(t.liquidationPrice)&&t.liquidationPrice>0)return t.liquidationPrice;
+  return isolatedLiquidationPrice({entry:t.entryPrice,leverage:t.leverage,side:t.side,maintenanceRate:t.maintenanceRate??contract?.maintenanceRate});
+}
+/**
+ * 逐仓爆仓：价格已经越过强平价，而且止损没来得及成交（比如跳空），这一笔按爆仓平，亏掉这笔全部逐仓保证金
+ * （开仓费和资金费照常另算，强平费从维持保证金里扣，不再另收平仓费）。价格只到止损、没到强平价时不碰，照常走原来的出场。
+ */
+export function liquidateIfHit(s:ForwardState,t:Trade,q:Quote,now:number,contract?:Contract,bar?:Candle){
+  const liq=tradeLiquidationPrice(t,contract),px=t.side==="LONG"?q.bestBid:q.bestAsk;
+  if(!liquidationHit(t.side,px,liq))return false;
+  // 止损先到：这一分钟是从止损内侧一路打穿止损的（不是跳空），或上一口价已经贴着止损，止损单先成交，照常走止损。
+  if(t.stopPrice>0&&executableProtectionFill(t.side,t.stopPrice,px,t.lastPrice,bar)!==px)return false;
+  const leverage=Math.max(t.leverage||1,1),margin=t.notional/leverage,signed=dir(t.side)*(px/t.entryPrice-1);
+  t.adverse=Math.max(t.adverse,Math.max(0,-signed));
+  closeTrade(s,t,liq!,now,"LIQUIDATION",{authority:"ISOLATED_LIQUIDATION",liquidationPrice:liq!,observedPrice:px,leverage,
+    maintenanceRate:maintenanceRateOf(t.maintenanceRate??contract?.maintenanceRate),margin,quoteAt:q.observedAt},{gross:-margin,exitFee:0});
+  return true;
+}
+
 function manageTransitionTrade(s:ForwardState,t:Trade,q:Quote,now:number){
   const rule=t.entryContext?.transitionRule;if(!rule)return false;
   const px=t.side==="LONG"?q.bestBid:q.bestAsk,d=dir(t.side),signed=d*(px/t.entryPrice-1);
@@ -828,6 +853,8 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
     if(t.inverseCopy)continue;
     if(t.entryContext?.strategyVersion!==MARKET_INTELLIGENCE_VERSION)continue;
     const q=quotes[t.symbol];if(!freshQuote(q,now))continue;
+    // 逐仓爆仓先看：价格已经越过强平价就不可能再按止损价平。正常情况下止损远在强平价之前，这条不会触发。
+    if(liquidateIfHit(s,t,q!,now,contracts?.[t.symbol],minutePaths?.[t.symbol]?.at(-1))){closed.add(t.id);continue;}
     // 只有带过渡出场的单才按空间止损和时间走。爆发段的单不带这套出场，继续走原来的结构止损和理由失效。
     if(t.entryContext?.transitionRule){
       if(manageTransitionTrade(s,t,q!,now))closed.add(t.id);
@@ -1260,7 +1287,9 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
     wantedRisk=equity*riskRate*environmentRiskScale*expansion,riskBudget=note?wantedRisk:Math.min(wantedRisk,headroom);
   if(!note&&riskBudget<equity*(o.winnerPlan?.intent==="RANGE"?.0015:.0035))return"剩余风险预算不足以形成有效仓位";
   const rawNotional=riskBudget/(stopRate+ROUND_TRIP_COST),targetNotional=Math.min(rawNotional,equity*.70*expansion),
-    leverage=Math.max(1,Math.min(10,Math.floor(contract.leverageMax||10))),mult=Math.max(contract.quantoMultiplier,1e-12),
+    leverage=safePaperLeverage({leverageMax:contract.leverageMax,maintenanceRate:contract.maintenanceRate,stopRate:Math.abs(price-stopPrice)/price}).leverage,
+    maintenanceRate=maintenanceRateOf(contract.maintenanceRate),liquidationPrice=isolatedLiquidationPrice({entry:price,leverage,side,maintenanceRate}),
+    mult=Math.max(contract.quantoMultiplier,1e-12),
     minContracts=Math.max(1,Math.ceil(contract.minContracts??(Number(contract.orderSizeMin??1)||1))),
     contracts=Math.floor(targetNotional/(price*mult));
   if(contracts<minContracts)return"低于最小模拟合约数量";
@@ -1282,7 +1311,7 @@ function openIntelligenceTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Con
       estimatedNetRate:remainingNet,priorResponse:null,recentResponse:0,standardError:0,reason:o.reason,mutation:"CREATE",
       grammar:MARKET_INTELLIGENCE_VERSION,liveEligible:false,authority:"ADAPTIVE_TEN",turnTimeframe:"5m"},
     t:Trade={id,symbol:o.symbol,side,rule,openedAt:now,closedAt:null,status:"OPEN",entryPrice:price,exitPrice:null,quantity,contracts,quantoMultiplier:mult,
-      notional,leverage,margin,plannedRisk,stopPrice,armPrice:target,favorable:0,adverse:0,lastPrice:price,lastQuoteAt:q.observedAt,entryFee,exitFee:0,
+      notional,leverage,margin,liquidationPrice,maintenanceRate,plannedRisk,stopPrice,armPrice:target,favorable:0,adverse:0,lastPrice:price,lastQuoteAt:q.observedAt,entryFee,exitFee:0,
       fundingAllowance:0,grossPnl:null,netPnl:null,exitReason:null,relationFailureBars:0,lastRelationBar:now,execution:"REAL_QUOTE_PAPER_MODEL",
       liveEligible:false,firstProfitAt:null,holdScore:o.score,profitFloorRate:0,expectedHoldMinutes:horizon,peakPnlRate:0,
       liquidityLifecycle:o.tradePlan&&!o.winnerPlan?{currentPlan:o.tradePlan,upgradedAt:null,reason:o.liquidityReason??o.reason,

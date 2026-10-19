@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import {WINNER_POLICY_VERSION as V,trendCore,selectWinnerOpportunity,reactionGeometry,advanceWinnerManagement,rhythmBreakDecision,type WinnerPlan} from '../lib/winner-policy.ts';
 import type {MarketSymbolState,CandleLike} from '../lib/market-intelligence-engine.ts';
 import {realizeTradeSlice,assertTradeRealization,realizedContribution} from '../lib/trade-realization.ts';
@@ -12,9 +13,9 @@ const healthy:MarketSymbolState={symbol:'TEST_USDT',watchScore:90,regime:'DIVERG
 function row(time:number,open:number,close:number,low=Math.min(open,close)-.1,high=Math.max(open,close)+.1):CandleLike{return{time:time/1000,open,close,low,high,volume:100};}
 function plan(intent:'TREND'|'RANGE'='TREND'):WinnerPlan{return{version:V,intent,eventAt:T-B,initialStop:99,target:intent==='RANGE'?102:null,targetArea:null,origin:null,riskGroup:'corr:TEST:LONG:'+intent,source:intent==='RANGE'?'EDGE_REJECTION':'RELATIVE_CORE'};}
 const quote=(price:number,now=T)=>({bestBid:price,bestAsk:price,midpoint:price,observedAt:now,fresh:true,entryReady:true,sourceCount:4,disagreementRate:0,bookImbalance:.4,bidLiquidityChange:.2,askLiquidityChange:-.2,liquiditySourceCount:3});
-function fixture(){const s=initialForward(T-B);s.extremumRegime.symbols.TEST_USDT=healthy;s.extremumRegime.updatedAt=T;
+function fixture(leverageMax=10){const s=initialForward(T-B);s.extremumRegime.symbols.TEST_USDT=healthy;s.extremumRegime.updatedAt=T;
   const p=plan(),o:Opportunity={id:'test-winner',symbol:'TEST_USDT',side:'LONG',mode:'RELATIVE',premium:true,score:90,eligible:true,completedAt:T,expiresAt:T+B,price:100,stopPrice:99,targetPrice:105,stopRate:.01,targetRate:.05,directionStrength:90,pathEfficiency:90,momentumPersistence:100,positionScore:80,spaceScore:90,executionScore:100,grossRemainingSpaceRate:.05,netRemainingSpaceRate:.0481,pullbackRiskRate:.01,edgeRatio:4.81,expectedHoldMinutes:180,marketFit:80,regionId:null,regionQuality:null,reason:'Synthetic accounting and policy fixture; never a profitability replay',strategyVersion:'market-intelligence-v1',winnerPlan:p,tradePlan:'WINNER_TREND',liquidityInvalidationPrice:99,clusterId:healthy.clusterId,thesisId:'test-winner'};
-  s.opportunities=[o];assert.equal(fillForwardPortfolio(s,{TEST_USDT:quote(100)},{TEST_USDT:{quantoMultiplier:.01,leverageMax:10,maintenanceRate:.005,minContracts:1}},T,1000,false),1);return{s,t:s.positions[0]!};}
+  s.opportunities=[o];assert.equal(fillForwardPortfolio(s,{TEST_USDT:quote(100)},{TEST_USDT:{quantoMultiplier:.01,leverageMax,maintenanceRate:.005,minContracts:1}},T,1000,false),1);return{s,t:s.positions[0]!};}
 const inputs={side:'LONG' as const,price:104.5,entryPrice:100,openedAt:T,now:T+3*B,plan:plan(),rows:[] as CandleLike[],cost:.0019,remainingFraction:1,concernFamilies:[] as string[],supportFamilies:['PATH','STRUCTURE'],positionExit:false,trendEligible:true};
 
 test('relative core keeps independent entry authority without a map or a full-region breakout',()=>{
@@ -216,4 +217,66 @@ test('profits and elapsed time cannot replenish failed episode budget; a new cau
 test('partial contribution excludes entry fee because account already paid it once',()=>{
   const {t}=fixture();realizeTradeSlice({trade:t,price:104,now:T+B,quoteAt:T+B,fraction:.4,feeRate:.0007,fundingPerDay:.0002,minContracts:1,reason:'fixture'});
   assert.equal(realizedContribution(t),t.realization!.gross-t.realization!.fees-t.realization!.funding);
+});
+
+test('higher paper leverage only shrinks margin: same notional, risk, stop and quantity',()=>{
+  const old=fixture(10).t,now=fixture(50).t;
+  assert.equal(old.leverage,10);assert.equal(now.leverage,20);
+  assert.equal(now.notional,old.notional);assert.equal(now.quantity,old.quantity);assert.equal(now.plannedRisk,old.plannedRisk);assert.equal(now.stopPrice,old.stopPrice);
+  assert.ok(Math.abs(now.margin-old.margin/2)<1e-9);
+  assert.equal(fixture(12).t.leverage,12,'never above the contract max');
+});
+
+test('isolated liquidation: a gap past the liquidation price closes as 爆仓 and loses exactly the isolated margin',async()=>{
+  const {liquidateIfHit,tradeLiquidationPrice}=await import('../lib/forward-relations.ts');
+  const {closedLogRow}=await import('../lib/run-log.ts');
+  const {s,t}=fixture(50);
+  assert.equal(t.leverage,20);assert.equal(t.maintenanceRate,.005);
+  const liq=100*(1-1/20)/(1-.005);
+  assert.ok(Math.abs(t.liquidationPrice!-liq)<1e-9);assert.equal(tradeLiquidationPrice(t),t.liquidationPrice);
+  const balance=s.balance,margin=t.margin;
+  // between stop and liquidation: not liquidated, the normal exits handle it
+  assert.equal(liquidateIfHit(s,t,quote(97,T+B),T+B,undefined,row(T,97.5,97)),false);
+  assert.equal(t.status,'OPEN');
+  // the whole minute opened beyond the stop and the liquidation price (gap): liquidated
+  assert.equal(liquidateIfHit(s,t,quote(94,T+B),T+B,undefined,row(T,94.4,94)),true);
+  assert.equal(t.status,'CLOSED');assert.equal(t.exitReason,'LIQUIDATION');assert.ok(Math.abs(t.exitPrice!-liq)<1e-9);
+  assert.ok(Math.abs(t.grossPnl!+margin)<1e-9,'gross loss = the full isolated margin');
+  assert.equal(t.exitFee,0);
+  assert.ok(Math.abs(t.netPnl!-(-margin-t.entryFee-t.fundingAllowance))<1e-9);
+  assert.ok(Math.abs((balance-s.balance)-(margin+t.fundingAllowance))<1e-9,'balance moves by the same amount');
+  assert.equal(t.exitAudit?.evidence?.authority,'ISOLATED_LIQUIDATION');
+  assert.equal(closedLogRow(t).exit_trigger,'LIQUIDATION','run-log / archive rows carry it');
+});
+
+test('isolated liquidation: the stop still wins when price traded through it first',async()=>{
+  const {liquidateIfHit}=await import('../lib/forward-relations.ts');
+  const {s,t}=fixture(50);
+  t.lastPrice=99.5;
+  // the minute opened above the stop and ran down through it and past liquidation: the resting stop filled first
+  const bar=row(T,99.6,94,93.9,99.7);
+  assert.equal(liquidateIfHit(s,t,quote(94,T+B),T+B,undefined,bar),false);
+  assert.equal(t.status,'OPEN');
+  manageWinnerTrade(s,t,quote(94,T+B),T+B,undefined,{TEST_USDT:[bar]});
+  assert.equal(t.status,'CLOSED');assert.notEqual(t.exitReason,'LIQUIDATION');
+  assert.ok(t.exitPrice!>98.8,`stop fill near the stop, got ${t.exitPrice}`);
+});
+
+test('isolated liquidation: older trades without a stored price use their leverage and the contract rate; shorts mirror longs',async()=>{
+  const {tradeLiquidationPrice}=await import('../lib/forward-relations.ts');
+  const {isolatedLiquidationPrice,liquidationHit}=await import('../lib/paper-leverage.ts');
+  const {t}=fixture(10);const legacy={...t,liquidationPrice:undefined,maintenanceRate:undefined};
+  assert.ok(Math.abs(tradeLiquidationPrice(legacy,{quantoMultiplier:.01,leverageMax:10,maintenanceRate:.01})!-100*.9/.99)<1e-9);
+  assert.ok(Math.abs(tradeLiquidationPrice(legacy)!-100*.9/.99)<1e-9,'missing rate → conservative 1%');
+  const short=isolatedLiquidationPrice({entry:100,leverage:20,side:'SHORT',maintenanceRate:.005})!;
+  assert.ok(Math.abs(short-100*1.05/1.005)<1e-9);
+  assert.equal(liquidationHit('SHORT',short+.01,short),true);assert.equal(liquidationHit('SHORT',short-.01,short),false);
+  assert.equal(isolatedLiquidationPrice({entry:100,leverage:1,side:'LONG',maintenanceRate:.005}),null);
+});
+
+test('manager checks liquidation first for every market-intelligence position, then the normal exits',()=>{
+  const core=readFileSync(new URL('../lib/forward-relations.ts',import.meta.url),'utf8');
+  const loop=core.slice(core.indexOf('function manageIntelligenceTrades'),core.indexOf('function manageIntelligenceTrades')+1600);
+  const liq=loop.indexOf('liquidateIfHit('),transition=loop.indexOf('manageTransitionTrade('),winner=loop.indexOf('manageWinnerTrade(');
+  assert.ok(liq>0&&liq<transition&&liq<winner);
 });

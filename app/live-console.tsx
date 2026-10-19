@@ -337,7 +337,7 @@ export function LivePositionCard({position:p,runtime,now}:{position:LivePosition
       {p.parity.exitExecutionPolicy&&<><br/>出场 {num(p.parity.sourceExitPrice,5)} · 出场提交延迟 {latency(p.parity.exitDelayMs)}</>}</p>
       <a className="fr-text-button" href={`/api/live/source?id=${encodeURIComponent(p.parity.sourceId)}`} target="_blank" rel="noreferrer">查看完整模拟源单映射 ↗</a></>}
   </>;
-  return <OrderCard live symbol={p.symbol} side={p.side} leverage={p.leverage} pnl={pnl} pnlText={pnl==null?open?"待更新":"待结算":undefined}
+  return <OrderCard live symbol={p.symbol} side={p.side} leverage={p.leverage} liquidated={code==="LIQUIDATION"} pnl={pnl} pnlText={pnl==null?open?"待更新":"待结算":undefined}
     rate={rate} state={open?"持仓中":exitShort(code,"已平仓")} held={holdingTime(p.entryAt,open?now:p.exitAt??0)}
     facts={facts} why={p.parity?(inverse?"模拟单开仓后，实盘按固定比例反向跟随。":"模拟单开仓后，实盘按固定比例跟随开仓。"):null} out={out}
     detail={detail} detailTitle="执行明细"/>;

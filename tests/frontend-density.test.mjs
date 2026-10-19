@@ -384,3 +384,16 @@ test("run-log panel: long-term archive stats, three export modes, segments, and 
   const behind=render("app/run-log-status.tsx",{status:{...status,archive:{...archive,healthy:false,pending:180}}},{},"RunLogStatusView");
   assert.match(behind,/还有 180 条没存进去/);assert.match(behind,/建议导出/);
 });
+
+test("order card shows a clear 爆仓 tag and plain reason for a liquidated position (paper and live share the card)",()=>{
+  const base={symbol:"DOGE_USDT",side:"LONG",leverage:20,pnl:-71.2,rate:-.05,held:"12分钟",facts:[{label:"强平价（逐仓）",value:"0.2412",tone:-1}]};
+  const html=render("app/order-card.tsx",{...base,liquidated:true,state:"爆仓",out:"价格越过逐仓强平价，止损没来得及成交，按爆仓平掉，这笔保证金全部亏掉。"},{},"OrderCard");
+  assert.match(html,/class="oc-liq"[^>]*>爆仓</);
+  assert.match(html,/oc-card is-liquidated/);
+  assert.match(html,/爆仓 · 12分钟/);
+  assert.match(html,/强平价（逐仓）/);
+  const live=render("app/order-card.tsx",{...base,live:true,liquidated:true,state:"爆仓"},{},"OrderCard");
+  assert.match(live,/实盘<\/i>.*爆仓<\/i>/s);
+  const normal=render("app/order-card.tsx",{...base,state:"止损"},{},"OrderCard");
+  assert.doesNotMatch(normal,/oc-liq|is-liquidated/);
+});
