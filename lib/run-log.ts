@@ -1,11 +1,12 @@
 /** One export. Strategy decisions and runtime faults stay in different categories. */
-import type {ForwardState,Quote,Trade} from './forward-relations.ts';
+import type {AccountReset,ForwardState,Quote,Trade} from './forward-relations.ts';
 import type {EntryStructure} from './entry-structure.ts';
 import {orderRecord, pathFields, qualityFields, signalFields, snapFields, gapFields, gateFields, type OrderJournal, type OrderRecord} from './order-journal.ts';
 import {PAPER_COST,freshQuote,forwardEquity} from './forward-relations.ts';
 import {readStageTimeline} from './stage-chronicle.ts';
 import {type LiveFillNote} from './live-fill-note.ts';
 import {summarizeEquity, type EquityMinute} from './equity-minutes.ts';
+import {accountEpochAt,resetAdjustment} from './account-reset.ts';
 import {isCompleteLogRow,exportLogRow,logRowGaps,LOG_COMPLETE_DEFINITION,LOG_NULL_BY_DESIGN} from './log-complete.ts';
 export type LogCat='STRAT'|'EXEC'|'DATA'|'RISK'|'SYS'|'PNL';
 export type RunEvent={ts:number;level:'DEBUG'|'INFO'|'WARN'|'ERROR';cat:LogCat;symbol:string|null;event:string;reason:string|null;
@@ -39,6 +40,10 @@ export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null
   positions?:LsrPositionRow[];fills?:LsrFill[];curve?:LsrCurvePoint[];equity?:number|null;initial?:number|null;closedNet?:number|null;priorAdjustment?:number|null;
   unreconstructed?:number|null;unreconstructedN?:number|null;
   places?:LsrPlace[]|null;notOpened?:LsrPositionRow[]|null;stageTimeline?:ReturnType<typeof readStageTimeline>|null;liveFills?:LiveFillNote[]|null;equityMinutes?:EquityMinute[]|null;tallySince?:number|null;
+  /** Funds-only resets in this log epoch (oldest first). */
+  accountResets?:AccountReset[]|null;
+  /** A funds reset waiting for the account to be flat. */
+  pendingResetAt?:number|null;
   /** Run-log export: only complete records leave (see lib/log-complete.ts). Account sums still use every row. */
   completeOnly?:boolean;
   /** With completeOnly: the record's price path is part of a complete record (false = path missing or unfinished). */
@@ -68,7 +73,10 @@ export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null
   const minutes=input.equityMinutes??[];
   const timeline=input.stageTimeline??[];
   const tallySince=input.tallySince??null;
-  const withTally=<T extends object>(rows:T[])=>rows.map(row=>({...row,tally_since:tallySince}));
+  const resets=input.accountResets??[],lastReset=resets.at(-1)?.at??null;
+  const withTally=<T extends object>(rows:T[])=>rows.map(row=>({...row,tally_since:tallySince,
+    account_epoch:accountEpochAt(resets,(row as {opened_at?:number|null}).opened_at)}));
+  const ddMinutes=lastReset==null?minutes:minutes.filter(row=>row.ts>=lastReset);
   const completeOnly=input.completeOnly===true;
   const pathOk=(row:LsrPositionRow)=>!input.pathReady||input.pathReady(row.id,row.closed_at!=null||row.exit!=null);
   const complete=(row:LsrPositionRow)=>isCompleteLogRow(row as unknown as Record<string,unknown>)&&pathOk(row);
@@ -86,7 +94,7 @@ export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null
     positions_left_out_missing:hiddenPositions.slice(0,20).map(row=>({id:row.id,missing:missing(row)})),
     not_opened_shown:shownNotOpened.length,not_opened_left_out:allNotOpened.length-shownNotOpened.length}:null;
   const body={version:'lsr-run-log-v2' as const,exportedAt:input.exportedAt,liveEnabled:input.liveEnabled,
-    howToRead:'这是当前市场智能模拟账户。权益 = 初始 + 已平净利 + 未平（价格盈亏 − 开仓费 − 预计平仓费）。不是已经停掉的实验漏斗。已平订单单独留档，不随热历史裁掉。每一笔记进场和出场当时的行情判定与演化阶段。分钟路径最多留 1200 笔，按页分开存，一次只写改过的那一页。not_opened 是没开进账户的单，只供复盘，不进权益。同步爆发的新单仓位是原来的 10 倍，趋势是 5 倍（这之前两种都是 6 倍）。新单杠杆最高 20 倍（逐仓）：强平价离开仓价要比止损远出至少 1 个点、并且不少于止损距离的 1.5 倍，不够就一档档降，最低 10 倍；杠杆只改保证金，不改名义和风险。exit_trigger 为 LIQUIDATION 是逐仓爆仓：价格越过强平价、止损没来得及成交，按强平价记出场，亏掉这笔全部保证金。进场另外记下全市场方向、这笔是否顺向、盘口、残差、相对强度、开仓前 30 分钟这个币已经顺着这笔走过的幅度、同步度和广度。研究层另外给每个准备交易的币记下两句：前面这段后半段比前半段高或低多少、有没有慢慢抬或慢慢压，以及进场前同一方向连着走了几根、一共走了多少。这些只用于复盘，不参与开仓。stageTimeline 是行情阶段每次切换的时间线：at 这段开始，until 这段结束，最后一条的 until 是导出时间且 open 为 true 表示还没结束。stage 是这段的名字，prior 是上一段，trendSide 是切过来那一刻写下的全市场方向，min 是这段多少分钟。以前没记下的切换补不回来。这条线不参与开仓或出场。paths 里 hold 加 after 覆盖信号之后 6 小时，一分钟一个点，到点就停，不再往下记。signal_n 是同币同方向第几次信号，signal_gap_min 是距上一笔多少分钟，entry_spread_bps 是写下这一笔时的买卖价差。这三项从本次部署之后的新信号才有。liveFills 是实盘真实成交：exchangePrice 是交易所成交价，bid、ask、spreadBps 是提交时的盘口，leg 区分开仓和平仓。没开实盘就是空的。equity_minutes 是每分钟一条的权益，和上面那条只有一个点的 equity_curve 分开，避免把记账校验弄乱。curve_since、timeline_since、tally_since 分别是这三样从哪一刻开始有。entry_signal、entry_fade、entry_room_pct、entry_room_touches 已经不用，空着是正常的。minutes_since_shock 在还没出现过同步爆发时也是空的，用 shock_seen 区分。trend_score 是短期方向分，有正负，全市场方向为空时也有。factor_30m_pct 是进场时全市场等权 30 分钟收益，单位是百分比。equity_minutes 最多带最近 8 个北京时间日。liveFills 的 fee、fee_rate、role 只有对上已经拉回来的 Gate 成交才有值。这些都不参与开仓或出场。entry_gate 是趋势/爆发两条开仓规则的判定（只在全市场阶段为趋势或同步爆发时有值）：btc_follow 是 BTC 1小时顺着这笔走了至少 0.5% 才开；washout_flip 是趋势里 BTC 1小时不到 ±0.4%、全市场 30 分钟已跌 1.4% 以上，把做空信号反手成做多开，gate_signal_side 是原信号方向；washout_long 是同样条件下原本就是做多；pumped_short 是 BTC 1小时没有跌够 0.5%，但这个币自己背景（coin_background_pct，约 8 小时）已涨 5% 以上，做空照开，gate_coin_bg_pct 是判定时用的背景涨幅，和 coin_background_pct 同一个值；btc_follow_block 和 btc_missing_block 是被挡下只留档（后者是 BTC 1小时拿不到）。gate_btc_1h_pct 是判定时用的 BTC 1小时涨跌，和 btc_1h_pct 同一个算法。',
+    howToRead:'这是当前市场智能模拟账户。权益 = 初始 + 已平净利 + 未平（价格盈亏 − 开仓费 − 预计平仓费）。不是已经停掉的实验漏斗。已平订单单独留档，不随热历史裁掉。每一笔记进场和出场当时的行情判定与演化阶段。分钟路径最多留 1200 笔，按页分开存，一次只写改过的那一页。not_opened 是没开进账户的单，只供复盘，不进权益。同步爆发的新单仓位是原来的 10 倍，趋势是 5 倍（这之前两种都是 6 倍）。新单杠杆最高 20 倍（逐仓）：强平价离开仓价要比止损远出至少 1 个点、并且不少于止损距离的 1.5 倍，不够就一档档降，最低 10 倍；杠杆只改保证金，不改名义和风险。exit_trigger 为 LIQUIDATION 是逐仓爆仓：价格越过强平价、止损没来得及成交，按强平价记出场，亏掉这笔全部保证金。进场另外记下全市场方向、这笔是否顺向、盘口、残差、相对强度、开仓前 30 分钟这个币已经顺着这笔走过的幅度、同步度和广度。研究层另外给每个准备交易的币记下两句：前面这段后半段比前半段高或低多少、有没有慢慢抬或慢慢压，以及进场前同一方向连着走了几根、一共走了多少。这些只用于复盘，不参与开仓。stageTimeline 是行情阶段每次切换的时间线：at 这段开始，until 这段结束，最后一条的 until 是导出时间且 open 为 true 表示还没结束。stage 是这段的名字，prior 是上一段，trendSide 是切过来那一刻写下的全市场方向，min 是这段多少分钟。以前没记下的切换补不回来。这条线不参与开仓或出场。paths 里 hold 加 after 覆盖信号之后 6 小时，一分钟一个点，到点就停，不再往下记。signal_n 是同币同方向第几次信号，signal_gap_min 是距上一笔多少分钟，entry_spread_bps 是写下这一笔时的买卖价差。这三项从本次部署之后的新信号才有。liveFills 是实盘真实成交：exchangePrice 是交易所成交价，bid、ask、spreadBps 是提交时的盘口，leg 区分开仓和平仓。没开实盘就是空的。equity_minutes 是每分钟一条的权益，和上面那条只有一个点的 equity_curve 分开，避免把记账校验弄乱。curve_since、timeline_since、tally_since 分别是这三样从哪一刻开始有。entry_signal、entry_fade、entry_room_pct、entry_room_touches 已经不用，空着是正常的。minutes_since_shock 在还没出现过同步爆发时也是空的，用 shock_seen 区分。trend_score 是短期方向分，有正负，全市场方向为空时也有。factor_30m_pct 是进场时全市场等权 30 分钟收益，单位是百分比。equity_minutes 最多带最近 8 个北京时间日。liveFills 的 fee、fee_rate、role 只有对上已经拉回来的 Gate 成交才有值。这些都不参与开仓或出场。entry_gate 是趋势/爆发两条开仓规则的判定（只在全市场阶段为趋势或同步爆发时有值）：btc_follow 是 BTC 1小时顺着这笔走了至少 0.5% 才开；washout_flip 是趋势里 BTC 1小时不到 ±0.4%、全市场 30 分钟已跌 1.4% 以上，把做空信号反手成做多开，gate_signal_side 是原信号方向；washout_long 是同样条件下原本就是做多；pumped_short 是 BTC 1小时没有跌够 0.5%，但这个币自己背景（coin_background_pct，约 8 小时）已涨 5% 以上，做空照开，gate_coin_bg_pct 是判定时用的背景涨幅，和 coin_background_pct 同一个值；btc_follow_block 和 btc_missing_block 是被挡下只留档（后者是 BTC 1小时拿不到）。gate_btc_1h_pct 是判定时用的 BTC 1小时涨跌，和 btc_1h_pct 同一个算法。account_resets 是资金重置记录：ts 重置时刻，requested_at 点重置的时刻（有持仓时重置先预约，等到没有持仓那一刻才执行，期间照常开平仓，不强平），balance_before 重置前余额，balance_after 重置后余额；重置只动资金、页面曲线和页面开单记录，运行日志不删，重置前的单照样在 positions 里。每一行的 account_epoch 是开仓时处在第几段账户（0 是第一次重置之前）。account_reset_pending 是还在等空仓的预约重置时刻，没有就是空。max_drawdown 只从最后一次重置算起（drawdown_since），重置那一下的跳变不算回撤。',
     reviewPlan:[
       '先看爆发和趋势里开出的单：方向对不对，最后落袋多少。',
       '再看没开、但路径上浮盈到过 5% 的单。对照进场时的全市场方向、是否顺向、盘口、开仓前 30 分钟已走过的幅度。样本够了再决定要不要开。',
@@ -112,7 +120,7 @@ export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null
     stop_loss_stats:{count:gaps.length,gapbps_min:gaps[0]??0,gapbps_median:at(.5),gapbps_p90:at(.9),gapbps_max:gaps.at(-1)??0,gapbps_values:gaps},
     book_audit:[
       {step:'初始资金',amount:initial},
-      {step:'旧账 prior_adjustment，只记一次，不算进已平',amount:Number(prior.toFixed(4))},
+      {step:'旧账 prior_adjustment 加上每次资金重置拿走/补上的现金（见 account_resets），不算进已平',amount:Number(prior.toFixed(4))},
       {step:'已平净利，含实验单',amount:Number(closedPnl.toFixed(4))},
       {step:'还没平的浮盈，已扣掉开仓手续费和开仓滑点',amount:Number(unrealized.toFixed(4))},
       {step:`平仓记录被裁掉的 ${input.unreconstructedN??0} 笔，合计现金，不算进胜率`,amount:Number(unreconstructed.toFixed(4))},
@@ -121,7 +129,9 @@ export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null
       {step:'对不上的差额。接近 0 才算账平了',amount:identity==null?null:Number(identity.toFixed(4))},
     ],
     ...(completeness?{log_completeness:completeness}:{}),
-    positions:withTally(clean(shownPositions)),fills:completeOnly?fills.filter(row=>shownIds.has(row.trace)):fills,equity_curve:curve,equity_minutes:minutes,...summarizeEquity(minutes),
+    positions:withTally(clean(shownPositions)),fills:completeOnly?fills.filter(row=>shownIds.has(row.trace)):fills,equity_curve:curve,equity_minutes:minutes,...summarizeEquity(ddMinutes),curve_since:minutes[0]?.ts??null,drawdown_since:ddMinutes[0]?.ts??null,
+    account_resets:resets.map(r=>({ts:r.at,epoch:r.epoch,requested_at:r.requestedAt,balance_before:r.balanceBefore,balance_after:r.balanceAfter})),
+    account_epoch:resets.length,account_reset_pending:input.pendingResetAt??null,
     not_opened:withTally(clean(shownNotOpened)),stageTimeline:timeline,timeline_since:timeline[0]?.at??null,
     tally_since:input.tallySince??null,liveFills:input.liveFills??[],
     fieldNotes:completeOnly?{...LOG_NULL_BY_DESIGN,equity_curve:'只有导出这一刻的一个点，用来对账。分钟序列在 equity_minutes。'}
@@ -201,7 +211,7 @@ export function accountLogBook(state:ForwardState,quotes:Record<string,Quote>,no
     return row;
   });
   return {positions:[...closedRows,...openRows],fills,curve:[{ts:now,equity:round4(mark.equity),closed_pnl:round4(closedNet),unrealized_pnl:round4(unrealized),positions:openRows.length}],
-    equity:mark.equity,initial:state.initialEquity,closedNet:round4(closedNet),priorAdjustment:0,places:[] as LsrPlace[],funnel,
+    equity:mark.equity,initial:state.initialEquity,closedNet:round4(closedNet),priorAdjustment:resetAdjustment(state.accountResets),accountResets:state.accountResets??[],pendingResetAt:state.pendingFundsReset?.requestedAt??null,places:[] as LsrPlace[],funnel,
     unreconstructed:0,unreconstructedN:0,notOpened,stageTimeline:readStageTimeline(state.stageChronicle,now),
     tallySince:state.signalTallyMeta?.from??null};
 }

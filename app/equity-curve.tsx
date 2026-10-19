@@ -5,7 +5,7 @@ import {DAY_MS,EQUITY_CURVE_VERSION,curveSegments,mergeEquity,nearestPoint,smoot
   type CurveContext,type EquityPoint} from "../lib/equity-curve.ts";
 import {EquityHistoryCache,EQUITY_CACHE_VERSION} from "../lib/equity-cache.ts";
 import "./equity-curve.css";
-export type CurveAccount={startedAt:number;initialEquity:number;equity:number;updatedAt:number;lastCycleAt?:number|null;
+export type CurveAccount={startedAt:number;pageStartedAt?:number;initialEquity:number;equity:number;updatedAt:number;lastCycleAt?:number|null;
   policyVersion?:string;engineVersion?:string;storage:{persistedAt?:number|null};stalePositions?:number};
 const number=(v:number)=>v.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
 const stamp=(t:number)=>new Date(t).toLocaleString("zh-CN",{timeZone:BEIJING_TIME_ZONE,month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false});
@@ -28,10 +28,12 @@ export default function EquityCurve({data,healthy,fixture,cache,cacheScope="owne
   const scroll=useRef<HTMLDivElement>(null),atLatest=useRef(true),cycle=useRef(0);
   useEffect(()=>{cycle.current=data?.lastCycleAt??0;},[data?.lastCycleAt]);
   const liveNow=data?.updatedAt??0;
-  const context:CurveContext=useMemo(()=>({startedAt:data?.startedAt??0,initialEquity:data?.initialEquity??1000,
+  // The page curve starts at the last funds reset (pageStartedAt); before any reset that is the account start.
+  const curveStart=data?.pageStartedAt??data?.startedAt??0;
+  const context:CurveContext=useMemo(()=>({startedAt:curveStart,initialEquity:data?.initialEquity??1000,
     policy:data?.policyVersion??"adaptive-ten-slim-v1",exitPolicy:data?.engineVersion??data?.policyVersion??"adaptive-ten-slim-v1",
-    comparableSince:data?.startedAt??0,persistedAt:data?.storage.persistedAt??0}),
-    [data?.startedAt,data?.initialEquity,data?.policyVersion,data?.engineVersion,data?.storage.persistedAt]);
+    comparableSince:curveStart,persistedAt:data?.storage.persistedAt??0}),
+    [curveStart,data?.initialEquity,data?.policyVersion,data?.engineVersion,data?.storage.persistedAt]);
   const account=context.startedAt;
   useEffect(()=>{if(account&&!fixture)store.configure(context,cacheScope);},[store,context,cacheScope,account,fixture]);
   useEffect(()=>()=>{if(!cache)store.cancel();},[store,cache]);

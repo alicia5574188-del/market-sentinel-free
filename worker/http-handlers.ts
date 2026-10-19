@@ -181,13 +181,13 @@ export async function ownerLiveCredentials(request: Request, env: CloudflareEnv)
   });
 }
 
-export async function ownerPaperAction(request: Request, env: CloudflareEnv, action: "RESET" | "CLEAR_HISTORY") {
+export async function ownerPaperAction(request: Request, env: CloudflareEnv, action: "RESET" | "RESET_CANCEL" | "CLEAR_HISTORY") {
   if (!sameOriginMutation(request)) return json({ error: "请求来源验证失败" }, 403);
   if (!await ownerAuthenticated(request, env)) return json({ error: "请先登录" }, 401);
   const body = await request.json<{ confirm?: unknown }>().catch(() => ({} as { confirm?: unknown }));
-  const expected = action === "RESET" ? "RESET_PAPER" : "CLEAR_PAPER_HISTORY";
+  const expected = action === "RESET" ? "RESET_PAPER" : action === "RESET_CANCEL" ? "CANCEL_PAPER_RESET" : "CLEAR_PAPER_HISTORY";
   if (body.confirm !== expected) return json({ error: "确认参数无效" }, 400);
-  const path = action === "RESET" ? "/paper-reset" : "/paper-history-clear";
+  const path = action === "RESET" ? "/paper-reset" : action === "RESET_CANCEL" ? "/paper-reset-cancel" : "/paper-history-clear";
   const response = await env.MARKET_STREAM.getByName("primary").fetch(`https://market-stream${path}`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
   });

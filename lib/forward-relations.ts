@@ -226,6 +226,10 @@ export type EntryValidation={id:string;candidateId:string;symbol:string;side:"LO
   environment?:MarketEnvironment;playbook?:EnvironmentPlaybook;requiresProbeRetest?:boolean;probeImpulseMin?:number;
   probePullbackMin?:number;probeRestartMin?:number;probeRetestSeen?:boolean;
   status:"WAITING"|"CANCELLED";reason:string|null};
+/** Funds-only reset. Requested while positions are open it waits (pendingFundsReset) and runs at the first
+ * moment the account has no open position; nothing is force-closed and entries/exits are unchanged. */
+export type AccountReset={at:number;requestedAt:number;epoch:number;equityBefore:number;balanceBefore:number;balanceAfter:number};
+export type PendingFundsReset={requestedAt:number};
 export type ForwardState={
   inverseTrial?:InverseTrial;
   winnerRisk?:WinnerRiskLedger;
@@ -241,6 +245,9 @@ export type ForwardState={
   stageChronicle?:StageChronicle;
   signalTally?:Record<string,SignalTally>;
   signalTallyMeta?:SignalTallyMeta;
+  /** Funds-only resets inside this log epoch (startedAt). Oldest first. */
+  accountResets?:AccountReset[];
+  pendingFundsReset?:PendingFundsReset|null;
   entryValidations:Record<string,EntryValidation>;
   marketPulse:MarketPulse;lastEntryAt:Record<string,number>;lastExitAt:Record<string,number>;lastSide:Record<string,"LONG"|"SHORT">;
   consumedTheses:Record<string,number>;
@@ -1868,6 +1875,8 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
   // Positions opened before cutover keep their frozen lifecycle and cannot gain
   // new-entry authority from the retired relation/region/interrupt stack.
   markAndManage(s,input.quotes,input.now);
+  // A pending funds reset runs here, after this tick's exits and before its entries: the first moment with no open position.
+  if(s.pendingFundsReset&&!s.positions.length)applyFundsReset(s,input.now);
 
   const mark=equityMark(s,input.quotes,input.now);s.peakEquity=Math.max(s.peakEquity,mark.equity);
   s.maxDrawdown=Math.max(s.maxDrawdown,1-mark.equity/Math.max(s.peakEquity,1));updateDaily(s,input.now,mark.equity);
@@ -1893,6 +1902,22 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
     v:Object.values(s.entryValidations).filter(x=>x.status==="WAITING").map(x=>x.id).sort()});
   return{state:s,changed:before!==after||dataDue,protectionChanged:input.state.positions.some(t=>s.positions.find(n=>n.id===t.id)?.stopPrice!==t.stopPrice)};
 }
+export const ACCOUNT_RESET_LIMIT=200;
+/** Money only. startedAt (the log epoch), history, not-opened rows, stage timeline, tallies, learning, cooldowns,
+ * opportunities and the inverse book stay, so every run-log store keyed on startedAt keeps going. Needs a flat account. */
+export function applyFundsReset(s:ForwardState,now:number){
+  if(s.positions.length)throw new Error("还有持仓，资金重置只能在没有持仓时执行");
+  const prior=s.accountResets??[],r4=(v:number)=>Number(v.toFixed(4));
+  const marker:AccountReset={at:now,requestedAt:s.pendingFundsReset?.requestedAt??now,epoch:prior.length+1,
+    equityBefore:r4(s.balance),balanceBefore:r4(s.balance),balanceAfter:s.initialEquity};
+  s.balance=s.initialEquity;s.peakEquity=s.initialEquity;s.maxDrawdown=0;s.resolved=0;s.wins=0;s.grossPnl=0;s.fees=0;
+  s.fundingAllowance=0;s.turnover=0;s.daily=[];
+  s.accountResets=[...prior,marker].slice(-ACCOUNT_RESET_LIMIT);s.pendingFundsReset=null;
+  event(s,now,"START","ACCOUNT",`资金重置：${marker.balanceBefore.toFixed(2)}U → ${marker.balanceAfter}U；运行日志、价格路径、阶段时间线和导出进度都保留。`);
+  return marker;
+}
+/** Where the page's account starts: the last funds reset, else the log epoch. */
+export function pageStartedAt(s:Pick<ForwardState,"startedAt"|"accountResets">){return s.accountResets?.at(-1)?.at??s.startedAt;}
 export function closeForwardForReset(state:ForwardState,quotes:Record<string,Quote>,now:number){
   const s=normalizeForward(structuredClone(state),now);
   if(s.inverseTrial){
@@ -1993,7 +2018,10 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
     policyUpgrade:null,exitPolicyUpgrade:null,startedAt:s.startedAt,cutoverAt:s.cutoverAt,updatedAt:s.lastQuoteCycleAt,
     lastCycleAt:s.lastCycleAt,revision:s.revision,initialEquity:s.initialEquity,balance:s.balance,...mark,targetEquity:s.initialEquity*2,
     netPnl:mark.equity-s.initialEquity,maxDrawdown:s.maxDrawdown,resolved:s.resolved,wins:s.wins,grossPnl:s.grossPnl,fees:s.fees,
-    fundingAllowance:s.fundingAllowance,turnover:s.turnover,positions:s.positions,history:s.history,events:s.events,daily:s.daily,
+    fundingAllowance:s.fundingAllowance,turnover:s.turnover,accountResets:s.accountResets??[],pendingFundsReset:s.pendingFundsReset??null,
+    pageStartedAt:pageStartedAt(s),positions:s.positions,
+    // The page's order records restart at a funds reset; the account keeps them (run log, archive, journal).
+    history:s.accountResets?.length?s.history.filter(t=>t.openedAt>=pageStartedAt(s)):s.history,events:s.events,daily:s.daily,
     opportunities:s.opportunities,entryOpportunities:s.opportunities,regions:[],marketPulse:s.marketPulse,
     hypothesisResearch:s.hypothesisResearch,researchPlanVersion:RESEARCH_PLAN_VERSION,
     environmentRouter:{...s.environmentContext,currentEnvironment:s.environmentContext.environment,activePlaybooks,

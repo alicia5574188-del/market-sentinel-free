@@ -64,11 +64,12 @@ import {emptyOrderJournal,observeOrderJournal,ORDER_JOURNAL_CAP,ORDER_JOURNAL_KE
 import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
 import {confirmationRealityView} from '../lib/confirmation-reality.ts';
 import {observationReading} from '../lib/observation-tape.ts';
-import { ADAPTIVE_ENGINE_VERSION, FORWARD_EXECUTION_BBO_CAP, FORWARD_MINUTE_CONFIRMATION_CAP, advanceForward, closeForwardForReset,
+import { cancelFundsReset, requestFundsReset } from "../lib/account-reset.ts";
+import { ADAPTIVE_ENGINE_VERSION, pageStartedAt, FORWARD_EXECUTION_BBO_CAP, FORWARD_MINUTE_CONFIRMATION_CAP, advanceForward,
   forwardSummary, forwardEquity, freshQuote, forwardUrgentMinuteSymbols, forwardUrgentQuoteSymbols, forwardWatchSymbols,
-  resetForwardAccountPreservingLearning, BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
+  BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
 import { FORWARD_EXECUTION_VOLUME_FLOOR_USD, forwardExecutionUniverseEligible, selectAnchorOpportunityUniverse } from "../lib/multi-turn-universe.ts";
-import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite, prepareForwardReset,
+import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite,
   FORWARD_STORAGE, FORWARD_PROTECTION_STORAGE, FORWARD_PAGED_STATE_VERSION } from "../lib/forward-store.ts";
 import { advanceCounterfactualResearch, counterfactualResearchView, counterfactualResearchWrites,
   initialCounterfactualResearch, readCounterfactualResearch, type CounterfactualResearchState } from "../lib/market-intelligence-research.ts";
@@ -2610,12 +2611,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private async resetPaperAccount() {
-    const now=Date.now();let stage="检查实盘状态";
+    const now=Date.now();let stage="检查实盘状态",claimed=false;
     try{
       if(this.runtime.live.requestedEnabled||this.runtime.live.operational
         ||Object.values(this.runtime.live.positions).some(position=>position?.status==="OPEN")
         ||Object.values(this.runtime.live.entries).some(entry=>entry&& !["FILLED","CANCELLED"].includes(entry.status)))
         throw new Error("请先关闭实盘并确认 Gate 没有本系统持仓或待成交订单");
+      // A tick that is mid-flight would otherwise publish its pre-reset state over the reset one.
+      if(this.forwardBusy)throw new Error("模拟账户正在结算这一轮，几秒后再试");
+      this.forwardBusy=true;claimed=true;
 
       stage="读取当前模拟账户";
       if(!this.forwardState){
@@ -2627,42 +2631,51 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }
       const previous=this.forwardState;if(!previous)throw new Error("模拟账户尚未恢复");
 
-      stage="封存旧账户";
-      // Manual reset abandons the old PAPER ledger. Fresh executable prices are
-      // preferred, but a missing quote must never make account maintenance
-      // impossible; closeForwardForReset safely falls back to the last saved mark.
-      const closed=closeForwardForReset(previous,this.regimeQuotes(now),now);
-      const wiped=resetForwardAccountPreservingLearning(previous,now);
-      const next=emptyStrategyAccount(wiped,now);
-
-      stage="准备新账户";
-      const prepared=await prepareForwardReset(previous,closed,next,now);
-      const saved=await this.ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
-      const protection=prepared.accountEntries[FORWARD_PROTECTION_STORAGE] as Record<string,unknown>|undefined;
-      if(protection&&saved?.writeBudget!==undefined)
-        prepared.accountEntries[FORWARD_PROTECTION_STORAGE]={...protection,writeBudget:saved.writeBudget};
-
-      const reservation=this.reserveCriticalWrites(prepared.writes);
-      stage="原子写入重置账户";
-      try{
-        await this.ctx.storage.transaction(async transaction=>{
-          for(const[key,value]of Object.entries(prepared.archiveEntries))await transaction.put(key,value);
-          await transaction.put(prepared.accountEntries);
-          await transaction.delete(THESIS_STORAGE_KEY);
-        });
-        reservation.finish(true);
-      }finally{reservation.finish(false);}
-
-      prepared.state.storage.layout=FORWARD_PAGED_STATE_VERSION;
-      this.forwardCompression=prepared.compression;this.forwardState=prepared.state;this.forwardError=null;
-      this.thesis=null;this.thesisView=null;this.thesisLoaded=true;this.thesisPersistedAt=0;this.thesisAckAt=0;
-      this.forwardProtectionBudget=readProtectionWriteBudget(saved?.writeBudget);this.mirrorClosures.clear();
-      return{ok:true,equity:1000,forward:forwardSummary(this.forwardState,this.regimeQuotes(now),now)};
+      stage="写入资金重置";
+      // Funds only. No position is closed: with open positions the reset is booked as pending and advanceForward
+      // runs it at the first moment the account is flat. startedAt (the log epoch) stays, so the run log is untouched.
+      const result=requestFundsReset(previous,now);
+      await this.commitForwardAccount(previous,result.state,now);
+      if(result.status==="DONE"){try{await this.noteEquityMinute(now);}catch{/* 权益分钟线写失败不挡重置 */}}
+      return{ok:true,status:result.status,open:result.open,equity:result.state.balance,reset:result.reset,
+        pending:result.state.pendingFundsReset??null,forward:forwardSummary(result.state,this.regimeQuotes(now),now)};
     }catch(error){
       const raw=safeError(error),friendly=/The string did not match the expected pattern/i.test(raw)
         ?"底层存储参数校验失败；原账户保持不变":raw;
       throw new Error(`模拟账户重置失败（${stage}）：${friendly}`);
-    }
+    }finally{if(claimed)this.forwardBusy=false;}
+  }
+
+  /** One atomic write of an operator-edited account (same layout as a tick's commit; run-log side stores untouched). */
+  private async commitForwardAccount(previous:ForwardState,next:ForwardState,now:number){
+    await this.ensureReviewLog();
+    next.storage={persistedAt:now,error:null};
+    await this.persistReviewLog(next,now);
+    const prepared=await prepareForwardWrite(previous.storage.persistedAt?previous:null,next,now,{compact:true,offload:this.hotReviewOffload(next)});
+    const saved=await this.ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
+    const checkpoint=prepareForwardProtectionWrite(next).entries[FORWARD_PROTECTION_STORAGE] as Record<string,unknown>|undefined;
+    if(checkpoint){prepared.entries[FORWARD_PROTECTION_STORAGE]=saved?.writeBudget!==undefined?{...checkpoint,writeBudget:saved.writeBudget}:checkpoint;prepared.writes++;}
+    const reservation=this.reserveCriticalWrites(prepared.writes);
+    try{
+      await this.ctx.storage.transaction(async transaction=>{await transaction.put(prepared.entries);});
+      reservation.finish(true);
+    }finally{reservation.finish(false);}
+    next.storage.layout=FORWARD_PAGED_STATE_VERSION;next.storage.sampleIntegrity="raw-sha256";
+    this.forwardCompression=prepared.compression;this.forwardState=next;this.forwardError=null;
+    this.forwardProtectionBudget=readProtectionWriteBudget(saved?.writeBudget);
+  }
+
+  private async cancelPaperReset() {
+    const now=Date.now();
+    if(this.forwardBusy)throw new Error("模拟账户正在结算这一轮，几秒后再试");
+    this.forwardBusy=true;
+    try{
+      const previous=this.forwardState;if(!previous)throw new Error("模拟账户尚未恢复");
+      if(!previous.pendingFundsReset)return{ok:true,cancelled:false,forward:forwardSummary(previous,this.regimeQuotes(now),now)};
+      const result=cancelFundsReset(previous,now);
+      await this.commitForwardAccount(previous,result.state,now);
+      return{ok:true,cancelled:result.cancelled,forward:forwardSummary(result.state,this.regimeQuotes(now),now)};
+    }finally{this.forwardBusy=false;}
   }
 
   private async clearPaperHistory() {
@@ -4791,7 +4804,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         const pathById=new Map(this.tradePaths.trades.map(row=>[row.id,row]));
         const file=buildRunLogExport({events:[],funnel:book.funnel,health:hub,gate,exportedAt,liveEnabled:this.runtime.live.requestedEnabled,
           positions:book.positions,fills:book.fills,curve:book.curve,equity:book.equity,initial:book.initial,closedNet:book.closedNet,
-          priorAdjustment:book.priorAdjustment,unreconstructed:book.unreconstructed,unreconstructedN:book.unreconstructedN,places:book.places,notOpened:[...book.notOpened,...archived.rows],stageTimeline:book.stageTimeline,liveFills:normalizeLiveFills(this.runtime.live.fills),equityMinutes:(await this.readEquityMinutes(exportedAt)).filter(row=>row.ts>=state.startedAt),tallySince:book.tallySince,completeOnly:true,
+          priorAdjustment:book.priorAdjustment,unreconstructed:book.unreconstructed,unreconstructedN:book.unreconstructedN,places:book.places,notOpened:[...book.notOpened,...archived.rows],stageTimeline:book.stageTimeline,liveFills:normalizeLiveFills(this.runtime.live.fills),equityMinutes:(await this.readEquityMinutes(exportedAt)).filter(row=>row.ts>=state.startedAt),tallySince:book.tallySince,accountResets:book.accountResets,pendingResetAt:book.pendingResetAt,completeOnly:true,
           pathReady:pathsReady?(id,closed)=>pathComplete(pathById.get(id),closed):undefined});
         const shown=new Set<string>([...file.positions.map(row=>row.id),...file.not_opened.map(row=>row.id)]);
         const keep=(id:string)=>shown.has(id);
@@ -4841,9 +4854,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const s=this.forwardState;
       if(!s)return json({error:"净值源尚未恢复"},503);
       try {
-        const page=await this.equityReader.read(this.ctx.storage,{startedAt:s.startedAt,initialEquity:s.initialEquity,
+        // The page curve restarts at the last funds reset; saved packets still carry the log epoch (startedAt).
+        const curveStart=pageStartedAt(s);
+        const page=await this.equityReader.read(this.ctx.storage,{startedAt:curveStart,initialEquity:s.initialEquity,
           policy:s.policyVersion,exitPolicy:ADAPTIVE_ENGINE_VERSION,
-          comparableSince:s.startedAt,
+          comparableSince:curveStart,...(curveStart!==s.startedAt?{accountStartedAt:s.startedAt}:{}),
           persistedAt:s.storage.persistedAt},url.searchParams.get("cursor"),Date.now(),url.searchParams.get("after"));
         return json(page);
       }catch(error){const message=error instanceof Error?error.message:"";
@@ -5128,6 +5143,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       try { return json(await this.ctx.blockConcurrencyWhile(() => this.resetPaperAccount())); }
       catch (error) { return json({ error: safeError(error) }, 409); }
     }
+    if (path === "/paper-reset-cancel" && request.method === "POST") {
+      try { return json(await this.ctx.blockConcurrencyWhile(() => this.cancelPaperReset())); }
+      catch (error) { return json({ error: safeError(error) }, 409); }
+    }
     if (path === "/paper-history-clear" && request.method === "POST") {
       try { return json(await this.ctx.blockConcurrencyWhile(() => this.clearPaperHistory())); }
       catch (error) { return json({ error: safeError(error) }, 409); }
@@ -5199,6 +5218,7 @@ const worker = {
     if (url.pathname === "/api/live/mode" && request.method === "POST") return ownerLiveMode(request, env);
     if (url.pathname === "/api/live/credentials" && ["GET", "PUT", "DELETE"].includes(request.method)) return ownerLiveCredentials(request, env);
     if (url.pathname === "/api/paper/reset" && request.method === "POST") return ownerPaperAction(request, env, "RESET");
+    if (url.pathname === "/api/paper/reset/cancel" && request.method === "POST") return ownerPaperAction(request, env, "RESET_CANCEL");
     if (url.pathname === "/api/paper/history/clear" && request.method === "POST") return ownerPaperAction(request, env, "CLEAR_HISTORY");
     if (url.pathname.startsWith("/api/")) return json({ error: "not found" }, 404);
     let pageResponse:Response;

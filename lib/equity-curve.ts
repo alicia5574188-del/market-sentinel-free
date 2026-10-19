@@ -5,8 +5,10 @@ export const CURVE_GAP = 15 * 60_000;
 export const DAY_MS = 86_400_000;
 export type EquityPoint = { at:number; equity:number; kind:"origin"|"observed"|"preview";
   policy:string; homogeneous:boolean; stale?:boolean };
+/** startedAt is where the page curve starts (the last funds reset, else the account start). accountStartedAt is the
+ * log epoch stamped on saved packets when it differs (after a funds reset). */
 export type CurveContext = { startedAt:number; initialEquity:number; policy:string;
-  exitPolicy:string; comparableSince:number; persistedAt:number };
+  exitPolicy:string; comparableSince:number; persistedAt:number; accountStartedAt?:number };
 export type CurvePage = { version:string; context:CurveContext; points:EquityPoint[];
   nextCursor:string|null; scannedTo:number|null; omitted:number; scanned:number; generatedAt:number;
   newestCursor?:string|null; afterCursor?:string|null; moreAfter?:boolean };
@@ -21,7 +23,7 @@ type Packet = {at?:number;startedAt?:number;policyVersion?:string;
 export function archivedEquity(value:unknown,context:CurveContext,now:number):EquityPoint|null {
   if(!value||typeof value!=="object")return null;
   const p=value as Packet,d=p.daily,positions=p.account?.positions;
-  if(p.startedAt!==context.startedAt||!valid(p.at)||p.at<context.startedAt||p.at>now
+  if(p.startedAt!==(context.accountStartedAt??context.startedAt)||!valid(p.at)||p.at<context.startedAt||p.at>now
     ||!d||d.lastAt!==p.at||!valid(d.endEquity)||!Array.isArray(positions))return null;
   if(positions.some(t=>!valid(t.lastQuoteAt)||t.lastQuoteAt>p.at!+1000))return null;
   const stale=positions.some(t=>p.at!-t.lastQuoteAt!>8000);
