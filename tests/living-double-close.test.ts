@@ -72,3 +72,27 @@ test("repairDoubleCloses undoes exactly the second close and is idempotent",asyn
   assert.ok(Math.abs(ledgerGap(s))<1e-6);
   const again=repairDoubleCloses(s,Date.now());assert.equal(again.rows.length,0);assert.equal(again.balanceAfter,again.balanceBefore);
 });
+
+test("repair ignores rows from before the account start and reset closes; a reloaded (JSON) repaired state is a no-op",async()=>{
+  const {findDoubleCloses,repairDoubleCloses}=await import("../lib/double-close-repair.ts");
+  const row=(id:string,openedAt:number,closedAt:number,exitReason:string)=>({id,symbol:"X_USDT",openedAt,closedAt,exitReason,status:"CLOSED",
+    grossPnl:-1,exitFee:.1,fundingAllowance:0,netPnl:-1.2,entryFee:.1,notional:100,plannedRisk:1}) as unknown as import("../lib/forward-relations.ts").Trade;
+  assert.equal(findDoubleCloses([row("old",50,70,"A"),row("old",50,60,"B")],100).length,0,"previous account epoch untouched");
+  assert.equal(findDoubleCloses([row("r",150,170,"ACCOUNT_RESET"),row("r",150,160,"B")],100).length,0,"reset close untouched");
+  assert.equal(findDoubleCloses([row("d",150,170,"WINNER_THESIS_EXIT"),row("d",150,160,"LIVING_FAST_EXHAUST")],100).length,1);
+  const s={startedAt:100,balance:1000,grossPnl:0,fees:0,fundingAllowance:0,resolved:2,wins:0,turnover:200,revision:0,events:[],positions:[],
+    environmentPerformance:{cells:{}},history:[row("d",150,170,"WINNER_THESIS_EXIT"),row("d",150,160,"LIVING_FAST_EXHAUST")]} as unknown as ForwardState;
+  const out=repairDoubleCloses(s,1000);
+  assert.equal(out.rows.length,1);assert.ok(Math.abs(s.balance-1001.1)<1e-9);assert.equal(s.resolved,1);
+  assert.equal(s.history.length,1);assert.equal(s.history[0]!.exitReason,"LIVING_FAST_EXHAUST");
+  assert.equal(s.events[0]!.subject,"ledger-repair-double-close-v1");
+  const reloaded=JSON.parse(JSON.stringify(s)) as ForwardState;
+  assert.equal(repairDoubleCloses(reloaded,2000).rows.length,0);assert.equal(reloaded.balance,s.balance);assert.equal(reloaded.events.length,1);
+});
+
+test("worker runs the repair right after loading the forward state and reports it in health",async()=>{
+  const {readFileSync}=await import("node:fs");
+  const src=readFileSync(new URL("../worker/index-clean.ts",import.meta.url),"utf8");
+  assert.match(src,/this\.forwardState = await readForwardStore\(ctx\.storage, Date\.now\(\)\);\s*await this\.repairLedgerOnce\(ctx\.storage\);/);
+  assert.match(src,/repairDoubleCloses\(s, now\)/);assert.match(src,/ledgerRepair:this\.ledgerRepair\?/);
+});

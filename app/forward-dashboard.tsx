@@ -22,7 +22,7 @@ import "./paid-fee.css";
 import "./pages.css";
 import {tradePaidNetPnl,pairedPaidView,type PaidPair} from "../lib/paid-fee-view.ts";
 import type {ThesisPublic} from "../lib/thesis-view.ts";
-import {OrderCard,exitShort,exitPlain,priceText,type OrderFact} from "./order-card.tsx";
+import {OrderCard,exitShort,exitPlain,priceText,livingPlaybookLabel,type OrderFact} from "./order-card.tsx";
 
 type View=ReturnType<typeof forwardSummary>;
 type Desk=NonNullable<View["forwardDesk"]>;
@@ -464,7 +464,9 @@ function openReason(t:Trade){
   if(t.inverseCopy)return t.inverseCopy.alignment==="WITH_SOURCE"?"跟着提案同方向开。":"跟提案反着开。";
   if(!ctx)return null;
   const trend=ctx.entryRead?.withTrend===true?"顺着大盘方向":ctx.entryRead?.withTrend===false?"逆着大盘方向":"";
-  const plan=ctx.winnerPlan?(ctx.winnerPlan.intent==="TREND"?"做这个币自己的趋势":"做回到区间"):`${ctx.reserve?"低风险 · ":""}${modeName(ctx.mode)}`;
+  // 研究层的单：说研究层自己的打法（附带的赢家计划只是出场用的，不是开仓理由）。
+  const living=livingPlaybookLabel(ctx.living?.pb);
+  const plan=living?living:ctx.winnerPlan?(ctx.winnerPlan.intent==="TREND"?"做这个币自己的趋势":"做回到区间"):`${ctx.reserve?"低风险 · ":""}${modeName(ctx.mode)}`;
   const board=ctx.stageNote?.liveStage??ctx.environment;
   return `${trend}${t.side==="LONG"?"做多":"做空"}，${plan}${board?`；开仓时盘面是${stageName(board)}`:""}。`;
 }

@@ -17,9 +17,9 @@ function closeCredit(t:Trade){
   const r=t.realization;
   return ((t.grossPnl??0)-(r?.gross??0))-(t.exitFee-(r?.fees??0))-(t.fundingAllowance-(r?.funding??0));
 }
-export function findDoubleCloses(history:Trade[]):{row:DoubleCloseRow;dropped:Trade}[]{
+export function findDoubleCloses(history:Trade[],accountStartedAt?:number):{row:DoubleCloseRow;dropped:Trade}[]{
   const byId=new Map<string,Trade[]>();
-  for(const t of history){if(t.unopened)continue;const g=byId.get(t.id);if(g)g.push(t);else byId.set(t.id,[t]);}
+  for(const t of history){if(t.unopened||t.inverseCopy||t.exitReason==="ACCOUNT_RESET"||(accountStartedAt!=null&&t.openedAt<accountStartedAt))continue;const g=byId.get(t.id);if(g)g.push(t);else byId.set(t.id,[t]);}
   const out:{row:DoubleCloseRow;dropped:Trade}[]=[];
   for(const rows of byId.values()){
     if(rows.length<2)continue;
@@ -31,7 +31,7 @@ export function findDoubleCloses(history:Trade[]):{row:DoubleCloseRow;dropped:Tr
   return out;
 }
 export function repairDoubleCloses(s:ForwardState,now:number):{rows:DoubleCloseRow[];balanceBefore:number;balanceAfter:number}{
-  const found=findDoubleCloses(s.history),balanceBefore=s.balance;
+  const found=findDoubleCloses(s.history,s.startedAt),balanceBefore=s.balance;
   // A trade already in history must not stay in positions either way.
   if(s.positions.some(t=>t.status!=="OPEN"))s.positions=s.positions.filter(t=>t.status==="OPEN");
   if(!found.length)return {rows:[],balanceBefore,balanceAfter:s.balance};

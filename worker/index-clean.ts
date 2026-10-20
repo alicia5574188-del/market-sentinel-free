@@ -28,6 +28,9 @@ import { MemberDirectory, type MemberFeed } from "./member-directory.ts";
 import { memberExecutionClass } from "./member-executor.ts";
 import { memberRoutes } from "./member-routes.ts";
 import { pageForwardView } from "../lib/page-runtime-view.ts";
+import { repairDoubleCloses, type DoubleCloseRow } from "../lib/double-close-repair.ts";
+const LEDGER_REPAIR_KEY = "ledger-repair:double-close-v1";
+type LedgerRepairRecord = { version: "double-close-v1"; runs: { at: number; rows: DoubleCloseRow[]; balanceBefore: number; balanceAfter: number; resolvedAfter: number }[] };
 import { isAsset, runtimeStatus, paperHistory, accountLogs, strategyRuntimeLogs, ownerAuthenticated, authSession, ownerLogin, ownerLogout, ownerLiveStatus, ownerLiveSource, ownerLiveMode, ownerLiveCredentials, ownerPaperAction } from "./http-handlers.ts";
 
 import { type EventEntryAssessment, type RadarCandidate } from "../lib/market-radar.ts";
@@ -600,6 +603,25 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   protected liveClient: GateLiveClient | null = null;
   private optionalWork: Promise<void> | null = null;
   protected forwardState: ForwardState | null = null;
+  /** Audit record of the one-time double-close ledger repair (durable key; null = never needed). */
+  private ledgerRepair: LedgerRepairRecord | null = null;
+  /** Undo trades that were closed twice (living exit + old exit stack). Only acts when duplicate history rows exist, so a
+   * later reload finds nothing and changes nothing; every run that did change something is appended to the audit key.
+   * The repaired state is written by the next regular forward save (full hot projection). */
+  private async repairLedgerOnce(storage: DurableObjectStorage) {
+    try {
+      this.ledgerRepair = (await storage.get<LedgerRepairRecord>(LEDGER_REPAIR_KEY)) ?? null;
+      const s = this.forwardState; if (!s) return;
+      const now = Date.now(), out = repairDoubleCloses(s, now);
+      if (!out.rows.length) return;
+      const record: LedgerRepairRecord = { version: "double-close-v1", runs: [...(this.ledgerRepair?.runs ?? []),
+        { at: now, rows: out.rows, balanceBefore: out.balanceBefore, balanceAfter: out.balanceAfter, resolvedAfter: s.resolved }].slice(-5) };
+      await storage.put(LEDGER_REPAIR_KEY, record);
+      this.ledgerRepair = record;
+    } catch (error) {
+      console.error("ledger repair skipped", safeError(error));
+    }
+  }
   protected forwardError: string | null = null;
   private counterfactualResearch: CounterfactualResearchState = initialCounterfactualResearch();
   private counterfactualResearchLoaded = false;
@@ -853,6 +875,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.resetDailyCounters(Date.now());
       try {
         this.forwardState = await readForwardStore(ctx.storage, Date.now());
+        await this.repairLedgerOnce(ctx.storage);
         const overlay=await ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
         this.forwardProtectionBudget=readProtectionWriteBudget(overlay?.writeBudget);
       }
@@ -1305,6 +1328,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       startedAt:s?.startedAt??null,initialEquity:s?.initialEquity??null,balance:s?.balance??null,
       lastCycleAt:Math.max(s?.lastCycleAt??0, this.thesis?.updatedAt??0)||null,
       resolved:s?.resolved??0,openCount:s?.positions.length??0,targetPositionCount:null,positionLimit:null,
+      ledgerRepair:this.ledgerRepair?{version:this.ledgerRepair.version,runs:this.ledgerRepair.runs.map(r=>({at:r.at,rows:r.rows.length,
+        ids:r.rows.map(x=>x.id),balanceBefore:r.balanceBefore,balanceAfter:r.balanceAfter,resolvedAfter:r.resolvedAfter}))}:null,
       executionBboCapacity:FORWARD_EXECUTION_BBO_CAP,minuteConfirmationCapacity:FORWARD_MINUTE_CONFIRMATION_CAP,
       executionVolumeFloorUsd:FORWARD_EXECUTION_VOLUME_FLOOR_USD,learningEligibleMarkets:executionEligibleCount(this.contractCatalog),
       participationCandidateCount:opportunities.length,participationEligibleCount:eligible.length,
@@ -1606,7 +1631,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private async ensureAdaptiveAccount(now:number){
-    if(!this.forwardState)this.forwardState=await readForwardStore(this.ctx.storage,now);
+    if(!this.forwardState){this.forwardState=await readForwardStore(this.ctx.storage,now);await this.repairLedgerOnce(this.ctx.storage);}
     if(!this.forwardState)throw new Error("PAPER权威账户缺失");
     await this.ensureReviewLog();
     if(!this.counterfactualResearchLoaded){

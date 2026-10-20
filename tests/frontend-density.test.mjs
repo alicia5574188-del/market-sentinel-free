@@ -123,6 +123,24 @@ test("dead reverse desk does not hide living-layer positions: paper page shows t
   assert.match(html,/<small>当前持仓<\/small><strong>2 笔<\/strong>/);
 });
 
+test("living-layer order says its own playbook as the open reason, not the attached TREND winner plan",()=>{
+  const ctx=(living)=>({winnerPlan:{intent:"TREND"},mode:"CONTINUATION",reserve:false,environment:null,...(living?{living}:{})});
+  const pos=(id,symbol,c)=>({id,status:"OPEN",symbol,side:"LONG",entryPrice:1,lastPrice:1,quantity:100,notional:100,entryFee:.07,
+    leverage:10,margin:10,plannedRisk:1,openedAt:1790760000000,closedAt:null,exitPrice:null,netPnl:null,stopPrice:.99,
+    favorable:0,adverse:0,profitFloorRate:0,expectedHoldMinutes:30,entryContext:c,holdScore:80});
+  const data={...account(),positions:[pos("a","ONDO_USDT",ctx({v:"living-v2",k:"F",pb:"fast"})),pos("b","ARB_USDT",ctx({v:"living-v2",k:"N",pb:"follow"}))]};
+  const html=render("app/forward-dashboard.tsx",dashboardProps(data));
+  assert.match(html,/做多，集体异动快速跟进/);assert.match(html,/做多，顺着真资金（回调跟进）/);
+  assert.doesNotMatch(html,/做这个币自己的趋势/);
+  const legacy=render("app/forward-dashboard.tsx",dashboardProps({...account(),positions:[pos("c","SOL_USDT",ctx(null))]}));
+  assert.match(legacy,/做这个币自己的趋势/);
+});
+test("living playbook labels on the page match the living layer's own labels",async()=>{
+  const {PLAYBOOK_LABEL}=await import("../lib/living/thesis.ts");
+  for(const [k,v] of Object.entries(PLAYBOOK_LABEL))assert.equal(orderCardModule.exports.LIVING_PLAYBOOK_LABEL[k],v,k);
+  assert.equal(orderCardModule.exports.livingPlaybookLabel("fast"),"集体异动快速跟进");
+});
+
 test("missing account stays unknown and operational errors remain visible",()=>{
   const html=render("app/forward-dashboard.tsx",{...dashboardProps(null),healthy:false,error:"fixture storage unavailable"});
   const equity=html.match(/<section[^>]*data-testid="overview-equity-first"[\s\S]*?<\/section>/)?.[0];
