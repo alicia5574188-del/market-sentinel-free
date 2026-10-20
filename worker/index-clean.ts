@@ -50,8 +50,7 @@ import {experimentReport} from '../lib/research-experiment.ts';
 import {emptyStrategyAccount, STRATEGY_EPOCH} from '../lib/strategy-slot.ts';
 import {emptyThesis, runThesisCycle, THESIS_STORAGE_KEY, type ThesisAttached, type ThesisMarket} from '../lib/thesis-attach.ts';
 import type {ThesisPublic} from '../lib/thesis-view.ts';
-import {RESEARCH_NOTES} from '../lib/log-complete.ts';
-import {buildRunLogExport,accountLogBook,closedLogRow,isCompleteTradeRecord,shadowSignalOf,withResearchColumns} from '../lib/run-log.ts';
+import {buildRunLogExport,accountLogBook,isCompleteTradeRecord,shadowSignalOf,withResearchColumns} from '../lib/run-log.ts';
 import {btcChange,entryFeatures,type RadarRow} from '../lib/entry-features.ts';
 import {mergeOiRing,noteOiSnapshot,oiAnchor,oiSnapshotKey,OI_SNAPSHOT_PREFIX,type OiRing,type OiSnapshot} from '../lib/oi-anchor.ts';
 import {RUN_LOG_EXPORT_KEY,runLogCapacity,type RunLogExportMark} from '../lib/run-log-capacity.ts';
@@ -59,7 +58,7 @@ import {RunLogArchiver} from '../lib/run-log-archiver.ts';
 import {ARCHIVE_SEGMENT_SIZE,archiveFileName,buildArchiveFile,countArchive,readEquityFor,readMeta,readSegment,readStagesFor,segmentCount,writeMeta,
   type ArchiveCursor,type ArchiveMode,type D1Like} from '../lib/run-log-archive.ts';
 import {STAGE_CHANGE_CAP} from '../lib/stage-chronicle.ts';
-import {PATH_CAP,adoptLegacyPaths,bookFromStoredPaths,commitPathWrite,emptyTradePathBook,exportTradePaths,observeTradePaths,peekPathWrite,pendingPathWrites,pathColumns,pathComplete,pruneGhostPaths,pruneOrphanPaths,searchHolding,TRADE_PATH_INDEX_KEY,TRADE_PATH_KEY,TRADE_PATH_PAGE_PREFIX,type TradePathBook,type TradePathIndex,type TradePathPage} from '../lib/trade-path.ts';
+import {PATH_CAP,adoptLegacyPaths,bookFromStoredPaths,commitPathWrite,emptyTradePathBook,exportTradePaths,observeTradePaths,peekPathWrite,pendingPathWrites,pathColumns,pathComplete,pruneGhostPaths,pruneOrphanPaths,TRADE_PATH_INDEX_KEY,TRADE_PATH_KEY,TRADE_PATH_PAGE_PREFIX,type TradePathBook,type TradePathIndex,type TradePathPage} from '../lib/trade-path.ts';
 import {emptyOrderJournal,observeOrderJournal,ORDER_JOURNAL_CAP,ORDER_JOURNAL_KEY,restoreOrderJournal,type OrderJournal} from '../lib/order-journal.ts';
 import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
 import {confirmationRealityView} from '../lib/confirmation-reality.ts';
@@ -92,8 +91,9 @@ import { LIVE_PARITY_VERSION, LIVE_PARITY_PREFIX, buildProportionalMirror, forwa
   type MirrorSourceTrade, type MirrorReceipt, type MirrorBinding } from "../lib/live-parity.ts";
 import { rememberLiveFill, normalizeLiveFills, applyConfirmedFillCosts, type LiveFillNote } from "../lib/live-fill-note.ts";
 import { quoteSpreadBps } from "../lib/signal-repeat.ts";
+import { summarizeEquity } from "../lib/equity-minutes.ts";
 import { collectEquityMinutes, equityGaps, equityMinuteKey, equityMinuteStep, mergeEquityMinutes, sampleEquity, type EquityMinute } from "../lib/equity-minutes.ts";
-import { emptyReviewLogCursor, prepareIncompletePrune, prepareReviewLogWrite, readArchivedUnopened, readReviewLog, restoreReviewLog, reviewLogOffload, unopenedRowKey, type ReviewLogCursor } from "../lib/review-log-store.ts";
+import { emptyReviewLogCursor, prepareIncompletePrune, prepareReviewLogWrite, readReviewLog, restoreReviewLog, reviewLogOffload, unopenedRowKey, type ReviewLogCursor } from "../lib/review-log-store.ts";
 // Inverse closes that merely follow the shadow are not protective; they may rest 2s.
 const MAKER_EXIT_REASONS=new Set(["SHADOW_SOURCE_EXIT"]);
 import { makerFirstEntry, makerEntryTag, MakerStateUnknownError, LIVE_MAKER_ENTRY_POLICY, LIVE_MAKER_ENTRY_ENABLED, type MakerResult } from "../lib/live-maker-entry.ts";
@@ -101,6 +101,9 @@ import {buildReviewSnapshot, readReviewArchivePage} from "../lib/research-snapsh
 import {LivingEngine,LOG_PAGE_PREFIX as LIVING_LOG_PAGE_PREFIX,type ForwardView as LivingForwardView,type LogRow as LivingLogRow} from "../lib/living/engine.ts";
 import {LIVING_MODES,LIVING_ITEMS,type LivingMode} from "../lib/living/config.ts";
 import {withLivingEpoch} from "../lib/living/run-log-fields.ts";
+import {writeLivingLog,readLivingLog,countLivingLog,emptyLivingLogStatus,LIVING_LOG_EVERY_MS,LIVING_LOG_DAILY_ROWS} from "../lib/living/runlog-d1.ts";
+import {buildLivingRunLog} from "../lib/living/runlog-export.ts";
+import type {Bucket as LivingBucket,FinalCase as LivingFinalCase} from "../lib/living/runlog.ts";
 import type {LivingDirective} from "../lib/living/directive.ts";
 import {liveExitPriceLimit} from '../lib/live-entry-price.ts';
 import {observeLiveAccount,type LiveAccountMark} from '../lib/live-account-view.ts';
@@ -585,6 +588,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     readEquityDay:async day=>{const rows=await this.ctx.storage.get<EquityMinute[]>(`log:eqmin:${day}`);return Array.isArray(rows)?rows:null;},
   });
   private archiveWork:Promise<void>|null=null;
+  /** Run log v3 → D1 (timeline buckets every ~2 min, finished research cases). Off the trading clock; never DO writes. */
+  private livingLogStatus=emptyLivingLogStatus();
+  private livingLogWork:Promise<void>|null=null;
   private archivePendingCache:{at:number;cursorKey:string;pending:number;records:number}|null=null;
   private oiAnchorCache:{at:number;anchor:ReturnType<typeof oiAnchor>}|null=null;
   private oiRestore:"none"|"loading"|"done"="none";
@@ -1873,6 +1879,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const dataCycleDue=allowDataCycle&&(!state.lastCycleAt
         ||Math.floor((now-90_000)/BAR_MS)>Math.floor((state.lastCycleAt-90_000)/BAR_MS));
       await this.ensureLiving(now);
+      this.living?.tickLog(now,state as unknown as LivingForwardView);
       const urgent=this.forwardUrgentSymbols(now).length>0||state.positions.length>0||(this.living?.wantsUrgent(now)??false);
       const quoteCadence=urgent?LOOP_MS:5_000;
       if(!dataCycleDue&&now-state.lastQuoteCycleAt<quoteCadence){
@@ -4618,6 +4625,30 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.ctx.waitUntil(tracked);
     }catch{/* 归档只是记录，失败不能碰交易 */}
   }
+  private launchLivingLogWork(now:number){
+    try{
+      const engine=this.living,st=this.livingLogStatus;
+      if(this.livingLogWork||!engine||!engine.loaded)return;
+      const every=st.failures>0?Math.min(30*60_000,LIVING_LOG_EVERY_MS*2**Math.min(4,st.failures)):LIVING_LOG_EVERY_MS;
+      if(st.lastRunAt!=null&&now-st.lastRunAt<every)return;
+      const db=(this.env as {DB?:unknown}).DB?(this.env.DB as unknown as D1Like):null;
+      st.lastRunAt=now;
+      if(!db){st.error="D1 binding missing";return;}
+      const buckets=engine.runlog.bucketsDue(now),cases=engine.runlog.casesDue(now,engine.tape);
+      const task=writeLivingLog(db,st,now,buckets,cases).then(done=>{
+        engine.runlog.bucketsSaved(done.buckets);engine.runlog.casesSaved(done.cases);st.lastOkAt=Date.now();st.error=null;st.failures=0;
+      }).catch(error=>{st.error=safeError(error);st.failures++;});
+      this.livingLogWork=task;
+      const tracked=task.finally(()=>{if(this.livingLogWork===task)this.livingLogWork=null;});
+      this.ctx.waitUntil(tracked);
+    }catch{/* 只是记录，失败不能碰交易 */}
+  }
+  private livingLogView(now:number){
+    const st=this.livingLogStatus,engine=this.living;
+    return {...st,budgetPerDay:LIVING_LOG_DAILY_ROWS,healthy:st.error==null&&st.lastOkAt!=null&&now-st.lastOkAt<=10*60_000,
+      activeCases:engine?.runlog.activeCount()??0,casesToday:engine?.runlog.daily.n??0,casesDroppedToday:engine?.runlog.daily.dropped??0,
+      bucketMinutes:engine?.runlog.bucket?.minutes??null};
+  }
   private archiveView(now:number){
     return {...this.runLogArchiver.status,healthy:this.runLogArchiver.healthy(now),segmentSize:ARCHIVE_SEGMENT_SIZE};
   }
@@ -4787,6 +4818,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.launchOptionalWork(now, universeDue);
       this.launchTurnoverWork(Date.now());
       this.launchArchiveWork(Date.now());
+      this.launchLivingLogWork(Date.now());
     } catch (error) {
       this.runtime.state = "RECONNECTING";
       this.runtime.lastError = safeError(error);
@@ -4872,34 +4904,49 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(!this.forwardState||!this.authorityReady)return json({error:"权威账户尚未恢复，不能导出空账户"},503);
       if(url.searchParams.get("kind")==="log"){
         const exportedAt=Date.now(),hub=this.marketHub.status(exportedAt),gate=this.gateStream.status(exportedAt);
-        await this.ensureReviewLog();
         await this.ensureTradePaths();
         await this.ensureOrderJournal();
+        await this.ensureLiving(exportedAt);
         const state=this.forwardState;
         const book=accountLogBook(state,this.forwardQuotes(exportedAt),exportedAt,this.orderJournal);
-        // Archived not-opened rows older than the in-memory window: read only here, in batches, as export rows.
-        let archived:{rows:ReturnType<typeof closedLogRow>[];read:number;missing:number}={rows:[],read:0,missing:0};
-        if(this.reviewLogReadyFor===state.startedAt&&this.reviewLogCursor.startedAt===state.startedAt){
-          try{archived=await readArchivedUnopened(this.ctx.storage,state.startedAt,this.reviewLogCursor.coldIds,
-            new Set((state.unopenedTrades??[]).map(t=>t.id)),t=>closedLogRow(t));}catch{/* 归档读不到就只导出内存里的 */}
-        }
-        // Paths unreadable right now: records are still judged on their own fields, and the file says the path check was skipped.
         const pathsReady=this.tradePathsLoaded&&this.tradePaths.accountStartedAt===state.startedAt;
         const pathById=new Map(this.tradePaths.trades.map(row=>[row.id,row]));
+        const minutes=(await this.readEquityMinutes(exportedAt)).filter(row=>row.ts>=state.startedAt);
+        // Account part: every paper trade of the account (open + closed), no legacy not-opened rows.
         const file=buildRunLogExport({events:[],funnel:book.funnel,health:hub,gate,exportedAt,liveEnabled:this.runtime.live.requestedEnabled,
           positions:book.positions,fills:book.fills,curve:book.curve,equity:book.equity,initial:book.initial,closedNet:book.closedNet,
-          priorAdjustment:book.priorAdjustment,unreconstructed:book.unreconstructed,unreconstructedN:book.unreconstructedN,places:book.places,notOpened:[...book.notOpened,...archived.rows],stageTimeline:book.stageTimeline,liveFills:normalizeLiveFills(this.runtime.live.fills),equityMinutes:(await this.readEquityMinutes(exportedAt)).filter(row=>row.ts>=state.startedAt),tallySince:book.tallySince,accountResets:book.accountResets,pendingResetAt:book.pendingResetAt,completeOnly:true,
-          pathReady:pathsReady?(id,closed)=>pathComplete(pathById.get(id),closed):undefined});
-        const shown=new Set<string>([...file.positions.map(row=>row.id),...file.not_opened.map(row=>row.id)]);
-        const keep=(id:string)=>shown.has(id);
+          priorAdjustment:book.priorAdjustment,unreconstructed:book.unreconstructed,unreconstructedN:book.unreconstructedN,places:book.places,notOpened:[],
+          stageTimeline:[],liveFills:normalizeLiveFills(this.runtime.live.fills),equityMinutes:minutes,tallySince:book.tallySince,accountResets:book.accountResets,pendingResetAt:book.pendingResetAt});
+        const ids=new Set(file.positions.map(row=>row.id));
         const columnsOf=(id:string,row:{side:'LONG'|'SHORT';gate_signal_side?:unknown;gate_btc_1h_pct?:unknown})=>{try{return pathColumns(pathById.get(id),shadowSignalOf(row));}catch{return null;}};
-        const livingEpoch=this.living?.config.epochStartedAt??null;
-        await this.noteRunLogExport(exportedAt,file.positions.length+file.not_opened.length);
-        return json({...file,positions:withLivingEpoch(withResearchColumns(file.positions,columnsOf),livingEpoch),not_opened:withLivingEpoch(withResearchColumns(file.not_opened,columnsOf),livingEpoch),
-          equity_minutes_since:state.startedAt,equity_gaps:(()=>{try{return equityGaps(file.equity_minutes);}catch{return [];}})(),
-          equity_filled_min:file.equity_minutes.filter(row=>row.filled).length,researchNotes:RESEARCH_NOTES,archive_read:{rows:archived.read,missing:archived.missing},path_check:pathsReady,
-          paths:exportTradePaths(this.tradePaths,keep),holding:searchHolding(this.tradePaths,keep),
-          livingResearch:await (async()=>{try{return await this.livingExport(exportedAt);}catch(error){return {version:"living-v2",error:safeError(error)};}})()});
+        const engine=this.living,livingEpoch=engine?.config.epochStartedAt??null;
+        const hoursRaw=Number(url.searchParams.get("hours")),hours=Number.isFinite(hoursRaw)&&hoursRaw>0?Math.min(720,Math.max(1,Math.round(hoursRaw))):72;
+        const from=exportedAt-hours*3_600_000;
+        let buckets:LivingBucket[]=[],cases:LivingFinalCase[]=[],d1Error:string|null=null,d1Counts:unknown=null;
+        const db=(this.env as {DB?:unknown}).DB?(this.env.DB as unknown as D1Like):null;
+        if(db){try{
+          buckets=await readLivingLog(db,"bucket",from-600_000,exportedAt,hours*6*3+50) as LivingBucket[];
+          cases=await readLivingLog(db,"case",from,exportedAt,2000) as LivingFinalCase[];
+          d1Counts=await countLivingLog(db);
+        }catch(error){d1Error=safeError(error);}}
+        if(engine){try{buckets=[...buckets,...engine.runlog.closed,...engine.runlog.bucketsDue(exportedAt).slice(-1)];
+          cases=[...cases,...engine.runlog.activeView(exportedAt,engine.tape)];}catch(error){d1Error=d1Error??safeError(error);}}
+        let status:Record<string,unknown>|null=null;
+        try{if(engine){const st=engine.status(exportedAt,state as unknown as LivingForwardView);
+          status={mode:st.mode,configured:st.configured,acting:st.acting,fallback:st.fallback,loadedAt:st.loadedAt,market:st.market,fast:st.fast,
+            watches:st.watches,positions:st.positions,items:st.items,writesToday:st.writesToday,lastError:st.lastError,basket:st.basket,lastFeedAt:st.lastFeedAt};}}catch{status=null;}
+        const lastReset=book.accountResets.at(-1)?.at??null;
+        const out=buildLivingRunLog({exportedAt,liveEnabled:this.runtime.live.requestedEnabled,buildSha:FORWARD_BUILD_SHA,hours,status,buckets,cases,
+          account:{equity:file.invariants.equity,initial:file.invariants.initial,invariants:file.invariants,book_audit:file.book_audit,equity_curve:file.equity_curve,
+            equity_minutes:file.equity_minutes,drawdown:summarizeEquity(lastReset==null?minutes:minutes.filter(row=>row.ts>=lastReset)),
+            curve_since:file.curve_since,drawdown_since:file.drawdown_since,account_resets:file.account_resets,account_epoch:file.account_epoch,
+            account_reset_pending:file.account_reset_pending,liveFills:file.liveFills,
+            equity_gaps:(()=>{try{return equityGaps(file.equity_minutes);}catch{return [];}})(),equity_filled_min:file.equity_minutes.filter(row=>row.filled).length},
+          positions:withLivingEpoch(withResearchColumns(file.positions,columnsOf),livingEpoch) as unknown as Record<string,unknown>[],fills:file.fills,
+          paths:pathsReady?exportTradePaths(this.tradePaths,id=>ids.has(id)):[],
+          archive:{d1Error,d1Counts,livingRunLog:this.livingLogView(exportedAt),runLogArchive:this.archiveView(exportedAt),path_check:pathsReady}});
+        await this.noteRunLogExport(exportedAt,out.positions.length+out.cases.length);
+        return json(out);
       }
       if(url.searchParams.get("page")==="archive"){
         const startedAt=Number(url.searchParams.get("accountStartedAt")),asOf=Number(url.searchParams.get("asOf"));
@@ -4994,6 +5041,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           previous:this.runtime.resourceRollovers?.at(-1)??null,forwardCompression:this.forwardCompression,
           reviewLog:{readyFor:this.reviewLogReadyFor,coldUnopened:this.reviewLogCursor.coldIds.length,error:this.reviewLogError,complete:this.reviewLogComplete},
           runLogArchive:this.archiveView(Date.now()),
+          livingRunLog:this.livingLogView(Date.now()),
           ghostPaths:{removed:this.ghostPathsRemoved,remaining:this.ghostPathsRemaining,error:this.ghostPathError},
           incompleteLog:{rowsRemoved:this.incompleteRowsRemoved,rowsRemaining:this.incompleteRowsRemaining,error:this.incompleteRowError,
             orphanPathsRemoved:this.orphanPathsRemoved,orphanPathsRemaining:this.orphanPathsRemaining}},

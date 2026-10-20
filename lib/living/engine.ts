@@ -30,11 +30,12 @@ import {features,readCoin,readMarket,marketAllows,sizeModulator,intentEvidence,b
 import type {IntentPlaybook,Playbook} from "./thesis.ts";
 import type {LivingDirective,LivingOrder,LivingTradeAction,LivingResult,LivingNote} from "./directive.ts";
 import {bytesOf,r6,r4,corr} from "./util.ts";
+import {RunLog,CASES_KEY,type Gate,type Layer,type CaseInput,type MarketSample} from "./runlog.ts";
 
 export const LIVING_KEYS={config:LIVING_CONFIG_KEY,basket:`${LIVING_KEY_PREFIX}basket`,fast:`${LIVING_KEY_PREFIX}fast`,
   episodes:`${LIVING_KEY_PREFIX}episodes`,probes:`${LIVING_KEY_PREFIX}probes`,thesis:`${LIVING_KEY_PREFIX}thesis`,
   select:`${LIVING_KEY_PREFIX}select`,trades:`${LIVING_KEY_PREFIX}trades`,logIndex:`${LIVING_KEY_PREFIX}log:index`,
-  intent:`${LIVING_KEY_PREFIX}intent`} as const;
+  intent:`${LIVING_KEY_PREFIX}intent`,cases:CASES_KEY} as const;
 export const LOG_PAGE_PREFIX=`${LIVING_KEY_PREFIX}log:`;
 export const LOG_PAGES_KEPT=30;
 const LOG_PAGE_BYTES=LIVING_MAX_VALUE_BYTES-2048;
@@ -84,7 +85,7 @@ export class LivingEngine{
   loaded=false;
   lastError:string|null=null;
   private dirty=new Set<string>();
-  private lastHot=0;private lastHeavy=0;private lastBars=0;private lastWarm=0;private lastFastWrite=0;private lastIndexSig="";
+  private lastHot=0;private lastHeavy=0;private lastBars=0;private lastWarm=0;private lastCasesWrite=0;private lastFastWrite=0;private lastIndexSig="";
   /** Market read from before a restart: shown until the first fresh read, never used to trade. */
   restoredMarket:MarketIntent|null=null;loadedAt=0;
   writesToday={day:"",n:0};
@@ -99,7 +100,9 @@ export class LivingEngine{
   decisions:LogRow[]=[];
   private lastIntentAt=0;
   intentCounts:Record<string,number>={};
-  constructor(now:number,config?:unknown){this.config=normalizeLivingConfig(config,now);}
+  /** Run log v3 (lib/living/runlog.ts): timeline buckets, funnel and research cases. Review only. */
+  runlog:RunLog;
+  constructor(now:number,config?:unknown){this.config=normalizeLivingConfig(config,now);this.runlog=new RunLog(now);}
 
   /** Keys to read at start (one batched get). */
   static loadKeys(){return[...Object.values(LIVING_KEYS),...Array.from({length:BAR_PAGES},(_,i)=>`${BAR_PAGE_PREFIX}${i}`),
@@ -130,8 +133,9 @@ export class LivingEngine{
       const last=this.marketHist.at(-1);this.restoredMarket=last&&now-last.at<=20*60_000?last:null;
     }
     this.lastIndexSig=JSON.stringify({seq:this.logSeq,pages:this.logPages});
+    let cases=0;try{cases=this.runlog.restore(values.get(LIVING_KEYS.cases),now);}catch{cases=0;}
     this.loaded=true;this.loadedAt=now;
-    this.note(now,"RESTART",{bars:this.tape.m5.size,bars1m:m1,flow:this.flow.m1.size,hist:this.marketHist.length,episodes:this.episodes.length,watches:this.trades.watches.length});
+    this.note(now,"RESTART",{bars:this.tape.m5.size,bars1m:m1,flow:this.flow.m1.size,hist:this.marketHist.length,episodes:this.episodes.length,watches:this.trades.watches.length,cases});
   }
   effective(now:number){return effectiveLiving(this.config,now);}
   setConfig(next:Partial<Pick<LivingConfig,"mode"|"items">>,now:number){
@@ -153,12 +157,43 @@ export class LivingEngine{
     this.trades.counts[ck]=(this.trades.counts[ck]??0)+1;
     if(this.log.length%25===0&&bytesOf(this.log)>LOG_PAGE_BYTES)this.rollLog();
     this.dirty.add("log");
+    if(/^(INTENT_MARKET|FALLBACK|CONFIG|RESTART|BASKET|FAST_(ALERT|CONFIRM|FAKE|EXHAUST|TIMEOUT|REVERSED|SURGE))$/.test(k)){
+      const text=String(data.sentence??data.reason??data.mode??data.why??data.flowWhy??data.side??"");
+      try{this.runlog.event(at,k,`${k==="INTENT_MARKET"?`${data.state}${data.side?`/${data.side}`:""} `:""}${text}`);}catch{/* 只是记录 */}
+    }
   }
   private once=new Set<string>();
   /** Same row only once per key (per-tick repeats of an unchanged decision are not new information). */
   noteOnce(key:string,at:number,k:string,data:Record<string,string|number|boolean|null>={}){
-    if(this.once.has(key))return;this.once.add(key);if(this.once.size>2000)this.once=new Set([...this.once].slice(-1000));this.note(at,k,data);
+    if(this.once.has(key))return false;this.once.add(key);if(this.once.size>2000)this.once=new Set([...this.once].slice(-1000));this.note(at,k,data);return true;
   }
+  // ------------------------------------------------------------------ run log v3 hooks (never throw into trading)
+  /** One sample a minute, whatever the mode (an off layer is recorded as off, so the timeline has no holes). */
+  tickLog(now:number,forward?:ForwardView){
+    try{
+      const eff=this.effective(now),m=this.marketIntent;
+      const gate:Gate=!this.loaded?"NOT_LOADED":this.config.mode==="off"?"PAUSED_OFF":eff.fallback?"FALLBACK":!eff.acting?"COMPUTE_ONLY"
+        :!this.basket?"NO_BASKET":!m||m.state==="WARMING"?"WARMING":this.fast.episode?"FAST_OWNS":"OPEN";
+      this.runlog.sample(now,{gate,market:this.marketSample(),fast:this.fast.episode?this.fast.episode.phase:"CALM",
+        open:(forward?.positions??[]).filter(p=>!p.inverseCopy).length,watches:this.trades.watches.length,mode:eff.mode});
+    }catch{/* 只是记录 */}
+  }
+  private marketSample():MarketSample{
+    const m=this.marketIntent;if(!m)return null;
+    return {state:m.state,side:m.side,conf:Math.round(m.confidence*100)/100,allowed:m.allowed.map(a=>`${a.pb}${a.side?`/${a.side}`:""}`)};
+  }
+  private caseInput(now:number,sym:string,side:"LONG"|"SHORT",pb:string,kind:"normal"|"fast",why?:string):CaseInput{
+    const ci=this.coins.get(sym),f=ci?.f,p=(v:number|null|undefined)=>v==null||!Number.isFinite(v)?null:Math.round(v*1e5)/1e3;
+    return {at:now,sym,side,pb,pbLabel:PLAYBOOK_LABEL[pb as Playbook]??(pb==="fast"?"集体异动快速跟进":pb),kind,
+      intent:ci?`${ci.capital}/${ci.emotion}`:null,strength:ci?.action?.strength??ci?.strength??null,why:why??ci?.action?.why??ci?.why??"",
+      ev:f?{p15:p(f.p15),p60:p(f.p60),oi15:p(f.oi15),oi60:p(f.oi60),funding:f.funding==null?null:Math.round(f.funding*1e7)/1e5,taker15:f.taker15==null?null:Math.round(f.taker15*1e3)/1e3,
+        vol15:f.vol15==null?null:Math.round(f.vol15*100)/100,basis:p(f.basis)}:null,
+      market:this.marketSample(),px:this.tape.last(sym)?.mid??null};
+  }
+  private logCase(now:number,sym:string,side:"LONG"|"SHORT",pb:string,layer:Layer,reason:string,kind:"normal"|"fast"="normal",why?:string){
+    try{this.runlog.noteCase(this.caseInput(now,sym,side,pb,kind,why),layer,reason);}catch{/* 只是记录 */}
+  }
+  private logCount(now:number,layer:Layer|"reads"|"ideas"|"no_idea",reason?:string|null,n=1){try{this.runlog.count(now,layer,reason,n);}catch{/* 只是记录 */}}
   private sealed:{seq:number;rows:LogRow[]}[]=[];
   private rollLog(){this.sealed.push({seq:this.logSeq,rows:this.log});this.logPages=[...this.logPages.filter(p=>p!==this.logSeq),this.logSeq];this.logSeq++;this.log=[];}
 
@@ -271,10 +306,10 @@ export class LivingEngine{
       const keep:Watch[]=[];
       for(const w of this.trades.watches){
         const n=stepWatch(w,this.tape,now,oppositeAlert(w.side),items.noChase);
-        if(n.status==="DONE"){this.note(now,"RECORD_ONLY",{sym:w.symbol,side:w.side,pb:w.playbook,reason:n.reason??"放弃"});continue;}
+        if(n.status==="DONE"){this.logCase(now,w.symbol,w.side,w.playbook,"WATCH_END",n.reason??"放弃");this.note(now,"RECORD_ONLY",{sym:w.symbol,side:w.side,pb:w.playbook,reason:n.reason??"放弃"});continue;}
         if(n.status==="READY"){
           const o=this.normalOrder(ctx,n,scores,items);
-          if(typeof o==="string"){this.note(now,"RECORD_ONLY",{sym:w.symbol,side:w.side,pb:w.playbook,reason:o});continue;}
+          if(typeof o==="string"){this.logCase(now,w.symbol,w.side,w.playbook,"CONFIRM_FAIL",o);this.note(now,"RECORD_ONLY",{sym:w.symbol,side:w.side,pb:w.playbook,reason:o});continue;}
           orders.push(o);keep.push({...n,status:"WAITING"});continue;
         }
         keep.push(n);
@@ -285,13 +320,14 @@ export class LivingEngine{
       // execution filter: only symbols with a fresh entry-ready Gate quote (no new request)
       const exec=orders.filter(o=>{
         const q=ctx.quotes[o.symbol],ok=!!q&&now-q.observedAt<=10_000&&q.entryReady!==false&&q.bestBid>0&&q.bestAsk>=q.bestBid;
-        if(!ok){this.noteOnce(`q|${o.id}`,now,"RECORD_ONLY",{sym:o.symbol,side:o.side,pb:o.note.pb,kind:o.kind,reason:"没有 Gate 实时盘口（不新增请求）"});
+        if(!ok){if(this.noteOnce(`q|${o.id}`,now,"RECORD_ONLY",{sym:o.symbol,side:o.side,pb:o.note.pb,kind:o.kind,reason:"没有 Gate 实时盘口（不新增请求）"}))
+            this.logCase(now,o.symbol,o.side,o.note.pb,"NO_QUOTE","没有 Gate 实时盘口",o.kind==="F"?"fast":"normal");
           this.endOrder(o,false);}
         return ok;
       });
       this.dirty.add(LIVING_KEYS.trades);
       if(!eff.acting){
-        for(const o of exec){const px=this.tape.last(o.symbol)?.mid??null;
+        for(const o of exec){const px=this.tape.last(o.symbol)?.mid??null;this.logCase(now,o.symbol,o.side,o.note.pb,"COMPUTE_ONLY",`只计算模式：${o.reason.slice(0,60)}`,o.kind==="F"?"fast":"normal");
           this.note(now,"ENTRY_RECORD",{sym:o.symbol,side:o.side,pb:o.note.pb,kind:o.kind,mult:r4(o.multiple),px,stop:o.stop,hold:o.note.hold,
             intent:o.note.in??null,market:o.note.mk??null,story:(o.note.nar??"").slice(0,200),evd:(o.note.evd??"").slice(0,160),reason:`只计算模式：${o.reason.slice(0,80)}`});this.endOrder(o,true);}
         return undefined;
@@ -300,7 +336,7 @@ export class LivingEngine{
         actions:actions.filter(a=>FAST_CODES.has(a.code)?items.fastProtect:items.thesisExit),
         orders:exec.filter(o=>o.kind==="F"?items.fastFollow:items.newSource).sort((a,b)=>(a.kind==="F"?0:1)-(b.kind==="F"?0:1)),
         legacyGate:items.newSource?"note":"open"};
-      for(const o of exec)if(!directive.orders.includes(o)){this.note(now,"RECORD_ONLY",{sym:o.symbol,side:o.side,pb:o.note.pb,reason:"对应开关关着，只记录"});this.endOrder(o,true);}
+      for(const o of exec)if(!directive.orders.includes(o)){this.logCase(now,o.symbol,o.side,o.note.pb,"SWITCH_OFF","对应开关关着",o.kind==="F"?"fast":"normal");this.note(now,"RECORD_ONLY",{sym:o.symbol,side:o.side,pb:o.note.pb,reason:"对应开关关着，只记录"});this.endOrder(o,true);}
       if(this.config.epochStartedAt==null&&(directive.orders.length||directive.actions.length||directive.legacyGate==="note")){
         this.config={...this.config,epochStartedAt:now};this.dirty.add(LIVING_KEYS.config);
       }
@@ -369,9 +405,12 @@ export class LivingEngine{
     const busy=new Set([...ctx.forward.positions.map(p=>p.symbol),...this.trades.watches.map(w=>w.symbol)]);
     const cands:{ci:CoinIntent;rank:number;score:number}[]=[];
     for(const s of basket.members){
-      const ci=this.coins.get(s);if(!ci?.action)continue;
+      const ci=this.coins.get(s);if(ci)this.logCount(now,"reads");
+      if(!ci?.action){if(ci)this.logCount(now,"no_idea",noTradeReason(ci));continue;}
+      this.logCount(now,"ideas");
       const a=ci.action,l1=marketAllows(m,a.pb,a.side);
-      if(!l1.ok){this.noteOnce(`l1|${s}|${a.pb}|${a.side}|${m.state}`,now,"RECORD_ONLY",{sym:s,side:a.side,pb:a.pb,intent:`${ci.capital}/${ci.emotion}`,reason:`没开：${l1.why.slice(0,120)}`});continue;}
+      if(!l1.ok){this.logCase(now,s,a.side,a.pb,"L1_MARKET",l1.why);
+        this.noteOnce(`l1|${s}|${a.pb}|${a.side}|${m.state}`,now,"RECORD_ONLY",{sym:s,side:a.side,pb:a.pb,intent:`${ci.capital}/${ci.emotion}`,reason:`没开：${l1.why.slice(0,120)}`});continue;}
       const mod=sizeModulator(scores[PLAYBOOK_PROBE[a.pb]]);
       cands.push({ci,rank:0,score:a.strength*(.85+.15*mod)});
     }
@@ -379,23 +418,23 @@ export class LivingEngine{
     const used:string[]=[];let rank=0;
     for(const c of cands){
       const s=c.ci.symbol,a=c.ci.action!;
-      if(rank>=STEPS.selectTop)break;
+      if(rank>=STEPS.selectTop){this.logCount(now,"RANK",null,cands.length-cands.indexOf(c));break;}
       const why=this.hardFilter(ctx,s,items);
-      if(why){this.noteOnce(`hf|${s}|${a.pb}`,now,"RECORD_ONLY",{sym:s,side:a.side,pb:a.pb,reason:why});continue;}
-      const cl=this.clusterOf(s,used);if(used.includes(cl)&&cl!==s){this.noteOnce(`cl|${s}|${a.pb}|${Math.floor(now/900_000)}`,now,"RECORD_ONLY",{sym:s,side:a.side,pb:a.pb,reason:`和 ${cl} 走势高度相关，只留一个`});continue;}
+      if(why){this.logCase(now,s,a.side,a.pb,"FILTER",why);this.noteOnce(`hf|${s}|${a.pb}`,now,"RECORD_ONLY",{sym:s,side:a.side,pb:a.pb,reason:why});continue;}
+      const cl=this.clusterOf(s,used);if(used.includes(cl)&&cl!==s){this.logCase(now,s,a.side,a.pb,"CLUSTER",`和 ${cl} 走势高度相关`);this.noteOnce(`cl|${s}|${a.pb}|${Math.floor(now/900_000)}`,now,"RECORD_ONLY",{sym:s,side:a.side,pb:a.pb,reason:`和 ${cl} 走势高度相关，只留一个`});continue;}
       used.push(s);rank++;
-      if(a.strength<.35){this.noteOnce(`st|${s}|${a.pb}|${Math.floor(now/900_000)}`,now,"RECORD_ONLY",{sym:s,side:a.side,pb:a.pb,reason:`第二层：这个币的证据不够强（${a.strength.toFixed(2)}<0.35）`});continue;}
-      if(busy.has(s))continue;
+      if(a.strength<.35){this.logCase(now,s,a.side,a.pb,"L2_WEAK",`证据强度 ${a.strength.toFixed(2)}<0.35`);this.noteOnce(`st|${s}|${a.pb}|${Math.floor(now/900_000)}`,now,"RECORD_ONLY",{sym:s,side:a.side,pb:a.pb,reason:`第二层：这个币的证据不够强（${a.strength.toFixed(2)}<0.35）`});continue;}
+      if(busy.has(s)){this.logCount(now,"BUSY","已有持仓或在等位置");continue;}
       const plan=planIntent(a.pb,a.side,c.ci,this.tape.closed5(s,now),this.tape.closed1(s,now));
-      if(!plan){this.noteOnce(`pl|${s}|${a.pb}`,now,"RECORD_ONLY",{sym:s,side:a.side,pb:a.pb,reason:"找不到合理的位置"});continue;}
+      if(!plan){this.logCase(now,s,a.side,a.pb,"NO_LOCATION","找不到合理的位置");this.noteOnce(`pl|${s}|${a.pb}`,now,"RECORD_ONLY",{sym:s,side:a.side,pb:a.pb,reason:"找不到合理的位置"});continue;}
       const mid=(plan.lo+plan.hi)/2,ct=ctx.contracts[s];
       const chk=stopCheck({side:a.side,price:mid,stop:plan.inv,min:STEPS.stopMin,max:STEPS.stopMax,leverageMax:ct?.leverageMax??10,mmr:ct?.maintenanceRate??null,liqSafety:items.liqSafety});
-      if(!chk.ok){this.noteOnce(`sc|${s}|${a.pb}`,now,"RECORD_ONLY",{sym:s,side:a.side,pb:a.pb,reason:chk.reason});continue;}
+      if(!chk.ok){this.logCase(now,s,a.side,a.pb,"RISK",chk.reason);this.noteOnce(`sc|${s}|${a.pb}`,now,"RECORD_ONLY",{sym:s,side:a.side,pb:a.pb,reason:chk.reason});continue;}
       const cand={symbol:s,side:a.side,playbook:a.pb,probe:PLAYBOOK_PROBE[a.pb],score:r4(c.score),rank,factors:{eff:0,fit:0,early:0,funding:0,edge:0},
         trigger:{probe:PLAYBOOK_PROBE[a.pb],symbol:s,side:a.side,strength:a.strength,ref:plan.ref},reject:null};
       const w=newWatch(cand,{lo:plan.lo,hi:plan.hi,inv:chk.stop,target:plan.target},now,plan.hold,{l1:true,l2:true,probeSize:false,why1:marketAllows(m,a.pb,a.side).why,why2:a.why});
       w.intent={state:`${c.ci.capital}/${c.ci.emotion}`,market:m.state,why:a.why.slice(0,200),ev:evidenceLine(c.ci.f).slice(0,200),strength:a.strength};
-      this.trades.watches.push(w);busy.add(s);
+      this.trades.watches.push(w);busy.add(s);this.logCase(now,s,a.side,a.pb,"WATCH",`等 ${r6(w.zoneLo)}–${r6(w.zoneHi)}，失效 ${r6(w.invalidation)}`);
       this.note(now,"WATCH",{sym:s,side:a.side,pb:a.pb,rank,score:r4(c.score),lo:w.zoneLo,hi:w.zoneHi,inv:w.invalidation,intent:w.intent.state,market:m.state,why:a.why.slice(0,160)});
     }
     if(this.trades.watches.length>12)this.trades.watches.splice(0,this.trades.watches.length-12);
@@ -475,7 +514,7 @@ export class LivingEngine{
       const why=ep.flow.kind==="SQUEEZE"?"这一段是空头被逼回补（持仓量在降），不是新买盘：不追，等衰竭后反做"
         :ep.flow.kind==="FLUSH"?"这一段是多头踩踏（持仓量在降）：不追空，等恐慌出尽再抄反弹"
         :"价格很猛但资金数据没跟上：只做保护，不跟";
-      this.noteOnce(`ff|${ep.id}`,now,"RECORD_ONLY",{pb:"fast",side:ep.side,ep:ep.id,reason:why});return[];
+      if(this.noteOnce(`ff|${ep.id}`,now,"RECORD_ONLY",{pb:"fast",side:ep.side,ep:ep.id,reason:why}))this.logCount(now,"FAST_FLOW_BLOCK",why);return[];
     }
     if(now-ep.confirmAt>FAST.followWindowMs)return[];
     if(fastFollowBlocked(this.fast,ep.side,now))return[];
@@ -489,13 +528,15 @@ export class LivingEngine{
     const {picks,skipped}=fastFollowPicks({ep,tape:this.tape,now,members:this.basket.members,already,
       mmr:s=>ctx.contracts[s]?.maintenanceRate??null,volume:s=>this.tape.meta.get(s)?.volume24hUsd??0,spread:s=>this.tape.meta.get(s)?.spread??null,
       z60,leadersPreferred:p8,clusterOf:s=>this.clusterOf(s),usedClusters});
-    for(const s of skipped.slice(0,3))this.noteOnce(`f|${ep.id}|${s.symbol}`,now,"RECORD_ONLY",{sym:s.symbol,side:ep.side,pb:"fast",reason:s.why});
+    for(const s of skipped.slice(0,3))if(this.noteOnce(`f|${ep.id}|${s.symbol}`,now,"RECORD_ONLY",{sym:s.symbol,side:ep.side,pb:"fast",reason:s.why}))
+      this.logCase(now,s.symbol,ep.side,"fast","FAST_SKIP",s.why,"fast",`集体异动${ep.side==="LONG"?"普涨":"普跌"}：${ep.flow?.why??"资金未验证"}`);
     const out:LivingOrder[]=[];
     for(const p of picks){
       const last=this.tape.last(p.symbol);if(!last)continue;const ct=ctx.contracts[p.symbol];
       const chk=stopCheck({side:p.side,price:last.mid,stop:p.stop,min:FAST.stopMin,max:FAST.stopMax,leverageMax:ct?.leverageMax??10,mmr:ct?.maintenanceRate??null,liqSafety:true});
-      if(!chk.ok){this.noteOnce(`f|${ep.id}|${p.symbol}`,now,"RECORD_ONLY",{sym:p.symbol,side:p.side,pb:"fast",reason:chk.reason});continue;}
+      if(!chk.ok){if(this.noteOnce(`f|${ep.id}|${p.symbol}`,now,"RECORD_ONLY",{sym:p.symbol,side:p.side,pb:"fast",reason:chk.reason}))this.logCase(now,p.symbol,p.side,"fast","RISK",chk.reason,"fast");continue;}
       const mult=items.sizing?fastMultiple(this.episodes,bucketOf(ep.peakZ)):1,risk=fastRisk({fastMultiple:mult,probe:p.mode==="PROBE"});
+      if(!this.once.has(`fp|${ep.id}|${p.symbol}`)){this.once.add(`fp|${ep.id}|${p.symbol}`);this.logCase(now,p.symbol,p.side,"fast","FAST_PICK",p.why,"fast");}
       const why=`集体异动${ep.side==="LONG"?"普涨":"普跌"}确认后跟进（${p.mode==="PROBE"?"试探 1/3":"回调后再创新"}，${ep.flow?.kind==="NEW_POSITIONS"?"新开仓推动":ep.flow?.kind==="VOLUME"?"放量推动":"资金未验证"}）：${p.why}`;
       out.push({id:`lf-${ep.id}-${p.symbol}`,symbol:p.symbol,side:p.side,stop:chk.stop,riskRate:risk.riskRate,multiple:risk.multiple,kind:"F",episodeId:ep.id,
         episodeCap:SIZING.episodeRiskCap,winner:true,reason:why,
@@ -547,13 +588,22 @@ export class LivingEngine{
       if(result){
         for(const o of result.opened){
           this.note(now,"ENTRY",{sym:o.symbol,side:o.side,trade:o.tradeId,risk:r4(o.risk),notional:Math.round(o.notional)});
+          try{const pb=o.orderId.startsWith("lf-")?"fast":this.trades.watches.find(w=>w.id===o.orderId)?.playbook??null;
+            const pos=forward.positions.find(p=>p.id===o.tradeId);
+            this.runlog.count(now,"OPENED");this.runlog.opened(now,{sym:o.symbol,side:o.side,pb:pb??"",trade:o.tradeId});
+            const linked=this.runlog.linkTrade(o.symbol,o.side,pb,{id:o.tradeId,openedAt:pos?.openedAt??now,entry:pos?.entryPrice??null,stop:pos?.stopPrice??null});
+            if(!linked&&pb){this.logCase(now,o.symbol,o.side,pb,"OPENED","开出",pb==="fast"?"fast":"normal");
+              this.runlog.linkTrade(o.symbol,o.side,pb,{id:o.tradeId,openedAt:pos?.openedAt??now,entry:pos?.entryPrice??null,stop:pos?.stopPrice??null});}
+          }catch{/* 只是记录 */}
           this.trades.watches=this.trades.watches.filter(w=>w.id!==o.orderId);
           const f=o.orderId.startsWith("lf-")?o.orderId.slice(3,o.orderId.lastIndexOf("-")):null;
           if(f){this.trades.fastEntries[f]=(this.trades.fastEntries[f]??0)+1;const rec=this.episodes.find(r=>r.id===f);if(rec)rec.entries++;}
         }
         for(const r of result.rejected){
           const transient=/每轮最多一笔|老流程已开过|路径还在恢复/.test(r.reason);
-          if(!transient){this.noteOnce(`r|${r.orderId}`,now,"RECORD_ONLY",{sym:r.symbol,reason:`开单被拒：${r.reason}`});this.trades.watches=this.trades.watches.filter(w=>w.id!==r.orderId);
+          if(!transient){if(this.noteOnce(`r|${r.orderId}`,now,"RECORD_ONLY",{sym:r.symbol,reason:`开单被拒：${r.reason}`})){
+              const w=this.trades.watches.find(x=>x.id===r.orderId);
+              if(w)this.logCase(now,w.symbol,w.side,w.playbook,"REJECTED",r.reason);else this.logCount(now,"REJECTED",r.reason);}this.trades.watches=this.trades.watches.filter(w=>w.id!==r.orderId);
             if(r.orderId.startsWith("lf-")){const ep=r.orderId.slice(3,r.orderId.lastIndexOf("-")),sym=r.orderId.slice(r.orderId.lastIndexOf("-")+1);void sym;this.virtualFast.add(`${ep}|${r.symbol}`);}}
         }
         for(const a of result.applied)this.note(now,"APPLIED",{trade:a.tradeId,code:a.code,action:a.action});
@@ -564,6 +614,7 @@ export class LivingEngine{
         seen.add(t.id);const r=t.netPnl/Math.max(1e-9,t.plannedRisk);
         const xs=this.trades.liveNet[n.pb]??[];xs.push(r4(r));this.trades.liveNet[n.pb]=xs.slice(-60);
         this.note(now,"CLOSED",{trade:t.id,sym:t.symbol,pb:n.pb,kind:n.k,r:r4(r),exit:t.exitReason});
+        try{this.runlog.closeTrade(t.id,{closedAt:t.closedAt,exit:(t as {exitPrice?:number|null}).exitPrice??null,exitReason:t.exitReason,netPnl:t.netPnl});}catch{/* 只是记录 */}
       }
       this.trades.seen=[...seen].slice(-300);
       this.dirty.add(LIVING_KEYS.trades);
@@ -606,11 +657,12 @@ export class LivingEngine{
     }
     const warm=force||now-this.lastWarm>=WARM_EVERY_MS;
     if(warm&&this.basket){
-      const syms=[...new Set([...this.basket.members,"BTC_USDT","ETH_USDT",...this.trades.watches.map(w=>w.symbol),...this.coins.keys()])];
+      const syms=[...new Set([...this.basket.members,"BTC_USDT","ETH_USDT",...this.trades.watches.map(w=>w.symbol),...this.coins.keys(),...[...this.runlog.cases.values()].map(c=>c.sym)])];
       if(this.flow.m1.size)Object.assign(out,this.flow.pages(syms));
       if(this.tape.m1.size)Object.assign(out,this.tape.pages1(syms));
       if(this.dirty.has(LIVING_KEYS.intent)&&this.marketHist.length)out[LIVING_KEYS.intent]=this.fitIntent();
     }
+    if((warm||now-this.lastCasesWrite>=WARM_EVERY_MS)&&this.runlog.dirty)out[LIVING_KEYS.cases]=this.runlog.value();
     if(barsDue&&this.tape.m5.size)Object.assign(out,this.tape.pages());
     const n=Object.keys(out).length;
     if(!n)return{};
@@ -631,6 +683,7 @@ export class LivingEngine{
     if(keys.some(k=>k===LIVING_KEYS.probes||k===LIVING_KEYS.thesis||k===LIVING_KEYS.select||k===LIVING_KEYS.episodes||k===LIVING_KEYS.basket))this.lastHeavy=now;
     if(keys.some(k=>k.startsWith(BAR_PAGE_PREFIX)))this.lastBars=now;
     if(keys.includes(LIVING_KEYS.fast)){this.lastFastWrite=now;this.dirty.delete("fastNow");}
+    if(keys.includes(LIVING_KEYS.cases)){this.runlog.dirty=false;this.lastCasesWrite=now;}
     if(keys.some(k=>k.startsWith(M1_PAGE_PREFIX)||k.startsWith(FLOW_PAGE_PREFIX)||k===LIVING_KEYS.intent))this.lastWarm=now;
     if(keys.includes(LIVING_KEYS.logIndex))this.lastIndexSig=JSON.stringify({seq:this.logSeq,pages:[...new Set([...this.logPages,this.logSeq])].slice(-LOG_PAGES_KEPT)});
   }

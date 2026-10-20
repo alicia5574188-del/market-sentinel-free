@@ -1756,13 +1756,11 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
     if(livingNote){
       // The living research layer decides new entries (paper-enabled, item 3): this legacy signal is kept as a note only;
       // its "momentum" playbook competes there with no privilege. Absent directive → livingNote is false → a38882f4 path.
-      const why="研究层五步闭环接管开单：这条老信号只留档，作为动量打法参与竞争";
-      const noted=openIntelligenceTrade(s,o,q!,meta,now,equity,{validation,decision},minutePaths?.[o.symbol],structure,null,null,true);
-      if(!noted||noted.startsWith("同币已有未开")){
-        validation.status="CANCELLED";validation.reason=why;
-        delete s.entryValidations[validation.id];
-      }
-      reject(noted??why);continue;
+      // Run log v3: the legacy signal is no longer kept as a not-opened row (the living layer's own research cases replace it).
+      const why="研究层五步闭环接管开单：老信号不再留档";
+      validation.status="CANCELLED";validation.reason=why;
+      delete s.entryValidations[validation.id];
+      reject(why);continue;
     }
     // 趋势/爆发两条开仓规则：BTC 1小时要顺向 0.5%；趋势里 BTC 不动、山寨 30 分钟已跌 1.4% 时做空改做多。
     // 例外：做空时这个币自己 8 小时背景已涨 5% 以上（就是记录里的 coin_background_pct，取自下面存进单子的 o.coinPath），BTC 不顺也放行。
