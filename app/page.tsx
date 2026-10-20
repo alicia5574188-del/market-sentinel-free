@@ -109,5 +109,6 @@ export default function Home() {
       missing:runtime?.live?.mirror?.eligibleMissingCount??runtime?.liveMirror?.eligibleMissingCount??null}}
     livePanel={<LiveConsole view="trade" auth={auth} runtime={runtime} onSession={sessionChanged} onLive={liveChanged} onRefresh={reload}/>}
     liveSystemPanel={<LiveConsole view="system" auth={auth} runtime={runtime} onSession={sessionChanged} onLive={liveChanged} onRefresh={reload}/>}
-    accountPanel={<><MemberAccess auth={auth}/><PaperAccountReset auth={auth} runtime={runtime} onReset={reload}/><LivingPanel auth={auth}/></>}/>;
+    accountPanel={<><MemberAccess auth={auth}/><PaperAccountReset auth={auth} runtime={runtime} onReset={reload}/></>}
+    brainPanel={<LivingPanel auth={auth}/>}/>;
 }

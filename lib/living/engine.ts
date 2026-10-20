@@ -165,7 +165,7 @@ export class LivingEngine{
       const r=stepFast(this.fast,this.tape,this.basket,now,side=>burstFlow(this.flow,members,side,now));this.fast=r.state;
       for(const e of r.events){
         this.trades.pendingEvents.push(e);
-        this.note(now,`FAST_${e.type}`,{ep:e.episodeId,side:e.side,...Object.fromEntries(Object.entries(e.detail).slice(0,8))});
+        this.note(now,`FAST_${e.type}`,{ep:e.episodeId,side:e.side,...Object.fromEntries(Object.entries(e.detail).slice(0,12))});
       }
       if(r.ended){this.episodes.push(r.ended);if(this.episodes.length>200)this.episodes.splice(0,this.episodes.length-200);
         this.trades.lastEnd={id:r.ended.id,end:r.ended.end,at:now};this.dirty.add(LIVING_KEYS.episodes);}
@@ -277,7 +277,9 @@ export class LivingEngine{
       });
       this.dirty.add(LIVING_KEYS.trades);
       if(!eff.acting){
-        for(const o of exec){this.note(now,"ENTRY_RECORD",{sym:o.symbol,side:o.side,pb:o.note.pb,kind:o.kind,mult:r4(o.multiple),reason:`只计算模式：${o.reason.slice(0,80)}`});this.endOrder(o,true);}
+        for(const o of exec){const px=this.tape.last(o.symbol)?.mid??null;
+          this.note(now,"ENTRY_RECORD",{sym:o.symbol,side:o.side,pb:o.note.pb,kind:o.kind,mult:r4(o.multiple),px,stop:o.stop,hold:o.note.hold,
+            intent:o.note.in??null,market:o.note.mk??null,story:(o.note.nar??"").slice(0,200),evd:(o.note.evd??"").slice(0,160),reason:`只计算模式：${o.reason.slice(0,80)}`});this.endOrder(o,true);}
         return undefined;
       }
       const directive:LivingDirective={version:"living-v2",items:{...items},

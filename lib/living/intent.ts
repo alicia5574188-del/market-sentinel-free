@@ -39,7 +39,7 @@ export type MarketIntent={at:number;state:MarketState;side:Side|null;confidence:
 export const INTENT={
   moveZ:1.5,moveMin:.004,oiMove15:.005,oiStrong15:.015,oiBuild60:.02,oiDrop60:-.02,oiCascade5:-.01,
   fundingHot:.0003,fundingCold:-.0002,fundingRise60:.0001,basisHot:.0005,takerNotable:.25,volSurge:1.8,volClimax:3,
-  extended:2.5,stallMin:3,blowoffStall:5,edgeLo:.2,edgeHi:.8,sigmaFloor5:.0015,
+  extended:2.5,stallMin:3,stallMax:30,capMove60:.012,blowoffStall:5,edgeLo:.2,edgeHi:.8,sigmaFloor5:.0015,
   marketMove15:.003,marketPanic15:-.006,marketSqueeze15:.006,marketFomo60:.01,breadth:.6,calmMove60:.005,
 } as const;
 const d=(s:Side)=>s==="LONG"?1:-1;
@@ -104,9 +104,12 @@ export function readCoin(symbol:string,f:CoinFeatures,now:number,recent:CoinInte
   const had=(e:Emotion,side?:Side)=>recent.some(r=>now-r.at<=60*60_000&&r.emotion===e&&(!side||r.crowd===side||r.actor===side));
   let emotion:Emotion="NONE",why="";
   // order matters: "it stopped" first, then the live emotions
-  if((had("PANIC","LONG")||(f.p60!=null&&f.z60!=null&&f.z60<=-2&&(f.oi60??0)<=I.oiDrop60))&&stalled&&(f.oi5??-1)>=-.002&&(f.taker5??0)>=(f.taker15??0)&&(f.p5??0)>=-.001){
+  // "it stopped" needs a real leg first: a ≥1.2% / 2σ hour move that forced one side out (OI fell), and the stop is fresh (≤30 min)
+  const fresh=stalled&&(f.stallMin??0)<=I.stallMax,oiOut=f.oi60!=null&&f.oi60<=I.oiDrop60/2;
+  const bigDrop=f.p60!=null&&f.p60<=-I.capMove60&&(f.z60??0)<=-2,bigRise=f.p60!=null&&f.p60>=I.capMove60&&(f.z60??0)>=2;
+  if(bigDrop&&(had("PANIC","LONG")||oiOut)&&(f.oi60??0)<0&&fresh&&(f.oi5??-1)>=-.002&&(f.taker5??0)>=(f.taker15??0)&&(f.p5??0)>=-.001){
     emotion="CAPITULATION";why=`恐慌出尽：1小时跌 ${f2(f.p60)}、持仓量掉 ${f2(f.oi60)}，${(f.stallMin??0).toFixed(0)} 分钟没再创新低，强平停了，买盘回来`;
-  }else if((had("PANIC","SHORT")||(f.z60!=null&&f.z60>=2&&(f.oi60??0)<=I.oiDrop60))&&stalled&&(f.oi5??-1)>=-.002&&(f.taker5??0)<=(f.taker15??0)&&(f.p5??0)<=.001){
+  }else if(bigRise&&(had("PANIC","SHORT")||oiOut)&&(f.oi60??0)<0&&fresh&&(f.oi5??-1)>=-.002&&(f.taker5??0)<=(f.taker15??0)&&(f.p5??0)<=.001){
     emotion="EXHAUSTION";why=`逼空衰竭：1小时涨 ${f2(f.p60)} 靠空头回补（持仓量 ${f2(f.oi60)}），${(f.stallMin??0).toFixed(0)} 分钟没新高，回补停了`;
   }else if((had("FOMO","LONG")||(extendedUp&&heatUp&&built))&&(f.stallMin??0)>=I.blowoffStall&&((f.taker5??0)<0||(f.oi5??0)<=0)){
     emotion="BLOWOFF";why=`贪婪见顶：追多的人还在（资金费 ${f.funding==null?"—":(f.funding*100).toFixed(3)+"%"}、持仓量1小时 ${f2(f.oi60)}），但 ${(f.stallMin??0).toFixed(0)} 分钟没新高、新多不再进`;

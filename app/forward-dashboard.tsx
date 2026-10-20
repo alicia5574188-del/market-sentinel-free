@@ -22,7 +22,7 @@ import {OrderCard,exitShort,exitPlain,priceText,type OrderFact} from "./order-ca
 
 type View=ReturnType<typeof forwardSummary>;
 type Desk=NonNullable<View["forwardDesk"]>;
-type Tab="execution"|"paper"|"live"|"settings";
+type Tab="execution"|"brain"|"paper"|"live"|"settings";
 const fmt=(v:number|null|undefined,d=2)=>typeof v==="number"&&Number.isFinite(v)?v.toLocaleString("en-US",{minimumFractionDigits:d,maximumFractionDigits:d}):"—";
 const signed=(v:number|null|undefined,d=2)=>typeof v==="number"&&Number.isFinite(v)?`${v>=0?"+":""}${fmt(v,d)}`:"—";
 const time=(v?:number|null)=>v?new Date(v).toLocaleString("zh-CN",{timeZone:BEIJING_TIME_ZONE,month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}):"—";
@@ -73,11 +73,11 @@ const stanceName=(stance?:string)=>stance==="REVERSE"?"反向":stance==="FLAT"?"
 const sessionName=(session?:string)=>session==="ASIA"?"亚盘":session==="EUROPE"?"欧盘":session==="US"?"美盘":"—";
 const claimName=(kind?:string)=>kind==="CONTINUE"?"延续":kind==="SUSPECT"?"可疑":"不投票";
 
-export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,livePanel,liveSystemPanel,liveEnabled,liveOverview,accountPanel,memberName,cacheScope="owner"}:{
+export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,livePanel,liveSystemPanel,liveEnabled,liveOverview,accountPanel,brainPanel,memberName,cacheScope="owner"}:{
   data:View|null;healthy:boolean;statusLabel?:string;feedAt:number|null;error:string|null;livePanel:ReactNode;liveSystemPanel?:ReactNode;
   liveEnabled:boolean;liveOverview?:{equity:number|null;available:number|null;positionCount:number;operational:boolean;lastSyncAt:number|null;copied:number|null;eligible:number|null;missing:number|null;accountMark?:import('../lib/live-account-view.ts').LiveAccountMark|null;
     equityCurve?:import('../lib/live-equity.ts').LiveEquityHead|null;sessionAt?:number};
-  accountPanel?:ReactNode;memberName?:string;cacheScope?:string;
+  accountPanel?:ReactNode;brainPanel?:ReactNode;memberName?:string;cacheScope?:string;
 }){
   const [equityCache]=useState(()=>new EquityHistoryCache());
   useEffect(()=>()=>equityCache.cancel(),[equityCache]);
@@ -85,7 +85,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   const [fontScale,setFontScale]=useState(()=>{if(typeof window==="undefined")return 92;try{const saved=Number(localStorage.getItem("sentinel-ui-font-scale-v1"));return saved>=70&&saved<=110?saved:92;}catch{return 92;}});
   const [exporting,setExporting]=useState(false),[exportStatus,setExportStatus]=useState<string|null>(null),[exportCount,setExportCount]=useState(0);
   const [historyShown,setHistoryShown]=useState(10);
-  const scroll=useRef<Record<Tab,number>>({execution:0,paper:0,live:0,settings:0});
+  const scroll=useRef<Record<Tab,number>>({execution:0,brain:0,paper:0,live:0,settings:0});
   useEffect(()=>{const id=setInterval(()=>setNow(Date.now()),1000);return()=>clearInterval(id);},[]);
   useLayoutEffect(()=>{window.scrollTo({top:tab==="live"?0:scroll.current[tab]??0,behavior:"auto"});},[tab]);
   const select=(next:Tab)=>{scroll.current[tab]=window.scrollY;if(next==="live")setLiveMounted(true);setTab(next);};
@@ -126,7 +126,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   },[cacheScope,!!data,healthy,systemStatus,liveText,engine,storageOk,feedMinute]);
   const card:SystemSnap&{cached:boolean}=data||!systemSnap?{healthy,status:systemStatus,feedAt,live:liveText,engine,storageOk,cached:false}
     :{...systemSnap.value,cached:true};
-  const nav:[Tab,string,string][]=[["execution","◉","执行"],["paper","⇄","模拟"],["live","◈","实盘"],["settings","⊙","系统"]];
+  const nav:[Tab,string,string][]=[["execution","◉","执行"],...(brainPanel?[["brain","◎","大脑"] as [Tab,string,string]]:[]),["paper","⇄","模拟"],["live","◈","实盘"],["settings","⊙","系统"]];
   return <main className="fr-app" style={fontVars as CSSProperties} data-ui-version="market-intelligence-v1">
     <header className="fr-compact-header pg-head"><b>哨兵 · 市场智能系统</b><span>
       <i className={`pg-pill ${healthy?"is-ok":"is-warn"}`} role="status">{systemStatus}</i>
@@ -177,9 +177,10 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
         <div className="fr-font-options">{[70,80,90,100,110].map(value=><button key={value} className={fontScale===value?"selected":""} onClick={()=>{setFontScale(value);try{localStorage.setItem("sentinel-ui-font-scale-v1",String(value));}catch{}}}>{value}%</button>)}</div></section>
     </div>}
 
+    {tab==="brain"&&brainPanel&&<div className="pg-brain">{brainPanel}</div>}
     {liveMounted&&<div className="fr-live-panel-host" hidden={tab!=="live"}>{livePanel}</div>}
     {(error||data?.storage.error)&&<aside className="fr-error" role="alert"><b>运行提示</b><p>{data?.storage.error??error}</p></aside>}
-    <nav className="fr-nav">{nav.map(([id,icon,label])=><button key={id} className={id===tab?"selected":""} onClick={()=>select(id)}><span>{icon}</span><b>{label}</b>{id==="paper"&&paperHeld>0&&<i>{paperHeld}</i>}{id==="live"&&liveHeld>0&&<i>{liveHeld}</i>}</button>)}</nav>
+    <nav className={nav.length===5?"fr-nav fr-nav-five":"fr-nav"}>{nav.map(([id,icon,label])=><button key={id} className={id===tab?"selected":""} onClick={()=>select(id)}><span>{icon}</span><b>{label}</b>{id==="paper"&&paperHeld>0&&<i>{paperHeld}</i>}{id==="live"&&liveHeld>0&&<i>{liveHeld}</i>}</button>)}</nav>
   </main>;
 }
 

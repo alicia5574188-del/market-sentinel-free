@@ -73,5 +73,5 @@ test("member render shows only 执行 and 系统 with the member's own live acco
 });
 test("owner render keeps the original four tabs and owner panels",async()=>{
   const {owner}=await surfaces();
-  assert.deepEqual(navLabels(owner),["执行","模拟","实盘","系统"]);assert.match(owner,/market-intelligence-v1/);assert.doesNotMatch(owner,/member-dashboard/);
+  assert.deepEqual(navLabels(owner),["执行","大脑","模拟","实盘","系统"]);assert.match(owner,/market-intelligence-v1/);assert.doesNotMatch(owner,/member-dashboard/);
 });
