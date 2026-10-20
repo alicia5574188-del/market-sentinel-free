@@ -274,6 +274,7 @@ export function holdCheck(input:{pb:IntentPlaybook;side:Side;entry:number;price:
     if(gain>input.cost){const st=lock(.5);if(st)return{act:"GUARD",code:"LIVING_INTENT_MARKET_LOCK",why:`市场意图转向（${market!.sentence.slice(0,50)}），浮盈单锁一半利润`,stop:st};}
     else return{act:"EXIT",code:"LIVING_INTENT_MARKET_FLIP",why:`市场意图转向（${market!.sentence.slice(0,60)}），持有理由没了`};
   }
+  if(input.holdMin>0&&input.ageMin>=1.5*input.holdMin)return{act:"EXIT",code:"LIVING_THESIS_TIMEOUT",why:`拿到计划时长 ${input.holdMin} 分钟的 1.5 倍，理由没兑现`};
   if(!coin||!f)return{act:"HOLD",code:"",why:"这个币暂时读不到（没有新鲜数据），先按失效价拿"};
   switch(pb){
     case "follow":{
@@ -309,7 +310,6 @@ export function holdCheck(input:{pb:IntentPlaybook;side:Side;entry:number;price:
       return{act:"HOLD",code:"",why:"持有：边缘还有人接，价格在回归"};
     }
   }
-  if(input.ageMin>=1.5*input.holdMin)return{act:"EXIT",code:"LIVING_THESIS_TIMEOUT",why:`拿到计划时长 ${input.holdMin} 分钟的 1.5 倍`};
   return{act:"HOLD",code:"",why:"持有"};
 }
 /** Zone + invalidation for a v2 trade (location step). Null = no sensible position. */

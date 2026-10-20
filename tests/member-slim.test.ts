@@ -52,6 +52,7 @@ async function surfaces(){
       execution:render(h(MemberDashboard,{...base,...panels(member)})),
       system:render(h(MemberDashboard,{...base,...panels(member),initialTab:'settings'})),
       owner:render(h(Dashboard,{data:forwardSummary(state,{},1790050001000),healthy:true,feedAt:null,error:null,liveEnabled:false,...panels(owner)})),
+      ownerBrain:render(h(Dashboard,{data:forwardSummary(state,{},1790050001000),healthy:true,feedAt:null,error:null,liveEnabled:false,...panels(owner),brainPanel:h('div',null,'BRAIN')})),
     };
   `},bundle:true,write:false,format:"cjs",platform:"node",jsx:"automatic",loader:{".css":"empty"},logLevel:"silent"});
   const module_={exports:{} as {out?:Record<string,string>}};
@@ -72,6 +73,7 @@ test("member render shows only 执行 and 系统 with the member's own live acco
   assert.match(system,/alice/);
 });
 test("owner render keeps the original four tabs and owner panels",async()=>{
-  const {owner}=await surfaces();
-  assert.deepEqual(navLabels(owner),["执行","大脑","模拟","实盘","系统"]);assert.match(owner,/market-intelligence-v1/);assert.doesNotMatch(owner,/member-dashboard/);
+  const {owner,ownerBrain}=await surfaces();
+  assert.deepEqual(navLabels(owner),["执行","模拟","实盘","系统"]);
+  assert.deepEqual(navLabels(ownerBrain),["执行","大脑","模拟","实盘","系统"],"owner page with the market-brain tab");assert.match(owner,/market-intelligence-v1/);assert.doesNotMatch(owner,/member-dashboard/);
 });

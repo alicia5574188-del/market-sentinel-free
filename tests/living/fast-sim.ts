@@ -12,13 +12,13 @@ export function feedTape(tape:LivingTape,symbols:string[],at:number){
   tape.feed(symbols.flatMap(s=>{const p=priceAt(seg.bars[s]!,at,true);return p?[{symbol:s,mid:p,at:at-200,spread:.0002,disagreement:.0005,sources:3,volume24hUsd:5e7}]:[];}),at);
 }
 /** Warm 6h at 10s, then 2s steps through [from,to). */
-export function runFast(opts:{from:number;to:number;warmMs?:number;onStep?:(r:{state:FastState;sample:FastSample;events:FastEvent[]},tape:LivingTape)=>void}){
+export function runFast(opts:{from:number;to:number;warmMs?:number;flow?:import("../../lib/living/fast-lane.ts").FlowCheck;onStep?:(r:{state:FastState;sample:FastSample;events:FastEvent[]},tape:LivingTape)=>void}){
   const basket=fixtureBasket(opts.from),symbols=[...basket.members,"BTC_USDT","ETH_USDT"],tape=new LivingTape();
   let state=initialFast();const events:FastEvent[]=[];
   const start=opts.from-(opts.warmMs??6*3_600_000);
   for(let at=start;at<opts.to;at+=at<opts.from-15*60_000?10_000:2_000){
     feedTape(tape,symbols,at);
-    const r=stepFast(state,tape,basket,at);state=r.state;
+    const r=stepFast(state,tape,basket,at,opts.flow);state=r.state;
     if(at>=opts.from){events.push(...r.events);opts.onStep?.(r,tape);}
   }
   return {state,events,tape,basket};

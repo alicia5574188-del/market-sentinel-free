@@ -20,9 +20,9 @@ import {detectProbes,registerObservations,matureObservations,allScores,noteSerie
   PROBE_META,type ProbeState,type ProbeScore,type ProbeId,type Trigger} from "./probes.ts";
 import {thesisInputs,noteBasketIndex,judge,advanceThesis,notePredictions,initialThesis,normalizeThesis,PLAYBOOK_PROBE,PLAYBOOK_LABEL,
   type ThesisState} from "./thesis.ts";
-import {selectCandidates,notePick,learnSelection,initialSelect,normalizeSelect,type SelectState,type Market} from "./select.ts";
-import {planPosition,stopCheck,newWatch,stepWatch,fastFollowPicks,type Watch} from "./entry.ts";
-import {layerOne,layerTwo,evidenceFactor,normalRisk,fastRisk} from "./conviction.ts";
+import {learnSelection,initialSelect,normalizeSelect,type SelectState,type Market} from "./select.ts";
+import {stopCheck,newWatch,stepWatch,fastFollowPicks,type Watch} from "./entry.ts";
+import {layerOne,evidenceFactor,normalRisk,fastRisk} from "./conviction.ts";
 import {fastProtection,thesisExits,surgeGuard,type PositionView} from "./exits.ts";
 import {FlowBook,FLOW_PAGES,FLOW_PAGE_PREFIX,type FlowPoint} from "./flow.ts";
 import {features,readCoin,readMarket,marketAllows,sizeModulator,intentEvidence,burstFlow,holdCheck,planIntent,noTradeReason,evidenceLine,
