@@ -21,15 +21,20 @@ const environmentName=(v?:string)=>({TREND:"趋势环境",TRANSITION:"过渡环�
 const tradePlanName=(v?:string)=>({
   WINNER_TREND:"独立趋势",RANGE_REVERSION:"边缘回归",LIQUIDITY_MIGRATION:"流动性迁移",LIQUIDITY_REJECTION:"离开失败回归",FAMILY_TURN:"家族提前转折",OBSERVE_ONLY:"只观察"
 }[v??""]??"历史计划");
-const clock=(v?:number|null)=>v?new Date(v).toLocaleTimeString("zh-CN",{timeZone:BEIJING_TIME_ZONE,hour12:false}):"—";
-const stamp=(v?:number|null)=>v?new Date(v).toLocaleString("zh-CN",{timeZone:BEIJING_TIME_ZONE,month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false}):"—";
+export const clock=(v?:number|null)=>v?new Date(v).toLocaleTimeString("zh-CN",{timeZone:BEIJING_TIME_ZONE,hour12:false}):"—";
+export const stamp=(v?:number|null)=>v?new Date(v).toLocaleString("zh-CN",{timeZone:BEIJING_TIME_ZONE,month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false}):"—";
 const pressure=(v?:number)=>typeof v!=="number"?"待确认":v>=.65?"高":v>=.45?"上升中":"低";
 const fmt=(v:number|null|undefined,d=2)=>typeof v==="number"&&Number.isFinite(v)?v.toLocaleString("en-US",{minimumFractionDigits:d,maximumFractionDigits:d}):"—";
-const signed=(v:number|null|undefined,d=2)=>typeof v==="number"&&Number.isFinite(v)?`${v>=0?"+":""}${fmt(v,d)}`:"—";
-const tone=(v:number|null|undefined)=>typeof v!=="number"||!Number.isFinite(v)||v===0?"":v>0?"fr-positive":"fr-negative";
-const held=(start?:number|null,end?:number|null)=>{if(!start||!end)return "";const m=Math.floor(Math.max(0,end-start)/60000);return m<1?"<1分钟":m>=60?`${Math.floor(m/60)}小时${m%60}分`:`${m}分钟`;};
-const safePnl=(t:Trade)=>{try{return tradePaidNetPnl(t);}catch{return null;}};
+export const signed=(v:number|null|undefined,d=2)=>typeof v==="number"&&Number.isFinite(v)?`${v>=0?"+":""}${fmt(v,d)}`:"—";
+export const tone=(v:number|null|undefined)=>typeof v!=="number"||!Number.isFinite(v)||v===0?"":v>0?"fr-positive":"fr-negative";
+export const held=(start?:number|null,end?:number|null)=>{if(!start||!end)return "";const m=Math.floor(Math.max(0,end-start)/60000);return m<1?"<1分钟":m>=60?`${Math.floor(m/60)}小时${m%60}分`:`${m}分钟`;};
+export const safePnl=(t:Trade)=>{try{return tradePaidNetPnl(t);}catch{return null;}};
 
+/** One line of the old router's market read (the owner 大脑 page folds it into "旧系统参考"). */
+export function legacyMarketLine(data:View|null){
+  const phase=data?.environmentRouter?.phase??data?.opportunities?.find(o=>o.marketEvolutionPhase)?.marketEvolutionPhase;
+  return `${environmentName(data?.environmentRouter?.currentEnvironment)} · ${evolution(phase)}：${marketChangeText(data)}`;
+}
 function marketChangeText(data:View|null){
   const n=data?.marketIntelligence?.narrative;
   if(!n)return"市场状态建立中。";
@@ -65,7 +70,7 @@ function positionWatch(t:Trade){
   if(plan==="FAMILY_TURN")return"观察相关币是否持续共同转向。";
   return t.positionIntelligence?.summary??"观察原入场理由是否仍成立。";
 }
-function Coin({symbol,side}:{symbol:string;side:string}){
+export function Coin({symbol,side}:{symbol:string;side:string}){
   const [base,quote]=(symbol??"").split("_");
   return <span className="oc-name"><b>{base}</b>{quote&&<small>/{quote}</small>}<i className={`oc-side ${side==="LONG"?"is-long":"is-short"}`}>{side==="LONG"?"多":"空"}</i></span>;
 }

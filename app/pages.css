@@ -131,4 +131,3 @@
 .pg-live .fr-section-head{margin:0 2px 10px}
 .pg-live .fr-section-head h2{font-size:16px;font-size:var(--fr-fs16,16px)}
 .pg-live .fr-section-head>span{font-size:13px;font-size:var(--fr-fs13,13px)}
-.fr-nav.fr-nav-five{grid-template-columns:repeat(5,minmax(0,1fr))}

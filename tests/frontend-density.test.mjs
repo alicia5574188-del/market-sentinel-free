@@ -62,6 +62,7 @@ function render(path,props,extra={},component="default"){
     "./equity-curve.tsx":{default:()=>jsxRuntime.jsx("div",{"data-testid":"curve-fixture"})},
     "./live-equity-curve.tsx":{default:props=>jsxRuntime.jsx('div',{'data-testid':'live-curve-fixture','data-session':props.sessionAt})},
     "./market-intelligence-execution.tsx":{default:()=>null},
+    "./living-panel.tsx":{default:()=>jsxRuntime.jsx("div",{"data-testid":"brain-fixture"})},
     "./run-log-status.tsx":{default:()=>jsxRuntime.jsx("div",{"data-testid":"run-log-status-fixture"})},
     ...extra
   };

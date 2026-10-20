@@ -7,6 +7,8 @@ import {type Trade,type forwardSummary} from "../lib/forward-relations.ts";
 import EquityCurve from "./equity-curve.tsx";
 import {EquityHistoryCache} from "../lib/equity-cache.ts";
 import MarketIntelligenceExecution from "./market-intelligence-execution.tsx";
+import LivingPanel from "./living-panel.tsx";
+import type {AuthSession} from "../lib/operator-ui.ts";
 import RunLogStatus from "./run-log-status.tsx";
 import PanelStamp from "./panel-stamp.tsx";
 import {readPanel,writePanel,type PanelEntry} from "../lib/panel-cache.ts";
@@ -73,15 +75,18 @@ const stanceName=(stance?:string)=>stance==="REVERSE"?"反向":stance==="FLAT"?"
 const sessionName=(session?:string)=>session==="ASIA"?"亚盘":session==="EUROPE"?"欧盘":session==="US"?"美盘":"—";
 const claimName=(kind?:string)=>kind==="CONTINUE"?"延续":kind==="SUSPECT"?"可疑":"不投票";
 
-export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,livePanel,liveSystemPanel,liveEnabled,liveOverview,accountPanel,brainPanel,memberName,cacheScope="owner"}:{
+export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,livePanel,liveSystemPanel,liveEnabled,liveOverview,accountPanel,brainAuth,memberName,cacheScope="owner"}:{
   data:View|null;healthy:boolean;statusLabel?:string;feedAt:number|null;error:string|null;livePanel:ReactNode;liveSystemPanel?:ReactNode;
   liveEnabled:boolean;liveOverview?:{equity:number|null;available:number|null;positionCount:number;operational:boolean;lastSyncAt:number|null;copied:number|null;eligible:number|null;missing:number|null;accountMark?:import('../lib/live-account-view.ts').LiveAccountMark|null;
     equityCurve?:import('../lib/live-equity.ts').LiveEquityHead|null;sessionAt?:number};
-  accountPanel?:ReactNode;brainPanel?:ReactNode;memberName?:string;cacheScope?:string;
+  accountPanel?:ReactNode;
+  /** Owner only: the 大脑 tab replaces 执行 as the home tab. */
+  brainAuth?:AuthSession|null;memberName?:string;cacheScope?:string;
 }){
   const [equityCache]=useState(()=>new EquityHistoryCache());
   useEffect(()=>()=>equityCache.cancel(),[equityCache]);
-  const [tab,setTab]=useState<Tab>("execution"),[now,setNow]=useState(0),[liveMounted,setLiveMounted]=useState(false);
+  const brainHome=!!brainAuth;
+  const [tab,setTab]=useState<Tab>(brainHome?"brain":"execution"),[now,setNow]=useState(0),[liveMounted,setLiveMounted]=useState(false);
   const [fontScale,setFontScale]=useState(()=>{if(typeof window==="undefined")return 92;try{const saved=Number(localStorage.getItem("sentinel-ui-font-scale-v1"));return saved>=70&&saved<=110?saved:92;}catch{return 92;}});
   const [exporting,setExporting]=useState(false),[exportStatus,setExportStatus]=useState<string|null>(null),[exportCount,setExportCount]=useState(0);
   const [historyShown,setHistoryShown]=useState(10);
@@ -126,14 +131,16 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   },[cacheScope,!!data,healthy,systemStatus,liveText,engine,storageOk,feedMinute]);
   const card:SystemSnap&{cached:boolean}=data||!systemSnap?{healthy,status:systemStatus,feedAt,live:liveText,engine,storageOk,cached:false}
     :{...systemSnap.value,cached:true};
-  const nav:[Tab,string,string][]=[["execution","◉","执行"],...(brainPanel?[["brain","◎","大脑"] as [Tab,string,string]]:[]),["paper","⇄","模拟"],["live","◈","实盘"],["settings","⊙","系统"]];
+  const nav:[Tab,string,string][]=[brainHome?["brain","◉","大脑"]:["execution","◉","执行"],["paper","⇄","模拟"],["live","◈","实盘"],["settings","⊙","系统"]];
   return <main className="fr-app" style={fontVars as CSSProperties} data-ui-version="market-intelligence-v1">
     <header className="fr-compact-header pg-head"><b>哨兵 · 市场智能系统</b><span>
       <i className={`pg-pill ${healthy?"is-ok":"is-warn"}`} role="status">{systemStatus}</i>
       <i className={`pg-pill ${liveEnabled?liveOverview?.operational?"is-ok":"is-warn":"is-off"}`}>实盘{liveText}</i>
       {memberName&&<i className="pg-pill is-plain">{memberName}</i>}</span></header>
 
-    {tab==="execution"&&<MarketIntelligenceExecution data={data} now={now} liveEnabled={liveEnabled} liveOverview={liveOverview}
+    {tab==="brain"&&brainHome&&<LivingPanel auth={brainAuth??null} scope={cacheScope} data={data} now={now} liveEnabled={liveEnabled} liveOverview={liveOverview}
+      healthy={healthy} systemStatus={systemStatus} feedAt={feedAt} floating={data?paperFloating:null} onOpenOrders={()=>select("paper")}/>}
+    {tab==="execution"&&!brainHome&&<MarketIntelligenceExecution data={data} now={now} liveEnabled={liveEnabled} liveOverview={liveOverview}
       healthy={healthy} systemStatus={systemStatus} feedAt={feedAt} floating={data?paperFloating:null} onOpenOrders={()=>select("paper")}/>}
 
     {tab==="paper"&&<div className="pg-paper">
@@ -177,10 +184,9 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
         <div className="fr-font-options">{[70,80,90,100,110].map(value=><button key={value} className={fontScale===value?"selected":""} onClick={()=>{setFontScale(value);try{localStorage.setItem("sentinel-ui-font-scale-v1",String(value));}catch{}}}>{value}%</button>)}</div></section>
     </div>}
 
-    {tab==="brain"&&brainPanel&&<div className="pg-brain">{brainPanel}</div>}
     {liveMounted&&<div className="fr-live-panel-host" hidden={tab!=="live"}>{livePanel}</div>}
     {(error||data?.storage.error)&&<aside className="fr-error" role="alert"><b>运行提示</b><p>{data?.storage.error??error}</p></aside>}
-    <nav className={nav.length===5?"fr-nav fr-nav-five":"fr-nav"}>{nav.map(([id,icon,label])=><button key={id} className={id===tab?"selected":""} onClick={()=>select(id)}><span>{icon}</span><b>{label}</b>{id==="paper"&&paperHeld>0&&<i>{paperHeld}</i>}{id==="live"&&liveHeld>0&&<i>{liveHeld}</i>}</button>)}</nav>
+    <nav className="fr-nav">{nav.map(([id,icon,label])=><button key={id} className={id===tab?"selected":""} onClick={()=>select(id)}><span>{icon}</span><b>{label}</b>{id==="paper"&&paperHeld>0&&<i>{paperHeld}</i>}{id==="live"&&liveHeld>0&&<i>{liveHeld}</i>}</button>)}</nav>
   </main>;
 }
 

@@ -1,6 +1,7 @@
 /** System-tab panel sources (all cheap Worker/DO/D1 reads; none of them calls Gate) and their cache keys. */
 import {operatorRequest,type CredentialStatus} from "./operator-ui.ts";
 import {persistableCredential,persistableMembers,prefetchPanel} from "./panel-cache.ts";
+import {prefetchBrain} from "./brain-view.ts";
 
 export const PANEL_KEYS={logStatus:"log-status",credential:"credential",members:"members",archivePlanSince:"archive-plan-since",systemStatus:"system-status"} as const;
 
@@ -24,4 +25,6 @@ export function prefetchSystemPanels(scope:string,owner:boolean){
   if(owner)prefetchPanel(scope,PANEL_KEYS.logStatus,fetchLogStatus,persistLogStatus);
   prefetchPanel(scope,PANEL_KEYS.credential,fetchCredential,persistCredential);
   if(owner)prefetchPanel<{invite?:unknown}>(scope,PANEL_KEYS.members,fetchMembers,persistMembers);
+  // the owner home tab (大脑): first open shows the read at once
+  if(owner&&scope==="owner")prefetchBrain(scope);
 }

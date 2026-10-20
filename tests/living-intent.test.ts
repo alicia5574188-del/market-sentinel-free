@@ -157,3 +157,10 @@ test("warm restart: 1m bars, flow and market history are saved in own keys (≤9
   for(let at=back;at<back+20*60_000;at+=10_000){feed(e,at);if(readyAt==null&&e.marketIntent&&e.marketIntent.state!=="WARMING")readyAt=at;}
   assert.ok(readyAt!=null&&readyAt-back<=2*60_000,`market read resumed after ${readyAt==null?"never":(readyAt-back)/1000+"s"}`);
 });
+test("brain status cache on the device keeps the read, never error text or raw log rows",async()=>{
+  const {persistBrain}=await import("../lib/brain-view.ts");
+  const kept=persistBrain({lastError:"secret-ish failure text",recent:[{k:"X"}],decisions:Array.from({length:50},(_,i)=>({k:"WATCH",at:i})),market:null} as never) as Record<string,unknown>;
+  const json=JSON.stringify(kept);
+  assert.equal(kept.lastError,null);assert.doesNotMatch(json,/secret-ish|"recent"/);assert.equal((kept.decisions as unknown[]).length,30);
+  assert.equal(persistBrain(null),null);
+});
