@@ -36,6 +36,10 @@ const EXIT_SHORT:Record<string,string>={
   PAPER_SOURCE_EXIT:"跟随模拟平仓",PAPER_PORTFOLIO_EXIT:"跟随模拟调仓",EXCHANGE_FLAT:"交易所已平",RISK_CAP_AFTER_FILL:"超出风险上限",
   PROTECTIVE_STOP_CREATE_FAILED:"止损没挂上",PROTECTIVE_STOP_CREATE_UNCONFIRMED:"止损未确认",LIQUIDATION:"爆仓",
   S1_TP:"止盈 6%",S1_SL:"止损",S1_TIME_6H:"满 6 小时",S1_TIME_24H:"满 24 小时",
+  LIVING_STOP:"止损",LIVING_FALLBACK_TIMEOUT:"兜底到时间",LIVING_GUARD_STOP:"碰到收紧保护",LIVING_FAST_EXHAUST:"异动力竭",LIVING_FAST_FAKE:"假动作",
+  LIVING_FAST_TIME:"10分钟没走出",LIVING_FAST_GIVEBACK:"利润回吐",LIVING_FAST_CONFIRM_EXIT:"异动确认平",LIVING_FAST_LIQ_GUARD:"离爆仓太近",
+  LIVING_INTENT_GONE:"资金反了",LIVING_INTENT_MARKET_FLIP:"市场转向",LIVING_INTENT_DONE:"目标兑现",LIVING_THESIS_TIMEOUT:"到计划时长",
+  LIVING_THESIS_FLIP:"判断反了",LIVING_THESIS_STRUCTURE:"结构破了",LIVING_THESIS_UNREWARDED:"不再给钱",
 };
 /** One plain sentence for "为什么平". Unknown codes fall back to the caller's existing label. */
 const EXIT_PLAIN:Record<string,string>={
@@ -59,6 +63,8 @@ const EXIT_PLAIN:Record<string,string>={
   S1_SL:"价格打到 S1 止损位，平仓。",
   S1_TIME_6H:"S1 反向单拿满 6 小时，到点平仓。",
   S1_TIME_24H:"S1 顺势单拿满 24 小时还没碰到止盈止损，到点平仓。",
+  LIVING_STOP:"价格打到这笔单的止损价（开仓时定的，或大脑收紧过的），平仓。",
+  LIVING_FALLBACK_TIMEOUT:"大脑暂停（出错、数据不新鲜或关闭）期间，这笔单拿满计划时长的 1.5 倍，按兜底规则平仓。",
 };
 /** Living-layer playbook names (same text as lib/living/thesis.ts PLAYBOOK_LABEL; a test keeps them in sync). */
 export const LIVING_PLAYBOOK_LABEL:Record<string,string>={"trend-pullback":"趋势回调","breakout":"突破延续","range-revert":"区间回归",

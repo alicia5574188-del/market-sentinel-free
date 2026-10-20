@@ -66,6 +66,7 @@ export const BRAIN_EXIT:Record<string,string>={
   LIVING_FAST_BREAKEVEN:"集体异动：拉到保本后被打到",LIVING_FAST_GIVEBACK:"顺势单利润回吐就走",LIVING_FAST_TIME:"快速跟进 10 分钟没走出来",
   LIVING_FAST_FAKE:"集体异动是假动作，平掉",LIVING_FAST_EXHAUST:"集体异动力竭，平掉",LIVING_THESIS_FLIP:"市场判断反了",LIVING_THESIS_STRUCTURE:"结构破了",
   LIVING_THESIS_BREAKEVEN:"保本后被打到",LIVING_THESIS_UNREWARDED:"这种做法市场不再给钱",
+  LIVING_STOP:"打到开仓止损价",LIVING_FALLBACK_TIMEOUT:"大脑暂停期间拿满计划时长 1.5 倍，兜底平掉",
 };
 export const bj=(ms:number|null|undefined)=>ms?new Date(ms+8*3_600_000).toISOString().slice(5,16).replace("T"," "):"—";
 export const pct=(v:number|null|undefined,d=2)=>v==null||!Number.isFinite(v)?"—":`${v>=0?"+":""}${(v*100).toFixed(d)}%`;

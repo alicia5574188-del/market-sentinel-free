@@ -140,6 +140,11 @@ test("living playbook labels on the page match the living layer's own labels",as
   for(const [k,v] of Object.entries(PLAYBOOK_LABEL))assert.equal(orderCardModule.exports.LIVING_PLAYBOOK_LABEL[k],v,k);
   assert.equal(orderCardModule.exports.livingPlaybookLabel("fast"),"集体异动快速跟进");
 });
+test("living exit reasons read in plain Chinese on the order card (no raw codes)",()=>{
+  const {exitShort,exitPlain}=orderCardModule.exports;
+  assert.equal(exitShort("LIVING_FAST_EXHAUST"),"异动力竭");assert.equal(exitShort("LIVING_STOP"),"止损");
+  assert.equal(exitShort("LIVING_FALLBACK_TIMEOUT"),"兜底到时间");assert.match(exitPlain("LIVING_FALLBACK_TIMEOUT"),/大脑暂停/);
+});
 
 test("missing account stays unknown and operational errors remain visible",()=>{
   const html=render("app/forward-dashboard.tsx",{...dashboardProps(null),healthy:false,error:"fixture storage unavailable"});

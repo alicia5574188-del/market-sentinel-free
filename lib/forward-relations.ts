@@ -191,6 +191,8 @@ export type Trade={
   inverseCopy?:InverseCopy;
   /** Living layer protection (fast-lane tighten / breakeven / thesis breakeven): a tighter stop with its reason. Absent unless the living layer set it. */
   livingGuard?:{stop:number;code:string;reason:string;at:number};
+  /** Last tick the living layer was driving this trade's exits (directive present with exits on). Living trades only. */
+  livingSeenAt?:number;
   /** Isolated-margin liquidation price fixed at open, and the maintenance rate used for it. */
   liquidationPrice?:number|null;maintenanceRate?:number|null;
   winnerManagement?:WinnerManagement;realization?:TradeRealization;
@@ -865,7 +867,8 @@ function manageTransitionTrade(s:ForwardState,t:Trade,q:Quote,now:number){
 }
 
 function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now:number,minutePaths:Record<string,Candle[]>|undefined,
-  marketEvolution:MarketEvolutionState,environmentOutlook:EnvironmentOutlook,paths?:Record<string,Candle[]>,contracts?:Record<string,Contract>){
+  marketEvolution:MarketEvolutionState,environmentOutlook:EnvironmentOutlook,paths?:Record<string,Candle[]>,contracts?:Record<string,Contract>,
+  livingDriving=false){
   const closed=new Set<string>();
   for(const t of [...s.positions,...(s.unopenedTrades??[]).filter(row=>row.status==="OPEN")]){
     if(t.inverseCopy||t.status!=="OPEN")continue;
@@ -875,6 +878,11 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
     if(liquidateIfHit(s,t,q!,now,contracts?.[t.symbol],minutePaths?.[t.symbol]?.at(-1))){closed.add(t.id);continue;}
     // 研究层收紧过的保护价（只有研究层设置过才存在）：在原来的出场之前先看。
     if(t.livingGuard&&livingGuardHit(s,t,q!,now,minutePaths?.[t.symbol]?.at(-1))){closed.add(t.id);continue;}
+    // 研究层开的单只听研究层：旧的出场（推不动了、保护位、回吐、节奏断等）一律不碰；这里只留止损、强平和大脑停摆时的兜底。
+    if(t.entryContext?.living){
+      if(manageLivingTrade(s,t,q!,now,minutePaths?.[t.symbol]?.at(-1),livingDriving))closed.add(t.id);
+      continue;
+    }
     // 只有带过渡出场的单才按空间止损和时间走。爆发段的单不带这套出场，继续走原来的结构止损和理由失效。
     if(t.entryContext?.transitionRule){
       if(manageTransitionTrade(s,t,q!,now))closed.add(t.id);
@@ -1853,6 +1861,33 @@ function applyLivingActions(s:ForwardState,living:LivingDirective,out:LivingResu
   // 研究层平掉的单必须当场从持仓里摘掉；留在持仓里会被后面的旧出场再平一次（重复记账）。
   if(closed.size)s.positions=s.positions.filter(t=>!closed.has(t.id));
 }
+/** Fallback hold limit when the living layer is not driving exits: the same 1.5x planned-hold rule the layer itself uses. */
+export const LIVING_FALLBACK_HOLD_MULTIPLE=1.5,LIVING_FALLBACK_GRACE_MS=120_000;
+/**
+ * A living-layer trade outside the living actions: mark it, then only hard safety.
+ * - its own stop (opening stop, or a living-tightened one; liquidation and the living guard are checked before this),
+ * - when the living layer has not been driving exits for 2+ minutes (fallback / stale / off / exits switched off):
+ *   close once the trade is 1.5x its planned hold old (LIVING_FALLBACK_TIMEOUT), so nothing is left orphaned.
+ * No legacy discretionary exit and no legacy stop moves.
+ */
+function manageLivingTrade(s:ForwardState,t:Trade,q:Quote,now:number,bar:Candle|undefined,driving:boolean){
+  const px=t.side==="LONG"?q.bestBid:q.bestAsk,d=dir(t.side),signed=d*(px/t.entryPrice-1),prior=t.lastPrice;
+  t.lastPrice=px;t.lastQuoteAt=q.observedAt;t.favorable=Math.max(t.favorable,Math.max(0,signed));t.adverse=Math.max(t.adverse,Math.max(0,-signed));
+  t.peakPnlRate=Math.max(t.peakPnlRate??0,t.favorable);
+  if(!t.firstProfitAt&&signed>ROUND_TRIP_COST)t.firstProfitAt=now;
+  if(driving)t.livingSeenAt=now;
+  if(t.stopPrice>0&&d*(px-t.stopPrice)<=0){
+    closeTrade(s,t,executableProtectionFill(t.side,t.stopPrice,px,prior,bar),now,"LIVING_STOP",{authority:"PRICE_STOP",stopPrice:t.stopPrice,quote:px,quoteAt:q.observedAt});
+    return true;
+  }
+  const hold=t.entryContext?.living?.hold,holdMin=typeof hold==="number"&&hold>0?hold:30;
+  if(!driving&&now-(t.livingSeenAt??t.openedAt)>=LIVING_FALLBACK_GRACE_MS&&now-t.openedAt>=LIVING_FALLBACK_HOLD_MULTIPLE*holdMin*60_000){
+    closeTrade(s,t,px,now,"LIVING_FALLBACK_TIMEOUT",{authority:"LIVING_FALLBACK",holdMin,ageMin:Math.round((now-t.openedAt)/60_000),
+      lastDrivenAt:t.livingSeenAt??null,quoteAt:q.observedAt});
+    return true;
+  }
+  return false;
+}
 /** Opens one paper trade decided by the living layer. Existing total/side/margin/5-minute caps apply (expansion fixed 5x). */
 function openLivingTrade(s:ForwardState,o:LivingOrder,living:LivingDirective,q:Quote|undefined,contract:Contract|undefined,now:number,equity:number,
   minutePath?:Candle[]):string|{tradeId:string;symbol:string;side:"LONG"|"SHORT";risk:number;notional:number}{
@@ -2015,7 +2050,8 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
   const livingResult:LivingResult|undefined=input.living?{opened:[],rejected:[],applied:[]}:undefined;
   // Living exits/protections come first (after liquidation, which applyLivingActions checks itself), then the existing exit stack.
   if(input.living&&livingResult)applyLivingActions(s,input.living,livingResult,input.quotes,input.now,input.minutePaths,input.contracts);
-  manageIntelligenceTrades(s,input.quotes,input.now,input.minutePaths,marketEvolution,environmentOutlook,input.paths,input.contracts);
+  manageIntelligenceTrades(s,input.quotes,input.now,input.minutePaths,marketEvolution,environmentOutlook,input.paths,input.contracts,
+    !!input.living&&input.living.items.thesisExit!==false);
   // Positions opened before cutover keep their frozen lifecycle and cannot gain
   // new-entry authority from the retired relation/region/interrupt stack.
   markAndManage(s,input.quotes,input.now);
