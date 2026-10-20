@@ -13,7 +13,7 @@
  */
 import {FAST,STEPS,SIZING,LIVING_CONFIG_KEY,LIVING_KEY_PREFIX,LIVING_MAX_VALUE_BYTES,LIVING_ITEM_LABELS,LIVING_RULE_EPOCH,
   type LivingConfig,type LivingItems,normalizeLivingConfig,effectiveLiving,withFallback,LIVING_ITEMS} from "./config.ts";
-import {LivingTape,BAR_PAGES,BAR_PAGE_PREFIX,selectBasket,basketDue,pruneBasket,type Basket,type TapePoint,type MidBar} from "./tape.ts";
+import {LivingTape,BAR_PAGES,BAR_PAGE_PREFIX,M1_PAGES,M1_PAGE_PREFIX,selectBasket,basketDue,pruneBasket,type Basket,type TapePoint,type MidBar} from "./tape.ts";
 import {stepFast,initialFast,normalizeFast,fastFollowBlocked,matureRecords,fastMultiple,weeklyAdjust,noteMissed,bucketOf,
   type FastState,type EpisodeRecord,type FastEvent,type Episode} from "./fast-lane.ts";
 import {detectProbes,registerObservations,matureObservations,allScores,noteSeries,fitProbes,initialProbes,normalizeProbes,
@@ -33,13 +33,17 @@ import {bytesOf,r6,r4,corr} from "./util.ts";
 
 export const LIVING_KEYS={config:LIVING_CONFIG_KEY,basket:`${LIVING_KEY_PREFIX}basket`,fast:`${LIVING_KEY_PREFIX}fast`,
   episodes:`${LIVING_KEY_PREFIX}episodes`,probes:`${LIVING_KEY_PREFIX}probes`,thesis:`${LIVING_KEY_PREFIX}thesis`,
-  select:`${LIVING_KEY_PREFIX}select`,trades:`${LIVING_KEY_PREFIX}trades`,logIndex:`${LIVING_KEY_PREFIX}log:index`} as const;
+  select:`${LIVING_KEY_PREFIX}select`,trades:`${LIVING_KEY_PREFIX}trades`,logIndex:`${LIVING_KEY_PREFIX}log:index`,
+  intent:`${LIVING_KEY_PREFIX}intent`} as const;
 export const LOG_PAGE_PREFIX=`${LIVING_KEY_PREFIX}log:`;
 export const LOG_PAGES_KEPT=30;
 const LOG_PAGE_BYTES=LIVING_MAX_VALUE_BYTES-2048;
 /** Own daily write budget (rows), well inside the shared 100k optional guard. */
 export const LIVING_WRITES_PER_DAY=4_000;
 const HOT_EVERY_MS=120_000,HEAVY_EVERY_MS=15*60_000,BARS_EVERY_MS=60*60_000;
+/** Warm-restart cadence: recent 1m bars, flow pages and the market-read history (so a deploy resumes in ~1-2 minutes, not 15-60). */
+const WARM_EVERY_MS=10*60_000,FAST_BASELINE_EVERY_MS=6*60_000;
+const INTENT_HIST_BYTES=72_000;
 const STALE_MS=30_000; // spec C8: quotes older than 30s → compute-only for 1h
 
 /** Minimal views of the forward core the engine reads (no runtime import of forward-relations). */
@@ -80,7 +84,9 @@ export class LivingEngine{
   loaded=false;
   lastError:string|null=null;
   private dirty=new Set<string>();
-  private lastHot=0;private lastHeavy=0;private lastBars=0;
+  private lastHot=0;private lastHeavy=0;private lastBars=0;private lastWarm=0;private lastFastWrite=0;private lastIndexSig="";
+  /** Market read from before a restart: shown until the first fresh read, never used to trade. */
+  restoredMarket:MarketIntent|null=null;loadedAt=0;
   writesToday={day:"",n:0};
   lastPlanAt=0;lastPlanMs=0;maxPlanMs=0;lastHubMs=0;
   // v2 intent layer
@@ -97,7 +103,7 @@ export class LivingEngine{
 
   /** Keys to read at start (one batched get). */
   static loadKeys(){return[...Object.values(LIVING_KEYS),...Array.from({length:BAR_PAGES},(_,i)=>`${BAR_PAGE_PREFIX}${i}`),
-    ...Array.from({length:FLOW_PAGES},(_,i)=>`${FLOW_PAGE_PREFIX}${i}`)];}
+    ...Array.from({length:FLOW_PAGES},(_,i)=>`${FLOW_PAGE_PREFIX}${i}`),...Array.from({length:M1_PAGES},(_,i)=>`${M1_PAGE_PREFIX}${i}`)];}
   restore(values:Map<string,unknown>,now:number,logPage?:unknown){
     this.config=normalizeLivingConfig(values.get(LIVING_KEYS.config),now);
     const b=values.get(LIVING_KEYS.basket) as Basket|undefined;this.basket=b&&Array.isArray(b.members)?b:null;
@@ -116,8 +122,16 @@ export class LivingEngine{
     const lp=logPage as {rows?:LogRow[]}|undefined;this.log=Array.isArray(lp?.rows)?lp!.rows!:[];
     this.tape.restore(Array.from({length:BAR_PAGES},(_,i)=>values.get(`${BAR_PAGE_PREFIX}${i}`)).filter(Boolean));
     this.flow.restore(Array.from({length:FLOW_PAGES},(_,i)=>values.get(`${FLOW_PAGE_PREFIX}${i}`)).filter(Boolean));
-    this.loaded=true;
-    this.note(now,"RESTART",{bars:this.tape.m5.size,episodes:this.episodes.length,watches:this.trades.watches.length});
+    const m1=this.tape.restore1(Array.from({length:M1_PAGES},(_,i)=>values.get(`${M1_PAGE_PREFIX}${i}`)).filter(Boolean),now);
+    const iv=values.get(LIVING_KEYS.intent) as {v?:number;hist?:MarketIntent[];decisions?:LogRow[]}|undefined;
+    if(iv?.v===1){
+      this.marketHist=(Array.isArray(iv.hist)?iv.hist:[]).filter(x=>x&&typeof x.at==="number"&&now-x.at<=90*60_000&&x.at<=now);
+      this.decisions=Array.isArray(iv.decisions)?iv.decisions.slice(-60):[];
+      const last=this.marketHist.at(-1);this.restoredMarket=last&&now-last.at<=20*60_000?last:null;
+    }
+    this.lastIndexSig=JSON.stringify({seq:this.logSeq,pages:this.logPages});
+    this.loaded=true;this.loadedAt=now;
+    this.note(now,"RESTART",{bars:this.tape.m5.size,bars1m:m1,flow:this.flow.m1.size,hist:this.marketHist.length,episodes:this.episodes.length,watches:this.trades.watches.length});
   }
   effective(now:number){return effectiveLiving(this.config,now);}
   setConfig(next:Partial<Pick<LivingConfig,"mode"|"items">>,now:number){
@@ -169,7 +183,7 @@ export class LivingEngine{
       }
       if(r.ended){this.episodes.push(r.ended);if(this.episodes.length>200)this.episodes.splice(0,this.episodes.length-200);
         this.trades.lastEnd={id:r.ended.id,end:r.ended.end,at:now};this.dirty.add(LIVING_KEYS.episodes);}
-      if(r.events.length)this.dirty.add(LIVING_KEYS.fast);
+      if(r.events.length){this.dirty.add(LIVING_KEYS.fast);this.dirty.add("fastNow");}
       if(this.trades.pendingEvents.length>40)this.trades.pendingEvents.splice(0,this.trades.pendingEvents.length-40);
       if(now-this.trades.lastMinuteAt>=60_000){
         this.trades.lastMinuteAt=now;
@@ -208,7 +222,7 @@ export class LivingEngine{
     }
     for(const s of [...this.coins.keys()])if(!syms.includes(s))this.coins.delete(s);
     const m=readMarket(basketReads,this.coins.get("BTC_USDT")??null,this.coins.get("ETH_USDT")??null,now,this.marketHist);
-    const prev=this.marketIntent;this.marketIntent=m;this.marketHist.push(m);while(this.marketHist.length&&now-this.marketHist[0]!.at>90*60_000)this.marketHist.shift();
+    const prev=this.marketIntent??this.restoredMarket;this.marketIntent=m;this.restoredMarket=null;this.dirty.add(LIVING_KEYS.intent);this.marketHist.push(m);while(this.marketHist.length&&now-this.marketHist[0]!.at>90*60_000)this.marketHist.shift();
     if(!prev||prev.state!==m.state||prev.side!==m.side)this.note(now,"INTENT_MARKET",{state:m.state,side:m.side,conf:m.confidence,sentence:m.sentence.slice(0,200),
       oi15:m.ev.oi15,p15:m.ev.p15,funding:m.ev.funding,breadth:m.ev.breadth});
   }
@@ -556,6 +570,14 @@ export class LivingEngine{
     }catch(error){this.lastError=String((error as Error)?.message??error).slice(0,200);this.fallback(now,`研究层记录出错：${this.lastError}`);}
   }
 
+  /** Market-read history (≤ 90 min) + recent decisions for the brain page, trimmed to fit one key. */
+  private fitIntent(){
+    let hist=this.marketHist.slice(-90);const decisions=this.decisions.slice(-60);
+    let v={v:1 as const,hist,decisions};
+    while(bytesOf(v)>INTENT_HIST_BYTES&&hist.length>5){hist=hist.slice(Math.ceil(hist.length*.2));v={v:1,hist,decisions};}
+    if(bytesOf(v)>INTENT_HIST_BYTES)v={v:1,hist,decisions:decisions.slice(-20)};
+    return v;
+  }
   // ------------------------------------------------------------------ persistence
   /** Dirty own keys due now, each ≤ 96KB. Returns {} when nothing is due or the own daily budget is used. */
   writes(now:number,force=false):Record<string,unknown>{
@@ -564,13 +586,15 @@ export class LivingEngine{
     if(this.dirty.has(LIVING_KEYS.config)){out[LIVING_KEYS.config]=this.config;}
     const hot=force||now-this.lastHot>=HOT_EVERY_MS,heavy=force||now-this.lastHeavy>=HEAVY_EVERY_MS,barsDue=force||now-this.lastBars>=BARS_EVERY_MS;
     if(hot){
-      if(this.dirty.has(LIVING_KEYS.fast))out[LIVING_KEYS.fast]=this.fast;
+      // the strength baseline moves every 30s; an event (alert/confirm/end) is written at once, the baseline every 6 minutes
+      if(this.dirty.has(LIVING_KEYS.fast)&&(force||this.dirty.has("fastNow")||now-this.lastFastWrite>=FAST_BASELINE_EVERY_MS))out[LIVING_KEYS.fast]=this.fast;
       if(this.dirty.has(LIVING_KEYS.trades))out[LIVING_KEYS.trades]=this.fitTrades();
       if(this.dirty.has("log")||this.sealed.length){
         for(const p of this.sealed)out[`${LOG_PAGE_PREFIX}${p.seq}`]={v:1,seq:p.seq,rows:p.rows};
         out[`${LOG_PAGE_PREFIX}${this.logSeq}`]={v:1,seq:this.logSeq,rows:this.log};
         const pages=[...new Set([...this.logPages,this.logSeq])].slice(-LOG_PAGES_KEPT);
-        out[LIVING_KEYS.logIndex]={v:1,seq:this.logSeq,pages};
+        // the index only names pages: rewrite it only when the page set changed (the current page itself is written every time)
+        if(force||this.sealed.length||JSON.stringify({seq:this.logSeq,pages})!==this.lastIndexSig)out[LIVING_KEYS.logIndex]={v:1,seq:this.logSeq,pages};
       }
     }
     if(heavy){
@@ -579,7 +603,13 @@ export class LivingEngine{
       if(this.dirty.has(LIVING_KEYS.probes))out[LIVING_KEYS.probes]=fitProbes(this.probes);
       if(this.dirty.has(LIVING_KEYS.thesis))out[LIVING_KEYS.thesis]=this.fitThesis();
       if(this.dirty.has(LIVING_KEYS.select))out[LIVING_KEYS.select]=this.fitSelect();
-      if(this.flow.m1.size&&this.basket)Object.assign(out,this.flow.pages([...this.basket.members,"BTC_USDT","ETH_USDT"]));
+    }
+    const warm=force||now-this.lastWarm>=WARM_EVERY_MS;
+    if(warm&&this.basket){
+      const syms=[...new Set([...this.basket.members,"BTC_USDT","ETH_USDT",...this.trades.watches.map(w=>w.symbol),...this.coins.keys()])];
+      if(this.flow.m1.size)Object.assign(out,this.flow.pages(syms));
+      if(this.tape.m1.size)Object.assign(out,this.tape.pages1(syms));
+      if(this.dirty.has(LIVING_KEYS.intent)&&this.marketHist.length)out[LIVING_KEYS.intent]=this.fitIntent();
     }
     if(barsDue&&this.tape.m5.size)Object.assign(out,this.tape.pages());
     const n=Object.keys(out).length;
@@ -596,10 +626,13 @@ export class LivingEngine{
   committed(keys:string[],now:number){
     this.writesToday.n+=keys.length;
     for(const k of keys){this.dirty.delete(k);if(k.startsWith(LOG_PAGE_PREFIX)&&k!==LIVING_KEYS.logIndex){const seq=Number(k.slice(LOG_PAGE_PREFIX.length));this.sealed=this.sealed.filter(p=>p.seq!==seq);}}
-    if(keys.includes(LIVING_KEYS.logIndex))this.dirty.delete("log");
+    if(keys.includes(LIVING_KEYS.logIndex)||keys.includes(`${LOG_PAGE_PREFIX}${this.logSeq}`))this.dirty.delete("log");
     if(keys.some(k=>k===LIVING_KEYS.fast||k===LIVING_KEYS.trades||k.startsWith(LOG_PAGE_PREFIX)))this.lastHot=now;
-    if(keys.some(k=>k===LIVING_KEYS.probes||k===LIVING_KEYS.thesis||k===LIVING_KEYS.select||k===LIVING_KEYS.episodes||k===LIVING_KEYS.basket||k.startsWith(FLOW_PAGE_PREFIX)))this.lastHeavy=now;
+    if(keys.some(k=>k===LIVING_KEYS.probes||k===LIVING_KEYS.thesis||k===LIVING_KEYS.select||k===LIVING_KEYS.episodes||k===LIVING_KEYS.basket))this.lastHeavy=now;
     if(keys.some(k=>k.startsWith(BAR_PAGE_PREFIX)))this.lastBars=now;
+    if(keys.includes(LIVING_KEYS.fast)){this.lastFastWrite=now;this.dirty.delete("fastNow");}
+    if(keys.some(k=>k.startsWith(M1_PAGE_PREFIX)||k.startsWith(FLOW_PAGE_PREFIX)||k===LIVING_KEYS.intent))this.lastWarm=now;
+    if(keys.includes(LIVING_KEYS.logIndex))this.lastIndexSig=JSON.stringify({seq:this.logSeq,pages:[...new Set([...this.logPages,this.logSeq])].slice(-LOG_PAGES_KEPT)});
   }
   /** Old log pages beyond the kept window (to delete). */
   expiredLogKeys(){const keep=new Set([...this.logPages,this.logSeq].slice(-LOG_PAGES_KEPT));return this.logPages.filter(p=>!keep.has(p)).map(p=>`${LOG_PAGE_PREFIX}${p}`);}
@@ -618,7 +651,7 @@ export class LivingEngine{
 
   // ------------------------------------------------------------------ views
   status(now:number,forward?:ForwardView){
-    const eff=this.effective(now),scores=allScores(this.probes,now,this.thesis.current?.dirTag),m=this.marketIntent;
+    const eff=this.effective(now),scores=allScores(this.probes,now,this.thesis.current?.dirTag),m=this.marketIntent??this.restoredMarket;
     const board=[...this.coins.values()].filter(c=>c.symbol!=="BTC_USDT"&&c.symbol!=="ETH_USDT")
       .sort((x,y)=>(y.action?1:0)-(x.action?1:0)||y.strength-x.strength).slice(0,14)
       .map(c=>({symbol:c.symbol,capital:c.capital,emotion:c.emotion,crowd:c.crowd,strength:c.strength,why:c.why,
@@ -634,7 +667,7 @@ export class LivingEngine{
     const eps=this.episodes.slice(-50);
     return {version:LIVING_RULE_EPOCH,mode:eff.mode,configured:eff.configured,acting:eff.acting,fallback:eff.fallback,
       items:LIVING_ITEMS.map(k=>({key:k,label:LIVING_ITEM_LABELS[k],on:eff.items[k]})),epochStartedAt:this.config.epochStartedAt,
-      market:m?{state:m.state,side:m.side,confidence:m.confidence,sentence:m.sentence,at:m.at,lead:m.lead,ev:m.ev,
+      market:m?{state:m.state,side:m.side,confidence:m.confidence,sentence:m.sentence,at:m.at,lead:m.lead,ev:m.ev,restored:!this.marketIntent,
         allowed:m.allowed.map(a=>({pb:a.pb,label:PLAYBOOK_LABEL[a.pb],side:a.side}))}:null,
       marketTimeline:this.marketHist.filter((x,i,a)=>i===0||a[i-1]!.state!==x.state||a[i-1]!.side!==x.side).slice(-12).map(x=>({at:x.at,state:x.state,side:x.side,sentence:x.sentence.slice(0,120)})),
       board,positions,
@@ -652,7 +685,7 @@ export class LivingEngine{
           follow30:eps.filter(e=>e.follow30Net!=null).map(e=>e.follow30Net!)},
         intentReads:this.intentCounts},
       decisions:this.decisions.slice(-30).reverse(),
-      basket:this.basket?.members.length??0,tapeSymbols:this.tape.symbols().length,flowSymbols:this.flow.m1.size,lastFeedAt:this.tape.lastFeedAt,flowAt:this.flow.lastAt,
+      loadedAt:this.loadedAt,basket:this.basket?.members.length??0,tapeSymbols:this.tape.symbols().length,flowSymbols:this.flow.m1.size,lastFeedAt:this.tape.lastFeedAt,flowAt:this.flow.lastAt,
       cpu:{planMs:this.lastPlanMs,maxPlanMs:Math.round(this.maxPlanMs),hubMs:this.lastHubMs},writesToday:this.writesToday.n,lastError:this.lastError,
       recent:this.log.slice(-12)};
   }

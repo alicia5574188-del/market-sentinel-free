@@ -128,3 +128,32 @@ test("fast lane: a burst with no money behind it raises SURGE (no episode, prote
   assert.ok(ok.events.some(e=>e.type==="ALERT"&&e.detail.flow==="NEW_POSITIONS"));assert.ok(ok.events.some(e=>e.type==="CONFIRM"));
   assert.ok(!ok.events.some(e=>e.type==="SURGE"));
 });
+test("warm restart: 1m bars, flow and market history are saved in own keys (≤96KB) and the market read resumes in ~1 minute",async()=>{
+  const {LivingEngine,LIVING_KEYS}=await import("../lib/living/engine.ts");
+  const {defaultLivingConfig}=await import("../lib/living/config.ts");
+  const t0=Math.floor(NOW/60_000)*60_000-3*3_600_000,syms=Array.from({length:60},(_,i)=>`W${i}_USDT`);
+  const store=new Map<string,unknown>();let indexWrites=0;
+  const cfg={...defaultLivingConfig(t0),mode:"compute-only" as const};
+  const mk=(at:number,vals:Map<string,unknown>)=>{const e=new LivingEngine(at);e.restore(vals,at);return e;};
+  const feed=(e:InstanceType<typeof LivingEngine>,at:number)=>{
+    const pts=syms.map((s,i)=>({symbol:s,mid:100+i+Math.sin(at/7e5+i)*2,at,volume24hUsd:5e8-i*1e6,sources:3,spread:.0002}));
+    e.onHub([...pts,{symbol:"BTC_USDT",mid:60000+Math.sin(at/7e5)*300,at,volume24hUsd:5e9,sources:3},{symbol:"ETH_USDT",mid:3000+Math.sin(at/7e5)*20,at,volume24hUsd:3e9,sources:3}],at,()=>true,
+      syms.map((s,i)=>({symbol:s,at,oi:1e6*(1+.0001*((at-t0)/60_000))+i,funding:.0001,basis:.0002,taker:.05,turnover:null})));
+  };
+  let e=mk(t0,new Map([[LIVING_KEYS.config,cfg]]));
+  const end=t0+2*3_600_000;
+  for(let at=t0;at<end;at+=10_000){feed(e,at);const w=e.writes(at);const keys=Object.keys(w);
+    for(const k of keys){store.set(k,w[k]);if(k===LIVING_KEYS.logIndex)indexWrites++;}if(keys.length)e.committed(keys,at);}
+  assert.ok(e.marketIntent&&e.marketIntent.state!=="WARMING",`warmed before restart (${e.marketIntent?.state})`);
+  for(const [k,v] of store){assert.ok(k.startsWith("living:v1:"),k);assert.ok(bytesOf(v)<=LIVING_MAX_VALUE_BYTES,`${k} ${bytesOf(v)}`);}
+  assert.ok([...store.keys()].some(k=>k.startsWith("living:v1:bars1m:")),"1m pages saved");assert.ok(store.has(LIVING_KEYS.intent),"market history saved");
+  assert.ok(indexWrites<10,`log index only rewritten when the page set changes (${indexWrites})`);
+  // restart after 60s: fresh engine from the saved keys only
+  const back=end+60_000,vals=new Map<string,unknown>();for(const k of LivingEngine.loadKeys())if(store.has(k))vals.set(k,store.get(k));
+  e=mk(back,vals);
+  assert.ok(e.status(back).market,"the last read is shown (marked restored) until the first fresh read");
+  assert.equal(e.status(back).market!.restored,true);
+  let readyAt:number|null=null;
+  for(let at=back;at<back+20*60_000;at+=10_000){feed(e,at);if(readyAt==null&&e.marketIntent&&e.marketIntent.state!=="WARMING")readyAt=at;}
+  assert.ok(readyAt!=null&&readyAt-back<=2*60_000,`market read resumed after ${readyAt==null?"never":(readyAt-back)/1000+"s"}`);
+});

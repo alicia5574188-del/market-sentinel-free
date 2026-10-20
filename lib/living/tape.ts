@@ -14,6 +14,10 @@ const RING=Math.ceil(FAST.ringMs/1_000)+16;// one slot per second at most
 const KEEP_1M=26*60,KEEP_5M=26*12;
 export const BAR_PAGE_PREFIX=`${LIVING_KEY_PREFIX}bars5m:`;
 export const BAR_PAGES=6;
+/** 1m bars of the last M1_PAGE_MIN minutes (basket + majors + followed coins) so a restart resumes the intent read at once. */
+export const M1_PAGE_PREFIX=`${LIVING_KEY_PREFIX}bars1m:`;
+export const M1_PAGES=3;
+export const M1_PAGE_MIN=75;
 
 class Ring{t=new Float64Array(RING);p=new Float64Array(RING);n=0;head=0;
   push(at:number,mid:number){
@@ -90,6 +94,35 @@ export class LivingTape{
     }
     return out;
   }
+  /** Own-key pages of recent 1m bars (newest M1_PAGE_MIN minutes), symbols split across M1_PAGES keys, each ≤ 96KB. */
+  pages1(symbols:string[]):Record<string,unknown>{
+    const syms=[...new Set(symbols)].filter(s=>this.m1.has(s)).sort(),out:Record<string,unknown>={};
+    for(let p=0;p<M1_PAGES;p++){
+      const part=syms.filter((_,i)=>i%M1_PAGES===p);let keep=M1_PAGE_MIN;
+      const build=()=>{const value:{v:1;step:60;s:Record<string,[number,number,number[]]>}={v:1,step:60,s:{}};
+        for(const s of part){const rows=this.m1.get(s)!.slice(-keep);if(rows.length)value.s[s]=encodeBars(rows,60);}return value;};
+      let value=build();
+      while(bytesOf(value)>LIVING_MAX_VALUE_BYTES-512&&keep>15){keep=Math.floor(keep*.85);value=build();}
+      out[`${M1_PAGE_PREFIX}${p}`]=value;
+    }
+    return out;
+  }
+  /** Restart: merge saved 1m bars (never over live ones), then rebuild the 5m bars the hourly 5m pages did not have yet. */
+  restore1(values:unknown[],now:number){
+    let n=0;
+    for(const v of values){const page=v as {v?:number;step?:number;s?:Record<string,[number,number,number[]]>}|undefined;if(page?.v!==1||page.step!==60||!page.s)continue;
+      for(const [s,enc] of Object.entries(page.s)){
+        const rows=decodeBars(enc,60).filter(r=>(r.time+60)*1000<=now);if(!rows.length)continue;
+        const own=this.m1.get(s)??[],first=own[0]?.time??Infinity,add=rows.filter(r=>r.time<first);
+        this.m1.set(s,[...add,...own].slice(-KEEP_1M));n++;
+        const m5=this.m5.get(s)??[],last5=m5.at(-1)?.time??-Infinity,built:MidBar[]=[];
+        for(const r of add){const t=Math.floor(r.time/300)*300;if(t<=last5)continue;const b=built.at(-1);
+          if(b&&b.time===t){b.high=Math.max(b.high,r.high);b.low=Math.min(b.low,r.low);b.close=r.close;}else built.push({time:t,open:r.open,high:r.high,low:r.low,close:r.close});}
+        if(built.length)this.m5.set(s,[...m5,...built].slice(-KEEP_5M));
+      }
+    }
+    return n;
+  }
   restore(values:unknown[]){
     let n=0;
     for(const v of values){const page=v as {v?:number;s?:Record<string,[number,number,number[]]>}|undefined;if(page?.v!==1||!page.s)continue;
@@ -98,23 +131,23 @@ export class LivingTape{
   }
 }
 /** [firstTime, p0, flat int deltas o,h,l,c vs previous close in 1e-5 of p0]. Bars are contiguous 5m with gaps encoded by time jumps. */
-export function encodeBars(rows:MidBar[]):[number,number,number[]]{
+export function encodeBars(rows:MidBar[],step=300):[number,number,number[]]{
   const p0=rows[0]!.open,d:number[]=[];let prev=p0,t=rows[0]!.time;
   for(const r of rows){
-    const gap=Math.round((r.time-t)/300);if(gap>0)d.push(1e9+gap);// gap marker
-    t=r.time+300;
+    const gap=Math.round((r.time-t)/step);if(gap>0)d.push(1e9+gap);// gap marker
+    t=r.time+step;
     const q=(x:number)=>Math.round((x-prev)/p0*1e5);
     d.push(q(r.open),q(r.high),q(r.low),q(r.close));prev=prev+q(r.close)*p0/1e5;
   }
   return [rows[0]!.time,p0,d];
 }
-export function decodeBars([time,p0,d]:[number,number,number[]]):MidBar[]{
+export function decodeBars([time,p0,d]:[number,number,number[]],step=300):MidBar[]{
   const out:MidBar[]=[];let prev=p0,t=time;
   for(let i=0;i<d.length;){
-    if(d[i]!>=1e9){t+=(d[i]!-1e9)*300;i++;continue;}
+    if(d[i]!>=1e9){t+=(d[i]!-1e9)*step;i++;continue;}
     if(i+3>=d.length)break;
     const at=(q:number)=>prev+q*p0/1e5,o=at(d[i]!),h=at(d[i+1]!),l=at(d[i+2]!),c=at(d[i+3]!);
-    out.push({time:t,open:o,high:Math.max(h,o,c),low:Math.min(l,o,c),close:c});prev=c;t+=300;i+=4;
+    out.push({time:t,open:o,high:Math.max(h,o,c),low:Math.min(l,o,c),close:c});prev=c;t+=step;i+=4;
   }
   return out;
 }
