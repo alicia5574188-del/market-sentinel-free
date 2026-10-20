@@ -24,6 +24,13 @@ runInNewContext(`(function(require,module,exports){${paidSource}\n})`,{})(name=>
   if(name==='./inverse-fee.ts')return inverseFee;
   throw new Error(`pure view imported ${name}`);
 },paidModule,paidModule.exports);
+// The real paper-account selector (which book the page shows and its floating P&L).
+const paperAccountModule={exports:{}};
+const paperAccountSource=ts.transpileModule(read("lib/paper-account-view.ts"),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
+runInNewContext(`(function(require,module,exports){${paperAccountSource}\n})`,{Set,Number})(name=>{
+  if(name==='./paid-fee-view.ts')return paidModule.exports;
+  throw new Error(`paper account view imported ${name}`);
+},paperAccountModule,paperAccountModule.exports);
 // The shared order card is a pure presentation module; load the real one, not a fixture.
 const orderCardModule={exports:{}};
 const orderCardSource=ts.transpileModule(read("app/order-card.tsx"),{fileName:"app/order-card.tsx",compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;
@@ -50,6 +57,7 @@ function render(path,props,extra={},component="default"){
     react:{...React,useState(initial){return React.useState(initial==="execution"?"paper":initial);}},"react/jsx-runtime":jsxRuntime,
     "../lib/trade-realization.ts":realizationModule.exports,
     "../lib/paid-fee-view.ts":paidModule.exports,
+    "../lib/paper-account-view.ts":paperAccountModule.exports,
     "../lib/research-snapshot.ts":{collectReviewSnapshot(){throw new Error("render must not export");}},
     "../lib/beijing-time.ts":{BEIJING_TIME_ZONE:"Asia/Shanghai",beijingDayKey:()=>"2026-09-30"},
     "../lib/equity-cache.ts":{EquityHistoryCache:class{cancel(){}}},
@@ -98,6 +106,21 @@ test("paper floating display deducts paid entry fees only and leaves future exit
   const html=render("app/forward-dashboard.tsx",dashboardProps(data));
   assert.match(html,/<small>浮动盈亏<\/small><strong>\+0\.93 U<\/strong>/);
   assert.doesNotMatch(html,/<small>浮动盈亏<\/small><strong>\+123\.45 U<\/strong>/);
+});
+
+test("dead reverse desk does not hide living-layer positions: paper page shows the account and its real floating",()=>{
+  const pos=(id,symbol,side,entry,last,qty,fee)=>({id,status:"OPEN",symbol,side,entryPrice:entry,lastPrice:last,quantity:qty,notional:entry*qty,entryFee:fee,
+    leverage:10,margin:entry*qty/10,plannedRisk:1,openedAt:1790760000000,closedAt:null,exitPrice:null,netPnl:null,stopPrice:null,
+    favorable:0,adverse:0,profitFloorRate:0,expectedHoldMinutes:30,entryContext:null,holdScore:80});
+  const data={...account(),equity:1014.2,netPnl:14.2,positions:[pos("o","ONDO_USDT","LONG",1,.9995,2000,.33),pos("z","ZRO_USDT","SHORT",2,2.004,600,1.86)],
+    forwardDesk:{stance:"REVERSE",book:"reverse-v1",equity:1000,initialEquity:1000,netPnl:0,maxDrawdown:0,fees:0,floating:0,stale:false,openCount:0,resolved:0,wins:0,
+      open:[],recent:[],curve:[],study:{},research:{}}};
+  const html=render("app/forward-dashboard.tsx",dashboardProps(data));
+  assert.match(html,/模拟账户权益/);assert.doesNotMatch(html,/反向权益/);
+  assert.match(html,/<strong>1,014\.20<\/strong>/);
+  // ONDO 2000*(−0.0005)−0.33 = −1.33 ; ZRO −600*0.004−1.86 = −4.26 → −5.59
+  assert.match(html,/<small>浮动盈亏<\/small><strong>-5\.59 U<\/strong>/);
+  assert.match(html,/<small>当前持仓<\/small><strong>2 笔<\/strong>/);
 });
 
 test("missing account stays unknown and operational errors remain visible",()=>{

@@ -13,12 +13,13 @@ import RunLogStatus from "./run-log-status.tsx";
 import PanelStamp from "./panel-stamp.tsx";
 import {readPanel,writePanel,type PanelEntry} from "../lib/panel-cache.ts";
 import {PANEL_KEYS} from "../lib/system-panels.ts";
+import {paperAccountView} from "../lib/paper-account-view.ts";
 
 type SystemSnap={healthy:boolean;status:string;feedAt:number|null;live:string;engine:string|null;storageOk:boolean|null};
 import "./account-first.css";
 import "./paid-fee.css";
 import "./pages.css";
-import {remainingPaidNetPnl,tradePaidNetPnl,pairedPaidView,type PaidPair} from "../lib/paid-fee-view.ts";
+import {tradePaidNetPnl,pairedPaidView,type PaidPair} from "../lib/paid-fee-view.ts";
 import type {ThesisPublic} from "../lib/thesis-view.ts";
 import {OrderCard,exitShort,exitPlain,priceText,type OrderFact} from "./order-card.tsx";
 
@@ -108,10 +109,10 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   }catch{setExportStatus("导出失败，请重试。");}finally{setExporting(false);}};
 
   const desk=data?.forwardDesk??null,positions=data?.positions??[],history=[...(data?.history??[])].sort((a,b)=>(b.closedAt??0)-(a.closedAt??0));
-  const usingDesk=!!desk&&!liveEnabled&&(!!desk.book||desk.open.length>0);
+  const paperView=paperAccountView(desk,positions,liveEnabled),usingDesk=paperView.usingDesk&&!!desk;
   const stanceLabel=desk?.book==="lsr-v1"?"实验":desk?.book==="stretch-v1"?"新账":desk?.book==="reverse-v1"?"反向":desk?.book==="needle-v1"||desk?.book==="brain-v1"||desk?.book==="score-v1"||desk?.book==="read-v1"?"账户":stanceName(desk?.stance);
-  const paperFloating=usingDesk?desk.floating:positions.reduce((n,t)=>n+(t.status==="OPEN"?remainingPaidNetPnl(t,t.lastPrice):0),0);
-  const held=usingDesk?desk.openCount:positions.length;
+  const paperFloating=paperView.floating;
+  const held=paperView.openCount;
   const paperHeld=positions.filter(t=>!t.inverseCopy).length;
   const liveHeld=liveOverview?.positionCount??0;
   const systemStatus=statusLabel==="后台运行中"?"正常":statusLabel?.startsWith("后台运行中 · ")?statusLabel.slice(8):statusLabel??(healthy?"正常":"行情恢复中");
