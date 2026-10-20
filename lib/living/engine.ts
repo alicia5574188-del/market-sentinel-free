@@ -23,7 +23,11 @@ import {thesisInputs,noteBasketIndex,judge,advanceThesis,notePredictions,initial
 import {selectCandidates,notePick,learnSelection,initialSelect,normalizeSelect,type SelectState,type Market} from "./select.ts";
 import {planPosition,stopCheck,newWatch,stepWatch,fastFollowPicks,type Watch} from "./entry.ts";
 import {layerOne,layerTwo,evidenceFactor,normalRisk,fastRisk} from "./conviction.ts";
-import {fastProtection,thesisExits,type PositionView} from "./exits.ts";
+import {fastProtection,thesisExits,surgeGuard,type PositionView} from "./exits.ts";
+import {FlowBook,FLOW_PAGES,FLOW_PAGE_PREFIX,type FlowPoint} from "./flow.ts";
+import {features,readCoin,readMarket,marketAllows,sizeModulator,intentEvidence,burstFlow,holdCheck,planIntent,noTradeReason,evidenceLine,
+  type CoinIntent,type MarketIntent} from "./intent.ts";
+import type {IntentPlaybook,Playbook} from "./thesis.ts";
 import type {LivingDirective,LivingOrder,LivingTradeAction,LivingResult,LivingNote} from "./directive.ts";
 import {bytesOf,r6,r4,corr} from "./util.ts";
 
@@ -45,6 +49,10 @@ export type ForwardView={positions:{id:string;symbol:string;side:"LONG"|"SHORT";
     openedAt:number;entryContext?:{living?:LivingNote}|undefined}[];
   opportunities:{symbol:string;side:"LONG"|"SHORT";eligible?:boolean}[]};
 export type QuoteView={bestBid:number;bestAsk:number;observedAt:number;entryReady?:boolean};
+/** Gate bulk radar row the worker already fetched every 15s (no request of the living layer). */
+export type RadarView={symbol:string;openInterest?:number;fundingRate?:number;markPrice?:number;indexPrice?:number};
+/** Hub flow row (MarketDataHub.peekFlow): Bybit OI / funding / basis / turnover and the venues' aggressor proxy. */
+export type HubFlowView={symbol:string;at:number;oi:number|null;funding:number|null;basis:number|null;taker:number|null;turnover:number|null};
 export type ContractView={maintenanceRate:number;leverageMax:number};
 export type PlanContext={now:number;forward:ForwardView;quotes:Record<string,QuoteView>;contracts:Record<string,ContractView>;
   funding:Record<string,number>;candles:Record<string,{time:number;open:number;high:number;low:number;close:number}[]>};
@@ -75,10 +83,21 @@ export class LivingEngine{
   private lastHot=0;private lastHeavy=0;private lastBars=0;
   writesToday={day:"",n:0};
   lastPlanAt=0;lastPlanMs=0;maxPlanMs=0;lastHubMs=0;
+  // v2 intent layer
+  flow=new FlowBook();
+  marketIntent:MarketIntent|null=null;
+  marketHist:MarketIntent[]=[];
+  coins=new Map<string,CoinIntent>();
+  private coinHist=new Map<string,CoinIntent[]>();
+  holds=new Map<string,{why:string;code:string;at:number}>();
+  decisions:LogRow[]=[];
+  private lastIntentAt=0;
+  intentCounts:Record<string,number>={};
   constructor(now:number,config?:unknown){this.config=normalizeLivingConfig(config,now);}
 
   /** Keys to read at start (one batched get). */
-  static loadKeys(){return[...Object.values(LIVING_KEYS),...Array.from({length:BAR_PAGES},(_,i)=>`${BAR_PAGE_PREFIX}${i}`)];}
+  static loadKeys(){return[...Object.values(LIVING_KEYS),...Array.from({length:BAR_PAGES},(_,i)=>`${BAR_PAGE_PREFIX}${i}`),
+    ...Array.from({length:FLOW_PAGES},(_,i)=>`${FLOW_PAGE_PREFIX}${i}`)];}
   restore(values:Map<string,unknown>,now:number,logPage?:unknown){
     this.config=normalizeLivingConfig(values.get(LIVING_KEYS.config),now);
     const b=values.get(LIVING_KEYS.basket) as Basket|undefined;this.basket=b&&Array.isArray(b.members)?b:null;
@@ -96,6 +115,7 @@ export class LivingEngine{
     this.logSeq=Number.isFinite(idx?.seq)?idx!.seq!:0;this.logPages=Array.isArray(idx?.pages)?idx!.pages!:[];
     const lp=logPage as {rows?:LogRow[]}|undefined;this.log=Array.isArray(lp?.rows)?lp!.rows!:[];
     this.tape.restore(Array.from({length:BAR_PAGES},(_,i)=>values.get(`${BAR_PAGE_PREFIX}${i}`)).filter(Boolean));
+    this.flow.restore(Array.from({length:FLOW_PAGES},(_,i)=>values.get(`${FLOW_PAGE_PREFIX}${i}`)).filter(Boolean));
     this.loaded=true;
     this.note(now,"RESTART",{bars:this.tape.m5.size,episodes:this.episodes.length,watches:this.trades.watches.length});
   }
@@ -113,6 +133,8 @@ export class LivingEngine{
   }
   note(at:number,k:string,data:Record<string,string|number|boolean|null>={}){
     this.log.push({at,k,...data});
+    if(/^(ENTRY|ENTRY_RECORD|RECORD_ONLY|WATCH|EXIT|EXIT_RECORD|PROTECT|PROTECT_RECORD|HOLD_CHANGE|INTENT_MARKET|CLOSED|FAST_|SURGE)/.test(k)){
+      this.decisions.push({at,k,...data});if(this.decisions.length>60)this.decisions.splice(0,this.decisions.length-60);}
     const ck=typeof data.reason==="string"?`${k}:${String(data.reason).replace(/[0-9.+\-%]+/g,"#").slice(0,40)}`:k;
     this.trades.counts[ck]=(this.trades.counts[ck]??0)+1;
     if(this.log.length%25===0&&bytesOf(this.log)>LOG_PAGE_BYTES)this.rollLog();
@@ -127,17 +149,20 @@ export class LivingEngine{
   private rollLog(){this.sealed.push({seq:this.logSeq,rows:this.log});this.logPages=[...this.logPages.filter(p=>p!==this.logSeq),this.logSeq];this.logSeq++;this.log=[];}
 
   // ------------------------------------------------------------------ fast path (every hub refresh)
-  onHub(points:TapePoint[],now:number,gateListed:(s:string)=>boolean){
+  onHub(points:TapePoint[],now:number,gateListed:(s:string)=>boolean,flowRows:HubFlowView[]=[]){
     if(this.config.mode==="off"||!this.loaded)return;
     const t0=Date.now();
     try{
+      if(flowRows.length)this.flow.feed(flowRows.map((r):FlowPoint=>({symbol:r.symbol,at:r.at,src:"B",oi:r.oi,funding:r.funding,basis:r.basis,taker:r.taker,
+        volUsd:r.turnover!=null?this.flow.volFromTurnover(r.symbol,r.at,r.turnover):null})),now);
       if(basketDue(this.basket,now)&&points.length>=40){
         const rows=points.map(p=>({symbol:p.symbol,volume24hUsd:p.volume24hUsd??0,sources:p.sources??1,gate:gateListed(p.symbol)}));
         const b=selectBasket(rows,now);if(b.members.length>=20){this.basket=b;this.dirty.add(LIVING_KEYS.basket);this.note(now,"BASKET",{n:b.members.length,top:b.top10.slice(0,5).join(",")});}
       }else if(this.basket){const nb=pruneBasket(this.basket,gateListed);if(nb!==this.basket){this.basket=nb;this.dirty.add(LIVING_KEYS.basket);}}
       this.tape.feed(points,now);
       if(!this.basket)return;
-      const r=stepFast(this.fast,this.tape,this.basket,now);this.fast=r.state;
+      const members=this.basket.members;
+      const r=stepFast(this.fast,this.tape,this.basket,now,side=>burstFlow(this.flow,members,side,now));this.fast=r.state;
       for(const e of r.events){
         this.trades.pendingEvents.push(e);
         this.note(now,`FAST_${e.type}`,{ep:e.episodeId,side:e.side,...Object.fromEntries(Object.entries(e.detail).slice(0,8))});
@@ -153,8 +178,39 @@ export class LivingEngine{
         if(weeklyAdjust(this.fast,now))this.note(now,"FAST_ADJUST",{z:this.fast.adjust.z,why:this.fast.adjust.log.at(-1)?.why??""});
         this.dirty.add(LIVING_KEYS.fast);
       }
+      if(now-this.lastIntentAt>=60_000){this.lastIntentAt=now;this.readIntents(now,[]);}
     }catch(error){this.lastError=String((error as Error)?.message??error).slice(0,200);this.fallback(now,`快速通道出错：${this.lastError}`);}
     finally{this.lastHubMs=Date.now()-t0;}
+  }
+
+  /** Gate bulk radar rows the worker already fetched (15s): Gate open interest, funding, mark/index basis. */
+  onRadar(rows:RadarView[],now:number){
+    if(this.config.mode==="off"||!this.loaded)return;
+    try{
+      this.flow.feed(rows.filter(r=>r&&r.symbol).map((r):FlowPoint=>({symbol:r.symbol,at:now,src:"G",oi:Number.isFinite(r.openInterest)?r.openInterest!:null,
+        funding:Number.isFinite(r.fundingRate)?r.fundingRate!:null,
+        basis:r.markPrice&&r.indexPrice&&r.indexPrice>0?r.markPrice/r.indexPrice-1:null})),now);
+    }catch(error){this.lastError=String((error as Error)?.message??error).slice(0,200);}
+  }
+  /** Warm-up after a restart from the worker's existing 15-minute Gate OI snapshots (lib/oi-anchor.ts). */
+  seedOi(ring:readonly {at:number;oi:Record<string,number>}[]){try{return this.flow.seedOi(ring);}catch{return 0;}}
+  /** Per-coin and market-wide intent read (about once a minute, ~60 coins, pure). */
+  readIntents(now:number,extra:string[]){
+    if(!this.basket)return;
+    const syms=[...new Set([...this.basket.members,"BTC_USDT","ETH_USDT",...extra])],basketReads:CoinIntent[]=[];
+    for(const s of syms){
+      const hist=this.coinHist.get(s)??[];
+      const ci=readCoin(s,features(this.tape,this.flow,s,now),now,hist);
+      this.coins.set(s,ci);hist.push({...ci,f:undefined as never,why:""} as CoinIntent);
+      while(hist.length&&now-hist[0]!.at>65*60_000)hist.shift();this.coinHist.set(s,hist);
+      if(this.basket.members.includes(s))basketReads.push(ci);
+      const k=`${ci.capital}/${ci.emotion}`;this.intentCounts[k]=(this.intentCounts[k]??0)+1;
+    }
+    for(const s of [...this.coins.keys()])if(!syms.includes(s))this.coins.delete(s);
+    const m=readMarket(basketReads,this.coins.get("BTC_USDT")??null,this.coins.get("ETH_USDT")??null,now,this.marketHist);
+    const prev=this.marketIntent;this.marketIntent=m;this.marketHist.push(m);while(this.marketHist.length&&now-this.marketHist[0]!.at>90*60_000)this.marketHist.shift();
+    if(!prev||prev.state!==m.state||prev.side!==m.side)this.note(now,"INTENT_MARKET",{state:m.state,side:m.side,conf:m.confidence,sentence:m.sentence.slice(0,200),
+      oi15:m.ev.oi15,p15:m.ev.p15,funding:m.ev.funding,breadth:m.ev.breadth});
   }
 
   // ------------------------------------------------------------------ plan (before advanceForward)
@@ -166,6 +222,8 @@ export class LivingEngine{
       const eff=this.effective(now),items=eff.items;
       const bar=Math.floor((now-5_000)/300_000)*300_000;
       if(bar>this.trades.lastBarAt&&this.basket){this.trades.lastBarAt=bar;this.onBar(ctx,bar,items);}
+      const minute=Math.floor(now/60_000)*60_000;
+      if(minute!==this.lastWatchMinute&&this.basket&&this.marketIntent){this.lastWatchMinute=minute;this.intentWatches(ctx,items);}
       const actions:LivingTradeAction[]=[],orders:LivingOrder[]=[];
       const events=this.trades.pendingEvents.splice(0);
       const views=this.positionViews(ctx);
@@ -180,10 +238,16 @@ export class LivingEngine{
         if(prot.length){const rec=this.episodes.find(r=>r.id===ep?.id);if(rec)rec.protections+=prot.length;}
       }
       this.trades.peaks=[...peaks].filter(([id])=>views.some(v=>v.id===id));
+      for(const a of surgeGuard({positions:views,events,tape:this.tape,now})){actions.push(a);
+        this.noteOnce(`p|${a.tradeId}|${a.code}`,now,eff.acting&&items.fastProtect?"PROTECT":"PROTECT_RECORD",{trade:a.tradeId,code:a.code,reason:a.reason});}
+      // v2 hold / exit from the live intent read (normal trades and handed-off fast trades)
+      for(const a of this.intentHolds(views,now)){actions.push(a);
+        this.noteOnce(`h|${a.tradeId}|${a.code}|${a.stop??""}`,now,eff.acting&&items.thesisExit?"EXIT":"EXIT_RECORD",{trade:a.tradeId,code:a.code,reason:a.reason});}
       // C5 thesis exits
       const scores=this.scoreMap(now);
       const th=thesisExits({positions:views,thesis:this.thesis.current,scores,tape:this.tape,now,episode:this.fast.episode,
-        handedOff:new Set(this.trades.handedOff),lastEnd:this.trades.lastEnd});
+        handedOff:new Set(this.trades.handedOff),lastEnd:this.trades.lastEnd,
+        intentSupports:side=>!!this.marketIntent&&this.marketIntent.side===side&&(this.marketIntent.state==="RISK_ON"||this.marketIntent.state==="RISK_OFF")});
       for(const a of th){
         if(a.action==="HANDOFF")this.trades.handedOff=[...this.trades.handedOff,a.tradeId].slice(-100);
         actions.push(a);this.noteOnce(`x|${a.tradeId}|${a.code}`,now,eff.acting&&items.thesisExit?"EXIT":"EXIT_RECORD",{trade:a.tradeId,code:a.code,reason:a.reason});
@@ -216,7 +280,7 @@ export class LivingEngine{
         for(const o of exec){this.note(now,"ENTRY_RECORD",{sym:o.symbol,side:o.side,pb:o.note.pb,kind:o.kind,mult:r4(o.multiple),reason:`只计算模式：${o.reason.slice(0,80)}`});this.endOrder(o,true);}
         return undefined;
       }
-      const directive:LivingDirective={version:"living-v1",items:{...items},
+      const directive:LivingDirective={version:"living-v2",items:{...items},
         actions:actions.filter(a=>FAST_CODES.has(a.code)?items.fastProtect:items.thesisExit),
         orders:exec.filter(o=>o.kind==="F"?items.fastFollow:items.newSource).sort((a,b)=>(a.kind==="F"?0:1)-(b.kind==="F"?0:1)),
         legacyGate:items.newSource?"note":"open"};
@@ -274,35 +338,81 @@ export class LivingEngine{
     if(advanceThesis(this.thesis,cand,at))this.note(at,"THESIS",{kind:cand.kind,side:cand.side,structure:cand.structure,sentence:cand.sentence.slice(0,200)});
     notePredictions(this.thesis,at);noteSeries(this.probes,at,tag);
     this.dirty.add(LIVING_KEYS.probes);this.dirty.add(LIVING_KEYS.thesis);this.dirty.add(LIVING_KEYS.select);
-    const th=this.thesis.current;
-    if(!th||!th.playbooks.length){this.note(at,"NO_REWARD",{reason:"现在市场不给钱：没有被奖励的做法，不开新单"});return;}
-    if(th.structure==="BURST")return;// fast lane owns bursts
-    const recent=this.trades.recentTriggers.filter(x=>at-x.at<=10*60_000).flatMap(x=>x.t);
-    const market=this.market(ctx,at);
+    // v2: the v1 probes / thesis above keep running as context and as the 0.7–1.2x size modulator; opening is decided by
+    // the live intent read (intentWatches), never by a sample count.
+    void items;
+  }
+
+  private lastWatchMinute=0;
+  /** v2 steps 1-3 every minute: market intent clear → coins whose own read best expresses an allowed playbook → a watch at
+   * the playbook's location (step 4 confirms). All from live evidence; no sample-count gate. */
+  private intentWatches(ctx:PlanContext,items:LivingItems){
+    const now=ctx.now,m=this.marketIntent!,basket=this.basket!;
+    if(this.fast.episode)return;// the fast lane owns bursts
+    const scores=this.scoreMap(now);
     const busy=new Set([...ctx.forward.positions.map(p=>p.symbol),...this.trades.watches.map(w=>w.symbol)]);
-    for(const p of th.playbooks){
-      const pb=p.pb,directional=pb!=="range-revert"&&pb!=="extension-fade"&&pb!=="crowding-fade";
-      const picked=selectCandidates(market,this.select,pb,recent,directional?th.side:null,items.liqSafety);
-      notePick(this.select,PLAYBOOK_PROBE[pb],at,picked.filter(c=>c.trigger&&triggers.includes(c.trigger)));
-      const score=scores[PLAYBOOK_PROBE[pb]];
-      for(const c of picked){
-        if(c.reject){if(c.rank===0&&!/排在前/.test(c.reject))this.note(at,"RECORD_ONLY",{sym:c.symbol,side:c.side,pb,reason:c.reject});continue;}
-        if(busy.has(c.symbol))continue;
-        const l1=layerOne(score),l2=layerTwo(th,pb,c.side,c);
-        if(!l1.ok||!l2.ok){this.note(at,"RECORD_ONLY",{sym:c.symbol,side:c.side,pb,reason:`研究层没开：${!l1.ok?l1.why:l2.why}`});continue;}
-        const rows=bars(c.symbol),plan=planPosition(c,rows);
-        if(!plan){this.note(at,"RECORD_ONLY",{sym:c.symbol,side:c.side,pb,reason:"找不到合理的位置"});continue;}
-        const mid=(plan.lo+plan.hi)/2,ct=ctx.contracts[c.symbol];
-        const chk=stopCheck({side:c.side,price:mid,stop:plan.inv,min:STEPS.stopMin,max:STEPS.stopMax,leverageMax:ct?.leverageMax??10,mmr:ct?.maintenanceRate??null,liqSafety:items.liqSafety});
-        if(!chk.ok){this.note(at,"RECORD_ONLY",{sym:c.symbol,side:c.side,pb,reason:chk.reason});continue;}
-        const w=newWatch(c,{...plan,inv:chk.stop},at,PROBE_META[PLAYBOOK_PROBE[pb]].horizon,{l1:true,l2:true,probeSize:l1.probeSize,why1:l1.why,why2:l2.why});
-        this.trades.watches.push(w);busy.add(c.symbol);
-        this.note(at,"WATCH",{sym:c.symbol,side:c.side,pb,rank:c.rank,score:c.score,lo:w.zoneLo,hi:w.zoneHi,inv:w.invalidation});
-      }
+    const cands:{ci:CoinIntent;rank:number;score:number}[]=[];
+    for(const s of basket.members){
+      const ci=this.coins.get(s);if(!ci?.action)continue;
+      const a=ci.action,l1=marketAllows(m,a.pb,a.side);
+      if(!l1.ok){this.noteOnce(`l1|${s}|${a.pb}|${a.side}|${m.state}`,now,"RECORD_ONLY",{sym:s,side:a.side,pb:a.pb,intent:`${ci.capital}/${ci.emotion}`,reason:`没开：${l1.why.slice(0,120)}`});continue;}
+      const mod=sizeModulator(scores[PLAYBOOK_PROBE[a.pb]]);
+      cands.push({ci,rank:0,score:a.strength*(.85+.15*mod)});
+    }
+    cands.sort((x,y)=>y.score-x.score);
+    const used:string[]=[];let rank=0;
+    for(const c of cands){
+      const s=c.ci.symbol,a=c.ci.action!;
+      if(rank>=STEPS.selectTop)break;
+      const why=this.hardFilter(ctx,s,items);
+      if(why){this.noteOnce(`hf|${s}|${a.pb}`,now,"RECORD_ONLY",{sym:s,side:a.side,pb:a.pb,reason:why});continue;}
+      const cl=this.clusterOf(s,used);if(used.includes(cl)&&cl!==s){this.noteOnce(`cl|${s}|${a.pb}|${Math.floor(now/900_000)}`,now,"RECORD_ONLY",{sym:s,side:a.side,pb:a.pb,reason:`和 ${cl} 走势高度相关，只留一个`});continue;}
+      used.push(s);rank++;
+      if(a.strength<.35){this.noteOnce(`st|${s}|${a.pb}|${Math.floor(now/900_000)}`,now,"RECORD_ONLY",{sym:s,side:a.side,pb:a.pb,reason:`第二层：这个币的证据不够强（${a.strength.toFixed(2)}<0.35）`});continue;}
+      if(busy.has(s))continue;
+      const plan=planIntent(a.pb,a.side,c.ci,this.tape.closed5(s,now),this.tape.closed1(s,now));
+      if(!plan){this.noteOnce(`pl|${s}|${a.pb}`,now,"RECORD_ONLY",{sym:s,side:a.side,pb:a.pb,reason:"找不到合理的位置"});continue;}
+      const mid=(plan.lo+plan.hi)/2,ct=ctx.contracts[s];
+      const chk=stopCheck({side:a.side,price:mid,stop:plan.inv,min:STEPS.stopMin,max:STEPS.stopMax,leverageMax:ct?.leverageMax??10,mmr:ct?.maintenanceRate??null,liqSafety:items.liqSafety});
+      if(!chk.ok){this.noteOnce(`sc|${s}|${a.pb}`,now,"RECORD_ONLY",{sym:s,side:a.side,pb:a.pb,reason:chk.reason});continue;}
+      const cand={symbol:s,side:a.side,playbook:a.pb,probe:PLAYBOOK_PROBE[a.pb],score:r4(c.score),rank,factors:{eff:0,fit:0,early:0,funding:0,edge:0},
+        trigger:{probe:PLAYBOOK_PROBE[a.pb],symbol:s,side:a.side,strength:a.strength,ref:plan.ref},reject:null};
+      const w=newWatch(cand,{lo:plan.lo,hi:plan.hi,inv:chk.stop,target:plan.target},now,plan.hold,{l1:true,l2:true,probeSize:false,why1:marketAllows(m,a.pb,a.side).why,why2:a.why});
+      w.intent={state:`${c.ci.capital}/${c.ci.emotion}`,market:m.state,why:a.why.slice(0,200),ev:evidenceLine(c.ci.f).slice(0,200),strength:a.strength};
+      this.trades.watches.push(w);busy.add(s);
+      this.note(now,"WATCH",{sym:s,side:a.side,pb:a.pb,rank,score:r4(c.score),lo:w.zoneLo,hi:w.zoneHi,inv:w.invalidation,intent:w.intent.state,market:m.state,why:a.why.slice(0,160)});
     }
     if(this.trades.watches.length>12)this.trades.watches.splice(0,this.trades.watches.length-12);
   }
+  private hardFilter(ctx:PlanContext,s:string,items:LivingItems){
+    const meta=this.tape.meta.get(s),mmr=ctx.contracts[s]?.maintenanceRate??null;
+    if((meta?.volume24hUsd??0)<STEPS.selectVolume)return`成交额 ${((meta?.volume24hUsd??0)/1e6).toFixed(0)}M<20M`;
+    if(meta&&meta.spread>STEPS.selectSpread)return`价差 ${(meta.spread*1e4).toFixed(1)}bp>6bp`;
+    if(items.liqSafety&&(mmr==null||mmr>STEPS.selectMmr))return`维持保证金率 ${mmr==null?"未知":(mmr*100).toFixed(1)+"%"}>2%`;
+    return null;
+  }
+  /** v2 step 5 for open living trades: is the reason to hold still there? (normal trades and handed-off fast trades) */
+  private intentHolds(views:PositionView[],now:number):LivingTradeAction[]{
+    const out:LivingTradeAction[]=[],handed=new Set(this.trades.handedOff),seen=new Set<string>();
+    for(const p of views){
+      const n=p.living;if(!n||p.price==null)continue;
+      const v2=n.v==="living-v2";if(!v2)continue;
+      if(n.k==="F"&&!handed.has(p.id))continue;
+      seen.add(p.id);
+      const pb=(n.k==="F"?"follow":n.pb) as IntentPlaybook;
+      const coin=this.coins.get(p.symbol)??(this.basket?readCoin(p.symbol,features(this.tape,this.flow,p.symbol,now),now,this.coinHist.get(p.symbol)??[]):null);
+      const stop=p.guard!=null?(p.side==="LONG"?Math.max(p.stopPrice,p.guard):Math.min(p.stopPrice,p.guard)):p.stopPrice;
+      const v=holdCheck({pb,side:p.side,entry:p.entryPrice,price:p.price,stop,coin,market:this.marketIntent,ageMin:(now-p.openedAt)/60_000,holdMin:n.hold,cost:STEPS.cost});
+      const prev=this.holds.get(p.id);
+      if(!prev||prev.why!==v.why){this.holds.set(p.id,{why:v.why,code:v.code,at:now});if(v.act==="HOLD")this.note(now,"HOLD_CHANGE",{trade:p.id,sym:p.symbol,why:v.why.slice(0,160)});}
+      if(v.act==="EXIT")out.push({tradeId:p.id,action:"EXIT",code:v.code,reason:v.why.slice(0,160)});
+      else if(v.act==="GUARD"&&v.stop!=null)out.push({tradeId:p.id,action:"GUARD",stop:r6(v.stop),code:v.code,reason:v.why.slice(0,160)});
+    }
+    for(const id of [...this.holds.keys()])if(!seen.has(id))this.holds.delete(id);
+    return out;
+  }
   private normalOrder(ctx:PlanContext,w:Watch,scores:Record<ProbeId,ProbeScore>,items:LivingItems):LivingOrder|string{
+    if(w.intent)return this.intentOrder(ctx,w,scores,items);
     const last=this.tape.last(w.symbol);if(!last)return"没有新鲜报价";
     const score=scores[PLAYBOOK_PROBE[w.playbook]];
     const l1=layerOne(score);if(!l1.ok)return`研究层没开：${l1.why}`;
@@ -320,8 +430,37 @@ export class LivingEngine{
     return {id:w.id,symbol:w.symbol,side:w.side,stop:chk.stop,riskRate:risk.riskRate,multiple:risk.multiple,kind:"N",episodeId:null,episodeCap:null,
       winner:true,note,reason:why};
   }
+  /** v2 order at READY: layers 1 and 2 re-read live (the market or the coin may have changed while waiting). */
+  private intentOrder(ctx:PlanContext,w:Watch,scores:Record<ProbeId,ProbeScore>,items:LivingItems):LivingOrder|string{
+    const last=this.tape.last(w.symbol);if(!last)return"没有新鲜报价";
+    const pb=w.playbook as IntentPlaybook,m=this.marketIntent,l1=marketAllows(m,pb,w.side);
+    if(!l1.ok)return`等位置期间市场意图变了：${l1.why.slice(0,100)}`;
+    const ci=this.coins.get(w.symbol);
+    if(!ci||!ci.action||ci.action.pb!==pb||ci.action.side!==w.side){
+      // the setup emotion may have moved on (e.g. capitulation → rebound under way); keep it only if nothing contradicts
+      const contra=ci&&(w.side==="LONG"?ci.capital==="SUPPLY"||ci.capital==="FLUSH_DOWN":ci.capital==="DEMAND"||ci.capital==="SQUEEZE_UP");
+      if(contra)return`第二层：等位置期间这个币的资金反了（${ci!.why.slice(0,80)}）`;
+    }
+    const ct=ctx.contracts[w.symbol];
+    const chk=stopCheck({side:w.side,price:last.mid,stop:w.invalidation,min:STEPS.stopMin,max:STEPS.stopMax,leverageMax:ct?.leverageMax??10,mmr:ct?.maintenanceRate??null,liqSafety:items.liqSafety});
+    if(!chk.ok)return chk.reason;
+    const strength=w.intent!.strength,ev=intentEvidence(strength,m!.confidence),mod=items.sizing?sizeModulator(scores[PLAYBOOK_PROBE[pb]]):1;
+    const risk=normalRisk({premium:ev.label==="strong"&&w.rank===1,evidence:ev.factor*mod,sizingItem:items.sizing});
+    const why=`${PLAYBOOK_LABEL[pb]}：${w.intent!.why.slice(0,110)}；位置到了且确认`;
+    const note:LivingNote={v:"living-v2",k:"N",pb,th:this.thesis.current?.id??null,ep:null,ev:ev.label,mult:r4(risk.multiple),sc:r4(strength),t:null,n:null,
+      per:mod===1?null:`x${mod}`,rk:w.rank,inv:chk.stop,ref:w.ref,hold:w.holdMin,why:why.slice(0,200),
+      in:w.intent!.state,mk:m!.state,nar:`${m!.sentence.slice(0,80)}｜${w.intent!.why.slice(0,100)}`,evd:w.intent!.ev.slice(0,160)};
+    return {id:w.id,symbol:w.symbol,side:w.side,stop:chk.stop,riskRate:risk.riskRate,multiple:risk.multiple,kind:"N",episodeId:null,episodeCap:null,
+      winner:true,note,reason:why};
+  }
   private fastOrders(ctx:PlanContext,items:LivingItems):LivingOrder[]{
     const ep=this.fast.episode,now=ctx.now;if(!ep||ep.phase!=="CONFIRMED"||ep.confirmAt==null||!this.basket)return[];
+    if(ep.flow&&ep.flow.kind!=="NEW_POSITIONS"&&ep.flow.kind!=="VOLUME"&&ep.flow.kind!=="UNKNOWN"){
+      const why=ep.flow.kind==="SQUEEZE"?"这一段是空头被逼回补（持仓量在降），不是新买盘：不追，等衰竭后反做"
+        :ep.flow.kind==="FLUSH"?"这一段是多头踩踏（持仓量在降）：不追空，等恐慌出尽再抄反弹"
+        :"价格很猛但资金数据没跟上：只做保护，不跟";
+      this.noteOnce(`ff|${ep.id}`,now,"RECORD_ONLY",{pb:"fast",side:ep.side,ep:ep.id,reason:why});return[];
+    }
     if(now-ep.confirmAt>FAST.followWindowMs)return[];
     if(fastFollowBlocked(this.fast,ep.side,now))return[];
     const used=this.trades.fastEntries[ep.id]??0;if(used>=FAST.followMax)return[];
@@ -341,11 +480,12 @@ export class LivingEngine{
       const chk=stopCheck({side:p.side,price:last.mid,stop:p.stop,min:FAST.stopMin,max:FAST.stopMax,leverageMax:ct?.leverageMax??10,mmr:ct?.maintenanceRate??null,liqSafety:true});
       if(!chk.ok){this.noteOnce(`f|${ep.id}|${p.symbol}`,now,"RECORD_ONLY",{sym:p.symbol,side:p.side,pb:"fast",reason:chk.reason});continue;}
       const mult=items.sizing?fastMultiple(this.episodes,bucketOf(ep.peakZ)):1,risk=fastRisk({fastMultiple:mult,probe:p.mode==="PROBE"});
-      const why=`集体异动${ep.side==="LONG"?"普涨":"普跌"}确认后跟进（${p.mode==="PROBE"?"试探 1/3":"回调后再创新"}）：${p.why}`;
+      const why=`集体异动${ep.side==="LONG"?"普涨":"普跌"}确认后跟进（${p.mode==="PROBE"?"试探 1/3":"回调后再创新"}，${ep.flow?.kind==="NEW_POSITIONS"?"新开仓推动":ep.flow?.kind==="VOLUME"?"放量推动":"资金未验证"}）：${p.why}`;
       out.push({id:`lf-${ep.id}-${p.symbol}`,symbol:p.symbol,side:p.side,stop:chk.stop,riskRate:risk.riskRate,multiple:risk.multiple,kind:"F",episodeId:ep.id,
         episodeCap:SIZING.episodeRiskCap,winner:true,reason:why,
-        note:{v:"living-v1",k:"F",pb:"fast",th:this.thesis.current?.id??null,ep:ep.id,ev:"fast",mult:r4(risk.multiple),sc:null,t:null,n:null,per:null,rk:null,
-          inv:chk.stop,ref:null,hold:30,why:why.slice(0,200)}});
+        note:{v:"living-v2",k:"F",pb:"fast",th:this.thesis.current?.id??null,ep:ep.id,ev:"fast",mult:r4(risk.multiple),sc:null,t:null,n:null,per:null,rk:null,
+          inv:chk.stop,ref:null,hold:30,why:why.slice(0,200),in:`BURST/${ep.flow?.kind??"UNKNOWN"}`,mk:this.marketIntent?.state??"WARMING",
+          nar:`全市场集体${ep.side==="LONG"?"上涨":"下跌"}：${ep.flow?.why??"资金数据未到"}`.slice(0,180),evd:(ep.flow?.why??"").slice(0,160)}});
     }
     return out;
   }
@@ -437,6 +577,7 @@ export class LivingEngine{
       if(this.dirty.has(LIVING_KEYS.probes))out[LIVING_KEYS.probes]=fitProbes(this.probes);
       if(this.dirty.has(LIVING_KEYS.thesis))out[LIVING_KEYS.thesis]=this.fitThesis();
       if(this.dirty.has(LIVING_KEYS.select))out[LIVING_KEYS.select]=this.fitSelect();
+      if(this.flow.m1.size&&this.basket)Object.assign(out,this.flow.pages([...this.basket.members,"BTC_USDT","ETH_USDT"]));
     }
     if(barsDue&&this.tape.m5.size)Object.assign(out,this.tape.pages());
     const n=Object.keys(out).length;
@@ -455,7 +596,7 @@ export class LivingEngine{
     for(const k of keys){this.dirty.delete(k);if(k.startsWith(LOG_PAGE_PREFIX)&&k!==LIVING_KEYS.logIndex){const seq=Number(k.slice(LOG_PAGE_PREFIX.length));this.sealed=this.sealed.filter(p=>p.seq!==seq);}}
     if(keys.includes(LIVING_KEYS.logIndex))this.dirty.delete("log");
     if(keys.some(k=>k===LIVING_KEYS.fast||k===LIVING_KEYS.trades||k.startsWith(LOG_PAGE_PREFIX)))this.lastHot=now;
-    if(keys.some(k=>k===LIVING_KEYS.probes||k===LIVING_KEYS.thesis||k===LIVING_KEYS.select||k===LIVING_KEYS.episodes||k===LIVING_KEYS.basket))this.lastHeavy=now;
+    if(keys.some(k=>k===LIVING_KEYS.probes||k===LIVING_KEYS.thesis||k===LIVING_KEYS.select||k===LIVING_KEYS.episodes||k===LIVING_KEYS.basket||k.startsWith(FLOW_PAGE_PREFIX)))this.lastHeavy=now;
     if(keys.some(k=>k.startsWith(BAR_PAGE_PREFIX)))this.lastBars=now;
   }
   /** Old log pages beyond the kept window (to delete). */
@@ -474,24 +615,50 @@ export class LivingEngine{
   private fitSelect(){const s=this.select;let guard=0;while(bytesOf(s)>LIVING_MAX_VALUE_BYTES-1024&&guard++<50){s.rows=s.rows.slice(Math.ceil(s.rows.length*.2));s.picks=s.picks.slice(Math.ceil(s.picks.length*.2));}return s;}
 
   // ------------------------------------------------------------------ views
-  status(now:number){
-    const eff=this.effective(now),scores=allScores(this.probes,now,this.thesis.current?.dirTag);
+  status(now:number,forward?:ForwardView){
+    const eff=this.effective(now),scores=allScores(this.probes,now,this.thesis.current?.dirTag),m=this.marketIntent;
+    const board=[...this.coins.values()].filter(c=>c.symbol!=="BTC_USDT"&&c.symbol!=="ETH_USDT")
+      .sort((x,y)=>(y.action?1:0)-(x.action?1:0)||y.strength-x.strength).slice(0,14)
+      .map(c=>({symbol:c.symbol,capital:c.capital,emotion:c.emotion,crowd:c.crowd,strength:c.strength,why:c.why,
+        action:c.action?{pb:c.action.pb,label:PLAYBOOK_LABEL[c.action.pb],side:c.action.side}:null,noTrade:noTradeReason(c),
+        ev:{p15:c.f.p15,oi15:c.f.oi15,oi60:c.f.oi60,funding:c.f.funding,taker15:c.f.taker15,vol15:c.f.vol15,basis:c.f.basis}}));
+    const positions=(forward?.positions??[]).filter(p=>!p.inverseCopy).map(p=>{const n=p.entryContext?.living,h=this.holds.get(p.id);
+      return {id:p.id,symbol:p.symbol,side:p.side,entry:p.entryPrice,stop:p.livingGuard?.stop??p.stopPrice,openedAt:p.openedAt,living:!!n,
+        playbook:n?(PLAYBOOK_LABEL[n.pb as Playbook]??(n.pb==="fast"?"集体异动快速跟进":n.pb)):null,intent:n?.in??null,story:n?.nar??n?.why??null,evidence:n?.evd??null,
+        invalidation:n?.inv??null,hold:h?.why??(n?null:"老流程的单：按原有出场规则管理"),holdAt:h?.at??null};});
+    const closed=(forward?.history??[]).filter(t=>t.entryContext?.living&&t.closedAt!=null).slice(-200);
+    const byPb:Record<string,{n:number;win:number;r:number}>={};
+    for(const t of closed){const k=t.entryContext!.living!.pb,r=(t.netPnl??0)/Math.max(1e-9,t.plannedRisk);const x=byPb[k]??={n:0,win:0,r:0};x.n++;if((t.netPnl??0)>0)x.win++;x.r+=r;}
+    const eps=this.episodes.slice(-50);
     return {version:LIVING_RULE_EPOCH,mode:eff.mode,configured:eff.configured,acting:eff.acting,fallback:eff.fallback,
       items:LIVING_ITEMS.map(k=>({key:k,label:LIVING_ITEM_LABELS[k],on:eff.items[k]})),epochStartedAt:this.config.epochStartedAt,
+      market:m?{state:m.state,side:m.side,confidence:m.confidence,sentence:m.sentence,at:m.at,lead:m.lead,ev:m.ev,
+        allowed:m.allowed.map(a=>({pb:a.pb,label:PLAYBOOK_LABEL[a.pb],side:a.side}))}:null,
+      marketTimeline:this.marketHist.filter((x,i,a)=>i===0||a[i-1]!.state!==x.state||a[i-1]!.side!==x.side).slice(-12).map(x=>({at:x.at,state:x.state,side:x.side,sentence:x.sentence.slice(0,120)})),
+      board,positions,
       thesis:this.thesis.current?{sentence:this.thesis.current.sentence,structure:this.thesis.current.structure,side:this.thesis.current.side,
         since:this.thesis.current.since,playbooks:this.thesis.current.playbooks.map(p=>PLAYBOOK_LABEL[p.pb])}:null,
-      rewarded:scores.filter(s=>s.rewarded).map(s=>({probe:s.probe,label:PROBE_META[s.probe].label,score:s.score,t:s.t,n:s.n,persistence:s.persistence})),
-      probes:scores.map(s=>({probe:s.probe,score:s.score,t:s.t,n:s.n,rewarded:s.rewarded})),
-      fast:{state:this.fast.episode?this.fast.episode.phase:"CALM",side:this.fast.episode?.side??null,reason:this.fast.lastReason,
+      probes:scores.map(s=>({probe:s.probe,label:PROBE_META[s.probe].label,score:s.score,t:s.t,n:s.n,modulator:sizeModulator(s)})),
+      fast:{state:this.fast.episode?this.fast.episode.phase:"CALM",side:this.fast.episode?.side??null,reason:this.fast.lastReason,flow:this.fast.episode?.flow??null,
         cooldowns:this.fast.cooldowns.filter(c=>c.until>now),adjustZ:this.fast.adjust.z,episodes:this.episodes.length,
-        last:this.episodes.slice(-5).map(e=>({id:e.id,side:e.side,end:e.end,alertAt:e.alertAt,confirmAt:e.confirmAt,endAt:e.endAt}))},
-      watches:this.trades.watches.map(w=>({symbol:w.symbol,side:w.side,pb:PLAYBOOK_LABEL[w.playbook],expiresAt:w.expiresAt,reason:w.reason})),
-      basket:this.basket?.members.length??0,tapeSymbols:this.tape.symbols().length,lastFeedAt:this.tape.lastFeedAt,
+        surges7d:(this.trades.counts["FAST_SURGE"]??0),
+        last:this.episodes.slice(-6).map(e=>({id:e.id,side:e.side,end:e.end,alertAt:e.alertAt,confirmAt:e.confirmAt,endAt:e.endAt,after15:e.after["15"]?.[0]??null}))},
+      watches:this.trades.watches.map(w=>({symbol:w.symbol,side:w.side,pb:PLAYBOOK_LABEL[w.playbook],expiresAt:w.expiresAt,reason:w.reason,
+        intent:w.intent?.state??null,why:w.intent?.why??null,zone:[w.zoneLo,w.zoneHi],invalidation:w.invalidation})),
+      selfCheck:{byPlaybook:Object.entries(byPb).map(([pb,x])=>({pb,label:PLAYBOOK_LABEL[pb as Playbook]??(pb==="fast"?"快速跟进":pb),n:x.n,winRate:x.n?x.win/x.n:0,avgR:x.n?x.r/x.n:0})),
+        fast:{alerts:eps.length,fake:eps.filter(e=>e.end==="FAKE").length,confirmed:eps.filter(e=>e.confirmAt!=null).length,
+          follow30:eps.filter(e=>e.follow30Net!=null).map(e=>e.follow30Net!)},
+        intentReads:this.intentCounts},
+      decisions:this.decisions.slice(-30).reverse(),
+      basket:this.basket?.members.length??0,tapeSymbols:this.tape.symbols().length,flowSymbols:this.flow.m1.size,lastFeedAt:this.tape.lastFeedAt,flowAt:this.flow.lastAt,
       cpu:{planMs:this.lastPlanMs,maxPlanMs:Math.round(this.maxPlanMs),hubMs:this.lastHubMs},writesToday:this.writesToday.n,lastError:this.lastError,
       recent:this.log.slice(-12)};
   }
   exportSection(now:number,olderPages:{seq:number;rows:LogRow[]}[]=[]){
-    return {version:LIVING_RULE_EPOCH,note:"研究层（living-v1）独立记录：配置、市场判断、各做法奖励分、快速通道每一段、等位置、保护、开单与只记录的原因。",
+    return {version:LIVING_RULE_EPOCH,note:"研究层（living-v2）独立记录：资金意图（价格×持仓量、资金费、溢价、主动买卖、成交量）和人性（追涨、恐慌、出尽、拥挤、安逸）的实时读数，市场判断，快速通道每一段（资金是否跟上），等位置、持有理由、保护、开单与只记录的原因。价格幅度都是价格涨跌 %，不是 ROE。",
+      marketTimeline:this.marketHist.slice(-90).map(x=>({at:x.at,state:x.state,side:x.side,conf:x.confidence,sentence:x.sentence,ev:x.ev})),
+      coinReads:[...this.coins.values()].map(c=>({s:c.symbol,cap:c.capital,emo:c.emotion,crowd:c.crowd,st:c.strength,act:c.action?`${c.action.pb}/${c.action.side}`:null,why:c.why})),
+      holds:[...this.holds.entries()].map(([id,h])=>({id,...h})),intentCounts:this.intentCounts,
       status:this.status(now),counts:this.trades.counts,
       thesisHistory:this.thesis.history.slice(-100),probeSeries:this.probes.series.slice(-600),
       selection:{weights:this.select.weights,excess:this.select.excess},episodes:this.episodes,
@@ -502,5 +669,7 @@ export class LivingEngine{
   followSymbols(forward:ForwardView){return[...new Set([...(this.basket?.members??[]),"BTC_USDT","ETH_USDT",...forward.positions.map(p=>p.symbol),...this.trades.watches.map(w=>w.symbol)])];}
   /** Only when acting (paper-enabled, no fallback): compute-only must not change the legacy loop cadence. */
   wantsUrgent(now:number){return this.effective(now).acting&&(!!this.fast.episode||this.trades.watches.some(w=>w.status==="WAITING"&&w.expiresAt>now));}
+  /** Symbols whose flow (OI / funding / aggressor) the hub should hand over: the tape's symbols. */
+  flowSymbols(forward:ForwardView){return this.followSymbols(forward);}
 }
 export type {Episode,MidBar};

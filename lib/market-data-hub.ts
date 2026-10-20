@@ -76,6 +76,9 @@ export class MarketDataHub{
   private inFlight:Promise<void>|null=null;
   private candleSource=new Map<string,{source:MarketSource;at:number}>();
   private quoteHistory=new Map<string,Map<MarketSource,{at:number;mid:number;bidSize:number;askSize:number;imbalance:number;spread:number}[]>>();
+  /** Derivatives fields Bybit already sends in the same bulk ticker payload (read only by the living layer). */
+  private bybitDeriv=new Map<string,{at:number;oi:number|null;funding:number|null;mark:number|null;index:number|null;turnover:number|null}>();
+  private bybitDerivNext:typeof this.bybitDeriv|null=null;
 
   launchRefresh(now:number){
     if(this.inFlight)return this.inFlight;
@@ -90,7 +93,8 @@ export class MarketDataHub{
       this.fetchBybit(now),this.fetchOkx(now),this.fetchKucoin(now),
       mexcDue?bounded(this.fetchMexc(now),500):Promise.resolve(null),htxDue?bounded(this.fetchHtx(now),500):Promise.resolve(null),
     ]);
-    if(bybit.status==="fulfilled"){this.bybit=bybit.value;this.ok("BYBIT",now,bybit.value.size);}else this.fail("BYBIT",now,bybit.reason);
+    if(bybit.status==="fulfilled"){this.bybit=bybit.value;this.ok("BYBIT",now,bybit.value.size);if(this.bybitDerivNext)this.bybitDeriv=this.bybitDerivNext;}else this.fail("BYBIT",now,bybit.reason);
+    this.bybitDerivNext=null;
     if(okx.status==="fulfilled"){this.okx=okx.value;this.ok("OKX",now,okx.value.size);}else this.fail("OKX",now,okx.reason);
     if(kucoin.status==="fulfilled"){this.kucoin=kucoin.value;this.ok("KUCOIN",now,kucoin.value.size);}else this.fail("KUCOIN",now,kucoin.reason);
     if(mexc.status==="fulfilled"&&mexc.value){this.mexc=mexc.value;this.ok("MEXC",now,mexc.value.size);}
@@ -110,18 +114,21 @@ export class MarketDataHub{
     this.health[source]={...prior,lastFailureAt:now,failures,lastError:message,nextRetryAt:backoffMs?now+backoffMs:0};}
 
   private async fetchBybit(now:number){
-    type Row={symbol?:string;lastPrice?:string;bid1Price?:string;ask1Price?:string;bid1Size?:string;ask1Size?:string;turnover24h?:string;price24hPcnt?:string};
+    type Row={symbol?:string;lastPrice?:string;bid1Price?:string;ask1Price?:string;bid1Size?:string;ask1Size?:string;turnover24h?:string;price24hPcnt?:string;
+      openInterest?:string;fundingRate?:string;markPrice?:string;indexPrice?:string};
     type Res={retCode?:number;result?:{list?:Row[]}};
     const body=await json<Res>(`${BYBIT}/v5/market/tickers?category=linear`,BULK_TIMEOUT_MS);
     if(body.retCode!==0||!Array.isArray(body.result?.list))throw new Error("Bybit ticker payload");
-    const out=new Map<string,HubQuote>();
+    const out=new Map<string,HubQuote>(),deriv=new Map<string,{at:number;oi:number|null;funding:number|null;mark:number|null;index:number|null;turnover:number|null}>();
+    const num=(v:string|undefined)=>{if(v==null||v==="")return null;const n=Number(v);return Number.isFinite(n)?n:null;};
     for(const row of body.result!.list!){const symbol=canonical(row.symbol??"");if(!symbol)continue;
       const last=Number(row.lastPrice),bid=Number(row.bid1Price),ask=Number(row.ask1Price);
       if(!(last>0&&bid>0&&ask>bid))continue;
+      deriv.set(symbol,{at:now,oi:num(row.openInterest),funding:num(row.fundingRate),mark:num(row.markPrice),index:num(row.indexPrice),turnover:num(row.turnover24h)});
       out.set(symbol,{source:"BYBIT",symbol,observedAt:now,last,bid,ask,bidSize:Math.max(0,Number(row.bid1Size??0)),askSize:Math.max(0,Number(row.ask1Size??0)),
         volume24hUsd:Math.max(0,Number(row.turnover24h??0)),change24hRate:Number(row.price24hPcnt??0)});
     }
-    if(out.size<20)throw new Error(`Bybit incomplete ticker surface: ${out.size}`);return out;
+    if(out.size<20)throw new Error(`Bybit incomplete ticker surface: ${out.size}`);this.bybitDerivNext=deriv;return out;
   }
   private async fetchOkx(now:number){
     type Row={instId?:string;last?:string;bidPx?:string;askPx?:string;bidSz?:string;askSz?:string;volCcy24h?:string;open24h?:string;ts?:string};
@@ -244,6 +251,23 @@ export class MarketDataHub{
       out.push({symbol,mid,at:Math.max(...rows.map(q=>q.observedAt)),spread:median(rows.map(q=>(q.ask-q.bid)/((q.bid+q.ask)/2))),
         disagreement:rows.length>1?(Math.max(...mids)-Math.min(...mids))/mid:0,sources:rows.length,
         volume24hUsd:Math.max(...rows.map(q=>q.volume24hUsd)),change24h:directional.change24hRate,imbalance:imb.length?median(imb):0});
+    }
+    return out;
+  }
+  /**
+   * Read-only capital-flow fields for the living layer, from payloads the refresh already received (no request):
+   * Bybit open interest / funding / mark-index basis / 24h turnover, and every venue's last-vs-bid/ask aggressor proxy.
+   */
+  peekFlow(symbols:Iterable<string>,now=Date.now()){
+    const out:{symbol:string;at:number;oi:number|null;funding:number|null;basis:number|null;taker:number|null;turnover:number|null}[]=[];
+    for(const symbol of symbols){
+      const rows=[this.bybit.get(symbol),this.okx.get(symbol),this.kucoin.get(symbol),this.mexc.get(symbol),this.htx.get(symbol)]
+        .filter((q):q is HubQuote=>!!q&&validQuote(q,now));
+      const tk=rows.map(q=>{const mid=(q.bid+q.ask)/2,half=(q.ask-q.bid)/2;return half>0?clip((q.last-mid)/half):NaN;}).filter(Number.isFinite);
+      const dv=this.bybitDeriv.get(symbol),fresh=dv&&now-dv.at<=QUOTE_FRESH_MS?dv:null;
+      if(!tk.length&&!fresh)continue;
+      out.push({symbol,at:fresh?.at??Math.max(...rows.map(q=>q.observedAt)),oi:fresh?.oi??null,funding:fresh?.funding??null,
+        basis:fresh&&fresh.mark&&fresh.index&&fresh.index>0?fresh.mark/fresh.index-1:null,taker:tk.length?median(tk):null,turnover:fresh?.turnover??null});
     }
     return out;
   }

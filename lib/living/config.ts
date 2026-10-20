@@ -7,8 +7,8 @@
  *  - compute-only  : everything is computed and logged; advanceForward still gets no living input.
  *  - paper-enabled : the enabled items act on the PAPER account only. Live switch, Gate orders: never touched.
  */
-export const LIVING_VERSION="living-v1" as const;
-export const LIVING_RULE_EPOCH="living-v1" as const;
+export const LIVING_VERSION="living-v2" as const;
+export const LIVING_RULE_EPOCH="living-v2" as const;
 export const LIVING_KEY_PREFIX="living:v1:";
 export const LIVING_CONFIG_KEY=`${LIVING_KEY_PREFIX}config`;
 /** Every own value stays at or below this (same rule as market-intelligence shadow research). */
@@ -21,8 +21,8 @@ export const LIVING_ITEMS=["fastProtect","fastFollow","newSource","noChase","liq
 export type LivingItem=typeof LIVING_ITEMS[number];
 export type LivingItems=Record<LivingItem,boolean>;
 export const LIVING_ITEM_LABELS:Record<LivingItem,string>={
-  fastProtect:"1 快速保护",fastFollow:"2 快速跟进",newSource:"3 五步闭环开单",noChase:"4 到位置再确认（不追价）",
-  liqSafety:"5 维持保证金率≤2%、止损≤爆仓距离40%",thesisExit:"6 理由没了就走",sizing:"7 证据倍数仓位"};
+  fastProtect:"1 快速保护",fastFollow:"2 快速跟进",newSource:"3 资金意图开单（五步闭环）",noChase:"4 到位置再确认（不追价）",
+  liqSafety:"5 维持保证金率≤2%、止损≤爆仓距离40%",thesisExit:"6 持有理由没了就走",sizing:"7 证据倍数仓位"};
 
 export type LivingConfig={version:typeof LIVING_VERSION;mode:LivingMode;items:LivingItems;updatedAt:number;
   /** First moment paper-enabled acted on the account (run-log rule_epoch boundary). */
@@ -36,7 +36,7 @@ export function defaultLivingConfig(now:number):LivingConfig{
 }
 export function normalizeLivingConfig(raw:unknown,now:number):LivingConfig{
   const base=defaultLivingConfig(now),v=raw as Partial<LivingConfig>|null|undefined;
-  if(!v||typeof v!=="object"||v.version!==LIVING_VERSION)return base;
+  if(!v||typeof v!=="object"||(v.version!==LIVING_VERSION&&(v.version as unknown)!=="living-v1"))return base;
   const mode=LIVING_MODES.includes(v.mode as LivingMode)?v.mode as LivingMode:base.mode;
   const items={...base.items};
   for(const k of LIVING_ITEMS)if(typeof v.items?.[k]==="boolean")items[k]=v.items[k];

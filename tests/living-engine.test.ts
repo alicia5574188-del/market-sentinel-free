@@ -64,7 +64,7 @@ test("paper-enabled on 10-19 06:00: fast follow opens a paper trade with its liv
   assert.ok(lv.length>=1,"a living trade");
   const t=lv[0]!;assert.equal(t.entryContext!.living!.k,"F");assert.equal(t.side,"LONG");assert.ok(t.openedAt>=bj("10-19 06:00:12")&&t.openedAt<=bj("10-19 06:02"));
   const ct=fixtureContracts();for(const x of lv)assert.ok(ct[x.symbol]!.maintenanceRate<=.02);
-  const rec=orderRecord(t) as Record<string,unknown>;assert.equal(rec.living_kind,"fast");assert.equal(rec.rule_epoch,"living-v1");assert.equal(rec.living_episode,t.entryContext!.living!.ep);
+  const rec=orderRecord(t) as Record<string,unknown>;assert.equal(rec.living_kind,"fast");assert.equal(rec.rule_epoch,"living-v2");assert.equal(rec.living_episode,t.entryContext!.living!.ep);
   assert.ok(r.engine.log.some(row=>row.k==="RECORD_ONLY"&&/维持保证金率/.test(String(row.reason))));
   assert.ok(r.engine.config.epochStartedAt!=null);
   // the run-log row of a trade without a note is unchanged (no living_* keys)

@@ -15,6 +15,8 @@ export type FastSample={at:number;healthy:boolean;reason:string|null;warm:boolea
 export type Episode={id:string;side:Side;phase:"ALERT"|"CONFIRMED";alertAt:number;alertKind:"z60"|"z30";confirmAt:number|null;
   anchorAt:number;anchor:Record<string,number>;level:number;extreme:number;extremeAt:number;retrace:number;maxRetrace:number;
   peakZ:number;quietSince:number|null;pullbackSeen:boolean;newExtremeAfterPullbackAt:number|null;
+  /** v2: what carried the move (OI / volume / aggressor), checked at alert and again at confirm */
+  flow?:{kind:string;real:boolean|null;why:string;vol:number|null;taker:number|null;oi:number|null};
   confirm?:{b180:number;z180:number;beta180:number;btc:number|null;eth:number|null;agree:number}};
 export type EpisodeEnd="FAKE"|"EXHAUST"|"TIMEOUT"|"REVERSED";
 export type EpisodeRecord={id:string;side:Side;alertAt:number;alertKind:"z60"|"z30";confirmAt:number|null;endAt:number;end:EpisodeEnd;
@@ -23,13 +25,17 @@ export type EpisodeRecord={id:string;side:Side;alertAt:number;alertKind:"z60"|"z
   after:Record<string,[number|null,number|null,number|null]>;
   /** P8 fade: top-decile leaders at the end, and their signed move 30m later (negative = leaders reversed). */
   leaders:string[];leadersAfter30:number|null;follow30Net:number|null;entries:number;protections:number};
-export type FastEvent={type:"ALERT"|"CONFIRM"|"FAKE"|"EXHAUST"|"TIMEOUT"|"REVERSED";at:number;episodeId:string;side:Side;detail:Record<string,number|string|null>};
+export type FastEvent={type:"ALERT"|"CONFIRM"|"FAKE"|"EXHAUST"|"TIMEOUT"|"REVERSED"|"SURGE";at:number;episodeId:string;side:Side;detail:Record<string,number|string|null>};
 export type FastState={v:1;sigma:Record<"30"|"60"|"180"|"300"|"btc"|"eth",number[]>;lastSigmaAt:number;
   streak:{side:Side;n:number;kind:"z60"|"z30";lastAt:number}|null;episode:Episode|null;
   cooldowns:{side:Side;until:number;kind:"END"|"FAKE"}[];adjust:{z:number;at:number;log:{at:number;delta:number;why:string}[]};
   lastSampleAt:number;lastReason:string|null;
   /** missed-move detector (B7): last 15m windows where the basket moved ≥1% without an alert. */
-  missed:number[];alertsLog:{at:number;fake:boolean}[]};
+  missed:number[];alertsLog:{at:number;fake:boolean}[];
+  /** v2: price-only bursts that flow did not back (not an alert; only the liquidation guard reacts) */
+  surges?:{at:number;side:Side}[]};
+/** v2 flow check the engine passes in (intent.burstFlow). real=null → no flow data yet (price-only, as v1). */
+export type FlowCheck=(side:Side)=>{real:boolean|null;kind:string;why:string;vol:number|null;taker:number|null;oi:number|null};
 export const AFTER_MIN=[1,5,15,30,60,120] as const;
 
 export function initialFast():FastState{
@@ -100,7 +106,7 @@ function alertSide(s:FastSample,adj:number):{side:Side;kind:"z60"|"z30"}|null{
 export function bucketOf(z:number):0|1|2|3{const a=Math.abs(z);return a>=FAST.bucketEdges[2]?3:a>=FAST.bucketEdges[1]?2:a>=FAST.bucketEdges[0]?1:0;}
 
 /** One fast-lane step. Pure apart from reading the tape; returns the new state, events, and a finished record if any. */
-export function stepFast(prev:FastState,tape:LivingTape,basket:Basket,now:number):{state:FastState;sample:FastSample;events:FastEvent[];ended:EpisodeRecord|null}{
+export function stepFast(prev:FastState,tape:LivingTape,basket:Basket,now:number,flowCheck?:FlowCheck):{state:FastState;sample:FastSample;events:FastEvent[];ended:EpisodeRecord|null}{
   const state:FastState={...prev,sigma:prev.sigma,cooldowns:prev.cooldowns.filter(c=>c.until>now),episode:prev.episode?{...prev.episode}:null};
   const sample=sampleBasket(tape,basket,state,now),events:FastEvent[]=[];let ended:EpisodeRecord|null=null;
   pushSigma(state,sample);state.lastSampleAt=now;state.lastReason=sample.reason;
@@ -154,10 +160,12 @@ export function stepFast(prev:FastState,tape:LivingTape,basket:Basket,now:number
           const ok=d*sample.B[180]>=FAST.confirmB180&&d*sample.z[180]>=FAST.confirmZ180&&sample.beta[180]>=FAST.confirmBeta180
             &&Math.sign(sample.B[180])===d&&ep.retrace<=FAST.confirmMaxRetrace
             &&((btc!=null&&btc>=FAST.confirmBtc)||(eth!=null&&eth>=FAST.confirmEth))&&agree>=FAST.confirmTopAgree;
-          if(ok){
+          const fv=ok&&flowCheck?flowCheck(ep.side):null;
+          if(fv)ep.flow={kind:fv.kind,real:fv.real,why:fv.why,vol:fv.vol,taker:fv.taker,oi:fv.oi};
+          if(ok&&fv?.real!==false){
             ep.phase="CONFIRMED";ep.confirmAt=now;
             ep.confirm={b180:r6(sample.B[180]),z180:r6(sample.z[180]),beta180:r6(sample.beta[180]),btc:btc==null?null:r6(btc),eth:eth==null?null:r6(eth),agree};
-            events.push({type:"CONFIRM",at:now,episodeId:ep.id,side:ep.side,detail:{...ep.confirm,level:r6(ep.level),retrace:r6(ep.retrace)}});
+            events.push({type:"CONFIRM",at:now,episodeId:ep.id,side:ep.side,detail:{...ep.confirm,level:r6(ep.level),retrace:r6(ep.retrace),flow:ep.flow?.kind??null,flowWhy:ep.flow?.why??null}});
           }
         }
       }
@@ -171,15 +179,24 @@ export function stepFast(prev:FastState,tape:LivingTape,basket:Basket,now:number
   }else state.streak=null;
   if(!state.episode&&state.streak&&state.streak.n>=FAST.alertSamples){
     const side=state.streak.side,blocked=state.cooldowns.some(c=>c.side===side&&c.kind==="FAKE"&&c.until>now);
-    if(!blocked){
+    const fv=!blocked&&flowCheck?flowCheck(side):null,override=Math.abs(sample.z[60])>=FAST.alertZ60+2+adj;
+    if(!blocked&&fv&&fv.real===false&&!override){
+      // v2: price moved together but no flow behind it → no alert (noise); one SURGE note per side per 5 minutes
+      const surges=(state.surges??[]).filter(x=>now-x.at<=5*60_000);
+      if(!surges.some(x=>x.side===side)){surges.push({at:now,side});
+        events.push({type:"SURGE",at:now,episodeId:`sg-${Math.floor(now/1000).toString(36)}`,side,detail:{z60:r6(sample.z[60]),why:fv.why}});}
+      state.surges=surges;
+    }else if(!blocked){
       const anchorAt=now-60_000,anchor:Record<string,number>={};
       for(const s of [...basket.members,"BTC_USDT","ETH_USDT"]){const p=tape.midAt(s,anchorAt);if(p&&p.mid>0)anchor[s]=p.mid;}
       const e:Episode={id:`fe-${Math.floor(now/1000).toString(36)}-${side[0]}`,side,phase:"ALERT",alertAt:now,alertKind:state.streak.kind,confirmAt:null,
-        anchorAt,anchor,level:0,extreme:0,extremeAt:now,retrace:0,maxRetrace:0,peakZ:Math.abs(sample.z[60]),quietSince:null,pullbackSeen:false,newExtremeAfterPullbackAt:null};
+        anchorAt,anchor,level:0,extreme:0,extremeAt:now,retrace:0,maxRetrace:0,peakZ:Math.abs(sample.z[60]),quietSince:null,pullbackSeen:false,newExtremeAfterPullbackAt:null,
+        ...(fv?{flow:{kind:override&&fv.real===false?"PRICE_ONLY_STRONG":fv.kind,real:fv.real,why:fv.why,vol:fv.vol,taker:fv.taker,oi:fv.oi}}:{})};
       const lv=episodeLevel(tape,e,now);if(Number.isFinite(lv)){e.level=lv;e.extreme=Math.max(0,lv);}
       state.episode=e;
       events.push({type:"ALERT",at:now,episodeId:e.id,side,detail:{kind:e.alertKind,z60:r6(sample.z[60]),z30:r6(sample.z[30]),beta60:r6(sample.beta[60]),
-        beta30:r6(sample.beta[30]),btcZ60:sample.btcZ60==null?null:r6(sample.btcZ60),ethZ60:sample.ethZ60==null?null:r6(sample.ethZ60),level:r6(e.level)}});
+        beta30:r6(sample.beta[30]),btcZ60:sample.btcZ60==null?null:r6(sample.btcZ60),ethZ60:sample.ethZ60==null?null:r6(sample.ethZ60),level:r6(e.level),
+        flow:e.flow?.kind??null,flowWhy:e.flow?.why??null}});
     }
   }
   return {state,sample,events,ended};

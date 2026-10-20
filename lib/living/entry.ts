@@ -17,7 +17,9 @@ import {r6,quantile} from "./util.ts";
 export type Watch={id:string;symbol:string;side:Side;playbook:Playbook;probe:string;createdAt:number;expiresAt:number;
   zoneLo:number;zoneHi:number;invalidation:number;ref:number|null;target:number|null;holdMin:number;rank:number;selectScore:number;
   layers:{l1:boolean;l2:boolean;probeSize:boolean;why1:string;why2:string};inZoneSamples:number;lastSampleAt:number;
-  zoneSeenAt:number|null;zonePrice:number|null;status:"WAITING"|"READY"|"DONE";reason:string|null};
+  zoneSeenAt:number|null;zonePrice:number|null;status:"WAITING"|"READY"|"DONE";reason:string|null;
+  /** v2: the live intent read that created the watch (narrative + evidence carried into the trade note) */
+  intent?:{state:string;market:string;why:string;ev:string;strength:number}};
 const d=(s:Side)=>s==="LONG"?1:-1;
 /** Zone + invalidation for a selected candidate (C4 positions). Null = no sensible position. */
 export function planPosition(c:Candidate,rows:MidBar[]):{lo:number;hi:number;inv:number;target:number|null}|null{
@@ -67,7 +69,7 @@ export function stopCheck(input:{side:Side;price:number;stop:number;min:number;m
   }
   return {ok:true,stop:r6(stop),rate,liq:liq??NaN};
 }
-export function newWatch(c:Candidate,plan:{lo:number;hi:number;inv:number;target:number|null},now:number,holdMin:number,
+export function newWatch(c:Pick<Candidate,"symbol"|"side"|"playbook"|"probe"|"score"|"rank"|"trigger">,plan:{lo:number;hi:number;inv:number;target:number|null},now:number,holdMin:number,
   layers:Watch["layers"]):Watch{
   return {id:`lw-${Math.floor(now/1000).toString(36)}-${c.symbol.replace(/[^A-Z0-9]/g,"")}-${c.side[0]}`,symbol:c.symbol,side:c.side,playbook:c.playbook,
     probe:c.probe,createdAt:now,expiresAt:now+STEPS.waitPositionMs,zoneLo:r6(plan.lo),zoneHi:r6(plan.hi),invalidation:r6(plan.inv),

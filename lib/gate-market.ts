@@ -210,7 +210,9 @@ export async function fetchGateRadarTickers(){
     volume24hUsd:Number(row.volume_24h_usd??row.volume_24h_settle??0),
     high24h:Number(row.high_24h??row.last??0),low24h:Number(row.low_24h??row.last??0),
     change24hRate:Number(row.change_percentage??0)/100,fundingRate:Number(row.funding_rate??0),
-    openInterest:Math.abs(Number(row.total_size??0))}))
+    openInterest:Math.abs(Number(row.total_size??0)),
+    // same payload, read only by the living layer's flow book (basis = mark vs index)
+    markPrice:Number(row.mark_price??0),indexPrice:Number(row.index_price??0)}))
     .filter(row=>row.symbol.endsWith("_USDT")&&row.last>0&&row.volume24hUsd>0);
 }
 

@@ -1818,7 +1818,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const keys=LivingEngine.loadKeys(),values=await this.ctx.storage.get<unknown>(keys);
       const idx=values.get(`${LIVING_LOG_PAGE_PREFIX}index`) as {seq?:number}|undefined;
       const page=Number.isFinite(idx?.seq)?await this.ctx.storage.get<unknown>(`${LIVING_LOG_PAGE_PREFIX}${idx!.seq}`):undefined;
-      const engine=new LivingEngine(now);engine.restore(values,now,page);this.living=engine;
+      const engine=new LivingEngine(now);engine.restore(values,now,page);
+      // warm-up of the OI baseline from the worker's existing 15-minute Gate OI snapshots (no request)
+      try{engine.seedOi(this.oiRing);}catch{/* 只是暖机 */}
+      this.living=engine;
     }catch(error){
       this.livingLoadFailedAt=now;this.runtime.strategyLogError=`living-load: ${safeError(error)}`;
     }
@@ -1830,7 +1833,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const symbols=engine.basket&&engine.basket.day===new Date(at).toISOString().slice(0,10)&&engine.basket.members.length>=10
         ?engine.followSymbols(this.forwardState as unknown as LivingForwardView??{positions:[],history:[],opportunities:[]})
         :[...this.marketHub.listedSymbols()].filter(listed);
-      engine.onHub(this.marketHub.peekMids(symbols,at),at,listed);
+      // prices and capital flow both come from the payloads this refresh already received (no request of its own)
+      engine.onHub(this.marketHub.peekMids(symbols,at),at,listed,this.marketHub.peekFlow(symbols,at));
     }catch(error){this.runtime.strategyLogError=`living-hub: ${safeError(error)}`;}
   }
   private livingPlan(now:number,state:ForwardState,quotes:Record<string,{bestBid:number;bestAsk:number;observedAt:number;entryReady?:boolean}>):LivingDirective|undefined{
@@ -1852,7 +1856,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     catch{reservation.finish(false);}
   }
   private async livingExport(now:number){
-    const engine=this.living;if(!engine)return {version:"living-v1",loaded:false};
+    const engine=this.living;if(!engine)return {version:"living-v2",loaded:false};
     const pages=engine.logPages.filter(p=>p!==engine.logSeq).slice(-10),older:{seq:number;rows:LivingLogRow[]}[]=[];
     if(pages.length){try{const got=await this.ctx.storage.get<{seq:number;rows:LivingLogRow[]}>(pages.map(p=>`${LIVING_LOG_PAGE_PREFIX}${p}`));
       for(const v of got.values())if(v&&Array.isArray(v.rows))older.push(v);}catch{/* 旧页读不到就只导出内存里的 */}}
@@ -4684,6 +4688,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
               moves=new Map<string,number>();
             for(const row of next){const prior=previous.get(row.symbol);if(prior&&prior>0)moves.set(row.symbol,row.last/prior-1);}
             this.gateRadarCache=next;this.gateRadarShortMoves=moves;this.gateRadarAt=Date.now();subrequests++;
+            // living layer reads Gate OI / funding / basis from this same payload (no extra Gate request)
+            try{this.living?.onRadar(next,this.gateRadarAt);}catch{/* 研究层读不到不影响主流程 */}
             try{this.noteRadarForLog(next,this.gateRadarAt);}catch{/* 只是记录用的索引 */}
           }catch{/* stale Gate-only discovery must never block external analysis */}
         }
@@ -4837,7 +4843,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (path === "/living-status" && request.method === "GET") {
       await this.ensureLiving(Date.now());
       if(!this.living)return json({error:"研究层还没恢复"},503);
-      return json(this.living.status(Date.now()));
+      return json(this.living.status(Date.now(),this.forwardState as unknown as LivingForwardView??undefined));
     }
     if (path === "/living-mode" && request.method === "POST") {
       await this.ensureLiving(Date.now());
@@ -4849,7 +4855,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       for(const [k,v] of Object.entries(body.items??{})){if(!(LIVING_ITEMS as readonly string[]).includes(k)||typeof v!=="boolean")return json({error:`未知开关 ${k}`},400);items[k]=v;}
       const now=Date.now();this.living.setConfig({mode,items:items as never},now);
       await this.persistLiving(now,true);
-      return json(this.living.status(now));
+      return json(this.living.status(now,this.forwardState as unknown as LivingForwardView??undefined));
     }
     if (path === "/forward-log-status" && request.method === "GET") {
       if(!this.forwardState||!this.authorityReady)return json({error:"权威账户尚未恢复"},503);
@@ -4893,7 +4899,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           equity_minutes_since:state.startedAt,equity_gaps:(()=>{try{return equityGaps(file.equity_minutes);}catch{return [];}})(),
           equity_filled_min:file.equity_minutes.filter(row=>row.filled).length,researchNotes:RESEARCH_NOTES,archive_read:{rows:archived.read,missing:archived.missing},path_check:pathsReady,
           paths:exportTradePaths(this.tradePaths,keep),holding:searchHolding(this.tradePaths,keep),
-          livingResearch:await (async()=>{try{return await this.livingExport(exportedAt);}catch(error){return {version:"living-v1",error:safeError(error)};}})()});
+          livingResearch:await (async()=>{try{return await this.livingExport(exportedAt);}catch(error){return {version:"living-v2",error:safeError(error)};}})()});
       }
       if(url.searchParams.get("page")==="archive"){
         const startedAt=Number(url.searchParams.get("accountStartedAt")),asOf=Number(url.searchParams.get("asOf"));

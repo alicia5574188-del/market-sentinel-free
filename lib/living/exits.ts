@@ -61,9 +61,24 @@ export function fastProtection(input:{positions:PositionView[];ep:Episode|null;e
   }
   return out;
 }
+/** v2: a price-only burst that flow did not back (SURGE) is not an alert; only positions near liquidation react. */
+export function surgeGuard(input:{positions:PositionView[];events:FastEvent[];tape:LivingTape;now:number}):LivingTradeAction[]{
+  const out:LivingTradeAction[]=[];
+  for(const e of input.events){if(e.type!=="SURGE")continue;
+    for(const p of input.positions){
+      if(p.price==null||p.side===e.side||!p.liquidationPrice)continue;
+      const r60=input.tape.ret(p.symbol,input.now,60);if(r60==null||Math.sign(r60)!==d(e.side))continue;
+      const liqDist=Math.abs(p.price-p.liquidationPrice)/p.price;
+      if(liqDist<Math.max(FAST.liqMoveMultiple*Math.abs(r60),FAST.liqMinDistance))
+        out.push({tradeId:p.id,action:"EXIT",code:"LIVING_FAST_LIQ_GUARD",reason:`全市场急动（资金没跟，不算警报），但离爆仓只有 ${(liqDist*100).toFixed(2)}%，直接平`,detail:{surge:e.episodeId,liqDist:r6(liqDist)}});
+    }}
+  return out;
+}
 /** C5 thesis exits for trades the living layer opened. `probe` = live score of the trade's playbook probe. */
 export function thesisExits(input:{positions:PositionView[];thesis:Thesis|null;scores:Record<ProbeId,ProbeScore>;tape:LivingTape;now:number;
-  episode:Episode|null;handedOff:Set<string>;lastEnd:{id:string;end:string;at:number}|null}):LivingTradeAction[]{
+  episode:Episode|null;handedOff:Set<string>;lastEnd:{id:string;end:string;at:number}|null;
+  /** v2: the live market intent still backs this side (handoff instead of exit when an episode ends) */
+  intentSupports?:(side:"LONG"|"SHORT")=>boolean}):LivingTradeAction[]{
   const out:LivingTradeAction[]=[];
   for(const p of input.positions){
     const n=p.living;if(!n||p.price==null)continue;
@@ -74,13 +89,13 @@ export function thesisExits(input:{positions:PositionView[];thesis:Thesis|null;s
       if(ageMin>=FAST.timeExitMs/60_000&&p.favorable<FAST.timeExitMin){out.push({tradeId:p.id,action:"EXIT",code:"LIVING_FAST_TIME",reason:"快速单 10 分钟内没走出 +0.5%，平掉"});continue;}
       if((!ep||ep.id!==n.ep)&&input.lastEnd&&input.lastEnd.id===n.ep){
         // the episode ended (EXHAUST/TIMEOUT/REVERSED): hand off if step 2 agrees, else exit
-        if(thesisSupports(input.thesis,"momentum",p.side)||(input.thesis?.side===p.side&&input.thesis.structure!=="RANGE"))
-          out.push({tradeId:p.id,action:"HANDOFF",code:"LIVING_FAST_HANDOFF",reason:"这一段走完，第二步判断也支持这个方向，交给正常流程继续拿"});
-        else out.push({tradeId:p.id,action:"EXIT",code:"LIVING_FAST_EXHAUST",reason:"这一段走完，第二步判断不支持这个方向，平掉"});
+        if(input.intentSupports?input.intentSupports(p.side):(thesisSupports(input.thesis,"momentum",p.side)||(input.thesis?.side===p.side&&input.thesis.structure!=="RANGE")))
+          out.push({tradeId:p.id,action:"HANDOFF",code:"LIVING_FAST_HANDOFF",reason:"这一段走完，市场资金意图还支持这个方向，交给正常流程继续拿"});
+        else out.push({tradeId:p.id,action:"EXIT",code:"LIVING_FAST_EXHAUST",reason:"这一段走完，市场资金意图不再支持这个方向，平掉"});
       }
       continue;
     }
-    if(n.k!=="N")continue;
+    if(n.k!=="N"||n.v==="living-v2")continue;// v2 normal trades: intent.holdCheck decides hold / exit
     const pb=n.pb as Playbook,score=input.scores[PLAYBOOK_PROBE[pb]];
     const flipped=!!input.thesis?.side&&input.thesis.side!==p.side&&(pb!=="extension-fade"&&pb!=="crowding-fade"&&pb!=="range-revert");
     if(score&&((score.score<=0&&score.t<=STEPS.exitUnrewardedT)||flipped)){
