@@ -645,6 +645,8 @@ function executableProtectionFill(side:"LONG"|"SHORT",stop:number,quote:number,p
 }
 function closeTrade(s:ForwardState,t:Trade,price:number,now:number,reason:string,evidence?:Record<string,string|number|boolean|null>,
   settle?:{gross:number;exitFee:number}){
+  // 一笔单只能平一次：已经平过的（例如研究层刚平、还没从持仓里摘掉）再进任何出场都直接忽略，不能二次记账。
+  if(t.status!=="OPEN")return;
   const gross=settle?settle.gross:dir(t.side)*t.quantity*(price-t.entryPrice),exitFee=settle?settle.exitFee:t.quantity*price*PAPER_COST.feeRate;
   const funding=t.notional*PAPER_COST.fundingAllowancePerDay*Math.max(0,now-t.openedAt)/86_400_000,
     net=gross-t.entryFee-exitFee-funding+realizedContribution(t),r=t.realization,remainingNotional=t.notional;
@@ -866,7 +868,7 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
   marketEvolution:MarketEvolutionState,environmentOutlook:EnvironmentOutlook,paths?:Record<string,Candle[]>,contracts?:Record<string,Contract>){
   const closed=new Set<string>();
   for(const t of [...s.positions,...(s.unopenedTrades??[]).filter(row=>row.status==="OPEN")]){
-    if(t.inverseCopy)continue;
+    if(t.inverseCopy||t.status!=="OPEN")continue;
     if(t.entryContext?.strategyVersion!==MARKET_INTELLIGENCE_VERSION)continue;
     const q=quotes[t.symbol];if(!freshQuote(q,now))continue;
     // 逐仓爆仓先看：价格已经越过强平价就不可能再按止损价平。正常情况下止损远在强平价之前，这条不会触发。
@@ -1061,7 +1063,7 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
 
 function markAndManage(s:ForwardState,quotes:Record<string,Quote>,now:number){
   const candidates=new Map(s.opportunities.filter(o=>!isIntelligenceOpportunity(o)).map(o=>[o.symbol,o])),relationById=new Map(s.relationEngine.rules.map(r=>[r.id,r])),closed=new Set<string>();
-  for(const t of s.positions){if(t.inverseCopy||t.entryContext?.strategyVersion===MARKET_INTELLIGENCE_VERSION||t.exitControl?.policy==='needle-v1'||t.exitControl?.policy==='brain-v1'||t.exitControl?.policy==='score-v1'||t.exitControl?.policy==='read-v1'||t.exitControl?.policy==='lsr-v1'||t.exitControl?.policy==='rx-v1'||t.exitControl?.policy==='desk-v1')continue;const q=quotes[t.symbol];if(!freshQuote(q,now))continue;const px=t.side==="LONG"?q!.bestBid:q!.bestAsk,d=dir(t.side);
+  for(const t of s.positions){if(t.inverseCopy||t.status!=="OPEN"||t.entryContext?.strategyVersion===MARKET_INTELLIGENCE_VERSION||t.exitControl?.policy==='needle-v1'||t.exitControl?.policy==='brain-v1'||t.exitControl?.policy==='score-v1'||t.exitControl?.policy==='read-v1'||t.exitControl?.policy==='lsr-v1'||t.exitControl?.policy==='rx-v1'||t.exitControl?.policy==='desk-v1')continue;const q=quotes[t.symbol];if(!freshQuote(q,now))continue;const px=t.side==="LONG"?q!.bestBid:q!.bestAsk,d=dir(t.side);
     t.lastPrice=px;t.lastQuoteAt=q!.observedAt;const signed=d*(px/t.entryPrice-1),favorable=Math.max(0,signed),adverse=Math.max(0,-signed);
     t.favorable=Math.max(t.favorable,favorable);t.adverse=Math.max(t.adverse,adverse);t.peakPnlRate=Math.max(t.peakPnlRate??0,favorable);
     if(!t.firstProfitAt&&favorable>=ROUND_TRIP_COST*.6)t.firstProfitAt=now;
@@ -1825,16 +1827,17 @@ function livingGuardHit(s:ForwardState,t:Trade,q:Quote,now:number,bar?:Candle){
 }
 function applyLivingActions(s:ForwardState,living:LivingDirective,out:LivingResult,quotes:Record<string,Quote>,now:number,
   minutePaths?:Record<string,Candle[]>,contracts?:Record<string,Contract>){
+  const closed=new Set<string>();
   for(const a of living.actions){
     const t=s.positions.find(x=>x.id===a.tradeId);if(!t||t.status!=="OPEN"||t.inverseCopy)continue;
     const q=quotes[t.symbol];if(!freshQuote(q,now))continue;
     const bar=minutePaths?.[t.symbol]?.at(-1);
-    if(liquidateIfHit(s,t,q!,now,contracts?.[t.symbol],bar)){out.applied.push({tradeId:t.id,code:"LIQUIDATION",action:"EXIT"});continue;}
+    if(liquidateIfHit(s,t,q!,now,contracts?.[t.symbol],bar)){closed.add(t.id);out.applied.push({tradeId:t.id,code:"LIQUIDATION",action:"EXIT"});continue;}
     const px=t.side==="LONG"?q!.bestBid:q!.bestAsk,d=dir(t.side),signed=d*(px/t.entryPrice-1);
     if(a.action==="EXIT"){
       t.lastPrice=px;t.lastQuoteAt=q!.observedAt;t.favorable=Math.max(t.favorable,Math.max(0,signed));t.adverse=Math.max(t.adverse,Math.max(0,-signed));
       closeTrade(s,t,px,now,a.code,{authority:"LIVING_RESEARCH",reason:a.reason.slice(0,160),quoteAt:q!.observedAt,...(a.detail??{})});
-      out.applied.push({tradeId:t.id,code:a.code,action:"EXIT"});
+      closed.add(t.id);out.applied.push({tradeId:t.id,code:a.code,action:"EXIT"});
     }else if(a.action==="GUARD"&&a.stop!=null&&Number.isFinite(a.stop)&&a.stop>0){
       // Only ever tighter than the current stop, and still on the safe side of the executable price.
       if(d*(a.stop-t.stopPrice)<=0||d*(px-a.stop)<=0)continue;
@@ -1847,6 +1850,8 @@ function applyLivingActions(s:ForwardState,living:LivingDirective,out:LivingResu
       out.applied.push({tradeId:t.id,code:a.code,action:"HANDOFF"});
     }
   }
+  // 研究层平掉的单必须当场从持仓里摘掉；留在持仓里会被后面的旧出场再平一次（重复记账）。
+  if(closed.size)s.positions=s.positions.filter(t=>!closed.has(t.id));
 }
 /** Opens one paper trade decided by the living layer. Existing total/side/margin/5-minute caps apply (expansion fixed 5x). */
 function openLivingTrade(s:ForwardState,o:LivingOrder,living:LivingDirective,q:Quote|undefined,contract:Contract|undefined,now:number,equity:number,
@@ -2005,6 +2010,8 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
     s.stageChronicle=fillStageForward(s.stageChronicle,snap.btc,snap.eth,(at:number)=>equalWeightReturnSince(input.paths,at),input.now);
   }catch{/* 阶段快照写失败不能挡住这一轮 */}
   if(marketReady)annotateLifecycleOpportunities(s,marketEvolution,environmentOutlook);
+  // 已平的单（已在历史里）不该留在持仓里；恢复的旧状态里如果有，这里摘掉，不再记账。
+  if(s.positions.some(t=>t.status!=="OPEN"))s.positions=s.positions.filter(t=>t.status==="OPEN");
   const livingResult:LivingResult|undefined=input.living?{opened:[],rejected:[],applied:[]}:undefined;
   // Living exits/protections come first (after liquidation, which applyLivingActions checks itself), then the existing exit stack.
   if(input.living&&livingResult)applyLivingActions(s,input.living,livingResult,input.quotes,input.now,input.minutePaths,input.contracts);

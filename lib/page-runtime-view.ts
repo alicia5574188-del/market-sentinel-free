@@ -15,11 +15,21 @@ function pageTrade(t:unknown){
   }
   return row;
 }
+/** One row per trade id (newest-first list): a trade closed twice shows only its first (earliest) close. */
+export function onceById(rows:unknown[]){
+  const first=new Map<unknown,{at:number;row:unknown}>();
+  for(const row of rows){
+    const r=row as Row|null;if(!r||r.id==null||r.unopened)continue;const id=r.id;
+    const at=typeof r.closedAt==='number'?r.closedAt:Infinity,prev=first.get(id);
+    if(!prev||at<prev.at)first.set(id,{at,row});
+  }
+  return rows.filter(row=>{const r=row as Row|null,id=r?.id;return id==null||r?.unopened||first.get(id)?.row===row;});
+}
 export function pageForwardView<T>(view:T):T{
   if(!view||typeof view!=='object')return view;
   const v={...(view as Row)};
-  if(Array.isArray(v.positions))v.positions=v.positions.map(pageTrade);
-  if(Array.isArray(v.history))v.history=v.history.map(pageTrade);
+  if(Array.isArray(v.positions))v.positions=v.positions.filter(t=>(t as Row|null)?.status!=='CLOSED').map(pageTrade);
+  if(Array.isArray(v.history))v.history=onceById(v.history).map(pageTrade);
   if('entryOpportunities' in v)delete v.entryOpportunities;
   delete v.shadowInverse;delete v.confirmationReality;delete v.latestReason;delete v.events;
   if(v.boundaries&&typeof v.boundaries==='object'){
