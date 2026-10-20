@@ -25,6 +25,7 @@ import { readCoinPath, type CoinPath } from "./coin-path.ts";
 import { transitionExitReason, type TransitionEntry } from "./transition-rule.ts";
 import { entryGate, entryGateNote, type EntryGateNote } from "./entry-gate.ts";
 import type { S1Note } from "./s1-rule.ts";
+import type { LivingDirective, LivingNote, LivingOrder, LivingResult } from "./living/directive.ts";
 import { advanceShockEpisode, initialShockEpisode, normalizeShockEpisode, type ShockEpisode } from "./shock-episode.ts";
 import { advanceStageChronicle, attachStageSnap, equalWeightReturnPct, equalWeightReturnSince, fillStageForward, initialStageChronicle, normalizeStageChronicle, stageStamp, type StageChronicle, type StageSnap, type StageStamp } from "./stage-chronicle.ts";
 import { backfillSignalTally, earliestTallyAt, normalizeSignalTally, noteSignalOutcome, quoteSpreadBps, rememberSignalRepeat, type SignalRepeat, type SignalTally, type SignalTallyMeta } from "./signal-repeat.ts";
@@ -174,6 +175,8 @@ export type EntryContext={
   /** LEGACY (read-only): S1 note on trades opened while S1 was live (10-19, withdrawn the same day; lib/s1-rule.ts).
    * Only exported/rendered; no decision reads it. Such a trade, if still open, is managed by the earlier exit stack. */
   s1?:S1Note;
+  /** Living research layer (lib/living): the compact reason this trade was opened by the living flow. Absent on every other trade. */
+  living?:LivingNote;
 };
 import type {ReviewEvent, TradeReview} from "./review-trace.ts";
 
@@ -186,6 +189,8 @@ export type EntrySnap={
 
 export type Trade={
   inverseCopy?:InverseCopy;
+  /** Living layer protection (fast-lane tighten / breakeven / thesis breakeven): a tighter stop with its reason. Absent unless the living layer set it. */
+  livingGuard?:{stop:number;code:string;reason:string;at:number};
   /** Isolated-margin liquidation price fixed at open, and the maintenance rate used for it. */
   liquidationPrice?:number|null;maintenanceRate?:number|null;
   winnerManagement?:WinnerManagement;realization?:TradeRealization;
@@ -749,7 +754,7 @@ export function manageWinnerTrade(s:ForwardState,t:Trade,q:Quote,now:number,path
   t.lastPrice=px;t.lastQuoteAt=q.observedAt;t.favorable=Math.max(t.favorable,Math.max(0,signed));t.adverse=Math.max(t.adverse,Math.max(0,-signed));
   t.peakPnlRate=Math.max(t.peakPnlRate??0,t.favorable);
   const stage=t.entryContext?.environment,live=t.entryContext?.stageNote?.liveStage,
-    shockTrend=stage==="SHOCK"||stage==="TREND"||live==="SHOCK"||live==="TREND";
+    shockTrend=stage==="SHOCK"||stage==="TREND"||live==="SHOCK"||live==="TREND"||!!t.entryContext?.living;
   // 到过 10% 只听 1.5 个点。5% 到 10% 之间才听 0.8 个点。没碰到就走原来的出场。
   if(shockTrend&&t.favorable>=.10&&t.favorable-signed>=.015){
     closeTrade(s,t,px,now,"PEAK_GIVEBACK",{authority:"SHOCK_TREND_GIVEBACK",peakRate:t.favorable,signedRate:signed,armRate:.10,givebackRate:.015,quoteAt:q.observedAt});
@@ -760,7 +765,7 @@ export function manageWinnerTrade(s:ForwardState,t:Trade,q:Quote,now:number,path
     return true;
   }
   const liveStage=t.entryContext?.stageNote?.liveStage;
-  if((liveStage==="SHOCK"||liveStage==="TREND"||stage==="SHOCK"||stage==="TREND")){
+  if((liveStage==="SHOCK"||liveStage==="TREND"||stage==="SHOCK"||stage==="TREND"||!!t.entryContext?.living)){
     const rhythm=rhythmBreakDecision({side:t.side,entryPrice:t.entryPrice,openedAt:t.openedAt,now,price:px,minutes:minutePaths?.[t.symbol],cost:ROUND_TRIP_COST});
     if(rhythm.exit){
       closeTrade(s,t,px,now,"RHYTHM_BREAK",{authority:"OWN_RHYTHM",peakRate:rhythm.peakRate,stallMin:rhythm.stallMin,longestMin:rhythm.longestMin,atr:rhythm.atr,giveback:rhythm.giveback,quoteAt:q.observedAt});
@@ -866,6 +871,8 @@ function manageIntelligenceTrades(s:ForwardState,quotes:Record<string,Quote>,now
     const q=quotes[t.symbol];if(!freshQuote(q,now))continue;
     // 逐仓爆仓先看：价格已经越过强平价就不可能再按止损价平。正常情况下止损远在强平价之前，这条不会触发。
     if(liquidateIfHit(s,t,q!,now,contracts?.[t.symbol],minutePaths?.[t.symbol]?.at(-1))){closed.add(t.id);continue;}
+    // 研究层收紧过的保护价（只有研究层设置过才存在）：在原来的出场之前先看。
+    if(t.livingGuard&&livingGuardHit(s,t,q!,now,minutePaths?.[t.symbol]?.at(-1))){closed.add(t.id);continue;}
     // 只有带过渡出场的单才按空间止损和时间走。爆发段的单不带这套出场，继续走原来的结构止损和理由失效。
     if(t.entryContext?.transitionRule){
       if(manageTransitionTrade(s,t,q!,now))closed.add(t.id);
@@ -1591,7 +1598,7 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
 
 function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<string,Contract>,
   minutePaths:Record<string,Candle[]>|undefined,paths:Record<string,Candle[]>|undefined,now:number,equity:number,trace?:(event:ReviewEvent)=>void,
-  btc1hPct:number|null=null){
+  btc1hPct:number|null=null,livingNote=false){
   const opportunities=new Map(s.opportunities.map(o=>[o.id,o])),waiting=Object.values(s.entryValidations)
     .filter(v=>v.status==="WAITING").sort((a,b)=>{
       const ao=a.frozenOpportunity??opportunities.get(a.candidateId),bo=b.frozenOpportunity??opportunities.get(b.candidateId);
@@ -1746,6 +1753,17 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
       }
       reject(noted??"只有同步爆发或趋势才开新单，这笔只留档");continue;
     }
+    if(livingNote){
+      // The living research layer decides new entries (paper-enabled, item 3): this legacy signal is kept as a note only;
+      // its "momentum" playbook competes there with no privilege. Absent directive → livingNote is false → a38882f4 path.
+      const why="研究层五步闭环接管开单：这条老信号只留档，作为动量打法参与竞争";
+      const noted=openIntelligenceTrade(s,o,q!,meta,now,equity,{validation,decision},minutePaths?.[o.symbol],structure,null,null,true);
+      if(!noted||noted.startsWith("同币已有未开")){
+        validation.status="CANCELLED";validation.reason=why;
+        delete s.entryValidations[validation.id];
+      }
+      reject(noted??why);continue;
+    }
     // 趋势/爆发两条开仓规则：BTC 1小时要顺向 0.5%；趋势里 BTC 不动、山寨 30 分钟已跌 1.4% 时做空改做多。
     // 例外：做空时这个币自己 8 小时背景已涨 5% 以上（就是记录里的 coin_background_pct，取自下面存进单子的 o.coinPath），BTC 不顺也放行。
     const gateInput={stage,side:o.side,btc1hPct,factor30mPct:equalWeightReturnPct(Object.values(s.extremumRegime.symbols).map(row=>row.actualMove)),
@@ -1795,6 +1813,118 @@ export function fillForwardPortfolio(s:ForwardState,quotes:Record<string,Quote>,
   }
   s.entryDiagnostics.opened=opened;return opened;
 }
+// ---------------------------------------------------------------------------------------------------------------------
+// Living research layer hooks (lib/living). Only reached when advanceForward gets a `living` directive (paper-enabled).
+// ---------------------------------------------------------------------------------------------------------------------
+function livingGuardHit(s:ForwardState,t:Trade,q:Quote,now:number,bar?:Candle){
+  const g=t.livingGuard;if(!g)return false;
+  const px=t.side==="LONG"?q.bestBid:q.bestAsk,d=dir(t.side);
+  if(d*(px-g.stop)>0)return false;
+  const fill=executableProtectionFill(t.side,g.stop,px,t.lastPrice,bar),signed=d*(px/t.entryPrice-1);
+  t.favorable=Math.max(t.favorable,Math.max(0,signed));t.adverse=Math.max(t.adverse,Math.max(0,-signed));
+  closeTrade(s,t,fill,now,"LIVING_GUARD_STOP",{authority:"LIVING_RESEARCH",guardCode:g.code,guardStop:g.stop,guardAt:g.at,quote:px,quoteAt:q.observedAt});
+  return true;
+}
+function applyLivingActions(s:ForwardState,living:LivingDirective,out:LivingResult,quotes:Record<string,Quote>,now:number,
+  minutePaths?:Record<string,Candle[]>,contracts?:Record<string,Contract>){
+  for(const a of living.actions){
+    const t=s.positions.find(x=>x.id===a.tradeId);if(!t||t.status!=="OPEN"||t.inverseCopy)continue;
+    const q=quotes[t.symbol];if(!freshQuote(q,now))continue;
+    const bar=minutePaths?.[t.symbol]?.at(-1);
+    if(liquidateIfHit(s,t,q!,now,contracts?.[t.symbol],bar)){out.applied.push({tradeId:t.id,code:"LIQUIDATION",action:"EXIT"});continue;}
+    const px=t.side==="LONG"?q!.bestBid:q!.bestAsk,d=dir(t.side),signed=d*(px/t.entryPrice-1);
+    if(a.action==="EXIT"){
+      t.lastPrice=px;t.lastQuoteAt=q!.observedAt;t.favorable=Math.max(t.favorable,Math.max(0,signed));t.adverse=Math.max(t.adverse,Math.max(0,-signed));
+      closeTrade(s,t,px,now,a.code,{authority:"LIVING_RESEARCH",reason:a.reason.slice(0,160),quoteAt:q!.observedAt,...(a.detail??{})});
+      out.applied.push({tradeId:t.id,code:a.code,action:"EXIT"});
+    }else if(a.action==="GUARD"&&a.stop!=null&&Number.isFinite(a.stop)&&a.stop>0){
+      // Only ever tighter than the current stop, and still on the safe side of the executable price.
+      if(d*(a.stop-t.stopPrice)<=0||d*(px-a.stop)<=0)continue;
+      t.livingGuard={stop:a.stop,code:a.code,reason:a.reason.slice(0,160),at:now};
+      t.stopPrice=a.stop;t.profitFloorRate=Math.max(0,d*(a.stop/t.entryPrice-1));
+      event(s,now,"PROTECTION",t.id,`${t.symbol} 研究层收紧保护：${a.reason.slice(0,80)}`,{code:a.code,stop:a.stop});
+      out.applied.push({tradeId:t.id,code:a.code,action:"GUARD"});
+    }else if(a.action==="HANDOFF"&&t.entryContext?.living){
+      t.entryContext.living={...t.entryContext.living,ho:now};
+      out.applied.push({tradeId:t.id,code:a.code,action:"HANDOFF"});
+    }
+  }
+}
+/** Opens one paper trade decided by the living layer. Existing total/side/margin/5-minute caps apply (expansion fixed 5x). */
+function openLivingTrade(s:ForwardState,o:LivingOrder,living:LivingDirective,q:Quote|undefined,contract:Contract|undefined,now:number,equity:number,
+  minutePath?:Candle[]):string|{tradeId:string;symbol:string;side:"LONG"|"SHORT";risk:number;notional:number}{
+  if(!contract)return"没有合约规格";
+  if(!freshQuote(q,now)||q!.entryReady===false)return"没有可成交的 Gate 实时盘口（不新增请求）";
+  if(s.positions.some(t=>t.symbol===o.symbol))return"同币已有持仓";
+  const side=o.side,d=dir(side),price=side==="LONG"?q!.bestAsk:q!.bestBid;
+  if(!(price>0))return"盘口价格无效";
+  if(now-(s.lastExitAt[o.symbol]??0)<15*60_000&&s.lastSide[o.symbol]===side)return"同币同方向 15 分钟内刚平过";
+  if(d*(price-o.stop)<=0)return"失效价已经不在成交价外侧";
+  const stopRate=Math.abs(price-o.stop)/price;
+  if(!(stopRate>=.004&&stopRate<=.035))return`止损宽度 ${(stopRate*100).toFixed(2)}% 不在 0.4%-3.5%`;
+  const leverage=fixedPaperLeverage(contract.leverageMax),maintenanceRate=maintenanceRateOf(contract.maintenanceRate),
+    liquidationPrice=isolatedLiquidationPrice({entry:price,leverage,side,maintenanceRate});
+  if(living.items.liqSafety){
+    if(!(contract.maintenanceRate>0)||contract.maintenanceRate>.02)return`维持保证金率 ${((contract.maintenanceRate||0)*100).toFixed(1)}%>2%`;
+    const liqDist=liquidationPrice?Math.abs(price-liquidationPrice)/price:0;
+    if(!(liqDist>0)||stopRate>.40*liqDist)return`止损超过爆仓距离的 40%`;
+  }
+  const expansion=5,
+    totalHeadroom=equity*(TOTAL_RISK_RATE*expansion-.001)-existingRisk(s),
+    sideHeadroom=equity*(SIDE_RISK_RATE*expansion-.0005)-existingRisk(s,side),
+    cycleHeadroom=equity*FIVE_MINUTE_NEW_RISK_RATE*expansion-cycleRiskAdded(s,s.lastCandleAt),
+    episodeHeadroom=o.episodeCap!=null&&o.episodeId?equity*o.episodeCap-s.positions.filter(t=>t.entryContext?.living?.ep===o.episodeId).reduce((n,t)=>n+riskCharge(t),0):Infinity,
+    headroom=Math.min(totalHeadroom,sideHeadroom,cycleHeadroom,episodeHeadroom),
+    wantedRisk=equity*o.riskRate*o.multiple,riskBudget=Math.min(wantedRisk,headroom);
+  if(!(riskBudget>=equity*.0015))return episodeHeadroom<=totalHeadroom&&episodeHeadroom<wantedRisk?"这一段集体异动的风险已用满 2%":"剩余风险预算不足以形成有效仓位";
+  const targetNotional=Math.min(riskBudget/(stopRate+ROUND_TRIP_COST),equity*.70*expansion),
+    mult=Math.max(contract.quantoMultiplier,1e-12),
+    minContracts=Math.max(1,Math.ceil(contract.minContracts??(Number(contract.orderSizeMin??1)||1))),
+    contracts=Math.floor(targetNotional/(price*mult));
+  if(contracts<minContracts)return"低于最小模拟合约数量";
+  const quantity=contracts*mult,notional=quantity*price,margin=notional/leverage,totalMargin=s.positions.reduce((n,t)=>n+t.margin,0);
+  if(totalMargin+margin>equity*TOTAL_MARGIN_RATE*expansion)return"组合保证金已满";
+  const plannedRisk=notional*(stopRate+ROUND_TRIP_COST),entryFee=notional*PAPER_COST.feeRate,horizon=Math.max(10,Math.round(o.note.hold)),
+    target=null,
+    id=`lv-${now.toString(36)}-${o.symbol.replace(/[^A-Z0-9]/g,"")}-${side[0]}`,
+    winnerPlan:WinnerPlan|undefined=o.winner?{version:WINNER_POLICY_VERSION,intent:"TREND",eventAt:now,initialStop:o.stop,target,targetArea:null,origin:null,
+      riskGroup:`living:${o.note.pb}:${side}`,source:"RELATIVE_CORE"}:undefined,
+    rule:Rule={id:o.id,signature:`LIVING:${o.note.pb}:${o.note.k}`,parentId:null,version:1,createdAt:now,
+      expiresAt:now+Math.max(180,horizon*2.2)*60_000,status:"EXPERIMENTAL",conditions:[],side,horizon,stopRate,
+      armRate:0,givebackRate:0,exitMode:"HORIZON",samples:o.note.n??0,trainGroups:0,checkGroups:0,
+      estimatedNetRate:o.note.sc??0,priorResponse:null,recentResponse:0,standardError:0,reason:o.reason.slice(0,200),mutation:"CREATE",
+      grammar:MARKET_INTELLIGENCE_VERSION,liveEligible:false,authority:"ADAPTIVE_TEN",turnTimeframe:"5m"},
+    t:Trade={id,symbol:o.symbol,side,rule,openedAt:now,closedAt:null,status:"OPEN",entryPrice:price,exitPrice:null,quantity,contracts,quantoMultiplier:mult,
+      notional,leverage,margin,liquidationPrice,maintenanceRate,plannedRisk,stopPrice:o.stop,armPrice:price*(1+d*Math.max(.004,stopRate)),favorable:0,adverse:0,
+      lastPrice:price,lastQuoteAt:q!.observedAt,entryFee,exitFee:0,fundingAllowance:0,grossPnl:null,netPnl:null,exitReason:null,relationFailureBars:0,
+      lastRelationBar:now,execution:"REAL_QUOTE_PAPER_MODEL",liveEligible:false,firstProfitAt:null,holdScore:50,profitFloorRate:0,expectedHoldMinutes:horizon,peakPnlRate:0,
+      exitControl:{policy:MARKET_INTELLIGENCE_VERSION,armedAt:null,armedQuoteAt:null,maxObservationGapMs:30_000,maxQuoteAgeMs:10_000},
+      entryContext:{winnerPlan,version:"adaptive-ten-entry-v1",capturedAt:now,timeframe:"5m",side,mode:o.note.k==="F"?"SHOCK":"CONTINUATION",reserve:false,
+        reason:o.reason.slice(0,240),entryScore:Math.round((o.note.sc??0)*1e4)/100,directionStrength:0,spaceScore:0,positionScore:0,executionScore:0,
+        remainingSpaceRate:0,pullbackRiskRate:stopRate,edgeRatio:0,expectedHoldMinutes:horizon,marketFit:0,regionId:null,
+        portfolioRiskCharge:riskBudget,sizeMultiple:o.multiple,strategyVersion:MARKET_INTELLIGENCE_VERSION,postEntryState:"PENDING",
+        sourceCount:q!.sourceCount,disagreementRate:q!.disagreementRate,marketNarrativeId:s.extremumRegime.narrative.id,
+        thesisSummary:o.reason.slice(0,240),invalidationSummary:`失效价 ${o.stop}`,
+        stageNote:stageStamp(s.stageChronicle,s.extremumRegime.internals?.synchrony,now),living:o.note},
+      forecast:{remainingNetRate:0,quality:.5,sizingEquity:equity}};
+  try{
+    // Same position assessment the existing exits read later; recorded as the baseline only (no veto here).
+    const positionState=s.extremumRegime.symbols[o.symbol],mark=side==="LONG"?q!.bestBid:q!.bestAsk;
+    t.positionIntelligence=evaluatePositionIntelligence({now,openedAt:now,side,signedRate:d*(mark/price-1),peakFavorableRate:0,ageMin:0,firstProfit:false,
+      expectedHoldMinutes:horizon,stopRate,entryScore:50,entryResidual:0,entryRelativeStrength:.5,entryRemainingSpaceRate:0,
+      state:positionState,narrative:s.extremumRegime.narrative,quote:q!,minutePath,currentPrice:mark,liquidity:s.extremumRegime.liquidity?.symbols[o.symbol],
+      entryTradePlan:undefined,entryOrigin:null,entryTarget:null,entryBaseline:capturePositionBaseline(side,positionState,now),entryResponseValidated:true,
+      marketStateAgeMs:Math.max(0,now-s.extremumRegime.updatedAt),costRate:ROUND_TRIP_COST});
+  }catch{/* baseline is advisory */}
+  try{
+    const remembered=rememberSignalRepeat(s.signalTally,o.symbol,side,now,t.id);
+    s.signalTally=remembered.tally;t.signalRepeat=remembered.repeat;t.entrySpreadBps=quoteSpreadBps(q!.bestBid,q!.bestAsk);
+  }catch{/* 记下次数失败也不能挡住这张单 */}
+  s.positions.push(t);s.balance-=entryFee;s.fees+=entryFee;s.turnover+=notional;s.lastEntryAt[o.symbol]=now;s.lastSide[o.symbol]=side;
+  event(s,now,"ENTRY",id,`${o.symbol} ${side} 研究层${o.note.k==="F"?"快速跟进":"五步闭环"} ${o.note.pb}`,{notional,plannedRisk});
+  return{tradeId:id,symbol:o.symbol,side,risk:plannedRisk,notional};
+}
+
 function nextCandleAt(paths:Record<string,Candle[]>,now:number){
   let latest=0;for(const p of Object.values(paths)){const a=validPath(p,now);if(a)latest=Math.max(latest,(a.at(-1)!.time+300)*1000);}return latest;
 }
@@ -1804,7 +1934,9 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
   /** Log only (stage timeline snapshot): BTC/ETH prices when the analysis book does not carry them. Never read by a decision. */
   referenceMids?:Partial<Record<"BTC_USDT"|"ETH_USDT",number|null>>;
   /** BTC 1h change in percent, the same value the run log writes as btc_1h_pct. Gates TREND/SHOCK entries (entry-gate.ts); null blocks them. */
-  btc1hPct?:number|null}){
+  btc1hPct?:number|null;
+  /** Living research layer directive (lib/living). Undefined = exactly the a38882f4 path (modes off / compute-only never pass it). */
+  living?:LivingDirective}){
   // An optional observer has no return value or trading authority. A failed logger cannot block a trade.
   const trace=input.reviewTrace?(event:ReviewEvent)=>{try{input.reviewTrace!(event);}catch{/* diagnostics only */}}:undefined;
   const s=normalizeForward(structuredClone(input.state),input.now),
@@ -1875,6 +2007,9 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
     s.stageChronicle=fillStageForward(s.stageChronicle,snap.btc,snap.eth,(at:number)=>equalWeightReturnSince(input.paths,at),input.now);
   }catch{/* 阶段快照写失败不能挡住这一轮 */}
   if(marketReady)annotateLifecycleOpportunities(s,marketEvolution,environmentOutlook);
+  const livingResult:LivingResult|undefined=input.living?{opened:[],rejected:[],applied:[]}:undefined;
+  // Living exits/protections come first (after liquidation, which applyLivingActions checks itself), then the existing exit stack.
+  if(input.living&&livingResult)applyLivingActions(s,input.living,livingResult,input.quotes,input.now,input.minutePaths,input.contracts);
   manageIntelligenceTrades(s,input.quotes,input.now,input.minutePaths,marketEvolution,environmentOutlook,input.paths,input.contracts);
   // Positions opened before cutover keep their frozen lifecycle and cannot gain
   // new-entry authority from the retired relation/region/interrupt stack.
@@ -1890,7 +2025,17 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
   // execution clock; research refreshes can no longer make it disappear.
   if(marketReady)seedEntryResponses(s,input.quotes,input.now,trace);
   const opened=marketReady?advanceEntryResponses(s,input.quotes,input.contracts,input.minutePaths,input.paths,input.now,mark.equity,trace,
-    typeof input.btc1hPct==="number"&&Number.isFinite(input.btc1hPct)?input.btc1hPct:null):0;
+    typeof input.btc1hPct==="number"&&Number.isFinite(input.btc1hPct)?input.btc1hPct:null,input.living?.legacyGate==="note"):0;
+  let livingOpened=0;
+  if(input.living&&livingResult&&!opened){
+    if(!marketReady)for(const o of input.living.orders)livingResult.rejected.push({orderId:o.id,symbol:o.symbol,reason:"全市场路径还在恢复，不开新单"});
+    else for(const o of input.living.orders){
+      if(livingOpened){livingResult.rejected.push({orderId:o.id,symbol:o.symbol,reason:"这一轮已开过一笔（每轮最多一笔）"});continue;}
+      const r=openLivingTrade(s,o,input.living,input.quotes[o.symbol],input.contracts[o.symbol],input.now,mark.equity,input.minutePaths?.[o.symbol]);
+      if(typeof r==="string")livingResult.rejected.push({orderId:o.id,symbol:o.symbol,reason:r});
+      else{livingResult.opened.push({orderId:o.id,...r});livingOpened=1;}
+    }
+  }else if(input.living&&livingResult)for(const o of input.living.orders)livingResult.rejected.push({orderId:o.id,symbol:o.symbol,reason:"这一轮老流程已开过一笔"});
 
   const states=Object.values(s.extremumRegime.symbols),longReady=states.filter(x=>x.longScore>=62).length,
     shortReady=states.filter(x=>x.shortScore>=62).length,divergent=states.filter(x=>x.regime==="DIVERGENT").length,
@@ -1902,9 +2047,11 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
     +` 当前${s.positions.length}笔持仓，${s.opportunities.filter(o=>o.eligible).length}个可参与机会，计划风险已用${riskUse.toFixed(1)}%。 研究背景=${currentEnvironment}，${marketEvolution.reason} ${s.extremumRegime.narrative.plan} 前瞻研究分级作用于新版计划：${s.hypothesisResearch.summary}`;
   if(divergent)s.latestReason+=` 当前发现${divergent}个明显分化资产。`;
   if(opened)s.latestReason+=` 本轮新开${opened}笔。`;
+  if(livingOpened)s.latestReason+=` 研究层本轮新开${livingOpened}笔。`;
   const after=JSON.stringify({p:s.positions.map(t=>[t.id,t.status,t.stopPrice,t.profitFloorRate,t.contracts,t.realization?.sequence]),h:s.history.length,b:s.balance,r:s.revision,
     v:Object.values(s.entryValidations).filter(x=>x.status==="WAITING").map(x=>x.id).sort()});
-  return{state:s,changed:before!==after||dataDue,protectionChanged:input.state.positions.some(t=>s.positions.find(n=>n.id===t.id)?.stopPrice!==t.stopPrice)};
+  const result={state:s,changed:before!==after||dataDue,protectionChanged:input.state.positions.some(t=>s.positions.find(n=>n.id===t.id)?.stopPrice!==t.stopPrice)};
+  return livingResult?{...result,living:livingResult}:result as typeof result&{living?:LivingResult};
 }
 export const ACCOUNT_RESET_LIMIT=200;
 /** Money only. startedAt (the log epoch), history, not-opened rows, stage timeline, tallies, learning, cooldowns,

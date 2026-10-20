@@ -227,6 +227,28 @@ export class MarketDataHub{
       sourceBreadth,directionalAgreement,medianShortMove,bookImbalance,bidLiquidityChange,askLiquidityChange,spreadRate,
       liquiditySourceCount:imbalances.length};
   }
+  /**
+   * Read-only consensus mids for the living research tape. Unlike quote(), this never touches quoteHistory (so the
+   * existing medianShortMove / liquidity-change reads are unchanged) and makes no request: it only reads the maps the
+   * existing refresh already filled.
+   */
+  peekMids(symbols:Iterable<string>,now=Date.now()){
+    const out:{symbol:string;mid:number;at:number;spread:number;disagreement:number;sources:number;volume24hUsd:number;change24h:number;imbalance:number}[]=[];
+    for(const symbol of symbols){
+      const rows=[this.bybit.get(symbol),this.okx.get(symbol),this.kucoin.get(symbol),this.mexc.get(symbol),this.htx.get(symbol)]
+        .filter((q):q is HubQuote=>!!q&&validQuote(q,now));
+      if(!rows.length)continue;
+      const mids=rows.map(q=>(q.bid+q.ask)/2),mid=median(mids);if(!(mid>0))continue;
+      const imb=rows.map(q=>{const t=q.bidSize+q.askSize;return t>0?(q.bidSize-q.askSize)/t:NaN;}).filter(Number.isFinite);
+      const directional=rows.find(q=>q.source==="BYBIT")??rows[0]!;
+      out.push({symbol,mid,at:Math.max(...rows.map(q=>q.observedAt)),spread:median(rows.map(q=>(q.ask-q.bid)/((q.bid+q.ask)/2))),
+        disagreement:rows.length>1?(Math.max(...mids)-Math.min(...mids))/mid:0,sources:rows.length,
+        volume24hUsd:Math.max(...rows.map(q=>q.volume24hUsd)),change24h:directional.change24hRate,imbalance:imb.length?median(imb):0});
+    }
+    return out;
+  }
+  /** Symbols any analysis source currently lists (read-only). */
+  listedSymbols(){return new Set([...this.bybit.keys(),...this.okx.keys(),...this.kucoin.keys(),...this.mexc.keys(),...this.htx.keys()]);}
   coverage(symbol:string,now=Date.now()){const q=this.quote(symbol,now);return q?{sourceCount:q.sourceCount,sources:q.sources,disagreementRate:q.disagreementRate}
     :{sourceCount:0,sources:[] as MarketSource[],disagreementRate:0};}
   supports(symbol:string){return this.bybit.has(symbol)||this.okx.has(symbol)||this.kucoin.has(symbol)||this.mexc.has(symbol)||this.htx.has(symbol);}

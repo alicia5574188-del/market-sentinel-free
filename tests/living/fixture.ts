@@ -34,10 +34,11 @@ export function segmentAt(at:number){
   if(!seg)throw new Error(`fixture has no data at ${new Date(at).toISOString()}`);return seg;
 }
 /** Price path inside a minute: open -> (high or low first, by candle colour) -> other extreme -> close, piecewise linear. */
-export function priceAt(rows:Bar[],at:number){
+export function priceAt(rows:Bar[],at:number,linear=false){
   const minute=Math.floor(at/60_000)*60,i=rows.length?(minute-rows[0]!.time)/60:-1;
   if(i<0)return null;if(i>=rows.length)return rows.at(-1)!.close;
   const r=rows[i]!,f=(at-minute*1000)/60_000;
+  if(linear)return r.open+(r.close-r.open)*f;
   const pts=r.close>=r.open?[r.open,r.low,r.high,r.close]:[r.open,r.high,r.low,r.close];
   const seg=Math.min(2,Math.floor(f*3)),local=f*3-seg;
   return pts[seg]!+(pts[seg+1]!-pts[seg]!)*local;

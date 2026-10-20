@@ -3,6 +3,7 @@ import type {EntryStructure} from './entry-structure.ts';
 import type {Trade} from './forward-relations.ts';
 import {coinPathVersus} from './coin-path.ts';
 import {s1Fields as s1Columns,type S1Fields} from './s1-rule.ts';
+import {livingFields as livingColumns,type LivingFields} from './living/run-log-fields.ts';
 
 export const ORDER_JOURNAL_KEY='market-intelligence:order-journal:v1';
 export const ORDER_JOURNAL_VERSION='order-journal-v1' as const;
@@ -30,7 +31,7 @@ export type OrderRecord={
   gap_bps?:number|null;gap_applicable?:boolean|null;
   /** 趋势/爆发开仓规则：btc_follow / washout_flip / washout_long / pumped_short / btc_follow_block / btc_missing_block；其它阶段为空。 */
   entry_gate?:string|null;gate_signal_side?:'LONG'|'SHORT'|null;gate_btc_1h_pct?:number|null;gate_coin_bg_pct?:number|null;
-}&Partial<S1Fields>;
+}&Partial<S1Fields>&Partial<LivingFields>;
 export type OrderJournal={version:typeof ORDER_JOURNAL_VERSION;accountStartedAt:number;rows:OrderRecord[]};
 
 export function emptyOrderJournal(accountStartedAt:number):OrderJournal{
@@ -50,7 +51,7 @@ export function orderRecord(t:Trade):OrderRecord{
     market_expectancy:t.entryContext?.marketExpectancy??null,entry_structure:t.entryContext?.entryStructure??null,
     leverage:typeof t.leverage==="number"&&t.leverage>0?t.leverage:null,
     entry_rule:entryRuleOf(t),
-    ...entryDecision(t),...stageFields(t),...qualityFields(t),...pathFields(t),...signalFields(t),...snapFields(t),...gapFields(t),...gateFields(t),...s1Fields(t)};
+    ...entryDecision(t),...stageFields(t),...qualityFields(t),...pathFields(t),...signalFields(t),...snapFields(t),...gapFields(t),...gateFields(t),...s1Fields(t),...livingFields(t)};
 }
 function stageFields(t:Trade):Pick<OrderRecord,'live_stage'|'prior_stage'|'stage_age_min'|'minutes_since_shock'|'shock_push'|'sync_drop'|'shock_seen'>{
   const note=t.entryContext?.stageNote;
@@ -104,6 +105,10 @@ export function entryRuleOf(t:Trade):string|null{
 }
 /** S1 columns (btc1h_aligned_pct, s1_branch, original_side, s1_side, s1_plan, s1_stop_pct, s1_tp_pct, s1_exit_reason).
  * Only trades carrying an S1 note get the keys, so older/other rows (and the stored journal) carry no extra bytes. */
+/** Living layer columns (lib/living): only present on trades it opened or protected. */
+export function livingFields(t:Trade):Partial<LivingFields>{
+  return livingColumns(t.entryContext?.living,t.livingGuard);
+}
 export function s1Fields(t:Trade):Partial<S1Fields>{
   return s1Columns(t.entryContext?.s1,t.exitReason,t.status==="CLOSED")??{};
 }

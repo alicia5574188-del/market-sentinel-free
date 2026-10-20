@@ -98,6 +98,10 @@ import { emptyReviewLogCursor, prepareIncompletePrune, prepareReviewLogWrite, re
 const MAKER_EXIT_REASONS=new Set(["SHADOW_SOURCE_EXIT"]);
 import { makerFirstEntry, makerEntryTag, MakerStateUnknownError, LIVE_MAKER_ENTRY_POLICY, LIVE_MAKER_ENTRY_ENABLED, type MakerResult } from "../lib/live-maker-entry.ts";
 import {buildReviewSnapshot, readReviewArchivePage} from "../lib/research-snapshot.ts";
+import {LivingEngine,LOG_PAGE_PREFIX as LIVING_LOG_PAGE_PREFIX,type ForwardView as LivingForwardView,type LogRow as LivingLogRow} from "../lib/living/engine.ts";
+import {LIVING_MODES,LIVING_ITEMS,type LivingMode} from "../lib/living/config.ts";
+import {withLivingEpoch} from "../lib/living/run-log-fields.ts";
+import type {LivingDirective} from "../lib/living/directive.ts";
 import {liveExitPriceLimit} from '../lib/live-entry-price.ts';
 import {observeLiveAccount,type LiveAccountMark} from '../lib/live-account-view.ts';
 import {REVIEW_JOURNAL_KEY, appendReviewEvents, captureTradeReviews, initialReviewJournal, normalizeReviewJournal,
@@ -594,6 +598,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private counterfactualResearchLoaded = false;
   private shadowResearch: ShadowResearchState = initialShadowResearch();
   private shadowResearchLoaded = false;
+  /** Living research layer (lib/living): own keys living:v1:*, never inside the forward state. Null until loaded. */
+  private living: LivingEngine | null = null;
+  private livingLoadFailedAt = 0;
   private reviewJournal=initialReviewJournal(0,Date.now());
   private reviewJournalLoaded=false;
   private reviewJournalLastWrite=0;
@@ -1803,6 +1810,55 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }catch{reservation.finish(false);}
   }
 
+  // ------------------------------------------------------------------ living research layer (lib/living)
+  /** One batched read of the own keys; a failed read starts compute-only (fallback) instead of acting on empty memory. */
+  private async ensureLiving(now:number){
+    if(this.living||now-this.livingLoadFailedAt<60_000)return;
+    try{
+      const keys=LivingEngine.loadKeys(),values=await this.ctx.storage.get<unknown>(keys);
+      const idx=values.get(`${LIVING_LOG_PAGE_PREFIX}index`) as {seq?:number}|undefined;
+      const page=Number.isFinite(idx?.seq)?await this.ctx.storage.get<unknown>(`${LIVING_LOG_PAGE_PREFIX}${idx!.seq}`):undefined;
+      const engine=new LivingEngine(now);engine.restore(values,now,page);this.living=engine;
+    }catch(error){
+      this.livingLoadFailedAt=now;this.runtime.strategyLogError=`living-load: ${safeError(error)}`;
+    }
+  }
+  private livingOnHub(at:number){
+    const engine=this.living;if(!engine||engine.config.mode==="off")return;
+    try{
+      const listed=(s:string)=>this.contractCatalog.has(s);
+      const symbols=engine.basket&&engine.basket.day===new Date(at).toISOString().slice(0,10)&&engine.basket.members.length>=10
+        ?engine.followSymbols(this.forwardState as unknown as LivingForwardView??{positions:[],history:[],opportunities:[]})
+        :[...this.marketHub.listedSymbols()].filter(listed);
+      engine.onHub(this.marketHub.peekMids(symbols,at),at,listed);
+    }catch(error){this.runtime.strategyLogError=`living-hub: ${safeError(error)}`;}
+  }
+  private livingPlan(now:number,state:ForwardState,quotes:Record<string,{bestBid:number;bestAsk:number;observedAt:number;entryReady?:boolean}>):LivingDirective|undefined{
+    const engine=this.living;if(!engine||engine.config.mode==="off")return undefined;
+    try{
+      const contracts=this.regimeContracts(),funding:Record<string,number>={};
+      for(const [symbol,meta] of Object.entries(this.runtime.contractMeta))if(Number.isFinite(meta?.fundingRate))funding[symbol]=meta.fundingRate;
+      return engine.plan({now,forward:state as unknown as LivingForwardView,quotes,contracts,funding,candles:this.strategyCandles});
+    }catch(error){this.runtime.strategyLogError=`living-plan: ${safeError(error)}`;return undefined;}
+  }
+  /** Own keys only, under the shared optional write guard and the layer's own daily budget. */
+  private async persistLiving(now:number,force=false){
+    const engine=this.living;if(!engine||(engine.config.mode==="off"&&!force))return;
+    const entries=engine.writes(now,force),keys=Object.keys(entries);if(!keys.length)return;
+    const expired=engine.expiredLogKeys();
+    const reservation=this.reserveNonAlarmWrites(keys.length+expired.length,512);if(!reservation)return;
+    try{await this.ctx.storage.put(entries);if(expired.length)await this.ctx.storage.delete(expired);
+      reservation.finish(true);engine.committed(keys,now);engine.logPages=engine.logPages.filter(p=>!expired.includes(`${LIVING_LOG_PAGE_PREFIX}${p}`));}
+    catch{reservation.finish(false);}
+  }
+  private async livingExport(now:number){
+    const engine=this.living;if(!engine)return {version:"living-v1",loaded:false};
+    const pages=engine.logPages.filter(p=>p!==engine.logSeq).slice(-10),older:{seq:number;rows:LivingLogRow[]}[]=[];
+    if(pages.length){try{const got=await this.ctx.storage.get<{seq:number;rows:LivingLogRow[]}>(pages.map(p=>`${LIVING_LOG_PAGE_PREFIX}${p}`));
+      for(const v of got.values())if(v&&Array.isArray(v.rows))older.push(v);}catch{/* 旧页读不到就只导出内存里的 */}}
+    return {...engine.exportSection(now,older),olderPagesExported:older.length,olderPagesKept:engine.logPages.length};
+  }
+
   private async advanceForwardNow(now: number, allowDataCycle = true) {
     if (this.forwardBusy) return;
     this.forwardBusy = true;
@@ -1812,7 +1868,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const state=this.forwardState!;
       const dataCycleDue=allowDataCycle&&(!state.lastCycleAt
         ||Math.floor((now-90_000)/BAR_MS)>Math.floor((state.lastCycleAt-90_000)/BAR_MS));
-      const urgent=this.forwardUrgentSymbols(now).length>0||state.positions.length>0;
+      await this.ensureLiving(now);
+      const urgent=this.forwardUrgentSymbols(now).length>0||state.positions.length>0||(this.living?.wantsUrgent(now)??false);
       const quoteCadence=urgent?LOOP_MS:5_000;
       if(!dataCycleDue&&now-state.lastQuoteCycleAt<quoteCadence){
         this.forwardLastAttemptAt=state.lastQuoteCycleAt;
@@ -1821,12 +1878,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }
       this.forwardLastAttemptAt=now;
       const previous = state,reviewEvents:ReviewEvent[]=[],executionQuotes=this.forwardQuotes(now);
+      const livingDirective=this.livingPlan(now,previous,executionQuotes);
       const next = advanceForward({ state: previous, now, paths: this.strategyCandles,minutePaths:this.forwardMinutePaths(),
         daily:this.turnDailyCandles,quotes:executionQuotes,analysisQuotes:this.forwardAnalysisQuotes(now),contracts:this.regimeContracts(),
         entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue,
         research:{rolling:this.shadowResearch.market[0]?.rolling??null},reviewTrace:event=>{if(reviewEvents.length<128)reviewEvents.push(event);},
         referenceMids:(()=>{try{return this.referenceMids(now);}catch{return undefined;}})(),
-        btc1hPct:this.gateBtc1h(now) });
+        btc1hPct:this.gateBtc1h(now),...(livingDirective?{living:livingDirective}:{}) });
+      try{this.living?.afterForward(next.living,next.state as unknown as LivingForwardView,now);}catch{/* 研究层记录失败不能挡住这一轮 */}
       try{captureTradeReviews(previous,next.state,now,FORWARD_BUILD_SHA,STRATEGY_FINGERPRINT,executionQuotes);}
       catch{this.reviewDiagnosticError="TRADE_REVIEW_CAPTURE_FAILED";}
       if(this.tradePathsLoaded){
@@ -1892,6 +1951,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         catch{reservation.finish(false);}
       }
       try{await this.noteEquityMinute(now);}catch{/* 权益分钟线写失败不能挡住这一轮 */}
+      try{await this.persistLiving(now);}catch{/* 研究层自己的键写失败不能挡住这一轮 */}
     } catch (error) { this.forwardError = safeError(error); }
     finally { this.forwardBusy = false; }
   }
@@ -4303,6 +4363,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       for(const symbol of this.forwardUrgentSymbols(at)){
         const q=this.marketHub.quote(symbol,at);if(q)this.recordForwardMinuteQuote(symbol,q.mid,q.observedAt);
       }
+      this.livingOnHub(at);
     }).catch(error=>{this.runtime.strategyLogError=`external-market: ${safeError(error)}`;}));
   }
 
@@ -4773,6 +4834,23 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const actual=Object.values(this.runtime.live.positions).find(p=>p?.id===id)??binding.actual;
       return json({...binding,currentSource:this.currentMirrorSource(id),actual});
     }
+    if (path === "/living-status" && request.method === "GET") {
+      await this.ensureLiving(Date.now());
+      if(!this.living)return json({error:"研究层还没恢复"},503);
+      return json(this.living.status(Date.now()));
+    }
+    if (path === "/living-mode" && request.method === "POST") {
+      await this.ensureLiving(Date.now());
+      if(!this.living)return json({error:"研究层还没恢复"},503);
+      let body:{mode?:unknown;items?:Record<string,unknown>};try{body=await request.json() as typeof body;}catch{return json({error:"invalid json"},400);}
+      const mode=typeof body.mode==="string"&&LIVING_MODES.includes(body.mode as LivingMode)?body.mode as LivingMode:undefined;
+      if(body.mode!=null&&!mode)return json({error:"mode 只能是 off / compute-only / paper-enabled"},400);
+      const items:Record<string,boolean>={};
+      for(const [k,v] of Object.entries(body.items??{})){if(!(LIVING_ITEMS as readonly string[]).includes(k)||typeof v!=="boolean")return json({error:`未知开关 ${k}`},400);items[k]=v;}
+      const now=Date.now();this.living.setConfig({mode,items:items as never},now);
+      await this.persistLiving(now,true);
+      return json(this.living.status(now));
+    }
     if (path === "/forward-log-status" && request.method === "GET") {
       if(!this.forwardState||!this.authorityReady)return json({error:"权威账户尚未恢复"},503);
       const now=Date.now();
@@ -4809,11 +4887,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         const shown=new Set<string>([...file.positions.map(row=>row.id),...file.not_opened.map(row=>row.id)]);
         const keep=(id:string)=>shown.has(id);
         const columnsOf=(id:string,row:{side:'LONG'|'SHORT';gate_signal_side?:unknown;gate_btc_1h_pct?:unknown})=>{try{return pathColumns(pathById.get(id),shadowSignalOf(row));}catch{return null;}};
+        const livingEpoch=this.living?.config.epochStartedAt??null;
         await this.noteRunLogExport(exportedAt,file.positions.length+file.not_opened.length);
-        return json({...file,positions:withResearchColumns(file.positions,columnsOf),not_opened:withResearchColumns(file.not_opened,columnsOf),
+        return json({...file,positions:withLivingEpoch(withResearchColumns(file.positions,columnsOf),livingEpoch),not_opened:withLivingEpoch(withResearchColumns(file.not_opened,columnsOf),livingEpoch),
           equity_minutes_since:state.startedAt,equity_gaps:(()=>{try{return equityGaps(file.equity_minutes);}catch{return [];}})(),
           equity_filled_min:file.equity_minutes.filter(row=>row.filled).length,researchNotes:RESEARCH_NOTES,archive_read:{rows:archived.read,missing:archived.missing},path_check:pathsReady,
-          paths:exportTradePaths(this.tradePaths,keep),holding:searchHolding(this.tradePaths,keep)});
+          paths:exportTradePaths(this.tradePaths,keep),holding:searchHolding(this.tradePaths,keep),
+          livingResearch:await (async()=>{try{return await this.livingExport(exportedAt);}catch(error){return {version:"living-v1",error:safeError(error)};}})()});
       }
       if(url.searchParams.get("page")==="archive"){
         const startedAt=Number(url.searchParams.get("accountStartedAt")),asOf=Number(url.searchParams.get("asOf"));
@@ -5186,6 +5266,14 @@ const worker = {
     if (url.pathname === "/api/forward/archive-export" && request.method === "GET") {
       const owner=await ownerAuthenticated(request, env);
       return env.MARKET_STREAM.getByName("primary").fetch(`https://market-stream/forward-archive-export${url.search}`,{headers:{"x-archive-owner":owner?"1":"0"}});
+    }
+    if (url.pathname === "/api/living/status" && request.method === "GET") {
+      if(!await ownerAuthenticated(request,env))return json({error:"请先登录"},401);
+      return env.MARKET_STREAM.getByName("primary").fetch("https://market-stream/living-status");
+    }
+    if (url.pathname === "/api/living/mode" && request.method === "POST") {
+      if(!await ownerAuthenticated(request,env))return json({error:"请先登录"},401);
+      return env.MARKET_STREAM.getByName("primary").fetch("https://market-stream/living-mode",{method:"POST",headers:{"content-type":"application/json"},body:await request.text()});
     }
     if (url.pathname === "/api/forward/log-status" && request.method === "GET") return env.MARKET_STREAM.getByName("primary").fetch("https://market-stream/forward-log-status");
     if (url.pathname === "/api/forward/export" && request.method === "GET") return env.MARKET_STREAM.getByName("primary").fetch(`https://market-stream/forward-export${url.search}`);
