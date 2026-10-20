@@ -57,6 +57,7 @@ import {buildRunLogExport,accountLogBook,isCompleteTradeRecord,shadowSignalOf,wi
 import {btcChange,entryFeatures,type RadarRow} from '../lib/entry-features.ts';
 import {mergeOiRing,noteOiSnapshot,oiAnchor,oiSnapshotKey,OI_SNAPSHOT_PREFIX,type OiRing,type OiSnapshot} from '../lib/oi-anchor.ts';
 import {RUN_LOG_EXPORT_KEY,runLogCapacity,type RunLogExportMark} from '../lib/run-log-capacity.ts';
+import {RUNLOG_WIPE_KEY,RUNLOG_WIPE_PREFIXES,RUNLOG_WIPE_D1_TABLES,newWipeRecord,normalizeWipeRecord,wipeForwardLog,wipeBaseline,logSinceOf,type RunLogWipeRecord} from '../lib/runlog-wipe.ts';
 import {RunLogArchiver} from '../lib/run-log-archiver.ts';
 import {ARCHIVE_SEGMENT_SIZE,archiveFileName,buildArchiveFile,countArchive,readEquityFor,readMeta,readSegment,readStagesFor,segmentCount,writeMeta,
   type ArchiveCursor,type ArchiveMode,type D1Like} from '../lib/run-log-archive.ts';
@@ -620,6 +621,122 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.ledgerRepair = record;
     } catch (error) {
       console.error("ledger repair skipped", safeError(error));
+    }
+  }
+  /** One-shot run-log wipe (lib/runlog-wipe.ts). null until read; `runlogWipeChecked` caches the durable record. */
+  private runlogWipe: RunLogWipeRecord | null = null;
+  private runlogWipeChecked = false;
+  private runlogWipeRetryAt = 0;
+  private runlogWipeError: string | null = null;
+  /** Export / status "since": the wipe time once a wipe has started. */
+  private logSince(){return logSinceOf(this.runlogWipe);}
+  private async listDeleteBatch(prefix:string,limit:number){
+    const rows=await this.ctx.storage.list<unknown>({prefix,limit});
+    const keys=[...rows.keys()];if(!keys.length)return 0;
+    const reservation=this.reserveNonAlarmWrites(keys.length,256);if(!reservation)throw new Error("write budget");
+    try{await this.ctx.storage.delete(keys);reservation.finish(true);}finally{reservation.finish(false);}
+    return keys.length;
+  }
+  /**
+   * Called inside the forward claim (forwardBusy), so no tick, path, journal or equity-minute write interleaves.
+   * Phase "storage": account log rows, order journal, minute paths, review log + cold rows, equity minutes, living
+   * decision log, cases and timeline — memory first, then the keys in batches. Phase "d1": every run-log table emptied
+   * (schemas kept), archive watermarks reset. Each phase is idempotent; the record is written before anything is cleared,
+   * so a restart resumes and a finished wipe never runs again. Open positions, balance and the live switch are untouched.
+   */
+  private async runLogWipeOnce(now:number){
+    if(this.runlogWipe?.phase==="done"||now<this.runlogWipeRetryAt)return;
+    this.runlogWipeRetryAt=now+60_000;
+    try{
+      if(!this.runlogWipeChecked){this.runlogWipe=normalizeWipeRecord(await this.ctx.storage.get(RUNLOG_WIPE_KEY));this.runlogWipeChecked=true;}
+      if(this.runlogWipe?.phase==="done")return;
+      const state=this.forwardState;
+      if(!state||!this.authorityReady||this.forwardError||!state.storage.persistedAt||state.storage.error)return;
+      // live must be off and flat; the wipe never changes the switch
+      const live=this.runtime.live;
+      if(live.requestedEnabled||live.operational||Object.values(live.positions).some(p=>p?.status==="OPEN"))return;
+      await this.ensureLiving(now);
+      await this.ensureReviewLog();await this.ensureTradePaths();await this.ensureOrderJournal();
+      if(!this.living||!this.living.loaded||this.reviewLogReadyFor!==state.startedAt||!this.tradePathsLoaded||!this.orderJournalLoaded)return;
+      let record=this.runlogWipe;
+      if(!record){
+        const cleaned=wipeForwardLog(state,now).state;
+        const book=accountLogBook(cleaned,this.forwardQuotes(now),now,emptyOrderJournal(state.startedAt),{at:now,adjust:0});
+        record=newWipeRecord(now,wipeBaseline({equity:book.equity,initial:book.initial,positions:book.positions}),state.balance,state.positions.length);
+        await this.ctx.storage.put(RUNLOG_WIPE_KEY,record);this.runlogWipe=record;
+      }
+      const at=record.at,cleared=record.cleared,add=(k:string,n:number)=>{cleared[k]=(cleared[k]??0)+n;};
+      record.passes++;
+      if(record.phase==="storage"){
+        // 1. memory (synchronous: nothing else runs between these lines). Every step keeps what began at/after `at`, so a
+        //    retry after a failed pass is harmless.
+        const balanceBefore=state.balance,openBefore=state.positions.map(t=>t.id).join(",");
+        const wiped=wipeForwardLog(state,at);
+        if(wiped.state.balance!==balanceBefore||wiped.state.positions.map(t=>t.id).join(",")!==openBefore)throw new Error("wipe would change the account");
+        for(const [k,v] of Object.entries(wiped.counts))add(k,v);
+        const keepRow=(closedAt:number|null|undefined,openedAt:number)=>(closedAt??openedAt)>=at;
+        const journalBefore=this.orderJournal.rows.length;
+        this.orderJournal={...this.orderJournal,rows:this.orderJournal.rows.filter(r=>keepRow(r.closed_at,r.opened_at))};
+        add("journal",journalBefore-this.orderJournal.rows.length);this.orderJournalComplete=true;this.orderJournalPending=false;
+        const openIds=new Set(state.positions.map(t=>t.id)),book=this.tradePaths,pathsBefore=book.trades.length;
+        // an open position keeps its path (it is not a finished record); everything else from before the wipe goes
+        book.trades=book.trades.filter(r=>openIds.has(r.id)||r.openedAt>=at);
+        book.dirty=[...new Set(book.trades.map(r=>r.page??0))];book.drop=[];book.indexDirty=true;
+        add("paths",pathsBefore-book.trades.length);this.tradePathsLoaded=true;this.tradePathsPending=true;
+        add("equityBuffer",this.eqMinBuf.filter(r=>r.ts<at).length);this.eqMinBuf=this.eqMinBuf.filter(r=>r.ts>=at);
+        this.reviewLogCursor={...emptyReviewLogCursor(),startedAt:state.startedAt};this.reviewLogComplete=true;
+        if(!cleared.living_done){
+          const living=this.living.wipeLog(at);
+          for(const [k,v] of Object.entries(living.counts))add(`living_${k}`,v);
+          const old=[...living.oldKeys,RUN_LOG_EXPORT_KEY];
+          for(let i=0;i<old.length;i+=96){const part=old.slice(i,i+96);const r=this.reserveNonAlarmWrites(part.length,256);if(!r)throw new Error("write budget");
+            try{await this.ctx.storage.delete(part);r.finish(true);}finally{r.finish(false);}add("keys:living-log+export-mark",part.length);}
+          cleared.living_done=1;await this.ctx.storage.put(RUNLOG_WIPE_KEY,record);
+        }
+        // 2. storage keys (these prefixes hold run-log rows only). Equity-minute days are rewritten without the
+        //    pre-wipe minutes (a day that is all pre-wipe is deleted), so a retry never loses post-wipe minutes.
+        for(const prefix of RUNLOG_WIPE_PREFIXES){
+          if(prefix==="log:eqmin:"){
+            const days=await this.ctx.storage.list<EquityMinute[]>({prefix,limit:64});
+            for(const [key,rows] of days){
+              const kept=Array.isArray(rows)?rows.filter(r=>r&&r.ts>=at):[];
+              if(Array.isArray(rows)&&kept.length===rows.length)continue;
+              const r=this.reserveNonAlarmWrites(1,256);if(!r)throw new Error("write budget");
+              try{if(kept.length)await this.ctx.storage.put(key,kept);else await this.ctx.storage.delete(key);r.finish(true);}finally{r.finish(false);}
+              add("keys:log:eqmin:",1);add("equityMinutes",(Array.isArray(rows)?rows.length:0)-kept.length);
+            }
+            continue;
+          }
+          for(let guard=0;guard<60;guard++){const n=await this.listDeleteBatch(prefix,48);add(`keys:${prefix}`,n);if(n<48)break;}
+          const left=await this.ctx.storage.list<unknown>({prefix,limit:1});if(left.size)throw new Error(`keys left under ${prefix}`);
+        }
+        {const r=this.reserveCriticalWrites(1);try{await this.ctx.storage.put(ORDER_JOURNAL_KEY,this.orderJournal);r.finish(true);}finally{r.finish(false);}}
+        // 3. the account without its log rows: one atomic write (same path as an operator edit); then paths and living keys
+        await this.commitForwardAccount(state,wiped.state,now);
+        try{await this.persistTradePaths();}catch{/* 下一轮再写 */}
+        try{await this.persistLiving(now,true);}catch{/* 下一轮再写 */}
+        record.phase="d1";await this.ctx.storage.put(RUNLOG_WIPE_KEY,record);
+      }
+      if(record.phase==="d1"){
+        const db=(this.env as {DB?:unknown}).DB?(this.env.DB as unknown as D1Like):null;if(!db)throw new Error("D1 binding missing");
+        // a D1 pass already in flight wrote pre-wipe rows from memory that is now empty: let it finish first
+        try{await this.archiveWork;}catch{/* ignore */}try{await this.livingLogWork;}catch{/* ignore */}
+        for(const table of RUNLOG_WIPE_D1_TABLES){
+          try{
+            const n=(await db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first<{n:number}>())?.n??0;
+            await db.prepare(`DELETE FROM ${table}`).bind().run();record.d1[table]=n;
+          }catch(error){const msg=safeError(error);if(/no such table/i.test(msg)){record.d1[table]="absent";continue;}throw error;}
+        }
+        this.runLogArchiver.reset(now);this.archivePendingCache=null;
+        this.livingLogStatus={...this.livingLogStatus,bucketsThisBoot:0,casesThisBoot:0};
+        record.phase="done";record.doneAt=Date.now();record.lastError=null;
+        await this.ctx.storage.put(RUNLOG_WIPE_KEY,record);
+        console.log("runlog wipe done",JSON.stringify({at:record.at,cleared:record.cleared,d1:record.d1}));
+      }
+      this.runlogWipeError=null;
+    }catch(error){
+      this.runlogWipeError=safeError(error);
+      if(this.runlogWipe){this.runlogWipe.lastError=this.runlogWipeError;try{await this.ctx.storage.put(RUNLOG_WIPE_KEY,this.runlogWipe);}catch{/* 下次再记 */}}
     }
   }
   protected forwardError: string | null = null;
@@ -1330,6 +1447,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       resolved:s?.resolved??0,openCount:s?.positions.length??0,targetPositionCount:null,positionLimit:null,
       ledgerRepair:this.ledgerRepair?{version:this.ledgerRepair.version,runs:this.ledgerRepair.runs.map(r=>({at:r.at,rows:r.rows.length,
         ids:r.rows.map(x=>x.id),balanceBefore:r.balanceBefore,balanceAfter:r.balanceAfter,resolvedAfter:r.resolvedAfter}))}:null,
+      runlogWipe:this.runlogWipe?{version:this.runlogWipe.version,at:this.runlogWipe.at,phase:this.runlogWipe.phase,doneAt:this.runlogWipe.doneAt,
+        passes:this.runlogWipe.passes,adjust:this.runlogWipe.adjust,balanceAtWipe:this.runlogWipe.balanceAtWipe,openAtWipe:this.runlogWipe.openAtWipe,
+        cleared:this.runlogWipe.cleared,d1:this.runlogWipe.d1,lastError:this.runlogWipe.lastError}:{pending:true,error:this.runlogWipeError},
       executionBboCapacity:FORWARD_EXECUTION_BBO_CAP,minuteConfirmationCapacity:FORWARD_MINUTE_CONFIRMATION_CAP,
       executionVolumeFloorUsd:FORWARD_EXECUTION_VOLUME_FLOOR_USD,learningEligibleMarkets:executionEligibleCount(this.contractCatalog),
       participationCandidateCount:opportunities.length,participationEligibleCount:eligible.length,
@@ -1618,7 +1738,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         ...(pathsReady?[{key:"records",label:"订单记录（含价格路径）",cap:PATH_CAP,times:this.tradePaths.trades.map(row=>row.openedAt)}]:[]),
         ...(this.orderJournalComplete?[{key:"journal",label:"已平订单档案",cap:ORDER_JOURNAL_CAP,times:this.orderJournal.rows.map(row=>row.closed_at??row.opened_at)}]:[]),
         {key:"stages",label:"行情阶段时间线",cap:STAGE_CHANGE_CAP,times:(state.stageChronicle?.changes??[]).map(row=>row.at)}],
-      windows:[{key:"equity",label:"每分钟权益",days:8,since:state.startedAt}],
+      windows:[{key:"equity",label:"每分钟权益",days:8,since:Math.max(state.startedAt,this.logSince()?.at??0)}],
       hot:this.forwardCompression?{rawBytes:this.forwardCompression.rawBytes,budgetBytes:this.forwardCompression.accountBudgetBytes}:null});
     return {...report,pathsReady};
   }
@@ -1926,6 +2046,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     try {
       await this.ensureAdaptiveAccount(now);
       await this.adoptEmptyStrategy(now);
+      await this.runLogWipeOnce(now);
       const state=this.forwardState!;
       const dataCycleDue=allowDataCycle&&(!state.lastCycleAt
         ||Math.floor((now-90_000)/BAR_MS)>Math.floor((state.lastCycleAt-90_000)/BAR_MS));
@@ -4962,10 +5083,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         await this.ensureOrderJournal();
         await this.ensureLiving(exportedAt);
         const state=this.forwardState;
-        const book=accountLogBook(state,this.forwardQuotes(exportedAt),exportedAt,this.orderJournal);
+        const since=this.logSince();
+        const book=accountLogBook(state,this.forwardQuotes(exportedAt),exportedAt,this.orderJournal,since);
         const pathsReady=this.tradePathsLoaded&&this.tradePaths.accountStartedAt===state.startedAt;
         const pathById=new Map(this.tradePaths.trades.map(row=>[row.id,row]));
-        const minutes=(await this.readEquityMinutes(exportedAt)).filter(row=>row.ts>=state.startedAt);
+        const minutes=(await this.readEquityMinutes(exportedAt)).filter(row=>row.ts>=Math.max(state.startedAt,since?.at??0));
         // Account part: every paper trade of the account (open + closed), no legacy not-opened rows.
         const file=buildRunLogExport({events:[],funnel:book.funnel,health:hub,gate,exportedAt,liveEnabled:this.runtime.live.requestedEnabled,
           positions:book.positions,fills:book.fills,curve:book.curve,equity:book.equity,initial:book.initial,closedNet:book.closedNet,
@@ -4990,7 +5112,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           status={mode:st.mode,configured:st.configured,acting:st.acting,fallback:st.fallback,loadedAt:st.loadedAt,market:st.market,fast:st.fast,
             watches:st.watches,positions:st.positions,items:st.items,writesToday:st.writesToday,lastError:st.lastError,basket:st.basket,lastFeedAt:st.lastFeedAt};}}catch{status=null;}
         const lastReset=book.accountResets.at(-1)?.at??null;
-        const out=buildLivingRunLog({exportedAt,liveEnabled:this.runtime.live.requestedEnabled,buildSha:FORWARD_BUILD_SHA,hours,status,buckets,cases,
+        const out=buildLivingRunLog({exportedAt,liveEnabled:this.runtime.live.requestedEnabled,buildSha:FORWARD_BUILD_SHA,hours,since:since?.at??null,status,buckets,cases,
           account:{equity:file.invariants.equity,initial:file.invariants.initial,invariants:file.invariants,book_audit:file.book_audit,equity_curve:file.equity_curve,
             equity_minutes:file.equity_minutes,drawdown:summarizeEquity(lastReset==null?minutes:minutes.filter(row=>row.ts>=lastReset)),
             curve_since:file.curve_since,drawdown_since:file.drawdown_since,account_resets:file.account_resets,account_epoch:file.account_epoch,

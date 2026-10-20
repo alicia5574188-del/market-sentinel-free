@@ -7,7 +7,8 @@
  *  - Research cases: every coin the layer had a playbook idea for and that reached a layer (blocked or not), deduped
  *    per symbol+side+playbook within 90 minutes, with the evidence at that moment. After 6 hours a one-minute forward
  *    price path is built from the layer's own minute bars (already-fetched quotes, zero requests) and the case goes to
- *    D1. Active case headers (no path) live in one own key (≤ 96KB), written on the 10-minute warm cycle.
+ *    D1. Active case headers (no path) live in up to CASE_PAGES own keys (each ≤ 90KB), written on the 10-minute warm
+ *    cycle (only pages that changed).
  * All price numbers are price moves (%, or basis points in paths), never ROE.
  */
 import {LIVING_KEY_PREFIX,LIVING_MAX_VALUE_BYTES} from "./config.ts";
@@ -26,6 +27,20 @@ export const CASE_DAILY_CAP=500;
 /** Cases that stopped at an early layer (L1/FILTER/CLUSTER) per UTC day; later ones are only counted in the funnel. */
 export const CASE_EARLY_DAILY_CAP=250;
 const CASES_BYTES=LIVING_MAX_VALUE_BYTES-6*1024;
+/** Active case headers are spread over this many keys (page 0 is the old single key). */
+export const CASE_PAGES=4;
+export const casePageKey=(i:number)=>i===0?CASES_KEY:`${CASES_KEY}:${i}`;
+export const CASE_PAGE_KEYS=Array.from({length:CASE_PAGES},(_,i)=>casePageKey(i));
+/** Greedy split by time into pages of ≤ CASES_BYTES; null when CASE_PAGES are not enough. */
+function packCases(cases:Case[]):Case[][]|null{
+  const pages:Case[][]=[];let cur:Case[]=[],bytes=0;
+  for(const c of cases){const b=bytesOf(c)+1;
+    if(cur.length&&bytes+b>CASES_BYTES-512){pages.push(cur);cur=[];bytes=0;}
+    if(b>CASES_BYTES-512)return null;
+    cur.push(c);bytes+=b;}
+  if(cur.length)pages.push(cur);
+  return pages.length<=CASE_PAGES?pages:null;
+}
 const BUCKETS_KEPT=24*6;// in memory: last 24 h (export also reads D1)
 
 export type Gate="OPEN"|"PAUSED_OFF"|"COMPUTE_ONLY"|"FALLBACK"|"WARMING"|"FAST_OWNS"|"NO_BASKET"|"NOT_LOADED";
@@ -87,8 +102,8 @@ export class RunLog{
   constructor(now:number){this.boot=Math.floor(now/1000).toString(36);}
 
   private open(at:number):Bucket{
-    const start=Math.floor(at/BUCKET_MS)*BUCKET_MS;
-    return {v:1,id:`b:${start}:${this.boot}`,at:start,end:start+BUCKET_MS,boot:this.boot,minutes:0,gate:{},market:{},last:null,mode:null,fast:{},
+    const aligned=Math.floor(at/BUCKET_MS)*BUCKET_MS,start=this.wipedAt!=null&&this.wipedAt>aligned&&this.wipedAt<=at?this.wipedAt:aligned;
+    return {v:1,id:`b:${start}:${this.boot}`,at:start,end:aligned+BUCKET_MS,boot:this.boot,minutes:0,gate:{},market:{},last:null,mode:null,fast:{},
       funnel:{},reasons:{},open:0,watches:0,opened:[],events:[],blocker:null,firstSampleAt:null,lastSampleAt:null};
   }
   private cur(now:number){
@@ -180,27 +195,64 @@ export class RunLog{
   casesSaved(ids:string[]){for(const id of ids)this.drop(id);}
   /** Active cases with the path so far (export view). */
   activeView(now:number,tape:LivingTape){return[...this.cases.values()].sort((a,b)=>a.at-b.at).map(c=>finalize(c,tape,now,false));}
-  // ---------------------------------------------------------------- own key
-  value(){
+  // ---------------------------------------------------------------- own keys (paged)
+  /** Last committed JSON of each case page (key -> json). A page is rewritten only when its content changed. */
+  private pageSig=new Map<string,string>();
+  private pendingSig=new Map<string,string>();
+  /**
+   * Active case headers split over up to CASE_PAGES keys (each ≤ CASES_BYTES). Only when all pages are full is text
+   * trimmed and, last, the oldest early-layer case dropped — before this, one key's cap evicted cases hours before
+   * they could finish their 6 h and reach D1. Returns only the pages that changed (an emptied page is written empty).
+   */
+  values():Record<string,unknown>{
     const cases=[...this.cases.values()].sort((a,b)=>a.at-b.at);
-    let v={v:1 as const,boot:this.boot,daily:this.daily,cases};
-    let guard=0;
-    while(bytesOf(v)>CASES_BYTES&&guard++<40){
-      // trim text on early-layer cases first, then drop the oldest early-layer case
+    let pages=packCases(cases),guard=0;
+    while(!pages&&guard++<200){
       const early=cases.filter(c=>DEPTH[c.furthest]<7);
       const long=early.find(c=>c.why.length>30||c.stages.length>2);
-      if(long){long.why=short(long.why,30);long.stages=[long.stages[0]!,...long.stages.slice(-1)];continue;}
-      const victim=early[0]??cases[0];if(!victim)break;cases.splice(cases.indexOf(victim),1);this.drop(victim.id);
-      v={v:1,boot:this.boot,daily:this.daily,cases};
+      if(long){long.why=short(long.why,30);long.stages=[long.stages[0]!,...long.stages.slice(-1)];}
+      else{const victim=early[0]??cases[0];if(!victim)break;cases.splice(cases.indexOf(victim),1);this.drop(victim.id);}
+      pages=packCases(cases);
     }
-    return v;
+    pages??=[cases.slice(-1)];
+    const out:Record<string,unknown>={};this.pendingSig.clear();
+    for(let i=0;i<CASE_PAGES;i++){
+      const key=casePageKey(i),xs=pages[i]??[];
+      const v=i===0?{v:1 as const,boot:this.boot,daily:this.daily,pages:pages.length,cases:xs}:{v:1 as const,cases:xs};
+      const sig=JSON.stringify(v),prev=this.pageSig.get(key);
+      if(prev!==sig&&!(i>0&&prev==null&&!xs.length)){out[key]=v;this.pendingSig.set(key,sig);}
+    }
+    if(!Object.keys(out).length)this.dirty=false;
+    return out;
   }
-  restore(value:unknown,now:number){
-    const v=value as {v?:number;daily?:RunLog["daily"];cases?:Case[]}|undefined;if(v?.v!==1||!Array.isArray(v.cases))return 0;
-    for(const c of v.cases){if(!c||typeof c.id!=="string"||!(c.at>0)||now-c.at>48*3_600_000)continue;this.cases.set(c.id,c);this.byKey.set(`${c.sym}|${c.side}|${c.pb}`,c.id);}
-    if(v.daily&&v.daily.day===day(now))this.daily={...this.daily,...v.daily};
+  /** The put of these keys succeeded. */
+  committed(keys:string[]){
+    for(const k of keys){const sig=this.pendingSig.get(k);if(sig!=null){this.pageSig.set(k,sig);this.pendingSig.delete(k);}}
+    if(!this.pendingSig.size)this.dirty=false;
+  }
+  /** Back-compat single value (page 0 only); tests and old callers. */
+  value(){return this.values()[CASES_KEY]??{v:1,boot:this.boot,daily:this.daily,cases:[]};}
+  /** Restore from page 0 (old single key) plus the extra pages. */
+  restore(value:unknown,now:number,extra:unknown[]=[]){
+    const head=value as {v?:number;daily?:RunLog["daily"];cases?:Case[]}|undefined;
+    const all=[value,...extra];
+    all.forEach((raw,i)=>{const v=raw as {v?:number;cases?:Case[]}|undefined;if(v?.v===1&&Array.isArray(v.cases))this.pageSig.set(casePageKey(i),JSON.stringify(v));});
+    for(const raw of all){
+      const v=raw as {v?:number;cases?:Case[]}|undefined;if(v?.v!==1||!Array.isArray(v.cases))continue;
+      for(const c of v.cases){if(!c||typeof c.id!=="string"||!(c.at>0)||now-c.at>48*3_600_000)continue;this.cases.set(c.id,c);this.byKey.set(`${c.sym}|${c.side}|${c.pb}`,c.id);}
+    }
+    if(head?.v===1&&head.daily&&head.daily.day===day(now))this.daily={...this.daily,...head.daily};
     return this.cases.size;
   }
+  /** Run-log wipe: forget every case, closed bucket and counter; recording continues from `now` in a fresh bucket. */
+  wipe(now:number){
+    const n={cases:this.cases.size,buckets:this.closed.length+(this.bucket?1:0)};
+    this.cases.clear();this.byKey.clear();this.closed=[];this.unsaved.clear();this.bucket=null;
+    this.daily={day:day(now),n:0,early:0,dropped:0};this.dirty=true;this.lastSampleMinute=0;this.wipedAt=now;
+    return n;
+  }
+  /** Set by wipe(): the first bucket after a wipe starts at the wipe time, not at the 10-minute boundary before it. */
+  wipedAt:number|null=null;
 }
 
 /** The single most important reason this bucket did not open (Chinese, for a reviewer). */

@@ -51,6 +51,13 @@ export class RunLogArchiver{
     return now-s.lastRunAt>=every;
   }
   noteExport(mark:ArchiveExportMark){this.status.lastExport=mark;}
+  /** After the run-log wipe emptied the D1 tables: forget what was archived and reload from D1 on the next pass. */
+  reset(now:number){
+    const s=this.status;this.archived.clear();this.retryAt.clear();
+    this.status={...s,loaded:false,backfillDone:false,recordsThisBoot:0,rejectedThisBoot:0,stagesThisBoot:0,equityDaysThisBoot:0,pending:0,
+      stats:{records:0,bytes:0,firstOpenedAt:null,lastOpenedAt:null},stageWatermark:null,equityWatermark:null,lastExport:null,lastRunAt:null,
+      error:null,failures:0,day:s.day||utcDay(now)};
+  }
   /** One pass. Never throws. */
   async step(input:{now:number;state:ForwardState;book:TradePathBook|null;journal:OrderJournal|null}):Promise<void>{
     if(this.busy)return;this.busy=true;

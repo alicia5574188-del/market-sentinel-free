@@ -16,6 +16,7 @@ export function slimPosition(row:Record<string,unknown>){
 }
 
 export const HOW_TO_READ=[
+  "log_since 是运行日志清空的时间（有值时）：那之前的订单、时间线、案例、权益分钟和长期归档都已清掉，这份导出从那一刻开始，window_from 不会早于它。",
   "这是运行日志 v3，只为现在的系统写：开单、持有、出场都由研究层（living-v2）按实时的资金意图和人性读数决定。旧系统的阶段/路由、S1、entry_gate、老动量信号的未开单记录都不再导出。",
   "所有价格数字都是价格涨跌（%，路径里是基点 bp，1bp=0.01%），不是 ROE，不乘杠杆。",
   "想知道为什么很久没开单：先看 why_no_trades（整个导出窗口的汇总：开单通道每种状态多少分钟、候选在每一层被挡了多少次、最常见的挡单原因 top_reasons、大多数币为什么根本没有想法 no_idea_reasons、最长一段没开单的主要原因），再按时间看 timeline：每 10 分钟一行，gate 是开单通道每分钟的状态，funnel 是候选逐层的计数，reasons 是被挡原因，blocker 是这一段最主要的原因，events 是这段里的状态变化。minutes 少于 10 表示那段时间程序停过（例如部署）。",
@@ -48,6 +49,8 @@ export const REVIEW_PLAN=[
 
 export type RunLogExportInput={
   exportedAt:number;liveEnabled:boolean;buildSha:string;hours:number;
+  /** Run-log wipe time (lib/runlog-wipe.ts): nothing before it is exported and the window never starts earlier. */
+  since?:number|null;
   status:Record<string,unknown>|null;
   buckets:Bucket[];cases:FinalCase[];
   account:{equity:number|null;initial:number|null;invariants:unknown;book_audit:unknown;equity_curve:unknown;equity_minutes:unknown[];drawdown:Record<string,unknown>;
@@ -57,7 +60,7 @@ export type RunLogExportInput={
   archive:Record<string,unknown>;
 };
 export function buildLivingRunLog(input:RunLogExportInput){
-  const from=input.exportedAt-input.hours*3_600_000;
+  const from=Math.max(input.exportedAt-input.hours*3_600_000,input.since??0);
   // one row per 10-minute window: rows of the same window from two boots (a restart inside it) are merged
   const byAt=new Map<number,Bucket[]>();
   for(const b of input.buckets){if(!b||typeof b.at!=="number"||b.end<from)continue;const xs=byAt.get(b.at)??[];
@@ -69,7 +72,7 @@ export function buildLivingRunLog(input:RunLogExportInput){
   const seen=new Set<string>(),cases:FinalCase[]=[];
   for(const c of [...input.cases].sort((a,b)=>Number(b.final)-Number(a.final))){if(!c||seen.has(c.id)||c.at<from)continue;seen.add(c.id);cases.push(c);}
   cases.sort((a,b)=>a.at-b.at);
-  return {version:RUNLOG_VERSION,exportedAt:input.exportedAt,buildSha:input.buildSha,liveEnabled:input.liveEnabled,window_hours:input.hours,window_from:from,
+  return {version:RUNLOG_VERSION,exportedAt:input.exportedAt,buildSha:input.buildSha,liveEnabled:input.liveEnabled,window_hours:input.hours,window_from:from,log_since:input.since??null,
     howToRead:HOW_TO_READ,reviewPlan:REVIEW_PLAN,fieldNotes:FIELD_NOTES,gate_labels:GATE_LABEL,layer_labels:LAYER_LABEL,
     now:input.status,
     why_no_trades:whyNoTrades(timeline,input.exportedAt),

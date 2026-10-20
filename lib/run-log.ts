@@ -1,4 +1,5 @@
 /** One export. Strategy decisions and runtime faults stay in different categories. */
+import {sinceAdjustment,type LogSince} from './runlog-wipe.ts';
 import type {AccountReset,ForwardState,Quote,Trade} from './forward-relations.ts';
 import type {EntryStructure} from './entry-structure.ts';
 import {orderRecord, pathFields, qualityFields, signalFields, snapFields, gapFields, gateFields, s1Fields, livingFields, entryRuleOf, type OrderJournal, type OrderRecord} from './order-journal.ts';
@@ -148,13 +149,16 @@ export function buildRunLogExport(input:{events:RunEvent[];funnel:RunFunnel|null
 }
 
 /** The phone export. Rows are the live paper account, not a retired experiment book. */
-export function accountLogBook(state:ForwardState,quotes:Record<string,Quote>,now:number,journal?:OrderJournal){
+export function accountLogBook(state:ForwardState,quotes:Record<string,Quote>,now:number,journal?:OrderJournal,since?:LogSince|null){
+  // After the run-log wipe (lib/runlog-wipe.ts) the log starts at since.at: rows that ended before it are not exported,
+  // and the identity is booked from the wipe baseline plus later resets.
+  const before=(closedAt:number|null|undefined,openedAt:number)=>!!since&&(closedAt??openedAt)<since.at;
   const openRows:LsrPositionRow[]=[];
   const closedRows:LsrPositionRow[]=[];
   const seen=new Set<string>();
   const fills:LsrFill[]=[];
   const pushClosed=(row:LsrPositionRow)=>{
-    if(seen.has(row.id))return;
+    if(seen.has(row.id)||before(row.closed_at,row.opened_at))return;
     seen.add(row.id);closedRows.push(row);
     fills.push({ts:row.opened_at,symbol:row.symbol,side:row.side,price:row.entry,qty:row.qty,notional:row.notional,fee:row.fee,tag:'open',trace:row.trace,waitMs:null,limit:row.entry});
   };
@@ -195,7 +199,7 @@ export function accountLogBook(state:ForwardState,quotes:Record<string,Quote>,no
   funnel.filled=openRows.length+closedRows.length;
   funnel.closed=closedRows.length;
   funnel.wins=closedRows.filter(row=>(row.net_pnl??0)>0).length;
-  const notOpened=(state.unopenedTrades??[]).map(t=>{
+  const notOpened=(state.unopenedTrades??[]).filter(t=>t.status==="OPEN"||!before(t.closedAt,t.openedAt)).map(t=>{
     if(t.status==="CLOSED")return closedAccountRow(t);
     const marked=openMark(state,t,quotes,now);
     const row:LsrPositionRow={id:t.id,symbol:t.symbol,side:t.side,entry:t.entryPrice,exit:null,qty:t.quantity,notional:t.notional,
@@ -216,7 +220,9 @@ export function accountLogBook(state:ForwardState,quotes:Record<string,Quote>,no
     return row;
   });
   return {positions:[...closedRows,...openRows],fills,curve:[{ts:now,equity:round4(mark.equity),closed_pnl:round4(closedNet),unrealized_pnl:round4(unrealized),positions:openRows.length}],
-    equity:mark.equity,initial:state.initialEquity,closedNet:round4(closedNet),priorAdjustment:resetAdjustment(state.accountResets),accountResets:state.accountResets??[],pendingResetAt:state.pendingFundsReset?.requestedAt??null,places:[] as LsrPlace[],funnel,
+    equity:mark.equity,initial:state.initialEquity,closedNet:round4(closedNet),
+    ...(since?(()=>{const a=sinceAdjustment(since,state.accountResets);return{priorAdjustment:a.prior,accountResets:a.resets};})()
+      :{priorAdjustment:resetAdjustment(state.accountResets),accountResets:state.accountResets??[]}),logSince:since?.at??null,pendingResetAt:state.pendingFundsReset?.requestedAt??null,places:[] as LsrPlace[],funnel,
     unreconstructed:0,unreconstructedN:0,notOpened,stageTimeline:readStageTimeline(state.stageChronicle,now),
     tallySince:state.signalTallyMeta?.from??null};
 }

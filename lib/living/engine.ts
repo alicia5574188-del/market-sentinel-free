@@ -30,7 +30,7 @@ import {features,readCoin,readMarket,marketAllows,sizeModulator,intentEvidence,b
 import type {IntentPlaybook,Playbook} from "./thesis.ts";
 import type {LivingDirective,LivingOrder,LivingTradeAction,LivingResult,LivingNote} from "./directive.ts";
 import {bytesOf,r6,r4,corr} from "./util.ts";
-import {RunLog,CASES_KEY,type Gate,type Layer,type CaseInput,type MarketSample} from "./runlog.ts";
+import {RunLog,CASES_KEY,CASE_PAGE_KEYS,type Gate,type Layer,type CaseInput,type MarketSample} from "./runlog.ts";
 
 export const LIVING_KEYS={config:LIVING_CONFIG_KEY,basket:`${LIVING_KEY_PREFIX}basket`,fast:`${LIVING_KEY_PREFIX}fast`,
   episodes:`${LIVING_KEY_PREFIX}episodes`,probes:`${LIVING_KEY_PREFIX}probes`,thesis:`${LIVING_KEY_PREFIX}thesis`,
@@ -105,7 +105,7 @@ export class LivingEngine{
   constructor(now:number,config?:unknown){this.config=normalizeLivingConfig(config,now);this.runlog=new RunLog(now);}
 
   /** Keys to read at start (one batched get). */
-  static loadKeys(){return[...Object.values(LIVING_KEYS),...Array.from({length:BAR_PAGES},(_,i)=>`${BAR_PAGE_PREFIX}${i}`),
+  static loadKeys(){return[...Object.values(LIVING_KEYS),...CASE_PAGE_KEYS.slice(1),...Array.from({length:BAR_PAGES},(_,i)=>`${BAR_PAGE_PREFIX}${i}`),
     ...Array.from({length:FLOW_PAGES},(_,i)=>`${FLOW_PAGE_PREFIX}${i}`),...Array.from({length:M1_PAGES},(_,i)=>`${M1_PAGE_PREFIX}${i}`)];}
   restore(values:Map<string,unknown>,now:number,logPage?:unknown){
     this.config=normalizeLivingConfig(values.get(LIVING_KEYS.config),now);
@@ -133,7 +133,7 @@ export class LivingEngine{
       const last=this.marketHist.at(-1);this.restoredMarket=last&&now-last.at<=20*60_000?last:null;
     }
     this.lastIndexSig=JSON.stringify({seq:this.logSeq,pages:this.logPages});
-    let cases=0;try{cases=this.runlog.restore(values.get(LIVING_KEYS.cases),now);}catch{cases=0;}
+    let cases=0;try{cases=this.runlog.restore(values.get(LIVING_KEYS.cases),now,CASE_PAGE_KEYS.slice(1).map(k=>values.get(k)));}catch{cases=0;}
     this.loaded=true;this.loadedAt=now;
     this.note(now,"RESTART",{bars:this.tape.m5.size,bars1m:m1,flow:this.flow.m1.size,hist:this.marketHist.length,episodes:this.episodes.length,watches:this.trades.watches.length,cases});
   }
@@ -662,7 +662,7 @@ export class LivingEngine{
       if(this.tape.m1.size)Object.assign(out,this.tape.pages1(syms));
       if(this.dirty.has(LIVING_KEYS.intent)&&this.marketHist.length)out[LIVING_KEYS.intent]=this.fitIntent();
     }
-    if((warm||now-this.lastCasesWrite>=WARM_EVERY_MS)&&this.runlog.dirty)out[LIVING_KEYS.cases]=this.runlog.value();
+    if((warm||now-this.lastCasesWrite>=WARM_EVERY_MS)&&this.runlog.dirty)Object.assign(out,this.runlog.values());
     if(barsDue&&this.tape.m5.size)Object.assign(out,this.tape.pages());
     const n=Object.keys(out).length;
     if(!n)return{};
@@ -683,9 +683,23 @@ export class LivingEngine{
     if(keys.some(k=>k===LIVING_KEYS.probes||k===LIVING_KEYS.thesis||k===LIVING_KEYS.select||k===LIVING_KEYS.episodes||k===LIVING_KEYS.basket))this.lastHeavy=now;
     if(keys.some(k=>k.startsWith(BAR_PAGE_PREFIX)))this.lastBars=now;
     if(keys.includes(LIVING_KEYS.fast)){this.lastFastWrite=now;this.dirty.delete("fastNow");}
-    if(keys.includes(LIVING_KEYS.cases)){this.runlog.dirty=false;this.lastCasesWrite=now;}
+    if(keys.some(k=>CASE_PAGE_KEYS.includes(k))){this.runlog.committed(keys);this.lastCasesWrite=now;}
     if(keys.some(k=>k.startsWith(M1_PAGE_PREFIX)||k.startsWith(FLOW_PAGE_PREFIX)||k===LIVING_KEYS.intent))this.lastWarm=now;
     if(keys.includes(LIVING_KEYS.logIndex))this.lastIndexSig=JSON.stringify({seq:this.logSeq,pages:[...new Set([...this.logPages,this.logSeq])].slice(-LOG_PAGES_KEPT)});
+  }
+  /**
+   * Run-log wipe (lib/runlog-wipe.ts): the decision log pages, recent decisions, research cases and timeline buckets
+   * are forgotten; recording continues at once on a fresh log page and a bucket that starts at `now`. Learning state
+   * (episodes, thesis, probes, trade counters, bars) is kept. Returns the old log page keys for the caller to delete.
+   */
+  wipeLog(now:number){
+    const old=[...new Set([...this.logPages,...this.sealed.map(p=>p.seq),this.logSeq])].map(p=>`${LOG_PAGE_PREFIX}${p}`);
+    const counts={logRows:this.log.length+this.sealed.reduce((n,p)=>n+p.rows.length,0),logPages:old.length,decisions:this.decisions.length,...this.runlog.wipe(now)};
+    this.logSeq++;this.logPages=[];this.sealed=[];this.log=[];this.decisions=[];this.lastIndexSig="";
+    this.dirty.add("log");this.dirty.add(LIVING_KEYS.intent);
+    this.note(now,"RUNLOG_WIPE",{cases:counts.cases,buckets:counts.buckets,logRows:counts.logRows});
+    this.runlog.event(now,"RUNLOG_WIPE","运行日志已清空，从这里重新开始记录");
+    return {counts,oldKeys:old};
   }
   /** Old log pages beyond the kept window (to delete). */
   expiredLogKeys(){const keep=new Set([...this.logPages,this.logSeq].slice(-LOG_PAGES_KEPT));return this.logPages.filter(p=>!keep.has(p)).map(p=>`${LOG_PAGE_PREFIX}${p}`);}
