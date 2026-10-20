@@ -1,6 +1,6 @@
 "use client";
 
-import {useRef,useState} from "react";
+import {memo,useRef,useState} from "react";
 import {operatorRequest,type AuthSession} from "../lib/operator-ui.ts";
 import {type forwardSummary} from "../lib/forward-relations.ts";
 import {useBrain,MODE_LABEL,STATE_LABEL,CAPITAL_LABEL,EMOTION_LABEL,DECISION_LABEL,BRAIN_EXIT,bj,pct,sideCn,coinName,plain,
@@ -22,7 +22,23 @@ const exitText=(t:Trade)=>{const code=t.exitReason??"";const why=t.exitAudit?.ev
 /** Owner home (大脑): what the market is doing (capital and human nature), the account at a glance, what is held and why,
  * what was closed and why. Cached on the device and shown at once; refreshed in the background every 30s while visible.
  * Paper only; the live switch is never touched here. */
-export default function LivingPanel({auth,scope="owner",data=null,now=0,liveEnabled=false,liveOverview,healthy,systemStatus,feedAt,floating,onOpenOrders}:{
+type LivingProps={auth:AuthSession|null;scope?:string;data?:View|null;now?:number;liveEnabled?:boolean;liveOverview?:LiveOverview;
+  healthy?:boolean;systemStatus?:string;feedAt?:number|null;floating?:number|null;onOpenOrders?:()=>void};
+const tradeKey=(t:Trade)=>`${t.id}|${t.status}|${t.lastPrice}|${t.quantity}|${t.netPnl}|${t.closedAt}|${t.stopPrice}|${t.exitReason}`;
+/** Redraw the home panel only when something it shows changed: the open/closed trades it lists, the tiles, or the
+ * minute of the page clock (held times are in minutes). The brain read itself updates through its own hook. */
+export function sameLivingProps(a:LivingProps,b:LivingProps){
+  if(a.auth!==b.auth||a.scope!==b.scope||a.liveEnabled!==b.liveEnabled||a.healthy!==b.healthy||a.systemStatus!==b.systemStatus
+    ||a.floating!==b.floating||Math.floor((a.feedAt??0)/60_000)!==Math.floor((b.feedAt??0)/60_000)
+    ||Math.floor((a.now??0)/60_000)!==Math.floor((b.now??0)/60_000))return false;
+  const lo=(o?:LiveOverview)=>o?`${o.operational}|${o.positionCount}|${o.lastSyncAt}`:"";
+  if(lo(a.liveOverview)!==lo(b.liveOverview))return false;
+  if(!!a.data!==!!b.data)return false;
+  const rows=(d?:View|null)=>d?`${(d.positions??[]).map(tradeKey).join(";")}#${(d.history??[]).length}:${(d.history??[]).slice(-1).concat((d.history??[]).slice(0,1)).map(tradeKey).join(";")}`:"";
+  return rows(a.data)===rows(b.data);
+}
+export default memo(LivingPanel,sameLivingProps);
+function LivingPanel({auth,scope="owner",data=null,now=0,liveEnabled=false,liveOverview,healthy,systemStatus,feedAt,floating,onOpenOrders}:{
   auth:AuthSession|null;scope?:string;data?:View|null;now?:number;liveEnabled?:boolean;liveOverview?:LiveOverview;
   healthy?:boolean;systemStatus?:string;feedAt?:number|null;floating?:number|null;onOpenOrders?:()=>void;
 }){

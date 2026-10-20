@@ -401,6 +401,17 @@ test("primary Member-feed read is a projection with no changes to the active mai
   const r=await h.http("/api/runtime",owner);assert.equal(r.status,200);assert.equal((await r.json<any>()).primaryUnchanged,true);
   assert.equal((await h.http("/api/members/admin",owner)).status,503);
 }));
+test("owner home read: owner only, routed to the primary slim snapshot; members and guests are refused and keep /api/runtime",()=>clock(async()=>{
+  const h=await harness(),owner=ownerSessionCookie(await createOwnerSession(ROOT)),m=await h.issue();await h.member(m.id);
+  const paths:string[]=[];
+  h.env.MARKET_STREAM={getByName(){return{async fetch(input:string){paths.push(input);return Response.json({version:"owner-home-v1"});}};}};
+  const r=await h.http("/api/home",owner);assert.equal(r.status,200);assert.equal((await r.json<any>()).version,"owner-home-v1");
+  assert.deepEqual(paths,["https://market-stream/owner-home"]);
+  assert.equal((await h.http("/api/home")).status,401);
+  const cookie=memberCookie(await issueMemberSession(ROOT,m.id,1));
+  assert.ok([401,403].includes((await h.http("/api/home",cookie)).status));
+  assert.deepEqual(paths,["https://market-stream/owner-home"]);
+}));
 test("an authenticated member cannot access another member's binding or primary credentials",()=>clock(async()=>{
   const h=await harness(),a=await h.issue(),b=await h.issue(),aa=await h.member(a.id);await h.member(b.id);
   await aa.storage.put(`${LIVE_PARITY_PREFIX}binding:ft-secret`,{secret:"A-only"});

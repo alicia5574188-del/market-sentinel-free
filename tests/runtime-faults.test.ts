@@ -1514,6 +1514,25 @@ test("funding-only metadata changes update resident memory without resetting war
   assert.equal(stream.sessionWarmup.BTC_USDT, 30);
 });
 
+test("owner home is a slim, briefly cached owner snapshot; any write drops the cache", async () => {
+  const { stream } = await makeStream();
+  stream.runtime.outbox = Array.from({ length: 64 }, (_, index) => ({ key: `home:${index}`, position: position(`home:${index}`, "BTC_USDT"), equity: 1_000, equityVersion: index + 1 }));
+  const first = await stream.fetch(new Request("https://market-stream/owner-home"));
+  assert.equal(first.headers.get("x-home-cache"), "miss");
+  const text = await first.text(), body = JSON.parse(text) as Record<string, unknown> & { live: Record<string, unknown> };
+  assert.equal(body.version, "owner-home-v1");
+  for (const key of ["state","stale","authorityReady","lastSuccessAt","realtimeReadiness","strategyData","forward","liveMode","liveMirror","live","buildSha","generatedAt"]) assert.ok(key in body, key);
+  for (const key of ["outbox","limits","radar","symbols","positions","strategyArena","marketRegimes","multiSourceMarket"]) assert.equal(body[key], undefined, key);
+  assert.deepEqual(body.liveMode, { requestedEnabled: false, operational: false });
+  assert.deepEqual(body.live.history, []);assert.ok("turnover" in body.live);assert.ok("mirror" in body.live);
+  const full = await (await stream.fetch(new Request("https://market-stream/owner-runtime"))).text();
+  assert.ok(text.length < full.length, `home ${text.length} < runtime ${full.length}`);
+  const again = await stream.fetch(new Request("https://market-stream/owner-home"));
+  assert.equal(again.headers.get("x-home-cache"), "hit");assert.equal(await again.text(), text);
+  await stream.fetch(new Request("https://market-stream/no-such-write", { method: "POST", body: "{}" }));
+  assert.equal((await stream.fetch(new Request("https://market-stream/owner-home"))).headers.get("x-home-cache"), "miss");
+});
+
 test("status exposes bounded mirror telemetry, never the complete outage outbox", async () => {
   const { stream } = await makeStream();
   stream.runtime.outbox = Array.from({ length: 512 }, (_, index) => ({

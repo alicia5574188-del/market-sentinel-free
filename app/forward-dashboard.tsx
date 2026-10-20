@@ -1,7 +1,7 @@
 "use client";
 import {realizedNetPnl,initialTradeNotional,remainingTradeFraction} from "../lib/trade-realization.ts";
 
-import {useEffect,useLayoutEffect,useRef,useState,type CSSProperties,type ReactNode} from "react";
+import {useCallback,useEffect,useLayoutEffect,useRef,useState,type CSSProperties,type ReactNode} from "react";
 import {BEIJING_TIME_ZONE} from "../lib/beijing-time.ts";
 import {type Trade,type forwardSummary} from "../lib/forward-relations.ts";
 import EquityCurve from "./equity-curve.tsx";
@@ -15,6 +15,7 @@ import {readPanel,writePanel,type PanelEntry} from "../lib/panel-cache.ts";
 import {PANEL_KEYS} from "../lib/system-panels.ts";
 import {paperAccountView} from "../lib/paper-account-view.ts";
 
+export const PAGE_CLOCK_MS=15_000;
 type SystemSnap={healthy:boolean;status:string;feedAt:number|null;live:string;engine:string|null;storageOk:boolean|null};
 import "./account-first.css";
 import "./paid-fee.css";
@@ -76,13 +77,15 @@ const stanceName=(stance?:string)=>stance==="REVERSE"?"反向":stance==="FLAT"?"
 const sessionName=(session?:string)=>session==="ASIA"?"亚盘":session==="EUROPE"?"欧盘":session==="US"?"美盘":"—";
 const claimName=(kind?:string)=>kind==="CONTINUE"?"延续":kind==="SUSPECT"?"可疑":"不投票";
 
-export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,livePanel,liveSystemPanel,liveEnabled,liveOverview,accountPanel,brainAuth,memberName,cacheScope="owner"}:{
+export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,livePanel,liveSystemPanel,liveEnabled,liveOverview,accountPanel,brainAuth,memberName,cacheScope="owner",cachedAt=null}:{
   data:View|null;healthy:boolean;statusLabel?:string;feedAt:number|null;error:string|null;livePanel:ReactNode;liveSystemPanel?:ReactNode;
   liveEnabled:boolean;liveOverview?:{equity:number|null;available:number|null;positionCount:number;operational:boolean;lastSyncAt:number|null;copied:number|null;eligible:number|null;missing:number|null;accountMark?:import('../lib/live-account-view.ts').LiveAccountMark|null;
     equityCurve?:import('../lib/live-equity.ts').LiveEquityHead|null;sessionAt?:number};
   accountPanel?:ReactNode;
   /** Owner only: the 大脑 tab replaces 执行 as the home tab. */
   brainAuth?:AuthSession|null;memberName?:string;cacheScope?:string;
+  /** Set while the page shows the device snapshot (not yet a fresh read). */
+  cachedAt?:number|null;
 }){
   const [equityCache]=useState(()=>new EquityHistoryCache());
   useEffect(()=>()=>equityCache.cancel(),[equityCache]);
@@ -92,9 +95,13 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   const [exporting,setExporting]=useState(false),[exportStatus,setExportStatus]=useState<string|null>(null),[exportCount,setExportCount]=useState(0);
   const [historyShown,setHistoryShown]=useState(10);
   const scroll=useRef<Record<Tab,number>>({execution:0,brain:0,paper:0,live:0,settings:0});
-  useEffect(()=>{const id=setInterval(()=>setNow(Date.now()),1000);return()=>clearInterval(id);},[]);
+  // Page clock: held times are shown in minutes, so a 15s tick is enough; second-level labels run their own timer.
+  useEffect(()=>{const first=setTimeout(()=>setNow(Date.now()),0),id=setInterval(()=>setNow(Date.now()),PAGE_CLOCK_MS);return()=>{clearTimeout(first);clearInterval(id);};},[]);
   useLayoutEffect(()=>{window.scrollTo({top:tab==="live"?0:scroll.current[tab]??0,behavior:"auto"});},[tab]);
   const select=(next:Tab)=>{scroll.current[tab]=window.scrollY;if(next==="live")setLiveMounted(true);setTab(next);};
+  const selectRef=useRef(select);
+  useLayoutEffect(()=>{selectRef.current=select;});
+  const openOrders=useCallback(()=>selectRef.current("paper"),[]);
   const fontVars:Record<string,string>={};for(let px=10;px<=64;px++)fontVars[`--fr-fs${px}`]=`${(px*fontScale/100).toFixed(2)}px`;
   const exportSnapshot=async()=>{if(exporting)return;setExporting(true);setExportStatus(null);try{
     const response=await fetch(`/api/forward/export?kind=log&t=${Date.now()}`,{cache:"no-store",credentials:"same-origin"});
@@ -125,11 +132,11 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   const [systemSnap]=useState<PanelEntry<SystemSnap>|null>(()=>readPanel<SystemSnap>(cacheScope,PANEL_KEYS.systemStatus));
   const engine=data?.engineVersion??data?.version??null,storageOk=data?!data.storage?.error:null,feedMinute=feedAt==null?null:Math.floor(feedAt/60_000);
   useEffect(()=>{
-    if(!data)return;
+    if(!data||cachedAt)return;
     writePanel<SystemSnap>(cacheScope,PANEL_KEYS.systemStatus,{healthy,status:systemStatus,feedAt,live:liveText,engine,storageOk},v=>v);
   // Written once a minute or on any status change, not on every 10s feed tick.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[cacheScope,!!data,healthy,systemStatus,liveText,engine,storageOk,feedMinute]);
+  },[cacheScope,!!data,healthy,systemStatus,liveText,engine,storageOk,feedMinute,cachedAt]);
   const card:SystemSnap&{cached:boolean}=data||!systemSnap?{healthy,status:systemStatus,feedAt,live:liveText,engine,storageOk,cached:false}
     :{...systemSnap.value,cached:true};
   const nav:[Tab,string,string][]=[brainHome?["brain","◉","大脑"]:["execution","◉","执行"],["paper","⇄","模拟"],["live","◈","实盘"],["settings","⊙","系统"]];
@@ -140,7 +147,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       {memberName&&<i className="pg-pill is-plain">{memberName}</i>}</span></header>
 
     {tab==="brain"&&brainHome&&<LivingPanel auth={brainAuth??null} scope={cacheScope} data={data} now={now} liveEnabled={liveEnabled} liveOverview={liveOverview}
-      healthy={healthy} systemStatus={systemStatus} feedAt={feedAt} floating={data?paperFloating:null} onOpenOrders={()=>select("paper")}/>}
+      healthy={healthy} systemStatus={systemStatus} feedAt={feedAt} floating={data?paperFloating:null} onOpenOrders={openOrders}/>}
     {tab==="execution"&&!brainHome&&<MarketIntelligenceExecution data={data} now={now} liveEnabled={liveEnabled} liveOverview={liveOverview}
       healthy={healthy} systemStatus={systemStatus} feedAt={feedAt} floating={data?paperFloating:null} onOpenOrders={()=>select("paper")}/>}
 
@@ -200,18 +207,23 @@ function LsrPulse({desk}:{desk:Desk}){
     <p className="fr-note">费用合计 {fmt(exp?.fees.total,4)} U。开仓手续费 {fmt(exp?.fees.openFee,4)}，平仓手续费 {fmt(exp?.fees.closeFee,4)}，滑点 {fmt(exp?.fees.slippage,4)}，资金费 {fmt(exp?.fees.funding,4)}。</p>
   </section>;
 }
-function LsrResearch({desk,now}:{desk:Desk;now:number}){
+/** The only per-second label: its own 1s timer, so the rest of the page is not redrawn every second. */
+function SecondsLeft({at}:{at:number}){
+  const [t,setT]=useState(()=>Date.now());
+  useEffect(()=>{const id=setInterval(()=>setT(Date.now()),1000);return()=>clearInterval(id);},[]);
+  return <>{Math.max(0,Math.ceil((at-t)/1000))}</>;
+}
+function LsrResearch({desk}:{desk:Desk;now?:number}){
   const live=desk.liveResearch,a=live?.context,d=live?.decision,g=live?.analogy;
   const coin=(symbol?:string)=>symbol?symbol.replace("_"," / "):"";
   const side=(value?:"LONG"|"SHORT"|null)=>value==="LONG"?"做多":value==="SHORT"?"做空":"还没定";
-  const left=live?Math.max(0,Math.ceil((live.nextAt-now)/1000)):0;
   if(!live)return <section className="fr-section" data-testid="research-claims"><div className="fr-section-head"><h2>研究</h2></div><p>这一拍还没有扫完。</p></section>;
   return <>
     <section className="fr-section" data-testid="research-claims">
       <div className="fr-section-head"><h2>研究层正在运行</h2></div>
       <p>现在：{live.status}</p>
       <p>上一轮 {time(live.ts)}。扫了 {live.scanned} 个币，其中 {live.found} 个明显异常。</p>
-      <p>下一轮 {time(live.nextAt)}，还差 {left} 秒。</p>
+      <p>下一轮 {time(live.nextAt)}，还差 <SecondsLeft at={live.nextAt}/> 秒。</p>
       <p>今天扫了 {live.today?.scans??0} 次，看过 {live.today?.symbols??0} 个异动币。做多 {live.today?.long??0} 次，做空 {live.today?.short??0} 次，观望 {live.today?.watch??0} 次。</p>
       <p className="fr-note">这些话都写在研究页上，不会下单。</p>
     </section>

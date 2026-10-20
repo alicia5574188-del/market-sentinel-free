@@ -123,6 +123,7 @@ import { advanceStrategyArena as advancePreviousStrategyArena,
 const executionEligibleCount=(catalog:Map<string,{symbol:string;volume24hUsd:number}>)=>
   [...catalog.values()].filter(row=>adaptiveSymbolAllowed(row.symbol)&&row.volume24hUsd>=FORWARD_EXECUTION_VOLUME_FLOOR_USD).length;
 const LOOP_MS = 2_000;
+const OWNER_HOME_CACHE_MS = 2_000;
 // Whole-system display/health tolerance only. Executable quotes remain guarded
 // by the stricter per-symbol STALE_AFTER_MS/freshQuote checks; this must never
 // authorize an order from an old price. A few missed 2s polls should not make
@@ -1239,6 +1240,31 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(rows.length>=30)this.researchContextCandles[symbol]=rows.slice(-120);
     }catch{/* keep the previous context candles */}
     return 1;
+  }
+
+  /** Owner home: only what the owner page reads (status, paper account, live summary). The serialized body is
+   * reused for OWNER_HOME_CACHE_MS so several tabs / quick re-opens do not rebuild the account summary each time.
+   * Display only; no storage write, no Gate call. */
+  private ownerHomeCache:{body:string;at:number;status:number}|null=null;
+  private async ownerHome(){
+    const now=Date.now(),c=this.ownerHomeCache;
+    if(c&&now-c.at>=0&&now-c.at<OWNER_HOME_CACHE_MS)return new Response(c.body,{status:c.status,headers:{"content-type":"application/json","cache-control":"no-store","x-home-cache":"hit"}});
+    await this.ensureAlarm();
+    this.launchTurnoverWork(now);
+    const live=this.runtime.live,regime=this.runtime.regimePortfolio,failures=this.runtime.regimeHourlyFailures??{};
+    const stale=!this.authorityReady||this.runtime.lastSuccessAt==null||now-this.runtime.lastSuccessAt>SYSTEM_HEALTH_STALE_AFTER_MS;
+    const state=!this.authorityReady?"RECOVERY_REQUIRED":stale?"RECONNECTING":this.runtime.state;
+    const body=JSON.stringify({version:"owner-home-v1",buildSha:FORWARD_BUILD_SHA,generatedAt:now,state,stale,authorityReady:this.authorityReady,
+      lastError:this.runtime.lastError,lastSuccessAt:this.runtime.lastSuccessAt,
+      realtimeReadiness:this.realtimeReadiness(),
+      strategyData:{stableMarkets:regime.warmMarkets,lastCompletedCandleAt:regime.lastEvaluatedHour??0,hourlyPathFailures:Object.keys(failures).length},
+      forward:pageForwardView(this.forwardView(now)),
+      liveMirror:this.liveMirrorView(),
+      liveMode:{requestedEnabled:live.requestedEnabled,operational:live.operational},
+      live:{...live,history:this.decoratedLiveHistory(),mirror:this.liveMirrorView(),
+        turnover:turnoverView(this.turnoverState,this.turnoverError,now,live.activation?.enabledAt??null)}});
+    this.ownerHomeCache={body,at:now,status:200};
+    return new Response(body,{headers:{"content-type":"application/json","cache-control":"no-store","x-home-cache":"miss"}});
   }
 
   private forwardView(now = Date.now()) {
@@ -4834,6 +4860,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   async fetch(request: Request) {
     const url = new URL(request.url);
     const path = url.pathname;
+    // Any write invalidates the owner home snapshot at once (live switch, reset, credentials, living mode…).
+    if(request.method!=="GET"&&request.method!=="HEAD")this.ownerHomeCache=null;
+    if(path==="/owner-home"&&request.method==="GET")return this.ownerHome();
     // Binding-only projections. No public route reaches these methods. They do
     // not mutate primary state, re-arm alarms, start market work or touch Gate.
     if(path === "/member-feed" && request.method === "GET") {
@@ -5317,6 +5346,10 @@ const worker = {
           executionIsolation:true,guestProgramAccess:false},topLevelCpuMs: performance.now() - started }, live ? 200 : 503);
     }
     if (url.pathname === "/api/runtime" && request.method === "GET") return runtimeStatus(env, true, await ownerAuthenticated(request, env));
+    if (url.pathname === "/api/home" && request.method === "GET") {
+      if(!await ownerAuthenticated(request, env))return Response.json({error:"需要登录"},{status:401,headers:{"Cache-Control":"no-store"}});
+      return env.MARKET_STREAM.getByName("primary").fetch("https://market-stream/owner-home");
+    }
     if (url.pathname === "/api/forward/archive-export" && request.method === "GET") {
       const owner=await ownerAuthenticated(request, env);
       return env.MARKET_STREAM.getByName("primary").fetch(`https://market-stream/forward-archive-export${url.search}`,{headers:{"x-archive-owner":owner?"1":"0"}});

@@ -10,6 +10,8 @@ import { runtimeBackendOperational, runtimeStatusLabel } from "../lib/runtime-he
 import { operatorRequest, type AuthSession, type LiveRuntime, type OperatorRuntime } from "../lib/operator-ui.ts";
 import { clearPanels } from "../lib/panel-cache.ts";
 import { prefetchSystemPanels } from "../lib/system-panels.ts";
+import { prefetchBrain } from "../lib/brain-view.ts";
+import { readHome, saveHome, startHomeEarly, takeHomeEarly } from "../lib/owner-home.ts";
 import { runtimeRefreshMs } from "../lib/member-view.ts";
 
 const IDENTITY_KEY="sentinel-panel-identity-v1";
@@ -31,15 +33,24 @@ export default function Home() {
   const [auth,setAuth] = useState<AuthSession|null>(null);
   const [refresh,setRefresh] = useState(0);
   const epoch=useRef(0),runtimeReadFailures=useRef(0),hasRuntimeSnapshot=useRef(false),lastRuntime=useRef<OperatorRuntime|null>(null);
+  const [cachedAt,setCachedAt] = useState<number|null>(null);
+  const deferredPrefetch=useRef<string|null>(null);
   const reload=useCallback(() => { epoch.current++; setRefresh(v=>v+1); },[]);
   const sessionChanged=useCallback((session:AuthSession) => {
     // Closing the app or renewing a login must not erase saved chart history.
     // The authenticated Dashboard unmounts below; no cache is read while logged out.
     epoch.current++;runtimeReadFailures.current=0;hasRuntimeSnapshot.current=false;lastRuntime.current=null;guardPanelCache(session);setAuth(session);
     // Warm the System tab (cheap Worker reads, no Gate call) so opening it shows details at once.
-    if(session.authenticated)prefetchSystemPanels(session.memberId??"owner",session.role!=="member");
+    // Owner: the home tab's brain read goes now; the System-tab reads wait until the first screen is drawn.
+    const owner=session.authenticated&&session.role!=="member"&&(session.memberId??"owner")==="owner";
+    deferredPrefetch.current=null;
+    if(owner){prefetchBrain("owner");deferredPrefetch.current="owner";}
+    else if(session.authenticated)prefetchSystemPanels(session.memberId??"owner",session.role!=="member");
     // Remove private snapshots immediately and invalidate any in-flight response.
-    setRuntime(null);setError(null);setRefresh(v=>v+1);
+    setRuntime(null);setError(null);setCachedAt(null);
+    // Same owner as last time: show the last home read from this device at once, stamped, until the fresh one lands.
+    if(owner){const saved=readHome<OperatorRuntime>();if(saved){lastRuntime.current=saved.value;setRuntime(saved.value);setCachedAt(saved.at);}}
+    setRefresh(v=>v+1);
   },[]);
   const liveChanged=useCallback((live:LiveRuntime) => {
     epoch.current++;
@@ -48,6 +59,7 @@ export default function Home() {
   },[]);
   useEffect(() => {
     let active=true;
+    startHomeEarly(); // in parallel with the session check (owner device only)
     void operatorRequest<AuthSession>("/api/auth/session").then(value=>{if(active)sessionChanged(value);})
       .catch(()=>{if(active)setAuth({configured:true,authenticated:false,username:"owner"});});
     return()=>{active=false;};
@@ -61,12 +73,19 @@ export default function Home() {
       inFlight=true;controller=new AbortController();const requestEpoch=epoch.current;
       const timeout=setTimeout(()=>controller?.abort(),RUNTIME_REQUEST_TIMEOUT_MS);
       try{
-        const response=await fetch("/api/runtime",{cache:"no-store",credentials:"same-origin",signal:controller.signal});
+        const owner=auth.role!=="member"&&(auth.memberId??"owner")==="owner";
+        // Owner: the slim home read (the early one if it is still fresh). Members keep their own /api/runtime.
+        const early=owner?takeHomeEarly():null,signal=controller.signal;
+        const response=await (early?Promise.race([early,new Promise<never>((_,reject)=>signal.addEventListener("abort",()=>reject(new Error("timeout")),{once:true}))]):fetch(owner?"/api/home":"/api/runtime",{cache:"no-store",credentials:"same-origin",signal}));
         if(response.status===401){if(active&&requestEpoch===epoch.current)sessionChanged({...auth,authenticated:false});return false;}
         if(!response.ok)throw new Error(`HTTP ${response.status}`);
         const value=await response.json() as OperatorRuntime;
-        if(active&&requestEpoch===epoch.current){runtimeReadFailures.current=0;hasRuntimeSnapshot.current=true;lastRuntime.current=value;setRuntime(value);setError(null);
-          if(auth?.authenticated&&!value.live)sessionChanged({...auth,authenticated:false});}
+        if(active&&requestEpoch===epoch.current){runtimeReadFailures.current=0;hasRuntimeSnapshot.current=true;lastRuntime.current=value;setRuntime(value);setError(null);setCachedAt(null);
+          if(auth?.authenticated&&!value.live){sessionChanged({...auth,authenticated:false});return true;}
+          if(owner)saveHome(value);
+          // First screen is drawn: now warm the System tab (run log status, API status, members).
+          const scope=deferredPrefetch.current;
+          if(scope){deferredPrefetch.current=null;setTimeout(()=>{if(active)prefetchSystemPanels(scope,true,"deferred");},1_500);}}
         return true;
       }catch{
         if(active&&requestEpoch===epoch.current&&!document.hidden){
@@ -95,8 +114,10 @@ export default function Home() {
     livePositions={Object.values(runtime?.live?.positions??{}).filter(p=>p?.status==="OPEN").length}
     livePanel={<LiveConsole view="trade" auth={auth} runtime={runtime} onSession={sessionChanged} onLive={liveChanged} onRefresh={reload}/>}
     liveSystemPanel={<LiveConsole view="system" auth={auth} runtime={runtime} onSession={sessionChanged} onLive={liveChanged} onRefresh={reload}/>}/>;
+  // A device snapshot is shown with its time until the first fresh read lands; it never claims the system is healthy.
+  const cachedLabel=cachedAt?`更新于 ${new Date(cachedAt).toLocaleTimeString("zh-CN",{timeZone:"Asia/Shanghai",hour12:false})} · 刷新中`:null;
   return <ForwardDashboard key={auth.memberId??"owner"} cacheScope={auth.memberId??"owner"} data={runtime?.forward?.startedAt?runtime.forward:null}
-    healthy={runtimeBackendOperational(runtime)} statusLabel={runtimeStatusLabel(runtime)} feedAt={runtime?.lastSuccessAt??null}
+    healthy={cachedLabel?false:runtimeBackendOperational(runtime)} statusLabel={cachedLabel??runtimeStatusLabel(runtime)} feedAt={runtime?.lastSuccessAt??null}
     error={runtime?.forward?.storage?.error??error} liveEnabled={runtime?.liveMode?.requestedEnabled??false}
     liveOverview={{equity:runtime?.live?.equity??null,available:runtime?.live?.available??null,
       equityCurve:runtime?.live?.equityCurve??null,sessionAt:runtime?.live?.activation?.enabledAt??0,
@@ -109,5 +130,5 @@ export default function Home() {
     livePanel={<LiveConsole view="trade" auth={auth} runtime={runtime} onSession={sessionChanged} onLive={liveChanged} onRefresh={reload}/>}
     liveSystemPanel={<LiveConsole view="system" auth={auth} runtime={runtime} onSession={sessionChanged} onLive={liveChanged} onRefresh={reload}/>}
     accountPanel={<><MemberAccess auth={auth}/><PaperAccountReset auth={auth} runtime={runtime} onReset={reload}/></>}
-    brainAuth={auth}/>;
+    brainAuth={auth} cachedAt={cachedAt}/>;
 }
