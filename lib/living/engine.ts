@@ -36,7 +36,7 @@ const LOG_PAGE_BYTES=LIVING_MAX_VALUE_BYTES-2048;
 /** Own daily write budget (rows), well inside the shared 100k optional guard. */
 export const LIVING_WRITES_PER_DAY=4_000;
 const HOT_EVERY_MS=120_000,HEAVY_EVERY_MS=15*60_000,BARS_EVERY_MS=60*60_000;
-const STALE_MS=90_000;
+const STALE_MS=30_000; // spec C8: quotes older than 30s → compute-only for 1h
 
 /** Minimal views of the forward core the engine reads (no runtime import of forward-relations). */
 export type ForwardView={positions:{id:string;symbol:string;side:"LONG"|"SHORT";entryPrice:number;stopPrice:number;liquidationPrice?:number|null;
