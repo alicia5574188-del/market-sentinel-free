@@ -25,7 +25,7 @@ import {stopCheck,newWatch,stepWatch,fastFollowPicks,type Watch} from "./entry.t
 import {layerOne,evidenceFactor,normalRisk,fastRisk} from "./conviction.ts";
 import {fastProtection,thesisExits,surgeGuard,type PositionView} from "./exits.ts";
 import {FlowBook,FLOW_PAGES,FLOW_PAGE_PREFIX,type FlowPoint} from "./flow.ts";
-import {features,readCoin,readMarket,marketAllows,sizeModulator,intentEvidence,burstFlow,holdCheck,planIntent,noTradeReason,evidenceLine,
+import {features,readCoin,readMarket,marketAllows,mixedProbeAllows,healthOf,MIXED_PROBE,sizeModulator,intentEvidence,burstFlow,holdCheck,planIntent,noTradeReason,evidenceLine,
   type CoinIntent,type MarketIntent} from "./intent.ts";
 import type {IntentPlaybook,Playbook} from "./thesis.ts";
 import type {LivingDirective,LivingOrder,LivingTradeAction,LivingResult,LivingNote} from "./directive.ts";
@@ -403,12 +403,16 @@ export class LivingEngine{
     if(this.fast.episode)return;// the fast lane owns bursts
     const scores=this.scoreMap(now);
     const busy=new Set([...ctx.forward.positions.map(p=>p.symbol),...this.trades.watches.map(w=>w.symbol)]);
-    const cands:{ci:CoinIntent;rank:number;score:number}[]=[];
+    const cands:{ci:CoinIntent;rank:number;score:number;mixed?:boolean}[]=[];
     for(const s of basket.members){
       const ci=this.coins.get(s);if(ci)this.logCount(now,"reads");
       if(!ci?.action){if(ci)this.logCount(now,"no_idea",noTradeReason(ci));continue;}
       this.logCount(now,"ideas");
       const a=ci.action,l1=marketAllows(m,a.pb,a.side);
+      if(!l1.ok&&mixedProbeAllows(m,a.pb,a.strength)){
+        // B1: MIXED market, strong coin-level follow → a probe-size watch (re-checked at the planned position)
+        const mod=sizeModulator(scores[PLAYBOOK_PROBE[a.pb]]);cands.push({ci,rank:0,score:a.strength*(.85+.15*mod),mixed:true});continue;
+      }
       if(!l1.ok){this.logCase(now,s,a.side,a.pb,"L1_MARKET",l1.why);
         this.noteOnce(`l1|${s}|${a.pb}|${a.side}|${m.state}`,now,"RECORD_ONLY",{sym:s,side:a.side,pb:a.pb,intent:`${ci.capital}/${ci.emotion}`,reason:`没开：${l1.why.slice(0,120)}`});continue;}
       const mod=sizeModulator(scores[PLAYBOOK_PROBE[a.pb]]);
@@ -432,8 +436,9 @@ export class LivingEngine{
       if(!chk.ok){this.logCase(now,s,a.side,a.pb,"RISK",chk.reason);this.noteOnce(`sc|${s}|${a.pb}`,now,"RECORD_ONLY",{sym:s,side:a.side,pb:a.pb,reason:chk.reason});continue;}
       const cand={symbol:s,side:a.side,playbook:a.pb,probe:PLAYBOOK_PROBE[a.pb],score:r4(c.score),rank,factors:{eff:0,fit:0,early:0,funding:0,edge:0},
         trigger:{probe:PLAYBOOK_PROBE[a.pb],symbol:s,side:a.side,strength:a.strength,ref:plan.ref},reject:null};
-      const w=newWatch(cand,{lo:plan.lo,hi:plan.hi,inv:chk.stop,target:plan.target},now,plan.hold,{l1:true,l2:true,probeSize:false,why1:marketAllows(m,a.pb,a.side).why,why2:a.why});
-      w.intent={state:`${c.ci.capital}/${c.ci.emotion}`,market:m.state,why:a.why.slice(0,200),ev:evidenceLine(c.ci.f).slice(0,200),strength:a.strength};
+      const why1=c.mixed?`第一层：市场分歧，只允许强证据（≥${MIXED_PROBE.strength}）的顺势试探，0.3 倍仓位`:marketAllows(m,a.pb,a.side).why;
+      const w=newWatch(cand,{lo:plan.lo,hi:plan.hi,inv:chk.stop,target:plan.target},now,plan.hold,{l1:true,l2:true,probeSize:!!c.mixed,why1,why2:a.why});
+      w.intent={state:`${c.ci.capital}/${c.ci.emotion}`,market:m.state,why:a.why.slice(0,200),ev:evidenceLine(c.ci.f).slice(0,200),strength:a.strength,...(c.mixed?{mixed:true}:{})};
       this.trades.watches.push(w);busy.add(s);this.logCase(now,s,a.side,a.pb,"WATCH",`等 ${r6(w.zoneLo)}–${r6(w.zoneHi)}，失效 ${r6(w.invalidation)}`);
       this.note(now,"WATCH",{sym:s,side:a.side,pb:a.pb,rank,score:r4(c.score),lo:w.zoneLo,hi:w.zoneHi,inv:w.invalidation,intent:w.intent.state,market:m.state,why:a.why.slice(0,160)});
     }
@@ -457,7 +462,9 @@ export class LivingEngine{
       const pb=(n.k==="F"?"follow":n.pb) as IntentPlaybook;
       const coin=this.coins.get(p.symbol)??(this.basket?readCoin(p.symbol,features(this.tape,this.flow,p.symbol,now),now,this.coinHist.get(p.symbol)??[]):null);
       const stop=p.guard!=null?(p.side==="LONG"?Math.max(p.stopPrice,p.guard):Math.min(p.stopPrice,p.guard)):p.stopPrice;
-      const v=holdCheck({pb,side:p.side,entry:p.entryPrice,price:p.price,stop,coin,market:this.marketIntent,ageMin:(now-p.openedAt)/60_000,holdMin:n.hold,cost:STEPS.cost});
+      const stopDist=n.inv>0&&p.entryPrice>0?Math.abs(n.inv/p.entryPrice-1):null;
+      const v=holdCheck({pb,side:p.side,entry:p.entryPrice,price:p.price,stop,coin,market:this.marketIntent,ageMin:(now-p.openedAt)/60_000,holdMin:n.hold,cost:STEPS.cost,stopDist});
+      try{this.runlog.holdRead(p.id,now,p.openedAt,{coin,h:healthOf(p.side,coin,this.marketIntent),market:this.marketIntent?.state??null,code:v.act==="HOLD"?"":v.code});}catch{/* 只是记录 */}
       const prev=this.holds.get(p.id);
       if(!prev||prev.why!==v.why){this.holds.set(p.id,{why:v.why,code:v.code,at:now});if(v.act==="HOLD")this.note(now,"HOLD_CHANGE",{trade:p.id,sym:p.symbol,why:v.why.slice(0,160)});}
       if(v.act==="EXIT")out.push({tradeId:p.id,action:"EXIT",code:v.code,reason:v.why.slice(0,160)});
@@ -488,9 +495,14 @@ export class LivingEngine{
   /** v2 order at READY: layers 1 and 2 re-read live (the market or the coin may have changed while waiting). */
   private intentOrder(ctx:PlanContext,w:Watch,scores:Record<ProbeId,ProbeScore>,items:LivingItems):LivingOrder|string{
     const last=this.tape.last(w.symbol);if(!last)return"没有新鲜报价";
-    const pb=w.playbook as IntentPlaybook,m=this.marketIntent,l1=marketAllows(m,pb,w.side);
-    if(!l1.ok)return`等位置期间市场意图变了：${l1.why.slice(0,100)}`;
+    const pb=w.playbook as IntentPlaybook,m=this.marketIntent,l1=marketAllows(m,pb,w.side),mixed=w.intent?.mixed===true;
     const ci=this.coins.get(w.symbol);
+    if(mixed){
+      // B1 re-check: still MIXED (or now allowed), and the coin still reads the same strong follow
+      const still=ci?.action&&ci.action.pb===pb&&ci.action.side===w.side&&ci.action.strength>=MIXED_PROBE.strength;
+      if(!still)return`第二层：分歧市场的试探要求复核时证据仍 ≥${MIXED_PROBE.strength}，这个币变了（${ci?.why.slice(0,60)??"读不到"}）`;
+      if(!l1.ok&&!mixedProbeAllows(m,pb,ci!.action!.strength))return`等位置期间市场意图变了：${l1.why.slice(0,100)}`;
+    }else if(!l1.ok)return`等位置期间市场意图变了：${l1.why.slice(0,100)}`;
     if(!ci||!ci.action||ci.action.pb!==pb||ci.action.side!==w.side){
       // the setup emotion may have moved on (e.g. capitulation → rebound under way); keep it only if nothing contradicts
       const contra=ci&&(w.side==="LONG"?ci.capital==="SUPPLY"||ci.capital==="FLUSH_DOWN":ci.capital==="DEMAND"||ci.capital==="SQUEEZE_UP");
@@ -499,10 +511,10 @@ export class LivingEngine{
     const ct=ctx.contracts[w.symbol];
     const chk=stopCheck({side:w.side,price:last.mid,stop:w.invalidation,min:STEPS.stopMin,max:STEPS.stopMax,leverageMax:ct?.leverageMax??10,mmr:ct?.maintenanceRate??null,liqSafety:items.liqSafety});
     if(!chk.ok)return chk.reason;
-    const strength=w.intent!.strength,ev=intentEvidence(strength,m!.confidence),mod=items.sizing?sizeModulator(scores[PLAYBOOK_PROBE[pb]]):1;
+    const strength=w.intent!.strength,ev=mixed?{factor:MIXED_PROBE.factor,label:"probe" as const}:intentEvidence(strength,m!.confidence),mod=items.sizing?sizeModulator(scores[PLAYBOOK_PROBE[pb]]):1;
     const risk=normalRisk({premium:ev.label==="strong"&&w.rank===1,evidence:ev.factor*mod,sizingItem:items.sizing});
-    const why=`${PLAYBOOK_LABEL[pb]}：${w.intent!.why.slice(0,110)}；位置到了且确认`;
-    const note:LivingNote={v:"living-v2",k:"N",pb,th:this.thesis.current?.id??null,ep:null,ev:ev.label,mult:r4(risk.multiple),sc:r4(strength),t:null,n:null,
+    const why=`${mixed?"分歧市场试探（0.3 倍）·":""}${PLAYBOOK_LABEL[pb]}：${w.intent!.why.slice(0,110)}；位置到了且确认`;
+    const note:LivingNote={v:"living-v2",k:"N",pb,...(mixed?{mx:1 as const}:{}),th:this.thesis.current?.id??null,ep:null,ev:ev.label,mult:r4(risk.multiple),sc:r4(strength),t:null,n:null,
       per:mod===1?null:`x${mod}`,rk:w.rank,inv:chk.stop,ref:w.ref,hold:w.holdMin,why:why.slice(0,200),
       in:w.intent!.state,mk:m!.state,nar:`${m!.sentence.slice(0,80)}｜${w.intent!.why.slice(0,100)}`,evd:w.intent!.ev.slice(0,160)};
     return {id:w.id,symbol:w.symbol,side:w.side,stop:chk.stop,riskRate:risk.riskRate,multiple:risk.multiple,kind:"N",episodeId:null,episodeCap:null,

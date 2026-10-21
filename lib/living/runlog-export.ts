@@ -2,7 +2,7 @@
  * The run-log export (kind=log), format living-run-log-v3. Pure: the worker hands in what it already has
  * (account book from buildRunLogExport, timeline buckets and cases from memory + D1) and gets the file back.
  */
-import {RUNLOG_VERSION,mergeBuckets,whyNoTrades,caseStats,GATE_LABEL,LAYER_LABEL,BUCKET_MS,type Bucket,type FinalCase} from "./runlog.ts";
+import {RUNLOG_VERSION,mergeBuckets,whyNoTrades,caseStats,GATE_LABEL,LAYER_LABEL,BUCKET_MS,HOLD_READ_FIELDS,HOLD_READ_CODES,type Bucket,type FinalCase} from "./runlog.ts";
 
 /** Position columns that describe the current system (everything else on a stored row is legacy and not exported). */
 const POSITION_KEEP=new Set(["id","symbol","side","entry","exit","qty","notional","gross_pnl","fee","net_pnl","holdSec","opened_at","closed_at",
@@ -34,7 +34,7 @@ export const FIELD_NOTES:Record<string,unknown>={
     strength:"证据强度 0–1",why:"研究层的一句话",
     ev:"当时的证据（%）：p15/p60 价格 15/60 分钟涨跌，oi15/oi60 持仓量变化，funding 资金费（%），taker15 主动买卖（>0.5 买方多），vol15 成交量倍数，basis 期现溢价",
     market:"当时的市场意图",layer:"第一次被挡（或推进到）的层",reason:"原因",furthest:"走到最远的一层",stages:"每次层级变化：时间、层、原因、价格",
-    ref:"参考价：第一次出现时的中间价",seen:"90 分钟内被看到的次数",last:"最后一次被看到",trade:"开出的单：id、开仓时间/价、止损，平仓后有出场价、原因、净盈亏（U）",
+    ref:"参考价：第一次出现时的中间价",seen:"90 分钟内被看到的次数",last:"最后一次被看到",trade:"开出的单：id、开仓时间/价、止损，平仓后有出场价、原因、净盈亏（U）；hr 是持仓中每分钟的研究层读数（字段见 hold_read_legend，行用 ; 分隔、字段用 , 分隔），hr_drop 是超过 240 行后丢掉的最早行数",
     final:"true 表示 6 小时已走完、路径定稿；false 是进行中（路径到导出为止）",
     path:"t0 起每分钟一格，格式 收,高,低（相对 ref 的基点，原始价格方向，不按多空翻转），分号分隔；空格表示那一分钟没有数据（程序停了）；coarse 是只有 5 分钟精度的分钟段（重启前较早的部分）",
     out:"按案例方向算（价格 %）：mfe/mae 最大有利/不利及第几分钟，mae_before_mfe 到最高点前最深回撤，r15…r360 各时点收益，hit_1pct_first 先到 +1% 还是 -1%，from_open 从实际开仓起算"},
@@ -59,6 +59,8 @@ export type RunLogExportInput={
   positions:Record<string,unknown>[];fills:unknown[];paths:unknown[];
   archive:Record<string,unknown>;
 };
+const HOLD_READ_LEGEND={fields:HOLD_READ_FIELDS,codes:HOLD_READ_CODES,
+  notes:"h 是持有理由健康度（-1…1，按我们的方向：真资金同向 +、反向 −，主动买卖和持仓量随价格各占一部分，市场明确反向再 −0.3）；oi15_pct / funding_pct / atr5_pct 是 %；taker5 >0 买方多；verdict 为空表示继续拿，否则是大脑当分钟的出场/收紧代码"};
 export function buildLivingRunLog(input:RunLogExportInput){
   const from=Math.max(input.exportedAt-input.hours*3_600_000,input.since??0);
   // one row per 10-minute window: rows of the same window from two boots (a restart inside it) are merged
@@ -73,7 +75,7 @@ export function buildLivingRunLog(input:RunLogExportInput){
   for(const c of [...input.cases].sort((a,b)=>Number(b.final)-Number(a.final))){if(!c||seen.has(c.id)||c.at<from)continue;seen.add(c.id);cases.push(c);}
   cases.sort((a,b)=>a.at-b.at);
   return {version:RUNLOG_VERSION,exportedAt:input.exportedAt,buildSha:input.buildSha,liveEnabled:input.liveEnabled,window_hours:input.hours,window_from:from,log_since:input.since??null,
-    howToRead:HOW_TO_READ,reviewPlan:REVIEW_PLAN,fieldNotes:FIELD_NOTES,gate_labels:GATE_LABEL,layer_labels:LAYER_LABEL,
+    howToRead:HOW_TO_READ,reviewPlan:REVIEW_PLAN,fieldNotes:FIELD_NOTES,gate_labels:GATE_LABEL,layer_labels:LAYER_LABEL,hold_read_legend:HOLD_READ_LEGEND,
     now:input.status,
     why_no_trades:whyNoTrades(timeline,input.exportedAt),
     timeline,timeline_gaps:gaps,

@@ -71,7 +71,25 @@ export type CaseEv={p15:number|null;p60:number|null;oi15:number|null;oi60:number
 export type CaseInput={at:number;sym:string;side:"LONG"|"SHORT";pb:string;pbLabel:string;kind:"normal"|"fast";intent:string|null;strength:number|null;
   why:string;ev:CaseEv|null;market:MarketSample;px:number|null};
 export type CaseStage={at:number;layer:Layer;reason:string;px:number|null};
-export type CaseTrade={id:string;openedAt:number;entry:number|null;stop:number|null;closedAt?:number|null;exit?:number|null;exitReason?:string|null;netPnl?:number|null};
+export type CaseTrade={id:string;openedAt:number;entry:number|null;stop:number|null;closedAt?:number|null;exit?:number|null;exitReason?:string|null;netPnl?:number|null;
+  /** Holding reads, one row per minute while open (HOLD_READ_FIELDS, ";"-separated rows, "," fields); hr_drop = older rows dropped. */
+  hr?:string;hr_drop?:number};
+/** Fields of one holding-read row (≈60 bytes): minute since open, health h, capital, emotion, strength, OI 15m %, taker 5m,
+ * funding %, 5m ATR %, market intent, brain verdict code (empty = hold). */
+export const HOLD_READ_FIELDS=["min","h","capital","emotion","strength","oi15_pct","taker5","funding_pct","atr5_pct","market","verdict"] as const;
+export const HOLD_READ_MAX=240;
+const CAP_CODE:Record<string,string>={DEMAND:"DM",SUPPLY:"SP",SQUEEZE_UP:"SQ",FLUSH_DOWN:"FL",ABSORB_BID:"AB",ABSORB_ASK:"AA",DRIFT:"DR",UNVERIFIED:"UV",NONE:"-"};
+const EMO_CODE:Record<string,string>={FOMO:"FO",PANIC:"PA",CAPITULATION:"CA",EXHAUSTION:"EX",BLOWOFF:"BO",COMPLACENCY:"CO",CONVICTION:"CV",CALM:"CL",NONE:"-"};
+const MKT_CODE:Record<string,string>={RISK_ON:"ON",RISK_OFF:"OFF",SQUEEZE:"SQ",PANIC:"PA",CAPITULATION:"CA",FOMO:"FO",COMPLACENT:"CO",CALM:"CL",MIXED:"MX",WARMING:"WM"};
+export const HOLD_READ_CODES={capital:CAP_CODE,emotion:EMO_CODE,market:MKT_CODE};
+type HoldReadCoin={capital:string;emotion:string;strength:number;f:{oi15:number|null;taker5:number|null;funding:number|null;atr5:number|null;last:number|null}}|null;
+const fx=(v:number|null|undefined,k:number)=>typeof v==="number"&&Number.isFinite(v)?String(Math.round(v*10**k)/10**k):"";
+export function holdReadRow(min:number,x:{coin:HoldReadCoin;h:number|null;market:string|null;code:string}){
+  const c=x.coin,f=c?.f;
+  return [min,fx(x.h,2),c?CAP_CODE[c.capital]??c.capital:"",c?EMO_CODE[c.emotion]??c.emotion:"",fx(c?.strength,2),fx(f?.oi15!=null?f.oi15*100:null,2),
+    fx(f?.taker5,2),fx(f?.funding!=null?f.funding*100:null,4),fx(f?.atr5!=null&&f.last?f.atr5/f.last*100:null,2),x.market?MKT_CODE[x.market]??x.market:"",
+    x.code.replace(/^LIVING_/,"")].join(",");
+}
 export type Case={v:1;id:string;at:number;sym:string;side:"LONG"|"SHORT";pb:string;pb_label:string;kind:"normal"|"fast";intent:string|null;
   strength:number|null;why:string;ev:CaseEv|null;market:MarketSample;layer:Layer;reason:string;furthest:Layer;stages:CaseStage[];
   ref:number|null;seen:number;last:number;trade:CaseTrade|null};
@@ -162,6 +180,18 @@ export class RunLog{
     return nc;
   }
   /** The forward core opened a trade for this symbol/side (and playbook when known). */
+  /** Once a minute per open living trade: append its holding read to the linked case's trade (review only). */
+  holdRead(tradeId:string,now:number,openedAt:number,x:{coin:HoldReadCoin;h:number|null;market:string|null;code:string}){
+    let c:Case|undefined;const id=this.byTrade.get(tradeId);if(id)c=this.cases.get(id);
+    if(!c||c.trade?.id!==tradeId){c=[...this.cases.values()].find(k=>k.trade?.id===tradeId);if(!c)return false;this.byTrade.set(tradeId,c.id);}
+    const t=c.trade!,min=Math.max(0,Math.floor((now-openedAt)/60_000));
+    const rows=t.hr?t.hr.split(";"):[];const last=rows.at(-1);
+    if(last!=null&&Number(last.split(",")[0])>=min)return false;
+    rows.push(holdReadRow(min,x));
+    if(rows.length>HOLD_READ_MAX){const n=rows.length-HOLD_READ_MAX;rows.splice(0,n);t.hr_drop=(t.hr_drop??0)+n;}
+    t.hr=rows.join(";");this.dirty=true;return true;
+  }
+  private byTrade=new Map<string,string>();
   linkTrade(sym:string,side:"LONG"|"SHORT",pb:string|null,t:CaseTrade){
     let best:Case|null=null;
     for(const c of this.cases.values())if(c.sym===sym&&c.side===side&&(!pb||c.pb===pb)&&!c.trade&&(!best||c.at>best.at))best=c;

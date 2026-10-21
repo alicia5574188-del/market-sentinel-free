@@ -238,6 +238,39 @@ export function marketAllows(m:MarketIntent|null,pb:IntentPlaybook,side:Side){
   const a=m.allowed.find(x=>x.pb===pb&&(x.side==null||x.side===side));
   return a?{ok:true,why:`第一层：${m.sentence}`}:{ok:false,why:`第一层：当前市场（${m.state}）不支持「${pb} ${side==="LONG"?"多":"空"}」`};
 }
+/** B1 (2026-10-21): a MIXED market blocks every playbook except a follow on a coin whose own evidence is strong
+ * (strength ≥ .6). Such a watch opens only if the same read still holds at the planned-position re-check, at probe size. */
+export const MIXED_PROBE={strength:.6,factor:.3} as const;
+export function mixedProbeAllows(m:MarketIntent|null,pb:IntentPlaybook,strength:number|null|undefined){
+  return !!m&&m.state==="MIXED"&&pb==="follow"&&typeof strength==="number"&&strength>=MIXED_PROBE.strength;
+}
+/** Thesis health h ∈ [-1,1] in the trade's direction from one live read (logged every minute while holding; review only). */
+export function healthOf(side:Side,coin:CoinIntent|null,market:MarketIntent|null):number|null{
+  if(!coin)return null;const s=d(side),f=coin.f;
+  const withC=side==="LONG"?"DEMAND":"SUPPLY",against=side==="LONG"?"SUPPLY":"DEMAND";
+  const forcedOut=side==="LONG"?"SQUEEZE_UP":"FLUSH_DOWN",forcedIn=side==="LONG"?"FLUSH_DOWN":"SQUEEZE_UP";
+  const absorbWith=side==="LONG"?"ABSORB_BID":"ABSORB_ASK",absorbAgainst=side==="LONG"?"ABSORB_ASK":"ABSORB_BID";
+  const cap=coin.capital===withC?Math.max(.5,coin.strength):coin.capital===against?-Math.max(.5,coin.strength):
+    coin.capital===forcedOut||coin.capital===absorbWith?.3:coin.capital===forcedIn||coin.capital===absorbAgainst?-.5:0;
+  const flow=f.taker5==null?0:clamp(s*f.taker5/.5,-1,1);
+  const oiP=f.oi15==null||f.p15==null||Math.abs(f.oi15)<.002||f.oi15<0?0:s*f.p15>0?1:-1;
+  let h=.5*cap+.25*flow+.25*oiP;
+  if(market&&market.side&&market.side!==side&&market.confidence>=.6&&["RISK_ON","RISK_OFF","PANIC","SQUEEZE"].includes(market.state))h-=.3;
+  return Math.round(clamp(h,-1,1)*100)/100;
+}
+/** "Hand the profit to the late crowd": profit ≥ 1.5× the trade's own stop distance and the crowd is now chasing into it
+ * (greed/panic in our direction, or a climax: volume ≥ 3× with aggressor flow ≥ .3 our way). */
+export const CLIMAX_TAKE={profitR:1.5,vol5:3,taker5:.3} as const;
+export function climaxTake(side:Side,coin:CoinIntent|null,gain:number,stopDist:number|null|undefined){
+  if(!coin||!(typeof stopDist==="number"&&stopDist>0)||gain<CLIMAX_TAKE.profitR*stopDist)return null;
+  const f=coin.f,s=d(side);
+  const greed=side==="LONG"?(coin.emotion==="FOMO"||coin.emotion==="BLOWOFF")&&coin.crowd==="LONG":
+    (coin.emotion==="PANIC"&&coin.actor==="LONG")||coin.emotion==="CAPITULATION"||((coin.emotion==="FOMO"||coin.emotion==="BLOWOFF")&&coin.crowd==="SHORT");
+  const climax=(f.vol5??0)>=CLIMAX_TAKE.vol5&&f.taker5!=null&&s*f.taker5>=CLIMAX_TAKE.taker5&&s*(f.p5??0)>0;
+  if(!greed&&!climax)return null;
+  return greed?`${side==="LONG"?"后来的人在追涨":"后来的人在恐慌杀跌"}（${coin.why.slice(0,50)}），浮盈 ${pct(gain)} 已到止损距离的 1.5 倍：利润交给后来追进的人群，离场`
+    :`放量 ${(f.vol5??0).toFixed(1)} 倍、主动${side==="LONG"?"买":"卖"} ${(s*(f.taker5??0)).toFixed(2)} 冲进我们的利润：交给后来追进的人群，离场`;
+}
 /** Size modulator from the rolling live probe stats: 0.7–1.2x, never a gate. */
 export function sizeModulator(score:{t:number;n:number;score:number}|undefined){
   if(!score||score.n<10)return 1;
@@ -265,7 +298,7 @@ export function burstFlow(flow:FlowBook,members:string[],side:Side,now:number):B
 /** Hold / exit decision for an open v2 trade from the live read of its coin and the market. */
 export type HoldVerdict={act:"HOLD"|"EXIT"|"GUARD";code:string;why:string;stop?:number};
 export function holdCheck(input:{pb:IntentPlaybook;side:Side;entry:number;price:number;stop:number;coin:CoinIntent|null;market:MarketIntent|null;
-  ageMin:number;holdMin:number;cost:number}):HoldVerdict{
+  ageMin:number;holdMin:number;cost:number;stopDist?:number|null}):HoldVerdict{
   const {pb,side,coin,market}=input,s=d(side),gain=s*(input.price/input.entry-1),f=coin?.f;
   const lock=(frac:number)=>{const st=input.entry*(1+s*Math.max(input.cost,gain*frac));return s*(st-input.stop)>0?st:null;};
   const against=market&&market.side&&market.side!==side&&market.confidence>=.6&&["RISK_ON","RISK_OFF","PANIC","SQUEEZE"].includes(market.state)&&
@@ -276,6 +309,7 @@ export function holdCheck(input:{pb:IntentPlaybook;side:Side;entry:number;price:
   }
   if(input.holdMin>0&&input.ageMin>=1.5*input.holdMin)return{act:"EXIT",code:"LIVING_THESIS_TIMEOUT",why:`拿到计划时长 ${input.holdMin} 分钟的 1.5 倍，理由没兑现`};
   if(!coin||!f)return{act:"HOLD",code:"",why:"这个币暂时读不到（没有新鲜数据），先按失效价拿"};
+  {const take=climaxTake(side,coin,gain,input.stopDist);if(take)return{act:"EXIT",code:"LIVING_INTENT_CLIMAX_TAKE",why:take};}
   switch(pb){
     case "follow":{
       const leaving=side==="LONG"?(coin.capital==="FLUSH_DOWN"||coin.capital==="SUPPLY"):(coin.capital==="SQUEEZE_UP"||coin.capital==="DEMAND");

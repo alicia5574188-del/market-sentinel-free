@@ -59,7 +59,7 @@ export const DECISION_LABEL:Record<string,string>={ENTRY:"开单",ENTRY_RECORD:"
   FAST_END:"异动结束",FAST_FAKE:"异动是假动作",FAST_EXHAUST:"异动力竭",FAST_REVERSED:"异动反转",FAST_TIMEOUT:"异动超时",FAST_SURGE:"只有价格没有资金"};
 /** Exit reasons of research-layer trades, in the brain's own words. */
 export const BRAIN_EXIT:Record<string,string>={
-  LIVING_INTENT_MARKET_FLIP:"市场意图转向，持有理由没了",LIVING_INTENT_GONE:"这个币的资金反了，持有理由没了",LIVING_INTENT_DONE:"目标兑现，落袋",
+  LIVING_INTENT_MARKET_FLIP:"市场意图转向，持有理由没了",LIVING_INTENT_GONE:"这个币的资金反了，持有理由没了",LIVING_INTENT_DONE:"目标兑现，落袋",LIVING_INTENT_CLIMAX_TAKE:"利润交给后来追进的人群（追涨杀跌的人接盘），离场",
   LIVING_INTENT_LOCK:"资金反向，锁利润后被打到",LIVING_INTENT_MARKET_LOCK:"市场转向，锁利润后被打到",LIVING_INTENT_GREED_LOCK:"大家开始追（贪婪），锁利润后被打到",
   LIVING_INTENT_FEAR_LOCK:"多头开始踩踏（恐慌），锁利润后被打到",LIVING_THESIS_TIMEOUT:"拿到计划时长，理由没兑现",LIVING_GUARD_STOP:"打到研究层收紧后的保护价",
   LIVING_FAST_LIQ_GUARD:"集体异动：离爆仓太近，先平",LIVING_FAST_TIGHTEN:"集体异动：收紧止损后被打到",LIVING_FAST_CONFIRM_EXIT:"集体异动确认：亏着的单平掉",

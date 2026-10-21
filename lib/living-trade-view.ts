@@ -5,7 +5,7 @@
  * Every number here is a price move (%), never ROE.
  */
 export type LivingNoteView={v?:string;k?:string;pb?:string;ev?:string;mult?:number;sc?:number|null;t?:number|null;n?:number|null;per?:string|null;
-  rk?:number|null;inv?:number;ref?:number|null;hold?:number;why?:string;in?:string;mk?:string;nar?:string;evd?:string;ep?:string|null;ho?:number};
+  rk?:number|null;inv?:number;ref?:number|null;hold?:number;why?:string;in?:string;mk?:string;nar?:string;evd?:string;ep?:string|null;ho?:number;mx?:number};
 export type LivingTradeLike={side:"LONG"|"SHORT";entryPrice:number;stopPrice?:number|null;liquidationPrice?:number|null;plannedRisk:number;leverage:number;
   notional:number;expectedHoldMinutes?:number|null;entryContext?:{living?:LivingNoteView|null;reason?:string|null}|null};
 
@@ -41,7 +41,8 @@ export function livingBoard(n:LivingNoteView){
 export function livingWhy(t:LivingTradeLike,playbook:string|null){
   const n=t.entryContext!.living!,bits=[`${t.side==="LONG"?"做多":"做空"}，${playbook??n.pb??"研究层"}`];
   const coin=livingIntentText(n.in);if(coin)bits.push(`这个币${coin}`);
-  if(n.mk&&n.k!=="F")bits.push(`市场${LIVING_STATE_LABEL[n.mk]??n.mk}`);
+  if(n.mx)bits.push("市场分歧，强证据顺势试探（0.3 倍仓位）");
+  else if(n.mk&&n.k!=="F")bits.push(`市场${LIVING_STATE_LABEL[n.mk]??n.mk}`);
   else if(n.k==="F")bits.push("全市场集体异动");
   return `${bits.join("；")}。`;
 }
@@ -59,6 +60,8 @@ export function livingDetail(t:LivingTradeLike,playbook:string|null):string[]{
   if(n.evd)lines.push(`证据数字：${n.evd}（价格和持仓量都是涨跌 %，主动买卖 >0 买方多）`);
   if(fast){
     lines.push(`三层确认：全市场同时异动并被确认，资金跟上了才跟进；这一段异动所有单子合计最多冒权益的 2% 风险。`);
+  }else if(n.mx){
+    lines.push(`三层确认：第一层 市场「分歧」本来不开单，只放行强证据的顺势试探；第二层 这个币的证据强度 ${num(n.sc,2)}（分歧市场要求 ≥0.6）；第三层 价格回到计划位置时复核，证据仍 ≥0.6 才开，仓位固定按「试探」0.3。`);
   }else if(n.v==="living-v1"){
     lines.push(`三层确认：第一层 研究层判断支持这个打法；第二层 探针分数 ${num(n.sc,3)}（t ${num(n.t,1)} · 样本 ${n.n??"—"}）；第三层 价格回到计划位置并复核通过才开（选币第 ${n.rk??"—"}）。`);
   }else{
@@ -79,7 +82,7 @@ export function livingDetail(t:LivingTradeLike,playbook:string|null):string[]{
   if(typeof t.liquidationPrice==="number"&&t.liquidationPrice>0)lines.push(`强平：逐仓强平价 ${price(t.liquidationPrice)}，离开仓价 ${away(t.entryPrice,t.liquidationPrice)}；爆仓安全开关开着时，开仓要求止损距离不超过爆仓距离的 40%。`);
   // exits
   if(fast)lines.push(`出场计划：由大脑决定——异动是假动作、力竭或反转就平；10 分钟没走出来就平；离爆仓太近先平；确认后亏着的单平掉；赚了以后拉到保本、利润回吐就走。`);
-  else lines.push(`出场计划：由大脑决定——这个币的资金反了、市场意图转向、目标兑现就平；有人开始追（贪婪）或踩踏（恐慌）时把止损抬到锁住六成利润；拿到计划时长的 1.5 倍（${late} 分钟）理由还没兑现就平。`);
+  else lines.push(`出场计划：由大脑决定——这个币的资金反了、市场意图转向、目标兑现就平；浮盈到止损距离 1.5 倍后，后来的人开始追涨/恐慌杀跌（或放量 ≥3 倍、主动单 ≥0.3 冲进来）就把利润交给他们离场；有人开始追（贪婪）或踩踏（恐慌）时把止损抬到锁住六成利润；拿到计划时长的 1.5 倍（${late} 分钟）理由还没兑现就平。`);
   lines.push(`计划持有：${hold} 分钟。大脑停下（降级、只计算或关掉）超过 2 分钟时，这笔只按止损和强平管，持有满 ${late} 分钟就兜底平掉。`);
   lines.push("不适用：旧系统的持仓评分、入场评分/同组、盘面阶段门槛（同步爆发/趋势/过渡）、5% 和 10% 额外出场、同步爆发仓位倍数，这笔都不用。");
   return lines;

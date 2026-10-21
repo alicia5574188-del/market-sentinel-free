@@ -38,7 +38,7 @@ const EXIT_SHORT:Record<string,string>={
   S1_TP:"止盈 6%",S1_SL:"止损",S1_TIME_6H:"满 6 小时",S1_TIME_24H:"满 24 小时",
   LIVING_STOP:"止损",LIVING_FALLBACK_TIMEOUT:"兜底到时间",LIVING_GUARD_STOP:"碰到收紧保护",LIVING_FAST_EXHAUST:"异动力竭",LIVING_FAST_FAKE:"假动作",
   LIVING_FAST_TIME:"10分钟没走出",LIVING_FAST_GIVEBACK:"利润回吐",LIVING_FAST_CONFIRM_EXIT:"异动确认平",LIVING_FAST_LIQ_GUARD:"离爆仓太近",
-  LIVING_INTENT_GONE:"资金反了",LIVING_INTENT_MARKET_FLIP:"市场转向",LIVING_INTENT_DONE:"目标兑现",LIVING_THESIS_TIMEOUT:"到计划时长",
+  LIVING_INTENT_GONE:"资金反了",LIVING_INTENT_MARKET_FLIP:"市场转向",LIVING_INTENT_DONE:"目标兑现",LIVING_INTENT_CLIMAX_TAKE:"利润交给追进的人",LIVING_THESIS_TIMEOUT:"到计划时长",
   LIVING_THESIS_FLIP:"判断反了",LIVING_THESIS_STRUCTURE:"结构破了",LIVING_THESIS_UNREWARDED:"不再给钱",
 };
 /** One plain sentence for "为什么平". Unknown codes fall back to the caller's existing label. */
