@@ -12,7 +12,7 @@ import {clamp,median,pct} from "./util.ts";
 type Side="LONG"|"SHORT";
 export type CoinEnvState="TREND_UP"|"TREND_DOWN"|"CHOP"|"QUIET"|"SPIKE"|"FLUSH"|"UNCLEAR"|"WARMING";
 export type MarketEnvState=CoinEnvState|"MIXED";
-export type CoinEnvEv={er:number|null;hh:number|null;ll:number|null;flips:number|null;wick:number|null;range4h:number|null;atr:number|null;
+export type CoinEnvEv={er:number|null;r2?:number|null;touchHi?:number|null;touchLo?:number|null;hh:number|null;ll:number|null;flips:number|null;wick:number|null;range4h:number|null;atr:number|null;
   vol:number|null;p60:number|null;pos:number|null;net:number|null};
 export type CoinEnv={state:CoinEnvState;side:Side|null;clarity:number;sentence:string;ev:CoinEnvEv};
 export type MarketEnv={at:number;state:MarketEnvState;side:Side|null;clarity:number;sentence:string;
@@ -22,7 +22,10 @@ export type MarketEnv={at:number;state:MarketEnvState;side:Side|null;clarity:num
 export const REGIME={bars:48,minBars:24,refBars:288,refMin:60,
   spikeP60:.02,spikeAtr:6,
   trendEr:.3,trendStruct:.6,trendNetAtr:4,trendPosUp:.6,trendPosDn:.4,
-  chopEr:.25,chopFlips:.45,chopWick:.5,chopRangeAtr:3,
+  /** moderate-efficiency trend: a clean slope (R² of closes on time) is enough without the chunk structure */
+  slopeEr:.18,slopeR2:.5,
+  /** chop needs all of: low efficiency, frequent 15m sign flips, and both edge zones (top / bottom 20% of the 4h range) entered ≥ 2 times */
+  chopEr:.25,chopFlips:.45,chopEdge:.2,chopTouches:2,chopRangeAtr:3,
   quietVol:.7,
   impulseAtr:1.5,impulseBars:6,sweepBars:6,sweepAtr:.25,
   market:{min:10,spike:.25,trend:.3,trendLead:.2,chop:.35,quiet:.45,against:.5}} as const;
@@ -67,7 +70,15 @@ export function coinEnv(rows5:MidBar[]):CoinEnv{
   const wk=w.filter(r=>rng(r)>0),wick=wk.length?wk.reduce((s,r)=>s+1-Math.abs(r.close-r.open)/rng(r),0)/wk.length:0;
   const hi=Math.max(...w.map(r=>r.high)),lo=Math.min(...w.map(r=>r.low)),range4h=(hi-lo)/last,pos=hi>lo?(last-lo)/(hi-lo):.5;
   const p60=n>12?last/w[n-13]!.close-1:null;
-  const ev:CoinEnvEv={er:r(er),hh:r(hh),ll:r(ll),flips:r(flips),wick:r(wick),range4h:r(range4h,5),atr:r(atr,5),vol:vol==null?null:r(vol),p60:p60==null?null:r(p60,5),pos:r(pos),net:r(net,5)};
+  // linear fit of closes on time: R² says how clean the slope is
+  const xm=(n-1)/2,ym=w.reduce((a,b)=>a+b.close,0)/n;let sxy=0,sxx=0,syy=0;
+  for(let i=0;i<n;i++){const dx=i-xm,dy=w[i]!.close-ym;sxy+=dx*dy;sxx+=dx*dx;syy+=dy*dy;}
+  const r2v=sxx>0&&syy>0?sxy*sxy/(sxx*syy):0;
+  // separate visits into the top / bottom 20% of the 4h range
+  let touchHi=0,touchLo=0,inHi=false,inLo=false;const span=hi-lo;
+  for(const b of w){const h=span>0&&b.high>=hi-REGIME.chopEdge*span,l=span>0&&b.low<=lo+REGIME.chopEdge*span;
+    if(h&&!inHi)touchHi++;if(l&&!inLo)touchLo++;inHi=h;inLo=l;}
+  const ev:CoinEnvEv={er:r(er),hh:r(hh),ll:r(ll),flips:r(flips),wick:r(wick),range4h:r(range4h,5),atr:r(atr,5),vol:vol==null?null:r(vol),p60:p60==null?null:r(p60,5),pos:r(pos),net:r(net,5),r2:r(r2v),touchHi,touchLo};
   const refAtr=vol!=null&&vol>0?atr/vol:atr;// the coin's own usual 5m range
   const volTxt=vol==null?"":`，波动是自己平时的 ${vol.toFixed(1)} 倍`;
   const tail=`（效率 ${f2(er)}，4 小时区间 ${pa(range4h)}，5 分钟波动 ${pa(atr)}${volTxt}）`;
@@ -76,22 +87,24 @@ export function coinEnv(rows5:MidBar[]):CoinEnv{
     const s:CoinEnvState=p60>0?"SPIKE":"FLUSH",c=clamp((Math.abs(p60)/spikeLine-1)/1+.5,0,1);
     return{state:s,side:p60>0?"LONG":"SHORT",clarity:r(c),ev,sentence:`币环境：${ENV_LABEL[s]}，1 小时 ${pct(p60)}（线 ${pa(spikeLine)}）→ 等${s==="SPIKE"?"拉升力竭反做空":"杀跌出尽抄反弹"}${tail}`};
   }
-  const trendBase=er>=REGIME.trendEr&&Math.abs(net)>=REGIME.trendNetAtr*atr;
-  if(trendBase&&net>0&&hh>=REGIME.trendStruct&&pos>=REGIME.trendPosUp){
-    const c=clamp(.4*(er-REGIME.trendEr)/.3+.3*hh+.3*(pos-.5)/.5,0,1);
+  const big=Math.abs(net)>=REGIME.trendNetAtr*atr,slope=er>=REGIME.slopeEr&&r2v>=REGIME.slopeR2;
+  const trendUp=big&&net>0&&pos>=REGIME.trendPosUp&&((er>=REGIME.trendEr&&hh>=REGIME.trendStruct)||slope);
+  const trendDn=big&&net<0&&pos<=REGIME.trendPosDn&&((er>=REGIME.trendEr&&ll>=REGIME.trendStruct)||slope);
+  if(trendUp){
+    const c=clamp(.4*Math.max(0,er-REGIME.slopeEr)/.3+.3*Math.max(hh,r2v)+.3*(pos-.5)/.5,0,1);
     return{state:"TREND_UP",side:"LONG",clarity:r(c),ev,sentence:`币环境：上升趋势，4 小时 ${pct(net)}，高点低点一路抬高（${up}/${ch.length-1}），位置在区间 ${Math.round(pos*100)}% → 只做回调守住的多${tail}`};
   }
-  if(trendBase&&net<0&&ll>=REGIME.trendStruct&&pos<=REGIME.trendPosDn){
-    const c=clamp(.4*(er-REGIME.trendEr)/.3+.3*ll+.3*(.5-pos)/.5,0,1);
+  if(trendDn){
+    const c=clamp(.4*Math.max(0,er-REGIME.slopeEr)/.3+.3*Math.max(ll,r2v)+.3*(.5-pos)/.5,0,1);
     return{state:"TREND_DOWN",side:"SHORT",clarity:r(c),ev,sentence:`币环境：下降趋势，4 小时 ${pct(net)}，高点低点一路降低（${dn}/${ch.length-1}），位置在区间 ${Math.round(pos*100)}% → 只做反弹失败的空${tail}`};
   }
   if(vol!=null&&vol<=REGIME.quietVol){
     const c=clamp((REGIME.quietVol-vol)/.4+.4,0,1);
     return{state:"QUIET",side:null,clarity:r(c),ev,sentence:`币环境：安静窄幅，波动只有平时的 ${vol.toFixed(2)} 倍 → 等第一根快速冲出区间的 K 线再回踩${tail}`};
   }
-  if(er<=REGIME.chopEr&&(flips>=REGIME.chopFlips||wick>=REGIME.chopWick)&&range4h>=REGIME.chopRangeAtr*atr){
-    const c=clamp(.4*(REGIME.chopEr-er)/REGIME.chopEr+.3*flips+.3*wick,0,1);
-    return{state:"CHOP",side:null,clarity:r(c),ev,sentence:`币环境：来回震荡，15 分钟方向翻转 ${Math.round(flips*100)}%，影线占 ${Math.round(wick*100)}% → 不追突破，只做扫过边缘又收回的假突破，目标区间中部${tail}`};
+  if(er<=REGIME.chopEr&&flips>=REGIME.chopFlips&&touchHi>=REGIME.chopTouches&&touchLo>=REGIME.chopTouches&&range4h>=REGIME.chopRangeAtr*atr){
+    const c=clamp(.4*(REGIME.chopEr-er)/REGIME.chopEr+.3*flips+.3*Math.min(1,Math.min(touchHi,touchLo)/4),0,1);
+    return{state:"CHOP",side:null,clarity:r(c),ev,sentence:`币环境：来回震荡，15 分钟方向翻转 ${Math.round(flips*100)}%，区间上沿碰了 ${touchHi} 次、下沿 ${touchLo} 次 → 不追突破，只做扫过边缘又收回的假突破，目标区间中部${tail}`};
   }
   return{state:"UNCLEAR",side:null,clarity:0,ev,sentence:`币环境：看不清（不是趋势、震荡或安静）→ 不按环境开${tail}`};
 }

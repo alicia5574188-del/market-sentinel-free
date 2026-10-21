@@ -25,6 +25,20 @@ test("coin env: chop (back and forth, low efficiency)", ()=>{
   const zz=Array.from({length:288},(_,i)=>100*(1+.01*Math.sin(i*Math.PI/6)));// 1h swings
   const e=coinEnv(bars(zz,.002));
   assert.equal(e.state,"CHOP",e.sentence);assert.ok(e.ev.er!<=.25);assert.ok(e.ev.flips!>=.45);assert.match(e.sentence,/假突破/);
+  assert.ok(e.ev.touchHi!>=2&&e.ev.touchLo!>=2,"both edges visited at least twice");
+});
+test("coin env: big wicks alone are not chop; moderate-efficiency clean slope is a trend; drift is unclear", ()=>{
+  // wick-heavy bars that never visit both edges twice: one push up then flat at the top (not ping-pong)
+  const step=[...Array.from({length:12},(_,i)=>100+i*.1),...Array.from({length:36},(_,i)=>101.2+.05*Math.sin(i*2))];
+  const wb=bars([...flat(240,100,.002),...step],.004);
+  const we=coinEnv(wb);assert.notEqual(we.state,"CHOP",we.sentence);
+  // noisy but clean uptrend: efficiency ≈ 0.2, R² high → TREND_UP via the slope path
+  const mod=Array.from({length:288},(_,i)=>100*(1+.0006*i+.0032*Math.sin(i*1.7)));
+  const me=coinEnv(bars(mod,.002));assert.equal(me.state,"TREND_UP",me.sentence);assert.ok(me.ev.er!<.3,"moderate efficiency");assert.ok(me.ev.r2!>=.5);
+  const mdn=coinEnv(bars(mod.map(c=>200-c),.002));assert.equal(mdn.state,"TREND_DOWN",mdn.sentence);
+  // slow drift with tiny noise: not enough net move for a trend, no ping-pong → unclear (no forced class)
+  const drift=Array.from({length:288},(_,i)=>100*(1+.00002*i+.0006*Math.sin(i*1.3)));
+  const de=coinEnv(bars(drift,.002));assert.equal(de.state,"UNCLEAR",de.sentence);
 });
 test("coin env: quiet (range far below its own level), spike / flush, warming", ()=>{
   const loud=bars(flat(240,100,.01),.012),quiet=bars(flat(48,100,.0008),.002,240*300);
