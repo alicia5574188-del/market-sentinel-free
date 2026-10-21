@@ -785,6 +785,9 @@ export class LivingEngine{
   /** Symbols the tape should follow beyond the basket (positions, watches). */
   followSymbols(forward:ForwardView){return[...new Set([...(this.basket?.members??[]),"BTC_USDT","ETH_USDT",...forward.positions.map(p=>p.symbol),...this.trades.watches.map(w=>w.symbol)])];}
   /** Only when acting (paper-enabled, no fallback): compute-only must not change the legacy loop cadence. */
+  /** Symbols whose Gate book must stay on the old every-loop REST fallback: waiting watches (entry fill check); a fast episode → all. */
+  restCritical(now:number){const acting=this.effective(now).acting;
+    return{all:acting&&!!this.fast.episode,symbols:acting?this.trades.watches.filter(w=>w.status==="WAITING"&&w.expiresAt>now).map(w=>w.symbol):[]};}
   wantsUrgent(now:number){return this.effective(now).acting&&(!!this.fast.episode||this.trades.watches.some(w=>w.status==="WAITING"&&w.expiresAt>now));}
   /** Symbols whose flow (OI / funding / aggressor) the hub should hand over: the tape's symbols. */
   flowSymbols(forward:ForwardView){return this.followSymbols(forward);}

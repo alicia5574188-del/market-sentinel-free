@@ -9,6 +9,7 @@ import handler from "vinext/server/app-router-entry";
 import { GatePublicError, fetchActiveContracts, fetchContractStats, fetchGateRadarTickers, fetchLiquidations, fetchRecentTrades,
   fetchStructureCandles, fetchTickerBbo, fetchUrgentFuturesBook } from "../lib/gate-market.ts";
 import { MarketDataHub } from "../lib/market-data-hub.ts";
+import { GateRestThrottle } from "../lib/gate-rest-throttle.ts";
 import { GateStreamingFeed } from "../lib/gate-stream.ts";
 import { CORRELATED_DIRECTION_RISK_CAP, PORTFOLIO_RISK_CAP, remainingStressRisk, STALE_AFTER_MS, SYSTEM_VERSION, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
 import { aggregateFourHourCandles, analyzeSnapshot, ancillarySchedule, deriveMinuteNoiseRate, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, structureDirection, updateOpenInterestCohorts, type SymbolMemory } from "../lib/liquidity-runtime.ts";
@@ -563,6 +564,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private forwardMinuteCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
   private forwardMinuteRetryAt = new Map<string,number>();
   private gateStream = new GateStreamingFeed();
+  private gateRestThrottle = new GateRestThrottle();
   private marketHub = new MarketDataHub();
   private forwardMinuteQuoteBars: Record<string,{minute:number;open:number;high:number;low:number;close:number;samples:number;
     firstAt:number;lastAt:number;completed:Array<{time:number;open:number;high:number;low:number;close:number;volume:number}>}> = {};
@@ -4628,7 +4630,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const urgent=new Set([...this.currentAuthorityProtectionSymbols(),...this.forwardUrgentSymbols(now)]);
     const streamBook=(symbol:string)=>this.gateStream.book(symbol,this.runtime.tickSize[symbol]??.0001,
       this.runtime.contractMeta[symbol]?.quantoMultiplier??1,Math.max(now,Date.now()));
-    const due=cycleSymbols.filter(symbol=>streamBook(symbol)||(this.runtime.feedFailures[symbol]?.retryAt??0)<=now);
+    // REST fallback only where it matters: critical symbols keep the old every-loop behaviour; research/scanning symbols
+    // back off while their websocket book stays silent and share a global REST budget (no new requests anywhere).
+    const fastLiving=this.living?.restCritical(now)??{all:false,symbols:[] as string[]};
+    const critical=(symbol:string)=>fastLiving.all||urgent.has(symbol)||fastLiving.symbols.includes(symbol);
+    this.gateRestThrottle.forget(this.runtime.symbols);
+    const due=cycleSymbols.filter(symbol=>{
+      if(streamBook(symbol)){this.gateRestThrottle.wsSeen(symbol);return true;}
+      return (this.runtime.feedFailures[symbol]?.retryAt??0)<=now&&this.gateRestThrottle.allow(symbol,now,critical(symbol));
+    });
     this.runtime.feedQuality.attempts+=due.length;
     const rows=await Promise.allSettled(due.map(async symbol=>{
       const pushed=streamBook(symbol);if(pushed){this.gateStream.used("websocket");return{symbol,snapshot:pushed};}
@@ -5334,6 +5344,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         feedQuality: this.runtime.feedQuality,
         multiSourceMarket: this.marketHub.status(),
         marketDataTransport: this.gateStream.status(),
+        gateRestThrottle: this.gateRestThrottle.status(),
         marketRegimes: { tracked: regimes.tracked, warmed: regimes.warmed, counts: regimes.counts },
         limits: {
           markets: this.runtime.symbols.length,
