@@ -1606,9 +1606,10 @@ function seedEntryResponses(s:ForwardState,quotes:Record<string,Quote>,now:numbe
   s.entryDiagnostics={at:now,matched:eligible.length,opened:0,reasons};
 }
 
+export const LEGACY_ENTRY_DISABLED_REASON="旧系统不再开新单（只有研究层开单），这笔只留档";
 function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<string,Contract>,
   minutePaths:Record<string,Candle[]>|undefined,paths:Record<string,Candle[]>|undefined,now:number,equity:number,trace?:(event:ReviewEvent)=>void,
-  btc1hPct:number|null=null,livingNote=false){
+  btc1hPct:number|null=null,livingNote=false,replayLegacyOpens=false){
   const opportunities=new Map(s.opportunities.map(o=>[o.id,o])),waiting=Object.values(s.entryValidations)
     .filter(v=>v.status==="WAITING").sort((a,b)=>{
       const ao=a.frozenOpportunity??opportunities.get(a.candidateId),bo=b.frozenOpportunity??opportunities.get(b.candidateId);
@@ -1786,6 +1787,19 @@ function advanceEntryResponses(s:ForwardState,quotes:Record<string,Quote>,contra
       }
       reject(noted??why);continue;
     }
+    // 2026-10-21 user: "只有研究层能开单". The legacy stack never opens a new paper trade in any state (living off, record-only,
+    // FALLBACK, new-source switch off). A signal that would have opened is kept as a record-only (not-opened) row, same as the
+    // gate-blocked rows above, so the run log stays continuous. Existing legacy trades keep their exits.
+    if(!replayLegacyOpens){
+      const noted=openIntelligenceTrade(s,o,q!,meta,now,equity,{validation,decision},minutePaths?.[o.symbol],structure,null,null,true,gateNote);
+    const why=LEGACY_ENTRY_DISABLED_REASON;
+    if(!noted||noted.startsWith("同币已有未开")){
+      validation.status="CANCELLED";validation.reason=why;
+      delete s.entryValidations[validation.id];
+    }
+    reject(noted??why);continue;
+    }
+    // Historical replays only (tests/living/forward-sim.ts fixtures that need legacy-opened trades). The worker never sets it.
     const error=openIntelligenceTrade(s,o,q!,meta,now,equity,{validation,decision},minutePaths?.[o.symbol],structure,null,null,false,gateNote);
     if(error){
       if(error.startsWith("实时成交性价比")||error.startsWith("实时入场已消耗剩余空间")||error.startsWith("入场与持仓证据冲突")){
@@ -1973,6 +1987,8 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
   referenceMids?:Partial<Record<"BTC_USDT"|"ETH_USDT",number|null>>;
   /** BTC 1h change in percent, the same value the run log writes as btc_1h_pct. Gates TREND/SHOCK entries (entry-gate.ts); null blocks them. */
   btc1hPct?:number|null;
+  /** Test/replay fixtures only: let the legacy stack open paper trades as it did before 2026-10-21. Production never sets it. */
+  replayLegacyOpens?:boolean;
   /** Living research layer directive (lib/living). Undefined = exactly the a38882f4 path (modes off / compute-only never pass it). */
   living?:LivingDirective}){
   // An optional observer has no return value or trading authority. A failed logger cannot block a trade.
@@ -2066,7 +2082,7 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
   // execution clock; research refreshes can no longer make it disappear.
   if(marketReady)seedEntryResponses(s,input.quotes,input.now,trace);
   const opened=marketReady?advanceEntryResponses(s,input.quotes,input.contracts,input.minutePaths,input.paths,input.now,mark.equity,trace,
-    typeof input.btc1hPct==="number"&&Number.isFinite(input.btc1hPct)?input.btc1hPct:null,input.living?.legacyGate==="note"):0;
+    typeof input.btc1hPct==="number"&&Number.isFinite(input.btc1hPct)?input.btc1hPct:null,input.living?.legacyGate==="note",input.replayLegacyOpens===true):0;
   let livingOpened=0;
   if(input.living&&livingResult&&!opened){
     if(!marketReady)for(const o of input.living.orders)livingResult.rejected.push({orderId:o.id,symbol:o.symbol,reason:"全市场路径还在恢复，不开新单"});

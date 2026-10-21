@@ -55,7 +55,7 @@ export function runForward(opts:{from:number;to:number;stepMs:number;symbols?:st
   for(let now=opts.from;now<opts.to;now+=opts.stepMs,i++){
     const inp=simInputs(state,now,symbols,cache);
     const extra=opts.extra?.(state,inp)??{};
-    state=advanceForward({state,now,paths:inp.paths,minutePaths:inp.minutePaths,quotes:inp.quotes,analysisQuotes:inp.quotes,
+    state=advanceForward({state,now,replayLegacyOpens:true,paths:inp.paths,minutePaths:inp.minutePaths,quotes:inp.quotes,analysisQuotes:inp.quotes,
       contracts:inp.contracts,entrySymbols:symbols,allowDataCycle:inp.allowDataCycle,btc1hPct:inp.btc1hPct,
       referenceMids:{BTC_USDT:inp.mids.BTC_USDT??null,ETH_USDT:inp.mids.ETH_USDT??null},...extra}).state;
     opts.onTick?.(state,inp);
