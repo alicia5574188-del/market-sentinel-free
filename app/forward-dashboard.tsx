@@ -23,6 +23,7 @@ import "./pages.css";
 import {tradePaidNetPnl,pairedPaidView,type PaidPair} from "../lib/paid-fee-view.ts";
 import type {ThesisPublic} from "../lib/thesis-view.ts";
 import {OrderCard,exitShort,exitPlain,priceText,livingPlaybookLabel,type OrderFact} from "./order-card.tsx";
+import {isLivingTrade,livingBoard,livingDetail,livingWhy} from "../lib/living-trade-view.ts";
 
 type View=ReturnType<typeof forwardSummary>;
 type Desk=NonNullable<View["forwardDesk"]>;
@@ -463,10 +464,10 @@ function openReason(t:Trade){
   const ctx=t.entryContext;
   if(t.inverseCopy)return t.inverseCopy.alignment==="WITH_SOURCE"?"跟着提案同方向开。":"跟提案反着开。";
   if(!ctx)return null;
+  // 研究层的单：说研究层自己的打法和资金意图，不说旧系统的盘面阶段。
+  if(ctx.living)return livingWhy(t,livingPlaybookLabel(ctx.living.pb));
   const trend=ctx.entryRead?.withTrend===true?"顺着大盘方向":ctx.entryRead?.withTrend===false?"逆着大盘方向":"";
-  // 研究层的单：说研究层自己的打法（附带的赢家计划只是出场用的，不是开仓理由）。
-  const living=livingPlaybookLabel(ctx.living?.pb);
-  const plan=living?living:ctx.winnerPlan?(ctx.winnerPlan.intent==="TREND"?"做这个币自己的趋势":"做回到区间"):`${ctx.reserve?"低风险 · ":""}${modeName(ctx.mode)}`;
+  const plan=ctx.winnerPlan?(ctx.winnerPlan.intent==="TREND"?"做这个币自己的趋势":"做回到区间"):`${ctx.reserve?"低风险 · ":""}${modeName(ctx.mode)}`;
   const board=ctx.stageNote?.liveStage??ctx.environment;
   return `${trend}${t.side==="LONG"?"做多":"做空"}，${plan}${board?`；开仓时盘面是${stageName(board)}`:""}。`;
 }
@@ -495,7 +496,7 @@ export function TradeCard({trade:t,now,paid}:{trade:Trade;now:number;paid?:PaidP
   const pair=t.inverseCopy?(paid?.status===t.status?paid:pairedPaidView(t,undefined,now||t.lastQuoteAt)):null;
   const px=pair?pair.inverse.price:open?t.lastPrice:t.exitPrice??t.lastPrice;
   const pnl=pair?pair.inverse.netPnl:open?openTradeNetPnl(t,px??t.lastPrice):t.netPnl,rate=pnl!==null&&initialTradeNotional(t)>0?pnl/initialTradeNotional(t):null,ctx=t.entryContext;
-  const board=ctx?.stageNote?.liveStage??ctx?.environment;
+  const board=ctx?.stageNote?.liveStage??ctx?.environment,living=!t.inverseCopy&&isLivingTrade(t);
   const state=t.inverseCopy?(open?"持仓中":"已跟随出场"):open?"持仓中":t.exitReason==="PEAK_GIVEBACK"?"浮盈回吐":exitShort(t.exitReason,exitLabel(t));
   const fees=pair?pair.inverse.fees:(t.entryFee??0)+(open?0:t.exitFee??0);
   const facts:OrderFact[]=[
@@ -506,11 +507,16 @@ export function TradeCard({trade:t,now,paid}:{trade:Trade;now:number;paid?:PaidP
     {label:"名义金额",value:`${fmt(t.notional)} U`},{label:"保证金",value:`${fmt(t.margin)} U`},
     {label:t.inverseCopy?"出场参考":"止损位",value:priceText(t.inverseCopy?.sourceStopPrice??t.stopPrice)},
     ...(typeof t.liquidationPrice==="number"&&!t.inverseCopy?[{label:"强平价（逐仓）",value:priceText(t.liquidationPrice),tone:t.exitReason==="LIQUIDATION"?-1:null}]:[]),
-    {label:"开仓盘面",value:t.inverseCopy?"跟随提案":board?stageName(board):"没记下"},
+    living&&ctx?.living?{label:"开仓时市场意图",value:livingBoard(ctx.living)}:{label:"开仓盘面",value:t.inverseCopy?"跟随提案":board?stageName(board):"没记下"},
   ];
-  const facts2=entryFacts(t);
+  const facts2=living?livingDetail(t,livingPlaybookLabel(ctx?.living?.pb)):entryFacts(t);
   const score=t.inverseCopy?null:ctx?(ctx.strategyVersion==="market-intelligence-v1"?`入场评分 ${fmt(ctx.entryScore,0)} · 同组 ${(ctx.clusterId?.replace(/^corr:/,"")??"—").replace(/_USDT$/,"")} · ${afterEntryName(ctx.postEntryState)}`:`入场评分 ${fmt(ctx.entryScore,0)} · 旧关系 ${ctx.relationStatus??"—"} ${fmt((ctx.relationHealth??0)*100,0)} · 首次浮赢 ${t.firstProfitAt?time(t.firstProfitAt):"尚未"}`):"历史兼容持仓";
-  const detail=<>
+  const detail=living?<>
+    {facts2.map(labelled)}
+    {t.exitReason&&<p><b>退出依据</b>：{exitLabel(t)}</p>}
+    <p><b>持有时长</b>：计划 {fmt(t.expectedHoldMinutes,0)} 分钟 · 实际 {duration(t.openedAt,t.closedAt,now)}</p>
+    <p><b>精确时间</b>：开仓 {time(t.openedAt)} · 平仓 {open?"尚未平仓":time(t.closedAt)}</p>
+  </>:<>
     {open&&!t.inverseCopy&&<p><b>持仓评分</b>：{fmt(t.holdScore,0)}</p>}
     {score&&<p><b>评分</b>：{score}</p>}
     {ctx&&<p><b>入场依据</b>：{ctx.reason}</p>}

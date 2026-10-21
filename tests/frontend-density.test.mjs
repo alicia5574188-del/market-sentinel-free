@@ -39,6 +39,11 @@ runInNewContext(`(function(require,module,exports){${orderCardSource}\n})`,{})(n
   if(name==="react/jsx-runtime")return jsxRuntime;
   throw new Error(`order card imported ${name}`);
 },orderCardModule,orderCardModule.exports);
+// Living-trade order-card text (pure, no imports).
+const livingViewModule={exports:{}};
+runInNewContext(`(function(require,module,exports){${ts.transpileModule(read("lib/living-trade-view.ts"),{fileName:"lib/living-trade-view.ts",compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText}\n})`,{Math,Number})(name=>{
+  throw new Error(`living trade view imported ${name}`);
+},livingViewModule,livingViewModule.exports);
 // The real freshness stamp (pure presentation).
 const panelStampModule={exports:{}};
 const panelStampSource=ts.transpileModule(read("app/panel-stamp.tsx"),{fileName:"app/panel-stamp.tsx",compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;
@@ -64,6 +69,7 @@ function render(path,props,extra={},component="default"){
     "../lib/record-view.ts":{recordWindows:rows=>({recent:rows.slice(0,10),archive:rows.slice(10)}),archivePage:rows=>({items:rows,page:0,pages:1})},
     "./record-controls.tsx":{ArchivePagination:()=>null},
     "./order-card.tsx":orderCardModule.exports,
+    "../lib/living-trade-view.ts":livingViewModule.exports,
     "./panel-stamp.tsx":panelStampModule.exports,
     "../lib/panel-cache.ts":panelCache,
     "../lib/system-panels.ts":systemPanels,
@@ -134,6 +140,30 @@ test("living-layer order says its own playbook as the open reason, not the attac
   assert.doesNotMatch(html,/做这个币自己的趋势/);
   const legacy=render("app/forward-dashboard.tsx",dashboardProps({...account(),positions:[pos("c","SOL_USDT",ctx(null))]}));
   assert.match(legacy,/做这个币自己的趋势/);
+});
+test("living-layer order: 详细依据 shows the brain's intent, evidence, layers, sizing and exit plan, not the old system's fields",()=>{
+  // 2026-10-21 screenshot: squeeze-fade short opened at 06:33 with stage TRANSITION stamped by the shared entry context.
+  const living={v:"living-v2",k:"N",pb:"squeeze-fade",th:null,ep:null,ev:"normal",mult:3,sc:.62,t:null,n:null,per:null,rk:1,inv:2.0748,ref:2.06,hold:60,
+    why:"逼空衰竭反做：逼空衰竭：1小时涨 +3.95% 靠空头回补（持仓量 -0.25%），19 分钟没新高，回补停了 → 反做；位置到了且确认",
+    in:"SQUEEZE_UP/EXHAUSTION",mk:"MIXED",nar:"大盘分歧，没有一边占优｜逼空衰竭",evd:"15分钟价格 +0.40%，持仓量 -0.25%（1小时 -0.80%），资金费 0.010%，主动买卖 -0.12，成交量 1.8倍"};
+  const ctx={winnerPlan:{intent:"TREND"},mode:"CONTINUATION",reserve:false,environment:"TRANSITION",stageNote:{liveStage:"TRANSITION",priorStage:"TREND",stageAgeMin:82},
+    sizeMultiple:3,strategyVersion:"market-intelligence-v1",entryScore:68,postEntryState:"PENDING",reason:living.why,living};
+  const t={id:"lv-1",status:"OPEN",symbol:"ZRO_USDT",side:"SHORT",entryPrice:2.06,lastPrice:2.032,quantity:883,notional:1818.98,entryFee:1.27,
+    leverage:10,margin:181.9,plannedRisk:16.5,openedAt:1792535596000,closedAt:null,exitPrice:null,netPnl:null,stopPrice:2.0748,liquidationPrice:2.2525,
+    favorable:.0262,adverse:.0005,profitFloorRate:0,expectedHoldMinutes:60,entryContext:ctx,holdScore:50};
+  const html=render("app/forward-dashboard.tsx",dashboardProps({...account(),positions:[t]}));
+  assert.match(html,/做空，逼空衰竭反做；这个币空头被逼平（力竭）；市场分歧。/);
+  assert.match(html,/开仓时市场意图/);
+  for(const k of ["资金意图","市场判断","证据数字","三层确认","仓位","止损","强平","出场计划","计划持有","不适用"])assert.match(html,new RegExp(`<b>${k}</b>`),k);
+  assert.match(html,/0\.55% 作风险基数 × 3\.00 倍（5 倍 × 证据档「普通」0\.6）/);
+  assert.match(html,/离开仓价 0\.72%（价格涨跌，不是收益率）/);
+  assert.match(html,/1\.5 倍（90 分钟）/);
+  assert.doesNotMatch(html,/<b>持仓评分<\/b>|入场评分 68|开仓时盘面是过渡|只有同步爆发或趋势才会真正开仓|不使用 5% 和 10% 那两条|同步爆发和趋势都是 5 倍|<b>开仓走势<\/b>/);
+  assert.doesNotMatch(html,/<small>开仓盘面<\/small>|>过渡</);
+});
+test("living-trade labels match the 大脑 page",async()=>{
+  const brain=await import("../lib/brain-view.ts");const v=livingViewModule.exports;
+  const j=o=>JSON.stringify(o);assert.equal(j(v.LIVING_STATE_LABEL),j(brain.STATE_LABEL));assert.equal(j(v.LIVING_CAPITAL_LABEL),j(brain.CAPITAL_LABEL));assert.equal(j(v.LIVING_EMOTION_LABEL),j(brain.EMOTION_LABEL));
 });
 test("living playbook labels on the page match the living layer's own labels",async()=>{
   const {PLAYBOOK_LABEL}=await import("../lib/living/thesis.ts");
