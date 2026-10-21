@@ -70,7 +70,7 @@ import {confirmationRealityView} from '../lib/confirmation-reality.ts';
 import {observationReading} from '../lib/observation-tape.ts';
 import { cancelFundsReset, requestFundsReset } from "../lib/account-reset.ts";
 import { ADAPTIVE_ENGINE_VERSION, pageStartedAt, FORWARD_EXECUTION_BBO_CAP, FORWARD_MINUTE_CONFIRMATION_CAP, advanceForward,
-  forwardSummary, forwardEquity, freshQuote, forwardUrgentMinuteSymbols, forwardUrgentQuoteSymbols, forwardWatchSymbols,
+  forwardSummary, forwardEquity, freshQuote, forwardUrgentMinuteSymbols, forwardUrgentQuoteSymbols, forwardRestCriticalSymbols, forwardWatchSymbols,
   BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
 import { FORWARD_EXECUTION_VOLUME_FLOOR_USD, forwardExecutionUniverseEligible, selectAnchorOpportunityUniverse } from "../lib/multi-turn-universe.ts";
 import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite,
@@ -4633,7 +4633,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     // REST fallback only where it matters: critical symbols keep the old every-loop behaviour; research/scanning symbols
     // back off while their websocket book stays silent and share a global REST budget (no new requests anywhere).
     const fastLiving=this.living?.restCritical(now)??{all:false,symbols:[] as string[]};
-    const critical=(symbol:string)=>fastLiving.all||urgent.has(symbol)||fastLiving.symbols.includes(symbol);
+    // open/pending exposure only; research-only scanning symbols (opportunities, extremum watch list) are not critical
+    const restCritical=new Set([...this.currentAuthorityProtectionSymbols(),
+      ...(this.forwardState?forwardRestCriticalSymbols(this.forwardState,now,this.runtime.liquidUniverse??[]):[])]);
+    const critical=(symbol:string)=>fastLiving.all||restCritical.has(symbol)||fastLiving.symbols.includes(symbol);
     this.gateRestThrottle.forget(this.runtime.symbols);
     const due=cycleSymbols.filter(symbol=>{
       if(streamBook(symbol)){this.gateRestThrottle.wsSeen(symbol);return true;}

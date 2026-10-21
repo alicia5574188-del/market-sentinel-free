@@ -2196,6 +2196,15 @@ export function forwardUrgentQuoteSymbols(s:ForwardState,now:number,entrySymbols
   const watched=Object.values(s.extremumRegime.symbols).filter(r=>keep(r.symbol)&&r.watchScore>=58).sort((a,b)=>b.watchScore-a.watchScore);
   return[...new Set([...(s.inverseTrial?.source.positions.map(t=>t.symbol)??[]),...(s.inverseTrial?.lsrWork?.map(order=>order.s)??[]),...s.positions.map(t=>t.symbol),...(s.unopenedTrades??[]).filter(t=>t.status==="OPEN").map(t=>t.symbol),...armed.map(v=>v.symbol),...premium.map(o=>o.symbol),...normal.map(o=>o.symbol),...watched.map(r=>r.symbol)])];
 }
+/** Symbols whose Gate book must keep the every-loop REST fallback (marks, stops, liquidation, pending fills):
+ * the urgent set minus research-only scanning (opportunities, extremum watch list). */
+export function forwardRestCriticalSymbols(s:ForwardState,now:number,entrySymbols?:Iterable<string>){
+  const allowed=entrySymbols?new Set(entrySymbols):null,keep=(x:string)=>!allowed||allowed.has(x);
+  void now;
+  return[...new Set([...(s.inverseTrial?.source.positions.map(t=>t.symbol)??[]),...(s.inverseTrial?.lsrWork?.map(order=>order.s)??[]),...s.positions.map(t=>t.symbol),
+    ...(s.unopenedTrades??[]).filter(t=>t.status==="OPEN").map(t=>t.symbol),
+    ...Object.values(s.entryValidations).filter(v=>v.status==="WAITING"&&keep(v.symbol)).map(v=>v.symbol)])];
+}
 export function forwardUrgentMinuteSymbols(s:ForwardState,entrySymbols?:Iterable<string>){
   const allowed=entrySymbols?new Set(entrySymbols):undefined,keep=(x:string)=>!allowed||allowed.has(x),
     armed=Object.values(s.entryValidations).filter(v=>v.status==="WAITING"&&keep(v.symbol))
