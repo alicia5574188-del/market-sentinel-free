@@ -5,7 +5,7 @@
  * Every number here is a price move (%), never ROE.
  */
 export type LivingNoteView={v?:string;k?:string;pb?:string;ev?:string;mult?:number;sc?:number|null;t?:number|null;n?:number|null;per?:string|null;
-  rk?:number|null;inv?:number;ref?:number|null;hold?:number;why?:string;in?:string;mk?:string;nar?:string;evd?:string;ep?:string|null;ho?:number;mx?:number;lm?:number};
+  rk?:number|null;inv?:number;ref?:number|null;hold?:number;why?:string;in?:string;mk?:string;nar?:string;evd?:string;ep?:string|null;ho?:number;mx?:number;lm?:number;env?:string;tg?:number};
 export type LivingTradeLike={side:"LONG"|"SHORT";entryPrice:number;stopPrice?:number|null;liquidationPrice?:number|null;plannedRisk:number;leverage:number;
   notional:number;expectedHoldMinutes?:number|null;entryContext?:{living?:LivingNoteView|null;reason?:string|null}|null};
 
@@ -41,7 +41,8 @@ export function livingBoard(n:LivingNoteView){
 export function livingWhy(t:LivingTradeLike,playbook:string|null){
   const n=t.entryContext!.living!,bits=[`${t.side==="LONG"?"做多":"做空"}，${playbook??n.pb??"研究层"}`];
   const coin=livingIntentText(n.in);if(coin)bits.push(`这个币${coin}`);
-  if(typeof n.lm==="number"&&n.lm<1)bits.push(`市场方向不清，半仓（${n.lm}×）`);
+  if(n.env)bits.push(n.env.split("｜")[0]!.replace(/^环境：/,"环境："));
+  else if(typeof n.lm==="number"&&n.lm<1)bits.push(`市场方向不清，半仓（${n.lm}×）`);
   else if(n.mx)bits.push("市场分歧，强证据顺势试探（0.3 倍仓位）");
   else if(n.mk&&n.k!=="F")bits.push(`市场${LIVING_STATE_LABEL[n.mk]??n.mk}`);
   else if(n.k==="F")bits.push("全市场集体异动");
@@ -59,8 +60,14 @@ export function livingDetail(t:LivingTradeLike,playbook:string|null):string[]{
   if(marketSentence&&!fast)lines.push(`市场判断：${marketSentence}`);
   const why=n.why??t.entryContext?.reason??null;if(why)lines.push(`依据：${why}`);
   if(n.evd)lines.push(`证据数字：${n.evd}（价格和持仓量都是涨跌 %，主动买卖 >0 买方多）`);
+  if(n.env&&!fast){const [pick,coinEnv,marketEnv]=n.env.split("｜");
+    if(coinEnv)lines.push(`币环境：${coinEnv.replace(/^币环境：/,"")}`);if(marketEnv)lines.push(`市场环境：${marketEnv.replace(/^市场环境：/,"")}`);
+    if(pick)lines.push(`为什么选这个打法：${pick.replace(/^环境：/,"")}（环境决定打法：趋势做回调/冲击回踩，震荡只做假突破回中部，急拉急杀等力竭反转，安静等第一根冲击回踩）`);
+    if(typeof n.tg==="number")lines.push(`目标：${price(n.tg)}（区间中部，到了就落袋）`);}
   if(fast){
     lines.push(`三层确认：全市场同时异动并被确认，资金跟上了才跟进；这一段异动所有单子合计最多冒权益的 2% 风险。`);
+  }else if(n.env){
+    lines.push(`三层确认：第一层 市场环境不反对这个方向（明确反向就不做）；第二层 币环境对得上这个打法、证据强度 ${num(n.sc,2)}（≥0.35 才往下走）→ 证据档「${EVIDENCE_LABEL[n.ev??""]??n.ev??"—"}」，环境清晰度定仓位 ${num(n.lm??1,2)}×（0.5–1×）；第三层 价格回到计划位置并复核通过才开（选币第 ${n.rk??"—"}）。`);
   }else if(typeof n.lm==="number"&&n.lm<1){
     lines.push(`三层确认：第一层 市场方向不清（分歧），不拦截，按 ${n.lm}× 仓位放行（只放行顺势、逼空衰竭反做、贪婪拥挤失败反做）；第二层 这个币的证据强度 ${num(n.sc,2)}（≥0.35 才往下走，≥0.75 算强）→ 证据档「${EVIDENCE_LABEL[n.ev??""]??n.ev??"—"}」；第三层 价格回到计划位置并复核通过才开（选币第 ${n.rk??"—"}）。`);
   }else if(n.mx){
@@ -75,7 +82,7 @@ export function livingDetail(t:LivingTradeLike,playbook:string|null):string[]{
     lines.push(`仓位：按账户权益的 ${(FAST_RISK_RATE*100).toFixed(2)}% 作风险基数 × ${num(n.mult,2)} 倍（集体异动 1–3 倍，试探再除以 3）；打到止损最多亏 ${num(t.plannedRisk)} U（含来回手续费）；杠杆 ${num(t.leverage,0)}× 逐仓，名义 ${num(t.notional)} U。`);
   }else{
     const premium=n.ev==="strong"&&n.rk===1,factor=EVIDENCE_FACTOR[n.ev??""];
-    const parts=[`${NORMAL_MULTIPLE} 倍`];if(factor!=null)parts.push(`证据档「${EVIDENCE_LABEL[n.ev!]}」${factor}`);if(typeof n.lm==="number"&&n.lm<1)parts.push(`市场方向不清 ${n.lm}`);if(n.per)parts.push(`打法近况 ${n.per}`);
+    const parts=[`${NORMAL_MULTIPLE} 倍`];if(factor!=null)parts.push(`证据档「${EVIDENCE_LABEL[n.ev!]}」${factor}`);if(typeof n.lm==="number"&&n.lm<1)parts.push(n.env?`环境清晰度 ${n.lm}`:`市场方向不清 ${n.lm}`);if(n.per)parts.push(`打法近况 ${n.per}`);
     lines.push(`仓位：按账户权益的 ${((premium?PREMIUM_RISK_RATE:RISK_RATE)*100).toFixed(2)}% 作风险基数 × ${num(n.mult,2)} 倍（${parts.join(" × ")}）；打到止损最多亏 ${num(t.plannedRisk)} U（含来回手续费，风险额度不够时会更少）；杠杆 ${num(t.leverage,0)}× 逐仓，名义 ${num(t.notional)} U。`);
   }
   // protection

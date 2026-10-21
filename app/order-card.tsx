@@ -70,7 +70,8 @@ const EXIT_PLAIN:Record<string,string>={
 export const LIVING_PLAYBOOK_LABEL:Record<string,string>={"trend-pullback":"趋势回调","breakout":"突破延续","range-revert":"区间回归",
   "extension-fade":"过度延伸反转","crowding-fade":"拥挤反转",leaders:"领涨延续",laggards:"落后补涨","btc-lead":"BTC 带动",momentum:"动量",
   follow:"顺着真资金（回调跟进）","squeeze-fade":"逼空衰竭反做","flush-rebound":"恐慌出尽抄反弹","crowd-fade":"贪婪拥挤失败反做",
-  "crowd-break":"安逸拥挤破位反做","absorb-revert":"区间边缘被吸收回归",fast:"集体异动快速跟进"};
+  "crowd-break":"安逸拥挤破位反做","absorb-revert":"区间边缘被吸收回归",
+  "sweep-reclaim":"震荡假突破收回（做回区间中部）","impulse-retest":"第一根快速冲击回踩跟进",fast:"集体异动快速跟进"};
 export const livingPlaybookLabel=(pb:string|null|undefined)=>pb?LIVING_PLAYBOOK_LABEL[pb]??pb:null;
 export const exitShort=(code:string|null|undefined,fallback?:string)=>code?EXIT_SHORT[code]??fallback??code:"—";
 export const exitPlain=(code:string|null|undefined,fallback?:string)=>code?EXIT_PLAIN[code]??fallback??code:null;

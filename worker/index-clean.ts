@@ -4842,7 +4842,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const st=this.livingLogStatus,engine=this.living;
     return {...st,budgetPerDay:LIVING_LOG_DAILY_ROWS,healthy:st.error==null&&st.lastOkAt!=null&&now-st.lastOkAt<=10*60_000,
       activeCases:engine?.runlog.activeCount()??0,casesToday:engine?.runlog.daily.n??0,casesDroppedToday:engine?.runlog.daily.dropped??0,
-      bucketMinutes:engine?.runlog.bucket?.minutes??null};
+      bucketMinutes:engine?.runlog.bucket?.minutes??null,env:(()=>{try{return engine?.envSummary()??null;}catch{return null;}})()};
   }
   private archiveView(now:number){
     return {...this.runLogArchiver.status,healthy:this.runLogArchiver.healthy(now),segmentSize:ARCHIVE_SEGMENT_SIZE};

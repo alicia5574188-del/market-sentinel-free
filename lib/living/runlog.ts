@@ -48,35 +48,39 @@ export const GATE_LABEL:Record<Gate,string>={OPEN:"能开单（在找机会）",
   FALLBACK:"出错或报价断了，自动降级为只计算",WARMING:"市场还读不出来（暖机/数据不够）",FAST_OWNS:"集体异动进行中，普通开单让给快速通道",
   NO_BASKET:"还没选出一篮子币",NOT_LOADED:"研究层还没恢复"};
 export type Layer="L1_MARKET"|"FILTER"|"RANK"|"CLUSTER"|"L2_WEAK"|"BUSY"|"NO_LOCATION"|"RISK"|"WATCH"|"WATCH_END"|"CONFIRM_FAIL"|
-  "NO_QUOTE"|"COMPUTE_ONLY"|"SWITCH_OFF"|"REJECTED"|"OPENED"|"FAST_FLOW_BLOCK"|"FAST_SKIP"|"FAST_PICK"|"L1_SIZED"|"FOLLOW_EDGE"|"COOLDOWN";
+  "NO_QUOTE"|"COMPUTE_ONLY"|"SWITCH_OFF"|"REJECTED"|"OPENED"|"FAST_FLOW_BLOCK"|"FAST_SKIP"|"FAST_PICK"|"L1_SIZED"|"FOLLOW_EDGE"|"COOLDOWN"|"ENV_MISMATCH"|"ENV_PICK";
 export const LAYER_LABEL:Record<Layer,string>={L1_MARKET:"第一层：市场意图不允许这个打法/方向",FILTER:"硬条件：成交额/价差/维持保证金率不合格",
   RANK:"排在前 3 名之外",CLUSTER:"和已选的币走势高度相关，只留一个",L2_WEAK:"第二层：这个币的证据不够强",BUSY:"已有持仓或在等位置",
   NO_LOCATION:"找不到合理的位置",RISK:"止损/强平检查不过",WATCH:"进入等位置",WATCH_END:"等位置结束，没开（过期/失效/不追）",
   CONFIRM_FAIL:"位置到了但复核没过（意图变了）",NO_QUOTE:"没有 Gate 实时盘口",COMPUTE_ONLY:"只计算模式：本应开的单",
   SWITCH_OFF:"对应开关关着",REJECTED:"账户层拒绝",OPENED:"开出",FAST_FLOW_BLOCK:"集体异动：资金没跟上或是逼空/踩踏，不跟",
-  FAST_SKIP:"集体异动：这个币没被选上",FAST_PICK:"集体异动：选中跟进",L1_SIZED:"第一层：市场方向不清，按半仓放行（不是拦截）",FOLLOW_EDGE:"顺势不追在 4 小时区间顶部/底部",COOLDOWN:"止损后 60 分钟冷却（同币同打法）"};
+  FAST_SKIP:"集体异动：这个币没被选上",FAST_PICK:"集体异动：选中跟进",L1_SIZED:"第一层：市场方向不清，按半仓放行（不是拦截）",FOLLOW_EDGE:"顺势不追在 4 小时区间顶部/底部",COOLDOWN:"止损后 60 分钟冷却（同币同打法）",
+  ENV_MISMATCH:"环境：这个打法和币自己的环境对不上（只记录不开）",ENV_PICK:"环境：币环境选中这个打法（不是拦截，往下走）"};
 /** How far a case got (furthest wins). */
 const DEPTH:Record<Layer,number>={RANK:0,FILTER:1,L1_MARKET:2,CLUSTER:3,L2_WEAK:4,BUSY:4,NO_LOCATION:5,RISK:6,FAST_FLOW_BLOCK:2,FAST_SKIP:5,
-  WATCH:7,WATCH_END:8,CONFIRM_FAIL:9,NO_QUOTE:10,SWITCH_OFF:10,COMPUTE_ONLY:11,FAST_PICK:7,REJECTED:11,OPENED:12,L1_SIZED:2,FOLLOW_EDGE:5,COOLDOWN:4};
-const EARLY=new Set<Layer>(["L1_MARKET","FILTER","CLUSTER","RANK"]);
+  WATCH:7,WATCH_END:8,CONFIRM_FAIL:9,NO_QUOTE:10,SWITCH_OFF:10,COMPUTE_ONLY:11,FAST_PICK:7,REJECTED:11,OPENED:12,L1_SIZED:2,FOLLOW_EDGE:5,COOLDOWN:4,ENV_MISMATCH:2,ENV_PICK:2};
+const EARLY=new Set<Layer>(["L1_MARKET","FILTER","CLUSTER","RANK","ENV_MISMATCH"]);
 const PRIORITY=(l:Layer)=>DEPTH[l]>=7?3:EARLY.has(l)?1:2;
 
-export type MarketSample={state:string;side:"LONG"|"SHORT"|null;conf:number;allowed:string[]}|null;
+export type MarketSample={state:string;side:"LONG"|"SHORT"|null;conf:number;allowed:string[];
+  /** v3 market environment (TREND_UP / CHOP / …) and its clarity */env?:string;envConf?:number}|null;
 export type Sample={gate:Gate;market:MarketSample;fast:string;open:number;watches:number;mode:string};
 export type Bucket={v:1;id:string;at:number;end:number;boot:string;minutes:number;gate:Record<string,number>;market:Record<string,number>;
-  last:MarketSample;mode:string|null;fast:Record<string,number>;funnel:Record<string,number>;reasons:Record<string,number>;
+  last:MarketSample;mode:string|null;fast:Record<string,number>;
+  /** v3: minutes per market environment in this bucket */env?:Record<string,number>;funnel:Record<string,number>;reasons:Record<string,number>;
   open:number;watches:number;opened:{at:number;sym:string;side:string;pb:string;trade:string}[];
   events:{at:number;k:string;text:string}[];blocker:string|null;firstSampleAt:number|null;lastSampleAt:number|null};
 export type CaseEv={p15:number|null;p60:number|null;oi15:number|null;oi60:number|null;funding:number|null;taker15:number|null;vol15:number|null;basis:number|null};
 export type CaseInput={at:number;sym:string;side:"LONG"|"SHORT";pb:string;pbLabel:string;kind:"normal"|"fast";intent:string|null;strength:number|null;
-  why:string;ev:CaseEv|null;market:MarketSample;px:number|null};
+  why:string;ev:CaseEv|null;market:MarketSample;px:number|null;
+  /** v3 environment: "<coin env>|M:<market env>" */env?:string|null};
 export type CaseStage={at:number;layer:Layer;reason:string;px:number|null};
 export type CaseTrade={id:string;openedAt:number;entry:number|null;stop:number|null;closedAt?:number|null;exit?:number|null;exitReason?:string|null;netPnl?:number|null;
   /** Holding reads, one row per minute while open (HOLD_READ_FIELDS, ";"-separated rows, "," fields); hr_drop = older rows dropped. */
   hr?:string;hr_drop?:number};
 /** Fields of one holding-read row (≈60 bytes): minute since open, health h, capital, emotion, strength, OI 15m %, taker 5m,
  * funding %, 5m ATR %, market intent, brain verdict code (empty = hold). */
-export const HOLD_READ_FIELDS=["min","h","capital","emotion","strength","oi15_pct","taker5","funding_pct","atr5_pct","market","verdict"] as const;
+export const HOLD_READ_FIELDS=["min","h","capital","emotion","strength","oi15_pct","taker5","funding_pct","atr5_pct","market","verdict","env"] as const;
 export const HOLD_READ_MAX=240;
 const CAP_CODE:Record<string,string>={DEMAND:"DM",SUPPLY:"SP",SQUEEZE_UP:"SQ",FLUSH_DOWN:"FL",ABSORB_BID:"AB",ABSORB_ASK:"AA",DRIFT:"DR",UNVERIFIED:"UV",NONE:"-"};
 const EMO_CODE:Record<string,string>={FOMO:"FO",PANIC:"PA",CAPITULATION:"CA",EXHAUSTION:"EX",BLOWOFF:"BO",COMPLACENCY:"CO",CONVICTION:"CV",CALM:"CL",NONE:"-"};
@@ -84,14 +88,14 @@ const MKT_CODE:Record<string,string>={RISK_ON:"ON",RISK_OFF:"OFF",SQUEEZE:"SQ",P
 export const HOLD_READ_CODES={capital:CAP_CODE,emotion:EMO_CODE,market:MKT_CODE};
 type HoldReadCoin={capital:string;emotion:string;strength:number;f:{oi15:number|null;taker5:number|null;funding:number|null;atr5:number|null;last:number|null}}|null;
 const fx=(v:number|null|undefined,k:number)=>typeof v==="number"&&Number.isFinite(v)?String(Math.round(v*10**k)/10**k):"";
-export function holdReadRow(min:number,x:{coin:HoldReadCoin;h:number|null;market:string|null;code:string}){
+export function holdReadRow(min:number,x:{coin:HoldReadCoin;h:number|null;market:string|null;code:string;env?:string|null}){
   const c=x.coin,f=c?.f;
   return [min,fx(x.h,2),c?CAP_CODE[c.capital]??c.capital:"",c?EMO_CODE[c.emotion]??c.emotion:"",fx(c?.strength,2),fx(f?.oi15!=null?f.oi15*100:null,2),
     fx(f?.taker5,2),fx(f?.funding!=null?f.funding*100:null,4),fx(f?.atr5!=null&&f.last?f.atr5/f.last*100:null,2),x.market?MKT_CODE[x.market]??x.market:"",
-    x.code.replace(/^LIVING_/,"")].join(",");
+    x.code.replace(/^LIVING_/,""),(x.env??"").replace(/[,;]/g,"")].join(",");
 }
 export type Case={v:1;id:string;at:number;sym:string;side:"LONG"|"SHORT";pb:string;pb_label:string;kind:"normal"|"fast";intent:string|null;
-  strength:number|null;why:string;ev:CaseEv|null;market:MarketSample;layer:Layer;reason:string;furthest:Layer;stages:CaseStage[];
+  strength:number|null;why:string;ev:CaseEv|null;market:MarketSample;env?:string|null;layer:Layer;reason:string;furthest:Layer;stages:CaseStage[];
   ref:number|null;seen:number;last:number;trade:CaseTrade|null};
 export type CasePath={t0:number;step:60;ref:number;bps:string;minutes:number;missing:number;coarse:[number,number][]};
 export type CaseOutcome={mfe:number|null;mae:number|null;mfe_min:number|null;mae_min:number|null;mae_before_mfe:number|null;
@@ -137,7 +141,7 @@ export class RunLog{
   sample(now:number,s:Sample){
     const minute=Math.floor(now/60_000);if(minute===this.lastSampleMinute)return false;this.lastSampleMinute=minute;
     const b=this.cur(now);
-    b.minutes++;inc(b.gate,s.gate);inc(b.market,MARKET_KEY(s.market));inc(b.fast,s.fast);
+    b.minutes++;inc(b.gate,s.gate);inc(b.market,MARKET_KEY(s.market));inc(b.fast,s.fast);if(s.market?.env)inc(b.env??={},s.market.env);
     b.last=s.market;b.mode=s.mode;b.open=s.open;b.watches=s.watches;b.firstSampleAt??=now;b.lastSampleAt=now;
     return true;
   }
@@ -175,13 +179,13 @@ export class RunLog{
     }
     const nc:Case={v:1,id:`c:${input.sym}:${input.side[0]}:${input.pb}:${input.at}`,at:input.at,sym:input.sym,side:input.side,pb:input.pb,
       pb_label:input.pbLabel,kind:input.kind,intent:input.intent,strength:input.strength==null?null:Math.round(input.strength*1000)/1000,
-      why:short(input.why,90),ev:input.ev,market:input.market,layer,reason:short(reason,70),furthest:layer,stages:[stage],ref:input.px,seen:1,last:input.at,trade:null};
+      why:short(input.why,90),ev:input.ev,market:input.market,...(input.env?{env:input.env}:{}),layer,reason:short(reason,70),furthest:layer,stages:[stage],ref:input.px,seen:1,last:input.at,trade:null};
     this.cases.set(nc.id,nc);this.byKey.set(key,nc.id);this.daily.n++;if(prio===1)this.daily.early++;this.dirty=true;
     return nc;
   }
   /** The forward core opened a trade for this symbol/side (and playbook when known). */
   /** Once a minute per open living trade: append its holding read to the linked case's trade (review only). */
-  holdRead(tradeId:string,now:number,openedAt:number,x:{coin:HoldReadCoin;h:number|null;market:string|null;code:string}){
+  holdRead(tradeId:string,now:number,openedAt:number,x:{coin:HoldReadCoin;h:number|null;market:string|null;code:string;env?:string|null}){
     let c:Case|undefined;const id=this.byTrade.get(tradeId);if(id)c=this.cases.get(id);
     if(!c||c.trade?.id!==tradeId){c=[...this.cases.values()].find(k=>k.trade?.id===tradeId);if(!c)return false;this.byTrade.set(tradeId,c.id);}
     const t=c.trade!,min=Math.max(0,Math.floor((now-openedAt)/60_000));
@@ -394,9 +398,10 @@ export function whyNoTrades(buckets:Bucket[],now:number){
 /** Merge several bucket rows into one (same window from two boots, or a whole stretch). */
 export function mergeBuckets(rows:Bucket[]):Bucket{
   const sorted=[...rows].sort((a,b)=>a.at-b.at||(a.lastSampleAt??0)-(b.lastSampleAt??0)),first=sorted[0]!,lastRow=sorted.at(-1)!;
-  const m:Bucket={...structuredClone(first),gate:{},market:{},fast:{},funnel:{},reasons:{},opened:[],events:[],minutes:0,end:Math.max(...sorted.map(r=>r.end))};
+  const m:Bucket={...structuredClone(first),env:undefined,gate:{},market:{},fast:{},funnel:{},reasons:{},opened:[],events:[],minutes:0,end:Math.max(...sorted.map(r=>r.end))};
   for(const r of sorted){m.minutes+=r.minutes;for(const [k,v] of Object.entries(r.gate))inc(m.gate,k,v);for(const [k,v] of Object.entries(r.market))inc(m.market,k,v);
     for(const [k,v] of Object.entries(r.fast))inc(m.fast,k,v);for(const [k,v] of Object.entries(r.funnel))inc(m.funnel,k,v);for(const [k,v] of Object.entries(r.reasons))inc(m.reasons,k,v);
+    if(r.env)for(const [k,v] of Object.entries(r.env))inc(m.env??={},k,v);
     m.opened.push(...r.opened);m.events.push(...r.events);}
   m.last=lastRow.last;m.open=lastRow.open;m.watches=lastRow.watches;m.mode=lastRow.mode;m.lastSampleAt=lastRow.lastSampleAt;
   m.boot=[...new Set(sorted.map(r=>r.boot))].join(",");m.events=m.events.slice(0,24);m.blocker=blockerOf(m);

@@ -39,8 +39,8 @@ test("timeline: one sample a minute into 10-minute buckets; funnel and blocker s
     assert.equal(Object.values(b.market).reduce((n,x)=>n+x,0),10);}
   const withIdeas=rl.closed.find(b=>(b.funnel.ideas??0)>0)!;
   assert.ok(withIdeas,"some bucket had ideas");
-  assert.ok((withIdeas.funnel.L1_MARKET??0)>0,"the market layer blocked them");
-  assert.match(withIdeas.blocker!,/只计算.*第一层：市场意图不允许/);
+  assert.ok((withIdeas.funnel.L1_MARKET??0)+(withIdeas.funnel.ENV_MISMATCH??0)>0,"the market / env layer blocked them");
+  assert.match(withIdeas.blocker!,/只计算.*(第一层：市场意图不允许|环境：这个打法和币自己的环境对不上)/);
   const quiet=rl.closed.at(-1)!;assert.match(quiet.blocker!,/没有一个有打法想法/);
   // cases key: one own key, ≤ 96KB, written at most every 10 minutes
   assert.ok(store.has(CASES_KEY));assert.ok(bytesOf(store.get(CASES_KEY))<=LIVING_MAX_VALUE_BYTES);
@@ -53,7 +53,7 @@ test("research cases: deduped per symbol+side+playbook, 6h one-minute path and o
   assert.ok(all.length>=20);
   const w0=all.filter(c=>c.sym==="W0_USDT");
   assert.ok(w0.length>=1&&w0.every((c,i)=>i===0||c.at-w0[i-1]!.at>90*MIN),"one case per 90 minutes");
-  const c=w0[0]!;assert.equal(c.pb,"follow");assert.equal(c.side,"LONG");assert.equal(c.layer,"L1_MARKET");assert.ok(c.seen>1);
+  const c=w0[0]!;assert.equal(c.pb,"follow");assert.equal(c.side,"LONG");assert.ok(c.layer==="L1_MARKET"||c.layer==="ENV_MISMATCH",c.layer);assert.ok(c.seen>1);assert.ok(typeof c.env==="string"&&c.env.includes("|M:"),"env kept on the case");
   assert.ok(c.ev&&c.ev.oi15!=null&&c.ev.p15!=null,"evidence numbers kept");
   const due=rl.casesDue(t0+8*H,e.tape);assert.ok(due.length>=1);
   const f=due.find(x=>x.id===c.id)!;assert.ok(f.final);

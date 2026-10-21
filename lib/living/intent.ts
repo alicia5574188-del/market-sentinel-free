@@ -18,6 +18,7 @@ import type {LivingTape,MidBar} from "./tape.ts";
 import type {FlowBook} from "./flow.ts";
 import type {IntentPlaybook,Side} from "./thesis.ts";
 import {median,clamp,r4,r6,pct} from "./util.ts";
+import {envPlan} from "./regime.ts";
 
 export type CapitalState="DEMAND"|"SUPPLY"|"SQUEEZE_UP"|"FLUSH_DOWN"|"ABSORB_BID"|"ABSORB_ASK"|"DRIFT"|"UNVERIFIED"|"NONE";
 export type Emotion="FOMO"|"PANIC"|"CAPITULATION"|"EXHAUSTION"|"BLOWOFF"|"COMPLACENCY"|"CONVICTION"|"CALM"|"NONE";
@@ -305,7 +306,8 @@ export function burstFlow(flow:FlowBook,members:string[],side:Side,now:number):B
 /** Hold / exit decision for an open v2 trade from the live read of its coin and the market. */
 export type HoldVerdict={act:"HOLD"|"EXIT"|"GUARD";code:string;why:string;stop?:number};
 export function holdCheck(input:{pb:IntentPlaybook;side:Side;entry:number;price:number;stop:number;coin:CoinIntent|null;market:MarketIntent|null;
-  ageMin:number;holdMin:number;cost:number;stopDist?:number|null}):HoldVerdict{
+  ageMin:number;holdMin:number;cost:number;stopDist?:number|null;
+  /** planned take-profit (sweep-reclaim: the range middle at entry) */target?:number|null}):HoldVerdict{
   const {pb,side,coin,market}=input,s=d(side),gain=s*(input.price/input.entry-1),f=coin?.f;
   const lock=(frac:number)=>{const st=input.entry*(1+s*Math.max(input.cost,gain*frac));return s*(st-input.stop)>0?st:null;};
   const against=market&&market.side&&market.side!==side&&market.confidence>=.6&&["RISK_ON","RISK_OFF","PANIC","SQUEEZE"].includes(market.state)&&
@@ -318,6 +320,14 @@ export function holdCheck(input:{pb:IntentPlaybook;side:Side;entry:number;price:
   if(!coin||!f)return{act:"HOLD",code:"",why:"这个币暂时读不到（没有新鲜数据），先按失效价拿"};
   {const take=climaxTake(side,coin,gain,input.stopDist);if(take)return{act:"EXIT",code:"LIVING_INTENT_CLIMAX_TAKE",why:take};}
   switch(pb){
+    case "sweep-reclaim":{
+      const t=input.target,hit=t!=null&&t>0?s*(input.price-t)>=0:f.rangePos!=null&&(side==="LONG"?f.rangePos>=.5:f.rangePos<=.5);
+      if(hit&&gain>input.cost)return{act:"EXIT",code:"LIVING_INTENT_DONE",why:`回到区间中部${t!=null?`（目标 ${r6(t)}）`:""}，假突破已经收回，落袋`};
+      const pushOn=side==="LONG"?(f.taker5??0)<=-.3&&(f.p5??0)<-.002:(f.taker5??0)>=.3&&(f.p5??0)>.002;
+      if(pushOn&&gain<=input.cost)return{act:"EXIT",code:"LIVING_INTENT_GONE",why:"收回没站住：主动单又往边缘外砸，假突破可能变真突破"};
+      return{act:"HOLD",code:"",why:"持有：扫过边缘后收回了，等回到区间中部"};
+    }
+    case "impulse-retest":
     case "follow":{
       const leaving=side==="LONG"?(coin.capital==="FLUSH_DOWN"||coin.capital==="SUPPLY"):(coin.capital==="SQUEEZE_UP"||coin.capital==="DEMAND");
       if(leaving&&coin.strength>=.4)return gain>input.cost&&lock(.5)?{act:"GUARD",code:"LIVING_INTENT_LOCK",why:`资金方向反了（${coin.why.slice(0,50)}），锁一半利润`,stop:lock(.5)!}
@@ -381,10 +391,12 @@ export function planIntent(pb:IntentPlaybook,side:Side,ci:CoinIntent,rows5:MidBa
       const lvl=side==="SHORT"?f.rangeLo:f.rangeHi;if(lvl==null)return null;
       return{lo:lvl-.4*A,hi:lvl+.4*A,inv:lvl+s*-.8*A,target:null,ref:lvl,hold:180};
     }
+    case "sweep-reclaim":case "impulse-retest":return envPlan(pb,side,rows5,A);
     case "absorb-revert":{
       const edge=side==="LONG"?f.rangeLo:f.rangeHi;if(edge==null||f.rangeHi==null||f.rangeLo==null)return null;
       return{lo:side==="LONG"?edge-.3*A:edge-.4*A,hi:side==="LONG"?edge+.4*A:edge+.3*A,inv:edge-s*.6*A,target:(f.rangeHi+f.rangeLo)/2,ref:edge,hold:120};
     }
   }
+  return null;
 }
 export {r6};

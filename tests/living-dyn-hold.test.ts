@@ -59,7 +59,7 @@ test("loss: REVERSED two minutes running exits; no pure time cut; repair at 0 / 
 test("engine wires the dynamic rules after the brain exits; holdCheck's fixed timeout is off", ()=>{
   const src=readFileSync(new URL("../lib/living/engine.ts",import.meta.url),"utf8");
   const h=src.slice(src.indexOf("private intentHolds("),src.indexOf("private normalOrder("));
-  assert.match(h,/holdMin:0,cost:STEPS\.cost,stopDist\}\)/);assert.match(h,/dynHold\(/);assert.match(h,/volUnit\(this\.tape\.closed1\(/);
+  assert.match(h,/holdMin:0,cost:STEPS\.cost,stopDist[,}]/);assert.match(h,/dynHold\(/);assert.match(h,/volUnit\(this\.tape\.closed1\(/);
   for(const k of ["LIVING_DYN_LOCK","LIVING_DYN_REVERSED","LIVING_DYN_LOSS_REPAIR","LIVING_DYN_EXTEND_END"]){
     assert.match(readFileSync(new URL("../app/order-card.tsx",import.meta.url),"utf8"),new RegExp(k));
     assert.match(readFileSync(new URL("../lib/brain-view.ts",import.meta.url),"utf8"),new RegExp(k));
@@ -73,9 +73,9 @@ test("L1 sizing: MIXED → 0.5× for follow/squeeze-fade/crowd-fade; absorb-reve
   assert.equal(marketSizing(mk("CALM"),"follow","LONG").ok,false);
   assert.match(LAYER_LABEL.L1_SIZED,/半仓/);
 });
-test("L1 sizing in the engine: L1_SIZED is logged, risk × multiplier, note lm, card shows half size", ()=>{
+test("L1 sizing in the engine (v3: env pick replaces MIXED half size; pre-v3 watches keep marketSizing), risk × multiplier, note lm, card", ()=>{
   const src=readFileSync(new URL("../lib/living/engine.ts",import.meta.url),"utf8");
-  assert.match(src,/logCount\(now,"L1_SIZED",l1\.why\)/);assert.match(src,/evidence:ev\.factor\*mod\*lm/);assert.match(src,/\.\.\.\(lm<1\?\{lm\}:\{\}\)/);
+  assert.match(src,/logCount\(now,"ENV_PICK"/);assert.match(src,/marketSizing\(m,pb,w\.side\)/);assert.match(src,/evidence:ev\.factor\*mod\*lm/);assert.match(src,/\.\.\.\(lm<1\?\{lm\}:\{\}\)/);
   const t={side:"LONG" as const,entryPrice:100,stopPrice:99,liquidationPrice:91,plannedRisk:1.6,leverage:10,notional:300,expectedHoldMinutes:60,
     entryContext:{living:{v:"living-v2",k:"N",pb:"follow",ev:"medium",mult:1.5,sc:.5,rk:1,inv:99,hold:60,why:"市场方向不清，半仓（0.5×）·x",in:"DEMAND/CONVICTION",mk:"MIXED",lm:.5}}};
   assert.match(livingWhy(t,"顺着真资金"),/市场方向不清，半仓（0\.5×）/);

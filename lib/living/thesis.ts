@@ -12,14 +12,15 @@ import {median,mean,quantile,r6,r4,pct} from "./util.ts";
 export type Structure="TREND"|"RANGE"|"CHOP"|"BURST";
 export type Playbook="trend-pullback"|"breakout"|"range-revert"|"extension-fade"|"crowding-fade"|"leaders"|"laggards"|"btc-lead"|"momentum"|IntentPlaybook;
 /** v2 playbooks chosen by the intent layer (intent.ts); the v1 ones above stay as computed/logged context. */
-export type IntentPlaybook="follow"|"squeeze-fade"|"flush-rebound"|"crowd-fade"|"crowd-break"|"absorb-revert";
+export type IntentPlaybook="follow"|"squeeze-fade"|"flush-rebound"|"crowd-fade"|"crowd-break"|"absorb-revert"|"sweep-reclaim"|"impulse-retest";
 export const PLAYBOOK_PROBE:Record<Playbook,ProbeId>={"trend-pullback":"P5",breakout:"P1","range-revert":"P2","extension-fade":"P6",
   "crowding-fade":"P7",leaders:"P3",laggards:"P4","btc-lead":"P9",momentum:"MOM",
-  follow:"P5","squeeze-fade":"P6","flush-rebound":"P6","crowd-fade":"P7","crowd-break":"P1","absorb-revert":"P2"};
+  follow:"P5","squeeze-fade":"P6","flush-rebound":"P6","crowd-fade":"P7","crowd-break":"P1","absorb-revert":"P2","sweep-reclaim":"P2","impulse-retest":"P1"};
 export const PLAYBOOK_LABEL:Record<Playbook,string>={"trend-pullback":"趋势回调","breakout":"突破延续","range-revert":"区间回归",
   "extension-fade":"过度延伸反转","crowding-fade":"拥挤反转",leaders:"领涨延续",laggards:"落后补涨","btc-lead":"BTC 带动",momentum:"动量",
   follow:"顺着真资金（回调跟进）","squeeze-fade":"逼空衰竭反做","flush-rebound":"恐慌出尽抄反弹","crowd-fade":"贪婪拥挤失败反做",
-  "crowd-break":"安逸拥挤破位反做","absorb-revert":"区间边缘被吸收回归"};
+  "crowd-break":"安逸拥挤破位反做","absorb-revert":"区间边缘被吸收回归",
+  "sweep-reclaim":"震荡假突破收回（做回区间中部）","impulse-retest":"第一根快速冲击回踩跟进"};
 export type Side="LONG"|"SHORT";
 export type ThesisInputs={b1h:number;b4h:number;b24h:number;breadth:number;volPct:number|null;dispersion:number;btcEff:number;ethEff:number;
   funding:number|null;oi1h:number|null;members:number};

@@ -28,6 +28,7 @@ import {FlowBook,FLOW_PAGES,FLOW_PAGE_PREFIX,type FlowPoint} from "./flow.ts";
 import {followAtEdge} from "./intent.ts";
 import {features,readCoin,readMarket,marketSizing,healthOf,sizeModulator,intentEvidence,burstFlow,holdCheck,planIntent,noTradeReason,evidenceLine,
   type CoinIntent,type MarketIntent} from "./intent.ts";
+import {coinEnv,marketEnv,basketAutocorr,basketDir24,envDecide,envSetup,envTag,envHead,ENV_LABEL,type CoinEnv,type MarketEnv,type EnvDecision} from "./regime.ts";
 import type {IntentPlaybook,Playbook} from "./thesis.ts";
 import type {LivingDirective,LivingOrder,LivingTradeAction,LivingResult,LivingNote} from "./directive.ts";
 import {bytesOf,r6,r4,corr} from "./util.ts";
@@ -109,6 +110,10 @@ export class LivingEngine{
   marketIntent:MarketIntent|null=null;
   marketHist:MarketIntent[]=[];
   coins=new Map<string,CoinIntent>();
+  /** v3 environment read (lib/living/regime.ts): per coin, and the market env (switches after 3 equal reads in a row) */
+  envs=new Map<string,CoinEnv>();
+  menv:MarketEnv|null=null;
+  private menvPending:{state:string;n:number}={state:"",n:0};
   private coinHist=new Map<string,CoinIntent[]>();
   holds=new Map<string,{why:string;code:string;at:number}>();
   decisions:LogRow[]=[];
@@ -165,15 +170,15 @@ export class LivingEngine{
   }
   note(at:number,k:string,data:Record<string,string|number|boolean|null>={}){
     this.log.push({at,k,...data});
-    if(/^(ENTRY|ENTRY_RECORD|RECORD_ONLY|WATCH|EXIT|EXIT_RECORD|PROTECT|PROTECT_RECORD|HOLD_CHANGE|INTENT_MARKET|CLOSED|FAST_|SURGE)/.test(k)){
+    if(/^(ENTRY|ENTRY_RECORD|RECORD_ONLY|WATCH|EXIT|EXIT_RECORD|PROTECT|PROTECT_RECORD|HOLD_CHANGE|INTENT_MARKET|ENV_MARKET|CLOSED|FAST_|SURGE)/.test(k)){
       this.decisions.push({at,k,...data});if(this.decisions.length>60)this.decisions.splice(0,this.decisions.length-60);}
     const ck=typeof data.reason==="string"?`${k}:${String(data.reason).replace(/[0-9.+\-%]+/g,"#").slice(0,40)}`:k;
     this.trades.counts[ck]=(this.trades.counts[ck]??0)+1;
     if(this.log.length%25===0&&bytesOf(this.log)>LOG_PAGE_BYTES)this.rollLog();
     this.dirty.add("log");
-    if(/^(INTENT_MARKET|FALLBACK|CONFIG|RESTART|BASKET|FAST_(ALERT|CONFIRM|FAKE|EXHAUST|TIMEOUT|REVERSED|SURGE))$/.test(k)){
+    if(/^(INTENT_MARKET|ENV_MARKET|FALLBACK|CONFIG|RESTART|BASKET|FAST_(ALERT|CONFIRM|FAKE|EXHAUST|TIMEOUT|REVERSED|SURGE))$/.test(k)){
       const text=String(data.sentence??data.reason??data.mode??data.why??data.flowWhy??data.side??"");
-      try{this.runlog.event(at,k,`${k==="INTENT_MARKET"?`${data.state}${data.side?`/${data.side}`:""} `:""}${text}`);}catch{/* 只是记录 */}
+      try{this.runlog.event(at,k,`${k==="INTENT_MARKET"||k==="ENV_MARKET"?`${data.state}${data.side?`/${data.side}`:""} `:""}${text}`);}catch{/* 只是记录 */}
     }
   }
   private once=new Set<string>();
@@ -194,7 +199,9 @@ export class LivingEngine{
   }
   private marketSample():MarketSample{
     const m=this.marketIntent;if(!m)return null;
-    return {state:m.state,side:m.side,conf:Math.round(m.confidence*100)/100,allowed:m.allowed.map(a=>`${a.pb}${a.side?`/${a.side}`:""}`)};
+    const e=this.menv;
+    return {state:m.state,side:m.side,conf:Math.round(m.confidence*100)/100,allowed:m.allowed.map(a=>`${a.pb}${a.side?`/${a.side}`:""}`),
+      ...(e?{env:`${e.state}${e.side?`/${e.side}`:""}`,envConf:e.clarity}:{})};
   }
   private caseInput(now:number,sym:string,side:"LONG"|"SHORT",pb:string,kind:"normal"|"fast",why?:string):CaseInput{
     const ci=this.coins.get(sym),f=ci?.f,p=(v:number|null|undefined)=>v==null||!Number.isFinite(v)?null:Math.round(v*1e5)/1e3;
@@ -202,7 +209,7 @@ export class LivingEngine{
       intent:ci?`${ci.capital}/${ci.emotion}`:null,strength:ci?.action?.strength??ci?.strength??null,why:why??ci?.action?.why??ci?.why??"",
       ev:f?{p15:p(f.p15),p60:p(f.p60),oi15:p(f.oi15),oi60:p(f.oi60),funding:f.funding==null?null:Math.round(f.funding*1e7)/1e5,taker15:f.taker15==null?null:Math.round(f.taker15*1e3)/1e3,
         vol15:f.vol15==null?null:Math.round(f.vol15*100)/100,basis:p(f.basis)}:null,
-      market:this.marketSample(),px:this.tape.last(sym)?.mid??null};
+      market:this.marketSample(),px:this.tape.last(sym)?.mid??null,env:envTag(this.envs.get(sym),this.menv)};
   }
   private logCase(now:number,sym:string,side:"LONG"|"SHORT",pb:string,layer:Layer,reason:string,kind:"normal"|"fast"="normal",why?:string){
     try{this.runlog.noteCase(this.caseInput(now,sym,side,pb,kind,why),layer,reason);}catch{/* 只是记录 */}
@@ -270,10 +277,36 @@ export class LivingEngine{
       const k=`${ci.capital}/${ci.emotion}`;this.intentCounts[k]=(this.intentCounts[k]??0)+1;
     }
     for(const s of [...this.coins.keys()])if(!syms.includes(s))this.coins.delete(s);
+    try{this.readEnvs(now,syms);}catch(error){this.lastError=`环境读数出错：${String((error as Error)?.message??error).slice(0,160)}`;}
     const m=readMarket(basketReads,this.coins.get("BTC_USDT")??null,this.coins.get("ETH_USDT")??null,now,this.marketHist);
     const prev=this.marketIntent??this.restoredMarket;this.marketIntent=m;this.restoredMarket=null;this.dirty.add(LIVING_KEYS.intent);this.marketHist.push(m);while(this.marketHist.length&&now-this.marketHist[0]!.at>90*60_000)this.marketHist.shift();
     if(!prev||prev.state!==m.state||prev.side!==m.side)this.note(now,"INTENT_MARKET",{state:m.state,side:m.side,conf:m.confidence,sentence:m.sentence.slice(0,200),
       oi15:m.ev.oi15,p15:m.ev.p15,funding:m.ev.funding,breadth:m.ev.breadth});
+  }
+
+  /** v3 environment read (pure, from the tape's own 5-minute bars); market env switches after 3 equal reads in a row. */
+  private readEnvs(now:number,syms:string[]){
+    const members=this.basket?.members??[],rows:MidBar[][]=[],envs:CoinEnv[]=[];
+    for(const s of syms){const r5=this.tape.closed5(s,now),e=coinEnv(r5);this.envs.set(s,e);if(members.includes(s)){rows.push(r5);envs.push(e);}}
+    for(const s of [...this.envs.keys()])if(!syms.includes(s))this.envs.delete(s);
+    const raw=marketEnv(envs,this.envs.get("BTC_USDT")??null,basketAutocorr(rows),basketDir24(rows),now),cur=this.menv;
+    if(!cur||cur.state===raw.state||cur.state==="WARMING"){this.menv=raw;this.menvPending={state:"",n:0};}
+    else{
+      this.menvPending=this.menvPending.state===raw.state?{state:raw.state,n:this.menvPending.n+1}:{state:raw.state,n:1};
+      if(this.menvPending.n>=3){this.menv=raw;this.menvPending={state:"",n:0};}
+      else this.menv={...cur,ev:raw.ev,at:now};
+    }
+    const m=this.menv!;
+    if(!cur||cur.state!==m.state||cur.side!==m.side)this.note(now,"ENV_MARKET",{state:m.state,side:m.side,conf:m.clarity,sentence:m.sentence.slice(0,200),
+      ac15:m.ev.ac15,dir24:m.ev.dir24,breadth:m.ev.breadth,btc:m.ev.btc});
+  }
+  /** Small public env summary (health / status). */
+  envSummary(){
+    const m=this.menv,members=this.basket?.members??[];
+    const coins=["BTC_USDT","ETH_USDT",...members.filter(s=>s!=="BTC_USDT"&&s!=="ETH_USDT")].slice(0,10).map(s=>{const e=this.envs.get(s);return e?{s,env:e.state,c:e.clarity}:null;}).filter(Boolean);
+    const counts:Record<string,number>={};for(const s of members){const e=this.envs.get(s);if(e)counts[e.state]=(counts[e.state]??0)+1;}
+    return {market:m?{state:m.state,label:ENV_LABEL[m.state],side:m.side,clarity:m.clarity,at:m.at,ac15:m.ev.ac15,dir24:m.ev.dir24,breadth:m.ev.breadth,btc:m.ev.btc}:null,
+      counts,coins};
   }
 
   // ------------------------------------------------------------------ plan (before advanceForward)
@@ -418,22 +451,34 @@ export class LivingEngine{
     if(this.fast.episode)return;// the fast lane owns bursts
     const scores=this.scoreMap(now);
     const busy=new Set([...ctx.forward.positions.map(p=>p.symbol),...this.trades.watches.map(w=>w.symbol)]);
-    const cands:{ci:CoinIntent;rank:number;score:number;mult:number;why1:string}[]=[];
+    type Act={pb:IntentPlaybook;side:"LONG"|"SHORT";strength:number;why:string};
+    const cands:{ci:CoinIntent;act:Act;rank:number;score:number;mult:number;why1:string;env:string}[]=[];
+    // v3: the coin env picks the playbook family, the market env decides the side and the size (replaces the L1 MIXED half size)
     for(const s of basket.members){
-      const ci=this.coins.get(s);if(ci)this.logCount(now,"reads");
-      if(!ci?.action){if(ci)this.logCount(now,"no_idea",noTradeReason(ci));continue;}
-      this.logCount(now,"ideas");
-      const a=ci.action,l1=marketSizing(m,a.pb,a.side);
-      if(!l1.ok){this.logCase(now,s,a.side,a.pb,"L1_MARKET",l1.why);
-        this.noteOnce(`l1|${s}|${a.pb}|${a.side}|${m.state}`,now,"RECORD_ONLY",{sym:s,side:a.side,pb:a.pb,intent:`${ci.capital}/${ci.emotion}`,reason:`没开：${l1.why.slice(0,120)}`});continue;}
-      if(l1.sized)this.logCount(now,"L1_SIZED",l1.why);
+      const ci=this.coins.get(s);if(!ci)continue;this.logCount(now,"reads");
+      const env=this.envs.get(s)??null,tag=envTag(env,this.menv);
+      let a:Act|null=null,d:EnvDecision|null=null;
+      const miss=(x:Act,dd:EnvDecision)=>{this.logCase(now,s,x.side,x.pb,dd.layer,dd.why,"normal",x.why);
+        this.noteOnce(`env|${s}|${x.pb}|${x.side}|${tag}`,now,"RECORD_ONLY",{sym:s,side:x.side,pb:x.pb,intent:`${ci.capital}/${ci.emotion}`,env:tag,reason:`没开：${dd.why.slice(0,120)}`});};
+      if(ci.action){this.logCount(now,"ideas");const dd=envDecide(env,this.menv,ci.action.pb,ci.action.side);if(dd.ok){a=ci.action;d=dd;}else miss(ci.action,dd);}
+      if(!a&&env){
+        const st=envSetup(env,this.tape.closed5(s,now),ci.capital);
+        if(st){if(!ci.action)this.logCount(now,"ideas");const dd=envDecide(env,this.menv,st.pb,st.side);if(dd.ok){a=st;d=dd;}else miss(st,dd);}
+        else if(!ci.action)this.logCount(now,"no_idea",env.state==="UNCLEAR"||env.state==="WARMING"?`环境${ENV_LABEL[env.state]}`:noTradeReason(ci));
+      }else if(!a&&!ci.action)this.logCount(now,"no_idea",noTradeReason(ci));
+      if(!a||!d)continue;
+      // the market intent's hard states still block: PANIC (no knife catching / no selling into panic), WARMING (flow not readable)
+      if(m.state==="PANIC"||m.state==="WARMING"){const why=`第一层：${m.sentence.slice(0,100)}`;this.logCase(now,s,a.side,a.pb,"L1_MARKET",why);
+        this.noteOnce(`l1|${s}|${a.pb}|${a.side}|${m.state}`,now,"RECORD_ONLY",{sym:s,side:a.side,pb:a.pb,intent:`${ci.capital}/${ci.emotion}`,reason:`没开：${why}`});continue;}
+      this.logCount(now,"ENV_PICK",`${env?.state??"-"}:${a.pb}`);
       const mod=sizeModulator(scores[PLAYBOOK_PROBE[a.pb]]);
-      cands.push({ci,rank:0,score:a.strength*(.85+.15*mod),mult:l1.mult,why1:l1.why});
+      cands.push({ci,act:a,rank:0,score:a.strength*(.85+.15*mod),mult:d.mult,why1:d.why,
+        env:`${d.why}｜${envHead(env?.sentence)}｜${envHead(this.menv?.sentence)}`.slice(0,260)});
     }
     cands.sort((x,y)=>y.score-x.score);
     const used:string[]=[];let rank=0;
     for(const c of cands){
-      const s=c.ci.symbol,a=c.ci.action!;
+      const s=c.ci.symbol,a=c.act;
       if(rank>=STEPS.selectTop){this.logCount(now,"RANK",null,cands.length-cands.indexOf(c));break;}
       const why=this.hardFilter(ctx,s,items);
       if(why){this.logCase(now,s,a.side,a.pb,"FILTER",why);this.noteOnce(`hf|${s}|${a.pb}`,now,"RECORD_ONLY",{sym:s,side:a.side,pb:a.pb,reason:why});continue;}
@@ -453,9 +498,9 @@ export class LivingEngine{
       const cand={symbol:s,side:a.side,playbook:a.pb,probe:PLAYBOOK_PROBE[a.pb],score:r4(c.score),rank,factors:{eff:0,fit:0,early:0,funding:0,edge:0},
         trigger:{probe:PLAYBOOK_PROBE[a.pb],symbol:s,side:a.side,strength:a.strength,ref:plan.ref},reject:null};
       const w=newWatch(cand,{lo:plan.lo,hi:plan.hi,inv:chk.stop,target:plan.target},now,plan.hold,{l1:true,l2:true,probeSize:false,why1:c.why1,why2:a.why});
-      w.intent={state:`${c.ci.capital}/${c.ci.emotion}`,market:m.state,why:a.why.slice(0,200),ev:evidenceLine(c.ci.f).slice(0,200),strength:a.strength,...(c.mult<1?{mult:c.mult}:{})};
+      w.intent={state:`${c.ci.capital}/${c.ci.emotion}`,market:m.state,why:a.why.slice(0,200),ev:evidenceLine(c.ci.f).slice(0,200),strength:a.strength,...(c.mult<1?{mult:c.mult}:{}),env:c.env};
       this.trades.watches.push(w);busy.add(s);this.logCase(now,s,a.side,a.pb,"WATCH",`等 ${r6(w.zoneLo)}–${r6(w.zoneHi)}，失效 ${r6(w.invalidation)}`);
-      this.note(now,"WATCH",{sym:s,side:a.side,pb:a.pb,rank,score:r4(c.score),lo:w.zoneLo,hi:w.zoneHi,inv:w.invalidation,intent:w.intent.state,market:m.state,why:a.why.slice(0,160)});
+      this.note(now,"WATCH",{sym:s,side:a.side,pb:a.pb,rank,score:r4(c.score),lo:w.zoneLo,hi:w.zoneHi,inv:w.invalidation,intent:w.intent.state,market:m.state,env:envTag(this.envs.get(s),this.menv),mult:c.mult,why:a.why.slice(0,160)});
     }
     if(this.trades.watches.length>12)this.trades.watches.splice(0,this.trades.watches.length-12);
   }
@@ -479,7 +524,7 @@ export class LivingEngine{
       const stop=p.guard!=null?(p.side==="LONG"?Math.max(p.stopPrice,p.guard):Math.min(p.stopPrice,p.guard)):p.stopPrice;
       const stopDist=n.inv>0&&p.entryPrice>0?Math.abs(n.inv/p.entryPrice-1):null;
       // brain exits first (market flip, intent gone, climax take, targets, locks); time is owned by the dynamic rules below
-      let v:{act:"HOLD"|"EXIT"|"GUARD";code:string;why:string;stop?:number}=holdCheck({pb,side:p.side,entry:p.entryPrice,price:p.price,stop,coin,market:this.marketIntent,ageMin:(now-p.openedAt)/60_000,holdMin:0,cost:STEPS.cost,stopDist});
+      let v:{act:"HOLD"|"EXIT"|"GUARD";code:string;why:string;stop?:number}=holdCheck({pb,side:p.side,entry:p.entryPrice,price:p.price,stop,coin,market:this.marketIntent,ageMin:(now-p.openedAt)/60_000,holdMin:0,cost:STEPS.cost,stopDist,target:typeof n.tg==="number"?n.tg:null});
       const h=healthOf(p.side,coin,this.marketIntent);
       if(v.act!=="EXIT"){
         let st=this.dyn.get(p.id);if(!st){st={revN:0,lastMin:0};this.dyn.set(p.id,st);}
@@ -488,7 +533,7 @@ export class LivingEngine{
         if(dv.act==="EXIT")v={act:"EXIT",code:dv.code,why:dv.why};
         else if(v.act==="HOLD"&&dv.extended)v={act:"HOLD",code:dv.code,why:dv.why};
       }
-      try{this.runlog.holdRead(p.id,now,p.openedAt,{coin,h,market:this.marketIntent?.state??null,code:v.act==="HOLD"?v.code:v.code});}catch{/* 只是记录 */}
+      try{this.runlog.holdRead(p.id,now,p.openedAt,{coin,h,market:this.marketIntent?.state??null,code:v.act==="HOLD"?v.code:v.code,env:envTag(this.envs.get(p.symbol),this.menv)});}catch{/* 只是记录 */}
       const prev=this.holds.get(p.id);
       if(!prev||prev.why!==v.why){this.holds.set(p.id,{why:v.why,code:v.code,at:now});if(v.act==="HOLD")this.note(now,"HOLD_CHANGE",{trade:p.id,sym:p.symbol,why:v.why.slice(0,160)});}
       if(v.act==="EXIT")out.push({tradeId:p.id,action:"EXIT",code:v.code,reason:v.why.slice(0,160)});
@@ -520,9 +565,19 @@ export class LivingEngine{
   /** v2 order at READY: layers 1 and 2 re-read live (the market or the coin may have changed while waiting). */
   private intentOrder(ctx:PlanContext,w:Watch,scores:Record<ProbeId,ProbeScore>,items:LivingItems):LivingOrder|string{
     const last=this.tape.last(w.symbol);if(!last)return"没有新鲜报价";
-    const pb=w.playbook as IntentPlaybook,m=this.marketIntent,l1=marketSizing(m,pb,w.side);
-    if(!l1.ok)return`等位置期间市场意图变了：${l1.why.slice(0,100)}`;
-    const ci=this.coins.get(w.symbol),lm=l1.mult;
+    const pb=w.playbook as IntentPlaybook,m=this.marketIntent;
+    let lm:number,envNote:string|undefined;
+    if(w.intent!.env){
+      // v3 watch: re-read the env. A clearly-against market or a coin env that now points the other way cancels; a coin env that
+      // merely went unclear keeps the size chosen at the watch.
+      if(!m||m.state==="PANIC"||m.state==="WARMING")return`等位置期间市场意图变了：${(m?.sentence??"还没有市场意图").slice(0,100)}`;
+      const env=this.envs.get(w.symbol)??null,dd=envDecide(env,this.menv,pb,w.side);
+      if(!dd.ok&&(dd.layer==="L1_MARKET"||(env?.side!=null&&env.side!==w.side)))return`等位置期间环境变了：${dd.why.slice(0,100)}`;
+      lm=dd.ok?dd.mult:w.intent!.mult??1;envNote=dd.ok?`${dd.why}｜${envHead(env?.sentence)}｜${envHead(this.menv?.sentence)}`.slice(0,260):w.intent!.env;
+    }else{
+      const l1=marketSizing(m,pb,w.side);if(!l1.ok)return`等位置期间市场意图变了：${l1.why.slice(0,100)}`;lm=l1.mult;
+    }
+    const ci=this.coins.get(w.symbol);
     if(!ci||!ci.action||ci.action.pb!==pb||ci.action.side!==w.side){
       // the setup emotion may have moved on (e.g. capitulation → rebound under way); keep it only if nothing contradicts
       const contra=ci&&(w.side==="LONG"?ci.capital==="SUPPLY"||ci.capital==="FLUSH_DOWN":ci.capital==="DEMAND"||ci.capital==="SQUEEZE_UP");
@@ -533,8 +588,9 @@ export class LivingEngine{
     if(!chk.ok)return chk.reason;
     const strength=w.intent!.strength,ev=intentEvidence(strength,m!.confidence),mod=items.sizing?sizeModulator(scores[PLAYBOOK_PROBE[pb]]):1;
     const risk=normalRisk({premium:ev.label==="strong"&&w.rank===1&&lm>=1,evidence:ev.factor*mod*lm,sizingItem:items.sizing});
-    const why=`${lm<1?`市场方向不清，半仓（${lm}×）·`:""}${PLAYBOOK_LABEL[pb]}：${w.intent!.why.slice(0,110)}；位置到了且确认`;
-    const note:LivingNote={v:"living-v2",k:"N",pb,...(lm<1?{lm}:{}),th:this.thesis.current?.id??null,ep:null,ev:ev.label,mult:r4(risk.multiple),sc:r4(strength),t:null,n:null,
+    const why=envNote?`${PLAYBOOK_LABEL[pb]}：${w.intent!.why.slice(0,110)}；${envNote.split("｜")[0]!.slice(0,70)}；位置到了且确认`
+      :`${lm<1?`市场方向不清，半仓（${lm}×）·`:""}${PLAYBOOK_LABEL[pb]}：${w.intent!.why.slice(0,110)}；位置到了且确认`;
+    const note:LivingNote={v:"living-v2",k:"N",pb,...(lm<1?{lm}:{}),...(envNote?{env:envNote}:{}),...(pb==="sweep-reclaim"&&w.target!=null?{tg:r6(w.target)}:{}),th:this.thesis.current?.id??null,ep:null,ev:ev.label,mult:r4(risk.multiple),sc:r4(strength),t:null,n:null,
       per:mod===1?null:`x${mod}`,rk:w.rank,inv:chk.stop,ref:w.ref,hold:w.holdMin,why:why.slice(0,200),
       in:w.intent!.state,mk:m!.state,nar:`${m!.sentence.slice(0,80)}｜${w.intent!.why.slice(0,100)}`,evd:w.intent!.ev.slice(0,160)};
     return {id:w.id,symbol:w.symbol,side:w.side,stop:chk.stop,riskRate:risk.riskRate,multiple:risk.multiple,kind:"N",episodeId:null,episodeCap:null,
@@ -769,7 +825,7 @@ export class LivingEngine{
       market:m?{state:m.state,side:m.side,confidence:m.confidence,sentence:m.sentence,at:m.at,lead:m.lead,ev:m.ev,restored:!this.marketIntent,
         allowed:m.allowed.map(a=>({pb:a.pb,label:PLAYBOOK_LABEL[a.pb],side:a.side}))}:null,
       marketTimeline:this.marketHist.filter((x,i,a)=>i===0||a[i-1]!.state!==x.state||a[i-1]!.side!==x.side).slice(-12).map(x=>({at:x.at,state:x.state,side:x.side,sentence:x.sentence.slice(0,120)})),
-      board,positions,
+      board,positions,env:this.envSummary(),
       thesis:this.thesis.current?{sentence:this.thesis.current.sentence,structure:this.thesis.current.structure,side:this.thesis.current.side,
         since:this.thesis.current.since,playbooks:this.thesis.current.playbooks.map(p=>PLAYBOOK_LABEL[p.pb])}:null,
       probes:scores.map(s=>({probe:s.probe,label:PROBE_META[s.probe].label,score:s.score,t:s.t,n:s.n,modulator:sizeModulator(s)})),
@@ -791,6 +847,7 @@ export class LivingEngine{
   exportSection(now:number,olderPages:{seq:number;rows:LogRow[]}[]=[]){
     return {version:LIVING_RULE_EPOCH,note:"研究层（living-v2）独立记录：资金意图（价格×持仓量、资金费、溢价、主动买卖、成交量）和人性（追涨、恐慌、出尽、拥挤、安逸）的实时读数，市场判断，快速通道每一段（资金是否跟上），等位置、持有理由、保护、开单与只记录的原因。价格幅度都是价格涨跌 %，不是 ROE。",
       marketTimeline:this.marketHist.slice(-90).map(x=>({at:x.at,state:x.state,side:x.side,conf:x.confidence,sentence:x.sentence,ev:x.ev})),
+      envNow:{market:this.menv,coins:[...this.envs.entries()].map(([s,e])=>({s,env:e.state,c:e.clarity,ev:e.ev,why:e.sentence}))},
       coinReads:[...this.coins.values()].map(c=>({s:c.symbol,cap:c.capital,emo:c.emotion,crowd:c.crowd,st:c.strength,act:c.action?`${c.action.pb}/${c.action.side}`:null,why:c.why})),
       holds:[...this.holds.entries()].map(([id,h])=>({id,...h})),intentCounts:this.intentCounts,
       status:this.status(now),counts:this.trades.counts,

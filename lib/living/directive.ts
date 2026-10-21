@@ -13,7 +13,9 @@ export type LivingNote={v:"living-v1"|"living-v2";k:LivingKind;pb:string;th:stri
   /** Old B1 MIXED probe flag (kept so old trades render). */
   mx?:1;
   /** Layer-1 sizing multiplier when < 1 (MIXED market → 0.5). */
-  lm?:number};
+  lm?:number;
+  /** v3 environment at entry (Chinese: coin env + market env + why this playbook) and the planned take-profit (sweep-reclaim). */
+  env?:string;tg?:number};
 export type LivingTradeAction={tradeId:string;action:"EXIT"|"GUARD"|"HANDOFF";stop?:number;code:string;reason:string;detail?:Record<string,number|string|null>};
 export type LivingOrder={id:string;symbol:string;side:"LONG"|"SHORT";stop:number;
   /** fraction of equity risked before the multiple, and the multiple (normal: 5 x evidence; fast: 1..3, probe /3) */

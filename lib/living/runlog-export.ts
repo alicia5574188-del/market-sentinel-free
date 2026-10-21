@@ -25,7 +25,8 @@ export const HOW_TO_READ=[
 ];
 export const FIELD_NOTES:Record<string,unknown>={
   timeline:{at:"这一段开始（UTC 毫秒）",end:"结束",minutes:"实际采样的分钟数",gate:"开单通道每分钟状态的分钟数，含义见 gate_labels",
-    market:"市场意图每分钟的分钟数，如 RISK_OFF/SHORT（真资金做空）、CALM（平静）、WARMING（还读不出来）",last:"段末的市场意图：state 状态、side 方向、conf 把握、allowed 允许的打法/方向",
+    market:"市场意图每分钟的分钟数，如 RISK_OFF/SHORT（真资金做空）、CALM（平静）、WARMING（还读不出来）",last:"段末的市场意图：state 状态、side 方向、conf 把握、allowed 允许的打法/方向；env/envConf 是段末的市场环境和清晰度（v3）",
+    env:"v3 市场环境每分钟的分钟数：TREND_UP 上升趋势、TREND_DOWN 下降趋势、CHOP 来回震荡、QUIET 安静窄幅、SPIKE 集体急拉、FLUSH 集体急杀、MIXED 分歧、WARMING 暖机；环境变化也记在 events（ENV_MARKET）",
     mode:"研究层模式：off 关 / compute-only 只计算 / paper-enabled 模拟开单",fast:"快速通道（集体异动）每分钟状态：CALM 平静、ALERT 警报、CONFIRMED 确认",
     funnel:"这段里候选逐层的计数（每分钟每个候选算一次）：reads 读了几次币、ideas 有打法想法、no_idea 没想法；其余见 layer_labels",
     reasons:"层:原因 的计数（数字换成 #）",open:"段末持仓数",watches:"段末在等位置数",opened:"这段开出的单",blocker:"这一段最主要的没开单原因",events:"状态变化（市场意图、降级、模式、重启、集体异动）",boot:"程序这次启动的编号；同一段有两个编号说明这段里重启过"},
@@ -33,12 +34,12 @@ export const FIELD_NOTES:Record<string,unknown>={
     intent:"这个币当时的资金状态/情绪，如 DEMAND/BLOWOFF（贪婪见顶）、SUPPLY/CONVICTION（真卖盘）、FLUSH_DOWN/CAPITULATION（踩踏出尽）",
     strength:"证据强度 0–1",why:"研究层的一句话",
     ev:"当时的证据（%）：p15/p60 价格 15/60 分钟涨跌，oi15/oi60 持仓量变化，funding 资金费（%），taker15 主动买卖（>0.5 买方多），vol15 成交量倍数，basis 期现溢价",
-    market:"当时的市场意图",layer:"第一次被挡（或推进到）的层",reason:"原因",furthest:"走到最远的一层",stages:"每次层级变化：时间、层、原因、价格",
+    market:"当时的市场意图（含 v3 市场环境 env）",env:"v3 环境：币环境|M:市场环境，如 CHOP|M:TREND_UP。币环境决定打法（趋势→回调/冲击回踩，震荡→假突破收回做回中部，急拉/急杀→力竭反转，安静→第一根冲击回踩），对不上记 ENV_MISMATCH 不开；市场环境明确反向就不做；环境清晰度定仓位 0.5–1×",layer:"第一次被挡（或推进到）的层",reason:"原因",furthest:"走到最远的一层",stages:"每次层级变化：时间、层、原因、价格",
     ref:"参考价：第一次出现时的中间价",seen:"90 分钟内被看到的次数",last:"最后一次被看到",trade:"开出的单：id、开仓时间/价、止损，平仓后有出场价、原因、净盈亏（U）；hr 是持仓中每分钟的研究层读数（字段见 hold_read_legend，行用 ; 分隔、字段用 , 分隔），hr_drop 是超过 240 行后丢掉的最早行数",
     final:"true 表示 6 小时已走完、路径定稿；false 是进行中（路径到导出为止）",
     path:"t0 起每分钟一格，格式 收,高,低（相对 ref 的基点，原始价格方向，不按多空翻转），分号分隔；空格表示那一分钟没有数据（程序停了）；coarse 是只有 5 分钟精度的分钟段（重启前较早的部分）",
     out:"按案例方向算（价格 %）：mfe/mae 最大有利/不利及第几分钟，mae_before_mfe 到最高点前最深回撤，r15…r360 各时点收益，hit_1pct_first 先到 +1% 还是 -1%，from_open 从实际开仓起算"},
-  positions:"账户真实模拟单。living_playbook 打法，living_intent 开单时资金状态/情绪，living_market_intent 市场意图，living_story 叙述，living_flow_evidence 证据数字，living_invalidation 失效价，living_protect_* 保护；mfe_pct/mae_pct 等是这笔单从开仓起的价格路径结果（%）。",
+  positions:"账户真实模拟单。living_playbook 打法，living_intent 开单时资金状态/情绪，living_market_intent 市场意图，living_story 叙述，living_flow_evidence 证据数字，living_env 开单时的环境选择（为什么选这个打法｜币环境｜市场环境），living_invalidation 失效价，living_protect_* 保护；mfe_pct/mae_pct 等是这笔单从开仓起的价格路径结果（%）。",
 };
 export const REVIEW_PLAN=[
   "很久没开单：why_no_trades.longest_no_open 那一段的 main 和 gate；再到 timeline 里那几行看是哪一层挡的、原因是什么。",
@@ -60,7 +61,7 @@ export type RunLogExportInput={
   archive:Record<string,unknown>;
 };
 const HOLD_READ_LEGEND={fields:HOLD_READ_FIELDS,codes:HOLD_READ_CODES,
-  notes:"h 是持有理由健康度（-1…1，按我们的方向：真资金同向 +、反向 −，主动买卖和持仓量随价格各占一部分，市场明确反向再 −0.3）；oi15_pct / funding_pct / atr5_pct 是 %；taker5 >0 买方多；verdict 为空表示继续拿，否则是大脑当分钟的出场/收紧代码"};
+  notes:"h 是持有理由健康度（-1…1，按我们的方向：真资金同向 +、反向 −，主动买卖和持仓量随价格各占一部分，市场明确反向再 −0.3）；oi15_pct / funding_pct / atr5_pct 是 %；taker5 >0 买方多；verdict 为空表示继续拿，否则是大脑当分钟的出场/收紧代码；env 是当分钟的 币环境|M:市场环境（v3）"};
 export function buildLivingRunLog(input:RunLogExportInput){
   const from=Math.max(input.exportedAt-input.hours*3_600_000,input.since??0);
   // one row per 10-minute window: rows of the same window from two boots (a restart inside it) are merged
