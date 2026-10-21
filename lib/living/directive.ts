@@ -10,8 +10,10 @@ export type LivingNote={v:"living-v1"|"living-v2";k:LivingKind;pb:string;th:stri
   /** v2 intent read at entry: capital state / human-nature emotion (e.g. "DEMAND/CONVICTION"), market state, the narrative
    * and the evidence numbers it was made from (price %, OI %, funding, aggressor, volume ratio) */
   in?:string;mk?:string;nar?:string;evd?:string;
-  /** B1: opened as a MIXED-market strong-follow probe (0.3×). */
-  mx?:1};
+  /** Old B1 MIXED probe flag (kept so old trades render). */
+  mx?:1;
+  /** Layer-1 sizing multiplier when < 1 (MIXED market → 0.5). */
+  lm?:number};
 export type LivingTradeAction={tradeId:string;action:"EXIT"|"GUARD"|"HANDOFF";stop?:number;code:string;reason:string;detail?:Record<string,number|string|null>};
 export type LivingOrder={id:string;symbol:string;side:"LONG"|"SHORT";stop:number;
   /** fraction of equity risked before the multiple, and the multiple (normal: 5 x evidence; fast: 1..3, probe /3) */

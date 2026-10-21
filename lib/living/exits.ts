@@ -13,7 +13,7 @@ import type {LivingTradeAction,LivingNote} from "./directive.ts";
 import {r6} from "./util.ts";
 
 export type PositionView={id:string;symbol:string;side:"LONG"|"SHORT";entryPrice:number;stopPrice:number;liquidationPrice:number|null;
-  openedAt:number;favorable:number;guard:number|null;living?:LivingNote;price:number|null};
+  openedAt:number;favorable:number;adverse?:number;guard:number|null;living?:LivingNote;price:number|null};
 const d=(s:"LONG"|"SHORT")=>s==="LONG"?1:-1;
 /** B4: protection actions for one fast-lane step. `scale` halves the tightening when B7 says protection cost money (not the liq guard). */
 export function fastProtection(input:{positions:PositionView[];ep:Episode|null;events:FastEvent[];tape:LivingTape;now:number;scale:number;

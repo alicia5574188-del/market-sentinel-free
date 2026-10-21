@@ -19,7 +19,7 @@ export type Watch={id:string;symbol:string;side:Side;playbook:Playbook;probe:str
   layers:{l1:boolean;l2:boolean;probeSize:boolean;why1:string;why2:string};inZoneSamples:number;lastSampleAt:number;
   zoneSeenAt:number|null;zonePrice:number|null;status:"WAITING"|"READY"|"DONE";reason:string|null;
   /** v2: the live intent read that created the watch (narrative + evidence carried into the trade note) */
-  intent?:{state:string;market:string;why:string;ev:string;strength:number;mixed?:boolean}};
+  intent?:{state:string;market:string;why:string;ev:string;strength:number;mult?:number}};
 const d=(s:Side)=>s==="LONG"?1:-1;
 /** Zone + invalidation for a selected candidate (C4 positions). Null = no sensible position. */
 export function planPosition(c:Candidate,rows:MidBar[]):{lo:number;hi:number;inv:number;target:number|null}|null{

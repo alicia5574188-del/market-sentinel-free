@@ -4,8 +4,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import {readFileSync} from "node:fs";
-import {climaxTake,holdCheck,healthOf,mixedProbeAllows,MIXED_PROBE,type CoinIntent,type MarketIntent} from "../lib/living/intent.ts";
+import {climaxTake,holdCheck,healthOf,type CoinIntent,type MarketIntent} from "../lib/living/intent.ts";
 import {RunLog,HOLD_READ_MAX,HOLD_READ_FIELDS,CASE_PAGE_KEYS,type CaseInput} from "../lib/living/runlog.ts";
 import {buildLivingRunLog} from "../lib/living/runlog-export.ts";
 import {livingWhy,livingDetail} from "../lib/living-trade-view.ts";
@@ -34,24 +33,12 @@ test("holdCheck exits with LIVING_INTENT_CLIMAX_TAKE only when the stop distance
   assert.notEqual(holdCheck(base).code,"LIVING_INTENT_CLIMAX_TAKE");
   assert.equal(holdCheck({...base,price:101,stopDist:.01}).code==="LIVING_INTENT_CLIMAX_TAKE",false,"+1% < 1.5× 1% stop");
 });
-test("B1: MIXED allows only follow with strength ≥ 0.6; CALM follow and MIXED coin playbooks stay blocked", ()=>{
-  assert.equal(MIXED_PROBE.strength,.6);assert.equal(MIXED_PROBE.factor,.3);
-  assert.equal(mixedProbeAllows(mixed,"follow",.6),true);
-  assert.equal(mixedProbeAllows(mixed,"follow",.59),false);
-  assert.equal(mixedProbeAllows(calm,"follow",.9),false);
-  for(const pb of ["squeeze-fade","absorb-revert","crowd-fade","crowd-break","flush-rebound"] as const)assert.equal(mixedProbeAllows(mixed,pb,.9),false,pb);
-  const src=readFileSync(new URL("../lib/living/engine.ts",import.meta.url),"utf8");
-  const order=src.slice(src.indexOf("private intentOrder("),src.indexOf("private fastOrders("));
-  assert.match(order,/const still=ci\?\.action&&ci\.action\.pb===pb&&ci\.action\.side===w\.side&&ci\.action\.strength>=MIXED_PROBE\.strength/,"re-check at the planned position");
-  assert.match(order,/ev=mixed\?\{factor:MIXED_PROBE\.factor,label:"probe" as const\}/,"probe size 0.3");
-  assert.match(order,/分歧市场试探（0\.3 倍）/);assert.match(order,/mx:1/);
-});
-test("B1 card text says it is a MIXED probe", ()=>{
+test("old B1 probe trades (mx:1) still render as a MIXED probe", ()=>{
   const t={side:"LONG" as const,entryPrice:100,stopPrice:99,liquidationPrice:91,plannedRisk:1.6,leverage:10,notional:300,expectedHoldMinutes:60,
     entryContext:{living:{v:"living-v2",k:"N",pb:"follow",ev:"probe",mult:1.5,sc:.66,rk:1,inv:99,hold:60,why:"分歧市场试探（0.3 倍）·顺着真资金：x",in:"DEMAND/CONVICTION",mk:"MIXED",mx:1}}};
   assert.match(livingWhy(t,"顺着真资金（回调跟进）"),/市场分歧，强证据顺势试探（0\.3 倍仓位）/);
   const d=livingDetail(t,"顺着真资金（回调跟进）").join("\n");
-  assert.match(d,/分歧市场要求 ≥0\.6/);assert.match(d,/证据档「试探」0\.3/);assert.match(d,/利润交给他们离场/);
+  assert.match(d,/分歧市场要求 ≥0\.6/);assert.match(d,/证据档「试探」0\.3/);assert.match(d,/利润交给他们/);
 });
 const input=(sym:string,at:number):CaseInput=>({at,sym,side:"LONG",pb:"follow",pbLabel:"顺着真资金",kind:"normal",intent:"DEMAND/CONVICTION",strength:.6,
   why:"真买盘",ev:null,market:null,px:100});

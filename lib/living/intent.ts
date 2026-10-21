@@ -238,11 +238,18 @@ export function marketAllows(m:MarketIntent|null,pb:IntentPlaybook,side:Side){
   const a=m.allowed.find(x=>x.pb===pb&&(x.side==null||x.side===side));
   return a?{ok:true,why:`第一层：${m.sentence}`}:{ok:false,why:`第一层：当前市场（${m.state}）不支持「${pb} ${side==="LONG"?"多":"空"}」`};
 }
-/** B1 (2026-10-21): a MIXED market blocks every playbook except a follow on a coin whose own evidence is strong
- * (strength ≥ .6). Such a watch opens only if the same read still holds at the planned-position re-check, at probe size. */
-export const MIXED_PROBE={strength:.6,factor:.3} as const;
-export function mixedProbeAllows(m:MarketIntent|null,pb:IntentPlaybook,strength:number|null|undefined){
-  return !!m&&m.state==="MIXED"&&pb==="follow"&&typeof strength==="number"&&strength>=MIXED_PROBE.strength;
+/**
+ * Layer 1 as sizing (2026-10-21): a market clearly against the trade still blocks; an aligned / allowing market is 1×;
+ * a MIXED market lets follow, squeeze-fade and crowd-fade through at half size (layer 2 strength and the planned-position
+ * re-check still apply); absorb-revert and the rest stay blocked in MIXED; CALM / other states as marketAllows.
+ */
+export const MARKET_SIZING={mixed:.5,mixedPlaybooks:["follow","squeeze-fade","crowd-fade"] as readonly IntentPlaybook[]} as const;
+export function marketSizing(m:MarketIntent|null,pb:IntentPlaybook,side:Side):{ok:boolean;mult:number;why:string;sized:boolean}{
+  if(m&&m.state==="MIXED"){
+    return MARKET_SIZING.mixedPlaybooks.includes(pb)?{ok:true,mult:MARKET_SIZING.mixed,sized:true,why:"第一层：市场方向不清，半仓（0.5×）"}
+      :{ok:false,mult:0,sized:false,why:`第一层：市场方向不清，「${pb}」在分歧市场不做`};
+  }
+  const a=marketAllows(m,pb,side);return{ok:a.ok,mult:a.ok?1:0,sized:false,why:a.why};
 }
 /** Thesis health h ∈ [-1,1] in the trade's direction from one live read (logged every minute while holding; review only). */
 export function healthOf(side:Side,coin:CoinIntent|null,market:MarketIntent|null):number|null{
