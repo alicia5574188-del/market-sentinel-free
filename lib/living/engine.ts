@@ -25,6 +25,7 @@ import {stopCheck,newWatch,stepWatch,fastFollowPicks,type Watch} from "./entry.t
 import {layerOne,evidenceFactor,normalRisk,fastRisk} from "./conviction.ts";
 import {fastProtection,thesisExits,surgeGuard,type PositionView} from "./exits.ts";
 import {FlowBook,FLOW_PAGES,FLOW_PAGE_PREFIX,type FlowPoint} from "./flow.ts";
+import {followAtEdge} from "./intent.ts";
 import {features,readCoin,readMarket,marketSizing,healthOf,sizeModulator,intentEvidence,burstFlow,holdCheck,planIntent,noTradeReason,evidenceLine,
   type CoinIntent,type MarketIntent} from "./intent.ts";
 import type {IntentPlaybook,Playbook} from "./thesis.ts";
@@ -49,6 +50,18 @@ const INTENT_HIST_BYTES=72_000;
 const STALE_MS=30_000; // spec C8: quotes older than 30s → compute-only for 1h
 
 /** Minimal views of the forward core the engine reads (no runtime import of forward-relations). */
+/** 60 min after a LIVING_STOP on a coin, the same coin + playbook is not traded again (NEAR faded 3× in 30 min on 10-21).
+ * Derived from the persisted forward history, so it survives restarts. */
+export const STOP_COOLDOWN_MS=60*60_000;
+export function stopCooldown(history:ForwardView["history"],symbol:string,pb:string,now:number):string|null{
+  for(const t of history){
+    if(t.symbol!==symbol||t.closedAt==null||now-t.closedAt>=STOP_COOLDOWN_MS||now<t.closedAt)continue;
+    if(t.exitReason!=="LIVING_STOP")continue;
+    const n=t.entryContext?.living;const tpb=n?(n.k==="F"?"follow":n.pb):null;if(tpb!==pb)continue;
+    return`止损后冷却：${Math.ceil((STOP_COOLDOWN_MS-(now-t.closedAt))/60_000)} 分钟内同币同打法不再做`;
+  }
+  return null;
+}
 export type ForwardView={positions:{id:string;symbol:string;side:"LONG"|"SHORT";entryPrice:number;stopPrice:number;liquidationPrice?:number|null;
   openedAt:number;favorable:number;adverse?:number;livingGuard?:{stop:number}|undefined;entryContext?:{living?:LivingNote}|undefined;inverseCopy?:unknown}[];
   history:{id:string;symbol:string;side:"LONG"|"SHORT";netPnl:number|null;plannedRisk:number;notional:number;closedAt:number|null;exitReason:string|null;
@@ -428,6 +441,10 @@ export class LivingEngine{
       used.push(s);rank++;
       if(a.strength<.35){this.logCase(now,s,a.side,a.pb,"L2_WEAK",`证据强度 ${a.strength.toFixed(2)}<0.35`);this.noteOnce(`st|${s}|${a.pb}|${Math.floor(now/900_000)}`,now,"RECORD_ONLY",{sym:s,side:a.side,pb:a.pb,reason:`第二层：这个币的证据不够强（${a.strength.toFixed(2)}<0.35）`});continue;}
       if(busy.has(s)){this.logCount(now,"BUSY","已有持仓或在等位置");continue;}
+      if(a.pb==="follow"&&followAtEdge(a.side,c.ci.f.rangePos)){const why=`顺势不追在区间${a.side==="LONG"?"顶部":"底部"}（4 小时区间位置 ${((c.ci.f.rangePos??0)*100).toFixed(0)}%）`;
+        this.logCase(now,s,a.side,a.pb,"FOLLOW_EDGE",why);this.noteOnce(`fe|${s}|${a.side}|${Math.floor(now/900_000)}`,now,"RECORD_ONLY",{sym:s,side:a.side,pb:a.pb,reason:why});continue;}
+      const cool=stopCooldown(ctx.forward.history,s,a.pb,now);
+      if(cool){this.logCase(now,s,a.side,a.pb,"COOLDOWN",cool);this.noteOnce(`cd|${s}|${a.pb}`,now,"RECORD_ONLY",{sym:s,side:a.side,pb:a.pb,reason:cool});continue;}
       const plan=planIntent(a.pb,a.side,c.ci,this.tape.closed5(s,now),this.tape.closed1(s,now));
       if(!plan){this.logCase(now,s,a.side,a.pb,"NO_LOCATION","找不到合理的位置");this.noteOnce(`pl|${s}|${a.pb}`,now,"RECORD_ONLY",{sym:s,side:a.side,pb:a.pb,reason:"找不到合理的位置"});continue;}
       const mid=(plan.lo+plan.hi)/2,ct=ctx.contracts[s];
@@ -445,7 +462,7 @@ export class LivingEngine{
   private hardFilter(ctx:PlanContext,s:string,items:LivingItems){
     const meta=this.tape.meta.get(s),mmr=ctx.contracts[s]?.maintenanceRate??null;
     if((meta?.volume24hUsd??0)<STEPS.selectVolume)return`成交额 ${((meta?.volume24hUsd??0)/1e6).toFixed(0)}M<20M`;
-    if(meta&&meta.spread>STEPS.selectSpread)return`价差 ${(meta.spread*1e4).toFixed(1)}bp>6bp`;
+    if(meta&&meta.spread>STEPS.selectSpread)return`价差 ${(meta.spread*1e4).toFixed(1)}bp>${(STEPS.selectSpread*1e4).toFixed(0)}bp`;
     if(items.liqSafety&&(mmr==null||mmr>STEPS.selectMmr))return`维持保证金率 ${mmr==null?"未知":(mmr*100).toFixed(1)+"%"}>2%`;
     return null;
   }

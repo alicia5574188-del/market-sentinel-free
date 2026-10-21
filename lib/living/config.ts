@@ -87,7 +87,7 @@ export const STEPS={
   rewardScore:.0010,rewardT:2,rewardN:30,halfLifeShortMs:6*3_600_000,halfLifeLongMs:48*3_600_000,
   persistenceWindowMs:6*3_600_000,persistenceSpanMs:7*24*3_600_000,
   thesisDebounceBars:2,thesisPredictMs:4*3_600_000,
-  selectTop:3,selectMin:.5,selectVolume:20_000_000,selectSpread:.0006,selectMmr:.02,
+  selectTop:3,selectMin:.5,selectVolume:20_000_000,selectSpread:.0004,selectMmr:.02,
   waitPositionMs:30*60_000,stopMin:.006,stopMax:.020,
   exitUnrewardedT:-1,holdOverrun:1.5,
 } as const;

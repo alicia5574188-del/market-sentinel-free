@@ -54,7 +54,7 @@ export function selectCandidates(m:Market,state:SelectState,pb:Playbook,triggers
     const f=candidateFactors(m,t),wsum=FACTORS.reduce((n,k)=>n+state.weights[k],0);
     const score=FACTORS.reduce((n,k)=>n+state.weights[k]*f[k],0)/wsum;
     const spread=m.spread(t.symbol),vol=m.volume(t.symbol),mmr=m.mmr(t.symbol);
-    const reject=vol<STEPS.selectVolume?`24小时成交额 ${(vol/1e6).toFixed(1)}M<20M`:spread==null||spread>STEPS.selectSpread?`价差 ${spread==null?"未知":(spread*1e4).toFixed(1)+"bp"}>6bp`
+    const reject=vol<STEPS.selectVolume?`24小时成交额 ${(vol/1e6).toFixed(1)}M<20M`:spread==null||spread>STEPS.selectSpread?`价差 ${spread==null?"未知":(spread*1e4).toFixed(1)+"bp"}>${(STEPS.selectSpread*1e4).toFixed(0)}bp`
       :liqSafety&&(mmr==null||mmr>STEPS.selectMmr)?`维持保证金率 ${mmr==null?"未知":(mmr*100).toFixed(1)+"%"}>2%`:score<STEPS.selectMin?`选币分 ${score.toFixed(2)}<${STEPS.selectMin}`:null;
     out.push({symbol:t.symbol,side:t.side,playbook:pb,probe,score:r4(score),rank:0,factors:f,trigger:t,reject});
   }

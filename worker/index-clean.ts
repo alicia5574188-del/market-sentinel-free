@@ -1273,11 +1273,21 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           ? (this.strategyCandles[symbol].at(-1)!.time + 300) * 1_000 : undefined }]] : []));
   }
 
-  private regimeContracts() {
-    return Object.fromEntries(Object.entries(this.runtime.contractMeta).map(([symbol, row]) => [symbol, {
+  private regimeContracts(extra: Iterable<string> = []) {
+    const out = Object.fromEntries(Object.entries(this.runtime.contractMeta).map(([symbol, row]) => [symbol, {
       ...row, volume24hUsd: this.contractCatalog.get(symbol)?.volume24hUsd ?? 0,
     }]));
+    // Living basket coins outside the Gate-resident set: same contract params from the in-memory catalog (no request).
+    for (const symbol of extra) {
+      if (out[symbol]) continue;
+      const row = this.contractCatalog.get(symbol);
+      if (row) out[symbol] = { quantoMultiplier: row.quantoMultiplier, maintenanceRate: row.maintenanceRate, leverageMax: row.leverageMax,
+        fundingRate: row.fundingRate, enableDecimal: row.enableDecimal, orderSizeMin: row.orderSizeMin, orderSizeMax: row.orderSizeMax,
+        marketOrderSizeMax: row.marketOrderSizeMax, volume24hUsd: row.volume24hUsd ?? 0 };
+    }
+    return out;
   }
+  private livingContractSymbols() { return this.living?.basket?.members ?? []; }
 
   protected reconcileCanonicalMirror(now: number) {
     // Retired arena/regime accounts no longer participate in trading authority.
@@ -2019,7 +2029,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private livingPlan(now:number,state:ForwardState,quotes:Record<string,{bestBid:number;bestAsk:number;observedAt:number;entryReady?:boolean}>):LivingDirective|undefined{
     const engine=this.living;if(!engine||engine.config.mode==="off")return undefined;
     try{
-      const contracts=this.regimeContracts(),funding:Record<string,number>={};
+      const contracts=this.regimeContracts(this.livingContractSymbols()),funding:Record<string,number>={};
       for(const [symbol,meta] of Object.entries(this.runtime.contractMeta))if(Number.isFinite(meta?.fundingRate))funding[symbol]=meta.fundingRate;
       return engine.plan({now,forward:state as unknown as LivingForwardView,quotes,contracts,funding,candles:this.strategyCandles});
     }catch(error){this.runtime.strategyLogError=`living-plan: ${safeError(error)}`;return undefined;}
@@ -2065,7 +2075,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const previous = state,reviewEvents:ReviewEvent[]=[],executionQuotes=this.forwardQuotes(now);
       const livingDirective=this.livingPlan(now,previous,executionQuotes);
       const next = advanceForward({ state: previous, now, paths: this.strategyCandles,minutePaths:this.forwardMinutePaths(),
-        daily:this.turnDailyCandles,quotes:executionQuotes,analysisQuotes:this.forwardAnalysisQuotes(now),contracts:this.regimeContracts(),
+        daily:this.turnDailyCandles,quotes:executionQuotes,analysisQuotes:this.forwardAnalysisQuotes(now),contracts:this.regimeContracts(this.livingContractSymbols()),
         entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue,
         research:{rolling:this.shadowResearch.market[0]?.rolling??null},reviewTrace:event=>{if(reviewEvents.length<128)reviewEvents.push(event);},
         referenceMids:(()=>{try{return this.referenceMids(now);}catch{return undefined;}})(),

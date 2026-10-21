@@ -354,6 +354,16 @@ export function holdCheck(input:{pb:IntentPlaybook;side:Side;entry:number;price:
   return{act:"HOLD",code:"",why:"持有"};
 }
 /** Zone + invalidation for a v2 trade (location step). Null = no sensible position. */
+/** Squeeze-fade / flush-rebound invalidation distance beyond the extreme: max(0.4·ATR5, 1.2 × mean 5-min range of the last 14 bars).
+ * A 0.4·ATR stop sat inside one bar of noise (NEAR 10-21: stopped in 1 min). The stopMax 2% cap still applies downstream. */
+export const EXTREME_PAD={atr:.4,range:1.2,bars:14} as const;
+export function extremePad(A:number,rows5:MidBar[]){
+  const w=rows5.slice(-EXTREME_PAD.bars),mr=w.length?w.reduce((s,r)=>s+(r.high-r.low),0)/w.length:0;
+  return Math.max(EXTREME_PAD.atr*A,EXTREME_PAD.range*mr);
+}
+/** Follow does not chase at the edge of the 4h range: LONG with rangePos ≥ 0.90, SHORT with ≤ 0.10 (LIT 10-21). */
+export const FOLLOW_EDGE={long:.9,short:.1} as const;
+export function followAtEdge(side:Side,rangePos:number|null){return rangePos!=null&&(side==="LONG"?rangePos>=FOLLOW_EDGE.long:rangePos<=FOLLOW_EDGE.short);}
 export function planIntent(pb:IntentPlaybook,side:Side,ci:CoinIntent,rows5:MidBar[],rows1:MidBar[]):{lo:number;hi:number;inv:number;target:number|null;ref:number|null;hold:number}|null{
   const f=ci.f,A=f.atr5,last=f.last;if(!A||!(A>0)||last==null||rows5.length<12)return null;
   const s=d(side),w1=rows1.slice(-60),hi60=w1.length?Math.max(...w1.map(r=>r.high)):last,lo60=w1.length?Math.min(...w1.map(r=>r.low)):last;
@@ -364,8 +374,8 @@ export function planIntent(pb:IntentPlaybook,side:Side,ci:CoinIntent,rows5:MidBa
       const a=ext-s*.5*leg,b=ext-s*.25*leg;// shallow pullback in a real-money move
       return{lo:Math.min(a,b),hi:Math.max(a,b),inv:(up?Math.min(a,b):Math.max(a,b))-s*.6*A,target:ext,ref:start,hold:120};
     }
-    case "flush-rebound":return{lo:lo60,hi:lo60+.8*A,inv:lo60-.4*A,target:null,ref:lo60,hold:90};
-    case "squeeze-fade":return{lo:hi60-.8*A,hi:hi60,inv:hi60+.4*A,target:null,ref:hi60,hold:90};
+    case "flush-rebound":return{lo:lo60,hi:lo60+.8*A,inv:lo60-extremePad(A,rows5),target:null,ref:lo60,hold:90};
+    case "squeeze-fade":return{lo:hi60-.8*A,hi:hi60,inv:hi60+extremePad(A,rows5),target:null,ref:hi60,hold:90};
     case "crowd-fade":return side==="SHORT"?{lo:hi60-1*A,hi:hi60,inv:hi60+.4*A,target:null,ref:hi60,hold:180}:{lo:lo60,hi:lo60+1*A,inv:lo60-.4*A,target:null,ref:lo60,hold:180};
     case "crowd-break":{
       const lvl=side==="SHORT"?f.rangeLo:f.rangeHi;if(lvl==null)return null;

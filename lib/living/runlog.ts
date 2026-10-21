@@ -48,16 +48,16 @@ export const GATE_LABEL:Record<Gate,string>={OPEN:"能开单（在找机会）",
   FALLBACK:"出错或报价断了，自动降级为只计算",WARMING:"市场还读不出来（暖机/数据不够）",FAST_OWNS:"集体异动进行中，普通开单让给快速通道",
   NO_BASKET:"还没选出一篮子币",NOT_LOADED:"研究层还没恢复"};
 export type Layer="L1_MARKET"|"FILTER"|"RANK"|"CLUSTER"|"L2_WEAK"|"BUSY"|"NO_LOCATION"|"RISK"|"WATCH"|"WATCH_END"|"CONFIRM_FAIL"|
-  "NO_QUOTE"|"COMPUTE_ONLY"|"SWITCH_OFF"|"REJECTED"|"OPENED"|"FAST_FLOW_BLOCK"|"FAST_SKIP"|"FAST_PICK"|"L1_SIZED";
+  "NO_QUOTE"|"COMPUTE_ONLY"|"SWITCH_OFF"|"REJECTED"|"OPENED"|"FAST_FLOW_BLOCK"|"FAST_SKIP"|"FAST_PICK"|"L1_SIZED"|"FOLLOW_EDGE"|"COOLDOWN";
 export const LAYER_LABEL:Record<Layer,string>={L1_MARKET:"第一层：市场意图不允许这个打法/方向",FILTER:"硬条件：成交额/价差/维持保证金率不合格",
   RANK:"排在前 3 名之外",CLUSTER:"和已选的币走势高度相关，只留一个",L2_WEAK:"第二层：这个币的证据不够强",BUSY:"已有持仓或在等位置",
   NO_LOCATION:"找不到合理的位置",RISK:"止损/强平检查不过",WATCH:"进入等位置",WATCH_END:"等位置结束，没开（过期/失效/不追）",
   CONFIRM_FAIL:"位置到了但复核没过（意图变了）",NO_QUOTE:"没有 Gate 实时盘口",COMPUTE_ONLY:"只计算模式：本应开的单",
   SWITCH_OFF:"对应开关关着",REJECTED:"账户层拒绝",OPENED:"开出",FAST_FLOW_BLOCK:"集体异动：资金没跟上或是逼空/踩踏，不跟",
-  FAST_SKIP:"集体异动：这个币没被选上",FAST_PICK:"集体异动：选中跟进",L1_SIZED:"第一层：市场方向不清，按半仓放行（不是拦截）"};
+  FAST_SKIP:"集体异动：这个币没被选上",FAST_PICK:"集体异动：选中跟进",L1_SIZED:"第一层：市场方向不清，按半仓放行（不是拦截）",FOLLOW_EDGE:"顺势不追在 4 小时区间顶部/底部",COOLDOWN:"止损后 60 分钟冷却（同币同打法）"};
 /** How far a case got (furthest wins). */
 const DEPTH:Record<Layer,number>={RANK:0,FILTER:1,L1_MARKET:2,CLUSTER:3,L2_WEAK:4,BUSY:4,NO_LOCATION:5,RISK:6,FAST_FLOW_BLOCK:2,FAST_SKIP:5,
-  WATCH:7,WATCH_END:8,CONFIRM_FAIL:9,NO_QUOTE:10,SWITCH_OFF:10,COMPUTE_ONLY:11,FAST_PICK:7,REJECTED:11,OPENED:12,L1_SIZED:2};
+  WATCH:7,WATCH_END:8,CONFIRM_FAIL:9,NO_QUOTE:10,SWITCH_OFF:10,COMPUTE_ONLY:11,FAST_PICK:7,REJECTED:11,OPENED:12,L1_SIZED:2,FOLLOW_EDGE:5,COOLDOWN:4};
 const EARLY=new Set<Layer>(["L1_MARKET","FILTER","CLUSTER","RANK"]);
 const PRIORITY=(l:Layer)=>DEPTH[l]>=7?3:EARLY.has(l)?1:2;
 
