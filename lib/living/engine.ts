@@ -305,7 +305,9 @@ export class LivingEngine{
     const m=this.menv,members=this.basket?.members??[];
     const coins=["BTC_USDT","ETH_USDT",...members.filter(s=>s!=="BTC_USDT"&&s!=="ETH_USDT")].slice(0,10).map(s=>{const e=this.envs.get(s);return e?{s,env:e.state,c:e.clarity}:null;}).filter(Boolean);
     const counts:Record<string,number>={};for(const s of members){const e=this.envs.get(s);if(e)counts[e.state]=(counts[e.state]??0)+1;}
-    return {market:m?{state:m.state,label:ENV_LABEL[m.state],side:m.side,clarity:m.clarity,at:m.at,ac15:m.ev.ac15,dir24:m.ev.dir24,breadth:m.ev.breadth,btc:m.ev.btc}:null,
+    const eff=this.effective(Date.now());
+    return {brain:{mode:eff.mode,acting:eff.acting,fallback:!!eff.fallback,watches:this.trades.watches.length,lastError:this.lastError?this.lastError.slice(0,120):null},
+      market:m?{state:m.state,label:ENV_LABEL[m.state],side:m.side,clarity:m.clarity,at:m.at,ac15:m.ev.ac15,dir24:m.ev.dir24,breadth:m.ev.breadth,btc:m.ev.btc}:null,
       counts,coins};
   }
 
