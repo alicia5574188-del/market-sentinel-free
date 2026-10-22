@@ -459,14 +459,15 @@ test("pool log (dynamic-v1.4): every gate decision, pool open and close goes int
   assert.ok(JSON.stringify(b).length<80_000,"a full bucket stays well under a D1 row");
 });
 
-test("pool log (dynamic-v1.5): a sent pool order that never reaches the account is closed out — NO_QUOTE (coin not in the realtime feed) and REJECTED (the paper account's reason)",()=>{
+test("realtime pool only (dynamic-v1.5): a pool signal on a coin without a streamed Gate quote is record-only (NOT_LIVE), never ORDER; an account refusal after ORDER is a REJECTED record",()=>{
   const e=engine({},"paper-enabled",NOW);
   const gates={"box1h-long":{ok:true,risk:.00125,conf:.25,why:"预测：概率 90%",p6:.9,pMin:.58,phase:"GOOD" as const,elapsedH:5,label:"数据一般"}};
   const d=e.plan(ctx(dynIn({gates,signals:[sig("box1h-long","AAA_USDT"),sig("box1h-long","ZZZ_USDT")]})))!;
   assert.deepEqual(d.orders.map(o=>o.symbol),["AAA_USDT"],"no realtime quote for ZZZ → not sent");
   const g=e.runlog.poolRecent.filter(r=>r.t==="GATE");
-  const nq=g.find(r=>r.sym==="ZZZ_USDT"&&r.decision==="NO_QUOTE")!;assert.ok(nq,"NO_QUOTE record");assert.equal(nq.ok,false);assert.match(String(nq.why),/实时盘口/);
-  assert.ok(g.some(r=>r.sym==="ZZZ_USDT"&&r.decision==="ORDER"),"the ORDER record stays (what the gate decided)");
+  const nl=g.filter(r=>r.sym==="ZZZ_USDT");assert.deepEqual(nl.map(r=>[r.decision,r.ok,r.why]),[["NOT_LIVE",false,"不在实时报价币池，只记录"]],"one record-only decision, no ORDER");
+  assert.ok(e.log.some(r=>r.k==="DYN_SIGNAL"&&r.sym==="ZZZ_USDT"&&/不在实时报价币池/.test(String(r.reason))));
+  e.plan(ctx(dynIn({gates,signals:[sig("box1h-long","ZZZ_USDT")]})));assert.equal(e.runlog.poolRecent.filter(r=>r.sym==="ZZZ_USDT").length,1,"not repeated per tick");
   e.afterForward({opened:[],rejected:[{orderId:d.orders[0]!.id,symbol:"AAA_USDT",reason:"维持保证金率 2.5%>2%"}],applied:[]},emptyForward(),NOW);
   e.afterForward({opened:[],rejected:[{orderId:d.orders[0]!.id,symbol:"AAA_USDT",reason:"维持保证金率 2.5%>2%"}],applied:[]},emptyForward(),NOW+1000);
   const rj=e.runlog.poolRecent.filter(r=>r.decision==="REJECTED");assert.equal(rj.length,1,"once per order");

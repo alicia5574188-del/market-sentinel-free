@@ -17,7 +17,7 @@ export const dur=(h:number|null|undefined)=>{if(h==null||!Number.isFinite(h))ret
 export const phaseCn=(l:string|null|undefined)=>l==="GOOD"?"赚钱期":l==="BAD"?"亏钱期":"还看不清";
 export const DECISION_CN:Record<string,string>={ORDER:"发出开单",ALLOW:"允许开单",DENY:"不允许（只记录）",CUT:"暂停（预测被打脸）",SWITCH_OFF:"开关 10 关着（只记录）",
   BUSY:"位置满了（只记录）",WAIT:"研究层在等（只记录）",STOP_CROSSED:"现价已越过止损（不开）",
-  NO_QUOTE:"没有实时盘口（没开）",REJECTED:"模拟账户拒单（没开）"};
+  NOT_LIVE:"不在实时报价币池（只记录）",NO_QUOTE:"没有实时盘口（没开）",REJECTED:"模拟账户拒单（没开）"};
 const KIND_CN:Record<string,string>={pool:"打法池信号",burst:"爆发选币",htf:"日线突破"};
 type Pb=DynamicView["playbooks"][number];
 export function dynOf(s:BrainStatus):DynamicView|null{const raw=s.dynamic;return raw&&!("error" in raw&&!("backfill" in raw))?raw as DynamicView:null;}

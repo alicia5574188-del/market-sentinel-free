@@ -322,3 +322,11 @@ test("replay parity: the live rule functions reproduce the research per-coin C1b
     if(w!.px!=null)assert.ok(Math.abs(g.px!/w!.px-1)<1e-9,`${key(g)} exit px`);}
   assert.ok(fx.trades.length>=100,"enough trades to mean something");
 });
+test("realtime pool only (dynamic-v1.5): a daily-breakout pick without a streamed Gate quote is recorded NOT_LIVE, not ordered; it stays pending",()=>{
+  const {htf,dayStartMs}=htfWorld(),now=dayStartMs+5*60_000,e=engine({},"paper-enabled",now);
+  const c=ctxOf(now,htf),d=e.plan({...c,quotes:{BBB_USDT:c.quotes.BBB_USDT!}})!;
+  assert.deepEqual(d.orders.map(o=>o.symbol),["BBB_USDT"]);
+  const g=e.runlog.poolRecent.find(r=>r.t==="GATE"&&r.kind==="htf"&&r.sym==="AAA_USDT")!;
+  assert.deepEqual([g.decision,g.ok],["NOT_LIVE",false]);assert.match(String(g.why),/不在实时报价币池，只记录/);
+  assert.ok(e.trades.hx!.pending.some(x=>x.sym==="AAA_USDT"),"kept inside its entry window");
+});

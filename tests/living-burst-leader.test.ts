@@ -110,7 +110,7 @@ test("exit ownership: FAST_FAKE / EXHAUST / 10-minute / tighten / confirm-exit /
 });
 
 // ---------------------------------------------------------------- engine wiring on a synthetic tape (no request, no fixture)
-function engineRun(items:Partial<Record<string,boolean>>={},dyn?:Parameters<LivingEngine["plan"]>[0]["dyn"]){
+function engineRun(items:Partial<Record<string,boolean>>={},dyn?:Parameters<LivingEngine["plan"]>[0]["dyn"],noQuote:ReadonlySet<string>=new Set()){
   const t0=END*1000-MINS*60_000,e=new LivingEngine(t0);
   const cfg=defaultLivingConfig(t0);e.restore(new Map([[LIVING_KEYS.config,{...cfg,items:{...cfg.items,...items}}]]),t0);
   e.basket=selectBasket(alts.map(s=>({symbol:s,volume24hUsd:5e7,sources:3,gate:true})),t0);
@@ -124,7 +124,7 @@ function engineRun(items:Partial<Record<string,boolean>>={},dyn?:Parameters<Livi
     const pts=alts.map((s,i)=>({symbol:s,mid:px(i,Math.min(k,MINS+5)),at,spread:.0001,sources:3,volume24hUsd:5e7+i*1e6}));
     e.tape.feed(pts,at);
     if(k<MINS-5)continue;
-    for(const p of pts)quotes[p.symbol]={bestBid:p.mid*.9999,bestAsk:p.mid*1.0001,observedAt:at,entryReady:true};
+    for(const p of pts)if(!noQuote.has(p.symbol))quotes[p.symbol]={bestBid:p.mid*.9999,bestAsk:p.mid*1.0001,observedAt:at,entryReady:true};
     const dir=e.plan({now:at+5_000,forward:{positions:[],history:[],opportunities:[]},quotes,contracts,funding:{},candles:{},...(dyn?{dyn}:{})});
     e.tickLog(at+5_000);
     out.push({now:at,dir});
@@ -195,4 +195,13 @@ test("10-19 06:00 fixture with burstLeader on: the old fast-follow entries are r
   assert.equal(lv.length,0,"no non-burst living trade");
   assert.ok(r.engine.log.some(x=>x.k==="RECORD_ONLY"&&/只在全市场突然爆发时开单/.test(String(x.reason))),"recorded instead");
   assert.ok([...r.engine.runlog.cases.values()].some(c=>c.stages.some(s=>s.layer==="SPECIAL_ONLY")),"a SPECIAL_ONLY case");
+});
+test("realtime pool only (dynamic-v1.5): burst picks without a streamed Gate quote are shadow trades and NOT_LIVE gate records, never orders",()=>{
+  const gate={ok:true,risk:.0025,conf:.5,why:"预测：概率 70%"},dyn={ready:true,gates:{[LEADER.pb]:gate},signals:[],exits:[],state:null};
+  const all=engineRun({},dyn);const picked=[...new Set(all.out.flatMap(x=>x.dir?.orders??[]).map(o=>o.symbol))];assert.ok(picked.length>=1);
+  const r=engineRun({},dyn,new Set(picked));
+  assert.ok(!r.out.flatMap(x=>x.dir?.orders??[]).some(o=>picked.includes(o.symbol)),"no order on a coin without a live quote");
+  const nl=r.e.runlog.poolRecent.filter(x=>x.t==="GATE"&&x.kind==="burst"&&x.decision==="NOT_LIVE");
+  assert.ok(nl.length>=1&&nl.every(x=>picked.includes(String(x.sym))&&x.ok===false&&/不在实时报价币池，只记录/.test(String(x.why))),JSON.stringify(nl));
+  assert.ok(r.e.burstShadowOpen().some(x=>picked.includes(x.sym)),"still followed as a shadow trade (the predictor keeps learning)");
 });
