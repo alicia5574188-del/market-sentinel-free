@@ -48,7 +48,7 @@ export function SchemeSummary({s,pool,busy,onToggle,liveEnabled}:{s:BrainStatus;
     <p className="bs-lead">{on?`未来 6 小时处在赚钱期的概率 ≥${pct(pr?.pMin??.58)}、预测记录不差的打法才开小模拟单；其余只记录。`:"所有打法只做影子交易和预测，不开模拟单。"}
       实盘{liveEnabled?"开着":"关着"}，这里只作用于模拟账户。</p>
     <div className="bs-tiles">
-      <div><small>打法池持仓</small><b>{pool?`${open.length}/${pool.max}`:"—"}</b><p className={toneOf(float)}>{open.length?`浮动 ${pc(float)}（价格）`:"空仓"}</p></div>
+      <div><small>打法池持仓</small><b>{pool?(pool.max==null?`${open.length} 笔`:`${open.length}/${pool.max}`):"—"}</b><p className={toneOf(float)}>{open.length?`浮动 ${pc(float)}（价格）`:"空仓"}</p></div>
       <div><small>今天 开/平</small><b>{t?`${t.opened} / ${t.closed}`:"—"}</b><p>{t&&t.closed?`赚 ${t.win} 笔，亏 ${t.closed-t.win} 笔`:"今天还没平仓"}</p></div>
       <div><small>今天平仓净涨跌</small><b className={toneOf(t?.move)}>{t?pc(t.move):"—"}</b><p>{t&&t.closed?`价格涨跌合计，平均 ${pc(t.move/t.closed)}/笔`:"价格涨跌，不是 ROE"}</p></div>
       <div><small>允许开单的打法</small><b>{d?`${allowed}/${withFc||d.playbooks.length}`:"—"}</b><p>{d?`${withFc} 套有预测`:"研究层读取中"}</p></div>
@@ -178,7 +178,7 @@ export function ResearchDetail({s}:{s:BrainStatus}){
     {!!d.events.length&&<details className="mb-fold"><summary>研究层记录（{d.events.length}）</summary><ol className="mb-list">{d.events.map((e,i)=><li key={i}><b>{bj(e.at)} {e.k}</b><span>{e.text}</span></li>)}</ol></details>}
     <p className="mb-hint">规则：每套打法先只做影子交易（扣 0.19% 手续费）；所有打法（含全市场爆发选领涨、日线突破做多）是一个总方案，开关 10 开着时开单全由周期预测器决定：
       未来 6 小时在赚钱期的概率 ≥{pct(d.predictor.pMin)}、预测记录不差（评过不到 10 次用最小仓位）才开，风险 0.25–0.5%×记录权重×证据（爆发单最多 0.75%）；
-      开闸后前 3 笔全亏或连亏 5 笔立即暂停 12 小时；打法池最多 {d.limits.maxPoolOpen} 笔、每套最多 {d.limits.maxPerPlaybook} 笔、一个币一笔。
+      开闸后前 3 笔全亏或连亏 5 笔立即暂停 12 小时；打法池{d.limits.maxPoolOpen==null?"不限笔数":`最多 ${d.limits.maxPoolOpen} 笔`}、{d.limits.maxPerPlaybook==null?"每套不限":`每套最多 ${d.limits.maxPerPlaybook} 笔`}、一个币一笔（由风险预算、保证金和爆仓距离自然限制）。
       {d.lastError?` 最近错误：${d.lastError}`:""}{d.lastAnalyzeAt?` 最近分析 ${bj(d.lastAnalyzeAt)}。`:""} {d.version}</p>
   </>;
 }

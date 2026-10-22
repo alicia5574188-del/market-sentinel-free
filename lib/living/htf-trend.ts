@@ -106,20 +106,21 @@ export function volumeRanks(vol:Record<string,number|null|undefined>){
   return new Map(xs.map(([s],i)=>[s,i+1]));
 }
 export type HtfCheck={day:string;regime:HtfRegime;rows:HtfSignal[];picks:HtfSignal[];skipped:{sym:string;why:string}[];
-  universe:number;fresh:number;slots:number};
+  universe:number;fresh:number;slots:number|null};
 /**
  * The once-a-day check (pure): regime, every coin's verdict, and the picks for the free slots (most liquid first, one per coin,
  * coins already held skipped). Regime off → no picks (every breakout is still listed).
  */
-export function dailyCheck(input:{nowMs:number;btc:DailyBar[];coins:{sym:string;rows:DailyBar[];vol:number|null}[];held:Set<string>;open:number}):HtfCheck{
+export function dailyCheck(input:{nowMs:number;btc:DailyBar[];coins:{sym:string;rows:DailyBar[];vol:number|null}[];held:Set<string>;open:number;
+  /** count cap on daily-breakout trades; null = no cap (switch 10 pool scheme: one per coin + risk budget decide) */maxOpen?:number|null}):HtfCheck{
   const regime=bullRegime(input.btc),rank=volumeRanks(Object.fromEntries(input.coins.map(c=>[c.sym,c.vol])));
   const rows=input.coins.map(c=>htfSignal(c.sym,c.rows,rank.get(c.sym)??null,input.nowMs,c.vol)).sort((a,b)=>(a.rank??999)-(b.rank??999));
-  const slots=Math.max(0,HTF.maxOpen-input.open),picks:HtfSignal[]=[],skipped:{sym:string;why:string}[]=[];
+  const cap=input.maxOpen===undefined?HTF.maxOpen:input.maxOpen,slots=cap==null?null:Math.max(0,cap-input.open),picks:HtfSignal[]=[],skipped:{sym:string;why:string}[]=[];
   for(const s of rows){
     if(!s.ok)continue;
     if(regime.on!==true){skipped.push({sym:s.sym,why:regime.on==null?`BTC 均线算不出：${regime.why}`:`BTC 在 100 日均线下：${regime.why}`});continue;}
     if(input.held.has(s.sym)){skipped.push({sym:s.sym,why:"这个币已有持仓（一币一笔），或日线突破单就在信号那天平掉（研究里那天的信号不算）"});continue;}
-    if(picks.length>=slots){skipped.push({sym:s.sym,why:`日线突破单已占 ${input.open} 个名额，最多 ${HTF.maxOpen}`});continue;}
+    if(slots!=null&&picks.length>=slots){skipped.push({sym:s.sym,why:`日线突破单已占 ${input.open} 个名额，最多 ${cap}`});continue;}
     picks.push(s);
   }
   return{day:new Date(Math.floor(input.nowMs/86_400_000)*86_400_000).toISOString().slice(0,10),regime,rows,picks,skipped,

@@ -45,7 +45,7 @@ export function build(later:boolean){
     state:{day:"2026-10-21",bucket:"UP|MID",label:"BTC 上升趋势、波动中等",trend:"UP",strength:.061,atrPct:.024,volPct:.44,dd90:-.072,eff20:.3,eth:"UP",altVsBtc:-.031,lead:"BTC",corr30:.8},
     intraday:{hour:"2026-10-22T12:00",bucket:"UP|LOW",label:"1 小时上涨、波动低",trend:"上涨",trend4h:"上涨",vol:"低",atrPct:.0041,volPct:.28,eth:"上涨",session:"欧洲盘"},
     stateHistory:[],playbooks,allowed:playbooks.filter(p=>p.gate.ok).map(p=>({pb:p.id,label:p.label,risk:p.gate.risk,why:p.gate.why})),
-    limits:{maxPoolOpen:8,maxPerPlaybook:4,baseRisk:.005,shortRisk:.005},
+    limits:{maxPoolOpen:null,maxPerPlaybook:null,baseRisk:.005,shortRisk:.005},
     predictor:{ready:true,at:NOW-4*60_000,ms:380,playbooks:withF,hourRows:30,pMin:.58,track:{n:tot,hit:later?.61:0,brier:later?.221:0,calib:[]},
       topNow:[],real:[realH(6),realH(24),realH(72)],
       realLine:later?"实盘检验（6 小时内跟着来的影子交易）：看好时 平均 0.21%/笔（41 次预测后 57 笔）；不看好时 平均 -0.09%/笔（77 次预测后 96 笔）":"实盘检验：还没有到期的 6 小时预测",

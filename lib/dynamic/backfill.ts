@@ -56,6 +56,21 @@ export function trackedSeries(universe:readonly string[]):{sym:string;iv:Iv}[]{
     const k=seriesKey(sym,iv);if(!seen.has(k)){seen.add(k);out.push({sym,iv});}}
   return out;
 }
+/** index of the backfill phase a series belongs to (BACKFILL.phases order) */
+function phaseOf(sym:string,iv:Iv){
+  for(let i=0;i<BACKFILL.phases.length;i++){const [piv,majors]=BACKFILL.phases[i]!;if(piv===iv&&(!majors||MAJORS.has(sym)))return i;}
+  return BACKFILL.phases.length;
+}
+/** the series deeper pages go to (pass 1): earliest phase, then most pages, then name. Reads only (no plan is created). */
+export function backTarget(st:BackfillState,list:readonly {sym:string;iv:Iv}[],nowMs:number):{sym:string;iv:Iv}|null{
+  let best:{sym:string;iv:Iv;pages:number;ph:number}|null=null;
+  for(const {sym,iv} of list){
+    const p=st.series[seriesKey(sym,iv)];if(p?.done||(p?.retryAt??0)>nowMs)continue;
+    const ph=phaseOf(sym,iv),pages=p?.pages??0;
+    if(!best||ph<best.ph||(ph===best.ph&&(pages>best.pages||(pages===best.pages&&sym<best.sym))))best={sym,iv,pages,ph};
+  }
+  return best&&{sym:best.sym,iv:best.iv};
+}
 /** start (s) of the last bar that is closed at `nowMs` */
 export const lastClosedStart=(iv:Iv,nowMs:number)=>Math.floor(nowMs/1000/IV_SEC[iv])*IV_SEC[iv]-IV_SEC[iv];
 const plan=(st:BackfillState,sym:string,iv:Iv)=>st.series[seriesKey(sym,iv)]??=({sym,iv,oldest:null,newest:null,done:false,pages:0,bars:0,fails:0,retryAt:0,venue:0,lastError:null,doneAt:null});
@@ -67,9 +82,11 @@ export function noteFeed(st:BackfillState,sym:string,iv:Iv,first:number,last:num
   const p=st.series[seriesKey(sym,iv)];if(!p)return;p.newest=p.newest==null?last:Math.max(p.newest,last);p.oldest=p.oldest==null?first:Math.min(p.oldest,first);
 }
 /** the next request, or null while pacing / paused / nothing due. Tail refreshes come before older history. */
-export function nextJob(st:BackfillState,nowMs:number,universe:readonly string[],opts:{minGapMs?:number}={}):Job|null{
+export function nextJob(st:BackfillState,nowMs:number,universe:readonly string[],
+  opts:{minGapMs?:number;/** series whose stored bars are in memory; others are skipped (a job for them would waste the paced slot) */ready?:(key:string)=>boolean}={}):Job|null{
   if(nowMs<st.pauseUntil||nowMs-st.lastReqAt<(opts.minGapMs??BACKFILL.minGapMs))return null;
-  const list=trackedSeries(universe);
+  const ok=opts.ready??(()=>true);
+  const list=trackedSeries(universe).filter(x=>ok(seriesKey(x.sym,x.iv)));
   for(const {sym,iv} of list){
     const p=st.series[seriesKey(sym,iv)];if(!p||p.newest==null||p.retryAt>nowMs)continue;
     const want=lastClosedStart(iv,nowMs),closedAt=(want+IV_SEC[iv])*1000,grace=Math.min(BACKFILL.tailGraceMs,IV_SEC[iv]*1000/3);
@@ -82,12 +99,18 @@ export function nextJob(st:BackfillState,nowMs:number,universe:readonly string[]
   }
   // newest first everywhere: the first (most recent) page of every series before any deeper page, so the latest regimes are
   // learned within the first hour; then each series backwards in the short-term-first order
-  for(const pass of [0,1])for(const {sym,iv} of list){
-    const p=plan(st,sym,iv);if(p.done||p.retryAt>nowMs||(pass===0&&p.pages>0))continue;
+  // pass 0: the newest page of every series that has none yet
+  for(const {sym,iv} of list){
+    const p=plan(st,sym,iv);if(p.done||p.retryAt>nowMs||p.pages>0)continue;
     const venue=venueFor(st,p,nowMs);if(!venue)return null;
     return {key:seriesKey(sym,iv),sym,iv,kind:"back",venue,endSec:p.oldest,limit:PAGE[venue]};
   }
-  return null;
+  // pass 1: deeper pages, earliest phase first; inside a phase the series with the most pages (closest to done) first, then by
+  // name. The universe ranking reorders every few minutes; following it spread the pages over ~36 half-done series and almost
+  // none finished. Now one series is carried to done before the next starts, whatever the ranking does.
+  const best=backTarget(st,list,nowMs);if(!best)return null;
+  const p=plan(st,best.sym,best.iv),venue=venueFor(st,p,nowMs);if(!venue)return null;
+  return {key:seriesKey(best.sym,best.iv),sym:best.sym,iv:best.iv,kind:"back",venue,endSec:p.oldest,limit:PAGE[venue]};
 }
 function count(st:BackfillState,nowMs:number){const d=new Date(nowMs).toISOString().slice(0,10);if(st.day!==d){st.day=d;st.reqToday=0;}
   st.reqToday++;st.reqTotal++;st.lastReqAt=nowMs;st.startedAt??=nowMs;
@@ -124,9 +147,10 @@ export function backfillView(st:BackfillState,universe:readonly string[],nowMs:n
   for(const p of Object.values(st.series))if(p.done&&!seen.has(seriesKey(p.sym,p.iv))){seen.add(seriesKey(p.sym,p.iv));list.push({sym:p.sym,iv:p.iv});}
   for(const {sym,iv} of list){const p=st.series[seriesKey(sym,iv)],x=(byIv[iv]??={done:0,total:0,bars:0,from:null});total++;x.total++;
     if(p?.done){done++;x.done++;}else{const covered=p?.oldest!=null?Math.max(0,(p.newest??nowMs/1000)-p.oldest)/IV_SEC[iv]:0,need=depthOf(sym,iv)*86_400/IV_SEC[iv];
-      pagesLeft+=Math.ceil(Math.max(0,need-covered)/PAGE[VENUES[(p?.venue??0)%3]!]);working??=`${sym} ${iv}`;}
+      pagesLeft+=Math.ceil(Math.max(0,need-covered)/PAGE[VENUES[(p?.venue??0)%3]!]);}
     const n=p?.oldest!=null&&p.newest!=null?Math.round((p.newest-p.oldest)/IV_SEC[iv])+1:0;x.bars+=n;bars+=n;
     if(p?.oldest!=null){const d=new Date(p.oldest*1000).toISOString().slice(0,10);if(!x.from||d<x.from)x.from=d;}}
+  {const w=backTarget(st,list,nowMs);working=w?`${w.sym} ${w.iv}`:null;}
   return {pct:total?done/total:0,done,total,bars,byIv,reqToday:st.reqToday,reqTotal:st.reqTotal,errTotal:st.errTotal,
     pausedUntil:st.pauseUntil>nowMs?st.pauseUntil:null,blocked:VENUES.filter(v=>(st.venueBlock?.[v]??0)>nowMs),startedAt:st.startedAt,
     etaMin:pagesLeft?Math.ceil(pagesLeft*minGapMs/60_000):0,working,

@@ -97,7 +97,7 @@ export function BrainBody({s,data=null,now=0,liveEnabled=false,liveOverview,heal
     {s&&<Ranked s={s}/>}
 
     <section className="pg-section" data-testid="execution-positions">
-      <h2>正在持仓<small>{positions.length} 笔{pool?` · 打法池 ${pool.open.length}/${pool.max}`:""}</small></h2>
+      <h2>正在持仓<small>{positions.length} 笔{pool?` · 打法池 ${pool.open.length}${pool.max==null?" 笔（不限）":`/${pool.max}`}`:""}</small></h2>
       {positions.length?<div className="pg-list">{positions.map(t=>{const pnl=safePnl(t),b=why.get(t.id),pp=poolPos.get(t.id),u=typeof pnl==="number"&&Number.isFinite(pnl);return <article className="pg-row" key={t.id}>
         <div className="oc-line"><Coin symbol={t.symbol} side={t.side}/><b className={`oc-pnl ${tone(pp?.move??pnl)}`}>{pp?pc(pp.move):`${signed(pnl)} U`}</b></div>
         <div className="oc-line oc-sub"><span>{pp?labels.get(pp.pb)??b?.playbook??pp.pb:b?.playbook??"老流程"} · 已拿 {held(t.openedAt,clockNow)||"—"}{pp?.risk!=null?` · 风险 ${(pp.risk*100).toFixed(2)}%`:""}{pp&&u?` · ${signed(pnl)} U`:""}</span></div>
@@ -162,7 +162,7 @@ function htfLine(h:NonNullable<BrainStatus["htf"]>){
   const l=h.last,reg=l?(l.regime==="ON"?"BTC 在 100 日均线上":l.regime==="OFF"?"BTC 在 100 日均线下（不做）":"BTC 均线算不出"):"";
   const head=l?`${l.day} 检查：${reg}（${l.btc??"-"} / ${l.sma??"-"}），突破 ${l.breakouts.length} 个，选中 ${l.picks.map(coinName).join("、")||"无"}`:"今天还没检查";
   const wait=h.pending.length?`，等开 ${h.pending.map(x=>coinName(x.sym)).join("、")}`:"";
-  return `日线突破做多：${head}；持有 ${h.open}/${h.maxOpen} 笔${wait}`;
+  return `日线突破做多：${head}；持有 ${h.open}${h.maxOpen==null?" 笔（打法池不限笔数）":`/${h.maxOpen} 笔`}${wait}`;
 }
 function Read({c}:{c:NonNullable<BrainStatus["board"]>[number]}){
   return <article className={c.action?"is-act":""}>

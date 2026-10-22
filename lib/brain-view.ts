@@ -27,7 +27,7 @@ export type BrainStatus={version:string;mode:BrainMode;configured:BrainMode;acti
   decisions?:Record<string,unknown>[];
   /** htf-donch20 (switch 9): the last daily check, picks waiting for entry, open daily-breakout trades */
   htf?:{last:{day:string;at:number;regime:"ON"|"OFF"|"UNKNOWN";btc:number|null;sma:number|null;universe:number;fresh:number;breakouts:string[];picks:string[];skipped:string[];text:string}|null;
-    pending:{sym:string;day:string;until:number;why:string}[];open:number;maxOpen:number;
+    pending:{sym:string;day:string;until:number;why:string}[];open:number;maxOpen:number|null;
     trades:{id:string;sym:string;entry:number;stop:number;initial:number|null;openedAt:number}[]};
   /** dynamic-v1 research layer: backfill, BTC/ETH state, per-playbook cycles, allocator gates, events */
   dynamic?:DynamicView|{error:string}|null;

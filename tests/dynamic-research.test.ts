@@ -92,6 +92,21 @@ test("backfill: one request per 15 s at most; newest page of every series first,
   assert.match(pageUrl("BYBIT","SOL_USDT","5m",null,1000)!,/interval=5&/);assert.match(pageUrl("OKX","SOL_USDT","15m",null,100)!,/bar=15m&/);
   assert.match(pageUrl("KUCOIN","SOL_USDT","5m",1_800_000_000,200)!,/granularity=5&/);assert.match(pageUrl("BYBIT","BTC_USDT","1m",null,1000)!,/interval=1&/);
 });
+test("backfill: deeper pages stick to one series until done, even when the liquidity ranking reorders; unloaded series never take the slot",()=>{
+  const st=initialBackfill(),t=1_800_000_000_000,uniA=["AAA_USDT","BBB_USDT","CCC_USDT"],uniB=["CCC_USDT","BBB_USDT","AAA_USDT"];
+  // every series already has its newest page (pass 0 over); BTC/ETH series and the 5m+ phases are done so only alt 15m is left
+  for(const {sym,iv} of trackedSeries(uniA)){const lc=lastClosedStart(iv,t),alt15=iv==="15m"&&!["BTC_USDT","ETH_USDT"].includes(sym);
+    st.series[seriesKey(sym,iv)]={sym,iv,oldest:lc-10*IV_SEC[iv],newest:lc,done:!alt15,pages:sym==="BBB_USDT"?3:1,bars:11,fails:0,retryAt:0,venue:0,lastError:null,doneAt:alt15?null:t,lastTailAt:t};}
+  const backs=(uni:string[],now:number,ready?:(k:string)=>boolean)=>{const x=nextJob(st,now,uni,ready?{ready}:{});return x&&x.kind==="back"?`${x.sym} ${x.iv}`:x?`tail ${x.sym}`:null;};
+  assert.equal(backs(uniA,t),"BBB_USDT 15m","most pages first (closest to done), not the ranking's first coin");
+  assert.equal(backs(uniB,t),"BBB_USDT 15m","ranking reordered → same series");
+  assert.equal(backfillView(st,uniB,t).working,"BBB_USDT 15m","the panel names the series that really gets the next page");
+  st.series[seriesKey("BBB_USDT","15m")]!.done=true;
+  assert.equal(backs(uniB,t),"AAA_USDT 15m","tie on pages → by name, stable across rankings");
+  assert.equal(backs(uniA,t),"AAA_USDT 15m");
+  assert.equal(backs(uniA,t,k=>k!==seriesKey("AAA_USDT","15m")),"CCC_USDT 15m","bars not in memory yet → skipped, the slot goes to a loaded series");
+  assert.equal(backs(uniA,t,()=>false),null,"nothing loaded → no request at all");
+});
 test("backfill: the live 5m feed keeps short series current (request tails only when stale); 4h / 1d tail after the close; 429 skips a venue; resumes from JSON",()=>{
   const st=initialBackfill(),uni:string[]=[],day=Math.floor(1_800_000_000/D)*D,t=day*1000+10*60_000;
   for(const {sym,iv} of trackedSeries(uni))st.series[seriesKey(sym,iv)]={sym,iv,oldest:0,newest:lastClosedStart(iv,t),done:true,pages:1,bars:1,fails:0,retryAt:0,venue:0,lastError:null,doneAt:t,lastTailAt:t};
@@ -369,23 +384,35 @@ test("engine: an allowed pool signal → order (hx+dp, allocator risk, absolute 
   assert.ok(off.log.some(r=>r.k==="DYN_SIGNAL"&&/开关 10 关着/.test(String(r.reason))));
   const burst=engine({burstLeader:true},"paper-enabled",NOW);assert.equal(burst.plan(ctx(dynIn({signals:[sig("box1h-long","AAA_USDT")]})))!.orders.length,1,"burst-leader record-only filter does not drop pool orders");
 });
-test("engine: pool slots (8 total incl. daily breakout, 4 per playbook, one per coin); exits of open pool trades pass as LIVING_DYN_* actions",()=>{
+test("engine: no pool count cap (switch 10) — not 8 total, not 4 per playbook, burst trades do not count; one per coin stays; exits of open pool trades pass as LIVING_DYN_* actions",()=>{
   const mk=(i:number,pb:string)=>({id:`p${i}`,symbol:`X${i}_USDT`,side:"LONG" as const,entryPrice:1,stopPrice:.9,openedAt:NOW-D*1000,favorable:0,
     entryContext:{living:{v:"living-v2",k:"N",pb,inv:.9,hx:1,...(pb===HTF.pb?{}:{dp:1})} as LivingNote}});
   const four=Array.from({length:4},(_,i)=>mk(i,"box1h-long"));
-  assert.equal(engine({},"paper-enabled",NOW).plan(ctx(dynIn({signals:[sig("box1h-long","AAA_USDT")]}),{...emptyForward(),positions:four}))!.orders.length,0,"4 per playbook");
-  const eight=Array.from({length:8},(_,i)=>mk(i,HTF.pb));
-  assert.equal(engine({},"paper-enabled",NOW).plan(ctx(dynIn({signals:[sig("box1h-long","AAA_USDT")]}),{...emptyForward(),positions:eight}))!.orders.length,0,"8 in the pool");
+  assert.equal(engine({},"paper-enabled",NOW).plan(ctx(dynIn({signals:[sig("box1h-long","AAA_USDT")]}),{...emptyForward(),positions:four}))!.orders.length,1,"4 of the same playbook open: no per-playbook cap");
+  const twenty=Array.from({length:20},(_,i)=>mk(i,i%2?HTF.pb:"box1h-long"));
+  assert.equal(engine({},"paper-enabled",NOW).plan(ctx(dynIn({signals:[sig("box1h-long","AAA_USDT")]}),{...emptyForward(),positions:twenty}))!.orders.length,1,"20 in the pool: no total cap");
+  // many signals at once (different coins): every one becomes an order (forward opens at most one per cycle, the rest wait unsent)
+  const coins=Array.from({length:12},(_,i)=>`C${i}_USDT`),many=engine({},"paper-enabled",NOW);
+  const cm:PlanContext={...ctx(dynIn({signals:coins.map(c=>sig("box1h-long",c))}),{...emptyForward(),positions:twenty}),quotes:quotesAt(NOW,Object.fromEntries(coins.map(c=>[c,10])))};
+  assert.equal(many.plan(cm)!.orders.length,12,"12 coins → 12 orders, more than the old 8/4");
+  assert.ok(!many.log.some(r=>r.k==="DYN_SKIP"&&/打法池/.test(String(r.reason))),"no pool-full skip");
   const held=[{...mk(0,"x"),symbol:"AAA_USDT",entryContext:{living:{v:"living-v2",k:"N",pb:"x"} as LivingNote}}];
-  assert.equal(engine({},"paper-enabled",NOW).plan(ctx(dynIn({signals:[sig("box1h-long","AAA_USDT")]}),{...emptyForward(),positions:held}))!.orders.length,0,"one per coin");
+  const one=engine({},"paper-enabled",NOW);
+  assert.equal(one.plan(ctx(dynIn({signals:[sig("box1h-long","AAA_USDT")]}),{...emptyForward(),positions:held}))!.orders.length,0,"one per coin");
+  assert.ok(one.log.some(r=>r.k==="DYN_SKIP"&&/一币一笔/.test(String(r.reason))));
+  // two signals on the same coin in one plan → one order
+  const dup=engine({},"paper-enabled",NOW);
+  assert.equal(dup.plan(ctx(dynIn({gates:{"box1h-long":{ok:true,risk:.005,conf:1,why:"ok"},"box1h-short":{ok:true,risk:.005,conf:1,why:"ok"}},
+    signals:[sig("box1h-long","AAA_USDT"),sig("box1h-short","AAA_USDT","SHORT")]})))!.orders.length,1,"one per coin inside one plan");
   const e=engine({dynAllocator:false},"paper-enabled",NOW);
   const d=e.plan(ctx(dynIn({exits:[{tradeId:"p1",act:"GUARD",stop:.95,why:"trail",code:"LIVING_DYN_TRAIL"},{tradeId:"p2",act:"EXIT",why:"到时",code:"LIVING_DYN_EXIT"},{tradeId:"nope",act:"EXIT",why:"x",code:"LIVING_DYN_EXIT"}]}),
     {...emptyForward(),positions:[mk(1,"box1h-long"),mk(2,"box1h-long")]}))!;
   assert.deepEqual(d.actions.filter(a=>a.code.startsWith("LIVING_DYN_")).map(a=>[a.tradeId,a.action]),[["p1","GUARD"],["p2","EXIT"]],"own trades only; pass with switch 10 off");
-  // one scheme: open burst-leader trades count in the pool slots too
+  // open burst-leader trades no longer fill a pool cap
   const bursts=Array.from({length:8},(_,i)=>({...mk(i,"burst-leader"),entryContext:{living:{v:"living-v2",k:"F",pb:"burst-leader",inv:.9,bh:1} as LivingNote}}));
-  assert.equal(engine({},"paper-enabled",NOW).plan(ctx(dynIn({signals:[sig("box1h-long","AAA_USDT")],gates:{"box1h-long":{ok:true,risk:.005,conf:1,why:"ok"}}}),{...emptyForward(),positions:bursts}))!.orders.length,0,"8 incl. burst trades");
-  assert.equal(engine({},"paper-enabled",NOW).plan(ctx(dynIn({signals:[sig("box1h-long","AAA_USDT")],gates:{"box1h-long":{ok:true,risk:.005,conf:1,why:"ok"}}}),{...emptyForward(),positions:bursts.slice(0,7)}))!.orders.length,1);
+  assert.equal(engine({},"paper-enabled",NOW).plan(ctx(dynIn({signals:[sig("box1h-long","AAA_USDT")],gates:{"box1h-long":{ok:true,risk:.005,conf:1,why:"ok"}}}),{...emptyForward(),positions:bursts}))!.orders.length,1,"8 burst trades open: still opens");
+  const st=engine({},"paper-enabled",NOW).status(NOW,emptyForward()) as {pool?:{max:number|null;perPb:number|null}};
+  assert.deepEqual([st.pool?.max,st.pool?.perPb],[null,null],"brain view: no cap");
   // an open burst trade keeps its own exit even with switches 8 and 10 off (never orphaned)
   const old={id:"pb1",symbol:"AAA_USDT",side:"LONG" as const,entryPrice:10,stopPrice:9.8,openedAt:NOW-5*3_600_000,favorable:0,entryContext:{living:{v:"living-v2",k:"F",pb:"burst-leader",inv:9.8,hold:240,bh:1} as LivingNote}};
   const x=engine({burstLeader:false,dynAllocator:false},"paper-enabled",NOW).plan(ctx(dynIn({}),{...emptyForward(),positions:[old]}))!;
@@ -440,7 +467,7 @@ test("pool log (dynamic-v1.4): every gate decision, pool open and close goes int
   assert.deepEqual([cl[0]!.entry,cl[0]!.exit,cl[0]!.move,cl[0]!.net,cl[0]!.risk,cl[0]!.held_min,cl[0]!.exit_code,cl[0]!.exit_why],[10,10.3,.03,1.2,.003,60,"LIVING_DYN_EXIT","到目标价"]);
   // brain page: today's opens / closes / net price move, recent pool trades, latest gate decisions
   const ps=e.poolStatus(NOW+3_700_000,{...emptyForward(),history:[closed]});
-  assert.deepEqual([ps.max,ps.open.length,ps.today.closed,ps.today.win,ps.today.move,ps.recent[0]!.move,ps.recent[0]!.exitWhy],[8,0,1,1,.03,.03,"到目标价"]);
+  assert.deepEqual([ps.max,ps.open.length,ps.today.closed,ps.today.win,ps.today.move,ps.recent[0]!.move,ps.recent[0]!.exitWhy],[null,0,1,1,.03,.03,"到目标价"]);
   assert.equal(ps.gates[0]!.t,"GATE");
   // export: pool_log flat in time order, timeline rows keep only the count, the summary per playbook
   const buckets=e.runlog.bucketsDue(NOW+3_700_000);

@@ -110,7 +110,8 @@ test("exit ownership: FAST_FAKE / EXHAUST / 10-minute / tighten / confirm-exit /
 });
 
 // ---------------------------------------------------------------- engine wiring on a synthetic tape (no request, no fixture)
-function engineRun(items:Partial<Record<string,boolean>>={},dyn?:Parameters<LivingEngine["plan"]>[0]["dyn"],noQuote:ReadonlySet<string>=new Set()){
+type ForwardViewPositions=Parameters<LivingEngine["plan"]>[0]["forward"]["positions"];
+function engineRun(items:Partial<Record<string,boolean>>={},dyn?:Parameters<LivingEngine["plan"]>[0]["dyn"],noQuote:ReadonlySet<string>=new Set(),positions:ForwardViewPositions=[]){
   const t0=END*1000-MINS*60_000,e=new LivingEngine(t0);
   const cfg=defaultLivingConfig(t0);e.restore(new Map([[LIVING_KEYS.config,{...cfg,items:{...cfg.items,...items}}]]),t0);
   e.basket=selectBasket(alts.map(s=>({symbol:s,volume24hUsd:5e7,sources:3,gate:true})),t0);
@@ -125,7 +126,7 @@ function engineRun(items:Partial<Record<string,boolean>>={},dyn?:Parameters<Livi
     e.tape.feed(pts,at);
     if(k<MINS-5)continue;
     for(const p of pts)if(!noQuote.has(p.symbol))quotes[p.symbol]={bestBid:p.mid*.9999,bestAsk:p.mid*1.0001,observedAt:at,entryReady:true};
-    const dir=e.plan({now:at+5_000,forward:{positions:[],history:[],opportunities:[]},quotes,contracts,funding:{},candles:{},...(dyn?{dyn}:{})});
+    const dir=e.plan({now:at+5_000,forward:{positions,history:[],opportunities:[]},quotes,contracts,funding:{},candles:{},...(dyn?{dyn}:{})});
     e.tickLog(at+5_000);
     out.push({now:at,dir});
   }
@@ -166,6 +167,16 @@ test("one scheme (switch 10 on): burst picks are shadow trades always; orders on
   const c=engineRun({},{ready:true,gates:{[LEADER.pb]:{...gate,conf:3}},signals:[],exits:[],state:null});
   for(const o of c.out.flatMap(x=>x.dir?.orders??[]))assert.equal(o.riskRate,BURST_POOL_MAX_RISK,"never above 0.75%");
   assert.deepEqual(b.e.takeBurstShadow(),[],"nothing closed yet");
+});
+test("switch 10 on: no 'max 3 burst trades' cap — 3 (or 9) burst trades already open still let the next burst order its picks; switch 10 off keeps max 3",()=>{
+  const gate={ok:true,risk:.0025,conf:.5,why:"预测：概率 70%"},dyn={ready:true,gates:{[LEADER.pb]:gate},signals:[],exits:[],state:null};
+  const held=(n:number)=>Array.from({length:n},(_,i)=>({id:`ob${i}`,symbol:`ZZ${i}_USDT`,side:"LONG" as const,entryPrice:1,stopPrice:.98,openedAt:END*1000-MINS*60_000,favorable:0,
+    entryContext:{living:{v:"living-v2",k:"F",pb:LEADER.pb,inv:.98,hold:240,bh:1}}})) as unknown as ForwardViewPositions;
+  for(const n of [3,9]){const x=engineRun({},dyn,new Set(),held(n));
+    assert.ok(x.out.flatMap(o=>o.dir?.orders??[]).length>=1,`${n} burst trades open: still orders`);
+    assert.ok(!x.e.log.some(r=>r.k==="BURST_CHECK"&&/最多/.test(String(r.why??r.reason??""))),"no BUSY for a full burst cap");}
+  const off=engineRun({dynAllocator:false},undefined,new Set(),held(3));
+  assert.equal(off.out.flatMap(o=>o.dir?.orders??[]).length,0,"switch 10 off: burst keeps its own max 3");
 });
 test("shadow burst trade: stop touch, breakeven / trail / 4 hours on closed 1m bars, net of fees",()=>{
   const at=1_000_000*60_000+10_000,t1=Math.ceil(at/60_000)*60,bar=(k:number,o:number,h:number,l:number,c:number):MidBar=>({time:t1+k*60,open:o,high:h,low:l,close:c});

@@ -136,7 +136,8 @@ export class DynamicResearch{
   private async pageOnce(now:number,db:D1Like,fetch:Fetch):Promise<boolean>{
     if(this.bfBusy)return false;this.bfBusy=true;
     try{
-      const job=nextJob(this.bf,now,this.universe,{minGapMs:this.opts.minGapMs});
+      // only series whose stored bars are already in memory (step() loads 3 a step); an unloaded pick used to burn the slot
+      const job=nextJob(this.bf,now,this.universe,{minGapMs:this.opts.minGapMs,ready:k=>this.loaded.has(k)});
       if(job&&this.loaded.has(job.key)){
         const url=pageUrl(job.venue,job.sym,job.iv,job.endSec,job.limit);
         try{if(!url)throw new Error("symbol");

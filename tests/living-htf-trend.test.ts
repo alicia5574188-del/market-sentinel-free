@@ -95,6 +95,9 @@ test("daily check: regime off → nothing picked (breakouts listed); slots / one
   const full=dailyCheck({nowMs:now,btc,coins,held:new Set(),open:HTF.maxOpen-1});
   assert.deepEqual(full.picks.map(p=>p.sym),["B_USDT"]);assert.equal(full.skipped.filter(x=>/最多 8/.test(x.why)).length,3);
   assert.equal(dailyCheck({nowMs:now,btc,coins,held:new Set(),open:HTF.maxOpen}).picks.length,0);
+  const nocap=dailyCheck({nowMs:now,btc,coins,held:new Set(),open:30,maxOpen:null});
+  assert.deepEqual(nocap.picks.map(p=>p.sym),["B_USDT","C_USDT","A_USDT","D_USDT"],"maxOpen null (switch 10 pool): no slot cap, still one per coin");
+  assert.equal(nocap.slots,null);
   assert.equal(on.day,dayKey(now));
 });
 
@@ -189,6 +192,18 @@ test("engine: at most 8 open daily-breakout trades (burst trades not counted)",(
   const e=engine({},"paper-enabled",now);const d=e.plan(ctxOf(now,htf,{...emptyForward(),positions:[...Array.from({length:7},(_,i)=>mk(i,true)),mk(7,false),mk(8,false),mk(9,false)]}))!;
   assert.equal(d.orders.length,1,"7 htf open → one slot left (3 burst trades do not use htf slots)");
   const e2=engine({},"paper-enabled",now);assert.equal(e2.plan(ctxOf(now,htf,{...emptyForward(),positions:Array.from({length:8},(_,i)=>mk(i,true))}))!.orders.length,0);
+});
+test("engine: switch 10 on (pool scheme) — no 8-trade cap on daily-breakout entries; one per coin stays",()=>{
+  const {htf,dayStartMs}=htfWorld(),now=dayStartMs+5*60_000;
+  const mk=(i:number)=>({id:`p${i}`,symbol:`X${i}_USDT`,side:"LONG" as const,entryPrice:1,stopPrice:.9,openedAt:now-D*1000,favorable:0,
+    entryContext:{living:{v:"living-v2",k:"N",pb:HTF.pb,inv:.9,hx:1} as LivingNote}});
+  const dyn={ready:true,gates:{[HTF.pb]:{ok:true,risk:.005,conf:1,why:"ok"}},signals:[],exits:[],state:"UP/MID"};
+  const e=engine({dynAllocator:true},"paper-enabled",now);
+  const d=e.plan({...ctxOf(now,htf,{...emptyForward(),positions:Array.from({length:12},(_,i)=>mk(i))}),dyn})!;
+  assert.deepEqual(d.orders.map(o=>o.symbol).sort(),["AAA_USDT","BBB_USDT"],"12 daily-breakout trades open: both picks still order");
+  assert.match(String(e.log.find(r=>r.k==="HTF_CHECK")?.reason??""),/不限笔数/);
+  const st=e.status(now,{...emptyForward(),positions:[mk(0)]}) as {htf?:{maxOpen:number|null}};
+  assert.equal(st.htf?.maxOpen,null);
 });
 test("engine: daily trail → GUARD LIVING_HTF_TRAIL once per level (passes with switch 9 off), EXIT when the price is already below",()=>{
   const {htf,dayStartMs}=htfWorld(),now=dayStartMs+5*60_000;

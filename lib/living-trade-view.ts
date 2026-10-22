@@ -120,7 +120,7 @@ function htfDetail(t:LivingTradeLike,n:LivingNoteView,playbook:string|null):stri
   if(n.why)lines.push(`依据：${n.why}`);
   if(n.evd)lines.push(`证据数字：${n.evd}（ATR20 = 最近 20 天每天真实波幅的平均，占价格 %）`);
   if(n.nar)lines.push(`当天检查：${n.nar}`);
-  lines.push(`条件：前一天 BTC 日线收盘在 100 日均线上；这个币在 24 小时成交额前 30；前一天日线收盘高于之前 20 天的最高价；每天 00:00 UTC 收盘后按现价开多，一个币只拿一笔，最多 8 笔。`);
+  lines.push(`条件：前一天 BTC 日线收盘在 100 日均线上；这个币在 24 小时成交额前 30；前一天日线收盘高于之前 20 天的最高价；每天 00:00 UTC 收盘后按现价开多，一个币只拿一笔（开关 10 开着时不限笔数，由风险预算限制；关着时最多 8 笔）。`);
   lines.push(`仓位：打到初始止损亏账户权益的 0.75%（名义 = 权益 × 0.75% ÷ 止损距离，单笔最多 1 倍权益）；计划风险 ${num(t.plannedRisk)} U（含来回手续费）；名义 ${num(t.notional)} U。`);
   lines.push(`杠杆：${num(t.leverage,0)}× 逐仓。日线止损宽（2 倍 ATR，常见 6%–20%），固定 10 倍时强平会在止损里面，所以这类单用不超过 10 倍、且让止损不超过爆仓距离 40% 的最高整数倍；杠杆只影响保证金，不影响盈亏和风险。`);
   lines.push(`止损：${price(stop)}，离开仓价 ${away(t.entryPrice,stop)}（价格涨跌，不是收益率）；初始止损 = 入场 − 2×ATR20 = ${price(inv)}${moved?"，之后按近 10 日最低点上移过":""}。`);

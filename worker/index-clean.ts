@@ -18,7 +18,7 @@ import { arenaProtectionStop, arenaTradePlan, liveMirrorExitRequired } from "../
 import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem } from "../lib/paper-outbox.ts";
 import { buildBankruptcyReport, diagnoseClosedPosition, paperCycleSummary, recordCycleTrade, startPaperCycle,
   PAPER_INITIAL_EQUITY, type BankruptcyReport, type PaperCycle } from "../lib/paper-cycle.ts";
-import { runtimeReady, type RuntimeHealthShape } from "../lib/runtime-health.ts";
+import { runtimeReady, protectedQuoteDelay, PROTECTED_QUOTE_GRACE_MS, type RuntimeHealthShape } from "../lib/runtime-health.ts";
 import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, gateMarkedEquity, gatePositionValuation, isGateReadTimeoutError, isGateTransportTimeoutError, LiveEntrySizingError, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, liveStopShouldChase, loadGateLiveClient, type GateLiveOrder, type GateLiveOrderSnapshot, type GateLiveSnapshot, type LiveEntrySizingCode } from "../lib/gate-live.ts";
 import { LIVE_SESSION_VERSION, establishLiveScale, reconcileLiveScale, startLiveSession, sourceAfterEnable, sameLiveSession, fenceLiveSourcePolicy, type LiveSession } from "../lib/live-session.ts";
 import {liveProtectionPrice,isInverseLiveReceipt,INVERSE_LIVE_EXIT_POLICY} from '../lib/live-source-policy.ts';
@@ -580,6 +580,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private turnDailyFailures = new Map<string,{retryAt:number;lastError:string}>();
   private regimeHourly: Record<string, RegimeHourlyPath> = {};
   private sessionWarmup: Record<string, number> = {};
+  /** when a held coin's Gate quote went missing (null = all held coins quoted); see protectedQuoteDelay */
+  private protectedMissingSince: number | null = null;
   private contractCatalog = new Map<string, Awaited<ReturnType<typeof fetchActiveContracts>>[number]>();
   private gateRadarCache: Awaited<ReturnType<typeof fetchGateRadarTickers>> = [];
   private gateRadarShortMoves=new Map<string,number>();
@@ -4526,9 +4528,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const actionableMarkets=this.runtime.symbols.filter(symbol=>this.symbolEntryReady(symbol,now)).length;
     const missingProtectedMarkets=[...protectedSymbols].filter(symbol=>!this.runtime.symbols.includes(symbol)
       ||!this.symbolManagementReady(symbol,now));
+    // a gap shorter than PROTECTED_QUOTE_GRACE_MS is not reported (health stays LIVE); the held coin still only acts on fresh prices
+    const delay=protectedQuoteDelay(this.protectedMissingSince,missingProtectedMarkets.length,now);this.protectedMissingSince=delay.since;
     return{capacity:FORWARD_EXECUTION_BBO_CAP,actionableMarkets,
       warmingMarkets:Math.max(0,this.runtime.symbols.length-actionableMarkets),
-      protectedMarkets:protectedSymbols.size,protectedMarketsReady:missingProtectedMarkets.length===0,missingProtectedMarkets};
+      protectedMarkets:protectedSymbols.size,protectedMarketsReady:!delay.delayed,missingProtectedMarkets,
+      protectedMissingMs:delay.since==null?0:now-delay.since};
   }
 
   private ensureProtectionSymbolsResident() {
@@ -4846,7 +4851,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.state=!this.authorityReady?"RECOVERY_REQUIRED":authorityStale?"RECONNECTING"
       :!readiness.protectedMarketsReady?"DEGRADED":hub.healthySources>0||readiness.actionableMarkets>0?"LIVE":"WARMING";
     const feedError=authorityStale?"Bybit/OKX/KuCoin分析源与Gate执行源同时不可用"
-      :!readiness.protectedMarketsReady?"已有持仓缺少Gate保护报价":null;
+      :!readiness.protectedMarketsReady?`持仓报价延迟：${readiness.missingProtectedMarkets.join("、")} 的Gate报价已断 ${Math.round(readiness.protectedMissingMs/1000)} 秒（超过 ${PROTECTED_QUOTE_GRACE_MS/1000} 秒才提示）`:null;
     this.runtime.lastError=feedError??this.runtime.d1MirrorError;
   }
 

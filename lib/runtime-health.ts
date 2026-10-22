@@ -12,6 +12,17 @@ export type RuntimeHealthShape = {
   strategyData?: { stableMarkets?: number; lastCompletedCandleAt?: number; hourlyPathFailures?: number };
 };
 
+/** A held coin's Gate quote has to be missing this long before health turns DEGRADED. Short gaps (one late tick, a socket
+ * reconnect, the 30-slot set reshuffling) used to flip the page to "新仓冻结" for a second or two although nothing was frozen:
+ * that coin's own exits just wait for the next fresh price, and every other coin keeps trading. */
+export const PROTECTED_QUOTE_GRACE_MS = 20_000;
+/** debounce for missing held-coin quotes: `since` = when the gap started (null = none), `delayed` = it has lasted the grace */
+export function protectedQuoteDelay(prevSince: number | null, missing: number, now: number, graceMs = PROTECTED_QUOTE_GRACE_MS) {
+  if (missing <= 0) return { since: null, delayed: false };
+  const since = prevSince != null && prevSince <= now ? prevSince : now;
+  return { since, delayed: now - since >= graceMs };
+}
+
 const OPERATIONAL_STATES = new Set(["LIVE", "DEGRADED", "WARMING"]);
 // Diagnostic only: tolerate three nominal five-minute cycles, including
 // scheduling delay. Never turn this read-only status into trading authority.
@@ -69,7 +80,7 @@ export function runtimeStatusLabel(runtime: RuntimeHealthShape | null, transport
     && ((runtime.strategyData.stableMarkets ?? 0) < 8 || !(runtime.strategyData.lastCompletedCandleAt ?? 0))) {
     return "后台运行中 · 策略路径预热";
   }
-  if (runtime.realtimeReadiness?.protectedMarketsReady === false) return "后台运行中 · 新仓冻结";
+  if (runtime.realtimeReadiness?.protectedMarketsReady === false) return "后台运行中 · 持仓报价延迟";
   return "后台运行中";
 }
 
@@ -81,6 +92,7 @@ export function runtimeNotice(runtime: RuntimeHealthShape | null, now?: number) 
   if (error.startsWith("D1")) return `历史镜像稍后重试，不影响行情判断和开仓：${error}`;
   if (error.startsWith("portfolio stress risk")) return "账户风险已触及保护线，后台继续管理持仓并暂停新开仓。";
   if (error.startsWith("protected position data")) return "持仓相关盘口正在等待新鲜数据；旧价格不会触发平仓，新开仓已暂停。";
+  if (error.startsWith("持仓报价延迟")) return `${error}；该币等新鲜价格再管理，其它币照常开新仓。`;
   if (error.includes("realtime markets warming")) return "部分精细市场正在准备新鲜数据；后台持续运行，未准备好的币种不会开仓。";
   if (runtime?.stale || runtime?.state === "RECONNECTING" || runtime?.state === "RECOVERY_REQUIRED"
     || error.startsWith("checkpoint:") || error.startsWith("authority checkpoint")) {

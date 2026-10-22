@@ -19,7 +19,7 @@ import {CYCLE,sampleOf,sampleLabel,type PlaybookCycle} from "./cycles.ts";
 import {bucketLabel,type DayState,type IntraState} from "./state.ts";
 import {POOL_BY_ID,tierOf} from "./playbooks.ts";
 import {trackView,type PbForecast,type Track} from "./predictor.ts";
-export const ALLOC={baseRisk:.0075,shortRisk:.005,minConf:.5,maxPoolOpen:8,maxPerPlaybook:4,minTDay:2,minDays:10,longAllowed:["htf-donch20"] as readonly string[]} as const;
+export const ALLOC={baseRisk:.0075,shortRisk:.005,minConf:.5,maxPoolOpen:null as number|null,maxPerPlaybook:null as number|null,minTDay:2,minDays:10,longAllowed:["htf-donch20"] as readonly string[]} as const;
 export type Gate={pb:string;ok:boolean;conf:number;risk:number;why:string;bucket:string|null;n:number;mean:number;t:number};
 export function allocate(cycles:Record<string,PlaybookCycle>,state:DayState|null,intra:IntraState|null=null):Record<string,Gate>{
   const out:Record<string,Gate>={};
