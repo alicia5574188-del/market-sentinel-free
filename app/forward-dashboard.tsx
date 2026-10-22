@@ -4,8 +4,7 @@ import {realizedNetPnl,initialTradeNotional,remainingTradeFraction} from "../lib
 import {useCallback,useEffect,useLayoutEffect,useRef,useState,type CSSProperties,type ReactNode} from "react";
 import {BEIJING_TIME_ZONE} from "../lib/beijing-time.ts";
 import {type Trade,type forwardSummary} from "../lib/forward-relations.ts";
-import EquityCurve from "./equity-curve.tsx";
-import {EquityHistoryCache} from "../lib/equity-cache.ts";
+import {purgeEquityBrowserCache} from "../lib/equity-browser-purge.ts";
 import MarketIntelligenceExecution from "./market-intelligence-execution.tsx";
 import LivingPanel from "./living-panel.tsx";
 import type {AuthSession} from "../lib/operator-ui.ts";
@@ -80,16 +79,15 @@ const claimName=(kind?:string)=>kind==="CONTINUE"?"延续":kind==="SUSPECT"?"可
 
 export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,livePanel,liveSystemPanel,liveEnabled,liveOverview,accountPanel,brainAuth,memberName,cacheScope="owner",cachedAt=null}:{
   data:View|null;healthy:boolean;statusLabel?:string;feedAt:number|null;error:string|null;livePanel:ReactNode;liveSystemPanel?:ReactNode;
-  liveEnabled:boolean;liveOverview?:{equity:number|null;available:number|null;positionCount:number;operational:boolean;lastSyncAt:number|null;copied:number|null;eligible:number|null;missing:number|null;accountMark?:import('../lib/live-account-view.ts').LiveAccountMark|null;
-    equityCurve?:import('../lib/live-equity.ts').LiveEquityHead|null;sessionAt?:number};
+  liveEnabled:boolean;liveOverview?:{equity:number|null;available:number|null;positionCount:number;operational:boolean;lastSyncAt:number|null;copied:number|null;eligible:number|null;missing:number|null;accountMark?:import('../lib/live-account-view.ts').LiveAccountMark|null;};
   accountPanel?:ReactNode;
   /** Owner only: the 大脑 tab replaces 执行 as the home tab. */
   brainAuth?:AuthSession|null;memberName?:string;cacheScope?:string;
   /** Set while the page shows the device snapshot (not yet a fresh read). */
   cachedAt?:number|null;
 }){
-  const [equityCache]=useState(()=>new EquityHistoryCache());
-  useEffect(()=>()=>equityCache.cancel(),[equityCache]);
+  // The equity chart is gone; free the space its old browser copies still take on the phone.
+  useEffect(()=>{purgeEquityBrowserCache();},[]);
   const brainHome=!!brainAuth;
   const [tab,setTab]=useState<Tab>(brainHome?"brain":"execution"),[now,setNow]=useState(0),[liveMounted,setLiveMounted]=useState(false);
   const [fontScale,setFontScale]=useState(()=>{if(typeof window==="undefined")return 92;try{const saved=Number(localStorage.getItem("sentinel-ui-font-scale-v1"));return saved>=70&&saved<=110?saved:92;}catch{return 92;}});
@@ -166,7 +164,6 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
         <Stat label="已扣手续费" value={`${fmt(usingDesk?desk.fees:data?.fees)} U`} note={usingDesk?"决策账户成交费用":`成交额 ${fmt(data?.turnover,0)} U`}/>
       </section>
       {desk?.book==="lsr-v1"&&<LsrPulse desk={desk}/>}
-      {usingDesk?<ForwardCurve desk={desk}/>:<PaperEquitySection data={data} healthy={healthy} cache={equityCache} cacheScope={cacheScope}/>}
       {usingDesk?<ForwardOrders desk={desk} now={now}/>:<><section className="fr-section" data-testid="forward-orders"><div className="fr-section-head"><h2>持仓</h2><span>{positions.length} 笔</span></div><TradeList trades={positions} now={now} empty="当前没有持仓。"/></section>
       <section className="fr-section" data-testid="forward-history"><div className="fr-section-head"><h2>历史订单</h2><span>{history.length} 笔</span></div><TradeList trades={history.slice(0,historyShown)} now={now} empty="还没有已平订单。"/>
         {history.length>historyShown&&<button type="button" className="pg-link" onClick={()=>setHistoryShown(n=>n+20)}>再显示 {Math.min(20,history.length-historyShown)} 笔（还有 {history.length-historyShown} 笔）</button>}</section></>}
@@ -395,21 +392,6 @@ function DecisionPage({data,now,thesis}:{data:View|null;now:number;thesis:Thesis
     <p className="fr-note">新单和提案一样大。先停的时候不开新单，也不把后面的单加大。出场看确认位、30 分钟、利润回吐、90 分钟和提案自己平仓，谁先到听谁。浮亏到 10U 也走。旧账本和旧订单不带进这一轮。</p>
   </section>;
 }
-function ForwardCurve({desk}:{desk:Desk}){
-  const label=desk.book==="lsr-v1"?"实验净值":desk.book==="stretch-v1"?"新账净值":desk.book==="reverse-v1"?"反向净值":desk.book==="needle-v1"||desk.book==="brain-v1"||desk.book==="score-v1"||desk.book==="read-v1"?"账户净值":stanceName(desk.stance)==="反向"?"反向净值":desk.stance==="FLAT"?"账户净值":"正向净值";
-  const points=desk.curve.length?desk.curve:[{at:0,equity:desk.initialEquity}];
-  const lo=Math.min(desk.initialEquity,...points.map(p=>p.equity)),hi=Math.max(desk.initialEquity,...points.map(p=>p.equity));
-  const range=Math.max(1e-6,hi-lo),first=points[0]!.at,last=Math.max(first+1,points.at(-1)!.at);
-  const x=(at:number)=>12+(at-first)/(last-first)*376,y=(n:number)=>164-(n-lo)/range*140;
-  return <section className="fr-section" data-testid="forward-equity-curve" aria-label={label}>
-    <div className="fr-section-head"><h2>{label}</h2><span>{points.length} 点</span></div>
-    <svg viewBox="0 0 400 185" width="100%" role="img" aria-label={label}>
-      <polyline fill="none" className="eq-curve" points={points.map(p=>`${x(p.at)},${y(p.equity)}`).join(" ")}/>
-      <text x="12" y="14" fill="currentColor" fontSize="10">{fmt(hi)} U</text><text x="12" y="180" fill="currentColor" fontSize="10">{fmt(lo)} U</text>
-    </svg>
-    <div className="fr-three"><div><small>已扣手续费</small><b>{fmt(desk.fees)} U</b></div><div><small>浮动盈亏</small><b>{signed(desk.floating)} U</b></div><div><small>已平仓</small><b>{fmt(desk.resolved,0)}</b></div></div>
-  </section>;
-}
 function ForwardOrders({desk,now}:{desk:Desk;now:number}){
   if(!desk.book&&desk.open.length===0)return <section className="fr-section" data-testid="forward-orders">
     <div className="fr-section-head"><h2>订单</h2><span>0 笔</span></div>
@@ -446,12 +428,6 @@ function ForwardOrders({desk,now}:{desk:Desk;now:number}){
     {desk.recent.length>0&&<><div className="fr-section-head"><h2>最近平仓</h2><span>{desk.recent.length} 笔</span></div>
       {desk.recent.map(o=><article className="fr-order" key={o.id}><header><div><b>{o.symbol.replace("_"," / ")}</b><small>{o.side==="LONG"?"多":"空"}{o.plan?` · ${o.plan}`:""}</small></div><b className={(o.net??0)>=0?"fr-positive":"fr-negative"}>{signed(o.net)} U</b></header>
         <small>{time(o.openedAt)} → {time(o.closedAt)}{o.exit?` · ${exitName(o.exit)}`:""}</small></article>)}</>}
-  </section>;
-}
-function PaperEquitySection({data,healthy,cache,cacheScope}:{data:View|null;healthy:boolean;cache:EquityHistoryCache;cacheScope:string}){
-  return <section className="fr-section" data-testid="paper-equity-curve" aria-label="原模拟账户净值">
-    <div className="fr-section-head"><h2>模拟净值</h2><span>账户曲线</span></div>
-    <EquityCurve data={data} healthy={healthy} cache={cache} cacheScope={cacheScope}/>
   </section>;
 }
 function TradeList({trades,now,empty}:{trades:Trade[];now:number;empty:string}){

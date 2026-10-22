@@ -8,7 +8,6 @@ test("owner PAPER reset remains isolated, confirmed and unavailable to members",
   const handlers=readFileSync(new URL("../worker/http-handlers.ts",import.meta.url),"utf8");
   const page=readFileSync(new URL("../app/page.tsx",import.meta.url),"utf8");
   const control=readFileSync(new URL("../app/paper-account-reset.tsx",import.meta.url),"utf8");
-  const cache=readFileSync(new URL("../lib/equity-cache.ts",import.meta.url),"utf8");
   const ownerAction=handlers.slice(handlers.indexOf("async function ownerPaperAction"));
   const resetMethod=worker.slice(worker.indexOf("private async resetPaperAccount"),worker.indexOf("private async clearPaperHistory"));
   assert.match(ownerAction,/sameOriginMutation\(request\)/);
@@ -38,8 +37,6 @@ test("owner PAPER reset remains isolated, confirmed and unavailable to members",
   assert.match(control,/submitting\.current/);
   assert.doesNotMatch(control,/setInterval|setTimeout|retry/i);
   assert.match(page,/PaperAccountReset/);
-  assert.match(cache,/context\.startedAt/);
-  assert.match(cache,/if\(this\.key!==key\)/);
 });
 
 test("startup clears the strategy once and does not install an old book",()=>{

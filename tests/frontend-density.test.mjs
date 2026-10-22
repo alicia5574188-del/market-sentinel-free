@@ -6,10 +6,7 @@ import React from "react";
 import * as jsxRuntime from "react/jsx-runtime";
 import {renderToStaticMarkup} from "react-dom/server";
 import ts from "typescript";
-import * as liveEquity from '../lib/live-equity.ts';
-import * as equityGeometry from '../lib/equity-curve.ts';
 import * as inverseFee from '../lib/inverse-fee.ts';
-import {EquityHistoryCache,EQUITY_CACHE_VERSION} from '../lib/equity-cache.ts';
 import * as panelCache from '../lib/panel-cache.ts';
 import * as systemPanels from '../lib/system-panels.ts';
 
@@ -65,7 +62,7 @@ function render(path,props,extra={},component="default"){
     "../lib/paper-account-view.ts":paperAccountModule.exports,
     "../lib/research-snapshot.ts":{collectReviewSnapshot(){throw new Error("render must not export");}},
     "../lib/beijing-time.ts":{BEIJING_TIME_ZONE:"Asia/Shanghai",beijingDayKey:()=>"2026-09-30"},
-    "../lib/equity-cache.ts":{EquityHistoryCache:class{cancel(){}}},
+    "../lib/equity-browser-purge.ts":{purgeEquityBrowserCache(){}},
     "../lib/record-view.ts":{recordWindows:rows=>({recent:rows.slice(0,10),archive:rows.slice(10)}),archivePage:rows=>({items:rows,page:0,pages:1})},
     "./record-controls.tsx":{ArchivePagination:()=>null},
     "./order-card.tsx":orderCardModule.exports,
@@ -73,8 +70,6 @@ function render(path,props,extra={},component="default"){
     "./panel-stamp.tsx":panelStampModule.exports,
     "../lib/panel-cache.ts":panelCache,
     "../lib/system-panels.ts":systemPanels,
-    "./equity-curve.tsx":{default:()=>jsxRuntime.jsx("div",{"data-testid":"curve-fixture"})},
-    "./live-equity-curve.tsx":{default:props=>jsxRuntime.jsx('div',{'data-testid':'live-curve-fixture','data-session':props.sessionAt})},
     "./market-intelligence-execution.tsx":{default:()=>null},
     "./living-panel.tsx":{default:()=>jsxRuntime.jsx("div",{"data-testid":"brain-fixture"})},
     "./run-log-status.tsx":{default:()=>jsxRuntime.jsx("div",{"data-testid":"run-log-status-fixture"})},
@@ -98,7 +93,7 @@ test("overview renders account equity before any statistics or research",()=>{
   const html=render("app/forward-dashboard.tsx",dashboardProps(data));
   assert.match(html,/<section[^>]*data-testid="overview-equity-first"/);
   assert.ok(html.indexOf("overview-equity-first")<html.indexOf('class="fr-stats"'));
-  assert.ok(html.indexOf("922.82")<html.indexOf("curve-fixture"));
+  assert.ok(html.indexOf("922.82")<html.indexOf('data-testid="forward-orders"'));
   assert.match(html,/-77\.18/);assert.match(html,/14\.10%/);
   assert.doesNotMatch(html,/系统正在正常运行|独立交易假设|MARKET STATE|实盘开启参考/);
 });
@@ -187,65 +182,30 @@ test('LIVE ON keeps the simulation page on the paper account',()=>{
   const data={...account(),equity:9876.54,netPnl:8876.54};
   const html=render('app/forward-dashboard.tsx',{...dashboardProps(data),cacheScope:'member:curve-owner',liveEnabled:true,
     liveOverview:{equity:101.23,available:80,positionCount:1,accountMark:{initialEquity:110,tradingPnl:-8.77,
-      capitalChange:-8.77,floating:-3.21,margin:20,positionCount:1,startedAt:1790760000000,maxDrawdown:.08},copied:1,eligible:3,missing:2}},
-    {'./equity-curve.tsx':{default:props=>{
-      assert.strictEqual(props.data,data);assert.equal(props.cacheScope,'member:curve-owner');assert.ok(props.cache);
-      return jsxRuntime.jsx('div',{'data-testid':'curve-fixture',children:'PAPER_CURVE_9876.54'});
-    }}});
+      capitalChange:-8.77,floating:-3.21,margin:20,positionCount:1,startedAt:1790760000000,maxDrawdown:.08},copied:1,eligible:3,missing:2}});
   assert.match(html,/9,876\.54/);assert.match(html,/\+8,876\.54/);
-  assert.doesNotMatch(html,/101\.23|-3\.21 U|未跟上 2|含出入金|实盘账户权益|live-curve-fixture/);
-  assert.match(html,/data-testid="paper-equity-curve"[\s\S]*模拟净值[\s\S]*PAPER_CURVE_9876\.54/);
-  assert.equal(html.split('data-testid="curve-fixture"').length-1,1);
+  assert.doesNotMatch(html,/101\.23|-3\.21 U|未跟上 2|含出入金|实盘账户权益/);
 });
 test('LIVE ON without a live account still shows the paper equity',()=>{
   const html=render('app/forward-dashboard.tsx',{...dashboardProps(account()),liveEnabled:true});
   const equity=html.match(/<section[^>]*data-testid="overview-equity-first"[\s\S]*?<\/section>/)?.[0];
   assert.match(equity,/922\.82/);assert.match(equity,/-77\.18/);
-  assert.match(html,/paper-equity-curve/);assert.match(html,/curve-fixture/);
-  assert.doesNotMatch(html,/实盘账户权益|live-curve-fixture/);
+  assert.doesNotMatch(html,/实盘账户权益/);
 });
 test('LIVE ON simulated page keeps the paper account and does not mount the live order panel',()=>{
-  const data=account();
-  const html=render('app/forward-dashboard.tsx',{...dashboardProps(data),liveEnabled:true,livePanel:'REAL_ORDER_PANEL'},
-    {react:{...React,useState:value=>React.useState(value==='execution'?'paper':value)},
-      './equity-curve.tsx':{default:props=>{assert.strictEqual(props.data,data);return jsxRuntime.jsx('div',{'data-testid':'curve-fixture'});}}});
-  assert.match(html,/curve-fixture/);
+  const html=render('app/forward-dashboard.tsx',{...dashboardProps(account()),liveEnabled:true,livePanel:'REAL_ORDER_PANEL'},
+    {react:{...React,useState:value=>React.useState(value==='execution'?'paper':value)}});
+  assert.match(html,/overview-equity-first/);
   assert.doesNotMatch(html,/REAL_ORDER_PANEL|shadow-inverse-comparison/);
 });
-test('the simulation page does not mount the live curve or the live order panel',()=>{
-  const mark={sessionAt:123,accountUser:'gate-fixture'},head={sessionAt:123,lastEquity:456};
+test('the simulation page has no equity curve section, only the numbers, stats and orders',()=>{
   const html=render('app/forward-dashboard.tsx',{...dashboardProps(account()),liveEnabled:true,livePanel:'REAL_ORDER_PANEL',cacheScope:'member:private',
-    liveOverview:{equity:456,accountMark:mark,equityCurve:head,sessionAt:123}},
-    {'./live-equity-curve.tsx':{default:()=>jsxRuntime.jsx('div',{'data-testid':'live-curve-fixture'})}});
-  assert.equal(html.split('data-testid="curve-fixture"').length-1,1);
-  assert.equal(html.split('data-testid="live-curve-fixture"').length-1,0);
-  assert.doesNotMatch(html,/REAL_ORDER_PANEL/);
+    liveOverview:{equity:456,accountMark:{sessionAt:123,accountUser:'gate-fixture'}}});
+  assert.doesNotMatch(html,/paper-equity-curve|forward-equity-curve|模拟净值|账户曲线|eq-module|<svg|REAL_ORDER_PANEL/);
+  for(const id of ['overview-equity-first','forward-orders','forward-history'])assert.match(html,new RegExp(`data-testid="${id}"`));
+  assert.match(html,/class="fr-stats"/);
+  assert.ok(html.indexOf('class="fr-stats"')<html.indexOf('data-testid="forward-orders"'));
 });
-test('real LIVE curve hides old-session data while awaiting the new baseline and uses native scoped history',()=>{
-  const T=1790760000000,head={version:liveEquity.LIVE_EQUITY_VERSION,sessionAt:T,accountUser:'gate-test',startedAt:T,
-    initialEquity:100,lastAt:T+300000,lastEquity:93};
-  const props={head,mark:null,enabled:true,sessionAt:T,cacheScope:'member:one',now:T+300000};
-  const extra={'../lib/live-equity.ts':liveEquity,'./equity-curve.tsx':{default:p=>{
-    assert.equal(p.data.equity,93);assert.equal(p.data.initialEquity,100);assert.equal(p.label,'实盘账户净值');
-    assert.equal(p.cacheScope,`live:member:one:${T}:gate-test`);assert.equal(p.healthy,false);
-    return jsxRuntime.jsx('div',{'data-testid':'native-curve'});
-  }}};
-  assert.match(render('app/live-equity-curve.tsx',props,extra),/native-curve/);
-  const pending=render('app/live-equity-curve.tsx',{...props,sessionAt:T+1},extra);
-  assert.match(pending,/等待本次开启后的实盘净值记录/);assert.doesNotMatch(pending,/native-curve/);
-});
-test('both real chart variants share ranges, sliding controls and exact saved native values',()=>{
-  const T=1790760000000,data={startedAt:T,initialEquity:100,equity:93,updatedAt:T+300000,storage:{persistedAt:T+300000}};
-  const points=[{at:T+300000,equity:93,kind:'observed',policy:'native',homogeneous:true}];
-  for(const label of ['模拟账户净值','实盘账户净值']){
-    const html=render('app/equity-curve.tsx',{data,healthy:false,label,fixture:{points,complete:true},cache:new EquityHistoryCache()},
-      {'../lib/equity-curve.ts':equityGeometry,'../lib/equity-cache.ts':{EquityHistoryCache,EQUITY_CACHE_VERSION}});
-    assert.match(html,new RegExp(label));assert.match(html,/93\.00/);assert.match(html,/-7\.00 U/);
-    for(const control of ['24小时','7天','全部','较早','较新','最新'])assert.ok(html.includes(control));
-    assert.match(html,/class="eq-curve"/);assert.match(html,/aria-label="净值曲线，可左右滑动或使用方向键"/);
-  }
-});
-
 test("partial realizations are not counted as floating and entry fees are allocated only once",()=>{
   const t={id:"partial",status:"OPEN",symbol:"WLD_USDT",side:"LONG",entryPrice:100,lastPrice:110,quantity:6,contracts:6,
     notional:600,entryFee:.7,leverage:10,margin:60,plannedRisk:6,openedAt:1790760000000,closedAt:null,exitPrice:null,
@@ -334,11 +294,9 @@ test('PAPER cards keep the first glance to symbol, side, result and one status l
   for(const text of["额外出场","开仓走势","入场依据","持仓计划","有效结构保护","入场评分 90","同组 PONS","已经走出成本"])assert.match(fold,new RegExp(text));
 });
 
-test("reference card and static manuals are removed, not hidden; cache and controls stay",()=>{
-  const chart=read("app/equity-curve.tsx"),dashboard=read("app/forward-dashboard.tsx"),live=read("app/live-console.tsx");
-  assert.doesNotMatch(chart,/equityReference|eq-reference|实盘开启参考|依据与限制|eq-hint/);
-  assert.match(chart,/store\.configure\(context,cacheScope\)/);assert.match(chart,/history\.cacheNotice/);
-  assert.match(chart,/继续加载/);assert.match(chart,/onPointerDown=\{pick\}/);
+test("reference card, equity chart and static manuals are removed, not hidden; controls stay",()=>{
+  const dashboard=read("app/forward-dashboard.tsx"),live=read("app/live-console.tsx");
+  assert.doesNotMatch(dashboard+live,/equityReference|eq-reference|实盘开启参考|依据与限制|eq-hint|EquityCurve/);
   assert.doesNotMatch(dashboard,/latestReason|当前系统边界|fr-hero-tags/);
   assert.doesNotMatch(live,/复制规则与边界|只有添加或更换API时需要填写/);
   assert.match(live,/confirmEnable&&!enabled/);assert.match(live,/disabled=\{!canEnable\}/);assert.match(live,/confirmDelete&&/);
@@ -392,16 +350,10 @@ test("orders page shows the forward book and does not render a shadow ledger",()
     assert.doesNotMatch(read(file),/影子/);
 });
 
-test('LIVE OFF hides saved native curve and cached native statistics while preserving PAPER history',()=>{
-  const html=render('app/forward-dashboard.tsx',{...dashboardProps(account()),liveOverview:{equity:4321.09,available:6543.21,positionCount:99,equityCurve:{lastEquity:4321.09}}},
-    {'./live-equity-curve.tsx':{default:()=>{throw new Error('OFF must not mount native history');}}});
-  assert.match(html,/paper-equity-curve/);assert.doesNotMatch(html,/4,321\.09|6,543\.21|99 笔|live-curve-fixture/);
-  const T=1790760000000;
-  assert.equal(render('app/live-equity-curve.tsx',{enabled:false,sessionAt:T,cacheScope:'owner',now:T,
-    head:{version:liveEquity.LIVE_EQUITY_VERSION,sessionAt:T,accountUser:'gate',startedAt:T,initialEquity:100,lastAt:T,lastEquity:101}},
-    {'../lib/live-equity.ts':liveEquity,'./equity-curve.tsx':{default:()=>{throw new Error('OFF must not fetch chart history');}}}), '');
+test('LIVE OFF hides cached native statistics while preserving PAPER history',()=>{
+  const html=render('app/forward-dashboard.tsx',{...dashboardProps(account()),liveOverview:{equity:4321.09,available:6543.21,positionCount:99}});
+  assert.match(html,/overview-equity-first/);assert.doesNotMatch(html,/4,321\.09|6,543\.21|99 笔/);
 });
-
 test('the order tab is the forward book, and live orders stay on the live page',()=>{
   const data=account();
   const states=[],refs=[],buttons=[];let cursor=0,refCursor=0;

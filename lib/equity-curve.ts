@@ -39,34 +39,6 @@ export function mergeEquity(points:EquityPoint[],context:CurveContext,now:number
   const sorted=[...byTime.values()].sort((a,b)=>a.at-b.at);
   return [{at:context.startedAt,equity:context.initialEquity,kind:"origin",policy:"initial",homogeneous:false},...sorted];
 }
-export type XY = {x:number;y:number};
-/** Monotone Hermite / slope limiting: visits every supplied point, never adds
- * an extremum between adjacent points. This changes geometry, not statistics. */
-export function smoothPath(points:XY[]):string {
-  if(!points.length)return "";
-  const f=(v:number)=>Number(v.toFixed(4));
-  let path=`M${f(points[0].x)},${f(points[0].y)}`;
-  if(points.length===1)return path;
-  const d=points.slice(1).map((p,i)=>(p.y-points[i].y)/(p.x-points[i].x));
-  const m=points.map((_,i)=>i===0?d[0]:i===points.length-1?d.at(-1)!:
-    d[i-1]*d[i]<=0?0:2/(1/d[i-1]+1/d[i]));
-  for(let i=0;i<d.length;i++){
-    if(d[i]===0){m[i]=m[i+1]=0;continue;}
-    const a=m[i]/d[i],b=m[i+1]/d[i],s=a*a+b*b;
-    if(s>9){const scale=3/Math.sqrt(s);m[i]=scale*a*d[i];m[i+1]=scale*b*d[i];}
-  }
-  for(let i=0;i<points.length-1;i++){
-    const a=points[i],b=points[i+1],h=(b.x-a.x)/3;
-    path+=` C${f(a.x+h)},${f(a.y+h*m[i])} ${f(b.x-h)},${f(b.y-h*m[i+1])} ${f(b.x)},${f(b.y)}`;
-  }
-  return path;
-}
-export function curveSegments(points:EquityPoint[]):EquityPoint[][] {
-  const result:EquityPoint[][]=[];
-  for(const p of points){const last=result.at(-1),prev=last?.at(-1);
-    if(!prev||p.at-prev.at>CURVE_GAP)result.push([p]);else last!.push(p);}
-  return result;
-}
 export function nearestPoint(points:EquityPoint[],at:number):EquityPoint|null {
   if(!points.length)return null;
   let lo=0,hi=points.length-1;

@@ -6,7 +6,6 @@ import {Memory} from './member-fixtures.ts';
 import {observeLiveAccount,type LiveAccountMark} from '../lib/live-account-view.ts';
 import {prepareLiveEquity,liveEquityView,LiveEquityReader,LIVE_EQUITY_PREFIX,LIVE_EQUITY_SAMPLE_MS,validLiveEquityCursor} from '../lib/live-equity.ts';
 import {OPTIONAL_WRITE_GUARD_PER_DAY,PAID_PLAN_PLANNED_MONTHLY_ROWS,PAID_PLAN_ROW_SAFETY_LIMIT} from '../lib/forward-write-budget.ts';
-import {EquityHistoryCache} from '../lib/equity-cache.ts';
 import {startLiveSession} from '../lib/live-session.ts';
 import {createOwnerSession,ownerSessionCookie} from '../lib/owner-auth.ts';
 import {issueMemberSession,memberCookie} from '../lib/member-auth.ts';
@@ -57,28 +56,19 @@ test('OFF freezes the saved session; ON changes identity and cannot preview an o
   const second=mark(T+STEP,77,T+STEP),newHead=prepareLiveEquity(second,true,T+STEP,head,T+STEP)!.head;
   assert.equal(newHead.initialEquity,77);assert.equal(newHead.startedAt,T+STEP);assert.notEqual(newHead.sessionAt,head.sessionAt);
 });
-test('authenticated reader and persistent incremental cache recover all points and isolate sessions',async()=>{
+test('live equity reader pages every recorded point, reads only newer rows after, and rejects foreign cursors',async()=>{
   const storage=new ChartMemory(),reader=new LiveEquityReader();let previous=mark(),head=prepareLiveEquity(previous,true,T,null,T)!.head;
   for(let i=0;i<=150;i++){
     const m=mark(T+i*STEP,100+i,T,previous),p=prepareLiveEquity(m,true,T,i?head:null,m.at)!;
     head=p.head;previous=m;await storage.put(p.key,p.value);
   }
-  let now=T+151*STEP;const disk=new ChartMemory(),urls:string[]=[];
-  const local={get length(){return disk.data.size;},getItem:(k:string)=>disk.data.get(k) as string??null,
-    setItem:(k:string,v:string)=>{disk.data.set(k,v);},removeItem:(k:string)=>{disk.data.delete(k);},key:(n:number)=>[...disk.data.keys()][n]??null};
-  const options={endpoint:`/api/live/equity?session=${T}`,validCursor:validLiveEquityCursor,now:()=>now,
-    storage:()=>local,legacyStorage:()=>null,pause:async()=>{now+=701;},fetch:async(input:any)=>{
-      urls.push(String(input));const u=new URL(input,'https://fixture');assert.equal(u.searchParams.get('session'),String(T));
-      return Response.json(await reader.read(storage,head,u.searchParams.get('cursor'),now,u.searchParams.get('after')));
-    }};
-  const context={startedAt:T,initialEquity:100,policy:head.version,exitPolicy:head.version,comparableSince:T,persistedAt:head.lastAt};
-  const cache=new EquityHistoryCache(options);cache.configure(context,`live:owner:${T}`);await cache.load(T,head.lastAt,()=>true);
-  assert.equal(cache.getSnapshot().points.length,150);assert.equal(urls.length,3);assert.ok(urls[1].includes('&cursor='));
-  const reloaded=new EquityHistoryCache(options);reloaded.configure(context,`live:owner:${T}`);
-  assert.equal(reloaded.getSnapshot().points.length,150);await reloaded.load(T,head.lastAt,()=>true);assert.equal(urls.length,3);
+  let now=T+151*STEP;const seen=new Map<number,number>();let cursor:string|null=null,pages=0,newest:string|null=null;
+  do{const page:any=await reader.read(storage,head,cursor,now);pages++;if(pages===1)newest=page.newestCursor??null;
+    for(const point of page.points)seen.set(point.at,point.equity);cursor=page.nextCursor;}while(cursor&&pages<10);
+  assert.equal(seen.size,151);assert.equal(pages,3);assert.ok(newest&&validLiveEquityCursor(newest));
   const p=prepareLiveEquity(mark(T+151*STEP,251,T,previous),true,T,head,now)!;head=p.head;await storage.put(p.key,p.value);now+=60001;
-  await reloaded.load(T,head.lastAt,()=>true);assert.equal(reloaded.getSnapshot().points.length,151);assert.ok(urls.at(-1)!.includes('&after='));
-  reloaded.configure({...context,startedAt:T+152*STEP,initialEquity:55},`live:owner:${T+152*STEP}`);assert.equal(reloaded.getSnapshot().points.length,0);
+  const after:any=await reader.read(storage,head,null,now,newest);
+  assert.deepEqual(after.points.map((x:any)=>x.equity),[251]);
   await assert.rejects(reader.read(storage,head,'live-equity:v1:0000000000000001:0000000000000002',now),/INVALID_CURSOR/);
 });
 function ownerHost(storage=new ChartMemory()){

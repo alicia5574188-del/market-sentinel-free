@@ -6,8 +6,6 @@ import {runInNewContext} from "node:vm";
 import ts from "typescript";
 import * as operator from "../lib/operator-ui.ts";
 import * as records from "../lib/record-view.ts";
-import * as curve from "../lib/equity-curve.ts";
-import * as cache from "../lib/equity-cache.ts";
 
 // Execute the actual TSX callbacks with controlled hook lifetimes. No mutation
 // endpoint, authenticated browser, exchange request or strategy is involved.
@@ -19,7 +17,6 @@ function component(file:string,request:typeof operator.operatorRequest=operator.
     useSyncExternalStore:(_subscribe:unknown,snapshot:()=>unknown)=>snapshot()};
   const imports:Record<string,unknown>={react,"react/jsx-runtime":{jsx,jsxs:jsx},
     "../lib/operator-ui.ts":{...operator,operatorRequest:request},"../lib/record-view.ts":records,
-    "../lib/equity-curve.ts":curve,"../lib/equity-cache.ts":cache,"./equity-curve.css":{},
     "./record-controls.tsx":{ArchivePagination:()=>null},
     "./order-card.tsx":{OrderCard:()=>null,exitShort:(code:string|null)=>code??"—",exitPlain:(code:string|null)=>code,priceText:String}};
   const compiledModule={exports:{} as any};
@@ -79,14 +76,4 @@ test("account identity changes remount private LIVE state even under a retained 
   const keys=[owner,{...owner,authenticated:false},{...owner,role:"member",memberId:"m1",username:"a"},
     {...owner,role:"member",memberId:"m2",username:"b"}].map(auth=>ui.wrapper({...props,auth}).key);
   assert.equal(new Set(keys).size,4);
-});
-test("a valid persistent curve beyond function argument limits renders without a stack overflow",()=>{
-  const startedAt=1_700_000_000_000,points=Array.from({length:160_000},(_,i)=>({
-    at:startedAt+(i+1)*300_000,equity:i%2?1001:999,kind:"observed" as const,policy:"p",homogeneous:false,
-  }));
-  assert.ok(JSON.stringify(points.map(p=>[p.at,p.equity,p.policy,p.homogeneous,false])).length<8_000_000);
-  const ui=component("equity-curve.tsx"),data={startedAt,initialEquity:1000,updatedAt:points.at(-1)!.at,
-    lastCycleAt:points.at(-1)!.at,policyVersion:"p",exitPolicyVersion:"e",storage:{persistedAt:points.at(-1)!.at}};
-  const tree=ui.render({data,healthy:false,fixture:{points,complete:true}});
-  assert.equal(tree.props["data-equity-version"],curve.EQUITY_CURVE_VERSION);
 });

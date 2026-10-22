@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {register} from "node:module";
 import {readFileSync} from "node:fs";
-import {archivedEquity,mergeEquity,curveSegments,smoothPath,nearestPoint,equityReference,DAY_MS,
+import {archivedEquity,mergeEquity,nearestPoint,equityReference,DAY_MS,
   type EquityPoint,type CurveContext} from "../lib/equity-curve.ts";
 import {EquityReader,validCurveCursor} from "../lib/equity-reader.ts";
 import {initialForward,advanceForward} from "../lib/forward-relations.ts";
@@ -29,7 +29,6 @@ class ReadMemory {
 test("origin is exactly original deposit and account time; no invented flat prehistory",()=>{
   const result=mergeEquity([point(100,1010)],context,T+200*STEP);
   assert.equal(result.length,2);assert.equal(result[0].at,T);assert.equal(result[0].equity,1000);
-  assert.equal(curveSegments(result).length,2);
 });
 test("archived endpoint uses recorded net equity, not balance or gross trade PnL",()=>{
   const p={...packet(1,971.236),account:{balance:99999,grossPnl:555,positions:[]}};
@@ -60,29 +59,16 @@ test("sorting and validation do not mutate original financial inputs",()=>{
   const p=[point(3,1010),point(1,990),point(2,995)],before=structuredClone(p);
   const r=mergeEquity(p,context,T+5*STEP);assert.deepEqual(p,before);assert.deepEqual(r.map(x=>x.equity),[1000,990,995,1010]);
 });
-test("curve segments preserve missing intervals rather than smoothing an outage",()=>{
-  assert.deepEqual(curveSegments([point(1),point(2),point(8),point(9)]).map(s=>s.length),[2,2]);
-});
-test("saved stale marks reconnect a filtered display gap without manufacturing an archive point",()=>{
+test("saved stale marks stay real observations without manufacturing an archive point",()=>{
   const a=packet(1,998),b=packet(2,997),d=packet(3,999);
   b.account.positions=[{lastQuoteAt:T,exitControl:{policy:context.exitPolicy}}];
   const points=[a,b,d].map(p=>archivedEquity(p,context,T+3*STEP)!);
-  assert.equal(points[1].stale,true);assert.equal(points[1].homogeneous,false);
-  assert.deepEqual(curveSegments(points).map(s=>s.length),[3]);
+  assert.equal(points[1].stale,true);assert.equal(points[1].homogeneous,false);assert.equal(points.length,3);
 });
 test("nearest point tooltip chooses an original observation, never an interpolated amount",()=>{
   const p=[point(1,999),point(2,1003)];assert.equal(nearestPoint(p,T+1.4*STEP),p[0]);assert.equal(nearestPoint(p,T+1.7*STEP),p[1]);
 });
-test("smooth cubic passes through points and has no inter-point extrema or overshoot",()=>{
-  for(const ys of [[100,120,80,130,110],[100,100,100],[100,101,150,151,152],[160,90,89,30]]){
-    const points=ys.map((y,i)=>({x:i*i*12+i+1,y})),path=smoothPath(points);assert.ok(path.includes(" C"));
-    const curves=path.split(" C").slice(1).map(c=>c.split(/[ ,]/).map(Number));
-    curves.forEach((c,i)=>{assert.equal(c[4],points[i+1].x);assert.equal(c[5],points[i+1].y);
-      for(let j=0;j<=100;j++){const t=j/100,y=(1-t)**3*ys[i]+3*(1-t)**2*t*c[1]+3*(1-t)*t*t*c[3]+t**3*ys[i+1];
-        assert.ok(y>=Math.min(ys[i],ys[i+1])-1e-4&&y<=Math.max(ys[i],ys[i+1])+1e-4);}});
-  }
-});
-test("empty or single point curve is safe",()=>{assert.equal(smoothPath([]),"");assert.equal(smoothPath([{x:1,y:2}]),"M1,2");assert.equal(nearestPoint([],T),null);});
+test("nearest point of an empty curve is null",()=>{assert.equal(nearestPoint([],T),null);});
 test("two archive rows at one time contribute the later row only",async()=>{
   const storage=new ReadMemory();
   storage.data.set(key(1),packet(1,1100));
