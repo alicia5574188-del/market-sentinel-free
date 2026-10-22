@@ -4871,6 +4871,16 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.ctx.waitUntil(tracked);
     }catch{/* 只是记录，失败不能碰交易 */}
   }
+  /** compact public summary of the research layer (no positions, no keys): boot, backfill progress, external requests, trades, predictor */
+  private dynamicHealth(now:number){
+    try{const d=this.dynamic,v=d.view(now),b=v.backfill;
+      return {version:v.version,booted:v.booted,bootError:v.bootError,lastError:v.lastError,lastStepAt:v.lastStepAt,maxStepMs:v.maxStepMs,
+        store:{error:v.store.error,rowsToday:v.store.rowsToday,deferred:v.store.deferred,failures:v.store.failures},
+        backfill:{done:b.done,total:b.total,pct:b.pct,working:b.working,reqToday:b.reqToday,errTotal:b.errTotal,blocked:b.blocked,venues:"bybit/okx/kucoin (never Gate)"},
+        shadowTrades:v.shadowTrades,tradesLoaded:v.tradesLoaded,replayUnits:v.replay.unitsDone,allowed:v.allowed.length,
+        predictor:{ready:v.predictor.ready,playbooks:v.predictor.playbooks,scored:v.predictor.track.n,ms:v.predictor.ms}};
+    }catch(error){return {error:safeError(error)};}
+  }
   private livingLogView(now:number){
     const st=this.livingLogStatus,engine=this.living;
     return {...st,budgetPerDay:LIVING_LOG_DAILY_ROWS,healthy:st.error==null&&st.lastOkAt!=null&&now-st.lastOkAt<=10*60_000,
@@ -4901,6 +4911,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const universe=this.strategyPathSymbols().filter(s=>this.marketHub.supports(s));
       const daily:Record<string,(typeof this.turnDailyCandles)[string]|undefined>={};
       for(const s of [...universe,"BTC_USDT"])daily[s]=this.turnDailyCandles[s]??this.htfDaily[s];// external daily rows already in memory (no request)
+      // burst-leader shadow trades (followed by the engine on its own 1m tape) become pool trades of the research layer
+      if(this.living&&this.dynamic.booted&&this.dynamic.tradesLoaded){const xs=this.living.takeBurstShadow();if(xs.length)this.dynamic.addExternal(xs,now);}
       const task=this.dynamic.step(now,{universe,db,fetch:venueFetch,feed:this.strategyCandles,daily}).then(()=>{
         const engine=this.living;if(!engine)return;
         for(const e of this.dynamic.events)if(e.at>this.dynamicEventAt){try{engine.runlog.event(e.at,`DYN_${e.k}`,e.text);}catch{/* 只是记录 */}}
@@ -5309,6 +5321,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           reviewLog:{readyFor:this.reviewLogReadyFor,coldUnopened:this.reviewLogCursor.coldIds.length,error:this.reviewLogError,complete:this.reviewLogComplete},
           runLogArchive:this.archiveView(Date.now()),
           livingRunLog:this.livingLogView(Date.now()),
+          dynamicResearch:this.dynamicHealth(Date.now()),
           ghostPaths:{removed:this.ghostPathsRemoved,remaining:this.ghostPathsRemaining,error:this.ghostPathError},
           incompleteLog:{rowsRemoved:this.incompleteRowsRemoved,rowsRemaining:this.incompleteRowsRemaining,error:this.incompleteRowError,
             orphanPathsRemoved:this.orphanPathsRemoved,orphanPathsRemaining:this.orphanPathsRemaining}},

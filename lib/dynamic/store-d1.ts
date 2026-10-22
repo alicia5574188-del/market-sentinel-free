@@ -94,19 +94,19 @@ export async function writeMeta(db:D1Like,st:DynStoreStatus,entries:Record<strin
   await db.batch(ks.map(k=>db.prepare(`INSERT INTO dyn_meta (k,at,json) VALUES (?,?,?) ON CONFLICT(k) DO UPDATE SET at=excluded.at,json=excluded.json`).bind(k,now,JSON.stringify(entries[k]))));
   st.lastOkAt=now;return true;
 }
-export type ForecastRowJson={f:Record<string,[number,number,number]>;y:Record<string,[number|null,number|null,number|null]>};
+export type ForecastRowJson={f:Record<string,[number,number,number]>;y:Record<string,[number|null,number|null,number|null]>;r?:Record<string,([number,number]|null)[]>};
 /** upsert hourly forecast rows (scored = every horizon of every playbook has an outcome). false = deferred by budget. */
 export async function writeForecasts(db:D1Like,st:DynStoreStatus,rows:readonly ({t:number}&ForecastRowJson)[],now:number){
   if(!rows.length)return true;if(!budget(st,now,rows.length))return false;await ensureDynSchema(db,st);
   const done=(r:ForecastRowJson)=>Object.keys(r.f).every(pb=>(r.y[pb]??[]).length===3&&r.y[pb]!.every(v=>v!=null));
   for(let i=0;i<rows.length;i+=20)await db.batch(rows.slice(i,i+20).map(r=>db.prepare(`INSERT INTO dyn_forecasts (t,json,scored,updated_at) VALUES (?,?,?,?)
-    ON CONFLICT(t) DO UPDATE SET json=excluded.json,scored=excluded.scored,updated_at=excluded.updated_at`).bind(r.t,JSON.stringify({f:r.f,y:r.y}),done(r)?1:0,now)));
+    ON CONFLICT(t) DO UPDATE SET json=excluded.json,scored=excluded.scored,updated_at=excluded.updated_at`).bind(r.t,JSON.stringify({f:r.f,y:r.y,...(r.r?{r:r.r}:{})}),done(r)?1:0,now)));
   st.lastOkAt=now;return true;
 }
 export async function readForecasts(db:D1Like,st:DynStoreStatus,fromT:number,limit=200){
   await ensureDynSchema(db,st);
   const res=await db.prepare(`SELECT t,json FROM dyn_forecasts WHERE t>=? ORDER BY t LIMIT ?`).bind(fromT,limit).all<{t:number;json:string}>();
-  return res.results.map(r=>{let j:ForecastRowJson={f:{},y:{}};try{j=JSON.parse(r.json);}catch{/* 坏行跳过 */}return {t:r.t,f:j.f??{},y:j.y??{}};});
+  return res.results.map(r=>{let j:ForecastRowJson={f:{},y:{}};try{j=JSON.parse(r.json);}catch{/* 坏行跳过 */}return {t:r.t,f:j.f??{},y:j.y??{},...(j.r?{r:j.r}:{})};});
 }
 /** forecast rows older than the cutoff (already scored and folded into the track record) */
 export async function pruneForecasts(db:D1Like,st:DynStoreStatus,olderThanSec:number){await ensureDynSchema(db,st);await db.prepare(`DELETE FROM dyn_forecasts WHERE t<?`).bind(olderThanSec).run();}

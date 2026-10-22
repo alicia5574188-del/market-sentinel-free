@@ -26,7 +26,9 @@ export type Playbook={id:string;label:string;iv:Iv;side:Side;warm:number;
   /** at the close of bar i (> ei): a signal exit and/or a new stop */
   manage?(x:Record<string,Float64Array>,s:Series,i:number,p:Pos):{exit?:string;stop?:number}|null;
   /** short description (dashboard) */
-  rule:string};
+  rule:string;
+  /** dynamic-v1.3: traded by the living engine itself (burst-leader); its shadow trades come from the engine, never simulated here */
+  external?:true};
 export type ShadowTrade={id:string;pb:string;side:Side;sym:string;iv:Iv;et:number;xt:number;ep:number;xp:number;stop0:number;net:number;r:number;bars:number;why:string;exit:string};
 export type OpenShadow={pb:string;side:Side;sym:string;iv:Iv;et:number;ep:number;stop0:number;stop:number;target:number|null;maxBars:number|null;bars:number;why:string;
   /** the entry happened on the last closed bar (a live entry would be due now) */fresh:boolean};
@@ -86,7 +88,14 @@ const LONG_POOL:readonly Playbook[]=[donch,breakdown,emaCross("LONG"),emaCross("
   family:p.id.replace(/-(long|short)$/,""),familyLabel:p.iv==="1d"?"日线趋势":"4小时趋势"}));
 const HOUR_POOL:readonly Playbook[]=[boxBreak("LONG"),boxBreak("SHORT"),burstFollow("LONG"),burstFollow("SHORT"),burstFade("LONG"),burstFade("SHORT")].map(p=>({...p,tier:"short" as Tier,
   family:p.id.replace(/-(long|short)$/,""),familyLabel:p.id.startsWith("box")?"箱体突破":p.id.startsWith("burst")?"爆发跟随":"爆发反打",minStop:.008}));
-export const POOL:readonly Playbook[]=[...SHORT_POOL,...HOUR_POOL,...LONG_POOL];
+/** dynamic-v1.3: burst-leader-v1 as a pool member. The engine follows every pick of every burst ranking as a shadow trade with the
+ * burst-hold rules (lib/living/burst-leader.ts shadowStep) and hands the closed ones to the research layer; phases, forecasts and
+ * the predictor gate then treat it like any other playbook. Both sides share one record (bursts are rare). */
+export const BURST_LEADER:Playbook={id:"burst-leader",label:"全市场突然爆发选领涨（多空）",iv:"1m",side:"LONG",warm:0,tier:"short",family:"burst-leader",
+  familyLabel:"全市场突然爆发",external:true,rule:"一篮子 3 分钟涨跌 ≥4σ、≥80% 币同向、之前 45 分钟平静 → 2 分钟后按相对强度 + 6 小时波动选前 3 个币；止损在起点外，保本 +0.8%、+1.5% 起留 70% 跟踪、最长 4 小时",
+  prep:()=>({}),enter:()=>null};
+export const EXTERNAL_POOL:readonly Playbook[]=[BURST_LEADER];
+export const POOL:readonly Playbook[]=[...SHORT_POOL,...HOUR_POOL,...LONG_POOL,...EXTERNAL_POOL];
 export const POOL_BY_ID:Record<string,Playbook>=Object.fromEntries(POOL.map(p=>[p.id,p]));
 export const POOL_INDEX:Record<string,number>=Object.fromEntries(POOL.map((p,i)=>[p.id,i]));
 export const tierOf=(pb:Playbook):Tier=>pb.tier??"long";

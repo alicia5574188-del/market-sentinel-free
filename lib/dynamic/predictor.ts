@@ -221,22 +221,39 @@ function triggerOf(cur:"GOOD"|"BAD"|null,el:number,cond:Record<string,CondStat[]
 export const fmtH=(h:number)=>h>=48?`${Math.round(h/24)} 天`:`${Math.round(h)} 小时`;
 // ------------------------------------------------------------------ 4) forecast log, scoring, track record
 /** one row per hour: every playbook's P(good) at +6 / +24 / +72 h and, once scored, the outcomes (1 good, 0 not, −1 unknown) */
-export type FcRow={t:number;f:Record<string,[number,number,number]>;y:Record<string,[number|null,number|null,number|null]>};
-export type Track={n:number;hits:number;brier:number;bins:[number,number,number][]};// bins: [count, Σy, Σp] per 0.1 of p
+export type FcRow={t:number;f:Record<string,[number,number,number]>;y:Record<string,[number|null,number|null,number|null]>;
+  /** live score: per playbook and horizon, the shadow trades that actually followed (entry in [t, t + h)): [count, net sum] */
+  r?:Record<string,([number,number]|null)[]>};
+export type Track={n:number;hits:number;brier:number;bins:[number,number,number][];// bins: [count, Σy, Σp] per 0.1 of p
+  /** live score per horizon: [forecasts that said good (p ≥ pMin), their following trades, Σ net, other forecasts, trades, Σ net] */
+  real?:number[][]};
 export const emptyTrack=():Track=>({n:0,hits:0,brier:0,bins:Array.from({length:10},()=>[0,0,0] as [number,number,number])});
 export function addScore(tr:Track,p:number,y:0|1){tr.n++;if((p>=.5?1:0)===y)tr.hits++;tr.brier+=(p-y)**2;const b=tr.bins[Math.min(9,Math.floor(p*10))]!;b[0]++;b[1]+=y;b[2]+=p;}
 /** score every due forecast in the rows (label at t + h known from the line); returns the rows that changed */
+export type Realized=(pb:string,from:number,to:number)=>[number,number];
 export function scoreRows(rows:FcRow[],labelAt:(pb:string,tSec:number)=>Lab|null,nowSec:number,track:Record<string,Track>,
-  onScore?:(x:{t:number;pb:string;h:number;p:number;y:0|1})=>void):FcRow[]{
+  onScore?:(x:{t:number;pb:string;h:number;p:number;y:0|1;n?:number;net?:number})=>void,opt?:{realized?:Realized;pMin?:number}):FcRow[]{
   const changed:FcRow[]=[];
   for(const r of rows){let ch=false;
     for(const [pb,ps] of Object.entries(r.f)){const ys=(r.y[pb]??=[null,null,null]);
       PRED.horizons.forEach((h,m)=>{if(ys[m]!=null)return;const at=r.t+h*H;if(at+H>nowSec)return;const l=labelAt(pb,at);
         if(l==null||l===0){if(nowSec-at>3*86_400){ys[m]=-1;ch=true;}return;}// never known (no trades) → dropped after 3 days
-        const y=l===1?1:0;ys[m]=y;addScore(track[pb]??=emptyTrack(),ps[m]!,y);onScore?.({t:r.t,pb,h,p:ps[m]!,y});ch=true;});}
+        const y=l===1?1:0;ys[m]=y;const tr=(track[pb]??=emptyTrack());addScore(tr,ps[m]!,y);
+        // live score: what the shadow trades that followed this forecast actually made (recorded, not gated on)
+        let rn:number|undefined,rnet:number|undefined;
+        if(opt?.realized){const [n,net]=opt.realized(pb,r.t,at);rn=n;rnet=net;((r.r??={})[pb]??=[null,null,null])[m]=[n,r6(net)];
+          const R=(tr.real??=PRED.horizons.map(()=>[0,0,0,0,0,0]))[m]!,o=ps[m]!>=(opt.pMin??.58)?0:3;R[o]!++;R[o+1]!+=n;R[o+2]!+=net;}
+        onScore?.({t:r.t,pb,h,p:ps[m]!,y,n:rn,net:rnet});ch=true;});}
     if(ch)changed.push(r);}
   return changed;
 }
+const r6=(x:number)=>Math.round(x*1e6)/1e6;
+/** live score of one horizon: average net per following trade when the forecast said good vs otherwise */
+export function realView(t:Track|undefined,m=0){const R=t?.real?.[m];if(!R)return null;
+  return {good:{forecasts:R[0]!,trades:R[1]!,avg:R[1]!?R[2]!/R[1]!:null,sum:R[2]!},other:{forecasts:R[3]!,trades:R[4]!,avg:R[4]!?R[5]!/R[4]!:null,sum:R[5]!}};}
+export const realLine=(t:Track|undefined,m=0)=>{const v=realView(t,m),h=PRED.horizons[m];if(!v||!(v.good.forecasts+v.other.forecasts))return `实盘检验：还没有到期的 ${h} 小时预测`;
+  const f=(x:{forecasts:number;trades:number;avg:number|null})=>x.trades?`平均 ${(x.avg!*100).toFixed(2)}%/笔（${x.forecasts} 次预测后 ${x.trades} 笔）`:`没有后续交易（${x.forecasts} 次）`;
+  return `实盘检验（${h} 小时内跟着来的影子交易）：看好时 ${f(v.good)}；不看好时 ${f(v.other)}`;};
 export const trackView=(t:Track|undefined)=>t&&t.n?{n:t.n,hit:t.hits/t.n,brier:t.brier/t.n,calib:t.bins.map(b=>b[0]?{n:b[0],p:b[2]/b[0],y:b[1]/b[0]}:null)}:{n:0,hit:0,brier:0,calib:[]};
 // ------------------------------------------------------------------ 6) dashboard text
 export function forecastLine(f:PbForecast,track:Track|undefined):string{

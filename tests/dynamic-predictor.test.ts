@@ -193,3 +193,27 @@ test("runtime: the predictor runs in the analysis — hourly forecast row to D1,
   assert.ok(rt.events.some(e=>e.k==="ALLOC"&&/最近 5 笔影子交易全亏/.test(e.text)));
   void IV_SEC;void now0;
 });
+
+test("live score: each scored forecast records the net of the shadow trades that actually followed within its horizon (good vs not), shown in plain words",()=>{
+  const rows:P.FcRow[]=[{t:T0,f:{a:[.7,.7,.7]},y:{}},{t:T0+H,f:{a:[.3,.3,.3]},y:{}}],track:Record<string,P.Track>={};
+  const ts=[{et:T0+600,net:.01},{et:T0+2*H,net:-.004},{et:T0+30*H,net:.002}];
+  const realized:P.Realized=(_pb,from,to)=>{const xs=ts.filter(x=>x.et>=from&&x.et<to);return [xs.length,xs.reduce((a,x)=>a+x.net,0)];};
+  P.scoreRows(rows,()=>1,T0+8*H,track,undefined,{realized,pMin:.58});
+  assert.deepEqual(rows[0]!.r!.a![0],[2,.006]);assert.deepEqual(rows[1]!.r!.a![0],[1,-.004]);
+  const v=P.realView(track.a,0)!;assert.equal(v.good.forecasts,1);assert.equal(v.good.trades,2);assert.ok(Math.abs(v.good.avg!-.003)<1e-12);assert.equal(v.other.trades,1);
+  assert.equal(P.realLine(track.a,0),"实盘检验（6 小时内跟着来的影子交易）：看好时 平均 0.30%/笔（1 次预测后 2 笔）；不看好时 平均 -0.40%/笔（1 次预测后 1 笔）");
+  assert.match(P.realLine(undefined,0),/还没有到期/);
+});
+
+test("one scheme: burst-leader is a pool member fed by the engine's shadow trades (deduplicated, never simulated) and gets a forecast like the others",()=>{
+  const rt=new DynamicResearch(),pb="burst-leader";
+  const xs=tradesOf(pb,[[3,.006],[3,-.006],[3,.006],[3,-.006],[2,.006]]).map(t=>({...t,side:"LONG" as const,ep:1,xp:1+t.net}));
+  assert.equal(rt.addExternal(xs,T0*1000),xs.length);assert.equal(rt.addExternal(xs.slice(0,5),T0*1000),5,"same trades again");
+  assert.equal(rt.tradesLite().filter(t=>t.pb===pb).length,xs.length,"deduplicated by entry time");
+  assert.equal(rt.addExternal([{...xs[0]!,pb:"box1h-long"}],T0*1000),0,"only external playbooks");
+  assert.ok([...rt.tsrc.keys()].every(k=>k.startsWith("x|SOL_USDT|1m|")));
+  const last=xs.at(-1)!.xt;rt.series.set("BTC_USDT|1h",series1h("BTC_USDT",last-40*D,40*24));rt.tradesLoaded=true;
+  rt.analyze((Math.floor(last/H)+1)*H*1000+60_000);
+  const f=rt.forecasts[pb];assert.ok(f,"forecast for burst-leader");assert.ok(rt.gates![pb],"gated by the predictor");
+  const v=rt.view((Math.floor(last/H)+1)*H*1000+60_000).playbooks.find(p=>p.id===pb)!;assert.equal(v.tier,"short");assert.match(v.pred!.line,/^现在：/);
+});

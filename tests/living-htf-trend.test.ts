@@ -250,7 +250,7 @@ test("forward: htf order opens with adaptive leverage (stop inside 40% of liquid
   const {s,step,at}=forwardStart();const now=at+6000;
   const inp=simInputs(s,now,GOLDEN_SYMBOLS,{});const sym=GOLDEN_SYMBOLS.find(x=>!s.positions.some(p=>p.symbol===x)&&inp.quotes[x]?.bestAsk&&(inp.contracts[x]?.maintenanceRate??1)<=.02)!;
   const ask=inp.quotes[sym]!.bestAsk;
-  let n=step(s,now,dir([htfOrderFor(sym,ask,.115,4)]));
+  const n=step(s,now,dir([htfOrderFor(sym,ask,.115,4)]));
   const t=n.state.positions.find(p=>p.entryContext?.living?.hx===1);assert.ok(t,`htf trade opened (${JSON.stringify(n.living?.rejected)})`);
   assert.equal(t!.leverage,htfPaperLeverage(Math.abs(t!.entryPrice-t!.stopPrice)/t!.entryPrice,inp.contracts[sym]!.leverageMax,inp.contracts[sym]!.maintenanceRate));
   assert.ok(t!.leverage<=3);

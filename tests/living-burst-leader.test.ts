@@ -1,7 +1,7 @@
 /** burst-leader-v1: special-condition check, leader ranking, structure stop, burst hold, exit ownership and the engine wiring. */
 import test from "node:test";
 import assert from "node:assert/strict";
-import {LEADER,burstCheck,basketAt,rankLeaders,leaderStop,leaderHold,vol6Of,closesOf,type Closes} from "../lib/living/burst-leader.ts";
+import {LEADER,burstCheck,basketAt,rankLeaders,leaderStop,leaderHold,vol6Of,closesOf,shadowStep,BURST_POOL_MAX_RISK,SHADOW_FEE,type Closes,type BurstShadow} from "../lib/living/burst-leader.ts";
 import {thesisExits,fastProtection,type PositionView} from "../lib/living/exits.ts";
 import {LivingEngine,LIVING_KEYS} from "../lib/living/engine.ts";
 import {defaultLivingConfig,LIVING_ITEMS} from "../lib/living/config.ts";
@@ -110,7 +110,7 @@ test("exit ownership: FAST_FAKE / EXHAUST / 10-minute / tighten / confirm-exit /
 });
 
 // ---------------------------------------------------------------- engine wiring on a synthetic tape (no request, no fixture)
-function engineRun(items:Partial<Record<string,boolean>>={}){
+function engineRun(items:Partial<Record<string,boolean>>={},dyn?:Parameters<LivingEngine["plan"]>[0]["dyn"]){
   const t0=END*1000-MINS*60_000,e=new LivingEngine(t0);
   const cfg=defaultLivingConfig(t0);e.restore(new Map([[LIVING_KEYS.config,{...cfg,items:{...cfg.items,...items}}]]),t0);
   e.basket=selectBasket(alts.map(s=>({symbol:s,volume24hUsd:5e7,sources:3,gate:true})),t0);
@@ -125,21 +125,21 @@ function engineRun(items:Partial<Record<string,boolean>>={}){
     e.tape.feed(pts,at);
     if(k<MINS-5)continue;
     for(const p of pts)quotes[p.symbol]={bestBid:p.mid*.9999,bestAsk:p.mid*1.0001,observedAt:at,entryReady:true};
-    const dir=e.plan({now:at+5_000,forward:{positions:[],history:[],opportunities:[]},quotes,contracts,funding:{},candles:{}});
+    const dir=e.plan({now:at+5_000,forward:{positions:[],history:[],opportunities:[]},quotes,contracts,funding:{},candles:{},...(dyn?{dyn}:{})});
     e.tickLog(at+5_000);
     out.push({now:at,dir});
   }
   return {e,out};
 }
-test("engine: trigger → BURST_ONSET, ranking 2 minutes later → ≤3 burst orders (1.5% risk, wide stop, bh); every check is in the timeline",()=>{
+test("engine: trigger → BURST_ONSET, ranking 2 minutes later → ≤3 burst orders (switch 10 off: own size capped at 0.75%, wide stop, bh); every check is in the timeline",()=>{
   assert.ok(LIVING_ITEMS.includes("burstLeader"));assert.equal(defaultLivingConfig(0).items.burstLeader,true);
-  const {e,out}=engineRun();
+  const {e,out}=engineRun({dynAllocator:false});
   const onset=e.log.find(r=>r.k==="BURST_ONSET");assert.ok(onset,"onset row");assert.equal(onset!.side,"LONG");
   const rank=e.log.find(r=>r.k==="BURST_RANK");assert.ok(rank,"ranking row");assert.ok(String(rank!.top).includes("rs+"));
   assert.ok(rank!.at-onset!.at>=110_000&&rank!.at-onset!.at<=130_000,"ranked 2 minutes after the trigger");
   const orders=out.flatMap(x=>x.dir?.orders??[]);
   assert.ok(orders.length>=1&&orders.length<=3,`orders ${orders.length}`);
-  for(const o of orders){assert.equal(o.note.bh,1);assert.equal(o.riskRate,.015);assert.equal(o.multiple,1);assert.equal(o.note.pb,LEADER.pb);assert.equal(o.note.hold,240);
+  for(const o of orders){assert.equal(o.note.bh,1);assert.equal(o.riskRate,BURST_POOL_MAX_RISK);assert.equal(o.multiple,1);assert.equal(o.note.pb,LEADER.pb);assert.equal(o.note.hold,240);
     const q=e.tape.last(o.symbol)!.mid,rate=Math.abs(q-o.stop)/q;assert.ok(rate>=.0099&&rate<=.0251,`stop ${rate}`);}
   // later minutes: no second entry for the same burst (pending cleared, side locked)
   assert.equal(e.log.filter(r=>r.k==="BURST_RANK").length,1);
@@ -149,10 +149,40 @@ test("engine: trigger → BURST_ONSET, ranking 2 minutes later → ≤3 burst or
   assert.ok(buckets.some(b=>b.events.some(ev=>ev.k==="BURST_RANK")));
 });
 test("engine: burstLeader off → the same orders are only recorded (SWITCH_OFF); the check still runs",()=>{
-  const {e,out}=engineRun({burstLeader:false});
+  const {e,out}=engineRun({burstLeader:false,dynAllocator:false});
   assert.equal(out.flatMap(x=>x.dir?.orders??[]).length,0);
   assert.ok(e.log.some(r=>r.k==="BURST_RANK"));
   assert.ok(e.log.some(r=>r.k==="RECORD_ONLY"&&/对应开关关着/.test(String(r.reason))));
+});
+test("one scheme (switch 10 on): burst picks are shadow trades always; orders only when the predictor gate allows burst-leader, sized ≤ 0.75% by its confidence",()=>{
+  // no gate yet → recorded only (DYN_GATE), the picks are followed as shadow trades
+  const a=engineRun();assert.equal(a.out.flatMap(x=>x.dir?.orders??[]).length,0);
+  assert.ok(a.e.log.some(r=>r.k==="DYN_GATE"&&/动态分配不允许/.test(String(r.reason))));
+  const sh=a.e.burstShadowOpen();assert.ok(sh.length>=1&&sh.length<=3,`shadows ${sh.length}`);assert.ok(sh.every(x=>x.side==="LONG"&&x.stop<x.ep));
+  const gate={ok:true,risk:.0025,conf:.5,why:"预测：概率 70%"};
+  const b=engineRun({},{ready:true,gates:{[LEADER.pb]:gate},signals:[],exits:[],state:null});
+  const orders=b.out.flatMap(x=>x.dir?.orders??[]);assert.ok(orders.length>=1&&orders.length<=3);
+  for(const o of orders){assert.equal(o.note.bh,1);assert.ok(Math.abs(o.riskRate-BURST_POOL_MAX_RISK*.5)<1e-12,`risk ${o.riskRate}`);assert.match(o.reason,/分配器/);}
+  const c=engineRun({},{ready:true,gates:{[LEADER.pb]:{...gate,conf:3}},signals:[],exits:[],state:null});
+  for(const o of c.out.flatMap(x=>x.dir?.orders??[]))assert.equal(o.riskRate,BURST_POOL_MAX_RISK,"never above 0.75%");
+  assert.deepEqual(b.e.takeBurstShadow(),[],"nothing closed yet");
+});
+test("shadow burst trade: stop touch, breakeven / trail / 4 hours on closed 1m bars, net of fees",()=>{
+  const at=1_000_000*60_000+10_000,t1=Math.ceil(at/60_000)*60,bar=(k:number,o:number,h:number,l:number,c:number):MidBar=>({time:t1+k*60,open:o,high:h,low:l,close:c});
+  const s1:BurstShadow={id:"a",sym:"X_USDT",side:"LONG",ep:100,stop:98.5,at,peak:0,lastBar:0};
+  assert.equal(shadowStep(s1,[bar(0,100,100.5,99.6,100.2)],at+120_000),null);
+  const d1=shadowStep(s1,[bar(0,100,100.5,99.6,100.2),bar(1,100.2,100.3,98.4,98.6)],at+180_000)!;
+  assert.equal(d1.exit,"止损");assert.equal(d1.xp,98.5);assert.ok(Math.abs(d1.net-(-.015-SHADOW_FEE))<1e-12);assert.equal(d1.pb,LEADER.pb);
+  // trail: up to +2% inside the bar, closes at +1.3% (< 70% of 2%) → out at the close
+  const s2:BurstShadow={id:"b",sym:"X_USDT",side:"SHORT",ep:100,stop:101.5,at,peak:0,lastBar:0};
+  const d2=shadowStep(s2,[bar(0,100,100.1,98,98.7)],at+120_000)!;
+  assert.equal(d2.exit,"trail");assert.ok(Math.abs(d2.net-(.013-SHADOW_FEE))<1e-9,`${d2.net}`);
+  // 4 hours
+  const s3:BurstShadow={id:"c",sym:"X_USDT",side:"LONG",ep:100,stop:98.5,at,peak:0,lastBar:0};
+  const flat=Array.from({length:240},(_,k)=>bar(k,100,100.2,99.9,100.1));const d3=shadowStep(s3,flat,at+250*60_000)!;assert.equal(d3.exit,"maxhold");
+  // no bars at all: closed after the hold limit + 2 h (data gap)
+  const s4:BurstShadow={id:"d",sym:"X_USDT",side:"LONG",ep:100,stop:98.5,at,peak:0,lastBar:0};
+  assert.equal(shadowStep(s4,[],at+60*60_000),null);assert.equal(shadowStep(s4,[],at+7*3_600_000)!.exit,"数据断了");
 });
 test("closesOf reads only closed bars from the given start",()=>{
   const rows:MidBar[]=[{time:0,open:1,high:1,low:1,close:1},{time:60,open:2,high:2,low:2,close:2}];

@@ -33,7 +33,7 @@ import type {IntentPlaybook,Playbook} from "./thesis.ts";
 import type {LivingDirective,LivingOrder,LivingTradeAction,LivingResult,LivingNote} from "./directive.ts";
 import {bytesOf,r6,r4,corr} from "./util.ts";
 import {dynHold,volUnit,type DynState} from "./hold-dyn.ts";
-import {LEADER,closesOf,burstCheck,rankLeaders,leaderStop,leaderHold,vol6Of} from "./burst-leader.ts";
+import {LEADER,closesOf,burstCheck,rankLeaders,leaderStop,leaderHold,vol6Of,shadowStep,BURST_POOL_MAX_RISK,type BurstShadow,type BurstShadowDone} from "./burst-leader.ts";
 import {HTF,closedDaily,dailyCheck,htfExitLevel,htfOrder,freshThrough,dayKey,dayStartSec,signalCell,trailLow,type DailyBar} from "./htf-trend.ts";
 import type {DynPlanInput} from "../dynamic/runtime.ts";
 import {RunLog,CASES_KEY,CASE_PAGE_KEYS,type Gate,type Layer,type CaseInput,type MarketSample} from "./runlog.ts";
@@ -99,7 +99,9 @@ type HtfPending={id:string;sym:string;day:string;close:number;brk:number;atr:num
 type HtfSummary={day:string;at:number;regime:"ON"|"OFF"|"UNKNOWN";btc:number|null;sma:number|null;universe:number;fresh:number;
   breakouts:string[];picks:string[];skipped:string[];text:string};
 type HtfState={day:string;pending:HtfPending[];last:HtfSummary|null};
-type BurstLeaderState={last:{LONG:number;SHORT:number};pending:{id:string;side:"LONG"|"SHORT";bar:number;z:number;why:string}|null};
+type BurstLeaderState={last:{LONG:number;SHORT:number};pending:{id:string;side:"LONG"|"SHORT";bar:number;z:number;why:string}|null;
+  /** dynamic-v1.3: shadow burst trades (every pick, sent or not) and the closed ones waiting for the research layer */
+  sh?:BurstShadow[];done?:BurstShadowDone[]};
 const initialTrades=():TradesState=>({v:1,watches:[],liveNet:{},seen:[],handedOff:[],peaks:[],recentTriggers:[],lastBarAt:0,lastMinuteAt:0,
   counts:{},pendingEvents:[],lastEnd:null,fastEntries:{}});
 /** dynamic-v1 pool slots (lib/dynamic/allocator.ts ALLOC): open pool trades (daily breakout included) and per playbook */
@@ -425,7 +427,7 @@ export class LivingEngine{
       }
       const directive:LivingDirective={version:"living-v2",items:{...items},
         // htf trail always passes (switch 9 only stops new daily-breakout entries; open ones keep their trail)
-        actions:actions.filter(a=>a.code.startsWith("LIVING_HTF_")||a.code.startsWith("LIVING_DYN_")?true:a.code.startsWith("LIVING_BURST_")?!!items.burstLeader:FAST_CODES.has(a.code)?items.fastProtect:items.thesisExit),
+        actions:actions.filter(a=>a.code.startsWith("LIVING_HTF_")||a.code.startsWith("LIVING_DYN_")||a.code.startsWith("LIVING_BURST_")?true:FAST_CODES.has(a.code)?items.fastProtect:items.thesisExit),
         orders:exec.filter(o=>o.note.dp?!!items.dynAllocator:o.note.hx?!!items.htfTrend:o.note.bh?!!items.burstLeader:o.kind==="F"?items.fastFollow:items.newSource).sort((a,b)=>(a.kind==="F"?0:1)-(b.kind==="F"?0:1)),
         legacyGate:items.newSource?"note":"open"};
       for(const o of exec)if(!directive.orders.includes(o)){this.logCase(now,o.symbol,o.side,o.note.pb,"SWITCH_OFF","对应开关关着",o.kind==="F"?"fast":"normal");this.note(now,"RECORD_ONLY",{sym:o.symbol,side:o.side,pb:o.note.pb,reason:"对应开关关着，只记录"});this.endOrder(o,true);}
@@ -695,7 +697,7 @@ export class LivingEngine{
   /**
    * burst-leader-v1. Once a minute (on the last closed 1m bar): the special-condition check, logged whatever the verdict (timeline
    * bucket `burst`; a BURST_CHECK row when anything but NONE/WARMING). On TRIGGER the side is locked for 3 hours and the ranking runs on
-   * the bar 2 minutes later (BURST_RANK row with the top rows and why each other coin was not picked) → up to 3 orders, 1.5% risk each.
+   * the bar 2 minutes later (BURST_RANK row with the top rows and why each other coin was not picked) → up to 3 orders (dynamic-v1.3: every pick is a shadow trade; with switch 10 on orders need the predictor gate, ≤ 0.75% risk, pool slots).
    */
   private burstOrders(ctx:PlanContext,items:LivingItems):LivingOrder[]{
     const now=ctx.now,mk=Math.floor((now-3_000)/60_000);if(mk===this.lastBurstMinute||!this.basket)return[];this.lastBurstMinute=mk;
@@ -712,8 +714,20 @@ export class LivingEngine{
         if(bar>nowBar+120){this.note(now,"BURST_RANK",{ep:p.id,side:p.side,reason:"选币时间已过（程序停过），这一段不做"});}
         else{
           const busy=new Set(ctx.forward.positions.map(x=>x.symbol)),top=Math.max(0,Math.min(LEADER.top,LEADER.maxOpen-open));
+          // all top picks are followed as shadow trades (the pool's record); only the free slots may become orders
           const r=rankLeaders({side:p.side,alts,c,originBar,nowBar,vol6:s=>vol6Of(this.tape.closed1(s,now),originBar),volume:s=>this.tape.meta.get(s)?.volume24hUsd??0,
-            filter:s=>this.hardFilter(ctx,s,items),skip:s=>busy.has(s)?"已有持仓":null,top});
+            filter:s=>this.hardFilter(ctx,s,items),skip:s=>busy.has(s)?"已有持仓":null,top:LEADER.top});
+          const sh=(st.sh??=[]);
+          for(const x of r.picks){const last=this.tape.last(x.sym),origin=c.get(x.sym)?.get(originBar);if(!last||!origin)continue;const id=`lb-${p.id}-${x.sym}`;
+            if(!sh.some(y=>y.id===id)&&sh.length<20)sh.push({id,sym:x.sym,side:p.side,ep:last.mid,stop:leaderStop(p.side,last.mid,origin).stop,at:now,peak:0,lastBar:0});}
+          // pool scheme (switch 10): the predictor gate decides, one set of pool slots, risk ≤ 0.75% scaled by the gate's confidence
+          const g=items.dynAllocator?ctx.dyn?.gates?.[LEADER.pb]??null:null;
+          const poolOpen=ctx.forward.positions.filter(x=>!x.inverseCopy&&(x.entryContext?.living?.hx||x.entryContext?.living?.bh)).length;
+          const gateWhy=!items.dynAllocator?null:!g?.ok?`爆发选中，但动态分配不允许（只记录影子单）：${g?.why??"研究层还没算出这套打法"}`
+            :poolOpen>=DYN_POOL_MAX?`爆发选中，但打法池已有 ${poolOpen} 笔（最多 ${DYN_POOL_MAX}），只记录影子单`:null;
+          const risk=items.dynAllocator&&g?.ok?Math.min(BURST_POOL_MAX_RISK,BURST_POOL_MAX_RISK*Math.max(0,Math.min(1,g.conf))):BURST_POOL_MAX_RISK;
+          if(gateWhy){this.note(now,"DYN_GATE",{ep:p.id,side:p.side,pb:LEADER.pb,reason:gateWhy.slice(0,240)});try{this.runlog.event(now,"DYN_GATE",gateWhy.slice(0,200));}catch{/* 只是记录 */}}
+          const orderPicks=gateWhy?[]:r.picks.slice(0,Math.min(top,Math.max(0,DYN_POOL_MAX-poolOpen)));
           const pc=(v:number|null)=>v==null?"-":`${v>=0?"+":""}${(v*100).toFixed(2)}`;
           const rows=r.rows.slice(0,10).map(x=>`${x.sym.replace("_USDT","")} rs${pc(x.rs)} v${x.vol6==null?"-":(x.vol6*100).toFixed(3)} ${Math.round(x.liq/1e6)}M ${x.ok?`#${x.rank}`:x.why.slice(0,24)}`).join("｜");
           const text=`${p.side==="LONG"?"做多":"做空"}爆发 ${p.id}：一篮子从起点 ${pc(r.basket)}%，${r.rows.filter(x=>x.ok).length} 个合格，选 ${r.picks.map(x=>x.sym.replace("_USDT","")).join("/")||"无"}${top<LEADER.top?`（已持有 ${open} 笔爆发单，最多 ${LEADER.maxOpen}）`:""}`;
@@ -722,14 +736,14 @@ export class LivingEngine{
           const why0=`集体异动${p.side==="LONG"?"普涨":"普跌"}：${p.why}`.slice(0,160);
           for(const x of r.rows.slice(0,8))if(!r.picks.includes(x)&&x.rs!=null&&x.rs>0)
             this.logCase(now,x.sym,p.side,LEADER.pb,"FAST_SKIP",x.ok?`排第 ${x.rank}，只取前 ${top}`:x.why,"fast",why0);
-          for(const x of r.picks){
+          for(const x of orderPicks){
             const last=this.tape.last(x.sym),origin=c.get(x.sym)?.get(originBar);if(!last||!origin)continue;
             const ls=leaderStop(p.side,last.mid,origin),ct=ctx.contracts[x.sym];
             const chk=stopCheck({side:p.side,price:last.mid,stop:ls.stop,min:LEADER.stopMin*.999,max:LEADER.stopMax*1.001,leverageMax:ct?.leverageMax??10,mmr:ct?.maintenanceRate??null,liqSafety:true});
             if(!chk.ok){this.logCase(now,x.sym,p.side,LEADER.pb,"RISK",chk.reason,"fast",why0);continue;}
-            const why=`爆发选币第 ${x.rank}：从起点跑赢一篮子 ${pc(x.rs)}%，6 小时波动 ${((x.vol6??0)*100).toFixed(3)}%/分钟；止损在起点外 ${(chk.rate*100).toFixed(2)}%，风险 1.5%；${p.why}`;
+            const why=`爆发选币第 ${x.rank}：从起点跑赢一篮子 ${pc(x.rs)}%，6 小时波动 ${((x.vol6??0)*100).toFixed(3)}%/分钟；止损在起点外 ${(chk.rate*100).toFixed(2)}%，风险 ${(risk*100).toFixed(2)}%${g?.ok?`（分配器：${g.why.slice(0,60)}）`:""}；${p.why}`;
             this.logCase(now,x.sym,p.side,LEADER.pb,"FAST_PICK",why.slice(0,70),"fast",why0);
-            out.push({id:`lb-${p.id}-${x.sym}`,symbol:x.sym,side:p.side,stop:chk.stop,riskRate:LEADER.riskRate,multiple:1,kind:"F",episodeId:p.id,
+            out.push({id:`lb-${p.id}-${x.sym}`,symbol:x.sym,side:p.side,stop:chk.stop,riskRate:risk,multiple:1,kind:"F",episodeId:p.id,
               episodeCap:LEADER.episodeCap,winner:true,reason:why.slice(0,240),
               note:{v:"living-v2",k:"F",pb:LEADER.pb,th:null,ep:p.id,ev:"fast",mult:1,sc:x.score,t:null,n:null,per:null,rk:x.rank,inv:chk.stop,ref:origin,
                 hold:LEADER.maxHoldMin,bh:1,why:why.slice(0,200),in:`BURST/${p.side}`,mk:this.marketIntent?.state??"WARMING",nar:p.why.slice(0,180),
@@ -737,6 +751,12 @@ export class LivingEngine{
           }
         }
       }
+      // shadow burst trades: same hold rules on closed 1m bars; closed ones wait for the research layer (takeBurstShadow)
+      if(st.sh?.length){const keep:BurstShadow[]=[];
+        for(const x of st.sh){const d=shadowStep(x,this.tape.closed1(x.sym,now),now);if(!d){keep.push(x);continue;}
+          (st.done??=[]).push(d);if(st.done.length>60)st.done.splice(0,st.done.length-60);
+          this.note(now,"BURST_SHADOW",{sym:d.sym,side:d.side,net:r4(d.net),exit:d.exit,reason:`爆发影子单 ${d.sym.replace("_USDT","")} ${d.side==="LONG"?"多":"空"}：${d.exit}，净 ${(d.net*100).toFixed(2)}%`});}
+        st.sh=keep;}
       let chk=burstCheck(c,alts,bar,st.last);
       if(chk.verdict==="TRIGGER"&&(open>=LEADER.maxOpen||st.pending))chk={...chk,verdict:"BUSY",why:`${chk.why}；但爆发单已有 ${open} 笔（最多 ${LEADER.maxOpen}）`};
       try{this.runlog.burstCheck(now,chk);}catch{/* 只是记录 */}
@@ -801,7 +821,7 @@ export class LivingEngine{
       const busy=new Set(ctx.forward.positions.filter(p=>!p.inverseCopy).map(p=>p.symbol));
       let open=ctx.forward.positions.filter(p=>!p.inverseCopy&&p.entryContext?.living?.hx&&!p.entryContext.living.dp).length;
       // switch 10 on: the daily breakout is a pool playbook too — it opens only when the allocator allows it, sized by its confidence
-      const gate=items.dynAllocator?ctx.dyn?.gates?.[HTF.pb]??null:null,poolOpen=ctx.forward.positions.filter(p=>!p.inverseCopy&&p.entryContext?.living?.hx).length;
+      const gate=items.dynAllocator?ctx.dyn?.gates?.[HTF.pb]??null:null,poolOpen=ctx.forward.positions.filter(p=>!p.inverseCopy&&(p.entryContext?.living?.hx||p.entryContext?.living?.bh)).length;
       for(const x of [...st.pending]){
         if(busy.has(x.sym)){st.pending=st.pending.filter(y=>y.id!==x.id);
           if(!ctx.forward.positions.some(p=>p.symbol===x.sym&&p.entryContext?.living?.hx&&!p.entryContext.living.dp&&p.entryContext.living.dy===x.day))
@@ -895,7 +915,7 @@ export class LivingEngine{
       const st=(this.trades.dx??={sent:{}});
       for(const [k,at] of Object.entries(st.sent))if(now-at>3*86_400_000)delete st.sent[k];
       const busy=new Set(ctx.forward.positions.filter(p=>!p.inverseCopy).map(p=>p.symbol));
-      const pool=ctx.forward.positions.filter(p=>!p.inverseCopy&&p.entryContext?.living?.hx);let open=pool.length;
+      const pool=ctx.forward.positions.filter(p=>!p.inverseCopy&&(p.entryContext?.living?.hx||p.entryContext?.living?.bh));let open=pool.length;
       const perPb:Record<string,number>={};for(const p of pool){const pb=p.entryContext!.living!.pb;perPb[pb]=(perPb[pb]??0)+1;}
       const mk=this.marketIntent?.state??null;
       for(const s of d.signals){
@@ -928,6 +948,10 @@ export class LivingEngine{
         lev:(p as {leverage?:number}|undefined)?.leverage??null,reason:(p?.entryContext?.living?.why??"").slice(0,160)});
       try{this.runlog.event(now,"DYN_OPEN",`${(p?.symbol??"").replace("_USDT","")} ${p?.side??""} ${dynPbOf(orderId)} 开出 ${p?.entryPrice??""}，止损 ${p?.stopPrice??""}`);}catch{/* 只是记录 */}}
   }
+  /** closed shadow burst trades for the research layer (taken once; the engine keeps them until then, ≤ 60) */
+  takeBurstShadow():BurstShadowDone[]{const st=this.trades.bl;if(!st?.done?.length)return[];const out=st.done;st.done=[];this.dirty.add(LIVING_KEYS.trades);return out;}
+  /** open shadow burst trades (dashboard) */
+  burstShadowOpen(){return (this.trades.bl?.sh??[]).map(x=>({sym:x.sym,side:x.side,ep:x.ep,stop:x.stop,at:x.at,peak:x.peak}));}
   /** htf-donch20 summary for status / brain view */
   htfSummary(forward?:ForwardView){
     const st=this.trades.hx,open=(forward?.positions??[]).filter(p=>!p.inverseCopy&&p.entryContext?.living?.hx);

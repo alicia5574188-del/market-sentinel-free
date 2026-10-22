@@ -124,3 +124,28 @@ export function leaderHold(i:{side:Side;entry:number;price:number;peak:number;ag
       why:trail?`爆发单：最好 ${p2(peak)}，止损跟到 ${p2(lock)}`:`爆发单：浮盈到过 ${p2(peak)}，止损拉到保本加手续费（${p2(lock)}）`};
   return{act:"HOLD",code:"",why:""};
 }
+// ------------------------------------------------------------------ dynamic-v1.3: burst-leader as a pool playbook
+/** pool-scheme risk cap of a burst order (its own size logic, scaled by the predictor gate's confidence, never above this) */
+export const BURST_POOL_MAX_RISK=.0075;
+export const SHADOW_FEE=.0019;
+/** a shadow burst trade: every pick of every ranking (sent or not) is followed with the same burst-hold rules on closed 1m bars */
+export type BurstShadow={id:string;sym:string;side:Side;ep:number;stop:number;at:number;peak:number;lastBar:number;px?:number};
+export type BurstShadowDone={pb:string;sym:string;side:Side;et:number;xt:number;net:number;ep:number;xp:number;exit:string};
+/**
+ * Advance one shadow over the closed 1m bars after its entry: stop touch (bar low / high) → out at the stop; else the best move so
+ * far and the burst hold (breakeven, 70% trail, 4 hours) on the close; a GUARD tightens the stop. Returns the closed trade (net of
+ * 0.19% fees) or null while it is still open. Mutates `sh` (peak, stop, lastBar). A shadow with no bars for 2 hours past its hold
+ * limit is closed at its last processed price (data gap).
+ */
+export function shadowStep(sh:BurstShadow,bars:readonly MidBar[],now:number):BurstShadowDone|null{
+  const s=sh.side==="LONG"?1:-1,first=Math.ceil(sh.at/60_000)*60;
+  const done=(xp:number,xt:number,exit:string):BurstShadowDone=>({pb:LEADER.pb,sym:sh.sym,side:sh.side,et:Math.floor(sh.at/1000),xt,net:s*(xp/sh.ep-1)-SHADOW_FEE,ep:sh.ep,xp,exit});
+  for(const b of bars){if(b.time<first||b.time<=sh.lastBar)continue;sh.lastBar=b.time;sh.px=b.close;
+    if(s>0?b.low<=sh.stop:b.high>=sh.stop)return done(sh.stop,b.time+60,"止损");
+    sh.peak=Math.max(sh.peak,s*((s>0?b.high:b.low)/sh.ep-1));
+    const v=leaderHold({side:sh.side,entry:sh.ep,price:b.close,peak:sh.peak,ageMin:((b.time+60)*1000-sh.at)/60_000,stop:sh.stop});
+    if(v.act==="EXIT")return done(b.close,b.time+60,v.code.replace("LIVING_BURST_","").toLowerCase());
+    if(v.act==="GUARD"&&v.stop!=null)sh.stop=v.stop;}
+  if(now-sh.at>(LEADER.maxHoldMin+120)*60_000)return done(sh.px??sh.ep,Math.floor(now/1000),"数据断了");
+  return null;
+}

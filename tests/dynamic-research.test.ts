@@ -134,7 +134,7 @@ test("D1: chunks round-trip (all / newest / a window); prune drops old short his
 
 // ---------------------------------------------------------------- pool
 test("pool: ≥ 25 short-term playbooks (both sides per family, tagged) + daily/4h record-only tier; unique ids; labels match the order card; deterministic simulator nets 0.19% fees, fills gaps at the open, no re-entry on the exit bar",()=>{
-  const short=POOL.filter(p=>tierOf(p)==="short"),long=POOL.filter(p=>tierOf(p)==="long");
+  const short=POOL.filter(p=>tierOf(p)==="short"&&!p.external),long=POOL.filter(p=>tierOf(p)==="long");
   assert.ok(short.length>=25,`${short.length} short`);assert.ok(SHORT_POOL.length>=50);assert.equal(new Set(POOL.map(p=>p.id)).size,POOL.length);
   assert.deepEqual(long.map(p=>p.iv).sort(),["1d","1d","4h","4h","4h","4h"]);
   for(const p of short){assert.ok(["5m","15m","1h"].includes(p.iv),p.id);assert.ok(p.family&&p.familyLabel&&p.rule,p.id);assert.equal(p.minStop,MIN_STOP);}
@@ -157,7 +157,7 @@ test("pool: ≥ 25 short-term playbooks (both sides per family, tagged) + daily/
 const MKT=synthMarket();
 test("short pool: every family trades on a synthetic market and every trade is sane — stop ≥ max(0.8%, ATR15m-ish), hold ≤ 24 h, exit = stop / target / time, net = side × move − fees, entry on a closed bar",()=>{
   const byFam:Record<string,number>={};
-  for(const pb of POOL.filter(p=>tierOf(p)==="short")){
+  for(const pb of POOL.filter(p=>tierOf(p)==="short"&&!p.external)){
     for(const [sym,ss] of Object.entries(MKT)){if(!applies(pb,sym))continue;const s=ss[pb.iv as "5m"|"15m"|"1h"];
       const ctx:Ctx={btcBull:()=>null,btc:MKT.BTC_USDT![pb.iv as "5m"|"15m"|"1h"],memo:new Memo()};
       const a=simulate(pb,s,ctx);assert.deepEqual(simulate(pb,s,{...ctx,memo:new Memo()}).trades,a.trades,`${pb.id} deterministic (memo is only a cache)`);
@@ -382,6 +382,14 @@ test("engine: pool slots (8 total incl. daily breakout, 4 per playbook, one per 
   const d=e.plan(ctx(dynIn({exits:[{tradeId:"p1",act:"GUARD",stop:.95,why:"trail",code:"LIVING_DYN_TRAIL"},{tradeId:"p2",act:"EXIT",why:"到时",code:"LIVING_DYN_EXIT"},{tradeId:"nope",act:"EXIT",why:"x",code:"LIVING_DYN_EXIT"}]}),
     {...emptyForward(),positions:[mk(1,"box1h-long"),mk(2,"box1h-long")]}))!;
   assert.deepEqual(d.actions.filter(a=>a.code.startsWith("LIVING_DYN_")).map(a=>[a.tradeId,a.action]),[["p1","GUARD"],["p2","EXIT"]],"own trades only; pass with switch 10 off");
+  // one scheme: open burst-leader trades count in the pool slots too
+  const bursts=Array.from({length:8},(_,i)=>({...mk(i,"burst-leader"),entryContext:{living:{v:"living-v2",k:"F",pb:"burst-leader",inv:.9,bh:1} as LivingNote}}));
+  assert.equal(engine({},"paper-enabled",NOW).plan(ctx(dynIn({signals:[sig("box1h-long","AAA_USDT")],gates:{"box1h-long":{ok:true,risk:.005,conf:1,why:"ok"}}}),{...emptyForward(),positions:bursts}))!.orders.length,0,"8 incl. burst trades");
+  assert.equal(engine({},"paper-enabled",NOW).plan(ctx(dynIn({signals:[sig("box1h-long","AAA_USDT")],gates:{"box1h-long":{ok:true,risk:.005,conf:1,why:"ok"}}}),{...emptyForward(),positions:bursts.slice(0,7)}))!.orders.length,1);
+  // an open burst trade keeps its own exit even with switches 8 and 10 off (never orphaned)
+  const old={id:"pb1",symbol:"AAA_USDT",side:"LONG" as const,entryPrice:10,stopPrice:9.8,openedAt:NOW-5*3_600_000,favorable:0,entryContext:{living:{v:"living-v2",k:"F",pb:"burst-leader",inv:9.8,hold:240,bh:1} as LivingNote}};
+  const x=engine({burstLeader:false,dynAllocator:false},"paper-enabled",NOW).plan(ctx(dynIn({}),{...emptyForward(),positions:[old]}))!;
+  assert.ok(x.actions.some(a=>a.tradeId==="pb1"&&a.action==="EXIT"&&a.code==="LIVING_BURST_MAXHOLD"),JSON.stringify(x.actions));
 });
 test("engine: switch 10 on gates the daily breakout — record only until the allocator allows it, then sized by its risk",()=>{
   const day=Math.floor(NOW/1000/D)*D,rows=(cs:number[])=>cs.map((c,i)=>({time:day-(cs.length-i)*D,open:i?cs[i-1]!:c,high:c*1.01,low:c*.99,close:c}));

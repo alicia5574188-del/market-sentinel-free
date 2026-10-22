@@ -29,9 +29,9 @@ import {POOL,POOL_BY_ID,simulate,manageLive,btcRegime,tierOf,applies,type OpenSh
 import {dailyStates,stateChanges,bucketLabel,intradayStates,sessionOf,SESSION_LABEL,TREND_LABEL,VOL_LABEL,type DayState,type IntraState} from "./state.ts";
 import {analyzePlaybook,phaseChanges,type PlaybookCycle,type TradeLite} from "./cycles.ts";
 import {allocate,allocatePred,contradicted,ALLOC,PRED_ALLOC,type Gate,type LiveCheck} from "./allocator.ts";
-import {btcFeatures,phaseInfo,hazardCounts,addHazard,predictPlaybook,scoreRows,forecastLine,trackView,emptyTrack,PRED,
+import {btcFeatures,phaseInfo,hazardCounts,addHazard,predictPlaybook,scoreRows,forecastLine,trackView,emptyTrack,realView,realLine,PRED,
   type PbForecast,type Track,type FcRow,type Lab,type Hazard} from "./predictor.ts";
-export const DYN_VERSION="dynamic-v1.2";
+export const DYN_VERSION="dynamic-v1.3";
 /** forecast rows kept in memory (scoring needs t + 72 h + the 3-day "never known" expiry) and in D1 */
 export const FC_KEEP_SEC=7*86_400,FC_DB_KEEP_SEC=30*86_400;
 /** live entries must reach the engine within this long after the signal bar closed */
@@ -45,7 +45,7 @@ export type DynSignal={id:string;pb:string;label:string;sym:string;side:"LONG"|"
 export type DynExit={tradeId:string;act:"GUARD"|"EXIT";stop?:number;why:string;code:string};
 export type DynPlanInput={ready:boolean;gates:Record<string,Pick<Gate,"ok"|"risk"|"conf"|"why">>|null;signals:DynSignal[];exits:DynExit[];state:string|null};
 export type DynEvent={at:number;k:"BACKFILL"|"STATE"|"PHASE"|"ALLOC"|"ERROR"|"BOOT"|"FORECAST"|"SCORE";text:string};
-export type ScoreRec={t:number;pb:string;h:number;p:number;y:0|1};
+export type ScoreRec={t:number;pb:string;h:number;p:number;y:0|1;n?:number;net?:number};
 export type DynPosition={id:string;symbol:string;side:"LONG"|"SHORT";entryPrice:number;stopPrice:number;openedAt:number;guard:number|null;pb:string;inv:number;target:number|null;maxBars:number|null};
 /** the worker's 5m bars (time = open, seconds) */
 export type FeedBar={time:number;open:number;high:number;low:number;close:number;volume:number};
@@ -53,7 +53,7 @@ type Fetch=(url:string)=>Promise<unknown>;
 type TSrc={k:string;sym:string;iv:Iv;t0:number;pbs:string[];rows:TradeRow[];dirty:boolean};
 const safe=(e:unknown)=>String((e as Error)?.message??e).slice(0,160);
 const keepOf=(sym:string,iv:Iv)=>iv==="1h"&&(sym==="BTC_USDT"||sym==="ETH_USDT")?MAJOR_1H_KEEP:MEM_KEEP[iv];
-const PB_BY_IV=new Map<Iv,Playbook[]>();for(const pb of POOL)(PB_BY_IV.get(pb.iv)??PB_BY_IV.set(pb.iv,[]).get(pb.iv)!).push(pb);
+const PB_BY_IV=new Map<Iv,Playbook[]>();for(const pb of POOL)if(!pb.external)(PB_BY_IV.get(pb.iv)??PB_BY_IV.set(pb.iv,[]).get(pb.iv)!).push(pb);
 const needsBtc=(iv:Iv)=>(PB_BY_IV.get(iv)??[]).some(p=>p.only==="alts");
 export class DynamicResearch{
   series=new Map<string,Series>();loaded=new Set<string>();bf:BackfillState=initialBackfill();store:DynStoreStatus=emptyDynStore();
@@ -72,7 +72,7 @@ export class DynamicResearch{
   wm:Record<string,[number,number|null]>={};
   // cycle predictor
   forecasts:Record<string,PbForecast>={};track:Record<string,Track>={};fcRows:FcRow[]=[];fcDirty=new Set<number>();
-  predLive:Record<string,{since:number|null;cutUntil:number}>={};recentScores:ScoreRec[]=[];scoreAcc={n:0,hits:0,brier:0,since:0};
+  predLive:Record<string,{since:number|null;cutUntil:number}>={};recentScores:ScoreRec[]=[];scoreAcc={n:0,hits:0,brier:0,since:0,gN:0,gNet:0,oN:0,oNet:0};
   lastFcLogAt=0;lastTop="";predMs=0;predAt=0;
   private manageCache=new Map<string,{key:string;m:ReturnType<typeof manageLive>}>();
   opts:{minGapMs?:number;analyzeEveryMs?:number;metaEveryMs?:number};
@@ -163,7 +163,7 @@ export class DynamicResearch{
       const tr=await readMeta<Record<string,Track>>(db,this.store,"track");if(tr&&typeof tr==="object")this.track=tr;
       const pl=await readMeta<Record<string,{since:number|null;cutUntil:number}>>(db,this.store,"predLive");if(pl&&typeof pl==="object")this.predLive=pl;
       const rs=await readMeta<ScoreRec[]>(db,this.store,"fcRecent");if(Array.isArray(rs))this.recentScores=rs.slice(-40);
-      this.fcRows=(await readForecasts(db,this.store,Math.floor(now/1000)-FC_KEEP_SEC,400)).map(r=>({t:r.t,f:r.f,y:r.y}));
+      this.fcRows=(await readForecasts(db,this.store,Math.floor(now/1000)-FC_KEEP_SEC,400)).map(r=>({t:r.t,f:r.f,y:r.y,...(r.r?{r:r.r}:{})}));
       // a series with history but no liveFrom (older state): live from its newest stored bar
       for(const [k,p] of Object.entries(this.bf.series))if(p.pages>0&&isShortIv(p.iv)&&this.liveFrom[k]==null&&p.newest!=null)this.liveFrom[k]=p.newest+IV_SEC[p.iv];
       this.booted=true;this.bootError=null;
@@ -323,6 +323,16 @@ export class DynamicResearch{
       if(g.ok&&pl.since==null)pl.since=Math.floor(nowSec);else if(!g.ok&&pl.cutUntil<=nowSec)pl.since=null;}
     for(const [pb,g] of Object.entries(this.gates))if(prev&&prev[pb]?.ok!==g.ok||!prev&&g.ok)this.log(now,"ALLOC",`${POOL_BY_ID[pb]?.label??pb}：${g.ok?"允许开单":"只记录"} — ${g.why}`);
   }
+  /** dynamic-v1.3: closed shadow trades of a playbook the engine trades itself (burst-leader), stored per coin and UTC day like
+   * live trades; deduplicated by playbook + entry time. Returns how many were taken. */
+  addExternal(trades:readonly {pb:string;sym:string;side:"LONG"|"SHORT";et:number;xt:number;net:number;ep:number;xp:number}[],now:number){
+    const by=new Map<string,ShadowTrade[]>();
+    for(const t of trades){if(!POOL_BY_ID[t.pb]?.external||!Number.isFinite(t.net)||!(t.xt>=t.et))continue;const d=Math.floor(t.et/86_400)*86_400,k=`x|${t.sym}|1m|${d}`;
+      (by.get(k)??by.set(k,[]).get(k)!).push({id:`${t.pb}|${t.sym}|${t.et}`,pb:t.pb,sym:t.sym,side:t.side,iv:"1m",et:t.et,xt:t.xt,net:t.net,ep:t.ep,xp:t.xp,stop0:0,r:0,bars:0,why:"",exit:""});}
+    let n=0;for(const [k,ts] of by){const [,sym,,d]=k.split("|");this.putTrades(k,sym!,"1m",Number(d),ts,false);n+=ts.length;}
+    if(n){this.recount();this.log(now,"PHASE",`爆发选领涨：收到 ${n} 笔影子单（${trades.map(t=>`${t.sym.replace("_USDT","")} ${(t.net*100).toFixed(2)}%`).join("，").slice(0,120)}）`);}
+    return n;
+  }
   /** the cycle predictor (pure learners in predictor.ts): forecasts for every playbook with trades, the hourly forecast row,
    * scoring of due rows, the run-log lines, and the contradiction cut. Returns the live checks for the allocator, or null when
    * BTC 1h is not there yet (the old gate then stays in charge). */
@@ -344,7 +354,14 @@ export class DynamicResearch{
       const f:FcRow["f"]={};for(const [pb,x] of Object.entries(fc))f[pb]=[r3(x.p["6"]),r3(x.p["24"]),r3(x.p["72"])];
       this.fcRows.push({t:hourT,f,y:{}});this.fcDirty.add(hourT);}
     const labelAt=(pb:string,t:number):Lab|null=>{const L=pre.get(pb)?.L;if(!L)return null;const i=Math.round((t-L.t0)/3600);return i>=0&&i<L.n?L.lab[i] as Lab:null;};
-    for(const r of scoreRows(this.fcRows,labelAt,nowSec,this.track,x=>{this.recentScores.push(x);const a=this.scoreAcc;a.n++;if((x.p>=.5?1:0)===x.y)a.hits++;a.brier+=(x.p-x.y)**2;}))this.fcDirty.add(r.t);
+    // live score: entries of the playbook's shadow trades in [t, t + h) (sorted once by entry time, binary search)
+    const ets=new Map<string,{et:number[];cum:number[]}>();
+    const realized=(pb:string,from:number,to:number):[number,number]=>{let e=ets.get(pb);
+      if(!e){const ts=[...(by.get(pb)??[])].sort((a,b)=>a.et-b.et),cum=[0];for(const t of ts)cum.push(cum.at(-1)!+t.net);e={et:ts.map(t=>t.et),cum};ets.set(pb,e);}
+      const lb=(x:number)=>{let lo=0,hi=e!.et.length;while(lo<hi){const m=(lo+hi)>>1;if(e!.et[m]!<x)lo=m+1;else hi=m;}return lo;};
+      const i=lb(from),j=lb(to);return [j-i,e.cum[j]!-e.cum[i]!];};
+    for(const r of scoreRows(this.fcRows,labelAt,nowSec,this.track,x=>{this.recentScores.push(x as ScoreRec);const a=this.scoreAcc;a.n++;if((x.p>=.5?1:0)===x.y)a.hits++;a.brier+=(x.p-x.y)**2;
+      if(x.h===6&&x.n){if(x.p>=PRED_ALLOC.pMin){a.gN+=x.n;a.gNet+=x.net??0;}else{a.oN+=x.n;a.oNet+=x.net??0;}}},{realized,pMin:PRED_ALLOC.pMin}))this.fcDirty.add(r.t);
     this.recentScores=this.recentScores.slice(-40);
     this.fcRows=this.fcRows.filter(r=>r.t>=nowSec-FC_KEEP_SEC);
     // run log: the top predictions (when they change, at least every 6 h) and the scoring summary (every 6 h)
@@ -352,7 +369,9 @@ export class DynamicResearch{
     if(top.length&&(key!==this.lastTop||now-this.lastFcLogAt>=6*3_600_000)){this.lastTop=key;this.lastFcLogAt=now;
       this.log(now,"FORECAST",`最看好：${top.map(x=>`${x.label} ${Math.round(x.p6*100)}%（6 小时）【${x.sampleLabel}】`).join("；")}`);}
     const a=this.scoreAcc;if(a.n&&now-a.since>=6*3_600_000){
-      this.log(now,"SCORE",`过去一段评了 ${a.n} 个到期预测：命中 ${Math.round(a.hits/a.n*100)}%，Brier ${(a.brier/a.n).toFixed(3)}`);this.scoreAcc={n:0,hits:0,brier:0,since:now};}
+      const av=(n:number,x:number)=>n?`${(x/n*100).toFixed(2)}%/笔（${n} 笔）`:"没有";
+      this.log(now,"SCORE",`过去一段评了 ${a.n} 个到期预测：命中 ${Math.round(a.hits/a.n*100)}%，Brier ${(a.brier/a.n).toFixed(3)}；实盘检验（6 小时内跟着来的影子交易）看好时 ${av(a.gN,a.gNet)}，不看好时 ${av(a.oN,a.oNet)}`);
+      this.scoreAcc={n:0,hits:0,brier:0,since:now,gN:0,gNet:0,oN:0,oNet:0};}
     else if(!a.since)a.since=now;
     // contradiction cut: the first trades after the gate opened all lost (or the last five) → pause the playbook
     const live:Record<string,LiveCheck>={};
@@ -377,7 +396,7 @@ export class DynamicResearch{
       const until=(o.et*1000)+FRESH_MS[o.iv];if(now>until)continue;
       signals.push({id:`ld-${o.pb}-${o.sym}-${o.et}`,pb:o.pb,label:pb.label,sym:o.sym,side:o.side,iv:o.iv,et:o.et,ep:o.ep,stop:o.stop0,target:o.target,maxBars:o.maxBars,why:`${pb.label}：${o.why}`,until});}
     const exits:DynExit[]=[];
-    for(const p of positions){const pb=POOL_BY_ID[p.pb];if(!pb)continue;const s=this.get(p.symbol,pb.iv);if(!s)continue;
+    for(const p of positions){const pb=POOL_BY_ID[p.pb];if(!pb||pb.external)continue;const s=this.get(p.symbol,pb.iv);if(!s)continue;
       const cur=p.guard!=null?(p.side==="LONG"?Math.max(p.stopPrice,p.guard):Math.min(p.stopPrice,p.guard)):p.stopPrice;
       const ck=`${s.last}|${s.n}|${cur}`,hit=this.manageCache.get(p.id);
       const m=hit&&hit.key===ck?hit.m:manageLive(pb,s,{openedAtMs:p.openedAt,entry:p.entryPrice,stop0:p.inv,stop:cur,target:p.target,maxBars:p.maxBars});
@@ -418,13 +437,16 @@ export class DynamicResearch{
   private predView(pb:string){const f=this.forecasts[pb];if(!f)return null;const tv=trackView(this.track[pb]);
     return {line:forecastLine(f,this.track[pb]),cur:f.cur,elapsedH:f.elapsedH,p6:r3(f.p["6"]),p24:r3(f.p["24"]),p72:r3(f.p["72"]),trigger:f.trigger,label:f.label,sample:r3(f.sample),
       phases:{good:f.phases.good,bad:f.phases.bad,meanGoodH:r1(f.phases.meanGoodH),meanBadH:r1(f.phases.meanBadH)},period:f.period,profile:f.profile,wLog:r3(f.wLog),
-      track:{n:tv.n,hit:r3(tv.hit),brier:r3(tv.brier)},hist:{n:f.hist.n,hit:r3(f.hist.hit)},live:this.predLive[pb]??null};}
+      track:{n:tv.n,hit:r3(tv.hit),brier:r3(tv.brier)},hist:{n:f.hist.n,hit:r3(f.hist.hit)},live:this.predLive[pb]??null,
+      real:realView(this.track[pb],0),realLine:realLine(this.track[pb],0)};}
   private predictorView(){
     const all=emptyTrack();for(const t of Object.values(this.track)){all.n+=t.n;all.hits+=t.hits;all.brier+=t.brier;t.bins.forEach((b,i)=>{all.bins[i]![0]+=b[0];all.bins[i]![1]+=b[1];all.bins[i]![2]+=b[2];});}
-    const tv=trackView(all);
+    const tv=trackView(all),R=PRED.horizons.map(()=>[0,0,0,0,0,0]);
+    for(const t of Object.values(this.track))t.real?.forEach((x,m)=>x.forEach((v,k)=>{R[m]![k]!+=v;}));
+    const real=PRED.horizons.map((h,m)=>({h,...realView({...emptyTrack(),real:R},m)!}));
     return {ready:Object.keys(this.forecasts).length>0,at:this.predAt||null,ms:this.predMs,playbooks:Object.keys(this.forecasts).length,hourRows:this.fcRows.length,pMin:PRED_ALLOC.pMin,
       track:{n:tv.n,hit:r3(tv.hit),brier:r3(tv.brier),calib:tv.calib.map(c=>c&&{n:c.n,p:r3(c.p),y:r3(c.y)})},
-      topNow:this.topNow(5),
+      topNow:this.topNow(5),real,realLine:realLine({...emptyTrack(),real:R},0),
       recent:this.recentScores.slice(-12).reverse().map(x=>({...x,label:POOL_BY_ID[x.pb]?.label??x.pb,hit:(x.p>=.5?1:0)===x.y}))};
   }
 }
