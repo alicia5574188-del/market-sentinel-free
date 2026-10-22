@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import {readFileSync} from "node:fs";
 import {build} from "esbuild";
 import {createRequire} from "node:module";
-import {memberForwardView,liveSourceIds,runtimeRefreshMs,MEMBER_IDLE_MS,RUNTIME_ACTIVE_MS} from "../lib/member-view.ts";
+import {memberForwardView,liveSourceIds,runtimeRefreshMs,MEMBER_IDLE_MS,OWNER_IDLE_MS,RUNTIME_ACTIVE_MS} from "../lib/member-view.ts";
 
 const trade=(id:string,status="OPEN")=>({id,symbol:"BTC_USDT",side:"LONG",status,entryPrice:100,lastPrice:101,exitPrice:status==="OPEN"?null:102,netPnl:1,notional:50,
   openedAt:1,closedAt:status==="OPEN"?null:2,margin:5,entryContext:{secret:"research"},positionIntelligence:{decision:"HOLD"}});
@@ -21,8 +22,8 @@ test("live source ids cover open, pending and recently closed orders",()=>{
   assert.deepEqual([...liveSourceIds({positions:{a:{id:"a"},b:null},entries:{p:{planId:"p"}},history:[{id:"h"}]})].sort(),["a","b","h","p"]);
   assert.equal(liveSourceIds(undefined).size,0);
 });
-test("refresh cadence: owner always 10s; member 10s while copying or holding, 30s when idle",()=>{
-  assert.equal(runtimeRefreshMs("owner",null),RUNTIME_ACTIVE_MS);assert.equal(runtimeRefreshMs(undefined,{live:{requestedEnabled:false}}),RUNTIME_ACTIVE_MS);
+test("refresh cadence: member 10s while copying or holding, 30s when idle",()=>{
+  assert.equal(runtimeRefreshMs("owner",null),RUNTIME_ACTIVE_MS);assert.equal(runtimeRefreshMs(undefined,{live:{requestedEnabled:false}}),OWNER_IDLE_MS);
   assert.equal(runtimeRefreshMs("member",null),RUNTIME_ACTIVE_MS);
   assert.equal(runtimeRefreshMs("member",{liveMode:{requestedEnabled:false},live:{requestedEnabled:false,positions:{},entries:{}}}),MEMBER_IDLE_MS);
   assert.equal(runtimeRefreshMs("member",{live:{requestedEnabled:true}}),RUNTIME_ACTIVE_MS);
@@ -77,4 +78,30 @@ test("owner render keeps the original four tabs and owner panels",async()=>{
   assert.deepEqual(navLabels(owner),["执行","模拟","实盘","系统"]);
   assert.deepEqual(navLabels(ownerBrain),["大脑","模拟","实盘","系统"],"owner home is the market brain; 执行 is gone");
   assert.match(ownerBrain,/data-testid="owner-living-research"/);assert.match(ownerBrain,/data-testid="execution-status"/);assert.doesNotMatch(ownerBrain,/market-command-summary/);assert.match(owner,/market-intelligence-v1/);assert.doesNotMatch(owner,/member-dashboard/);
+});
+
+test("owner home refresh: 20s by default, 10s only where data on screen moves quickly",()=>{
+  const paperOpen={live:{requestedEnabled:false,positions:{},entries:{}},forward:{positions:[{status:"OPEN"}]}};
+  const quiet={live:{requestedEnabled:false,positions:{},entries:{}},forward:{positions:[]}};
+  assert.equal(OWNER_IDLE_MS,20_000);
+  assert.equal(runtimeRefreshMs("owner",quiet,"brain"),OWNER_IDLE_MS);
+  assert.equal(runtimeRefreshMs("owner",quiet,"paper"),OWNER_IDLE_MS);
+  assert.equal(runtimeRefreshMs("owner",quiet,"live"),RUNTIME_ACTIVE_MS);
+  assert.equal(runtimeRefreshMs("owner",paperOpen,"brain"),OWNER_IDLE_MS);
+  assert.equal(runtimeRefreshMs("owner",paperOpen,"settings"),OWNER_IDLE_MS);
+  assert.equal(runtimeRefreshMs("owner",paperOpen,"paper"),RUNTIME_ACTIVE_MS);
+  assert.equal(runtimeRefreshMs("owner",paperOpen,"execution"),RUNTIME_ACTIVE_MS);
+  assert.equal(runtimeRefreshMs("owner",{...quiet,live:{requestedEnabled:true}},"brain"),RUNTIME_ACTIVE_MS);
+  assert.equal(runtimeRefreshMs("owner",{...quiet,live:{positions:{a:{status:"OPEN"}}}},"brain"),RUNTIME_ACTIVE_MS);
+  assert.equal(runtimeRefreshMs("owner",{...quiet,live:{entries:{p:{status:"SUBMITTED"}}}},"settings"),RUNTIME_ACTIVE_MS);
+  assert.equal(runtimeRefreshMs("owner",null,"brain"),RUNTIME_ACTIVE_MS,"first read retries fast");
+  // Members keep their own rule; the tab does not matter.
+  assert.equal(runtimeRefreshMs("member",quiet,"live"),MEMBER_IDLE_MS);
+});
+
+test("the page passes the shown tab to the cadence and re-aims the timer without an extra read",()=>{
+  const page=readFileSync(new URL("../app/page.tsx",import.meta.url),"utf8");
+  assert.match(page,/runtimeRefreshMs\(auth\.role,lastRuntime\.current,ownerTab\.current\)/);
+  assert.match(page,/onTabChange=\{tabChanged\}/);
+  assert.match(page,/timer=setTimeout\(cycle,Math\.max\(0,lastOkAt\+cadence\(\)-Date\.now\(\)\)\)/);
 });

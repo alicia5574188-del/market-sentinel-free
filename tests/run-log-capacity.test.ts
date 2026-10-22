@@ -79,7 +79,7 @@ test("the export mark is one tiny key written only on a served export, and the s
   const {readFileSync}=await import("node:fs");
   const worker=readFileSync(new URL("../worker/index-clean.ts",import.meta.url),"utf8");
   assert.match(worker,/await this\.noteRunLogExport\(exportedAt,out\.positions\.length\+out\.cases\.length\);\n\s*return json\(out\);/);
-  assert.match(worker,/this\.reserveNonAlarmWrites\(1,512\);if\(!reservation\)return;\n\s*try\{await this\.ctx\.storage\.put\(RUN_LOG_EXPORT_KEY,\{at,rows\}/);
+  assert.match(worker,/this\.reserveNonAlarmWrites\(1,512,"runlog-export"\);if\(!reservation\)return;\n\s*try\{await this\.ctx\.storage\.put\(RUN_LOG_EXPORT_KEY,\{at,rows\}/);
   const status=worker.slice(worker.indexOf("private async runLogStatus"),worker.indexOf("private async ensureOrderJournal"));
   assert.doesNotMatch(status,/storage\.put|storage\.delete|fetch\(|reserveNonAlarmWrites/);
 });

@@ -63,6 +63,7 @@ function render(path,props,extra={},component="default"){
     "../lib/research-snapshot.ts":{collectReviewSnapshot(){throw new Error("render must not export");}},
     "../lib/beijing-time.ts":{BEIJING_TIME_ZONE:"Asia/Shanghai",beijingDayKey:()=>"2026-09-30"},
     "../lib/equity-browser-purge.ts":{purgeEquityBrowserCache(){}},
+    "../lib/visible-poll.ts":{pageHidden:()=>false,visibleInterval:()=>()=>{}},
     "../lib/record-view.ts":{recordWindows:rows=>({recent:rows.slice(0,10),archive:rows.slice(10)}),archivePage:rows=>({items:rows,page:0,pages:1})},
     "./record-controls.tsx":{ArchivePagination:()=>null},
     "./order-card.tsx":orderCardModule.exports,

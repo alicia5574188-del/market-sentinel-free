@@ -33,6 +33,9 @@ export default function Home() {
   const [auth,setAuth] = useState<AuthSession|null>(null);
   const [refresh,setRefresh] = useState(0);
   const epoch=useRef(0),runtimeReadFailures=useRef(0),hasRuntimeSnapshot=useRef(false),lastRuntime=useRef<OperatorRuntime|null>(null);
+  // Which owner tab is shown: the home refresh is faster only where data on screen moves quickly.
+  const ownerTab=useRef<string|null>(null),retune=useRef<(()=>void)|null>(null);
+  const tabChanged=useCallback((tab:string)=>{ownerTab.current=tab;retune.current?.();},[]);
   const [cachedAt,setCachedAt] = useState<number|null>(null);
   const deferredPrefetch=useRef<string|null>(null);
   const reload=useCallback(() => { epoch.current++; setRefresh(v=>v+1); },[]);
@@ -97,12 +100,19 @@ export default function Home() {
       }
       finally{clearTimeout(timeout);inFlight=false;controller=null;}
     };
-    // Owner: every 10s. Member: 10s while copying or holding, 30s when copy is off and nothing is open.
-    const cycle=async()=>{const succeeded=await read();if(active&&!document.hidden)timer=setTimeout(cycle,succeeded?runtimeRefreshMs(auth.role,lastRuntime.current):RUNTIME_RETRY_MS);};
+    // Owner: 10s on 实盘, with real money active, or with an open position on the tab shown; 20s otherwise.
+    // Member: 10s while copying or holding, 30s when copy is off and nothing is open.
+    let lastOkAt=0;
+    const cadence=()=>runtimeRefreshMs(auth.role,lastRuntime.current,ownerTab.current);
+    const cycle=async()=>{const succeeded=await read();if(succeeded)lastOkAt=Date.now();
+      if(active&&!document.hidden)timer=setTimeout(cycle,succeeded?cadence():RUNTIME_RETRY_MS);};
     const resume=()=>{if(timer)clearTimeout(timer);timer=null;if(document.hidden){controller?.abort();return;}if(!inFlight)void cycle();};
+    // Tab switch: re-aim the pending timer at the new cadence measured from the last good read (no extra read).
+    retune.current=()=>{if(!active||inFlight||!timer||!lastOkAt||document.hidden)return;
+      clearTimeout(timer);timer=setTimeout(cycle,Math.max(0,lastOkAt+cadence()-Date.now()));};
     void cycle();document.addEventListener("visibilitychange",resume);
     window.addEventListener("focus",resume);window.addEventListener("online",resume);window.addEventListener("pageshow",resume);
-    return()=>{active=false;controller?.abort();if(timer)clearTimeout(timer);document.removeEventListener("visibilitychange",resume);
+    return()=>{active=false;retune.current=null;controller?.abort();if(timer)clearTimeout(timer);document.removeEventListener("visibilitychange",resume);
       window.removeEventListener("focus",resume);window.removeEventListener("online",resume);window.removeEventListener("pageshow",resume);};
   },[refresh,auth,sessionChanged]);
   if(!auth?.authenticated)return <LoginGate auth={auth} onSession={sessionChanged}/>;
@@ -116,7 +126,7 @@ export default function Home() {
     liveSystemPanel={<LiveConsole view="system" auth={auth} runtime={runtime} onSession={sessionChanged} onLive={liveChanged} onRefresh={reload}/>}/>;
   // A device snapshot is shown with its time until the first fresh read lands; it never claims the system is healthy.
   const cachedLabel=cachedAt?`更新于 ${new Date(cachedAt).toLocaleTimeString("zh-CN",{timeZone:"Asia/Shanghai",hour12:false})} · 刷新中`:null;
-  return <ForwardDashboard key={auth.memberId??"owner"} cacheScope={auth.memberId??"owner"} data={runtime?.forward?.startedAt?runtime.forward:null}
+  return <ForwardDashboard key={auth.memberId??"owner"} cacheScope={auth.memberId??"owner"} onTabChange={tabChanged} data={runtime?.forward?.startedAt?runtime.forward:null}
     healthy={cachedLabel?false:runtimeBackendOperational(runtime)} statusLabel={cachedLabel??runtimeStatusLabel(runtime)} feedAt={runtime?.lastSuccessAt??null}
     error={runtime?.forward?.storage?.error??error} liveEnabled={runtime?.liveMode?.requestedEnabled??false}
     liveOverview={{equity:runtime?.live?.equity??null,available:runtime?.live?.available??null,

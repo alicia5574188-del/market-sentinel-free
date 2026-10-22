@@ -2,6 +2,7 @@
  * Memory keeps the last good value for the open app (survives tab switches); localStorage keeps a sanitized copy so a
  * fresh app open renders at once. Nothing here authorizes trading, and no request here reaches Gate. */
 import {useCallback,useEffect,useRef,useState} from "react";
+import {visibleInterval} from "./visible-poll.ts";
 
 export const PANEL_CACHE_PREFIX="sentinel-panel-v1:";
 export const PANEL_FRESH_MS=60_000;
@@ -95,8 +96,9 @@ export function usePanel<T>(scope:string,key:string,fetcher:()=>Promise<T>,optio
     const tick=()=>{void refresh().catch(()=>undefined);};
     // Fresh enough (e.g. just switched back to this tab, or prefetched): no request now.
     if(!cached||Date.now()-cached.at>=fresh)tick();
-    const timer=every?setInterval(tick,every):null;
-    return()=>{listeners.get(id)?.delete(fn);if(timer)clearInterval(timer);};
+    // Periodic refresh pauses while the tab is hidden and catches up as soon as it is shown.
+    const stop=every?visibleInterval(tick,every):null;
+    return()=>{listeners.get(id)?.delete(fn);stop?.();};
   },[scope,key,enabled,fresh,every,refresh]);
   const set=useCallback((value:T)=>{writePanel(scope,key,value,persistRef.current);},[scope,key]);
   return {value:entry?.value??null,at:entry?.at??null,refreshing,failed,refresh,set};

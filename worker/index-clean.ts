@@ -2,6 +2,7 @@ import {reconcileSourceReduction,sourceReductionTarget,type SourceReduction} fro
 import {reconcileSourceClose,sourceExitFillPrice,SOURCE_EXIT_EXECUTION_POLICY,type SourceExit} from '../lib/live-exit.ts';
 import {FIXED_ALLOCATION_EQUITY,FIXED_ALLOCATION_POLICY,fixedLiveBasis,type FixedLiveBasis} from '../lib/fixed-allocation.ts';
 import { LiveHistoryReader } from "../lib/live-history-reader.ts";
+import {noteWriteKinds,writeKeyBreakdown,writeKindsView,type WriteKindBook,type WriteTag} from "../lib/write-kinds.ts";
 /// <reference types="@cloudflare/workers-types" />
 
 import { DurableObject } from "cloudflare:workers";
@@ -351,6 +352,7 @@ type RuntimeState = {
   d1Writes: number;
   nonAlarmWrites: number;
   criticalWrites: number;
+  writeKinds?: WriteKindBook;
   d1RetryAt: number;
   d1FailureCount: number;
   equityVersion: number;
@@ -644,7 +646,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private async listDeleteBatch(prefix:string,limit:number){
     const rows=await this.ctx.storage.list<unknown>({prefix,limit});
     const keys=[...rows.keys()];if(!keys.length)return 0;
-    const reservation=this.reserveNonAlarmWrites(keys.length,256);if(!reservation)throw new Error("write budget");
+    const reservation=this.reserveNonAlarmWrites(keys.length,256,"list-delete");if(!reservation)throw new Error("write budget");
     try{await this.ctx.storage.delete(keys);reservation.finish(true);}finally{reservation.finish(false);}
     return keys.length;
   }
@@ -700,7 +702,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           const living=this.living.wipeLog(at);
           for(const [k,v] of Object.entries(living.counts))add(`living_${k}`,v);
           const old=[...living.oldKeys,RUN_LOG_EXPORT_KEY];
-          for(let i=0;i<old.length;i+=96){const part=old.slice(i,i+96);const r=this.reserveNonAlarmWrites(part.length,256);if(!r)throw new Error("write budget");
+          for(let i=0;i<old.length;i+=96){const part=old.slice(i,i+96);const r=this.reserveNonAlarmWrites(part.length,256,"runlog-wipe");if(!r)throw new Error("write budget");
             try{await this.ctx.storage.delete(part);r.finish(true);}finally{r.finish(false);}add("keys:living-log+export-mark",part.length);}
           cleared.living_done=1;await this.ctx.storage.put(RUNLOG_WIPE_KEY,record);
         }
@@ -712,7 +714,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             for(const [key,rows] of days){
               const kept=Array.isArray(rows)?rows.filter(r=>r&&r.ts>=at):[];
               if(Array.isArray(rows)&&kept.length===rows.length)continue;
-              const r=this.reserveNonAlarmWrites(1,256);if(!r)throw new Error("write budget");
+              const r=this.reserveNonAlarmWrites(1,256,"runlog-wipe");if(!r)throw new Error("write budget");
               try{if(kept.length)await this.ctx.storage.put(key,kept);else await this.ctx.storage.delete(key);r.finish(true);}finally{r.finish(false);}
               add("keys:log:eqmin:",1);add("equityMinutes",(Array.isArray(rows)?rows.length:0)-kept.length);
             }
@@ -721,7 +723,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           for(let guard=0;guard<60;guard++){const n=await this.listDeleteBatch(prefix,48);add(`keys:${prefix}`,n);if(n<48)break;}
           const left=await this.ctx.storage.list<unknown>({prefix,limit:1});if(left.size)throw new Error(`keys left under ${prefix}`);
         }
-        {const r=this.reserveCriticalWrites(1);try{await this.ctx.storage.put(ORDER_JOURNAL_KEY,this.orderJournal);r.finish(true);}finally{r.finish(false);}}
+        {const r=this.reserveCriticalWrites(1,"order-journal");try{await this.ctx.storage.put(ORDER_JOURNAL_KEY,this.orderJournal);r.finish(true);}finally{r.finish(false);}}
         // 3. the account without its log rows: one atomic write (same path as an operator edit); then paths and living keys
         await this.commitForwardAccount(state,wiped.state,now);
         try{await this.persistTradePaths();}catch{/* 下一轮再写 */}
@@ -888,7 +890,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       valid:()=>this.liveClient===client,
       reserve:()=>this.runtime.nonAlarmWrites+(this.nonAlarmPendingWrites??0)+256<NON_ALARM_WRITE_CAP,
       persist:async entries=>{
-        const reservation=this.reserveNonAlarmWrites(Object.keys(entries).length,256);
+        const reservation=this.reserveNonAlarmWrites(Object.keys(entries).length,256,writeKeyBreakdown(Object.keys(entries)));
         if(!reservation)throw new Error("No optional write reserve");
         try {await this.ctx.storage.transaction(async tx=>{await tx.put(entries);});reservation.finish(true);}
         finally {reservation.finish(false);}
@@ -1019,7 +1021,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         // One-time rule migration: protect already-bound real positions, but do
         // not catch up any as-yet-unsubmitted position present at deployment.
         const activation=startLiveSession(Date.now(),this.forwardState,true);
-        const reservation=this.reserveCriticalWrites(1);
+        const reservation=this.reserveCriticalWrites(1,"live-session");
         try {await ctx.storage.put(`${LIVE_PARITY_PREFIX}owner-intent`,{enabled:true,changedAt:this.runtime.live.changedAt,activation});reservation.finish(true);}
         finally {reservation.finish(false);}
         this.runtime.live.activation=activation;
@@ -1124,7 +1126,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
    * survive UTC rollover in memory, so an old-day write cannot become free
    * capacity while it is still pending. Completion is conservatively charged
    * to the completion day. This is not a durable platform-quota ledger. */
-  protected reserveNonAlarmWrites(writes:number,headroom=0) {
+  protected reserveNonAlarmWrites(writes:number,headroom=0,tag:WriteTag="other") {
     if(!Number.isSafeInteger(writes)||writes<1||!Number.isSafeInteger(headroom)||headroom<0)
       throw new Error("Invalid non-alarm write reservation");
     const roll=()=>{
@@ -1140,15 +1142,21 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return {finish:(committed:boolean)=>{
       if(finished)return;
       roll();
-      if(committed)this.runtime.nonAlarmWrites+=writes;
+      if(committed){this.runtime.nonAlarmWrites+=writes;this.noteWriteKind(tag,writes);}
       this.nonAlarmPendingWrites-=writes;finished=true;
     }};
+  }
+
+  /** Measurement only (never admission): count committed rows by kind. It rides
+   * the existing checkpoint inside runtime, so it adds no storage writes. */
+  protected noteWriteKind(tag:WriteTag,writes:number){
+    try{this.runtime.writeKinds=noteWriteKinds(this.runtime.writeKinds,Date.now(),tag,writes);}catch{/* measurement must never affect a write */}
   }
 
   /** Financial authority is not an optional workload. This reservation only
    * accounts rows; it deliberately has no self-imposed daily admission cap.
    * The storage transaction itself remains fail-closed authority. */
-  protected reserveCriticalWrites(writes:number) {
+  protected reserveCriticalWrites(writes:number,tag:WriteTag="other") {
     if(!Number.isSafeInteger(writes)||writes<1)throw new Error("Invalid critical write reservation");
     const roll=()=>{
       if(this.runtime.utcDay)this.resetDailyCounters(Date.now());
@@ -1162,7 +1170,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return {finish:(committed:boolean)=>{
       if(finished)return;
       roll();
-      if(committed)this.runtime.criticalWrites+=writes;
+      if(committed){this.runtime.criticalWrites+=writes;this.noteWriteKind(tag,writes);}
       this.criticalPendingWrites-=writes;finished=true;
     }};
   }
@@ -1382,7 +1390,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if(view.log)view.log.splice(0,view.log.length,...this.researchLog.slice(-8));
     if(!fresh&&view.ts-this.researchLogSavedAt<5*60_000)return;
     if(view.ts-this.researchLogSavedAt<5*60_000)return;
-    const reservation=this.reserveNonAlarmWrites(2,512);
+    const reservation=this.reserveNonAlarmWrites(2,512,"research-memory");
     if(!reservation)return;
     try{await this.ctx.storage.put({"live-research-log":this.researchLog,"live-research-day":this.researchToday});this.researchLogSavedAt=row.at;reservation.finish(true);}
     catch{reservation.finish(false);}
@@ -1600,7 +1608,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const batch=this.eqMinBuf.splice(0,this.eqMinBuf.length);
     const byDay=new Map<string,EquityMinute[]>();
     for(const row of batch){const key=equityMinuteKey(row.ts);const list=byDay.get(key)??[];list.push(row);byDay.set(key,list);}
-    const reservation=this.reserveNonAlarmWrites(byDay.size,256);
+    const reservation=this.reserveNonAlarmWrites(byDay.size,256,"equity-minute");
     if(!reservation){this.eqMinBuf.unshift(...batch);if(this.eqMinBuf.length>30)this.eqMinBuf.splice(0,this.eqMinBuf.length-30);return;}
     try{
       const entries:Record<string,EquityMinute[]>={};
@@ -1642,7 +1650,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(this.reviewLogReadyFor!==state.startedAt)return;
       const plan=prepareReviewLogWrite(state,now,this.reviewLogCursor);
       if(!plan.writes)return;
-      const reservation=this.reserveNonAlarmWrites(plan.writes,256);
+      const reservation=this.reserveNonAlarmWrites(plan.writes,256,"review-log");
       if(!reservation)return;
       try{
         if(Object.keys(plan.entries).length)await this.ctx.storage.put(plan.entries);
@@ -1743,7 +1751,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   /** Last successful run-log export: one tiny key, written only when an export is served. Display only. */
   private async noteRunLogExport(at:number,rows:number){
-    const reservation=this.reserveNonAlarmWrites(1,512);if(!reservation)return;
+    const reservation=this.reserveNonAlarmWrites(1,512,"runlog-export");if(!reservation)return;
     try{await this.ctx.storage.put(RUN_LOG_EXPORT_KEY,{at,rows} satisfies RunLogExportMark);reservation.finish(true);}
     catch{reservation.finish(false);}
   }
@@ -1810,7 +1818,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if(!next.changed)return;
     const entries=counterfactualResearchWrites(next.state,next.postChanged,next.rejectedChanged),writes=Object.keys(entries).length;
     if(!writes)return;
-    const reservation=this.reserveNonAlarmWrites(writes,512);
+    const reservation=this.reserveNonAlarmWrites(writes,512,"research-counterfactual");
     if(!reservation)return;
     try{await this.ctx.storage.put(entries);reservation.finish(true);}
     catch{reservation.finish(false);}
@@ -1829,7 +1837,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if(!next.changed)return;
     const entries=shadowResearchWrites(next.state,next.marketChanged,next.tradesChanged),writes=Object.keys(entries).length;
     if(!writes)return;
-    const reservation=this.reserveNonAlarmWrites(writes,512);
+    const reservation=this.reserveNonAlarmWrites(writes,512,"research-shadow");
     if(!reservation)return;
     try{await this.ctx.storage.put(entries);reservation.finish(true);}
     catch{reservation.finish(false);}
@@ -1838,7 +1846,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private async persistReviewJournal(now:number){
     if(now-this.reviewJournalLastWrite<300_000||this.reviewJournal.updatedAt<=this.reviewJournal.persistedAt)return;
     this.reviewJournalLastWrite=now;
-    const reservation=this.reserveNonAlarmWrites(1,512);if(!reservation){this.reviewDiagnosticError="REVIEW_WRITE_BUDGET_DEFERRED";return;}
+    const reservation=this.reserveNonAlarmWrites(1,512,"review-journal");if(!reservation){this.reviewDiagnosticError="REVIEW_WRITE_BUDGET_DEFERRED";return;}
     const saved={...this.reviewJournal,persistedAt:now};
     try{await this.ctx.storage.put(REVIEW_JOURNAL_KEY,saved);this.reviewJournal.persistedAt=now;reservation.finish(true);this.reviewDiagnosticError=null;}
     catch{reservation.finish(false);this.reviewDiagnosticError="REVIEW_WRITE_FAILED";}
@@ -1965,7 +1973,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.incompleteRowsRemaining=plan.ids.size+plan.remaining;
       if(!plan.ids.size)return;
       if(plan.writes){
-        const reservation=this.reserveNonAlarmWrites(plan.writes,256);
+        const reservation=this.reserveNonAlarmWrites(plan.writes,256,"incomplete-prune");
         if(!reservation)return;
         try{
           await this.ctx.storage.transaction(async transaction=>{
@@ -1989,7 +1997,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if(!this.tradePathsLoaded||!this.tradePathsPending)return;
     const jobs=pendingPathWrites(this.tradePaths,8);
     if(!jobs.length){this.tradePathsPending=false;return;}
-    const reservation=this.reserveCriticalWrites(jobs.length);
+    const reservation=this.reserveCriticalWrites(jobs.length,"trade-path");
     try{
       await this.ctx.storage.transaction(async transaction=>{
         const entries:Record<string,unknown>={};
@@ -2069,7 +2077,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const engine=this.living;if(!engine||(engine.config.mode==="off"&&!force))return;
     const entries=engine.writes(now,force),keys=Object.keys(entries);if(!keys.length)return;
     const expired=engine.expiredLogKeys();
-    const reservation=this.reserveNonAlarmWrites(keys.length+expired.length,512);if(!reservation)return;
+    const reservation=this.reserveNonAlarmWrites(keys.length+expired.length,512,"living-log");if(!reservation)return;
     try{await this.ctx.storage.put(entries);if(expired.length)await this.ctx.storage.delete(expired);
       reservation.finish(true);engine.committed(keys,now);engine.logPages=engine.logPages.filter(p=>!expired.includes(`${LIVING_LOG_PAGE_PREFIX}${p}`));}
     catch{reservation.finish(false);}
@@ -2135,7 +2143,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           else prepared.entries[TRADE_PATH_INDEX_KEY]=job.value;
         }
         prepared.writes+=closures.length+pathJobs.length;
-        const reservation=this.reserveCriticalWrites(prepared.writes);
+        const reservation=this.reserveCriticalWrites(prepared.writes,writeKeyBreakdown(Object.keys(prepared.entries)));
         try {await this.ctx.storage.transaction(async transaction => {
           await transaction.put(prepared.entries);
           for(const key of pathDeletes)await transaction.delete(key);
@@ -2171,7 +2179,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.pruneGhostTradePaths();
       if(this.tradePathsPending)await this.persistTradePaths();
       if(this.orderJournalPending){
-        const reservation=this.reserveCriticalWrites(1);
+        const reservation=this.reserveCriticalWrites(1,"order-journal");
         try{await this.ctx.storage.put(ORDER_JOURNAL_KEY,this.orderJournal);reservation.finish(true);this.orderJournalPending=false;}
         catch{reservation.finish(false);}
       }
@@ -2273,7 +2281,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       else rows=mergeTurnDailyPath(prior,await fetchStructureCandles(selected,"1d",prior.length>=TURN_DAILY_REQUIRED_CANDLES?4:120));
       book[selected]=rows;
       if(rows.length<TURN_DAILY_REQUIRED_CANDLES)throw new Error(`日线历史不足：${rows.length}/${TURN_DAILY_REQUIRED_CANDLES}`);
-      const reservation=this.reserveNonAlarmWrites(1,64);
+      const reservation=this.reserveNonAlarmWrites(1,64,"turn-daily");
       if(reservation){
         try{await this.ctx.storage.put(turnDailyStorageKey(selected),rows);reservation.finish(true);}
         finally{reservation.finish(false);}
@@ -2671,7 +2679,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const persist=prepared.newFills>0||prepared.writes>1||previous.pending!==null||prepared.state.pending!==null
       ||!this.turnoverPersisted.at||now-this.turnoverPersisted.at>=300_000;
     if(persist){
-      const reservation=this.reserveNonAlarmWrites(prepared.writes,256);
+      const reservation=this.reserveNonAlarmWrites(prepared.writes,256,"turnover");
       if(!reservation)throw new Error("成交额保存等待资源预算，已核对金额保留；交易保护优先");
       try {await this.ctx.storage.transaction(async tx=>{await tx.put(prepared.entries);});reservation.finish(true);}
       finally {reservation.finish(false);}
@@ -2804,7 +2812,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if (this.thesis && this.thesisPersistedAt > 0) this.thesisAckAt = this.thesis.updatedAt;
       return;
     }
-    const reservation = this.reserveNonAlarmWrites(1, 256);
+    const reservation = this.reserveNonAlarmWrites(1, 256, "thesis");
     if (!reservation) return;
     try {
       await this.ctx.storage.put(THESIS_STORAGE_KEY, this.thesis);
@@ -2869,7 +2877,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if(checkpoint)prepared.entries[FORWARD_PROTECTION_STORAGE]=protection?.writeBudget!==undefined?{...checkpoint,writeBudget:protection.writeBudget}:checkpoint;
     prepared.entries[epochKey]=STRATEGY_EPOCH;
     prepared.writes+=(checkpoint?1:0)+1;
-    const reservation=this.reserveCriticalWrites(prepared.writes);
+    const reservation=this.reserveCriticalWrites(prepared.writes,writeKeyBreakdown(Object.keys(prepared.entries)));
     try{
       await this.ctx.storage.transaction(async transaction=>{await transaction.put(prepared.entries);});
       reservation.finish(true);
@@ -2890,11 +2898,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const rows=await this.ctx.storage.list<unknown>({prefix,end,limit:32});
     const keys=[...rows.keys()];
     if(!keys.length){
-      const reservation=this.reserveNonAlarmWrites(1,256);if(!reservation)return true;
+      const reservation=this.reserveNonAlarmWrites(1,256,"paper-archive-sweep");if(!reservation)return true;
       try{await this.ctx.storage.delete(sweepKey);reservation.finish(true);}finally{reservation.finish(false);}
       return false;
     }
-    const reservation=this.reserveNonAlarmWrites(keys.length,256);if(!reservation)return true;
+    const reservation=this.reserveNonAlarmWrites(keys.length,256,"paper-archive-sweep");if(!reservation)return true;
     try{await this.ctx.storage.delete(keys);reservation.finish(true);}finally{reservation.finish(false);}
     return true;
   }
@@ -2944,7 +2952,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const saved=await this.ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
     const checkpoint=prepareForwardProtectionWrite(next).entries[FORWARD_PROTECTION_STORAGE] as Record<string,unknown>|undefined;
     if(checkpoint){prepared.entries[FORWARD_PROTECTION_STORAGE]=saved?.writeBudget!==undefined?{...checkpoint,writeBudget:saved.writeBudget}:checkpoint;prepared.writes++;}
-    const reservation=this.reserveCriticalWrites(prepared.writes);
+    const reservation=this.reserveCriticalWrites(prepared.writes,writeKeyBreakdown(Object.keys(prepared.entries)));
     try{
       await this.ctx.storage.transaction(async transaction=>{await transaction.put(prepared.entries);});
       reservation.finish(true);
@@ -3028,7 +3036,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       :establishLiveScale(activation,sourceEquity,liveEquity,now,this.liveSessionSeedRatio()??undefined);
     if(scaled===activation)return activation;
     const prior=activation.scaleRatio??null;
-    const reservation=this.reserveCriticalWrites(1);
+    const reservation=this.reserveCriticalWrites(1,"live-session");
     this.runtime.live.activation=scaled;
     try {
       await this.ctx.storage.put(`${LIVE_PARITY_PREFIX}owner-intent`,{
@@ -3048,7 +3056,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const fenced=fenceLiveSourcePolicy(activation,state,now);
       if(fenced!==activation){
         if(fenced.sourceStartedAt==null)fenced.sourceStartedAt=state.startedAt;
-        const reservation=this.reserveCriticalWrites(1);
+        const reservation=this.reserveCriticalWrites(1,"live-session");
         let committed=false;
         try{await this.ctx.storage.transaction(async tx=>{
           const saved=await tx.get<{enabled:boolean;activation:LiveSession|null}>(LIVE_PARITY_PREFIX+'owner-intent');
@@ -3073,7 +3081,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const repaired:LiveSession={...activation,sourceStartedAt:state.startedAt,
       excludedSourceIds:[...new Set([...(activation.excludedSourceIds??[]),
         ...state.positions.filter(t=>t.openedAt<=activation.enabledAt).map(t=>t.id)])]};
-    const reservation=this.reserveCriticalWrites(1);
+    const reservation=this.reserveCriticalWrites(1,"live-session");
     this.runtime.live.activation=repaired;
     try{
       await this.ctx.storage.put(LIVE_PARITY_PREFIX+"owner-intent",{
@@ -4733,7 +4741,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const live=this.runtime.live,prepared=prepareLiveEquity(live.accountMark,live.requestedEnabled,
       live.activation?.enabledAt??0,live.equityCurve,now);
     if(!prepared)return null;
-    const reservation=this.reserveNonAlarmWrites(1,256);
+    const reservation=this.reserveNonAlarmWrites(1,256,"live-equity");
     if(!reservation)return null;
     this.liveEquityWritePending=true;
     return {...prepared,reservation:{finish:(committed:boolean)=>{reservation.finish(committed);this.liveEquityWritePending=false;}}};
@@ -4772,7 +4780,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const journal=new Map(this.liveJournal);
     const curve=this.prepareLiveEquityWrite(now);
     const writes=1+journal.size,critical=force||journal.size>0;
-    const reservation=critical?this.reserveCriticalWrites(writes):this.reserveNonAlarmWrites(writes,openCount);
+    const reservation=critical?this.reserveCriticalWrites(writes,{checkpoint:1,"live-journal":journal.size}):this.reserveNonAlarmWrites(writes,openCount,{checkpoint:1,"live-journal":journal.size});
     if (!reservation) {curve?.reservation.finish(false);return;}
     try {
       // Full immutable source snapshots live outside the bounded hot checkpoint.
@@ -5321,7 +5329,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           cap:NON_ALARM_WRITE_CAP,pendingWrites:this.nonAlarmPendingWrites??0,criticalWrites:this.runtime.criticalWrites,
           criticalPendingWrites:this.criticalPendingWrites??0,financialAdmission:"independent-of-optional-cap",
           criticalProtection:protectionWriteBudgetView(this.forwardProtectionBudget,Date.now()),
-          previous:this.runtime.resourceRollovers?.at(-1)??null,forwardCompression:this.forwardCompression,
+          previous:this.runtime.resourceRollovers?.at(-1)??null,writesByKind:writeKindsView(this.runtime.writeKinds,Date.now()),forwardCompression:this.forwardCompression,
           reviewLog:{readyFor:this.reviewLogReadyFor,coldUnopened:this.reviewLogCursor.coldIds.length,error:this.reviewLogError,complete:this.reviewLogComplete},
           runLogArchive:this.archiveView(Date.now()),
           livingRunLog:this.livingLogView(Date.now()),

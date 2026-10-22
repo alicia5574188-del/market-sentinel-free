@@ -6,6 +6,7 @@ import { OperatorRequestError, operatorRequest, isTransientLiveReadError, number
   type LivePosition, type LiveRuntime, type OperatorRuntime } from "../lib/operator-ui.ts";
 
 import {recordWindows,archivePage} from "../lib/record-view.ts";
+import {pageHidden,visibleInterval} from "../lib/visible-poll.ts";
 import {usePanel} from "../lib/panel-cache.ts";
 import {PANEL_KEYS,fetchCredential,persistCredential} from "../lib/system-panels.ts";
 import PanelStamp from "./panel-stamp.tsx";
@@ -66,9 +67,10 @@ function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade
     let active=true,reading=false,quick=0,soon:ReturnType<typeof setTimeout>|null=null;
     const load=async()=>{if(reading)return;reading=true;try{const value=await operatorRequest<HistoryView>("/api/live/history");if(active){setHistoryView(value);setHistoryError(null);
         // A settlement read is running on the server: look again shortly instead of waiting the full 10s (server-side Gate reads stay throttled).
-        if(value.updating&&value.pending>0&&quick<4){quick++;if(soon)clearTimeout(soon);soon=setTimeout(()=>void load(),2500);}}}
+        if(value.updating&&value.pending>0&&quick<4){quick++;if(soon)clearTimeout(soon);soon=setTimeout(()=>{if(!pageHidden())void load();},2500);}}}
       catch(e){if(active&&!(e instanceof OperatorRequestError&&e.status===0))setHistoryError(e instanceof Error?e.message:"历史记录读取失败");}finally{reading=false;}};
-    void load();const timer=setInterval(()=>void load(),10000);return()=>{active=false;clearInterval(timer);if(soon)clearTimeout(soon);};
+    // Paused while the tab is hidden; read at once when it is shown again.
+    void load();const stop=visibleInterval(()=>void load(),10000);return()=>{active=false;stop();if(soon)clearTimeout(soon);};
   },[auth?.authenticated,auth?.memberId,section,view]);
   // Device copy read once at mount; newly settled records are merged in and written back (external store only).
   const [deviceSettled]=useState<Record<string,SettledMark>>(()=>readSettled(auth));

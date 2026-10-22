@@ -118,7 +118,7 @@ export function memberExecutionClass(Base:typeof MarketStream) {
       }
       const curve=this.prepareLiveEquityWrite(now);
       const writes=1+journal.size,critical=force||journal.size>0;
-      const reservation=critical?this.reserveCriticalWrites(writes):this.reserveNonAlarmWrites(writes);
+      const reservation=critical?this.reserveCriticalWrites(writes,{"member-checkpoint":1,"member-program-tag":journal.size}):this.reserveNonAlarmWrites(writes,0,{"member-checkpoint":1,"member-program-tag":journal.size});
       if(!reservation){curve?.reservation.finish(false);return;}
       try {
         const bytes=await gzip(new TextEncoder().encode(JSON.stringify({version:MEMBERS_VERSION,id:this.identity.id,live:{...this.runtime.live,...(curve?{equityCurve:curve.head}:{})},
@@ -159,7 +159,7 @@ export function memberExecutionClass(Base:typeof MarketStream) {
               if(binding)close=(await this.directory("/source-close",{id,openedAt:binding.sourceAtCopy.openedAt})).trade as typeof close;
             }
             if(close&&!this.mirrorClosures.has(id)) {
-              const reservation=this.reserveCriticalWrites(1);
+              const reservation=this.reserveCriticalWrites(1,"member-source-close");
               try {await this.ctx.storage.put(`${LIVE_PARITY_PREFIX}source-close:${id}`,close);reservation.finish(true);}
               finally {reservation.finish(false);}
               this.mirrorClosures.set(id,structuredClone(close));

@@ -51,7 +51,7 @@ test("shadow geometry research is post-authority, optional and cannot become tra
   const optional=worker.slice(worker.indexOf("private launchOptionalWork"),worker.indexOf("async alarm("));
   assert.ok(optional.indexOf("await this.advanceForwardNow(Date.now(),true)")>=0);
   assert.ok(optional.indexOf("await this.advanceShadowResearchNow(Date.now())")>optional.indexOf("await this.advanceForwardNow(Date.now(),true)"));
-  assert.match(worker,/reserveNonAlarmWrites\(writes,512\)/);
+  assert.match(worker,/reserveNonAlarmWrites\(writes,512(?:,"[a-z-]+")?\)/);
   assert.match(shadow,/SHADOW_MILESTONE_CAUSALITY_VERSION/);
   assert.match(shadow,/BACKFILLED/);assert.match(shadow,/LIVE_OBSERVED/);
   assert.match(shadow,/deriveRollingGeometry/);assert.match(shadow,/shortFlips90/);assert.match(shadow,/breadthCrosses90/);

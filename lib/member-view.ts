@@ -25,19 +25,29 @@ export function memberForwardView(view:ForwardLike|null|undefined,state:StateLik
 }
 
 export const RUNTIME_ACTIVE_MS=10_000;
+/** Owner page when nothing on screen moves quickly (brain/settings, or no open position on the tab shown). */
+export const OWNER_IDLE_MS=20_000;
 export const MEMBER_IDLE_MS=30_000;
 type RuntimeLike={liveMode?:{requestedEnabled?:boolean}|null;live?:{requestedEnabled?:boolean;positions?:Record<string,{status?:string}|null|undefined>;
-  entries?:Record<string,{status?:string}|null|undefined>}|null}|null;
+  entries?:Record<string,{status?:string}|null|undefined>}|null;forward?:{positions?:{status?:string}[]|null}|null}|null;
 const DONE_ENTRY=new Set(["FILLED","CANCELLED","FINISHED","REJECTED"]);
-/** Page refresh cadence. The owner stays at 10s. A member keeps 10s while copying or holding anything,
- * and drops to 30s when copy-trading is off with nothing open (nothing on the page can change quickly). */
-export function runtimeRefreshMs(role:string|undefined,runtime:RuntimeLike){
-  if(role!=="member")return RUNTIME_ACTIVE_MS;
+/** Real-money activity: copy switch on, an open live position, or an unfinished live entry. */
+function liveBusy(runtime:RuntimeLike){
   const live=runtime?.live;
-  const busy=Boolean(live?.requestedEnabled||runtime?.liveMode?.requestedEnabled)
+  return Boolean(live?.requestedEnabled||runtime?.liveMode?.requestedEnabled)
     ||Object.values(live?.positions??{}).some(p=>p?.status==="OPEN")
     ||Object.values(live?.entries??{}).some(e=>e&&!DONE_ENTRY.has(String(e.status)));
-  return !runtime||busy?RUNTIME_ACTIVE_MS:MEMBER_IDLE_MS;
+}
+/** Page refresh cadence.
+ * Owner: 10s on the 实盘 tab, while real money is active, or while the tab shown (模拟/执行) lists an open
+ * paper position whose floating P&L moves; 20s otherwise (大脑/设置, or nothing open on the tab shown).
+ * Member: 10s while copying or holding anything, 30s when copy-trading is off with nothing open. */
+export function runtimeRefreshMs(role:string|undefined,runtime:RuntimeLike,tab?:string|null){
+  if(!runtime)return RUNTIME_ACTIVE_MS;
+  if(role==="member")return liveBusy(runtime)?RUNTIME_ACTIVE_MS:MEMBER_IDLE_MS;
+  if(tab==="live"||liveBusy(runtime))return RUNTIME_ACTIVE_MS;
+  const paperOpen=(runtime.forward?.positions??[]).some(p=>p?.status==="OPEN");
+  return paperOpen&&(tab==="paper"||tab==="execution")?RUNTIME_ACTIVE_MS:OWNER_IDLE_MS;
 }
 
 type LiveIdsLike={positions?:Record<string,{id?:string}|null|undefined>;entries?:Record<string,{planId?:string}|null|undefined>;history?:{id:string}[]};

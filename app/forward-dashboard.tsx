@@ -77,7 +77,7 @@ const stanceName=(stance?:string)=>stance==="REVERSE"?"反向":stance==="FLAT"?"
 const sessionName=(session?:string)=>session==="ASIA"?"亚盘":session==="EUROPE"?"欧盘":session==="US"?"美盘":"—";
 const claimName=(kind?:string)=>kind==="CONTINUE"?"延续":kind==="SUSPECT"?"可疑":"不投票";
 
-export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,livePanel,liveSystemPanel,liveEnabled,liveOverview,accountPanel,brainAuth,memberName,cacheScope="owner",cachedAt=null}:{
+export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,livePanel,liveSystemPanel,liveEnabled,liveOverview,accountPanel,brainAuth,memberName,cacheScope="owner",cachedAt=null,onTabChange}:{
   data:View|null;healthy:boolean;statusLabel?:string;feedAt:number|null;error:string|null;livePanel:ReactNode;liveSystemPanel?:ReactNode;
   liveEnabled:boolean;liveOverview?:{equity:number|null;available:number|null;positionCount:number;operational:boolean;lastSyncAt:number|null;copied:number|null;eligible:number|null;missing:number|null;accountMark?:import('../lib/live-account-view.ts').LiveAccountMark|null;};
   accountPanel?:ReactNode;
@@ -85,6 +85,8 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   brainAuth?:AuthSession|null;memberName?:string;cacheScope?:string;
   /** Set while the page shows the device snapshot (not yet a fresh read). */
   cachedAt?:number|null;
+  /** Tells the page which tab is shown (it sets the home refresh cadence). */
+  onTabChange?:(tab:Tab)=>void;
 }){
   // The equity chart is gone; free the space its old browser copies still take on the phone.
   useEffect(()=>{purgeEquityBrowserCache();},[]);
@@ -97,6 +99,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   // Page clock: held times are shown in minutes, so a 15s tick is enough; second-level labels run their own timer.
   useEffect(()=>{const first=setTimeout(()=>setNow(Date.now()),0),id=setInterval(()=>setNow(Date.now()),PAGE_CLOCK_MS);return()=>{clearTimeout(first);clearInterval(id);};},[]);
   useLayoutEffect(()=>{window.scrollTo({top:tab==="live"?0:scroll.current[tab]??0,behavior:"auto"});},[tab]);
+  useEffect(()=>{onTabChange?.(tab);},[tab,onTabChange]);
   const select=(next:Tab)=>{scroll.current[tab]=window.scrollY;if(next==="live")setLiveMounted(true);setTab(next);};
   const selectRef=useRef(select);
   useLayoutEffect(()=>{selectRef.current=select;});
