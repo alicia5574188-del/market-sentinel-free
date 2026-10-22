@@ -1906,6 +1906,8 @@ function manageLivingTrade(s:ForwardState,t:Trade,q:Quote,now:number,bar:Candle|
 }
 /** htf-donch20 (lib/living/htf-trend.ts HTF; kept here because this module must not import the living layer at runtime). */
 const HTF_STOP_MIN=.004,HTF_STOP_MAX=.35,HTF_NOTIONAL_CAP=1;
+/** smallest risk budget (share of equity) a unified-pool order may open with; the predictor gate never sizes below 0.125 % */
+export const POOL_RISK_FLOOR=.001;
 /** Opens one paper trade decided by the living layer. Existing total/side/margin/5-minute caps apply (expansion fixed 5x). */
 function openLivingTrade(s:ForwardState,o:LivingOrder,living:LivingDirective,q:Quote|undefined,contract:Contract|undefined,now:number,equity:number,
   minutePath?:Candle[]):string|{tradeId:string;symbol:string;side:"LONG"|"SHORT";risk:number;notional:number}{
@@ -1936,7 +1938,10 @@ function openLivingTrade(s:ForwardState,o:LivingOrder,living:LivingDirective,q:Q
     episodeHeadroom=o.episodeCap!=null&&o.episodeId?equity*o.episodeCap-s.positions.filter(t=>t.entryContext?.living?.ep===o.episodeId).reduce((n,t)=>n+riskCharge(t),0):Infinity,
     headroom=Math.min(totalHeadroom,sideHeadroom,cycleHeadroom,episodeHeadroom),
     wantedRisk=equity*o.riskRate*o.multiple,riskBudget=Math.min(wantedRisk,headroom);
-  if(!(riskBudget>=equity*.0015))return episodeHeadroom<=totalHeadroom&&episodeHeadroom<wantedRisk?"这一段集体异动的风险已用满 2%":"剩余风险预算不足以形成有效仓位";
+  // dynamic-v1.5: unified-pool members (pool playbook / daily breakout: hx, burst-leader: bh) are sized by the predictor gate at
+  // 0.125–0.75 %; the generic 0.15 % floor rejected every minimum-size pool order ("剩余风险预算不足以形成有效仓位")
+  const riskFloor=htf||o.note.bh===1?POOL_RISK_FLOOR:.0015;
+  if(!(riskBudget>=equity*riskFloor))return episodeHeadroom<=totalHeadroom&&episodeHeadroom<wantedRisk?"这一段集体异动的风险已用满 2%":"剩余风险预算不足以形成有效仓位";
   // htf-donch20 sizes like its research: notional = risk / stop distance, at most 1x equity per trade (no 5x expansion)
   const targetNotional=htf?Math.min(riskBudget/stopRate,equity*HTF_NOTIONAL_CAP):Math.min(riskBudget/(stopRate+ROUND_TRIP_COST),equity*.70*expansion),
     mult=Math.max(contract.quantoMultiplier,1e-12),

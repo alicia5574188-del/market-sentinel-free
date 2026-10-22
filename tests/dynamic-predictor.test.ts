@@ -128,7 +128,8 @@ test("allocator (predictor gate): P(good in 6 h) ≥ 0.58 and a track record tha
   assert.match(run(null).why,/还没有影子交易|预测器/);
   assert.match(run(fcOf({p6:.57})).why,/57%（要 ≥58%）/);
   assert.match(run(fcOf({p6:.9,sample:0})).why,/数据少/);
-  const few=run(fcOf({p6:.58}));assert.ok(few.ok);assert.ok(Math.abs(few.risk-.0025*PRED_ALLOC.trackFewW*(.25+.75*.5))<1e-12,`few scored → smallest size (${few.risk})`);
+  const few=run(fcOf({p6:.58}));assert.ok(few.ok);assert.ok(Math.abs(few.risk-PRED_ALLOC.riskFloor)<1e-12,`few scored → smallest size = the 0.125% floor (${few.risk})`);assert.match(few.why,/风险 0\.13%/);
+  const fewTop=run(fcOf({p6:.95,sample:1}));assert.ok(Math.abs(fewTop.risk-.005*PRED_ALLOC.trackFewW)<1e-12,`few scored, best edge → 0.125% (${fewTop.risk})`);
   const top=run(fcOf({p6:.85,sample:1}),{[pb]:trk(40,.75,.15)});assert.ok(top.ok&&Math.abs(top.risk-.005)<1e-12,`best case = 0.5% (${top.risk})`);
   const mid=run(fcOf({p6:.69,sample:1}),{[pb]:trk(40,.625,.18)});assert.ok(mid.ok&&mid.risk>.0025*.25&&mid.risk<.005);assert.match(mid.why,/命中率 63%（40 次）/);
   assert.match(run(fcOf({p6:.9}),{[pb]:trk(20,.45,.2)}).why,/预测记录不好/);

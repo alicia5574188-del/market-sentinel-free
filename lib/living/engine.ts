@@ -421,8 +421,11 @@ export class LivingEngine{
       // execution filter: only symbols with a fresh entry-ready Gate quote (no new request)
       const exec=orders.filter(o=>{
         const q=ctx.quotes[o.symbol],ok=!!q&&now-q.observedAt<=10_000&&q.entryReady!==false&&q.bestBid>0&&q.bestAsk>=q.bestBid;
-        if(!ok){if(this.noteOnce(`q|${o.id}`,now,"RECORD_ONLY",{sym:o.symbol,side:o.side,pb:o.note.pb,kind:o.kind,reason:"没有 Gate 实时盘口（不新增请求）"}))
+        if(!ok){if(this.noteOnce(`q|${o.id}`,now,"RECORD_ONLY",{sym:o.symbol,side:o.side,pb:o.note.pb,kind:o.kind,reason:"没有 Gate 实时盘口（不新增请求）"})){
             this.logCase(now,o.symbol,o.side,o.note.pb,"NO_QUOTE","没有 Gate 实时盘口",o.kind==="F"?"fast":"normal");
+            // dynamic-v1.5: a pool order that was sent but cannot reach the paper account is closed out in the pool log too
+            if(isPoolNote(o.note))this.poolGate(now,o.id,{kind:o.note.dp?"pool":o.note.bh?"burst":"htf",pb:o.note.pb,sym:o.symbol,side:o.side,decision:"NO_QUOTE",ok:false,g:null,
+              why:"没有 Gate 实时盘口（这个币不在实时订阅里，不新增请求），没开"});}
           this.endOrder(o,false);}
         return ok;
       });
@@ -1039,6 +1042,11 @@ export class LivingEngine{
               if(w)this.logCase(now,w.symbol,w.side,w.playbook,"REJECTED",r.reason);else this.logCount(now,"REJECTED",r.reason);}this.trades.watches=this.trades.watches.filter(w=>w.id!==r.orderId);
             if(r.orderId.startsWith("lh-"))this.htfDrop(r.orderId,now,`开单被拒：${r.reason}`);
             if(r.orderId.startsWith("ld-")&&!/Gate 实时盘口/.test(r.reason)){this.dynSent(r.orderId,now);this.note(now,"DYN_REJECT",{order:r.orderId,sym:r.symbol,reason:r.reason.slice(0,160)});}
+            // dynamic-v1.5: the paper account's refusal of a pool order (after ORDER) is a pool-log record too
+            const ppb=r.orderId.startsWith("ld-")?dynPbOf(r.orderId):r.orderId.startsWith("lh-")?HTF.pb:r.orderId.startsWith("lb-")?LEADER.pb:null;
+            if(ppb){const k=`pg|${r.orderId}|REJECTED`;if(!this.once.has(k)){this.once.add(k);
+              try{this.runlog.pool(now,{t:"GATE",at:now,pb:ppb,sym:r.symbol,side:null,src:"account",kind:r.orderId.startsWith("ld-")?"pool":r.orderId.startsWith("lh-")?"htf":"burst",
+                ok:false,decision:"REJECTED",risk:0,why:`模拟账户没开：${r.reason}`.slice(0,200)});}catch{/* 只是记录 */}}}
             if(r.orderId.startsWith("lf-")){const ep=r.orderId.slice(3,r.orderId.lastIndexOf("-")),sym=r.orderId.slice(r.orderId.lastIndexOf("-")+1);void sym;this.virtualFast.add(`${ep}|${r.symbol}`);}}
         }
         for(const a of result.applied)this.note(now,"APPLIED",{trade:a.tradeId,code:a.code,action:a.action});

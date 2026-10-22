@@ -15,7 +15,8 @@ import {fastProtection,thesisExits,type PositionView} from "../lib/living/exits.
 import {LivingTape} from "../lib/living/tape.ts";
 import {livingFields} from "../lib/living/run-log-fields.ts";
 import {livingDetail,livingWhy} from "../lib/living-trade-view.ts";
-import {advanceForward,type ForwardState} from "../lib/forward-relations.ts";
+import {advanceForward,POOL_RISK_FLOOR,type ForwardState} from "../lib/forward-relations.ts";
+import {PRED_ALLOC} from "../lib/dynamic/allocator.ts";
 import type {LivingDirective,LivingNote,LivingOrder} from "../lib/living/directive.ts";
 import {allItems} from "../lib/living/config.ts";
 import {runForward,simInputs,GOLDEN_SYMBOLS} from "./living/forward-sim.ts";
@@ -271,6 +272,21 @@ test("forward: htf order opens with adaptive leverage (stop inside 40% of liquid
   // stop touch closes it
   p.stopPrice=p.lastPrice*1.05;const c=step(back,now+202*6000);
   assert.ok(["LIVING_STOP","LIVING_GUARD_STOP"].includes(c.state.history.find(h=>h.id===t!.id)?.exitReason??""));
+});
+
+test("forward (dynamic-v1.5): a unified-pool order at the predictor gate's minimum size (0.125%) opens; an ordinary order that small is still refused",()=>{
+  const {s,step,at}=forwardStart();const now=at+6000;
+  const inp=simInputs(s,now,GOLDEN_SYMBOLS,{});const sym=GOLDEN_SYMBOLS.find(x=>!s.positions.some(p=>p.symbol===x)&&inp.quotes[x]?.bestAsk&&(inp.contracts[x]?.maintenanceRate??1)<=.02)!;
+  const ask=inp.quotes[sym]!.bestAsk,stop=ask*(1-.02);
+  const pool:LivingOrder={id:`ld-vwap15m-long-${sym}-1`,symbol:sym,side:"LONG",stop,riskRate:PRED_ALLOC.riskFloor,multiple:1,kind:"N",episodeId:null,episodeCap:null,winner:false,reason:"pool test",
+    note:{v:"living-v2",k:"N",pb:"vwap15m-long",th:null,ep:null,ev:"normal",mult:1,sc:null,t:null,n:null,per:null,rk:null,inv:stop,ref:ask,hold:1440,why:"pool test",hx:1,dp:1,rr:PRED_ALLOC.riskFloor}};
+  const n=step(structuredClone(s),now,dir([pool]));
+  const t=n.state.positions.find(p=>p.entryContext?.living?.dp===1);assert.ok(t,`pool trade opened (${JSON.stringify(n.living?.rejected)})`);
+  assert.ok(PRED_ALLOC.riskFloor>=POOL_RISK_FLOOR,"the gate's smallest size is above the account's pool floor");
+  const plain:LivingOrder={...pool,id:`ln-test-${sym}`,note:{...pool.note,hx:undefined,dp:undefined,rr:undefined}};
+  const r=step(structuredClone(s),now,dir([plain]));
+  assert.ok(!r.state.positions.some(p=>p.symbol===sym&&!s.positions.some(q=>q.id===p.id)),"ordinary 0.125% order not opened");
+  assert.match(r.living!.rejected[0]!.reason,/剩余风险预算不足/);
 });
 
 // ---------------------------------------------------------------- replay parity with the research

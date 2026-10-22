@@ -458,3 +458,17 @@ test("pool log (dynamic-v1.4): every gate decision, pool open and close goes int
   assert.equal(m.pool!.length,141);assert.equal(m.pool![0]!.t,"OPEN");assert.deepEqual(m.pool_dropped,{GATE:21,CLOSE:10});
   assert.ok(JSON.stringify(b).length<80_000,"a full bucket stays well under a D1 row");
 });
+
+test("pool log (dynamic-v1.5): a sent pool order that never reaches the account is closed out — NO_QUOTE (coin not in the realtime feed) and REJECTED (the paper account's reason)",()=>{
+  const e=engine({},"paper-enabled",NOW);
+  const gates={"box1h-long":{ok:true,risk:.00125,conf:.25,why:"预测：概率 90%",p6:.9,pMin:.58,phase:"GOOD" as const,elapsedH:5,label:"数据一般"}};
+  const d=e.plan(ctx(dynIn({gates,signals:[sig("box1h-long","AAA_USDT"),sig("box1h-long","ZZZ_USDT")]})))!;
+  assert.deepEqual(d.orders.map(o=>o.symbol),["AAA_USDT"],"no realtime quote for ZZZ → not sent");
+  const g=e.runlog.poolRecent.filter(r=>r.t==="GATE");
+  const nq=g.find(r=>r.sym==="ZZZ_USDT"&&r.decision==="NO_QUOTE")!;assert.ok(nq,"NO_QUOTE record");assert.equal(nq.ok,false);assert.match(String(nq.why),/实时盘口/);
+  assert.ok(g.some(r=>r.sym==="ZZZ_USDT"&&r.decision==="ORDER"),"the ORDER record stays (what the gate decided)");
+  e.afterForward({opened:[],rejected:[{orderId:d.orders[0]!.id,symbol:"AAA_USDT",reason:"维持保证金率 2.5%>2%"}],applied:[]},emptyForward(),NOW);
+  e.afterForward({opened:[],rejected:[{orderId:d.orders[0]!.id,symbol:"AAA_USDT",reason:"维持保证金率 2.5%>2%"}],applied:[]},emptyForward(),NOW+1000);
+  const rj=e.runlog.poolRecent.filter(r=>r.decision==="REJECTED");assert.equal(rj.length,1,"once per order");
+  assert.deepEqual([rj[0]!.pb,rj[0]!.sym,rj[0]!.src,rj[0]!.kind,rj[0]!.ok],["box1h-long","AAA_USDT","account","pool",false]);assert.match(String(rj[0]!.why),/模拟账户没开：维持保证金率/);
+});

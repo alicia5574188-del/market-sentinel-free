@@ -32,7 +32,7 @@ import {analyzePlaybook,phaseChanges,type PlaybookCycle,type TradeLite} from "./
 import {allocate,allocatePred,contradicted,ALLOC,PRED_ALLOC,type Gate,type LiveCheck} from "./allocator.ts";
 import {btcFeatures,phaseInfo,hazardCounts,addHazard,predictPlaybook,scoreRows,forecastLine,trackView,emptyTrack,realView,realLine,PRED,
   type PbForecast,type Track,type FcRow,type Lab,type Hazard} from "./predictor.ts";
-export const DYN_VERSION="dynamic-v1.3";
+export const DYN_VERSION="dynamic-v1.5";
 /** forecast rows kept in memory (scoring needs t + 72 h + the 3-day "never known" expiry) and in D1 */
 export const FC_KEEP_SEC=7*86_400,FC_DB_KEEP_SEC=30*86_400;
 /** live entries must reach the engine within this long after the signal bar closed */

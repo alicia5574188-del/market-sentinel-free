@@ -48,7 +48,7 @@ export function allocate(cycles:Record<string,PlaybookCycle>,state:DayState|null
 }
 // ------------------------------------------------------------------ dynamic-v1.2: predictor gate (short tier + htf-donch20)
 /** tunable constants of the predictor gate */
-export const PRED_ALLOC={pMin:.58,pFull:.8,riskMin:.0025,riskMax:.005,trackMinN:10,trackMinHit:.5,trackMaxBrier:.27,trackFewW:.25,
+export const PRED_ALLOC={pMin:.58,pFull:.8,riskMin:.0025,riskMax:.005,riskFloor:.00125,trackMinN:10,trackMinHit:.5,trackMaxBrier:.27,trackFewW:.25,
   contraFirst:3,contraLast:5,cutHours:12} as const;
 /** shadow results since the gate opened (for the immediate cut) */
 export type LiveCheck={since:number|null;cutUntil:number;results:readonly number[]};
@@ -58,7 +58,7 @@ export function contradicted(results:readonly number[]){const F=PRED_ALLOC.contr
   if(results.length>=F&&results.slice(0,F).every(x=>x<=0))return `开闸后前 ${F} 笔影子交易全亏`;
   if(results.length>=L&&results.slice(-L).every(x=>x<=0))return `最近 ${L} 笔影子交易全亏`;return null;}
 /** the predictor gate: open small paper trades when P(good in the next 6 h) ≥ pMin and the forecast track record is not bad.
- * size = (0.25% … 0.5% by the probability edge) × track-record weight × evidence scale. Long tier stays record-only. */
+ * size = (0.25% … 0.5% by the probability edge) × track-record weight × evidence scale, at least 0.125 %. Long tier stays record-only. */
 export function allocatePred(cycles:Record<string,PlaybookCycle>,state:DayState|null,intra:IntraState|null,pred:PredInput):Record<string,Gate>{
   const out=allocate(cycles,state,intra),A=PRED_ALLOC;
   for(const pb of Object.keys(POOL_BY_ID)){
@@ -74,7 +74,7 @@ export function allocatePred(cycles:Record<string,PlaybookCycle>,state:DayState|
     if(tv.n>=A.trackMinN){
       if(tv.hit<A.trackMinHit||tv.brier>A.trackMaxBrier){out[pb]=no(`概率 ${Math.round(p*100)}% 够，但这套打法的预测记录不好：命中率 ${Math.round(tv.hit*100)}%（${tv.n} 次），Brier ${tv.brier.toFixed(2)}`);continue;}
       tw=Math.max(A.trackFewW,Math.min(1,(tv.hit-A.trackMinHit)/.25));tWhy=`预测命中率 ${Math.round(tv.hit*100)}%（${tv.n} 次）→ ×${tw.toFixed(2)}`;}
-    const edge=Math.max(0,Math.min(1,(p-A.pMin)/(A.pFull-A.pMin))),scale=.25+.75*f.sample,r=(A.riskMin+(A.riskMax-A.riskMin)*edge)*tw*scale;
+    const edge=Math.max(0,Math.min(1,(p-A.pMin)/(A.pFull-A.pMin))),scale=.25+.75*f.sample,r=Math.max(A.riskFloor,(A.riskMin+(A.riskMax-A.riskMin)*edge)*tw*scale);// dynamic-v1.5: never below 0.125 % (switch 10's stated range; the paper account's pool floor is 0.1 %)
     out[pb]={...base,ok:true,conf:r/A.riskMax,risk:r,
       why:`预测：未来 6 小时在赚钱期的概率 ${Math.round(p*100)}%（${f.cur==="GOOD"?`赚钱期第 ${Math.round(f.elapsedH)} 小时`:f.cur==="BAD"?`亏钱期第 ${Math.round(f.elapsedH)} 小时`:"阶段不明"}）【${f.label}】；${tWhy}；证据 ×${scale.toFixed(2)} → 风险 ${(r*100).toFixed(2)}%`};
   }
