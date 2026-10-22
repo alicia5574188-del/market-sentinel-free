@@ -15,9 +15,9 @@ const base=(sym:string)=>sym.endsWith("_USDT")?sym.slice(0,-5):null;
  */
 export function pageUrl(venue:Venue,sym:string,iv:Iv,endSec:number|null,limit:number):string|null{
   const b=base(sym);if(!b)return null;const n=Math.max(1,Math.min(PAGE[venue],Math.floor(limit))),sec=IV_SEC[iv];
-  if(venue==="BYBIT"){const i=iv==="1d"?"D":iv==="4h"?"240":"60";
+  if(venue==="BYBIT"){const i=({"1d":"D","4h":"240","1h":"60","15m":"15","5m":"5","1m":"1"} as Record<Iv,string>)[iv];
     return `${BYBIT}/v5/market/kline?category=linear&symbol=${b}USDT&interval=${i}&limit=${n}${endSec!=null?`&end=${endSec*1000-1}`:""}`;}
-  if(venue==="OKX"){const bar=iv==="1d"?"1Dutc":iv==="4h"?"4H":"1H";
+  if(venue==="OKX"){const bar=({"1d":"1Dutc","4h":"4H","1h":"1H","15m":"15m","5m":"5m","1m":"1m"} as Record<Iv,string>)[iv];
     return `${OKX}/api/v5/market/history-candles?instId=${b}-USDT-SWAP&bar=${bar}&limit=${n}${endSec!=null?`&after=${endSec*1000}`:""}`;}
   const kb=b==="BTC"?"XBT":b,to=(endSec??Math.floor(Date.now()/1000/sec)*sec)*1000-1,from=to+1-n*sec*1000;
   return `${KUCOIN}/api/v1/kline/query?symbol=${kb}USDTM&granularity=${sec/60}&from=${from}&to=${to}`;

@@ -77,7 +77,22 @@ export const LIVING_PLAYBOOK_LABEL:Record<string,string>={"trend-pullback":"趋�
   // dynamic-v1 pool (lib/dynamic/playbooks.ts POOL labels; a test keeps them equal)
   "htf-down20":"日线跌破做空","ema4h-long":"4小时均线金叉做多","ema4h-short":"4小时均线死叉做空","pull4h-long":"4小时顺势回踩做多","pull4h-short":"4小时顺势回踩做空",
   "box1h-long":"1小时箱体上破做多","box1h-short":"1小时箱体下破做空","burst1h-long":"1小时爆发跟随做多","burst1h-short":"1小时爆发跟随做空",
-  "fade1h-long":"1小时爆发反打做多","fade1h-short":"1小时爆发反打做空"};
+  "fade1h-long":"1小时爆发反打做多","fade1h-short":"1小时爆发反打做空",
+  // dynamic-v1.1 short-term pool (lib/dynamic/playbooks-short.ts)
+  "box5m-long":"5m箱体上破跟随做多","box15m-long":"15m箱体上破跟随做多","box5m-short":"5m箱体下破跟随做空","box15m-short":"15m箱体下破跟随做空",
+  "boxfade15m-long":"15m箱体假跌破反打做多","boxfade15m-short":"15m箱体假突破反打做空","orb5m-asia-long":"亚洲开盘区间上破做多","orb5m-asia-short":"亚洲开盘区间下破做空",
+  "orb5m-eu-long":"欧洲开盘区间上破做多","orb5m-eu-short":"欧洲开盘区间下破做空","orb5m-us-long":"美国开盘区间上破做多","orb5m-us-short":"美国开盘区间下破做空",
+  "ny90-long":"美股开盘90分钟动量做多","ny90-short":"美股开盘90分钟动量做空","sweep15m-long":"上一时段低点扫单收回做多","sweep15m-short":"上一时段高点扫单收回做空",
+  "vwap15m-long":"日内均价线收复做多","vwap15m-short":"日内均价线跌回做空","emapull15m-long":"15m均线回踩做多","emapull15m-short":"15m均线回踩做空",
+  "squeeze15m-long":"布林收口后向上突破做多","squeeze15m-short":"布林收口后向下突破做空","bbrev15m-long":"震荡中布林下轨回归做多","bbrev15m-short":"震荡中布林上轨回归做空",
+  "rsidiv15m-long":"RSI底背离反转做多","rsidiv15m-short":"RSI顶背离反转做空","burst5m-long":"5m爆发跟随做多","fade5m-long":"5m爆发反打做多",
+  "burst5m-short":"5m爆发跟随做空","fade5m-short":"5m爆发反打做空","cascade5m-long":"连环爆多力竭反打做多","cascade5m-short":"连环爆空力竭反打做空",
+  "pump1h-long":"单币暴跌反弹做多","pump1h-short":"单币暴涨回落做空","laggard15m-long":"BTC拉升后山寨补涨做多","laggard15m-short":"BTC下跌后山寨补跌做空",
+  "resid1h-long":"山寨独立走强做多","resid1h-short":"山寨独立走弱做空","btclead5m-long":"BTC领涨山寨跟做多","btclead5m-short":"BTC领跌山寨跟做空",
+  "nsigma15m-long":"15m极端下跌回归做多","nsigma15m-short":"15m极端上涨回归做空","struct15m-long":"15m结构转强做多","struct15m-short":"15m结构转弱做空",
+  "nr715m-long":"15m窄幅内包上破做多","nr71h-long":"1h窄幅内包上破做多","nr715m-short":"15m窄幅内包下破做空","nr71h-short":"1h窄幅内包下破做空",
+  "trendday15m-long":"单边上涨日延续做多","trendday15m-short":"单边下跌日延续做空","pdbreak15m-long":"突破前一天高点做多","pdbreak15m-short":"突破前一天低点做空",
+  "pdreject15m-long":"前一天低点假突破回落做多","pdreject15m-short":"前一天高点假突破回落做空","round15m-long":"整数关口跌破收回做多","round15m-short":"整数关口突破回落做空"};
 export const livingPlaybookLabel=(pb:string|null|undefined)=>pb?LIVING_PLAYBOOK_LABEL[pb]??pb:null;
 export const exitShort=(code:string|null|undefined,fallback?:string)=>code?EXIT_SHORT[code]??fallback??code:"—";
 export const exitPlain=(code:string|null|undefined,fallback?:string)=>code?EXIT_PLAIN[code]??fallback??code:null;

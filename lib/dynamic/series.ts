@@ -2,8 +2,11 @@
  * dynamic-v1: compact bar series for the research layer's history (typed arrays, no per-bar objects) and the indicators the
  * playbook pool and the state monitor share. Pure; no request, no storage.
  */
-export type Iv="1d"|"4h"|"1h";
-export const IV_SEC:Record<Iv,number>={"1d":86_400,"4h":14_400,"1h":3_600};
+export type Iv="1d"|"4h"|"1h"|"15m"|"5m"|"1m";
+export const IV_SEC:Record<Iv,number>={"1d":86_400,"4h":14_400,"1h":3_600,"15m":900,"5m":300,"1m":60};
+/** short-term intervals: history replayed in chunks from D1, only a recent window kept in memory */
+export const SHORT_IV:readonly Iv[]=["5m","15m","1h"];
+export const isShortIv=(iv:Iv)=>iv==="5m"||iv==="15m"||iv==="1h"||iv==="1m";
 export type Bar={t:number;o:number;h:number;l:number;c:number;v:number};
 /** time (s, bar open) ascending, unique; a gap is allowed (listing pauses), indicators just run over it */
 export class Series{
@@ -78,3 +81,33 @@ export function corr(a:ArrayLike<number>,b:ArrayLike<number>){
   const n=Math.min(a.length,b.length);if(n<3)return NaN;let ma=0,mb=0;for(let i=0;i<n;i++){ma+=a[i]!;mb+=b[i]!;}ma/=n;mb/=n;
   let sab=0,saa=0,sbb=0;for(let i=0;i<n;i++){const x=a[i]!-ma,y=b[i]!-mb;sab+=x*y;saa+=x*x;sbb+=y*y;}return saa>0&&sbb>0?sab/Math.sqrt(saa*sbb):NaN;
 }
+
+export function rsi(c:ArrayLike<number>,n:number,len=c.length){const out=new Float64Array(len).fill(NaN);let g=0,l=0;
+  for(let i=1;i<len;i++){const d=c[i]!-c[i-1]!,up=Math.max(d,0),dn=Math.max(-d,0);
+    if(i<=n){g+=up;l+=dn;if(i===n){g/=n;l/=n;out[i]=l===0?100:100-100/(1+g/l);}continue;}
+    g=(g*(n-1)+up)/n;l=(l*(n-1)+dn)/n;out[i]=l===0?100:100-100/(1+g/l);}
+  return out;}
+/** rolling standard deviation of x over n values ending at i */
+export function stdev(x:ArrayLike<number>,n:number,len=x.length){const out=new Float64Array(len).fill(NaN);let s=0,q=0,bad=0;
+  for(let i=0;i<len;i++){const v=x[i]!;if(Number.isFinite(v)){s+=v;q+=v*v;}else bad++;
+    if(i>=n){const o=x[i-n]!;if(Number.isFinite(o)){s-=o;q-=o*o;}else bad--;}
+    if(i>=n-1&&!bad){const m=s/n;out[i]=Math.sqrt(Math.max(0,q/n-m*m));}}return out;}
+/** volume-weighted average price since the start of each UTC day (typical price) */
+export function sessionVwap(s:Series){const out=new Float64Array(s.n).fill(NaN);let day=-1,pv=0,v=0;
+  for(let i=0;i<s.n;i++){const d=Math.floor(s.t[i]!/86_400);if(d!==day){day=d;pv=0;v=0;}const tp=(s.h[i]!+s.l[i]!+s.c[i]!)/3,vol=Math.max(s.v[i]!,1e-12);pv+=tp*vol;v+=vol;out[i]=pv/v;}return out;}
+/** simple returns c[i]/c[i-1]-1 (NaN at 0) */
+export function returns(c:ArrayLike<number>,len=c.length){const out=new Float64Array(len).fill(NaN);for(let i=1;i<len;i++)out[i]=c[i]!/c[i-1]!-1;return out;}
+/**
+ * Complete higher-interval bars built from a lower-interval series (e.g. 5m → 15m / 1h): a bar is emitted only when every
+ * constituent bar is present and the bar has closed. Times are bar opens (UTC aligned).
+ */
+export function aggregate(src:Series,iv:Iv,fromT=-Infinity):Bar[]{
+  const sec=IV_SEC[iv],sub=IV_SEC[src.iv],need=sec/sub,out:Bar[]=[];if(!(need>1)||!Number.isInteger(need))return out;
+  let i=0;while(i<src.n&&src.t[i]!<fromT)i++;
+  while(i<src.n){const t0=Math.floor(src.t[i]!/sec)*sec;let j=i,o=0,h=-Infinity,l=Infinity,c=0,v=0,k=0;
+    while(j<src.n&&src.t[j]!<t0+sec){if(src.t[j]===t0+k*sub){if(!k)o=src.o[j]!;h=Math.max(h,src.h[j]!);l=Math.min(l,src.l[j]!);c=src.c[j]!;v+=src.v[j]!;k++;}else k=-1e9;j++;}
+    if(k===need&&t0>=fromT)out.push({t:t0,o,h,l,c,v});i=j;}
+  return out;
+}
+/** memo of indicator arrays for one series window (playbooks share ATR / EMA / … ) */
+export class Memo{private m=new Map<string,Float64Array>();get(k:string,f:()=>Float64Array){let v=this.m.get(k);if(!v){v=f();this.m.set(k,v);}return v;}}

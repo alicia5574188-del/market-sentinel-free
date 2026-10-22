@@ -4,14 +4,24 @@
  * fills at the open); signal / time exits at a bar close; trails move only in the trade's favour and apply from the next bar.
  * Net % = side × (exit / entry − 1) − 0.19% (round-trip fees). Price %, not ROE. No request, no state.
  */
-import {Series,ema,sma,atr,priorMax,priorMin,rollMin,rollMax,IV_SEC,type Iv} from "./series.ts";
+import {Series,ema,sma,atr,priorMax,priorMin,rollMin,rollMax,IV_SEC,Memo,type Iv} from "./series.ts";
+import {SHORT_POOL} from "./playbooks-short.ts";
 export const FEE=.0019;
 export type Side="LONG"|"SHORT";
 export type Entry={stop:number;target?:number|null;maxBars?:number|null;why:string};
 export type Pos={ei:number;et:number;ep:number;stop0:number;stop:number;target:number|null;maxBars:number|null;why:string};
-export type Ctx={btcBull:(tSec:number)=>boolean|null};
+/** btcBull: daily regime; btc: BTC bars of the same interval over (at least) the same window (cross-asset playbooks); memo:
+ * indicator cache for the series being replayed */
+export type Ctx={btcBull:(tSec:number)=>boolean|null;btc?:Series|null;memo?:Memo};
+export type Tier="short"|"long";
 export type Playbook={id:string;label:string;iv:Iv;side:Side;warm:number;
-  prep(s:Series):Record<string,Float64Array>;
+  /** short = the core pool (holds minutes to ≤ 24 h); long = daily / 4h, record-only by default */
+  tier?:Tier;family?:string;familyLabel?:string;
+  /** majors = BTC/ETH only; alts = everything but BTC/ETH */
+  only?:"majors"|"alts";
+  /** minimum stop distance (fraction of entry); short playbooks widen their stops to it */
+  minStop?:number;
+  prep(s:Series,ctx:Ctx):Record<string,Float64Array>;
   enter(x:Record<string,Float64Array>,s:Series,i:number,ctx:Ctx):Entry|null;
   /** at the close of bar i (> ei): a signal exit and/or a new stop */
   manage?(x:Record<string,Float64Array>,s:Series,i:number,p:Pos):{exit?:string;stop?:number}|null;
@@ -49,11 +59,11 @@ function emaCross(side:Side):Playbook{const L=side==="LONG";return {id:`ema4h-${
     const c=close(s,i);return (L?up:dn)?{stop:L?c-2.5*a:c+2.5*a,why:`EMA20 ${L?"上穿":"下穿"} EMA50`}:null;},
   manage:(x,_s,i)=>{const f=x.f![i]!,w=x.w![i]!;return (L?f<w:f>w)?{exit:"反向交叉"}:null;}};}
 function boxBreak(side:Side):Playbook{const L=side==="LONG";return {id:`box1h-${L?"long":"short"}`,label:`1小时箱体${L?"上破做多":"下破做空"}`,iv:"1h",side,warm:50,
-  rule:`前 48 根 1 小时 K 线高低差 ≤ 6%（箱体），收盘${L?"突破箱顶":"跌破箱底"} → ${L?"做多":"做空"}；止损箱体中线，目标 2R，最多 48 小时`,
+  rule:`前 48 根 1 小时 K 线高低差 ≤ 6%（箱体），收盘${L?"突破箱顶":"跌破箱底"} → ${L?"做多":"做空"}；止损箱体中线，目标 2R，最多 24 小时`,
   prep:s=>({hi:priorMax(s.h,48,s.n),lo:priorMin(s.l,48,s.n)}),
   enter:(x,s,i)=>{const h=x.hi![i]!,l=x.lo![i]!,c=close(s,i);if(!ok(h)||!ok(l)||(h-l)/c>.06)return null;const mid=(h+l)/2;
-    if(L&&c>h)return {stop:mid,target:c+2*(c-mid),maxBars:48,why:`箱体 ${((h-l)/c*100).toFixed(1)}% 上破`};
-    if(!L&&c<l)return {stop:mid,target:c-2*(mid-c),maxBars:48,why:`箱体 ${((h-l)/c*100).toFixed(1)}% 下破`};return null;}};}
+    if(L&&c>h)return {stop:mid,target:c+2*(c-mid),maxBars:24,why:`箱体 ${((h-l)/c*100).toFixed(1)}% 上破`};
+    if(!L&&c<l)return {stop:mid,target:c-2*(mid-c),maxBars:24,why:`箱体 ${((h-l)/c*100).toFixed(1)}% 下破`};return null;}};}
 function pullback(side:Side):Playbook{const L=side==="LONG";return {id:`pull4h-${L?"long":"short"}`,label:`4小时顺势回踩${L?"做多":"做空"}`,iv:"4h",side,warm:60,
   rule:`4小时 EMA50 ${L?"向上":"向下"}且价格在其${L?"上":"下"}方，K 线${L?"回踩":"反抽"} EMA20 后收${L?"阳":"阴"} → ${L?"做多":"做空"}；止损近 5 根${L?"最低":"最高"} ∓0.5ATR，目标 2R，最多 30 根`,
   prep:s=>({f:ema(s.c,20,s.n),w:ema(s.c,50,s.n),a:atr(s,14),lo:rollMin(s.l,5,s.n),hi:rollMax(s.h,5,s.n)}),
@@ -72,9 +82,16 @@ function burstFade(side:Side):Playbook{const L=side==="LONG";return {id:`fade1h-
   prep:s=>({a:atr(s,14),vm:sma(s.v,20,s.n)}),
   enter:(x,s,i)=>{const b=burstOf(x,s,i);if(b!==(L?-1:1))return null;const a=x.a![i]!;
     return {stop:L?s.l[i]!-.25*a:s.h[i]!+.25*a,target:s.o[i]!,maxBars:6,why:"爆发 K 线反打"};}};}
-export const POOL:readonly Playbook[]=[donch,breakdown,emaCross("LONG"),emaCross("SHORT"),pullback("LONG"),pullback("SHORT"),
-  boxBreak("LONG"),boxBreak("SHORT"),burstFollow("LONG"),burstFollow("SHORT"),burstFade("LONG"),burstFade("SHORT")];
+const LONG_POOL:readonly Playbook[]=[donch,breakdown,emaCross("LONG"),emaCross("SHORT"),pullback("LONG"),pullback("SHORT")].map(p=>({...p,tier:"long" as Tier,
+  family:p.id.replace(/-(long|short)$/,""),familyLabel:p.iv==="1d"?"日线趋势":"4小时趋势"}));
+const HOUR_POOL:readonly Playbook[]=[boxBreak("LONG"),boxBreak("SHORT"),burstFollow("LONG"),burstFollow("SHORT"),burstFade("LONG"),burstFade("SHORT")].map(p=>({...p,tier:"short" as Tier,
+  family:p.id.replace(/-(long|short)$/,""),familyLabel:p.id.startsWith("box")?"箱体突破":p.id.startsWith("burst")?"爆发跟随":"爆发反打",minStop:.008}));
+export const POOL:readonly Playbook[]=[...SHORT_POOL,...HOUR_POOL,...LONG_POOL];
 export const POOL_BY_ID:Record<string,Playbook>=Object.fromEntries(POOL.map(p=>[p.id,p]));
+export const POOL_INDEX:Record<string,number>=Object.fromEntries(POOL.map((p,i)=>[p.id,i]));
+export const tierOf=(pb:Playbook):Tier=>pb.tier??"long";
+export const MAJORS=new Set(["BTC_USDT","ETH_USDT"]);
+export const applies=(pb:Playbook,sym:string)=>pb.only==="majors"?MAJORS.has(sym):pb.only==="alts"?!MAJORS.has(sym):true;
 export const STOP_MIN=.004,STOP_MAX=.35;
 export const tradeId=(pb:string,sym:string,et:number)=>`${pb}|${sym}|${et}`;
 /** exit check of an open position on bar i (stop/target intrabar, then signal / time at the close, then the trail). Mutates p.stop. */
@@ -92,9 +109,9 @@ export function stepExit(pb:Playbook,x:Record<string,Float64Array>,s:Series,i:nu
  * Replay one playbook over one series. `fromT` skips entries before it (exits still run). Returns closed trades and the open one
  * (if any) at the last bar. Deterministic: the same bars always give the same trades and ids.
  */
-export function simulate(pb:Playbook,s:Series,ctx:Ctx,opts:{fromT?:number}={}):{trades:ShadowTrade[];open:OpenShadow|null}{
-  const trades:ShadowTrade[]=[],n=s.n;if(n<pb.warm+2)return {trades,open:null};
-  const x=pb.prep(s),d=pb.side==="LONG"?1:-1;let p:Pos|null=null;
+export function simulate(pb:Playbook,s:Series,ctx:Ctx,opts:{fromT?:number;toT?:number}={}):{trades:ShadowTrade[];open:OpenShadow|null}{
+  const trades:ShadowTrade[]=[],n=s.n;if(n<pb.warm+2||!applies(pb,s.sym))return {trades,open:null};
+  const x=pb.prep(s,ctx),d=pb.side==="LONG"?1:-1,minStop=pb.minStop??STOP_MIN;let p:Pos|null=null;
   for(let i=pb.warm;i<n;i++){
     if(p){const q:Pos=p,e=stepExit(pb,x,s,i,q);
       if(e){const net=d*(e.px/q.ep-1)-FEE,rr=Math.abs(q.ep-q.stop0)/q.ep;
@@ -102,11 +119,14 @@ export function simulate(pb:Playbook,s:Series,ctx:Ctx,opts:{fromT?:number}={}):{
         p=null;}
       continue;// no re-entry on the bar that closed a trade
     }
-    const t=end(s,i);if(opts.fromT!=null&&t<opts.fromT)continue;
+    const t=end(s,i);if(opts.fromT!=null&&t<opts.fromT)continue;if(opts.toT!=null&&t>=opts.toT)continue;
     const e=pb.enter(x,s,i,ctx);if(!e)continue;
-    const c=s.c[i]!,rate=d*(c-e.stop)/c;if(!(rate>=STOP_MIN&&rate<=STOP_MAX))continue;
+    const c=s.c[i]!;let stop=e.stop,rate=d*(c-stop)/c;
+    // short tier: a stop tighter than the minimum (fees) is widened to it, not skipped
+    if(pb.tier==="short"&&ok(rate)&&rate>0&&rate<minStop){stop=c*(1-d*minStop);rate=minStop;}
+    if(!(rate>=minStop*.999&&rate<=STOP_MAX))continue;
     if(e.target!=null&&!(d*(e.target-c)>0))continue;
-    p={ei:i,et:t,ep:c,stop0:e.stop,stop:e.stop,target:e.target??null,maxBars:e.maxBars??null,why:e.why};
+    p={ei:i,et:t,ep:c,stop0:stop,stop,target:e.target??null,maxBars:e.maxBars??null,why:e.why};
   }
   const q=p as Pos|null;
   return {trades,open:q?{pb:pb.id,side:pb.side,sym:s.sym,iv:s.iv,et:q.et,ep:q.ep,stop0:q.stop0,stop:q.stop,target:q.target,maxBars:q.maxBars,bars:n-1-q.ei,why:q.why,fresh:q.ei===n-1}:null};
@@ -116,7 +136,7 @@ export function simulate(pb:Playbook,s:Series,ctx:Ctx,opts:{fromT?:number}={}):{
  * at the open time; the target and the time limit are the signal's (stored on the trade). Returns the current stop, or an exit.
  */
 export function manageLive(pb:Playbook,s:Series,t:{openedAtMs:number;entry:number;stop0:number;stop:number;target?:number|null;maxBars?:number|null}):{exit:{why:string;px:number}|null;stop:number;bars:number}|null{
-  const n=s.n;if(n<pb.warm+2)return null;const x=pb.prep(s),sig=s.indexAtOrBefore(t.openedAtMs/1000-IV_SEC[s.iv]);if(sig<pb.warm)return null;
+  const n=s.n;if(n<pb.warm+2)return null;const x=pb.prep(s,{btcBull:()=>null,memo:new Memo()}),sig=s.indexAtOrBefore(t.openedAtMs/1000-IV_SEC[s.iv]);if(sig<pb.warm)return null;
   const p:Pos={ei:sig,et:t.openedAtMs/1000,ep:t.entry,stop0:t.stop0,stop:t.stop,target:t.target!=null&&ok(t.target)?t.target:null,maxBars:t.maxBars??null,why:""};
   // stop touches are the forward core's (real Gate price); here only target / signal / time exits and the trail
   for(let i=sig+1;i<n;i++){if(s.t[i]!<p.et-1)continue;const ex=stepExit(pb,x,s,i,p);if(ex&&!/止损/.test(ex.why))return {exit:ex,stop:p.stop,bars:i-sig};}

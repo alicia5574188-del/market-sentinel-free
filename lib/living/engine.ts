@@ -912,7 +912,7 @@ export class LivingEngine{
         const why=`${s.why}；分配器：${g.why}`.slice(0,240);
         out.orders.push({id:s.id,symbol:s.sym,side:s.side,stop:r6(s.stop),riskRate:g.risk,multiple:1,kind:"N",episodeId:null,episodeCap:null,winner:false,reason:why,
           note:{v:"living-v2",k:"N",pb:s.pb,th:null,ep:null,ev:"normal",mult:1,sc:null,t:null,n:null,per:null,rk:null,inv:r6(s.stop),ref:r6(s.ep),
-            hold:s.iv==="1d"?30*1440:s.iv==="4h"?7*1440:2*1440,why:why.slice(0,200),in:`DYN/${s.side}`,mk:mk??"WARMING",nar:(d.state??"").slice(0,60),
+            hold:s.iv==="1d"?30*1440:s.iv==="4h"?7*1440:s.iv==="1h"?2*1440:1440,why:why.slice(0,200),in:`DYN/${s.side}`,mk:mk??"WARMING",nar:(d.state??"").slice(0,60),
             evd:`${s.iv} 信号收盘 ${s.ep}｜止损 ${s.stop}${s.target!=null?`｜目标 ${r6(s.target)}`:""}${s.maxBars!=null?`｜最多 ${s.maxBars} 根`:""}｜风险 ${(g.risk*100).toFixed(2)}%`,hx:1,dp:1,cf:r4(g.conf),
             ...(s.target!=null?{tg:r6(s.target)}:{}),...(s.maxBars!=null?{mb:s.maxBars}:{})}});
         this.note(now,"DYN_ORDER",{sym:s.sym,side:s.side,pb:s.pb,order:s.id,stop:r6(s.stop),risk:r4(g.risk),reason:why.slice(0,200)});

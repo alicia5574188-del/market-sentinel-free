@@ -59,3 +59,32 @@ export function stateChanges(states:readonly DayState[]):StateChange[]{
     if(b.bucket!==cur&&a.bucket===b.bucket){out.push({t:b.t,from:cur,to:b.bucket,why:`BTC ${b.btc} ${TREND_LABEL[b.trend]}（距 100 日均线 ${(b.strength*100).toFixed(1)}%），ATR ${(b.atrPct*100).toFixed(1)}%（1 年分位 ${Math.round(b.volPct*100)}%）`});cur=b.bucket;}}
   return out;
 }
+// ---------------------------------------------------------------- intraday state (short-term playbooks cycle faster)
+/**
+ * Per closed BTC 1h bar: 1h trend (EMA20 vs EMA50 of 1h closes and the close vs the 4h-equivalent EMA96), 4h trend (EMA of 4h
+ * closes built from 1h: close vs EMA 4h×20), 24h realized volatility (ATR24 of 1h / price) and its 30-day percentile, ETH's
+ * 1h trend, and the UTC session. Bucket = 1h trend × volatility (same 9 cells as the daily one), so shadow trades split evenly.
+ */
+export type Session="ASIA"|"EU"|"US"|"LATE";
+export const SESSION_LABEL:Record<Session,string>={ASIA:"亚洲盘 0–7 点",EU:"欧洲盘 7–13 点",US:"美国盘 13–21 点",LATE:"美盘尾 21–24 点"};
+export const sessionOf=(tSec:number):Session=>{const h=Math.floor((tSec%86_400)/3600);return h<7?"ASIA":h<13?"EU":h<21?"US":"LATE";};
+export type IntraState={t:number;btc:number;trend:Trend;trend4h:Trend;atrPct:number;volPct:number;vol:Vol;eth:Trend|null;bucket:string};
+export function intradayStates(btc:Series,eth:Series|null):IntraState[]{
+  const n=btc.n,out:IntraState[]=[];if(n<200)return out;
+  const e20=ema(btc.c,20,n),e50=ema(btc.c,50,n),e96=ema(btc.c,96,n),e80=ema(btc.c,80,n),a24=atr(btc,24);
+  const ee=eth&&eth.n>=60?{f:ema(eth.c,20,eth.n),w:ema(eth.c,50,eth.n)}:null;
+  const atrp=new Float64Array(n).fill(NaN);for(let i=0;i<n;i++)atrp[i]=a24[i]!/btc.c[i]!;
+  for(let i=120;i<n;i++){const c=btc.c[i]!,ap=atrp[i]!;if(!ok(ap))continue;
+    const trend:Trend=c>e96[i]!&&e20[i]!>e50[i]!?"UP":c<e96[i]!&&e20[i]!<e50[i]!?"DOWN":"MIX";
+    const trend4h:Trend=c>e80[i]!*1.002?"UP":c<e80[i]!*.998?"DOWN":"MIX";
+    let below=0,eq=0,cnt=0;for(let j=Math.max(0,i-719);j<=i;j+=3){const v=atrp[j]!;if(ok(v)){cnt++;if(Math.abs(v-ap)<=1e-6*ap)eq++;else if(v<ap)below++;}}
+    const volPct=cnt?(below+eq/2)/cnt:.5,vol:Vol=volPct<1/3?"LOW":volPct>2/3?"HIGH":"MID";
+    let et:Trend|null=null;if(eth&&ee){const k=eth.indexAtOrBefore(btc.t[i]!);if(k>=0&&eth.t[k]===btc.t[i]){const ec=eth.c[k]!;et=ee.f[k]!>ee.w[k]!&&ec>ee.f[k]!?"UP":ee.f[k]!<ee.w[k]!&&ec<ee.f[k]!?"DOWN":"MIX";}}
+    out.push({t:btc.t[i]!,btc:c,trend,trend4h,atrPct:ap,volPct,vol,eth:et,bucket:`${trend}/${vol}`});}
+  return out;
+}
+/** the intraday state known at tSec (last 1h bar closed at or before it); stale (> 3 h) → null */
+export function intraAt(states:readonly IntraState[],tSec:number):IntraState|null{
+  let lo=0,hi=states.length-1,ans=-1;while(lo<=hi){const m=(lo+hi)>>1;if(states[m]!.t+3600<=tSec){ans=m;lo=m+1;}else hi=m-1;}
+  if(ans<0)return null;const s=states[ans]!;return tSec-(s.t+3600)<=3*3600?s:null;
+}

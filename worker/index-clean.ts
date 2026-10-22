@@ -4891,14 +4891,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
   /**
    * dynamic-v1 step: off the trading clock (the tick does not wait for it), one at a time, at most every 5 s; inside, at most one
-   * external-venue request per 15 s (never Gate) and a few D1 statements. Its events are copied into the living run log.
+   * external-venue request per 15 s (never Gate) and a few D1 statements. Live 5m bars come from strategyCandles (the external
+   * 5m refresh the worker already does — no extra request). Its events are copied into the living run log.
    */
   private launchDynamicWork(now:number){
     try{
       if(this.dynamicWork||now-this.dynamic.lastStepAt<5_000)return;
       const db=(this.env as {DB?:unknown}).DB?(this.env.DB as unknown as D1Like):null;
       const universe=this.strategyPathSymbols().filter(s=>this.marketHub.supports(s));
-      const task=this.dynamic.step(now,{universe,db,fetch:venueFetch}).then(()=>{
+      const task=this.dynamic.step(now,{universe,db,fetch:venueFetch,feed:this.strategyCandles}).then(()=>{
         const engine=this.living;if(!engine)return;
         for(const e of this.dynamic.events)if(e.at>this.dynamicEventAt){try{engine.runlog.event(e.at,`DYN_${e.k}`,e.text);}catch{/* 只是记录 */}}
         this.dynamicEventAt=Math.max(this.dynamicEventAt,...this.dynamic.events.map(e=>e.at));
