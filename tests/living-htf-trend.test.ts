@@ -34,7 +34,7 @@ test("constants are C1b: BTC>SMA100, top 30, Donchian 20 / trail 10 / 2×ATR20, 
   assert.deepEqual([HTF.pb,HTF.regimeN,HTF.topLiquid,HTF.entryN,HTF.exitN,HTF.atrN,HTF.stopAtr,HTF.riskRate,HTF.notionalCap,HTF.maxOpen],
     ["htf-donch20",100,30,20,10,20,2,.0075,1,8]);
   assert.equal(HTF.label,"日线突破做多");
-  assert.equal(LIVING_ITEMS.length,9);assert.equal(LIVING_ITEMS[8],"htfTrend");assert.match(LIVING_ITEM_LABELS.htfTrend,/^9 日线突破做多/);
+  assert.equal(LIVING_ITEMS.length,10);assert.equal(LIVING_ITEMS[8],"htfTrend");assert.match(LIVING_ITEM_LABELS.htfTrend,/^9 日线突破做多/);
   assert.equal(defaultLivingConfig(0).items.htfTrend,true);
   assert.equal(LEADER.maxOpen,3,"burst max 3 unchanged");
 });
@@ -110,7 +110,7 @@ const quotesAt=(now:number,px:Record<string,number>)=>Object.fromEntries(Object.
 const emptyForward=():ForwardView=>({positions:[],history:[],opportunities:[]});
 function engine(items:Partial<Record<string,boolean>>={},mode:"paper-enabled"|"compute-only"="paper-enabled",at=0){
   const e=new LivingEngine(at),cfg=defaultLivingConfig(at);
-  e.restore(new Map([[LIVING_KEYS.config,{...cfg,mode,items:{...cfg.items,...items}}]]),at);return e;
+  e.restore(new Map([[LIVING_KEYS.config,{...cfg,mode,items:{...cfg.items,dynAllocator:false,...items}}]]),at);return e;
 }
 const ctxOf=(now:number,htf:HtfInput,forward:ForwardView=emptyForward(),px:Record<string,number>={AAA_USDT:11,BBB_USDT:11,CCC_USDT:10,BTC_USDT:120}):PlanContext=>
   ({now,forward,quotes:quotesAt(now,px),contracts:{},funding:{},candles:{},htf});

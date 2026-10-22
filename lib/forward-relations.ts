@@ -1916,11 +1916,11 @@ function openLivingTrade(s:ForwardState,o:LivingOrder,living:LivingDirective,q:Q
   if(!(price>0))return"盘口价格无效";
   if(now-(s.lastExitAt[o.symbol]??0)<15*60_000&&s.lastSide[o.symbol]===side)return"同币同方向 15 分钟内刚平过";
   if(d*(price-o.stop)<=0)return"失效价已经不在成交价外侧";
-  const stopRate=Math.abs(price-o.stop)/price,htf=o.note.hx===1;
-  if(htf){if(!(stopRate>=HTF_STOP_MIN&&stopRate<=HTF_STOP_MAX))return`日线突破止损宽度 ${(stopRate*100).toFixed(2)}% 不在 0.4%-35%`;}
+  const stopRate=Math.abs(price-o.stop)/price,htf=o.note.hx===1,pool=o.note.dp===1,wideName=pool?`打法池 ${o.note.pb}`:"日线突破";
+  if(htf){if(!(stopRate>=HTF_STOP_MIN&&stopRate<=HTF_STOP_MAX))return`${wideName}止损宽度 ${(stopRate*100).toFixed(2)}% 不在 0.4%-35%`;}
   else if(!(stopRate>=.004&&stopRate<=.035))return`止损宽度 ${(stopRate*100).toFixed(2)}% 不在 0.4%-3.5%`;
-  const htfLeverage=htf?htfPaperLeverage(stopRate,contract.leverageMax,contract.maintenanceRate):null;
-  if(htf&&htfLeverage==null)return`日线突破止损 ${(stopRate*100).toFixed(2)}% 太宽，1 倍也放不进爆仓距离的 40%`;
+  const htfLeverage=htf?htfPaperLeverage(stopRate,contract.leverageMax,contract.maintenanceRate,.40,side):null;
+  if(htf&&htfLeverage==null)return`${wideName}止损 ${(stopRate*100).toFixed(2)}% 太宽，1 倍也放不进爆仓距离的 40%`;
   const leverage=htfLeverage??fixedPaperLeverage(contract.leverageMax),maintenanceRate=maintenanceRateOf(contract.maintenanceRate),
     liquidationPrice=isolatedLiquidationPrice({entry:price,leverage,side,maintenanceRate});
   if(living.items.liqSafety){
@@ -1982,7 +1982,7 @@ function openLivingTrade(s:ForwardState,o:LivingOrder,living:LivingDirective,q:Q
     s.signalTally=remembered.tally;t.signalRepeat=remembered.repeat;t.entrySpreadBps=quoteSpreadBps(q!.bestBid,q!.bestAsk);
   }catch{/* 记下次数失败也不能挡住这张单 */}
   s.positions.push(t);s.balance-=entryFee;s.fees+=entryFee;s.turnover+=notional;s.lastEntryAt[o.symbol]=now;s.lastSide[o.symbol]=side;
-  event(s,now,"ENTRY",id,`${o.symbol} ${side} 研究层${htf?"日线突破做多":o.note.k==="F"?"快速跟进":"五步闭环"} ${o.note.pb}`,{notional,plannedRisk});
+  event(s,now,"ENTRY",id,`${o.symbol} ${side} 研究层${pool?"打法池":htf?"日线突破做多":o.note.k==="F"?"快速跟进":"五步闭环"} ${o.note.pb}`,{notional,plannedRisk});
   return{tradeId:id,symbol:o.symbol,side,risk:plannedRisk,notional};
 }
 

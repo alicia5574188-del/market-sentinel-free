@@ -21,7 +21,13 @@ export type LivingNote={v:"living-v1"|"living-v2";k:LivingKind;pb:string;th:stri
   /** htf-donch20 (lib/living/htf-trend.ts): daily trend breakout. Only its stop / daily trail (and the liquidation guards) close it;
    * `inv` is the initial stop (entry − 2×ATR20), `ref` the 20-day high it broke, `atr` the daily ATR20 at the signal, `cl` the
    * signal-day close, `dy` the signal day (UTC "YYYY-MM-DD"). */
-  hx?:1;atr?:number;cl?:number;dy?:string};
+  hx?:1;atr?:number;cl?:number;dy?:string;
+  /** dynamic-v1 pool playbook (lib/dynamic/playbooks.ts, id in `pb`): set together with hx (wide stop, own exits, no time exit
+   * from the forward core); its stop trail / target / signal / time exits come from the same rule on the venue bars (LIVING_DYN_*).
+   * `cf` the allocator's confidence (0.5–1) that scaled its risk. */
+  dp?:1;cf?:number;
+  /** dynamic-v1: the signal's time limit in bars of its interval (target is `tg`) */
+  mb?:number};
 export type LivingTradeAction={tradeId:string;action:"EXIT"|"GUARD"|"HANDOFF";stop?:number;code:string;reason:string;detail?:Record<string,number|string|null>};
 export type LivingOrder={id:string;symbol:string;side:"LONG"|"SHORT";stop:number;
   /** fraction of equity risked before the multiple, and the multiple (normal: 5 x evidence; fast: 1..3, probe /3) */
@@ -30,7 +36,7 @@ export type LivingOrder={id:string;symbol:string;side:"LONG"|"SHORT";stop:number
   episodeCap:number|null;
   winner:boolean;note:LivingNote;reason:string};
 export type LivingDirective={version:"living-v1"|"living-v2";items:{fastProtect:boolean;fastFollow:boolean;newSource:boolean;noChase:boolean;
-  liqSafety:boolean;thesisExit:boolean;sizing:boolean;burstLeader?:boolean;htfTrend?:boolean};actions:LivingTradeAction[];orders:LivingOrder[];
+  liqSafety:boolean;thesisExit:boolean;sizing:boolean;burstLeader?:boolean;htfTrend?:boolean;dynAllocator?:boolean};actions:LivingTradeAction[];orders:LivingOrder[];
   /** "note": legacy stage/BTC gates no longer block — the unopened legacy row is kept as a note, the living flow decides. */
   legacyGate:"note"|"open"};
 export type LivingResult={opened:{orderId:string;tradeId:string;symbol:string;side:"LONG"|"SHORT";risk:number;notional:number}[];

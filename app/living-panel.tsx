@@ -8,6 +8,7 @@ import {useBrain,MODE_LABEL,STATE_LABEL,CAPITAL_LABEL,EMOTION_LABEL,DECISION_LAB
 import {Coin,safePnl,held,signed,tone,stamp,clock,legacyMarketLine} from "./market-intelligence-execution.tsx";
 import {exitShort} from "./order-card.tsx";
 import PanelStamp from "./panel-stamp.tsx";
+import DynamicPanel from "./dynamic-panel.tsx";
 import "./market-brain.css";
 
 type View=ReturnType<typeof forwardSummary>;
@@ -123,6 +124,7 @@ function LivingPanel({auth,scope="owner",data=null,now=0,liveEnabled=false,liveO
     </section>}
 
     <section className="pg-section mb-folds">
+    {s&&<DynamicPanel s={s} busy={busy} onToggle={on=>void setItem("dynAllocator",on)}/>}
     {s&&<details className="mb-fold"><summary>最近的决定（{s.decisions?.length??0}）</summary>
       {!s.decisions?.length?<p className="mb-hint">还没有决定。</p>:<ol className="mb-list">{s.decisions.map((d,i)=>{const k=String(d.k);return <li key={i}>
         <b>{bj(d.at as number)} {DECISION_LABEL[k]??k}{d.sym?` · ${coinName(String(d.sym))}`:""}{d.side?` ${sideCn(String(d.side))}`:""}</b>

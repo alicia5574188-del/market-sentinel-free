@@ -6,7 +6,8 @@
  */
 export type LivingNoteView={v?:string;k?:string;pb?:string;ev?:string;mult?:number;sc?:number|null;t?:number|null;n?:number|null;per?:string|null;
   rk?:number|null;inv?:number;ref?:number|null;hold?:number;why?:string;in?:string;mk?:string;nar?:string;evd?:string;ep?:string|null;ho?:number;mx?:number;lm?:number;env?:string;tg?:number;
-  /** htf-donch20 (daily trend breakout): signal day, its close, daily ATR20 */hx?:number;dy?:string;cl?:number;atr?:number};
+  /** htf-donch20 (daily trend breakout): signal day, its close, daily ATR20 */hx?:number;dy?:string;cl?:number;atr?:number;
+  /** dynamic-v1 pool playbook (allocator-gated) and the allocator confidence */dp?:number;cf?:number};
 export type LivingTradeLike={side:"LONG"|"SHORT";entryPrice:number;stopPrice?:number|null;liquidationPrice?:number|null;plannedRisk:number;leverage:number;
   notional:number;expectedHoldMinutes?:number|null;entryContext?:{living?:LivingNoteView|null;reason?:string|null}|null};
 
@@ -35,6 +36,7 @@ export function livingIntentText(raw:string|null|undefined){
 }
 /** The 开仓盘面 fact for a living trade: the market intent the layer read, not the old stage name. */
 export function livingBoard(n:LivingNoteView){
+  if(n.dp)return`打法池：BTC/ETH 状态 ${n.nar||"—"}`;
   if(n.hx)return"日线：BTC 在 100 日均线上";
   if(n.k==="F")return"集体异动";
   return n.mk?LIVING_STATE_LABEL[n.mk]??n.mk:"研究层判断";
@@ -42,6 +44,7 @@ export function livingBoard(n:LivingNoteView){
 /** The one-line 为什么开 for a living trade. */
 export function livingWhy(t:LivingTradeLike,playbook:string|null){
   const n=t.entryContext!.living!;
+  if(n.dp)return `${t.side==="LONG"?"做多":"做空"}，${playbook??n.pb??"打法池"}；${(n.why??"").split("；分配器")[0]}。`;
   if(n.hx)return `做多，${playbook??"日线突破做多"}；${n.dy??"前一天"} 日线收盘 ${price(n.cl)} 突破前 20 日最高 ${price(n.ref)}，BTC 在 100 日均线上。`;
   const bits=[`${t.side==="LONG"?"做多":"做空"}，${playbook??n.pb??"研究层"}`];
   const coin=livingIntentText(n.in);if(coin)bits.push(`这个币${coin}`);
@@ -56,6 +59,14 @@ export function livingWhy(t:LivingTradeLike,playbook:string|null){
 /** The 详细依据 lines ("标签：内容") for a living trade. */
 export function livingDetail(t:LivingTradeLike,playbook:string|null):string[]{
   const n=t.entryContext!.living!,fast=n.k==="F",lines:string[]=[];
+  if(n.dp){
+    lines.push(`打法：${playbook??n.pb??"—"}（打法池，动态分配允许后开单）`);
+    if(n.why)lines.push(`依据：${n.why}`);
+    if(n.evd)lines.push(`信号数字：${n.evd}`);
+    lines.push(`止损：${price(n.inv)}（离开仓价 ${away(t.entryPrice,n.inv)}），按打法规则只往有利方向移动；目标/反向信号/到时间在 K 线收盘时离场`);
+    lines.push(`仓位：分配器信心 ${num(n.cf,2)} → 计划风险 ${num(t.plannedRisk,2)} USDT，名义 ${num(t.notional,0)} USDT，${t.leverage} 倍（止损在爆仓距离 40% 内）`);
+    return lines;
+  }
   if(n.hx)return htfDetail(t,n,playbook);
   const hold=Math.round(n.hold??t.expectedHoldMinutes??0),late=Math.round(hold*1.5);
   lines.push(`打法：${playbook??n.pb??"—"}（${fast?"集体异动快速跟进":"研究层五步闭环"}，${n.v==="living-v1"?"living-v1":"living-v2"}）`);

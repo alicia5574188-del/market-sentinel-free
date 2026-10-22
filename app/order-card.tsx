@@ -66,13 +66,18 @@ const EXIT_PLAIN:Record<string,string>={
   LIVING_STOP:"价格打到这笔单的止损价（开仓时定的，或大脑收紧过的），平仓。",
   LIVING_FALLBACK_TIMEOUT:"大脑暂停（出错、数据不新鲜或关闭）期间，这笔单拿满计划时长的 1.5 倍，按兜底规则平仓。",
   LIVING_HTF_TRAIL_EXIT:"日线突破单：日线收盘后止损上移到近 10 日最低点，价格已经在下面，平仓。",
+  LIVING_DYN_TRAIL:"打法池单：按打法规则移动后的止损被打到。",LIVING_DYN_EXIT:"打法池单：K 线收盘时按打法规则离场（到目标、反向信号或到时间）。",
 };
 /** Living-layer playbook names (same text as lib/living/thesis.ts PLAYBOOK_LABEL; a test keeps them in sync). */
 export const LIVING_PLAYBOOK_LABEL:Record<string,string>={"trend-pullback":"趋势回调","breakout":"突破延续","range-revert":"区间回归",
   "extension-fade":"过度延伸反转","crowding-fade":"拥挤反转",leaders:"领涨延续",laggards:"落后补涨","btc-lead":"BTC 带动",momentum:"动量",
   follow:"顺着真资金（回调跟进）","squeeze-fade":"逼空衰竭反做","flush-rebound":"恐慌出尽抄反弹","crowd-fade":"贪婪拥挤失败反做",
   "crowd-break":"安逸拥挤破位反做","absorb-revert":"区间边缘被吸收回归",
-  "sweep-reclaim":"震荡假突破收回（做回区间中部）","impulse-retest":"第一根快速冲击回踩跟进",fast:"集体异动快速跟进","htf-donch20":"日线突破做多"};
+  "sweep-reclaim":"震荡假突破收回（做回区间中部）","impulse-retest":"第一根快速冲击回踩跟进",fast:"集体异动快速跟进","htf-donch20":"日线突破做多",
+  // dynamic-v1 pool (lib/dynamic/playbooks.ts POOL labels; a test keeps them equal)
+  "htf-down20":"日线跌破做空","ema4h-long":"4小时均线金叉做多","ema4h-short":"4小时均线死叉做空","pull4h-long":"4小时顺势回踩做多","pull4h-short":"4小时顺势回踩做空",
+  "box1h-long":"1小时箱体上破做多","box1h-short":"1小时箱体下破做空","burst1h-long":"1小时爆发跟随做多","burst1h-short":"1小时爆发跟随做空",
+  "fade1h-long":"1小时爆发反打做多","fade1h-short":"1小时爆发反打做空"};
 export const livingPlaybookLabel=(pb:string|null|undefined)=>pb?LIVING_PLAYBOOK_LABEL[pb]??pb:null;
 export const exitShort=(code:string|null|undefined,fallback?:string)=>code?EXIT_SHORT[code]??fallback??code:"—";
 export const exitPlain=(code:string|null|undefined,fallback?:string)=>code?EXIT_PLAIN[code]??fallback??code:null;

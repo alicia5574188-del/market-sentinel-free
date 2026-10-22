@@ -105,6 +105,7 @@ import { makerFirstEntry, makerEntryTag, MakerStateUnknownError, LIVE_MAKER_ENTR
 import {buildReviewSnapshot, readReviewArchivePage} from "../lib/research-snapshot.ts";
 import {LivingEngine,LOG_PAGE_PREFIX as LIVING_LOG_PAGE_PREFIX,type ForwardView as LivingForwardView,type LogRow as LivingLogRow,type HtfInput as LivingHtfInput} from "../lib/living/engine.ts";
 import type {DailyBar as LivingDailyBar} from "../lib/living/htf-trend.ts";
+import {DynamicResearch,venueFetch,type DynPosition} from "../lib/dynamic/runtime.ts";
 import {LIVING_MODES,LIVING_ITEMS,type LivingMode} from "../lib/living/config.ts";
 import {withLivingEpoch} from "../lib/living/run-log-fields.ts";
 import {writeLivingLog,readLivingLog,countLivingLog,emptyLivingLogStatus,LIVING_LOG_EVERY_MS,LIVING_LOG_DAILY_ROWS} from "../lib/living/runlog-d1.ts";
@@ -600,6 +601,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private archiveWork:Promise<void>|null=null;
   /** Run log v3 → D1 (timeline buckets every ~2 min, finished research cases). Off the trading clock; never DO writes. */
   private livingLogStatus=emptyLivingLogStatus();
+  /** dynamic-v1 research layer (history backfill from external venues → D1, shadow playbooks, state, cycles, allocator). */
+  private dynamic=new DynamicResearch();
+  private dynamicWork:Promise<void>|null=null;
+  private dynamicEventAt=0;
   private livingLogWork:Promise<void>|null=null;
   private archivePendingCache:{at:number;cursorKey:string;pending:number;records:number}|null=null;
   private oiAnchorCache:{at:number;anchor:ReturnType<typeof oiAnchor>}|null=null;
@@ -2035,7 +2040,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const contracts=this.regimeContracts(this.livingContractSymbols()),funding:Record<string,number>={};
       for(const [symbol,meta] of Object.entries(this.runtime.contractMeta))if(Number.isFinite(meta?.fundingRate))funding[symbol]=meta.fundingRate;
       let htf:LivingHtfInput|undefined;try{htf=this.livingHtfInput(now,state);}catch{htf=undefined;}
-      return engine.plan({now,forward:state as unknown as LivingForwardView,quotes,contracts,funding,candles:this.strategyCandles,...(htf?{htf}:{})});
+      let dyn:ReturnType<DynamicResearch["planInput"]>|undefined;try{dyn=this.dynamic.planInput(now,this.dynamicPositions(state));}catch{dyn=undefined;}
+      return engine.plan({now,forward:state as unknown as LivingForwardView,quotes,contracts,funding,candles:this.strategyCandles,...(htf?{htf}:{}),...(dyn?{dyn}:{})});
     }catch(error){this.runtime.strategyLogError=`living-plan: ${safeError(error)}`;return undefined;}
   }
   /**
@@ -4873,7 +4879,36 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
   private archiveView(now:number){
     return {...this.runLogArchiver.status,healthy:this.runLogArchiver.healthy(now),segmentSize:ARCHIVE_SEGMENT_SIZE};
+  }  /** open paper trades of dynamic-v1 pool playbooks (their exits come from the research runtime) */
+  private dynamicPositions(state:ForwardState):DynPosition[]{
+    const out:DynPosition[]=[];
+    for(const p of state.positions){const n=(p.entryContext as {living?:{dp?:number;pb?:string;inv?:number;tg?:number;mb?:number}}|undefined)?.living;
+      if(!n?.dp||!n.pb||(p as {inverseCopy?:boolean}).inverseCopy)continue;
+      const g=(p as {livingGuard?:{stop?:number}}).livingGuard?.stop;
+      out.push({id:p.id,symbol:p.symbol,side:p.side,entryPrice:p.entryPrice,stopPrice:p.stopPrice,openedAt:p.openedAt,guard:typeof g==="number"?g:null,pb:n.pb,inv:typeof n.inv==="number"?n.inv:p.stopPrice,
+        target:typeof n.tg==="number"?n.tg:null,maxBars:typeof n.mb==="number"?n.mb:null});}
+    return out;
   }
+  /**
+   * dynamic-v1 step: off the trading clock (the tick does not wait for it), one at a time, at most every 5 s; inside, at most one
+   * external-venue request per 15 s (never Gate) and a few D1 statements. Its events are copied into the living run log.
+   */
+  private launchDynamicWork(now:number){
+    try{
+      if(this.dynamicWork||now-this.dynamic.lastStepAt<5_000)return;
+      const db=(this.env as {DB?:unknown}).DB?(this.env.DB as unknown as D1Like):null;
+      const universe=this.strategyPathSymbols().filter(s=>this.marketHub.supports(s));
+      const task=this.dynamic.step(now,{universe,db,fetch:venueFetch}).then(()=>{
+        const engine=this.living;if(!engine)return;
+        for(const e of this.dynamic.events)if(e.at>this.dynamicEventAt){try{engine.runlog.event(e.at,`DYN_${e.k}`,e.text);}catch{/* 只是记录 */}}
+        this.dynamicEventAt=Math.max(this.dynamicEventAt,...this.dynamic.events.map(e=>e.at));
+      }).catch(()=>undefined);
+      this.dynamicWork=task;
+      const tracked=task.finally(()=>{if(this.dynamicWork===task)this.dynamicWork=null;});
+      this.ctx.waitUntil(tracked);
+    }catch{/* 研究层只是研究，失败不能碰交易 */}
+  }
+
   /** Rows archived since the archive-export cursor. One count per cursor move (or every 6 h); in between, new rows
    *  are added from the archive's own running total, so an open panel never turns into repeated D1 scans. */
   private async archivePendingSinceCursor(now:number){
@@ -5041,6 +5076,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.launchTurnoverWork(Date.now());
       this.launchArchiveWork(Date.now());
       this.launchLivingLogWork(Date.now());
+      this.launchDynamicWork(Date.now());
     } catch (error) {
       this.runtime.state = "RECONNECTING";
       this.runtime.lastError = safeError(error);
@@ -5100,7 +5136,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (path === "/living-status" && request.method === "GET") {
       await this.ensureLiving(Date.now());
       if(!this.living)return json({error:"研究层还没恢复"},503);
-      return json(this.living.status(Date.now(),this.forwardState as unknown as LivingForwardView??undefined));
+      const now=Date.now();let dynamic:unknown=null;try{dynamic=this.dynamic.view(now);}catch(error){dynamic={error:safeError(error)};}
+      return json({...this.living.status(now,this.forwardState as unknown as LivingForwardView??undefined),dynamic});
     }
     if (path === "/living-mode" && request.method === "POST") {
       await this.ensureLiving(Date.now());
@@ -5161,6 +5198,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         try{if(engine){const st=engine.status(exportedAt,state as unknown as LivingForwardView);
           status={mode:st.mode,configured:st.configured,acting:st.acting,fallback:st.fallback,loadedAt:st.loadedAt,market:st.market,fast:st.fast,
             watches:st.watches,positions:st.positions,items:st.items,writesToday:st.writesToday,lastError:st.lastError,basket:st.basket,lastFeedAt:st.lastFeedAt};}}catch{status=null;}
+        try{const v=this.dynamic.view(exportedAt);status={...(status??{}),dynamic:{...v,events:this.dynamic.events.slice(-120)}};}catch{/* 研究层视图失败不挡导出 */}
         const lastReset=book.accountResets.at(-1)?.at??null;
         const out=buildLivingRunLog({exportedAt,liveEnabled:this.runtime.live.requestedEnabled,buildSha:FORWARD_BUILD_SHA,hours,since:since?.at??null,status,buckets,cases,
           account:{equity:file.invariants.equity,initial:file.invariants.initial,invariants:file.invariants,book_audit:file.book_audit,equity_curve:file.equity_curve,

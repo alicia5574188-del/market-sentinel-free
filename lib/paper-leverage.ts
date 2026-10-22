@@ -43,11 +43,12 @@ export const liquidationHit=(side:"LONG"|"SHORT",price:number,liquidationPrice:n
  * the stop within `fraction` (40%, the item-5 rule) of it; 1x (no price liquidation) when nothing above 1 does. Null when even
  * 1x cannot hold the stop (stop ≥ 100%·fraction). Leverage only changes margin: notional, risk and the stop do not depend on it.
  */
-export function htfPaperLeverage(stopRate:number,leverageMax:number|null|undefined,maintenanceRate:number|null|undefined,fraction=.40){
+/** dynamic-v1 pool playbooks use the same rule (shorts too: `side`). */
+export function htfPaperLeverage(stopRate:number,leverageMax:number|null|undefined,maintenanceRate:number|null|undefined,fraction=.40,side:"LONG"|"SHORT"="LONG"){
   if(!(stopRate>0)||!(stopRate<fraction))return null;
   for(let lev=fixedPaperLeverage(leverageMax);lev>1;lev--){
-    const liq=isolatedLiquidationPrice({entry:1,leverage:lev,side:"LONG",maintenanceRate});
-    if(liq!=null&&stopRate<=fraction*(1-liq))return lev;
+    const liq=isolatedLiquidationPrice({entry:1,leverage:lev,side,maintenanceRate});
+    if(liq!=null&&stopRate<=fraction*Math.abs(1-liq))return lev;
   }
   return 1;
 }

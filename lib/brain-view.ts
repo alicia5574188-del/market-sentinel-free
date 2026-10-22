@@ -3,6 +3,8 @@
 import {useCallback,useEffect} from "react";
 import {operatorRequest} from "./operator-ui.ts";
 import {prefetchPanel,usePanel} from "./panel-cache.ts";
+import type {DynamicResearch} from "./dynamic/runtime.ts";
+export type DynamicView=ReturnType<DynamicResearch["view"]>;
 
 export type BrainMode="off"|"compute-only"|"paper-enabled";
 export type BrainSide="LONG"|"SHORT";
@@ -25,6 +27,8 @@ export type BrainStatus={version:string;mode:BrainMode;configured:BrainMode;acti
   htf?:{last:{day:string;at:number;regime:"ON"|"OFF"|"UNKNOWN";btc:number|null;sma:number|null;universe:number;fresh:number;breakouts:string[];picks:string[];skipped:string[];text:string}|null;
     pending:{sym:string;day:string;until:number;why:string}[];open:number;maxOpen:number;
     trades:{id:string;sym:string;entry:number;stop:number;initial:number|null;openedAt:number}[]};
+  /** dynamic-v1 research layer: backfill, BTC/ETH state, per-playbook cycles, allocator gates, events */
+  dynamic?:DynamicView|{error:string}|null;
   basket:number;flowSymbols?:number;lastFeedAt:number;flowAt?:number;cpu:{planMs:number;maxPlanMs:number;hubMs:number};writesToday:number;lastError:string|null};
 
 export const BRAIN_KEY="brain-status";
@@ -61,6 +65,8 @@ export const EMOTION_LABEL:Record<string,string>={FOMO:"追涨",PANIC:"恐慌",C
 export const DECISION_LABEL:Record<string,string>={ENTRY:"开单",ENTRY_RECORD:"本该开单（只记录）",RECORD_ONLY:"没开",WATCH:"等位置",EXIT:"出场",EXIT_RECORD:"本该出场（只记录）",
   PROTECT:"保护",PROTECT_RECORD:"本该保护（只记录）",HOLD_CHANGE:"持有判断变了",INTENT_MARKET:"市场判断变了",CLOSED:"平仓",FAST_ALERT:"集体异动",FAST_CONFIRM:"异动确认",
   FAST_END:"异动结束",FAST_FAKE:"异动是假动作",FAST_EXHAUST:"异动力竭",FAST_REVERSED:"异动反转",FAST_TIMEOUT:"异动超时",FAST_SURGE:"只有价格没有资金",
+  DYN_GATE:"动态分配：不允许（只记录）",DYN_SIGNAL:"打法池信号（只记录）",DYN_SKIP:"打法池：跳过",DYN_ORDER:"打法池：下单",DYN_OPEN:"打法池：开出",
+  DYN_REJECT:"打法池：被拒",DYN_TRAIL:"打法池：止损移动",DYN_EXIT:"打法池：按规则出场",DYN_ERROR:"打法池：出错",
   HTF_CHECK:"日线突破：每日检查",HTF_WAIT:"日线突破：等日线数据",HTF_OPEN:"日线突破：开多",HTF_TRAIL:"日线突破：止损上移",HTF_TRAIL_WAIT:"日线突破：日线没更新，止损不动",
   HTF_SKIP:"日线突破：没做",HTF_EXPIRE:"日线突破：入场窗口过了",HTF_REJECT:"日线突破：账户层拒绝",HTF_ERROR:"日线突破：出错（只影响这一条）"};
 /** Exit reasons of research-layer trades, in the brain's own words. */
@@ -72,6 +78,7 @@ export const BRAIN_EXIT:Record<string,string>={
   LIVING_FAST_BREAKEVEN:"集体异动：拉到保本后被打到",LIVING_FAST_GIVEBACK:"顺势单利润回吐就走",LIVING_FAST_TIME:"快速跟进 10 分钟没走出来",
   LIVING_FAST_FAKE:"集体异动是假动作，平掉",LIVING_BURST_TRAIL:"爆发单：从最好的位置回吐到 70%，锁利离场",LIVING_BURST_BREAKEVEN:"爆发单：浮盈过 0.8% 后回到保本加手续费",LIVING_BURST_MAXHOLD:"爆发单：拿满 4 小时",LIVING_FAST_EXHAUST:"集体异动力竭，平掉",LIVING_THESIS_FLIP:"市场判断反了",LIVING_THESIS_STRUCTURE:"结构破了",
   LIVING_THESIS_BREAKEVEN:"保本后被打到",LIVING_THESIS_UNREWARDED:"这种做法市场不再给钱",
+  LIVING_DYN_TRAIL:"打法池单：打到按规则移动后的止损",LIVING_DYN_EXIT:"打法池单：按它自己的规则收盘离场（目标/反向信号/到时）",
   LIVING_HTF_TRAIL:"日线突破单：打到 10 日最低点跟踪止损",LIVING_HTF_TRAIL_EXIT:"日线突破单：收盘后跟踪止损上移时价格已在下方，平掉",
   LIVING_STOP:"打到开仓止损价",LIVING_FALLBACK_TIMEOUT:"大脑暂停期间拿满计划时长 1.5 倍，兜底平掉",
 };

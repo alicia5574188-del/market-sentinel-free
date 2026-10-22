@@ -22,14 +22,19 @@ export const LIVING_MODES:readonly LivingMode[]=["off","compute-only","paper-ena
 /** htfTrend (htf-donch20, C1b): daily trend breakout long — once a day after 00:00 UTC, BTC > 100-day SMA, 20-day closing breakout
  * among the 30 most liquid coins, stop 2×ATR20, 10-day-low trail, 0.75% risk, max 8; its own slots, its own exits. Off = no new
  * daily-breakout entries (open ones keep their stop and daily trail). */
-export const LIVING_ITEMS=["fastProtect","fastFollow","newSource","noChase","liqSafety","thesisExit","sizing","burstLeader","htfTrend"] as const;
+/** dynAllocator (dynamic-v1): the research layer's allocator decides which pool playbooks may open paper trades (and how big) from
+ * their shadow trades' good/bad cycles in the current BTC/ETH state. On = pool entries (incl. the daily breakout) only when the
+ * allocator allows them; until a pattern is established it allows none (record only). Off = no pool entries except the daily
+ * breakout on switch 9 as before. burst-leader (8) is not affected either way. Open pool trades keep their own exits. */
+export const LIVING_ITEMS=["fastProtect","fastFollow","newSource","noChase","liqSafety","thesisExit","sizing","burstLeader","htfTrend","dynAllocator"] as const;
 export type LivingItem=typeof LIVING_ITEMS[number];
 export type LivingItems=Record<LivingItem,boolean>;
 export const LIVING_ITEM_LABELS:Record<LivingItem,string>={
   fastProtect:"1 快速保护",fastFollow:"2 快速跟进",newSource:"3 资金意图开单（五步闭环）",noChase:"4 到位置再确认（不追价）",
   liqSafety:"5 维持保证金率≤2%、止损≤爆仓距离40%",thesisExit:"6 持有理由没了就走",sizing:"7 证据倍数仓位",
   burstLeader:"8 只做全市场突然爆发：选 1-3 个领涨币，大仓位宽止损（其它开单只记录）",
-  htfTrend:"9 日线突破做多：BTC 在 100 日均线上时，前 30 大币日线收盘创 20 日新高就做多，止损 2 倍日波动、按 10 日低点跟踪，每笔 0.75% 风险，最多 8 笔"};
+  htfTrend:"9 日线突破做多：BTC 在 100 日均线上时，前 30 大币日线收盘创 20 日新高就做多，止损 2 倍日波动、按 10 日低点跟踪，每笔 0.75% 风险，最多 8 笔",
+  dynAllocator:"10 动态分配：按历史回放找到的赚钱/亏钱周期和当前 BTC/ETH 状态，只让当前状态下有优势的打法开单（规律没确认前全部只记录）"};
 
 export type LivingConfig={version:typeof LIVING_VERSION;mode:LivingMode;items:LivingItems;updatedAt:number;
   /** First moment paper-enabled acted on the account (run-log rule_epoch boundary). */
