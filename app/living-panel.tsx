@@ -54,6 +54,13 @@ function LivingPanel({auth,scope="owner",data=null,now=0,liveEnabled=false,liveO
     catch(e){setError(e instanceof Error?e.message:"切换失败");}
     finally{submitting.current=false;setBusy(false);}
   };
+  const setItem=async(key:string,on:boolean)=>{
+    if(submitting.current||busy)return;submitting.current=true;setBusy(true);
+    try{panel.set(await operatorRequest<BrainStatus>("/api/living/mode","POST",{items:{[key]:on}}));setError(null);}
+    catch(e){setError(e instanceof Error?e.message:"切换失败");}
+    finally{submitting.current=false;setBusy(false);}
+  };
+  const htfItem=s?.items.find(i=>i.key==="htfTrend");
   const positions=[...(data?.positions??[])].filter(t=>!t.inverseCopy);
   const recent=[...(data?.history??[])].filter(t=>!t.inverseCopy).sort((a,b)=>(b.closedAt??0)-(a.closedAt??0)).slice(0,5);
   const why=new Map((s?.positions??[]).map(p=>[p.id,p]));
@@ -133,6 +140,9 @@ function LivingPanel({auth,scope="owner",data=null,now=0,liveEnabled=false,liveO
       {!!sc?.byPlaybook.length&&<p className="mb-hint">{sc.byPlaybook.map(b=>`${b.label} ${b.n} 笔 胜率 ${Math.round(b.winRate*100)}% 平均 ${b.avgR.toFixed(2)}R`).join("；")}</p>}
       {!!s.probes?.length&&<p className="mb-hint">近期表现只调仓位（0.7–1.2 倍）：{s.probes.map(p=>`${p.label}×${p.modulator}`).join("，")}</p>}
       <p className="mb-hint">{s.items.map(i=>`${i.label}${i.on?"✓":"✗"}`).join("　")}</p>
+      {s.htf&&<p className="mb-hint">{htfLine(s.htf)}</p>}
+      {htfItem&&<div className="fr-owner-session"><button className="fr-text-button" type="button" disabled={busy}
+        onClick={()=>void setItem("htfTrend",!htfItem.on)}>{htfItem.on?"关掉 9 日线突破做多（已开的单继续按止损/跟踪管）":"打开 9 日线突破做多"}</button></div>}
       <p className="mb-hint">{s.version} · 一篮子 {s.basket} 个币 · 资金数据 {s.flowSymbols??0} 个 · 报价 {bj(s.lastFeedAt)} · 每轮 {s.cpu.planMs}ms · 今天写入 {s.writesToday} 次</p>
       <div className="fr-owner-session">{(["off","compute-only","paper-enabled"] as BrainMode[]).map(x=><button key={x} className={x===s.configured?"fr-button":"fr-text-button"} type="button"
         disabled={busy||x===s.configured} onClick={()=>void setMode(x)}>{MODE_LABEL[x]}</button>)}</div>
@@ -142,6 +152,12 @@ function LivingPanel({auth,scope="owner",data=null,now=0,liveEnabled=false,liveO
     {data&&<details className="mb-fold mb-legacy"><summary>旧系统参考</summary><p className="mb-hint">{legacyMarketLine(data)}</p></details>}
     </section>
   </div>;
+}
+function htfLine(h:NonNullable<BrainStatus["htf"]>){
+  const l=h.last,reg=l?(l.regime==="ON"?"BTC 在 100 日均线上":l.regime==="OFF"?"BTC 在 100 日均线下（不做）":"BTC 均线算不出"):"";
+  const head=l?`${l.day} 检查：${reg}（${l.btc??"-"} / ${l.sma??"-"}），突破 ${l.breakouts.length} 个，选中 ${l.picks.map(coinName).join("、")||"无"}`:"今天还没检查";
+  const wait=h.pending.length?`，等开 ${h.pending.map(x=>coinName(x.sym)).join("、")}`:"";
+  return `日线突破做多：${head}；持有 ${h.open}/${h.maxOpen} 笔${wait}`;
 }
 function Read({c}:{c:NonNullable<BrainStatus["board"]>[number]}){
   return <article className={c.action?"is-act":""}>

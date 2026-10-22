@@ -5,7 +5,8 @@
  * Every number here is a price move (%), never ROE.
  */
 export type LivingNoteView={v?:string;k?:string;pb?:string;ev?:string;mult?:number;sc?:number|null;t?:number|null;n?:number|null;per?:string|null;
-  rk?:number|null;inv?:number;ref?:number|null;hold?:number;why?:string;in?:string;mk?:string;nar?:string;evd?:string;ep?:string|null;ho?:number;mx?:number;lm?:number;env?:string;tg?:number};
+  rk?:number|null;inv?:number;ref?:number|null;hold?:number;why?:string;in?:string;mk?:string;nar?:string;evd?:string;ep?:string|null;ho?:number;mx?:number;lm?:number;env?:string;tg?:number;
+  /** htf-donch20 (daily trend breakout): signal day, its close, daily ATR20 */hx?:number;dy?:string;cl?:number;atr?:number};
 export type LivingTradeLike={side:"LONG"|"SHORT";entryPrice:number;stopPrice?:number|null;liquidationPrice?:number|null;plannedRisk:number;leverage:number;
   notional:number;expectedHoldMinutes?:number|null;entryContext?:{living?:LivingNoteView|null;reason?:string|null}|null};
 
@@ -34,12 +35,15 @@ export function livingIntentText(raw:string|null|undefined){
 }
 /** The 开仓盘面 fact for a living trade: the market intent the layer read, not the old stage name. */
 export function livingBoard(n:LivingNoteView){
+  if(n.hx)return"日线：BTC 在 100 日均线上";
   if(n.k==="F")return"集体异动";
   return n.mk?LIVING_STATE_LABEL[n.mk]??n.mk:"研究层判断";
 }
 /** The one-line 为什么开 for a living trade. */
 export function livingWhy(t:LivingTradeLike,playbook:string|null){
-  const n=t.entryContext!.living!,bits=[`${t.side==="LONG"?"做多":"做空"}，${playbook??n.pb??"研究层"}`];
+  const n=t.entryContext!.living!;
+  if(n.hx)return `做多，${playbook??"日线突破做多"}；${n.dy??"前一天"} 日线收盘 ${price(n.cl)} 突破前 20 日最高 ${price(n.ref)}，BTC 在 100 日均线上。`;
+  const bits=[`${t.side==="LONG"?"做多":"做空"}，${playbook??n.pb??"研究层"}`];
   const coin=livingIntentText(n.in);if(coin)bits.push(`这个币${coin}`);
   if(n.env)bits.push(n.env.split("｜")[0]!.replace(/^环境：/,"环境："));
   else if(typeof n.lm==="number"&&n.lm<1)bits.push(`市场方向不清，半仓（${n.lm}×）`);
@@ -52,6 +56,7 @@ export function livingWhy(t:LivingTradeLike,playbook:string|null){
 /** The 详细依据 lines ("标签：内容") for a living trade. */
 export function livingDetail(t:LivingTradeLike,playbook:string|null):string[]{
   const n=t.entryContext!.living!,fast=n.k==="F",lines:string[]=[];
+  if(n.hx)return htfDetail(t,n,playbook);
   const hold=Math.round(n.hold??t.expectedHoldMinutes??0),late=Math.round(hold*1.5);
   lines.push(`打法：${playbook??n.pb??"—"}（${fast?"集体异动快速跟进":"研究层五步闭环"}，${n.v==="living-v1"?"living-v1":"living-v2"}）`);
   const coin=livingIntentText(n.in);
@@ -95,5 +100,22 @@ export function livingDetail(t:LivingTradeLike,playbook:string|null):string[]{
   else lines.push(`出场计划：由大脑决定——资金反了、市场意图转向、目标兑现就平；后来的人追涨/恐慌杀跌冲进利润（浮盈 ≥ 止损距离 1.5 倍）就把利润交给他们；动态锁利：最高浮盈到 max(0.6%, 2 倍波动) 后，允许回吐 max(最高浮盈的一半（2% 以上是 35%）, 1.5 倍波动)，资金强时放宽 1.3 倍、资金变弱时收紧到 max(1 倍波动, 现在利润的一半)，回吐超过就走；持有理由连续两分钟反过来就走（资金反转离场）；亏过 0.5% 以上又反弹到 0（亏过 1% 以上是反弹到一半）且资金不强就走（反弹减亏离场）；拿到计划时长的 1.5 倍（${late} 分钟）就平，利润仍在最高的七成以上且最高 ≥1.5% 时延长持有，最多 3 倍。波动 = 3 × 最近 15 分钟每分钟涨跌的平均（至少 0.15%），都是价格涨跌 %。`);
   lines.push(`计划持有：${hold} 分钟。大脑停下（降级、只计算或关掉）超过 2 分钟时，这笔只按止损和强平管，持有满 ${late} 分钟就兜底平掉。`);
   lines.push("不适用：旧系统的持仓评分、入场评分/同组、盘面阶段门槛（同步爆发/趋势/过渡）、5% 和 10% 额外出场、同步爆发仓位倍数，这笔都不用。");
+  return lines;
+}
+/** 详细依据 for htf-donch20 (rulebook rule 1, daily trend breakout long). */
+function htfDetail(t:LivingTradeLike,n:LivingNoteView,playbook:string|null):string[]{
+  const lines:string[]=[],inv=n.inv,stop=t.stopPrice,moved=typeof inv==="number"&&typeof stop==="number"&&stop>inv+1e-12;
+  lines.push(`打法：${playbook??"日线突破做多"}（研究层规则 1，htf-donch20，日线级别）`);
+  if(n.why)lines.push(`依据：${n.why}`);
+  if(n.evd)lines.push(`证据数字：${n.evd}（ATR20 = 最近 20 天每天真实波幅的平均，占价格 %）`);
+  if(n.nar)lines.push(`当天检查：${n.nar}`);
+  lines.push(`条件：前一天 BTC 日线收盘在 100 日均线上；这个币在 24 小时成交额前 30；前一天日线收盘高于之前 20 天的最高价；每天 00:00 UTC 收盘后按现价开多，一个币只拿一笔，最多 8 笔。`);
+  lines.push(`仓位：打到初始止损亏账户权益的 0.75%（名义 = 权益 × 0.75% ÷ 止损距离，单笔最多 1 倍权益）；计划风险 ${num(t.plannedRisk)} U（含来回手续费）；名义 ${num(t.notional)} U。`);
+  lines.push(`杠杆：${num(t.leverage,0)}× 逐仓。日线止损宽（2 倍 ATR，常见 6%–20%），固定 10 倍时强平会在止损里面，所以这类单用不超过 10 倍、且让止损不超过爆仓距离 40% 的最高整数倍；杠杆只影响保证金，不影响盈亏和风险。`);
+  lines.push(`止损：${price(stop)}，离开仓价 ${away(t.entryPrice,stop)}（价格涨跌，不是收益率）；初始止损 = 入场 − 2×ATR20 = ${price(inv)}${moved?"，之后按近 10 日最低点上移过":""}。`);
+  if(typeof t.liquidationPrice==="number"&&t.liquidationPrice>0)lines.push(`强平：逐仓强平价 ${price(t.liquidationPrice)}，离开仓价 ${away(t.entryPrice,t.liquidationPrice)}。`);
+  lines.push("出场计划：只有止损会平它——每天日线收盘后，止损上移到 max(初始止损, 近 10 天最低价)，只上移不下移；实时价格碰到就平。没有时间限制；集体异动、资金意图、锁利、10 分钟等出场都不管这笔（只保留强平保护）。");
+  lines.push("研究（价格 %，含手续费和资金费）：2018-01 到 2025-10 每笔平均 +12.8%，中位 −5.0%，胜率 40%，平均赢 +47%、平均亏 −10%；一年 holdout 每笔 +8.9%。大部分单是小亏，靠少数大趋势赚钱。");
+  lines.push("不适用：旧系统的持仓评分、入场评分、盘面阶段门槛、5% 和 10% 额外出场、研究层的五步闭环和集体异动规则，这笔都不用。");
   return lines;
 }

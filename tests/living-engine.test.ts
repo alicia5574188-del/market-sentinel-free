@@ -13,7 +13,7 @@ const now0=bj("10-19 06:00");
 const engineWith=(mode:"off"|"compute-only"|"paper-enabled")=>{const e=new LivingEngine(now0);e.restore(new Map([[LIVING_KEYS.config,{...defaultLivingConfig(now0),mode}]]),now0);return e;};
 const emptyCtx=(now:number)=>({now,forward:{positions:[],history:[],opportunities:[]},quotes:{},contracts:{},funding:{},candles:{}});
 
-test("defaults: paper-enabled with all 8 items on (8 = burstLeader); off runs nothing; compute-only never returns a directive",()=>{
+test("defaults: paper-enabled with all 9 items on (8 = burstLeader, 9 = htfTrend); off runs nothing; compute-only never returns a directive",()=>{
   const d=defaultLivingConfig(0);assert.equal(d.mode,"paper-enabled");assert.ok(Object.values(d.items).every(Boolean));
   const off=engineWith("off");off.onHub([{symbol:"A",mid:1,at:now0}],now0,()=>true);
   assert.equal(off.tape.symbols().length,0);assert.equal(off.plan(emptyCtx(now0)),undefined);

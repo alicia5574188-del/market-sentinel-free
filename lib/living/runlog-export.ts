@@ -29,6 +29,7 @@ export const FIELD_NOTES:Record<string,unknown>={
     env:"v3 市场环境每分钟的分钟数：TREND_UP 上升趋势、TREND_DOWN 下降趋势、CHOP 来回震荡、QUIET 安静窄幅、SPIKE 集体急拉、FLUSH 集体急杀、MIXED 分歧、WARMING 暖机；环境变化也记在 events（ENV_MARKET）",
     mode:"研究层模式：off 关 / compute-only 只计算 / paper-enabled 模拟开单",fast:"快速通道（集体异动）每分钟状态：CALM 平静、ALERT 警报、CONFIRMED 确认",
     burst:"爆发单（burst-leader-v1）每分钟一次的特殊行情检查，行用 ; 分隔：时间(UTC 分钟),一篮子 3 分钟涨跌的 σ 倍数 z,同向币占比 %,一篮子 3 分钟涨跌(基点),结论。结论：NONE 普通行情、WARMING 数据不够、BREADTH 同向的币不够、NOT_QUIET 之前 45 分钟已经在异动、COOLDOWN 同方向 3 小时内做过、BUSY 爆发单已满、TRIGGER 触发（2 分钟后选币，见 events 的 BURST_ONSET / BURST_RANK）",
+    htf:"日线突破做多（htf-donch20）每天 00:00 UTC 后的那次检查：日期、BTC 日线收盘和 100 日均线（在上才做）、各币离 20 日新高多远/ATR20/24h 成交额名次、选中哪些、没选的原因；数据没到时记 WAIT 和差什么。开单/拒单/跟踪止损在 events（HTF_CHECK / HTF_OPEN / HTF_TRAIL / HTF_EXPIRE）",
     funnel:"这段里候选逐层的计数（每分钟每个候选算一次）：reads 读了几次币、ideas 有打法想法、no_idea 没想法；其余见 layer_labels",
     reasons:"层:原因 的计数（数字换成 #）",open:"段末持仓数",watches:"段末在等位置数",opened:"这段开出的单",blocker:"这一段最主要的没开单原因",events:"状态变化（市场意图、降级、模式、重启、集体异动）",boot:"程序这次启动的编号；同一段有两个编号说明这段里重启过"},
   cases:{id:"案例编号",at:"第一次出现（UTC 毫秒）",sym:"币",side:"方向",pb:"打法代码",pb_label:"打法",kind:"normal 五步闭环 / fast 集体异动",
@@ -40,7 +41,7 @@ export const FIELD_NOTES:Record<string,unknown>={
     final:"true 表示 6 小时已走完、路径定稿；false 是进行中（路径到导出为止）",
     path:"t0 起每分钟一格，格式 收,高,低（相对 ref 的基点，原始价格方向，不按多空翻转），分号分隔；空格表示那一分钟没有数据（程序停了）；coarse 是只有 5 分钟精度的分钟段（重启前较早的部分）",
     out:"按案例方向算（价格 %）：mfe/mae 最大有利/不利及第几分钟，mae_before_mfe 到最高点前最深回撤，r15…r360 各时点收益，hit_1pct_first 先到 +1% 还是 -1%，from_open 从实际开仓起算"},
-  positions:"账户真实模拟单。living_playbook 打法，living_intent 开单时资金状态/情绪，living_market_intent 市场意图，living_story 叙述，living_flow_evidence 证据数字，living_env 开单时的环境选择（为什么选这个打法｜币环境｜市场环境），living_invalidation 失效价，living_protect_* 保护；mfe_pct/mae_pct 等是这笔单从开仓起的价格路径结果（%）。",
+  positions:"账户真实模拟单。living_playbook 打法，living_intent 开单时资金状态/情绪，living_market_intent 市场意图，living_story 叙述，living_flow_evidence 证据数字，living_env 开单时的环境选择（为什么选这个打法｜币环境｜市场环境），living_invalidation 失效价，living_protect_* 保护（日线突破单的 10 日低点跟踪止损也记在这里，代码 LIVING_HTF_TRAIL）；living_htf_* 只在日线突破单上：信号日、当天收盘、突破的 20 日最高价、日线 ATR20、初始止损；mfe_pct/mae_pct 等是这笔单从开仓起的价格路径结果（%）。",
 };
 export const REVIEW_PLAN=[
   "很久没开单：why_no_trades.longest_no_open 那一段的 main 和 gate；再到 timeline 里那几行看是哪一层挡的、原因是什么。",

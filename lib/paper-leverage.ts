@@ -37,3 +37,17 @@ export function isolatedLiquidationPrice(input:{entry:number;leverage:number;sid
 /** Long: the executable bid at or below the liquidation price. Short: the ask at or above it. */
 export const liquidationHit=(side:"LONG"|"SHORT",price:number,liquidationPrice:number|null|undefined)=>
   liquidationPrice!=null&&Number.isFinite(price)&&(side==="LONG"?price<=liquidationPrice:price>=liquidationPrice);
+/**
+ * htf-donch20 (daily trend breakout) only: its stops are 2 daily ATRs (median 11.5%), wider than the 9.5% liquidation distance at
+ * the fixed 10x. It uses the highest whole leverage ≤ fixedPaperLeverage(contract max) whose isolated liquidation distance keeps
+ * the stop within `fraction` (40%, the item-5 rule) of it; 1x (no price liquidation) when nothing above 1 does. Null when even
+ * 1x cannot hold the stop (stop ≥ 100%·fraction). Leverage only changes margin: notional, risk and the stop do not depend on it.
+ */
+export function htfPaperLeverage(stopRate:number,leverageMax:number|null|undefined,maintenanceRate:number|null|undefined,fraction=.40){
+  if(!(stopRate>0)||!(stopRate<fraction))return null;
+  for(let lev=fixedPaperLeverage(leverageMax);lev>1;lev--){
+    const liq=isolatedLiquidationPrice({entry:1,leverage:lev,side:"LONG",maintenanceRate});
+    if(liq!=null&&stopRate<=fraction*(1-liq))return lev;
+  }
+  return 1;
+}

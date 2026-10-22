@@ -1,4 +1,4 @@
-import {fixedPaperLeverage,isolatedLiquidationPrice,liquidationHit,maintenanceRateOf} from "./paper-leverage.ts";
+import {fixedPaperLeverage,htfPaperLeverage,isolatedLiquidationPrice,liquidationHit,maintenanceRateOf} from "./paper-leverage.ts";
 import {RESEARCH_PLAN_VERSION,researchPlanContext,type PlanResearchDecision} from './research-plan.ts';
 import {assertInverseTrade,assertInverseTrial,inverseTrialSummary,sourceDecisionState,shadowCapsule,applyInverseSourceTrade,migrateInverseSamePrice,alignComparisonSourceFees,retainDetachedSourceIds,INVERSE_COST,type InverseCopy,type InverseTrial} from './shadow-inverse-ledger.ts';
 import {forwardDeskView,noteForwardStudy} from './forward-study.ts';
@@ -1894,6 +1894,8 @@ function manageLivingTrade(s:ForwardState,t:Trade,q:Quote,now:number,bar:Candle|
     closeTrade(s,t,executableProtectionFill(t.side,t.stopPrice,px,prior,bar),now,"LIVING_STOP",{authority:"PRICE_STOP",stopPrice:t.stopPrice,quote:px,quoteAt:q.observedAt});
     return true;
   }
+  // htf-donch20 has no time exit: only its stop / daily trail (and liquidation) close it, also while the layer is not driving
+  if(t.entryContext?.living?.hx===1)return false;
   const hold=t.entryContext?.living?.hold,holdMin=typeof hold==="number"&&hold>0?hold:30;
   if(!driving&&now-(t.livingSeenAt??t.openedAt)>=LIVING_FALLBACK_GRACE_MS&&now-t.openedAt>=LIVING_FALLBACK_HOLD_MULTIPLE*holdMin*60_000){
     closeTrade(s,t,px,now,"LIVING_FALLBACK_TIMEOUT",{authority:"LIVING_FALLBACK",holdMin,ageMin:Math.round((now-t.openedAt)/60_000),
@@ -1902,6 +1904,8 @@ function manageLivingTrade(s:ForwardState,t:Trade,q:Quote,now:number,bar:Candle|
   }
   return false;
 }
+/** htf-donch20 (lib/living/htf-trend.ts HTF; kept here because this module must not import the living layer at runtime). */
+const HTF_STOP_MIN=.004,HTF_STOP_MAX=.35,HTF_NOTIONAL_CAP=1;
 /** Opens one paper trade decided by the living layer. Existing total/side/margin/5-minute caps apply (expansion fixed 5x). */
 function openLivingTrade(s:ForwardState,o:LivingOrder,living:LivingDirective,q:Quote|undefined,contract:Contract|undefined,now:number,equity:number,
   minutePath?:Candle[]):string|{tradeId:string;symbol:string;side:"LONG"|"SHORT";risk:number;notional:number}{
@@ -1912,13 +1916,17 @@ function openLivingTrade(s:ForwardState,o:LivingOrder,living:LivingDirective,q:Q
   if(!(price>0))return"盘口价格无效";
   if(now-(s.lastExitAt[o.symbol]??0)<15*60_000&&s.lastSide[o.symbol]===side)return"同币同方向 15 分钟内刚平过";
   if(d*(price-o.stop)<=0)return"失效价已经不在成交价外侧";
-  const stopRate=Math.abs(price-o.stop)/price;
-  if(!(stopRate>=.004&&stopRate<=.035))return`止损宽度 ${(stopRate*100).toFixed(2)}% 不在 0.4%-3.5%`;
-  const leverage=fixedPaperLeverage(contract.leverageMax),maintenanceRate=maintenanceRateOf(contract.maintenanceRate),
+  const stopRate=Math.abs(price-o.stop)/price,htf=o.note.hx===1;
+  if(htf){if(!(stopRate>=HTF_STOP_MIN&&stopRate<=HTF_STOP_MAX))return`日线突破止损宽度 ${(stopRate*100).toFixed(2)}% 不在 0.4%-35%`;}
+  else if(!(stopRate>=.004&&stopRate<=.035))return`止损宽度 ${(stopRate*100).toFixed(2)}% 不在 0.4%-3.5%`;
+  const htfLeverage=htf?htfPaperLeverage(stopRate,contract.leverageMax,contract.maintenanceRate):null;
+  if(htf&&htfLeverage==null)return`日线突破止损 ${(stopRate*100).toFixed(2)}% 太宽，1 倍也放不进爆仓距离的 40%`;
+  const leverage=htfLeverage??fixedPaperLeverage(contract.leverageMax),maintenanceRate=maintenanceRateOf(contract.maintenanceRate),
     liquidationPrice=isolatedLiquidationPrice({entry:price,leverage,side,maintenanceRate});
   if(living.items.liqSafety){
     if(!(contract.maintenanceRate>0)||contract.maintenanceRate>.02)return`维持保证金率 ${((contract.maintenanceRate||0)*100).toFixed(1)}%>2%`;
-    const liqDist=liquidationPrice?Math.abs(price-liquidationPrice)/price:0;
+    // htf at 1x has no price liquidation (isolatedLiquidationPrice → null): nothing to keep the stop inside
+    const liqDist=liquidationPrice?Math.abs(price-liquidationPrice)/price:htf&&leverage===1?Infinity:0;
     if(!(liqDist>0)||stopRate>.40*liqDist)return`止损超过爆仓距离的 40%`;
   }
   const expansion=5,
@@ -1929,7 +1937,8 @@ function openLivingTrade(s:ForwardState,o:LivingOrder,living:LivingDirective,q:Q
     headroom=Math.min(totalHeadroom,sideHeadroom,cycleHeadroom,episodeHeadroom),
     wantedRisk=equity*o.riskRate*o.multiple,riskBudget=Math.min(wantedRisk,headroom);
   if(!(riskBudget>=equity*.0015))return episodeHeadroom<=totalHeadroom&&episodeHeadroom<wantedRisk?"这一段集体异动的风险已用满 2%":"剩余风险预算不足以形成有效仓位";
-  const targetNotional=Math.min(riskBudget/(stopRate+ROUND_TRIP_COST),equity*.70*expansion),
+  // htf-donch20 sizes like its research: notional = risk / stop distance, at most 1x equity per trade (no 5x expansion)
+  const targetNotional=htf?Math.min(riskBudget/stopRate,equity*HTF_NOTIONAL_CAP):Math.min(riskBudget/(stopRate+ROUND_TRIP_COST),equity*.70*expansion),
     mult=Math.max(contract.quantoMultiplier,1e-12),
     minContracts=Math.max(1,Math.ceil(contract.minContracts??(Number(contract.orderSizeMin??1)||1))),
     contracts=Math.floor(targetNotional/(price*mult));
@@ -1973,7 +1982,7 @@ function openLivingTrade(s:ForwardState,o:LivingOrder,living:LivingDirective,q:Q
     s.signalTally=remembered.tally;t.signalRepeat=remembered.repeat;t.entrySpreadBps=quoteSpreadBps(q!.bestBid,q!.bestAsk);
   }catch{/* 记下次数失败也不能挡住这张单 */}
   s.positions.push(t);s.balance-=entryFee;s.fees+=entryFee;s.turnover+=notional;s.lastEntryAt[o.symbol]=now;s.lastSide[o.symbol]=side;
-  event(s,now,"ENTRY",id,`${o.symbol} ${side} 研究层${o.note.k==="F"?"快速跟进":"五步闭环"} ${o.note.pb}`,{notional,plannedRisk});
+  event(s,now,"ENTRY",id,`${o.symbol} ${side} 研究层${htf?"日线突破做多":o.note.k==="F"?"快速跟进":"五步闭环"} ${o.note.pb}`,{notional,plannedRisk});
   return{tradeId:id,symbol:o.symbol,side,risk:plannedRisk,notional};
 }
 

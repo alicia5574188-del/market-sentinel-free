@@ -103,7 +103,8 @@ import { emptyReviewLogCursor, prepareIncompletePrune, prepareReviewLogWrite, re
 const MAKER_EXIT_REASONS=new Set(["SHADOW_SOURCE_EXIT"]);
 import { makerFirstEntry, makerEntryTag, MakerStateUnknownError, LIVE_MAKER_ENTRY_POLICY, LIVE_MAKER_ENTRY_ENABLED, type MakerResult } from "../lib/live-maker-entry.ts";
 import {buildReviewSnapshot, readReviewArchivePage} from "../lib/research-snapshot.ts";
-import {LivingEngine,LOG_PAGE_PREFIX as LIVING_LOG_PAGE_PREFIX,type ForwardView as LivingForwardView,type LogRow as LivingLogRow} from "../lib/living/engine.ts";
+import {LivingEngine,LOG_PAGE_PREFIX as LIVING_LOG_PAGE_PREFIX,type ForwardView as LivingForwardView,type LogRow as LivingLogRow,type HtfInput as LivingHtfInput} from "../lib/living/engine.ts";
+import type {DailyBar as LivingDailyBar} from "../lib/living/htf-trend.ts";
 import {LIVING_MODES,LIVING_ITEMS,type LivingMode} from "../lib/living/config.ts";
 import {withLivingEpoch} from "../lib/living/run-log-fields.ts";
 import {writeLivingLog,readLivingLog,countLivingLog,emptyLivingLogStatus,LIVING_LOG_EVERY_MS,LIVING_LOG_DAILY_ROWS} from "../lib/living/runlog-d1.ts";
@@ -569,6 +570,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private forwardMinuteQuoteBars: Record<string,{minute:number;open:number;high:number;low:number;close:number;samples:number;
     firstAt:number;lastAt:number;completed:Array<{time:number;open:number;high:number;low:number;close:number;volume:number}>}> = {};
   private turnDailyCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
+  /** htf-donch20 only: BTC's daily rows while BTC is outside the strategy path (never passed to advanceForward). */
+  private htfDaily: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
   private turnDailyLoaded = new Set<string>();
   private turnDailyCursor = 0;
   private turnDailyFailures = new Map<string,{retryAt:number;lastError:string}>();
@@ -2031,8 +2034,28 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     try{
       const contracts=this.regimeContracts(this.livingContractSymbols()),funding:Record<string,number>={};
       for(const [symbol,meta] of Object.entries(this.runtime.contractMeta))if(Number.isFinite(meta?.fundingRate))funding[symbol]=meta.fundingRate;
-      return engine.plan({now,forward:state as unknown as LivingForwardView,quotes,contracts,funding,candles:this.strategyCandles});
+      let htf:LivingHtfInput|undefined;try{htf=this.livingHtfInput(now,state);}catch{htf=undefined;}
+      return engine.plan({now,forward:state as unknown as LivingForwardView,quotes,contracts,funding,candles:this.strategyCandles,...(htf?{htf}:{})});
     }catch(error){this.runtime.strategyLogError=`living-plan: ${safeError(error)}`;return undefined;}
+  }
+  /**
+   * htf-donch20 inputs, all already in memory (no request): closed daily candles the turn-daily rotation keeps for the
+   * strategy path symbols (liquid universe + positions), BTC's daily rows (htfDaily when BTC is outside that set), and the hub's
+   * 24h volume. Coins the external venues do not cover are listed, not passed: their rows could only come from Gate.
+   */
+  private livingHtfInput(now:number,state:ForwardState):LivingHtfInput{
+    const universe:string[]=[],notExternal:string[]=[],daily:Record<string,LivingDailyBar[]>={};
+    for(const symbol of this.strategyPathSymbols()){
+      if(!this.marketHub.supports(symbol)){notExternal.push(symbol);continue;}
+      universe.push(symbol);const rows=this.turnDailyCandles[symbol];if(rows?.length)daily[symbol]=rows;
+    }
+    const btc=[this.turnDailyCandles.BTC_USDT,this.htfDaily.BTC_USDT].filter((r):r is NonNullable<typeof r>=>!!r?.length)
+      .sort((a,b)=>(b.at(-1)?.time??0)-(a.at(-1)?.time??0))[0];
+    if(btc)daily.BTC_USDT=btc;
+    const volume:Record<string,number|null>={};
+    for(const m of this.marketHub.peekMids(universe,now))volume[m.symbol]=Number.isFinite(m.volume24hUsd)&&m.volume24hUsd>0?m.volume24hUsd:null;
+    void state;
+    return {daily,volume,universe,notExternal};
   }
   /** Own keys only, under the shared optional write guard and the layer's own daily budget. */
   private async persistLiving(now:number,force=false){
@@ -2214,30 +2237,34 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private async refreshTurnDaily(now:number) {
-    const universe=this.strategyPathSymbols();if(!universe.length)return 0;
+    const path=this.strategyPathSymbols();if(!path.length)return 0;
+    // htf-donch20 needs BTC's daily candles for its regime even when BTC is outside the strategy path: one extra external
+    // (never Gate) symbol, kept apart (htfDaily) so the legacy daily input of advanceForward is unchanged.
+    const htfExtra=this.living&&!path.includes("BTC_USDT")&&this.marketHub.supports("BTC_USDT")?["BTC_USDT"]:[];
+    const universe=[...path,...htfExtra],store=(symbol:string)=>htfExtra.includes(symbol)?this.htfDaily:this.turnDailyCandles;
     const target=Math.floor(now/86_400_000)*86_400-86_400;
     let selected:string|null=null;
     for(let offset=0;offset<universe.length;offset++){
       const index=(this.turnDailyCursor+offset)%universe.length,symbol=universe[index];
       if(!this.turnDailyLoaded.has(symbol)){
         const saved=await this.ctx.storage.get<Awaited<ReturnType<typeof fetchStructureCandles>>>(turnDailyStorageKey(symbol));
-        if(saved?.length)this.turnDailyCandles[symbol]=mergeTurnDailyPath([],saved);
+        if(saved?.length)store(symbol)[symbol]=mergeTurnDailyPath([],saved);
         this.turnDailyLoaded.add(symbol);
       }
-      const rows=this.turnDailyCandles[symbol]??[],retryAt=this.turnDailyFailures.get(symbol)?.retryAt??0;
+      const rows=store(symbol)[symbol]??[],retryAt=this.turnDailyFailures.get(symbol)?.retryAt??0;
       if((rows.length<TURN_DAILY_REQUIRED_CANDLES||(rows.at(-1)?.time??0)<target)&&retryAt<=now){
         selected=symbol;this.turnDailyCursor=(index+1)%universe.length;break;
       }
     }
     if(!selected)return 0;
     try{
-      const prior=this.turnDailyCandles[selected]??[];
+      const book=store(selected),prior=book[selected]??[];
       const external=await this.marketHub.candles(selected,"1d",120);
       let rows:Awaited<ReturnType<typeof fetchStructureCandles>>;
       if(external)rows=mergeTurnDailyPath(prior,external.rows);
-      else if(this.marketHub.supports(selected))throw new Error(`${selected} external 1d temporarily unavailable`);
+      else if(this.marketHub.supports(selected)||htfExtra.includes(selected))throw new Error(`${selected} external 1d temporarily unavailable`);
       else rows=mergeTurnDailyPath(prior,await fetchStructureCandles(selected,"1d",prior.length>=TURN_DAILY_REQUIRED_CANDLES?4:120));
-      this.turnDailyCandles[selected]=rows;
+      book[selected]=rows;
       if(rows.length<TURN_DAILY_REQUIRED_CANDLES)throw new Error(`日线历史不足：${rows.length}/${TURN_DAILY_REQUIRED_CANDLES}`);
       const reservation=this.reserveNonAlarmWrites(1,64);
       if(reservation){

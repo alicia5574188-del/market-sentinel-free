@@ -34,6 +34,7 @@ import type {LivingDirective,LivingOrder,LivingTradeAction,LivingResult,LivingNo
 import {bytesOf,r6,r4,corr} from "./util.ts";
 import {dynHold,volUnit,type DynState} from "./hold-dyn.ts";
 import {LEADER,closesOf,burstCheck,rankLeaders,leaderStop,leaderHold,vol6Of} from "./burst-leader.ts";
+import {HTF,closedDaily,dailyCheck,htfExitLevel,htfOrder,freshThrough,dayKey,dayStartSec,signalCell,trailLow,type DailyBar} from "./htf-trend.ts";
 import {RunLog,CASES_KEY,CASE_PAGE_KEYS,type Gate,type Layer,type CaseInput,type MarketSample} from "./runlog.ts";
 
 export const LIVING_KEYS={config:LIVING_CONFIG_KEY,basket:`${LIVING_KEY_PREFIX}basket`,fast:`${LIVING_KEY_PREFIX}fast`,
@@ -76,18 +77,30 @@ export type RadarView={symbol:string;openInterest?:number;fundingRate?:number;ma
 export type HubFlowView={symbol:string;at:number;oi:number|null;funding:number|null;basis:number|null;taker:number|null;turnover:number|null};
 export type ContractView={maintenanceRate:number;leverageMax:number};
 export type PlanContext={now:number;forward:ForwardView;quotes:Record<string,QuoteView>;contracts:Record<string,ContractView>;
-  funding:Record<string,number>;candles:Record<string,{time:number;open:number;high:number;low:number;close:number}[]>};
+  funding:Record<string,number>;candles:Record<string,{time:number;open:number;high:number;low:number;close:number}[]>;
+  /** htf-donch20: daily candles the worker already keeps (external venues only), the hub's 24h volume, the universe (coins with
+   * external daily data) and the universe coins the external venues do not cover (skipped, never fetched from Gate). */
+  htf?:HtfInput};
+export type HtfInput={daily:Record<string,DailyBar[]>;volume:Record<string,number|null>;universe:string[];notExternal:string[]};
 export type LogRow={at:number;k:string;[x:string]:string|number|boolean|null};
 type TradesState={v:1;watches:Watch[];liveNet:Record<string,number[]>;seen:string[];handedOff:string[];peaks:[string,number][];
   recentTriggers:{at:number;t:Trigger[]}[];lastBarAt:number;lastMinuteAt:number;counts:Record<string,number>;
   pendingEvents:FastEvent[];lastEnd:{id:string;end:string;at:number}|null;fastEntries:Record<string,number>;
   /** burst-leader-v1: last trigger bar per side (seconds) and the trigger waiting 2 minutes for its leader ranking */
-  bl?:BurstLeaderState};
+  bl?:BurstLeaderState;
+  /** htf-donch20: last checked UTC day, picks waiting for a Gate quote (entry window), the last check's summary */
+  hx?:HtfState};
+type HtfPending={id:string;sym:string;day:string;close:number;brk:number;atr:number;rank:number|null;vol:number|null;why:string;until:number};
+type HtfSummary={day:string;at:number;regime:"ON"|"OFF"|"UNKNOWN";btc:number|null;sma:number|null;universe:number;fresh:number;
+  breakouts:string[];picks:string[];skipped:string[];text:string};
+type HtfState={day:string;pending:HtfPending[];last:HtfSummary|null};
 type BurstLeaderState={last:{LONG:number;SHORT:number};pending:{id:string;side:"LONG"|"SHORT";bar:number;z:number;why:string}|null};
 const initialTrades=():TradesState=>({v:1,watches:[],liveNet:{},seen:[],handedOff:[],peaks:[],recentTriggers:[],lastBarAt:0,lastMinuteAt:0,
   counts:{},pendingEvents:[],lastEnd:null,fastEntries:{}});
 const FAST_CODES=new Set(["LIVING_FAST_LIQ_GUARD","LIVING_FAST_TIGHTEN","LIVING_FAST_CONFIRM_EXIT","LIVING_FAST_BREAKEVEN","LIVING_FAST_GIVEBACK"]);
 const d=(s:"LONG"|"SHORT")=>s==="LONG"?1:-1;
+const fx=(v:number)=>Number(v.toPrecision(6)).toString();
+const hhmm=(ms:number)=>new Date(ms).toISOString().slice(11,16);
 
 export class LivingEngine{
   config:LivingConfig;
@@ -174,7 +187,7 @@ export class LivingEngine{
   }
   note(at:number,k:string,data:Record<string,string|number|boolean|null>={}){
     this.log.push({at,k,...data});
-    if(/^(ENTRY|ENTRY_RECORD|RECORD_ONLY|WATCH|EXIT|EXIT_RECORD|PROTECT|PROTECT_RECORD|HOLD_CHANGE|INTENT_MARKET|ENV_MARKET|CLOSED|FAST_|SURGE|BURST_ONSET|BURST_RANK)/.test(k)){
+    if(/^(ENTRY|ENTRY_RECORD|RECORD_ONLY|WATCH|EXIT|EXIT_RECORD|PROTECT|PROTECT_RECORD|HOLD_CHANGE|INTENT_MARKET|ENV_MARKET|CLOSED|FAST_|SURGE|BURST_ONSET|BURST_RANK|HTF_)/.test(k)){
       this.decisions.push({at,k,...data});if(this.decisions.length>60)this.decisions.splice(0,this.decisions.length-60);}
     const ck=typeof data.reason==="string"?`${k}:${String(data.reason).replace(/[0-9.+\-%]+/g,"#").slice(0,40)}`:k;
     this.trades.counts[ck]=(this.trades.counts[ck]??0)+1;
@@ -209,7 +222,7 @@ export class LivingEngine{
   }
   private caseInput(now:number,sym:string,side:"LONG"|"SHORT",pb:string,kind:"normal"|"fast",why?:string):CaseInput{
     const ci=this.coins.get(sym),f=ci?.f,p=(v:number|null|undefined)=>v==null||!Number.isFinite(v)?null:Math.round(v*1e5)/1e3;
-    return {at:now,sym,side,pb,pbLabel:PLAYBOOK_LABEL[pb as Playbook]??(pb==="fast"?"集体异动快速跟进":pb),kind,
+    return {at:now,sym,side,pb,pbLabel:PLAYBOOK_LABEL[pb as Playbook]??(pb==="fast"?"集体异动快速跟进":pb===HTF.pb?HTF.label:pb),kind,
       intent:ci?`${ci.capital}/${ci.emotion}`:null,strength:ci?.action?.strength??ci?.strength??null,why:why??ci?.action?.why??ci?.why??"",
       ev:f?{p15:p(f.p15),p60:p(f.p60),oi15:p(f.oi15),oi60:p(f.oi60),funding:f.funding==null?null:Math.round(f.funding*1e7)/1e5,taker15:f.taker15==null?null:Math.round(f.taker15*1e3)/1e3,
         vol15:f.vol15==null?null:Math.round(f.vol15*100)/100,basis:p(f.basis)}:null,
@@ -372,9 +385,13 @@ export class LivingEngine{
       for(const o of this.fastOrders(ctx,items))orders.push(o);
       // burst-leader-v1: once a minute the special-condition check; 2 minutes after a trigger the leader ranking → 1–3 orders
       for(const o of this.burstOrders(ctx,items))orders.push(o);
+      // htf-donch20: daily check once per UTC day, its picks while their entry window lasts, the daily trail of open ones
+      const hx=this.htfStep(ctx,views,items,eff.acting);
+      for(const a of hx.actions)actions.push(a);
+      for(const o of hx.orders)orders.push(o);
       if(items.burstLeader){
-        // only special conditions open: every other entry is recorded, not sent
-        for(let k=orders.length-1;k>=0;k--){const o=orders[k]!;if(o.note.bh)continue;orders.splice(k,1);
+        // only special conditions open: every other entry is recorded, not sent (htf-donch20 is its own rule, not an ordinary entry)
+        for(let k=orders.length-1;k>=0;k--){const o=orders[k]!;if(o.note.bh||o.note.hx)continue;orders.splice(k,1);
           this.logCase(now,o.symbol,o.side,o.note.pb,"SPECIAL_ONLY","只在全市场突然爆发时开单：普通行情只记录",o.kind==="F"?"fast":"normal");
           this.note(now,"RECORD_ONLY",{sym:o.symbol,side:o.side,pb:o.note.pb,kind:o.kind,reason:"只在全市场突然爆发时开单，这张只记录"});this.endOrder(o,true);}
       }
@@ -394,8 +411,9 @@ export class LivingEngine{
         return undefined;
       }
       const directive:LivingDirective={version:"living-v2",items:{...items},
-        actions:actions.filter(a=>a.code.startsWith("LIVING_BURST_")?!!items.burstLeader:FAST_CODES.has(a.code)?items.fastProtect:items.thesisExit),
-        orders:exec.filter(o=>o.note.bh?!!items.burstLeader:o.kind==="F"?items.fastFollow:items.newSource).sort((a,b)=>(a.kind==="F"?0:1)-(b.kind==="F"?0:1)),
+        // htf trail always passes (switch 9 only stops new daily-breakout entries; open ones keep their trail)
+        actions:actions.filter(a=>a.code.startsWith("LIVING_HTF_")?true:a.code.startsWith("LIVING_BURST_")?!!items.burstLeader:FAST_CODES.has(a.code)?items.fastProtect:items.thesisExit),
+        orders:exec.filter(o=>o.note.hx?!!items.htfTrend:o.note.bh?!!items.burstLeader:o.kind==="F"?items.fastFollow:items.newSource).sort((a,b)=>(a.kind==="F"?0:1)-(b.kind==="F"?0:1)),
         legacyGate:items.newSource?"note":"open"};
       for(const o of exec)if(!directive.orders.includes(o)){this.logCase(now,o.symbol,o.side,o.note.pb,"SWITCH_OFF","对应开关关着",o.kind==="F"?"fast":"normal");this.note(now,"RECORD_ONLY",{sym:o.symbol,side:o.side,pb:o.note.pb,reason:"对应开关关着，只记录"});this.endOrder(o,true);}
       if(this.config.epochStartedAt==null&&(directive.orders.length||directive.actions.length||directive.legacyGate==="note")){
@@ -531,6 +549,7 @@ export class LivingEngine{
     for(const p of views){
       const n=p.living;if(!n||p.price==null)continue;
       const v2=n.v==="living-v2";if(!v2)continue;
+      if(n.hx){seen.add(p.id);continue;}// htf-donch20: only its stop / daily trail (htfStep) — no intent / lock / dynamic exits
       if(n.bh){
         // burst-leader-v1: stop + breakeven after +0.8% + 70% trail from +1.5% + 4 hours; nothing else closes it
         seen.add(p.id);
@@ -719,6 +738,130 @@ export class LivingEngine{
     }catch(error){this.lastError=String((error as Error)?.message??error).slice(0,200);this.note(now,"BURST_CHECK",{verdict:"ERROR",reason:this.lastError});}
     return out;
   }
+  // ------------------------------------------------------------------ htf-donch20 (daily trend breakout, rulebook rule 1)
+  /**
+   * Every plan(): (1) the daily trail of open htf trades: max(initial stop, lowest low of the last 10 closed days) → GUARD (only
+   * tighter) or EXIT when the live price is already below it; (2) once per UTC day, ≥2 minutes after 00:00 and once BTC's and ≥80%
+   * of the universe's daily candles for yesterday are in (or 45 minutes passed): the check → HTF_CHECK row + timeline `htf` +
+   * picks kept as pending; (3) pending picks → orders while their entry window lasts (only when acting and switch 9 is on).
+   * Reads only what the worker passed (stored daily candles, hub volume, live quotes): no request. Never throws.
+   */
+  private htfStep(ctx:PlanContext,views:PositionView[],items:LivingItems,acting:boolean):{actions:LivingTradeAction[];orders:LivingOrder[]}{
+    const out={actions:[] as LivingTradeAction[],orders:[] as LivingOrder[]},h=ctx.htf,now=ctx.now;if(!h)return out;
+    try{
+      const day=dayKey(now),minOfDay=(now-dayStartSec(now)*1000)/60_000,mk=this.marketIntent?.state??null;
+      // (1) trail
+      for(const p of views){
+        const n=p.living;if(!n?.hx||p.side!=="LONG")continue;
+        const rows=closedDaily(h.daily[p.symbol],now),cur=p.guard!=null?Math.max(p.stopPrice,p.guard):p.stopPrice;
+        const lvl=htfExitLevel(n.inv,rows,p.openedAt/1000,cur),low10=trailLow(rows);
+        const why=`日线突破单：止损 ${fx(cur)}（初始 ${fx(n.inv)}${low10!=null?`，近 10 日最低 ${fx(low10)}`:""}），每天收盘后只上移不下移，没有时间限制`;
+        const prev=this.holds.get(p.id);if(!prev||prev.why!==why)this.holds.set(p.id,{why,code:"HTF_HOLD",at:now});
+        try{this.runlog.holdRead(p.id,now,p.openedAt,{coin:null,h:null,market:mk,code:"HTF_HOLD",env:null});}catch{/* 只是记录 */}
+        if(rows.length&&!freshThrough(rows,now)&&minOfDay>=HTF.waitFullMin)
+          this.noteOnce(`htw|${p.id}|${day}`,now,"HTF_TRAIL_WAIT",{trade:p.id,sym:p.symbol,stop:r6(cur),reason:`${p.symbol} 昨天的日线还没拿到，止损先不动`});
+        if(!(lvl>cur*(1+1e-9))||p.price==null)continue;
+        const above=p.price>lvl,code=above?"LIVING_HTF_TRAIL":"LIVING_HTF_TRAIL_EXIT";
+        const reason=above?`日线收盘后：10 日最低 ${fx(low10??lvl)}，止损从 ${fx(cur)} 上移到 ${fx(lvl)}`:`日线收盘后：止损上移到 ${fx(lvl)}，现价 ${fx(p.price)} 已在下方，平掉`;
+        out.actions.push(above?{tradeId:p.id,action:"GUARD",stop:r6(lvl),code,reason,detail:{from:r6(cur),to:r6(lvl),low10:low10==null?null:r6(low10)}}
+          :{tradeId:p.id,action:"EXIT",code,reason,detail:{level:r6(lvl),price:r6(p.price)}});
+        if(this.noteOnce(`ht|${p.id}|${r6(lvl)}`,now,"HTF_TRAIL",{trade:p.id,sym:p.symbol,from:r6(cur),to:r6(lvl),low10:low10==null?null:r6(low10),px:r6(p.price),
+          act:acting?(above?"GUARD":"EXIT"):"RECORD",reason:acting?reason:`只计算/降级中，没执行：${reason}`}))
+          try{this.runlog.event(now,"HTF_TRAIL",`${p.symbol.replace("_USDT","")} ${reason}`);}catch{/* 只是记录 */}
+      }
+      // (2) the daily check
+      const st=(this.trades.hx??={day:"",pending:[],last:null});
+      st.pending=st.pending.filter(x=>{if(x.until>now)return true;
+        this.note(now,"HTF_EXPIRE",{sym:x.sym,day:x.day,order:x.id,reason:`入场窗口过了还没开出（${!acting?"研究层没在执行":!items.htfTrend?"开关 9 关着":"没有 Gate 实时盘口或被拒"}），今天不做`});
+        this.logCase(now,x.sym,"LONG",HTF.pb,"NO_QUOTE","入场窗口内没开出");return false;});
+      if(st.day!==day&&minOfDay>=HTF.checkAfterMin){
+        const btc=closedDaily(h.daily.BTC_USDT,now),btcOk=freshThrough(btc,now);
+        const coins=h.universe.map(sym=>({sym,rows:closedDaily(h.daily[sym],now),vol:h.volume[sym]??null}));
+        const fresh=coins.filter(c=>freshThrough(c.rows,now)).length,cover=coins.length?fresh/coins.length:0;
+        if((!btcOk&&minOfDay<HTF.btcDeadlineMin)||(cover<HTF.coverage&&minOfDay<HTF.waitFullMin)){
+          const w=`BTC 昨天的日线${btcOk?"已到":"还没到"}，${fresh}/${coins.length} 个币有昨天的日线（要 ${Math.round(HTF.coverage*100)}%）`;
+          if(this.noteOnce(`hw|${day}|${btcOk?1:0}|${cover>=HTF.coverage?1:0}`,now,"HTF_WAIT",{day,fresh,universe:coins.length,btc:btcOk,reason:`日线突破做多：等数据，${w}`}))
+            try{this.runlog.htfCheck(now,`WAIT ${day} ${hhmm(now)} ${w}`);}catch{/* 只是记录 */}
+        }else this.htfCheck(ctx,st,day,btc,coins,h.notExternal,minOfDay);
+      }
+      // (3) pending → orders
+      const busy=new Set(ctx.forward.positions.filter(p=>!p.inverseCopy).map(p=>p.symbol));
+      let open=ctx.forward.positions.filter(p=>!p.inverseCopy&&p.entryContext?.living?.hx).length;
+      for(const x of [...st.pending]){
+        if(busy.has(x.sym)){st.pending=st.pending.filter(y=>y.id!==x.id);
+          if(!ctx.forward.positions.some(p=>p.symbol===x.sym&&p.entryContext?.living?.hx&&p.entryContext.living.dy===x.day))
+            this.note(now,"HTF_SKIP",{sym:x.sym,day:x.day,reason:"这个币已有持仓（一币一笔），今天的突破不做"});
+          continue;}
+        if(!acting||!items.htfTrend){this.noteOnce(`hs|${x.id}|${acting?1:0}`,now,"RECORD_ONLY",{sym:x.sym,side:"LONG",pb:HTF.pb,
+          reason:!acting?"日线突破做多选中，但研究层现在只计算/降级，先等（入场窗口内恢复就开）":"日线突破做多选中，但开关 9 关着，只记录"});continue;}
+        if(open>=HTF.maxOpen){this.noteOnce(`hm|${x.id}`,now,"HTF_SKIP",{sym:x.sym,day:x.day,reason:`日线突破单已有 ${open} 笔，最多 ${HTF.maxOpen}`});continue;}
+        const q=ctx.quotes[x.sym],px=q&&q.bestAsk>0&&now-q.observedAt<=10_000?q.bestAsk:this.tape.last(x.sym)?.mid??null;
+        if(px==null||!(px>0))continue;// no price at all: the exec filter would only log the same miss
+        const z=htfOrder(px,x.atr,1);if(!z||!(z.stop>0)||z.stop>=px){this.noteOnce(`hz|${x.id}`,now,"HTF_SKIP",{sym:x.sym,day:x.day,reason:"按现价算不出有效止损"});continue;}
+        open++;
+        const why=`${x.why}；止损 = 入场 − 2×ATR20 = ${fx(z.stop)}（${(z.stopRate*100).toFixed(2)}%），之后按 10 日最低跟踪；风险 0.75%`;
+        out.orders.push({id:x.id,symbol:x.sym,side:"LONG",stop:r6(z.stop),riskRate:HTF.riskRate,multiple:1,kind:"N",episodeId:null,episodeCap:null,winner:false,
+          reason:why.slice(0,240),
+          note:{v:"living-v2",k:"N",pb:HTF.pb,th:null,ep:null,ev:"normal",mult:1,sc:null,t:null,n:null,per:null,rk:x.rank,inv:r6(z.stop),ref:r6(x.brk),
+            hold:HTF.holdMin,why:why.slice(0,200),in:"HTF/LONG",mk:mk??"WARMING",nar:(st.last?.text??"").slice(0,180),
+            evd:`收盘 ${fx(x.close)}｜20日高 ${fx(x.brk)}｜ATR20 ${(x.atr/x.close*100).toFixed(2)}%｜24h ${x.vol==null?"-":Math.round(x.vol/1e6)+"M"}｜#${x.rank??"-"}`,
+            hx:1,atr:r6(x.atr),cl:r6(x.close),dy:x.day}});
+      }
+      this.dirty.add(LIVING_KEYS.trades);
+    }catch(error){this.lastError=String((error as Error)?.message??error).slice(0,200);this.noteOnce(`he|${Math.floor(now/3_600_000)}`,now,"HTF_ERROR",{reason:this.lastError});}
+    return out;
+  }
+  private htfCheck(ctx:PlanContext,st:HtfState,day:string,btc:DailyBar[],coins:{sym:string;rows:DailyBar[];vol:number|null}[],notExternal:string[],minOfDay:number){
+    // one per coin; and as in the research, a coin whose daily-breakout trade closed on the signal day waits for the next signal
+    const sigDay=(dayStartSec(ctx.now)-86_400)*1000,closedOnSignal=ctx.forward.history.filter(t=>t.entryContext?.living?.hx&&t.closedAt!=null&&t.closedAt>=sigDay).map(t=>t.symbol);
+    const now=ctx.now,held=new Set([...ctx.forward.positions.filter(p=>!p.inverseCopy).map(p=>p.symbol),...closedOnSignal]),
+      open=ctx.forward.positions.filter(p=>!p.inverseCopy&&p.entryContext?.living?.hx).length;
+    const c=dailyCheck({nowMs:now,btc,coins,held,open});
+    const nm=(s:string)=>s.replace("_USDT","");
+    const breaks=c.rows.filter(r=>r.ok),near=c.rows.filter(r=>!r.ok&&r.code==="NO_BREAK"&&r.close!=null&&r.breakout!=null)
+      .sort((a,b)=>(b.close!/b.breakout!)-(a.close!/a.breakout!)).slice(0,5);
+    const other=c.rows.filter(r=>r.code!=="BREAK"&&r.code!=="NO_BREAK");
+    const regime=c.regime.on==null?"UNKNOWN":c.regime.on?"ON":"OFF";
+    const text=`${day} 日线突破做多检查：${c.regime.on==null?"BTC 均线算不出（不开）":c.regime.on?"BTC 在 100 日均线上（可以做）":"BTC 在 100 日均线下（不做）"}，${c.regime.why}；`+
+      `${coins.length} 个币（${c.fresh} 个有昨天日线），${breaks.length} 个突破 20 日新高${breaks.length?`：${breaks.map(r=>nm(r.sym)).join("/")}`:""}；`+
+      `选中 ${c.picks.map(r=>nm(r.sym)).join("/")||"无"}（空名额 ${c.slots}/${HTF.maxOpen}）`;
+    const summary:HtfSummary={day,at:now,regime,btc:c.regime.close,sma:c.regime.sma==null?null:r6(c.regime.sma),universe:coins.length,fresh:c.fresh,
+      breakouts:breaks.map(signalCell),picks:c.picks.map(r=>r.sym),skipped:[...c.skipped.map(x=>`${nm(x.sym)}:${x.why}`),...notExternal.map(s=>`${nm(s)}:外部交易所没有日线（不向 Gate 补）`)].slice(0,30),text:text.slice(0,400)};
+    this.note(now,"HTF_CHECK",{day,regime,btc:c.regime.close,sma100:summary.sma,gap:c.regime.close!=null&&c.regime.sma!=null?r4(c.regime.close/c.regime.sma-1):null,
+      universe:coins.length,fresh:c.fresh,late:Math.round(minOfDay),breakouts:summary.breakouts.join("｜").slice(0,600),near:near.map(signalCell).join("｜").slice(0,400),
+      picks:summary.picks.join(","),skipped:summary.skipped.join("｜").slice(0,600),
+      other:other.slice(0,12).map(r=>`${nm(r.sym)}:${r.code}`).join(",").slice(0,300),notExternal:notExternal.map(nm).join(",").slice(0,200),reason:text.slice(0,240)});
+    try{this.runlog.event(now,"HTF_CHECK",text);
+      this.runlog.htfCheck(now,`${day} ${hhmm(now)} regime ${regime} BTC ${c.regime.close==null?"-":fx(c.regime.close)}/SMA100 ${c.regime.sma==null?"-":fx(c.regime.sma)} `+
+        `${coins.length}币 ${c.fresh}新 突破[${summary.breakouts.join(" ")}] 选[${summary.picks.map(nm).join(",")}] 跳过[${summary.skipped.slice(0,8).join(" ")}]`);}catch{/* 只是记录 */}
+    for(const r of c.picks)this.logCase(now,r.sym,"LONG",HTF.pb,"HTF_PICK",r.why.slice(0,70),"normal",text.slice(0,160));
+    for(const x of c.skipped)this.logCase(now,x.sym,"LONG",HTF.pb,"HTF_SKIP",x.why.slice(0,70),"normal",text.slice(0,160));
+    const until=Math.min(now+HTF.entryWindowMin*60_000,(dayStartSec(now)+86_400)*1000-60_000);
+    st.day=day;st.last=summary;
+    st.pending=[...st.pending.filter(x=>x.day!==day),...c.picks.map(r=>({id:`lh-${day}-${r.sym}`,sym:r.sym,day,close:r.close!,brk:r.breakout!,atr:r.atr!,rank:r.rank,vol:r.vol,
+      why:r.why.slice(0,160),until}))];
+    this.dirty.add(LIVING_KEYS.trades);
+  }
+  private htfOpened(o:{orderId:string;tradeId:string;symbol:string;risk:number;notional:number},forward:ForwardView,now:number){
+    const st=this.trades.hx;if(st)st.pending=st.pending.filter(x=>x.id!==o.orderId);
+    const p=forward.positions.find(x=>x.id===o.tradeId),n=p?.entryContext?.living;
+    const lev=(p as {leverage?:number}|undefined)?.leverage??null;
+    this.note(now,"HTF_OPEN",{trade:o.tradeId,sym:o.symbol,entry:p?.entryPrice??null,stop:p?.stopPrice??null,stopPct:p&&p.entryPrice?r4(1-p.stopPrice/p.entryPrice):null,
+      breakout:n?.ref??null,atr:n?.atr??null,lev,risk:r4(o.risk),notional:Math.round(o.notional),reason:`日线突破做多开出：${(n?.why??"").slice(0,160)}`});
+    try{this.runlog.event(now,"HTF_OPEN",`${o.symbol.replace("_USDT","")} 开多 ${p?.entryPrice??""}，止损 ${p?.stopPrice??""}${lev?`，${lev} 倍`:""}`);}catch{/* 只是记录 */}
+  }
+  private htfDrop(orderId:string,now:number,reason:string){
+    const st=this.trades.hx;if(!st)return;const x=st.pending.find(y=>y.id===orderId);if(!x)return;
+    if(/Gate 实时盘口/.test(reason))return;// the quote may come back inside the entry window
+    st.pending=st.pending.filter(y=>y.id!==orderId);this.note(now,"HTF_REJECT",{sym:x.sym,day:x.day,order:orderId,reason:reason.slice(0,160)});
+    this.logCase(now,x.sym,"LONG",HTF.pb,"REJECTED",reason.slice(0,70));
+  }
+  /** htf-donch20 summary for status / brain view */
+  htfSummary(forward?:ForwardView){
+    const st=this.trades.hx,open=(forward?.positions??[]).filter(p=>!p.inverseCopy&&p.entryContext?.living?.hx);
+    return {last:st?.last??null,pending:(st?.pending??[]).map(x=>({sym:x.sym,day:x.day,until:x.until,why:x.why})),open:open.length,maxOpen:HTF.maxOpen,
+      trades:open.map(p=>({id:p.id,sym:p.symbol,entry:p.entryPrice,stop:p.livingGuard?.stop??p.stopPrice,initial:p.entryContext?.living?.inv??null,openedAt:p.openedAt}))};
+  }
   /** An order that will not be sent again: normal → its watch ends; fast → counts as used for the episode (virtual entry when `used`). */
   private endOrder(o:LivingOrder,used:boolean){
     if(o.kind==="N")this.trades.watches=this.trades.watches.filter(w=>w.id!==o.id);
@@ -761,7 +904,7 @@ export class LivingEngine{
       if(result){
         for(const o of result.opened){
           this.note(now,"ENTRY",{sym:o.symbol,side:o.side,trade:o.tradeId,risk:r4(o.risk),notional:Math.round(o.notional)});
-          try{const pb=o.orderId.startsWith("lf-")?"fast":o.orderId.startsWith("lb-")?LEADER.pb:this.trades.watches.find(w=>w.id===o.orderId)?.playbook??null;
+          try{const pb=o.orderId.startsWith("lf-")?"fast":o.orderId.startsWith("lb-")?LEADER.pb:o.orderId.startsWith("lh-")?HTF.pb:this.trades.watches.find(w=>w.id===o.orderId)?.playbook??null;
             const pos=forward.positions.find(p=>p.id===o.tradeId);
             this.runlog.count(now,"OPENED");this.runlog.opened(now,{sym:o.symbol,side:o.side,pb:pb??"",trade:o.tradeId});
             const linked=this.runlog.linkTrade(o.symbol,o.side,pb,{id:o.tradeId,openedAt:pos?.openedAt??now,entry:pos?.entryPrice??null,stop:pos?.stopPrice??null});
@@ -769,6 +912,7 @@ export class LivingEngine{
               this.runlog.linkTrade(o.symbol,o.side,pb,{id:o.tradeId,openedAt:pos?.openedAt??now,entry:pos?.entryPrice??null,stop:pos?.stopPrice??null});}
           }catch{/* 只是记录 */}
           this.trades.watches=this.trades.watches.filter(w=>w.id!==o.orderId);
+          if(o.orderId.startsWith("lh-"))this.htfOpened(o,forward,now);
           const f=o.orderId.startsWith("lf-")?o.orderId.slice(3,o.orderId.lastIndexOf("-")):null;
           if(f){this.trades.fastEntries[f]=(this.trades.fastEntries[f]??0)+1;const rec=this.episodes.find(r=>r.id===f);if(rec)rec.entries++;}
         }
@@ -777,6 +921,7 @@ export class LivingEngine{
           if(!transient){if(this.noteOnce(`r|${r.orderId}`,now,"RECORD_ONLY",{sym:r.symbol,reason:`开单被拒：${r.reason}`})){
               const w=this.trades.watches.find(x=>x.id===r.orderId);
               if(w)this.logCase(now,w.symbol,w.side,w.playbook,"REJECTED",r.reason);else this.logCount(now,"REJECTED",r.reason);}this.trades.watches=this.trades.watches.filter(w=>w.id!==r.orderId);
+            if(r.orderId.startsWith("lh-"))this.htfDrop(r.orderId,now,`开单被拒：${r.reason}`);
             if(r.orderId.startsWith("lf-")){const ep=r.orderId.slice(3,r.orderId.lastIndexOf("-")),sym=r.orderId.slice(r.orderId.lastIndexOf("-")+1);void sym;this.virtualFast.add(`${ep}|${r.symbol}`);}}
         }
         for(const a of result.applied)this.note(now,"APPLIED",{trade:a.tradeId,code:a.code,action:a.action});
@@ -899,7 +1044,7 @@ export class LivingEngine{
         ev:{p15:c.f.p15,oi15:c.f.oi15,oi60:c.f.oi60,funding:c.f.funding,taker15:c.f.taker15,vol15:c.f.vol15,basis:c.f.basis}}));
     const positions=(forward?.positions??[]).filter(p=>!p.inverseCopy).map(p=>{const n=p.entryContext?.living,h=this.holds.get(p.id);
       return {id:p.id,symbol:p.symbol,side:p.side,entry:p.entryPrice,stop:p.livingGuard?.stop??p.stopPrice,openedAt:p.openedAt,living:!!n,
-        playbook:n?(PLAYBOOK_LABEL[n.pb as Playbook]??(n.pb==="fast"?"集体异动快速跟进":n.pb)):null,intent:n?.in??null,story:n?.nar??n?.why??null,evidence:n?.evd??null,
+        playbook:n?(PLAYBOOK_LABEL[n.pb as Playbook]??(n.pb==="fast"?"集体异动快速跟进":n.pb===HTF.pb?HTF.label:n.pb)):null,intent:n?.in??null,story:n?.nar??n?.why??null,evidence:n?.evd??null,
         invalidation:n?.inv??null,hold:h?.why??(n?null:"老流程的单：按原有出场规则管理"),holdAt:h?.at??null};});
     const closed=(forward?.history??[]).filter(t=>t.entryContext?.living&&t.closedAt!=null).slice(-200);
     const byPb:Record<string,{n:number;win:number;r:number}>={};
@@ -920,11 +1065,12 @@ export class LivingEngine{
         last:this.episodes.slice(-6).map(e=>({id:e.id,side:e.side,end:e.end,alertAt:e.alertAt,confirmAt:e.confirmAt,endAt:e.endAt,after15:e.after["15"]?.[0]??null}))},
       watches:this.trades.watches.map(w=>({symbol:w.symbol,side:w.side,pb:PLAYBOOK_LABEL[w.playbook],expiresAt:w.expiresAt,reason:w.reason,
         intent:w.intent?.state??null,why:w.intent?.why??null,zone:[w.zoneLo,w.zoneHi],invalidation:w.invalidation})),
-      selfCheck:{byPlaybook:Object.entries(byPb).map(([pb,x])=>({pb,label:PLAYBOOK_LABEL[pb as Playbook]??(pb==="fast"?"快速跟进":pb),n:x.n,winRate:x.n?x.win/x.n:0,avgR:x.n?x.r/x.n:0})),
+      selfCheck:{byPlaybook:Object.entries(byPb).map(([pb,x])=>({pb,label:PLAYBOOK_LABEL[pb as Playbook]??(pb==="fast"?"快速跟进":pb===HTF.pb?HTF.label:pb),n:x.n,winRate:x.n?x.win/x.n:0,avgR:x.n?x.r/x.n:0})),
         fast:{alerts:eps.length,fake:eps.filter(e=>e.end==="FAKE").length,confirmed:eps.filter(e=>e.confirmAt!=null).length,
           follow30:eps.filter(e=>e.follow30Net!=null).map(e=>e.follow30Net!)},
         intentReads:this.intentCounts},
       decisions:this.decisions.slice(-30).reverse(),
+      htf:this.htfSummary(forward),
       loadedAt:this.loadedAt,basket:this.basket?.members.length??0,tapeSymbols:this.tape.symbols().length,flowSymbols:this.flow.m1.size,lastFeedAt:this.tape.lastFeedAt,flowAt:this.flow.lastAt,
       cpu:{planMs:this.lastPlanMs,maxPlanMs:Math.round(this.maxPlanMs),hubMs:this.lastHubMs},writesToday:this.writesToday.n,lastError:this.lastError,
       recent:this.log.slice(-12)};

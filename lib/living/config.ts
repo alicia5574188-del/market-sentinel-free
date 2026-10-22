@@ -19,13 +19,17 @@ export const LIVING_MODES:readonly LivingMode[]=["off","compute-only","paper-ena
 /** C7 items 1-7. */
 /** burstLeader (burst-leader-v1): open only on a sudden market-wide burst (1–3 leaders, 1.5% risk, wide stop, burst hold); every
  * other entry is recorded only. */
-export const LIVING_ITEMS=["fastProtect","fastFollow","newSource","noChase","liqSafety","thesisExit","sizing","burstLeader"] as const;
+/** htfTrend (htf-donch20, C1b): daily trend breakout long — once a day after 00:00 UTC, BTC > 100-day SMA, 20-day closing breakout
+ * among the 30 most liquid coins, stop 2×ATR20, 10-day-low trail, 0.75% risk, max 8; its own slots, its own exits. Off = no new
+ * daily-breakout entries (open ones keep their stop and daily trail). */
+export const LIVING_ITEMS=["fastProtect","fastFollow","newSource","noChase","liqSafety","thesisExit","sizing","burstLeader","htfTrend"] as const;
 export type LivingItem=typeof LIVING_ITEMS[number];
 export type LivingItems=Record<LivingItem,boolean>;
 export const LIVING_ITEM_LABELS:Record<LivingItem,string>={
   fastProtect:"1 快速保护",fastFollow:"2 快速跟进",newSource:"3 资金意图开单（五步闭环）",noChase:"4 到位置再确认（不追价）",
   liqSafety:"5 维持保证金率≤2%、止损≤爆仓距离40%",thesisExit:"6 持有理由没了就走",sizing:"7 证据倍数仓位",
-  burstLeader:"8 只做全市场突然爆发：选 1-3 个领涨币，大仓位宽止损（其它开单只记录）"};
+  burstLeader:"8 只做全市场突然爆发：选 1-3 个领涨币，大仓位宽止损（其它开单只记录）",
+  htfTrend:"9 日线突破做多：BTC 在 100 日均线上时，前 30 大币日线收盘创 20 日新高就做多，止损 2 倍日波动、按 10 日低点跟踪，每笔 0.75% 风险，最多 8 笔"};
 
 export type LivingConfig={version:typeof LIVING_VERSION;mode:LivingMode;items:LivingItems;updatedAt:number;
   /** First moment paper-enabled acted on the account (run-log rule_epoch boundary). */
