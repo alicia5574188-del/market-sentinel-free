@@ -26,6 +26,8 @@ export type LivingNote={v:"living-v1"|"living-v2";k:LivingKind;pb:string;th:stri
    * from the forward core); its stop trail / target / signal / time exits come from the same rule on the venue bars (LIVING_DYN_*).
    * `cf` the allocator's confidence (0.5–1) that scaled its risk. */
   dp?:1;cf?:number;
+  /** dynamic-v1.4: the risk rate (fraction of equity) the pool order was sized with, for the pool log's CLOSE record */
+  rr?:number;
   /** dynamic-v1: the signal's time limit in bars of its interval (target is `tg`) */
   mb?:number};
 export type LivingTradeAction={tradeId:string;action:"EXIT"|"GUARD"|"HANDOFF";stop?:number;code:string;reason:string;detail?:Record<string,number|string|null>};

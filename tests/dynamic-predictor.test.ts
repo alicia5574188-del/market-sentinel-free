@@ -191,6 +191,17 @@ test("runtime: the predictor runs in the analysis — hourly forecast row to D1,
   rt.tsrc.get(`l|SOL_USDT|5m|${start}`)!.rows.push(...[0,1,2,3,4].map(k=>[0,t3+k*600,t3+k*600+300,-3000,100,100] as [number,number,number,number,number,number]));
   rt.analyze(at+8*H*1000);assert.ok(rt.predLive[pb]!.cutUntil>at/1000+8*H,"cut");assert.ok(!rt.gates![pb]!.ok);
   assert.ok(rt.events.some(e=>e.k==="ALLOC"&&/最近 5 笔影子交易全亏/.test(e.text)));
+  // dynamic-v1.4 pool log: allocator changes (allow, cut), the hourly predictor snapshot, the scoring, backfill progress — in order, by seq
+  const recs=rt.poolRecs.map(r=>r.rec),types=new Set(recs.map(r=>r.t));
+  for(const t of ["GATE","PRED","SCORE","BACKFILL"])assert.ok(types.has(t as never),`${t} record`);
+  const allow=recs.find(r=>r.t==="GATE"&&r.pb===pb&&r.ok)!;assert.equal(allow.src,"allocator");assert.equal(allow.decision,"ALLOW");
+  assert.equal(allow.p6,f.p["6"]);assert.equal(allow.pMin,PRED_ALLOC.pMin);assert.equal(allow.phase,"GOOD");assert.equal(typeof allow.elapsedH,"number");assert.ok(Number(allow.risk)>0);
+  assert.ok(recs.some(r=>r.t==="GATE"&&r.pb===pb&&r.decision==="CUT"&&/最近 5 笔影子交易全亏/.test(String(r.why))),"cut recorded");
+  const pred=recs.find(r=>r.t==="PRED")!;assert.ok(Number(pred.n)>=1);assert.equal((pred.top as {pb:string}[])[0]!.pb,pb);
+  assert.equal(recs.filter(r=>r.t==="PRED").length,rt.fcRows.length,"one snapshot per hourly row");
+  const sc=recs.find(r=>r.t==="SCORE")!;assert.equal(sc.n,1);assert.equal(sc.hit,1);
+  const bf=recs.find(r=>r.t==="BACKFILL")!;assert.equal(typeof bf.total,"number");assert.ok(Number(bf.total)>=Number(bf.done));assert.equal(bf.venues,"bybit/okx/kucoin");
+  assert.deepEqual(rt.poolRecs.map(r=>r.seq),rt.poolRecs.map((_,i)=>i+1),"sequence numbers for the worker relay");
   void IV_SEC;void now0;
 });
 

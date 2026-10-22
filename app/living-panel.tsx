@@ -8,8 +8,9 @@ import {useBrain,MODE_LABEL,STATE_LABEL,CAPITAL_LABEL,EMOTION_LABEL,DECISION_LAB
 import {Coin,safePnl,held,signed,tone,stamp,clock,legacyMarketLine} from "./market-intelligence-execution.tsx";
 import {exitShort} from "./order-card.tsx";
 import PanelStamp from "./panel-stamp.tsx";
-import DynamicPanel from "./dynamic-panel.tsx";
+import {SchemeSummary,Ranked,Families,GateLog,PoolTrades,ForecastRecord,ResearchDetail,dynOf,labelsOf,pc} from "./dynamic-panel.tsx";
 import "./market-brain.css";
+import "./brain-scheme.css";
 
 type View=ReturnType<typeof forwardSummary>;
 type Trade=View["positions"][number];
@@ -48,7 +49,7 @@ function LivingPanel({auth,scope="owner",data=null,now=0,liveEnabled=false,liveO
   const [error,setError]=useState<string|null>(null),[busy,setBusy]=useState(false);
   const submitting=useRef(false);
   if(!owner)return null;
-  const s=panel.value,m=s?.market,sc=s?.selfCheck;
+  const s=panel.value;
   const setMode=async(mode:BrainMode)=>{
     if(submitting.current||busy)return;submitting.current=true;setBusy(true);
     try{panel.set(await operatorRequest<BrainStatus>("/api/living/mode","POST",{mode}));setError(null);}
@@ -61,29 +62,31 @@ function LivingPanel({auth,scope="owner",data=null,now=0,liveEnabled=false,liveO
     catch(e){setError(e instanceof Error?e.message:"切换失败");}
     finally{submitting.current=false;setBusy(false);}
   };
+  return <BrainBody s={s} data={data} now={now} liveEnabled={liveEnabled} liveOverview={liveOverview} healthy={healthy} systemStatus={systemStatus}
+    feedAt={feedAt} floating={floating} onOpenOrders={onOpenOrders} busy={busy} error={error} stamp={{at:panel.at,refreshing:panel.refreshing,failed:panel.failed}}
+    setMode={m=>void setMode(m)} setItem={(k,on)=>void setItem(k,on)}/>;
+}
+type BodyProps={s:BrainStatus|null|undefined;data?:View|null;now?:number;liveEnabled?:boolean;liveOverview?:LiveOverview;healthy?:boolean;systemStatus?:string;
+  feedAt?:number|null;floating?:number|null;onOpenOrders?:()=>void;busy:boolean;error:string|null;stamp:{at:number|null;refreshing:boolean;failed:boolean};
+  setMode:(m:BrainMode)=>void;setItem:(key:string,on:boolean)=>void};
+/** The page itself (pure; the screenshot harness and tests render it with a fixture). dynamic-v1.4 layout: the one scheme first
+ * (summary, ranked playbooks, holdings, gate decisions, pool trades, families), the older read-outs folded under 旧系统/只记录. */
+export function BrainBody({s,data=null,now=0,liveEnabled=false,liveOverview,healthy,systemStatus,feedAt,floating,onOpenOrders,busy,error,stamp:st,setMode,setItem}:BodyProps){
+  const m=s?.market,sc=s?.selfCheck,pool=s?.pool;
   const htfItem=s?.items.find(i=>i.key==="htfTrend");
   const positions=[...(data?.positions??[])].filter(t=>!t.inverseCopy);
-  const recent=[...(data?.history??[])].filter(t=>!t.inverseCopy).sort((a,b)=>(b.closedAt??0)-(a.closedAt??0)).slice(0,5);
   const why=new Map((s?.positions??[]).map(p=>[p.id,p]));
+  const poolPos=new Map((pool?.open??[]).map(p=>[p.id,p]));
+  const labels=labelsOf(s?dynOf(s):null);
   const clockNow=now||data?.updatedAt||0;
   const liveText=!liveEnabled?"关闭":liveOverview?.operational?"运行中":"核对中";
   const board=s?.board??[];
-  const warming=!m||m.state==="WARMING";
-  return <div className="mb pg-exec" data-testid="owner-living-research">
-    <section className={`pg-card mb-state mb-${(m?.state??"WARMING").toLowerCase()}`} data-testid="brain-market">
-      <header><small>现在的市场</small><span className="mb-badge">{fastBadge(s?.fast)}</span></header>
-      <strong className="pg-title">{m?STATE_LABEL[m.state]??m.state:panel.failed?"读取失败":"读取中"}{m?.side?` · 偏${sideCn(m.side)}`:""}</strong>
-      <p className="mb-sentence">{m?.sentence??(s?"行情刚接上，一两分钟内给出第一句判断。":"正在读取研究层……")}</p>
-      {m&&<div className="pg-chips">
-        <span className="pg-chip"><small>把握</small>{Math.round(m.confidence*100)}%</span>
-        <span className="pg-chip mb-allowed"><small>能做</small>{m.allowed.length?m.allowed.map(a=>`${a.label}${a.side?sideCn(a.side):""}`).join("、"):"现在不开新单"}</span>
-      </div>}
-      {m?.restored&&<p className="mb-hint">这是重启前最后一次判断，正在用最新行情重读。</p>}
-      {!m?.restored&&warming&&s?.loadedAt?<p className="mb-hint">刚重启（{bj(s.loadedAt)}），在补数据。</p>:null}
-      {s?.fallback&&<p className="mb-hint mb-warn">自动降级为只计算（到 {bj(s.fallback.until)}）：{s.fallback.reason}</p>}
-      {error&&<p className="mb-hint mb-warn" role="alert">{error}</p>}
-      <PanelStamp at={panel.at} refreshing={panel.refreshing} failed={panel.failed}/>
-    </section>
+  const otherRecent=[...(data?.history??[])].filter(t=>!t.inverseCopy&&!pool?.recent.some(x=>x.id===t.id)).sort((a,b)=>(b.closedAt??0)-(a.closedAt??0)).slice(0,5);
+  return <div className="mb pg-exec bs" data-testid="owner-living-research">
+    {s?<SchemeSummary s={s} pool={pool} busy={busy} onToggle={on=>setItem("dynAllocator",on)} liveEnabled={liveEnabled}/>
+      :<section className="pg-card bs-scheme" data-testid="brain-scheme"><strong className="pg-title">{st.failed?"读取失败":"读取中"}</strong><p className="mb-hint">正在读取研究层……</p></section>}
+    {error&&<p className="mb-hint mb-warn" role="alert">{error}</p>}
+    <PanelStamp at={st.at} refreshing={st.refreshing} failed={st.failed}/>
 
     <div className="pg-tiles" data-testid="execution-status">
       <div><small>实盘</small><b className={liveEnabled&&liveOverview?.operational?"fr-positive":undefined}>{liveText}</b><p>{!liveEnabled?"只跑模拟，不下单":`实盘持仓 ${liveOverview?.positionCount??0} 笔`}</p></div>
@@ -91,67 +94,67 @@ function LivingPanel({auth,scope="owner",data=null,now=0,liveEnabled=false,liveO
       <div><small>系统</small><b className={healthy?"fr-positive":healthy===false?"fr-negative":undefined}>{systemStatus??"—"}</b><p>行情 {clock(feedAt)}</p></div>
     </div>
 
+    {s&&<Ranked s={s}/>}
+
     <section className="pg-section" data-testid="execution-positions">
-      <h2>正在持仓<small>{positions.length} 笔</small></h2>
-      {positions.length?<div className="pg-list">{positions.map(t=>{const pnl=safePnl(t),b=why.get(t.id);return <article className="pg-row" key={t.id}>
-        <div className="oc-line"><Coin symbol={t.symbol} side={t.side}/><b className={`oc-pnl ${tone(pnl)}`}>{signed(pnl)} U</b></div>
-        <div className="oc-line oc-sub"><span>{b?.playbook??"老流程"} · 已拿 {held(t.openedAt,clockNow)||"—"}</span></div>
+      <h2>正在持仓<small>{positions.length} 笔{pool?` · 打法池 ${pool.open.length}/${pool.max}`:""}</small></h2>
+      {positions.length?<div className="pg-list">{positions.map(t=>{const pnl=safePnl(t),b=why.get(t.id),pp=poolPos.get(t.id),u=typeof pnl==="number"&&Number.isFinite(pnl);return <article className="pg-row" key={t.id}>
+        <div className="oc-line"><Coin symbol={t.symbol} side={t.side}/><b className={`oc-pnl ${tone(pp?.move??pnl)}`}>{pp?pc(pp.move):`${signed(pnl)} U`}</b></div>
+        <div className="oc-line oc-sub"><span>{pp?labels.get(pp.pb)??b?.playbook??pp.pb:b?.playbook??"老流程"} · 已拿 {held(t.openedAt,clockNow)||"—"}{pp?.risk!=null?` · 风险 ${(pp.risk*100).toFixed(2)}%`:""}{pp&&u?` · ${signed(pnl)} U`:""}</span></div>
         {b?.story&&<p className="pg-watch"><b>为什么开</b>{b.story}</p>}
         <p className="pg-watch"><b>为什么还拿着</b>{b?.hold??"—"}</p>
         <p className="pg-plan">{b?.invalidation!=null&&b.invalidation!==(b?.stop??t.stopPrice)?`错了的标志：${plain(b.invalidation)} · `:""}错了就走：止损 {plain(b?.stop??t.stopPrice)}{b?.evidence?` · ${b.evidence}`:""}</p>
-      </article>;})}</div>:<div className="pg-empty">现在空仓。{m&&m.allowed.length?"市场允许的打法出现位置时会开。":"市场意图不清楚，不开新单。"}</div>}
+      </article>;})}</div>:<div className="pg-empty">现在空仓。{s?.items.find(i=>i.key==="dynAllocator")?.on?"预测看好的打法出现信号时会开。":"开关 10 关着，只记录。"}</div>}
     </section>
 
-    <section className="pg-section" data-testid="execution-recent">
-      <h2>最近平仓<small>最新 {recent.length} 笔</small></h2>
-      {recent.length?<div className="pg-recent">{recent.map(t=><div key={t.id}>
-        <span><Coin symbol={t.symbol} side={t.side}/><small>{exitText(t)} · {stamp(t.closedAt)}</small></span>
-        <strong className={tone(t.netPnl)}>{signed(t.netPnl)} U<small>{held(t.openedAt,t.closedAt)}</small></strong>
-      </div>)}</div>:<div className="pg-empty">还没有已平订单。</div>}
-      {onOpenOrders&&<button type="button" className="pg-link" onClick={onOpenOrders}>查看全部模拟订单 →</button>}
-    </section>
-
-    {s&&<section className="pg-section" data-testid="brain-board">
-      <h2>每个币在发生什么<small>{board.length}</small></h2>
-      {!board.length?<div className="pg-empty">还没有币的读数。</div>:<div className="mb-board">{board.slice(0,6).map(c=><Read key={c.symbol} c={c}/>)}</div>}
-      {board.length>6&&<details className="mb-more"><summary>再看 {board.length-6} 个</summary><div className="mb-board">{board.slice(6).map(c=><Read key={c.symbol} c={c}/>)}</div></details>}
-    </section>}
-
-    {s&&!!s.watches.length&&<section className="pg-section">
-      <h2>在等位置<small>{s.watches.length}</small></h2>
-      <ul className="mb-list">{s.watches.map((w,i)=><li key={i}><b>{coinName(w.symbol)} {sideCn(w.side)} · {w.pb}{w.zone?` · 等 ${plain(w.zone[0])}–${plain(w.zone[1])}`:""}</b>
-        {w.why&&<span>{w.why}</span>}<span>{w.invalidation!=null?`到 ${plain(w.invalidation)} 就不做 · `:""}{bj(w.expiresAt)} 过期</span></li>)}</ul>
-    </section>}
+    {s&&<GateLog s={s} pool={pool}/>}
+    {s&&<PoolTrades s={s} pool={pool} onOpenOrders={onOpenOrders}/>}
+    {s&&<Families s={s}/>}
 
     <section className="pg-section mb-folds">
-    {s&&<DynamicPanel s={s} busy={busy} onToggle={on=>void setItem("dynAllocator",on)}/>}
-    {s&&<details className="mb-fold"><summary>最近的决定（{s.decisions?.length??0}）</summary>
-      {!s.decisions?.length?<p className="mb-hint">还没有决定。</p>:<ol className="mb-list">{s.decisions.map((d,i)=>{const k=String(d.k);return <li key={i}>
-        <b>{bj(d.at as number)} {DECISION_LABEL[k]??k}{d.sym?` · ${coinName(String(d.sym))}`:""}{d.side?` ${sideCn(String(d.side))}`:""}</b>
-        <span>{plain(d.story??d.reason??d.why??d.sentence??"")}</span></li>;})}</ol>}
-    </details>}
-
-    {s&&<details className="mb-fold"><summary>集体异动与判断变化</summary>
-      <p className="mb-hint">{s.fast.flow?`资金：${s.fast.flow.real===true?"真钱在动":s.fast.flow.real===false?"只有价格在动，资金没跟":"资金未核实"}（${s.fast.flow.kind}）`:"没有正在进行的集体异动。"}{s.fast.reason?` ${s.fast.reason}`:""}</p>
-      <p className="mb-hint">已记录 {s.fast.episodes} 段{s.fast.surges7d!=null?`，只有价格没资金 ${s.fast.surges7d} 次`:""}。</p>
-      {!!s.marketTimeline?.length&&<ol className="mb-list">{[...s.marketTimeline].reverse().map((x,i)=><li key={i}><b>{bj(x.at)} {STATE_LABEL[x.state]??x.state}{x.side?` 偏${sideCn(x.side)}`:""}</b><span>{x.sentence}</span></li>)}</ol>}
-    </details>}
-
-    {s&&<details className="mb-fold"><summary>自检与开关（{MODE_LABEL[s.mode]}）</summary>
-      <p className="mb-hint">集体异动 {sc?.fast.alerts??0} 段：确认 {sc?.fast.confirmed??0}，假动作 {sc?.fast.fake??0}。</p>
-      {!!sc?.byPlaybook.length&&<p className="mb-hint">{sc.byPlaybook.map(b=>`${b.label} ${b.n} 笔 胜率 ${Math.round(b.winRate*100)}% 平均 ${b.avgR.toFixed(2)}R`).join("；")}</p>}
-      {!!s.probes?.length&&<p className="mb-hint">近期表现只调仓位（0.7–1.2 倍）：{s.probes.map(p=>`${p.label}×${p.modulator}`).join("，")}</p>}
+    {s&&<ForecastRecord s={s}/>}
+    {s&&<details className="mb-fold"><summary>开关与模式（{MODE_LABEL[s.mode]}）</summary>
       <p className="mb-hint">{s.items.map(i=>`${i.label}${i.on?"✓":"✗"}`).join("　")}</p>
       {s.htf&&<p className="mb-hint">{htfLine(s.htf)}</p>}
       {htfItem&&<div className="fr-owner-session"><button className="fr-text-button" type="button" disabled={busy}
-        onClick={()=>void setItem("htfTrend",!htfItem.on)}>{htfItem.on?"关掉 9 日线突破做多（已开的单继续按止损/跟踪管）":"打开 9 日线突破做多"}</button></div>}
+        onClick={()=>setItem("htfTrend",!htfItem.on)}>{htfItem.on?"关掉 9 日线突破做多（已开的单继续按止损/跟踪管）":"打开 9 日线突破做多"}</button></div>}
       <p className="mb-hint">{s.version} · 一篮子 {s.basket} 个币 · 资金数据 {s.flowSymbols??0} 个 · 报价 {bj(s.lastFeedAt)} · 每轮 {s.cpu.planMs}ms · 今天写入 {s.writesToday} 次</p>
       <div className="fr-owner-session">{(["off","compute-only","paper-enabled"] as BrainMode[]).map(x=><button key={x} className={x===s.configured?"fr-button":"fr-text-button"} type="button"
-        disabled={busy||x===s.configured} onClick={()=>void setMode(x)}>{MODE_LABEL[x]}</button>)}</div>
+        disabled={busy||x===s.configured} onClick={()=>setMode(x)}>{MODE_LABEL[x]}</button>)}</div>
       <p className="mb-hint">只作用于模拟账户；实盘开关不受这里影响。</p>
     </details>}
+    {s&&<details className="mb-fold"><summary>研究细节（历史下载、BTC/ETH 状态、每套打法的周期、规则）</summary><ResearchDetail s={s}/></details>}
 
-    {data&&<details className="mb-fold mb-legacy"><summary>旧系统参考</summary><p className="mb-hint">{legacyMarketLine(data)}</p></details>}
+    <details className="mb-fold mb-legacy" data-testid="brain-legacy"><summary>旧系统 / 只记录（不再决定开单）</summary>
+      <p className="mb-hint">下面是旧的市场意图、每个币的资金/情绪读数、等位置、集体异动和老流程的决定。数据照常记录，只是不再决定开不开单。</p>
+      {s&&<div className={`mb-state mb-${(m?.state??"WARMING").toLowerCase()}`} data-testid="brain-market">
+        <p className="mb-hint"><b>旧市场意图：{m?STATE_LABEL[m.state]??m.state:"读取中"}{m?.side?` · 偏${sideCn(m.side)}`:""}</b> · {fastBadge(s.fast)}{m?` · 把握 ${Math.round(m.confidence*100)}%`:""}</p>
+        {m?.sentence&&<p className="mb-hint">{m.sentence}</p>}
+        {m&&<p className="mb-hint">旧流程能做：{m.allowed.length?m.allowed.map(a=>`${a.label}${a.side?sideCn(a.side):""}`).join("、"):"不开新单"}</p>}
+        {m?.restored&&<p className="mb-hint">这是重启前最后一次判断，正在用最新行情重读。</p>}
+      </div>}
+      {s&&!!board.length&&<details className="mb-more"><summary>每个币在发生什么（{board.length}）</summary><div className="mb-board" data-testid="brain-board">{board.map(c=><Read key={c.symbol} c={c}/>)}</div></details>}
+      {s&&!!s.watches.length&&<details className="mb-more"><summary>在等位置（{s.watches.length}）</summary>
+        <ul className="mb-list">{s.watches.map((w,i)=><li key={i}><b>{coinName(w.symbol)} {sideCn(w.side)} · {w.pb}{w.zone?` · 等 ${plain(w.zone[0])}–${plain(w.zone[1])}`:""}</b>
+          {w.why&&<span>{w.why}</span>}<span>{w.invalidation!=null?`到 ${plain(w.invalidation)} 就不做 · `:""}{bj(w.expiresAt)} 过期</span></li>)}</ul></details>}
+      {s&&<details className="mb-more"><summary>全部决定（{s.decisions?.length??0}）</summary>
+        {!s.decisions?.length?<p className="mb-hint">还没有决定。</p>:<ol className="mb-list">{s.decisions.map((d,i)=>{const k=String(d.k);return <li key={i}>
+          <b>{bj(d.at as number)} {DECISION_LABEL[k]??k}{d.sym?` · ${coinName(String(d.sym))}`:""}{d.side?` ${sideCn(String(d.side))}`:""}</b>
+          <span>{plain(d.story??d.reason??d.why??d.sentence??"")}</span></li>;})}</ol>}
+      </details>}
+      {s&&<details className="mb-more"><summary>集体异动与判断变化</summary>
+        <p className="mb-hint">{s.fast.flow?`资金：${s.fast.flow.real===true?"真钱在动":s.fast.flow.real===false?"只有价格在动，资金没跟":"资金未核实"}（${s.fast.flow.kind}）`:"没有正在进行的集体异动。"}{s.fast.reason?` ${s.fast.reason}`:""}</p>
+        <p className="mb-hint">已记录 {s.fast.episodes} 段{s.fast.surges7d!=null?`，只有价格没资金 ${s.fast.surges7d} 次`:""}。集体异动 {sc?.fast.alerts??0} 段：确认 {sc?.fast.confirmed??0}，假动作 {sc?.fast.fake??0}。</p>
+        {!!sc?.byPlaybook.length&&<p className="mb-hint">{sc.byPlaybook.map(b=>`${b.label} ${b.n} 笔 胜率 ${Math.round(b.winRate*100)}% 平均 ${b.avgR.toFixed(2)}R`).join("；")}</p>}
+        {!!s.probes?.length&&<p className="mb-hint">近期表现只调仓位（0.7–1.2 倍）：{s.probes.map(p=>`${p.label}×${p.modulator}`).join("，")}</p>}
+        {!!s.marketTimeline?.length&&<ol className="mb-list">{[...s.marketTimeline].reverse().map((x,i)=><li key={i}><b>{bj(x.at)} {STATE_LABEL[x.state]??x.state}{x.side?` 偏${sideCn(x.side)}`:""}</b><span>{x.sentence}</span></li>)}</ol>}
+      </details>}
+      {!!otherRecent.length&&<details className="mb-more"><summary>其他最近平仓（{otherRecent.length}）</summary><div className="pg-recent">{otherRecent.map(t=><div key={t.id}>
+        <span><Coin symbol={t.symbol} side={t.side}/><small>{exitText(t)} · {stamp(t.closedAt)}</small></span>
+        <strong className={tone(t.netPnl)}>{signed(t.netPnl)} U<small>{held(t.openedAt,t.closedAt)}</small></strong>
+      </div>)}</div></details>}
+      {data&&<p className="mb-hint">{legacyMarketLine(data)}</p>}
+    </details>
     </section>
   </div>;
 }

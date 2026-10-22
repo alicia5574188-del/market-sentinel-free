@@ -4,7 +4,9 @@ import {useCallback,useEffect} from "react";
 import {operatorRequest} from "./operator-ui.ts";
 import {prefetchPanel,usePanel} from "./panel-cache.ts";
 import type {DynamicResearch} from "./dynamic/runtime.ts";
+import type {LivingEngine} from "./living/engine.ts";
 export type DynamicView=ReturnType<DynamicResearch["view"]>;
+export type PoolStatus=ReturnType<LivingEngine["poolStatus"]>;
 
 export type BrainMode="off"|"compute-only"|"paper-enabled";
 export type BrainSide="LONG"|"SHORT";
@@ -29,6 +31,8 @@ export type BrainStatus={version:string;mode:BrainMode;configured:BrainMode;acti
     trades:{id:string;sym:string;entry:number;stop:number;initial:number|null;openedAt:number}[]};
   /** dynamic-v1 research layer: backfill, BTC/ETH state, per-playbook cycles, allocator gates, events */
   dynamic?:DynamicView|{error:string}|null;
+  /** dynamic-v1.4 unified pool (lib/living/engine.ts poolStatus) */
+  pool?:PoolStatus;
   basket:number;flowSymbols?:number;lastFeedAt:number;flowAt?:number;cpu:{planMs:number;maxPlanMs:number;hubMs:number};writesToday:number;lastError:string|null};
 
 export const BRAIN_KEY="brain-status";

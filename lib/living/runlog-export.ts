@@ -2,6 +2,8 @@
  * The run-log export (kind=log), format living-run-log-v3. Pure: the worker hands in what it already has
  * (account book from buildRunLogExport, timeline buckets and cases from memory + D1) and gets the file back.
  */
+import {POOL_LOG_VERSION,POOL_FIELD_NOTES,POOL_TYPE_LABEL,poolSummary,type PoolRec} from "./pool-log.ts";
+import {POOL} from "../dynamic/playbooks.ts";
 import {RUNLOG_VERSION,mergeBuckets,whyNoTrades,caseStats,GATE_LABEL,LAYER_LABEL,BUCKET_MS,HOLD_READ_FIELDS,HOLD_READ_CODES,type Bucket,type FinalCase} from "./runlog.ts";
 
 /** Position columns that describe the current system (everything else on a stored row is legacy and not exported). */
@@ -21,6 +23,7 @@ export const HOW_TO_READ=[
   "所有价格数字都是价格涨跌（%，路径里是基点 bp，1bp=0.01%），不是 ROE，不乘杠杆。",
   "想知道为什么很久没开单：先看 why_no_trades（整个导出窗口的汇总：开单通道每种状态多少分钟、候选在每一层被挡了多少次、最常见的挡单原因 top_reasons、大多数币为什么根本没有想法 no_idea_reasons、最长一段没开单的主要原因），再按时间看 timeline：每 10 分钟一行，gate 是开单通道每分钟的状态，funnel 是候选逐层的计数，reasons 是被挡原因，blocker 是这一段最主要的原因，events 是这段里的状态变化。minutes 少于 10 表示那段时间程序停过（例如部署）。",
   "想找赚钱的办法：看 cases。每一行是研究层认真看过的一个想法（某个币、某个方向、某个打法），记下当时的资金/情绪读数、证据数字、市场意图、走到了哪一层、被什么挡住，以及之后 6 小时每分钟的价格路径和结果（out）。同一个币同方向同打法 90 分钟内只算一个案例，seen 是这期间又被看到几次，stages 是每次层级变化。case_stats 按打法 × 走到的层汇总：被挡掉的想法后来到底涨了还是跌了。",
+  "总方案（dynamic-v1.4，开关 10）：所有打法（包括爆发选领涨、日线突破）都是打法池成员，由周期预测器决定能不能开。看 pool_log：按时间排列的每一条开单判断（GATE：P(未来 6 小时赚钱期)、门槛、现在是赚钱期还是亏钱期、已多久、数据多少、允许/不允许和原因）、每一笔打法池开仓（OPEN）和平仓（CLOSE：开平价、价格涨跌 %、风险 %、出场原因）、每小时的预测快照（PRED）、到期预测的评分（SCORE）、历史下载进度（BACKFILL）。字段见 pool_log_fields，汇总见 pool_summary，打法代码的中文名见 playbook_labels。pool_log 也按 10 分钟存在 D1（和 timeline 同一行），这里为了不重复，从 timeline 里拿掉了，timeline 只留 pool_n（这一段有几条）和 pool_dropped（超过每段上限被丢掉的条数，按类型）。",
   "positions 是账户里的真实模拟单（开着的和平掉的，全部导出），带研究层字段 living_* 和价格路径；paths 是这些单从开仓起的分钟路径。账户对账看 account。",
 ];
 export const FIELD_NOTES:Record<string,unknown>={
@@ -70,7 +73,11 @@ export function buildLivingRunLog(input:RunLogExportInput){
   const byAt=new Map<number,Bucket[]>();
   for(const b of input.buckets){if(!b||typeof b.at!=="number"||b.end<from)continue;const xs=byAt.get(b.at)??[];
     if(!xs.some(x=>x.id===b.id))xs.push(b);else{const i=xs.findIndex(x=>x.id===b.id);if((b.lastSampleAt??0)>=(xs[i]!.lastSampleAt??0))xs[i]=b;}byAt.set(b.at,xs);}
-  const timeline=[...byAt.entries()].sort((a,b)=>a[0]-b[0]).map(([,xs])=>xs.length===1?xs[0]!:mergeBuckets(xs));
+  const merged=[...byAt.entries()].sort((a,b)=>a[0]-b[0]).map(([,xs])=>xs.length===1?xs[0]!:mergeBuckets(xs));
+  // the pool log is listed once, flat and in time order; the timeline row keeps only its count (and any dropped count)
+  const poolLog:PoolRec[]=[];
+  const timeline=merged.map(b=>{const {pool,...rest}=b;if(pool?.length)poolLog.push(...pool.filter(r=>r&&r.at>=from));return pool?.length?{...rest,pool_n:pool.length}:rest;});
+  poolLog.sort((a,b)=>a.at-b.at);
   // windows with no row at all (program down for a whole bucket) are listed so a gap is never silent
   const gaps:{from:number;to:number}[]=[];
   for(let i=1;i<timeline.length;i++){const a=timeline[i-1]!,b=timeline[i]!;if(b.at-a.at>BUCKET_MS)gaps.push({from:a.end,to:b.at});}
@@ -83,6 +90,9 @@ export function buildLivingRunLog(input:RunLogExportInput){
     why_no_trades:whyNoTrades(timeline,input.exportedAt),
     timeline,timeline_gaps:gaps,
     cases,case_stats:caseStats(cases),
+    pool_log_version:POOL_LOG_VERSION,pool_log_fields:POOL_FIELD_NOTES,pool_log_types:POOL_TYPE_LABEL,
+    playbook_labels:Object.fromEntries(POOL.map(p=>[p.id,p.label])),
+    pool_summary:poolSummary(poolLog),pool_log:poolLog,
     account:{equity:input.account.equity,initial:input.account.initial,invariants:input.account.invariants,book_audit:input.account.book_audit,
       equity_curve:input.account.equity_curve,...input.account.drawdown,curve_since:input.account.curve_since,drawdown_since:input.account.drawdown_since,
       equity_gaps:input.account.equity_gaps,equity_filled_min:input.account.equity_filled_min},

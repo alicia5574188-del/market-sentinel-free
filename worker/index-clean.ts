@@ -605,6 +605,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private dynamic=new DynamicResearch();
   private dynamicWork:Promise<void>|null=null;
   private dynamicEventAt=0;
+  private dynamicPoolSeq=0;
   private livingLogWork:Promise<void>|null=null;
   private archivePendingCache:{at:number;cursorKey:string;pending:number;records:number}|null=null;
   private oiAnchorCache:{at:number;anchor:ReturnType<typeof oiAnchor>}|null=null;
@@ -4917,6 +4918,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         const engine=this.living;if(!engine)return;
         for(const e of this.dynamic.events)if(e.at>this.dynamicEventAt){try{engine.runlog.event(e.at,`DYN_${e.k}`,e.text);}catch{/* 只是记录 */}}
         this.dynamicEventAt=Math.max(this.dynamicEventAt,...this.dynamic.events.map(e=>e.at));
+        // dynamic-v1.4 pool log: allocator changes, predictor snapshots, scoring, backfill progress (by sequence, never twice)
+        for(const r of this.dynamic.poolRecs)if(r.seq>this.dynamicPoolSeq){try{engine.runlog.pool(r.rec.at,r.rec);}catch{/* 只是记录 */}}
+        this.dynamicPoolSeq=Math.max(this.dynamicPoolSeq,this.dynamic.poolSeq);
       }).catch(()=>undefined);
       this.dynamicWork=task;
       const tracked=task.finally(()=>{if(this.dynamicWork===task)this.dynamicWork=null;});

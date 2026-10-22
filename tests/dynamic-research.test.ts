@@ -413,3 +413,48 @@ test("worker wiring: the research step is launched off the tick, its view is in 
   const rt=readFileSync(new URL("../lib/dynamic/runtime.ts",import.meta.url),"utf8")+readFileSync(new URL("../lib/dynamic/venues.ts",import.meta.url),"utf8");
   assert.doesNotMatch(rt,/gateio|gate\.io|api\.gateio/i);
 });
+test("pool log (dynamic-v1.4): every gate decision, pool open and close goes into the run-log timeline with one schema; the export lists it flat; the brain page summary",async()=>{
+  const {buildLivingRunLog}=await import("../lib/living/runlog-export.ts");
+  const {RunLog,mergeBuckets}=await import("../lib/living/runlog.ts");
+  const e=engine({},"paper-enabled",NOW);
+  const gates={"box1h-long":{ok:true,risk:.003,conf:.6,why:"预测：未来 6 小时在赚钱期的概率 70%",p6:.7,pMin:.58,phase:"GOOD" as const,elapsedH:5,label:"数据少"},
+    "box1h-short":{ok:false,risk:0,conf:0,why:"未来 6 小时处在赚钱期的概率 30%（要 ≥58%）【数据少】",p6:.3,pMin:.58,phase:"BAD" as const,elapsedH:12,label:"数据少"}};
+  const d=e.plan(ctx(dynIn({gates,signals:[sig("box1h-long","AAA_USDT"),sig("box1h-short","BBB_USDT","SHORT")]})))!;
+  assert.equal(d.orders.length,1);assert.equal(d.orders[0]!.note.rr,.003,"risk rate on the note");
+  const g=e.runlog.poolRecent.filter(r=>r.t==="GATE");
+  const order=g.find(r=>r.pb==="box1h-long")!,deny=g.find(r=>r.pb==="box1h-short")!;
+  assert.deepEqual([order.decision,order.ok,order.sym,order.side,order.kind,order.src,order.p6,order.pMin,order.phase,order.elapsedH,order.label,order.risk],
+    ["ORDER",true,"AAA_USDT","LONG","pool","signal",.7,.58,"GOOD",5,"数据少",.003]);
+  assert.deepEqual([deny.decision,deny.ok,deny.risk,deny.p6],["DENY",false,0,.3]);assert.match(String(deny.why),/分配器不允许/);
+  e.plan(ctx(dynIn({gates,signals:[sig("box1h-short","BBB_USDT","SHORT")]})));
+  assert.equal(e.runlog.poolRecent.filter(r=>r.t==="GATE").length,2,"one record per signal and decision");
+  // open → OPEN; close → CLOSE with the price move (never ROE) and the exit reason
+  const note=d.orders[0]!.note,pos={id:"lv-p",symbol:"AAA_USDT",side:"LONG" as const,entryPrice:10,stopPrice:9.5,openedAt:NOW,favorable:0,entryContext:{living:note}};
+  e.afterForward({opened:[{orderId:d.orders[0]!.id,tradeId:"lv-p",symbol:"AAA_USDT",side:"LONG",risk:3,notional:60}],rejected:[],applied:[]},{...emptyForward(),positions:[pos]},NOW);
+  const open=e.runlog.poolRecent.find(r=>r.t==="OPEN")!;assert.deepEqual([open.pb,open.sym,open.trade,open.entry,open.stop,open.risk],["box1h-long","AAA_USDT","lv-p",10,9.5,.003]);
+  const closed={id:"lv-p",symbol:"AAA_USDT",side:"LONG" as const,netPnl:1.2,plannedRisk:3,notional:60,closedAt:NOW+3_600_000,exitReason:"LIVING_DYN_EXIT",openedAt:NOW,
+    entryPrice:10,exitPrice:10.3,exitAudit:{trigger:"LIVING_DYN_EXIT",at:NOW+3_600_000,evidence:{reason:"到目标价"}},entryContext:{living:note}};
+  e.afterForward({opened:[],rejected:[],applied:[]},{...emptyForward(),history:[closed]},NOW+3_600_000);
+  e.afterForward({opened:[],rejected:[],applied:[]},{...emptyForward(),history:[closed]},NOW+3_660_000);
+  const cl=e.runlog.poolRecent.filter(r=>r.t==="CLOSE");assert.equal(cl.length,1,"closed once");
+  assert.deepEqual([cl[0]!.entry,cl[0]!.exit,cl[0]!.move,cl[0]!.net,cl[0]!.risk,cl[0]!.held_min,cl[0]!.exit_code,cl[0]!.exit_why],[10,10.3,.03,1.2,.003,60,"LIVING_DYN_EXIT","到目标价"]);
+  // brain page: today's opens / closes / net price move, recent pool trades, latest gate decisions
+  const ps=e.poolStatus(NOW+3_700_000,{...emptyForward(),history:[closed]});
+  assert.deepEqual([ps.max,ps.open.length,ps.today.closed,ps.today.win,ps.today.move,ps.recent[0]!.move,ps.recent[0]!.exitWhy],[8,0,1,1,.03,.03,"到目标价"]);
+  assert.equal(ps.gates[0]!.t,"GATE");
+  // export: pool_log flat in time order, timeline rows keep only the count, the summary per playbook
+  const buckets=e.runlog.bucketsDue(NOW+3_700_000);
+  const ex=buildLivingRunLog({exportedAt:NOW+3_700_000,liveEnabled:false,buildSha:"t",hours:6,status:null,buckets,cases:[],
+    account:{equity:null,initial:null,invariants:null,book_audit:null,equity_curve:null,equity_minutes:[],drawdown:{},curve_since:null,drawdown_since:null,account_resets:null,account_epoch:0,account_reset_pending:null,liveFills:null,equity_gaps:null,equity_filled_min:0},
+    positions:[],fills:[],paths:[],archive:{}});
+  assert.deepEqual(ex.pool_log.map(r=>r.t),["GATE","GATE","OPEN","CLOSE"]);assert.ok(ex.pool_log.every((r,i,a)=>!i||a[i-1]!.at<=r.at));
+  assert.ok(ex.timeline.every(b=>!("pool" in b)));assert.equal(ex.timeline.reduce((a,b)=>a+((b as {pool_n?:number}).pool_n??0),0),4);
+  assert.deepEqual(ex.pool_summary.by_playbook["box1h-long"],{allow:1,deny:0,open:1,close:1,win:1,move:.03,net:1.2});
+  assert.equal(ex.playbook_labels["burst-leader"],POOL_BY_ID["burst-leader"]!.label);assert.match(ex.howToRead.join(""),/pool_log/);assert.ok(ex.pool_log_fields.GATE);
+  // caps: trades keep their own slots; overflow is counted, never silent; merged buckets keep every record
+  const rl=new RunLog(NOW);for(let i=0;i<100;i++)rl.pool(NOW+i,{t:"GATE",at:NOW+i,pb:"x"});for(let i=0;i<70;i++)rl.pool(NOW+i,{t:"CLOSE",at:NOW+i,pb:"x"});
+  const b=rl.bucketsDue(NOW+200)[0]!;assert.equal(b.pool!.length,80+60);assert.deepEqual(b.pool_dropped,{GATE:20,CLOSE:10});
+  const m=mergeBuckets([b,{...b,id:"other",boot:"zz",pool:[{t:"OPEN",at:NOW-1}],pool_dropped:{GATE:1}}]);
+  assert.equal(m.pool!.length,141);assert.equal(m.pool![0]!.t,"OPEN");assert.deepEqual(m.pool_dropped,{GATE:21,CLOSE:10});
+  assert.ok(JSON.stringify(b).length<80_000,"a full bucket stays well under a D1 row");
+});

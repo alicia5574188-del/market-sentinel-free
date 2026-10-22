@@ -13,6 +13,7 @@
  */
 import {LIVING_KEY_PREFIX,LIVING_MAX_VALUE_BYTES} from "./config.ts";
 import {bytesOf} from "./util.ts";
+import {compactRec,POOL_PER_BUCKET,POOL_TRADES_PER_BUCKET,type PoolRec} from "./pool-log.ts";
 import type {LivingTape,MidBar} from "./tape.ts";
 
 export const RUNLOG_VERSION="living-run-log-v3" as const;
@@ -73,7 +74,11 @@ export type Bucket={v:1;id:string;at:number;end:number;boot:string;minutes:numbe
   /** burst-leader-v1: every special-condition check this bucket, one per minute: "HH:MM,z,breadth%,b3bp,verdict" joined by ";" */burst?:string;
   /** htf-donch20: the once-a-day check in this bucket ("day regime BTC/SMA100 breakouts picks"), and "WAIT …" rows while it waits for data */htf?:string;funnel:Record<string,number>;reasons:Record<string,number>;
   open:number;watches:number;opened:{at:number;sym:string;side:string;pb:string;trade:string}[];
-  events:{at:number;k:string;text:string}[];blocker:string|null;firstSampleAt:number|null;lastSampleAt:number|null};
+  events:{at:number;k:string;text:string}[];blocker:string|null;firstSampleAt:number|null;lastSampleAt:number|null;
+  /** dynamic-v1.4 pool log (lib/living/pool-log.ts): gate decisions, pool opens/closes, predictor snapshots, scoring, backfill */
+  pool?:PoolRec[];
+  /** pool records over the per-bucket cap, counted by type (never silent) */
+  pool_dropped?:Record<string,number>};
 export type CaseEv={p15:number|null;p60:number|null;oi15:number|null;oi60:number|null;funding:number|null;taker15:number|null;vol15:number|null;basis:number|null};
 export type CaseInput={at:number;sym:string;side:"LONG"|"SHORT";pb:string;pbLabel:string;kind:"normal"|"fast";intent:string|null;strength:number|null;
   why:string;ev:CaseEv|null;market:MarketSample;px:number|null;
@@ -165,6 +170,17 @@ export class RunLog{
   /** htf-donch20: the daily check (or why it is still waiting), once per change. */
   htfCheck(now:number,text:string){const b=this.cur(now),row=short(text,600);b.htf=b.htf?short(`${b.htf}；${row}`,1200):row;}
   opened(now:number,o:{sym:string;side:string;pb:string;trade:string}){const b=this.cur(now);if(b.opened.length<20)b.opened.push({at:now,...o});}
+  /** One pool-log record into the bucket of its time. Trades (OPEN / CLOSE) keep POOL_TRADES_PER_BUCKET slots of their own; a record
+   * over the cap is counted in pool_dropped. The latest records are also kept in `poolRecent` for the brain page. */
+  pool(now:number,rec:PoolRec){
+    const b=this.cur(now),xs=b.pool??=[],r=compactRec({...rec,at:rec.at||now}),trade=r.t==="OPEN"||r.t==="CLOSE";
+    const nTrade=xs.filter(x=>x.t==="OPEN"||x.t==="CLOSE").length,nOther=xs.length-nTrade;
+    if(trade?nTrade<POOL_TRADES_PER_BUCKET:nOther<POOL_PER_BUCKET)xs.push(r);
+    else inc(b.pool_dropped??={},r.t);
+    this.poolRecent.push(r);if(this.poolRecent.length>120)this.poolRecent.splice(0,this.poolRecent.length-120);
+  }
+  /** last pool records (memory only, ≤ 120; the D1 log keeps everything) */
+  poolRecent:PoolRec[]=[];
 
   /** A candidate reached `layer`: counts it, and creates/updates its research case (deduped, capped). */
   noteCase(input:CaseInput,layer:Layer,reason:string){
@@ -293,7 +309,7 @@ export class RunLog{
   /** Run-log wipe: forget every case, closed bucket and counter; recording continues from `now` in a fresh bucket. */
   wipe(now:number){
     const n={cases:this.cases.size,buckets:this.closed.length+(this.bucket?1:0)};
-    this.cases.clear();this.byKey.clear();this.closed=[];this.unsaved.clear();this.bucket=null;
+    this.cases.clear();this.byKey.clear();this.closed=[];this.unsaved.clear();this.bucket=null;this.poolRecent=[];
     this.daily={day:day(now),n:0,early:0,dropped:0};this.dirty=true;this.lastSampleMinute=0;this.wipedAt=now;
     return n;
   }
@@ -410,11 +426,13 @@ export function whyNoTrades(buckets:Bucket[],now:number){
 /** Merge several bucket rows into one (same window from two boots, or a whole stretch). */
 export function mergeBuckets(rows:Bucket[]):Bucket{
   const sorted=[...rows].sort((a,b)=>a.at-b.at||(a.lastSampleAt??0)-(b.lastSampleAt??0)),first=sorted[0]!,lastRow=sorted.at(-1)!;
-  const m:Bucket={...structuredClone(first),env:undefined,gate:{},market:{},fast:{},funnel:{},reasons:{},opened:[],events:[],minutes:0,end:Math.max(...sorted.map(r=>r.end))};
+  const m:Bucket={...structuredClone(first),env:undefined,pool:undefined,pool_dropped:undefined,gate:{},market:{},fast:{},funnel:{},reasons:{},opened:[],events:[],minutes:0,end:Math.max(...sorted.map(r=>r.end))};
   for(const r of sorted){m.minutes+=r.minutes;for(const [k,v] of Object.entries(r.gate))inc(m.gate,k,v);for(const [k,v] of Object.entries(r.market))inc(m.market,k,v);
     for(const [k,v] of Object.entries(r.fast))inc(m.fast,k,v);for(const [k,v] of Object.entries(r.funnel))inc(m.funnel,k,v);for(const [k,v] of Object.entries(r.reasons))inc(m.reasons,k,v);
     if(r.env)for(const [k,v] of Object.entries(r.env))inc(m.env??={},k,v);
-    m.opened.push(...r.opened);m.events.push(...r.events);}
+    m.opened.push(...r.opened);m.events.push(...r.events);
+    if(r.pool?.length)(m.pool??=[]).push(...r.pool);if(r.pool_dropped)for(const [k,v] of Object.entries(r.pool_dropped))inc(m.pool_dropped??={},k,v);}
+  if(m.pool)m.pool.sort((a,b)=>a.at-b.at);
   const htf=[...new Set(sorted.map(r=>r.htf).filter((x):x is string=>!!x))];if(htf.length)m.htf=htf.join("；").slice(0,1200);
   m.last=lastRow.last;m.open=lastRow.open;m.watches=lastRow.watches;m.mode=lastRow.mode;m.lastSampleAt=lastRow.lastSampleAt;
   m.boot=[...new Set(sorted.map(r=>r.boot))].join(",");m.events=m.events.slice(0,24);m.blocker=blockerOf(m);

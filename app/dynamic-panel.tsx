@@ -1,76 +1,183 @@
 "use client";
-/** 大脑 tab: the dynamic-v1 research layer (history download, BTC/ETH daily + intraday state, the short-term playbook pool grouped by
- * family with each one's good/bad cycles, what the allocator allows now and why, recent events). Display only; switch 10 is the
- * only control. */
-import {bj,type BrainStatus,type DynamicView} from "../lib/brain-view.ts";
+/** 大脑 tab, dynamic-v1.4: the one scheme. Every playbook (pool playbooks, the market-wide burst leader, the daily breakout) is a member
+ * of one pool, and the cycle predictor decides which may open paper trades (switch 10). This module draws the parts of the brain
+ * page that follow that scheme: the summary, the playbooks ranked by P(good in 6 h), the families, the latest gate decisions and
+ * pool trades, and the research detail (backfill, BTC/ETH state, rules, events) folded away. Display only; switch 10 is the only
+ * control here. Price numbers are price moves (%), never ROE. */
+import {bj,coinName,sideCn,type BrainStatus,type DynamicView,type PoolStatus} from "../lib/brain-view.ts";
 
-const pc=(x:number|null|undefined,d=1)=>x==null||!Number.isFinite(x)?"—":`${x>0?"+":""}${(x*100).toFixed(d)}%`;
+export const pc=(x:number|null|undefined,d=2)=>x==null||!Number.isFinite(x)?"—":`${x>0?"+":""}${(x*100).toFixed(d)}%`;
+const pct=(x:number|null|undefined)=>x==null||!Number.isFinite(x)?"—":`${Math.round(x*100)}%`;
+const toneOf=(x:number|null|undefined)=>x==null||!Number.isFinite(x)||Math.abs(x)<1e-9?"":x>0?"fr-positive":"fr-negative";
 const ivCn:Record<string,string>={"1d":"日线","4h":"4小时","1h":"1小时","15m":"15分钟","5m":"5分钟","1m":"1分钟"};
-const phaseCn=(l:string|null|undefined)=>l==="GOOD"?"赚钱段":l==="BAD"?"亏钱段":"未定";
-const day=(t:number|null|undefined)=>t?new Date(t*1000).toISOString().slice(0,10):"—";
-type Pb=DynamicView["playbooks"][number];
-const pct=(x:number)=>`${Math.round(x*100)}%`;
 const sessCn:Record<string,string>={ASIA:"亚洲盘",EU:"欧洲盘",US:"美国盘",LATE:"美盘尾段"};
-function Row({p,bucket}:{p:Pb;bucket:string|null}){
-  const u=p.unit==="day"?"天":"周",win=p.unit==="day"?["1w","2w","4w"]:["2w","4w","8w"],b=bucket?p.byBucket[bucket]:undefined;
-  return <li>
-    <b>{p.gate?.ok?"✓ ":"· "}{p.stage!=="confirmed"?"【数据少】":""}{p.label}（{ivCn[p.iv]??p.iv}）{p.trades} 笔{p.all?`，平均 ${pc(p.all.mean,2)}/笔，胜率 ${Math.round(p.all.win*100)}%`:""}</b>
-    <span>近 {win.map(k=>k.replace("w",""))
-      .join("/")} 周：{p.rolling?win.map(k=>`${pc(p.rolling![k]?.net)}（${p.rolling![k]?.n??0} 笔）`).join(" / "):"—"}
-      {p.counts&&Object.keys(p.counts).length?`；最近 ${Object.entries(p.counts).map(([n,x])=>`${n} 笔 ${pc(x.net)}`).join(" / ")}`:""}；
-      周期：{p.good} 段赚钱、{p.bad} 段亏钱（平均 {p.meanGoodWeeks} / {p.meanBadWeeks} {u}），持续性 {p.persistence==null?"—":`${Math.round(p.persistence*100)}%`}；
-      现在 {phaseCn(p.current?.label)}{p.current?.weeks?` 第 ${p.current.weeks} ${u}`:""}；{p.pattern?"规律已确认":p.patternWhy}</span>
-    {p.pred&&<span><b>{p.pred.line}</b>
-      （6/24/72 小时赚钱期概率 {pct(p.pred.p6)}/{pct(p.pred.p24)}/{pct(p.pred.p72)}；{p.pred.phases.good} 段赚 {p.pred.phases.meanGoodH} 小时、{p.pred.phases.bad} 段亏 {p.pred.phases.meanBadH} 小时
-      {p.pred.period?`；每 ${p.pred.period.lag} 天有重复（相关 ${p.pred.period.acf.toFixed(2)}）`:""}{p.pred.profile.session?`；最好时段 ${sessCn[p.pred.profile.session]??p.pred.profile.session}`:""}）；{p.pred.realLine}</span>}
-    <span>周期（按天）预测：{p.forecast?`下一段${p.forecast.next==="GOOD"?"赚钱":"亏钱"}（${Math.round(p.forecast.prob*100)}%，【${p.forecast.label}】）— ${p.forecast.why}`:`还没有（${p.trades?"只看到不明朗的段":"还没有影子交易"}，【数据少】）`}
-      {p.stage==="confirmed"?"；规律已确认":p.stage==="early"?"；早期规律（小仓位）":""}</span>
-    <span>{p.gate?(p.gate.ok?`允许：${p.gate.why}`:`不开：${p.gate.why}`):"分配器还没算"}</span>
-    {b&&<span>当前状态下：{b.n} 笔{b.days!=null?`/${b.days} 天`:""}，平均 {pc(b.mean,2)}，t={b.t.toFixed(1)}{b.tDay!=null?`，t(按天)=${b.tDay.toFixed(1)}`:""}</span>}
+/** hours → "5 小时" / "2 天" / "2 天 8 小时" */
+export const dur=(h:number|null|undefined)=>{if(h==null||!Number.isFinite(h))return"—";const x=Math.max(0,Math.round(h));
+  return x<1?"不到 1 小时":x<48?`${x} 小时`:x%24?`${Math.floor(x/24)} 天 ${x%24} 小时`:`${x/24} 天`;};
+export const phaseCn=(l:string|null|undefined)=>l==="GOOD"?"赚钱期":l==="BAD"?"亏钱期":"还看不清";
+export const DECISION_CN:Record<string,string>={ORDER:"发出开单",ALLOW:"允许开单",DENY:"不允许（只记录）",CUT:"暂停（预测被打脸）",SWITCH_OFF:"开关 10 关着（只记录）",
+  BUSY:"位置满了（只记录）",WAIT:"研究层在等（只记录）",STOP_CROSSED:"现价已越过止损（不开）"};
+const KIND_CN:Record<string,string>={pool:"打法池信号",burst:"爆发选币",htf:"日线突破"};
+type Pb=DynamicView["playbooks"][number];
+export function dynOf(s:BrainStatus):DynamicView|null{const raw=s.dynamic;return raw&&!("error" in raw&&!("backfill" in raw))?raw as DynamicView:null;}
+export function labelsOf(d:DynamicView|null){return new Map((d?.playbooks??[]).map(p=>[p.id,p.label]));}
+/** a playbook may open on paper at all (short tier, or the daily breakout); the other long-tier ones are record-only */
+const tradable=(p:Pb)=>p.tier==="short"||p.id==="htf-donch20";
+const shortWhy=(w:string|null|undefined,n=70)=>!w?"":w.length>n?`${w.slice(0,n)}…`:w;
+/** the gate's reason in plain words, without the probability the line already shows */
+export function gateWords(why:string|null|undefined,pMin=.58){
+  if(!why)return"";
+  return why.replace(/^分配器不允许（只记录）— /,"").replace(/^分配器允许：/,"")
+    .replace(/未来 6 小时处在赚钱期的概率 \d+%（要 ≥(\d+)%）【[^】]*】/,"概率没到门槛 $1%，只记录")
+    .replace(/^预测：未来 6 小时在赚钱期的概率 \d+%（[^）]*）【[^】]*】；/,`概率过了门槛 ${Math.round(pMin*100)}%；`)
+    .replace(/^概率 \d+% 够，但/,"概率够，但");
+}
+
+/** 总方案: switch 10, pool slots, today's opens / closes / net price move, live score, hit rate, backfill. */
+export function SchemeSummary({s,pool,busy,onToggle,liveEnabled}:{s:BrainStatus;pool:PoolStatus|undefined;busy:boolean;onToggle:(on:boolean)=>void;liveEnabled:boolean}){
+  const d=dynOf(s),item=s.items.find(i=>i.key==="dynAllocator"),on=!!item?.on,b=d?.backfill,pr=d?.predictor;
+  const open=pool?.open??[],float=open.reduce((a,p)=>a+(p.move??0),0),t=pool?.today;
+  const r6=pr?.real?.find(x=>x.h===6)??pr?.real?.[0],g=r6?.good,o=r6?.other;
+  const allowed=d?.playbooks.filter(p=>p.gate?.ok).length??0,withFc=d?.playbooks.filter(p=>p.pred).length??0;
+  const state=!s.acting?(s.fallback?"研究层降级中，只计算":"研究层只计算，不开单"):on?"按预测开模拟单":"只记录，不开单";
+  return <section className="pg-card bs-scheme" data-testid="brain-scheme">
+    <header className="bs-head"><div><small>总方案 · 一个打法池，周期预测器决定开不开</small>
+      <strong className="pg-title">{state}</strong></div>
+      <span className={`bs-switch${on?" is-on":""}`}>开关 10 {on?"开":"关"}</span></header>
+    <p className="bs-lead">{on?`未来 6 小时处在赚钱期的概率 ≥${pct(pr?.pMin??.58)}、预测记录不差的打法才开小模拟单；其余只记录。`:"所有打法只做影子交易和预测，不开模拟单。"}
+      实盘{liveEnabled?"开着":"关着"}，这里只作用于模拟账户。</p>
+    <div className="bs-tiles">
+      <div><small>打法池持仓</small><b>{pool?`${open.length}/${pool.max}`:"—"}</b><p className={toneOf(float)}>{open.length?`浮动 ${pc(float)}（价格）`:"空仓"}</p></div>
+      <div><small>今天 开/平</small><b>{t?`${t.opened} / ${t.closed}`:"—"}</b><p>{t&&t.closed?`赚 ${t.win} 笔，亏 ${t.closed-t.win} 笔`:"今天还没平仓"}</p></div>
+      <div><small>今天平仓净涨跌</small><b className={toneOf(t?.move)}>{t?pc(t.move):"—"}</b><p>{t&&t.closed?`价格涨跌合计，平均 ${pc(t.move/t.closed)}/笔`:"价格涨跌，不是 ROE"}</p></div>
+      <div><small>允许开单的打法</small><b>{d?`${allowed}/${withFc||d.playbooks.length}`:"—"}</b><p>{d?`${withFc} 套有预测`:"研究层读取中"}</p></div>
+    </div>
+    <div className="bs-score" data-testid="brain-live-score">
+      <div><small>实盘检验 · 预测看好后 6 小时</small><b className={toneOf(g?.avg)}>{g?.trades?`${pc(g.avg)}/笔`:"还没有"}</b><p>{g?`${g.forecasts} 次预测，后续 ${g.trades} 笔影子交易`:"等第一批 6 小时预测到期"}</p></div>
+      <div><small>预测不看好后 6 小时</small><b className={toneOf(o?.avg)}>{o?.trades?`${pc(o.avg)}/笔`:"还没有"}</b><p>{o?`${o.forecasts} 次预测，后续 ${o.trades} 笔`:"—"}</p></div>
+      <div><small>预测命中率</small><b>{pr?.track.n?pct(pr.track.hit):"—"}</b><p>{pr?.track.n?`${pr.track.n} 次到期预测，Brier ${pr.track.brier.toFixed(3)}`:"还没有到期的预测"}</p></div>
+    </div>
+    {g&&o&&g.trades>0&&o.trades>0&&<p className="bs-hint">{(g.avg??0)>(o.avg??0)?"看好时跟着来的交易比不看好时好，预测有用。":"看好时并没有比不看好时好，预测还没证明自己（只记录，不影响开单）。"}</p>}
+    {b?<p className="bs-hint" data-testid="brain-backfill">历史下载：<b>{b.done}/{b.total}</b> 条序列（{pct(b.pct)}）{b.working?`，正在下 ${b.working.replace("_USDT","")}`:""} · Bybit / OKX / KuCoin（不用 Gate）·
+      今天请求 {b.reqToday} 次 · 失败累计 {b.errTotal}{b.blocked.length?` · ${b.blocked.join("/")} 限流中`:""}{b.pausedUntil?` · 暂停到 ${bj(b.pausedUntil)}`:""} · 影子交易 {d!.shadowTrades} 笔</p>
+      :<p className="bs-hint">研究层还没读到。</p>}
+    {s.fallback&&<p className="bs-hint mb-warn">自动降级为只计算（到 {bj(s.fallback.until)}）：{s.fallback.reason}</p>}
+    {item&&<div className="fr-owner-session"><button className="fr-text-button" type="button" disabled={busy} onClick={()=>onToggle(!on)}>
+      {on?"关掉开关 10（全部打法只记录；已开的单照常按各自的出场管）":"打开开关 10（按预测开模拟单）"}</button></div>}
+  </section>;
+}
+
+/** one playbook in one line: phase, forecast + probability + data label, gate decision + reason, size */
+export function PbLine({p}:{p:Pb}){
+  const f=p.pred,g=p.gate,ok=!!g?.ok&&tradable(p);
+  const verdict=!tradable(p)?"只记录（长线）":ok?"允许开单":"只记录";
+  return <li className={`bs-pb${ok?" is-ok":""}`}>
+    <div className="bs-pb-top"><b>{p.label}</b><span className="bs-iv">{ivCn[p.iv]??p.iv}</span>
+      <span className={`bs-tag${ok?" is-ok":""}`}>{verdict}{ok&&g?` · 风险 ${(g.risk*100).toFixed(2)}%`:""}</span></div>
+    <div className="bs-pb-mid">
+      {f?<><span className={f.cur==="GOOD"?"fr-positive":f.cur==="BAD"?"fr-negative":""}>{phaseCn(f.cur)}{f.cur?`（已 ${dur(f.elapsedH)}）`:""}</span>
+        <span>6 小时赚钱期概率 <b>{pct(f.p6)}</b>【{f.label}】</span>
+        <span className="bs-dim">24 小时 {pct(f.p24)}</span></>
+        :<span>还没有预测（{p.trades?`${p.trades} 笔影子交易，段数不够`:"还没有影子交易"}）</span>}
+    </div>
+    <p className="bs-why">{g?shortWhy(gateWords(g.why),90):"分配器还没算"}{f?.track.n&&!/命中率/.test(g?.why??"")?` · 这套的预测命中 ${pct(f.track.hit)}（${f.track.n} 次）`:""}</p>
   </li>;
 }
-export default function DynamicPanel({s,busy,onToggle}:{s:BrainStatus;busy:boolean;onToggle:(on:boolean)=>void}){
-  const raw=s.dynamic;if(!raw)return null;
-  if("error" in raw&&!("backfill" in raw))return <details className="mb-fold"><summary>研究层：周期与分配</summary><p className="mb-hint">读取失败：{raw.error}</p></details>;
-  const d=raw as DynamicView,b=d.backfill,item=s.items.find(i=>i.key==="dynAllocator");
-  const short=d.playbooks.filter(p=>p.tier==="short"),long=d.playbooks.filter(p=>p.tier!=="short");
-  const fams=new Map<string,Pb[]>();for(const p of short)(fams.get(p.familyLabel)??fams.set(p.familyLabel,[]).get(p.familyLabel)!).push(p);
-  const ib=d.intraday?.bucket??null;
-  return <details className="mb-fold" open>
-    <summary>研究层：短线打法池（{short.length} 套）周期与分配（{d.allowed.length?`允许 ${d.allowed.length} 套`:"全部只记录"}）</summary>
-    <p className="mb-hint">历史下载（先短线 5/15 分钟、1 小时，后 4 小时/日线）：{b.done}/{b.total} 条序列完成（{Math.round(b.pct*100)}%）{b.working?`，正在下 ${b.working.replace("_USDT","")}`:""}
-      {b.etaMin?`，预计还要约 ${b.etaMin>=120?`${Math.round(b.etaMin/60)} 小时`:`${b.etaMin} 分钟`}`:""}；
-      {Object.entries(b.byIv).map(([iv,x])=>`${ivCn[iv]??iv} ${x.done}/${x.total}（${x.bars} 根，最早 ${x.from??"—"}）`).join("，")}；
-      今天外部请求 {b.reqToday} 次，失败累计 {b.errTotal}{b.blocked.length?`，${b.blocked.join("/")} 限流中（先用别的交易所）`:""}{b.pausedUntil?`，三家都限流，暂停到 ${bj(b.pausedUntil)}`:""}。
-      历史回放 {d.replay.unitsDone}/{Math.max(d.replay.unitsKnown,d.replay.unitsDone)} 块{d.replay.unitsQueued?`（排队 ${d.replay.unitsQueued}）`:""}，实时评估 {d.replay.liveSeries} 条序列；
-      影子交易 {d.shadowTrades} 笔{d.tradesLoaded?"":"（读取中）"}；单步最长 {d.maxStepMs} 毫秒。</p>
-    {d.intraday?<p className="mb-hint">BTC/ETH 日内状态（{d.intraday.hour} UTC 收盘）：<b>{d.intraday.label}</b>；1 小时 {d.intraday.trend}，4 小时 {d.intraday.trend4h}，ETH 1 小时 {d.intraday.eth??"—"}；
-      24 小时波动 {pc(d.intraday.atrPct,2)}/小时（30 天分位 {Math.round(d.intraday.volPct*100)}%）；现在 {d.intraday.session}。短线打法按这个状态分组统计和分配。</p>
-      :<p className="mb-hint">BTC/ETH 日内状态：等 BTC 1 小时历史下载完再算。</p>}
-    {d.state?<p className="mb-hint">BTC/ETH 日线状态（{d.state.day} 收盘）：<b>{d.state.label}</b>；BTC 距 100 日均线 {pc(d.state.strength)}，日波动 {pc(d.state.atrPct,2)}（1 年分位 {Math.round(d.state.volPct*100)}%），
-      距 90 日高点 {pc(d.state.dd90)}；山寨相对 BTC（20 日）{pc(d.state.altVsBtc)}（{d.state.lead==="ALT"?"山寨更强":d.state.lead==="BTC"?"BTC 更强":"—"}）</p>
-      :<p className="mb-hint">BTC/ETH 日线状态：等 BTC 日线历史下载完再算。</p>}
-    {d.predictor.ready?<div className="mb-hint"><b>周期预测器</b>（每小时更新，{d.predictor.playbooks} 套打法；开单门槛：未来 6 小时在赚钱期的概率 ≥{pct(d.predictor.pMin)}）。
-      全部到期预测：{d.predictor.track.n?`命中 ${pct(d.predictor.track.hit)}（${d.predictor.track.n} 次），Brier ${d.predictor.track.brier.toFixed(3)}`:"还没有到期的"}。
-      <ol className="mb-list">{d.predictor.topNow.map(x=><li key={x.pb}><b>现在最看好：{x.label}</b><span>{x.line}</span></li>)}</ol>
-      <span>{d.predictor.realLine}（只记录，不参与开单判断）。</span>
-      {!!d.predictor.recent.length&&<span>最近评分：{d.predictor.recent.slice(0,8).map(x=>`${x.label} ${x.h} 小时 ${pct(x.p)}→${x.y?"赚钱期":"非赚钱期"}${x.hit?"✓":"✗"}${x.n?`（后续 ${x.n} 笔 ${pc(x.net??0,2)}）`:""}`).join("；")}</span>}
-    </div>:<p className="mb-hint">周期预测器：等 BTC 1 小时历史和第一批影子交易（一到就开始，先标【数据少】）。</p>}
-    {[...fams].map(([f,ps])=><details key={f} className="mb-fold" open={ps.some(p=>p.gate?.ok)}>
-      <summary>{f}（{ps.length} 套，{ps.reduce((a,p)=>a+p.trades,0)} 笔{ps.some(p=>p.gate?.ok)?"，有允许的":""}）</summary>
-      <ol className="mb-list">{ps.map(p=><Row key={p.id} p={p} bucket={ib}/>)}</ol></details>)}
-    <details className="mb-fold"><summary>日线 / 4 小时打法（只记录，不参与分配；日线突破做多除外）（{long.length} 套）</summary>
-      <ol className="mb-list">{long.map(p=><Row key={p.id} p={p} bucket={d.state?.bucket??null}/>)}</ol></details>
-    {!!d.stateHistory.length&&<p className="mb-hint">日线状态变化：{d.stateHistory.slice(-6).map(x=>`${x.day} → ${x.to}`).join("；")}</p>}
-    {!!d.events.length&&<details className="mb-fold"><summary>研究层记录（{d.events.length}）</summary><ol className="mb-list">{d.events.map((e,i)=><li key={i}><b>{bj(e.at)} {e.k}</b><span>{e.text}</span></li>)}</ol></details>}
-    <p className="mb-hint">规则：每套打法先在历史和实时 K 线上只做影子交易（扣 0.19% 手续费，止损至少 0.8% 或 1 倍 15 分钟波动，最长拿 24 小时）；
-      所有打法（含全市场爆发选领涨、日线突破做多）是一个总方案：开关 10 开着时开单全由周期预测器决定（爆发单风险最多 0.75%），共用打法池上限；未来 6 小时处在赚钱期的概率 ≥{pct(d.predictor.pMin)}、预测记录不差（评过 &lt;10 次时用最小仓位）才开小模拟单，风险 0.25–0.5%×记录权重×证据；开闸后前 3 笔全亏或连亏 5 笔立即暂停 12 小时。
-      学习不等下载完：现有日线、实时 5 分钟 K 线和每块新到的历史（从最近往前）一到就回放进来；短线按天看周期（近 7 天合计）。见到 ≥1 段赚钱和 ≥1 段亏钱、≥15 笔就开始预测（标【数据少】，证据越多信心越高），
-      这时允许的单子仓位按证据缩小（×0.25–1）；赚钱段和亏钱段各 ≥3 次、≥40 笔后算规律确认；当前日内状态下 ≥20 笔、平均 ≥+0.2%/笔、t≥1.5，按天算 t≥{2}、≥10 天，
-      且不在会延续的亏钱段（旧门槛，预测器还没算出来时用），才允许开模拟单，风险 {pc(d.limits.shortRisk*.5,2)}–{pc(d.limits.shortRisk,2)}/笔（按信心）；打法池最多 {d.limits.maxPoolOpen} 笔、每套最多 {d.limits.maxPerPlaybook} 笔。
-      {d.lastError?` 最近错误：${d.lastError}`:""}{d.lastAnalyzeAt?` 最近分析 ${bj(d.lastAnalyzeAt)}。`:""}</p>
-    {item&&<div className="fr-owner-session"><button className="fr-text-button" type="button" disabled={busy} onClick={()=>onToggle(!item.on)}>
-      {item.on?"关掉 10 动态分配（打法池只记录；日线突破回到开关 9 单独控制）":"打开 10 动态分配"}</button></div>}
-    <p className="mb-hint">起始 {day(d.backfill.startedAt?d.backfill.startedAt/1000:null)} · {d.version}</p>
+
+/** 现在最看好 / 现在不看好: playbooks that may trade, ranked by P(good 6 h) */
+export function Ranked({s}:{s:BrainStatus}){
+  const d=dynOf(s);if(!d)return null;
+  const xs=d.playbooks.filter(p=>p.pred&&tradable(p)).sort((a,b)=>b.pred!.p6-a.pred!.p6);
+  if(!xs.length)return <section className="pg-section" data-testid="brain-ranked"><h2>现在最看好</h2>
+    <div className="pg-empty">预测器还在等 BTC 1 小时历史和第一批影子交易（一到就开始，先标【数据少】）。</div></section>;
+  const n=Math.min(5,Math.ceil(xs.length/2)),top=xs.slice(0,n),bottom=xs.slice(-Math.min(5,xs.length-n)).reverse();
+  return <>
+    <section className="pg-section" data-testid="brain-ranked">
+      <h2>现在最看好<small>按未来 6 小时赚钱期概率</small></h2>
+      <ol className="bs-list">{top.map(p=><PbLine key={p.id} p={p}/>)}</ol>
+    </section>
+    {!!bottom.length&&<section className="pg-section" data-testid="brain-ranked-low">
+      <h2>现在不看好<small>概率最低的 {bottom.length} 套</small></h2>
+      <ol className="bs-list">{bottom.map(p=><PbLine key={p.id} p={p}/>)}</ol>
+    </section>}
+  </>;
+}
+
+/** every playbook by family (burst leader and daily breakout are normal members), collapsible */
+export function Families({s}:{s:BrainStatus}){
+  const d=dynOf(s);if(!d)return null;
+  const fams=new Map<string,Pb[]>();for(const p of d.playbooks)(fams.get(p.familyLabel)??fams.set(p.familyLabel,[]).get(p.familyLabel)!).push(p);
+  const rows=[...fams].map(([f,ps])=>({f,ps:[...ps].sort((a,b)=>(b.pred?.p6??-1)-(a.pred?.p6??-1)),ok:ps.filter(p=>p.gate?.ok&&tradable(p)).length,
+    best:Math.max(-1,...ps.map(p=>p.pred?.p6??-1)),trades:ps.reduce((a,p)=>a+p.trades,0),rec:ps.every(p=>!tradable(p))}))
+    .sort((a,b)=>Number(a.rec)-Number(b.rec)||b.ok-a.ok||b.best-a.best);
+  return <section className="pg-section" data-testid="brain-families">
+    <h2>所有打法<small>{d.playbooks.length} 套 · {rows.length} 类</small></h2>
+    {rows.map(({f,ps,ok,best,trades,rec})=><details key={f} className="bs-fam">
+      <summary><span>{f}</span><small>{ps.length} 套 · {trades} 笔{best>=0?` · 最高 ${pct(best)}`:""}{rec?" · 只记录":ok?` · 允许 ${ok} 套`:""}</small></summary>
+      <ol className="bs-list">{ps.map(p=><PbLine key={p.id} p={p}/>)}</ol>
+    </details>)}
+  </section>;
+}
+
+/** the latest gate decisions (allocator changes and entry signals) */
+export function GateLog({s,pool}:{s:BrainStatus;pool:PoolStatus|undefined}){
+  const lab=labelsOf(dynOf(s)),xs=pool?.gates??[];
+  return <section className="pg-section" data-testid="brain-gates">
+    <h2>最近的开单判断<small>最新 {xs.length} 条</small></h2>
+    {!xs.length?<div className="pg-empty">程序这次启动后还没有新的开单判断（全部记录在运行日志里）。</div>:
+    <ol className="bs-list bs-log">{xs.map((r,i)=>{const dec=String(r.decision??(r.ok?"ALLOW":"DENY")),ok=dec==="ORDER"||dec==="ALLOW",pMin=typeof r.pMin==="number"?r.pMin:.58;
+      return <li key={i}>
+        <div className="bs-pb-top"><span className="bs-time">{bj(r.at)}</span><b>{lab.get(String(r.pb))??String(r.pb??"")}</b>
+          {r.sym?<span>{coinName(String(r.sym))} {sideCn(String(r.side??""))}</span>:<span className="bs-dim">{r.src==="allocator"?"分配器":""}</span>}
+          <span className={`bs-tag${ok?" is-ok":""}`}>{DECISION_CN[dec]??dec}</span></div>
+        <p className="bs-why">{typeof r.p6==="number"?`概率 ${pct(r.p6)}（门槛 ${pct(pMin)}）· `:""}
+          {r.phase!==undefined?`${phaseCn(r.phase as string|null)}${typeof r.elapsedH==="number"?` 已 ${dur(r.elapsedH)}`:""} · `:""}
+          {r.kind?`${KIND_CN[String(r.kind)]??r.kind} · `:""}{shortWhy(gateWords(String(r.why??""),pMin),110)}</p>
+      </li>;})}</ol>}
+  </section>;
+}
+
+/** the latest closed pool trades with their price move */
+export function PoolTrades({s,pool,onOpenOrders}:{s:BrainStatus;pool:PoolStatus|undefined;onOpenOrders?:()=>void}){
+  const lab=labelsOf(dynOf(s)),xs=pool?.recent??[],all=pool?.all;
+  return <section className="pg-section" data-testid="brain-pool-trades">
+    <h2>最近打法池平仓<small>{all?.closed?`共 ${all.closed} 笔，赚 ${all.win} 笔，价格合计 ${pc(all.move)}`:"最新"}</small></h2>
+    {!xs.length?<div className="pg-empty">还没有平掉的打法池单。</div>:
+    <div className="pg-recent">{xs.map(t=><div key={t.id}>
+      <span><b>{coinName(t.sym)} {sideCn(t.side)}</b><small>{lab.get(t.pb)??t.pb} · {shortWhy(t.exitWhy??t.exitCode??"已平仓",40)} · {bj(t.closedAt)}</small></span>
+      <strong className={toneOf(t.move)}>{pc(t.move)}<small>{t.risk!=null?`风险 ${(t.risk*100).toFixed(2)}% · `:""}{dur((t.closedAt-t.openedAt)/3_600_000)}</small></strong>
+    </div>)}</div>}
+    {onOpenOrders&&<button type="button" className="pg-link" onClick={onOpenOrders}>查看全部模拟订单 →</button>}
+  </section>;
+}
+
+/** forecast outcomes (scored after the horizon) */
+export function ForecastRecord({s}:{s:BrainStatus}){
+  const d=dynOf(s);const pr=d?.predictor;if(!pr)return null;
+  return <details className="mb-fold"><summary>预测记录（到期 {pr.track.n} 次）</summary>
+    <p className="mb-hint">每小时给每套打法预测一次未来 6 / 24 / 72 小时在不在赚钱期，到期后对答案。{pr.track.n?`命中 ${pct(pr.track.hit)}，Brier ${pr.track.brier.toFixed(3)}（越小越好，瞎猜约 0.25）。`:"还没有到期的预测。"}</p>
+    <p className="mb-hint">{pr.realLine}（只记录，不参与开单判断）</p>
+    {!!pr.recent.length&&<ol className="mb-list">{pr.recent.map((x,i)=><li key={i}><b>{x.hit?"✓":"✗"} {x.label} · {x.h} 小时</b>
+      <span>说 {pct(x.p)} → 实际{x.y?"在赚钱期":"不在赚钱期"}{x.n?`；后续 ${x.n} 笔影子交易 ${pc(x.net??0)}`:""}</span></li>)}</ol>}
   </details>;
+}
+
+/** research detail that no longer needs to be on top: backfill by interval, BTC/ETH state, per-playbook detail, rules, events */
+export function ResearchDetail({s}:{s:BrainStatus}){
+  const d=dynOf(s);if(!d)return s.dynamic&&"error" in s.dynamic?<p className="mb-hint">研究层读取失败：{(s.dynamic as {error:string}).error}</p>:null;
+  const b=d.backfill;
+  return <>
+    <p className="mb-hint">历史下载（先短线，后 4 小时/日线）：{Object.entries(b.byIv).map(([iv,x])=>`${ivCn[iv]??iv} ${x.done}/${x.total}（${x.bars} 根，最早 ${x.from??"—"}）`).join("，")}
+      {b.etaMin?`；预计还要约 ${b.etaMin>=120?`${Math.round(b.etaMin/60)} 小时`:`${b.etaMin} 分钟`}`:""}；历史回放 {d.replay.unitsDone}/{Math.max(d.replay.unitsKnown,d.replay.unitsDone)} 块，实时评估 {d.replay.liveSeries} 条序列；单步最长 {d.maxStepMs} 毫秒。</p>
+    {d.intraday&&<p className="mb-hint">BTC/ETH 日内（{d.intraday.hour} UTC）：<b>{d.intraday.label}</b>；1 小时 {d.intraday.trend}，4 小时 {d.intraday.trend4h}，ETH {d.intraday.eth??"—"}；24 小时波动 {pc(d.intraday.atrPct)}/小时（分位 {pct(d.intraday.volPct)}）；{d.intraday.session}。</p>}
+    {d.state&&<p className="mb-hint">BTC/ETH 日线（{d.state.day}）：<b>{d.state.label}</b>；距 100 日均线 {pc(d.state.strength,1)}，距 90 日高点 {pc(d.state.dd90,1)}，山寨相对 BTC {pc(d.state.altVsBtc,1)}。</p>}
+    <ol className="mb-list">{d.playbooks.filter(p=>p.pred||p.trades).map(p=><li key={p.id}><b>{p.label}（{ivCn[p.iv]??p.iv}）{p.trades} 笔{p.all?`，平均 ${pc(p.all.mean)}/笔，胜率 ${pct(p.all.win)}`:""}</b>
+      <span>{p.pred?`${p.pred.line}（${p.pred.phases.good} 段赚、${p.pred.phases.bad} 段亏，平均 ${p.pred.phases.meanGoodH}/${p.pred.phases.meanBadH} 小时${p.pred.period?`，每 ${p.pred.period.lag} 天重复`:""}${p.pred.profile.session?`，最好 ${sessCn[p.pred.profile.session]??p.pred.profile.session}`:""}）；${p.pred.realLine}`:"还没有预测"}</span>
+      <span>旧周期（按{p.unit==="day"?"天":"周"}）：{p.good} 段赚 / {p.bad} 段亏；{p.pattern?"规律已确认":p.patternWhy}</span></li>)}</ol>
+    {!!d.events.length&&<details className="mb-fold"><summary>研究层记录（{d.events.length}）</summary><ol className="mb-list">{d.events.map((e,i)=><li key={i}><b>{bj(e.at)} {e.k}</b><span>{e.text}</span></li>)}</ol></details>}
+    <p className="mb-hint">规则：每套打法先只做影子交易（扣 0.19% 手续费）；所有打法（含全市场爆发选领涨、日线突破做多）是一个总方案，开关 10 开着时开单全由周期预测器决定：
+      未来 6 小时在赚钱期的概率 ≥{pct(d.predictor.pMin)}、预测记录不差（评过不到 10 次用最小仓位）才开，风险 0.25–0.5%×记录权重×证据（爆发单最多 0.75%）；
+      开闸后前 3 笔全亏或连亏 5 笔立即暂停 12 小时；打法池最多 {d.limits.maxPoolOpen} 笔、每套最多 {d.limits.maxPerPlaybook} 笔、一个币一笔。
+      {d.lastError?` 最近错误：${d.lastError}`:""}{d.lastAnalyzeAt?` 最近分析 ${bj(d.lastAnalyzeAt)}。`:""} {d.version}</p>
+  </>;
 }
