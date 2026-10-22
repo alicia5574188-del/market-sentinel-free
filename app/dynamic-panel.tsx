@@ -60,7 +60,7 @@ export function SchemeSummary({s,pool,busy,onToggle,liveEnabled}:{s:BrainStatus;
     </div>
     {g&&o&&g.trades>0&&o.trades>0&&<p className="bs-hint">{(g.avg??0)>(o.avg??0)?"看好时跟着来的交易比不看好时好，预测有用。":"看好时并没有比不看好时好，预测还没证明自己（只记录，不影响开单）。"}</p>}
     {b?<p className="bs-hint" data-testid="brain-backfill">历史下载：<b>{b.done}/{b.total}</b> 条序列（{pct(b.pct)}）{b.working?`，正在下 ${b.working.replace("_USDT","")}`:""} · Bybit / OKX / KuCoin（不用 Gate）·
-      今天请求 {b.reqToday} 次 · 失败累计 {b.errTotal}{b.blocked.length?` · ${b.blocked.join("/")} 限流中`:""}{b.pausedUntil?` · 暂停到 ${bj(b.pausedUntil)}`:""} · 影子交易 {d!.shadowTrades} 笔</p>
+      {b.pages!=null?`已下 ${b.pages} 页 · 近 1 小时 ${b.reqLastHour??0} 次 · `:""}{b.lastProgressAt?`上次有新数据 ${bj(b.lastProgressAt)} · `:""}{d!.booted===false?"启动中，进度读取后再显示 · ":""}今天请求 {b.reqToday} 次 · 失败累计 {b.errTotal}{b.blocked.length?` · ${b.blocked.join("/")} 限流中`:""}{b.pausedUntil?` · 暂停到 ${bj(b.pausedUntil)}`:""} · 影子交易 {d!.shadowTrades} 笔</p>
       :<p className="bs-hint">研究层还没读到。</p>}
     {s.fallback&&<p className="bs-hint mb-warn">自动降级为只计算（到 {bj(s.fallback.until)}）：{s.fallback.reason}</p>}
     {item&&<div className="fr-owner-session"><button className="fr-text-button" type="button" disabled={busy} onClick={()=>onToggle(!on)}>

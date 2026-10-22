@@ -2,8 +2,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
-import {LivingEngine,LIVING_WRITES_PER_DAY,LIVING_KEYS} from "../lib/living/engine.ts";
-import {defaultLivingConfig,LIVING_MAX_VALUE_BYTES,LIVING_KEY_PREFIX,effectiveLiving,withFallback} from "../lib/living/config.ts";
+import {LivingEngine,LIVING_WRITES_PER_DAY,LIVING_KEYS,entryQuoteAge} from "../lib/living/engine.ts";
+import {LivingTape} from "../lib/living/tape.ts";
+import {defaultLivingConfig,LIVING_MAX_VALUE_BYTES,LIVING_KEY_PREFIX,effectiveLiving,normalizeLivingConfig} from "../lib/living/config.ts";
 import {bytesOf} from "../lib/living/util.ts";
 import {orderRecord} from "../lib/order-journal.ts";
 import {runLiving} from "./living/living-sim.ts";
@@ -21,17 +22,32 @@ test("defaults: paper-enabled with all 9 items on (8 = burstLeader, 9 = htfTrend
   const pe=engineWith("paper-enabled");const dir=pe.plan(emptyCtx(now0));
   assert.ok(dir);assert.equal(dir!.legacyGate,"note");assert.deepEqual(dir!.orders,[]);
 });
-test("fallback: stale quotes or a module error → compute-only for one hour, then back",()=>{
+test("no automatic pause: stale quotes or a module error never turn paper-enabled into compute-only",()=>{
   const e=engineWith("paper-enabled");
   e.onHub(Array.from({length:50},(_,i)=>({symbol:`S${i}`,mid:1,at:now0,volume24hUsd:1e8,sources:3})),now0,()=>true);
-  assert.equal(e.plan(emptyCtx(now0+200_000)),undefined,"quotes 200s old");
-  assert.match(e.config.fallback!.reason,/秒没更新/);
-  assert.equal(effectiveLiving(e.config,now0+30*60_000).acting,false);
-  assert.equal(effectiveLiving(e.config,now0+200_000+61*60_000).acting,true);
+  assert.ok(e.plan(emptyCtx(now0+200_000)),"quotes 200s old: still acting (directive returned)");
+  assert.equal(e.config.fallback,null);assert.equal(e.effective(now0+200_000).acting,true);
+  assert.ok(e.log.some(r=>r.k==="QUOTE_STALE"&&/暂不开新单/.test(String(r.reason))),"one plain-words stale line");
+  assert.equal(e.log.filter(r=>r.k==="QUOTE_STALE").length,1);e.plan(emptyCtx(now0+202_000));
+  assert.equal(e.log.filter(r=>r.k==="QUOTE_STALE").length,1,"logged once per stale stretch");
+  e.onHub(Array.from({length:50},(_,i)=>({symbol:`S${i}`,mid:1.01,at:now0+204_000,volume24hUsd:1e8,sources:3})),now0+204_000,()=>true);
+  e.plan(emptyCtx(now0+205_000));assert.ok(e.log.some(r=>r.k==="QUOTE_BACK"),"recovery logged");
   const bad=engineWith("paper-enabled");
   const ctx={...emptyCtx(now0),forward:null as never};
-  assert.equal(bad.plan(ctx),undefined);assert.match(bad.config.fallback!.reason,/研究层出错/);
-  assert.equal(withFallback(bad.config,now0+1000,"again"),bad.config,"no stacking while active");
+  assert.equal(bad.plan(ctx),undefined,"an error skips this tick only");assert.equal(bad.config.fallback,null);
+  assert.equal(bad.log.filter(r=>r.k==="TICK_ERROR").length,1);bad.plan({...ctx,now:now0+2000});
+  assert.equal(bad.log.filter(r=>r.k==="TICK_ERROR").length,1,"same error not repeated within 10 min");
+  assert.ok(bad.plan(emptyCtx(now0+4000)),"next good tick acts again");
+  // a fallback stored by the old version is dropped on restore
+  const old={...defaultLivingConfig(now0),fallback:{at:now0,until:now0+3_600_000,reason:"实时报价 70 秒没更新"}};
+  const n=normalizeLivingConfig(old,now0);assert.equal(n.fallback,null);assert.equal(effectiveLiving(old,now0+60_000).acting,true);
+});
+test("per-coin entry freshness: only a coin whose own quote is older than 30s is held back, and it resumes when fresh",()=>{
+  const tape=new LivingTape();tape.feed([{symbol:"A_USDT",mid:1,at:now0},{symbol:"B_USDT",mid:2,at:now0+25_000}],now0+25_000);
+  assert.equal(entryQuoteAge(tape,"B_USDT",now0+40_000),null);
+  assert.equal(entryQuoteAge(tape,"A_USDT",now0+40_000),40_000);
+  assert.equal(entryQuoteAge(tape,"C_USDT",now0+40_000),null,"never on the tape: the Gate-quote filter decides");
+  tape.feed([{symbol:"A_USDT",mid:1.1,at:now0+41_000}],now0+41_000);assert.equal(entryQuoteAge(tape,"A_USDT",now0+42_000),null);
 });
 test("storage: every own value ≤ 96KB, own prefix only, 5m bars paged in 6 keys, log rolls into pages, daily write budget",()=>{
   const e=engineWith("compute-only");

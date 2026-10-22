@@ -41,7 +41,8 @@ export const LIVING_ITEM_LABELS:Record<LivingItem,string>={
 export type LivingConfig={version:typeof LIVING_VERSION;mode:LivingMode;items:LivingItems;updatedAt:number;
   /** First moment paper-enabled acted on the account (run-log rule_epoch boundary). */
   epochStartedAt:number|null;
-  /** Automatic fallback to compute-only (module error / stale data), C8. */
+  /** Legacy (C8 automatic 1-hour compute-only fallback). Removed: the paper brain never pauses itself any more; a stale coin only
+   *  skips its own new entries and an error only skips that tick. Kept as a field (always null) so old stored configs and the UI still read. */
   fallback:{at:number;until:number;reason:string}|null};
 
 export const allItems=(on:boolean):LivingItems=>Object.fromEntries(LIVING_ITEMS.map(k=>[k,on])) as LivingItems;
@@ -54,22 +55,13 @@ export function normalizeLivingConfig(raw:unknown,now:number):LivingConfig{
   const mode=LIVING_MODES.includes(v.mode as LivingMode)?v.mode as LivingMode:base.mode;
   const items={...base.items};
   for(const k of LIVING_ITEMS)if(typeof v.items?.[k]==="boolean")items[k]=v.items[k];
-  const fb=v.fallback&&Number.isFinite(v.fallback.until)&&Number.isFinite(v.fallback.at)?
-    {at:v.fallback.at,until:v.fallback.until,reason:String(v.fallback.reason??"").slice(0,200)}:null;
   return {version:LIVING_VERSION,mode,items,updatedAt:Number.isFinite(v.updatedAt)?v.updatedAt!:now,
-    epochStartedAt:Number.isFinite(v.epochStartedAt)?v.epochStartedAt!:null,fallback:fb};
+    epochStartedAt:Number.isFinite(v.epochStartedAt)?v.epochStartedAt!:null,fallback:null};// a stored old fallback is dropped on restore
 }
 export type LivingEffective={mode:LivingMode;configured:LivingMode;items:LivingItems;fallback:LivingConfig["fallback"];acting:boolean};
-/** What actually runs now: a live fallback turns paper-enabled into compute-only. */
-export function effectiveLiving(c:LivingConfig,now:number):LivingEffective{
-  const fb=c.fallback&&c.fallback.until>now?c.fallback:null;
-  const mode=c.mode==="paper-enabled"&&fb?"compute-only":c.mode;
-  return {mode,configured:c.mode,items:{...c.items},fallback:fb,acting:mode==="paper-enabled"};
-}
-export const FALLBACK_MS=60*60_000;
-export function withFallback(c:LivingConfig,now:number,reason:string):LivingConfig{
-  if(c.fallback&&c.fallback.until>now)return c;
-  return {...c,fallback:{at:now,until:now+FALLBACK_MS,reason:reason.slice(0,200)},updatedAt:now};
+/** What actually runs now: exactly the configured mode (no automatic pause; paper-enabled always acts). */
+export function effectiveLiving(c:LivingConfig,_now:number):LivingEffective{
+  return {mode:c.mode,configured:c.mode,items:{...c.items},fallback:null,acting:c.mode==="paper-enabled"};
 }
 
 /** Fast lane (B1-B7) initial values. B7 may move the alert z thresholds by ±0.5 per week (stored offset, not here). */

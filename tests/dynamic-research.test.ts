@@ -473,3 +473,29 @@ test("realtime pool only (dynamic-v1.5): a pool signal on a coin without a strea
   const rj=e.runlog.poolRecent.filter(r=>r.decision==="REJECTED");assert.equal(rj.length,1,"once per order");
   assert.deepEqual([rj[0]!.pb,rj[0]!.sym,rj[0]!.src,rj[0]!.kind,rj[0]!.ok],["box1h-long","AAA_USDT","account","pool",false]);assert.match(String(rj[0]!.why),/模拟账户没开：维持保证金率/);
 });
+
+test("runtime: the alarm's backfillTick keeps the history download going while a long step is busy (shared ≤4/min pacing), saves progress so a restart resumes, and the done counter never goes back when the coin list rotates",async()=>{
+  const db=sqliteD1(),calls:string[]=[];const t0=Date.UTC(2026,9,1,0,10);let now=t0;const listed=Math.floor(Date.UTC(2023,0,1)/1000);
+  const fetch=fakeBybit(listed,()=>now,calls);
+  const rt=new DynamicResearch({minGapMs:15_000});
+  // boot + load the stored series through a few normal steps
+  for(let i=0;i<12;i++){await rt.step(now,{universe:["SOL_USDT"],db,fetch});now+=5_000;}
+  const before=calls.length;
+  // a long step is "running": only the alarm's light tick, every 2 s, for 10 minutes
+  let ticks=0;for(let i=0;i<300;i++){if(await rt.backfillTick(now,{universe:["SOL_USDT"],db,fetch}))ticks++;now+=2_000;}
+  const n=calls.length-before;assert.ok(n>=38&&n<=41,`about 4 pages a minute from the alarm alone (${n} in 10 min)`);assert.equal(ticks,n);
+  const v=rt.view(now).backfill;
+  assert.ok(v.reqLastHour>=n&&v.pages>=n&&v.lastProgressAt!=null&&v.nextRunAt!=null&&v.nextRunAt>=now-2_000,"health fields");
+  // a step and a tick at the same instant never send two requests
+  const c0=calls.length;await Promise.all([rt.backfillTick(now,{universe:["SOL_USDT"],db,fetch}),rt.step(now,{universe:["SOL_USDT"],db,fetch})]);
+  assert.ok(calls.length-c0<=1);
+  // restart: progress read back from D1 (saved at most a minute ago) — no page re-fetched beyond that minute
+  const pagesSaved=Object.values(rt.bf.series).reduce((a,p)=>a+p.pages,0);
+  const rt2=new DynamicResearch({minGapMs:15_000});await rt2.step(now,{universe:["SOL_USDT"],db,fetch});
+  const pagesBack=Object.values(rt2.bf.series).reduce((a,p)=>a+p.pages,0);
+  assert.ok(pagesBack>=pagesSaved-4&&pagesBack<=pagesSaved,`restart resumes (${pagesBack} of ${pagesSaved} pages)`);
+  // the liquid list rotates: a finished series of a coin that left stays counted
+  const doneNow=v.done;rt.bf.series[seriesKey("SOL_USDT","1d")]={...(rt.bf.series[seriesKey("SOL_USDT","1d")]??{sym:"SOL_USDT",iv:"1d",oldest:1,newest:2,pages:1,bars:1,venue:0,fails:0,retryAt:0,lastError:null}),done:true,doneAt:now} as never;
+  const a=backfillView(rt.bf,["SOL_USDT"],now).done,b=backfillView(rt.bf,["DOGE_USDT"],now).done;
+  assert.ok(a>=doneNow&&b>=a,`done ${doneNow} → ${a} → ${b} after SOL left the list`);
+});

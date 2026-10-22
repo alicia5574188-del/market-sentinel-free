@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {initialForward, type Quote, type Trade} from '../lib/forward-relations.ts';
-import {adoptLegacyPaths, bookFromStoredPaths, commitPathWrite, emptyTradePathBook, exportTradePaths, observeTradePaths, pendingPathWrites, peekPathWrite, searchHolding, type TradePath} from '../lib/trade-path.ts';
+import {adoptLegacyPaths, bookFromStoredPaths, commitPathWrite, emptyTradePathBook, exportTradePaths, observeTradePaths, pendingPathWrites, peekPathWrite, pathFlushDue, PATH_FLUSH_MS, searchHolding, type TradePath} from '../lib/trade-path.ts';
 
 const now=1_791_770_000_000;
 function quote(bid:number,ask:number,at=now):Quote{
@@ -154,4 +154,26 @@ test('a signal keeps every minute for six hours from the entry and then stops',(
   const after=closed.trades[0]?.after.length??0;
   observeTradePaths(closed,state,{ETH_USDT:quote(104,104.1,at(370))},{},at(370));
   assert.equal(closed.trades[0]?.after.length,after);
+});
+
+test('write batching: an open trade writes its page at most once per flush interval, at once on open and exit, nothing lost',()=>{
+  const state=initialForward(now);const book=emptyTradePathBook(state.startedAt);
+  const flush=(at:number)=>{let n=0;if(!pathFlushDue(book,at))return 0;for(let i=0;i<10;i++){const jobs=pendingPathWrites(book,8);if(!jobs.length)break;for(const j of jobs){commitPathWrite(book,j);n++;}}return n;};
+  state.positions.push(open('a','LONG',100));
+  observeTradePaths(book,state,{ETH_USDT:quote(100,100.1,now)},{},now);
+  assert.ok(flush(now)>0,'a new opened trade is written at once');
+  let writes=0;
+  // 10 minutes of 2s ticks with a moving price: without batching this would be up to one write per tick
+  for(let at=now+2_000;at<now+600_000;at+=2_000){
+    const px=100+Math.sin(at/7_000)*0.5+(at-now)/600_000;
+    observeTradePaths(book,state,{ETH_USDT:quote(px,px+0.1,at)},{},at);writes+=flush(at);
+  }
+  assert.ok(writes<=Math.ceil(600_000/PATH_FLUSH_MS)+1,`batched writes ${writes}`);
+  assert.ok(book.trades[0]!.hold.length>=10,'every minute still has its point');
+  observeTradePaths(book,state,{ETH_USDT:quote(101,101.1,now+600_000)},{},now+600_000);flush(now+600_000);
+  const before=book.flushedAt;
+  const t=state.positions.pop()!;t.status='CLOSED';t.exitPrice=101;t.closedAt=now+601_000;t.netPnl=1;state.history.unshift(t);
+  observeTradePaths(book,state,{ETH_USDT:quote(101,101.1,now+601_000)},{},now+601_000);
+  assert.ok(flush(now+601_000)>0,'the exit is written at once, not after the interval');
+  assert.notEqual(book.flushedAt,before);assert.equal(book.dirty.length,0);assert.equal(book.flushing,false);
 });

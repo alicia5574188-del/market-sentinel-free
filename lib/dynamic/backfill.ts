@@ -34,6 +34,8 @@ export type SeriesPlan={sym:string;iv:Iv;oldest:number|null;newest:number|null;d
   fails:number;retryAt:number;venue:number;lastError:string|null;doneAt:number|null;lastTailAt?:number};
 export type BackfillState={v:1;series:Record<string,SeriesPlan>;lastReqAt:number;pauseUntil:number;pause429:number;
   day:string;reqToday:number;reqTotal:number;okTotal:number;errTotal:number;startedAt:number|null;
+  /** request times of the last hour (ms) and the last page that brought bars — for /__health */
+  recent?:number[];lastProgressAt?:number|null;
   /** a venue that answered 429 / 403 is skipped by every series until then (the others keep going) */
   venueBlock?:Partial<Record<Venue,number>>};
 export type Job={key:string;sym:string;iv:Iv;kind:"back"|"tail";venue:Venue;endSec:number|null;limit:number};
@@ -88,12 +90,13 @@ export function nextJob(st:BackfillState,nowMs:number,universe:readonly string[]
   return null;
 }
 function count(st:BackfillState,nowMs:number){const d=new Date(nowMs).toISOString().slice(0,10);if(st.day!==d){st.day=d;st.reqToday=0;}
-  st.reqToday++;st.reqTotal++;st.lastReqAt=nowMs;st.startedAt??=nowMs;}
+  st.reqToday++;st.reqTotal++;st.lastReqAt=nowMs;st.startedAt??=nowMs;
+  const r=(st.recent??=[]).filter(t=>nowMs-t<3_600_000);r.push(nowMs);st.recent=r.slice(-300);}
 /** a page arrived (bars already parsed / closed only). Returns true when this page finished the series' history. */
 export function onPage(st:BackfillState,job:Job,bars:{t:number}[],nowMs:number){
   count(st,nowMs);st.okTotal++;st.pause429=0;
   const p=plan(st,job.sym,job.iv);p.venue=VENUES.indexOf(job.venue);p.fails=0;p.retryAt=0;p.lastError=null;p.pages++;p.bars+=bars.length;
-  if(bars.length){const lo=bars[0]!.t,hi=bars.at(-1)!.t;p.oldest=p.oldest==null?lo:Math.min(p.oldest,lo);p.newest=p.newest==null?hi:Math.max(p.newest,hi);}
+  if(bars.length){st.lastProgressAt=nowMs;const lo=bars[0]!.t,hi=bars.at(-1)!.t;p.oldest=p.oldest==null?lo:Math.min(p.oldest,lo);p.newest=p.newest==null?hi:Math.max(p.newest,hi);}
   if(job.kind==="tail"){p.lastTailAt=nowMs;return false;}
   const floor=nowMs/1000-depthOf(job.sym,job.iv)*86_400;
   const before=job.endSec,reached=p.oldest!=null&&p.oldest<=floor,stuck=bars.length===0||(before!=null&&p.oldest!=null&&p.oldest>=before);
@@ -111,15 +114,22 @@ export function onFailure(st:BackfillState,job:Job,error:unknown,nowMs:number){
   p.retryAt=p.fails%VENUES.length===0?nowMs+Math.min(BACKFILL.retryMaxMs,BACKFILL.retryBaseMs*2**Math.min(8,p.fails/VENUES.length)):nowMs;
 }
 export type BackfillView={pct:number;done:number;total:number;bars:number;byIv:Record<string,{done:number;total:number;bars:number;from:string|null}>;
-  reqToday:number;reqTotal:number;errTotal:number;pausedUntil:number|null;blocked:Venue[];startedAt:number|null;etaMin:number|null;working:string|null};
+  reqToday:number;reqTotal:number;errTotal:number;pausedUntil:number|null;blocked:Venue[];startedAt:number|null;etaMin:number|null;working:string|null;
+  /** pages fetched so far (only grows), requests in the last hour, last page that brought bars, earliest next request */
+  pages:number;reqLastHour:number;lastProgressAt:number|null;nextRunAt:number|null};
 export function backfillView(st:BackfillState,universe:readonly string[],nowMs:number,minGapMs:number=BACKFILL.minGapMs):BackfillView{
   const byIv:BackfillView["byIv"]={};let done=0,total=0,bars=0,pagesLeft=0,working:string|null=null;
-  for(const {sym,iv} of trackedSeries(universe)){const p=st.series[seriesKey(sym,iv)],x=(byIv[iv]??={done:0,total:0,bars:0,from:null});total++;x.total++;
+  // finished series stay counted after their coin leaves the liquid list, so `done` only grows (the list rotates)
+  const list=trackedSeries(universe),seen=new Set(list.map(x=>seriesKey(x.sym,x.iv)));
+  for(const p of Object.values(st.series))if(p.done&&!seen.has(seriesKey(p.sym,p.iv))){seen.add(seriesKey(p.sym,p.iv));list.push({sym:p.sym,iv:p.iv});}
+  for(const {sym,iv} of list){const p=st.series[seriesKey(sym,iv)],x=(byIv[iv]??={done:0,total:0,bars:0,from:null});total++;x.total++;
     if(p?.done){done++;x.done++;}else{const covered=p?.oldest!=null?Math.max(0,(p.newest??nowMs/1000)-p.oldest)/IV_SEC[iv]:0,need=depthOf(sym,iv)*86_400/IV_SEC[iv];
       pagesLeft+=Math.ceil(Math.max(0,need-covered)/PAGE[VENUES[(p?.venue??0)%3]!]);working??=`${sym} ${iv}`;}
     const n=p?.oldest!=null&&p.newest!=null?Math.round((p.newest-p.oldest)/IV_SEC[iv])+1:0;x.bars+=n;bars+=n;
     if(p?.oldest!=null){const d=new Date(p.oldest*1000).toISOString().slice(0,10);if(!x.from||d<x.from)x.from=d;}}
   return {pct:total?done/total:0,done,total,bars,byIv,reqToday:st.reqToday,reqTotal:st.reqTotal,errTotal:st.errTotal,
     pausedUntil:st.pauseUntil>nowMs?st.pauseUntil:null,blocked:VENUES.filter(v=>(st.venueBlock?.[v]??0)>nowMs),startedAt:st.startedAt,
-    etaMin:pagesLeft?Math.ceil(pagesLeft*minGapMs/60_000):0,working};
+    etaMin:pagesLeft?Math.ceil(pagesLeft*minGapMs/60_000):0,working,
+    pages:Object.values(st.series).reduce((a,p)=>a+(p.pages||0),0),reqLastHour:(st.recent??[]).filter(t=>nowMs-t<3_600_000).length,
+    lastProgressAt:st.lastProgressAt??null,nextRunAt:working||pagesLeft?Math.max(st.lastReqAt+minGapMs,st.pauseUntil,nowMs):null};
 }

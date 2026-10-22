@@ -9,10 +9,11 @@
  *  - afterForward(res, state) log opened/rejected, learn from closed living trades.
  *  - writes(now)              dirty own keys under a small daily budget.
  * Mode off: none of this runs. Compute-only: everything runs and is logged, plan() returns undefined.
- * Any exception or stale data → automatic fallback to compute-only for 1 hour (C8).
+ * Paper-enabled never pauses itself: a coin whose quote is stale (>30s) only skips its own new entries until it is fresh again
+ * (exits and protections keep running on the last good quote), and an exception only skips that one tick (logged once).
  */
 import {FAST,STEPS,SIZING,LIVING_CONFIG_KEY,LIVING_KEY_PREFIX,LIVING_MAX_VALUE_BYTES,LIVING_ITEM_LABELS,LIVING_RULE_EPOCH,
-  type LivingConfig,type LivingItems,normalizeLivingConfig,effectiveLiving,withFallback,LIVING_ITEMS} from "./config.ts";
+  type LivingConfig,type LivingItems,normalizeLivingConfig,effectiveLiving,LIVING_ITEMS} from "./config.ts";
 import {LivingTape,BAR_PAGES,BAR_PAGE_PREFIX,M1_PAGES,M1_PAGE_PREFIX,selectBasket,basketDue,pruneBasket,type Basket,type TapePoint,type MidBar} from "./tape.ts";
 import {stepFast,initialFast,normalizeFast,fastFollowBlocked,matureRecords,fastMultiple,weeklyAdjust,noteMissed,bucketOf,
   type FastState,type EpisodeRecord,type FastEvent,type Episode} from "./fast-lane.ts";
@@ -52,8 +53,13 @@ const HOT_EVERY_MS=120_000,HEAVY_EVERY_MS=15*60_000,BARS_EVERY_MS=60*60_000;
 /** Warm-restart cadence: recent 1m bars, flow pages and the market-read history (so a deploy resumes in ~1-2 minutes, not 15-60). */
 const WARM_EVERY_MS=10*60_000,FAST_BASELINE_EVERY_MS=6*60_000;
 const INTENT_HIST_BYTES=72_000;
-const STALE_MS=30_000; // spec C8: quotes older than 30s → compute-only for 1h
+const STALE_MS=30_000; // a coin whose tape quote is older than 30s opens nothing new until it is fresh again (exits keep running)
 
+/** null = this coin's tape quote is fresh enough for a new entry (or it was never on the tape — then the Gate-quote filter
+ *  alone decides); otherwise how old its last tape quote is (ms). */
+export function entryQuoteAge(tape:Pick<LivingTape,"last">,symbol:string,now:number):number|null{
+  const last=tape.last(symbol);if(!last)return null;const age=now-last.at;return age<=STALE_MS?null:age;
+}
 /** Minimal views of the forward core the engine reads (no runtime import of forward-relations). */
 /** 60 min after a LIVING_STOP on a coin, the same coin + playbook is not traded again (NEAR faded 3× in 30 min on 10-21).
  * Derived from the persisted forward history, so it survives restarts. */
@@ -197,9 +203,23 @@ export class LivingEngine{
     this.dirty.add(LIVING_KEYS.config);this.note(now,"CONFIG",{mode:this.config.mode,items:LIVING_ITEMS.filter(k=>items[k]).join(",")});
     return this.config;
   }
-  private fallback(now:number,reason:string){
-    const before=this.config.fallback;this.config=withFallback(this.config,now,reason);
-    if(this.config.fallback!==before){this.dirty.add(LIVING_KEYS.config);this.note(now,"FALLBACK",{reason:reason.slice(0,160)});}
+  /** Recent gaps between two accepted hub feeds longer than 10s (start time + length), for the stall diagnosis on /__health. */
+  quoteGaps:{at:number;ms:number}[]=[];
+  private errorNotedAt=new Map<string,number>();
+  /** An exception skips only the current tick; the same kind of error is written to the log at most once every 10 minutes. */
+  private tickError(now:number,where:string,reason:string){
+    const last=this.errorNotedAt.get(where)??-Infinity;if(now-last<10*60_000)return;
+    this.errorNotedAt.set(where,now);this.note(now,"TICK_ERROR",{reason:`${where}出错，这一轮跳过（下一轮照常）：${reason}`.slice(0,200)});
+  }
+  /** Whole-tape stale episode (diagnosis only; no mode change): one line when it starts, one when quotes come back. */
+  private staleSince:number|null=null;
+  quoteStale(now:number){
+    const age=this.tape.feeds>0?now-this.tape.lastFeedAt:0;
+    if(age>STALE_MS&&this.staleSince==null){this.staleSince=this.tape.lastFeedAt;
+      this.note(now,"QUOTE_STALE",{reason:`所有实时报价 ${Math.round(age/1000)} 秒没更新，暂不开新单（平仓和保护照常）`});}
+    else if(age<=STALE_MS&&this.staleSince!=null){const gap=Math.round((now-this.staleSince)/1000);this.staleSince=null;
+      this.note(now,"QUOTE_BACK",{reason:`实时报价恢复（断了约 ${gap} 秒），新单恢复`});}
+    return this.staleSince!=null;
   }
   note(at:number,k:string,data:Record<string,string|number|boolean|null>={}){
     this.log.push({at,k,...data});
@@ -209,7 +229,7 @@ export class LivingEngine{
     this.trades.counts[ck]=(this.trades.counts[ck]??0)+1;
     if(this.log.length%25===0&&bytesOf(this.log)>LOG_PAGE_BYTES)this.rollLog();
     this.dirty.add("log");
-    if(/^(INTENT_MARKET|ENV_MARKET|FALLBACK|CONFIG|RESTART|BASKET|FAST_(ALERT|CONFIRM|FAKE|EXHAUST|TIMEOUT|REVERSED|SURGE))$/.test(k)){
+    if(/^(INTENT_MARKET|ENV_MARKET|FALLBACK|QUOTE_STALE|QUOTE_BACK|TICK_ERROR|CONFIG|RESTART|BASKET|FAST_(ALERT|CONFIRM|FAKE|EXHAUST|TIMEOUT|REVERSED|SURGE))$/.test(k)){
       const text=String(data.sentence??data.reason??data.mode??data.why??data.flowWhy??data.side??"");
       try{this.runlog.event(at,k,`${k==="INTENT_MARKET"||k==="ENV_MARKET"?`${data.state}${data.side?`/${data.side}`:""} `:""}${text}`);}catch{/* 只是记录 */}
     }
@@ -231,7 +251,7 @@ export class LivingEngine{
   tickLog(now:number,forward?:ForwardView){
     try{
       const eff=this.effective(now),m=this.marketIntent;
-      const gate:Gate=!this.loaded?"NOT_LOADED":this.config.mode==="off"?"PAUSED_OFF":eff.fallback?"FALLBACK":!eff.acting?"COMPUTE_ONLY"
+      const gate:Gate=!this.loaded?"NOT_LOADED":this.config.mode==="off"?"PAUSED_OFF":!eff.acting?"COMPUTE_ONLY":this.staleSince!=null?"QUOTES_STALE"
         :!this.basket?"NO_BASKET":!m||m.state==="WARMING"?"WARMING":this.fast.episode?"FAST_OWNS":"OPEN";
       this.runlog.sample(now,{gate,market:this.marketSample(),fast:this.fast.episode?this.fast.episode.phase:"CALM",
         open:(forward?.positions??[]).filter(p=>!p.inverseCopy).length,watches:this.trades.watches.length,mode:eff.mode});
@@ -269,7 +289,9 @@ export class LivingEngine{
         const rows=points.map(p=>({symbol:p.symbol,volume24hUsd:p.volume24hUsd??0,sources:p.sources??1,gate:gateListed(p.symbol)}));
         const b=selectBasket(rows,now);if(b.members.length>=20){this.basket=b;this.dirty.add(LIVING_KEYS.basket);this.note(now,"BASKET",{n:b.members.length,top:b.top10.slice(0,5).join(",")});}
       }else if(this.basket){const nb=pruneBasket(this.basket,gateListed);if(nb!==this.basket){this.basket=nb;this.dirty.add(LIVING_KEYS.basket);}}
-      this.tape.feed(points,now);
+      const prevFeed=this.tape.lastFeedAt;
+      if(this.tape.feed(points,now)&&prevFeed>0&&now-prevFeed>10_000){// diagnosis: every quote gap >10s (in memory, last 12)
+        this.quoteGaps.push({at:prevFeed,ms:now-prevFeed});if(this.quoteGaps.length>12)this.quoteGaps.splice(0,this.quoteGaps.length-12);}
       if(!this.basket)return;
       const members=this.basket.members;
       const r=stepFast(this.fast,this.tape,this.basket,now,side=>burstFlow(this.flow,members,side,now));this.fast=r.state;
@@ -289,7 +311,7 @@ export class LivingEngine{
         this.dirty.add(LIVING_KEYS.fast);
       }
       if(now-this.lastIntentAt>=60_000){this.lastIntentAt=now;this.readIntents(now,[]);}
-    }catch(error){this.lastError=String((error as Error)?.message??error).slice(0,200);this.fallback(now,`快速通道出错：${this.lastError}`);}
+    }catch(error){this.lastError=String((error as Error)?.message??error).slice(0,200);this.tickError(now,"快速通道",this.lastError);}
     finally{this.lastHubMs=Date.now()-t0;}
   }
 
@@ -346,7 +368,7 @@ export class LivingEngine{
     const coins=["BTC_USDT","ETH_USDT",...members.filter(s=>s!=="BTC_USDT"&&s!=="ETH_USDT")].slice(0,10).map(s=>{const e=this.envs.get(s);return e?{s,env:e.state,c:e.clarity}:null;}).filter(Boolean);
     const counts:Record<string,number>={};for(const s of members){const e=this.envs.get(s);if(e)counts[e.state]=(counts[e.state]??0)+1;}
     const eff=this.effective(Date.now());
-    return {brain:{mode:eff.mode,acting:eff.acting,fallback:!!eff.fallback,watches:this.trades.watches.length,lastError:this.lastError?this.lastError.slice(0,120):null},
+    return {brain:{mode:eff.mode,acting:eff.acting,fallback:false,quotesStale:this.staleSince!=null,quoteGaps:this.quoteGaps.slice(-6),watches:this.trades.watches.length,lastError:this.lastError?this.lastError.slice(0,120):null},
       market:m?{state:m.state,label:ENV_LABEL[m.state],side:m.side,clarity:m.clarity,at:m.at,ac15:m.ev.ac15,dir24:m.ev.dir24,breadth:m.ev.breadth,btc:m.ev.btc}:null,
       counts,coins};
   }
@@ -356,7 +378,7 @@ export class LivingEngine{
     if(this.config.mode==="off"||!this.loaded)return undefined;
     const t0=Date.now(),now=ctx.now;
     try{
-      if(this.tape.feeds>0&&now-this.tape.lastFeedAt>STALE_MS)this.fallback(now,`实时报价 ${Math.round((now-this.tape.lastFeedAt)/1000)} 秒没更新`);
+      this.quoteStale(now);
       const eff=this.effective(now),items=eff.items;
       const bar=Math.floor((now-5_000)/300_000)*300_000;
       if(bar>this.trades.lastBarAt&&this.basket){this.trades.lastBarAt=bar;this.onBar(ctx,bar,items);}
@@ -422,8 +444,19 @@ export class LivingEngine{
           this.logCase(now,o.symbol,o.side,o.note.pb,"SPECIAL_ONLY","只在全市场突然爆发时开单：普通行情只记录",o.kind==="F"?"fast":"normal");
           this.note(now,"RECORD_ONLY",{sym:o.symbol,side:o.side,pb:o.note.pb,kind:o.kind,reason:"只在全市场突然爆发时开单，这张只记录"});this.endOrder(o,true);}
       }
+      // per-coin freshness: a coin whose tape quote is older than 30s opens nothing new (the order is not consumed, so it can
+      // still go out the moment the quote is fresh); logged once per coin per stale stretch. Exits/protections are not filtered.
+      const live=orders.filter(o=>{
+        const last=this.tape.last(o.symbol),age=entryQuoteAge(this.tape,o.symbol,now);
+        if(age==null)return true;
+        const coin=o.symbol.replace("_USDT",""),secs=`${Math.round(age/1000)} 秒没更新`;
+        if(this.noteOnce(`st|${o.symbol}|${last?.at??0}`,now,"RECORD_ONLY",{sym:o.symbol,side:o.side,pb:o.note.pb,kind:o.kind,
+          reason:`${coin} 的实时报价${secs}，这个币暂不开新单（平仓照常），报价一恢复就继续`})){
+          this.logCase(now,o.symbol,o.side,o.note.pb,"NO_QUOTE",`实时报价${secs}，暂不开新单`,o.kind==="F"?"fast":"normal");}
+        return false;
+      });
       // execution filter: only symbols with a fresh entry-ready Gate quote (no new request)
-      const exec=orders.filter(o=>{
+      const exec=live.filter(o=>{
         const q=ctx.quotes[o.symbol],ok=!!q&&now-q.observedAt<=10_000&&q.entryReady!==false&&q.bestBid>0&&q.bestAsk>=q.bestBid;
         if(!ok){if(this.noteOnce(`q|${o.id}`,now,"RECORD_ONLY",{sym:o.symbol,side:o.side,pb:o.note.pb,kind:o.kind,reason:"没有 Gate 实时盘口（不新增请求）"})){
             this.logCase(now,o.symbol,o.side,o.note.pb,"NO_QUOTE","没有 Gate 实时盘口",o.kind==="F"?"fast":"normal");
@@ -451,7 +484,7 @@ export class LivingEngine{
       }
       return directive;
     }catch(error){
-      this.lastError=String((error as Error)?.stack??error).slice(0,300);this.fallback(now,`研究层出错：${String((error as Error)?.message??error).slice(0,120)}`);
+      this.lastError=String((error as Error)?.stack??error).slice(0,300);this.tickError(now,"研究层",String((error as Error)?.message??error).slice(0,120));
       return undefined;
     }finally{this.lastPlanAt=now;this.lastPlanMs=Date.now()-t0;this.maxPlanMs=Math.max(this.maxPlanMs*.999,this.lastPlanMs);}
   }
@@ -1071,7 +1104,7 @@ export class LivingEngine{
       }
       this.trades.seen=[...seen].slice(-300);
       this.dirty.add(LIVING_KEYS.trades);
-    }catch(error){this.lastError=String((error as Error)?.message??error).slice(0,200);this.fallback(now,`研究层记录出错：${this.lastError}`);}
+    }catch(error){this.lastError=String((error as Error)?.message??error).slice(0,200);this.tickError(now,"研究层记录",this.lastError);}
   }
 
   /** Market-read history (≤ 90 min) + recent decisions for the brain page, trimmed to fit one key. */

@@ -56,7 +56,23 @@ export type PathCapture={features?:(t:Trade)=>Record<string,EntryFeatureValue>|n
 export type TradePathBook={
   version:typeof TRADE_PATH_VERSION;accountStartedAt:number;trades:TradePath[];
   dirty:number[];drop:number[];indexDirty:boolean;
+  /** Write batching (memory only): a new opened trade, its exit or a 30-minute exit-state snapshot asks for a flush at once. */
+  urgent?:boolean;
+  /** Start of the last flush round; between rounds dirty pages wait (samples keep accumulating in memory). */
+  flushedAt?:number;
+  /** A flush round in progress: keep writing until every dirty page is out. */
+  flushing?:boolean;
 };
+/** One write of each changed page at most every 45s (plus at once on new record / exit / exit-state snapshot).
+ *  A restart loses at most this much of the in-memory samples; the path stays continuous (minute points just get coarser). */
+export const PATH_FLUSH_MS=45_000;
+/** Whether the trade-path pages should be written now. Starts a flush round when due; the round ends once nothing is dirty. */
+export function pathFlushDue(book:TradePathBook,now:number,everyMs=PATH_FLUSH_MS){
+  if(!book.dirty.length&&!book.indexDirty&&!book.drop.length){book.flushing=false;book.urgent=false;return false;}
+  if(book.flushing)return true;
+  if(book.urgent||book.indexDirty||book.drop.length>0||now-(book.flushedAt??0)>=everyMs){book.flushing=true;book.flushedAt=now;return true;}
+  return false;
+}
 export type TradePathPage={version:typeof TRADE_PATH_PAGE_VERSION;accountStartedAt:number;page:number;trades:TradePath[]};
 export type TradePathIndex={version:typeof TRADE_PATH_PAGE_VERSION;accountStartedAt:number;pages:number[]};
 export type PathWrite={op:'put';page:number;value:TradePathPage}|{op:'delete';page:number}|{op:'index';value:TradePathIndex};
@@ -115,6 +131,7 @@ export function commitPathWrite(book:TradePathBook,job:PathWrite){
     if(at>=0)book.dirty.splice(at,1);
   }else if(job.op==='index')book.indexDirty=false;
   else book.drop.shift();
+  if(!book.dirty.length&&!book.indexDirty&&!book.drop.length){book.flushing=false;book.urgent=false;}
 }
 
 const num=(v:unknown)=>typeof v==="number"&&Number.isFinite(v)?Math.round(v*1e6)/1e6:null;
@@ -160,14 +177,14 @@ export function observeTradePaths(book:TradePathBook,state:ForwardState,executio
       row={id:t.id,symbol:t.symbol,side:t.side,entry:t.entryPrice,qty:t.quantity,notional:t.notional,entryFee:t.entryFee,openedAt:t.openedAt,
         exit:null,exitAt:null,net:null,hold:[],after:[],page,...(x?{x}:{})};
       if(!book.trades.some(item=>(item.page??0)===page))book.indexDirty=true;
-      book.trades.unshift(row);byId.set(t.id,row);markDirty(book,page);changed=true;
+      book.trades.unshift(row);byId.set(t.id,row);markDirty(book,page);changed=true;if(!t.unopened)book.urgent=true;
     }
     if(row.hold.length<=1&&rebuildFromBars(row,bars?.[t.symbol],t.closedAt??now)){markDirty(book,row.page??0);changed=true;}
     const stage=state.environmentContext?.environment??null;
     if(t.status==='CLOSED'&&row.exit==null&&t.exitPrice!=null&&t.closedAt!=null){
       row.exit=t.exitPrice;row.exitAt=t.closedAt;row.net=t.netPnl;row.qty=t.realization?.initialQuantity??row.qty;
       const exitMin=Math.max(0,Math.floor((t.closedAt-t.openedAt)/60_000));
-      note(row.hold,exitMin,t.exitPrice);markDirty(book,row.page??0);changed=true;
+      note(row.hold,exitMin,t.exitPrice);markDirty(book,row.page??0);changed=true;if(!t.unopened)book.urgent=true;
       try{
         const peakPct=Math.max(bestFavorable(row),row.peak?.pct??0),exitPct=favorablePct(row.side,row.entry,t.exitPrice);
         row.end={...pathState(t,stage,exitMin,exitPct),trigger:str(t.exitAudit?.trigger)??str(t.exitReason),detail:str(t.exitAudit?.detail)?.slice(0,200)??null,
@@ -187,7 +204,7 @@ export function observeTradePaths(book:TradePathBook,state:ForwardState,executio
           if(!t.unopened){
             const track=row.track??[];
             if(track.length<TRACK_CAP&&(!track.length||minute-track.at(-1)!.m>=TRACK_EVERY)){
-              row.track=[...track,pathState(t,stage,minute,pct)];markDirty(book,row.page??0);changed=true;
+              row.track=[...track,pathState(t,stage,minute,pct)];markDirty(book,row.page??0);changed=true;book.urgent=true;
             }
           }
         }

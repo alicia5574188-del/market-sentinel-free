@@ -44,9 +44,9 @@ function packCases(cases:Case[]):Case[][]|null{
 }
 const BUCKETS_KEPT=24*6;// in memory: last 24 h (export also reads D1)
 
-export type Gate="OPEN"|"PAUSED_OFF"|"COMPUTE_ONLY"|"FALLBACK"|"WARMING"|"FAST_OWNS"|"NO_BASKET"|"NOT_LOADED";
+export type Gate="OPEN"|"PAUSED_OFF"|"COMPUTE_ONLY"|"FALLBACK"|"QUOTES_STALE"|"WARMING"|"FAST_OWNS"|"NO_BASKET"|"NOT_LOADED";
 export const GATE_LABEL:Record<Gate,string>={OPEN:"能开单（在找机会）",PAUSED_OFF:"研究层关着",COMPUTE_ONLY:"只计算，不开单",
-  FALLBACK:"出错或报价断了，自动降级为只计算",WARMING:"市场还读不出来（暖机/数据不够）",FAST_OWNS:"集体异动进行中，普通开单让给快速通道",
+  FALLBACK:"出错或报价断了，自动降级为只计算（旧版，已取消）",QUOTES_STALE:"所有实时报价断了，暂不开新单（平仓照常）",WARMING:"市场还读不出来（暖机/数据不够）",FAST_OWNS:"集体异动进行中，普通开单让给快速通道",
   NO_BASKET:"还没选出一篮子币",NOT_LOADED:"研究层还没恢复"};
 export type Layer="L1_MARKET"|"FILTER"|"RANK"|"CLUSTER"|"L2_WEAK"|"BUSY"|"NO_LOCATION"|"RISK"|"WATCH"|"WATCH_END"|"CONFIRM_FAIL"|
   "NO_QUOTE"|"COMPUTE_ONLY"|"SWITCH_OFF"|"REJECTED"|"OPENED"|"FAST_FLOW_BLOCK"|"FAST_SKIP"|"FAST_PICK"|"L1_SIZED"|"FOLLOW_EDGE"|"COOLDOWN"|"ENV_MISMATCH"|"ENV_PICK"|"SPECIAL_ONLY"|

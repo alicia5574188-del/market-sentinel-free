@@ -64,7 +64,7 @@ import {RunLogArchiver} from '../lib/run-log-archiver.ts';
 import {ARCHIVE_SEGMENT_SIZE,archiveFileName,buildArchiveFile,countArchive,readEquityFor,readMeta,readSegment,readStagesFor,segmentCount,writeMeta,
   type ArchiveCursor,type ArchiveMode,type D1Like} from '../lib/run-log-archive.ts';
 import {STAGE_CHANGE_CAP} from '../lib/stage-chronicle.ts';
-import {PATH_CAP,adoptLegacyPaths,bookFromStoredPaths,commitPathWrite,emptyTradePathBook,exportTradePaths,observeTradePaths,peekPathWrite,pendingPathWrites,pathColumns,pathComplete,pruneGhostPaths,pruneOrphanPaths,TRADE_PATH_INDEX_KEY,TRADE_PATH_KEY,TRADE_PATH_PAGE_PREFIX,type TradePathBook,type TradePathIndex,type TradePathPage} from '../lib/trade-path.ts';
+import {PATH_CAP,pathFlushDue,adoptLegacyPaths,bookFromStoredPaths,commitPathWrite,emptyTradePathBook,exportTradePaths,observeTradePaths,peekPathWrite,pendingPathWrites,pathColumns,pathComplete,pruneGhostPaths,pruneOrphanPaths,TRADE_PATH_INDEX_KEY,TRADE_PATH_KEY,TRADE_PATH_PAGE_PREFIX,type TradePathBook,type TradePathIndex,type TradePathPage} from '../lib/trade-path.ts';
 import {emptyOrderJournal,observeOrderJournal,ORDER_JOURNAL_CAP,ORDER_JOURNAL_KEY,restoreOrderJournal,type OrderJournal} from '../lib/order-journal.ts';
 import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
 import {confirmationRealityView} from '../lib/confirmation-reality.ts';
@@ -1995,6 +1995,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private async persistTradePaths(){
     if(!this.tradePathsLoaded||!this.tradePathsPending)return;
+    if(!pathFlushDue(this.tradePaths,Date.now()))return;// batched: changed pages wait in memory until the next flush round
     const jobs=pendingPathWrites(this.tradePaths,8);
     if(!jobs.length){this.tradePathsPending=false;return;}
     const reservation=this.reserveCriticalWrites(jobs.length,"trade-path");
@@ -2135,7 +2136,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           ...Object.values(this.runtime.live.positions).flatMap(p=>p?.mirrorSourceId?[p.mirrorSourceId]:[])]);
         const closures=next.state.history.filter(t=>bound.has(t.id)&&!this.mirrorClosures.has(t.id));
         for(const t of closures)prepared.entries[`${LIVE_PARITY_PREFIX}source-close:${t.id}`]=structuredClone(t);
-        const pathJobs=this.tradePathsLoaded?pendingPathWrites(this.tradePaths,8):[];
+        const pathJobs=this.tradePathsLoaded&&pathFlushDue(this.tradePaths,now)?pendingPathWrites(this.tradePaths,8):[];
         const pathDeletes:string[]=[];
         for(const job of pathJobs){
           if(job.op==='delete')pathDeletes.push(`${TRADE_PATH_PAGE_PREFIX}${job.page}`);
@@ -4881,11 +4882,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }catch{/* 只是记录，失败不能碰交易 */}
   }
   /** compact public summary of the research layer (no positions, no keys): boot, backfill progress, external requests, trades, predictor */
+  /** In-memory alarm-loop timing (diagnosis of quote gaps): alarm runs >10s and gaps >10s between two alarm starts, last 8 each. */
+  private alarmStats={lastStartAt:0,lastMs:0,slow:[] as {at:number;ms:number}[],gaps:[] as {at:number;ms:number}[]};
   private dynamicHealth(now:number){
     try{const d=this.dynamic,v=d.view(now),b=v.backfill;
       return {version:v.version,booted:v.booted,bootError:v.bootError,lastError:v.lastError,lastStepAt:v.lastStepAt,maxStepMs:v.maxStepMs,
         store:{error:v.store.error,rowsToday:v.store.rowsToday,deferred:v.store.deferred,failures:v.store.failures},
-        backfill:{done:b.done,total:b.total,pct:b.pct,working:b.working,reqToday:b.reqToday,errTotal:b.errTotal,blocked:b.blocked,venues:"bybit/okx/kucoin (never Gate)"},
+        backfill:{done:b.done,total:b.total,pct:b.pct,working:b.working,reqToday:b.reqToday,errTotal:b.errTotal,blocked:b.blocked,venues:"bybit/okx/kucoin (never Gate)",
+          pages:b.pages,reqLastHour:b.reqLastHour,lastProgressAt:b.lastProgressAt,nextRunAt:b.nextRunAt,stepRunning:!!this.dynamicWork,lastStepMs:d.lastStepMs},
         shadowTrades:v.shadowTrades,tradesLoaded:v.tradesLoaded,replayUnits:v.replay.unitsDone,allowed:v.allowed.length,
         predictor:{ready:v.predictor.ready,playbooks:v.predictor.playbooks,scored:v.predictor.track.n,ms:v.predictor.ms}};
     }catch(error){return {error:safeError(error)};}
@@ -4913,11 +4917,20 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
    * external-venue request per 15 s (never Gate) and a few D1 statements. Live 5m bars come from strategyCandles (the external
    * 5m refresh the worker already does — no extra request). Its events are copied into the living run log.
    */
+  private backfillWork:Promise<unknown>|null=null;
   private launchDynamicWork(now:number){
     try{
-      if(this.dynamicWork||now-this.dynamic.lastStepAt<5_000)return;
       const db=(this.env as {DB?:unknown}).DB?(this.env.DB as unknown as D1Like):null;
       const universe=this.strategyPathSymbols().filter(s=>this.marketHub.supports(s));
+      // history download is driven by this alarm on its own: while a long research step runs (analysis / replays can take
+      // minutes), a light tick still fetches the next paced page (one every 15 s shared with the step, never Gate)
+      if(this.dynamicWork){
+        if(!this.backfillWork&&this.dynamic.booted){
+          const t=this.dynamic.backfillTick(now,{universe,db,fetch:venueFetch}).catch(()=>false);
+          this.backfillWork=t;this.ctx.waitUntil(t.finally(()=>{if(this.backfillWork===t)this.backfillWork=null;}));}
+        return;
+      }
+      if(now-this.dynamic.lastStepAt<5_000)return;
       const daily:Record<string,(typeof this.turnDailyCandles)[string]|undefined>={};
       for(const s of [...universe,"BTC_USDT"])daily[s]=this.turnDailyCandles[s]??this.htfDaily[s];// external daily rows already in memory (no request)
       // burst-leader shadow trades (followed by the engine on its own 1m tape) become pool trades of the research layer
@@ -5060,6 +5073,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         lastFailureAt: this.runtime.feedQuality.lastFailureAt, lastFailureSymbol: this.runtime.feedQuality.lastFailureSymbol,
         lastError: this.runtime.feedQuality.lastError };
     }
+    if(this.alarmStats.lastStartAt>0){const gap=now-this.alarmStats.lastStartAt;
+      if(gap>10_000){this.alarmStats.gaps.push({at:this.alarmStats.lastStartAt,ms:gap});if(this.alarmStats.gaps.length>8)this.alarmStats.gaps.shift();}}
+    this.alarmStats.lastStartAt=now;
     this.runtime.lastAlarmAt = now;
     this.runtime.alarmCount += 1;
     let subrequests = 0;
@@ -5108,7 +5124,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.runtime.state = "RECONNECTING";
       this.runtime.lastError = safeError(error);
     } finally {
-      const finishedAt = Date.now();
+      const finishedAt = Date.now(),took=finishedAt-now;
+      this.alarmStats.lastMs=took;
+      if(took>10_000){this.alarmStats.slow.push({at:now,ms:took});if(this.alarmStats.slow.length>8)this.alarmStats.slow.shift();}
       this.runtime.lastAlarmAt = finishedAt;
       this.runtime.subrequestCount += subrequests;
       this.runtime.maxSubrequestsInAlarm = Math.max(this.runtime.maxSubrequestsInAlarm, subrequests);
@@ -5334,6 +5352,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           runLogArchive:this.archiveView(Date.now()),
           livingRunLog:this.livingLogView(Date.now()),
           dynamicResearch:this.dynamicHealth(Date.now()),
+          alarmLoop:{lastMs:this.alarmStats.lastMs,slow:this.alarmStats.slow,gaps:this.alarmStats.gaps},
           ghostPaths:{removed:this.ghostPathsRemoved,remaining:this.ghostPathsRemaining,error:this.ghostPathError},
           incompleteLog:{rowsRemoved:this.incompleteRowsRemoved,rowsRemaining:this.incompleteRowsRemaining,error:this.incompleteRowError,
             orphanPathsRemoved:this.orphanPathsRemoved,orphanPathsRemaining:this.orphanPathsRemaining}},

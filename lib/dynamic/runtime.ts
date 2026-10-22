@@ -107,26 +107,9 @@ export class DynamicResearch{
       for(const [k,ts] of [...this.unsaved]){const s=this.series.get(k);if(!s){this.unsaved.delete(k);continue;}
         if(await this.writeBars(db,s.sym,s.iv,[],[...ts],now))this.unsaved.delete(k);else break;}
       if(now-this.lastLiveFlushAt>=STEP.liveFlushMs)await this.flushLive(db,now);
-      // 5) one request (paced)
-      const job=nextJob(this.bf,now,this.universe,{minGapMs:this.opts.minGapMs});
-      if(job&&this.loaded.has(job.key)){
-        const url=pageUrl(job.venue,job.sym,job.iv,job.endSec,job.limit);
-        try{if(!url)throw new Error("symbol");
-          const body=await input.fetch(url),bars=parsePage(job.venue,job.iv,body,Math.floor(now/1000));
-          const s=this.series.get(job.key)!,lastBefore=s.last,finished=onPage(this.bf,job,bars,now);
-          s.merge(bars);
-          if(bars.length&&!await this.writeBars(db,job.sym,job.iv,bars,[],now)){const u=this.unsaved.get(job.key)??new Set();for(const b of bars)u.add(chunkStart(s.iv,b.t));this.unsaved.set(job.key,u);}
-          s.trim(keepOf(job.sym,job.iv));
-          if(job.kind==="back"&&bars.length){
-            if(isShortIv(job.iv)){if(this.liveFrom[job.key]==null&&s.last!=null){this.liveFrom[job.key]=s.last+IV_SEC[job.iv];this.liveNew.add(job.key);}this.unitQueue.length=0;}// re-plan units (newest first)
-            else this.dirty.add(job.key);}
-          if(finished){this.log(now,"BACKFILL",`${job.sym.replace("_USDT","")} ${job.iv} 历史下载完：${this.bf.series[job.key]?.bars??s.n} 根，从 ${this.bf.series[job.key]?.oldest?new Date(this.bf.series[job.key]!.oldest!*1000).toISOString().slice(0,10):"-"}（${job.venue}）`);
-            if(isShortIv(job.iv)){this.liveFrom[job.key]??=(s.last??Math.floor(now/1000))+IV_SEC[job.iv];this.liveNew.add(job.key);}else this.dirty.add(job.key);}
-          else if(job.kind==="tail"&&this.bf.series[job.key]?.done&&s.last!==lastBefore)(isShortIv(job.iv)?this.liveNew:this.dirty).add(job.key);
-          if(bars.length&&job.sym==="BTC_USDT"&&job.iv==="1d")for(const sym of this.universe)if(this.bf.series[seriesKey(sym,"1d")]?.done)this.dirty.add(seriesKey(sym,"1d"));
-        }catch(error){onFailure(this.bf,job,error,now);
-          const p=this.bf.series[job.key];if(p&&p.fails%3===0)this.log(now,"ERROR",`${job.sym} ${job.iv} ${job.venue} 下载失败 ${p.fails} 次：${safe(error)}`);}
-      }
+      // 5) one request (paced). The worker also calls backfillTick() from its alarm while a long step runs, so history keeps
+      //    coming in at the same pace (one request every minGapMs, shared) whether or not the page is open.
+      {const done0=this.doneCount();if(await this.pageOnce(now,db,input.fetch))await this.saveBackfill(db,now,this.doneCount()!==done0);}
       // 6) live evaluation of series that got a new closed bar
       let lives=0;for(const k of [...this.liveNew]){if(lives>=STEP.live)break;this.liveNew.delete(k);const s=this.series.get(k);if(!s||this.liveFrom[k]==null)continue;this.evalLive(s);lives++;}
       // 7) history units (one chunk each) once a series is complete
@@ -147,6 +130,51 @@ export class DynamicResearch{
       this.lastError=null;
     }catch(error){this.lastError=safe(error);this.store.failures++;this.store.error=this.lastError;}
     finally{this.lastStepAt=now;this.lastStepMs=Date.now()-t0;this.maxStepMs=Math.max(this.maxStepMs,this.lastStepMs);}
+  }
+  private bfBusy=false;private wq:Promise<unknown>=Promise.resolve();
+  /** at most one backfill request in flight across step() and backfillTick(); pacing is nextJob's minGapMs (≤4/min) */
+  private async pageOnce(now:number,db:D1Like,fetch:Fetch):Promise<boolean>{
+    if(this.bfBusy)return false;this.bfBusy=true;
+    try{
+      const job=nextJob(this.bf,now,this.universe,{minGapMs:this.opts.minGapMs});
+      if(job&&this.loaded.has(job.key)){
+        const url=pageUrl(job.venue,job.sym,job.iv,job.endSec,job.limit);
+        try{if(!url)throw new Error("symbol");
+          const body=await fetch(url),bars=parsePage(job.venue,job.iv,body,Math.floor(now/1000));
+          const s=this.series.get(job.key)!,lastBefore=s.last,finished=onPage(this.bf,job,bars,now);
+          s.merge(bars);
+          if(bars.length&&!await this.writeBars(db,job.sym,job.iv,bars,[],now)){const u=this.unsaved.get(job.key)??new Set();for(const b of bars)u.add(chunkStart(s.iv,b.t));this.unsaved.set(job.key,u);}
+          s.trim(keepOf(job.sym,job.iv));
+          if(job.kind==="back"&&bars.length){
+            if(isShortIv(job.iv)){if(this.liveFrom[job.key]==null&&s.last!=null){this.liveFrom[job.key]=s.last+IV_SEC[job.iv];this.liveNew.add(job.key);}this.unitQueue.length=0;}// re-plan units (newest first)
+            else this.dirty.add(job.key);}
+          if(finished){this.log(now,"BACKFILL",`${job.sym.replace("_USDT","")} ${job.iv} 历史下载完：${this.bf.series[job.key]?.bars??s.n} 根，从 ${this.bf.series[job.key]?.oldest?new Date(this.bf.series[job.key]!.oldest!*1000).toISOString().slice(0,10):"-"}（${job.venue}）`);
+            if(isShortIv(job.iv)){this.liveFrom[job.key]??=(s.last??Math.floor(now/1000))+IV_SEC[job.iv];this.liveNew.add(job.key);}else this.dirty.add(job.key);}
+          else if(job.kind==="tail"&&this.bf.series[job.key]?.done&&s.last!==lastBefore)(isShortIv(job.iv)?this.liveNew:this.dirty).add(job.key);
+          if(bars.length&&job.sym==="BTC_USDT"&&job.iv==="1d")for(const sym of this.universe)if(this.bf.series[seriesKey(sym,"1d")]?.done)this.dirty.add(seriesKey(sym,"1d"));
+        }catch(error){onFailure(this.bf,job,error,now);
+          const p=this.bf.series[job.key];if(p&&p.fails%3===0)this.log(now,"ERROR",`${job.sym} ${job.iv} ${job.venue} 下载失败 ${p.fails} 次：${safe(error)}`);}
+      }
+      return !!job&&this.loaded.has(job.key);
+    }finally{this.bfBusy=false;}
+  }
+  /** alarm-driven backfill between (or during) research steps: one paced page, then the progress is saved (≤ once a minute,
+   *  at once when a series finishes) so a restart loses at most a minute and the done counter never goes back. Never throws. */
+  async backfillTick(now:number,input:{universe:readonly string[];db:D1Like|null;fetch:Fetch}):Promise<boolean>{
+    const db=input.db;if(!db||!this.booted)return false;
+    try{this.universe=trackedSymbols(input.universe);
+      const done0=this.doneCount(),did=await this.pageOnce(now,db,input.fetch);
+      if(did)await this.saveBackfill(db,now,this.doneCount()!==done0);
+      return did;
+    }catch(error){this.lastError=safe(error);return false;}
+  }
+  private doneCount(){let n=0;for(const p of Object.values(this.bf.series))if(p.done)n++;return n;}
+  private lastBfSaveAt=0;
+  private async saveBackfill(db:D1Like,now:number,force:boolean){
+    // bars first: progress is only stored while every fetched page is in D1, so a restart never skips a page it lost
+    if(this.unsaved.size||(!force&&now-this.lastBfSaveAt<60_000))return;
+    const j=JSON.stringify(this.bf);if(this.metaSent.backfill===j)return;
+    this.lastBfSaveAt=now;if(await writeMeta(db,this.store,{backfill:this.bf},now))this.metaSent.backfill=j;
   }
   private async saveMeta(db:D1Like,now:number){
     const dirtyLive=[...this.tsrc.values()].some(s=>s.dirty);
@@ -208,7 +236,11 @@ export class DynamicResearch{
       for(const s of ds){s.dirty=false;if(s.k.startsWith("u|"))this.unitsPending.delete(s.k.slice(2));}this.recount();}
   }
   /** rewrite the chunks touched by `bars` (and/or the given chunk starts), merging what D1 already holds (memory is trimmed) */
-  private async writeBars(db:D1Like,sym:string,iv:Iv,bars:readonly Bar[],starts0:readonly number[],now:number){
+  /** chunk writes one at a time (step and backfillTick can both write; each read-merge-write sees the previous one) */
+  private writeBars(db:D1Like,sym:string,iv:Iv,bars:readonly Bar[],starts0:readonly number[],now:number):Promise<boolean>{
+    const run=this.wq.then(()=>this.writeBarsNow(db,sym,iv,bars,starts0,now));this.wq=run.catch(()=>undefined);return run;
+  }
+  private async writeBarsNow(db:D1Like,sym:string,iv:Iv,bars:readonly Bar[],starts0:readonly number[],now:number){
     const starts=[...new Set([...bars.map(b=>chunkStart(iv,b.t)),...starts0])];if(!starts.length)return true;
     const tmp=new Series(sym,iv),mem=this.get(sym,iv);
     for(const t0 of starts){
