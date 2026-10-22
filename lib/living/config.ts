@@ -17,12 +17,15 @@ export const LIVING_MAX_VALUE_BYTES=96*1024;
 export type LivingMode="off"|"compute-only"|"paper-enabled";
 export const LIVING_MODES:readonly LivingMode[]=["off","compute-only","paper-enabled"];
 /** C7 items 1-7. */
-export const LIVING_ITEMS=["fastProtect","fastFollow","newSource","noChase","liqSafety","thesisExit","sizing"] as const;
+/** burstLeader (burst-leader-v1): open only on a sudden market-wide burst (1–3 leaders, 1.5% risk, wide stop, burst hold); every
+ * other entry is recorded only. */
+export const LIVING_ITEMS=["fastProtect","fastFollow","newSource","noChase","liqSafety","thesisExit","sizing","burstLeader"] as const;
 export type LivingItem=typeof LIVING_ITEMS[number];
 export type LivingItems=Record<LivingItem,boolean>;
 export const LIVING_ITEM_LABELS:Record<LivingItem,string>={
   fastProtect:"1 快速保护",fastFollow:"2 快速跟进",newSource:"3 资金意图开单（五步闭环）",noChase:"4 到位置再确认（不追价）",
-  liqSafety:"5 维持保证金率≤2%、止损≤爆仓距离40%",thesisExit:"6 持有理由没了就走",sizing:"7 证据倍数仓位"};
+  liqSafety:"5 维持保证金率≤2%、止损≤爆仓距离40%",thesisExit:"6 持有理由没了就走",sizing:"7 证据倍数仓位",
+  burstLeader:"8 只做全市场突然爆发：选 1-3 个领涨币，大仓位宽止损（其它开单只记录）"};
 
 export type LivingConfig={version:typeof LIVING_VERSION;mode:LivingMode;items:LivingItems;updatedAt:number;
   /** First moment paper-enabled acted on the account (run-log rule_epoch boundary). */

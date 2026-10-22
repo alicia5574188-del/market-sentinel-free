@@ -64,7 +64,7 @@ export const BRAIN_EXIT:Record<string,string>={
   LIVING_INTENT_FEAR_LOCK:"多头开始踩踏（恐慌），锁利润后被打到",LIVING_THESIS_TIMEOUT:"拿到计划时长，理由没兑现",LIVING_GUARD_STOP:"打到研究层收紧后的保护价",
   LIVING_FAST_LIQ_GUARD:"集体异动：离爆仓太近，先平",LIVING_FAST_TIGHTEN:"集体异动：收紧止损后被打到",LIVING_FAST_CONFIRM_EXIT:"集体异动确认：亏着的单平掉",
   LIVING_FAST_BREAKEVEN:"集体异动：拉到保本后被打到",LIVING_FAST_GIVEBACK:"顺势单利润回吐就走",LIVING_FAST_TIME:"快速跟进 10 分钟没走出来",
-  LIVING_FAST_FAKE:"集体异动是假动作，平掉",LIVING_FAST_EXHAUST:"集体异动力竭，平掉",LIVING_THESIS_FLIP:"市场判断反了",LIVING_THESIS_STRUCTURE:"结构破了",
+  LIVING_FAST_FAKE:"集体异动是假动作，平掉",LIVING_BURST_TRAIL:"爆发单：从最好的位置回吐到 70%，锁利离场",LIVING_BURST_BREAKEVEN:"爆发单：浮盈过 0.8% 后回到保本加手续费",LIVING_BURST_MAXHOLD:"爆发单：拿满 4 小时",LIVING_FAST_EXHAUST:"集体异动力竭，平掉",LIVING_THESIS_FLIP:"市场判断反了",LIVING_THESIS_STRUCTURE:"结构破了",
   LIVING_THESIS_BREAKEVEN:"保本后被打到",LIVING_THESIS_UNREWARDED:"这种做法市场不再给钱",
   LIVING_STOP:"打到开仓止损价",LIVING_FALLBACK_TIMEOUT:"大脑暂停期间拿满计划时长 1.5 倍，兜底平掉",
 };

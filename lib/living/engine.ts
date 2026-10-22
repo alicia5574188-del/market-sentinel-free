@@ -33,6 +33,7 @@ import type {IntentPlaybook,Playbook} from "./thesis.ts";
 import type {LivingDirective,LivingOrder,LivingTradeAction,LivingResult,LivingNote} from "./directive.ts";
 import {bytesOf,r6,r4,corr} from "./util.ts";
 import {dynHold,volUnit,type DynState} from "./hold-dyn.ts";
+import {LEADER,closesOf,burstCheck,rankLeaders,leaderStop,leaderHold,vol6Of} from "./burst-leader.ts";
 import {RunLog,CASES_KEY,CASE_PAGE_KEYS,type Gate,type Layer,type CaseInput,type MarketSample} from "./runlog.ts";
 
 export const LIVING_KEYS={config:LIVING_CONFIG_KEY,basket:`${LIVING_KEY_PREFIX}basket`,fast:`${LIVING_KEY_PREFIX}fast`,
@@ -79,7 +80,10 @@ export type PlanContext={now:number;forward:ForwardView;quotes:Record<string,Quo
 export type LogRow={at:number;k:string;[x:string]:string|number|boolean|null};
 type TradesState={v:1;watches:Watch[];liveNet:Record<string,number[]>;seen:string[];handedOff:string[];peaks:[string,number][];
   recentTriggers:{at:number;t:Trigger[]}[];lastBarAt:number;lastMinuteAt:number;counts:Record<string,number>;
-  pendingEvents:FastEvent[];lastEnd:{id:string;end:string;at:number}|null;fastEntries:Record<string,number>};
+  pendingEvents:FastEvent[];lastEnd:{id:string;end:string;at:number}|null;fastEntries:Record<string,number>;
+  /** burst-leader-v1: last trigger bar per side (seconds) and the trigger waiting 2 minutes for its leader ranking */
+  bl?:BurstLeaderState};
+type BurstLeaderState={last:{LONG:number;SHORT:number};pending:{id:string;side:"LONG"|"SHORT";bar:number;z:number;why:string}|null};
 const initialTrades=():TradesState=>({v:1,watches:[],liveNet:{},seen:[],handedOff:[],peaks:[],recentTriggers:[],lastBarAt:0,lastMinuteAt:0,
   counts:{},pendingEvents:[],lastEnd:null,fastEntries:{}});
 const FAST_CODES=new Set(["LIVING_FAST_LIQ_GUARD","LIVING_FAST_TIGHTEN","LIVING_FAST_CONFIRM_EXIT","LIVING_FAST_BREAKEVEN","LIVING_FAST_GIVEBACK"]);
@@ -170,7 +174,7 @@ export class LivingEngine{
   }
   note(at:number,k:string,data:Record<string,string|number|boolean|null>={}){
     this.log.push({at,k,...data});
-    if(/^(ENTRY|ENTRY_RECORD|RECORD_ONLY|WATCH|EXIT|EXIT_RECORD|PROTECT|PROTECT_RECORD|HOLD_CHANGE|INTENT_MARKET|ENV_MARKET|CLOSED|FAST_|SURGE)/.test(k)){
+    if(/^(ENTRY|ENTRY_RECORD|RECORD_ONLY|WATCH|EXIT|EXIT_RECORD|PROTECT|PROTECT_RECORD|HOLD_CHANGE|INTENT_MARKET|ENV_MARKET|CLOSED|FAST_|SURGE|BURST_ONSET|BURST_RANK)/.test(k)){
       this.decisions.push({at,k,...data});if(this.decisions.length>60)this.decisions.splice(0,this.decisions.length-60);}
     const ck=typeof data.reason==="string"?`${k}:${String(data.reason).replace(/[0-9.+\-%]+/g,"#").slice(0,40)}`:k;
     this.trades.counts[ck]=(this.trades.counts[ck]??0)+1;
@@ -366,6 +370,14 @@ export class LivingEngine{
       this.trades.watches=keep;
       // B5 fast follow
       for(const o of this.fastOrders(ctx,items))orders.push(o);
+      // burst-leader-v1: once a minute the special-condition check; 2 minutes after a trigger the leader ranking → 1–3 orders
+      for(const o of this.burstOrders(ctx,items))orders.push(o);
+      if(items.burstLeader){
+        // only special conditions open: every other entry is recorded, not sent
+        for(let k=orders.length-1;k>=0;k--){const o=orders[k]!;if(o.note.bh)continue;orders.splice(k,1);
+          this.logCase(now,o.symbol,o.side,o.note.pb,"SPECIAL_ONLY","只在全市场突然爆发时开单：普通行情只记录",o.kind==="F"?"fast":"normal");
+          this.note(now,"RECORD_ONLY",{sym:o.symbol,side:o.side,pb:o.note.pb,kind:o.kind,reason:"只在全市场突然爆发时开单，这张只记录"});this.endOrder(o,true);}
+      }
       // execution filter: only symbols with a fresh entry-ready Gate quote (no new request)
       const exec=orders.filter(o=>{
         const q=ctx.quotes[o.symbol],ok=!!q&&now-q.observedAt<=10_000&&q.entryReady!==false&&q.bestBid>0&&q.bestAsk>=q.bestBid;
@@ -382,8 +394,8 @@ export class LivingEngine{
         return undefined;
       }
       const directive:LivingDirective={version:"living-v2",items:{...items},
-        actions:actions.filter(a=>FAST_CODES.has(a.code)?items.fastProtect:items.thesisExit),
-        orders:exec.filter(o=>o.kind==="F"?items.fastFollow:items.newSource).sort((a,b)=>(a.kind==="F"?0:1)-(b.kind==="F"?0:1)),
+        actions:actions.filter(a=>a.code.startsWith("LIVING_BURST_")?!!items.burstLeader:FAST_CODES.has(a.code)?items.fastProtect:items.thesisExit),
+        orders:exec.filter(o=>o.note.bh?!!items.burstLeader:o.kind==="F"?items.fastFollow:items.newSource).sort((a,b)=>(a.kind==="F"?0:1)-(b.kind==="F"?0:1)),
         legacyGate:items.newSource?"note":"open"};
       for(const o of exec)if(!directive.orders.includes(o)){this.logCase(now,o.symbol,o.side,o.note.pb,"SWITCH_OFF","对应开关关着",o.kind==="F"?"fast":"normal");this.note(now,"RECORD_ONLY",{sym:o.symbol,side:o.side,pb:o.note.pb,reason:"对应开关关着，只记录"});this.endOrder(o,true);}
       if(this.config.epochStartedAt==null&&(directive.orders.length||directive.actions.length||directive.legacyGate==="note")){
@@ -519,6 +531,17 @@ export class LivingEngine{
     for(const p of views){
       const n=p.living;if(!n||p.price==null)continue;
       const v2=n.v==="living-v2";if(!v2)continue;
+      if(n.bh){
+        // burst-leader-v1: stop + breakeven after +0.8% + 70% trail from +1.5% + 4 hours; nothing else closes it
+        seen.add(p.id);
+        const stop=p.guard!=null?(p.side==="LONG"?Math.max(p.stopPrice,p.guard):Math.min(p.stopPrice,p.guard)):p.stopPrice;
+        const v=leaderHold({side:p.side,entry:p.entryPrice,price:p.price,peak:p.favorable??0,ageMin:(now-p.openedAt)/60_000,stop});
+        try{this.runlog.holdRead(p.id,now,p.openedAt,{coin:null,h:null,market:this.marketIntent?.state??null,code:v.code,env:envTag(this.envs.get(p.symbol),this.menv)});}catch{/* 只是记录 */}
+        if(v.act!=="HOLD"){const prev=this.holds.get(p.id);if(!prev||prev.why!==v.why)this.holds.set(p.id,{why:v.why,code:v.code,at:now});}
+        if(v.act==="EXIT")out.push({tradeId:p.id,action:"EXIT",code:v.code,reason:v.why.slice(0,160)});
+        else if(v.act==="GUARD"&&v.stop!=null)out.push({tradeId:p.id,action:"GUARD",stop:r6(v.stop),code:v.code,reason:v.why.slice(0,160)});
+        continue;
+      }
       if(n.k==="F"&&!handed.has(p.id))continue;
       seen.add(p.id);
       const pb=(n.k==="F"?"follow":n.pb) as IntentPlaybook;
@@ -636,6 +659,66 @@ export class LivingEngine{
     }
     return out;
   }
+  private lastBurstMinute=0;
+  /**
+   * burst-leader-v1. Once a minute (on the last closed 1m bar): the special-condition check, logged whatever the verdict (timeline
+   * bucket `burst`; a BURST_CHECK row when anything but NONE/WARMING). On TRIGGER the side is locked for 3 hours and the ranking runs on
+   * the bar 2 minutes later (BURST_RANK row with the top rows and why each other coin was not picked) → up to 3 orders, 1.5% risk each.
+   */
+  private burstOrders(ctx:PlanContext,items:LivingItems):LivingOrder[]{
+    const now=ctx.now,mk=Math.floor((now-3_000)/60_000);if(mk===this.lastBurstMinute||!this.basket)return[];this.lastBurstMinute=mk;
+    const out:LivingOrder[]=[];
+    try{
+      const bar=(mk-1)*60,st=(this.trades.bl??={last:{LONG:0,SHORT:0},pending:null});
+      const alts=this.basket.members.filter(s=>s!=="BTC_USDT"&&s!=="ETH_USDT");
+      const c=closesOf(s=>this.tape.closed1(s,now),alts,bar-(LEADER.sigmaMin+LEADER.quietMin+LEADER.win+2)*60);
+      const open=ctx.forward.positions.filter(p=>p.entryContext?.living?.bh).length;
+      const p=st.pending;
+      if(p&&bar>=p.bar+LEADER.enterAfterMin*60){
+        st.pending=null;
+        const originBar=p.bar-LEADER.win*60,nowBar=p.bar+LEADER.enterAfterMin*60;
+        if(bar>nowBar+120){this.note(now,"BURST_RANK",{ep:p.id,side:p.side,reason:"选币时间已过（程序停过），这一段不做"});}
+        else{
+          const busy=new Set(ctx.forward.positions.map(x=>x.symbol)),top=Math.max(0,Math.min(LEADER.top,LEADER.maxOpen-open));
+          const r=rankLeaders({side:p.side,alts,c,originBar,nowBar,vol6:s=>vol6Of(this.tape.closed1(s,now),originBar),volume:s=>this.tape.meta.get(s)?.volume24hUsd??0,
+            filter:s=>this.hardFilter(ctx,s,items),skip:s=>busy.has(s)?"已有持仓":null,top});
+          const pc=(v:number|null)=>v==null?"-":`${v>=0?"+":""}${(v*100).toFixed(2)}`;
+          const rows=r.rows.slice(0,10).map(x=>`${x.sym.replace("_USDT","")} rs${pc(x.rs)} v${x.vol6==null?"-":(x.vol6*100).toFixed(3)} ${Math.round(x.liq/1e6)}M ${x.ok?`#${x.rank}`:x.why.slice(0,24)}`).join("｜");
+          const text=`${p.side==="LONG"?"做多":"做空"}爆发 ${p.id}：一篮子从起点 ${pc(r.basket)}%，${r.rows.filter(x=>x.ok).length} 个合格，选 ${r.picks.map(x=>x.sym.replace("_USDT","")).join("/")||"无"}${top<LEADER.top?`（已持有 ${open} 笔爆发单，最多 ${LEADER.maxOpen}）`:""}`;
+          this.note(now,"BURST_RANK",{ep:p.id,side:p.side,basket:r.basket==null?null:r6(r.basket),eligible:r.rows.filter(x=>x.ok).length,picks:r.picks.map(x=>x.sym).join(","),top:rows.slice(0,900),reason:text.slice(0,200)});
+          try{this.runlog.event(now,"BURST_RANK",text);}catch{/* 只是记录 */}
+          const why0=`集体异动${p.side==="LONG"?"普涨":"普跌"}：${p.why}`.slice(0,160);
+          for(const x of r.rows.slice(0,8))if(!r.picks.includes(x)&&x.rs!=null&&x.rs>0)
+            this.logCase(now,x.sym,p.side,LEADER.pb,"FAST_SKIP",x.ok?`排第 ${x.rank}，只取前 ${top}`:x.why,"fast",why0);
+          for(const x of r.picks){
+            const last=this.tape.last(x.sym),origin=c.get(x.sym)?.get(originBar);if(!last||!origin)continue;
+            const ls=leaderStop(p.side,last.mid,origin),ct=ctx.contracts[x.sym];
+            const chk=stopCheck({side:p.side,price:last.mid,stop:ls.stop,min:LEADER.stopMin*.999,max:LEADER.stopMax*1.001,leverageMax:ct?.leverageMax??10,mmr:ct?.maintenanceRate??null,liqSafety:true});
+            if(!chk.ok){this.logCase(now,x.sym,p.side,LEADER.pb,"RISK",chk.reason,"fast",why0);continue;}
+            const why=`爆发选币第 ${x.rank}：从起点跑赢一篮子 ${pc(x.rs)}%，6 小时波动 ${((x.vol6??0)*100).toFixed(3)}%/分钟；止损在起点外 ${(chk.rate*100).toFixed(2)}%，风险 1.5%；${p.why}`;
+            this.logCase(now,x.sym,p.side,LEADER.pb,"FAST_PICK",why.slice(0,70),"fast",why0);
+            out.push({id:`lb-${p.id}-${x.sym}`,symbol:x.sym,side:p.side,stop:chk.stop,riskRate:LEADER.riskRate,multiple:1,kind:"F",episodeId:p.id,
+              episodeCap:LEADER.episodeCap,winner:true,reason:why.slice(0,240),
+              note:{v:"living-v2",k:"F",pb:LEADER.pb,th:null,ep:p.id,ev:"fast",mult:1,sc:x.score,t:null,n:null,per:null,rk:x.rank,inv:chk.stop,ref:origin,
+                hold:LEADER.maxHoldMin,bh:1,why:why.slice(0,200),in:`BURST/${p.side}`,mk:this.marketIntent?.state??"WARMING",nar:p.why.slice(0,180),
+                evd:`z ${p.z.toFixed(1)}｜rs ${pc(x.rs)}%｜vol6 ${((x.vol6??0)*100).toFixed(3)}%｜24h ${Math.round(x.liq/1e6)}M`}});
+          }
+        }
+      }
+      let chk=burstCheck(c,alts,bar,st.last);
+      if(chk.verdict==="TRIGGER"&&(open>=LEADER.maxOpen||st.pending))chk={...chk,verdict:"BUSY",why:`${chk.why}；但爆发单已有 ${open} 笔（最多 ${LEADER.maxOpen}）`};
+      try{this.runlog.burstCheck(now,chk);}catch{/* 只是记录 */}
+      if(chk.verdict!=="NONE"&&chk.verdict!=="WARMING")
+        this.note(now,chk.verdict==="TRIGGER"?"BURST_ONSET":"BURST_CHECK",{bar:chk.bar,side:chk.side,z:chk.z==null?null:r4(chk.z),breadth:chk.breadth==null?null:r4(chk.breadth),
+          b3:chk.b3==null?null:r6(chk.b3),n:chk.n,verdict:chk.verdict,reason:chk.why.slice(0,200)});
+      if(chk.verdict==="TRIGGER"&&chk.side){
+        const id=`bl-${chk.bar.toString(36)}-${chk.side[0]}`;st.last={...st.last,[chk.side]:chk.bar};st.pending={id,side:chk.side,bar:chk.bar,z:chk.z!,why:chk.why};
+        try{this.runlog.event(now,"BURST_ONSET",chk.why);}catch{/* 只是记录 */}
+      }
+      this.dirty.add(LIVING_KEYS.trades);
+    }catch(error){this.lastError=String((error as Error)?.message??error).slice(0,200);this.note(now,"BURST_CHECK",{verdict:"ERROR",reason:this.lastError});}
+    return out;
+  }
   /** An order that will not be sent again: normal → its watch ends; fast → counts as used for the episode (virtual entry when `used`). */
   private endOrder(o:LivingOrder,used:boolean){
     if(o.kind==="N")this.trades.watches=this.trades.watches.filter(w=>w.id!==o.id);
@@ -678,11 +761,11 @@ export class LivingEngine{
       if(result){
         for(const o of result.opened){
           this.note(now,"ENTRY",{sym:o.symbol,side:o.side,trade:o.tradeId,risk:r4(o.risk),notional:Math.round(o.notional)});
-          try{const pb=o.orderId.startsWith("lf-")?"fast":this.trades.watches.find(w=>w.id===o.orderId)?.playbook??null;
+          try{const pb=o.orderId.startsWith("lf-")?"fast":o.orderId.startsWith("lb-")?LEADER.pb:this.trades.watches.find(w=>w.id===o.orderId)?.playbook??null;
             const pos=forward.positions.find(p=>p.id===o.tradeId);
             this.runlog.count(now,"OPENED");this.runlog.opened(now,{sym:o.symbol,side:o.side,pb:pb??"",trade:o.tradeId});
             const linked=this.runlog.linkTrade(o.symbol,o.side,pb,{id:o.tradeId,openedAt:pos?.openedAt??now,entry:pos?.entryPrice??null,stop:pos?.stopPrice??null});
-            if(!linked&&pb){this.logCase(now,o.symbol,o.side,pb,"OPENED","开出",pb==="fast"?"fast":"normal");
+            if(!linked&&pb){this.logCase(now,o.symbol,o.side,pb,"OPENED","开出",pb==="fast"||pb===LEADER.pb?"fast":"normal");
               this.runlog.linkTrade(o.symbol,o.side,pb,{id:o.tradeId,openedAt:pos?.openedAt??now,entry:pos?.entryPrice??null,stop:pos?.stopPrice??null});}
           }catch{/* 只是记录 */}
           this.trades.watches=this.trades.watches.filter(w=>w.id!==o.orderId);

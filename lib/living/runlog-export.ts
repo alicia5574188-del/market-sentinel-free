@@ -28,6 +28,7 @@ export const FIELD_NOTES:Record<string,unknown>={
     market:"市场意图每分钟的分钟数，如 RISK_OFF/SHORT（真资金做空）、CALM（平静）、WARMING（还读不出来）",last:"段末的市场意图：state 状态、side 方向、conf 把握、allowed 允许的打法/方向；env/envConf 是段末的市场环境和清晰度（v3）",
     env:"v3 市场环境每分钟的分钟数：TREND_UP 上升趋势、TREND_DOWN 下降趋势、CHOP 来回震荡、QUIET 安静窄幅、SPIKE 集体急拉、FLUSH 集体急杀、MIXED 分歧、WARMING 暖机；环境变化也记在 events（ENV_MARKET）",
     mode:"研究层模式：off 关 / compute-only 只计算 / paper-enabled 模拟开单",fast:"快速通道（集体异动）每分钟状态：CALM 平静、ALERT 警报、CONFIRMED 确认",
+    burst:"爆发单（burst-leader-v1）每分钟一次的特殊行情检查，行用 ; 分隔：时间(UTC 分钟),一篮子 3 分钟涨跌的 σ 倍数 z,同向币占比 %,一篮子 3 分钟涨跌(基点),结论。结论：NONE 普通行情、WARMING 数据不够、BREADTH 同向的币不够、NOT_QUIET 之前 45 分钟已经在异动、COOLDOWN 同方向 3 小时内做过、BUSY 爆发单已满、TRIGGER 触发（2 分钟后选币，见 events 的 BURST_ONSET / BURST_RANK）",
     funnel:"这段里候选逐层的计数（每分钟每个候选算一次）：reads 读了几次币、ideas 有打法想法、no_idea 没想法；其余见 layer_labels",
     reasons:"层:原因 的计数（数字换成 #）",open:"段末持仓数",watches:"段末在等位置数",opened:"这段开出的单",blocker:"这一段最主要的没开单原因",events:"状态变化（市场意图、降级、模式、重启、集体异动）",boot:"程序这次启动的编号；同一段有两个编号说明这段里重启过"},
   cases:{id:"案例编号",at:"第一次出现（UTC 毫秒）",sym:"币",side:"方向",pb:"打法代码",pb_label:"打法",kind:"normal 五步闭环 / fast 集体异动",

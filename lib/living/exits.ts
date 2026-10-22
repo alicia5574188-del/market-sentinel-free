@@ -35,6 +35,7 @@ export function fastProtection(input:{positions:PositionView[];ep:Episode|null;e
           out.push({tradeId:p.id,action:"EXIT",code:"LIVING_FAST_LIQ_GUARD",reason:`集体异动警报：离爆仓 ${(liqDist*100).toFixed(2)}%，不到 2.5 倍 60 秒波动或 1.5%，直接平`,
             detail:{episode:ep.id,liqDist:r6(liqDist),r60:r6(r60!)}});continue;
         }
+        if(p.living?.bh)continue;// burst-leader-v1: only its own stop and the liquidation guard
         const stop=p.guard!=null?(s>0?Math.max(p.stopPrice,p.guard):Math.min(p.stopPrice,p.guard)):p.stopPrice;
         const remaining=s*(px-stop)/px;
         if(remaining>FAST.tightenMin){
@@ -43,7 +44,7 @@ export function fastProtection(input:{positions:PositionView[];ep:Episode|null;e
             reason:`集体异动警报：止损收紧到剩余距离的 ${(keep/remaining*100).toFixed(0)}%（${(keep*100).toFixed(2)}%）`,detail:{episode:ep.id,before:r6(stop),after:next}});
         }
       }
-      if(confirmNow){
+      if(confirmNow&&!p.living?.bh){
         const stop=p.guard!=null?(s>0?Math.max(p.stopPrice,p.guard):Math.min(p.stopPrice,p.guard)):p.stopPrice,remaining=s*(px-stop)/px;
         if(signed<0||remaining>FAST.confirmMaxRemaining){
           out.push({tradeId:p.id,action:"EXIT",code:"LIVING_FAST_CONFIRM_EXIT",reason:`集体异动确认：${signed<0?"这笔在亏":"剩余止损距离 "+(remaining*100).toFixed(2)+"%>0.6%"}，平掉`,
@@ -53,7 +54,7 @@ export function fastProtection(input:{positions:PositionView[];ep:Episode|null;e
           if(s*(be-stop)>0&&s*(px-be)>0)out.push({tradeId:p.id,action:"GUARD",stop:be,code:"LIVING_FAST_BREAKEVEN",reason:"集体异动确认：这笔在赚，止损拉到保本加手续费",detail:{episode:ep.id}});
         }
       }
-    }else{
+    }else if(!p.living?.bh){
       const peak=Math.max(input.peaks.get(p.id)??0,signed);input.peaks.set(p.id,peak);
       if(peak>=FAST.withMoveArm&&signed<=peak*(1-FAST.withMoveGiveback))
         out.push({tradeId:p.id,action:"EXIT",code:"LIVING_FAST_GIVEBACK",reason:`顺着这波的单：这一段最高浮盈 ${(peak*100).toFixed(2)}%，回吐 40% 就走`,detail:{episode:ep.id,peak:r6(peak),signed:r6(signed)}});
@@ -83,6 +84,7 @@ export function thesisExits(input:{positions:PositionView[];thesis:Thesis|null;s
   for(const p of input.positions){
     const n=p.living;if(!n||p.price==null)continue;
     const s=d(p.side),signed=s*(p.price/p.entryPrice-1),ageMin=(input.now-p.openedAt)/60_000;
+    if(n.bh)continue;// burst-leader-v1: the burst hold owns this trade's exits (no FAKE / EXHAUST / 10-minute exits)
     if(n.k==="F"&&!input.handedOff.has(p.id)){
       const ep=input.episode;
       if(input.lastEnd&&input.lastEnd.id===n.ep&&input.lastEnd.end==="FAKE"){out.push({tradeId:p.id,action:"EXIT",code:"LIVING_FAST_FAKE",reason:"这一段判成假动作，快速单平掉"});continue;}
