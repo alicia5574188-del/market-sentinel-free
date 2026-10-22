@@ -4899,7 +4899,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(this.dynamicWork||now-this.dynamic.lastStepAt<5_000)return;
       const db=(this.env as {DB?:unknown}).DB?(this.env.DB as unknown as D1Like):null;
       const universe=this.strategyPathSymbols().filter(s=>this.marketHub.supports(s));
-      const task=this.dynamic.step(now,{universe,db,fetch:venueFetch,feed:this.strategyCandles}).then(()=>{
+      const daily:Record<string,(typeof this.turnDailyCandles)[string]|undefined>={};
+      for(const s of [...universe,"BTC_USDT"])daily[s]=this.turnDailyCandles[s]??this.htfDaily[s];// external daily rows already in memory (no request)
+      const task=this.dynamic.step(now,{universe,db,fetch:venueFetch,feed:this.strategyCandles,daily}).then(()=>{
         const engine=this.living;if(!engine)return;
         for(const e of this.dynamic.events)if(e.at>this.dynamicEventAt){try{engine.runlog.event(e.at,`DYN_${e.k}`,e.text);}catch{/* 只是记录 */}}
         this.dynamicEventAt=Math.max(this.dynamicEventAt,...this.dynamic.events.map(e=>e.at));

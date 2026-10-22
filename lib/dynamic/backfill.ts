@@ -2,7 +2,8 @@
  * dynamic-v1: slow, resumable history backfill plan (pure). One request at a time, at most one every `minGapMs` (default 15 s,
  * 4 a minute), external venues only (Bybit → OKX → KuCoin on failure); a venue answering 429 / 403 is skipped for a while
  * (all three refusing → everything pauses), exponential backoff per series.
- * Order (short-term first): BTC/ETH daily + 1h (a few pages, for the state monitor) → 15m → 5m → 1h → BTC/ETH 1m → 4h → daily.
+ * Order: first the newest page of every series (≈ 40 min for ~30 coins: the latest 3.5 days of 5m, 10 days of 15m, 6 weeks of
+ * 1h, …), then each series backwards, short-term first: BTC/ETH daily + 1h → 15m → 5m → 1h → BTC/ETH 1m → 4h → daily.
  * Live tails: 5m bars come from the worker's own external 5m refresh (no request here) and 15m / 1h are built from them; a
  * request tail is made only when a series falls behind (no live feed for it), and for 4h / 1d / 1m after their bar closes.
  * The plan state is small JSON (saved in D1 meta), so a restart / redeploy resumes where it stopped.
@@ -77,8 +78,10 @@ export function nextJob(st:BackfillState,nowMs:number,universe:readonly string[]
     const venue=venueFor(st,p,nowMs);if(!venue)return null;const gap=Math.ceil((want-p.newest)/IV_SEC[iv])+2;
     return {key:seriesKey(sym,iv),sym,iv,kind:"tail",venue,endSec:null,limit:Math.min(PAGE[venue],Math.max(3,gap))};
   }
-  for(const {sym,iv} of list){
-    const p=plan(st,sym,iv);if(p.done||p.retryAt>nowMs)continue;
+  // newest first everywhere: the first (most recent) page of every series before any deeper page, so the latest regimes are
+  // learned within the first hour; then each series backwards in the short-term-first order
+  for(const pass of [0,1])for(const {sym,iv} of list){
+    const p=plan(st,sym,iv);if(p.done||p.retryAt>nowMs||(pass===0&&p.pages>0))continue;
     const venue=venueFor(st,p,nowMs);if(!venue)return null;
     return {key:seriesKey(sym,iv),sym,iv,kind:"back",venue,endSec:p.oldest,limit:PAGE[venue]};
   }

@@ -4,11 +4,14 @@
  * view are synchronous reads of memory. Requests: external public venues only (Bybit / OKX / KuCoin), at most one per
  * BACKFILL.minGapMs. Storage: D1 only (store-d1.ts).
  *
- * Short-term core (5m / 15m / 1h, 1m for BTC/ETH): memory keeps only the newest bars (MEM_KEEP); the full history lives in D1.
+ * Learning starts at once with whatever exists (no waiting for the download to finish):
+ *  - the worker's daily candles (already in memory, external) seed the daily series and the daily state at boot;
  *  - live: the worker's own external 5m bars (strategyCandles, no extra request) are appended, 15m / 1h are built from them;
- *    each series is evaluated only when it got a new closed bar, on its memory window, entries from `liveFrom` on;
- *  - history: once a series' download is complete, its stored chunks are replayed one "unit" (one chunk, ±1 chunk for warm-up
- *    and exits, BTC's matching window for cross-asset rules) per step, entries before `liveFrom`, so CPU per step stays small.
+ *    each series is evaluated only when it got a new closed bar, on its memory window, entries from `liveFrom` (= the newest bar
+ *    when its first history page arrived) on;
+ *  - history arrives newest first; every stored chunk with enough warm-up below it is replayed as one "unit" (one chunk, ±1
+ *    chunk for warm-up and exits, BTC's matching window for cross-asset rules), newest units first, one per step, entries before
+ *    `liveFrom` — so the phase tracker, the forecasts and the allocator update chunk by chunk while the download continues.
  * Daily / 4h (record-only tier): full history in memory, replayed whole when it changes.
  * Shadow trades are stored grouped (dyn_trade_chunks: one row per unit / live day / long series), loaded gradually at boot.
  */
@@ -51,7 +54,7 @@ export class DynamicResearch{
   liveBars=new Map<string,Set<number>>();lastLiveFlushAt=0;lastPruneAt=0;
   /** bar end (s) from which a series is evaluated live; history units cover entries before it */
   liveFrom:Record<string,number>={};
-  unitsDone:Record<string,1>={};unitsPending=new Set<string>();unitQueue:string[]=[];unitsListed=new Set<string>();unitsTotal:Record<string,number>={};
+  unitsDone:Record<string,1>={};unitsPending=new Set<string>();unitQueue:string[]=[];unitsTotal:Record<string,number>={};
   states:DayState[]=[];intra:IntraState[]=[];cycles:Record<string,PlaybookCycle>={};gates:Record<string,Gate>|null=null;
   events:DynEvent[]=[];booted=false;bootError:string|null=null;lastStepAt=0;lastStepMs=0;lastAnalyzeAt=0;lastMetaAt=0;lastError:string|null=null;
   universe:string[]=[];replays=0;analyses=0;liveEvals=0;unitsRun=0;lastBucket:string|null=null;lastIntraBucket:string|null=null;maxStepMs=0;
@@ -65,7 +68,7 @@ export class DynamicResearch{
   drainEvents(){return this.events.slice();}
   get(sym:string,iv:Iv){return this.series.get(seriesKey(sym,iv))??null;}
   /** one bounded piece of work. Never throws. */
-  async step(now:number,input:{universe:readonly string[];db:D1Like|null;fetch:Fetch;feed?:Record<string,readonly FeedBar[]|undefined>}):Promise<void>{
+  async step(now:number,input:{universe:readonly string[];db:D1Like|null;fetch:Fetch;feed?:Record<string,readonly FeedBar[]|undefined>;daily?:Record<string,readonly FeedBar[]|undefined>}):Promise<void>{
     const t0=Date.now();
     try{
       const db=input.db;if(!db){this.lastError="D1 binding missing";return;}
@@ -80,6 +83,7 @@ export class DynamicResearch{
         if(s.n&&this.bf.series[k]?.done)(isShortIv(iv)?this.liveNew:this.dirty).add(k);}
       // 3) the worker's live 5m bars (no request) → 5m, 15m, 1h
       if(input.feed)this.ingest(input.feed,now);
+      if(input.daily)this.seedDaily(input.daily,now);
       // 4) deferred writes
       for(const [k,ts] of [...this.unsaved]){const s=this.series.get(k);if(!s){this.unsaved.delete(k);continue;}
         if(await this.writeBars(db,s.sym,s.iv,[],[...ts],now))this.unsaved.delete(k);else break;}
@@ -94,6 +98,9 @@ export class DynamicResearch{
           s.merge(bars);
           if(bars.length&&!await this.writeBars(db,job.sym,job.iv,bars,[],now)){const u=this.unsaved.get(job.key)??new Set();for(const b of bars)u.add(chunkStart(s.iv,b.t));this.unsaved.set(job.key,u);}
           s.trim(keepOf(job.sym,job.iv));
+          if(job.kind==="back"&&bars.length){
+            if(isShortIv(job.iv)){if(this.liveFrom[job.key]==null&&s.last!=null){this.liveFrom[job.key]=s.last+IV_SEC[job.iv];this.liveNew.add(job.key);}this.unitQueue.length=0;}// re-plan units (newest first)
+            else this.dirty.add(job.key);}
           if(finished){this.log(now,"BACKFILL",`${job.sym.replace("_USDT","")} ${job.iv} 历史下载完：${this.bf.series[job.key]?.bars??s.n} 根，从 ${this.bf.series[job.key]?.oldest?new Date(this.bf.series[job.key]!.oldest!*1000).toISOString().slice(0,10):"-"}（${job.venue}）`);
             if(isShortIv(job.iv)){this.liveFrom[job.key]??=(s.last??Math.floor(now/1000))+IV_SEC[job.iv];this.liveNew.add(job.key);}else this.dirty.add(job.key);}
           else if(job.kind==="tail"&&this.bf.series[job.key]?.done&&s.last!==lastBefore)(isShortIv(job.iv)?this.liveNew:this.dirty).add(job.key);
@@ -104,13 +111,13 @@ export class DynamicResearch{
       // 6) live evaluation of series that got a new closed bar
       let lives=0;for(const k of [...this.liveNew]){if(lives>=STEP.live)break;this.liveNew.delete(k);const s=this.series.get(k);if(!s||this.liveFrom[k]==null)continue;this.evalLive(s);lives++;}
       // 7) history units (one chunk each) once a series is complete
-      await this.listUnits(db);
-      for(let u=0;u<STEP.units&&this.unitQueue.length;u++)await this.runUnit(db,this.unitQueue.shift()!,now);
+      this.planUnits();let units=0;
+      for(;units<STEP.units&&this.unitQueue.length;units++)await this.runUnit(db,this.unitQueue.shift()!,now);
       // 8) daily / 4h whole-series replays
       let replays=0;for(const k of [...this.dirty]){if(replays>=2)break;this.dirty.delete(k);const s=this.series.get(k);if(!s)continue;this.replayLong(s);replays++;}
       await this.flushTrades(db,now);
       // 9) analysis (hourly, or soon after new trades)
-      if(this.tradesLoaded&&(now-this.lastAnalyzeAt>=(this.opts.analyzeEveryMs??3_600_000)||((replays||lives)&&now-this.lastAnalyzeAt>=10*60_000)))this.analyze(now);
+      if(this.tradesLoaded&&(now-this.lastAnalyzeAt>=(this.opts.analyzeEveryMs??3_600_000)||((replays||lives||units)&&now-this.lastAnalyzeAt>=10*60_000)))this.analyze(now);
       // 10) prune short history beyond its depth (+20 %), once a day
       if(now-this.lastPruneAt>=STEP.pruneEveryMs){this.lastPruneAt=now;
         for(const iv of ["5m","15m","1h","1m"] as Iv[]){const d=Math.max(depthOf("BTC_USDT",iv),depthOf("SOL_USDT",iv));await pruneBars(db,this.store,iv,Math.floor(now/1000-d*1.2*86_400),now);}}
@@ -137,8 +144,8 @@ export class DynamicResearch{
       const wm=await readMeta<Record<string,[number,number|null]>>(db,this.store,"watermarks");if(wm&&typeof wm==="object")this.wm=wm;
       const lf=await readMeta<Record<string,number>>(db,this.store,"liveFrom");if(lf&&typeof lf==="object")this.liveFrom=lf;
       const un=await readMeta<Record<string,1>>(db,this.store,"units");if(un&&typeof un==="object")this.unitsDone=un;
-      // a series completed before liveFrom existed: live from its newest stored bar
-      for(const [k,p] of Object.entries(this.bf.series))if(p.done&&isShortIv(p.iv)&&this.liveFrom[k]==null&&p.newest!=null)this.liveFrom[k]=p.newest+IV_SEC[p.iv];
+      // a series with history but no liveFrom (older state): live from its newest stored bar
+      for(const [k,p] of Object.entries(this.bf.series))if(p.pages>0&&isShortIv(p.iv)&&this.liveFrom[k]==null&&p.newest!=null)this.liveFrom[k]=p.newest+IV_SEC[p.iv];
       this.booted=true;this.bootError=null;
       this.log(now,"BOOT",`研究层启动（${DYN_VERSION}）：${POOL.length} 套打法，历史下载进度 ${Object.values(this.bf.series).filter(s=>s.done).length} 条序列完成，已回放历史块 ${Object.keys(this.unitsDone).length} 个；影子交易分批读取中`);
     }catch(error){this.bootError=safe(error);}
@@ -221,16 +228,26 @@ export class DynamicResearch{
       this.wm[wk]=[last+IV_SEC[s.iv],open?.et??null];}
     for(const [d,ts] of byDay)this.putTrades(`l|${s.sym}|${s.iv}|${d}`,s.sym,s.iv,d,ts,false);
   }
-  /** queue the history units of every completed short series (once) */
-  private async listUnits(db:D1Like){
-    if(this.unitQueue.length)return;
-    for(const {sym,iv} of trackedSeries(this.universe)){if(!isShortIv(iv)||!PB_BY_IV.get(iv)?.length)continue;const k=seriesKey(sym,iv);
-      if(this.unitsListed.has(k)||!this.bf.series[k]?.done||this.liveFrom[k]==null||!this.loaded.has(k))continue;
-      if(needsBtc(iv)&&sym!=="BTC_USDT"&&!this.bf.series[seriesKey("BTC_USDT",iv)]?.done)continue;// cross-asset rules need BTC's history first
-      this.unitsListed.add(k);const lf=this.liveFrom[k]!;
-      const starts=(await chunkStarts(db,this.store,sym,iv)).filter(t0=>t0<lf);this.unitsTotal[k]=starts.length;
-      for(const t0 of starts){const u=`${sym}|${iv}|${t0}`;if(!this.unitsDone[u])this.unitQueue.push(u);}
-      if(this.unitQueue.length)return;}
+  /** queue every stored chunk that is ready (warm-up below it downloaded, or the series complete) and not replayed yet, newest
+   * first across all series; BTC's same window must be there first for the cross-asset rules. Pure memory, no query. */
+  planUnits(){
+    if(this.unitQueue.length)return;const out:{u:string;t0:number}[]=[];this.unitsTotal={};
+    const ready=(k:string,t0:number,span:number)=>{const p=this.bf.series[k];if(!p||p.oldest==null)return false;return p.done?t0+span>p.oldest:p.oldest<=t0-span/4;};
+    for(const {sym,iv} of trackedSeries(this.universe)){if(!isShortIv(iv)||!PB_BY_IV.get(iv)?.length)continue;const k=seriesKey(sym,iv),lf=this.liveFrom[k],p=this.bf.series[k];
+      if(lf==null||!p||p.oldest==null||this.unsaved.has(k))continue;const span=CHUNK_SEC[iv];let n=0;
+      for(let t0=chunkStart(iv,lf-1);t0+span>p.oldest;t0-=span){n++;const u=`${sym}|${iv}|${t0}`;if(this.unitsDone[u]||!ready(k,t0,span))continue;
+        if(needsBtc(iv)&&sym!=="BTC_USDT"&&!ready(seriesKey("BTC_USDT",iv),t0,span)&&!this.bf.series[seriesKey("BTC_USDT",iv)]?.done)continue;
+        out.push({u,t0});}
+      this.unitsTotal[k]=n;}
+    out.sort((a,b)=>b.t0-a.t0);this.unitQueue=out.map(x=>x.u);
+  }
+  /** the worker's daily candles (external, already in memory): merged into the daily series so the daily state and the daily /
+   * 4h tier start at boot; the download later replaces them with its own rows */
+  seedDaily(daily:Record<string,readonly FeedBar[]|undefined>,now:number){
+    const nowSec=Math.floor(now/1000);
+    for(const sym of this.universe){const rows=daily[sym];const k=seriesKey(sym,"1d"),s=this.series.get(k);if(!rows?.length||!s||!this.loaded.has(k))continue;
+      const fresh=rows.filter(r=>r.time+86_400<=nowSec&&(s.first==null||r.time<s.first||r.time>s.last!));if(!fresh.length)continue;
+      const added=s.merge(fresh.map(r=>({t:r.time,o:r.open,h:r.high,l:r.low,c:r.close,v:Number.isFinite(r.volume)?r.volume:0})));if(added)this.dirty.add(k);}
   }
   /** one history unit: chunk t0 of one series, with the chunk before (warm-up) and after (exits of trades still open) */
   private async runUnit(db:D1Like,u:string,now:number){
@@ -260,7 +277,7 @@ export class DynamicResearch{
     const btc=this.get("BTC_USDT","1d"),eth=this.get("ETH_USDT","1d");
     const alts=this.universe.filter(s=>s!=="BTC_USDT"&&s!=="ETH_USDT").map(s=>this.get(s,"1d")).filter((x):x is Series=>!!x&&x.n>=60);
     const prevBucket=this.states.at(-1)?.bucket??this.lastBucket;
-    this.states=btc&&this.bf.series[seriesKey("BTC_USDT","1d")]?.done?dailyStates(btc,eth,alts):[];
+    this.states=btc&&btc.n>=120?dailyStates(btc,eth,alts):[];
     const cur=this.states.at(-1)??null;
     if(cur&&cur.bucket!==prevBucket){const ch=stateChanges(this.states).at(-1);
       this.log(now,"STATE",`BTC/ETH 日线状态：${prevBucket?bucketLabel(prevBucket):"-"} → ${bucketLabel(cur.bucket)}；${ch?.why??""}`);}
@@ -317,6 +334,7 @@ export class DynamicResearch{
         family:pb.family??pb.id,familyLabel:pb.familyLabel??pb.label,only:pb.only??null,trades:counts[pb.id]??0,
         all:c?.all??null,rolling:c?.rolling??null,counts:c?.counts??null,unit:c?.unit??"week",good:c?.good??0,bad:c?.bad??0,meanGoodWeeks:c?r1(c.meanGoodWeeks):0,meanBadWeeks:c?r1(c.meanBadWeeks):0,
         persistence:c?.persistence??null,current:c?.current??null,pattern:c?.pattern??false,patternWhy:c?.patternWhy??"还没分析",
+        stage:c?.stage??"none",sample:c?.sample??0,forecast:c?.forecast?{...c.forecast,prob:r4(c.forecast.prob),raw:r4(c.forecast.raw),sample:r4(c.forecast.sample)}:null,
         byBucket:c?.byBucket??{},bySession:c?.bySession??{},gate:g?{ok:g.ok,risk:g.risk,conf:g.conf,why:g.why}:null,
         open:[...this.opens.values()].filter(o=>o.pb===pb.id).length};}),
       allowed:this.gates?Object.values(this.gates).filter(g=>g.ok).map(g=>({pb:g.pb,label:POOL_BY_ID[g.pb]?.label??g.pb,risk:g.risk,why:g.why})):[],

@@ -65,18 +65,27 @@ test("venues: page URLs page backwards per venue (never Gate); parser keeps clos
 });
 
 // ---------------------------------------------------------------- backfill plan
-test("backfill: one request per 15 s at most; short-term first — BTC/ETH daily + 1h, then 15m, 5m, the rest of 1h, BTC/ETH 1m, 4h, daily",()=>{
+test("backfill: one request per 15 s at most; newest page of every series first, then each series backwards short-term first — BTC/ETH daily + 1h, 15m, 5m, the rest of 1h, BTC/ETH 1m, 4h, daily",()=>{
   const st=initialBackfill(),uni=["SOL_USDT","BTC_USDT"],t=1_800_000_000_000;
   assert.deepEqual(trackedSymbols(uni),["BTC_USDT","ETH_USDT","SOL_USDT"]);
   const j=nextJob(st,t,uni)!;assert.deepEqual([j.sym,j.iv,j.kind,j.venue,j.endSec,j.limit],["BTC_USDT","1d","back","BYBIT",null,PAGE.BYBIT]);
   onPage(st,j,[{t:lastClosedStart("1d",t)-999*D},{t:lastClosedStart("1d",t)}],t);
   assert.equal(nextJob(st,t+14_999,uni),null,"pacing");
-  const j2=nextJob(st,t+15_000,uni)!;assert.deepEqual([j2.sym,j2.iv,j2.endSec],["BTC_USDT","1d",lastClosedStart("1d",t)-999*D],"continues backwards from the oldest bar");
-  onPage(st,j2,[{t:lastClosedStart("1d",t)-1600*D}],t+15_000);assert.ok(st.series[seriesKey("BTC_USDT","1d")]!.done,"depth reached → done");
-  // finish every series with an empty page and record the order
-  const order:string[]=[];let now=t+30_000;
-  for(let k=0;k<40;k++){const x=nextJob(st,now,uni);if(!x)break;if(x.kind==="back"){order.push(`${x.sym.replace("_USDT","")} ${x.iv}`);onPage(st,x,[],now);}now+=15_000;}
-  assert.deepEqual(order,["ETH 1d","BTC 1h","ETH 1h","BTC 15m","ETH 15m","SOL 15m","BTC 5m","ETH 5m","SOL 5m","SOL 1h","BTC 1m","ETH 1m","BTC 4h","ETH 4h","SOL 4h","SOL 1d"]);
+  const want=["BTC 1d","ETH 1d","BTC 1h","ETH 1h","BTC 15m","ETH 15m","SOL 15m","BTC 5m","ETH 5m","SOL 5m","SOL 1h","BTC 1m","ETH 1m","BTC 4h","ETH 4h","SOL 4h","SOL 1d"];
+  // pass 1: the newest page of every series (so the latest regimes are learned first)
+  const first:string[]=["BTC 1d"];let now=t+15_000;
+  for(let k=0;k<40&&first.length<17;k++){const x=nextJob(st,now,uni)!,lc=lastClosedStart(x.iv,now);
+    if(x.kind==="back"){assert.equal(x.endSec,null,"newest page");first.push(`${x.sym.replace("_USDT","")} ${x.iv}`);onPage(st,x,[{t:lc-10*IV_SEC[x.iv]},{t:lc}],now);}
+    else onPage(st,x,[{t:lc}],now);// a 1m tail can come in between (tails first)
+    now+=15_000;}
+  assert.deepEqual(first,want);
+  // pass 2: deeper pages, series by series in the same order, continuing from each oldest bar
+  let j2=nextJob(st,now,uni)!;while(j2.kind==="tail"){onPage(st,j2,[{t:lastClosedStart(j2.iv,now)}],now);now+=15_000;j2=nextJob(st,now,uni)!;}
+  assert.deepEqual([j2.sym,j2.iv,j2.endSec],["BTC_USDT","1d",lastClosedStart("1d",t)-999*D],"continues backwards from the oldest bar");
+  onPage(st,j2,[{t:lastClosedStart("1d",t)-1600*D}],now);assert.ok(st.series[seriesKey("BTC_USDT","1d")]!.done,"depth reached → done");
+  const order:string[]=[];now+=15_000;
+  for(let k=0;k<80;k++){const x=nextJob(st,now,uni);if(!x)break;if(x.kind==="back"){order.push(`${x.sym.replace("_USDT","")} ${x.iv}`);onPage(st,x,[],now);}else onPage(st,x,[{t:lastClosedStart(x.iv,now)}],now);now+=15_000;}
+  assert.deepEqual(order,want.slice(1));
   assert.equal(trackedSeries(uni).length,17,"1m only for BTC/ETH");
   assert.equal(depthOf("BTC_USDT","5m"),120);assert.equal(depthOf("SOL_USDT","5m"),75);assert.equal(depthOf("SOL_USDT","15m"),150);assert.equal(depthOf("ETH_USDT","1m"),14);
   // 5m back pages go to the venue's interval code
@@ -226,13 +235,18 @@ test("allocator: no state / no pattern / thin or losing bucket / persistent bad 
   const base=analyzePlaybook("htf-donch20",cycleTrades("htf-donch20",60,8),[],60*7*D);
   const st=(n:number,mean:number,t:number)=>({n,sum:n*mean,mean,win:.5,t});
   assert.match(allocate({},null)["htf-donch20"]!.why,/算不出/);
-  assert.match(allocate({"htf-donch20":{...base,pattern:false}},state)["htf-donch20"]!.why,/规律未确认/);
+  assert.match(allocate({"htf-donch20":{...base,pattern:false,stage:"none"}},state)["htf-donch20"]!.why,/数据少，还看不出周期/);
+  // early stage (≥1 good + ≥1 bad phase, ≥15 trades): allowed on half the bucket sample, size scaled by the evidence
+  const early=allocate({"htf-donch20":{...base,pattern:false,stage:"early",sample:.2,forecast:null,byBucket:{"UP/MID":st(12,.01,3)},current:{label:"GOOD",weeks:1,since:0}}},state)["htf-donch20"]!;
+  assert.equal(early.ok,true,early.why);assert.ok(Math.abs(early.risk-ALLOC.baseRisk*1*(.25+.75*.2))<1e-12);assert.match(early.why,/早期（数据少/);
+  assert.match(allocate({"htf-donch20":{...base,pattern:false,stage:"early",sample:.2,byBucket:{"UP/MID":st(8,.01,3)}}},state)["htf-donch20"]!.why,/样本 8\/10/);
+  assert.match(allocate({"htf-donch20":{...base,byBucket:{"UP/MID":st(50,.01,3)},current:{label:"GOOD",weeks:2,since:0},forecast:{next:"BAD",prob:.7,raw:.3,sample:1,label:"数据较足",why:"x"}}},state)["htf-donch20"]!.why,/预测下一段亏钱/);
   assert.match(allocate({"htf-donch20":{...base,byBucket:{"UP/MID":st(10,.05,3)}}},state)["htf-donch20"]!.why,/样本 10\/20/);
   assert.match(allocate({"htf-donch20":{...base,byBucket:{"UP/MID":st(50,.001,3)}}},state)["htf-donch20"]!.why,/不赚钱/);
   assert.match(allocate({"htf-donch20":{...base,byBucket:{"UP/MID":st(50,.01,2)},current:{label:"BAD",weeks:2,since:0},persistence:.7}},state)["htf-donch20"]!.why,/亏钱段/);
-  const ok=allocate({"htf-donch20":{...base,byBucket:{"UP/MID":st(50,.01,1.5)},current:{label:"GOOD",weeks:2,since:0}}},state)["htf-donch20"]!;
+  const ok=allocate({"htf-donch20":{...base,byBucket:{"UP/MID":st(50,.01,1.5)},current:{label:"GOOD",weeks:2,since:0},forecast:null}},state)["htf-donch20"]!;
   assert.equal(ok.ok,true);assert.equal(ok.conf,.5);assert.ok(Math.abs(ok.risk-ALLOC.baseRisk/2)<1e-12);
-  const hi=allocate({"htf-donch20":{...base,byBucket:{"UP/MID":st(50,.01,6)},current:{label:"BAD",weeks:2,since:0},persistence:.4}},state)["htf-donch20"]!;
+  const hi=allocate({"htf-donch20":{...base,byBucket:{"UP/MID":st(50,.01,6)},current:{label:"BAD",weeks:2,since:0},persistence:.4,forecast:null}},state)["htf-donch20"]!;
   assert.equal(hi.ok,true,"a bad phase that does not persist does not block");assert.equal(hi.risk,ALLOC.baseRisk);
   assert.equal(CYCLE.minPhases,3);
 });
@@ -243,6 +257,10 @@ test("cycles (short tier): daily steps on a 7-day window, rolling 1/2/4 weeks an
   const c=analyzePlaybook("box5m-long",tr,[],120*D,{tier:"short",intra});
   assert.equal(c.unit,"day");assert.ok(c.good>=3&&c.bad>=3&&c.pattern,c.patternWhy);assert.ok(c.meanGoodWeeks>=7&&c.meanGoodWeeks<=21,"phase length in days");
   assert.ok(c.rolling["1w"]&&c.rolling["2w"]&&c.rolling["4w"]);assert.equal(c.counts!["200"]!.n,200);assert.ok(c.byBucket["UP/MID"]!.n>0);assert.ok(c.bySession!.ASIA!.n>0);
+  // early: one good and one bad phase, 20 trades → forecasts start, labelled 数据少, confidence near 50/50
+  const few=tr.filter(t=>t.et<26*D&&t.et>=4*D).filter((_,i)=>i%3===0);const e=analyzePlaybook("box5m-long",few,[],27*D,{tier:"short",intra});
+  assert.equal(e.stage,"early",`${e.good}/${e.bad}/${e.trades}`);assert.ok(e.sample!>0&&e.sample!<1/3);assert.equal(e.forecast!.label,"数据少");assert.ok(e.forecast!.prob<.6,"little evidence → close to 50/50");
+  assert.equal(c.stage,"confirmed");assert.equal(c.sample,1);assert.equal(c.forecast!.label,"数据较足");
   // clustering: 50 identical trades on one day are one observation, not 50
   const one=statDay(Array.from({length:50},(_,i)=>({et:5*D+i,net:.01+(i%2)*.001})));assert.equal(one.days,1);assert.equal(one.tDay,0);assert.ok(one.t>10);
 });
@@ -254,7 +272,7 @@ test("allocator (short tier): intraday bucket, needs t(by day) ≥ 2 over ≥ 10
   assert.match(g({},null).why,/日内状态还算不出/);
   assert.match(g({byBucket:{"UP/MID":st(80,.004,4,6,3)}}).why,/按天算不够显著/);
   assert.match(g({byBucket:{"UP/MID":st(80,.004,4,30,1.2)}}).why,/按天算不够显著/);
-  const ok=g({byBucket:{"UP/MID":st(80,.004,4,30,2.5)},current:{label:"GOOD",weeks:3,since:0},unit:"day"});assert.equal(ok.ok,true);assert.ok(ok.risk<=ALLOC.shortRisk&&ok.risk>=ALLOC.shortRisk*ALLOC.minConf);
+  const ok=g({byBucket:{"UP/MID":st(80,.004,4,30,2.5)},current:{label:"GOOD",weeks:3,since:0},unit:"day",forecast:null});assert.equal(ok.ok,true);assert.ok(ok.risk<=ALLOC.shortRisk&&ok.risk>=ALLOC.shortRisk*ALLOC.minConf);
   const all=allocate({},{t:0,btc:1,trend:"UP",strength:.1,atrPct:.02,volPct:.5,vol:"MID",dd90:0,eff20:.3,eth:null,altVsBtc:null,lead:null,corr30:null,bucket:"UP/MID"},intra);
   for(const id of ["htf-down20","ema4h-long","pull4h-short"])assert.match(all[id]!.why,/只记录/);assert.doesNotMatch(all["htf-donch20"]!.why,/日线\/4小时打法：只记录/);
 });
@@ -267,8 +285,16 @@ test("runtime: short-term-first paced backfill (5m / 15m / 1h / 1m / 4h / 1d) in
   const fetch=fakeBybit(listed,()=>now,calls);
   const rt=new DynamicResearch({minGapMs:15_000,analyzeEveryMs:3_600_000,metaEveryMs:60_000});
   const uni=["SOL_USDT"],syms=["BTC_USDT","ETH_USDT","SOL_USDT"];
-  let steps=0;while(steps<4000){await rt.step(now,{universe:uni,db,fetch,feed:feedOf(syms,now)});steps++;now+=5_000;
-    if(Object.values(rt.bf.series).length===17&&Object.values(rt.bf.series).every(s=>s.done)&&rt.unitQueue.length===0&&rt.unitsListed.size>=9&&[...rt.tsrc.values()].every(s=>!s.dirty))break;}
+  const daily=Object.fromEntries(syms.map(sym=>{const d0=Math.floor(t0/1000/D)*D;return [sym,Array.from({length:130},(_,i)=>{const b=barAt(sym,"1d",d0-(130-i)*D);return {time:b.t,open:b.o,high:b.h,low:b.l,close:b.c,volume:b.v};})];}));
+  let steps=0,early=false;while(steps<4000){await rt.step(now,{universe:uni,db,fetch,feed:feedOf(syms,now),daily});steps++;now+=5_000;
+    if(!early&&calls.length>=20){early=true;
+      // learning starts before the download is done: daily state from the worker's daily rows, units of the newest pages replayed
+      rt.analyze(now);assert.ok(rt.states.length>0,"daily state from the existing daily rows");assert.ok(rt.intra.length>0,"intraday state from the first BTC 1h page");
+      assert.ok(Object.keys(rt.unitsDone).length>0&&rt.tradeCount>0,`newest history replayed already (${Object.keys(rt.unitsDone).length} units, ${rt.tradeCount} trades)`);
+      assert.ok(Object.values(rt.bf.series).some(s=>!s.done));
+      const pv=rt.view(now).playbooks;assert.ok(pv.every(p=>p.stage!=="confirmed"||p.sample===1));}
+    if(Object.values(rt.bf.series).length===17&&Object.values(rt.bf.series).every(s=>s.done)&&(rt.planUnits(),rt.unitQueue.length===0)&&[...rt.tsrc.values()].every(s=>!s.dirty))break;}
+  assert.ok(early);
   assert.ok(Object.values(rt.bf.series).every(s=>s.done),"all 17 series done");
   assert.ok(calls.length>0&&calls.every(u=>/api\.bybit\.com/.test(u)));
   const ivOf=(u:string)=>new URL(u).searchParams.get("interval");

@@ -38,10 +38,33 @@ export type PlaybookCycle={pb:string;trades:number;first:number|null;last:number
   current:{label:"GOOD"|"BAD"|null;weeks:number;since:number|null};pattern:boolean;patternWhy:string;
   byBucket:Record<string,Stat>;byLead:Record<string,Stat>;
   /** short tier: phases step in days (else weeks); bySession; last-N-trades windows */
-  unit?:"day"|"week";bySession?:Record<string,Stat>;counts?:Record<string,{net:number;n:number;perTrade:number}>};
+  unit?:"day"|"week";bySession?:Record<string,Stat>;counts?:Record<string,{net:number;n:number;perTrade:number}>;
+  /** none → early (≥ 1 good and ≥ 1 bad phase, ≥ 15 trades: forecasts and small allocations) → confirmed (the full rule) */
+  stage?:"none"|"early"|"confirmed";
+  /** how much evidence there is, 0–1 (min(good, bad) / 3 × trades / 40, capped): scales forecast confidence and size */
+  sample?:number;forecast?:Forecast|null};
+/** next window's phase: P(current phase continues), shrunk towards 50/50 by the sample */
+export type Forecast={next:"GOOD"|"BAD";prob:number;raw:number;sample:number;label:"数据少"|"数据一般"|"数据较足";why:string};
+export const EARLY={minPhases:1,minTrades:15} as const;
+export const sampleOf=(good:number,bad:number,trades:number)=>Math.max(0,Math.min(1,Math.min(good,bad)/CYCLE.minPhases)*Math.min(1,trades/CYCLE.minTrades));
+export const sampleLabel=(x:number):Forecast["label"]=>x<1/3?"数据少":x<.75?"数据一般":"数据较足";
+function withForecast(c:PlaybookCycle):PlaybookCycle{
+  const sample=sampleOf(c.good,c.bad,c.trades);
+  const stage=c.pattern?"confirmed":c.good>=EARLY.minPhases&&c.bad>=EARLY.minPhases&&c.trades>=EARLY.minTrades?"early":"none";
+  const cur=c.current.label;let forecast:Forecast|null=null;
+  if(cur){const L=cur==="GOOD"?c.meanGoodWeeks:c.meanBadWeeks,u=c.unit==="day"?"天":"周";
+    const raw=c.persistence!=null?c.persistence:L>1?Math.min(.95,1-1/L):.5,p=.5+(raw-.5)*sample;
+    const next=p>=.5?cur:cur==="GOOD"?"BAD":"GOOD",prob=Math.max(p,1-p);
+    forecast={next,prob,raw,sample,label:sampleLabel(sample),
+      why:`现在${cur==="GOOD"?"赚钱段":"亏钱段"}第 ${c.current.weeks} ${u}；${c.persistence!=null?`好坏段延续概率 ${Math.round(raw*100)}%`:L>0?`这种段平均 ${L.toFixed(1)} ${u}`:"只见过这一段"}；证据 ${Math.round(sample*100)}%（${c.good} 段赚 / ${c.bad} 段亏 / ${c.trades} 笔）`};}
+  return {...c,stage,sample,forecast};
+}
 /** trades must be of one playbook */
 export function analyzePlaybook(pb:string,trades:readonly TradeLite[],states:readonly DayState[],nowSec:number,opts:{tier?:"short"|"long";intra?:readonly IntraState[]}={}):PlaybookCycle{
-  if(opts.tier==="short")return analyzeShort(pb,trades,opts.intra??[],nowSec);
+  if(opts.tier==="short")return withForecast(analyzeShort(pb,trades,opts.intra??[],nowSec));
+  return withForecast(analyzeLong(pb,trades,states,nowSec));
+}
+function analyzeLong(pb:string,trades:readonly TradeLite[],states:readonly DayState[],nowSec:number):PlaybookCycle{
   const ts=[...trades].sort((a,b)=>a.xt-b.xt),all=stat(ts.map(t=>t.net));
   const rolling:PlaybookCycle["rolling"]={};
   for(const w of CYCLE.weeks){const xs=ts.filter(t=>t.xt>nowSec-w*WEEK&&t.xt<=nowSec).map(t=>t.net),s=xs.reduce((a,b)=>a+b,0);
