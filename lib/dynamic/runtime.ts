@@ -14,18 +14,26 @@
  *    `liveFrom` — so the phase tracker, the forecasts and the allocator update chunk by chunk while the download continues.
  * Daily / 4h (record-only tier): full history in memory, replayed whole when it changes.
  * Shadow trades are stored grouped (dyn_trade_chunks: one row per unit / live day / long series), loaded gradually at boot.
+ * dynamic-v1.2 cycle predictor (predictor.ts) runs inside every analysis: phase line per playbook, timing / BTC-state learners,
+ * P(good) at +6 / +24 / +72 h with a plain-words trigger; one forecast row per hour is logged to D1 (dyn_forecasts) and scored
+ * once its horizon passed; the per-playbook track record feeds the predictor gate of the allocator (allocatePred).
  */
 import type {D1Like} from "../run-log-archive.ts";
 import {Series,IV_SEC,aggregate,isShortIv,Memo,type Iv,type Bar} from "./series.ts";
 import {pageUrl,parsePage,HttpStatusError} from "./venues.ts";
 import {BACKFILL,initialBackfill,normalizeBackfill,nextJob,onPage,onFailure,backfillView,trackedSymbols,trackedSeries,seriesKey,noteFeed,depthOf,type BackfillState} from "./backfill.ts";
 import {emptyDynStore,writeChunks,readSeries,readMeta,writeMeta,ensureDynSchema,chunkStart,chunkStarts,pruneBars,writeTradeChunks,readTradeChunks,
+  writeForecasts,readForecasts,pruneForecasts,
   CHUNK_SEC,type DynStoreStatus,type TradeRow} from "./store-d1.ts";
 import {POOL,POOL_BY_ID,simulate,manageLive,btcRegime,tierOf,applies,type OpenShadow,type ShadowTrade,type Playbook,type Ctx} from "./playbooks.ts";
 import {dailyStates,stateChanges,bucketLabel,intradayStates,sessionOf,SESSION_LABEL,TREND_LABEL,VOL_LABEL,type DayState,type IntraState} from "./state.ts";
 import {analyzePlaybook,phaseChanges,type PlaybookCycle,type TradeLite} from "./cycles.ts";
-import {allocate,ALLOC,type Gate} from "./allocator.ts";
-export const DYN_VERSION="dynamic-v1.1";
+import {allocate,allocatePred,contradicted,ALLOC,PRED_ALLOC,type Gate,type LiveCheck} from "./allocator.ts";
+import {btcFeatures,phaseInfo,hazardCounts,addHazard,predictPlaybook,scoreRows,forecastLine,trackView,emptyTrack,PRED,
+  type PbForecast,type Track,type FcRow,type Lab,type Hazard} from "./predictor.ts";
+export const DYN_VERSION="dynamic-v1.2";
+/** forecast rows kept in memory (scoring needs t + 72 h + the 3-day "never known" expiry) and in D1 */
+export const FC_KEEP_SEC=7*86_400,FC_DB_KEEP_SEC=30*86_400;
 /** live entries must reach the engine within this long after the signal bar closed */
 export const FRESH_MS:Record<Iv,number>={"1d":240*60_000,"4h":60*60_000,"1h":20*60_000,"15m":10*60_000,"5m":6*60_000,"1m":2*60_000};
 /** bars kept in memory per series (BTC/ETH 1h: the whole history, for the intraday state) */
@@ -36,7 +44,8 @@ export const STEP={loads:3,live:6,units:1,tradeRows:20,tradeLoad:300,liveFlushMs
 export type DynSignal={id:string;pb:string;label:string;sym:string;side:"LONG"|"SHORT";iv:Iv;et:number;ep:number;stop:number;target:number|null;maxBars:number|null;why:string;until:number};
 export type DynExit={tradeId:string;act:"GUARD"|"EXIT";stop?:number;why:string;code:string};
 export type DynPlanInput={ready:boolean;gates:Record<string,Pick<Gate,"ok"|"risk"|"conf"|"why">>|null;signals:DynSignal[];exits:DynExit[];state:string|null};
-export type DynEvent={at:number;k:"BACKFILL"|"STATE"|"PHASE"|"ALLOC"|"ERROR"|"BOOT";text:string};
+export type DynEvent={at:number;k:"BACKFILL"|"STATE"|"PHASE"|"ALLOC"|"ERROR"|"BOOT"|"FORECAST"|"SCORE";text:string};
+export type ScoreRec={t:number;pb:string;h:number;p:number;y:0|1};
 export type DynPosition={id:string;symbol:string;side:"LONG"|"SHORT";entryPrice:number;stopPrice:number;openedAt:number;guard:number|null;pb:string;inv:number;target:number|null;maxBars:number|null};
 /** the worker's 5m bars (time = open, seconds) */
 export type FeedBar={time:number;open:number;high:number;low:number;close:number;volume:number};
@@ -61,6 +70,10 @@ export class DynamicResearch{
   /** per playbook × symbol: end (s) of the last bar evaluated and the entry time of the trade open then — later evaluations only
    * add trades that start after it (or that one), so a window that starts elsewhere (trimmed memory, a reload) adds nothing old */
   wm:Record<string,[number,number|null]>={};
+  // cycle predictor
+  forecasts:Record<string,PbForecast>={};track:Record<string,Track>={};fcRows:FcRow[]=[];fcDirty=new Set<number>();
+  predLive:Record<string,{since:number|null;cutUntil:number}>={};recentScores:ScoreRec[]=[];scoreAcc={n:0,hits:0,brier:0,since:0};
+  lastFcLogAt=0;lastTop="";predMs=0;predAt=0;
   private manageCache=new Map<string,{key:string;m:ReturnType<typeof manageLive>}>();
   opts:{minGapMs?:number;analyzeEveryMs?:number;metaEveryMs?:number};
   constructor(opts:{minGapMs?:number;analyzeEveryMs?:number;metaEveryMs?:number}={}){this.opts=opts;}
@@ -118,9 +131,11 @@ export class DynamicResearch{
       await this.flushTrades(db,now);
       // 9) analysis (hourly, or soon after new trades)
       if(this.tradesLoaded&&(now-this.lastAnalyzeAt>=(this.opts.analyzeEveryMs??3_600_000)||((replays||lives||units)&&now-this.lastAnalyzeAt>=10*60_000)))this.analyze(now);
+      if(this.fcDirty.size)await this.flushForecasts(db,now);
       // 10) prune short history beyond its depth (+20 %), once a day
       if(now-this.lastPruneAt>=STEP.pruneEveryMs){this.lastPruneAt=now;
-        for(const iv of ["5m","15m","1h","1m"] as Iv[]){const d=Math.max(depthOf("BTC_USDT",iv),depthOf("SOL_USDT",iv));await pruneBars(db,this.store,iv,Math.floor(now/1000-d*1.2*86_400),now);}}
+        for(const iv of ["5m","15m","1h","1m"] as Iv[]){const d=Math.max(depthOf("BTC_USDT",iv),depthOf("SOL_USDT",iv));await pruneBars(db,this.store,iv,Math.floor(now/1000-d*1.2*86_400),now);}
+        await pruneForecasts(db,this.store,Math.floor(now/1000)-FC_DB_KEEP_SEC);}
       // 11) small meta
       if(now-this.lastMetaAt>=(this.opts.metaEveryMs??120_000)){this.lastMetaAt=now;await this.saveMeta(db,now);}
       this.lastError=null;
@@ -131,7 +146,8 @@ export class DynamicResearch{
     const dirtyLive=[...this.tsrc.values()].some(s=>s.dirty);
     const units:Record<string,1>={};for(const k of Object.keys(this.unitsDone))if(!this.unitsPending.has(k))units[k]=1;
     // watermarks only once every trade below them is stored (a restart then re-evaluates and re-finds the unstored ones)
-    const all:Record<string,unknown>={backfill:this.bf,events:this.events.slice(-120),liveFrom:this.liveFrom,units,...(dirtyLive?{}:{watermarks:this.wm})};
+    const all:Record<string,unknown>={backfill:this.bf,events:this.events.slice(-120),liveFrom:this.liveFrom,units,
+      track:this.track,predLive:this.predLive,fcRecent:this.recentScores.slice(-40),...(dirtyLive?{}:{watermarks:this.wm})};
     // only values that changed since the last write (rows and bytes stay small)
     const out:Record<string,unknown>={},js:Record<string,string>={};for(const [k,v] of Object.entries(all)){const j=JSON.stringify(v);if(this.metaSent[k]!==j){out[k]=v;js[k]=j;}}
     if(Object.keys(out).length&&await writeMeta(db,this.store,out,now))Object.assign(this.metaSent,js);
@@ -144,6 +160,10 @@ export class DynamicResearch{
       const wm=await readMeta<Record<string,[number,number|null]>>(db,this.store,"watermarks");if(wm&&typeof wm==="object")this.wm=wm;
       const lf=await readMeta<Record<string,number>>(db,this.store,"liveFrom");if(lf&&typeof lf==="object")this.liveFrom=lf;
       const un=await readMeta<Record<string,1>>(db,this.store,"units");if(un&&typeof un==="object")this.unitsDone=un;
+      const tr=await readMeta<Record<string,Track>>(db,this.store,"track");if(tr&&typeof tr==="object")this.track=tr;
+      const pl=await readMeta<Record<string,{since:number|null;cutUntil:number}>>(db,this.store,"predLive");if(pl&&typeof pl==="object")this.predLive=pl;
+      const rs=await readMeta<ScoreRec[]>(db,this.store,"fcRecent");if(Array.isArray(rs))this.recentScores=rs.slice(-40);
+      this.fcRows=(await readForecasts(db,this.store,Math.floor(now/1000)-FC_KEEP_SEC,400)).map(r=>({t:r.t,f:r.f,y:r.y}));
       // a series with history but no liveFrom (older state): live from its newest stored bar
       for(const [k,p] of Object.entries(this.bf.series))if(p.pages>0&&isShortIv(p.iv)&&this.liveFrom[k]==null&&p.newest!=null)this.liveFrom[k]=p.newest+IV_SEC[p.iv];
       this.booted=true;this.bootError=null;
@@ -171,6 +191,10 @@ export class DynamicResearch{
     if(replace||!cur){const same=cur&&JSON.stringify(cur.rows)===JSON.stringify(rows)&&JSON.stringify(cur.pbs)===JSON.stringify(pbs);
       if(!same&&(rows.length||cur))this.tsrc.set(k,{k,sym,iv,t0,pbs,rows,dirty:true});}
     else this.mergeRows(cur,pbs,rows);
+  }
+  private async flushForecasts(db:D1Like,now:number){
+    const rows=this.fcRows.filter(r=>this.fcDirty.has(r.t)).slice(0,20);if(!rows.length){this.fcDirty.clear();return;}
+    if(await writeForecasts(db,this.store,rows,now))for(const r of rows)this.fcDirty.delete(r.t);
   }
   private async flushTrades(db:D1Like,now:number){
     const ds=[...this.tsrc.values()].filter(s=>s.dirty).slice(0,STEP.tradeRows);if(!ds.length)return;
@@ -292,9 +316,57 @@ export class DynamicResearch{
     for(const c of phaseChanges(Object.keys(this.cycles).length?this.cycles:null,next)){if(!this.cycles[c.pb]&&c.to==null&&!c.pattern)continue;
       this.log(now,"PHASE",`${POOL_BY_ID[c.pb]?.label??c.pb}：${c.from??"-"} → ${c.to??"-"}${c.pattern?"（规律已确认）":""}`);}
     this.cycles=next;
-    const prev=this.gates;this.gates=allocate(next,cur,ic);
+    const live=this.predict(now,by);
+    const prev=this.gates;this.gates=live?allocatePred(next,cur,ic,{forecasts:this.forecasts,track:this.track,live,nowSec:Math.floor(nowSec)}):allocate(next,cur,ic);
+    // gate opened → shadow results are checked against the forecast from now on; closed → forget
+    for(const [pb,g] of Object.entries(this.gates)){if(!live||!(pb in this.forecasts))continue;const pl=(this.predLive[pb]??={since:null,cutUntil:0});
+      if(g.ok&&pl.since==null)pl.since=Math.floor(nowSec);else if(!g.ok&&pl.cutUntil<=nowSec)pl.since=null;}
     for(const [pb,g] of Object.entries(this.gates))if(prev&&prev[pb]?.ok!==g.ok||!prev&&g.ok)this.log(now,"ALLOC",`${POOL_BY_ID[pb]?.label??pb}：${g.ok?"允许开单":"只记录"} — ${g.why}`);
   }
+  /** the cycle predictor (pure learners in predictor.ts): forecasts for every playbook with trades, the hourly forecast row,
+   * scoring of due rows, the run-log lines, and the contradiction cut. Returns the live checks for the allocator, or null when
+   * BTC 1h is not there yet (the old gate then stays in charge). */
+  private predict(now:number,by:Map<string,TradeLite[]>):Record<string,LiveCheck>|null{
+    const t0=Date.now(),nowSec=Math.floor(now/1000),b1=this.get("BTC_USDT","1h");
+    if(!b1||b1.n<130){this.forecasts={};return null;}
+    const alts=this.universe.filter(s=>s!=="BTC_USDT"&&s!=="ETH_USDT").map(s=>this.get(s,"1h")).filter((x):x is Series=>!!x&&x.n>=60);
+    const feats=btcFeatures(b1,this.get("ETH_USDT","1h"),alts);if(!feats.rows.length){this.forecasts={};return null;}
+    const pre=new Map<string,ReturnType<typeof phaseInfo>>(),z=():Hazard=>({events:Array(PRED.hazEdges.length-1).fill(0),exposure:Array(PRED.hazEdges.length-1).fill(0)});
+    const pool={GOOD:z(),BAD:z()};
+    for(const pb of POOL){const ts=by.get(pb.id);if(!ts?.length)continue;const x=phaseInfo(ts,nowSec);pre.set(pb.id,x);
+      pool.GOOD=addHazard(pool.GOOD,hazardCounts(x.phases,"GOOD"));pool.BAD=addHazard(pool.BAD,hazardCounts(x.phases,"BAD"));}
+    const fc:Record<string,PbForecast>={};
+    for(const [pb,x] of pre)fc[pb]=predictPlaybook({pb,trades:by.get(pb)!,feats,nowSec,pool},x);
+    this.forecasts=fc;this.predAt=now;
+    // one row per hour (the first analysis of the hour), then score every due row against the labels known now
+    const hourT=Math.floor(nowSec/3600)*3600;
+    if(Object.keys(fc).length&&!this.fcRows.some(r=>r.t===hourT)){
+      const f:FcRow["f"]={};for(const [pb,x] of Object.entries(fc))f[pb]=[r3(x.p["6"]),r3(x.p["24"]),r3(x.p["72"])];
+      this.fcRows.push({t:hourT,f,y:{}});this.fcDirty.add(hourT);}
+    const labelAt=(pb:string,t:number):Lab|null=>{const L=pre.get(pb)?.L;if(!L)return null;const i=Math.round((t-L.t0)/3600);return i>=0&&i<L.n?L.lab[i] as Lab:null;};
+    for(const r of scoreRows(this.fcRows,labelAt,nowSec,this.track,x=>{this.recentScores.push(x);const a=this.scoreAcc;a.n++;if((x.p>=.5?1:0)===x.y)a.hits++;a.brier+=(x.p-x.y)**2;}))this.fcDirty.add(r.t);
+    this.recentScores=this.recentScores.slice(-40);
+    this.fcRows=this.fcRows.filter(r=>r.t>=nowSec-FC_KEEP_SEC);
+    // run log: the top predictions (when they change, at least every 6 h) and the scoring summary (every 6 h)
+    const top=this.topNow(3),key=top.map(x=>`${x.pb}:${Math.round(x.p6*20)}`).join(",");
+    if(top.length&&(key!==this.lastTop||now-this.lastFcLogAt>=6*3_600_000)){this.lastTop=key;this.lastFcLogAt=now;
+      this.log(now,"FORECAST",`最看好：${top.map(x=>`${x.label} ${Math.round(x.p6*100)}%（6 小时）【${x.sampleLabel}】`).join("；")}`);}
+    const a=this.scoreAcc;if(a.n&&now-a.since>=6*3_600_000){
+      this.log(now,"SCORE",`过去一段评了 ${a.n} 个到期预测：命中 ${Math.round(a.hits/a.n*100)}%，Brier ${(a.brier/a.n).toFixed(3)}`);this.scoreAcc={n:0,hits:0,brier:0,since:now};}
+    else if(!a.since)a.since=now;
+    // contradiction cut: the first trades after the gate opened all lost (or the last five) → pause the playbook
+    const live:Record<string,LiveCheck>={};
+    for(const pb of Object.keys(fc)){const pl=(this.predLive[pb]??={since:null,cutUntil:0});
+      const res=pl.since==null?[]:(by.get(pb)??[]).filter(t=>t.et>=pl.since!).sort((x,y)=>x.et-y.et).map(t=>t.net);
+      const why=pl.since!=null?contradicted(res):null;
+      if(why){pl.cutUntil=nowSec+PRED_ALLOC.cutHours*3600;pl.since=null;
+        this.log(now,"ALLOC",`${POOL_BY_ID[pb]?.label??pb}：预测说赚钱期，但${why}，暂停 ${PRED_ALLOC.cutHours} 小时（只记录）`);}
+      live[pb]={since:pl.since,cutUntil:pl.cutUntil,results:res};}
+    this.predMs=Date.now()-t0;return live;
+  }
+  /** the playbooks the predictor likes most right now (P(good in 6 h), evidence > 0, not the record-only long tier) */
+  topNow(n=5){return Object.values(this.forecasts).filter(f=>f.sample>0&&(tierOf(POOL_BY_ID[f.pb]!)==="short"||ALLOC.longAllowed.includes(f.pb)))
+    .sort((a,b)=>b.p["6"]-a.p["6"]).slice(0,n).map(f=>({pb:f.pb,label:POOL_BY_ID[f.pb]?.label??f.pb,p6:f.p["6"],p24:f.p["24"],sampleLabel:f.label,line:forecastLine(f,this.track[f.pb])}));}
   /** the intraday state now (the last BTC 1h bar, if it is recent) */
   currentIntra(now:number){const s=this.intra.at(-1);return s&&now/1000-(s.t+3600)<=3*3600?s:null;}
   /** synchronous plan input for the living engine */
@@ -336,13 +408,27 @@ export class DynamicResearch{
         persistence:c?.persistence??null,current:c?.current??null,pattern:c?.pattern??false,patternWhy:c?.patternWhy??"还没分析",
         stage:c?.stage??"none",sample:c?.sample??0,forecast:c?.forecast?{...c.forecast,prob:r4(c.forecast.prob),raw:r4(c.forecast.raw),sample:r4(c.forecast.sample)}:null,
         byBucket:c?.byBucket??{},bySession:c?.bySession??{},gate:g?{ok:g.ok,risk:g.risk,conf:g.conf,why:g.why}:null,
+        pred:this.predView(pb.id),
         open:[...this.opens.values()].filter(o=>o.pb===pb.id).length};}),
       allowed:this.gates?Object.values(this.gates).filter(g=>g.ok).map(g=>({pb:g.pb,label:POOL_BY_ID[g.pb]?.label??g.pb,risk:g.risk,why:g.why})):[],
       limits:{maxPoolOpen:ALLOC.maxPoolOpen,maxPerPlaybook:ALLOC.maxPerPlaybook,baseRisk:ALLOC.baseRisk,shortRisk:ALLOC.shortRisk},
+      predictor:this.predictorView(),
       events:this.events.slice(-40).reverse()};
   }
+  private predView(pb:string){const f=this.forecasts[pb];if(!f)return null;const tv=trackView(this.track[pb]);
+    return {line:forecastLine(f,this.track[pb]),cur:f.cur,elapsedH:f.elapsedH,p6:r3(f.p["6"]),p24:r3(f.p["24"]),p72:r3(f.p["72"]),trigger:f.trigger,label:f.label,sample:r3(f.sample),
+      phases:{good:f.phases.good,bad:f.phases.bad,meanGoodH:r1(f.phases.meanGoodH),meanBadH:r1(f.phases.meanBadH)},period:f.period,profile:f.profile,wLog:r3(f.wLog),
+      track:{n:tv.n,hit:r3(tv.hit),brier:r3(tv.brier)},hist:{n:f.hist.n,hit:r3(f.hist.hit)},live:this.predLive[pb]??null};}
+  private predictorView(){
+    const all=emptyTrack();for(const t of Object.values(this.track)){all.n+=t.n;all.hits+=t.hits;all.brier+=t.brier;t.bins.forEach((b,i)=>{all.bins[i]![0]+=b[0];all.bins[i]![1]+=b[1];all.bins[i]![2]+=b[2];});}
+    const tv=trackView(all);
+    return {ready:Object.keys(this.forecasts).length>0,at:this.predAt||null,ms:this.predMs,playbooks:Object.keys(this.forecasts).length,hourRows:this.fcRows.length,pMin:PRED_ALLOC.pMin,
+      track:{n:tv.n,hit:r3(tv.hit),brier:r3(tv.brier),calib:tv.calib.map(c=>c&&{n:c.n,p:r3(c.p),y:r3(c.y)})},
+      topNow:this.topNow(5),
+      recent:this.recentScores.slice(-12).reverse().map(x=>({...x,label:POOL_BY_ID[x.pb]?.label??x.pb,hit:(x.p>=.5?1:0)===x.y}))};
+  }
 }
-const r4=(x:number)=>Math.round(x*1e4)/1e4,r1=(x:number)=>Math.round(x*10)/10,p8=(x:number)=>Number(x.toPrecision(8));
+const r3=(x:number)=>Math.round(x*1e3)/1e3,r4=(x:number)=>Math.round(x*1e4)/1e4,r1=(x:number)=>Math.round(x*10)/10,p8=(x:number)=>Number(x.toPrecision(8));
 const fmt=(x:number)=>x>=100?x.toFixed(2):x>=1?x.toFixed(4):x.toPrecision(4);
 /** fetch for the worker: JSON, 8 s timeout, non-2xx → HttpStatusError (429 / 403 skip that venue for a while) */
 export async function venueFetch(url:string):Promise<unknown>{

@@ -12,10 +12,13 @@
  * be allowed, with half the bucket sample (≥ 10 trades, short tier ≥ 5 days) and its size scaled by the evidence
  * (0.25 + 0.75 × sample, sample = min(good, bad)/3 × trades/40): small while there is little data, full once confirmed.
  * A forecast of a BAD next window with ≥ 60% blocks it.
+ * dynamic-v1.2: with the cycle predictor running, `allocatePred` replaces the bucket mean / t gate for the short tier and
+ * htf-donch20 (see below); `allocate` stays the fallback while the predictor has not produced forecasts yet.
  */
 import {CYCLE,sampleOf,sampleLabel,type PlaybookCycle} from "./cycles.ts";
 import {bucketLabel,type DayState,type IntraState} from "./state.ts";
 import {POOL_BY_ID,tierOf} from "./playbooks.ts";
+import {trackView,type PbForecast,type Track} from "./predictor.ts";
 export const ALLOC={baseRisk:.0075,shortRisk:.005,minConf:.5,maxPoolOpen:8,maxPerPlaybook:4,minTDay:2,minDays:10,longAllowed:["htf-donch20"] as readonly string[]} as const;
 export type Gate={pb:string;ok:boolean;conf:number;risk:number;why:string;bucket:string|null;n:number;mean:number;t:number};
 export function allocate(cycles:Record<string,PlaybookCycle>,state:DayState|null,intra:IntraState|null=null):Record<string,Gate>{
@@ -40,6 +43,40 @@ export function allocate(cycles:Record<string,PlaybookCycle>,state:DayState|null
     const conf=Math.max(ALLOC.minConf,Math.min(1,.5+(tt-1.5)/3))*scale,br=short?ALLOC.shortRisk:ALLOC.baseRisk;
     out[pb]={...base,ok:true,conf,risk:br*conf,
       why:`${short?"日内":""}状态「${bucketLabel(b!)}」${s.n} 笔${short?`/${s.days} 天`:""}，平均 ${(s.mean*100).toFixed(2)}%/笔，胜率 ${Math.round(s.win*100)}%，t=${s.t.toFixed(1)}${short?`，t(按天)=${(s.tDay??0).toFixed(1)}`:""}；${c.current.label==="GOOD"?`赚钱段第 ${c.current.weeks} ${unit}`:"不在亏钱段"}${early?`；早期（${sampleLabel(sample)}，证据 ${Math.round(sample*100)}%，仓位 ×${scale.toFixed(2)}）`:""} → 风险 ${(br*conf*100).toFixed(2)}%`};
+  }
+  return out;
+}
+// ------------------------------------------------------------------ dynamic-v1.2: predictor gate (short tier + htf-donch20)
+/** tunable constants of the predictor gate */
+export const PRED_ALLOC={pMin:.58,pFull:.8,riskMin:.0025,riskMax:.005,trackMinN:10,trackMinHit:.5,trackMaxBrier:.27,trackFewW:.25,
+  contraFirst:3,contraLast:5,cutHours:12} as const;
+/** shadow results since the gate opened (for the immediate cut) */
+export type LiveCheck={since:number|null;cutUntil:number;results:readonly number[]};
+export type PredInput={forecasts:Record<string,PbForecast>;track:Record<string,Track>;live:Record<string,LiveCheck>;nowSec:number};
+/** contradiction: the first `contraFirst` shadow trades after the gate opened all lost, or the last `contraLast` all lost */
+export function contradicted(results:readonly number[]){const F=PRED_ALLOC.contraFirst,L=PRED_ALLOC.contraLast;
+  if(results.length>=F&&results.slice(0,F).every(x=>x<=0))return `开闸后前 ${F} 笔影子交易全亏`;
+  if(results.length>=L&&results.slice(-L).every(x=>x<=0))return `最近 ${L} 笔影子交易全亏`;return null;}
+/** the predictor gate: open small paper trades when P(good in the next 6 h) ≥ pMin and the forecast track record is not bad.
+ * size = (0.25% … 0.5% by the probability edge) × track-record weight × evidence scale. Long tier stays record-only. */
+export function allocatePred(cycles:Record<string,PlaybookCycle>,state:DayState|null,intra:IntraState|null,pred:PredInput):Record<string,Gate>{
+  const out=allocate(cycles,state,intra),A=PRED_ALLOC;
+  for(const pb of Object.keys(POOL_BY_ID)){
+    const short=tierOf(POOL_BY_ID[pb]!)==="short";if(!short&&!ALLOC.longAllowed.includes(pb))continue;
+    const f=pred.forecasts[pb],g0=out[pb]!,base={pb,bucket:g0.bucket,n:g0.n,mean:g0.mean,t:g0.t};
+    const no=(why:string):Gate=>({...base,ok:false,conf:0,risk:0,why});
+    if(!f){out[pb]=no(cycles[pb]?.trades?"预测器还没算出这套打法（等下一次分析）":"还没有影子交易");continue;}
+    const p=f.p["6"],tv=trackView(pred.track[pb]),lv=pred.live[pb];
+    if(f.sample<=0){out[pb]=no(`数据少：还没见到一段赚钱和一段亏钱（${f.phases.good} 段赚 / ${f.phases.bad} 段亏，${f.trades} 笔），只记录`);continue;}
+    if(lv&&lv.cutUntil>pred.nowSec){out[pb]=no(`影子交易和预测相反，暂停到 ${new Date(lv.cutUntil*1000).toISOString().slice(5,16).replace("T"," ")} UTC`);continue;}
+    if(p<A.pMin){out[pb]=no(`未来 6 小时处在赚钱期的概率 ${Math.round(p*100)}%（要 ≥${Math.round(A.pMin*100)}%）【${f.label}】`);continue;}
+    let tw:number=A.trackFewW,tWhy=`预测才评过 ${tv.n} 次（<${A.trackMinN}），用最小仓位`;
+    if(tv.n>=A.trackMinN){
+      if(tv.hit<A.trackMinHit||tv.brier>A.trackMaxBrier){out[pb]=no(`概率 ${Math.round(p*100)}% 够，但这套打法的预测记录不好：命中率 ${Math.round(tv.hit*100)}%（${tv.n} 次），Brier ${tv.brier.toFixed(2)}`);continue;}
+      tw=Math.max(A.trackFewW,Math.min(1,(tv.hit-A.trackMinHit)/.25));tWhy=`预测命中率 ${Math.round(tv.hit*100)}%（${tv.n} 次）→ ×${tw.toFixed(2)}`;}
+    const edge=Math.max(0,Math.min(1,(p-A.pMin)/(A.pFull-A.pMin))),scale=.25+.75*f.sample,r=(A.riskMin+(A.riskMax-A.riskMin)*edge)*tw*scale;
+    out[pb]={...base,ok:true,conf:r/A.riskMax,risk:r,
+      why:`预测：未来 6 小时在赚钱期的概率 ${Math.round(p*100)}%（${f.cur==="GOOD"?`赚钱期第 ${Math.round(f.elapsedH)} 小时`:f.cur==="BAD"?`亏钱期第 ${Math.round(f.elapsedH)} 小时`:"阶段不明"}）【${f.label}】；${tWhy}；证据 ×${scale.toFixed(2)} → 风险 ${(r*100).toFixed(2)}%`};
   }
   return out;
 }

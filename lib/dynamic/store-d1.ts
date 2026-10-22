@@ -15,8 +15,10 @@ export const DYN_SCHEMA=[
   `CREATE TABLE IF NOT EXISTS dyn_trade_chunks (k TEXT PRIMARY KEY NOT NULL, sym TEXT NOT NULL, iv TEXT NOT NULL, t0 INTEGER NOT NULL, n INTEGER NOT NULL,
     json TEXT NOT NULL, updated_at INTEGER NOT NULL) WITHOUT ROWID`,
   `CREATE TABLE IF NOT EXISTS dyn_meta (k TEXT PRIMARY KEY NOT NULL, at INTEGER NOT NULL, json TEXT NOT NULL) WITHOUT ROWID`,
+  // dynamic-v1.2 forecast log: one row per hour, every playbook's P(good) at +6 / +24 / +72 h and (once scored) the outcomes
+  `CREATE TABLE IF NOT EXISTS dyn_forecasts (t INTEGER PRIMARY KEY NOT NULL, json TEXT NOT NULL, scored INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL)`,
 ] as const;
-export const DYN_TABLES=["dyn_bars","dyn_trades","dyn_trade_chunks","dyn_meta"] as const;
+export const DYN_TABLES=["dyn_bars","dyn_trades","dyn_trade_chunks","dyn_meta","dyn_forecasts"] as const;
 /** chunk span per interval (s): 600 bars each */
 export const CHUNK_SEC:Record<Iv,number>={"1d":600*86_400,"4h":600*14_400,"1h":600*3_600,"15m":600*900,"5m":600*300,"1m":600*60};
 export const chunkStart=(iv:Iv,t:number)=>Math.floor(t/CHUNK_SEC[iv])*CHUNK_SEC[iv];
@@ -92,6 +94,22 @@ export async function writeMeta(db:D1Like,st:DynStoreStatus,entries:Record<strin
   await db.batch(ks.map(k=>db.prepare(`INSERT INTO dyn_meta (k,at,json) VALUES (?,?,?) ON CONFLICT(k) DO UPDATE SET at=excluded.at,json=excluded.json`).bind(k,now,JSON.stringify(entries[k]))));
   st.lastOkAt=now;return true;
 }
+export type ForecastRowJson={f:Record<string,[number,number,number]>;y:Record<string,[number|null,number|null,number|null]>};
+/** upsert hourly forecast rows (scored = every horizon of every playbook has an outcome). false = deferred by budget. */
+export async function writeForecasts(db:D1Like,st:DynStoreStatus,rows:readonly ({t:number}&ForecastRowJson)[],now:number){
+  if(!rows.length)return true;if(!budget(st,now,rows.length))return false;await ensureDynSchema(db,st);
+  const done=(r:ForecastRowJson)=>Object.keys(r.f).every(pb=>(r.y[pb]??[]).length===3&&r.y[pb]!.every(v=>v!=null));
+  for(let i=0;i<rows.length;i+=20)await db.batch(rows.slice(i,i+20).map(r=>db.prepare(`INSERT INTO dyn_forecasts (t,json,scored,updated_at) VALUES (?,?,?,?)
+    ON CONFLICT(t) DO UPDATE SET json=excluded.json,scored=excluded.scored,updated_at=excluded.updated_at`).bind(r.t,JSON.stringify({f:r.f,y:r.y}),done(r)?1:0,now)));
+  st.lastOkAt=now;return true;
+}
+export async function readForecasts(db:D1Like,st:DynStoreStatus,fromT:number,limit=200){
+  await ensureDynSchema(db,st);
+  const res=await db.prepare(`SELECT t,json FROM dyn_forecasts WHERE t>=? ORDER BY t LIMIT ?`).bind(fromT,limit).all<{t:number;json:string}>();
+  return res.results.map(r=>{let j:ForecastRowJson={f:{},y:{}};try{j=JSON.parse(r.json);}catch{/* 坏行跳过 */}return {t:r.t,f:j.f??{},y:j.y??{}};});
+}
+/** forecast rows older than the cutoff (already scored and folded into the track record) */
+export async function pruneForecasts(db:D1Like,st:DynStoreStatus,olderThanSec:number){await ensureDynSchema(db,st);await db.prepare(`DELETE FROM dyn_forecasts WHERE t<?`).bind(olderThanSec).run();}
 export async function dynCounts(db:D1Like){
   const out:Record<string,number>={};
   for(const t of DYN_TABLES){try{const r=await db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).first<{n:number}>();out[t]=r?.n??0;}catch{out[t]=-1;}}
