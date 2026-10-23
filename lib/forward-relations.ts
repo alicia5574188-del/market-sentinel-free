@@ -1951,7 +1951,7 @@ function openLivingTrade(s:ForwardState,o:LivingOrder,living:LivingDirective,q:Q
   if(!(riskBudget>=equity*riskFloor))return episodeHeadroom<=totalHeadroom&&episodeHeadroom<wantedRisk?"这一段集体异动的风险已用满 2%":"剩余风险预算不足以形成有效仓位";
   // htf-donch20 sizes like its research: notional = risk / stop distance, at most 1x equity per trade (no 5x expansion)
   const virtualNotional=htf?Math.min(riskBudget/stopRate,equity*HTF_NOTIONAL_CAP):Math.min(riskBudget/(stopRate+ROUND_TRIP_COST),equity*.70*expansion),
-    // the fixed size may exceed the 1x-equity cap (equity < 1000); the cap still shapes the original (virtual) size
+    // the fixed size (500 U) is below the 1x-equity cap at today's equity; the cap still shapes the original (virtual) size
     gateHeadroomNotional=htf?riskBudget/stopRate:riskBudget/(stopRate+ROUND_TRIP_COST),
     targetNotional=fx?fixedTargetNotional(FIXED_NOTIONAL_CFG,{equity,stopRate,costRate:ROUND_TRIP_COST,virtualNotional,gateHeadroomNotional}):virtualNotional,
     vz=fx?virtualSizing(virtualNotional,stopRate,ROUND_TRIP_COST,leverage):null,
