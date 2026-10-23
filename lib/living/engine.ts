@@ -1102,7 +1102,8 @@ export class LivingEngine{
           }catch{/* 只是记录 */}
           try{const pos=forward.positions.find(p=>p.id===o.tradeId),n=pos?.entryContext?.living;
             if(isPoolNote(n))this.runlog.pool(now,{t:"OPEN",at:pos?.openedAt??now,pb:n!.pb,sym:o.symbol,side:o.side,trade:o.tradeId,entry:pos?.entryPrice??null,
-              stop:pos?.stopPrice??null,risk:n!.rr??o.risk??null,conf:n!.cf??null,why:n!.why});}catch{/* 只是记录 */}
+              stop:pos?.stopPrice??null,risk:n!.rr??o.risk??null,conf:n!.cf??null,why:n!.why,
+              ...(n!.fx!=null?{notional:o.notional,notional_fixed:n!.fx,sizing_notional_virtual:n!.szn??null,sizing_risk_virtual:n!.szr??null,planned_risk:o.risk??null}:{})});}catch{/* 只是记录 */}
           this.trades.watches=this.trades.watches.filter(w=>w.id!==o.orderId);
           if(o.orderId.startsWith("lh-"))this.htfOpened(o,forward,now);
           if(o.orderId.startsWith("ld-"))this.dynSent(o.orderId,now,forward,o.tradeId);

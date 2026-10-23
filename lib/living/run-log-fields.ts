@@ -11,10 +11,12 @@ export type LivingFields={rule_epoch:string;living_kind:"normal"|"fast";living_p
   /** v3: environment pick at entry (coin env + market env + why), "" before v3 */living_env?:string|null;
   living_protect_code:string|null;living_protect_stop:number|null;living_protect_at:number|null;living_protect_reason:string|null;
   /** htf-donch20 only (daily trend breakout): signal day, its close, the 20-day high it broke, daily ATR20 at the signal, initial stop */
-  living_htf_day?:string|null;living_htf_close?:number|null;living_htf_breakout?:number|null;living_htf_atr?:number|null;living_htf_initial_stop?:number|null};
+  living_htf_day?:string|null;living_htf_close?:number|null;living_htf_breakout?:number|null;living_htf_atr?:number|null;living_htf_initial_stop?:number|null;
+  /** fixed paper notional: the size opened (U), the notional / risk the original formula would have opened */
+  notional_fixed?:number;sizing_notional_virtual?:number|null;sizing_risk_virtual?:number|null};
 type NoteLike={v?:unknown;k?:unknown;pb?:unknown;th?:unknown;ep?:unknown;ev?:unknown;mult?:unknown;sc?:unknown;t?:unknown;n?:unknown;per?:unknown;
   rk?:unknown;inv?:unknown;hold?:unknown;why?:unknown;ho?:unknown;in?:unknown;mk?:unknown;nar?:unknown;evd?:unknown;env?:unknown;
-  hx?:unknown;dy?:unknown;cl?:unknown;ref?:unknown;atr?:unknown};
+  hx?:unknown;dy?:unknown;cl?:unknown;ref?:unknown;atr?:unknown;fx?:unknown;szn?:unknown;szr?:unknown};
 type GuardLike={stop?:unknown;code?:unknown;reason?:unknown;at?:unknown};
 const num=(v:unknown)=>typeof v==="number"&&Number.isFinite(v)?v:null;
 const str=(v:unknown)=>typeof v==="string"?v:null;
@@ -27,6 +29,7 @@ export function livingFields(note:unknown,guard:unknown):Partial<LivingFields>{
       living_persistence:str(n.per),living_rank:num(n.rk),living_invalidation:num(n.inv)??0,living_evidence:str(n.ev)??"",
       living_multiple:num(n.mult)??0,living_episode:str(n.ep),living_hold_min:num(n.hold)??0,living_why:str(n.why)??"",living_handoff_at:num(n.ho)});
     if(n.hx===1)Object.assign(out,{living_htf_day:str(n.dy),living_htf_close:num(n.cl),living_htf_breakout:num(n.ref),living_htf_atr:num(n.atr),living_htf_initial_stop:num(n.inv)});
+    if(num(n.fx)!=null)Object.assign(out,{notional_fixed:num(n.fx)!,sizing_notional_virtual:num(n.szn),sizing_risk_virtual:num(n.szr)});
     if(n.v==="living-v2")Object.assign(out,{living_intent:str(n.in),living_market_intent:str(n.mk),living_story:str(n.nar),living_flow_evidence:str(n.evd),...(typeof n.env==="string"?{living_env:n.env}:{})});
   }
   if(g&&num(g.stop)!=null)Object.assign(out,{living_protect_code:str(g.code),living_protect_stop:num(g.stop),living_protect_at:num(g.at),living_protect_reason:str(g.reason)});

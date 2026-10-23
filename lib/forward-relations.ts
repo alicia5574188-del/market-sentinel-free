@@ -26,6 +26,7 @@ import { transitionExitReason, type TransitionEntry } from "./transition-rule.ts
 import { entryGate, entryGateNote, type EntryGateNote } from "./entry-gate.ts";
 import type { S1Note } from "./s1-rule.ts";
 import type { LivingDirective, LivingNote, LivingOrder, LivingResult } from "./living/directive.ts";
+import { FIXED_NOTIONAL_CFG, fixedNotionalActive, fixedTargetNotional, virtualSizing } from "./fixed-notional.ts";
 import { advanceShockEpisode, initialShockEpisode, normalizeShockEpisode, type ShockEpisode } from "./shock-episode.ts";
 import { advanceStageChronicle, attachStageSnap, equalWeightReturnPct, equalWeightReturnSince, fillStageForward, initialStageChronicle, normalizeStageChronicle, stageStamp, type StageChronicle, type StageSnap, type StageStamp } from "./stage-chronicle.ts";
 import { backfillSignalTally, earliestTallyAt, normalizeSignalTally, noteSignalOutcome, quoteSpreadBps, rememberSignalRepeat, type SignalRepeat, type SignalTally, type SignalTallyMeta } from "./signal-repeat.ts";
@@ -1160,11 +1161,14 @@ function markAndManage(s:ForwardState,quotes:Record<string,Quote>,now:number){
   }
   if(closed.size)s.positions=s.positions.filter(t=>!closed.has(t.id));
 }
-const riskCharge=(t:Trade)=>Math.max(t.plannedRisk,(t.entryContext?.portfolioRiskCharge??((t.forecast?.sizingEquity??0)*.006))*remainingTradeFraction(t));
+/** fixed-notional orders (gates "virtual"): the gates read the risk / margin the original formula would have opened, kept on the note */
+export const gateRisk=(t:Trade)=>t.entryContext?.living?.szr??t.plannedRisk;
+const gateMargin=(t:Trade)=>t.entryContext?.living?.szm??t.margin;
+const riskCharge=(t:Trade)=>Math.max(gateRisk(t),(t.entryContext?.portfolioRiskCharge??((t.forecast?.sizingEquity??0)*.006))*remainingTradeFraction(t));
 function existingRisk(s:ForwardState,side?:"LONG"|"SHORT"){return s.positions.filter(t=>!side||t.side===side).reduce((n,t)=>n+riskCharge(t),0);}
 function continuationRisk(s:ForwardState,side:"LONG"|"SHORT"){return s.positions.filter(t=>t.side===side&&t.entryContext?.mode==="CONTINUATION"
   &&((t.liquidityLifecycle?.currentPlan??t.entryContext?.tradePlan)==="LIQUIDITY_MIGRATION"||t.entryContext?.winnerPlan?.intent==="TREND")).reduce((n,t)=>n+riskCharge(t),0);}
-function cycleRiskAdded(s:ForwardState,since:number){return[...s.positions,...s.history].filter(t=>t.openedAt>=since).reduce((n,t)=>n+Math.max(t.realization?.initialRisk??t.plannedRisk,t.entryContext?.portfolioRiskCharge??0),0);}
+function cycleRiskAdded(s:ForwardState,since:number){return[...s.positions,...s.history].filter(t=>t.openedAt>=since).reduce((n,t)=>n+Math.max(t.realization?.initialRisk??gateRisk(t),t.entryContext?.portfolioRiskCharge??0),0);}
 export function executionValueAtQuote(input:{remainingNetRate:number;pullbackRiskRate:number;costRate?:number}){
   const cost=Math.max(.0005,input.costRate??ROUND_TRIP_COST),remaining=Math.max(0,input.remainingNetRate),
     pullback=Math.max(cost*1.5,input.pullbackRiskRate),edgeRatio=remaining/Math.max(pullback,1e-9);
@@ -1937,19 +1941,26 @@ function openLivingTrade(s:ForwardState,o:LivingOrder,living:LivingDirective,q:Q
     cycleHeadroom=equity*FIVE_MINUTE_NEW_RISK_RATE*expansion-cycleRiskAdded(s,s.lastCandleAt),
     episodeHeadroom=o.episodeCap!=null&&o.episodeId?equity*o.episodeCap-s.positions.filter(t=>t.entryContext?.living?.ep===o.episodeId).reduce((n,t)=>n+riskCharge(t),0):Infinity,
     headroom=Math.min(totalHeadroom,sideHeadroom,cycleHeadroom,episodeHeadroom),
-    wantedRisk=equity*o.riskRate*o.multiple,riskBudget=Math.min(wantedRisk,headroom);
+    fx=fixedNotionalActive(FIXED_NOTIONAL_CFG,o.note),
+    // fixed size, gates "actual": the fixed notional is the wanted size (its real risk), shrunk to the headroom below
+    wantedRisk=fx&&FIXED_NOTIONAL_CFG.gates==="actual"?FIXED_NOTIONAL_CFG.usdt*(htf?stopRate:stopRate+ROUND_TRIP_COST):equity*o.riskRate*o.multiple,
+    riskBudget=Math.min(wantedRisk,headroom);
   // dynamic-v1.5: unified-pool members (pool playbook / daily breakout: hx, burst-leader: bh) are sized by the predictor gate at
   // 0.125–0.75 %; the generic 0.15 % floor rejected every minimum-size pool order ("剩余风险预算不足以形成有效仓位")
   const riskFloor=htf||o.note.bh===1?POOL_RISK_FLOOR:.0015;
   if(!(riskBudget>=equity*riskFloor))return episodeHeadroom<=totalHeadroom&&episodeHeadroom<wantedRisk?"这一段集体异动的风险已用满 2%":"剩余风险预算不足以形成有效仓位";
   // htf-donch20 sizes like its research: notional = risk / stop distance, at most 1x equity per trade (no 5x expansion)
-  const targetNotional=htf?Math.min(riskBudget/stopRate,equity*HTF_NOTIONAL_CAP):Math.min(riskBudget/(stopRate+ROUND_TRIP_COST),equity*.70*expansion),
+  const virtualNotional=htf?Math.min(riskBudget/stopRate,equity*HTF_NOTIONAL_CAP):Math.min(riskBudget/(stopRate+ROUND_TRIP_COST),equity*.70*expansion),
+    // the fixed size may exceed the 1x-equity cap (equity < 1000); the cap still shapes the original (virtual) size
+    gateHeadroomNotional=htf?riskBudget/stopRate:riskBudget/(stopRate+ROUND_TRIP_COST),
+    targetNotional=fx?fixedTargetNotional(FIXED_NOTIONAL_CFG,{equity,stopRate,costRate:ROUND_TRIP_COST,virtualNotional,gateHeadroomNotional}):virtualNotional,
+    vz=fx?virtualSizing(virtualNotional,stopRate,ROUND_TRIP_COST,leverage):null,
     mult=Math.max(contract.quantoMultiplier,1e-12),
     minContracts=Math.max(1,Math.ceil(contract.minContracts??(Number(contract.orderSizeMin??1)||1))),
     contracts=Math.floor(targetNotional/(price*mult));
   if(contracts<minContracts)return"低于最小模拟合约数量";
-  const quantity=contracts*mult,notional=quantity*price,margin=notional/leverage,totalMargin=s.positions.reduce((n,t)=>n+t.margin,0);
-  if(totalMargin+margin>equity*TOTAL_MARGIN_RATE*expansion)return"组合保证金已满";
+  const quantity=contracts*mult,notional=quantity*price,margin=notional/leverage,totalMargin=s.positions.reduce((n,t)=>n+gateMargin(t),0);
+  if(totalMargin+(fx&&FIXED_NOTIONAL_CFG.gates==="virtual"?vz!.margin:margin)>equity*TOTAL_MARGIN_RATE*expansion)return"组合保证金已满";
   const plannedRisk=notional*(stopRate+ROUND_TRIP_COST),entryFee=notional*PAPER_COST.feeRate,horizon=Math.max(10,Math.round(o.note.hold)),
     target=null,
     id=`lv-${now.toString(36)}-${o.symbol.replace(/[^A-Z0-9]/g,"")}-${side[0]}`,
@@ -1971,7 +1982,8 @@ function openLivingTrade(s:ForwardState,o:LivingOrder,living:LivingDirective,q:Q
         portfolioRiskCharge:riskBudget,sizeMultiple:o.multiple,strategyVersion:MARKET_INTELLIGENCE_VERSION,postEntryState:"PENDING",
         sourceCount:q!.sourceCount,disagreementRate:q!.disagreementRate,marketNarrativeId:s.extremumRegime.narrative.id,
         thesisSummary:o.reason.slice(0,240),invalidationSummary:`失效价 ${o.stop}`,
-        stageNote:stageStamp(s.stageChronicle,s.extremumRegime.internals?.synchrony,now),living:o.note},
+        stageNote:stageStamp(s.stageChronicle,s.extremumRegime.internals?.synchrony,now),
+        living:fx?{...o.note,fx:FIXED_NOTIONAL_CFG.usdt,szn:vz!.notional,...(FIXED_NOTIONAL_CFG.gates==="virtual"?{szr:vz!.risk,szm:vz!.margin}:{})}:o.note},
       forecast:{remainingNetRate:0,quality:.5,sizingEquity:equity}};
   try{
     // Same position assessment the existing exits read later; recorded as the baseline only (no veto here).

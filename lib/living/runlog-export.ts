@@ -7,7 +7,7 @@ import {POOL} from "../dynamic/playbooks.ts";
 import {RUNLOG_VERSION,mergeBuckets,whyNoTrades,caseStats,GATE_LABEL,LAYER_LABEL,BUCKET_MS,HOLD_READ_FIELDS,HOLD_READ_CODES,type Bucket,type FinalCase} from "./runlog.ts";
 
 /** Position columns that describe the current system (everything else on a stored row is legacy and not exported). */
-const POSITION_KEEP=new Set(["id","symbol","side","entry","exit","qty","notional","gross_pnl","fee","net_pnl","holdSec","opened_at","closed_at",
+const POSITION_KEEP=new Set(["notional_fixed","sizing_notional_virtual","sizing_risk_virtual","id","symbol","side","entry","exit","qty","notional","gross_pnl","fee","net_pnl","holdSec","opened_at","closed_at",
   "leverage","stop_price","exit_trigger","exit_move_pct","account_epoch","rule_epoch","planned_hold_min","funding_rate","volume24h_usd","entry_spread_bps",
   "path_minutes","mfe_pct","mae_pct","mfe_min","mae_before_mfe_pct","mfe_6h_pct","mae_6h_pct","hold_mfe_pct","exit_giveback_pct",
   "stop_dist_pct","hour_utc","weekday","chg_1h_pct","atr_5m_pct","dist_high_10h_pct","dist_low_10h_pct","range_pos_10h","mkt_with_share"]);
@@ -44,7 +44,7 @@ export const FIELD_NOTES:Record<string,unknown>={
     final:"true 表示 6 小时已走完、路径定稿；false 是进行中（路径到导出为止）",
     path:"t0 起每分钟一格，格式 收,高,低（相对 ref 的基点，原始价格方向，不按多空翻转），分号分隔；空格表示那一分钟没有数据（程序停了）；coarse 是只有 5 分钟精度的分钟段（重启前较早的部分）",
     out:"按案例方向算（价格 %）：mfe/mae 最大有利/不利及第几分钟，mae_before_mfe 到最高点前最深回撤，r15…r360 各时点收益，hit_1pct_first 先到 +1% 还是 -1%，from_open 从实际开仓起算"},
-  positions:"账户真实模拟单。living_playbook 打法，living_intent 开单时资金状态/情绪，living_market_intent 市场意图，living_story 叙述，living_flow_evidence 证据数字，living_env 开单时的环境选择（为什么选这个打法｜币环境｜市场环境），living_invalidation 失效价，living_protect_* 保护（日线突破单的 10 日低点跟踪止损也记在这里，代码 LIVING_HTF_TRAIL）；living_htf_* 只在日线突破单上：信号日、当天收盘、突破的 20 日最高价、日线 ATR20、初始止损；mfe_pct/mae_pct 等是这笔单从开仓起的价格路径结果（%）。",
+  positions:"账户真实模拟单。固定名义单有 notional_fixed（固定名义 U）、sizing_notional_virtual（原公式会开的名义 U）、sizing_risk_virtual（原公式风险额 U）；止损止盈按价格百分比，与名义无关。living_playbook 打法，living_intent 开单时资金状态/情绪，living_market_intent 市场意图，living_story 叙述，living_flow_evidence 证据数字，living_env 开单时的环境选择（为什么选这个打法｜币环境｜市场环境），living_invalidation 失效价，living_protect_* 保护（日线突破单的 10 日低点跟踪止损也记在这里，代码 LIVING_HTF_TRAIL）；living_htf_* 只在日线突破单上：信号日、当天收盘、突破的 20 日最高价、日线 ATR20、初始止损；mfe_pct/mae_pct 等是这笔单从开仓起的价格路径结果（%）。",
 };
 export const REVIEW_PLAN=[
   "很久没开单：why_no_trades.longest_no_open 那一段的 main 和 gate；再到 timeline 里那几行看是哪一层挡的、原因是什么。",

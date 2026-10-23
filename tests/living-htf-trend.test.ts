@@ -17,6 +17,7 @@ import {livingFields} from "../lib/living/run-log-fields.ts";
 import {livingDetail,livingWhy} from "../lib/living-trade-view.ts";
 import {advanceForward,POOL_RISK_FLOOR,type ForwardState} from "../lib/forward-relations.ts";
 import {PRED_ALLOC} from "../lib/dynamic/allocator.ts";
+import {FIXED_NOTIONAL_CFG} from "../lib/fixed-notional.ts";
 import type {LivingDirective,LivingNote,LivingOrder} from "../lib/living/directive.ts";
 import {allItems} from "../lib/living/config.ts";
 import {runForward,simInputs,GOLDEN_SYMBOLS} from "./living/forward-sim.ts";
@@ -263,6 +264,8 @@ function htfOrderFor(sym:string,ask:number,stopRate:number,hold=HTF.holdMin):Liv
     note:{v:"living-v2",k:"N",pb:HTF.pb,th:null,ep:null,ev:"normal",mult:1,sc:null,t:null,n:null,per:null,rk:1,inv:stop,ref:ask*.98,hold,why:"htf test",hx:1,atr:ask*stopRate/2,cl:ask,dy:"2026-10-19"}};
 }
 test("forward: htf order opens with adaptive leverage (stop inside 40% of liquidation), 0.75% risk sizing, ≤1× equity; no time exit; trail persists",()=>{
+  const savedFixed=FIXED_NOTIONAL_CFG.usdt;FIXED_NOTIONAL_CFG.usdt=0; // this test pins the ORIGINAL risk sizing; fixed 1000 is covered in fixed-notional.test.ts
+  try{
   const {s,step,at}=forwardStart();const now=at+6000;
   const inp=simInputs(s,now,GOLDEN_SYMBOLS,{});const sym=GOLDEN_SYMBOLS.find(x=>!s.positions.some(p=>p.symbol===x)&&inp.quotes[x]?.bestAsk&&(inp.contracts[x]?.maintenanceRate??1)<=.02)!;
   const ask=inp.quotes[sym]!.bestAsk;
@@ -287,6 +290,7 @@ test("forward: htf order opens with adaptive leverage (stop inside 40% of liquid
   // stop touch closes it
   p.stopPrice=p.lastPrice*1.05;const c=step(back,now+202*6000);
   assert.ok(["LIVING_STOP","LIVING_GUARD_STOP"].includes(c.state.history.find(h=>h.id===t!.id)?.exitReason??""));
+  }finally{FIXED_NOTIONAL_CFG.usdt=savedFixed;}
 });
 
 test("forward (dynamic-v1.5): a unified-pool order at the predictor gate's minimum size (0.125%) opens; an ordinary order that small is still refused",()=>{
