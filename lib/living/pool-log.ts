@@ -46,7 +46,7 @@ export const POOL_FIELD_NOTES={
   common:"每条记录：t 类型，at 时间（UTC 毫秒），pb 打法代码（看 playbook_labels），sym 币，side 方向。价格幅度都是价格涨跌（0.012 = +1.2%），不是 ROE。",
   GATE:"开单判断。src=allocator：分配器对这套打法的结论变了（ok 允许/不允许）；src=signal：一个新的开单信号被放行或拦下（kind=pool 打法池信号 / burst 爆发选币 / htf 日线突破）。p6 未来 6 小时在赚钱期的概率，pMin 门槛，phase 现在是赚钱期 GOOD / 亏钱期 BAD / 不明，elapsedH 这一段已多久（小时），label 数据少/数据一般/数据较足，risk 允许时的风险（占权益比例），why 原因（中文）。decision：ALLOW 分配器允许（src=allocator），CUT 预测被影子交易打脸、暂停 12 小时，ORDER 发出开单，DENY 分配器不允许，SWITCH_OFF 开关 10 关着，BUSY 打法池/本打法/这个币已满，WAIT 研究层只计算/降级，STOP_CROSSED 现价已越过止损，NOT_LIVE 这个币不在实时报价币池（没有 Gate 实时盘口），只记录、不发单（影子交易照记，预测器照学），NO_QUOTE 发出后这个币没有 Gate 实时盘口、没开，REJECTED 发出后模拟账户拒单（src=account，why 是拒单原因，例如维持保证金率 >2%、止损超过爆仓距离 40%、风险预算不足）。",
   OPEN:"开仓：trade 订单号，entry 开仓价，stop 止损，risk 风险（占权益比例），why 开单理由。",
-  CLOSE:"平仓：entry/exit 开平价，move 价格涨跌（按方向，%），net 净盈亏（U，已扣费），risk 开仓时的风险比例（老单没有记录时为空），held_min 持有分钟，exit_code 出场代码，exit_why 出场原因。出场代码 LIVING_DYN_POOL_LOCK（池内动态锁利）时另带：lock_peak 最高浮盈，lock_cur 触发时浮盈，lock_line 保护线，lock_stall_min 多少分钟没创新高，lock_unit 该币波动单位，lock_window_min 停滞窗口（都是价格涨跌，不是 ROE）。",
+  CLOSE:"平仓：entry/exit 开平价，move 价格涨跌（按方向，%），net 净盈亏（U，已扣费），risk 开仓时的风险比例（老单没有记录时为空），held_min 持有分钟，exit_code 出场代码，exit_why 出场原因。出场代码 LIVING_DYN_POOL_LOCK（池内动态锁利）时另带：lock_peak 最高浮盈，lock_cur 触发时浮盈，lock_line 保护线，lock_stall_min 多少分钟没创新高，lock_r 这单计划风险（开仓价到初始止损的距离），lock_peak_r 最高浮盈是几个 R，lock_window_min 停滞窗口（都是价格涨跌，不是 ROE）。",
   PRED:"预测快照（每小时）：n 有预测的打法数，allowed 允许开单的打法数，top 前 5（pb, p6 概率, phase, label），real6 实盘检验（6 小时内跟着来的影子交易：看好时/不看好时的笔数和平均 %），hit/brier 已到期预测的命中率和 Brier。",
   SCORE:"一次分析里到期并评分的预测：n 个，hit 命中率，brier，good/other 是 6 小时预测看好时/不看好时后续影子交易的 [笔数, 合计 %]。",
   BACKFILL:"历史下载进度（每 30 分钟）：done/total 序列，req 今天请求数，err 累计失败，blocked 限流中的交易所，trades 影子交易笔数，units 已回放的历史块。只用 Bybit/OKX/KuCoin，从不请求 Gate。",

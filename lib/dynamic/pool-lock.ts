@@ -1,34 +1,37 @@
 /**
- * Pool profit lock (2026-10-23): dynamic profit protection for open pool-playbook trades (dp) only. Pure: no I/O, no request.
+ * Pool profit lock (2026-10-23, R version): dynamic profit protection for open pool-playbook trades (dp) only. Pure: no I/O, no request.
  * It can only close a trade EARLIER than the playbook's own exits (stop / target / signal / time stay as they are, nothing is
- * loosened). Everything is in the coin's own volatility unit a = max(0.15%, 15-min 1-minute unit, 5-minute ATR14), price-move %.
+ * loosened). The yardstick is the trade's OWN planned risk R = |entry − initial stop| / entry (price move, not ROE), not a volatility
+ * estimate: the playbook already sized its stop and (mostly) its 2R target from the structure it traded, so R is also the scale on
+ * which "a meaningful profit" and "room for the trend" are measured. Cost (fees + buffer) is the only fixed number.
  *
- *  armed       peak ≥ max(ARM_A × a, ARM_MIN): smaller profits are left alone (noise), a loser never arms
- *  curve       keep line L2 = peak² / (peak + CURVE_C × a): the kept share peak/(peak+C·a) grows with the peak (a small peak keeps
- *              ~half, a big one keeps most of it) but the room C·a never drops to a touch-and-go value
- *  stall       no new high for more than W minutes: the allowed giveback goes from WIDE_A × a down to TIGHT_A × a over the next W
- *              minutes (line L1 = peak − giveback). W follows the playbook's planned hold: planned / 24, clamped to 15–45 min
- *  line        max(L1, L2, cost floor): the stricter (closer to the peak) one, never below entry + fees + buffer (COST_FLOOR)
- *  trigger     current price move ≤ line → exit at the executable quote. Unknown peak / peak time / unit / quote → no trigger.
+ *  armed       peak ≥ max(ARM_R × R, ARM_FLOOR): ARM_FLOOR = 2.5 × cost floor (0.6%) keeps a tiny R from arming on noise; smaller
+ *              profits are left alone, a loser never arms
+ *  curve       keep line L2 = peak² / (peak + K × R): the kept share m/(m+K) (m = peak/R) grows with the peak (K=0.5: half at 0.5R,
+ *              2/3 at 1R, 80% at 2R) while the room K·R scales with the trade's own risk
+ *  stall       no new high for more than W minutes: allowed giveback goes from WIDE_K × R (never binds while fresh) down to
+ *              TIGHT_K × R over the next W minutes (line L1 = peak − giveback). W follows the playbook's planned hold
+ *              (maxBars × interval): planned / 8, clamped to 15–45 min
+ *  line        max(L1, L2, cost floor): the stricter one, never below entry + fees + buffer (COST_FLOOR)
+ *  trigger     current price move ≤ line → exit at the executable quote. Unknown peak / peak time / R / quote → no trigger.
  */
-export const POOL_LOCK={armA:3,armMin:.006,curveC:3,wideA:3,tightA:1.5,wMin:15,wMax:45,wDiv:24,defaultBars:24,
+export const POOL_LOCK={armR:.5,armFloor:.006,curveK:.5,wideK:1,tightK:.25,minR:.008,wMin:15,wMax:45,wDiv:8,defaultBars:24,
   /** round-trip fee 0.19% + 0.05% buffer: once armed, the line never sits below this (a winner is not allowed to turn into a loss) */
   costFloor:.0019+.0005} as const;
 export const POOL_LOCK_CODE="LIVING_DYN_POOL_LOCK";
 export const IV_MIN:Record<string,number>={"1m":1,"5m":5,"15m":15,"1h":60,"4h":240,"1d":1440};
 const fin=(x:unknown):x is number=>typeof x==="number"&&Number.isFinite(x);
-/** stall window (minutes) from the playbook's planned hold (bars × interval); no planned hold → default bars */
+/** planned hold in minutes (bars × interval); no planned bars → default bars */
+export function plannedMin(iv:string,maxBars:number|null|undefined):number{return (fin(maxBars)&&maxBars>0?maxBars:POOL_LOCK.defaultBars)*(IV_MIN[iv]??15);}
+/** stall window (minutes) from the playbook's planned hold */
 export function stallWindowMin(iv:string,maxBars:number|null|undefined):number{
-  const ivm=IV_MIN[iv]??15,planned=(fin(maxBars)&&maxBars>0?maxBars:POOL_LOCK.defaultBars)*ivm;
-  return Math.min(POOL_LOCK.wMax,Math.max(POOL_LOCK.wMin,planned/POOL_LOCK.wDiv));
+  return Math.min(POOL_LOCK.wMax,Math.max(POOL_LOCK.wMin,plannedMin(iv,maxBars)/POOL_LOCK.wDiv));
 }
-/** the coin's volatility unit (price-move fraction): max of the floor, the existing 15-min unit and the 5-minute ATR14 (both optional) */
-export function lockUnit(unit1m:number|null|undefined,atr5:number|null|undefined):number{return Math.max(.0015,fin(unit1m)?unit1m:0,fin(atr5)?atr5:0);}
-/** 5-minute ATR14 as a fraction of the last close (mean true range over the last ≤14 closed bars); null with < 6 bars */
-export function atr5Frac(bars:readonly {high:number;low:number;close:number}[]):number|null{
-  const xs=bars.slice(-15);if(xs.length<7)return null;let s=0,n=0;
-  for(let i=1;i<xs.length;i++){const b=xs[i]!,pc=xs[i-1]!.close;if(!(pc>0))continue;s+=Math.max(b.high-b.low,Math.abs(b.high-pc),Math.abs(b.low-pc));n++;}
-  const c=xs[xs.length-1]!.close;return n>=5&&c>0?s/n/c:null;
+/** the trade's planned risk R as a price-move fraction from entry and the INITIAL stop (never the trailed one); null when unusable.
+ *  Floored at minR (the pool playbooks never plan a stop closer than that), so a degenerate tiny stop cannot make the line a touch-and-go. */
+export function riskR(entry:number|null|undefined,initialStop:number|null|undefined):number|null{
+  if(!fin(entry)||!fin(initialStop)||!(entry>0)||!(initialStop>0))return null;
+  const r=Math.abs(entry-initialStop)/entry;return r>0&&r<1?Math.max(r,POOL_LOCK.minR):null;
 }
 export type LockIn={
   /** best price move so far in the trade's direction (Trade.favorable, persisted), fraction; null = lost */
@@ -37,24 +40,25 @@ export type LockIn={
   cur:number|null;
   /** minutes since the peak was last improved; null = unknown (lost after a restart) */
   stallMin:number|null;
-  a:number|null;windowMin:number};
+  /** planned risk R (price-move fraction); null = unknown */
+  r:number|null;windowMin:number};
 export type LockVerdict={act:"HOLD"|"EXIT";armed:boolean;line:number|null;giveback:number|null;peak:number;cur:number;stallMin:number;why:string};
 const p2=(x:number)=>`${(x*100).toFixed(2)}%`;
-/** the protection line (price-move fraction) for a peak, or null while not armed. Pure function of (peak, a, stall, window). */
-export function lockLine(peak:number,a:number,stallMin:number,windowMin:number):{line:number;giveback:number;armed:true}|null{
-  if(!fin(peak)||!fin(a)||a<=0||peak<Math.max(POOL_LOCK.armA*a,POOL_LOCK.armMin))return null;
-  const l2=peak*peak/(peak+POOL_LOCK.curveC*a);
+/** the protection line (price-move fraction) for a peak, or null while not armed. Pure function of (peak, R, stall, window). */
+export function lockLine(peak:number,r:number,stallMin:number,windowMin:number):{line:number;giveback:number;armed:true}|null{
+  if(!fin(peak)||!fin(r)||r<=0||peak<Math.max(POOL_LOCK.armR*r,POOL_LOCK.armFloor))return null;
+  const l2=peak*peak/(peak+POOL_LOCK.curveK*r);
   const w=Math.max(1,windowMin),over=Math.max(0,Math.min(1,(stallMin-w)/w));
-  const g1=(POOL_LOCK.wideA+(POOL_LOCK.tightA-POOL_LOCK.wideA)*over)*a;
+  const g1=(POOL_LOCK.wideK+(POOL_LOCK.tightK-POOL_LOCK.wideK)*over)*r;
   const line=Math.min(peak,Math.max(l2,peak-g1,POOL_LOCK.costFloor));
   return {line,giveback:peak-line,armed:true};
 }
 export function poolLock(i:LockIn):LockVerdict|null{
-  if(!fin(i.peak)||!fin(i.cur)||!fin(i.stallMin)||!fin(i.a)||i.a<=0)return null;// anything unknown → the rule stays out
-  const r=lockLine(i.peak,i.a,i.stallMin,i.windowMin);
+  if(!fin(i.peak)||!fin(i.cur)||!fin(i.stallMin)||!fin(i.r)||i.r<=0)return null;// anything unknown → the rule stays out
+  const r=lockLine(i.peak,i.r,i.stallMin,i.windowMin);
   if(!r)return {act:"HOLD",armed:false,line:null,giveback:null,peak:i.peak,cur:i.cur,stallMin:i.stallMin,why:""};
   if(i.cur<=r.line+1e-12)return {act:"EXIT",armed:true,line:r.line,giveback:r.giveback,peak:i.peak,cur:i.cur,stallMin:i.stallMin,
-    why:`池内动态锁利：最高浮盈 ${p2(i.peak)}，保护线 ${p2(r.line)}（允许回吐 ${p2(r.giveback)}），${Math.round(i.stallMin)} 分钟没创新高，现在 ${p2(i.cur)}`};
+    why:`池内动态锁利：最高浮盈 ${p2(i.peak)}（${(i.peak/i.r).toFixed(2)}R，计划风险 R=${p2(i.r)}），保护线 ${p2(r.line)}（允许回吐 ${p2(r.giveback)}），${Math.round(i.stallMin)} 分钟没创新高，现在 ${p2(i.cur)}`};
   return {act:"HOLD",armed:true,line:r.line,giveback:r.giveback,peak:i.peak,cur:i.cur,stallMin:i.stallMin,why:""};
 }
 /** per-trade peak clock kept in the living trades state (persisted with its normal 45 s batch): [peak seen, since ms] */

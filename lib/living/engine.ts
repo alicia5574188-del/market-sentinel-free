@@ -39,7 +39,7 @@ import {HTF,closedDaily,dailyCheck,htfExitLevel,htfOrder,freshThrough,dayKey,day
 import type {DynPlanInput,DynGateView} from "../dynamic/runtime.ts";
 import {isPoolNote,movePct} from "./pool-log.ts";
 import {POOL_BY_ID} from "../dynamic/playbooks.ts";
-import {poolLock,tickClock,stallWindowMin,lockUnit,atr5Frac,POOL_LOCK_CODE,type PeakClock} from "../dynamic/pool-lock.ts";
+import {poolLock,tickClock,stallWindowMin,riskR,POOL_LOCK_CODE,type PeakClock} from "../dynamic/pool-lock.ts";
 import {RunLog,CASES_KEY,CASE_PAGE_KEYS,type Gate,type Layer,type CaseInput,type MarketSample} from "./runlog.ts";
 
 export const LIVING_KEYS={config:LIVING_CONFIG_KEY,basket:`${LIVING_KEY_PREFIX}basket`,fast:`${LIVING_KEY_PREFIX}fast`,
@@ -124,7 +124,7 @@ const NOT_LIVE_WHY="不在实时报价币池，只记录";
 const liveQuote=(ctx:PlanContext,sym:string)=>{const q=ctx.quotes[sym];return !!q&&ctx.now-q.observedAt<=10_000&&q.entryReady!==false&&q.bestBid>0&&q.bestAsk>=q.bestBid;};
 /** pool profit lock: peak / current move, line, minutes without a new high, unit — recorded in the CLOSE record for the review */
 const lockFields=(code:string|null,ev:Record<string,unknown>|null)=>code===POOL_LOCK_CODE&&ev?{lock_peak:ev.peak??null,lock_cur:ev.cur??null,lock_line:ev.line??null,
-  lock_stall_min:ev.stall_min??null,lock_unit:ev.unit??null,lock_window_min:ev.window_min??null}:{};
+  lock_stall_min:ev.stall_min??null,lock_r:ev.r??null,lock_peak_r:ev.peak_r??null,lock_window_min:ev.window_min??null}:{};
 const dynPbOf=(id:string)=>{const m=/^ld-(.+)-[A-Z0-9]+_USDT-\d+$/.exec(id);return m?m[1]!:"dyn";};
 const FAST_CODES=new Set(["LIVING_FAST_LIQ_GUARD","LIVING_FAST_TIGHTEN","LIVING_FAST_CONFIRM_EXIT","LIVING_FAST_BREAKEVEN","LIVING_FAST_GIVEBACK"]);
 const d=(s:"LONG"|"SHORT")=>s==="LONG"?1:-1;
@@ -1010,7 +1010,7 @@ export class LivingEngine{
     return out;
   }
   /**
-   * pool profit lock (lib/dynamic/pool-lock.ts): only for open pool trades (dp). Reads the persisted best move (Trade.favorable) and a
+   * pool profit lock (lib/dynamic/pool-lock.ts): only for open pool trades (dp). Reads the persisted best move (Trade.favorable), the planned risk R from the initial stop (living.inv) and a
    * per-trade peak clock kept in the trades state (no extra write: that key is already written in its 45 s batch). Can only add an
    * EXIT earlier than the playbook's own rules; never touches a stop. Unknown peak / clock / quote / unit → does nothing. Never throws.
    */
@@ -1023,12 +1023,12 @@ export class LivingEngine{
         const stall=tickClock(ck,v.id,Number.isFinite(v.favorable)?v.favorable:null,now);
         if(stall==null||v.price==null||taken.has(v.id)||!(v.entryPrice>0))continue;
         const cur=(v.side==="LONG"?1:-1)*(v.price/v.entryPrice-1);
-        const a=lockUnit(volUnit(this.tape.closed1(v.symbol,now).slice(-16).map(r=>r.close)),atr5Frac(this.tape.closed5(v.symbol,now)));
-        const iv=POOL_BY_ID[v.living.pb]?.iv??"15m",vd=poolLock({peak:v.favorable,cur,stallMin:stall,a,windowMin:stallWindowMin(iv,v.living.mb)});
+        const rr=riskR(v.entryPrice,v.living.inv);if(rr==null)continue;// initial stop (living.inv), not the trailed one
+        const iv=POOL_BY_ID[v.living.pb]?.iv??"15m",vd=poolLock({peak:v.favorable,cur,stallMin:stall,r:rr,windowMin:stallWindowMin(iv,v.living.mb)});
         if(!vd||vd.act!=="EXIT")continue;
         const why=`${vd.why}`.slice(0,200);
         actions.push({tradeId:v.id,action:"EXIT",code:POOL_LOCK_CODE,reason:why.slice(0,160),
-          detail:{peak:r6(vd.peak),cur:r6(vd.cur),line:r6(vd.line!),stall_min:Math.round(vd.stallMin),unit:r6(a),window_min:Math.round(stallWindowMin(iv,v.living.mb))}});
+          detail:{peak:r6(vd.peak),cur:r6(vd.cur),line:r6(vd.line!),stall_min:Math.round(vd.stallMin),r:r6(rr),peak_r:r6(vd.peak/rr),window_min:Math.round(stallWindowMin(iv,v.living.mb))}});
         this.noteOnce(`dk|${v.id}`,now,"DYN_EXIT",{trade:v.id,stop:null,act:acting?"EXIT":"RECORD",reason:acting?why:`只计算/降级中，没执行：${why}`});
       }
       for(const id of Object.keys(ck))if(!open.has(id))delete ck[id];

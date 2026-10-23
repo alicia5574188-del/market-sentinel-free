@@ -4,58 +4,63 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import {POOL_LOCK,POOL_LOCK_CODE,lockLine,poolLock,tickClock,stallWindowMin,lockUnit,atr5Frac,type PeakClock} from "../lib/dynamic/pool-lock.ts";
+import {POOL_LOCK,POOL_LOCK_CODE,lockLine,poolLock,tickClock,stallWindowMin,plannedMin,riskR,type PeakClock} from "../lib/dynamic/pool-lock.ts";
 import {LivingEngine,LIVING_KEYS,type PlanContext,type ForwardView} from "../lib/living/engine.ts";
 import {defaultLivingConfig} from "../lib/living/config.ts";
 import type {DynPlanInput} from "../lib/dynamic/runtime.ts";
 import type {LivingNote} from "../lib/living/directive.ts";
 
-const A=.004;// a coin whose volatility unit is 0.4%
+const R=.02;// a trade that planned a 2% stop distance
 const W=30;
-test("small profit does not arm: below max(3a, 0.6%) nothing triggers, even after a long stall and a full giveback",()=>{
-  for(const peak of [0,.002,.005,3*A-1e-4]){
-    assert.equal(lockLine(peak,A,500,W),null,`peak ${peak}`);
-    const v=poolLock({peak,cur:-.02,stallMin:500,a:A,windowMin:W});assert.equal(v?.act,"HOLD");assert.equal(v?.armed,false);
+test("small profit does not arm: below max(0.5R, 0.6%) nothing triggers, even after a long stall and a full giveback",()=>{
+  for(const peak of [0,.002,.005,.5*R-1e-4]){
+    assert.equal(lockLine(peak,R,500,W),null,`peak ${peak}`);
+    const v=poolLock({peak,cur:-.02,stallMin:500,r:R,windowMin:W});assert.equal(v?.act,"HOLD");assert.equal(v?.armed,false);
   }
-  assert.equal(lockLine(.0059,.0015,500,W),null,"quiet coin: the 0.6% floor still applies");
-  assert.ok(lockLine(.006,.0015,0,W));
+  assert.equal(lockLine(.0059,.008,500,W),null,"small R: the 0.6% floor (2.5 × cost) still applies");
+  assert.ok(lockLine(.006,.008,0,W));
+  assert.ok(lockLine(.5*R,R,0,W),"armed exactly at 0.5R");
+});
+test("scale is the trade's own R: the same peak in R-multiples gets the same kept share, whatever R is",()=>{
+  for(const r of [.01,.02,.05,.08]){const l=lockLine(1*r,r,0,W)!;assert.ok(Math.abs(l.line/(1*r)-1/(1+POOL_LOCK.curveK))<1e-12,`1R share at R ${r}`);}
+  // a wide-stop trade (R 6%) is not armed by a 1% peak; a tight-stop trade (R 1%) is
+  assert.equal(lockLine(.01,.06,0,W),null);assert.ok(lockLine(.01,.01,0,W));
+  // the 5-minute noise level is not an input at all: line depends on (peak, R, stall, window) only
+  assert.equal(lockLine.length,4);
 });
 test("curve: the kept share of the peak rises monotonically with the peak; the room never drops to a touch",()=>{
   let last=-1;
-  for(let p=.012;p<=.2;p+=.004){const r=lockLine(p,A,0,W)!,share=r.line/p;assert.ok(share>=last-1e-12,`share ${share} at ${p}`);last=share;assert.ok(r.giveback>=POOL_LOCK.curveC*A*.999-1e-12||r.line===POOL_LOCK.costFloor||r.giveback>=POOL_LOCK.tightA*A,"room kept");}
-  // quiet coin vs wild coin at the same peak: the wild coin gets more room
-  assert.ok(lockLine(.03,.002,0,W)!.line>lockLine(.03,.008,0,W)!.line);
-  // line is monotone in the peak
-  let l=-1;for(let p=.012;p<=.2;p+=.002){const r=lockLine(p,A,0,W)!;assert.ok(r.line>=l);l=r.line;}
+  for(let p=.01;p<=.3;p+=.004){const r=lockLine(p,R,0,W)!,share=r.line/p;assert.ok(share>=last-1e-12,`share ${share} at ${p}`);last=share;assert.ok(r.giveback>=POOL_LOCK.curveK*R*p/(p+POOL_LOCK.curveK*R)-1e-12||r.line===POOL_LOCK.costFloor,"room kept");}
+  // wide-stop trade at the same peak gets more room than a tight-stop one
+  assert.ok(lockLine(.05,.01,0,W)!.line>lockLine(.05,.04,0,W)!.line);
+  let l=-1;for(let p=.01;p<=.3;p+=.002){const r=lockLine(p,R,0,W)!;assert.ok(r.line>=l);l=r.line;}
 });
-test("curve trigger (no stall): peak 3% on a=0.4% → exit at or under it, hold above it",()=>{
-  const line=lockLine(.03,A,0,W)!.line;assert.ok(Math.abs(line-.03*.03/(.03+3*A))<1e-12);
-  assert.equal(poolLock({peak:.03,cur:line+.0005,stallMin:0,a:A,windowMin:W})!.act,"HOLD");
-  const v=poolLock({peak:.03,cur:line-.0001,stallMin:0,a:A,windowMin:W})!;assert.equal(v.act,"EXIT");assert.match(v.why,/池内动态锁利/);
+test("curve trigger (no stall): peak 3% on R=2% → exit at or under it, hold above it",()=>{
+  const line=lockLine(.03,R,0,W)!.line;assert.ok(Math.abs(line-.03*.03/(.03+POOL_LOCK.curveK*R))<1e-12);
+  assert.equal(poolLock({peak:.03,cur:line+.0005,stallMin:0,r:R,windowMin:W})!.act,"HOLD");
+  const v=poolLock({peak:.03,cur:line-.0001,stallMin:0,r:R,windowMin:W})!;assert.equal(v.act,"EXIT");assert.match(v.why,/池内动态锁利/);assert.match(v.why,/1\.50R/);
 });
-test("stall trigger: after W minutes without a new high the giveback narrows from 3a to 1.5a, and a new high resets it",()=>{
-  const peak=.06,wide=lockLine(peak,A,0,W)!,tight=lockLine(peak,A,2*W,W)!;
-  assert.ok(tight.line>wide.line,"narrower giveback → line closer to the peak");assert.ok(Math.abs(tight.giveback-1.5*A)<1e-12||tight.line===POOL_LOCK.costFloor,"narrowed to 1.5a");
-  assert.equal(lockLine(peak,A,W,W)!.line,wide.line,"exactly W: not yet narrowing");
-  const mid=lockLine(peak,A,1.5*W,W)!.line;assert.ok(mid>wide.line&&mid<tight.line);
+test("stall trigger: after W minutes without a new high the giveback narrows to 0.25R, and a new high resets it",()=>{
+  const peak=.15,wide=lockLine(peak,R,0,W)!,tight=lockLine(peak,R,2*W,W)!;// peak 7.5R: curve keeps 15R/(...) → a wide line, stall tightens it
+  assert.ok(tight.line>wide.line,"narrower giveback → line closer to the peak");assert.ok(Math.abs(tight.giveback-POOL_LOCK.tightK*R)<1e-12||tight.line===POOL_LOCK.costFloor,"narrowed to 0.25R");
+  assert.equal(lockLine(peak,R,W,W)!.line,wide.line,"exactly W: not yet narrowing");
+  const mid=lockLine(peak,R,1.5*W,W)!.line;assert.ok(mid>=wide.line&&mid<=tight.line);
   const cur=(wide.line+tight.line)/2;
-  assert.equal(poolLock({peak,cur,stallMin:0,a:A,windowMin:W})!.act,"HOLD","fresh high: trend gets its room");
-  assert.equal(poolLock({peak,cur,stallMin:2*W,a:A,windowMin:W})!.act,"EXIT","stalled: tight line");
-  assert.match(poolLock({peak,cur,stallMin:2*W,a:A,windowMin:W})!.why,/60 分钟没创新高/);
+  assert.equal(poolLock({peak,cur,stallMin:0,r:R,windowMin:W})!.act,"HOLD","fresh high: trend gets its room");
+  assert.equal(poolLock({peak,cur,stallMin:2*W,r:R,windowMin:W})!.act,"EXIT","stalled: tight line");
+  assert.match(poolLock({peak,cur,stallMin:2*W,r:R,windowMin:W})!.why,/60 分钟没创新高/);
 });
 test("the line is never below cost (fees + buffer) once armed, and never above the peak",()=>{
-  for(const a of [.0015,.003,.01,.05])for(const peak of [.006,.01,.02,.1])for(const st of [0,W,2*W,10*W]){
-    const r=lockLine(peak,a,st,W);if(!r)continue;assert.ok(r.line>=POOL_LOCK.costFloor-1e-12,`a ${a} peak ${peak}`);assert.ok(r.line<=peak);}
-  assert.ok(Math.abs(POOL_LOCK.costFloor-.0024)<1e-12);
-  // with the arming rule the curve alone already stays above cost (peak ≥ 0.6% → line ≥ peak/2 ≥ 0.3%): the floor is a guarantee, not a tuning knob
-  for(const a of [.0015,.002])assert.ok(lockLine(.006,a,0,W)!.line>=POOL_LOCK.costFloor);
-  // a winner that was armed leaves at about its curve line, which is above cost: it does not turn into a loss
-  assert.equal(poolLock({peak:.0061,cur:.0023,stallMin:0,a:.0015,windowMin:W})!.act,"EXIT");
+  for(const r of [.008,.01,.02,.06,.1])for(const peak of [.006,.01,.02,.1,.3])for(const st of [0,W,2*W,10*W]){
+    const x=lockLine(peak,r,st,W);if(!x)continue;assert.ok(x.line>=POOL_LOCK.costFloor-1e-12,`R ${r} peak ${peak}`);assert.ok(x.line<=peak);}
+  assert.ok(Math.abs(POOL_LOCK.costFloor-.0024)<1e-12);assert.ok(Math.abs(POOL_LOCK.armFloor-2.5*POOL_LOCK.costFloor)<1e-12);
+  // an armed winner leaves at about its curve line, which is above cost: it does not turn into a loss
+  assert.equal(poolLock({peak:.0061,cur:.0023,stallMin:0,r:.008,windowMin:W})!.act,"EXIT");
 });
-test("unknowns never trigger: lost peak, lost clock, no fresh quote, no unit",()=>{
-  const ok={peak:.03,cur:-.05,stallMin:100,a:A,windowMin:W};assert.equal(poolLock(ok)!.act,"EXIT");
-  for(const k of ["peak","cur","stallMin","a"] as const)assert.equal(poolLock({...ok,[k]:null}),null,k);
-  assert.equal(poolLock({...ok,a:0}),null);assert.equal(poolLock({...ok,peak:NaN}),null);
+test("unknowns never trigger: lost peak, lost clock, no fresh quote, no R",()=>{
+  const ok={peak:.03,cur:-.05,stallMin:100,r:R,windowMin:W};assert.equal(poolLock(ok)!.act,"EXIT");
+  for(const k of ["peak","cur","stallMin","r"] as const)assert.equal(poolLock({...ok,[k]:null}),null,k);
+  assert.equal(poolLock({...ok,r:0}),null);assert.equal(poolLock({...ok,peak:NaN}),null);
 });
 test("peak clock: first sight / lost clock starts at now and reports unknown; new high resets; stall grows",()=>{
   const ck:PeakClock={},t0=1e12;
@@ -66,13 +71,12 @@ test("peak clock: first sight / lost clock starts at now and reports unknown; ne
   assert.equal(tickClock(ck,"y",null,t0),null);assert.equal(ck.y,undefined);
   const bad={z:["a",1]} as unknown as PeakClock;assert.equal(tickClock(bad,"z",.02,t0),null);
 });
-test("window follows the planned hold: planned/24 clamped to 15–45 min; unit helpers",()=>{
-  assert.equal(stallWindowMin("1h",48),45);assert.equal(stallWindowMin("15m",24),15);assert.equal(stallWindowMin("5m",12),15);
-  assert.equal(stallWindowMin("1h",null),45);assert.equal(stallWindowMin("15m",null),15);assert.equal(stallWindowMin("1h",24),45);
-  assert.equal(stallWindowMin("15m",48),30);
-  assert.equal(lockUnit(null,null),.0015);assert.equal(lockUnit(.002,.004),.004);
-  assert.equal(atr5Frac([]),null);
-  const bars=Array.from({length:15},(_,i)=>({high:101,low:99,close:100+(i%2)*0}));assert.ok(Math.abs(atr5Frac(bars)!-.02)<1e-9);
+test("window follows the planned hold: planned/8 clamped to 15–45 min; R comes from the initial stop",()=>{
+  assert.equal(plannedMin("5m",24),120);assert.equal(plannedMin("1h",12),720);assert.equal(plannedMin("15m",null),360);
+  assert.equal(stallWindowMin("5m",24),15,"cascade 2h → 15");assert.equal(stallWindowMin("15m",16),30,"box-fade 4h → 30");
+  assert.equal(stallWindowMin("1h",6),45,"burst 6h → 45");assert.equal(stallWindowMin("1h",12),45,"nr7 12h → clamp 45");assert.equal(stallWindowMin("5m",6),15);
+  assert.equal(riskR(100,95),.05);assert.equal(riskR(100,105),.05);assert.equal(riskR(100,99.9),.008,"degenerate tiny stop floored at the pool minimum");
+  for(const bad of [[100,null],[100,undefined],[0,95],[100,0],[100,100],[NaN,95],[100,Number.NaN],[100,300]] as const)assert.equal(riskR(bad[0],bad[1]),null,String(bad));
 });
 
 // ---------------------------------------------------------------- engine wiring
@@ -86,8 +90,8 @@ const pos=(id:string,side:"LONG"|"SHORT",favorable:number,living:Partial<LivingN
 const plan=(e:LivingEngine,now:number,price:number,positions:ReturnType<typeof pos>[],exits:DynPlanInput["exits"]=[])=>
   e.plan({now,forward:{...emptyFwd(),positions:positions as never},quotes:q(now,"AAA_USDT",price),contracts:{},funding:{},candles:{},dyn:dynIn(exits)} as PlanContext)!;
 const lockActs=(d:{actions:{code:string;tradeId:string;action:string}[]})=>d.actions.filter(a=>a.code===POOL_LOCK_CODE);
-// no tape: a = 0.15% floor → armed at peak ≥ 0.6%; window for box1h-long mb48 = 45 min
-const A0=.0015;
+// entry 100, initial stop 95 → R = 5%; armed at peak ≥ 2.5%; window for box1h-long mb48 = 45 min
+const A0=.05;
 
 test("engine, long: no fresh clock → no trigger on the first tick; after the stall window a fall to the line exits with the new code and the audit detail",()=>{
   const e=engine(),p=pos("t1","LONG",.03);
@@ -97,7 +101,7 @@ test("engine, long: no fresh clock → no trigger on the first tick; after the s
   const d=plan(e,NOW+20_000,100*(1+line-.0005),[p]);const a=lockActs(d);assert.equal(a.length,1);
   assert.equal(a[0]!.action,"EXIT");assert.equal(a[0]!.tradeId,"t1");
   const det=(a[0] as unknown as {detail:Record<string,number>}).detail;
-  assert.equal(det.peak,.03);assert.ok(det.cur<det.line);assert.equal(det.stall_min,0);assert.equal(det.window_min,45);
+  assert.equal(det.peak,.03);assert.ok(det.cur<det.line);assert.equal(det.stall_min,0);assert.equal(det.window_min,45);assert.equal(det.r,.05);assert.equal(det.peak_r,.6);
   assert.match((a[0] as unknown as {reason:string}).reason,/池内动态锁利/);
 });
 test("engine, short: mirrored (price rising against the short)",()=>{
@@ -107,15 +111,15 @@ test("engine, short: mirrored (price rising against the short)",()=>{
   assert.equal(lockActs(plan(e,NOW+20_000,100*(1-line+.0005),[p])).length,1);
 });
 test("engine: stall trigger — same price holds right after a new high, exits once 2W have passed without one",()=>{
-  const e=engine(),p=pos("t3","LONG",.02);plan(e,NOW,100,[p]);
-  const wide=lockLine(.02,A0,0,45)!.line,tight=lockLine(.02,A0,90,45)!.line,px=100*(1+(wide+tight)/2);assert.ok(tight>wide);
+  const e=engine(),p=pos("t3","LONG",.06);plan(e,NOW,100,[p]);
+  const wide=lockLine(.06,A0,0,45)!.line,tight=lockLine(.06,A0,90,45)!.line,px=100*(1+(wide+tight)/2);assert.ok(tight>wide);
   assert.equal(lockActs(plan(e,NOW+60_000,px,[p])).length,0);
   assert.equal(lockActs(plan(e,NOW+91*60_000,px,[p])).length,1,"91 min without a new high");
   // a new high resets the clock → no trigger at the same price
-  const e2=engine(),p2=pos("t3b","LONG",.02);plan(e2,NOW,100,[p2]);
-  const px2=100*(1+lockLine(.021,A0,0,45)!.line+.0003);
-  plan(e2,NOW+60*60_000,px2,[{...p2,favorable:.021}]);
-  assert.equal(lockActs(plan(e2,NOW+61*60_000,px2,[{...p2,favorable:.021}])).length,0,"new high at minute 60 → clock restarted");
+  const e2=engine(),p2=pos("t3b","LONG",.06);plan(e2,NOW,100,[p2]);
+  const px2=100*(1+lockLine(.061,A0,0,45)!.line+.0003);
+  plan(e2,NOW+60*60_000,px2,[{...p2,favorable:.061}]);
+  assert.equal(lockActs(plan(e2,NOW+61*60_000,px2,[{...p2,favorable:.061}])).length,0,"new high at minute 60 → clock restarted");
 });
 test("engine: small profit and losing trades are untouched; non-pool trades are untouched",()=>{
   const e=engine();const small=pos("s1","LONG",.004),loser=pos("s2","LONG",0),old=pos("s3","LONG",.05,{dp:undefined,hx:undefined,pb:"fast"}),burst=pos("s4","LONG",.05,{dp:undefined,bh:1,pb:"burst-leader"});
@@ -152,4 +156,20 @@ test("engine: ordinary trades with a deep drawdown are never closed by the lock;
   const e=engine(),p=pos("o1","LONG",.0007);plan(e,NOW,100,[p]);
   const d=plan(e,NOW+4*3_600_000,90,[p]);assert.ok(!d.actions.some(a=>a.code===POOL_LOCK_CODE));
   assert.equal(POOL_LOCK_CODE,"LIVING_DYN_POOL_LOCK");
+});
+test("engine: the line scales with the trade's own R — a volatile cascade trade (R 2.75%, peak 1.92%) is armed and protected; R comes from living.inv, not the trailed stop",()=>{
+  const e=engine(),p={...pos("v1","LONG",.0192,{pb:"cascade5m-long",mb:24,inv:100*(1-.0275)}),stopPrice:99};// stop trailed to 99: must not shrink R
+  plan(e,NOW,100,[p]);
+  const line=lockLine(.0192,.0275,0,15)!.line;assert.ok(line>.0105&&line<.0115,"keeps ~58% of a 0.70R peak");
+  assert.equal(lockActs(plan(e,NOW+10_000,100*(1+line+.001),[p])).length,0);
+  const a=lockActs(plan(e,NOW+20_000,100*(1+line-.001),[p]));assert.equal(a.length,1);
+  const det=(a[0] as unknown as {detail:Record<string,number>}).detail;assert.equal(det.r,.0275);assert.equal(det.window_min,15);assert.ok(Math.abs(det.peak_r-.698)<.001);
+});
+test("engine: unknown R (no initial stop in the order note) → the lock stays out",()=>{
+  const e=engine(),p=pos("n1","LONG",.05,{inv:undefined});plan(e,NOW,100,[p]);
+  assert.equal(lockActs(plan(e,NOW+20_000,90,[p])).length,0);
+});
+test("engine: a wide-stop trade with a small peak (0.17R) is not armed — the lock never sells a small profit",()=>{
+  const e=engine(),p=pos("w1","LONG",.0102,{pb:"burst1h-long",mb:6,inv:100*(1-.0613)});plan(e,NOW,100,[p]);
+  assert.equal(lockActs(plan(e,NOW+3_600_000,100.1,[p])).length,0);
 });
