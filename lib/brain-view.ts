@@ -82,7 +82,7 @@ export const BRAIN_EXIT:Record<string,string>={
   LIVING_FAST_BREAKEVEN:"集体异动：拉到保本后被打到",LIVING_FAST_GIVEBACK:"顺势单利润回吐就走",LIVING_FAST_TIME:"快速跟进 10 分钟没走出来",
   LIVING_FAST_FAKE:"集体异动是假动作，平掉",LIVING_BURST_TRAIL:"爆发单：从最好的位置回吐到 70%，锁利离场",LIVING_BURST_BREAKEVEN:"爆发单：浮盈过 0.8% 后回到保本加手续费",LIVING_BURST_MAXHOLD:"爆发单：拿满 4 小时",LIVING_FAST_EXHAUST:"集体异动力竭，平掉",LIVING_THESIS_FLIP:"市场判断反了",LIVING_THESIS_STRUCTURE:"结构破了",
   LIVING_THESIS_BREAKEVEN:"保本后被打到",LIVING_THESIS_UNREWARDED:"这种做法市场不再给钱",
-  LIVING_DYN_TRAIL:"打法池单：打到按规则移动后的止损",LIVING_DYN_EXIT:"打法池单：按它自己的规则收盘离场（目标/反向信号/到时）",
+  LIVING_DYN_TRAIL:"打法池单：打到按规则移动后的止损",LIVING_DYN_POOL_LOCK:"打法池单：池内动态锁利，浮盈回吐到按波动和峰值算的保护线，离场",LIVING_DYN_EXIT:"打法池单：按它自己的规则收盘离场（目标/反向信号/到时）",
   LIVING_HTF_TRAIL:"日线突破单：打到 10 日最低点跟踪止损",LIVING_HTF_TRAIL_EXIT:"日线突破单：收盘后跟踪止损上移时价格已在下方，平掉",
   LIVING_STOP:"打到开仓止损价",LIVING_FALLBACK_TIMEOUT:"大脑暂停期间拿满计划时长 1.5 倍，兜底平掉",
 };

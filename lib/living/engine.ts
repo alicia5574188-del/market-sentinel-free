@@ -38,6 +38,8 @@ import {LEADER,closesOf,burstCheck,rankLeaders,leaderStop,leaderHold,vol6Of,shad
 import {HTF,closedDaily,dailyCheck,htfExitLevel,htfOrder,freshThrough,dayKey,dayStartSec,signalCell,trailLow,type DailyBar} from "./htf-trend.ts";
 import type {DynPlanInput,DynGateView} from "../dynamic/runtime.ts";
 import {isPoolNote,movePct} from "./pool-log.ts";
+import {POOL_BY_ID} from "../dynamic/playbooks.ts";
+import {poolLock,tickClock,stallWindowMin,lockUnit,atr5Frac,POOL_LOCK_CODE,type PeakClock} from "../dynamic/pool-lock.ts";
 import {RunLog,CASES_KEY,CASE_PAGE_KEYS,type Gate,type Layer,type CaseInput,type MarketSample} from "./runlog.ts";
 
 export const LIVING_KEYS={config:LIVING_CONFIG_KEY,basket:`${LIVING_KEY_PREFIX}basket`,fast:`${LIVING_KEY_PREFIX}fast`,
@@ -101,7 +103,8 @@ type TradesState={v:1;watches:Watch[];liveNet:Record<string,number[]>;seen:strin
   /** htf-donch20: last checked UTC day, picks waiting for a Gate quote (entry window), the last check's summary */
   hx?:HtfState;
   /** dynamic-v1: pool signal ids already sent (opened / finally rejected) → at, so a signal is not sent twice */
-  dx?:{sent:Record<string,number>}};
+  dx?:{sent:Record<string,number>;
+    /** pool profit lock: per open pool trade [best price move seen, when it was set (ms)]; rides the normal trades-state batch */pk?:PeakClock}};
 type HtfPending={id:string;sym:string;day:string;close:number;brk:number;atr:number;rank:number|null;vol:number|null;why:string;until:number};
 type HtfSummary={day:string;at:number;regime:"ON"|"OFF"|"UNKNOWN";btc:number|null;sma:number|null;universe:number;fresh:number;
   breakouts:string[];picks:string[];skipped:string[];text:string};
@@ -119,6 +122,9 @@ const DYN_POOL_MAX:number|null=null,DYN_PER_PB:number|null=null;
  * execution filter; never a new request). Pool entry signals on other coins stay record-only. */
 const NOT_LIVE_WHY="不在实时报价币池，只记录";
 const liveQuote=(ctx:PlanContext,sym:string)=>{const q=ctx.quotes[sym];return !!q&&ctx.now-q.observedAt<=10_000&&q.entryReady!==false&&q.bestBid>0&&q.bestAsk>=q.bestBid;};
+/** pool profit lock: peak / current move, line, minutes without a new high, unit — recorded in the CLOSE record for the review */
+const lockFields=(code:string|null,ev:Record<string,unknown>|null)=>code===POOL_LOCK_CODE&&ev?{lock_peak:ev.peak??null,lock_cur:ev.cur??null,lock_line:ev.line??null,
+  lock_stall_min:ev.stall_min??null,lock_unit:ev.unit??null,lock_window_min:ev.window_min??null}:{};
 const dynPbOf=(id:string)=>{const m=/^ld-(.+)-[A-Z0-9]+_USDT-\d+$/.exec(id);return m?m[1]!:"dyn";};
 const FAST_CODES=new Set(["LIVING_FAST_LIQ_GUARD","LIVING_FAST_TIGHTEN","LIVING_FAST_CONFIRM_EXIT","LIVING_FAST_BREAKEVEN","LIVING_FAST_GIVEBACK"]);
 const d=(s:"LONG"|"SHORT")=>s==="LONG"?1:-1;
@@ -972,6 +978,7 @@ export class LivingEngine{
       }
       const st=(this.trades.dx??={sent:{}});
       for(const [k,at] of Object.entries(st.sent))if(now-at>3*86_400_000)delete st.sent[k];
+      this.poolLockStep(ctx,views,d.exits.filter(x=>x.act==="EXIT"),st,out.actions,acting);
       const busy=new Set(ctx.forward.positions.filter(p=>!p.inverseCopy).map(p=>p.symbol));
       const pool=ctx.forward.positions.filter(p=>!p.inverseCopy&&(p.entryContext?.living?.hx||p.entryContext?.living?.bh));let open=pool.length;
       const perPb:Record<string,number>={};for(const p of pool){const pb=p.entryContext!.living!.pb;perPb[pb]=(perPb[pb]??0)+1;}
@@ -1001,6 +1008,31 @@ export class LivingEngine{
       this.dirty.add(LIVING_KEYS.trades);
     }catch(error){this.lastError=String((error as Error)?.message??error).slice(0,200);this.noteOnce(`de|${Math.floor(now/3_600_000)}`,now,"DYN_ERROR",{reason:this.lastError});}
     return out;
+  }
+  /**
+   * pool profit lock (lib/dynamic/pool-lock.ts): only for open pool trades (dp). Reads the persisted best move (Trade.favorable) and a
+   * per-trade peak clock kept in the trades state (no extra write: that key is already written in its 45 s batch). Can only add an
+   * EXIT earlier than the playbook's own rules; never touches a stop. Unknown peak / clock / quote / unit → does nothing. Never throws.
+   */
+  private poolLockStep(ctx:PlanContext,views:PositionView[],exits:readonly {tradeId:string}[],st:{sent:Record<string,number>;pk?:PeakClock},actions:LivingTradeAction[],acting:boolean){
+    const now=ctx.now;
+    try{
+      const ck=(st.pk??={}),open=new Set<string>(),taken=new Set(exits.map(x=>x.tradeId));
+      for(const v of views){
+        if(!v.living?.dp||v.living.bh)continue;open.add(v.id);
+        const stall=tickClock(ck,v.id,Number.isFinite(v.favorable)?v.favorable:null,now);
+        if(stall==null||v.price==null||taken.has(v.id)||!(v.entryPrice>0))continue;
+        const cur=(v.side==="LONG"?1:-1)*(v.price/v.entryPrice-1);
+        const a=lockUnit(volUnit(this.tape.closed1(v.symbol,now).slice(-16).map(r=>r.close)),atr5Frac(this.tape.closed5(v.symbol,now)));
+        const iv=POOL_BY_ID[v.living.pb]?.iv??"15m",vd=poolLock({peak:v.favorable,cur,stallMin:stall,a,windowMin:stallWindowMin(iv,v.living.mb)});
+        if(!vd||vd.act!=="EXIT")continue;
+        const why=`${vd.why}`.slice(0,200);
+        actions.push({tradeId:v.id,action:"EXIT",code:POOL_LOCK_CODE,reason:why.slice(0,160),
+          detail:{peak:r6(vd.peak),cur:r6(vd.cur),line:r6(vd.line!),stall_min:Math.round(vd.stallMin),unit:r6(a),window_min:Math.round(stallWindowMin(iv,v.living.mb))}});
+        this.noteOnce(`dk|${v.id}`,now,"DYN_EXIT",{trade:v.id,stop:null,act:acting?"EXIT":"RECORD",reason:acting?why:`只计算/降级中，没执行：${why}`});
+      }
+      for(const id of Object.keys(ck))if(!open.has(id))delete ck[id];
+    }catch(error){this.lastError=String((error as Error)?.message??error).slice(0,200);this.noteOnce(`de|${Math.floor(now/3_600_000)}`,now,"DYN_ERROR",{reason:this.lastError});}
   }
   private dynSent(orderId:string,now:number,forward?:ForwardView,tradeId?:string){
     (this.trades.dx??={sent:{}}).sent[orderId]=now;this.dirty.add(LIVING_KEYS.trades);
@@ -1103,7 +1135,7 @@ export class LivingEngine{
         if(isPoolNote(n))try{const x=t as {entryPrice?:number;exitPrice?:number|null;exitAudit?:{evidence?:{reason?:unknown}}|null},why=x.exitAudit?.evidence?.reason;
           this.runlog.pool(now,{t:"CLOSE",at:t.closedAt??now,pb:n.pb,sym:t.symbol,side:t.side,trade:t.id,entry:x.entryPrice??null,exit:x.exitPrice??null,
             move:movePct(t.side,x.entryPrice,x.exitPrice),net:t.netPnl,risk:n.rr??null,held_min:t.closedAt!=null?Math.round((t.closedAt-t.openedAt)/60_000):null,
-            exit_code:t.exitReason,exit_why:typeof why==="string"?why:null});}catch{/* 只是记录 */}
+            exit_code:t.exitReason,exit_why:typeof why==="string"?why:null,...lockFields(t.exitReason,(x.exitAudit?.evidence??null) as Record<string,unknown>|null)});}catch{/* 只是记录 */}
       }
       this.trades.seen=[...seen].slice(-300);
       this.dirty.add(LIVING_KEYS.trades);

@@ -38,7 +38,7 @@ const EXIT_SHORT:Record<string,string>={
   S1_TP:"止盈 6%",S1_SL:"止损",S1_TIME_6H:"满 6 小时",S1_TIME_24H:"满 24 小时",
   LIVING_STOP:"止损",LIVING_FALLBACK_TIMEOUT:"兜底到时间",LIVING_GUARD_STOP:"碰到收紧保护",LIVING_FAST_EXHAUST:"异动力竭",LIVING_FAST_FAKE:"假动作",
   LIVING_FAST_TIME:"10分钟没走出",LIVING_FAST_GIVEBACK:"利润回吐",LIVING_FAST_CONFIRM_EXIT:"异动确认平",LIVING_FAST_LIQ_GUARD:"离爆仓太近",
-  LIVING_INTENT_GONE:"资金反了",LIVING_INTENT_MARKET_FLIP:"市场转向",LIVING_INTENT_DONE:"目标兑现",LIVING_INTENT_CLIMAX_TAKE:"利润交给追进的人",LIVING_DYN_LOCK:"动态锁利",LIVING_DYN_REVERSED:"资金反转离场",LIVING_DYN_LOSS_REPAIR:"反弹减亏离场",LIVING_DYN_EXTEND_END:"延长持有到期",LIVING_DYN_EXTEND:"延长持有",LIVING_THESIS_TIMEOUT:"到计划时长",
+  LIVING_INTENT_GONE:"资金反了",LIVING_INTENT_MARKET_FLIP:"市场转向",LIVING_INTENT_DONE:"目标兑现",LIVING_INTENT_CLIMAX_TAKE:"利润交给追进的人",LIVING_DYN_LOCK:"动态锁利",LIVING_DYN_POOL_LOCK:"池内动态锁利",LIVING_DYN_REVERSED:"资金反转离场",LIVING_DYN_LOSS_REPAIR:"反弹减亏离场",LIVING_DYN_EXTEND_END:"延长持有到期",LIVING_DYN_EXTEND:"延长持有",LIVING_THESIS_TIMEOUT:"到计划时长",
   LIVING_THESIS_FLIP:"判断反了",LIVING_THESIS_STRUCTURE:"结构破了",LIVING_THESIS_UNREWARDED:"不再给钱",
 };
 /** One plain sentence for "为什么平". Unknown codes fall back to the caller's existing label. */
@@ -66,7 +66,7 @@ const EXIT_PLAIN:Record<string,string>={
   LIVING_STOP:"价格打到这笔单的止损价（开仓时定的，或大脑收紧过的），平仓。",
   LIVING_FALLBACK_TIMEOUT:"大脑暂停（出错、数据不新鲜或关闭）期间，这笔单拿满计划时长的 1.5 倍，按兜底规则平仓。",
   LIVING_HTF_TRAIL_EXIT:"日线突破单：日线收盘后止损上移到近 10 日最低点，价格已经在下面，平仓。",
-  LIVING_DYN_TRAIL:"打法池单：按打法规则移动后的止损被打到。",LIVING_DYN_EXIT:"打法池单：K 线收盘时按打法规则离场（到目标、反向信号或到时间）。",
+  LIVING_DYN_TRAIL:"打法池单：按打法规则移动后的止损被打到。",LIVING_DYN_POOL_LOCK:"打法池单：浮盈回吐到按波动和峰值算的保护线，锁利离场。",LIVING_DYN_EXIT:"打法池单：K 线收盘时按打法规则离场（到目标、反向信号或到时间）。",
 };
 /** Living-layer playbook names (same text as lib/living/thesis.ts PLAYBOOK_LABEL; a test keeps them in sync). */
 export const LIVING_PLAYBOOK_LABEL:Record<string,string>={"trend-pullback":"趋势回调","breakout":"突破延续","range-revert":"区间回归",
