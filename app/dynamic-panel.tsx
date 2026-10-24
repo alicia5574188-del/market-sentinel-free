@@ -59,8 +59,9 @@ export function SchemeSummary({s,pool,liveEnabled}:{s:BrainStatus;pool:PoolStatu
       <div><small>预测命中率</small><b>{pr?.track.n?pct(pr.track.hit):"—"}</b><p>{pr?.track.n?`${pr.track.n} 次到期预测，Brier ${pr.track.brier.toFixed(3)}`:"还没有到期的预测"}</p></div>
     </div>
     {g&&o&&g.trades>0&&o.trades>0&&<p className="bs-hint">{(g.avg??0)>(o.avg??0)?"看好时跟着来的交易比不看好时好，预测有用。":"看好时并没有比不看好时好，预测还没证明自己（只记录，不影响开单）。"}</p>}
-    {b?<p className="bs-hint" data-testid="brain-backfill">历史下载：<b>{b.done}/{b.total}</b> 条序列（{pct(b.pct)}）{b.working?`，正在下 ${b.working.replace("_USDT","")}`:""} · Bybit / OKX / KuCoin（不用 Gate）·
-      {b.pages!=null?`已下 ${b.pages} 页 · 近 1 小时 ${b.reqLastHour??0} 次 · `:""}{b.lastProgressAt?`上次有新数据 ${bj(b.lastProgressAt)} · `:""}{d!.booted===false?"启动中，进度读取后再显示 · ":""}今天请求 {b.reqToday} 次 · 失败累计 {b.errTotal}{b.blocked.length?` · ${b.blocked.join("/")} 限流中`:""}{b.pausedUntil?` · 暂停到 ${bj(b.pausedUntil)}`:""} · 影子交易 {d!.shadowTrades} 笔</p>
+    {b&&d!.booted===false?<p className="bs-hint" data-testid="brain-backfill">历史下载：读取中（刚启动，进度读回后显示；已下载的历史都在数据库里，不会丢）</p>
+      :b?<p className="bs-hint" data-testid="brain-backfill">历史下载：<b>{b.done}/{b.total}</b> 条序列（{pct(b.pct)}）{b.working?`，正在下 ${b.working.replace("_USDT","")}`:""} · Bybit / OKX / KuCoin（不用 Gate）·
+      {b.pages!=null?`已下 ${b.pages} 页 · 近 1 小时 ${b.reqLastHour??0} 次 · `:""}{b.lastProgressAt?`上次有新数据 ${bj(b.lastProgressAt)} · `:""}今天请求 {b.reqToday} 次 · 失败累计 {b.errTotal}{b.blocked.length?` · ${b.blocked.join("/")} 限流中`:""}{b.pausedUntil?` · 暂停到 ${bj(b.pausedUntil)}`:""} · 影子交易 {d!.tradesLoaded?`${d!.shadowTrades} 笔`:`读取中（已读 ${d!.shadowTradesRead} 笔${d!.shadowTrades>d!.shadowTradesRead?`，共约 ${d!.shadowTrades}`:""}）`}</p>
       :<p className="bs-hint">研究层还没读到。</p>}
     {s.fallback&&<p className="bs-hint mb-warn">自动降级为只计算（到 {bj(s.fallback.until)}）：{s.fallback.reason}</p>}
   </section>;
@@ -88,11 +89,12 @@ export function Ranked({s}:{s:BrainStatus}){
   const d=dynOf(s);if(!d)return null;
   const xs=d.playbooks.filter(p=>p.pred&&tradable(p)).sort((a,b)=>b.pred!.p6-a.pred!.p6);
   if(!xs.length)return <section className="pg-section" data-testid="brain-ranked"><h2>现在最看好</h2>
-    <div className="pg-empty">预测器还在等 BTC 1 小时历史和第一批影子交易（一到就开始，先标【数据少】）。</div></section>;
+    <div className="pg-empty">{d.predictor.waiting?.text||"预测器还没有预测。"}</div></section>;
   const n=Math.min(5,Math.ceil(xs.length/2)),top=xs.slice(0,n),bottom=xs.slice(-Math.min(5,xs.length-n)).reverse();
   return <>
     <section className="pg-section" data-testid="brain-ranked">
       <h2>现在最看好<small>按未来 6 小时赚钱期概率</small></h2>
+      {d.snapshot?.usingSaved&&<p className="bs-hint" data-testid="brain-snap-hint">这是上次保存的预测（{d.snapshot.ageMin} 分钟前{d.snapshot.stale?"，已过期，只记录不开单":""}）；新一轮分析一出就更新。</p>}
       <ol className="bs-list">{top.map(p=><PbLine key={p.id} p={p}/>)}</ol>
     </section>
     {!!bottom.length&&<section className="pg-section" data-testid="brain-ranked-low">
@@ -166,8 +168,8 @@ export function ResearchDetail({s}:{s:BrainStatus}){
   const d=dynOf(s);if(!d)return s.dynamic&&"error" in s.dynamic?<p className="mb-hint">研究层读取失败：{(s.dynamic as {error:string}).error}</p>:null;
   const b=d.backfill;
   return <>
-    <p className="mb-hint">历史下载（先短线，后 4 小时/日线）：{Object.entries(b.byIv).map(([iv,x])=>`${ivCn[iv]??iv} ${x.done}/${x.total}（${x.bars} 根，最早 ${x.from??"—"}）`).join("，")}
-      {b.etaMin?`；预计还要约 ${b.etaMin>=120?`${Math.round(b.etaMin/60)} 小时`:`${b.etaMin} 分钟`}`:""}；历史回放 {d.replay.unitsDone}/{Math.max(d.replay.unitsKnown,d.replay.unitsDone)} 块，实时评估 {d.replay.liveSeries} 条序列；单步最长 {d.maxStepMs} 毫秒。</p>
+    {d.booted===false?<p className="mb-hint">历史下载：读取中（刚启动，进度读回后显示）。</p>:<p className="mb-hint">历史下载（先短线，后 4 小时/日线）：{Object.entries(b.byIv).map(([iv,x])=>`${ivCn[iv]??iv} ${x.done}/${x.total}（${x.bars} 根，最早 ${x.from??"—"}）`).join("，")}
+      {b.etaMin?`；预计还要约 ${b.etaMin>=120?`${Math.round(b.etaMin/60)} 小时`:`${b.etaMin} 分钟`}`:""}；历史回放 {d.replay.unitsDone}/{Math.max(d.replay.unitsKnown,d.replay.unitsDone)} 块，实时评估 {d.replay.liveSeries} 条序列；单步最长 {d.maxStepMs} 毫秒。</p>}
     {d.intraday&&<p className="mb-hint">BTC/ETH 日内（{d.intraday.hour} UTC）：<b>{d.intraday.label}</b>；1 小时 {d.intraday.trend}，4 小时 {d.intraday.trend4h}，ETH {d.intraday.eth??"—"}；24 小时波动 {pc(d.intraday.atrPct)}/小时（分位 {pct(d.intraday.volPct)}）；{d.intraday.session}。</p>}
     {d.state&&<p className="mb-hint">BTC/ETH 日线（{d.state.day}）：<b>{d.state.label}</b>；距 100 日均线 {pc(d.state.strength,1)}，距 90 日高点 {pc(d.state.dd90,1)}，山寨相对 BTC {pc(d.state.altVsBtc,1)}。</p>}
     <ol className="mb-list">{d.playbooks.filter(p=>p.pred||p.trades).map(p=><li key={p.id}><b>{p.label}（{ivCn[p.iv]??p.iv}）{p.trades} 笔{p.all?`，平均 ${pc(p.all.mean)}/笔，胜率 ${pct(p.all.win)}`:""}</b>

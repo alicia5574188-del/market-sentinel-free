@@ -4896,7 +4896,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         backfill:{done:b.done,total:b.total,pct:b.pct,working:b.working,reqToday:b.reqToday,errTotal:b.errTotal,blocked:b.blocked,venues:"bybit/okx/kucoin (never Gate)",
           pages:b.pages,reqLastHour:b.reqLastHour,lastProgressAt:b.lastProgressAt,nextRunAt:b.nextRunAt,stepRunning:!!this.dynamicWork,lastStepMs:d.lastStepMs},
         shadowTrades:v.shadowTrades,tradesLoaded:v.tradesLoaded,replayUnits:v.replay.unitsDone,allowed:v.allowed.length,
-        predictor:{ready:v.predictor.ready,playbooks:v.predictor.playbooks,scored:v.predictor.track.n,ms:v.predictor.ms}};
+        predictor:{ready:v.predictor.ready,playbooks:v.predictor.playbooks,scored:v.predictor.track.n,ms:v.predictor.ms,waiting:v.predictor.waiting.code},
+        snapshot:{restored:v.snapshot.restored,usingSaved:v.snapshot.usingSaved,stale:v.snapshot.stale,ageMin:v.snapshot.ageMin,bytes:v.snapshot.bytes,peakLite:v.snapshot.peakLite}};
     }catch(error){return {error:safeError(error)};}
   }
   private livingLogView(now:number){

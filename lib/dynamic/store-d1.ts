@@ -94,6 +94,12 @@ export async function writeMeta(db:D1Like,st:DynStoreStatus,entries:Record<strin
   await db.batch(ks.map(k=>db.prepare(`INSERT INTO dyn_meta (k,at,json) VALUES (?,?,?) ON CONFLICT(k) DO UPDATE SET at=excluded.at,json=excluded.json`).bind(k,now,JSON.stringify(entries[k]))));
   st.lastOkAt=now;return true;
 }
+/** one dyn_meta value that is already a JSON string (the analysis snapshot is built once, compared and written as is) */
+export async function writeMetaJson(db:D1Like,st:DynStoreStatus,k:string,json:string,now:number){
+  if(!budget(st,now,1))return false;await ensureDynSchema(db,st);
+  await db.prepare(`INSERT INTO dyn_meta (k,at,json) VALUES (?,?,?) ON CONFLICT(k) DO UPDATE SET at=excluded.at,json=excluded.json`).bind(k,now,json).run();
+  st.lastOkAt=now;return true;
+}
 export type ForecastRowJson={f:Record<string,[number,number,number]>;y:Record<string,[number|null,number|null,number|null]>;r?:Record<string,([number,number]|null)[]>};
 /** upsert hourly forecast rows (scored = every horizon of every playbook has an outcome). false = deferred by budget. */
 export async function writeForecasts(db:D1Like,st:DynStoreStatus,rows:readonly ({t:number}&ForecastRowJson)[],now:number){

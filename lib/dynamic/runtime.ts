@@ -24,7 +24,7 @@ import {Series,IV_SEC,aggregate,isShortIv,Memo,type Iv,type Bar} from "./series.
 import {pageUrl,parsePage,HttpStatusError} from "./venues.ts";
 import {BACKFILL,initialBackfill,normalizeBackfill,nextJob,onPage,onFailure,backfillView,trackedSymbols,trackedSeries,seriesKey,noteFeed,depthOf,type BackfillState} from "./backfill.ts";
 import {emptyDynStore,writeChunks,readSeries,readMeta,writeMeta,ensureDynSchema,chunkStart,chunkStarts,pruneBars,writeTradeChunks,readTradeChunks,
-  writeForecasts,readForecasts,pruneForecasts,
+  writeForecasts,readForecasts,pruneForecasts,writeMetaJson,
   CHUNK_SEC,type DynStoreStatus,type TradeRow} from "./store-d1.ts";
 import {POOL,POOL_BY_ID,simulate,manageLive,btcRegime,tierOf,applies,type OpenShadow,type ShadowTrade,type Playbook,type Ctx} from "./playbooks.ts";
 import {dailyStates,stateChanges,bucketLabel,intradayStates,sessionOf,SESSION_LABEL,TREND_LABEL,VOL_LABEL,type DayState,type IntraState} from "./state.ts";
@@ -41,13 +41,21 @@ export const FRESH_MS:Record<Iv,number>={"1d":240*60_000,"4h":60*60_000,"1h":20*
 export const MEM_KEEP:Record<Iv,number>={"1d":1600,"4h":4500,"1h":700,"15m":700,"5m":700,"1m":1500};
 export const MAJOR_1H_KEEP=4500;
 /** per step: series loads, live evaluations, history units, trade-row writes */
-export const STEP={loads:3,live:6,units:1,tradeRows:20,tradeLoad:300,liveFlushMs:30*60_000,pruneEveryMs:24*3_600_000} as const;
+/** loads: series read per step (BTC/ETH 1h + 1d always first); tradeBatches: stored-trade reads per step (each tradeLoad chunks, stops after loadMs) */
+export const STEP={loads:8,loadMs:3_000,tradeBatches:3,live:6,units:1,tradeRows:20,tradeLoad:300,liveFlushMs:30*60_000,pruneEveryMs:24*3_600_000} as const;
 export type DynSignal={id:string;pb:string;label:string;sym:string;side:"LONG"|"SHORT";iv:Iv;et:number;ep:number;stop:number;target:number|null;maxBars:number|null;why:string;until:number};
 export type DynExit={tradeId:string;act:"GUARD"|"EXIT";stop?:number;why:string;code:string};
 /** dynamic-v1.4: the gate plus the forecast it was made from (for the pool log's GATE records) */
 export type DynGateView=Pick<Gate,"ok"|"risk"|"conf"|"why">&{p6?:number|null;pMin?:number;phase?:"GOOD"|"BAD"|null;elapsedH?:number;label?:string|null};
 export type DynPlanInput={ready:boolean;gates:Record<string,DynGateView>|null;signals:DynSignal[];exits:DynExit[];state:string|null};
 export type DynEvent={at:number;k:"BACKFILL"|"STATE"|"PHASE"|"ALLOC"|"ERROR"|"BOOT"|"FORECAST"|"SCORE";text:string};
+/** the last analysis, stored in D1 (dyn_meta "snap") after every analysis and read back at boot: the predictor is ready at once */
+export type DynSnap={v:1;at:number;trades:number;predAt:number;gates:Record<string,Gate>;forecasts:Record<string,PbForecast>;cycles:Record<string,PlaybookCycle>;
+  state:DayState|null;intra:IntraState[];bucket:string|null;intraBucket:string|null};
+/** a saved analysis older than this only keeps the playbook list, nothing is allowed to open from it */
+export const SNAP_STALE_MS=2*3_600_000;
+export const SNAP_MAX_BYTES=1_500_000;
+const CORE_SERIES=new Set(["BTC_USDT|1h","BTC_USDT|1d","ETH_USDT|1h","ETH_USDT|1d"]);
 export type ScoreRec={t:number;pb:string;h:number;p:number;y:0|1;n?:number;net?:number};
 export type DynPosition={id:string;symbol:string;side:"LONG"|"SHORT";entryPrice:number;stopPrice:number;openedAt:number;guard:number|null;pb:string;inv:number;target:number|null;maxBars:number|null};
 /** the worker's 5m bars (time = open, seconds) */
@@ -80,6 +88,8 @@ export class DynamicResearch{
   forecasts:Record<string,PbForecast>={};track:Record<string,Track>={};fcRows:FcRow[]=[];fcDirty=new Set<number>();
   predLive:Record<string,{since:number|null;cutUntil:number}>={};recentScores:ScoreRec[]=[];scoreAcc={n:0,hits:0,brier:0,since:0,gN:0,gNet:0,oN:0,oNet:0};
   lastFcLogAt=0;lastTop="";predMs=0;predAt=0;
+  /** saved analysis: restored at boot (snapRestored), replaced by the first live analysis (snapFresh) */
+  snapAt=0;snapStale=false;snapRestored=false;snapFresh=false;snapTrades=0;snapBytes=0;peakLite=0;private snapJson:string|null=null;
   private manageCache=new Map<string,{key:string;m:ReturnType<typeof manageLive>}>();
   opts:{minGapMs?:number;analyzeEveryMs?:number;metaEveryMs?:number};
   constructor(opts:{minGapMs?:number;analyzeEveryMs?:number;metaEveryMs?:number}={}){this.opts=opts;}
@@ -94,9 +104,10 @@ export class DynamicResearch{
       this.universe=trackedSymbols(input.universe);
       if(!this.booted){await this.boot(db,now);return;}
       // 1) stored shadow trades, a few hundred rows a step
-      if(!this.tradesLoaded)await this.loadTrades(db);
+      for(let i=0;i<STEP.tradeBatches&&!this.tradesLoaded&&(i===0||Date.now()-t0<STEP.loadMs);i++)await this.loadTrades(db);
       // 2) stored series: short intervals only their newest chunks, daily / 4h whole
-      let loads=0;for(const {sym,iv} of trackedSeries(this.universe)){const k=seriesKey(sym,iv);if(this.loaded.has(k)||loads>=STEP.loads)continue;
+      //    BTC/ETH 1h + 1d first (the predictor and the state need them), then the rest in download order
+      let loads=0;for(const {sym,iv} of this.loadOrder()){const k=seriesKey(sym,iv);if(this.loaded.has(k)||loads>=STEP.loads||(loads>0&&Date.now()-t0>STEP.loadMs))continue;
         const s=await readSeries(db,this.store,sym,iv,isShortIv(iv)?{lastChunks:keepOf(sym,iv)>MEM_KEEP[iv]?Math.ceil(keepOf(sym,iv)/600)+1:2}:{});
         s.trim(keepOf(sym,iv));this.series.set(k,s);this.loaded.add(k);loads++;
         if(s.n&&this.bf.series[k]?.done)(isShortIv(iv)?this.liveNew:this.dirty).add(k);}
@@ -119,7 +130,7 @@ export class DynamicResearch{
       let replays=0;for(const k of [...this.dirty]){if(replays>=2)break;this.dirty.delete(k);const s=this.series.get(k);if(!s)continue;this.replayLong(s);replays++;}
       await this.flushTrades(db,now);
       // 9) analysis (hourly, or soon after new trades)
-      if(this.tradesLoaded&&(now-this.lastAnalyzeAt>=(this.opts.analyzeEveryMs??3_600_000)||((replays||lives||units)&&now-this.lastAnalyzeAt>=10*60_000)))this.analyze(now);
+      if(this.tradesLoaded&&this.coreLoaded()&&(now-this.lastAnalyzeAt>=(this.opts.analyzeEveryMs??3_600_000)||((replays||lives||units)&&now-this.lastAnalyzeAt>=10*60_000))){this.analyze(now);this.lastMetaAt=0;}
       if(this.fcDirty.size)await this.flushForecasts(db,now);
       // 10) prune short history beyond its depth (+20 %), once a day
       if(now-this.lastPruneAt>=STEP.pruneEveryMs){this.lastPruneAt=now;
@@ -131,6 +142,10 @@ export class DynamicResearch{
     }catch(error){this.lastError=safe(error);this.store.failures++;this.store.error=this.lastError;}
     finally{this.lastStepAt=now;this.lastStepMs=Date.now()-t0;this.maxStepMs=Math.max(this.maxStepMs,this.lastStepMs);}
   }
+  /** BTC/ETH 1d and 1h are in memory (the analysis must not run on an empty BTC series and wipe the saved predictions) */
+  coreLoaded(){for(const k of CORE_SERIES)if(!this.loaded.has(k))return false;return true;}
+  private loadOrder(){const all=trackedSeries(this.universe),core=all.filter(x=>CORE_SERIES.has(`${x.sym}|${x.iv}`));
+    return core.length?[...core,...all.filter(x=>!CORE_SERIES.has(`${x.sym}|${x.iv}`))]:all;}
   private bfBusy=false;private wq:Promise<unknown>=Promise.resolve();
   /** at most one backfill request in flight across step() and backfillTick(); pacing is nextJob's minGapMs (≤4/min) */
   private async pageOnce(now:number,db:D1Like,fetch:Fetch):Promise<boolean>{
@@ -186,6 +201,8 @@ export class DynamicResearch{
     // only values that changed since the last write (rows and bytes stay small)
     const out:Record<string,unknown>={},js:Record<string,string>={};for(const [k,v] of Object.entries(all)){const j=JSON.stringify(v);if(this.metaSent[k]!==j){out[k]=v;js[k]=j;}}
     if(Object.keys(out).length&&await writeMeta(db,this.store,out,now))Object.assign(this.metaSent,js);
+    // the analysis snapshot: one D1 row, rewritten only after an analysis produced a new one (hourly / ≥10 min after new trades)
+    if(this.snapJson&&this.metaSent.snap!==this.snapJson&&await writeMetaJson(db,this.store,"snap",this.snapJson,now))this.metaSent.snap=this.snapJson;
   }
   private metaSent:Record<string,string>={};
   private async boot(db:D1Like,now:number){
@@ -199,18 +216,38 @@ export class DynamicResearch{
       const pl=await readMeta<Record<string,{since:number|null;cutUntil:number}>>(db,this.store,"predLive");if(pl&&typeof pl==="object")this.predLive=pl;
       const rs=await readMeta<ScoreRec[]>(db,this.store,"fcRecent");if(Array.isArray(rs))this.recentScores=rs.slice(-40);
       this.fcRows=(await readForecasts(db,this.store,Math.floor(now/1000)-FC_KEEP_SEC,400)).map(r=>({t:r.t,f:r.f,y:r.y,...(r.r?{r:r.r}:{})}));
+      this.restoreSnap(await readMeta<DynSnap>(db,this.store,"snap"),now);
       // a series with history but no liveFrom (older state): live from its newest stored bar
       for(const [k,p] of Object.entries(this.bf.series))if(p.pages>0&&isShortIv(p.iv)&&this.liveFrom[k]==null&&p.newest!=null)this.liveFrom[k]=p.newest+IV_SEC[p.iv];
       this.booted=true;this.bootError=null;
-      this.log(now,"BOOT",`研究层启动（${DYN_VERSION}）：${POOL.length} 套打法，历史下载进度 ${Object.values(this.bf.series).filter(s=>s.done).length} 条序列完成，已回放历史块 ${Object.keys(this.unitsDone).length} 个；影子交易分批读取中`);
+      this.log(now,"BOOT",`研究层启动（${DYN_VERSION}）：${POOL.length} 套打法，历史下载进度 ${Object.values(this.bf.series).filter(s=>s.done).length} 条序列完成，已回放历史块 ${Object.keys(this.unitsDone).length} 个；影子交易分批读取中${this.snapRestored?`；已恢复上次保存的分析（${Math.round((now-this.snapAt)/60_000)} 分钟前${this.snapStale?"，已过期，只记录":""}）`:""}`);
     }catch(error){this.bootError=safe(error);}
+  }
+  /** put the saved analysis back (forecasts, gates, cycles, BTC/ETH state): the predictor is ready at boot, before any trade is read.
+   * Older than SNAP_STALE_MS: shown, but every gate is record-only until a fresh analysis (small positions / fixed notional / gates unchanged). */
+  restoreSnap(sn:DynSnap|null,now:number){
+    if(!sn||sn.v!==1||!sn.gates||!sn.forecasts||!Number.isFinite(sn.at)||!Object.keys(sn.forecasts).length)return false;
+    const ageMs=now-sn.at,stale=ageMs>SNAP_STALE_MS;
+    this.forecasts=sn.forecasts;this.cycles=sn.cycles??{};this.predAt=sn.predAt??sn.at;this.states=sn.state?[sn.state]:[];this.intra=Array.isArray(sn.intra)?sn.intra:[];
+    this.lastBucket=sn.bucket??null;this.lastIntraBucket=sn.intraBucket??null;
+    const why=`上次保存的分析已过期（${Math.round(ageMs/3_600_000)} 小时前），新分析出来前只记录`;
+    this.gates=stale?Object.fromEntries(Object.entries(sn.gates).map(([k,g])=>[k,{...g,ok:false,conf:0,risk:0,why}])):sn.gates;
+    this.snapAt=sn.at;this.snapStale=stale;this.snapRestored=true;this.snapFresh=false;this.snapTrades=sn.trades??0;
+    this.snapJson=JSON.stringify(sn);this.metaSent.snap=this.snapJson;this.snapBytes=this.snapJson.length;
+    return true;
+  }
+  private buildSnap(now:number){
+    const sn:DynSnap={v:1,at:now,trades:this.tradeCount,predAt:this.predAt,gates:this.gates??{},forecasts:this.forecasts,cycles:this.cycles,
+      state:this.states.at(-1)??null,intra:this.intra.slice(-3),bucket:this.lastBucket,intraBucket:this.lastIntraBucket};
+    const j=JSON.stringify(sn);this.snapBytes=j.length;
+    if(j.length<=SNAP_MAX_BYTES){this.snapJson=j;this.snapAt=now;}// too big for one D1 row: keep the older one, the live analysis still runs
   }
   private async loadTrades(db:D1Like){
     const rows=await readTradeChunks(db,this.store,this.tradeCursor,STEP.tradeLoad);
     for(const r of rows){this.tradeCursor=r.k;const cur=this.tsrc.get(r.k);
       if(cur){this.mergeRows(cur,r.pbs,r.trades);continue;}// a live day already touched in memory: union
       this.tsrc.set(r.k,{k:r.k,sym:r.sym,iv:r.iv,t0:r.t0,pbs:r.pbs,rows:r.trades,dirty:false});}
-    if(rows.length<STEP.tradeLoad){this.tradesLoaded=true;this.recount();}
+    this.recount();if(rows.length<STEP.tradeLoad)this.tradesLoaded=true;
   }
   private recount(){let n=0;for(const s of this.tsrc.values())n+=s.rows.length;this.tradeCount=n;}
   private mergeRows(dst:TSrc,pbs:readonly string[],rows:readonly TradeRow[]){
@@ -331,11 +368,21 @@ export class DynamicResearch{
       if(r.open)this.opens.set(key,r.open);else this.opens.delete(key);}
     this.putTrades(`f|${s.sym}|${s.iv}`,s.sym,s.iv,0,out,true);
   }
-  /** every stored shadow trade, light (for the analysis) */
+  /** one pass over the stored rows → per playbook the (source, row) positions; trades are then expanded ONE playbook at a time
+   * (a few thousand objects) instead of all ~400k at once. Same trades, same order of sources as tradesLite(). */
+  private liteIndex():(pb:string)=>TradeLite[]{
+    const srcs=[...this.tsrc.values()],at=new Map<string,{s:number[];r:number[]}>();
+    srcs.forEach((src,si)=>{const rows=src.rows,pbs=src.pbs;for(let i=0;i<rows.length;i++){const pb=pbs[rows[i]![0]];if(!pb)continue;
+      let a=at.get(pb);if(!a){a={s:[],r:[]};at.set(pb,a);}a.s.push(si);a.r.push(i);}});
+    return pb=>{const a=at.get(pb);if(!a)return [];const out:TradeLite[]=new Array(a.s.length);
+      for(let j=0;j<a.s.length;j++){const src=srcs[a.s[j]!]!,r=src.rows[a.r[j]!]!;out[j]={pb,sym:src.sym,et:r[1],xt:r[2],net:r[3]/1e6};}
+      if(out.length>this.peakLite)this.peakLite=out.length;return out;};
+  }
+  /** every stored shadow trade, light (kept as the reference for the batched analysis; the analysis itself no longer uses it) */
   tradesLite():TradeLite[]{const out:TradeLite[]=[];
     for(const s of this.tsrc.values())for(const r of s.rows){const pb=s.pbs[r[0]];if(pb)out.push({pb,sym:s.sym,et:r[1],xt:r[2],net:r[3]/1e6});}
     return out;}
-  analyze(now:number){
+  analyze(now:number,liteOf?:(pb:string)=>TradeLite[]){
     this.lastAnalyzeAt=now;this.analyses++;const nowSec=now/1000;
     const btc=this.get("BTC_USDT","1d"),eth=this.get("ETH_USDT","1d");
     const alts=this.universe.filter(s=>s!=="BTC_USDT"&&s!=="ETH_USDT").map(s=>this.get(s,"1d")).filter((x):x is Series=>!!x&&x.n>=60);
@@ -349,13 +396,13 @@ export class DynamicResearch{
     const ic=this.currentIntra(now);
     if(ic&&ic.bucket!==this.lastIntraBucket)this.log(now,"STATE",`BTC/ETH 日内状态：${this.lastIntraBucket?bucketLabel(this.lastIntraBucket):"-"} → ${bucketLabel(ic.bucket)}（1 小时趋势，24 小时波动分位 ${Math.round(ic.volPct*100)}%）`);
     this.lastIntraBucket=ic?.bucket??null;
-    const by=new Map<string,TradeLite[]>();for(const t of this.tradesLite())(by.get(t.pb)??by.set(t.pb,[]).get(t.pb)!).push(t);
+    const lite=liteOf??this.liteIndex();
     const next:Record<string,PlaybookCycle>={};
-    for(const pb of POOL)next[pb.id]=analyzePlaybook(pb.id,by.get(pb.id)??[],this.states,nowSec,{tier:tierOf(pb),intra:this.intra});
+    for(const pb of POOL)next[pb.id]=analyzePlaybook(pb.id,lite(pb.id),this.states,nowSec,{tier:tierOf(pb),intra:this.intra});
     for(const c of phaseChanges(Object.keys(this.cycles).length?this.cycles:null,next)){if(!this.cycles[c.pb]&&c.to==null&&!c.pattern)continue;
       this.log(now,"PHASE",`${POOL_BY_ID[c.pb]?.label??c.pb}：${c.from??"-"} → ${c.to??"-"}${c.pattern?"（规律已确认）":""}`);}
     this.cycles=next;
-    const live=this.predict(now,by);
+    const live=this.predict(now,lite);
     const prev=this.gates;this.gates=live?allocatePred(next,cur,ic,{forecasts:this.forecasts,track:this.track,live,nowSec:Math.floor(nowSec)}):allocate(next,cur,ic);
     // gate opened → shadow results are checked against the forecast from now on; closed → forget
     for(const [pb,g] of Object.entries(this.gates)){if(!live||!(pb in this.forecasts))continue;const pl=(this.predLive[pb]??={since:null,cutUntil:0});
@@ -368,6 +415,8 @@ export class DynamicResearch{
     if(now-this.lastBfRecAt>=30*60_000){this.lastBfRecAt=now;try{const b=backfillView(this.bf,this.universe,now,this.opts.minGapMs??BACKFILL.minGapMs);
       this.rec({t:"BACKFILL",at:now,done:b.done,total:b.total,pct:b.pct,req:b.reqToday,err:b.errTotal,blocked:b.blocked.join(",")||null,working:b.working,
         trades:this.tradeCount,units:Object.keys(this.unitsDone).length,venues:"bybit/okx/kucoin"});}catch{/* 只是记录 */}}
+    // the predictor is only "fresh" when it really ran on BTC history; a null result (no BTC 1h) keeps what the saved analysis said
+    if(live){this.snapFresh=true;this.snapStale=false;this.buildSnap(now);}
   }
   /** dynamic-v1.3: closed shadow trades of a playbook the engine trades itself (burst-leader), stored per coin and UTC day like
    * live trades; deduplicated by playbook + entry time. Returns how many were taken. */
@@ -382,7 +431,7 @@ export class DynamicResearch{
   /** the cycle predictor (pure learners in predictor.ts): forecasts for every playbook with trades, the hourly forecast row,
    * scoring of due rows, the run-log lines, and the contradiction cut. Returns the live checks for the allocator, or null when
    * BTC 1h is not there yet (the old gate then stays in charge). */
-  private predict(now:number,by:Map<string,TradeLite[]>):Record<string,LiveCheck>|null{
+  private predict(now:number,lite:(pb:string)=>TradeLite[]):Record<string,LiveCheck>|null{
     const t0=Date.now(),nowSec=Math.floor(now/1000),b1=this.get("BTC_USDT","1h");
     const sc={n:0,hits:0,brier:0,gN:0,gNet:0,oN:0,oNet:0};
     if(!b1||b1.n<130){this.forecasts={};return null;}
@@ -390,10 +439,10 @@ export class DynamicResearch{
     const feats=btcFeatures(b1,this.get("ETH_USDT","1h"),alts);if(!feats.rows.length){this.forecasts={};return null;}
     const pre=new Map<string,ReturnType<typeof phaseInfo>>(),z=():Hazard=>({events:Array(PRED.hazEdges.length-1).fill(0),exposure:Array(PRED.hazEdges.length-1).fill(0)});
     const pool={GOOD:z(),BAD:z()};
-    for(const pb of POOL){const ts=by.get(pb.id);if(!ts?.length)continue;const x=phaseInfo(ts,nowSec);pre.set(pb.id,x);
+    for(const pb of POOL){const ts=lite(pb.id);if(!ts.length)continue;const x=phaseInfo(ts,nowSec);pre.set(pb.id,x);
       pool.GOOD=addHazard(pool.GOOD,hazardCounts(x.phases,"GOOD"));pool.BAD=addHazard(pool.BAD,hazardCounts(x.phases,"BAD"));}
     const fc:Record<string,PbForecast>={};
-    for(const [pb,x] of pre)fc[pb]=predictPlaybook({pb,trades:by.get(pb)!,feats,nowSec,pool},x);
+    for(const [pb,x] of pre)fc[pb]=predictPlaybook({pb,trades:lite(pb),feats,nowSec,pool},x);
     this.forecasts=fc;this.predAt=now;
     // one row per hour (the first analysis of the hour), then score every due row against the labels known now
     const hourT=Math.floor(nowSec/3600)*3600;
@@ -404,7 +453,7 @@ export class DynamicResearch{
     // live score: entries of the playbook's shadow trades in [t, t + h) (sorted once by entry time, binary search)
     const ets=new Map<string,{et:number[];cum:number[]}>();
     const realized=(pb:string,from:number,to:number):[number,number]=>{let e=ets.get(pb);
-      if(!e){const ts=[...(by.get(pb)??[])].sort((a,b)=>a.et-b.et),cum=[0];for(const t of ts)cum.push(cum.at(-1)!+t.net);e={et:ts.map(t=>t.et),cum};ets.set(pb,e);}
+      if(!e){const ts=lite(pb).sort((a,b)=>a.et-b.et),cum=[0];for(const t of ts)cum.push(cum.at(-1)!+t.net);e={et:ts.map(t=>t.et),cum};ets.set(pb,e);}
       const lb=(x:number)=>{let lo=0,hi=e!.et.length;while(lo<hi){const m=(lo+hi)>>1;if(e!.et[m]!<x)lo=m+1;else hi=m;}return lo;};
       const i=lb(from),j=lb(to);return [j-i,e.cum[j]!-e.cum[i]!];};
     for(const r of scoreRows(this.fcRows,labelAt,nowSec,this.track,x=>{this.recentScores.push(x as ScoreRec);
@@ -425,7 +474,7 @@ export class DynamicResearch{
     // contradiction cut: the first trades after the gate opened all lost (or the last five) → pause the playbook
     const live:Record<string,LiveCheck>={};
     for(const pb of Object.keys(fc)){const pl=(this.predLive[pb]??={since:null,cutUntil:0});
-      const res=pl.since==null?[]:(by.get(pb)??[]).filter(t=>t.et>=pl.since!).sort((x,y)=>x.et-y.et).map(t=>t.net);
+      const res=pl.since==null?[]:lite(pb).filter(t=>t.et>=pl.since!).sort((x,y)=>x.et-y.et).map(t=>t.net);
       const why=pl.since!=null?contradicted(res):null;
       if(why){pl.cutUntil=nowSec+PRED_ALLOC.cutHours*3600;pl.since=null;
         this.log(now,"ALLOC",`${POOL_BY_ID[pb]?.label??pb}：预测说赚钱期，但${why}，暂停 ${PRED_ALLOC.cutHours} 小时（只记录）`);}
@@ -445,7 +494,7 @@ export class DynamicResearch{
   currentIntra(now:number){const s=this.intra.at(-1);return s&&now/1000-(s.t+3600)<=3*3600?s:null;}
   /** synchronous plan input for the living engine */
   planInput(now:number,positions:readonly DynPosition[]):DynPlanInput{
-    const ready=this.booted&&this.gates!=null&&this.tradesLoaded&&(this.states.length>0||this.intra.length>0);
+    const ready=this.booted&&this.gates!=null&&(this.tradesLoaded||this.snapRestored)&&(this.states.length>0||this.intra.length>0);
     const signals:DynSignal[]=[];
     for(const o of this.opens.values()){if(!o.fresh||o.pb==="htf-donch20")continue;const pb=POOL_BY_ID[o.pb];if(!pb)continue;
       const until=(o.et*1000)+FRESH_MS[o.iv];if(now>until)continue;
@@ -470,7 +519,8 @@ export class DynamicResearch{
     const counts:Record<string,number>={};for(const s of this.tsrc.values())for(const r of s.rows){const pb=s.pbs[r[0]];if(pb)counts[pb]=(counts[pb]??0)+1;}
     const unitsAll=Object.values(this.unitsTotal).reduce((a,b)=>a+b,0),unitsDone=Object.keys(this.unitsDone).length;
     return {version:DYN_VERSION,booted:this.booted,bootError:this.bootError,lastError:this.lastError,lastStepAt:this.lastStepAt||null,lastStepMs:this.lastStepMs,maxStepMs:this.maxStepMs,
-      lastAnalyzeAt:this.lastAnalyzeAt||null,store:{...this.store},backfill:bv,shadowTrades:this.tradeCount,tradesLoaded:this.tradesLoaded,
+      lastAnalyzeAt:this.lastAnalyzeAt||null,store:{...this.store},backfill:bv,shadowTrades:this.tradesLoaded?this.tradeCount:Math.max(this.tradeCount,this.snapTrades),shadowTradesRead:this.tradeCount,tradesLoaded:this.tradesLoaded,
+      snapshot:{restored:this.snapRestored,usingSaved:this.snapRestored&&!this.snapFresh,stale:this.snapStale,at:this.snapAt||null,ageMin:this.snapAt?Math.max(0,Math.round((now-this.snapAt)/60_000)):null,bytes:this.snapBytes,peakLite:this.peakLite},
       replay:{unitsDone,unitsQueued:this.unitQueue.length,unitsKnown:unitsAll,liveSeries:Object.keys(this.liveFrom).length,liveEvals:this.liveEvals},
       state:cur?{day:new Date(cur.t*1000).toISOString().slice(0,10),bucket:cur.bucket,label:bucketLabel(cur.bucket),trend:cur.trend,strength:r4(cur.strength),
         atrPct:r4(cur.atrPct),volPct:r4(cur.volPct),dd90:r4(cur.dd90),eff20:r4(cur.eff20),eth:cur.eth,altVsBtc:cur.altVsBtc==null?null:r4(cur.altVsBtc),lead:cur.lead,corr30:cur.corr30==null?null:r4(cur.corr30)}:null,
@@ -502,10 +552,21 @@ export class DynamicResearch{
     for(const t of Object.values(this.track))t.real?.forEach((x,m)=>x.forEach((v,k)=>{R[m]![k]!+=v;}));
     return {...all,real:R};
   }
+  /** why the predictor has no forecast yet (null when it has): each text says only what is true right now */
+  waitingWhy():{code:"ready"|"booting"|"loading-trades"|"loading-btc"|"btc-short"|"analysing"|"no-sample";text:string}{
+    if(Object.keys(this.forecasts).length)return {code:"ready",text:""};
+    if(!this.booted)return {code:"booting",text:"研究层刚启动，正在读取历史进度和上次保存的预测（通常几秒）。"};
+    if(!this.tradesLoaded)return {code:"loading-trades",text:`正在读取影子交易（已读 ${this.tradeCount}${this.snapTrades?` / 约 ${this.snapTrades}`:""} 笔），读完就分析。`};
+    if(!this.coreLoaded())return {code:"loading-btc",text:"正在从数据库读取 BTC/ETH 的 1 小时和日线历史。"};
+    const b1=this.get("BTC_USDT","1h");
+    if(!b1||b1.n<130)return {code:"btc-short",text:`BTC 1 小时历史还不够（现有 ${b1?.n??0} 根，至少要 130 根），在补。`};
+    if(!this.lastAnalyzeAt)return {code:"analysing",text:"数据已读完，第一次分析正在进行。"};
+    return {code:"no-sample",text:"数据已读完，但还没有一套打法的影子交易够预测（一够就出，先标【数据少】）。"};
+  }
   private predictorView(){
     const all=this.trackTotal(),R=all.real!,tv=trackView(all);
     const real=PRED.horizons.map((h,m)=>({h,...realView({...emptyTrack(),real:R},m)!}));
-    return {ready:Object.keys(this.forecasts).length>0,at:this.predAt||null,ms:this.predMs,playbooks:Object.keys(this.forecasts).length,hourRows:this.fcRows.length,pMin:PRED_ALLOC.pMin,
+    return {ready:Object.keys(this.forecasts).length>0,waiting:this.waitingWhy(),at:this.predAt||null,ms:this.predMs,playbooks:Object.keys(this.forecasts).length,hourRows:this.fcRows.length,pMin:PRED_ALLOC.pMin,
       track:{n:tv.n,hit:r3(tv.hit),brier:r3(tv.brier),calib:tv.calib.map(c=>c&&{n:c.n,p:r3(c.p),y:r3(c.y)})},
       topNow:this.topNow(5),real,realLine:realLine({...emptyTrack(),real:R},0),
       recent:this.recentScores.slice(-12).reverse().map(x=>({...x,label:POOL_BY_ID[x.pb]?.label??x.pb,hit:(x.p>=.5?1:0)===x.y}))};
