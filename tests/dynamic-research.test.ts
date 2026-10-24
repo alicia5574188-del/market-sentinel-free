@@ -21,6 +21,8 @@ import {synthMarket} from "./helpers-synthetic-market.ts";
 import {DynamicResearch,MEM_KEEP,type DynPlanInput,type FeedBar} from "../lib/dynamic/runtime.ts";
 import {LivingEngine,LIVING_KEYS,type PlanContext,type ForwardView} from "../lib/living/engine.ts";
 import {defaultLivingConfig,LIVING_ITEMS,LIVING_ITEM_LABELS} from "../lib/living/config.ts";
+import {SWITCH10_FIXED} from "../lib/living/config.ts";
+SWITCH10_FIXED.on=false;// these files regression-test the engine's legacy "switch 10 off" branch (production keeps it on)
 import {htfPaperLeverage,isolatedLiquidationPrice} from "../lib/paper-leverage.ts";
 import {HTF} from "../lib/living/htf-trend.ts";
 import type {LivingNote} from "../lib/living/directive.ts";

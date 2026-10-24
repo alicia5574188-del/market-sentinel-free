@@ -83,7 +83,7 @@ export function BrainBody({s,data=null,now=0,liveEnabled=false,liveOverview,heal
   const board=s?.board??[];
   const otherRecent=[...(data?.history??[])].filter(t=>!t.inverseCopy&&!pool?.recent.some(x=>x.id===t.id)).sort((a,b)=>(b.closedAt??0)-(a.closedAt??0)).slice(0,5);
   return <div className="mb pg-exec bs" data-testid="owner-living-research">
-    {s?<SchemeSummary s={s} pool={pool} busy={busy} onToggle={on=>setItem("dynAllocator",on)} liveEnabled={liveEnabled}/>
+    {s?<SchemeSummary s={s} pool={pool} liveEnabled={liveEnabled}/>
       :<section className="pg-card bs-scheme" data-testid="brain-scheme"><strong className="pg-title">{st.failed?"读取失败":"读取中"}</strong><p className="mb-hint">正在读取研究层……</p></section>}
     {error&&<p className="mb-hint mb-warn" role="alert">{error}</p>}
     <PanelStamp at={st.at} refreshing={st.refreshing} failed={st.failed}/>

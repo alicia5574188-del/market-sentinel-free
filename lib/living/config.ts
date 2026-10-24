@@ -49,12 +49,16 @@ export const allItems=(on:boolean):LivingItems=>Object.fromEntries(LIVING_ITEMS.
 export function defaultLivingConfig(now:number):LivingConfig{
   return {version:LIVING_VERSION,mode:"paper-enabled",items:allItems(true),updatedAt:now,epochStartedAt:null,fallback:null};
 }
+/** Switch 10 (dynAllocator) is fixed on: the toggle UI/API are gone and a stored `false` (written by the old toggle) is read as on.
+ *  `on` is only ever set to false by regression tests that exercise the engine's legacy "10 off" branch; production never touches it. */
+export const SWITCH10_FIXED={on:true};
 export function normalizeLivingConfig(raw:unknown,now:number):LivingConfig{
   const base=defaultLivingConfig(now),v=raw as Partial<LivingConfig>|null|undefined;
   if(!v||typeof v!=="object"||(v.version!==LIVING_VERSION&&(v.version as unknown)!=="living-v1"))return base;
   const mode=LIVING_MODES.includes(v.mode as LivingMode)?v.mode as LivingMode:base.mode;
   const items={...base.items};
   for(const k of LIVING_ITEMS)if(typeof v.items?.[k]==="boolean")items[k]=v.items[k];
+  if(SWITCH10_FIXED.on)items.dynAllocator=true;
   return {version:LIVING_VERSION,mode,items,updatedAt:Number.isFinite(v.updatedAt)?v.updatedAt!:now,
     epochStartedAt:Number.isFinite(v.epochStartedAt)?v.epochStartedAt!:null,fallback:null};// a stored old fallback is dropped on restore
 }

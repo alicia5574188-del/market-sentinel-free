@@ -35,8 +35,8 @@ export function gateWords(why:string|null|undefined,pMin=.58){
 }
 
 /** 总方案: switch 10, pool slots, today's opens / closes / net price move, live score, hit rate, backfill. */
-export function SchemeSummary({s,pool,busy,onToggle,liveEnabled}:{s:BrainStatus;pool:PoolStatus|undefined;busy:boolean;onToggle:(on:boolean)=>void;liveEnabled:boolean}){
-  const d=dynOf(s),item=s.items.find(i=>i.key==="dynAllocator"),on=!!item?.on,b=d?.backfill,pr=d?.predictor;
+export function SchemeSummary({s,pool,liveEnabled}:{s:BrainStatus;pool:PoolStatus|undefined;liveEnabled:boolean}){
+  const d=dynOf(s),item=s.items.find(i=>i.key==="dynAllocator"),on=item?.on!==false,b=d?.backfill,pr=d?.predictor;
   const open=pool?.open??[],float=open.reduce((a,p)=>a+(p.move??0),0),t=pool?.today;
   const r6=pr?.real?.find(x=>x.h===6)??pr?.real?.[0],g=r6?.good,o=r6?.other;
   const allowed=d?.playbooks.filter(p=>p.gate?.ok).length??0,withFc=d?.playbooks.filter(p=>p.pred).length??0;
@@ -63,8 +63,6 @@ export function SchemeSummary({s,pool,busy,onToggle,liveEnabled}:{s:BrainStatus;
       {b.pages!=null?`已下 ${b.pages} 页 · 近 1 小时 ${b.reqLastHour??0} 次 · `:""}{b.lastProgressAt?`上次有新数据 ${bj(b.lastProgressAt)} · `:""}{d!.booted===false?"启动中，进度读取后再显示 · ":""}今天请求 {b.reqToday} 次 · 失败累计 {b.errTotal}{b.blocked.length?` · ${b.blocked.join("/")} 限流中`:""}{b.pausedUntil?` · 暂停到 ${bj(b.pausedUntil)}`:""} · 影子交易 {d!.shadowTrades} 笔</p>
       :<p className="bs-hint">研究层还没读到。</p>}
     {s.fallback&&<p className="bs-hint mb-warn">自动降级为只计算（到 {bj(s.fallback.until)}）：{s.fallback.reason}</p>}
-    {item&&<div className="fr-owner-session"><button className="fr-text-button" type="button" disabled={busy} onClick={()=>onToggle(!on)}>
-      {on?"关掉开关 10（全部打法只记录；已开的单照常按各自的出场管）":"打开开关 10（按预测开模拟单）"}</button></div>}
   </section>;
 }
 

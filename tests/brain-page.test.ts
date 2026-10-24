@@ -34,6 +34,7 @@ test("brain page: the scheme first (switch 10, pool x/8, today, live score, hit 
   assert.match(html,/全市场突然爆发/);assert.match(html,/日线突破做多/);assert.match(html,/旧系统 \/ 只记录/);
   assert.match(html,/发出开单/);assert.match(html,/不允许（只记录）/);assert.match(html,/暂停（预测被打脸）/);
   assert.doesNotMatch(html,/NaN|undefined/);
+  assert.doesNotMatch(html,/关掉开关 ?10|打开开关 ?10/,"switch 10 has no toggle button any more");assert.doesNotMatch(r.later,/关掉开关 ?10|打开开关 ?10/);
   assert.match(r.later,/\+0\.21%\/笔/);assert.match(r.later,/-0\.09%\/笔/);assert.match(r.later,/看好时跟着来的交易比不看好时好/);assert.match(r.later,/61%/);
   assert.match(r.empty,/读取中/);
   assert.equal(r.gateWords("未来 6 小时处在赚钱期的概率 41%（要 ≥58%）【数据一般】"),"概率没到门槛 58%，只记录");

@@ -10,6 +10,8 @@ import {HTF,atrOf,priorHigh,trailLow,smaClose,bullRegime,htfSignal,htfOrder,htfE
 import {htfPaperLeverage,isolatedLiquidationPrice} from "../lib/paper-leverage.ts";
 import {LivingEngine,LIVING_KEYS,type PlanContext,type ForwardView,type HtfInput} from "../lib/living/engine.ts";
 import {defaultLivingConfig,LIVING_ITEMS,LIVING_ITEM_LABELS} from "../lib/living/config.ts";
+import {SWITCH10_FIXED} from "../lib/living/config.ts";
+SWITCH10_FIXED.on=false;// these files regression-test the engine's legacy "switch 10 off" branch (production keeps it on)
 import {LEADER} from "../lib/living/burst-leader.ts";
 import {fastProtection,thesisExits,type PositionView} from "../lib/living/exits.ts";
 import {LivingTape} from "../lib/living/tape.ts";

@@ -5196,7 +5196,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const mode=typeof body.mode==="string"&&LIVING_MODES.includes(body.mode as LivingMode)?body.mode as LivingMode:undefined;
       if(body.mode!=null&&!mode)return json({error:"mode 只能是 off / compute-only / paper-enabled"},400);
       const items:Record<string,boolean>={};
-      for(const [k,v] of Object.entries(body.items??{})){if(!(LIVING_ITEMS as readonly string[]).includes(k)||typeof v!=="boolean")return json({error:`未知开关 ${k}`},400);items[k]=v;}
+      for(const [k,v] of Object.entries(body.items??{})){if(!(LIVING_ITEMS as readonly string[]).includes(k)||typeof v!=="boolean")return json({error:`未知开关 ${k}`},400);
+        if(k==="dynAllocator")return json({error:"开关 10 已固定开启，不能关闭"},400);items[k]=v;}
       const now=Date.now();this.living.setConfig({mode,items:items as never},now);
       await this.persistLiving(now,true);
       return json(this.living.status(now,this.forwardState as unknown as LivingForwardView??undefined));

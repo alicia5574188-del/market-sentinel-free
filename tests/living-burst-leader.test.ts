@@ -5,6 +5,8 @@ import {LEADER,burstCheck,basketAt,rankLeaders,leaderStop,leaderHold,vol6Of,clos
 import {thesisExits,fastProtection,type PositionView} from "../lib/living/exits.ts";
 import {LivingEngine,LIVING_KEYS} from "../lib/living/engine.ts";
 import {defaultLivingConfig,LIVING_ITEMS} from "../lib/living/config.ts";
+import {SWITCH10_FIXED} from "../lib/living/config.ts";
+SWITCH10_FIXED.on=false;// these files regression-test the engine's legacy "switch 10 off" branch (production keeps it on)
 import {selectBasket,LivingTape,type MidBar} from "../lib/living/tape.ts";
 import type {LivingNote} from "../lib/living/directive.ts";
 
