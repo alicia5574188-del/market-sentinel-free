@@ -74,11 +74,12 @@ test("C3 selection: hard filters (volume, spread, MMR), one per correlation grou
   // liqSafety off: MMR is no longer a filter
   assert.ok(!selectCandidates(m,initialSelect(),"breakout",tr,"LONG",false).find(c=>c.symbol==="HIGHMMR")?.reject?.includes("维持保证金率"));
 });
-test("C4 stop rules: widen to 0.6%, reject >2%, MMR >2% and stop >40% of liquidation distance are skipped",()=>{
+test("C4 stop rules: widen to 0.6%, reject >2%, MMR >3% and stop >40% of liquidation distance are skipped",()=>{
   const ok=stopCheck({side:"LONG",price:100,stop:99.8,min:.006,max:.02,leverageMax:10,mmr:.005,liqSafety:true});
   assert.ok(ok.ok&&Math.abs(ok.stop-99.4)<1e-9);
   const wide=stopCheck({side:"LONG",price:100,stop:97.5,min:.006,max:.02,leverageMax:10,mmr:.005,liqSafety:true});assert.ok(!wide.ok&&/宽度/.test(wide.reason));
   const mmr=stopCheck({side:"SHORT",price:100,stop:101,min:.006,max:.02,leverageMax:10,mmr:.04,liqSafety:true});assert.ok(!mmr.ok&&/维持保证金率/.test(mmr.reason));
+  assert.ok(stopCheck({side:"SHORT",price:100,stop:101,min:.006,max:.02,leverageMax:10,mmr:.025,liqSafety:true}).ok,"2.5% is inside the 3% cap");
   // 10x, mmr 1.8%: liquidation ≈ 8.35% away; a 1.9% stop is within 40% (3.3%): ok
   assert.ok(stopCheck({side:"LONG",price:100,stop:98.1,min:.006,max:.02,leverageMax:10,mmr:.018,liqSafety:true}).ok);
   // 3x max leverage → 10x not possible → 3x: far liquidation, ok; a fake 50x contract still uses 10x

@@ -74,14 +74,14 @@ test("storage: every own value ≤ 96KB, own prefix only, 5m bars paged in 6 key
     const ws=Object.keys(e.writes(t));if(ws.length){e.committed(ws,t);n+=ws.length;}}
   assert.ok(n<=LIVING_WRITES_PER_DAY+400,`writes ${n}`);
 });
-test("paper-enabled on 10-19 06:00 (burstLeader off): fast follow opens a paper trade with its living note and run-log fields; MMR > 2% coins are only recorded",()=>{
+test("paper-enabled on 10-19 06:00 (burstLeader off): fast follow opens a paper trade with its living note and run-log fields; MMR > 3% coins are only recorded",()=>{
   const from=bj("10-19 05:56"),eng=new LivingEngine(from);
   eng.restore(new Map([[LIVING_KEYS.config,{...defaultLivingConfig(from),mode:"paper-enabled",items:{...defaultLivingConfig(from).items,burstLeader:false}}]]),from);
   const r=runLiving({from,to:bj("10-19 06:12"),stepMs:4000,mode:"paper-enabled",engine:eng});
   const all=[...r.state.positions,...r.state.history],lv=all.filter(t=>t.entryContext?.living);
   assert.ok(lv.length>=1,"a living trade");
   const t=lv[0]!;assert.equal(t.entryContext!.living!.k,"F");assert.equal(t.side,"SHORT");assert.equal(t.entryContext!.living!.rv,1);assert.ok(t.stopPrice>t.entryPrice,"reverse stop sits above a short");assert.ok(t.openedAt>=bj("10-19 06:00:12")&&t.openedAt<=bj("10-19 06:02"));
-  const ct=fixtureContracts();for(const x of lv)assert.ok(ct[x.symbol]!.maintenanceRate<=.02);
+  const ct=fixtureContracts();for(const x of lv)assert.ok(ct[x.symbol]!.maintenanceRate<=.03);
   const rec=orderRecord(t) as Record<string,unknown>;assert.equal(rec.living_kind,"fast");assert.equal(rec.rule_epoch,"living-v2");assert.equal(rec.living_episode,t.entryContext!.living!.ep);
   assert.ok(r.engine.log.some(row=>row.k==="RECORD_ONLY"&&/维持保证金率/.test(String(row.reason))));
   assert.ok(r.engine.config.epochStartedAt!=null);

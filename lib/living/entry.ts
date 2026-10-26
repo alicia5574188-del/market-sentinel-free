@@ -62,7 +62,7 @@ export function stopCheck(input:{side:Side;price:number;stop:number;min:number;m
   const lev=fixedPaperLeverage(input.leverageMax),mmr=maintenanceRateOf(input.mmr??undefined);
   const liq=isolatedLiquidationPrice({entry:input.price,leverage:lev,side:input.side,maintenanceRate:mmr});
   if(input.liqSafety){
-    if(input.mmr==null||input.mmr>SIZING.mmrMax)return{ok:false,reason:`维持保证金率 ${input.mmr==null?"未知":(input.mmr*100).toFixed(1)+"%"}>2%`};
+    if(input.mmr==null||input.mmr>SIZING.mmrMax)return{ok:false,reason:`维持保证金率 ${input.mmr==null?"未知":(input.mmr*100).toFixed(1)+"%"}>${(SIZING.mmrMax*100).toFixed(0)}%`};
     if(liq==null)return{ok:false,reason:"爆仓价算不出"};
     const liqDist=Math.abs(input.price-liq)/input.price;
     if(rate>SIZING.stopLiqFraction*liqDist)return{ok:false,reason:`止损 ${(rate*100).toFixed(2)}% 超过爆仓距离 ${(liqDist*100).toFixed(2)}% 的 40%`};
@@ -141,7 +141,7 @@ export function fastFollowPicks(input:{ep:Episode;tape:LivingTape;now:number;mem
 }
 function filterFollow(s:string,input:{mmr:(s:string)=>number|null;volume:(s:string)=>number;spread:(s:string)=>number|null}){
   const mmr=input.mmr(s),vol=input.volume(s),sp=input.spread(s);
-  if(mmr==null||mmr>FAST.followMmr)return`维持保证金率 ${mmr==null?"未知":(mmr*100).toFixed(1)+"%"}>2%`;
+  if(mmr==null||mmr>FAST.followMmr)return`维持保证金率 ${mmr==null?"未知":(mmr*100).toFixed(1)+"%"}>${(FAST.followMmr*100).toFixed(0)}%`;
   if(sp==null||sp>FAST.followSpread)return`价差 ${sp==null?"未知":(sp*1e4).toFixed(1)+"bp"}>6bp`;
   if(vol<FAST.followVolume)return`成交额 ${(vol/1e6).toFixed(0)}M<20M`;
   return null;

@@ -33,7 +33,7 @@ export type LivingItem=typeof LIVING_ITEMS[number];
 export type LivingItems=Record<LivingItem,boolean>;
 export const LIVING_ITEM_LABELS:Record<LivingItem,string>={
   fastProtect:"1 快速保护",fastFollow:"2 快速跟进",newSource:"3 资金意图开单（五步闭环）",noChase:"4 到位置再确认（不追价）",
-  liqSafety:"5 维持保证金率≤2%、止损≤爆仓距离40%",thesisExit:"6 持有理由没了就走",sizing:"7 证据倍数仓位",
+  liqSafety:"5 维持保证金率≤3%、止损≤爆仓距离40%",thesisExit:"6 持有理由没了就走",sizing:"7 证据倍数仓位",
   burstLeader:"8 全市场突然爆发选领涨（打法池成员：每次爆发的前 3 个币都记影子单；开关 10 开着时由预测器决定开不开、风险最多 0.75%；其它普通开单只记录）",
   htfTrend:"9 日线突破做多：BTC 在 100 日均线上时，前 30 大币日线收盘创 20 日新高就做多，止损 2 倍日波动、按 10 日低点跟踪（打法池成员，开关 10 开着时由预测器决定，最多 0.75%）",
   dynAllocator:"10 动态分配（总方案）：所有打法（短线池、爆发选领涨、日线突破）按周期预测器开模拟单——未来 6 小时在赚钱期的概率 ≥58%、预测记录不差，风险 0.125–0.5%（爆发 ≤0.75%），影子交易和预测相反立刻暂停；打法池不限笔数、一币一笔，由风险预算、保证金和爆仓距离自然限制"};
@@ -82,7 +82,7 @@ export const FAST={
   liqMoveMultiple:2.5,liqMinDistance:.015,tightenFraction:.5,tightenMin:.0035,confirmMaxRemaining:.006,
   withMoveArm:.01,withMoveGiveback:.40,coinFollowFraction:.5,
   // B5 follow
-  followMmr:.02,followSpread:.0006,followVolume:20_000_000,followMax:3,followWindowMs:10*60_000,
+  followMmr:.03,followSpread:.0006,followVolume:20_000_000,followMax:3,followWindowMs:10*60_000,
   probeBasketRetrace:.25,probeZ60:2,probeCoinNear:.003,probeFraction:1/3,
   pullCoinMin:.30,pullCoinMax:.60,pullBasketMin:.25,pullBasketMax:.50,newExtremeMs:30_000,
   stopMin:.006,stopMax:.015,timeExitMs:10*60_000,timeExitMin:.005,
@@ -97,7 +97,7 @@ export const STEPS={
   rewardScore:.0010,rewardT:2,rewardN:30,halfLifeShortMs:6*3_600_000,halfLifeLongMs:48*3_600_000,
   persistenceWindowMs:6*3_600_000,persistenceSpanMs:7*24*3_600_000,
   thesisDebounceBars:2,thesisPredictMs:4*3_600_000,
-  selectTop:3,selectMin:.5,selectVolume:20_000_000,selectSpread:.0004,selectMmr:.02,
+  selectTop:3,selectMin:.5,selectVolume:20_000_000,selectSpread:.0004,selectMmr:.03,
   waitPositionMs:30*60_000,stopMin:.006,stopMax:.020,
   exitUnrewardedT:-1,holdOverrun:1.5,
 } as const;
@@ -108,5 +108,5 @@ export const SIZING={
   evidence:{probe:.3,normal:.6,strong:1} as const,
   fastRiskRate:.0055,fastMaxMultiple:3,episodeRiskCap:.02,
   expansion:5,
-  mmrMax:.02,stopLiqFraction:.40,liqStopMultiple:1.5,
+  mmrMax:.03,stopLiqFraction:.40,liqStopMultiple:1.5,
 } as const;

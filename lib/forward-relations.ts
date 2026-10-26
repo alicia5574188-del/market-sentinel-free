@@ -1930,7 +1930,7 @@ function openLivingTrade(s:ForwardState,o:LivingOrder,living:LivingDirective,q:Q
   const leverage=htfLeverage??fixedPaperLeverage(contract.leverageMax),maintenanceRate=maintenanceRateOf(contract.maintenanceRate),
     liquidationPrice=isolatedLiquidationPrice({entry:price,leverage,side,maintenanceRate});
   if(living.items.liqSafety){
-    if(!(contract.maintenanceRate>0)||contract.maintenanceRate>.02)return`维持保证金率 ${((contract.maintenanceRate||0)*100).toFixed(1)}%>2%`;
+    if(!(contract.maintenanceRate>0)||contract.maintenanceRate>.03)return`维持保证金率 ${((contract.maintenanceRate||0)*100).toFixed(1)}%>3%`;
     // htf at 1x has no price liquidation (isolatedLiquidationPrice → null): nothing to keep the stop inside
     const liqDist=liquidationPrice?Math.abs(price-liquidationPrice)/price:htf&&leverage===1?Infinity:0;
     if(!(liqDist>0)||stopRate>.40*liqDist)return`止损超过爆仓距离的 40%`;

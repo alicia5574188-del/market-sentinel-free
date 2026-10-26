@@ -631,7 +631,7 @@ export class LivingEngine{
     const meta=this.tape.meta.get(s),mmr=ctx.contracts[s]?.maintenanceRate??null;
     if((meta?.volume24hUsd??0)<STEPS.selectVolume)return`成交额 ${((meta?.volume24hUsd??0)/1e6).toFixed(0)}M<20M`;
     if(meta&&meta.spread>STEPS.selectSpread)return`价差 ${(meta.spread*1e4).toFixed(1)}bp>${(STEPS.selectSpread*1e4).toFixed(0)}bp`;
-    if(items.liqSafety&&(mmr==null||mmr>STEPS.selectMmr))return`维持保证金率 ${mmr==null?"未知":(mmr*100).toFixed(1)+"%"}>2%`;
+    if(items.liqSafety&&(mmr==null||mmr>STEPS.selectMmr))return`维持保证金率 ${mmr==null?"未知":(mmr*100).toFixed(1)+"%"}>${(STEPS.selectMmr*100).toFixed(0)}%`;
     return null;
   }
   /** v2 step 5 for open living trades: is the reason to hold still there? (normal trades and handed-off fast trades) */
