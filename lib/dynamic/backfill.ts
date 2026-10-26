@@ -1,6 +1,7 @@
 /**
- * dynamic-v1: slow, resumable history backfill plan (pure). One request at a time, at most one every `minGapMs` (default 15 s,
- * 4 a minute), external venues only (Bybit → OKX → KuCoin on failure); a venue answering 429 / 403 is skipped for a while
+ * dynamic-v1: resumable history backfill (pure). One venue request at a time, at most one every `minGapMs`
+ * (default 4 s). While the history is behind, the alarm may take a short burst of 3 (see DynamicResearch.backfillTick),
+ * still only Bybit → OKX → KuCoin, never Gate. A venue answering 429 / 403 is skipped for a while
  * (all three refusing → everything pauses), exponential backoff per series.
  * Order: first the newest page of every series (≈ 40 min for ~30 coins: the latest 3.5 days of 5m, 10 days of 15m, 6 weeks of
  * 1h, …), then each series backwards, short-term first: BTC/ETH daily + 1h → 15m → 5m → 1h → BTC/ETH 1m → 4h → daily.
@@ -12,7 +13,9 @@ import {IV_SEC,type Iv} from "./series.ts";
 import {PAGE,VENUES,type Venue} from "./venues.ts";
 const MAJORS=new Set(["BTC_USDT","ETH_USDT"]);
 export const BACKFILL={
-  minGapMs:15_000,
+  minGapMs:4_000,
+  /** while history is unfinished, an alarm may take this many pages and then wait `minGapMs` again */
+  burst:3,
   /** history depth per interval (days); BTC/ETH keep longer 5m and are the only ones with 1m */
   depthDays:{"1d":1500,"4h":730,"1h":180,"15m":150,"5m":75,"1m":14} as Record<Iv,number>,
   majorDepthDays:{"5m":120} as Partial<Record<Iv,number>>,

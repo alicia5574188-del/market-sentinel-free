@@ -4919,17 +4919,17 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return out;
   }
   /**
-   * dynamic-v1 step: off the trading clock (the tick does not wait for it), one at a time, at most every 5 s; inside, at most one
-   * external-venue request per 15 s (never Gate) and a few D1 statements. Live 5m bars come from strategyCandles (the external
-   * 5m refresh the worker already does — no extra request). Its events are copied into the living run log.
+   * dynamic-v1 step: off the trading clock (the tick does not wait for it), one at a time, at most every 5 s; inside, external
+   * history is Bybit / OKX / KuCoin only (never Gate): one page every 4 s, and while behind a burst of 3 then a 12 s wait.
+   * Live 5m bars come from strategyCandles (the external 5m refresh the worker already does — no extra request). Its events are copied into the living run log.
    */
   private backfillWork:Promise<unknown>|null=null;
   private launchDynamicWork(now:number){
     try{
       const db=(this.env as {DB?:unknown}).DB?(this.env.DB as unknown as D1Like):null;
       const universe=this.strategyPathSymbols().filter(s=>this.marketHub.supports(s));
-      // history download is driven by this alarm on its own: while a long research step runs (analysis / replays can take
-      // minutes), a light tick still fetches the next paced page (one every 15 s shared with the step, never Gate)
+      // history download is driven by this alarm on its own: while a long research step runs, a light tick still fetches
+      // the next paced pages (burst of 3, then 12 s, shared with the step, never Gate)
       if(this.dynamicWork){
         if(!this.backfillWork&&this.dynamic.booted){
           const t=this.dynamic.backfillTick(now,{universe,db,fetch:venueFetch}).catch(()=>false);

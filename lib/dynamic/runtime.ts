@@ -148,11 +148,11 @@ export class DynamicResearch{
     return core.length?[...core,...all.filter(x=>!CORE_SERIES.has(`${x.sym}|${x.iv}`))]:all;}
   private bfBusy=false;private wq:Promise<unknown>=Promise.resolve();
   /** at most one backfill request in flight across step() and backfillTick(); pacing is nextJob's minGapMs (≤4/min) */
-  private async pageOnce(now:number,db:D1Like,fetch:Fetch):Promise<boolean>{
+  private async pageOnce(now:number,db:D1Like,fetch:Fetch,minGapMs?:number):Promise<boolean>{
     if(this.bfBusy)return false;this.bfBusy=true;
     try{
       // only series whose stored bars are already in memory (step() loads 3 a step); an unloaded pick used to burn the slot
-      const job=nextJob(this.bf,now,this.universe,{minGapMs:this.opts.minGapMs,ready:k=>this.loaded.has(k)});
+      const job=nextJob(this.bf,now,this.universe,{minGapMs:minGapMs??this.opts.minGapMs,ready:k=>this.loaded.has(k)});
       if(job&&this.loaded.has(job.key)){
         const url=pageUrl(job.venue,job.sym,job.iv,job.endSec,job.limit);
         try{if(!url)throw new Error("symbol");
@@ -174,13 +174,21 @@ export class DynamicResearch{
       return !!job&&this.loaded.has(job.key);
     }finally{this.bfBusy=false;}
   }
-  /** alarm-driven backfill between (or during) research steps: one paced page, then the progress is saved (≤ once a minute,
-   *  at once when a series finishes) so a restart loses at most a minute and the done counter never goes back. Never throws. */
+  private lastBurstAt=0;
+  /** alarm-driven backfill between (or during) research steps. While history is unfinished, up to BACKFILL.burst pages,
+   *  then wait burst×minGap. One venue at a time, never Gate. Never throws. */
   async backfillTick(now:number,input:{universe:readonly string[];db:D1Like|null;fetch:Fetch}):Promise<boolean>{
     const db=input.db;if(!db||!this.booted)return false;
     try{this.universe=trackedSymbols(input.universe);
-      const done0=this.doneCount(),did=await this.pageOnce(now,db,input.fetch);
-      if(did)await this.saveBackfill(db,now,this.doneCount()!==done0);
+      const gap=this.opts.minGapMs??BACKFILL.minGapMs;
+      if(now-this.lastBurstAt<gap)return false;
+      this.lastBurstAt=now;
+      let did=false;
+      for(let i=0;i<BACKFILL.burst;i++){
+        const done0=this.doneCount(),one=await this.pageOnce(now,db,input.fetch,i===0?undefined:0);
+        if(!one)break;
+        did=true;await this.saveBackfill(db,now,this.doneCount()!==done0);
+      }
       return did;
     }catch(error){this.lastError=safe(error);return false;}
   }
