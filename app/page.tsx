@@ -10,7 +10,6 @@ import { runtimeBackendOperational, runtimeStatusLabel } from "../lib/runtime-he
 import { operatorRequest, type AuthSession, type LiveRuntime, type OperatorRuntime } from "../lib/operator-ui.ts";
 import { clearPanels } from "../lib/panel-cache.ts";
 import { prefetchSystemPanels } from "../lib/system-panels.ts";
-import { prefetchBrain } from "../lib/brain-view.ts";
 import { readHome, saveHome, startHomeEarly, takeHomeEarly } from "../lib/owner-home.ts";
 import { runtimeRefreshMs } from "../lib/member-view.ts";
 
@@ -43,11 +42,10 @@ export default function Home() {
     // Closing the app or renewing a login must not erase saved chart history.
     // The authenticated Dashboard unmounts below; no cache is read while logged out.
     epoch.current++;runtimeReadFailures.current=0;hasRuntimeSnapshot.current=false;lastRuntime.current=null;guardPanelCache(session);setAuth(session);
-    // Warm the System tab (cheap Worker reads, no Gate call) so opening it shows details at once.
-    // Owner: the home tab's brain read goes now; the System-tab reads wait until the first screen is drawn.
+    // Owner: system-tab reads wait until the first screen is drawn. The brain research read is not fetched.
     const owner=session.authenticated&&session.role!=="member"&&(session.memberId??"owner")==="owner";
     deferredPrefetch.current=null;
-    if(owner){prefetchBrain("owner");deferredPrefetch.current="owner";}
+    if(owner){deferredPrefetch.current="owner";}
     else if(session.authenticated)prefetchSystemPanels(session.memberId??"owner",session.role!=="member");
     // Remove private snapshots immediately and invalidate any in-flight response.
     setRuntime(null);setError(null);setCachedAt(null);

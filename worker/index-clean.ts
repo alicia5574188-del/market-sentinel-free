@@ -605,8 +605,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private archiveWork:Promise<void>|null=null;
   /** Run log v3 → D1 (timeline buckets every ~2 min, finished research cases). Off the trading clock; never DO writes. */
   private livingLogStatus=emptyLivingLogStatus();
-  /** dynamic-v1 research layer (history backfill from external venues → D1, shadow playbooks, state, cycles, allocator). */
-  private dynamic=new DynamicResearch();
+  /** dynamic-v1 research layer. Lean: reverse hold is fixed, so no history download and no fresh analysis. */
+  private dynamic=new DynamicResearch({lean:true,metaEveryMs:10*60_000});
   private dynamicWork:Promise<void>|null=null;
   private dynamicEventAt=0;
   private dynamicPoolSeq=0;
@@ -4919,24 +4919,23 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return out;
   }
   /**
-   * dynamic-v1 step: off the trading clock (the tick does not wait for it), one at a time, at most every 5 s; inside, external
-   * history is Bybit / OKX / KuCoin only (never Gate): one page every 4 s, and while behind a burst of 3 then a 12 s wait.
-   * Live 5m bars come from strategyCandles (the external 5m refresh the worker already does — no extra request). Its events are copied into the living run log.
+   * dynamic-v1 step: off the trading clock. Lean keeps the reverse hold fixed: no Bybit/OKX/KuCoin history pages,
+   * no shadow-trade reload, no replay, no new analysis. A step runs at most once a minute and only ingests the 5m
+   * bars the worker already has. Never Gate.
    */
   private backfillWork:Promise<unknown>|null=null;
   private launchDynamicWork(now:number){
     try{
       const db=(this.env as {DB?:unknown}).DB?(this.env.DB as unknown as D1Like):null;
       const universe=this.strategyPathSymbols().filter(s=>this.marketHub.supports(s));
-      // history download is driven by this alarm on its own: while a long research step runs, a light tick still fetches
-      // the next paced pages (burst of 3, then 12 s, shared with the step, never Gate)
+      // history download stays off while lean: the alarm must not burst venue pages
       if(this.dynamicWork){
-        if(!this.backfillWork&&this.dynamic.booted){
+        if(!this.dynamic.opts.lean&&!this.backfillWork&&this.dynamic.booted){
           const t=this.dynamic.backfillTick(now,{universe,db,fetch:venueFetch}).catch(()=>false);
           this.backfillWork=t;this.ctx.waitUntil(t.finally(()=>{if(this.backfillWork===t)this.backfillWork=null;}));}
         return;
       }
-      if(now-this.dynamic.lastStepAt<5_000)return;
+      if(now-this.dynamic.lastStepAt<(this.dynamic.opts.lean?60_000:5_000))return;
       const daily:Record<string,(typeof this.turnDailyCandles)[string]|undefined>={};
       for(const s of [...universe,"BTC_USDT"])daily[s]=this.turnDailyCandles[s]??this.htfDaily[s];// external daily rows already in memory (no request)
       // burst-leader shadow trades (followed by the engine on its own 1m tape) become pool trades of the research layer

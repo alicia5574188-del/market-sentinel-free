@@ -1,7 +1,6 @@
 /** System-tab panel sources (all cheap Worker/DO/D1 reads; none of them calls Gate) and their cache keys. */
 import {operatorRequest,type CredentialStatus} from "./operator-ui.ts";
 import {persistableCredential,persistableMembers,prefetchPanel} from "./panel-cache.ts";
-import {prefetchBrain} from "./brain-view.ts";
 
 export const PANEL_KEYS={logStatus:"log-status",credential:"credential",members:"members",archivePlanSince:"archive-plan-since",systemStatus:"system-status"} as const;
 
@@ -20,12 +19,11 @@ export const persistCredential=persistableCredential;
 export const persistMembers=persistableMembers;
 
 /** At app start: warm what the System tab shows, so opening it needs no wait. Skips keys fresh in memory.
- * `deferred` = the System-tab reads only (run after the first screen is drawn); the brain read is not in it. */
+ * `deferred` = the System-tab reads only (run after the first screen is drawn). The brain research read is not fetched. */
 export function prefetchSystemPanels(scope:string,owner:boolean,only:"all"|"deferred"="all"){
   // The run log and the member list are owner panels; a member page never shows them, so never fetch them for members.
   if(owner)prefetchPanel(scope,PANEL_KEYS.logStatus,fetchLogStatus,persistLogStatus);
   prefetchPanel(scope,PANEL_KEYS.credential,fetchCredential,persistCredential);
   if(owner)prefetchPanel<{invite?:unknown}>(scope,PANEL_KEYS.members,fetchMembers,persistMembers);
-  // the owner home tab (大脑): first open shows the read at once
-  if(only==="all"&&owner&&scope==="owner")prefetchBrain(scope);
+  void only;
 }

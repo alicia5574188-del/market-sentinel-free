@@ -91,8 +91,8 @@ export class DynamicResearch{
   /** saved analysis: restored at boot (snapRestored), replaced by the first live analysis (snapFresh) */
   snapAt=0;snapStale=false;snapRestored=false;snapFresh=false;snapTrades=0;snapBytes=0;peakLite=0;private snapJson:string|null=null;
   private manageCache=new Map<string,{key:string;m:ReturnType<typeof manageLive>}>();
-  opts:{minGapMs?:number;analyzeEveryMs?:number;metaEveryMs?:number};
-  constructor(opts:{minGapMs?:number;analyzeEveryMs?:number;metaEveryMs?:number}={}){this.opts=opts;}
+  opts:{minGapMs?:number;analyzeEveryMs?:number;metaEveryMs?:number;lean?:boolean};
+  constructor(opts:{minGapMs?:number;analyzeEveryMs?:number;metaEveryMs?:number;lean?:boolean}={}){this.opts=opts;}
   private log(at:number,k:DynEvent["k"],text:string){this.events.push({at,k,text:text.slice(0,300)});if(this.events.length>200)this.events.splice(0,this.events.length-200);}
   drainEvents(){return this.events.slice();}
   get(sym:string,iv:Iv){return this.series.get(seriesKey(sym,iv))??null;}
@@ -103,26 +103,34 @@ export class DynamicResearch{
       const db=input.db;if(!db){this.lastError="D1 binding missing";return;}
       this.universe=trackedSymbols(input.universe);
       if(!this.booted){await this.boot(db,now);return;}
+      // lean: the reverse hold is fixed. Do not reload shadow trades, download history, replay, or re-analyze.
+      // Still load stored bars (so the worker's existing 5m feed can append) and evaluate a new closed bar.
+      if(!this.opts.lean){
       // 1) stored shadow trades, a few hundred rows a step
       for(let i=0;i<STEP.tradeBatches&&!this.tradesLoaded&&(i===0||Date.now()-t0<STEP.loadMs);i++)await this.loadTrades(db);
+      }
       // 2) stored series: short intervals only their newest chunks, daily / 4h whole
       //    BTC/ETH 1h + 1d first (the predictor and the state need them), then the rest in download order
-      let loads=0;for(const {sym,iv} of this.loadOrder()){const k=seriesKey(sym,iv);if(this.loaded.has(k)||loads>=STEP.loads||(loads>0&&Date.now()-t0>STEP.loadMs))continue;
+      const loadCap=this.opts.lean?24:STEP.loads;
+      let loads=0;for(const {sym,iv} of this.loadOrder()){const k=seriesKey(sym,iv);if(this.loaded.has(k)||loads>=loadCap||(loads>0&&Date.now()-t0>STEP.loadMs))continue;
         const s=await readSeries(db,this.store,sym,iv,isShortIv(iv)?{lastChunks:keepOf(sym,iv)>MEM_KEEP[iv]?Math.ceil(keepOf(sym,iv)/600)+1:2}:{});
         s.trim(keepOf(sym,iv));this.series.set(k,s);this.loaded.add(k);loads++;
         if(s.n&&this.bf.series[k]?.done)(isShortIv(iv)?this.liveNew:this.dirty).add(k);}
       // 3) the worker's live 5m bars (no request) → 5m, 15m, 1h
       if(input.feed)this.ingest(input.feed,now);
-      if(input.daily)this.seedDaily(input.daily,now);
+      if(!this.opts.lean&&input.daily)this.seedDaily(input.daily,now);
       // 4) deferred writes
       for(const [k,ts] of [...this.unsaved]){const s=this.series.get(k);if(!s){this.unsaved.delete(k);continue;}
         if(await this.writeBars(db,s.sym,s.iv,[],[...ts],now))this.unsaved.delete(k);else break;}
       if(now-this.lastLiveFlushAt>=STEP.liveFlushMs)await this.flushLive(db,now);
+      if(!this.opts.lean){
       // 5) one request (paced). The worker also calls backfillTick() from its alarm while a long step runs, so history keeps
       //    coming in at the same pace (one request every minGapMs, shared) whether or not the page is open.
       {const done0=this.doneCount();if(await this.pageOnce(now,db,input.fetch))await this.saveBackfill(db,now,this.doneCount()!==done0);}
+      }
       // 6) live evaluation of series that got a new closed bar
       let lives=0;for(const k of [...this.liveNew]){if(lives>=STEP.live)break;this.liveNew.delete(k);const s=this.series.get(k);if(!s||this.liveFrom[k]==null)continue;this.evalLive(s);lives++;}
+      if(!this.opts.lean){
       // 7) history units (one chunk each) once a series is complete
       this.planUnits();let units=0;
       for(;units<STEP.units&&this.unitQueue.length;units++)await this.runUnit(db,this.unitQueue.shift()!,now);
@@ -131,6 +139,7 @@ export class DynamicResearch{
       await this.flushTrades(db,now);
       // 9) analysis (hourly, or soon after new trades)
       if(this.tradesLoaded&&this.coreLoaded()&&(now-this.lastAnalyzeAt>=(this.opts.analyzeEveryMs??3_600_000)||((replays||lives||units)&&now-this.lastAnalyzeAt>=10*60_000))){this.analyze(now);this.lastMetaAt=0;}
+      }else await this.flushTrades(db,now);
       if(this.fcDirty.size)await this.flushForecasts(db,now);
       // 10) prune short history beyond its depth (+20 %), once a day
       if(now-this.lastPruneAt>=STEP.pruneEveryMs){this.lastPruneAt=now;
@@ -228,14 +237,16 @@ export class DynamicResearch{
       // a series with history but no liveFrom (older state): live from its newest stored bar
       for(const [k,p] of Object.entries(this.bf.series))if(p.pages>0&&isShortIv(p.iv)&&this.liveFrom[k]==null&&p.newest!=null)this.liveFrom[k]=p.newest+IV_SEC[p.iv];
       this.booted=true;this.bootError=null;
-      this.log(now,"BOOT",`研究层启动（${DYN_VERSION}）：${POOL.length} 套打法，历史下载进度 ${Object.values(this.bf.series).filter(s=>s.done).length} 条序列完成，已回放历史块 ${Object.keys(this.unitsDone).length} 个；影子交易分批读取中${this.snapRestored?`；已恢复上次保存的分析（${Math.round((now-this.snapAt)/60_000)} 分钟前${this.snapStale?"，已过期，只记录":""}）`:""}`);
+      this.log(now,"BOOT",this.opts.lean
+        ?`反向持仓已固定（${DYN_VERSION}）：不再下载历史、不再重算打法${this.snapRestored?`；沿用上次分析的开关（${Math.round((now-this.snapAt)/60_000)} 分钟前）`:""}；只接现有 5 分钟行情`
+        :`研究层启动（${DYN_VERSION}）：${POOL.length} 套打法，历史下载进度 ${Object.values(this.bf.series).filter(s=>s.done).length} 条序列完成，已回放历史块 ${Object.keys(this.unitsDone).length} 个；影子交易分批读取中${this.snapRestored?`；已恢复上次保存的分析（${Math.round((now-this.snapAt)/60_000)} 分钟前${this.snapStale?"，已过期，只记录":""}）`:""}`);
     }catch(error){this.bootError=safe(error);}
   }
   /** put the saved analysis back (forecasts, gates, cycles, BTC/ETH state): the predictor is ready at boot, before any trade is read.
    * Older than SNAP_STALE_MS: shown, but every gate is record-only until a fresh analysis (small positions / fixed notional / gates unchanged). */
   restoreSnap(sn:DynSnap|null,now:number){
     if(!sn||sn.v!==1||!sn.gates||!sn.forecasts||!Number.isFinite(sn.at)||!Object.keys(sn.forecasts).length)return false;
-    const ageMs=now-sn.at,stale=ageMs>SNAP_STALE_MS;
+    const ageMs=now-sn.at,stale=!this.opts.lean&&ageMs>SNAP_STALE_MS;
     this.forecasts=sn.forecasts;this.cycles=sn.cycles??{};this.predAt=sn.predAt??sn.at;this.states=sn.state?[sn.state]:[];this.intra=Array.isArray(sn.intra)?sn.intra:[];
     this.lastBucket=sn.bucket??null;this.lastIntraBucket=sn.intraBucket??null;
     const why=`上次保存的分析已过期（${Math.round(ageMs/3_600_000)} 小时前），新分析出来前只记录`;

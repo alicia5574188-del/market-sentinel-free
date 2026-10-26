@@ -26,7 +26,7 @@ export function memberForwardView(view:ForwardLike|null|undefined,state:StateLik
 
 export const RUNTIME_ACTIVE_MS=10_000;
 /** Owner page when nothing on screen moves quickly (brain/settings, or no open position on the tab shown). */
-export const OWNER_IDLE_MS=20_000;
+export const OWNER_IDLE_MS=120_000;
 export const MEMBER_IDLE_MS=30_000;
 type RuntimeLike={liveMode?:{requestedEnabled?:boolean}|null;live?:{requestedEnabled?:boolean;positions?:Record<string,{status?:string}|null|undefined>;
   entries?:Record<string,{status?:string}|null|undefined>}|null;forward?:{positions?:{status?:string}[]|null}|null}|null;
@@ -40,7 +40,7 @@ function liveBusy(runtime:RuntimeLike){
 }
 /** Page refresh cadence.
  * Owner: 10s on the 实盘 tab, while real money is active, or while the tab shown (模拟/执行) lists an open
- * paper position whose floating P&L moves; 20s otherwise (大脑/设置, or nothing open on the tab shown).
+ * paper position whose floating P&L moves; 120s otherwise (大脑/设置, or nothing open on the tab shown).
  * Member: 10s while copying or holding anything, 30s when copy-trading is off with nothing open. */
 export function runtimeRefreshMs(role:string|undefined,runtime:RuntimeLike,tab?:string|null){
   if(!runtime)return RUNTIME_ACTIVE_MS;

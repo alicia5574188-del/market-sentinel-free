@@ -36,7 +36,7 @@ export type BrainStatus={version:string;mode:BrainMode;configured:BrainMode;acti
   basket:number;flowSymbols?:number;lastFeedAt:number;flowAt?:number;cpu:{planMs:number;maxPlanMs:number;hubMs:number};writesToday:number;lastError:string|null};
 
 export const BRAIN_KEY="brain-status";
-export const BRAIN_POLL_MS=30_000;
+export const BRAIN_POLL_MS=300_000;
 export async function fetchBrain():Promise<BrainStatus>{return await operatorRequest<BrainStatus>("/api/living/status");}
 /** What may stay on the device: the read itself. No error text, no raw log rows. */
 export function persistBrain(v:BrainStatus|null){
@@ -44,11 +44,11 @@ export function persistBrain(v:BrainStatus|null){
   const {lastError:_e,...rest}=v as BrainStatus&{recent?:unknown};void _e;
   return {...rest,recent:undefined,lastError:null,decisions:(v.decisions??[]).slice(0,30)};
 }
-export function prefetchBrain(scope:string){prefetchPanel(scope,BRAIN_KEY,fetchBrain,persistBrain,20_000);}
+export function prefetchBrain(scope:string){prefetchPanel(scope,BRAIN_KEY,fetchBrain,persistBrain,300_000);}
 
 /** Cached brain status: instant from the device, refreshed in the background, every 30s only while the page is visible. */
 export function useBrain(scope:string,enabled:boolean){
-  const panel=usePanel<BrainStatus>(scope,BRAIN_KEY,fetchBrain,{persist:persistBrain,fresh:20_000,enabled});
+  const panel=usePanel<BrainStatus>(scope,BRAIN_KEY,fetchBrain,{persist:persistBrain,fresh:300_000,enabled});
   const {refresh}=panel;
   const tick=useCallback(()=>{if(typeof document!=="undefined"&&document.hidden)return;void refresh().catch(()=>undefined);},[refresh]);
   useEffect(()=>{
@@ -84,7 +84,7 @@ export const BRAIN_EXIT:Record<string,string>={
   LIVING_THESIS_BREAKEVEN:"保本后被打到",LIVING_THESIS_UNREWARDED:"这种做法市场不再给钱",
   LIVING_DYN_TRAIL:"打法池单：打到按规则移动后的止损",LIVING_DYN_POOL_LOCK:"打法池单：池内动态锁利，浮盈回吐到按波动和峰值算的保护线，离场",LIVING_DYN_EXIT:"打法池单：按它自己的规则收盘离场（目标/反向信号/到时）",
   LIVING_HTF_TRAIL:"日线突破单：打到 10 日最低点跟踪止损",LIVING_HTF_TRAIL_EXIT:"日线突破单：收盘后跟踪止损上移时价格已在下方，平掉",
-  LIVING_STOP:"打到开仓止损价",LIVING_FALLBACK_TIMEOUT:"大脑暂停期间拿满计划时长 1.5 倍，兜底平掉",
+  LIVING_STOP:"打到开仓止损价",LIVING_REV_TARGET:"反向持仓到了止盈",LIVING_FALLBACK_TIMEOUT:"大脑暂停期间拿满计划时长 1.5 倍，兜底平掉",
 };
 export const bj=(ms:number|null|undefined)=>ms?new Date(ms+8*3_600_000).toISOString().slice(5,16).replace("T"," "):"—";
 export const pct=(v:number|null|undefined,d=2)=>v==null||!Number.isFinite(v)?"—":`${v>=0?"+":""}${(v*100).toFixed(d)}%`;

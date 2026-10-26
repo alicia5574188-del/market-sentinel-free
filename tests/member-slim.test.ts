@@ -80,10 +80,10 @@ test("owner render keeps the original four tabs and owner panels",async()=>{
   assert.match(ownerBrain,/data-testid="owner-living-research"/);assert.match(ownerBrain,/data-testid="execution-status"/);assert.doesNotMatch(ownerBrain,/market-command-summary/);assert.match(owner,/market-intelligence-v1/);assert.doesNotMatch(owner,/member-dashboard/);
 });
 
-test("owner home refresh: 20s by default, 10s only where data on screen moves quickly",()=>{
+test("owner home refresh: 120s by default, 10s only where data on screen moves quickly",()=>{
   const paperOpen={live:{requestedEnabled:false,positions:{},entries:{}},forward:{positions:[{status:"OPEN"}]}};
   const quiet={live:{requestedEnabled:false,positions:{},entries:{}},forward:{positions:[]}};
-  assert.equal(OWNER_IDLE_MS,20_000);
+  assert.equal(OWNER_IDLE_MS,120_000);
   assert.equal(runtimeRefreshMs("owner",quiet,"brain"),OWNER_IDLE_MS);
   assert.equal(runtimeRefreshMs("owner",quiet,"paper"),OWNER_IDLE_MS);
   assert.equal(runtimeRefreshMs("owner",quiet,"live"),RUNTIME_ACTIVE_MS);
