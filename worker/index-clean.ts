@@ -5264,7 +5264,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         const engine=this.living,livingEpoch=engine?.config.epochStartedAt??null;
         const hotPositions=withLivingEpoch(withResearchColumns(file.positions,columnsOf),livingEpoch) as Record<string,unknown>[];
         let positions=hotPositions;
-        let paths:unknown[]=pathsReady?exportTradePaths(this.tradePaths,id=>ids.has(id)):[];
+        const paths:unknown[]=pathsReady?exportTradePaths(this.tradePaths,id=>ids.has(id)):[];
         let archiveError:string|null=null;
         try{
           const saved=await this.archivedOrders();
