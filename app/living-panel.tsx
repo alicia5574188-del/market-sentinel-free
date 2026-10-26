@@ -60,7 +60,7 @@ export function BrainBody({data=null,now=0,liveEnabled=false,liveOverview,health
   return <div className="mb pg-exec bs" data-testid="owner-living-research">
     <section className="pg-card bs-scheme" data-testid="brain-scheme">
       <strong className="pg-title">{data||st.at?"反向持仓":st.failed?"读取失败":"读取中"}</strong>
-      <p className="mb-hint">新单走原来的信号，只把方向反过来。止损、止盈、到时、锁盈都还是原来的规则。实盘关着。历史不再下载。运行日志只留 7 天。</p>
+      <p className="mb-hint">新单走原来的信号，只把方向反过来。止损、止盈、到时、锁盈都还是原来的规则。实盘关着。历史不再下载。运行日志只留最近 1200 条，多了从最早的删。</p>
     </section>
     {error&&<p className="mb-hint mb-warn" role="alert">{error}</p>}
     <PanelStamp at={st.at} refreshing={st.refreshing} failed={st.failed}/>

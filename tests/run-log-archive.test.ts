@@ -7,7 +7,7 @@ import {buildRunLogExport,closedLogRow,type LsrPositionRow} from "../lib/run-log
 import {emptyTradePathBook,PATH_CAP,type TradePath} from "../lib/trade-path.ts";
 import {emptyOrderJournal,orderRecord,ORDER_JOURNAL_CAP} from "../lib/order-journal.ts";
 import {ARCHIVE_BATCH,ARCHIVE_SEGMENT_SIZE,TAIL_DONE_MS,archiveFileName,buildArchiveEntries,buildArchiveFile,countArchive,dueRecords,ensureArchiveSchema,
-  journalBackfillIds,mergeContinuousOrders,planArchiveBatch,readMeta,readSegment,segmentCount,sourceRows,writeArchiveEntries,writeMeta,type ArchiveEntry,type D1Like,type D1Stmt} from "../lib/run-log-archive.ts";
+  mergeContinuousOrders,planArchiveBatch,readMeta,readSegment,segmentCount,sourceRows,writeArchiveEntries,writeMeta,type ArchiveEntry,type D1Like,type D1Stmt} from "../lib/run-log-archive.ts";
 import {RunLogArchiver} from "../lib/run-log-archiver.ts";
 
 const MIN=60_000,H=60*MIN,T=1_792_300_000_000;
@@ -103,24 +103,19 @@ test("due records: closed + 24h tail finished; rows about to be evicted go early
   assert.equal(dueRecords(full,now,new Map(early.due.map(d=>[d.path.id,true])),new Map(),1000).pending,0,"partial rows wait for the tail");
 });
 
-test("backfill: the archiver writes 40 records per pass and catches up across ticks without DO writes", async()=>{
+test("a pass deletes the long-term copy and does not write new rows", async()=>{
   const now=T+3*24*H,db=sqliteD1();
+  await ensureArchiveSchema(db);
+  await writeArchiveEntries(db,Array.from({length:5},(_,i)=>entry(i,now-i*MIN)),STARTED,now,STATS);
+  assert.equal(await countArchive(db,{mode:"all"}),5);
   const rows=Array.from({length:100},(_,i)=>trade(i,now-TAIL_DONE_MS-(100-i)*MIN));
-  const state=account(rows),book=bookOf(rows);
   const archiver=new RunLogArchiver({db:()=>db,readCold:async()=>[],readEquityDay:async()=>null},now);
-  for(let pass=1;pass<=3;pass++){
-    assert.equal(archiver.due(now+pass*2*MIN),true);
-    await archiver.step({now:now+pass*2*MIN,state,book,journal:{version:"x",accountStartedAt:STARTED,rows:[]} as never});
-    assert.equal(archiver.status.error,null);
-    assert.equal(await countArchive(db,{mode:"all"}),Math.min(100,pass*40));
-  }
-  assert.equal(archiver.status.backfillDone,true);assert.equal(archiver.status.stats.records,100);
-  assert.ok(archiver.status.rowWritesToday<=100*3+3+10);
-  assert.equal(archiver.healthy(now+7*MIN),true);
-  // a restarted DO reloads what is already archived and writes nothing again
-  const again=new RunLogArchiver({db:()=>db,readCold:async()=>[],readEquityDay:async()=>null},now);
-  await again.step({now:now+10*MIN,state,book,journal:{rows:[]} as never});
-  assert.equal(again.status.recordsThisBoot,0);assert.equal(again.status.stats.records,100);assert.equal(again.status.pending,0);
+  await archiver.step({now,state:account(rows),book:bookOf(rows),journal:{version:"x",accountStartedAt:STARTED,rows:[]} as never});
+  assert.equal(archiver.status.error,null);
+  assert.equal(await countArchive(db,{mode:"all"}),0,"the long-term archive is deleted, not copied into");
+  assert.equal(archiver.status.recordsThisBoot,0);
+  assert.equal(archiver.status.backfillDone,true);
+  assert.equal(archiver.healthy(now),true);
 });
 
 test("failure isolation: a broken or missing D1 never throws, records the error and backs off", async()=>{
@@ -200,21 +195,18 @@ test("worker wiring: archive runs after the tick off the critical path; cursor m
   assert.match(src,/"x-archive-owner":owner\?"1":"0"/);
 });
 
-test("equity minutes: one finished Beijing day per pass, empty days skipped, readable back for a segment", async()=>{
+test("a pass does not store equity days; rows already there are deleted", async()=>{
   const db=sqliteD1(),now=STARTED+3*24*H+H,asked:string[]=[];
-  const {readEquityFor}=await import("../lib/run-log-archive.ts");
-  const archiver=new RunLogArchiver({db:()=>db,readCold:async()=>[],readEquityDay:async day=>{asked.push(day);return asked.length===2?[]:[{ts:Date.parse(`${day}T00:00:00Z`)-8*H+MIN,equity:1000}] as never;}},now);
-  const state=account([]),book=emptyTradePathBook(STARTED);
-  for(let i=0;i<5;i++)await archiver.step({now:now+i*MIN,state,book,journal:{rows:[]} as never});
-  assert.equal(new Set(asked).size,asked.length,"each day read once");
-  assert.ok(asked.length>=3&&asked.length<=4);
-  const rows=db.raw.prepare("SELECT day FROM run_log_equity_days ORDER BY day").all() as {day:string}[];
-  assert.equal(rows.length,asked.length-1,"the empty day was skipped");
-  const back=await readEquityFor(db,STARTED,now);
-  assert.equal(back.minutes.length,rows.length);
+  await ensureArchiveSchema(db);
+  db.raw.prepare("INSERT INTO run_log_equity_days (day,first_ts,last_ts,archived_at,rows_json) VALUES ('2026-10-01',1,2,3,'[]')").run();
+  const archiver=new RunLogArchiver({db:()=>db,readCold:async()=>[],readEquityDay:async day=>{asked.push(day);return [{ts:1,equity:1000}] as never;}},now);
+  await archiver.step({now,state:account([]),book:emptyTradePathBook(STARTED),journal:{rows:[]} as never});
+  assert.equal(asked.length,0,"equity days are not read into the long-term archive");
+  const rows=db.raw.prepare("SELECT day FROM run_log_equity_days").all() as {day:string}[];
+  assert.equal(rows.length,0);
 });
 
-test("a path with no order row is kept and does not block the orders behind it", async()=>{
+test("a pass does not copy a path that has no order row", async()=>{
   const now=T+3*24*H,db=sqliteD1();
   const good=Array.from({length:40},(_,i)=>trade(i,now-TAIL_DONE_MS-(40-i)*MIN));
   const book=bookOf(good);
@@ -224,12 +216,7 @@ test("a path with no order row is kept and does not block the orders behind it",
   const journal={version:"order-journal-v1" as const,accountStartedAt:STARTED,rows:[]};
   await archiver.step({now,state:account(good),book,journal});
   assert.equal(archiver.status.error,null);
-  assert.equal(archiver.status.rejectedThisBoot,0);
-  assert.equal(await countArchive(db,{mode:"all"}),40);
-  await archiver.step({now:now+2*MIN,state:account(good),book,journal});
-  const ids=(await readSegment(db,{mode:"all"},1)).map(r=>r.id);
-  assert.ok(ids.includes("t-0")&&ids.includes("t-1000"));
-  assert.equal(ids.length,80);
+  assert.equal(await countArchive(db,{mode:"all"}),0);
 });
 
 test("an order about to fall out of the journal is copied before a path that can wait", ()=>{
@@ -241,36 +228,30 @@ test("an order about to fall out of the journal is copied before a path that can
   assert.ok(plan.pending>1);
 });
 
-test("a later journal copy does not erase a path already stored", async()=>{
+test("a later pass does not keep a path that was stored before the archive was turned off", async()=>{
   const now=T+3*24*H,db=sqliteD1();
   const t=trade(7,now-TAIL_DONE_MS-H);
-  const book=bookOf([t]);
+  await ensureArchiveSchema(db);
+  await writeArchiveEntries(db,[entry(7,t.openedAt)],STARTED,now,STATS);
   const archiver=new RunLogArchiver({db:()=>db,readCold:async()=>[],readEquityDay:async()=>null},now);
-  await archiver.step({now,state:account([t]),book,journal:emptyOrderJournal(STARTED)});
-  const stored=await readSegment(db,{mode:"all"},1);
-  assert.ok(stored[0]!.path_json);
-  const gone=emptyTradePathBook(STARTED);
-  const journal=emptyOrderJournal(STARTED);journal.rows=[orderRecord(t)];
-  await archiver.step({now:now+2*MIN,state:account([]),book:gone,journal});
-  const after=await readSegment(db,{mode:"all"},1);
-  assert.equal(after.length,1);
-  assert.ok(after[0]!.path_json,"stored path stays");
+  await archiver.step({now,state:account([t]),book:bookOf([t]),journal:emptyOrderJournal(STARTED)});
+  assert.equal(await countArchive(db,{mode:"all"}),0);
 });
 
-test("restart remembers journal rows that are older than the path book", async()=>{
+test("a pass does not copy journal rows that are older than the path book", async()=>{
   const now=T+3*24*H,db=sqliteD1();
   const t=trade(7,now-TAIL_DONE_MS-H);
   const journal=emptyOrderJournal(STARTED);journal.rows=[orderRecord(t)];
   const first=new RunLogArchiver({db:()=>db,readCold:async()=>[],readEquityDay:async()=>null},now);
   await first.step({now,state:account([]),book:emptyTradePathBook(STARTED),journal});
-  assert.equal(await countArchive(db,{mode:"all"}),1);
+  assert.equal(await countArchive(db,{mode:"all"}),0);
   const again=new RunLogArchiver({db:()=>db,readCold:async()=>[],readEquityDay:async()=>null},now);
   await again.step({now:now+2*MIN,state:account([]),book:emptyTradePathBook(STARTED),journal});
   assert.equal(again.status.recordsThisBoot,0);
-  assert.equal(await countArchive(db,{mode:"all"}),1);
+  assert.equal(await countArchive(db,{mode:"all"}),0);
 });
 
-test("a closed order whose path has left the book is kept, with no invented path", async()=>{
+test("a closed order whose path has left the book is not copied into the long-term archive", async()=>{
   const now=T+3*24*H,db=sqliteD1();
   const {orderRecord}=await import("../lib/order-journal.ts");
   const row=orderRecord(trade(7,now-TAIL_DONE_MS-H));
@@ -279,12 +260,7 @@ test("a closed order whose path has left the book is kept, with no invented path
   const book=emptyTradePathBook(STARTED);
   await archiver.step({now,state:account([]),book,journal});
   assert.equal(archiver.status.error,null);
-  assert.equal(await countArchive(db,{mode:"all"}),1);
-  const seg=await readSegment(db,{mode:"all"},1);
-  assert.equal(seg[0]!.id,"t-7");assert.equal(seg[0]!.kind,"position");assert.equal(seg[0]!.path_json,null);
-  await archiver.step({now:now+2*MIN,state:account([]),book,journal});
-  assert.equal(await countArchive(db,{mode:"all"}),1,"the same order is not copied twice");
-  assert.deepEqual(journalBackfillIds(journal.rows,new Map([["t-7",false]]),new Map(),new Set(),now,10),[]);
+  assert.equal(await countArchive(db,{mode:"all"}),0);
 });
 
 test("export merge is one row per id, hot wins, open time order",()=>{

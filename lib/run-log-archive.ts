@@ -1,12 +1,7 @@
 /**
- * Long-term run-log archive in D1. Review only: nothing here is read by an entry, an exit, sizing, a stop or live copying,
- * and nothing here writes Durable Object storage. Every caller wraps it in try/catch and runs it off the trading clock.
- *
- * A record is copied once it is closed. A missing field or a missing price path does not drop the order: the order row is kept
- * and the path is attached when it exists. Rows about to fall out of the 1200-record book are copied early (partial=1)
- * and written again once the 24 h tail is finished, if they are still in the book. Closed orders whose path has already
- * left that book are copied from the closed-order journal with no path invented.
- * The stored row and path are what the run-log export carries for that id.
+ * Long-term run-log copy in D1. It is being deleted: a pass only removes rows.
+ * The run log that stays is the 1200-record book on the account. Nothing here is read by an entry, an exit,
+ * sizing, a stop or live copying, and nothing here writes Durable Object storage.
  */
 import type {ForwardState, Trade} from './forward-relations.ts';
 import type {OrderJournal, OrderRecord} from './order-journal.ts';
@@ -35,8 +30,8 @@ export const EVICTION_GUARD_ROWS=150;
 export const STAGE_SETTLE_MS=150*MIN;
 export const STAGE_BATCH=60;
 const EQUITY_SEGMENT_DAYS=14;
-/** Run log kept for review of this version. Older rows are deleted. */
-export const RUN_LOG_KEEP_MS=7*24*60*60*1000;
+/** The run log keeps this many records in the hot book. The D1 long-term copy is not kept. */
+export const RUN_LOG_KEEP_ROWS=1200;
 
 export const ARCHIVE_SCHEMA=[
   `CREATE TABLE IF NOT EXISTS run_log_archive (id TEXT PRIMARY KEY NOT NULL, kind TEXT NOT NULL, account_started_at INTEGER,
@@ -289,12 +284,11 @@ export async function countArchive(db:D1Like,q:ArchiveQuery){
   const row=await db.prepare(`SELECT COUNT(*) AS n FROM run_log_archive ${w.sql}`).bind(...w.binds).first<{n:number}>();
   return Number(row?.n??0);
 }
-/** Delete run-log rows older than 7 days. One bounded pass. Does not touch the account or open positions. */
-export async function pruneRunLog(db:D1Like,now:number,limit=400){
-  const cut=now-RUN_LOG_KEEP_MS;
-  const arch=await db.prepare(`DELETE FROM run_log_archive WHERE rowid IN (SELECT rowid FROM run_log_archive WHERE opened_at<? ORDER BY opened_at LIMIT ?)`).bind(cut,limit).run();
-  const stages=await db.prepare(`DELETE FROM run_log_stages WHERE rowid IN (SELECT rowid FROM run_log_stages WHERE at<? ORDER BY at LIMIT ?)`).bind(cut,limit).run();
-  const equity=await db.prepare(`DELETE FROM run_log_equity_days WHERE last_ts<?`).bind(cut).run();
+/** Delete the long-term archive. One bounded pass. Does not touch the account, the 1200-record book, or open positions. */
+export async function pruneRunLog(db:D1Like,_now:number,limit=2_000){
+  const arch=await db.prepare(`DELETE FROM run_log_archive WHERE rowid IN (SELECT rowid FROM run_log_archive ORDER BY opened_at LIMIT ?)`).bind(limit).run();
+  const stages=await db.prepare(`DELETE FROM run_log_stages WHERE rowid IN (SELECT rowid FROM run_log_stages ORDER BY at LIMIT ?)`).bind(limit).run();
+  const equity=await db.prepare(`DELETE FROM run_log_equity_days WHERE rowid IN (SELECT rowid FROM run_log_equity_days ORDER BY day LIMIT ?)`).bind(limit).run();
   const n=(r:unknown)=>{const c=(r as {meta?:{changes?:number}}).meta?.changes;return typeof c==="number"?c:0;};
   return {archive:n(arch),stages:n(stages),equity:n(equity)};
 }

@@ -38,7 +38,7 @@ export default function PaperAccountReset({auth,runtime,onReset}:{auth:AuthSessi
       }else{
         if(result.equity!==1000)throw new Error("服务器没有确认新的1000U资金，未发布重置结果。");
         setConfirming(false);
-        setNotice("模拟账户资金已重置为1000U；页面权益曲线和开单记录从现在重新开始。运行日志、价格路径、阶段时间线、导出进度和长期归档都保留。");
+        setNotice("模拟账户资金已重置为1000U；页面权益曲线和开单记录从现在重新开始。运行日志只留最近 1200 条，价格路径、阶段时间线和导出进度都保留。");
       }
       refresh();
     }catch(e){setError(e instanceof Error?e.message:"模拟账户重置失败");}
@@ -68,7 +68,7 @@ export default function PaperAccountReset({auth,runtime,onReset}:{auth:AuthSessi
       </div>
       :!confirming?<button className="fr-button" type="button" disabled={busy} onClick={()=>{setError(null);setNotice(null);setConfirming(true);}}>重置模拟账户资金</button>
       :<div className="fr-form">
-        <p className="fr-error"><b>确认重置？</b><br/>只重置页面上的三样：资金回到1000U、权益曲线从这里重新画、开单记录从这里重新记。系统不停，运行日志（已开、没开、价格路径）、阶段时间线、导出进度和长期归档都保留。{openPaper?`现在有 ${openPaper} 单模拟持仓：不会强平，重置先预约，等到没有持仓时自动执行，期间照常开平仓。`:"现在没有持仓，会立刻执行。"}该操作不能撤销。</p>
+        <p className="fr-error"><b>确认重置？</b><br/>只重置页面上的三样：资金回到1000U、权益曲线从这里重新画、开单记录从这里重新记。系统不停，运行日志只留最近 1200 条（已开、没开、价格路径），阶段时间线和导出进度都保留。{openPaper?`现在有 ${openPaper} 单模拟持仓：不会强平，重置先预约，等到没有持仓时自动执行，期间照常开平仓。`:"现在没有持仓，会立刻执行。"}该操作不能撤销。</p>
         {blocked&&<p className="fr-note">当前不能重置：请先关闭实盘，并确认没有本系统实盘持仓或待成交订单。</p>}
         <div className="fr-owner-session">
           <button className="fr-button" type="button" disabled={busy||blocked} onClick={()=>void reset()}>{busy?"正在提交…":openPaper?"确认预约重置":"确认重置为1000U"}</button>

@@ -130,3 +130,13 @@ test("D1: buckets upserted (current one rewritten), finished cases archived with
   const back=await readLivingLog(db,"case",0,now,100) as {path:{bps:string}}[];assert.equal(back.length,done.cases.length);assert.ok(back[0]!.path.bps.length>100);
   const bs=await readLivingLog(db,"bucket",0,now+MIN,1000);assert.ok(bs.length>=40);
 });
+
+test("D1 keeps the newest 1200 run-log rows and deletes the older ones",async()=>{
+  const db=sqliteD1(),st=emptyLivingLogStatus(),now=t0+9*H;
+  await writeLivingLog(db,st,now,[],[]);
+  for(let i=0;i<1205;i++)await db.prepare(`INSERT INTO living_run_log (id,kind,at,archived_at,json) VALUES (?,?,?,?,?)`).bind(`b${i}`,"bucket",i,now,"{}").run();
+  const n=async()=>Number((await db.prepare(`SELECT COUNT(*) AS n FROM living_run_log`).first<{n:number}>())?.n??0);
+  assert.equal(await n(),1205);
+  await writeLivingLog(db,st,now+1,[],[]);
+  assert.equal(await n(),1205-800,"one pass deletes the oldest 800 once the book is over 1200");
+});

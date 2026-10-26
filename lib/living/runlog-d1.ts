@@ -1,9 +1,9 @@
 /**
- * D1 long-term store for run log v3 (timeline buckets + finished research cases). Review only; never touches Durable
- * Object storage or the account. Same D1 database as the run-log archive, own table.
+ * D1 store for run log v3 (timeline buckets + finished research cases). Review only; never touches Durable
+ * Object storage or the account. Keeps the newest 1200 rows and deletes the rest. Not a long-term archive.
  */
 import type {D1Like} from "../run-log-archive.ts";
-import {RUN_LOG_KEEP_MS} from "../run-log-archive.ts";
+import {RUN_LOG_KEEP_ROWS} from "../run-log-archive.ts";
 import type {Bucket,FinalCase} from "./runlog.ts";
 
 export const LIVING_LOG_SCHEMA=[
@@ -25,7 +25,7 @@ export const emptyLivingLogStatus=():LivingLogStatus=>({schemaReady:false,lastRu
 export async function writeLivingLog(db:D1Like,status:LivingLogStatus,now:number,buckets:Bucket[],cases:FinalCase[]){
   const d=new Date(now).toISOString().slice(0,10);if(status.day!==d){status.day=d;status.rowsToday=0;}
   if(!status.schemaReady){await db.batch(LIVING_LOG_SCHEMA.map(sql=>db.prepare(sql)));status.schemaReady=true;}
-  try{await db.prepare(`DELETE FROM living_run_log WHERE rowid IN (SELECT rowid FROM living_run_log WHERE at<? ORDER BY at LIMIT ?)`).bind(now-RUN_LOG_KEEP_MS,400).run();}catch{/* 过期行下轮再删 */}
+  try{await db.prepare(`DELETE FROM living_run_log WHERE rowid IN (SELECT rowid FROM living_run_log ORDER BY at ASC LIMIT ?) AND (SELECT COUNT(*) FROM living_run_log)>?`).bind(800,RUN_LOG_KEEP_ROWS).run();}catch{/* 超限的旧行下轮再删 */}
   const rows=[...buckets.map(b=>({id:b.id,kind:"bucket",at:b.at,json:JSON.stringify(b)})),...cases.map(c=>({id:c.id,kind:"case",at:c.at,json:JSON.stringify(c)}))];
   if(!rows.length)return {buckets:[] as string[],cases:[] as string[]};
   // cases first when over budget: the timeline row for the current bucket is rewritten anyway
