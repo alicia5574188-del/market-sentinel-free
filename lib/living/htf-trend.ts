@@ -60,6 +60,10 @@ export function priorHigh(rows:DailyBar[],n:number=HTF.entryN):number|null{
 export function trailLow(rows:DailyBar[],n:number=HTF.exitN):number|null{
   if(rows.length<n)return null;let m=Infinity;for(let i=rows.length-n;i<rows.length;i++)m=Math.min(m,rows[i]!.low);return m;
 }
+/** highest high of the last n closed bars (the short-side mirror of trailLow) */
+export function trailHigh(rows:DailyBar[],n:number=HTF.exitN):number|null{
+  if(rows.length<n)return null;let m=-Infinity;for(let i=rows.length-n;i<rows.length;i++)m=Math.max(m,rows[i]!.high);return m;
+}
 export function smaClose(rows:DailyBar[],n:number):number|null{
   if(rows.length<n)return null;let s=0;for(let i=rows.length-n;i<rows.length;i++)s+=rows[i]!.close;return s/n;
 }
@@ -99,6 +103,12 @@ export function htfExitLevel(initialStop:number,closed:DailyBar[],entryTimeSec:n
   const entryDay=Math.floor(entryTimeSec/DAY)*DAY,after=closed.filter(r=>r.time>=entryDay).length;
   const tl=after>=1?trailLow(closed,HTF.exitN):null;
   return Math.max(initialStop,prevLevel??-Infinity,tl??-Infinity);
+}
+/** Mirror of htfExitLevel for a reversed short: min(initial stop, highest high of the last 10 closed days). Never higher than prevLevel. */
+export function htfExitLevelShort(initialStop:number,closed:DailyBar[],entryTimeSec:number,prevLevel:number|null=null){
+  const entryDay=Math.floor(entryTimeSec/DAY)*DAY,after=closed.filter(r=>r.time>=entryDay).length;
+  const th=after>=1?trailHigh(closed,HTF.exitN):null;
+  return Math.min(initialStop,prevLevel??Infinity,th??Infinity);
 }
 /** volume rank (1 = largest 24h volume) among the given coins; coins without a volume get no rank */
 export function volumeRanks(vol:Record<string,number|null|undefined>){

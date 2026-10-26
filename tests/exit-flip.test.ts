@@ -2,14 +2,14 @@ import {test} from "node:test";
 import assert from "node:assert/strict";
 import {flipExits,reverseTradeNet} from "../lib/dynamic/exit-flip.ts";
 
-test("the other side uses the original stop distance both ways, and ignores a different target",()=>{
+test("the other side keeps the original stop distance and the original target distance",()=>{
   const x=flipExits("LONG",100,90,130);
-  assert.deepEqual(x,{side:"SHORT",stop:110,target:90});
+  assert.deepEqual(x,{side:"SHORT",stop:110,target:70});
 });
 
-test("no target uses the stop distance both ways",()=>{
+test("no target stays a stop only — a target is not invented",()=>{
   const x=flipExits("SHORT",100,108,null);
-  assert.deepEqual(x,{side:"LONG",stop:92,target:108});
+  assert.deepEqual(x,{side:"LONG",stop:92,target:null});
 });
 
 test("a stop that is not a real price is not sent",()=>{

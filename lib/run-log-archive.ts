@@ -35,6 +35,8 @@ export const EVICTION_GUARD_ROWS=150;
 export const STAGE_SETTLE_MS=150*MIN;
 export const STAGE_BATCH=60;
 const EQUITY_SEGMENT_DAYS=14;
+/** Run log kept for review of this version. Older rows are deleted. */
+export const RUN_LOG_KEEP_MS=7*24*60*60*1000;
 
 export const ARCHIVE_SCHEMA=[
   `CREATE TABLE IF NOT EXISTS run_log_archive (id TEXT PRIMARY KEY NOT NULL, kind TEXT NOT NULL, account_started_at INTEGER,
@@ -286,6 +288,15 @@ export async function countArchive(db:D1Like,q:ArchiveQuery){
   const w=where(q);
   const row=await db.prepare(`SELECT COUNT(*) AS n FROM run_log_archive ${w.sql}`).bind(...w.binds).first<{n:number}>();
   return Number(row?.n??0);
+}
+/** Delete run-log rows older than 7 days. One bounded pass. Does not touch the account or open positions. */
+export async function pruneRunLog(db:D1Like,now:number,limit=400){
+  const cut=now-RUN_LOG_KEEP_MS;
+  const arch=await db.prepare(`DELETE FROM run_log_archive WHERE rowid IN (SELECT rowid FROM run_log_archive WHERE opened_at<? ORDER BY opened_at LIMIT ?)`).bind(cut,limit).run();
+  const stages=await db.prepare(`DELETE FROM run_log_stages WHERE rowid IN (SELECT rowid FROM run_log_stages WHERE at<? ORDER BY at LIMIT ?)`).bind(cut,limit).run();
+  const equity=await db.prepare(`DELETE FROM run_log_equity_days WHERE last_ts<?`).bind(cut).run();
+  const n=(r:unknown)=>{const c=(r as {meta?:{changes?:number}}).meta?.changes;return typeof c==="number"?c:0;};
+  return {archive:n(arch),stages:n(stages),equity:n(equity)};
 }
 /** One segment (1-based). The 'since' mode always reads the first segment after the cursor. */
 export async function readSegment(db:D1Like,q:ArchiveQuery,segment:number,size=ARCHIVE_SEGMENT_SIZE){

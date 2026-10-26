@@ -3,6 +3,7 @@
  * Object storage or the account. Same D1 database as the run-log archive, own table.
  */
 import type {D1Like} from "../run-log-archive.ts";
+import {RUN_LOG_KEEP_MS} from "../run-log-archive.ts";
 import type {Bucket,FinalCase} from "./runlog.ts";
 
 export const LIVING_LOG_SCHEMA=[
@@ -24,6 +25,7 @@ export const emptyLivingLogStatus=():LivingLogStatus=>({schemaReady:false,lastRu
 export async function writeLivingLog(db:D1Like,status:LivingLogStatus,now:number,buckets:Bucket[],cases:FinalCase[]){
   const d=new Date(now).toISOString().slice(0,10);if(status.day!==d){status.day=d;status.rowsToday=0;}
   if(!status.schemaReady){await db.batch(LIVING_LOG_SCHEMA.map(sql=>db.prepare(sql)));status.schemaReady=true;}
+  try{await db.prepare(`DELETE FROM living_run_log WHERE rowid IN (SELECT rowid FROM living_run_log WHERE at<? ORDER BY at LIMIT ?)`).bind(now-RUN_LOG_KEEP_MS,400).run();}catch{/* 过期行下轮再删 */}
   const rows=[...buckets.map(b=>({id:b.id,kind:"bucket",at:b.at,json:JSON.stringify(b)})),...cases.map(c=>({id:c.id,kind:"case",at:c.at,json:JSON.stringify(c)}))];
   if(!rows.length)return {buckets:[] as string[],cases:[] as string[]};
   // cases first when over budget: the timeline row for the current bucket is rewritten anyway

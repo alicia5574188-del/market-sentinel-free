@@ -381,8 +381,9 @@ test("engine: an allowed pool signal → order (hx+dp, allocator risk, absolute 
   const d=e.plan(ctx(dynIn({signals:[sig("box1h-long","AAA_USDT"),sig("box1h-short","BBB_USDT","SHORT")]})))!;
   assert.equal(d.orders.length,1);const o=d.orders[0]!;
   const f=flipExits("LONG",10*1.0001,9.5,null)!;
-  assert.deepEqual([o.symbol,o.side,o.stop,o.riskRate,o.note.pb,o.note.hx,o.note.dp,o.note.rv,o.note.tg],["AAA_USDT",f.side,r6(f.stop),.005,"box1h-long",1,1,1,r6(f.target)]);
-  assert.match(o.reason,/反向持仓/);
+  assert.deepEqual([o.symbol,o.side,o.stop,o.riskRate,o.note.pb,o.note.hx,o.note.dp,o.note.rv],["AAA_USDT",f.side,r6(f.stop),.005,"box1h-long",1,1,1]);
+  assert.equal(o.note.tg,undefined);
+  assert.match(o.reason,/反向/);
   assert.ok(e.log.some(r=>r.k==="DYN_SIGNAL"&&r.pb==="box1h-short"&&/分配器不允许/.test(String(r.reason))));
   e.afterForward({opened:[{orderId:o.id,tradeId:"lv-d",symbol:"AAA_USDT",side:"LONG",risk:5,notional:100}],rejected:[],applied:[]},emptyForward(),NOW);
   assert.equal(e.plan(ctx(dynIn({signals:[sig("box1h-long","AAA_USDT")]})))!.orders.length,0,"already sent");

@@ -33,7 +33,8 @@ export type LivingNote={v:"living-v1"|"living-v2";k:LivingKind;pb:string;th:stri
   fx?:number;szn?:number;szr?:number;szm?:number;
   /** dynamic-v1: the signal's time limit in bars of its interval (target is `tg`) */
   mb?:number;
-  /** reverse hold: other side of the signal. Only the price stop and `tg` close it. */
+  /** reverse of the forward signal: same stop distance and the same target distance, on the other side.
+   * Hold rules (time, trail, pool lock, playbook exit) still run. They are not replaced. */
   rv?:1;};
 export type LivingTradeAction={tradeId:string;action:"EXIT"|"GUARD"|"HANDOFF";stop?:number;code:string;reason:string;detail?:Record<string,number|string|null>};
 export type LivingOrder={id:string;symbol:string;side:"LONG"|"SHORT";stop:number;

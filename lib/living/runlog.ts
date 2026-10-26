@@ -173,6 +173,8 @@ export class RunLog{
   /** One pool-log record into the bucket of its time. Trades (OPEN / CLOSE) keep POOL_TRADES_PER_BUCKET slots of their own; a record
    * over the cap is counted in pool_dropped. The latest records are also kept in `poolRecent` for the brain page. */
   pool(now:number,rec:PoolRec){
+    // this version's review only needs the orders: gate, open, close. Predictor snapshots and download progress are not stored.
+    if(rec.t==="PRED"||rec.t==="SCORE"||rec.t==="BACKFILL")return;
     const b=this.cur(now),xs=b.pool??=[],r=compactRec({...rec,at:rec.at||now}),trade=r.t==="OPEN"||r.t==="CLOSE";
     const nTrade=xs.filter(x=>x.t==="OPEN"||x.t==="CLOSE").length,nOther=xs.length-nTrade;
     if(trade?nTrade<POOL_TRADES_PER_BUCKET:nOther<POOL_PER_BUCKET)xs.push(r);

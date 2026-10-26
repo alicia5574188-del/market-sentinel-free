@@ -7,7 +7,7 @@ import type {OrderJournal} from './order-journal.ts';
 import type {EquityMinute} from './equity-minutes.ts';
 import type {TradePathBook} from './trade-path.ts';
 import {ARCHIVE_BATCH,ARCHIVE_DAILY_ROW_WRITES,ARCHIVE_VERSION,buildArchiveEntries,buildJournalArchiveEntries,dueStages,ensureArchiveSchema,nextEquityDay,
-  pathFallbackRow,planArchiveBatch,readArchivedFlags,readMeta,sourceRows,writeArchiveEntries,writeEquityDay,writeStages,type ArchiveEntry,type ArchiveExportMark,type ArchiveStats,type D1Like} from './run-log-archive.ts';
+  pathFallbackRow,planArchiveBatch,pruneRunLog,readArchivedFlags,readMeta,sourceRows,writeArchiveEntries,writeEquityDay,writeStages,type ArchiveEntry,type ArchiveExportMark,type ArchiveStats,type D1Like} from './run-log-archive.ts';
 
 export type ArchiveStatus={version:typeof ARCHIVE_VERSION;schemaReady:boolean;loaded:boolean;backfillDone:boolean;
   lastRunAt:number|null;lastOkAt:number|null;lastError:string|null;lastErrorAt:number|null;error:string|null;failures:number;
@@ -137,6 +137,7 @@ export class RunLogArchiver{
         s.equityWatermark=day; // an empty day (worker down all day) is skipped, not retried forever
       }
       s.lastOkAt=now;s.error=null;s.failures=0;
+      try{await pruneRunLog(db,now);}catch{/* 过期日志删不掉也不挡这一轮归档 */}
     }catch(error){
       s.lastError=safe(error);s.lastErrorAt=now;s.error=s.lastError;s.failures++;
     }finally{this.busy=false;}

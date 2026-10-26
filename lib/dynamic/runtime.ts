@@ -139,8 +139,8 @@ export class DynamicResearch{
       await this.flushTrades(db,now);
       // 9) analysis (hourly, or soon after new trades)
       if(this.tradesLoaded&&this.coreLoaded()&&(now-this.lastAnalyzeAt>=(this.opts.analyzeEveryMs??3_600_000)||((replays||lives||units)&&now-this.lastAnalyzeAt>=10*60_000))){this.analyze(now);this.lastMetaAt=0;}
-      }else await this.flushTrades(db,now);
-      if(this.fcDirty.size)await this.flushForecasts(db,now);
+      }else {/* lean: signals only, no shadow-trade rows */}
+      if(!this.opts.lean&&this.fcDirty.size)await this.flushForecasts(db,now);
       // 10) prune short history beyond its depth (+20 %), once a day
       if(now-this.lastPruneAt>=STEP.pruneEveryMs){this.lastPruneAt=now;
         for(const iv of ["5m","15m","1h","1m"] as Iv[]){const d=Math.max(depthOf("BTC_USDT",iv),depthOf("SOL_USDT",iv));await pruneBars(db,this.store,iv,Math.floor(now/1000-d*1.2*86_400),now);}
@@ -345,7 +345,8 @@ export class DynamicResearch{
       const open=r.open&&fresh(r.open.et)?r.open:null;if(open)this.opens.set(wk,open);else this.opens.delete(wk);
       for(const t of r.trades){if(!fresh(t.et))continue;const d=Math.floor(t.et/86_400)*86_400;(byDay.get(d)??byDay.set(d,[]).get(d)!).push(t);}
       this.wm[wk]=[last+IV_SEC[s.iv],open?.et??null];}
-    for(const [d,ts] of byDay)this.putTrades(`l|${s.sym}|${s.iv}|${d}`,s.sym,s.iv,d,ts,false);
+    // lean keeps entry signals (opens) and does not store shadow trades
+    if(!this.opts.lean)for(const [d,ts] of byDay)this.putTrades(`l|${s.sym}|${s.iv}|${d}`,s.sym,s.iv,d,ts,false);
   }
   /** queue every stored chunk that is ready (warm-up below it downloaded, or the series complete) and not replayed yet, newest
    * first across all series; BTC's same window must be there first for the cross-asset rules. Pure memory, no query. */
@@ -440,6 +441,7 @@ export class DynamicResearch{
   /** dynamic-v1.3: closed shadow trades of a playbook the engine trades itself (burst-leader), stored per coin and UTC day like
    * live trades; deduplicated by playbook + entry time. Returns how many were taken. */
   addExternal(trades:readonly {pb:string;sym:string;side:"LONG"|"SHORT";et:number;xt:number;net:number;ep:number;xp:number}[],now:number){
+    if(this.opts.lean)return 0;
     const by=new Map<string,ShadowTrade[]>();
     for(const t of trades){if(!POOL_BY_ID[t.pb]?.external||!Number.isFinite(t.net)||!(t.xt>=t.et))continue;const d=Math.floor(t.et/86_400)*86_400,k=`x|${t.sym}|1m|${d}`;
       (by.get(k)??by.set(k,[]).get(k)!).push({id:`${t.pb}|${t.sym}|${t.et}`,pb:t.pb,sym:t.sym,side:t.side,iv:"1m",et:t.et,xt:t.xt,net:t.net,ep:t.ep,xp:t.xp,stop0:0,r:0,bars:0,why:"",exit:""});}
@@ -521,8 +523,10 @@ export class DynamicResearch{
     const exits:DynExit[]=[];
     for(const p of positions){const pb=POOL_BY_ID[p.pb];if(!pb||pb.external)continue;const s=this.get(p.symbol,pb.iv);if(!s)continue;
       const cur=p.guard!=null?(p.side==="LONG"?Math.max(p.stopPrice,p.guard):Math.min(p.stopPrice,p.guard)):p.stopPrice;
-      const ck=`${s.last}|${s.n}|${cur}`,hit=this.manageCache.get(p.id);
-      const m=hit&&hit.key===ck?hit.m:manageLive(pb,s,{openedAtMs:p.openedAt,entry:p.entryPrice,stop0:p.inv,stop:cur,target:p.target,maxBars:p.maxBars});
+      const ck=`${s.last}|${s.n}|${cur}|${p.side}`,hit=this.manageCache.get(p.id);
+      // the position may be the other side of this playbook; the same exit rule then runs that way
+      const rule=p.side===pb.side?pb:{...pb,side:p.side};
+      const m=hit&&hit.key===ck?hit.m:manageLive(rule,s,{openedAtMs:p.openedAt,entry:p.entryPrice,stop0:p.inv,stop:cur,target:p.target,maxBars:p.maxBars});
       this.manageCache.set(p.id,{key:ck,m});if(!m)continue;
       if(m.exit)exits.push({tradeId:p.id,act:"EXIT",why:`${pb.label}：${m.exit.why}（${s.iv} 收盘规则）`,code:"LIVING_DYN_EXIT"});
       else if(p.side==="LONG"?m.stop>cur*(1+1e-9):m.stop<cur*(1-1e-9))exits.push({tradeId:p.id,act:"GUARD",stop:m.stop,why:`${pb.label}：跟踪止损 ${fmt(cur)} → ${fmt(m.stop)}`,code:"LIVING_DYN_TRAIL"});
