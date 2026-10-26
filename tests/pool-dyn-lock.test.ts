@@ -23,8 +23,8 @@ test("small profit does not arm: below max(0.5R, 0.6%) nothing triggers, even af
 });
 test("scale is the trade's own R: the same peak in R-multiples gets the same kept share, whatever R is",()=>{
   for(const r of [.01,.02,.05,.08]){const l=lockLine(1*r,r,0,W)!;assert.ok(Math.abs(l.line/(1*r)-1/(1+POOL_LOCK.curveK))<1e-12,`1R share at R ${r}`);}
-  // a wide-stop trade (R 6%) is not armed by a 1% peak; a tight-stop trade (R 1%) is
-  assert.equal(lockLine(.01,.06,0,W),null);assert.ok(lockLine(.01,.01,0,W));
+  // a wide stop (R 6%) stays out under 1% and arms at 1%, not at half of R; a tight stop (R 1%) still arms at 1%
+  assert.equal(lockLine(.009,.06,0,W),null);assert.ok(lockLine(.01,.06,0,W));assert.ok(lockLine(.01,.01,0,W));
   // the 5-minute noise level is not an input at all: line depends on (peak, R, stall, window) only
   assert.equal(lockLine.length,4);
 });
@@ -169,7 +169,11 @@ test("engine: unknown R (no initial stop in the order note) → the lock stays o
   const e=engine(),p=pos("n1","LONG",.05,{inv:undefined});plan(e,NOW,100,[p]);
   assert.equal(lockActs(plan(e,NOW+20_000,90,[p])).length,0);
 });
-test("engine: a wide-stop trade with a small peak (0.17R) is not armed — the lock never sells a small profit",()=>{
+test("engine: a wide stop stays out under 1% and the same lock closes it once the peak has reached 1%",()=>{
+  const small=pos("w0","LONG",.008,{pb:"burst1h-long",mb:6,inv:100*(1-.0613)});
+  const e0=engine();plan(e0,NOW,100,[small]);
+  assert.equal(lockActs(plan(e0,NOW+3_600_000,99,[small])).length,0);
   const e=engine(),p=pos("w1","LONG",.0102,{pb:"burst1h-long",mb:6,inv:100*(1-.0613)});plan(e,NOW,100,[p]);
-  assert.equal(lockActs(plan(e,NOW+3_600_000,100.1,[p])).length,0);
+  const line=lockLine(.0102,.0613,0,45)!.line;assert.ok(line>=POOL_LOCK.costFloor-1e-12&&line<.0102);
+  assert.equal(lockActs(plan(e,NOW+3_600_000,100*(1+line-.001),[p])).length,1);
 });

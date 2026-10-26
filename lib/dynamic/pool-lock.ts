@@ -5,8 +5,9 @@
  * estimate: the playbook already sized its stop and (mostly) its 2R target from the structure it traded, so R is also the scale on
  * which "a meaningful profit" and "room for the trend" are measured. Cost (fees + buffer) is the only fixed number.
  *
- *  armed       peak ≥ max(ARM_R × R, ARM_FLOOR): ARM_FLOOR = 2.5 × cost floor (0.6%) keeps a tiny R from arming on noise; smaller
- *              profits are left alone, a loser never arms
+ *  armed       peak ≥ max(ARM_FLOOR, min(ARM_R × R, ARM_CAP)). ARM_CAP is 1%: a wide stop no longer waits
+ *              for half of R. Those trades were up about 3% and then stopped out red. A tiny R still needs the
+ *              0.6% floor. A loser never arms.
  *  curve       keep line L2 = peak² / (peak + K × R): the kept share m/(m+K) (m = peak/R) grows with the peak (K=0.5: half at 0.5R,
  *              2/3 at 1R, 80% at 2R) while the room K·R scales with the trade's own risk
  *  stall       no new high for more than W minutes: allowed giveback goes from WIDE_K × R (never binds while fresh) down to
@@ -15,7 +16,7 @@
  *  line        max(L1, L2, cost floor): the stricter one, never below entry + fees + buffer (COST_FLOOR)
  *  trigger     current price move ≤ line → exit at the executable quote. Unknown peak / peak time / R / quote → no trigger.
  */
-export const POOL_LOCK={armR:.5,armFloor:.006,curveK:.5,wideK:1,tightK:.25,minR:.008,wMin:15,wMax:45,wDiv:8,defaultBars:24,
+export const POOL_LOCK={armR:.5,armFloor:.006,armCap:.01,curveK:.5,wideK:1,tightK:.25,minR:.008,wMin:15,wMax:45,wDiv:8,defaultBars:24,
   /** round-trip fee 0.19% + 0.05% buffer: once armed, the line never sits below this (a winner is not allowed to turn into a loss) */
   costFloor:.0019+.0005} as const;
 export const POOL_LOCK_CODE="LIVING_DYN_POOL_LOCK";
@@ -46,7 +47,7 @@ export type LockVerdict={act:"HOLD"|"EXIT";armed:boolean;line:number|null;giveba
 const p2=(x:number)=>`${(x*100).toFixed(2)}%`;
 /** the protection line (price-move fraction) for a peak, or null while not armed. Pure function of (peak, R, stall, window). */
 export function lockLine(peak:number,r:number,stallMin:number,windowMin:number):{line:number;giveback:number;armed:true}|null{
-  if(!fin(peak)||!fin(r)||r<=0||peak<Math.max(POOL_LOCK.armR*r,POOL_LOCK.armFloor))return null;
+  if(!fin(peak)||!fin(r)||r<=0||peak<Math.max(POOL_LOCK.armFloor,Math.min(POOL_LOCK.armR*r,POOL_LOCK.armCap)))return null;
   const l2=peak*peak/(peak+POOL_LOCK.curveK*r);
   const w=Math.max(1,windowMin),over=Math.max(0,Math.min(1,(stallMin-w)/w));
   const g1=(POOL_LOCK.wideK+(POOL_LOCK.tightK-POOL_LOCK.wideK)*over)*r;

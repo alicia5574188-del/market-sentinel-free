@@ -378,8 +378,8 @@ test("engine: an allowed pool signal → order (hx+dp, allocator risk, absolute 
   const e=engine({},"paper-enabled",NOW);
   const d=e.plan(ctx(dynIn({signals:[sig("box1h-long","AAA_USDT"),sig("box1h-short","BBB_USDT","SHORT")]})))!;
   assert.equal(d.orders.length,1);const o=d.orders[0]!;
-  assert.deepEqual([o.symbol,o.side,o.stop,o.riskRate,o.note.pb,o.note.hx,o.note.dp],["AAA_USDT","SHORT",10.5,.005,"box1h-long",1,1]);
-  assert.match(o.reason,/止盈止损对调/);
+  assert.deepEqual([o.symbol,o.side,o.stop,o.riskRate,o.note.pb,o.note.hx,o.note.dp],["AAA_USDT","LONG",9.5,.005,"box1h-long",1,1]);
+  assert.doesNotMatch(o.reason,/止盈止损对调/);
   assert.ok(e.log.some(r=>r.k==="DYN_SIGNAL"&&r.pb==="box1h-short"&&/分配器不允许/.test(String(r.reason))));
   e.afterForward({opened:[{orderId:o.id,tradeId:"lv-d",symbol:"AAA_USDT",side:"LONG",risk:5,notional:100}],rejected:[],applied:[]},emptyForward(),NOW);
   assert.equal(e.plan(ctx(dynIn({signals:[sig("box1h-long","AAA_USDT")]})))!.orders.length,0,"already sent");
@@ -454,7 +454,7 @@ test("pool log (dynamic-v1.4): every gate decision, pool open and close goes int
   const g=e.runlog.poolRecent.filter(r=>r.t==="GATE");
   const order=g.find(r=>r.pb==="box1h-long")!,deny=g.find(r=>r.pb==="box1h-short")!;
   assert.deepEqual([order.decision,order.ok,order.sym,order.side,order.kind,order.src,order.p6,order.pMin,order.phase,order.elapsedH,order.label,order.risk],
-    ["ORDER",true,"AAA_USDT","SHORT","pool","signal",.7,.58,"GOOD",5,"数据少",.003]);
+    ["ORDER",true,"AAA_USDT","LONG","pool","signal",.7,.58,"GOOD",5,"数据少",.003]);
   assert.deepEqual([deny.decision,deny.ok,deny.risk,deny.p6],["DENY",false,0,.3]);assert.match(String(deny.why),/分配器不允许/);
   e.plan(ctx(dynIn({gates,signals:[sig("box1h-short","BBB_USDT","SHORT")]})));
   assert.equal(e.runlog.poolRecent.filter(r=>r.t==="GATE").length,2,"one record per signal and decision");

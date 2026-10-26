@@ -40,7 +40,6 @@ import type {DynPlanInput,DynGateView} from "../dynamic/runtime.ts";
 import {isPoolNote,movePct} from "./pool-log.ts";
 import {POOL_BY_ID} from "../dynamic/playbooks.ts";
 import {poolLock,tickClock,stallWindowMin,riskR,POOL_LOCK_CODE,type PeakClock} from "../dynamic/pool-lock.ts";
-import {flipExits} from "../dynamic/exit-flip.ts";
 import {RunLog,CASES_KEY,CASE_PAGE_KEYS,type Gate,type Layer,type CaseInput,type MarketSample} from "./runlog.ts";
 
 export const LIVING_KEYS={config:LIVING_CONFIG_KEY,basket:`${LIVING_KEY_PREFIX}basket`,fast:`${LIVING_KEY_PREFIX}fast`,
@@ -994,20 +993,17 @@ export class LivingEngine{
         if(busy.has(s.sym)){if(this.noteOnce(`db|${s.id}`,now,"DYN_SKIP",{sym:s.sym,pb:s.pb,reason:`${tag}：这个币已有持仓（一币一笔）`}))pg("BUSY","这个币已有持仓（一币一笔）");continue;}
         if((DYN_POOL_MAX!=null&&open>=DYN_POOL_MAX)||(DYN_PER_PB!=null&&(perPb[s.pb]??0)>=DYN_PER_PB)){const why=`打法池 ${open}/${DYN_POOL_MAX}，本打法 ${perPb[s.pb]??0}/${DYN_PER_PB}`;if(this.noteOnce(`dm|${s.id}`,now,"DYN_SKIP",{sym:s.sym,pb:s.pb,reason:`${tag}：${why}`}))pg("BUSY",why);continue;}
         if(!acting){if(this.noteOnce(`da|${s.id}`,now,"RECORD_ONLY",{sym:s.sym,side:s.side,pb:s.pb,reason:`${tag}：研究层只计算/降级中，先等`}))pg("WAIT","研究层只计算/降级中，先等");continue;}
-        const flipped=flipExits(s.side,s.ep,s.stop,s.target);
-        if(!flipped){st.sent[s.id]=now;if(this.noteOnce(`df|${s.id}`,now,"DYN_SKIP",{sym:s.sym,pb:s.pb,reason:`${tag}：止盈止损对调后没有有效价格`}))pg("FLIP","对调后没有有效价格");continue;}
-        const side=flipped.side,stop=flipped.stop,target=flipped.target;
-        const q=ctx.quotes[s.sym],px=q&&now-q.observedAt<=10_000?(side==="LONG"?q.bestAsk:q.bestBid):null;
-        if(px!=null&&(side==="LONG"?stop>=px:stop<=px)){st.sent[s.id]=now;this.note(now,"DYN_SKIP",{sym:s.sym,pb:s.pb,reason:`${tag}：对调后现价已越过止损 ${r6(stop)}`});pg("STOP_CROSSED",`对调后现价已越过止损 ${r6(stop)}`);continue;}
+        const q=ctx.quotes[s.sym],px=q&&now-q.observedAt<=10_000?(s.side==="LONG"?q.bestAsk:q.bestBid):null;
+        if(px!=null&&(s.side==="LONG"?s.stop>=px:s.stop<=px)){st.sent[s.id]=now;this.note(now,"DYN_SKIP",{sym:s.sym,pb:s.pb,reason:`${tag}：现价已越过止损 ${s.stop}`});pg("STOP_CROSSED",`现价已越过止损 ${s.stop}`);continue;}
         open++;perPb[s.pb]=(perPb[s.pb]??0)+1;busy.add(s.sym);
-        const why=`止盈止损对调：原${s.side==="LONG"?"多":"空"}止损 ${s.stop} 目标 ${s.target??"-"} → ${side==="LONG"?"多":"空"}止损 ${r6(stop)} 目标 ${r6(target)}。${s.why}；分配器：${g.why}`.slice(0,240);
-        out.orders.push({id:s.id,symbol:s.sym,side,stop:r6(stop),riskRate:g.risk,multiple:1,kind:"N",episodeId:null,episodeCap:null,winner:false,reason:why,
-          note:{v:"living-v2",k:"N",pb:s.pb,th:null,ep:null,ev:"normal",mult:1,sc:null,t:null,n:null,per:null,rk:null,inv:r6(stop),ref:r6(s.ep),
-            hold:s.iv==="1d"?30*1440:s.iv==="4h"?7*1440:s.iv==="1h"?2*1440:1440,why:why.slice(0,200),in:`DYN/${side}`,mk:mk??"WARMING",nar:(d.state??"").slice(0,60),
-            evd:`${s.iv} 信号收盘 ${s.ep}｜原${s.side} 止损 ${s.stop}${s.target!=null?` 目标 ${r6(s.target)}`:""}｜对调后止损 ${r6(stop)} 目标 ${r6(target)}${s.maxBars!=null?`｜最多 ${s.maxBars} 根`:""}｜风险 ${(g.risk*100).toFixed(2)}%`,hx:1,dp:1,cf:r4(g.conf),rr:r4(g.risk),
-            tg:r6(target),...(s.maxBars!=null?{mb:s.maxBars}:{})}});
-        this.note(now,"DYN_ORDER",{sym:s.sym,side,pb:s.pb,order:s.id,stop:r6(stop),risk:r4(g.risk),reason:why.slice(0,200)});
-        this.poolGate(now,s.id,{kind:"pool",pb:s.pb,sym:s.sym,side,decision:"ORDER",ok:true,g,risk:g.risk,why:`止盈止损对调后开${side==="LONG"?"多":"空"}。分配器允许：${g.why}`});
+        const why=`${s.why}；分配器：${g.why}`.slice(0,240);
+        out.orders.push({id:s.id,symbol:s.sym,side:s.side,stop:r6(s.stop),riskRate:g.risk,multiple:1,kind:"N",episodeId:null,episodeCap:null,winner:false,reason:why,
+          note:{v:"living-v2",k:"N",pb:s.pb,th:null,ep:null,ev:"normal",mult:1,sc:null,t:null,n:null,per:null,rk:null,inv:r6(s.stop),ref:r6(s.ep),
+            hold:s.iv==="1d"?30*1440:s.iv==="4h"?7*1440:s.iv==="1h"?2*1440:1440,why:why.slice(0,200),in:`DYN/${s.side}`,mk:mk??"WARMING",nar:(d.state??"").slice(0,60),
+            evd:`${s.iv} 信号收盘 ${s.ep}｜止损 ${s.stop}${s.target!=null?`｜目标 ${r6(s.target)}`:""}${s.maxBars!=null?`｜最多 ${s.maxBars} 根`:""}｜风险 ${(g.risk*100).toFixed(2)}%`,hx:1,dp:1,cf:r4(g.conf),rr:r4(g.risk),
+            ...(s.target!=null?{tg:r6(s.target)}:{}),...(s.maxBars!=null?{mb:s.maxBars}:{})}});
+        this.note(now,"DYN_ORDER",{sym:s.sym,side:s.side,pb:s.pb,order:s.id,stop:r6(s.stop),risk:r4(g.risk),reason:why.slice(0,200)});
+        this.poolGate(now,s.id,{kind:"pool",pb:s.pb,sym:s.sym,side:s.side,decision:"ORDER",ok:true,g,risk:g.risk,why:`分配器允许：${g.why}`});
       }
       this.dirty.add(LIVING_KEYS.trades);
     }catch(error){this.lastError=String((error as Error)?.message??error).slice(0,200);this.noteOnce(`de|${Math.floor(now/3_600_000)}`,now,"DYN_ERROR",{reason:this.lastError});}
