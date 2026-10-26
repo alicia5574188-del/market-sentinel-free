@@ -1,9 +1,9 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
-import {flipExits} from "../lib/dynamic/exit-flip.ts";
+import {flipExits,reverseTradeNet} from "../lib/dynamic/exit-flip.ts";
 
-test("a long stop becomes the short target, and the old target distance becomes the short stop",()=>{
-  const x=flipExits("LONG",100,90,110);
+test("the other side uses the original stop distance both ways, and ignores a different target",()=>{
+  const x=flipExits("LONG",100,90,130);
   assert.deepEqual(x,{side:"SHORT",stop:110,target:90});
 });
 
@@ -15,4 +15,9 @@ test("no target uses the stop distance both ways",()=>{
 test("a stop that is not a real price is not sent",()=>{
   assert.equal(flipExits("LONG",100,0,110),null);
   assert.equal(flipExits("LONG",100,100,110),null);
+});
+
+test("a long that was held down to its stop pays that distance on the short",()=>{
+  const net=reverseTradeNet({side:"LONG",entry:0.07308,exit:0.05956,stopDistPct:18.1445,notional:496.944,fee:0.7,gross:-92,bars:[[0.07,0.076],[0.055,0.06]]});
+  assert.ok(Math.abs(net-89.5)<1,String(net));
 });

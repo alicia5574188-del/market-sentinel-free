@@ -32,7 +32,9 @@ export type LivingNote={v:"living-v1"|"living-v2";k:LivingKind;pb:string;th:stri
    * formula would have opened, `szr` / `szm` that size's risk / margin when the gates read it (gates "virtual") */
   fx?:number;szn?:number;szr?:number;szm?:number;
   /** dynamic-v1: the signal's time limit in bars of its interval (target is `tg`) */
-  mb?:number};
+  mb?:number;
+  /** reverse hold: other side of the signal. Only the price stop and `tg` close it. */
+  rv?:1;};
 export type LivingTradeAction={tradeId:string;action:"EXIT"|"GUARD"|"HANDOFF";stop?:number;code:string;reason:string;detail?:Record<string,number|string|null>};
 export type LivingOrder={id:string;symbol:string;side:"LONG"|"SHORT";stop:number;
   /** fraction of equity risked before the multiple, and the multiple (normal: 5 x evidence; fast: 1..3, probe /3) */

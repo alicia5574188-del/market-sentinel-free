@@ -18,6 +18,8 @@ import {dailyStates,stateAt,intradayStates,intraAt,sessionOf} from "../lib/dynam
 import {analyzePlaybook,statDay,CYCLE,type TradeLite} from "../lib/dynamic/cycles.ts";
 import {allocate,ALLOC} from "../lib/dynamic/allocator.ts";
 import {synthMarket} from "./helpers-synthetic-market.ts";
+import {flipExits} from "../lib/dynamic/exit-flip.ts";
+import {r6} from "../lib/living/util.ts";
 import {DynamicResearch,MEM_KEEP,type DynPlanInput,type FeedBar} from "../lib/dynamic/runtime.ts";
 import {LivingEngine,LIVING_KEYS,type PlanContext,type ForwardView} from "../lib/living/engine.ts";
 import {defaultLivingConfig,LIVING_ITEMS,LIVING_ITEM_LABELS} from "../lib/living/config.ts";
@@ -378,8 +380,9 @@ test("engine: an allowed pool signal → order (hx+dp, allocator risk, absolute 
   const e=engine({},"paper-enabled",NOW);
   const d=e.plan(ctx(dynIn({signals:[sig("box1h-long","AAA_USDT"),sig("box1h-short","BBB_USDT","SHORT")]})))!;
   assert.equal(d.orders.length,1);const o=d.orders[0]!;
-  assert.deepEqual([o.symbol,o.side,o.stop,o.riskRate,o.note.pb,o.note.hx,o.note.dp],["AAA_USDT","LONG",9.5,.005,"box1h-long",1,1]);
-  assert.doesNotMatch(o.reason,/止盈止损对调/);
+  const f=flipExits("LONG",10*1.0001,9.5,null)!;
+  assert.deepEqual([o.symbol,o.side,o.stop,o.riskRate,o.note.pb,o.note.hx,o.note.dp,o.note.rv,o.note.tg],["AAA_USDT",f.side,r6(f.stop),.005,"box1h-long",1,1,1,r6(f.target)]);
+  assert.match(o.reason,/反向持仓/);
   assert.ok(e.log.some(r=>r.k==="DYN_SIGNAL"&&r.pb==="box1h-short"&&/分配器不允许/.test(String(r.reason))));
   e.afterForward({opened:[{orderId:o.id,tradeId:"lv-d",symbol:"AAA_USDT",side:"LONG",risk:5,notional:100}],rejected:[],applied:[]},emptyForward(),NOW);
   assert.equal(e.plan(ctx(dynIn({signals:[sig("box1h-long","AAA_USDT")]})))!.orders.length,0,"already sent");
@@ -454,7 +457,7 @@ test("pool log (dynamic-v1.4): every gate decision, pool open and close goes int
   const g=e.runlog.poolRecent.filter(r=>r.t==="GATE");
   const order=g.find(r=>r.pb==="box1h-long")!,deny=g.find(r=>r.pb==="box1h-short")!;
   assert.deepEqual([order.decision,order.ok,order.sym,order.side,order.kind,order.src,order.p6,order.pMin,order.phase,order.elapsedH,order.label,order.risk],
-    ["ORDER",true,"AAA_USDT","LONG","pool","signal",.7,.58,"GOOD",5,"数据少",.003]);
+    ["ORDER",true,"AAA_USDT","SHORT","pool","signal",.7,.58,"GOOD",5,"数据少",.003]);
   assert.deepEqual([deny.decision,deny.ok,deny.risk,deny.p6],["DENY",false,0,.3]);assert.match(String(deny.why),/分配器不允许/);
   e.plan(ctx(dynIn({gates,signals:[sig("box1h-short","BBB_USDT","SHORT")]})));
   assert.equal(e.runlog.poolRecent.filter(r=>r.t==="GATE").length,2,"one record per signal and decision");

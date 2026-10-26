@@ -80,7 +80,7 @@ test("paper-enabled on 10-19 06:00 (burstLeader off): fast follow opens a paper 
   const r=runLiving({from,to:bj("10-19 06:12"),stepMs:4000,mode:"paper-enabled",engine:eng});
   const all=[...r.state.positions,...r.state.history],lv=all.filter(t=>t.entryContext?.living);
   assert.ok(lv.length>=1,"a living trade");
-  const t=lv[0]!;assert.equal(t.entryContext!.living!.k,"F");assert.equal(t.side,"LONG");assert.ok(t.openedAt>=bj("10-19 06:00:12")&&t.openedAt<=bj("10-19 06:02"));
+  const t=lv[0]!;assert.equal(t.entryContext!.living!.k,"F");assert.equal(t.side,"SHORT");assert.equal(t.entryContext!.living!.rv,1);assert.ok(t.stopPrice>t.entryPrice,"reverse stop sits above a short");assert.ok(t.openedAt>=bj("10-19 06:00:12")&&t.openedAt<=bj("10-19 06:02"));
   const ct=fixtureContracts();for(const x of lv)assert.ok(ct[x.symbol]!.maintenanceRate<=.02);
   const rec=orderRecord(t) as Record<string,unknown>;assert.equal(rec.living_kind,"fast");assert.equal(rec.rule_epoch,"living-v2");assert.equal(rec.living_episode,t.entryContext!.living!.ep);
   assert.ok(r.engine.log.some(row=>row.k==="RECORD_ONLY"&&/维持保证金率/.test(String(row.reason))));

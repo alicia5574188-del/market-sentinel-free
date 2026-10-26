@@ -133,8 +133,8 @@ test("engine: no check before 00:02 UTC; waits (HTF_WAIT once) while BTC's candl
   const c=rows[0]!;assert.equal(c.regime,"ON");assert.equal(c.btc,120);assert.ok(Math.abs(Number(c.sma100)-100.2)<1e-9);
   assert.equal(c.picks,"BBB_USDT,AAA_USDT");assert.match(String(c.breakouts),/BBB #1 距突破\+8\.9%/);assert.match(String(c.skipped),/ZZZ:外部交易所没有日线/);
   assert.deepEqual(d.orders.map(o=>o.id),[`lh-${dayKey(dayStartMs)}-BBB_USDT`,`lh-${dayKey(dayStartMs)}-AAA_USDT`]);
-  for(const o of d.orders){assert.equal(o.note.hx,1);assert.equal(o.note.pb,"htf-donch20");assert.equal(o.riskRate,.0075);assert.equal(o.multiple,1);assert.equal(o.side,"LONG");
-    const atr=o.note.atr!;assert.ok(Math.abs(o.stop-(11*1.0001-2*atr))<1e-6,"stop = live ask − 2×ATR20");assert.ok(Math.abs(o.note.ref!-10.1)<1e-9);}
+  for(const o of d.orders){assert.equal(o.note.hx,1);assert.equal(o.note.pb,"htf-donch20");assert.equal(o.riskRate,.0075);assert.equal(o.multiple,1);assert.equal(o.side,"SHORT");assert.equal(o.note.rv,1);
+    const atr=o.note.atr!,ask=11*1.0001,orig=ask-2*atr;assert.ok(Math.abs(o.stop-(ask+(ask-orig)))<1e-6,"reverse stop is one original stop-distance above the ask");assert.ok(Math.abs(o.note.tg!-(ask-(ask-orig)))<1e-6);assert.ok(Math.abs(o.note.ref!-10.1)<1e-9);}
   for(let m=10;m<20;m++)e.plan(ctxOf(dayStartMs+m*60_000,htf));
   assert.equal(e.log.filter(r=>r.k==="HTF_CHECK").length,1,"once per UTC day");
   // timeline + brain view + decisions
