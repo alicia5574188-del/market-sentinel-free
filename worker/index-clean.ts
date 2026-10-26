@@ -61,8 +61,8 @@ import {mergeOiRing,noteOiSnapshot,oiAnchor,oiSnapshotKey,OI_SNAPSHOT_PREFIX,typ
 import {RUN_LOG_EXPORT_KEY,runLogCapacity,type RunLogExportMark} from '../lib/run-log-capacity.ts';
 import {RUNLOG_WIPE_KEY,RUNLOG_WIPE_PREFIXES,RUNLOG_WIPE_D1_TABLES,newWipeRecord,normalizeWipeRecord,wipeForwardLog,wipeBaseline,logSinceOf,type RunLogWipeRecord} from '../lib/runlog-wipe.ts';
 import {RunLogArchiver} from '../lib/run-log-archiver.ts';
-import {ARCHIVE_SEGMENT_SIZE,archiveFileName,buildArchiveFile,countArchive,readEquityFor,readMeta,readSegment,readStagesFor,segmentCount,writeMeta,
-  type ArchiveCursor,type ArchiveMode,type D1Like} from '../lib/run-log-archive.ts';
+import {ARCHIVE_SEGMENT_SIZE,archiveFileName,buildArchiveFile,countArchive,mergeContinuousOrders,readEquityFor,readMeta,readSegment,readStagesFor,segmentCount,writeMeta,
+  type ArchiveCursor,type ArchiveMode,type ArchiveStats,type D1Like} from '../lib/run-log-archive.ts';
 import {STAGE_CHANGE_CAP} from '../lib/stage-chronicle.ts';
 import {PATH_CAP,pathFlushDue,adoptLegacyPaths,bookFromStoredPaths,commitPathWrite,emptyTradePathBook,exportTradePaths,observeTradePaths,peekPathWrite,pendingPathWrites,pathColumns,pathComplete,pruneGhostPaths,pruneOrphanPaths,TRADE_PATH_INDEX_KEY,TRADE_PATH_KEY,TRADE_PATH_PAGE_PREFIX,type TradePathBook,type TradePathIndex,type TradePathPage} from '../lib/trade-path.ts';
 import {emptyOrderJournal,observeOrderJournal,ORDER_JOURNAL_CAP,ORDER_JOURNAL_KEY,restoreOrderJournal,type OrderJournal} from '../lib/order-journal.ts';
@@ -4967,9 +4967,26 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.archivePendingCache={at:now,cursorKey:key,pending,records};
     return pending;
   }
+  /** Orders already copied to D1, so an export is not limited to the 1200 still in the hot book. Paths are attached only when stored; none are invented. */
+  private async archivedOrders(){
+    const db=this.env.DB as unknown as D1Like;
+    if(!await this.runLogArchiver.ensureSchema())return {rows:[] as Record<string,unknown>[],paths:[] as {id:string}[]};
+    const total=await countArchive(db,{mode:"all"}),segments=segmentCount(total);
+    const rows:Record<string,unknown>[]=[],paths:{id:string}[]=[];
+    for(let k=1;k<=segments;k++){
+      const page=await readSegment(db,{mode:"all"},k);
+      for(const r of page){
+        if(r.kind!=="position")continue;
+        try{const row=JSON.parse(r.row_json) as Record<string,unknown>;if(row&&row.id!=null)rows.push(row);}catch{/* 坏行留在库里，不挡其余 */}
+        if(!r.path_json)continue;
+        try{const path=JSON.parse(r.path_json) as {id:string};if(path&&path.id)paths.push(path);}catch{/* 路径坏了仍导出订单 */}
+      }
+    }
+    return {rows,paths};
+  }
   private async archiveExport(url:URL,owner:boolean){
     const now=Date.now(),db=this.env.DB as unknown as D1Like;
-    if(!this.runLogArchiver.status.schemaReady)return json({error:"长期归档还没准备好，稍后再试"},503);
+    if(!await this.runLogArchiver.ensureSchema())return json({error:"长期归档还没准备好，稍后再试"},503);
     const raw=url.searchParams.get("mode"),mode:ArchiveMode=raw==="range"?"range":raw==="all"?"all":"since";
     const num=(v:string|null)=>{const n=Number(v);return v!=null&&v!==""&&Number.isFinite(n)?n:null;};
     const from=mode==="range"?num(url.searchParams.get("from")):null,to=mode==="range"?num(url.searchParams.get("to")):null;
@@ -5206,8 +5223,18 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (path === "/forward-log-status" && request.method === "GET") {
       if(!this.forwardState||!this.authorityReady)return json({error:"权威账户尚未恢复"},503);
       const now=Date.now();
+      try{await this.runLogArchiver.ensureSchema();}catch{/* 读不到库时仍返回热记录进度 */}
       let pendingExport:number|null=null;try{pendingExport=await this.archivePendingSinceCursor(now);}catch{pendingExport=null;}
-      return json({...await this.runLogStatus(now),archive:{...this.archiveView(now),pendingExport}});
+      let archive={...this.archiveView(now),pendingExport};
+      if(!archive.loaded||!(archive.stats?.records>0)){
+        try{
+          if(await this.runLogArchiver.ensureSchema()){
+            const stats=await readMeta<ArchiveStats>(this.env.DB as unknown as D1Like,"stats");
+            if(stats&&stats.records>0)archive={...archive,schemaReady:true,loaded:true,stats};
+          }
+        }catch{/* 库还在，只是这一次没读到条数 */}
+      }
+      return json({...await this.runLogStatus(now),archive});
     }
     if (path === "/forward-archive-export" && request.method === "GET") {
       if(!this.forwardState||!this.authorityReady)return json({error:"权威账户尚未恢复"},503);
@@ -5235,6 +5262,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         const ids=new Set(file.positions.map(row=>row.id));
         const columnsOf=(id:string,row:{side:'LONG'|'SHORT';gate_signal_side?:unknown;gate_btc_1h_pct?:unknown})=>{try{return pathColumns(pathById.get(id),shadowSignalOf(row));}catch{return null;}};
         const engine=this.living,livingEpoch=engine?.config.epochStartedAt??null;
+        const hotPositions=withLivingEpoch(withResearchColumns(file.positions,columnsOf),livingEpoch) as Record<string,unknown>[];
+        let positions=hotPositions;
+        let paths:unknown[]=pathsReady?exportTradePaths(this.tradePaths,id=>ids.has(id)):[];
+        try{
+          const saved=await this.archivedOrders();
+          positions=withLivingEpoch(mergeContinuousOrders(hotPositions,saved.rows) as {opened_at:number;rule_epoch?:string}[],livingEpoch) as Record<string,unknown>[];
+          const have=new Set(paths.map(p=>(p as {id?:string}).id));
+          for(const path of saved.paths)if(path.id&&!have.has(path.id))paths.push(path);
+        }catch{positions=hotPositions;}
         const hoursRaw=Number(url.searchParams.get("hours")),hours=Number.isFinite(hoursRaw)&&hoursRaw>0?Math.min(720,Math.max(1,Math.round(hoursRaw))):72;
         const from=exportedAt-hours*3_600_000;
         let buckets:LivingBucket[]=[],cases:LivingFinalCase[]=[],d1Error:string|null=null,d1Counts:unknown=null;
@@ -5258,8 +5294,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             curve_since:file.curve_since,drawdown_since:file.drawdown_since,account_resets:file.account_resets,account_epoch:file.account_epoch,
             account_reset_pending:file.account_reset_pending,liveFills:file.liveFills,
             equity_gaps:(()=>{try{return equityGaps(file.equity_minutes);}catch{return [];}})(),equity_filled_min:file.equity_minutes.filter(row=>row.filled).length},
-          positions:withLivingEpoch(withResearchColumns(file.positions,columnsOf),livingEpoch) as unknown as Record<string,unknown>[],fills:file.fills,
-          paths:pathsReady?exportTradePaths(this.tradePaths,id=>ids.has(id)):[],
+          positions,fills:file.fills,
+          paths,
           archive:{d1Error,d1Counts,livingRunLog:this.livingLogView(exportedAt),runLogArchive:this.archiveView(exportedAt),path_check:pathsReady}});
         await this.noteRunLogExport(exportedAt,out.positions.length+out.cases.length);
         return json(out);

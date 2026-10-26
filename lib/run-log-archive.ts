@@ -2,13 +2,14 @@
  * Long-term run-log archive in D1. Review only: nothing here is read by an entry, an exit, sizing, a stop or live copying,
  * and nothing here writes Durable Object storage. Every caller wraps it in try/catch and runs it off the trading clock.
  *
- * A record is archived once it is closed, passes the run-log completeness check (fields + price path, exactly the
- * export's own filter) and its 24 h path tail is finished. A record about to fall out of the 1200-record book is
- * archived early (partial=1) and written again once its tail is finished, if it is still in the book.
- * The stored row and path are byte-for-byte what the run-log export carries for that id.
+ * A record is copied once it is closed. A missing field or a missing price path does not drop the order: the order row is kept
+ * and the path is attached when it exists. Rows about to fall out of the 1200-record book are copied early (partial=1)
+ * and written again once the 24 h tail is finished, if they are still in the book. Closed orders whose path has already
+ * left that book are copied from the closed-order journal with no path invented.
+ * The stored row and path are what the run-log export carries for that id.
  */
 import type {ForwardState, Trade} from './forward-relations.ts';
-import type {OrderJournal} from './order-journal.ts';
+import type {OrderJournal, OrderRecord} from './order-journal.ts';
 import type {EquityMinute} from './equity-minutes.ts';
 import {collectEquityMinutes,equityGaps} from './equity-minutes.ts';
 import {buildRunLogExport,closedLogRow,journalLogRow,shadowSignalOf,withResearchColumns,type LsrPositionRow} from './run-log.ts';
@@ -99,13 +100,14 @@ export function sourceRows(ids:ReadonlySet<string>,state:ForwardState,journal:Or
 
 /** Exactly the export's filter, cleaning and research columns, applied to these rows only. */
 export function buildArchiveEntries(input:{due:readonly {path:TradePath;partial:boolean}[];rows:ReadonlyMap<string,{row:LsrPositionRow;kind:'position'|'not_opened'}>;
-  tallySince:number|null;now:number}):ArchiveEntry[]{
+  tallySince:number|null;now:number;completeOnly?:boolean}):ArchiveEntry[]{
   const pathById=new Map(input.due.map(d=>[d.path.id,d.path])),partial=new Map(input.due.map(d=>[d.path.id,d.partial]));
   const positions:LsrPositionRow[]=[],notOpened:LsrPositionRow[]=[];
   for(const d of input.due){const r=input.rows.get(d.path.id);if(!r)continue;(r.kind==='position'?positions:notOpened).push(r.row);}
+  const completeOnly=input.completeOnly!==false;
   const file=buildRunLogExport({events:[],funnel:null,health:{},gate:{},exportedAt:input.now,liveEnabled:false,
-    positions,notOpened,tallySince:input.tallySince,completeOnly:true,
-    pathReady:(id,closed)=>pathComplete(pathById.get(id),closed)});
+    positions,notOpened,tallySince:input.tallySince,completeOnly,
+    ...(completeOnly?{pathReady:(id:string,closed:boolean)=>pathComplete(pathById.get(id),closed)}:{})});
   const columnsOf=(id:string,row:{side:'LONG'|'SHORT';gate_signal_side?:unknown;gate_btc_1h_pct?:unknown})=>{try{return pathColumns(pathById.get(id),shadowSignalOf(row));}catch{return null;}};
   const book={trades:[...pathById.values()]} as unknown as TradePathBook;
   const paths=new Map(exportTradePaths(book).map(p=>[p.id,p]));
@@ -116,6 +118,35 @@ export function buildArchiveEntries(input:{due:readonly {path:TradePath;partial:
   add(withResearchColumns(file.positions as never[],columnsOf) as Record<string,unknown>[],'position');
   add(withResearchColumns(file.not_opened as never[],columnsOf) as Record<string,unknown>[],'not_opened');
   return out;
+}
+
+/** Closed orders whose price path has already left the 1200 book. Oldest first, so the ones about to fall out of the
+ *  4000 journal are copied before they disappear. A final archive row is not written again. */
+export function journalBackfillIds(rows:readonly {id:string}[],archived:ReadonlyMap<string,boolean>,retryAt:ReadonlyMap<string,number>,inBook:ReadonlySet<string>,now:number,limit:number){
+  const ids:string[]=[];
+  for(let i=rows.length-1;i>=0&&ids.length<limit;i--){
+    const id=rows[i]!.id;
+    if(!id||inBook.has(id)||archived.get(id)===false)continue;
+    if((retryAt.get(id)??0)>now)continue;
+    ids.push(id);
+  }
+  return ids;
+}
+
+/** Order rows only. No path is invented; the export still lists the order so the sequence does not break. */
+export function buildJournalArchiveEntries(records:readonly OrderRecord[],now:number):ArchiveEntry[]{
+  if(!records.length)return [];
+  const file=buildRunLogExport({events:[],funnel:null,health:{},gate:{},exportedAt:now,liveEnabled:false,
+    positions:records.map(journalLogRow),notOpened:[],completeOnly:false});
+  return (file.positions as Record<string,unknown>[]).map(row=>({id:String(row.id),kind:'position' as const,openedAt:Number(row.opened_at),partial:false,row,path:null}));
+}
+
+/** One id, one order. Hot rows win (they are newer). Sorted by open time so an export reads straight through. */
+export function mergeContinuousOrders<T extends {id?:unknown;opened_at?:unknown}>(hot:readonly T[],archived:readonly T[]):T[]{
+  const byId=new Map<string,T>();
+  for(const row of archived){const id=String(row?.id??"");if(id)byId.set(id,row);}
+  for(const row of hot){const id=String(row?.id??"");if(id)byId.set(id,row);}
+  return [...byId.values()].sort((a,b)=>Number(a.opened_at)-Number(b.opened_at));
 }
 
 /** Closed stage-timeline entries whose follow-up is settled and that are newer than the watermark. */

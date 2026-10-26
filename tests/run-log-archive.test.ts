@@ -6,7 +6,7 @@ import type {ForwardState, Trade} from "../lib/forward-relations.ts";
 import {buildRunLogExport,closedLogRow,type LsrPositionRow} from "../lib/run-log.ts";
 import {emptyTradePathBook,PATH_CAP,type TradePath} from "../lib/trade-path.ts";
 import {ARCHIVE_BATCH,ARCHIVE_SEGMENT_SIZE,TAIL_DONE_MS,archiveFileName,buildArchiveEntries,buildArchiveFile,countArchive,dueRecords,ensureArchiveSchema,
-  readMeta,readSegment,segmentCount,sourceRows,writeArchiveEntries,writeMeta,type ArchiveEntry,type D1Like,type D1Stmt} from "../lib/run-log-archive.ts";
+  journalBackfillIds,mergeContinuousOrders,readMeta,readSegment,segmentCount,sourceRows,writeArchiveEntries,writeMeta,type ArchiveEntry,type D1Like,type D1Stmt} from "../lib/run-log-archive.ts";
 import {RunLogArchiver} from "../lib/run-log-archiver.ts";
 
 const MIN=60_000,H=60*MIN,T=1_792_300_000_000;
@@ -211,4 +211,45 @@ test("equity minutes: one finished Beijing day per pass, empty days skipped, rea
   assert.equal(rows.length,asked.length-1,"the empty day was skipped");
   const back=await readEquityFor(db,STARTED,now);
   assert.equal(back.minutes.length,rows.length);
+});
+
+test("rows with no source do not take the batch; the orders behind them are archived", async()=>{
+  const now=T+3*24*H,db=sqliteD1();
+  const good=Array.from({length:40},(_,i)=>trade(i,now-TAIL_DONE_MS-(40-i)*MIN));
+  const book=bookOf(good);
+  const missing=Array.from({length:40},(_,i)=>path(trade(1000+i,now-TAIL_DONE_MS-(100-i)*MIN)));
+  book.trades=[...book.trades,...missing.reverse()];
+  const archiver=new RunLogArchiver({db:()=>db,readCold:async()=>[],readEquityDay:async()=>null},now);
+  await archiver.step({now,state:account(good),book,journal:{version:"order-journal-v1",accountStartedAt:STARTED,rows:[]} as never});
+  assert.equal(archiver.status.error,null);
+  assert.equal(archiver.status.recordsThisBoot,40);
+  assert.equal(archiver.status.rejectedThisBoot,40);
+  assert.equal(await countArchive(db,{mode:"all"}),40);
+  const ids=(await readSegment(db,{mode:"all"},1)).map(r=>r.id);
+  assert.equal(ids.length,40);
+  assert.ok(ids.includes("t-0")&&ids.includes("t-39")&&!ids.includes("t-1000"));
+});
+
+test("a closed order whose path has left the book is kept, with no invented path", async()=>{
+  const now=T+3*24*H,db=sqliteD1();
+  const {orderRecord}=await import("../lib/order-journal.ts");
+  const row=orderRecord(trade(7,now-TAIL_DONE_MS-H));
+  const journal={version:"order-journal-v1" as const,accountStartedAt:STARTED,rows:[row]};
+  const archiver=new RunLogArchiver({db:()=>db,readCold:async()=>[],readEquityDay:async()=>null},now);
+  const book=emptyTradePathBook(STARTED);
+  await archiver.step({now,state:account([]),book,journal});
+  assert.equal(archiver.status.error,null);
+  assert.equal(await countArchive(db,{mode:"all"}),1);
+  const seg=await readSegment(db,{mode:"all"},1);
+  assert.equal(seg[0]!.id,"t-7");assert.equal(seg[0]!.kind,"position");assert.equal(seg[0]!.path_json,null);
+  await archiver.step({now:now+2*MIN,state:account([]),book,journal});
+  assert.equal(await countArchive(db,{mode:"all"}),1,"the same order is not copied twice");
+  assert.deepEqual(journalBackfillIds(journal.rows,new Map([["t-7",false]]),new Map(),new Set(),now,10),[]);
+});
+
+test("export merge is one row per id, hot wins, open time order",()=>{
+  const rows=mergeContinuousOrders(
+    [{id:"b",opened_at:2,src:"hot"},{id:"c",opened_at:3,src:"hot"}],
+    [{id:"a",opened_at:1,src:"old"},{id:"b",opened_at:2,src:"old"}]);
+  assert.deepEqual(rows.map(r=>`${r.id}:${r.src}`),["a:old","b:hot","c:hot"]);
 });
