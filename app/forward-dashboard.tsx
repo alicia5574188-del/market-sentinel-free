@@ -108,13 +108,16 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   const exportSnapshot=async()=>{if(exporting)return;setExporting(true);setExportStatus(null);try{
     const response=await fetch(`/api/forward/export?kind=log&t=${Date.now()}`,{cache:"no-store",credentials:"same-origin"});
     if(!response.ok)throw new Error("log");
-    const log=await response.json() as {version?:string;exportedAt?:number;positions?:unknown[];cases?:unknown[];timeline?:unknown[]};
+    const log=await response.json() as {version?:string;exportedAt?:number;positions?:{opened_at?:number}[];cases?:unknown[];timeline?:unknown[];orders_from?:number|null;orders_to?:number|null;orders_archive_error?:string|null};
     const at=log.exportedAt??Date.now();
     const stamp=new Date(at+8*60*60*1000).toISOString().replace(/[-:]/g,"").slice(0,15);
     const blob=new Blob([JSON.stringify(log)],{type:"application/json"}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`living-run-log-${stamp}.json`;
     document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
     const n=log.positions?.length??0,cases=log.cases?.length??0,rows=log.timeline?.length??0;
-    setExportStatus(`已开始下载 ${a.download}。里面 ${n} 笔单、${cases} 个研究案例、${rows} 段时间线（每段 10 分钟）。`);setExportCount(c=>c+1);
+    const bj=(ms:number)=>{const d=new Date(ms+8*60*60*1000);return `${d.getUTCMonth()+1}月${d.getUTCDate()}日 ${String(d.getUTCHours()).padStart(2,"0")}:${String(d.getUTCMinutes()).padStart(2,"0")}`;};
+    const span=log.orders_from!=null&&log.orders_to!=null?`，从 ${bj(log.orders_from)} 到 ${bj(log.orders_to)}（北京）`:"";
+    const warn=log.orders_archive_error?"长期库这次没读到，这份只有手里还在的单。":"";
+    setExportStatus(`已开始下载 ${a.download}。里面 ${n} 笔单${span}。${warn}${cases} 个研究案例、${rows} 段时间线（每段 10 分钟）。`);setExportCount(c=>c+1);
   }catch{setExportStatus("导出失败，请重试。");}finally{setExporting(false);}};
 
   const desk=data?.forwardDesk??null,positions=data?.positions??[],history=[...(data?.history??[])].sort((a,b)=>(b.closedAt??0)-(a.closedAt??0));

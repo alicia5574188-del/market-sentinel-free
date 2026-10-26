@@ -6,8 +6,8 @@ import type {ForwardState, Trade} from './forward-relations.ts';
 import type {OrderJournal} from './order-journal.ts';
 import type {EquityMinute} from './equity-minutes.ts';
 import type {TradePathBook} from './trade-path.ts';
-import {ARCHIVE_BATCH,ARCHIVE_DAILY_ROW_WRITES,ARCHIVE_VERSION,buildArchiveEntries,buildJournalArchiveEntries,dueRecords,dueStages,ensureArchiveSchema,journalBackfillIds,nextEquityDay,
-  readMeta,sourceRows,writeArchiveEntries,writeEquityDay,writeStages,type ArchiveExportMark,type ArchiveStats,type D1Like} from './run-log-archive.ts';
+import {ARCHIVE_BATCH,ARCHIVE_DAILY_ROW_WRITES,ARCHIVE_VERSION,buildArchiveEntries,buildJournalArchiveEntries,dueStages,ensureArchiveSchema,nextEquityDay,
+  pathFallbackRow,planArchiveBatch,readArchivedFlags,readMeta,sourceRows,writeArchiveEntries,writeEquityDay,writeStages,type ArchiveEntry,type ArchiveExportMark,type ArchiveStats,type D1Like} from './run-log-archive.ts';
 
 export type ArchiveStatus={version:typeof ARCHIVE_VERSION;schemaReady:boolean;loaded:boolean;backfillDone:boolean;
   lastRunAt:number|null;lastOkAt:number|null;lastError:string|null;lastErrorAt:number|null;error:string|null;failures:number;
@@ -22,8 +22,6 @@ export type ArchiverDeps={
   readEquityDay:(day:string)=>Promise<EquityMinute[]|null>;
 };
 const RETRY_INCOMPLETE_MS=60*60_000,BEHIND_EVERY_MS=60_000,CAUGHT_UP_EVERY_MS=5*60_000,MAX_BACKOFF_MS=30*60_000;
-/** How far past a stuck row one pass looks. Incomplete rows must not fill the whole batch. */
-const ARCHIVE_LOOKAHEAD=ARCHIVE_BATCH*8;
 const utcDay=(now:number)=>new Date(now).toISOString().slice(0,10);
 const safe=(error:unknown)=>(error instanceof Error?error.message:String(error)).slice(0,300);
 
@@ -77,65 +75,50 @@ export class RunLogArchiver{
       if(s.day!==utcDay(now)){s.day=utcDay(now);s.rowWritesToday=0;s.budgetDeferred=false;}
       if(!s.schemaReady){await ensureArchiveSchema(db);s.schemaReady=true;}
       const book=input.book&&input.book.accountStartedAt===state.startedAt?input.book:null;
+      const journal=input.journal&&input.journal.accountStartedAt===state.startedAt?input.journal:null;
       if(!s.loaded){
-        if(!book||!input.journal)return; // wait until the book and journal are loaded for this account
-        const oldest=book.trades.reduce((m,row)=>Math.min(m,row.openedAt),Infinity);
-        if(Number.isFinite(oldest)){
-          const known=await db.prepare(`SELECT id,partial FROM run_log_archive WHERE opened_at>=?`).bind(oldest-1).all<{id:string;partial:number}>();
-          for(const row of known.results)this.archived.set(row.id,row.partial===1);
-        }
+        if(!book&&!journal)return; // nothing to copy until this account's book or journal is loaded
+        const flags=await readArchivedFlags(db,[...(book?.trades??[]).map(row=>row.id),...(journal?.rows??[]).map(row=>row.id)]);
+        for(const [id,partial] of flags)this.archived.set(id,partial);
         s.stats=(await readMeta<ArchiveStats>(db,'stats'))??s.stats;
         s.lastExport=await readMeta<ArchiveExportMark>(db,'last_export');
         s.stageWatermark=(await db.prepare(`SELECT MAX(at) AS m FROM run_log_stages`).first<{m:number|null}>())?.m??null;
         s.equityWatermark=(await db.prepare(`SELECT MAX(day) AS m FROM run_log_equity_days`).first<{m:string|null}>())?.m??null;
         s.loaded=true;
       }
-      // records. A row with no source is retried later and does not take a batch slot.
-      let room=ARCHIVE_BATCH;
-      const journal=input.journal&&input.journal.accountStartedAt===state.startedAt?input.journal:null;
-      if(book){
-        const scan=dueRecords(book.trades,now,this.archived,this.retryAt,ARCHIVE_LOOKAHEAD);
-        s.pending=scan.pending;
-        const budgetLeft=s.budgetPerDay-s.rowWritesToday;
-        if(scan.due.length&&budgetLeft<Math.min(scan.due.length,ARCHIVE_BATCH)*3+1){s.budgetDeferred=true;room=0;}
-        else if(scan.due.length){
-          const ids=new Set(scan.due.map(d=>d.path.id));
-          let rows=sourceRows(ids,state,journal,[]);
-          const missing=[...ids].filter(id=>!rows.has(id));
-          if(missing.length){
-            let cold:Trade[]=[];try{cold=await this.deps.readCold(missing);}catch{cold=[];}
-            if(cold.length)rows=sourceRows(ids,state,journal,cold);
-          }
-          const entries=buildArchiveEntries({due:scan.due,rows,tallySince:state.signalTallyMeta?.from??null,now,completeOnly:false});
-          const batch=entries.slice(0,ARCHIVE_BATCH);
-          const written=await writeArchiveEntries(db,batch,state.startedAt,now,s.stats);
-          s.stats=written.stats;s.rowWritesToday+=written.rowWrites;s.recordsThisBoot+=written.written;
-          const produced=new Set(entries.map(e=>e.id)),done=new Set(batch.map(e=>e.id));
-          for(const e of batch)this.archived.set(e.id,e.partial);
-          let rejected=0;
-          for(const d of scan.due)if(!produced.has(d.path.id)){this.retryAt.set(d.path.id,now+RETRY_INCOMPLETE_MS);rejected++;}
-          s.rejectedThisBoot+=rejected;room=ARCHIVE_BATCH-done.size;
-          s.pending=Math.max(0,scan.pending-done.size-rejected);
+      // Closest to being dropped first: full path book, then a full journal, then the rest. A missing order row does not block the batch.
+      const plan=planArchiveBatch({trades:book?.trades??null,journalRows:journal?.rows??null,archived:this.archived,retryAt:this.retryAt,now});
+      s.pending=plan.pending;
+      const budgetLeft=s.budgetPerDay-s.rowWritesToday;
+      if(plan.jobs.length&&budgetLeft<plan.jobs.length*3+1)s.budgetDeferred=true;
+      else if(plan.jobs.length){
+        const pathJobs=plan.jobs.filter(job=>job.path);
+        const ids=new Set(pathJobs.map(job=>job.id));
+        let rows=sourceRows(ids,state,journal,[]);
+        const missing=[...ids].filter(id=>!rows.has(id));
+        if(missing.length){
+          let cold:Trade[]=[];try{cold=await this.deps.readCold(missing);}catch{cold=[];}
+          if(cold.length)rows=sourceRows(ids,state,journal,cold);
         }
-        for(const [id,at] of this.retryAt)if(at<=now)this.retryAt.delete(id);
+        for(const job of pathJobs)if(job.path&&!rows.has(job.id))rows.set(job.id,{row:pathFallbackRow(job.path),kind:'not_opened'});
+        const pathEntries=buildArchiveEntries({due:pathJobs.map(job=>({path:job.path!,partial:job.partial})),rows,tallySince:state.signalTallyMeta?.from??null,now,completeOnly:false});
+        const journalIds=plan.jobs.filter(job=>!job.path).map(job=>job.id);
+        const byId=new Map((journal?.rows??[]).map(row=>[row.id,row]));
+        const journalEntries=buildJournalArchiveEntries(journalIds.map(id=>byId.get(id)).filter((row):row is NonNullable<typeof row>=>!!row),now);
+        const byEntry=new Map<string,ArchiveEntry>();
+        for(const entry of [...pathEntries,...journalEntries])byEntry.set(entry.id,entry);
+        const batch=plan.jobs.map(job=>byEntry.get(job.id)).filter((entry):entry is ArchiveEntry=>!!entry);
+        const written=await writeArchiveEntries(db,batch,state.startedAt,now,s.stats);
+        s.stats=written.stats;s.rowWritesToday+=written.rowWrites;s.recordsThisBoot+=written.written;
+        const done=new Set(batch.map(entry=>entry.id));
+        for(const entry of batch)this.archived.set(entry.id,entry.partial);
+        let rejected=0;
+        for(const job of plan.jobs)if(!done.has(job.id)){this.retryAt.set(job.id,now+RETRY_INCOMPLETE_MS);rejected++;}
+        s.rejectedThisBoot+=rejected;
+        s.pending=Math.max(0,plan.pending-done.size-rejected);
       }
-      // Closed orders whose path already left the 1200 book. Copy the order only; do not invent a price path.
-      if(room>0&&journal&&s.rowWritesToday+room*3+1<=s.budgetPerDay){
-        const inBook=new Set((book?.trades??[]).map(row=>row.id));
-        const ids=journalBackfillIds(journal.rows,this.archived,this.retryAt,inBook,now,room);
-        if(ids.length){
-          const byId=new Map(journal.rows.map(row=>[row.id,row]));
-          const records=ids.map(id=>byId.get(id)).filter((row):row is NonNullable<typeof row>=>!!row);
-          const entries=buildJournalArchiveEntries(records,now);
-          const written=await writeArchiveEntries(db,entries,state.startedAt,now,s.stats);
-          s.stats=written.stats;s.rowWritesToday+=written.rowWrites;s.recordsThisBoot+=written.written;
-          const done=new Set(entries.map(e=>e.id));
-          for(const e of entries)this.archived.set(e.id,false);
-          for(const id of ids)if(!done.has(id)){this.retryAt.set(id,now+RETRY_INCOMPLETE_MS);s.rejectedThisBoot++;}
-        }
-      }
-      const journalLeft=journal?journalBackfillIds(journal.rows,this.archived,this.retryAt,new Set((book?.trades??[]).map(row=>row.id)),now,1).length:0;
-      if(book)s.backfillDone=s.pending===0&&journalLeft===0;
+      for(const [id,at] of this.retryAt)if(at<=now)this.retryAt.delete(id);
+      s.backfillDone=s.pending===0;
       if(this.archived.size>8_000){
         const live=new Set([...(book?.trades??[]).map(row=>row.id),...(journal?.rows??[]).map(row=>row.id)]);
         for(const id of this.archived.keys())if(!live.has(id))this.archived.delete(id);

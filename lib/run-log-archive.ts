@@ -10,6 +10,7 @@
  */
 import type {ForwardState, Trade} from './forward-relations.ts';
 import type {OrderJournal, OrderRecord} from './order-journal.ts';
+import {ORDER_JOURNAL_CAP} from './order-journal.ts';
 import type {EquityMinute} from './equity-minutes.ts';
 import {collectEquityMinutes,equityGaps} from './equity-minutes.ts';
 import {buildRunLogExport,closedLogRow,journalLogRow,shadowSignalOf,withResearchColumns,type LsrPositionRow} from './run-log.ts';
@@ -87,6 +88,51 @@ export function dueRecords(book:readonly TradePath[],now:number,archived:Readonl
   return {due,pending};
 }
 
+/** One pass, oldest and closest-to-eviction first. A stored id is not written again from the journal: that would replace a real path with nothing. */
+export type ArchiveJob={id:string;priority:number;partial:boolean;path:TradePath|null};
+export function planArchiveBatch(input:{trades:readonly TradePath[]|null;journalRows:readonly {id:string}[]|null;
+  archived:ReadonlyMap<string,boolean>;retryAt:ReadonlyMap<string,number>;now:number;limit?:number}){
+  const limit=input.limit??ARCHIVE_BATCH,trades=input.trades??[],journalRows=input.journalRows??[];
+  const retry=(id:string)=>(input.retryAt.get(id)??0)>input.now;
+  const jobs:ArchiveJob[]=[];
+  const pathGuard=trades.length>=PATH_CAP-EVICTION_GUARD_ROWS?Math.max(0,PATH_CAP-EVICTION_GUARD_ROWS):Infinity;
+  const journalGuard=journalRows.length>=ORDER_JOURNAL_CAP-EVICTION_GUARD_ROWS?Math.max(0,ORDER_JOURNAL_CAP-EVICTION_GUARD_ROWS):Infinity;
+  const seen=new Set<string>();
+  for(let i=trades.length-1;i>=0;i--){
+    const path=trades[i]!;
+    if(path.exitAt==null||!Number.isFinite(path.openedAt)||input.archived.get(path.id)===false||retry(path.id))continue;
+    const tailDone=input.now-path.openedAt>=TAIL_DONE_MS,atRisk=i>=pathGuard,state=input.archived.get(path.id);
+    if(!tailDone&&!(atRisk&&state===undefined))continue;
+    seen.add(path.id);
+    jobs.push({id:path.id,priority:atRisk?0:3,partial:!tailDone,path});
+  }
+  for(let i=journalRows.length-1;i>=0;i--){
+    const id=journalRows[i]!.id;
+    if(!id||seen.has(id)||input.archived.has(id)||retry(id))continue;
+    seen.add(id);
+    jobs.push({id,priority:i>=journalGuard?1:2,partial:false,path:null});
+  }
+  jobs.sort((a,b)=>a.priority-b.priority);
+  return {jobs:jobs.slice(0,limit),pending:jobs.length};
+}
+
+/** The path book still has this record but the order row is already gone. Keep the path's own fields; do not invent minutes. */
+export function pathFallbackRow(path:TradePath):LsrPositionRow{
+  return {id:path.id,symbol:path.symbol,side:path.side,entry:path.entry,exit:path.exit,qty:path.qty,notional:path.notional,
+    gross_pnl:null,fee:path.entryFee,net_pnl:path.net,holdSec:path.exitAt==null?0:Math.max(0,Math.round((path.exitAt-path.openedAt)/1000)),
+    exit_reason:null,gapBps:null,opened_at:path.openedAt,closed_at:path.exitAt,trace:path.id} as LsrPositionRow;
+}
+
+export async function readArchivedFlags(db:D1Like,ids:readonly string[]){
+  const out=new Map<string,boolean>(),unique=[...new Set(ids.filter(Boolean))];
+  for(let i=0;i<unique.length;i+=90){
+    const chunk=unique.slice(i,i+90);
+    const found=await db.prepare(`SELECT id,partial FROM run_log_archive WHERE id IN (${chunk.map(()=>'?').join(',')})`).bind(...chunk).all<{id:string;partial:number}>();
+    for(const row of found.results)out.set(row.id,row.partial===1);
+  }
+  return out;
+}
+
 /** Run-log rows for the given ids, from the same sources and in the same precedence as accountLogBook. */
 export function sourceRows(ids:ReadonlySet<string>,state:ForwardState,journal:OrderJournal|null,cold:readonly Trade[]){
   const out=new Map<string,{row:LsrPositionRow;kind:'position'|'not_opened'}>();
@@ -126,7 +172,7 @@ export function journalBackfillIds(rows:readonly {id:string}[],archived:Readonly
   const ids:string[]=[];
   for(let i=rows.length-1;i>=0&&ids.length<limit;i--){
     const id=rows[i]!.id;
-    if(!id||inBook.has(id)||archived.get(id)===false)continue;
+    if(!id||inBook.has(id)||archived.has(id))continue;
     if((retryAt.get(id)??0)>now)continue;
     ids.push(id);
   }

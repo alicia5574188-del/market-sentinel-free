@@ -4970,7 +4970,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   /** Orders already copied to D1, so an export is not limited to the 1200 still in the hot book. Paths are attached only when stored; none are invented. */
   private async archivedOrders(){
     const db=this.env.DB as unknown as D1Like;
-    if(!await this.runLogArchiver.ensureSchema())return {rows:[] as Record<string,unknown>[],paths:[] as {id:string}[]};
+    if(!await this.runLogArchiver.ensureSchema())throw new Error("长期归档没准备好");
     const total=await countArchive(db,{mode:"all"}),segments=segmentCount(total);
     const rows:Record<string,unknown>[]=[],paths:{id:string}[]=[];
     for(let k=1;k<=segments;k++){
@@ -5265,12 +5265,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         const hotPositions=withLivingEpoch(withResearchColumns(file.positions,columnsOf),livingEpoch) as Record<string,unknown>[];
         let positions=hotPositions;
         let paths:unknown[]=pathsReady?exportTradePaths(this.tradePaths,id=>ids.has(id)):[];
+        let archiveError:string|null=null;
         try{
           const saved=await this.archivedOrders();
           positions=withLivingEpoch(mergeContinuousOrders(hotPositions,saved.rows) as {opened_at:number;rule_epoch?:string}[],livingEpoch) as Record<string,unknown>[];
           const have=new Set(paths.map(p=>(p as {id?:string}).id));
           for(const path of saved.paths)if(path.id&&!have.has(path.id))paths.push(path);
-        }catch{positions=hotPositions;}
+        }catch(error){archiveError=safeError(error);positions=hotPositions;}
         const hoursRaw=Number(url.searchParams.get("hours")),hours=Number.isFinite(hoursRaw)&&hoursRaw>0?Math.min(720,Math.max(1,Math.round(hoursRaw))):72;
         const from=exportedAt-hours*3_600_000;
         let buckets:LivingBucket[]=[],cases:LivingFinalCase[]=[],d1Error:string|null=null,d1Counts:unknown=null;
@@ -5297,8 +5298,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           positions,fills:file.fills,
           paths,
           archive:{d1Error,d1Counts,livingRunLog:this.livingLogView(exportedAt),runLogArchive:this.archiveView(exportedAt),path_check:pathsReady}});
-        await this.noteRunLogExport(exportedAt,out.positions.length+out.cases.length);
-        return json(out);
+        const openedAt=out.positions.map(row=>Number(row.opened_at)).filter(n=>Number.isFinite(n));
+        const body={...out,orders_from:openedAt.length?Math.min(...openedAt):null,orders_to:openedAt.length?Math.max(...openedAt):null,orders_archive_error:archiveError};
+        await this.noteRunLogExport(exportedAt,body.positions.length+body.cases.length);
+        return json(body);
       }
       if(url.searchParams.get("page")==="archive"){
         const startedAt=Number(url.searchParams.get("accountStartedAt")),asOf=Number(url.searchParams.get("asOf"));

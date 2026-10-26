@@ -5,8 +5,9 @@ import {DatabaseSync} from "node:sqlite";
 import type {ForwardState, Trade} from "../lib/forward-relations.ts";
 import {buildRunLogExport,closedLogRow,type LsrPositionRow} from "../lib/run-log.ts";
 import {emptyTradePathBook,PATH_CAP,type TradePath} from "../lib/trade-path.ts";
+import {emptyOrderJournal,orderRecord,ORDER_JOURNAL_CAP} from "../lib/order-journal.ts";
 import {ARCHIVE_BATCH,ARCHIVE_SEGMENT_SIZE,TAIL_DONE_MS,archiveFileName,buildArchiveEntries,buildArchiveFile,countArchive,dueRecords,ensureArchiveSchema,
-  journalBackfillIds,mergeContinuousOrders,readMeta,readSegment,segmentCount,sourceRows,writeArchiveEntries,writeMeta,type ArchiveEntry,type D1Like,type D1Stmt} from "../lib/run-log-archive.ts";
+  journalBackfillIds,mergeContinuousOrders,planArchiveBatch,readMeta,readSegment,segmentCount,sourceRows,writeArchiveEntries,writeMeta,type ArchiveEntry,type D1Like,type D1Stmt} from "../lib/run-log-archive.ts";
 import {RunLogArchiver} from "../lib/run-log-archiver.ts";
 
 const MIN=60_000,H=60*MIN,T=1_792_300_000_000;
@@ -213,21 +214,60 @@ test("equity minutes: one finished Beijing day per pass, empty days skipped, rea
   assert.equal(back.minutes.length,rows.length);
 });
 
-test("rows with no source do not take the batch; the orders behind them are archived", async()=>{
+test("a path with no order row is kept and does not block the orders behind it", async()=>{
   const now=T+3*24*H,db=sqliteD1();
   const good=Array.from({length:40},(_,i)=>trade(i,now-TAIL_DONE_MS-(40-i)*MIN));
   const book=bookOf(good);
   const missing=Array.from({length:40},(_,i)=>path(trade(1000+i,now-TAIL_DONE_MS-(100-i)*MIN)));
   book.trades=[...book.trades,...missing.reverse()];
   const archiver=new RunLogArchiver({db:()=>db,readCold:async()=>[],readEquityDay:async()=>null},now);
-  await archiver.step({now,state:account(good),book,journal:{version:"order-journal-v1",accountStartedAt:STARTED,rows:[]} as never});
+  const journal={version:"order-journal-v1" as const,accountStartedAt:STARTED,rows:[]};
+  await archiver.step({now,state:account(good),book,journal});
   assert.equal(archiver.status.error,null);
-  assert.equal(archiver.status.recordsThisBoot,40);
-  assert.equal(archiver.status.rejectedThisBoot,40);
+  assert.equal(archiver.status.rejectedThisBoot,0);
   assert.equal(await countArchive(db,{mode:"all"}),40);
+  await archiver.step({now:now+2*MIN,state:account(good),book,journal});
   const ids=(await readSegment(db,{mode:"all"},1)).map(r=>r.id);
-  assert.equal(ids.length,40);
-  assert.ok(ids.includes("t-0")&&ids.includes("t-39")&&!ids.includes("t-1000"));
+  assert.ok(ids.includes("t-0")&&ids.includes("t-1000"));
+  assert.equal(ids.length,80);
+});
+
+test("an order about to fall out of the journal is copied before a path that can wait", ()=>{
+  const now=T+3*24*H;
+  const keep=path(trade(1,now-TAIL_DONE_MS-MIN));
+  const journalRows=Array.from({length:ORDER_JOURNAL_CAP},(_,i)=>({id:`j-${i}`}));
+  const plan=planArchiveBatch({trades:[keep],journalRows,archived:new Map(),retryAt:new Map(),now,limit:1});
+  assert.equal(plan.jobs[0]!.id,`j-${ORDER_JOURNAL_CAP-1}`,"oldest journal row, the one the cap drops");
+  assert.ok(plan.pending>1);
+});
+
+test("a later journal copy does not erase a path already stored", async()=>{
+  const now=T+3*24*H,db=sqliteD1();
+  const t=trade(7,now-TAIL_DONE_MS-H);
+  const book=bookOf([t]);
+  const archiver=new RunLogArchiver({db:()=>db,readCold:async()=>[],readEquityDay:async()=>null},now);
+  await archiver.step({now,state:account([t]),book,journal:emptyOrderJournal(STARTED)});
+  const stored=await readSegment(db,{mode:"all"},1);
+  assert.ok(stored[0]!.path_json);
+  const gone=emptyTradePathBook(STARTED);
+  const journal=emptyOrderJournal(STARTED);journal.rows=[orderRecord(t)];
+  await archiver.step({now:now+2*MIN,state:account([]),book:gone,journal});
+  const after=await readSegment(db,{mode:"all"},1);
+  assert.equal(after.length,1);
+  assert.ok(after[0]!.path_json,"stored path stays");
+});
+
+test("restart remembers journal rows that are older than the path book", async()=>{
+  const now=T+3*24*H,db=sqliteD1();
+  const t=trade(7,now-TAIL_DONE_MS-H);
+  const journal=emptyOrderJournal(STARTED);journal.rows=[orderRecord(t)];
+  const first=new RunLogArchiver({db:()=>db,readCold:async()=>[],readEquityDay:async()=>null},now);
+  await first.step({now,state:account([]),book:emptyTradePathBook(STARTED),journal});
+  assert.equal(await countArchive(db,{mode:"all"}),1);
+  const again=new RunLogArchiver({db:()=>db,readCold:async()=>[],readEquityDay:async()=>null},now);
+  await again.step({now:now+2*MIN,state:account([]),book:emptyTradePathBook(STARTED),journal});
+  assert.equal(again.status.recordsThisBoot,0);
+  assert.equal(await countArchive(db,{mode:"all"}),1);
 });
 
 test("a closed order whose path has left the book is kept, with no invented path", async()=>{
