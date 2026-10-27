@@ -118,6 +118,8 @@ import {observeLiveAccount,type LiveAccountMark} from '../lib/live-account-view.
 import {REVIEW_JOURNAL_KEY, appendReviewEvents, captureTradeReviews, initialReviewJournal, normalizeReviewJournal,
   recordDiscoveryReview, type ReviewEvent} from "../lib/review-trace.ts";
 declare const __STRATEGY_FINGERPRINT__: string;
+/** history pages of the research layer: "full" = tail refresh + deep history, "tail" = only keep stored series current (no deep pages). Both ≤4 requests/min, external venues only. */
+const DYN_HISTORY:"full"|"tail"="full";
 const STRATEGY_FINGERPRINT=typeof __STRATEGY_FINGERPRINT__ === "string"?__STRATEGY_FINGERPRINT__:"local-verification";
 declare const __FORWARD_BUILD_SHA__: string;
 const FORWARD_BUILD_SHA = typeof __FORWARD_BUILD_SHA__ === "string" ? __FORWARD_BUILD_SHA__ : "local-verification";
@@ -605,8 +607,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private archiveWork:Promise<void>|null=null;
   /** Run log v3 → D1 (timeline buckets every ~2 min, finished research cases). Off the trading clock; never DO writes. */
   private livingLogStatus=emptyLivingLogStatus();
-  /** dynamic-v1 research layer. Lean: reverse hold is fixed, so no history download and no fresh analysis. */
-  private dynamic=new DynamicResearch({lean:true,metaEveryMs:10*60_000});
+  /** dynamic-v1 research layer: the forward analysis (shadow trades, predictor, allow-list) always runs; only the order direction/hold is reversed downstream. */
+  private dynamic=new DynamicResearch({history:DYN_HISTORY,metaEveryMs:10*60_000});
   private dynamicWork:Promise<void>|null=null;
   private dynamicEventAt=0;
   private dynamicPoolSeq=0;
@@ -4919,23 +4921,21 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return out;
   }
   /**
-   * dynamic-v1 step: off the trading clock. Lean keeps the reverse hold fixed: no Bybit/OKX/KuCoin history pages,
-   * no shadow-trade reload, no replay, no new analysis. A step runs at most once a minute and only ingests the 5m
-   * bars the worker already has. Never Gate.
+   * dynamic-v1 step: off the trading clock. Loads shadow trades, ingests the worker's 5m bars, evaluates new bars, replays,
+   * re-analyzes (hourly / after new trades) and, paced at ≤4 a minute, downloads history pages from Bybit/OKX/KuCoin (DYN_HISTORY). Never Gate.
    */
   private backfillWork:Promise<unknown>|null=null;
   private launchDynamicWork(now:number){
     try{
       const db=(this.env as {DB?:unknown}).DB?(this.env.DB as unknown as D1Like):null;
       const universe=this.strategyPathSymbols().filter(s=>this.marketHub.supports(s));
-      // history download stays off while lean: the alarm must not burst venue pages
       if(this.dynamicWork){
-        if(!this.dynamic.opts.lean&&!this.backfillWork&&this.dynamic.booted){
+        if(!this.backfillWork&&this.dynamic.booted){
           const t=this.dynamic.backfillTick(now,{universe,db,fetch:venueFetch}).catch(()=>false);
           this.backfillWork=t;this.ctx.waitUntil(t.finally(()=>{if(this.backfillWork===t)this.backfillWork=null;}));}
         return;
       }
-      if(now-this.dynamic.lastStepAt<(this.dynamic.opts.lean?60_000:5_000))return;
+      if(now-this.dynamic.lastStepAt<this.dynamic.stepGapMs())return;
       const daily:Record<string,(typeof this.turnDailyCandles)[string]|undefined>={};
       for(const s of [...universe,"BTC_USDT"])daily[s]=this.turnDailyCandles[s]??this.htfDaily[s];// external daily rows already in memory (no request)
       // burst-leader shadow trades (followed by the engine on its own 1m tape) become pool trades of the research layer

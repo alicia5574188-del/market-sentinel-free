@@ -1,7 +1,7 @@
 /**
- * dynamic-v1: resumable history backfill (pure). One venue request at a time, at most one every `minGapMs`
- * (default 4 s). While the history is behind, the alarm may take a short burst of 3 (see DynamicResearch.backfillTick),
- * still only Bybit → OKX → KuCoin, never Gate. A venue answering 429 / 403 is skipped for a while
+ * dynamic-v1: slow, resumable history backfill (pure). One venue request at a time, at most one every `minGapMs`
+ * (default 15 s = 4 a minute; `burst` 1 = no bursts, see DynamicResearch.backfillTick),
+ * Bybit → OKX → KuCoin, never Gate. A venue answering 429 / 403 is skipped for a while
  * (all three refusing → everything pauses), exponential backoff per series.
  * Order: first the newest page of every series (≈ 40 min for ~30 coins: the latest 3.5 days of 5m, 10 days of 15m, 6 weeks of
  * 1h, …), then each series backwards, short-term first: BTC/ETH daily + 1h → 15m → 5m → 1h → BTC/ETH 1m → 4h → daily.
@@ -13,9 +13,9 @@ import {IV_SEC,type Iv} from "./series.ts";
 import {PAGE,VENUES,type Venue} from "./venues.ts";
 const MAJORS=new Set(["BTC_USDT","ETH_USDT"]);
 export const BACKFILL={
-  minGapMs:4_000,
+  minGapMs:15_000,
   /** while history is unfinished, an alarm may take this many pages and then wait `minGapMs` again */
-  burst:3,
+  burst:1,
   /** history depth per interval (days); BTC/ETH keep longer 5m and are the only ones with 1m */
   depthDays:{"1d":1500,"4h":730,"1h":180,"15m":150,"5m":75,"1m":14} as Record<Iv,number>,
   majorDepthDays:{"5m":120} as Partial<Record<Iv,number>>,
@@ -86,7 +86,7 @@ export function noteFeed(st:BackfillState,sym:string,iv:Iv,first:number,last:num
 }
 /** the next request, or null while pacing / paused / nothing due. Tail refreshes come before older history. */
 export function nextJob(st:BackfillState,nowMs:number,universe:readonly string[],
-  opts:{minGapMs?:number;/** series whose stored bars are in memory; others are skipped (a job for them would waste the paced slot) */ready?:(key:string)=>boolean}={}):Job|null{
+  opts:{minGapMs?:number;/** only refresh the newest bars of series that already have history (no deeper pages) */tailOnly?:boolean;/** series whose stored bars are in memory; others are skipped (a job for them would waste the paced slot) */ready?:(key:string)=>boolean}={}):Job|null{
   if(nowMs<st.pauseUntil||nowMs-st.lastReqAt<(opts.minGapMs??BACKFILL.minGapMs))return null;
   const ok=opts.ready??(()=>true);
   const list=trackedSeries(universe).filter(x=>ok(seriesKey(x.sym,x.iv)));
@@ -100,6 +100,7 @@ export function nextJob(st:BackfillState,nowMs:number,universe:readonly string[]
     const venue=venueFor(st,p,nowMs);if(!venue)return null;const gap=Math.ceil((want-p.newest)/IV_SEC[iv])+2;
     return {key:seriesKey(sym,iv),sym,iv,kind:"tail",venue,endSec:null,limit:Math.min(PAGE[venue],Math.max(3,gap))};
   }
+  if(opts.tailOnly)return null;
   // newest first everywhere: the first (most recent) page of every series before any deeper page, so the latest regimes are
   // learned within the first hour; then each series backwards in the short-term-first order
   // pass 0: the newest page of every series that has none yet

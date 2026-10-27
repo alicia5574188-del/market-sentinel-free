@@ -110,22 +110,6 @@ test("restart: the predictor is ready at once (plan input ready, gates as saved)
   rt2.analyze(AT+10*60_000);const v=rt2.view(AT+10*60_000);assert.equal(v.snapshot.usingSaved,false);assert.ok(rt2.snapFresh);assert.ok(v.predictor.ready);
 });
 
-test("lean hold: no venue request, and a snapshot older than 2h keeps the gates that were saved",async()=>{
-  const db=sqliteD1(),src=new DynamicResearch();
-  await src.step(AT,{universe:[],db,fetch:async()=>({})});
-  fill(src);asAny(src).recount();src.analyze(AT);await asAny(src).saveMeta(db,AT);
-  const allowed=Object.values(src.gates!).filter(g=>g.ok).length;assert.ok(allowed>0);
-  let calls=0;const fetch=async()=>{calls++;return {};};
-  const lean=new DynamicResearch({lean:true});
-  await lean.step(AT+SNAP_STALE_MS+60_000,{universe:["SOL_USDT"],db,fetch});
-  assert.equal(calls,0,"boot does not download");
-  assert.equal(lean.snapStale,false);assert.equal(Object.values(lean.gates!).filter(g=>g.ok).length,allowed,"saved gates stay on");
-  await lean.step(AT+SNAP_STALE_MS+70_000,{universe:["SOL_USDT"],db,fetch});
-  assert.equal(calls,0,"the next step still does not download");
-  const wk=readFileSync(new URL("../worker/index-clean.ts",import.meta.url),"utf8");
-  assert.match(wk,/new DynamicResearch\(\{lean:true/);assert.match(wk,/!this\.dynamic\.opts\.lean/);
-});
-
 test("stale snapshot (> 2 h): kept for display, but every gate is record-only until a fresh analysis; a fresh one is used as saved",async()=>{
   const db=sqliteD1(),rt=new DynamicResearch();await rt.step(AT,{universe:[],db,fetch:async()=>({})});
   fill(rt);asAny(rt).recount();rt.analyze(AT);await asAny(rt).saveMeta(db,AT);

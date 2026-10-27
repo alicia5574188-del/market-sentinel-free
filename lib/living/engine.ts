@@ -1162,7 +1162,8 @@ export class LivingEngine{
       for(const t of forward.history){
         const n=t.entryContext?.living;if(!n||seen.has(t.id)||t.netPnl==null)continue;
         seen.add(t.id);const r=t.netPnl/Math.max(1e-9,t.plannedRisk);
-        const xs=this.trades.liveNet[n.pb]??[];xs.push(r4(r));this.trades.liveNet[n.pb]=xs.slice(-60);
+        // a reversed order's result says nothing about the forward playbook: it must not feed the forward evidence (liveNet → sizing)
+        if(!n.rv){const xs=this.trades.liveNet[n.pb]??[];xs.push(r4(r));this.trades.liveNet[n.pb]=xs.slice(-60);}
         this.note(now,"CLOSED",{trade:t.id,sym:t.symbol,pb:n.pb,kind:n.k,r:r4(r),exit:t.exitReason});
         try{this.runlog.closeTrade(t.id,{closedAt:t.closedAt,exit:(t as {exitPrice?:number|null}).exitPrice??null,exitReason:t.exitReason,netPnl:t.netPnl});}catch{/* 只是记录 */}
         if(isPoolNote(n))try{const x=t as {entryPrice?:number;exitPrice?:number|null;exitAudit?:{evidence?:{reason?:unknown}}|null},why=x.exitAudit?.evidence?.reason;

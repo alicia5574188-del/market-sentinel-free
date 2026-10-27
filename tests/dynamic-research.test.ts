@@ -517,7 +517,7 @@ test("runtime: the alarm's backfillTick keeps the history download going while a
   const before=calls.length;
   // a long step is "running": only the alarm's light tick, every 2 s, for 10 minutes
   let ticks=0;for(let i=0;i<300;i++){if(await rt.backfillTick(now,{universe:["SOL_USDT"],db,fetch}))ticks++;now+=2_000;}
-  const n=calls.length-before;assert.ok(n>=90&&n<=130,`about 3 pages per gap from the alarm (${n} in 10 min)`);assert.ok(ticks>=30&&ticks<=45&&ticks<n);
+  const n=calls.length-before;assert.ok(n>=36&&n<=41,`about 4 pages a minute from the alarm alone (${n} in 10 min)`);assert.equal(ticks,n);
   const v=rt.view(now).backfill;
   assert.ok(v.reqLastHour>=n&&v.pages>=n&&v.lastProgressAt!=null&&v.nextRunAt!=null&&v.nextRunAt>=now-2_000,"health fields");
   // a step and a tick at the same instant never send two requests
@@ -532,4 +532,34 @@ test("runtime: the alarm's backfillTick keeps the history download going while a
   const doneNow=v.done;rt.bf.series[seriesKey("SOL_USDT","1d")]={...(rt.bf.series[seriesKey("SOL_USDT","1d")]??{sym:"SOL_USDT",iv:"1d",oldest:1,newest:2,pages:1,bars:1,venue:0,fails:0,retryAt:0,lastError:null}),done:true,doneAt:now} as never;
   const a=backfillView(rt.bf,["SOL_USDT"],now).done,b=backfillView(rt.bf,["DOGE_USDT"],now).done;
   assert.ok(a>=doneNow&&b>=a,`done ${doneNow} → ${a} → ${b} after SOL left the list`);
+});
+
+test("reversal does not reach the forward stats: shadow trades are the playbook's own forward side (candle simulation), burst shadows stay forward, reversed live results stay out of liveNet",()=>{
+  // 1) live evaluation stores exactly the forward simulation of each playbook (side = playbook side, net = d*(xp/ep-1)-fee)
+  const rt=new DynamicResearch(),s=series("SOL_USDT","1h",1_700_000_000-400*H,700);
+  rt.series.set("SOL_USDT|1h",s);rt.liveFrom["SOL_USDT|1h"]=0;rt.evalLive(s);
+  const rows=[...rt.tsrc.values()].flatMap(x=>x.rows.map(r=>({pb:x.pbs[r[0]]!,r})));assert.ok(rows.length>20,`some shadow trades (${rows.length})`);
+  const ctxFor=(rt as unknown as {ctxFor(s:Series,b:Series|null):Ctx}).ctxFor.bind(rt);
+  let checked=0;
+  for(const pb of POOL.filter(p=>p.iv==="1h"&&!p.external&&applies(p,"SOL_USDT"))){
+    const sim=simulate(pb,s,ctxFor(s,null)).trades,stored=rows.filter(x=>x.pb===pb.id);
+    assert.equal(stored.length,sim.length,pb.id);
+    for(const t of sim){const hit=stored.find(x=>x.r[1]===t.et)!;assert.ok(hit,`${pb.id} ${t.et}`);
+      assert.equal(hit.r[3],Math.round(t.net*1e6));assert.equal(t.side,pb.side);
+      const d=pb.side==="LONG"?1:-1;assert.ok(Math.abs(t.net-(d*(t.xp/t.ep-1)-FEE))<1e-12,"net is the playbook's own side, never negated");checked++;}
+  }
+  assert.ok(checked>20);
+  // 2) a burst-leader shadow trade (the engine follows the burst's own side on its 1m tape) is stored as given
+  const bt=new DynamicResearch();bt.tradesLoaded=true;
+  const leader=POOL.find(p=>p.external)!;
+  assert.equal(bt.addExternal([{pb:leader.id,sym:"AAA_USDT",side:"LONG",et:1_700_000_000,xt:1_700_000_600,net:.012,ep:10,xp:10.1}],1_700_000_700_000),1);
+  assert.equal([...bt.tsrc.values()][0]!.rows[0]![3],12_000);
+  // 3) a closed reversed live trade is not a forward result: liveNet only takes the normal ones
+  const e=engine({},"paper-enabled",NOW);
+  const note=(rv?:1)=>({v:"living-v2",k:"N",pb:"box1h-long",hx:1,dp:1,inv:9.5,rr:.003,...(rv?{rv}:{})}) as unknown as LivingNote;
+  const closed=(id:string,rv?:1)=>({id,symbol:"AAA_USDT",side:"SHORT" as const,netPnl:1.5,plannedRisk:3,notional:60,closedAt:NOW+3_600_000,exitReason:"LIVING_DYN_EXIT",openedAt:NOW,
+    entryPrice:10,exitPrice:9.7,entryContext:{living:note(rv)}});
+  e.afterForward({opened:[],rejected:[],applied:[]},{...emptyForward(),history:[closed("rev-1",1),closed("fwd-1")]},NOW+3_600_000);
+  const liveNet=(e as unknown as {trades:{liveNet:Record<string,number[]>}}).trades.liveNet["box1h-long"];
+  assert.deepEqual(liveNet,[.5],"only the non-reversed trade counted");
 });
