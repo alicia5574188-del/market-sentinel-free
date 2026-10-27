@@ -131,7 +131,7 @@ test("history pages: full = tail refresh + deep pages, tail = only newest bars o
 test("worker wiring: no freeze mode left, history pages ≤4/min by default, step gap restored, research layer takes no live-order results",()=>{
   const w=readFileSync(new URL("../worker/index-clean.ts",import.meta.url),"utf8"),r=readFileSync(new URL("../lib/dynamic/runtime.ts",import.meta.url),"utf8");
   assert.doesNotMatch(w,/lean:true|opts\.lean/);assert.doesNotMatch(r,/opts\.lean/);
-  assert.match(w,/new DynamicResearch\(\{history:DYN_HISTORY/);assert.match(w,/const DYN_HISTORY:"full"\|"tail"="full"/);
+  assert.match(w,/new DynamicResearch\(\{history:DYN_HISTORY/);assert.match(w,/const DYN_HISTORY:"full"\|"tail"="tail"/);
   assert.match(w,/dynamic\.stepGapMs\(\)/);
   // nothing the live paper account produces can reach the research layer: the worker only hands it the 5m feed, the daily bars and
   // the engine's own forward-side shadow burst trades

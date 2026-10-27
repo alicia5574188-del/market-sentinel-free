@@ -28,7 +28,7 @@ test("brain page: reverse hold, live off, open positions with price % and U, rec
   for(const id of ["owner-living-research","brain-scheme","execution-status","execution-positions","brain-recent"])
     assert.ok(at(id)>=0,id);
   assert.ok(at("brain-scheme")<at("execution-status")&&at("execution-status")<at("execution-positions")&&at("execution-positions")<at("brain-recent"),"order");
-  assert.match(html,/反向持仓/);assert.match(html,/正向分析、预测器和允许名单照常重算/);assert.match(html,/每分钟最多 4 次/);assert.match(html,/只跑模拟，不下单/);
+  assert.match(html,/反向持仓/);assert.match(html,/正向分析、预测器和允许名单照常重算/);assert.match(html,/不再做深历史下载/);assert.match(html,/只跑模拟，不下单/);
   assert.match(html,/价格 \+/);assert.match(html,/SOL/);assert.match(html,/\+3\.41/);
   assert.doesNotMatch(html,/旧系统|开关 10|现在最看好|data-testid="brain-ranked"|data-testid="brain-gates"|data-testid="brain-families"|data-testid="brain-legacy"|data-testid="brain-backfill"/);
   assert.doesNotMatch(html,/NaN|undefined/);

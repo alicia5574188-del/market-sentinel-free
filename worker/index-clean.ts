@@ -118,8 +118,8 @@ import {observeLiveAccount,type LiveAccountMark} from '../lib/live-account-view.
 import {REVIEW_JOURNAL_KEY, appendReviewEvents, captureTradeReviews, initialReviewJournal, normalizeReviewJournal,
   recordDiscoveryReview, type ReviewEvent} from "../lib/review-trace.ts";
 declare const __STRATEGY_FINGERPRINT__: string;
-/** history pages of the research layer: "full" = tail refresh + deep history, "tail" = only keep stored series current (no deep pages). Both ≤4 requests/min, external venues only. */
-const DYN_HISTORY:"full"|"tail"="full";
+/** history pages of the research layer (default "tail": only keep stored series current, no deep history): "full" = tail refresh + deep history, "tail" = only keep stored series current (no deep pages). Both ≤4 requests/min, external venues only. */
+const DYN_HISTORY:"full"|"tail"="tail";
 const STRATEGY_FINGERPRINT=typeof __STRATEGY_FINGERPRINT__ === "string"?__STRATEGY_FINGERPRINT__:"local-verification";
 declare const __FORWARD_BUILD_SHA__: string;
 const FORWARD_BUILD_SHA = typeof __FORWARD_BUILD_SHA__ === "string" ? __FORWARD_BUILD_SHA__ : "local-verification";
@@ -4922,7 +4922,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
   /**
    * dynamic-v1 step: off the trading clock. Loads shadow trades, ingests the worker's 5m bars, evaluates new bars, replays,
-   * re-analyzes (hourly / after new trades) and, paced at ≤4 a minute, downloads history pages from Bybit/OKX/KuCoin (DYN_HISTORY). Never Gate.
+   * re-analyzes (hourly / after new trades) and, paced at ≤4 a minute, refreshes the newest bars (or, with DYN_HISTORY "full", deep history pages) from Bybit/OKX/KuCoin. Never Gate.
    */
   private backfillWork:Promise<unknown>|null=null;
   private launchDynamicWork(now:number){
