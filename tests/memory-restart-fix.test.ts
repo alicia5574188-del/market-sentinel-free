@@ -10,6 +10,7 @@ import {DatabaseSync} from "node:sqlite";
 import type {D1Like,D1Stmt} from "../lib/run-log-archive.ts";
 import {Series,type Bar} from "../lib/dynamic/series.ts";
 import {POOL,tierOf} from "../lib/dynamic/playbooks.ts";
+import {PackedRows} from "../lib/dynamic/packed.ts";
 import type {TradeLite} from "../lib/dynamic/cycles.ts";
 import {readMeta,writeMeta,emptyDynStore} from "../lib/dynamic/store-d1.ts";
 import {DynamicResearch,STEP,SNAP_STALE_MS,type DynSnap} from "../lib/dynamic/runtime.ts";
@@ -42,7 +43,7 @@ function fill(rt:DynamicResearch){
     for(const [n,part] of [["a",rows.slice(0,half)],["b",rows.slice(half)]] as const){
       const k=`l|${i%2?"SOL":"ADA"}_USDT|5m|${start}${n}`;const cur=rt.tsrc.get(k);
       if(cur){const pbs=cur.pbs.length;cur.pbs.push(pb);cur.rows.push(...part.map(r=>[pbs,r[1],r[2],r[3],r[4],r[5]] as TradeRow));}
-      else rt.tsrc.set(k,{k,sym:i%2?"SOL_USDT":"ADA_USDT",iv:"5m",t0:start,pbs:[pb],rows:part,dirty:false});}
+      else rt.tsrc.set(k,{k,sym:i%2?"SOL_USDT":"ADA_USDT",iv:"5m",t0:start,pbs:[pb],rows:PackedRows.from(part),dirty:false});}
   });
   rt.tradesLoaded=true;rt.recount?.();
   return start;

@@ -2,6 +2,7 @@
  * forward gate restored: the forward analysis (shadow trades, predictor scoring, allow-list, good/bad cycles) keeps running while
  * the paper orders are reversed. Reversal only touches the order direction and hold downstream; it never reaches the forward stats.
  */
+import {PackedRows} from "../lib/dynamic/packed.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
@@ -41,7 +42,7 @@ function fill(rt:DynamicResearch){
     for(const [n,part] of [["a",rows.slice(0,half)],["b",rows.slice(half)]] as const){
       const k=`l|${i%2?"SOL":"ADA"}_USDT|5m|${start}${n}`;const cur=rt.tsrc.get(k);
       if(cur){const pbs=cur.pbs.length;cur.pbs.push(pb);cur.rows.push(...part.map(r=>[pbs,r[1],r[2],r[3],r[4],r[5]] as TradeRow));}
-      else rt.tsrc.set(k,{k,sym:i%2?"SOL_USDT":"ADA_USDT",iv:"5m",t0:start,pbs:[pb],rows:part,dirty:false});}
+      else rt.tsrc.set(k,{k,sym:i%2?"SOL_USDT":"ADA_USDT",iv:"5m",t0:start,pbs:[pb],rows:PackedRows.from(part),dirty:false});}
   });
   rt.tradesLoaded=true;rt.recount?.();
   return start;
@@ -52,11 +53,11 @@ const reference=(rt:DynamicResearch)=>{const by=new Map<string,TradeLite[]>();fo
 
 const idle=()=>{const calls:string[]=[];return {calls,fetch:(async(u:string)=>{calls.push(u);throw new Error("no network in this test");}) as never};};
 const allowedOf=(rt:DynamicResearch)=>Object.entries(rt.gates!).filter(([,g])=>g.ok).map(([k])=>k).sort();
-const lastTrade=(rt:DynamicResearch)=>{let m=0;for(const s of rt.tsrc.values())for(const r of s.rows)m=Math.max(m,r[1]);return m;};
+const lastTrade=(rt:DynamicResearch)=>{let m=0;for(const s of rt.tsrc.values())for(let i=0;i<s.rows.n;i++)m=Math.max(m,s.rows.etAt(i));return m;};
 /** a source of `days` days of 4-hourly trades of one playbook, all with the same net */
 function addSource(rt:DynamicResearch,pb:string,net:number,days:number,from:number){
   const k=`l|SOL_USDT|5m|${from}x${pb}`,rows:TradeRow[]=[];let t=from;for(let n=0;n<days*6;n++){rows.push([0,t,t+1800,Math.round(net*1e6),100,100]);t+=4*H;}
-  rt.tsrc.set(k,{k,sym:"SOL_USDT",iv:"5m",t0:from,pbs:[pb],rows,dirty:false});
+  rt.tsrc.set(k,{k,sym:"SOL_USDT",iv:"5m",t0:from,pbs:[pb],rows:PackedRows.from(rows),dirty:false});
 }
 
 test("forward analysis keeps recomputing: hourly, never in between, snapshot saved on demand, and a new analysis does not need a venue request",async()=>{

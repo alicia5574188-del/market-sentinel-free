@@ -538,7 +538,7 @@ test("reversal does not reach the forward stats: shadow trades are the playbook'
   // 1) live evaluation stores exactly the forward simulation of each playbook (side = playbook side, net = d*(xp/ep-1)-fee)
   const rt=new DynamicResearch(),s=series("SOL_USDT","1h",1_700_000_000-400*H,700);
   rt.series.set("SOL_USDT|1h",s);rt.liveFrom["SOL_USDT|1h"]=0;rt.evalLive(s);
-  const rows=[...rt.tsrc.values()].flatMap(x=>x.rows.map(r=>({pb:x.pbs[r[0]]!,r})));assert.ok(rows.length>20,`some shadow trades (${rows.length})`);
+  const rows=[...rt.tsrc.values()].flatMap(x=>x.rows.toRows().map(r=>({pb:x.pbs[r[0]]!,r})));assert.ok(rows.length>20,`some shadow trades (${rows.length})`);
   const ctxFor=(rt as unknown as {ctxFor(s:Series,b:Series|null):Ctx}).ctxFor.bind(rt);
   let checked=0;
   for(const pb of POOL.filter(p=>p.iv==="1h"&&!p.external&&applies(p,"SOL_USDT"))){
@@ -553,7 +553,7 @@ test("reversal does not reach the forward stats: shadow trades are the playbook'
   const bt=new DynamicResearch();bt.tradesLoaded=true;
   const leader=POOL.find(p=>p.external)!;
   assert.equal(bt.addExternal([{pb:leader.id,sym:"AAA_USDT",side:"LONG",et:1_700_000_000,xt:1_700_000_600,net:.012,ep:10,xp:10.1}],1_700_000_700_000),1);
-  assert.equal([...bt.tsrc.values()][0]!.rows[0]![3],12_000);
+  assert.equal([...bt.tsrc.values()][0]!.rows.get(0)[3],12_000);
   // 3) a closed reversed live trade is not a forward result: liveNet only takes the normal ones
   const e=engine({},"paper-enabled",NOW);
   const note=(rv?:1)=>({v:"living-v2",k:"N",pb:"box1h-long",hx:1,dp:1,inv:9.5,rr:.003,...(rv?{rv}:{})}) as unknown as LivingNote;

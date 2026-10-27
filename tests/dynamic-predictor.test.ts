@@ -3,6 +3,7 @@
  * online logistic model, forecast logging / scoring / track record, the predictor gate of the allocator, the dashboard text, and
  * the runtime path (hourly row in D1, scoring after the horizon, restart keeps the record).
  */
+import {PackedRows} from "../lib/dynamic/packed.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import {DatabaseSync} from "node:sqlite";
@@ -162,7 +163,7 @@ test("runtime: the predictor runs in the analysis — hourly forecast row to D1,
   rt.series.set("BTC_USDT|1h",series1h("BTC_USDT",start,40*24));rt.series.set("ETH_USDT|1h",series1h("ETH_USDT",start,40*24));
   const pb="orb5m-eu-long",ts=tradesOf(pb,[[4,.004],[4,-.004],[4,.004],[4,-.004],[4,.004],[4,-.004],[4,.004],[4,-.004],[6,.004]],start+2*D);
   const rows=ts.map(t=>[0,t.et,t.xt,Math.round(t.net*1e6),100,100] as [number,number,number,number,number,number]);
-  rt.tsrc.set(`l|SOL_USDT|5m|${start}`,{k:`l|SOL_USDT|5m|${start}`,sym:"SOL_USDT",iv:"5m",t0:start,pbs:[pb],rows,dirty:false});rt.tradesLoaded=true;
+  rt.tsrc.set(`l|SOL_USDT|5m|${start}`,{k:`l|SOL_USDT|5m|${start}`,sym:"SOL_USDT",iv:"5m",t0:start,pbs:[pb],rows:PackedRows.from(rows),dirty:false});rt.tradesLoaded=true;
   const last=ts.at(-1)!.xt,at=(Math.floor(last/H)+1)*H*1000+60_000;
   rt.analyze(at);
   const f=rt.forecasts[pb]!;assert.ok(f,"forecast for the playbook");assert.equal(f.cur,"GOOD");assert.ok(f.p["6"]>.5);

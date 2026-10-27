@@ -26,6 +26,7 @@ import {BACKFILL,initialBackfill,normalizeBackfill,nextJob,onPage,onFailure,back
 import {emptyDynStore,writeChunks,readSeries,readMeta,writeMeta,ensureDynSchema,chunkStart,chunkStarts,pruneBars,writeTradeChunks,readTradeChunks,
   writeForecasts,readForecasts,pruneForecasts,writeMetaJson,
   CHUNK_SEC,type DynStoreStatus,type TradeRow} from "./store-d1.ts";
+import {PackedRows} from "./packed.ts";
 import {POOL,POOL_BY_ID,simulate,manageLive,btcRegime,tierOf,applies,type OpenShadow,type ShadowTrade,type Playbook,type Ctx} from "./playbooks.ts";
 import {dailyStates,stateChanges,bucketLabel,intradayStates,sessionOf,SESSION_LABEL,TREND_LABEL,VOL_LABEL,type DayState,type IntraState} from "./state.ts";
 import {analyzePlaybook,phaseChanges,type PlaybookCycle,type TradeLite} from "./cycles.ts";
@@ -64,7 +65,7 @@ export type DynPosition={id:string;symbol:string;side:"LONG"|"SHORT";entryPrice:
 /** the worker's 5m bars (time = open, seconds) */
 export type FeedBar={time:number;open:number;high:number;low:number;close:number;volume:number};
 type Fetch=(url:string)=>Promise<unknown>;
-type TSrc={k:string;sym:string;iv:Iv;t0:number;pbs:string[];rows:TradeRow[];dirty:boolean};
+type TSrc={k:string;sym:string;iv:Iv;t0:number;pbs:string[];rows:PackedRows;dirty:boolean};
 const safe=(e:unknown)=>String((e as Error)?.message??e).slice(0,160);
 const keepOf=(sym:string,iv:Iv)=>iv==="1h"&&(sym==="BTC_USDT"||sym==="ETH_USDT")?MAJOR_1H_KEEP:MEM_KEEP[iv];
 const PB_BY_IV=new Map<Iv,Playbook[]>();for(const pb of POOL)if(!pb.external)(PB_BY_IV.get(pb.iv)??PB_BY_IV.set(pb.iv,[]).get(pb.iv)!).push(pb);
@@ -263,22 +264,22 @@ export class DynamicResearch{
     const rows=await readTradeChunks(db,this.store,this.tradeCursor,STEP.tradeLoad);
     for(const r of rows){this.tradeCursor=r.k;const cur=this.tsrc.get(r.k);
       if(cur){this.mergeRows(cur,r.pbs,r.trades);continue;}// a live day already touched in memory: union
-      this.tsrc.set(r.k,{k:r.k,sym:r.sym,iv:r.iv,t0:r.t0,pbs:r.pbs,rows:r.trades,dirty:false});}
+      this.tsrc.set(r.k,{k:r.k,sym:r.sym,iv:r.iv,t0:r.t0,pbs:r.pbs,rows:PackedRows.from(r.trades),dirty:false});}
     this.recount();if(rows.length<STEP.tradeLoad)this.tradesLoaded=true;
   }
-  private recount(){let n=0;for(const s of this.tsrc.values())n+=s.rows.length;this.tradeCount=n;}
+  private recount(){let n=0;for(const s of this.tsrc.values())n+=s.rows.n;this.tradeCount=n;}
   private mergeRows(dst:TSrc,pbs:readonly string[],rows:readonly TradeRow[]){
-    const have=new Set(dst.rows.map(r=>`${dst.pbs[r[0]]}|${r[1]}`));
+    const have=new Set<string>();for(let i=0;i<dst.rows.n;i++)have.add(`${dst.pbs[dst.rows.pbAt(i)]}|${dst.rows.etAt(i)}`);
     for(const r of rows){const pb=pbs[r[0]];if(pb==null||have.has(`${pb}|${r[1]}`))continue;let i=dst.pbs.indexOf(pb);if(i<0){i=dst.pbs.length;dst.pbs.push(pb);}
-      dst.rows.push([i,r[1],r[2],r[3],r[4],r[5]]);have.add(`${pb}|${r[1]}`);dst.dirty=true;}
+      dst.rows.add(i,r[1],r[2],r[3],r[4],r[5]);have.add(`${pb}|${r[1]}`);dst.dirty=true;}
   }
   /** trades of one source: replace (history unit, long series) or add (live day) */
   private putTrades(k:string,sym:string,iv:Iv,t0:number,trades:readonly ShadowTrade[],replace:boolean){
     const pbs:string[]=[],rows:TradeRow[]=[];
     for(const t of trades){let i=pbs.indexOf(t.pb);if(i<0){i=pbs.length;pbs.push(t.pb);}rows.push([i,t.et,t.xt,Math.round(t.net*1e6),p8(t.ep),p8(t.xp)]);}
     const cur=this.tsrc.get(k);
-    if(replace||!cur){const same=cur&&JSON.stringify(cur.rows)===JSON.stringify(rows)&&JSON.stringify(cur.pbs)===JSON.stringify(pbs);
-      if(!same&&(rows.length||cur))this.tsrc.set(k,{k,sym,iv,t0,pbs,rows,dirty:true});}
+    if(replace||!cur){const same=cur&&cur.rows.sameAs(rows)&&JSON.stringify(cur.pbs)===JSON.stringify(pbs);
+      if(!same&&(rows.length||cur))this.tsrc.set(k,{k,sym,iv,t0,pbs,rows:PackedRows.from(rows),dirty:true});}
     else this.mergeRows(cur,pbs,rows);
   }
   private async flushForecasts(db:D1Like,now:number){
@@ -287,7 +288,7 @@ export class DynamicResearch{
   }
   private async flushTrades(db:D1Like,now:number){
     const ds=[...this.tsrc.values()].filter(s=>s.dirty).slice(0,STEP.tradeRows);if(!ds.length)return;
-    if(await writeTradeChunks(db,this.store,ds.map(s=>({k:s.k,sym:s.sym,iv:s.iv,t0:s.t0,pbs:s.pbs,trades:s.rows})),now)){
+    if(await writeTradeChunks(db,this.store,ds.map(s=>({k:s.k,sym:s.sym,iv:s.iv,t0:s.t0,pbs:s.pbs,trades:s.rows.toRows()})),now)){
       for(const s of ds){s.dirty=false;if(s.k.startsWith("u|"))this.unitsPending.delete(s.k.slice(2));}this.recount();}
   }
   /** rewrite the chunks touched by `bars` (and/or the given chunk starts), merging what D1 already holds (memory is trimmed) */
@@ -385,19 +386,20 @@ export class DynamicResearch{
       if(r.open)this.opens.set(key,r.open);else this.opens.delete(key);}
     this.putTrades(`f|${s.sym}|${s.iv}`,s.sym,s.iv,0,out,true);
   }
-  /** one pass over the stored rows → per playbook the (source, row) positions; trades are then expanded ONE playbook at a time
-   * (a few thousand objects) instead of all ~400k at once. Same trades, same order of sources as tradesLite(). */
+  /** the shadow trades of ONE playbook, expanded on demand (a few thousand objects instead of all ~490k at once).
+   * No per-playbook position index is built: each call scans the packed pb column (≈ 0.5M compares ≈ 1 ms), so the only
+   * thing alive besides the packed rows is the single playbook being analysed. Same trades, same order (sources, then rows)
+   * as tradesLite(). */
   private liteIndex():(pb:string)=>TradeLite[]{
-    const srcs=[...this.tsrc.values()],at=new Map<string,{s:number[];r:number[]}>();
-    srcs.forEach((src,si)=>{const rows=src.rows,pbs=src.pbs;for(let i=0;i<rows.length;i++){const pb=pbs[rows[i]![0]];if(!pb)continue;
-      let a=at.get(pb);if(!a){a={s:[],r:[]};at.set(pb,a);}a.s.push(si);a.r.push(i);}});
-    return pb=>{const a=at.get(pb);if(!a)return [];const out:TradeLite[]=new Array(a.s.length);
-      for(let j=0;j<a.s.length;j++){const src=srcs[a.s[j]!]!,r=src.rows[a.r[j]!]!;out[j]={pb,sym:src.sym,et:r[1],xt:r[2],net:r[3]/1e6};}
+    const srcs=[...this.tsrc.values()];
+    return pb=>{const out:TradeLite[]=[];
+      for(const src of srcs){const li=src.pbs.indexOf(pb);if(li<0)continue;const rows=src.rows;
+        for(let i=0;i<rows.n;i++)if(rows.pbAt(i)===li)out.push({pb,sym:src.sym,et:rows.etAt(i),xt:rows.xtAt(i),net:rows.netAt(i)/1e6});}
       if(out.length>this.peakLite)this.peakLite=out.length;return out;};
   }
   /** every stored shadow trade, light (kept as the reference for the batched analysis; the analysis itself no longer uses it) */
   tradesLite():TradeLite[]{const out:TradeLite[]=[];
-    for(const s of this.tsrc.values())for(const r of s.rows){const pb=s.pbs[r[0]];if(pb)out.push({pb,sym:s.sym,et:r[1],xt:r[2],net:r[3]/1e6});}
+    for(const s of this.tsrc.values())for(let i=0;i<s.rows.n;i++){const pb=s.pbs[s.rows.pbAt(i)];if(pb)out.push({pb,sym:s.sym,et:s.rows.etAt(i),xt:s.rows.xtAt(i),net:s.rows.netAt(i)/1e6});}
     return out;}
   analyze(now:number,liteOf?:(pb:string)=>TradeLite[]){
     this.lastAnalyzeAt=now;this.analyses++;const nowSec=now/1000;
@@ -535,7 +537,7 @@ export class DynamicResearch{
   }
   view(now:number){
     const cur=this.states.at(-1)??null,ic=this.currentIntra(now),bv=backfillView(this.bf,this.universe,now,this.opts.minGapMs??BACKFILL.minGapMs);
-    const counts:Record<string,number>={};for(const s of this.tsrc.values())for(const r of s.rows){const pb=s.pbs[r[0]];if(pb)counts[pb]=(counts[pb]??0)+1;}
+    const counts:Record<string,number>={};for(const s of this.tsrc.values())for(let i=0;i<s.rows.n;i++){const pb=s.pbs[s.rows.pbAt(i)];if(pb)counts[pb]=(counts[pb]??0)+1;}
     const unitsAll=Object.values(this.unitsTotal).reduce((a,b)=>a+b,0),unitsDone=Object.keys(this.unitsDone).length;
     return {version:DYN_VERSION,booted:this.booted,bootError:this.bootError,lastError:this.lastError,lastStepAt:this.lastStepAt||null,lastStepMs:this.lastStepMs,maxStepMs:this.maxStepMs,
       lastAnalyzeAt:this.lastAnalyzeAt||null,store:{...this.store},backfill:bv,shadowTrades:this.tradesLoaded?this.tradeCount:Math.max(this.tradeCount,this.snapTrades),shadowTradesRead:this.tradeCount,tradesLoaded:this.tradesLoaded,
