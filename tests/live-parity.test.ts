@@ -6,7 +6,7 @@ import { LIVE_PARITY_PREFIX, LIVE_PARITY_VERSION, forwardMirrorSources, buildPro
   mirrorCoverage, sourceLifecycle, liveEntryDriftGuard, mirrorPositionRisk, type MirrorBinding } from "../lib/live-parity.ts";
 import { advanceForward, initialForward, type Trade, type ForwardState } from "../lib/forward-relations.ts";
 const LEGACY_EXTREMUM_REGIME_VERSION="extremum-regime-v1"; // fixture only: verifies already-persisted old sources can still drain safely
-import {newExitControl} from "../lib/forward-protection.ts";
+const newExitControl=()=>({policy:"timely-protection-v1",armedAt:null,armedQuoteAt:null,maxObservationGapMs:0,maxQuoteAgeMs:0}) as never;
 import { gateMarkedEquity, gatePositionValuation, liveEntryDisposition, liveExitTag, type GateLiveAccount, type GateLiveOrder, type GateLivePosition, type LiveEntryIntent, type LiveStopIntent, LiveEntrySizingError, GateEntryCancelledError, GateLiveClient, GateReadTimeoutError } from "../lib/gate-live.ts";
 import { quantizeMirrorNotional } from "../lib/gate-quantity.ts";
 import { establishLiveScale, reconcileLiveScale, startLiveSession, sourceAfterEnable, LIVE_SESSION_VERSION, type LiveSession } from "../lib/live-session.ts";
@@ -731,15 +731,15 @@ test("arming or source rule re-synthesis does not prematurely close an existing 
   h.forwardState.positions[0].favorable=.03;h.forwardState.rules=[];await h.syncLive(T);
   assert.equal(gate.closeTags.length,0);assert.equal(live(h).positions.BTC_USDT.status,"OPEN");
 }));
-test("a new-policy early PAPER giveback is followed by the actual owner reconciler without five-minute delay",()=>clock(async()=>{
+test("a PAPER stop close is followed by the actual owner reconciler without five-minute delay",()=>clock(async()=>{
   const {h,gate}=await harness();h.forwardState.positions[0].exitControl=newExitControl();
   await enableNew(h);await h.syncLive(T);const activation=structuredClone(live(h).activation);
   let current=T+60000;Date.now=()=>current;
   const advance=(price:number)=>{h.forwardState=advanceForward({state:h.forwardState,now:current,paths:{},contracts:{},
     quotes:{BTC_USDT:{bestBid:price,bestAsk:price+.01,observedAt:current,fresh:true}}}).state;};
   advance(101);await h.syncLive(current);assert.equal(gate.closeTags.length,0);
-  current+=30000;advance(100.6);assert.equal(h.forwardState.positions.length,0);
-  assert.equal(h.forwardState.history[0].exitAudit!.trigger,"PROFIT_GIVEBACK");
+  current+=30000;advance(98.9);assert.equal(h.forwardState.positions.length,0);
+  assert.equal(h.forwardState.history[0].exitAudit!.trigger,"STRUCTURE_STOP");
   assert.ok(current-h.forwardState.history[0].openedAt<300000);
   await h.syncLive(current);await h.syncLive(current);
   assert.equal(gate.closeTags.length,1);assert.equal(gate.closeTags[0],liveExitTag("ft-fixture-1"));

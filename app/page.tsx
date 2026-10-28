@@ -137,5 +137,5 @@ export default function Home() {
     livePanel={<LiveConsole view="trade" auth={auth} runtime={runtime} onSession={sessionChanged} onLive={liveChanged} onRefresh={reload}/>}
     liveSystemPanel={<LiveConsole view="system" auth={auth} runtime={runtime} onSession={sessionChanged} onLive={liveChanged} onRefresh={reload}/>}
     accountPanel={<><MemberAccess auth={auth}/><PaperAccountReset auth={auth} runtime={runtime} onReset={reload}/></>}
-    brainAuth={auth} cachedAt={cachedAt}/>;
+    cachedAt={cachedAt}/>;
 }

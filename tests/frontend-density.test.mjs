@@ -157,15 +157,6 @@ test("living-layer order: 详细依据 shows the brain's intent, evidence, layer
   assert.doesNotMatch(html,/<b>持仓评分<\/b>|入场评分 68|开仓时盘面是过渡|只有同步爆发或趋势才会真正开仓|不使用 5% 和 10% 那两条|同步爆发和趋势都是 5 倍|<b>开仓走势<\/b>/);
   assert.doesNotMatch(html,/<small>开仓盘面<\/small>|>过渡</);
 });
-test("living-trade labels match the 大脑 page",async()=>{
-  const brain=await import("../lib/brain-view.ts");const v=livingViewModule.exports;
-  const j=o=>JSON.stringify(o);assert.equal(j(v.LIVING_STATE_LABEL),j(brain.STATE_LABEL));assert.equal(j(v.LIVING_CAPITAL_LABEL),j(brain.CAPITAL_LABEL));assert.equal(j(v.LIVING_EMOTION_LABEL),j(brain.EMOTION_LABEL));
-});
-test("living playbook labels on the page match the living layer's own labels",async()=>{
-  const {PLAYBOOK_LABEL}=await import("../lib/living/thesis.ts");
-  for(const [k,v] of Object.entries(PLAYBOOK_LABEL))assert.equal(orderCardModule.exports.LIVING_PLAYBOOK_LABEL[k],v,k);
-  assert.equal(orderCardModule.exports.livingPlaybookLabel("fast"),"集体异动快速跟进");
-});
 test("living exit reasons read in plain Chinese on the order card (no raw codes)",()=>{
   const {exitShort,exitPlain}=orderCardModule.exports;
   assert.equal(exitShort("LIVING_FAST_EXHAUST"),"异动力竭");assert.equal(exitShort("LIVING_STOP"),"止损");
@@ -221,21 +212,6 @@ test("partial realizations are not counted as floating and entry fees are alloca
   const html=render("app/forward-dashboard.tsx",dashboardProps({...account(),floating:123.45,positions:[t]}));
   assert.match(html,/<small>浮动盈亏<\/small><strong>\+59\.58 U<\/strong>/);
   assert.doesNotMatch(html,/<small>浮动盈亏<\/small><strong>\+90\.54 U<\/strong>/);
-});
-
-test("execution shows market, positions and recent fills; not-opened and waiting candidates stay in the run log only",()=>{
-  const data={...account(),marketIntelligence:{updatedAt:1790761200000,narrative:{major:{bias:"BULLISH"},short:{bias:"BULLISH"},plan:"NEVER_RENDER_PHILOSOPHY"},
-    liquidity:{market:{ready:true,testingShare:.3},symbols:{}}},
-    environmentRouter:{phase:"TRANSITIONAL",currentEnvironment:"TRANSITION",outlook:{transitionPressure:.5,horizonMinutes:45}},
-    opportunities:[{id:"observed",symbol:"BTC_USDT",side:"LONG",eligible:true,score:80,tradePlan:"LIQUIDITY_MIGRATION"}],
-    entryValidation:{records:[{id:"waiting",candidateId:"frozen",symbol:"ETH_USDT",side:"LONG",status:"WAITING",phase:"RETEST_WAIT",frozenOpportunity:{tradePlan:"LIQUIDITY_MIGRATION"}}]},
-    positions:[{id:"held",symbol:"SUI_USDT",side:"SHORT",entryContext:{tradePlan:"FAMILY_TURN"},positionIntelligence:{decision:"REVIEW",concerns:["fixture position concern"]}}],
-    history:[{id:"done",status:"CLOSED",symbol:"PONS_USDT",side:"SHORT",openedAt:1790752298000,closedAt:1790761200000,netPnl:78.36,exitReason:"WINNER_STRUCTURE_EXIT"}]};
-  const html=render("app/market-intelligence-execution.tsx",{data,now:1790761200000,liveEnabled:false});
-  for(const text of ["正在发生","接下来可能","SUI","重点复核","fixture position concern","最近成交","PONS","+78.36 U","碰到保护位","关闭"])assert.ok(html.includes(text),text);
-  // Not-opened candidates and armed/waiting plans are recorded in the run log, not on this page.
-  for(const text of ["BTC","ETH","等回调重启","等待执行 ·","正在观察 ·"])assert.ok(!html.includes(text),text);
-  assert.doesNotMatch(html,/NEVER_RENDER_PHILOSOPHY|一个板块只回答|每笔持仓只显示|这次页面精简/);
 });
 
 test("live account remains equity-first and rendering cannot enable trading",()=>{
@@ -304,15 +280,6 @@ test("reference card, equity chart and static manuals are removed, not hidden; c
   assert.match(read("app/paper-account-reset.tsx"),/该操作不能撤销/);
 });
 
-test("holding view uses the frozen order area, not a newer conflicting map",()=>{
-  const frozen={version:"winner-preservation-v1",researchVersion:"research-plan-v1",intent:"TREND",initialStop:99,
-    origin:{lower:100,upper:104,center:102},target:null},current={...frozen,origin:{lower:200,upper:204,center:202}};
-  const data={...account(),opportunities:[{id:"same",symbol:"SUI_USDT",side:"LONG",eligible:true,score:88,tradePlan:"WINNER_TREND",winnerPlan:current}],
-    positions:[{id:"held",symbol:"SUI_USDT",side:"LONG",status:"OPEN",stopPrice:101,entryContext:{tradePlan:"WINNER_TREND",winnerPlan:frozen},winnerManagement:{reason:"fixture hold"}}]};
-  const html=render("app/market-intelligence-execution.tsx",{data,now:1790761200000,liveEnabled:false});
-  assert.match(html,/本单参考区 100–104 · 当前保护 101/);assert.doesNotMatch(html,/本单参考区 200–204/);
-});
-
 test("inverse cards show only their own exact-price net and paid fees without an unfilled close charge",()=>{
   const t={id:"iv-source",status:"OPEN",symbol:"AAVE_USDT",side:"LONG",entryPrice:100,lastPrice:102,quantity:2,contracts:2,
     notional:200,entryFee:.14,leverage:10,margin:20,plannedRisk:2,openedAt:1790760000000,closedAt:null,
@@ -329,28 +296,6 @@ test("inverse cards show only their own exact-price net and paid fees without an
   assert.match(summary,/已扣手续费 0\.1400 U/);assert.doesNotMatch(summary,/平仓 [0-9]|已减仓 [0-9]/);
   assert.doesNotMatch(summary,/毛盈亏镜像校验|报价毛额差/);
 });
-test("orders page shows the forward book and does not render a shadow ledger",()=>{
-  const data=account();data.fees=3.25;
-  data.forwardDesk={stance:"FORWARD",equity:640.5,initialEquity:1000,netPnl:-359.5,maxDrawdown:.2,fees:12.5,floating:-3.2,stale:false,
-    openCount:1,resolved:80,wins:30,open:[{id:"s1",symbol:"BTC_USDT",side:"LONG",status:"OPEN",entryPrice:100,price:101,openedAt:1790760000000,
-      closedAt:null,net:1.2,leverage:5,margin:20,plan:"独立趋势"}],recent:[],curve:[{at:1790760000000,equity:1000},{at:1790761200000,equity:640.5}],
-    study:{recorded:42,recordedWins:18,recordedNet:-20,sourceResolved:80,startedAt:1790760000000,ready:true,
-      note:"这些分组留给以后定正反切换。现在仍然只做正向，不自动切。",coverage:"记下的平仓，就是现在还能核对到的全部。",
-      groups:[{label:"高持续",n:10,wins:3,net:-15}],recent:[]}};
-  const states=[],refs=[],buttons=[];let cursor=0,refCursor=0;
-  const hooks={...React,useState(initial){const i=cursor++;if(!(i in states))states[i]=initial==="execution"?"paper":typeof initial==="function"?initial():initial;return[states[i],value=>{states[i]=typeof value==="function"?value(states[i]):value;}];},
-    useRef(initial){const i=refCursor++;return refs[i]??(refs[i]={current:initial});},useEffect(){},useLayoutEffect(){}};
-  const capture=fn=>(type,props,...rest)=>{if(type==="button")buttons.push(props);return fn(type,props,...rest);};
-  const draw=()=>{cursor=0;refCursor=0;buttons.length=0;return render("app/forward-dashboard.tsx",dashboardProps(data),
-    {react:hooks,"react/jsx-runtime":{...jsxRuntime,jsx:capture(jsxRuntime.jsx),jsxs:capture(jsxRuntime.jsxs)}});};
-  let html=draw();
-  assert.match(html,/正向权益/);assert.match(html,/640\.50/);assert.match(html,/BTC \/ USDT/);assert.match(html,/\+1\.20 U/);
-  assert.doesNotMatch(html,/影子|影子订单|shadow-orders-panel|shadow-inverse-comparison/);
-  assert.doesNotMatch(html,/策略已接上|假突破/);
-  for(const file of ["app/forward-dashboard.tsx","app/market-intelligence-execution.tsx","app/live-console.tsx"])
-    assert.doesNotMatch(read(file),/影子/);
-});
-
 test('LIVE OFF hides cached native statistics while preserving PAPER history',()=>{
   const html=render('app/forward-dashboard.tsx',{...dashboardProps(account()),liveOverview:{equity:4321.09,available:6543.21,positionCount:99}});
   assert.match(html,/overview-equity-first/);assert.doesNotMatch(html,/4,321\.09|6,543\.21|99 笔/);

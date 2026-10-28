@@ -4,12 +4,8 @@
  * otherwise the tile shows the dead ledger's floating (+0.00 U) next to real position cards. Display only. */
 import {remainingPaidNetPnl} from "./paid-fee-view.ts";
 import type {Trade} from "./forward-relations.ts";
-import type {ForwardDesk} from "./forward-study.ts";
 
-/** Books whose trades are the account's own positions (not mirrored inverse copies). */
-export const OWN_DESK_BOOKS=new Set(["needle-v1","brain-v1","score-v1","read-v1","stretch-v1","lsr-v1"]);
-
-export type PaperAccountView={usingDesk:boolean;floating:number|null;openCount:number};
+export type PaperAccountView={floating:number|null;openCount:number};
 
 /** Floating net of the open account positions, entry fee already deducted (same basis as data.equity). */
 export function accountFloating(positions:readonly Trade[]):number|null{
@@ -23,13 +19,7 @@ export function accountFloating(positions:readonly Trade[]):number|null{
   return open===0?0:n===0?null:sum;
 }
 
-export function paperAccountView(desk:ForwardDesk|null|undefined,positions:readonly Trade[],liveEnabled:boolean):PaperAccountView{
+export function paperAccountView(positions:readonly Trade[]):PaperAccountView{
   const open=positions.filter(t=>t.status==="OPEN"&&!t.inverseCopy);
-  const deskIds=new Set((desk?.open??[]).map(o=>o.id));
-  const unmirrored=open.some(t=>!deskIds.has(t.id));
-  const own=!!desk?.book&&OWN_DESK_BOOKS.has(desk.book);
-  // A non-own desk (reverse / inverse study) is only the account while it holds paired trades.
-  const usingDesk=!!desk&&!liveEnabled&&!unmirrored&&(own||desk.open.length>0);
-  if(usingDesk)return {usingDesk,floating:desk!.floating,openCount:desk!.openCount};
-  return {usingDesk:false,floating:accountFloating(positions),openCount:open.length};
+  return {floating:accountFloating(positions),openCount:open.length};
 }

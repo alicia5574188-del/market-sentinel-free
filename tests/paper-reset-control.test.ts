@@ -39,20 +39,13 @@ test("owner PAPER reset remains isolated, confirmed and unavailable to members",
   assert.match(page,/PaperAccountReset/);
 });
 
-test("startup clears the strategy once and does not install an old book",()=>{
+test("startup does not replace the account and the tick can only manage existing positions",()=>{
   const worker=readFileSync(new URL("../worker/index-clean.ts",import.meta.url),"utf8");
-  const method=worker.slice(worker.indexOf("private async adoptEmptyStrategy"),worker.indexOf("private async sweepRetiredPaperArchives"));
-  assert.match(method,/requestedEnabled\|\|live\.operational/);
-  assert.match(method,/emptyStrategyAccount\(previous,now\)/);
-  assert.match(method,/STRATEGY_EPOCH/);
-  assert.doesNotMatch(method,/freshDeskLedger|freshLsrLedger|freshNewDesk|applyNewDesk|applyResearchExperiment/);
-  assert.doesNotMatch(method,/requestedEnabled\s*=\s*true|setLiveMode\(/);
-  const advance=worker.slice(worker.indexOf("private async advanceForwardNow"),worker.indexOf("private async refreshRegimeHourly"));
-  assert.match(advance,/adoptEmptyStrategy\(now\)/);
+  assert.doesNotMatch(worker,/adoptEmptyStrategy|emptyStrategyAccount|runLogWipeOnce/);
+  const advance=worker.slice(worker.indexOf("private async advanceForwardNow"),worker.indexOf("private async advanceForwardNow")+6000);
   assert.match(advance,/advanceForward\(/);
-  assert.doesNotMatch(advance,/adoptDeskCleanLedger|adoptLsrLedger|adoptNewDesk|advanceShadowInverse|applyNewDesk|applyResearchExperiment/);
+  assert.doesNotMatch(advance,/adoptDeskCleanLedger|adoptLsrLedger|adoptNewDesk|advanceShadowInverse|applyNewDesk|applyResearchExperiment|advanceLiving|launchLiving/);
 });
-
 
 test("PAPER reset Safari DOMException is Chinese and never replayed",async()=>{
   const original=globalThis.fetch;let calls=0;

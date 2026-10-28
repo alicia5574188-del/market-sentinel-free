@@ -6,7 +6,7 @@ import {readFileSync} from "node:fs";
 import {createHash} from "node:crypto";
 import {Memory,FakeGate,T,trade} from "./member-fixtures.ts";
 import {advanceForward,initialForward} from "../lib/forward-relations.ts";
-import {newExitControl} from "../lib/forward-protection.ts";
+const newExitControl=()=>({policy:"timely-protection-v1",armedAt:null,armedQuoteAt:null,maxObservationGapMs:0,maxQuoteAgeMs:0}) as never;
 import {MEMBERS_VERSION,MEMBER_LIMIT,memberCookie,issueMemberSession,verifyMemberSession,digestMember,memberVaultRoot,encryptMemberText,decryptMemberText} from "../lib/member-auth.ts";
 import {createOwnerSession,ownerSessionCookie} from "../lib/owner-auth.ts";
 import {encryptGateCredentials,decryptGateCredentials} from "../lib/credential-vault.ts";
@@ -309,7 +309,7 @@ test("member OFF leaves held positions protected and follows the same source clo
   now+=10000;h.source.history=[{...t,status:"CLOSED",closedAt:now,exitReason:"original-source-exit"}];h.source.positions=[];
   await aa.engine.alarm();now+=10000;await aa.engine.alarm();assert.equal(aa.gate.closeTags.length,1);assert.equal(aa.engine.runtime.live.positions.BTC_USDT.status,"CLOSED");
 }));
-test("member inherits the same early protection source close without new strategy or switch action",()=>clock(async()=>{
+test("member inherits the same source stop close without new strategy or switch action",()=>clock(async()=>{
   const h=await harness(),a=await h.issue(),aa=await h.member(a.id);
   await h.internal(a.id,"/live-mode",{enabled:true});now+=10000;
   h.source.positions=[{...trade("ft-early-protection"),openedAt:now-5000,exitControl:newExitControl()}];
@@ -318,7 +318,7 @@ test("member inherits the same early protection source close without new strateg
   const update=(price:number)=>{h.source=advanceForward({state:h.source,now,paths:{},contracts:{},
     quotes:{BTC_USDT:{bestBid:price,bestAsk:price+.01,observedAt:now,fresh:true}}}).state;};
   now+=10000;update(101);await aa.engine.alarm();assert.equal(aa.gate.closeTags.length,0);
-  now+=10000;update(100.6);assert.equal(h.source.history[0].exitAudit!.trigger,"PROFIT_GIVEBACK");
+  now+=10000;update(98.9);assert.equal(h.source.history[0].exitAudit!.trigger,"STRUCTURE_STOP");
   assert.ok(now-h.source.history[0].openedAt<300000);
   await aa.engine.alarm();now+=10000;await aa.engine.alarm();
   assert.equal(aa.gate.closeTags.length,1);assert.equal(aa.gate.closeTags[0],liveExitTag("ft-early-protection"));

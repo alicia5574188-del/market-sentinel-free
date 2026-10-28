@@ -33,20 +33,16 @@ test("worker wiring: only the REST fallback is gated; websocket path, urgent set
   const src=readFileSync(new URL("../worker/index-clean.ts",import.meta.url),"utf8");
   const f=src.slice(src.indexOf("private async processAdaptiveBooks("),src.indexOf("protected prepareLiveEquityWrite("));
   assert.match(f,/const urgent=new Set\(\[\.\.\.this\.currentAuthorityProtectionSymbols\(\),\.\.\.this\.forwardUrgentSymbols\(now\)\]\)/);
-  assert.match(f,/critical=\(symbol:string\)=>fastLiving\.all\|\|restCritical\.has\(symbol\)\|\|fastLiving\.symbols\.includes\(symbol\)/);
+  assert.match(f,/critical=\(symbol:string\)=>restCritical\.has\(symbol\)/);
   assert.match(f,/restCritical=new Set\(\[\.\.\.this\.currentAuthorityProtectionSymbols\(\),/);
   assert.match(f,/if\(streamBook\(symbol\)\)\{this\.gateRestThrottle\.wsSeen\(symbol\);return true;\}/);
   assert.match(f,/this\.gateRestThrottle\.allow\(symbol,now,critical\(symbol\)\)/);
   const prot=src.slice(src.indexOf("private currentAuthorityProtectionSymbols() {"),src.indexOf("private forwardUrgentSymbols("));
   for(const k of ["live.positions","live.entries","forwardState?.positions"])assert.ok(prot.includes(k),k);
-  const eng=readFileSync(new URL("../lib/living/engine.ts",import.meta.url),"utf8");
-  assert.match(eng,/restCritical\(now:number\)\{[^}]*all:acting&&!!this\.fast\.episode/);
   assert.match(src,/gateRestThrottle: this\.gateRestThrottle\.status\(\)/);
 });
-test("REST-critical set: positions, inverse positions/orders, open shadow trades, armed validations — not research opportunities/watch list", ()=>{
-  const st={positions:[{symbol:"POS_USDT"}],inverseTrial:{source:{positions:[{symbol:"INV_USDT"}]},lsrWork:[{s:"LSR_USDT"}]},
-    unopenedTrades:[{symbol:"SH_USDT",status:"OPEN"},{symbol:"DONE_USDT",status:"CLOSED"}],
-    entryValidations:{a:{symbol:"VAL_USDT",status:"WAITING"}},
-    opportunities:[{symbol:"OPP_USDT",premium:true,eligible:true,expiresAt:9e15}],extremumRegime:{symbols:{x:{symbol:"WATCH_USDT",watchScore:90}}}} as never;
-  assert.deepEqual(forwardRestCriticalSymbols(st,0).sort(),["INV_USDT","LSR_USDT","POS_USDT","SH_USDT","VAL_USDT"]);
+test("REST-critical set: only symbols with an open position — no research or watch-list symbols exist any more", ()=>{
+  const st={positions:[{symbol:"POS_USDT"},{symbol:"POS_USDT"}],
+    unopenedTrades:[{symbol:"SH_USDT",status:"OPEN"}],opportunities:[{symbol:"OPP_USDT"}]} as never;
+  assert.deepEqual(forwardRestCriticalSymbols(st,0).sort(),["POS_USDT"]);
 });

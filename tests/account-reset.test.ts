@@ -139,6 +139,6 @@ test('reset never touches run-log stores, export progress or the archive',()=>{
   assert.doesNotMatch(methods,/RUN_LOG_EXPORT_KEY|log:export|TRADE_PATH|ORDER_JOURNAL_KEY|tradePaths|orderJournal|archiver|run_log_archive|THESIS_STORAGE_KEY|transaction\.delete|initialForward|emptyStrategyAccount|closeForwardForReset/);
   const core=readFileSync(new URL('../lib/forward-relations.ts',import.meta.url),'utf8');
   const advance=core.slice(core.indexOf('export function advanceForward'),core.indexOf('export const ACCOUNT_RESET_LIMIT'));
-  assert.ok(advance.indexOf('applyFundsReset')>advance.indexOf('markAndManage(s,'),'runs after exits');
-  assert.ok(advance.indexOf('applyFundsReset')<advance.indexOf('advanceEntryResponses('),'and before entries');
+  assert.ok(advance.indexOf('applyFundsReset')>advance.indexOf('manageOpenTrades(s,'),'runs after exits');
+  assert.ok(!/openTrade|openPosition|fillForward|admit/.test(advance),'and nothing in the tick can open a position');
 });

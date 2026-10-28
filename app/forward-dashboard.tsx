@@ -5,8 +5,6 @@ import {useCallback,useEffect,useLayoutEffect,useRef,useState,type CSSProperties
 import {BEIJING_TIME_ZONE} from "../lib/beijing-time.ts";
 import {type Trade,type forwardSummary} from "../lib/forward-relations.ts";
 import {purgeEquityBrowserCache} from "../lib/equity-browser-purge.ts";
-import MarketIntelligenceExecution from "./market-intelligence-execution.tsx";
-import LivingPanel from "./living-panel.tsx";
 import type {AuthSession} from "../lib/operator-ui.ts";
 import RunLogStatus from "./run-log-status.tsx";
 import PanelStamp from "./panel-stamp.tsx";
@@ -20,13 +18,11 @@ import "./account-first.css";
 import "./paid-fee.css";
 import "./pages.css";
 import {tradePaidNetPnl,pairedPaidView,type PaidPair} from "../lib/paid-fee-view.ts";
-import type {ThesisPublic} from "../lib/thesis-view.ts";
 import {OrderCard,exitShort,exitPlain,priceText,livingPlaybookLabel,type OrderFact} from "./order-card.tsx";
 import {isLivingTrade,livingBoard,livingDetail,livingWhy} from "../lib/living-trade-view.ts";
 
 type View=ReturnType<typeof forwardSummary>;
-type Desk=NonNullable<View["forwardDesk"]>;
-type Tab="execution"|"brain"|"paper"|"live"|"settings";
+type Tab="paper"|"live"|"settings";
 const fmt=(v:number|null|undefined,d=2)=>typeof v==="number"&&Number.isFinite(v)?v.toLocaleString("en-US",{minimumFractionDigits:d,maximumFractionDigits:d}):"—";
 const signed=(v:number|null|undefined,d=2)=>typeof v==="number"&&Number.isFinite(v)?`${v>=0?"+":""}${fmt(v,d)}`:"—";
 const time=(v?:number|null)=>v?new Date(v).toLocaleString("zh-CN",{timeZone:BEIJING_TIME_ZONE,month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}):"—";
@@ -77,12 +73,11 @@ const stanceName=(stance?:string)=>stance==="REVERSE"?"反向":stance==="FLAT"?"
 const sessionName=(session?:string)=>session==="ASIA"?"亚盘":session==="EUROPE"?"欧盘":session==="US"?"美盘":"—";
 const claimName=(kind?:string)=>kind==="CONTINUE"?"延续":kind==="SUSPECT"?"可疑":"不投票";
 
-export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,livePanel,liveSystemPanel,liveEnabled,liveOverview,accountPanel,brainAuth,memberName,cacheScope="owner",cachedAt=null,onTabChange}:{
+export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,livePanel,liveSystemPanel,liveEnabled,liveOverview,accountPanel,memberName,cacheScope="owner",cachedAt=null,onTabChange}:{
   data:View|null;healthy:boolean;statusLabel?:string;feedAt:number|null;error:string|null;livePanel:ReactNode;liveSystemPanel?:ReactNode;
   liveEnabled:boolean;liveOverview?:{equity:number|null;available:number|null;positionCount:number;operational:boolean;lastSyncAt:number|null;copied:number|null;eligible:number|null;missing:number|null;accountMark?:import('../lib/live-account-view.ts').LiveAccountMark|null;};
   accountPanel?:ReactNode;
-  /** Owner only: the 大脑 tab replaces 执行 as the home tab. */
-  brainAuth?:AuthSession|null;memberName?:string;cacheScope?:string;
+  memberName?:string;cacheScope?:string;
   /** Set while the page shows the device snapshot (not yet a fresh read). */
   cachedAt?:number|null;
   /** Tells the page which tab is shown (it sets the home refresh cadence). */
@@ -90,12 +85,11 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
 }){
   // The equity chart is gone; free the space its old browser copies still take on the phone.
   useEffect(()=>{purgeEquityBrowserCache();},[]);
-  const brainHome=!!brainAuth;
-  const [tab,setTab]=useState<Tab>(brainHome?"brain":"execution"),[now,setNow]=useState(0),[liveMounted,setLiveMounted]=useState(false);
+  const [tab,setTab]=useState<Tab>("paper"),[now,setNow]=useState(0),[liveMounted,setLiveMounted]=useState(false);
   const [fontScale,setFontScale]=useState(()=>{if(typeof window==="undefined")return 92;try{const saved=Number(localStorage.getItem("sentinel-ui-font-scale-v1"));return saved>=70&&saved<=110?saved:92;}catch{return 92;}});
   const [exporting,setExporting]=useState(false),[exportStatus,setExportStatus]=useState<string|null>(null),[exportCount,setExportCount]=useState(0);
   const [historyShown,setHistoryShown]=useState(10);
-  const scroll=useRef<Record<Tab,number>>({execution:0,brain:0,paper:0,live:0,settings:0});
+  const scroll=useRef<Record<Tab,number>>({paper:0,live:0,settings:0});
   // Page clock: held times are shown in minutes, so a 15s tick is enough; second-level labels run their own timer.
   useEffect(()=>{const first=setTimeout(()=>setNow(Date.now()),0),id=setInterval(()=>setNow(Date.now()),PAGE_CLOCK_MS);return()=>{clearTimeout(first);clearInterval(id);};},[]);
   useLayoutEffect(()=>{window.scrollTo({top:tab==="live"?0:scroll.current[tab]??0,behavior:"auto"});},[tab]);
@@ -124,18 +118,17 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
     setExportStatus(`已开始下载 ${a.download}。里面 ${n} 笔单${span}。${warn}${cases} 个研究案例、${rows} 段时间线（每段 10 分钟）。`);setExportCount(c=>c+1);
   }catch(error){setExportStatus(`导出失败，请重试。（${error instanceof Error?error.message:"网络中断"}）`);}finally{setExporting(false);}};
 
-  const desk=data?.forwardDesk??null,positions=data?.positions??[],history=[...(data?.history??[])].sort((a,b)=>(b.closedAt??0)-(a.closedAt??0));
-  const paperView=paperAccountView(desk,positions,liveEnabled),usingDesk=paperView.usingDesk&&!!desk;
-  const stanceLabel=desk?.book==="lsr-v1"?"实验":desk?.book==="stretch-v1"?"新账":desk?.book==="reverse-v1"?"反向":desk?.book==="needle-v1"||desk?.book==="brain-v1"||desk?.book==="score-v1"||desk?.book==="read-v1"?"账户":stanceName(desk?.stance);
+  const positions=data?.positions??[],history=[...(data?.history??[])].sort((a,b)=>(b.closedAt??0)-(a.closedAt??0));
+  const paperView=paperAccountView(positions);
   const paperFloating=paperView.floating;
   const held=paperView.openCount;
   const paperHeld=positions.filter(t=>!t.inverseCopy).length;
   const liveHeld=liveOverview?.positionCount??0;
   const systemStatus=statusLabel==="后台运行中"?"正常":statusLabel?.startsWith("后台运行中 · ")?statusLabel.slice(8):statusLabel??(healthy?"正常":"行情恢复中");
-  const accountEquity=usingDesk?desk.equity:data?.equity,
-    accountPnl=usingDesk?desk.netPnl:data?.netPnl,
-    accountBase=usingDesk?desk.initialEquity:data?.initialEquity;
-  const drawdown=usingDesk?(desk.maxDrawdown==null?null:desk.maxDrawdown*100):data?data.maxDrawdown*100:null;
+  const accountEquity=data?.equity,
+    accountPnl=data?.netPnl,
+    accountBase=data?.initialEquity;
+  const drawdown=data?data.maxDrawdown*100:null;
   const liveText=liveEnabled?liveOverview?.operational?"运行中":"核对中":"关闭";
   // System card: the last good values are kept on the device so a fresh app open shows them before the first runtime read.
   const [systemSnap]=useState<PanelEntry<SystemSnap>|null>(()=>readPanel<SystemSnap>(cacheScope,PANEL_KEYS.systemStatus));
@@ -148,35 +141,29 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   },[cacheScope,!!data,healthy,systemStatus,liveText,engine,storageOk,feedMinute,cachedAt]);
   const card:SystemSnap&{cached:boolean}=data||!systemSnap?{healthy,status:systemStatus,feedAt,live:liveText,engine,storageOk,cached:false}
     :{...systemSnap.value,cached:true};
-  const nav:[Tab,string,string][]=[brainHome?["brain","◉","大脑"]:["execution","◉","执行"],["paper","⇄","模拟"],["live","◈","实盘"],["settings","⊙","系统"]];
+  const nav:[Tab,string,string][]=[["paper","⇄","模拟"],["live","◈","实盘"],["settings","⊙","系统"]];
   return <main className="fr-app" style={fontVars as CSSProperties} data-ui-version="market-intelligence-v1">
-    <header className="fr-compact-header pg-head"><b>哨兵 · 市场智能系统</b><span>
+    <header className="fr-compact-header pg-head"><b>哨兵 · 交易核心</b><span>
       <i className={`pg-pill ${healthy?"is-ok":"is-warn"}`} role="status">{systemStatus}</i>
       <i className={`pg-pill ${liveEnabled?liveOverview?.operational?"is-ok":"is-warn":"is-off"}`}>实盘{liveText}</i>
       {memberName&&<i className="pg-pill is-plain">{memberName}</i>}</span></header>
 
-    {tab==="brain"&&brainHome&&<LivingPanel auth={brainAuth??null} scope={cacheScope} data={data} now={now} liveEnabled={liveEnabled} liveOverview={liveOverview}
-      healthy={healthy} systemStatus={systemStatus} feedAt={feedAt} floating={data?paperFloating:null} onOpenOrders={openOrders}/>}
-    {tab==="execution"&&!brainHome&&<MarketIntelligenceExecution data={data} now={now} liveEnabled={liveEnabled} liveOverview={liveOverview}
-      healthy={healthy} systemStatus={systemStatus} feedAt={feedAt} floating={data?paperFloating:null} onOpenOrders={()=>select("paper")}/>}
-
     {tab==="paper"&&<div className="pg-paper">
-      <section className="fr-equity fr-overview-equity" data-testid="overview-equity-first" aria-label={usingDesk?`${stanceLabel}权益`:"模拟账户权益"}>
-        <small>{usingDesk?`${stanceLabel}权益`:"模拟账户权益"} · USDT</small><strong>{fmt(accountEquity)}</strong>
+      <section className="fr-equity fr-overview-equity" data-testid="overview-equity-first" aria-label="模拟账户权益">
+        <small>模拟账户权益 · USDT</small><strong>{fmt(accountEquity)}</strong>
         <div className={(accountPnl??0)>=0?"fr-positive":"fr-negative"}>{signed(accountPnl)} <span>U · {signed(accountPnl!=null&&accountBase?accountPnl/accountBase*100:null)}%</span></div>
         <footer><span>起点 {fmt(accountBase,0)} U</span><span>最大回撤 {fmt(drawdown)}%</span></footer>
-        <p>更新 {time(data?.updatedAt)}{(usingDesk?desk.stale:data?.stalePositions)?" · 持仓估值待更新":""}</p>
+        <p>更新 {time(data?.updatedAt)}{data?.stalePositions?" · 持仓估值待更新":""}</p>
       </section>
       <section className="fr-stats">
-        <Stat label="当前持仓" value={data?`${held} 笔`:"—"} note={usingDesk?`已平 ${fmt(desk.resolved,0)} 笔`:`保证金 ${fmt(positions.reduce((n,t)=>n+t.margin,0),0)} U`}/>
+        <Stat label="当前持仓" value={data?`${held} 笔`:"—"} note={`保证金 ${fmt(positions.reduce((n,t)=>n+t.margin,0),0)} U`}/>
         <Stat label="浮动盈亏" value={`${signed(data?paperFloating:null)} U`} note="已扣开仓费"/>
-        <Stat label="已完成" value={usingDesk?`${fmt(desk.resolved,0)} 笔`:data?`${fmt(data.resolved,0)} 笔`:"—"} note={winNote(usingDesk?desk.wins:data?.wins,usingDesk?desk.resolved:data?.resolved)}/>
-        <Stat label="已扣手续费" value={`${fmt(usingDesk?desk.fees:data?.fees)} U`} note={usingDesk?"决策账户成交费用":`成交额 ${fmt(data?.turnover,0)} U`}/>
+        <Stat label="已完成" value={data?`${fmt(data.resolved,0)} 笔`:"—"} note={winNote(data?.wins,data?.resolved)}/>
+        <Stat label="已扣手续费" value={`${fmt(data?.fees)} U`} note={`成交额 ${fmt(data?.turnover,0)} U`}/>
       </section>
-      {desk?.book==="lsr-v1"&&<LsrPulse desk={desk}/>}
-      {usingDesk?<ForwardOrders desk={desk} now={now}/>:<><section className="fr-section" data-testid="forward-orders"><div className="fr-section-head"><h2>持仓</h2><span>{positions.length} 笔</span></div><TradeList trades={positions} now={now} empty="当前没有持仓。"/></section>
+      <section className="fr-section" data-testid="forward-orders"><div className="fr-section-head"><h2>持仓</h2><span>{positions.length} 笔</span></div><TradeList trades={positions} now={now} empty="当前没有持仓。"/></section>
       <section className="fr-section" data-testid="forward-history"><div className="fr-section-head"><h2>历史订单</h2><span>{history.length} 笔</span></div><TradeList trades={history.slice(0,historyShown)} now={now} empty="还没有已平订单。"/>
-        {history.length>historyShown&&<button type="button" className="pg-link" onClick={()=>setHistoryShown(n=>n+20)}>再显示 {Math.min(20,history.length-historyShown)} 笔（还有 {history.length-historyShown} 笔）</button>}</section></>}
+        {history.length>historyShown&&<button type="button" className="pg-link" onClick={()=>setHistoryShown(n=>n+20)}>再显示 {Math.min(20,history.length-historyShown)} 笔（还有 {history.length-historyShown} 笔）</button>}</section>
     </div>}
 
     {tab==="settings"&&<div className="pg-system">
@@ -185,13 +172,13 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
         <dl className="pg-kv">
           <div><dt>行情更新</dt><dd>{time(card.feedAt)}</dd></div>
           <div><dt>实盘</dt><dd>{card.live}</dd></div>
-          <div><dt>策略版本</dt><dd>{card.engine??"—"}</dd></div>
+          <div><dt>引擎版本</dt><dd>{card.engine??"—"}</dd></div>
           <div><dt>数据保存</dt><dd className={card.storageOk===false?"fr-negative":card.storageOk?"fr-positive":undefined}>{card.storageOk==null?"—":card.storageOk?"正常":"异常"}</dd></div>
         </dl>
         {card.cached&&systemSnap&&<PanelStamp at={systemSnap.at} refreshing={true} failed={false}/>}
       </section>
       <section className="fr-section"><div className="fr-section-head"><h2>运行日志</h2></div>
-        <p className="fr-note">开仓、没开仓的候选、行情和执行记录都在这一个文件里，复盘就用它。</p>
+        <p className="fr-note">订单、净值曲线和执行记录都在这一个文件里，复盘就用它。</p>
         <RunLogStatus refreshKey={exportCount} scope={cacheScope}/>
         <button className="fr-button" onClick={exportSnapshot} disabled={exporting}>{exporting?"正在导出…":"导出运行日志 ↗"}</button>{exportStatus&&<p className="fr-note">{exportStatus}</p>}</section>
       {liveSystemPanel}
@@ -206,240 +193,6 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   </main>;
 }
 
-function LsrPulse({desk}:{desk:Desk}){
-  const exp=desk.liveResearch?.experiment;
-  return <section className="fr-section lsr-pulse" data-testid="lsr-pulse">
-    <div className="fr-section-head"><h2>实验</h2><span>{exp?.running?"在跑":exp?"已停止":"还没开始"}</span></div>
-    <b>{exp?.status??"实验还没记上第一笔。"}</b>
-    <p className="fr-note">决策 {exp?.decisions??0} 次，开成 {exp?.opened??0} 笔，6 秒没成交 {exp?.cancelled??0} 笔，还在场上 {exp?.stillOpen??0} 笔。</p>
-    <p className="fr-note">费用合计 {fmt(exp?.fees.total,4)} U。开仓手续费 {fmt(exp?.fees.openFee,4)}，平仓手续费 {fmt(exp?.fees.closeFee,4)}，滑点 {fmt(exp?.fees.slippage,4)}，资金费 {fmt(exp?.fees.funding,4)}。</p>
-  </section>;
-}
-/** The only per-second label: its own 1s timer, so the rest of the page is not redrawn every second. */
-function SecondsLeft({at}:{at:number}){
-  const [t,setT]=useState(()=>Date.now());
-  useEffect(()=>{const id=setInterval(()=>setT(Date.now()),1000);return()=>clearInterval(id);},[]);
-  return <>{Math.max(0,Math.ceil((at-t)/1000))}</>;
-}
-function LsrResearch({desk}:{desk:Desk;now?:number}){
-  const live=desk.liveResearch,a=live?.context,d=live?.decision,g=live?.analogy;
-  const coin=(symbol?:string)=>symbol?symbol.replace("_"," / "):"";
-  const side=(value?:"LONG"|"SHORT"|null)=>value==="LONG"?"做多":value==="SHORT"?"做空":"还没定";
-  if(!live)return <section className="fr-section" data-testid="research-claims"><div className="fr-section-head"><h2>研究</h2></div><p>这一拍还没有扫完。</p></section>;
-  return <>
-    <section className="fr-section" data-testid="research-claims">
-      <div className="fr-section-head"><h2>研究层正在运行</h2></div>
-      <p>现在：{live.status}</p>
-      <p>上一轮 {time(live.ts)}。扫了 {live.scanned} 个币，其中 {live.found} 个明显异常。</p>
-      <p>下一轮 {time(live.nextAt)}，还差 <SecondsLeft at={live.nextAt}/> 秒。</p>
-      <p>今天扫了 {live.today?.scans??0} 次，看过 {live.today?.symbols??0} 个异动币。做多 {live.today?.long??0} 次，做空 {live.today?.short??0} 次，观望 {live.today?.watch??0} 次。</p>
-      <p className="fr-note">这些话都写在研究页上，不会下单。</p>
-    </section>
-    <section className="fr-section">
-      <div className="fr-section-head"><h2>全市场最异常的 5 个</h2></div>
-      {live.candidates.length?live.candidates.map(c=><p key={c.symbol}><b>{c.rank}. {coin(c.symbol)}</b><br/>{c.priceWords}<br/>{c.volumeWords}<br/>现价 {fmt(c.last,6)}</p>):<p>还没有排出来。</p>}
-    </section>
-    <section className="fr-section">
-      <div className="fr-section-head"><h2>{a?`${coin(a.symbol)} 现在什么处境`:"现在什么处境"}</h2></div>
-      {a?a.sections.map(section=><p key={section.title}><b>{section.title}</b><br/>{section.body}<br/>{section.conclusion}</p>):<p>还没有。</p>}
-    </section>
-    <section className="fr-section">
-      <div className="fr-section-head"><h2>历史上类似的情况</h2><span>{g?.enough?`${g.count} 个`:"不够"}</span></div>
-      {g?<>
-        <p>{g.story}</p>
-        {g.count>0&&<>
-          <p>之后 1 小时：涨 {g.up} 次（{g.count?(g.up/g.count*100).toFixed(0):0}%），横着 {g.flat} 次（{g.count?(g.flat/g.count*100).toFixed(0):0}%），跌 {g.down} 次（{(g.downPct*100).toFixed(0)}%）。</p>
-          <p>{g.lean}</p>
-          {g.refs.slice(0,3).map((row,i)=><p key={`${row.symbol}-${row.similarity}-${row.o1h}`} className="fr-note">{i+1}. {coin(row.symbol)} 相似度 {(row.similarity*100).toFixed(0)}%，之后 1 小时 {row.o1h>=0?"涨":"跌"}了 {Math.abs(row.o1h*100).toFixed(2)}%</p>)}
-          {g.caution&&<p>{g.caution}</p>}
-          <p className="fr-note">最高相似度 {fmt(g.maxSim,2)}，最低 {fmt(g.minSim,2)}。低于 {fmt(g.threshold,2)} 的不算。{g.minSim>=0.95?"最低也很高，标准偏松。":g.minSim>0&&g.minSim<0.85?"最低贴着门槛。":""}</p>
-        </>}
-      </>:<p>还没有。</p>}
-    </section>
-    <section className="fr-section">
-      <div className="fr-section-head"><h2>研究判断</h2><span>{d?d.level:"还没有"}</span></div>
-      {d?<>
-        <p><b>{d.headline}</b></p>
-        {d.why.map(line=><p key={line}>{line}</p>)}
-        <p><b>{d.level==="明确信号"?"打算这样做":"如果非要做，会是这样"}</b></p>
-        <p>方向：{side(d.planSide)}</p>
-        <p>进场价 {fmt(d.entry,6)}</p>
-        <p>止损价 {fmt(d.stop,6)}（-{(d.stopPct*100).toFixed(2)}%）</p>
-        <p>第一目标 {fmt(d.tp1,6)}（+{(d.tp1Pct*100).toFixed(2)}%）</p>
-        <p>第二目标 {fmt(d.tp2,6)}（+{(d.tp2Pct*100).toFixed(2)}%）</p>
-        <p>最长持仓 {d.holdText}</p>
-        <p>{d.stopWhy}</p>
-        <p>什么情况算看错：{d.invalidate.join("；")}。</p>
-        {d.level==="观望"&&d.waitFor.length>0&&<>
-          <p><b>等什么才动手</b></p>
-          {d.waitFor.map(line=><p key={line}>{line}</p>)}
-        </>}
-        <p className="fr-note">上面是研究层的打算，不会下单。</p>
-      </>:<p>还没有判断。</p>}
-    </section>
-    <section className="fr-section">
-      <div className="fr-section-head"><h2>判断记录</h2><span>最多留 300 条</span></div>
-      {live.log?.length?live.log.map(row=>{
-        const later=!row.verdict?"1 小时后：等数据"
-          :row.verdict==="当时没给方向"?"1 小时后：当时没给方向"
-          :`1 小时后：实际${typeof row.laterRet==="number"?`${row.laterRet>=0?"涨":"跌"}了 ${Math.abs(row.laterRet*100).toFixed(2)}%`:""} ｜ 判断${row.verdict==="对"?"对":row.verdict==="错"?"错":"不明确"}`;
-        return <p key={row.at} className="fr-note">{time(row.at)} {coin(row.symbol)} {row.level==="计划"?"明确信号":row.level}。{later}</p>;
-      }):<p className="fr-note">刚开始记。同一币、同一个结论，5 分钟内不重复记。</p>}
-    </section>
-    <section className="fr-section" data-testid="research-experiment">
-      <div className="fr-section-head"><h2>实验</h2><span>{!live.experiment?'还没开始':live.experiment.running?'在跑':'已停止'}</span></div>
-      {!live.experiment?<p>正向实验还没记上第一笔。</p>:<>
-        <p>{live.experiment.status}</p>
-        <p>决策 {live.experiment.decisions} 次，开成 {live.experiment.opened} 笔，开单率 {(live.experiment.openRate*100).toFixed(0)}%。6 秒没成交 {live.experiment.cancelled} 笔。还在场上 {live.experiment.stillOpen} 笔。</p>
-        <p>做多做空：{live.experiment.bySide.length?live.experiment.bySide.map(row=>`${row.side} ${row.n} 笔，赢 ${row.wins} 笔${row.rate==null?'':`，胜率 ${(row.rate*100).toFixed(0)}%`}`).join('。'):'还没有平仓。'}</p>
-        <p>出场：{live.experiment.exits.map(row=>`${row.reason} ${row.n}`).join('，')}。</p>
-        <p>按把握分档：{live.experiment.byConfidence.filter(row=>row.n>0).map(row=>`${row.bucket} ${row.n} 笔，胜率 ${row.rate==null?'—':`${(row.rate*100).toFixed(0)}%`}`).join('。')||'还没有平仓。'}</p>
-        <p>费用：开仓手续费 {fmt(live.experiment.fees.openFee,4)} U，平仓手续费 {fmt(live.experiment.fees.closeFee,4)} U，滑点 {fmt(live.experiment.fees.slippage,4)} U，资金费 {fmt(live.experiment.fees.funding,4)} U。合计 {fmt(live.experiment.fees.total,4)} U{live.experiment.fees.share==null?'':`，占成交额 ${(live.experiment.fees.share*100).toFixed(3)}%`}。</p>
-        {live.experiment.path.length>0&&<p className="fr-note">权益：{live.experiment.path.map(row=>`${time(row.at)} ${fmt(row.equity,2)}`).join(' → ')}</p>}
-        {live.experiment.recent.map(row=><p key={`${row.at}-${row.symbol}-${row.status}`} className="fr-note">{time(row.at)} {row.symbol.replace('_',' / ')} {row.side} {row.status}{row.reason?` ${row.reason}`:''}{row.net==null?'':` ${row.net>=0?'+':''}${fmt(row.net,2)} U`}</p>)}
-      </>}
-    </section>
-  </>;
-}
-function LsrDecision({desk,now}:{desk:Desk;now:number}){
-  const live=desk.liveResearch,d=live?.decision,exp=live?.experiment;
-  const pending=exp?.recent.filter(row=>row.status==="挂着")??[];
-  const side=d?.planSide==="LONG"?"做多":d?.planSide==="SHORT"?"做空":"";
-  return <section className="fr-section" data-testid="decision-stance">
-    <div className="fr-section-head"><h2>现在在等</h2></div>
-    <p>{exp&&!exp.running?exp.status:pending.length?`挂着 ${pending.length} 笔，等 6 秒内打到买卖中间价。打不到就撤。`:"等下一次研究。研究给出方向，就按 500U 挂出去。老的四关已经不用了。"}</p>
-    {pending.map(row=><p key={`${row.at}-${row.symbol}`}>{row.symbol.replace("_"," / ")} {row.side}，挂着，等成交。</p>)}
-    <div className="fr-section-head"><h2>这一拍准备做</h2></div>
-    {d?<p>{d.headline} 这一拍按研究层，准备 {d.symbol.replace("_"," / ")} {side}，大约 500U。止损 {fmt(d.stop,6)}，第一目标 {fmt(d.tp1,6)}，第二目标 {fmt(d.tp2,6)}。</p>:<p>研究这一拍还没有方向。</p>}
-    <div className="fr-section-head"><h2>持仓在等什么出场</h2><span>{desk.open.length} 笔</span></div>
-    {desk.open.length?desk.open.map(order=><article className="lsr-hold" key={order.id}>
-      <header><b>{order.symbol.replace("_"," / ")} {order.side==="LONG"?"多":"空"}</b><b className={(order.net??0)>=0?"fr-positive":"fr-negative"}>{signed(order.net)} U</b></header>
-      <p>已拿 {duration(order.openedAt,null,now)}。进场 {fmt(order.entryPrice,6)}，现价 {fmt(order.price,6)}。</p>
-      <div className="lsr-exit">
-        <span>第一目标 {order.target==null?"还没写":fmt(order.target,6)}</span>
-        <span>止损 {order.stop==null?"还没写":fmt(order.stop,6)}</span>
-        <span>{order.plan==="研究"?"按研究层的时间出场":"旧单，按原来的 15 分钟"}</span>
-      </div>
-      {order.waiting&&<p>{order.waiting}</p>}
-    </article>):<p className="fr-note">没有持仓。成交以后等五件事：第一目标、第二目标、止损、研究层给的持仓时间，或者 30 秒检查发现看错了。</p>}
-  </section>;
-}
-function WorkResearch({work,note,ideas}:{work:Desk["work"];note?:string;ideas?:Desk["brainIdeas"]}){
-  return <section className="fr-section" data-testid="research-claims">
-    <div className="fr-section-head"><h2>在研究什么</h2></div>
-    <p>{work?.subject??note??"这一拍的步骤还没有写出来。"}</p>
-    {work&&<><div className="fr-section-head"><h2>用的方法</h2></div><p>{work.method}</p>
-      <div className="fr-section-head"><h2>这一拍的步骤</h2><span>{work.lines.length} 步</span></div>
-      {work.lines.map(line=><p key={line.name}><span>{line.name}</span><b>{line.data}</b><b>{line.said}</b></p>)}
-    </>}
-    {!!ideas?.length&&<><div className="fr-section-head"><h2>写出的思路</h2><span>{ideas.length} 条</span></div>
-      {ideas.map(idea=><p key={`${idea.symbol}-${idea.kind}`}><span>{idea.symbol.replace("_"," / ")} · {idea.side==="LONG"?"多":"空"} · {idea.kind==="FADE"?"单币失败":idea.kind==="LEAD"?"领头":"掉队"}</span><b>{idea.why}想错了：{idea.wrong}</b></p>)}
-    </>}
-  </section>;
-}
-function ThesisPanel({thesis}:{thesis:ThesisPublic}){
-  const stateName=(state:string)=>state==="ALIVE"?"存活":state==="WEAKENING"?"转弱":state==="DYING"?"濒死":state==="DEAD"?"死亡":state;
-  return <section className="fr-section" data-testid="decision-stance">
-    <div className="fr-section-head"><h2>策略已接上</h2><span>假突破 / 慢层</span></div>
-    <p>{thesis.note}</p>
-    <p className="fr-note">权益 {fmt(thesis.equity)} U · 已实现 {signed(thesis.closedPnl)} U · 浮动 {signed(thesis.unrealized)} U · 恒等误差 {Math.abs(thesis.identityError)<0.5?"0":fmt(thesis.identityError,4)}</p>
-    <p className="fr-note">扫描 {thesis.scans} · 信号 {thesis.signals} · 成交 {thesis.filled} · 已平 {thesis.closed} · 赢 {thesis.wins}</p>
-    {thesis.rows.length?thesis.rows.map(row=><p key={row.symbol}><span>{row.symbol.replace("_"," / ")} · {row.action} · {stateName(row.state)}</span><b>{row.detail}</b></p>):<p className="fr-note">这一拍还没有可判的合约。</p>}
-    {thesis.open.map(order=><p key={`${order.symbol}-${order.entry}`}><span>{order.symbol.replace("_"," / ")} · {order.side==="LONG"?"多":"空"} · {order.thesis}</span><b>进场 {fmt(order.entry,6)} · 浮动 {signed(order.upl)} U</b></p>)}
-  </section>;
-}
-function DecisionPage({data,now,thesis}:{data:View|null;now:number;thesis:ThesisPublic|null}){
-  const desk=data?.forwardDesk??null,research=desk?.research,stance=stanceName(desk?.stance);
-  if(!desk?.book&&!desk?.open?.length){
-    const eligible=data?.opportunities.filter(row=>row.eligible&&row.expiresAt>now).length??0;
-    return <section className="fr-section" data-testid="decision-stance">
-      <div className="fr-section-head"><h2>市场智能</h2><span>{eligible} 个可参与</span></div>
-      <p>可参与机会 {eligible} 个。实盘关闭，这里只记模拟。门槛不过就不下单，不会改用旧策略。</p>
-      {thesis&&<p className="fr-note">{thesis.note}</p>}
-    </section>;
-  }
-  if(desk?.book==="lsr-v1")return <LsrDecision desk={desk} now={now}/>;
-  if((desk?.book==="read-v1"||desk?.book==="brain-v1"||desk?.book==="stretch-v1")&&desk.work)return <section className="fr-section" data-testid="decision-stance">
-    <div className="fr-section-head"><h2>现在在等</h2></div>
-    <p>{desk.work.waiting}</p>
-    <div className="fr-section-head"><h2>准备做</h2></div>
-    <p>{desk.work.preparing}</p>
-  </section>;
-  if(desk?.book==="read-v1")return <section className="fr-section" data-testid="decision-stance">
-    <div className="fr-section-head"><h2>当前决策</h2><span>一拨</span></div>
-    <p>研究说接下来有方向，价差吃得起，价格也没追出去，才做这一拨。刚跟上的才做，已经冲远的不追。拿住，直到这段判断结束。</p>
-    <p className="fr-note">不拆成频繁的小碎单。小波动不平。方向还在就拿着。这段结束了，下一笔可以开，不因为平了一笔就把新仓停住。打到 1.2% 才当止损。整本亏的是方向、手续费却很小，就把这个判断反过来。亏的和手续费差不多，就停，不反。</p>
-  </section>;
-  if(desk?.book==="score-v1")return <section className="fr-section" data-testid="decision-stance">
-    <div className="fr-section-head"><h2>当前决策</h2><span>核对通过才做</span></div>
-    <p>研究没核对通过，就不开。通过了，这一窗开始时按偏离从大到小开，单笔大约 400U。同一币不叠仓。保证金到权益一半就停，大约十二笔。</p>
-    <p className="fr-note">价差超过 0.04% 不开。现价比这一窗写下的价劣了超过 0.15% 不开。到止损、到目标、或者满三十分钟，就走。同一根一分钟里两边都碰到，按止损走。</p>
-  </section>;
-  if(desk?.book==="brain-v1")return <section className="fr-section" data-testid="decision-stance">
-    <div className="fr-section-head"><h2>当前决策</h2><span>做不做</span></div>
-    <p>思路还新鲜、价差吃得起、这个币还没有仓，就做。价格已经跑远就放弃，不追。</p>
-    <p className="fr-note">不设最多几个仓。同一币不叠第二笔。保证金用到权益的一半，就暂停新开。</p>
-    <p className="fr-note">进场用当时的买一卖一。想错了马上走。想对了就拿着，刚赚到一点噪音不卖。走出一截以后吐回一半，或者思路被破坏，再走。没有 5 分钟砍盈利，也没有固定 90 分钟。</p>
-  </section>;
-  if(desk?.book==="reverse-v1")return <section className="fr-section" data-testid="decision-stance">
-    <div className="fr-section-head"><h2>当前决策</h2><span>反向</span></div>
-    <p>每一笔新提案都反着做。提案做多，这里做空。提案做空，这里做多。金额和提案一样。</p>
-    <p className="fr-note">打穿进场确认位、30 分钟没走出成本、利润回吐一半、满 90 分钟、提案自己平仓，谁先到听谁。浮亏到 10U 也走。已经开着的单不改方向。这套不再看 20 笔样本，也不会改回正向。</p>
-  </section>;
-  if(desk?.book==="needle-v1")return <section className="fr-section" data-testid="decision-stance">
-    <div className="fr-section-head"><h2>当前决策</h2><span>针</span></div>
-    <p>不跟提案开仓。向上的针做空，向下的针做多。</p>
-    <p className="fr-note">针尖离进场价不到 0.25%，或超过 0.6%，不开。这个币半小时内刚止损过，不开。同时最多 3 笔。</p>
-    <p className="fr-note">不顺的单短拿：打穿针尖就走，5 分钟没走出 0.15% 就走，浮亏到 4U 也走。顺的单长拿：不到 0.8% 不因小赚离场。到了以后吐回一半再走。最长 90 分钟。</p>
-  </section>;
-  const headline=desk?.stance==="REVERSE"?"新单跟提案反着做。":desk?.stance==="FLAT"?"这一时段先不开新单。":"新单跟提案同一边。";
-  return <section className="fr-section" data-testid="decision-stance">
-    <div className="fr-section-head"><h2>当前决策</h2><span>{stance}</span></div>
-    <p>{headline}</p>
-    <p className="fr-note">同一时段里，延续和可疑都够 20 笔才改方向。延续大多打错，而且可疑反着读大多对，才保持反向。两种读法都在亏，就先停开。样本不够时保持现在这个方向。已经开着的单不改。</p>
-    {research&&<div className="fr-three"><div><small>这一时段</small><b>{sessionName(research.session)}</b></div><div><small>延续打错</small><b>{research.continueN<20?`${research.continueN}/20`:`${research.continueWrong}/20`}</b></div><div><small>可疑反着读对</small><b>{research.suspectN<20?`${research.suspectN}/20`:`${research.suspectRight}/20`}</b></div></div>}
-    {research?.note&&<p className="fr-note">{research.note}</p>}
-    <p className="fr-note">新单和提案一样大。先停的时候不开新单，也不把后面的单加大。出场看确认位、30 分钟、利润回吐、90 分钟和提案自己平仓，谁先到听谁。浮亏到 10U 也走。旧账本和旧订单不带进这一轮。</p>
-  </section>;
-}
-function ForwardOrders({desk,now}:{desk:Desk;now:number}){
-  if(!desk.book&&desk.open.length===0)return <section className="fr-section" data-testid="forward-orders">
-    <div className="fr-section-head"><h2>订单</h2><span>0 笔</span></div>
-    <p className="fr-note">没有策略，所以没有订单。</p>
-  </section>;
-  const live=desk.liveResearch,rows=live?.experiment?.rows??[];
-  if(desk.book==="lsr-v1")return <section className="fr-section" data-testid="forward-orders">
-    <div className="fr-section-head"><h2>实验订单</h2><span>{rows.length} 笔</span></div>
-    <p className="fr-note">研究层给方向就挂 500U。这里能看到挂单、没成交、持仓和已平，以及手续费、滑点和资金费。</p>
-    {rows.length?rows.map(row=><article className="fr-order" key={row.id}>
-      <header><div><b>{row.symbol.replace("_"," / ")}</b><small>{row.side} · {row.status}{row.reason?` · ${row.reason}`:""} · 把握 {(row.confidence*100).toFixed(0)}%</small></div><b className={(row.net??0)>=0?"fr-positive":"fr-negative"}>{row.net==null?"—":`${signed(row.net)} U`}</b></header>
-      <small>{time(row.at)}{row.holdSec==null?"":` · 拿了 ${Math.round(row.holdSec/60)} 分钟`}</small>
-      <p>挂单价 {fmt(row.limit,6)}{row.entry==null?"":` · 成交 ${fmt(row.entry,6)}`}{row.exit==null?"":` · 出场 ${fmt(row.exit,6)}`} · 名义 {fmt(row.notional,2)} U · 数量 {fmt(row.qty,4)}</p>
-      <p>止损 {fmt(row.stop,6)} · 第一目标 {fmt(row.tp1,6)} · 第二目标 {fmt(row.tp2,6)}</p>
-      <p className="fr-note">{row.openFee==null?"还没成交，手续费还没记。":`开仓手续费 ${fmt(row.openFee,4)} U · 开仓滑点 ${fmt(row.openSlippage,4)} U${row.closeFee==null?" · 平仓费用等出场再记。":` · 平仓手续费 ${fmt(row.closeFee,4)} U · 平仓滑点 ${fmt(row.closeSlippage,4)} U · 资金费 ${fmt(row.fundingFee,4)} U · 费用合计 ${fmt(row.totalCost,4)} U`}`}</p>
-      {row.gross!=null&&<p>毛利 {signed(row.gross)} U · 扣完费用 {signed(row.net)} U</p>}
-    </article>):<Empty title="还没有实验订单"/>}
-    {desk.open.some(o=>o.plan!=="研究")&&<>
-      <div className="fr-section-head"><h2>老策略还没走完的单</h2><span>{desk.open.filter(o=>o.plan!=="研究").length} 笔</span></div>
-      {desk.open.filter(o=>o.plan!=="研究").map(o=><article className="fr-order" key={o.id}><header><div><b>{o.symbol.replace("_"," / ")}</b><small>{o.side==="LONG"?"多":"空"} · 已拿 {duration(o.openedAt,null,now)}</small></div><b className={(o.net??0)>=0?"fr-positive":"fr-negative"}>{signed(o.net)} U</b></header>
-        <small>入场 {fmt(o.entryPrice,6)} · 现价 {fmt(o.price,6)}</small>
-        {o.waiting&&<p className="fr-note">{o.waiting}</p>}
-      </article>)}
-    </>}
-  </section>;
-  const label=desk.book==="stretch-v1"?"新账":desk.book==="reverse-v1"?"反向":desk.book==="needle-v1"||desk.book==="brain-v1"||desk.book==="score-v1"||desk.book==="read-v1"?"账户":stanceName(desk.stance);
-  return <section className="fr-section" data-testid="forward-orders">
-    <div className="fr-section-head"><h2>{label}持仓</h2><span>{desk.open.length} 笔</span></div>
-    {!desk.work&&desk.book!=="brain-v1"&&desk.book!=="read-v1"&&<p className="fr-note">{desk.book==="score-v1"?"核对通过才开。单笔大约 400U。同一币不叠仓。保证金到权益一半就停。到止损、到目标或满三十分钟就走。":desk.book==="needle-v1"?"只做收回来的针。向上做空，向下做多。":"新单跟当前决策，一笔提案一笔单，金额不变。先停才不开，也不把后面的单加大。已经开着的单不改方向。"}</p>}
-    {desk.open.length?desk.open.map(o=><article className="fr-order" key={o.id}><header><div><b>{o.symbol.replace("_"," / ")}</b><small>{o.side==="LONG"?"多":"空"}{o.plan?` · ${o.plan}`:""} · {fmt(o.leverage,0)}× · {duration(o.openedAt,null,now)}</small></div><b className={(o.net??0)>=0?"fr-positive":"fr-negative"}>{signed(o.net)} U</b></header>
-      <small>入场 {fmt(o.entryPrice,6)} · 现价 {fmt(o.price,6)} · {time(o.openedAt)}</small>
-      {o.waiting&&<p className="fr-note">出场在等：{o.waiting}</p>}
-      </article>):<Empty title="当前没有持仓"/>}
-    {desk.recent.length>0&&<><div className="fr-section-head"><h2>最近平仓</h2><span>{desk.recent.length} 笔</span></div>
-      {desk.recent.map(o=><article className="fr-order" key={o.id}><header><div><b>{o.symbol.replace("_"," / ")}</b><small>{o.side==="LONG"?"多":"空"}{o.plan?` · ${o.plan}`:""}</small></div><b className={(o.net??0)>=0?"fr-positive":"fr-negative"}>{signed(o.net)} U</b></header>
-        <small>{time(o.openedAt)} → {time(o.closedAt)}{o.exit?` · ${exitName(o.exit)}`:""}</small></article>)}</>}
-  </section>;
-}
 function TradeList({trades,now,empty}:{trades:Trade[];now:number;empty:string}){
   return trades.length?<div className="oc-list">{trades.map(t=><TradeCard key={t.id} trade={t} now={now}/>)}</div>:<Empty title={empty}/>;
 }

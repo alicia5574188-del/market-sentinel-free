@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {initialForward, priorMoveInDirection, type Trade} from '../lib/forward-relations.ts';
+import {initialForward, type Trade} from '../lib/forward-relations.ts';
 import {emptyOrderJournal, observeOrderJournal} from '../lib/order-journal.ts';
 import {accountLogBook} from '../lib/run-log.ts';
 
@@ -39,14 +39,6 @@ test('closed orders stay in the journal after the hot history drops them',()=>{
   assert.equal(row.book,-0.62);
   assert.equal(row.move30,0.0042);
   assert.equal(packed.funnel.closed,2);
-});
-
-test('a 30 minute prior move is signed in the order direction and stays empty without that history',()=>{
-  const start=1_700_000_000;
-  const path=[{time:start,close:100}];
-  assert.equal(priorMoveInDirection(path,102,'LONG',(start+30*60)*1000),0.02);
-  assert.equal(priorMoveInDirection(path,102,'SHORT',(start+30*60)*1000),-0.02);
-  assert.equal(priorMoveInDirection(path,102,'LONG',(start+20*60)*1000),null);
 });
 
 test('reset closes and inverse copies are not archived',()=>{

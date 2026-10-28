@@ -53,7 +53,6 @@ async function surfaces(){
       execution:render(h(MemberDashboard,{...base,...panels(member)})),
       system:render(h(MemberDashboard,{...base,...panels(member),initialTab:'settings'})),
       owner:render(h(Dashboard,{data:forwardSummary(state,{},1790050001000),healthy:true,feedAt:null,error:null,liveEnabled:false,...panels(owner)})),
-      ownerBrain:render(h(Dashboard,{data:forwardSummary(state,{},1790050001000),healthy:true,feedAt:null,error:null,liveEnabled:false,...panels(owner),brainAuth:owner})),
     };
   `},bundle:true,write:false,format:"cjs",platform:"node",jsx:"automatic",loader:{".css":"empty"},logLevel:"silent"});
   const module_={exports:{} as {out?:Record<string,string>}};
@@ -73,28 +72,28 @@ test("member render shows only 执行 and 系统 with the member's own live acco
   assert.match(system,/data-testid="member-account"/);assert.match(system,/Gate API/);assert.match(system,/模拟 → 实盘跟单/);assert.match(system,/退出登录/);
   assert.match(system,/alice/);
 });
-test("owner render keeps the original four tabs and owner panels",async()=>{
-  const {owner,ownerBrain}=await surfaces();
-  assert.deepEqual(navLabels(owner),["执行","模拟","实盘","系统"]);
-  assert.deepEqual(navLabels(ownerBrain),["大脑","模拟","实盘","系统"],"owner home is the market brain; 执行 is gone");
-  assert.match(ownerBrain,/data-testid="owner-living-research"/);assert.match(ownerBrain,/data-testid="execution-status"/);assert.doesNotMatch(ownerBrain,/market-command-summary/);assert.match(owner,/market-intelligence-v1/);assert.doesNotMatch(owner,/member-dashboard/);
+test("owner render has only the core tabs: 模拟, 实盘, 系统 - no strategy, brain or execution-research panel",async()=>{
+  const {owner}=await surfaces();
+  assert.deepEqual(navLabels(owner),["模拟","实盘","系统"]);
+  for(const gone of ["owner-living-research","execution-status","market-command-summary","大脑","研究层"])assert.doesNotMatch(owner,new RegExp(gone),gone);
+  assert.doesNotMatch(owner,/member-dashboard/);
 });
 
 test("owner home refresh: 120s by default, 10s only where data on screen moves quickly",()=>{
   const paperOpen={live:{requestedEnabled:false,positions:{},entries:{}},forward:{positions:[{status:"OPEN"}]}};
   const quiet={live:{requestedEnabled:false,positions:{},entries:{}},forward:{positions:[]}};
   assert.equal(OWNER_IDLE_MS,120_000);
-  assert.equal(runtimeRefreshMs("owner",quiet,"brain"),OWNER_IDLE_MS);
+  assert.equal(runtimeRefreshMs("owner",quiet,"settings"),OWNER_IDLE_MS);
   assert.equal(runtimeRefreshMs("owner",quiet,"paper"),OWNER_IDLE_MS);
   assert.equal(runtimeRefreshMs("owner",quiet,"live"),RUNTIME_ACTIVE_MS);
-  assert.equal(runtimeRefreshMs("owner",paperOpen,"brain"),OWNER_IDLE_MS);
+  assert.equal(runtimeRefreshMs("owner",paperOpen,"settings"),OWNER_IDLE_MS);
   assert.equal(runtimeRefreshMs("owner",paperOpen,"settings"),OWNER_IDLE_MS);
   assert.equal(runtimeRefreshMs("owner",paperOpen,"paper"),RUNTIME_ACTIVE_MS);
-  assert.equal(runtimeRefreshMs("owner",paperOpen,"execution"),RUNTIME_ACTIVE_MS);
-  assert.equal(runtimeRefreshMs("owner",{...quiet,live:{requestedEnabled:true}},"brain"),RUNTIME_ACTIVE_MS);
-  assert.equal(runtimeRefreshMs("owner",{...quiet,live:{positions:{a:{status:"OPEN"}}}},"brain"),RUNTIME_ACTIVE_MS);
+  assert.equal(runtimeRefreshMs("owner",paperOpen,"paper"),RUNTIME_ACTIVE_MS);
+  assert.equal(runtimeRefreshMs("owner",{...quiet,live:{requestedEnabled:true}},"settings"),RUNTIME_ACTIVE_MS);
+  assert.equal(runtimeRefreshMs("owner",{...quiet,live:{positions:{a:{status:"OPEN"}}}},"settings"),RUNTIME_ACTIVE_MS);
   assert.equal(runtimeRefreshMs("owner",{...quiet,live:{entries:{p:{status:"SUBMITTED"}}}},"settings"),RUNTIME_ACTIVE_MS);
-  assert.equal(runtimeRefreshMs("owner",null,"brain"),RUNTIME_ACTIVE_MS,"first read retries fast");
+  assert.equal(runtimeRefreshMs("owner",null,"settings"),RUNTIME_ACTIVE_MS,"first read retries fast");
   // Members keep their own rule; the tab does not matter.
   assert.equal(runtimeRefreshMs("member",quiet,"live"),MEMBER_IDLE_MS);
 });

@@ -8,17 +8,15 @@ import {noteWriteKinds,writeKeyBreakdown,writeKindsView,type WriteKindBook,type 
 
 import { DurableObject } from "cloudflare:workers";
 import handler from "vinext/server/app-router-entry";
-import { GatePublicError, fetchActiveContracts, fetchContractStats, fetchGateRadarTickers, fetchLiquidations, fetchRecentTrades,
-  fetchStructureCandles, fetchTickerBbo, fetchUrgentFuturesBook } from "../lib/gate-market.ts";
+import {GatePublicError,fetchActiveContracts,fetchStructureCandles,fetchTickerBbo,fetchUrgentFuturesBook} from "../lib/gate-market.ts";
 import { MarketDataHub } from "../lib/market-data-hub.ts";
 import { GateRestThrottle } from "../lib/gate-rest-throttle.ts";
 import { GateStreamingFeed } from "../lib/gate-stream.ts";
 import { CORRELATED_DIRECTION_RISK_CAP, PORTFOLIO_RISK_CAP, remainingStressRisk, STALE_AFTER_MS, SYSTEM_VERSION, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
-import { aggregateFourHourCandles, analyzeSnapshot, ancillarySchedule, deriveMinuteNoiseRate, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, structureDirection, updateOpenInterestCohorts, type SymbolMemory } from "../lib/liquidity-runtime.ts";
+import {emptySymbolMemory,type SymbolMemory} from "../lib/liquidity-runtime.ts";
 import { arenaProtectionStop, arenaTradePlan, liveMirrorExitRequired } from "../lib/arena-live.ts";
-import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem } from "../lib/paper-outbox.ts";
-import { buildBankruptcyReport, diagnoseClosedPosition, paperCycleSummary, recordCycleTrade, startPaperCycle,
-  PAPER_INITIAL_EQUITY, type BankruptcyReport, type PaperCycle } from "../lib/paper-cycle.ts";
+import {type PositionOutboxItem} from "../lib/paper-outbox.ts";
+import {paperCycleSummary,startPaperCycle,PAPER_INITIAL_EQUITY,type BankruptcyReport,type PaperCycle} from "../lib/paper-cycle.ts";
 import { runtimeReady, protectedQuoteDelay, PROTECTED_QUOTE_GRACE_MS, type RuntimeHealthShape } from "../lib/runtime-health.ts";
 import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, gateMarkedEquity, gatePositionValuation, isGateReadTimeoutError, isGateTransportTimeoutError, LiveEntrySizingError, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, liveStopShouldChase, loadGateLiveClient, type GateLiveOrder, type GateLiveOrderSnapshot, type GateLiveSnapshot, type LiveEntrySizingCode } from "../lib/gate-live.ts";
 import { LIVE_SESSION_VERSION, establishLiveScale, reconcileLiveScale, startLiveSession, sourceAfterEnable, sameLiveSession, fenceLiveSourcePolicy, type LiveSession } from "../lib/live-session.ts";
@@ -37,50 +35,24 @@ type LedgerRepairRecord = { version: "double-close-v1"; runs: { at: number; rows
 import { isAsset, runtimeStatus, paperHistory, accountLogs, strategyRuntimeLogs, ownerAuthenticated, authSession, ownerLogin, ownerLogout, ownerLiveStatus, ownerLiveSource, ownerLiveMode, ownerLiveCredentials, ownerPaperAction } from "./http-handlers.ts";
 
 import { type EventEntryAssessment, type RadarCandidate } from "../lib/market-radar.ts";
-import { initialMarketRegimes, marketRegimeSummary, normalizeMarketRegimes, residentCandleCandidate,
-  type MarketRegimeCandidate, type MarketRegimeState, type ResidentCandleStructure } from "../lib/market-regime.ts";
-import { advanceStrategyArena, initialStrategyArena, normalizeStrategyArena, observeStrategyArena,
-  ARENA_FRICTION_RATE, MAX_PORTFOLIO_POSITIONS, resetStrategyArenaAccount,
-  type StrategyArenaState } from "../lib/strategy-arena.ts";
-import { ALL_REGIME_ENGINE_VERSION, allRegimePaperApproved } from "../lib/all-regime-engine.ts";
-import { allRegimePaperApproved as previousAllRegimePaperApproved } from "../lib/previous-all-regime-engine.ts";
-import { CANONICAL_PAPER_REFERENCE_EQUITY, canonicalPaperOpen, canonicalPaperSummary,
-  initialCanonicalPaperState, normalizeCanonicalPaperState, reconcileCanonicalPaper,
-  type CanonicalPaperState } from "../lib/dual-paper.ts";
-import { evaluateRegimePortfolio, initialRegimePortfolio, normalizeRegimePortfolio,
-  REGIME_EXECUTION_UNIVERSE, REGIME_HOURLY_REQUIRED_CANDLES, REGIME_PORTFOLIO_VERSION, REGIME_STRATEGIES, REGIME_SYSTEMS, REGIME_UNIVERSE,
-  type RegimePortfolioState } from "../lib/regime-portfolio.ts";
+import {initialMarketRegimes,normalizeMarketRegimes,type MarketRegimeCandidate,type MarketRegimeState,type ResidentCandleStructure} from "../lib/market-regime.ts";
+import {initialStrategyArena,normalizeStrategyArena,type StrategyArenaState} from "../lib/strategy-arena.ts";
+import {CANONICAL_PAPER_REFERENCE_EQUITY,initialCanonicalPaperState,normalizeCanonicalPaperState,reconcileCanonicalPaper,type CanonicalPaperState} from "../lib/dual-paper.ts";
+import {initialRegimePortfolio,normalizeRegimePortfolio,REGIME_HOURLY_REQUIRED_CANDLES,type RegimePortfolioState} from "../lib/regime-portfolio.ts";
 import type { PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
-import {runLiveResearch,reviewResearchLog,RESEARCH_MAJORS,type ResearchSnap,type LiveResearchView,type ResearchLogRow} from '../lib/live-research.ts';
-import {experimentReport} from '../lib/research-experiment.ts';
-import {emptyStrategyAccount, STRATEGY_EPOCH} from '../lib/strategy-slot.ts';
-import {emptyThesis, runThesisCycle, THESIS_STORAGE_KEY, type ThesisAttached, type ThesisMarket} from '../lib/thesis-attach.ts';
-import type {ThesisPublic} from '../lib/thesis-view.ts';
-import {buildRunLogExport,accountLogBook,isCompleteTradeRecord,shadowSignalOf,withResearchColumns} from '../lib/run-log.ts';
-import {btcChange,entryFeatures,type RadarRow} from '../lib/entry-features.ts';
-import {mergeOiRing,noteOiSnapshot,oiAnchor,oiSnapshotKey,OI_SNAPSHOT_PREFIX,type OiRing,type OiSnapshot} from '../lib/oi-anchor.ts';
+import {buildRunLogExport,accountLogBook,shadowSignalOf,withResearchColumns} from '../lib/run-log.ts';
 import {RUN_LOG_EXPORT_KEY,runLogCapacity,type RunLogExportMark} from '../lib/run-log-capacity.ts';
-import {RUNLOG_WIPE_KEY,RUNLOG_WIPE_PREFIXES,RUNLOG_WIPE_D1_TABLES,newWipeRecord,normalizeWipeRecord,wipeForwardLog,wipeBaseline,logSinceOf,type RunLogWipeRecord} from '../lib/runlog-wipe.ts';
+import {RUNLOG_WIPE_KEY,normalizeWipeRecord,logSinceOf,type RunLogWipeRecord} from '../lib/runlog-wipe.ts';
 import {RunLogArchiver} from '../lib/run-log-archiver.ts';
 import {ARCHIVE_SEGMENT_SIZE,archiveFileName,buildArchiveFile,countArchive,mergeContinuousOrders,readEquityFor,readMeta,readSegment,readStagesFor,segmentCount,writeMeta,
   type ArchiveCursor,type ArchiveMode,type ArchiveStats,type D1Like} from '../lib/run-log-archive.ts';
 import {STAGE_CHANGE_CAP} from '../lib/stage-chronicle.ts';
-import {PATH_CAP,pathFlushDue,adoptLegacyPaths,bookFromStoredPaths,commitPathWrite,emptyTradePathBook,exportTradePaths,observeTradePaths,peekPathWrite,pendingPathWrites,pathColumns,pathComplete,pruneGhostPaths,pruneOrphanPaths,TRADE_PATH_INDEX_KEY,TRADE_PATH_KEY,TRADE_PATH_PAGE_PREFIX,type TradePathBook,type TradePathIndex,type TradePathPage} from '../lib/trade-path.ts';
+import {PATH_CAP,pathFlushDue,adoptLegacyPaths,bookFromStoredPaths,commitPathWrite,emptyTradePathBook,exportTradePaths,observeTradePaths,peekPathWrite,pendingPathWrites,pathColumns,TRADE_PATH_INDEX_KEY,TRADE_PATH_KEY,TRADE_PATH_PAGE_PREFIX,type TradePathBook,type TradePathIndex,type TradePathPage} from '../lib/trade-path.ts';
 import {emptyOrderJournal,observeOrderJournal,ORDER_JOURNAL_CAP,ORDER_JOURNAL_KEY,restoreOrderJournal,type OrderJournal} from '../lib/order-journal.ts';
-import {sourceDecisionState,inverseTrialSummary,SHADOW_BASELINE_BUILD,inverseId} from '../lib/shadow-inverse-ledger.ts';
-import {confirmationRealityView} from '../lib/confirmation-reality.ts';
-import {observationReading} from '../lib/observation-tape.ts';
 import { cancelFundsReset, requestFundsReset } from "../lib/account-reset.ts";
-import { ADAPTIVE_ENGINE_VERSION, pageStartedAt, FORWARD_EXECUTION_BBO_CAP, FORWARD_MINUTE_CONFIRMATION_CAP, advanceForward,
-  forwardSummary, forwardEquity, freshQuote, forwardUrgentMinuteSymbols, forwardUrgentQuoteSymbols, forwardRestCriticalSymbols, forwardWatchSymbols,
-  BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
-import { FORWARD_EXECUTION_VOLUME_FLOOR_USD, forwardExecutionUniverseEligible, selectAnchorOpportunityUniverse } from "../lib/multi-turn-universe.ts";
+import {ADAPTIVE_ENGINE_VERSION,pageStartedAt,FORWARD_EXECUTION_BBO_CAP,FORWARD_MINUTE_CONFIRMATION_CAP,advanceForward,forwardSummary,forwardEquity,freshQuote,forwardUrgentMinuteSymbols,forwardUrgentQuoteSymbols,forwardRestCriticalSymbols,BAR_MS,FORWARD_VERSION,type ForwardState} from "../lib/forward-relations.ts";
 import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite,
   FORWARD_STORAGE, FORWARD_PROTECTION_STORAGE, FORWARD_PAGED_STATE_VERSION } from "../lib/forward-store.ts";
-import { advanceCounterfactualResearch, counterfactualResearchView, counterfactualResearchWrites,
-  initialCounterfactualResearch, readCounterfactualResearch, type CounterfactualResearchState } from "../lib/market-intelligence-research.ts";
-import { advanceShadowResearch, initialShadowResearch, readShadowResearch, shadowResearchView, shadowResearchWrites,
-  type ShadowResearchState } from "../lib/market-intelligence-shadow-research.ts";
 import { nextProtectionWriteBudget, readProtectionWriteBudget, protectionWriteBudgetView,
   OPTIONAL_WRITE_GUARD_PER_DAY, PAID_PLAN_PLANNED_MONTHLY_ROWS, PAID_DO_INCLUDED_ROWS_PER_MONTH, PAID_PLAN_ROW_SAFETY_LIMIT,
   PRIMARY_PLANNED_DO_ROWS, TWO_MEMBER_PLANNED_DO_ROWS, type ProtectionWriteBudget } from "../lib/forward-write-budget.ts";
@@ -100,39 +72,24 @@ import { rememberLiveFill, normalizeLiveFills, applyConfirmedFillCosts, type Liv
 import { quoteSpreadBps } from "../lib/signal-repeat.ts";
 import { summarizeEquity } from "../lib/equity-minutes.ts";
 import { collectEquityMinutes, equityGaps, equityMinuteKey, equityMinuteStep, mergeEquityMinutes, sampleEquity, type EquityMinute } from "../lib/equity-minutes.ts";
-import { emptyReviewLogCursor, prepareIncompletePrune, prepareReviewLogWrite, readReviewLog, restoreReviewLog, reviewLogOffload, unopenedRowKey, type ReviewLogCursor } from "../lib/review-log-store.ts";
+import {emptyReviewLogCursor,prepareReviewLogWrite,readReviewLog,restoreReviewLog,reviewLogOffload,unopenedRowKey,type ReviewLogCursor} from "../lib/review-log-store.ts";
 // Inverse closes that merely follow the shadow are not protective; they may rest 2s.
 const MAKER_EXIT_REASONS=new Set(["SHADOW_SOURCE_EXIT"]);
 import { makerFirstEntry, makerEntryTag, MakerStateUnknownError, LIVE_MAKER_ENTRY_POLICY, LIVE_MAKER_ENTRY_ENABLED, type MakerResult } from "../lib/live-maker-entry.ts";
 import {buildReviewSnapshot, readReviewArchivePage} from "../lib/research-snapshot.ts";
-import {LivingEngine,LOG_PAGE_PREFIX as LIVING_LOG_PAGE_PREFIX,type ForwardView as LivingForwardView,type LogRow as LivingLogRow,type HtfInput as LivingHtfInput} from "../lib/living/engine.ts";
-import type {DailyBar as LivingDailyBar} from "../lib/living/htf-trend.ts";
-import {DynamicResearch,venueFetch,type DynPosition} from "../lib/dynamic/runtime.ts";
-import {LIVING_MODES,LIVING_ITEMS,type LivingMode} from "../lib/living/config.ts";
 import {withLivingEpoch} from "../lib/living/run-log-fields.ts";
-import {writeLivingLog,readLivingLog,countLivingLog,emptyLivingLogStatus,LIVING_LOG_EVERY_MS,LIVING_LOG_DAILY_ROWS} from "../lib/living/runlog-d1.ts";
+import {readLivingLog,countLivingLog} from "../lib/living/runlog-d1.ts";
 import {buildLivingRunLog} from "../lib/living/runlog-export.ts";
 import type {Bucket as LivingBucket,FinalCase as LivingFinalCase} from "../lib/living/runlog.ts";
-import type {LivingDirective} from "../lib/living/directive.ts";
 import {liveExitPriceLimit} from '../lib/live-entry-price.ts';
 import {observeLiveAccount,type LiveAccountMark} from '../lib/live-account-view.ts';
-import {REVIEW_JOURNAL_KEY, appendReviewEvents, captureTradeReviews, initialReviewJournal, normalizeReviewJournal,
-  recordDiscoveryReview, type ReviewEvent} from "../lib/review-trace.ts";
+import {REVIEW_JOURNAL_KEY,captureTradeReviews,initialReviewJournal,normalizeReviewJournal} from "../lib/review-trace.ts";
 declare const __STRATEGY_FINGERPRINT__: string;
-/** history pages of the research layer (default "tail": only keep stored series current, no deep history): "full" = tail refresh + deep history, "tail" = only keep stored series current (no deep pages). Both ≤4 requests/min, external venues only. */
-const DYN_HISTORY:"full"|"tail"="tail";
 const STRATEGY_FINGERPRINT=typeof __STRATEGY_FINGERPRINT__ === "string"?__STRATEGY_FINGERPRINT__:"local-verification";
 declare const __FORWARD_BUILD_SHA__: string;
 const FORWARD_BUILD_SHA = typeof __FORWARD_BUILD_SHA__ === "string" ? __FORWARD_BUILD_SHA__ : "local-verification";
-import { advanceStrategyArena as advancePreviousStrategyArena,
-  initialStrategyArena as initialPreviousStrategyArena,
-  normalizeStrategyArena as normalizePreviousStrategyArena,
-  observeStrategyArena as observePreviousStrategyArena,
-  resetStrategyArenaAccount as resetPreviousStrategyArenaAccount,
-  type StrategyArenaState as PreviousStrategyArenaState } from "../lib/previous-strategy-arena.ts";
+import {initialStrategyArena as initialPreviousStrategyArena,normalizeStrategyArena as normalizePreviousStrategyArena,type StrategyArenaState as PreviousStrategyArenaState} from "../lib/previous-strategy-arena.ts";
 
-const executionEligibleCount=(catalog:Map<string,{symbol:string;volume24hUsd:number}>)=>
-  [...catalog.values()].filter(row=>adaptiveSymbolAllowed(row.symbol)&&row.volume24hUsd>=FORWARD_EXECUTION_VOLUME_FLOOR_USD).length;
 const LOOP_MS = 2_000;
 const OWNER_HOME_CACHE_MS = 2_000;
 // Whole-system display/health tolerance only. Executable quotes remain guarded
@@ -147,12 +104,8 @@ const FEED_QUALITY_WINDOW_MS = 60 * 60_000;
 const HEARTBEAT_MS = 30_000;
 const UNIVERSE_MS = 10 * 60_000;
 const RADAR_MS = 15_000;
-const GATE_RADAR_MS = RADAR_MS;
 const RADAR_ENTRY_STALE_MS = 150_000;
 const STRATEGY_CANDLE_GRACE_MS = 8_000;
-const STRATEGY_CANDLE_STALE_MS = 11 * 60_000;
-const STRATEGY_LOG_MS = 5 * 60_000;
-const STRATEGY_LOG_RETENTION_MS = 14 * 24 * 60 * 60_000;
 const WARMUP_SNAPSHOTS = 4;
 const MAX_ANCILLARY_CONCURRENCY = 2;
 const SCAN_UNIVERSE_SIZE = 30;
@@ -163,45 +116,9 @@ const NON_ALARM_WRITE_CAP = OPTIONAL_WRITE_GUARD_PER_DAY;
 const WATCHDOG_WRITE_RESERVE = 2_880;
 const AUTHORITY_SCHEMA_VERSION = 1;
 const DEFAULT_SYMBOLS = ["BTC_USDT", "ETH_USDT", "SOL_USDT"];
-const adaptiveSymbolAllowed=(symbol:string)=>/^[A-Z0-9]{2,24}_USDT$/.test(symbol);
-const REGIME_HOURLY_STORAGE_PREFIX = "regime-hourly:";
-const REGIME_HOURLY_RETRY_MS = 10_000;
-const TURN_DAILY_STORAGE_PREFIX = "multi-turn-daily:v1:";
-const TURN_DAILY_REQUIRED_CANDLES = 90;
 
-function broadMarketContext(candidates: Record<string, { symbol: string; observedAt: number; broadMoveRate?: number;
-  trendRate: number; move4hRate?: number; move24hRate?: number }>, now: number) {
-  const fresh = Object.values(candidates).filter((row) => now - row.observedAt <= 11 * 60_000);
-  const moves = fresh
-    .map((row) => row.broadMoveRate ?? row.trendRate).filter(Number.isFinite).sort((left, right) => left - right);
-  const moves4h = fresh.map((row) => row.move4hRate).filter((value): value is number => Number.isFinite(value)).sort((a, b) => a - b);
-  const moves24h = fresh.map((row) => row.move24hRate).filter((value): value is number => Number.isFinite(value)).sort((a, b) => a - b);
-  const middle = (values: number[]) => values.length % 2 ? values[Math.floor(values.length / 2)]
-    : (values[values.length / 2 - 1] + values[values.length / 2]) / 2;
-  return {
-    breadth: moves.length ? moves.filter((value) => value > 0).length / moves.length : 0.5,
-    medianMove: moves.length ? moves[Math.floor(moves.length / 2)] : 0,
-    markets: moves.length,
-    breadth4h: moves4h.length ? moves4h.filter((value) => value > 0).length / moves4h.length : 0.5,
-    medianMove4h: moves4h.length ? middle(moves4h) : 0,
-    breadth24h: moves24h.length ? moves24h.filter((value) => value > 0).length / moves24h.length : 0.5,
-    medianMove24h: moves24h.length ? middle(moves24h) : 0,
-    btcMove24h: fresh.find((row) => row.symbol === "BTC_USDT")?.move24hRate ?? 0,
-    regimeMarkets: Math.min(moves4h.length, moves24h.length),
-  };
-}
 
-function approvedRouteScore(candidate: MarketRegimeCandidate) {
-  return Math.max(-1, ...(candidate.allRegimeRoutes ?? [])
-    .filter((route) => allRegimePaperApproved(route.strategyId))
-    .map((route) => route.score));
-}
 
-function previousApprovedRouteScore(candidate: PreviousMarketRegimeCandidate) {
-  return Math.max(-1, ...(candidate.allRegimeRoutes ?? [])
-    .filter((route) => previousAllRegimePaperApproved(route.strategyId))
-    .map((route) => route.score));
-}
 
 export interface CloudflareEnv {
   ASSETS: Fetcher;
@@ -494,11 +411,6 @@ export function mergeTurnDailyPath(
   while(start>0&&rows[start].time-rows[start-1].time===86_400)start-=1;
   return rows.slice(start);
 }
-function turnDailyStorageKey(symbol:string){return `${TURN_DAILY_STORAGE_PREFIX}${symbol}`;}
-
-function regimeHourlyStorageKey(symbol: string) {
-  return `${REGIME_HOURLY_STORAGE_PREFIX}${symbol}`;
-}
 
 function initialState(): RuntimeState {
   return {
@@ -532,13 +444,6 @@ function retiredPreviousArena(value: PreviousStrategyArenaState | null | undefin
   return state;
 }
 
-async function batches<T>(tasks: Array<() => Promise<T>>, width = MAX_ANCILLARY_CONCURRENCY) {
-  const output: PromiseSettledResult<T>[] = [];
-  for (let index = 0; index < tasks.length; index += width) {
-    output.push(...await Promise.allSettled(tasks.slice(index, index + width).map((task) => task())));
-  }
-  return output;
-}
 
 function percentile99(values: number[]) {
   if (!values.length) return 0;
@@ -559,15 +464,7 @@ function markToMarketEquity(runtime: RuntimeState) {
 export class MarketStream extends DurableObject<CloudflareEnv> {
   protected runtime = initialState();
   private memory: Record<string, SymbolMemory> = {};
-  private structureCandles: Record<string, Partial<Record<"1m" | "15m" | "1h" | "4h", Awaited<ReturnType<typeof fetchStructureCandles>>>>> = {};
   private strategyCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
-  private liveResearchCache:{at:number;view:LiveResearchView}|null=null;
-  private researchContextCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
-  private researchLog:ResearchLogRow[]=[];
-  private researchBars:{symbol:string;m5:ResearchSnap["m5"]}[]=[];
-  private researchLogLoaded=false;
-  private researchLogSavedAt=0;
-  private researchToday:{day:string;scans:number;symbols:string[]}={day:"",scans:0,symbols:[]};
   private forwardMinuteCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
   private forwardMinuteRetryAt = new Map<string,number>();
   private gateStream = new GateStreamingFeed();
@@ -575,26 +472,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private marketHub = new MarketDataHub();
   private forwardMinuteQuoteBars: Record<string,{minute:number;open:number;high:number;low:number;close:number;samples:number;
     firstAt:number;lastAt:number;completed:Array<{time:number;open:number;high:number;low:number;close:number;volume:number}>}> = {};
-  private turnDailyCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
-  /** htf-donch20 only: BTC's daily rows while BTC is outside the strategy path (never passed to advanceForward). */
-  private htfDaily: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
-  private turnDailyLoaded = new Set<string>();
-  private turnDailyCursor = 0;
-  private turnDailyFailures = new Map<string,{retryAt:number;lastError:string}>();
-  private regimeHourly: Record<string, RegimeHourlyPath> = {};
   private sessionWarmup: Record<string, number> = {};
   /** when a held coin's Gate quote went missing (null = all held coins quoted); see protectedQuoteDelay */
   private protectedMissingSince: number | null = null;
   private contractCatalog = new Map<string, Awaited<ReturnType<typeof fetchActiveContracts>>[number]>();
-  private gateRadarCache: Awaited<ReturnType<typeof fetchGateRadarTickers>> = [];
-  private gateRadarShortMoves=new Map<string,number>();
-  private gateRadarAt=0;
-  /** Log only: radar rows by symbol, radar prices as a path fallback, and hourly open-interest anchors. */
-  private radarIndex=new Map<string,RadarRow>();
-  private radarFallback:Record<string,{px:number;at:number}>={};
-  private oiRing:OiRing=[];
-  /** Log only: ~1/min BTC mids (last ~5 h, memory only) for entry-feature btc_1h/4h. No requests, no storage. */
-  private btcMidRing:{at:number;px:number}[]=[];
   /** D1 long-term run-log archive (review only). In-memory driver; never writes DO storage. */
   private runLogArchiver=new RunLogArchiver({
     db:()=>(this.env as {DB?:unknown}).DB?(this.env.DB as unknown as D1Like):null,
@@ -606,17 +487,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     readEquityDay:async day=>{const rows=await this.ctx.storage.get<EquityMinute[]>(`log:eqmin:${day}`);return Array.isArray(rows)?rows:null;},
   });
   private archiveWork:Promise<void>|null=null;
-  /** Run log v3 → D1 (timeline buckets every ~2 min, finished research cases). Off the trading clock; never DO writes. */
-  private livingLogStatus=emptyLivingLogStatus();
-  /** dynamic-v1 research layer: the forward analysis (shadow trades, predictor, allow-list) always runs; only the order direction/hold is reversed downstream. */
-  private dynamic=new DynamicResearch({history:DYN_HISTORY,metaEveryMs:10*60_000});
-  private dynamicWork:Promise<void>|null=null;
-  private dynamicEventAt=0;
-  private dynamicPoolSeq=0;
-  private livingLogWork:Promise<void>|null=null;
   private archivePendingCache:{at:number;cursorKey:string;pending:number;records:number}|null=null;
-  private oiAnchorCache:{at:number;anchor:ReturnType<typeof oiAnchor>}|null=null;
-  private oiRestore:"none"|"loading"|"done"="none";
   private authorityReady = true;
   private authorityView = { positions: {} as RuntimeState["positions"], equity: CANONICAL_PAPER_REFERENCE_EQUITY, equityVersion: 0 };
   protected liveClient: GateLiveClient | null = null;
@@ -644,130 +515,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   /** One-shot run-log wipe (lib/runlog-wipe.ts). null until read; `runlogWipeChecked` caches the durable record. */
   private runlogWipe: RunLogWipeRecord | null = null;
   private runlogWipeChecked = false;
-  private runlogWipeRetryAt = 0;
   private runlogWipeError: string | null = null;
   /** Export / status "since": the wipe time once a wipe has started. */
   private logSince(){return logSinceOf(this.runlogWipe);}
-  private async listDeleteBatch(prefix:string,limit:number){
-    const rows=await this.ctx.storage.list<unknown>({prefix,limit});
-    const keys=[...rows.keys()];if(!keys.length)return 0;
-    const reservation=this.reserveNonAlarmWrites(keys.length,256,"list-delete");if(!reservation)throw new Error("write budget");
-    try{await this.ctx.storage.delete(keys);reservation.finish(true);}finally{reservation.finish(false);}
-    return keys.length;
-  }
-  /**
-   * Called inside the forward claim (forwardBusy), so no tick, path, journal or equity-minute write interleaves.
-   * Phase "storage": account log rows, order journal, minute paths, review log + cold rows, equity minutes, living
-   * decision log, cases and timeline — memory first, then the keys in batches. Phase "d1": every run-log table emptied
-   * (schemas kept), archive watermarks reset. Each phase is idempotent; the record is written before anything is cleared,
-   * so a restart resumes and a finished wipe never runs again. Open positions, balance and the live switch are untouched.
-   */
-  private async runLogWipeOnce(now:number){
-    if(this.runlogWipe?.phase==="done"||now<this.runlogWipeRetryAt)return;
-    this.runlogWipeRetryAt=now+60_000;
-    try{
-      if(!this.runlogWipeChecked){this.runlogWipe=normalizeWipeRecord(await this.ctx.storage.get(RUNLOG_WIPE_KEY));this.runlogWipeChecked=true;}
-      if(this.runlogWipe?.phase==="done")return;
-      const state=this.forwardState;
-      if(!state||!this.authorityReady||this.forwardError||!state.storage.persistedAt||state.storage.error)return;
-      // live must be off and flat; the wipe never changes the switch
-      const live=this.runtime.live;
-      if(live.requestedEnabled||live.operational||Object.values(live.positions).some(p=>p?.status==="OPEN"))return;
-      await this.ensureLiving(now);
-      await this.ensureReviewLog();await this.ensureTradePaths();await this.ensureOrderJournal();
-      if(!this.living||!this.living.loaded||this.reviewLogReadyFor!==state.startedAt||!this.tradePathsLoaded||!this.orderJournalLoaded)return;
-      let record=this.runlogWipe;
-      if(!record){
-        const cleaned=wipeForwardLog(state,now).state;
-        const book=accountLogBook(cleaned,this.forwardQuotes(now),now,emptyOrderJournal(state.startedAt),{at:now,adjust:0});
-        record=newWipeRecord(now,wipeBaseline({equity:book.equity,initial:book.initial,positions:book.positions}),state.balance,state.positions.length);
-        await this.ctx.storage.put(RUNLOG_WIPE_KEY,record);this.runlogWipe=record;
-      }
-      const at=record.at,cleared=record.cleared,add=(k:string,n:number)=>{cleared[k]=(cleared[k]??0)+n;};
-      record.passes++;
-      if(record.phase==="storage"){
-        // 1. memory (synchronous: nothing else runs between these lines). Every step keeps what began at/after `at`, so a
-        //    retry after a failed pass is harmless.
-        const balanceBefore=state.balance,openBefore=state.positions.map(t=>t.id).join(",");
-        const wiped=wipeForwardLog(state,at);
-        if(wiped.state.balance!==balanceBefore||wiped.state.positions.map(t=>t.id).join(",")!==openBefore)throw new Error("wipe would change the account");
-        for(const [k,v] of Object.entries(wiped.counts))add(k,v);
-        const keepRow=(closedAt:number|null|undefined,openedAt:number)=>(closedAt??openedAt)>=at;
-        const journalBefore=this.orderJournal.rows.length;
-        this.orderJournal={...this.orderJournal,rows:this.orderJournal.rows.filter(r=>keepRow(r.closed_at,r.opened_at))};
-        add("journal",journalBefore-this.orderJournal.rows.length);this.orderJournalComplete=true;this.orderJournalPending=false;
-        const openIds=new Set(state.positions.map(t=>t.id)),book=this.tradePaths,pathsBefore=book.trades.length;
-        // an open position keeps its path (it is not a finished record); everything else from before the wipe goes
-        book.trades=book.trades.filter(r=>openIds.has(r.id)||r.openedAt>=at);
-        book.dirty=[...new Set(book.trades.map(r=>r.page??0))];book.drop=[];book.indexDirty=true;
-        add("paths",pathsBefore-book.trades.length);this.tradePathsLoaded=true;this.tradePathsPending=true;
-        add("equityBuffer",this.eqMinBuf.filter(r=>r.ts<at).length);this.eqMinBuf=this.eqMinBuf.filter(r=>r.ts>=at);
-        this.reviewLogCursor={...emptyReviewLogCursor(),startedAt:state.startedAt};this.reviewLogComplete=true;
-        if(!cleared.living_done){
-          const living=this.living.wipeLog(at);
-          for(const [k,v] of Object.entries(living.counts))add(`living_${k}`,v);
-          const old=[...living.oldKeys,RUN_LOG_EXPORT_KEY];
-          for(let i=0;i<old.length;i+=96){const part=old.slice(i,i+96);const r=this.reserveNonAlarmWrites(part.length,256,"runlog-wipe");if(!r)throw new Error("write budget");
-            try{await this.ctx.storage.delete(part);r.finish(true);}finally{r.finish(false);}add("keys:living-log+export-mark",part.length);}
-          cleared.living_done=1;await this.ctx.storage.put(RUNLOG_WIPE_KEY,record);
-        }
-        // 2. storage keys (these prefixes hold run-log rows only). Equity-minute days are rewritten without the
-        //    pre-wipe minutes (a day that is all pre-wipe is deleted), so a retry never loses post-wipe minutes.
-        for(const prefix of RUNLOG_WIPE_PREFIXES){
-          if(prefix==="log:eqmin:"){
-            const days=await this.ctx.storage.list<EquityMinute[]>({prefix,limit:64});
-            for(const [key,rows] of days){
-              const kept=Array.isArray(rows)?rows.filter(r=>r&&r.ts>=at):[];
-              if(Array.isArray(rows)&&kept.length===rows.length)continue;
-              const r=this.reserveNonAlarmWrites(1,256,"runlog-wipe");if(!r)throw new Error("write budget");
-              try{if(kept.length)await this.ctx.storage.put(key,kept);else await this.ctx.storage.delete(key);r.finish(true);}finally{r.finish(false);}
-              add("keys:log:eqmin:",1);add("equityMinutes",(Array.isArray(rows)?rows.length:0)-kept.length);
-            }
-            continue;
-          }
-          for(let guard=0;guard<60;guard++){const n=await this.listDeleteBatch(prefix,48);add(`keys:${prefix}`,n);if(n<48)break;}
-          const left=await this.ctx.storage.list<unknown>({prefix,limit:1});if(left.size)throw new Error(`keys left under ${prefix}`);
-        }
-        {const r=this.reserveCriticalWrites(1,"order-journal");try{await this.ctx.storage.put(ORDER_JOURNAL_KEY,this.orderJournal);r.finish(true);}finally{r.finish(false);}}
-        // 3. the account without its log rows: one atomic write (same path as an operator edit); then paths and living keys
-        await this.commitForwardAccount(state,wiped.state,now);
-        try{await this.persistTradePaths();}catch{/* 下一轮再写 */}
-        try{await this.persistLiving(now,true);}catch{/* 下一轮再写 */}
-        record.phase="d1";await this.ctx.storage.put(RUNLOG_WIPE_KEY,record);
-      }
-      if(record.phase==="d1"){
-        const db=(this.env as {DB?:unknown}).DB?(this.env.DB as unknown as D1Like):null;if(!db)throw new Error("D1 binding missing");
-        // a D1 pass already in flight wrote pre-wipe rows from memory that is now empty: let it finish first
-        try{await this.archiveWork;}catch{/* ignore */}try{await this.livingLogWork;}catch{/* ignore */}
-        for(const table of RUNLOG_WIPE_D1_TABLES){
-          try{
-            const n=(await db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first<{n:number}>())?.n??0;
-            await db.prepare(`DELETE FROM ${table}`).bind().run();record.d1[table]=n;
-          }catch(error){const msg=safeError(error);if(/no such table/i.test(msg)){record.d1[table]="absent";continue;}throw error;}
-        }
-        this.runLogArchiver.reset(now);this.archivePendingCache=null;
-        this.livingLogStatus={...this.livingLogStatus,bucketsThisBoot:0,casesThisBoot:0};
-        record.phase="done";record.doneAt=Date.now();record.lastError=null;
-        await this.ctx.storage.put(RUNLOG_WIPE_KEY,record);
-        console.log("runlog wipe done",JSON.stringify({at:record.at,cleared:record.cleared,d1:record.d1}));
-      }
-      this.runlogWipeError=null;
-    }catch(error){
-      this.runlogWipeError=safeError(error);
-      if(this.runlogWipe){this.runlogWipe.lastError=this.runlogWipeError;try{await this.ctx.storage.put(RUNLOG_WIPE_KEY,this.runlogWipe);}catch{/* 下次再记 */}}
-    }
-  }
   protected forwardError: string | null = null;
-  private counterfactualResearch: CounterfactualResearchState = initialCounterfactualResearch();
-  private counterfactualResearchLoaded = false;
-  private shadowResearch: ShadowResearchState = initialShadowResearch();
-  private shadowResearchLoaded = false;
-  /** Living research layer (lib/living): own keys living:v1:*, never inside the forward state. Null until loaded. */
-  private living: LivingEngine | null = null;
-  private livingLoadFailedAt = 0;
   private reviewJournal=initialReviewJournal(0,Date.now());
   private reviewJournalLoaded=false;
-  private reviewJournalLastWrite=0;
   private tradePaths:TradePathBook=emptyTradePathBook(0);
   private tradePathsLoaded=false;
   private tradePathsPending=false;
@@ -796,29 +549,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private orphanPathsRemaining=0;
   private reviewDiagnosticError:string|null=null;
   private forwardBusy = false;
-  private deskCleanArmed = false;
-  private deskCleanSettled = false;
-  private needleArmed = false;
-  private needleSettled = false;
-  private brainArmed = false;
-  private brainSettled = false;
-  private scoreArmed = false;
-  private scoreSettled = false;
-  private readArmed = false;
-  private readSettled = false;
-  private reverseArmed = false;
-  private reverseSettled = false;
-  private stretchArmed = false;
-  private stretchSettled = false;
-  private lsrArmed = false;
-  private lsrSettled = false;
-  private newDeskSettled = false;
-  private thesis: ThesisAttached | null = null;
-  private thesisLoaded = false;
-  private thesisPersistedAt = 0;
-  private thesisAckAt = 0;
-  private thesisView: ThesisPublic | null = null;
-  private forwardLastAttemptAt = 0;
   private forwardProtectionBudget: ProtectionWriteBudget | null = null;
   private forwardCompression: Awaited<ReturnType<typeof prepareForwardWrite>>["compression"] | null = null;
   private equityReader = new EquityReader();
@@ -917,14 +647,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     super(ctx, env);
     // A separate member namespace reuses the verified executor, never the market loop.
     if (executionOnly) return;
-    this.deskCleanArmed = true;
-    this.needleArmed = true;
-    this.brainArmed = true;
-    this.scoreArmed = true;
-    this.readArmed = true;
-    this.reverseArmed = true;
-    this.stretchArmed = true;
-    this.lsrArmed = true;
     ctx.blockConcurrencyWhile(async () => {
       const saved = await ctx.storage.get<Checkpoint>("checkpoint");
       if (saved?.authoritySchemaVersion === AUTHORITY_SCHEMA_VERSION) {
@@ -989,23 +711,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           const cachedCatalog=await ctx.storage.get<Awaited<ReturnType<typeof fetchActiveContracts>>>("gate-contract-catalog:v1");
           if(cachedCatalog?.length)this.contractCatalog=new Map(cachedCatalog.map(row=>[row.symbol,row]));
         }catch{/* cached Gate universe is optional; live refresh will retry */}
-        const loaded = await Promise.all(REGIME_EXECUTION_UNIVERSE.map(async (symbol) => {
-          try {
-            return [symbol, await ctx.storage.get<RegimeHourlyPath>(regimeHourlyStorageKey(symbol))] as const;
-          } catch (error) {
-            const prior = this.runtime.regimeHourlyFailures[symbol];
-            this.runtime.regimeHourlyFailures[symbol] = { count: (prior?.count ?? 0) + 1,
-              lastFailureAt: Date.now(), retryAt: Date.now() + REGIME_HOURLY_RETRY_MS,
-              stage: "STORAGE", lastError: `读取720小时路径失败：${safeError(error)}` };
-            return [symbol, undefined] as const;
-          }
-        }));
-        for (const [symbol, rows] of loaded) {
-          const path = mergeRegimeHourlyPath([], rows ?? []);
-          if (path.length) this.regimeHourly[symbol] = path;
-        }
-        this.runtime.regimePortfolio.warmMarkets = REGIME_UNIVERSE
-          .filter((symbol) => (this.regimeHourly[symbol]?.length ?? 0) >= REGIME_HOURLY_REQUIRED_CANDLES).length;
       }
       this.resetDailyCounters(Date.now());
       try {
@@ -1198,12 +903,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (this.memory[symbol]) this.memory[symbol].flow.funding = row.fundingRate;
   }
 
-  private strategyPathSymbols() {
-    return [...new Set([
-      ...this.runtime.liquidUniverse,
-      ...(this.forwardState?.positions.map(position=>position.symbol)??[]),
-    ])];
-  }
 
   private applyRealtimeSymbols(next: string[]) {
     const prior = new Set(this.runtime.symbols);
@@ -1229,61 +928,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if (next.includes(symbol)) continue;
       delete this.memory[symbol]; delete this.sessionWarmup[symbol]; delete this.runtime.decisions[symbol]; delete this.runtime.routes[symbol]; delete this.runtime.plans[symbol];
       delete this.runtime.positions[symbol]; delete this.runtime.evidence[symbol]; delete this.runtime.entryAssessments[symbol]; delete this.runtime.feedFailures[symbol];
-      // Five-minute Multi-Turn paths are independent of the small realtime book pool.
-      // Keep current scan paths AND every open source holding until it closes,
-      // otherwise the owning timeframe could stop seeing its own reversal.
-      if (!this.strategyPathSymbols().includes(symbol)) {
-        delete this.runtime.strategyCandleFailures[symbol]; delete this.strategyCandles[symbol];
-      }
-      if(!this.runtime.liquidUniverse.includes(symbol)&&!this.forwardUrgentSymbols().includes(symbol)){
+      if(!this.forwardUrgentSymbols().includes(symbol)){
         delete this.forwardMinuteCandles[symbol];delete this.forwardMinuteQuoteBars[symbol];this.forwardMinuteRetryAt.delete(symbol);
       }
-      if(!this.runtime.liquidUniverse.includes(symbol)){
-        delete this.runtime.tickSize[symbol]; delete this.runtime.contractMeta[symbol];
-      }
+      delete this.runtime.tickSize[symbol]; delete this.runtime.contractMeta[symbol];
     }
   }
 
-  private refreshRadar(now:number) {
-    const cached=this.gateRadarAt>0&&now-this.gateRadarAt<=2*GATE_RADAR_MS?new Map(this.gateRadarCache.map(row=>[row.symbol,row])):null;
-    const known=this.contractCatalog.size
-      ?[...this.contractCatalog.values()].filter(row=>adaptiveSymbolAllowed(row.symbol)).map(row=>{
-        const fresh=cached?.get(row.symbol);return fresh?{...fresh,fundingRate:row.fundingRate,
-          shortMoveRate:this.gateRadarShortMoves.get(row.symbol)??0,directionalAgreement:1,sourceBreadth:Math.sign(this.gateRadarShortMoves.get(row.symbol)??0),
-          sourceCount:1}:{symbol:row.symbol,last:row.last,volume24hUsd:row.volume24hUsd,fundingRate:row.fundingRate};
-      })
-      :[...new Set([...this.runtime.liquidUniverse,...DEFAULT_SYMBOLS])].flatMap(symbol=>{
-        const q=this.marketHub.quote(symbol,now);return q?[{symbol,last:q.mid,volume24hUsd:q.volume24hUsd,fundingRate:0}]:[];
-      });
-    const eligibleRows=this.marketHub.radarRows(known,now);
-    if(!eligibleRows.length)throw new Error("no Gate-tradable extremum-regime markets");
-    const executionEligible=eligibleRows.filter(forwardExecutionUniverseEligible),
-      held=[...new Set([...(this.forwardState?.inverseTrial?.source.positions.map(p=>p.symbol)??[]),...(this.forwardState?.positions.map(p=>p.symbol)??[])])],
-      armed=Object.values(this.forwardState?.entryValidations??{}).filter(v=>v.status==="WAITING").map(v=>v.symbol),
-      locked=[...new Set([...held,...armed])];
-    const universeRows=selectAnchorOpportunityUniverse({rows:eligibleRows,limit:SCAN_UNIVERSE_SIZE,
-      lockedSymbols:locked,rotationSeed:Math.floor(now/RADAR_MS),explorationSlots:0,liquiditySlots:0});
-    if(!universeRows.length)throw new Error("no liquid extremum-regime markets");
-    this.runtime.liquidUniverse=universeRows.map(row=>row.symbol);
-    this.runtime.radar=successfulRadarRuntime(this.runtime.radar,now,universeRows.length,[]);
-    this.runtime.lastRadarAt=now;
-    if(this.forwardState&&this.reviewJournal.accountStartedAt===this.forwardState.startedAt){
-      try{const selected=new Set(universeRows.map(r=>r.symbol));
-        recordDiscoveryReview(this.reviewJournal,{at:now,sourceAt:this.gateRadarAt||null,catalogCount:this.contractCatalog.size,
-          radarInputCount:eligibleRows.length,eligibleCount:executionEligible.length,
-          selected:universeRows.map((r,i)=>({symbol:r.symbol,rank:i+1,source:r.selectionSource,score:r.activityScore})),
-          sampledOutside:eligibleRows.filter(r=>!selected.has(r.symbol)).sort((a,b)=>Math.abs(b.shortMoveRate??0)-Math.abs(a.shortMoveRate??0))
-            .slice(0,6).map(r=>({symbol:r.symbol,shortMoveRate:r.shortMoveRate??0,
-              reason:forwardExecutionUniverseEligible(r)?"OUTSIDE_RANKED_ANALYSIS_POOL":"OUTSIDE_EXECUTION_UNIVERSE"}))});
-      }catch{this.reviewDiagnosticError="DISCOVERY_REVIEW_CAPTURE_FAILED";}
-    }
-    // Gate realtime capacity is execution-only: open exposure and candidates
-    // that are actually eligible. Analysis-only markets stay on Bybit/OKX/KuCoin.
-    const protectedSymbols=[...this.currentAuthorityProtectionSymbols()];
-    const watched=this.forwardState?forwardWatchSymbols(this.forwardState,now,this.runtime.liquidUniverse):[];
-    const next=[...new Set([...protectedSymbols,...watched])].slice(0,FORWARD_EXECUTION_BBO_CAP);
-    if(next.length||this.runtime.symbols.length)this.applyRealtimeSymbols(next);
-  }
 
   protected regimeQuotes(now: number) {
     return Object.fromEntries(Object.entries(this.runtime.evidence).flatMap(([symbol, row]) => row?.fresh
@@ -1309,7 +960,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
     return out;
   }
-  private livingContractSymbols() { return this.living?.basket?.members ?? []; }
 
   protected reconcileCanonicalMirror(now: number) {
     // Retired arena/regime accounts no longer participate in trading authority.
@@ -1319,102 +969,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return false;
   }
 
-  private evaluateRegimeNow(now: number) {
-    this.runtime.regimePortfolio = evaluateRegimePortfolio({ state: this.runtime.regimePortfolio,
-      hourly: this.regimeHourly, quotes: this.regimeQuotes(now), contracts: this.regimeContracts(), now, allowNewEntries: false });
-  }
 
-  private liveResearchView(now=Date.now()){
-    if(this.liveResearchCache&&now-this.liveResearchCache.at<30_000){
-      this.liveResearchCache.view.experiment=experimentReport(this.forwardState?.inverseTrial?.rx);
-      return this.liveResearchCache.view;
-    }
-    const quotes=this.forwardQuotes(now);
-    const candles={...this.strategyCandles};
-    for(const symbol of RESEARCH_MAJORS){
-      const extra=this.researchContextCandles[symbol];
-      if(extra&&extra.length>=31)candles[symbol]=extra;
-    }
-    const snaps:ResearchSnap[]=[];
-    for(const [symbol,bars] of Object.entries(candles)){
-      if(bars.length<31)continue;
-      const q=quotes[symbol];
-      const meta=this.runtime.contractMeta[symbol];
-      const book=meta?this.gateStream.book(symbol,this.runtime.tickSize[symbol]??1e-8,meta.quantoMultiplier,now):null;
-      const depthBid=book?.bids.slice(0,5).reduce((n,row)=>n+row.size,0)??0;
-      const depthAsk=book?.asks.slice(0,5).reduce((n,row)=>n+row.size,0)??0;
-      const m1=(this.forwardMinuteCandles?.[symbol]??[]).map(bar=>({t:bar.time,o:bar.open,h:bar.high,l:bar.low,c:bar.close,v:bar.volume}));
-      snaps.push({symbol,bid:q?.bestBid??0,ask:q?.bestAsk??0,last:q?((q.bestBid+q.bestAsk)/2):(bars.at(-1)?.close??0),
-        depthBid,depthAsk,funding:meta?.fundingRate??0,
-        m1,m5:bars.map(bar=>({t:bar.time,o:bar.open,h:bar.high,l:bar.low,c:bar.close,v:bar.volume}))});
-    }
-    this.researchBars=snaps;
-    const view=runLiveResearch(snaps,now);
-    const day=new Date(now+8*3_600_000).toISOString().slice(0,10);
-    if(this.researchToday.day!==day)this.researchToday={day,scans:0,symbols:[]};
-    this.researchToday.scans+=1;
-    const subject=view.candidates[0]?.symbol;
-    if(subject&&!this.researchToday.symbols.includes(subject))this.researchToday.symbols.push(subject);
-    const todayRows=this.researchLog.filter(row=>new Date(row.at+8*3_600_000).toISOString().slice(0,10)===day);
-    view.today={scans:this.researchToday.scans,symbols:this.researchToday.symbols.length,
-      long:todayRows.filter(row=>row.direction==="LONG"&&row.level!=="观望").length,
-      short:todayRows.filter(row=>row.direction==="SHORT"&&row.level!=="观望").length,
-      watch:todayRows.filter(row=>row.level==="观望"||row.direction==null).length};
-    view.status=subject?`上一轮看完 ${subject.replace("_"," / ")}，等下一次扫描。`:"这一轮还没有排出异动。";
-    this.researchLog=reviewResearchLog(this.researchLog,snaps,now);
-    view.log=this.researchLog.slice(-8);
-    view.experiment=experimentReport(this.forwardState?.inverseTrial?.rx);
-    this.liveResearchCache={at:now,view};
-    void this.rememberResearch(view);
-    return view;
-  }
 
-  private async rememberResearch(view:LiveResearchView){
-    if(!this.researchLogLoaded){
-      this.researchLogLoaded=true;
-      try{
-        const saved=await this.ctx.storage.get<typeof this.researchLog>("live-research-log");
-        if(Array.isArray(saved)){
-          const seen=new Set(this.researchLog.map(row=>row.at));
-          this.researchLog=[...saved.filter(row=>row&&typeof row.at==="number"&&!seen.has(row.at)),...this.researchLog].slice(-300);
-        }
-      }catch{/* a missing log must not block the page */}
-        const savedDay=await this.ctx.storage.get<typeof this.researchToday>("live-research-day");
-        if(savedDay&&savedDay.day===new Date(view.ts+8*3_600_000).toISOString().slice(0,10)){
-          this.researchToday={day:savedDay.day,scans:savedDay.scans+this.researchToday.scans,symbols:[...new Set([...savedDay.symbols,...this.researchToday.symbols])]};
-          if(view.today)view.today={...view.today,scans:this.researchToday.scans,symbols:this.researchToday.symbols.length};
-        }
-    }
-    this.researchLog=reviewResearchLog(this.researchLog,this.researchBars,view.ts);
-    const row:ResearchLogRow={at:view.ts,symbol:view.decision?.symbol??view.candidates[0]?.symbol??"",level:view.decision?.level??"观望",confidence:view.decision?.confidence??0,btc1h:view.context?.btc1h??null,
-      direction:view.decision?.direction??null,price:view.decision?.entry??view.candidates[0]?.last??0,laterRet:null,verdict:null};
-    const last=this.researchLog.at(-1);
-    const fresh=!last||last.symbol!==row.symbol||last.level!==row.level||row.at-last.at>=5*60_000;
-    if(fresh)this.researchLog.push(row);
-    if(this.researchLog.length>300)this.researchLog=this.researchLog.slice(-300);
-    if(view.log)view.log.splice(0,view.log.length,...this.researchLog.slice(-8));
-    if(!fresh&&view.ts-this.researchLogSavedAt<5*60_000)return;
-    if(view.ts-this.researchLogSavedAt<5*60_000)return;
-    const reservation=this.reserveNonAlarmWrites(2,512,"research-memory");
-    if(!reservation)return;
-    try{await this.ctx.storage.put({"live-research-log":this.researchLog,"live-research-day":this.researchToday});this.researchLogSavedAt=row.at;reservation.finish(true);}
-    catch{reservation.finish(false);}
-  }
 
-  private async refreshResearchContext(now=Date.now()){
-    const due=RESEARCH_MAJORS.filter(symbol=>{
-      const last=this.researchContextCandles[symbol]?.at(-1);
-      return !last||(last.time+300)*1000<now-60_000;
-    }).slice(0,1);
-    if(!due.length)return 0;
-    const symbol=due[0]!;
-    try{
-      const external=await this.marketHub.candles(symbol,"5m",120);
-      const rows=external?.rows??await fetchStructureCandles(symbol,"5m",120);
-      if(rows.length>=30)this.researchContextCandles[symbol]=rows.slice(-120);
-    }catch{/* keep the previous context candles */}
-    return 1;
-  }
 
   /** Owner home: only what the owner page reads (status, paper account, live summary). The serialized body is
    * reused for OWNER_HOME_CACHE_MS so several tabs / quick re-opens do not rebuild the account summary each time.
@@ -1425,13 +982,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if(c&&now-c.at>=0&&now-c.at<OWNER_HOME_CACHE_MS)return new Response(c.body,{status:c.status,headers:{"content-type":"application/json","cache-control":"no-store","x-home-cache":"hit"}});
     await this.ensureAlarm();
     this.launchTurnoverWork(now);
-    const live=this.runtime.live,regime=this.runtime.regimePortfolio,failures=this.runtime.regimeHourlyFailures??{};
+    const live=this.runtime.live;
     const stale=!this.authorityReady||this.runtime.lastSuccessAt==null||now-this.runtime.lastSuccessAt>SYSTEM_HEALTH_STALE_AFTER_MS;
     const state=!this.authorityReady?"RECOVERY_REQUIRED":stale?"RECONNECTING":this.runtime.state;
     const body=JSON.stringify({version:"owner-home-v1",buildSha:FORWARD_BUILD_SHA,generatedAt:now,state,stale,authorityReady:this.authorityReady,
       lastError:this.runtime.lastError,lastSuccessAt:this.runtime.lastSuccessAt,
       realtimeReadiness:this.realtimeReadiness(),
-      strategyData:{stableMarkets:regime.warmMarkets,lastCompletedCandleAt:regime.lastEvaluatedHour??0,hourlyPathFailures:Object.keys(failures).length},
       forward:pageForwardView(this.forwardView(now)),
       liveMirror:this.liveMirrorView(),
       liveMode:{requestedEnabled:live.requestedEnabled,operational:live.operational},
@@ -1442,65 +998,29 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private forwardView(now = Date.now()) {
-    const cycleAt = Math.max(this.forwardState?.lastCycleAt ?? 0, this.thesis?.updatedAt ?? 0) || null;
-    const persistedAt = Math.max(this.forwardState?.storage.persistedAt ?? 0, this.thesisAckAt);
-    const view=this.forwardState ? { ...forwardSummary(this.forwardState, this.regimeQuotes(now), now),
-      confirmationReality: confirmationRealityView([...this.forwardState.positions, ...this.forwardState.history], now, {
-        opens: this.forwardState.inverseTrial?.regimeOpens, pauseUntil: this.forwardState.inverseTrial?.regimeClock?.pauseUntil}),
-      observationTape: this.forwardState.extremumRegime
-        ? observationReading(this.forwardState.extremumRegime, (this.shadowResearch?.market??[]).map(row=>row.tape).filter((row):row is NonNullable<typeof row>=>!!row))
-        : null,
+    const cycleAt = this.forwardState?.lastCycleAt || null;
+    const persistedAt = this.forwardState?.storage.persistedAt ?? 0;
+    return this.forwardState ? { ...forwardSummary(this.forwardState, this.regimeQuotes(now), now),
       liveMirror: this.liveMirrorView(),
       lastCycleAt: cycleAt,
-      thesis: this.thesisView,
       storage: { ...this.forwardState.storage, persistedAt, error: this.forwardError } }
-      : { version: FORWARD_VERSION, mode: "RECOVERY_REQUIRED", liveEligible: false, lastCycleAt: cycleAt, thesis: this.thesisView, storage: { persistedAt, error: this.forwardError } };
-    if("forwardDesk" in view&&view.forwardDesk)view.forwardDesk={...view.forwardDesk,liveResearch:this.liveResearchView(now)};
-    return view;
+      : { version: FORWARD_VERSION, mode: "RECOVERY_REQUIRED", liveEligible: false, lastCycleAt: cycleAt, storage: { persistedAt, error: this.forwardError } };
   }
 
   private forwardHealth() {
-    const s=this.forwardState,now=Date.now(),opportunities=s?.opportunities??[],
-      eligible=opportunities.filter(row=>row.eligible&&row.expiresAt>now),
-      states=Object.values(s?.extremumRegime?.symbols??{}),
-      counts={bullish:states.filter(row=>row.longScore>=62).length,bearish:states.filter(row=>row.shortScore>=62).length,
-        divergent:states.filter(row=>row.regime==="DIVERGENT").length,transition:states.filter(row=>row.regime==="TRANSITION").length,
-        ready:states.filter(row=>row.stage==="READY").length},
-      blocked=opportunities.filter(row=>!row.eligible&&row.expiresAt>now).slice(0,8).map(row=>({
-        symbol:row.symbol,side:row.side,mode:row.mode,score:Math.round(row.score),regime:row.regime??null,
-        stage:row.confirmationStage??null,clusterId:row.clusterId??null,residual:row.residual??null,
-        relativeStrength:row.relativeStrength??null,dataConfidence:row.dataConfidence??null,sourceCount:row.sourceCount??null,
-        disagreementRate:row.disagreementRate??null,reason:row.reason,
-      }));
-    return {shadowInverse:s?(()=>{const v=inverseTrialSummary(s,this.regimeQuotes(now),now);if(!v)return null;const {curve:_,...summary}=v;return{...summary,paidCost:summary.paidCost?{...summary.paidCost,rows:undefined}:null};})():null,
-      version:FORWARD_VERSION,engineVersion:ADAPTIVE_ENGINE_VERSION,policyVersion:s?.policyVersion??null,
-      strategyAuthorityVersion:s?.strategyAuthorityVersion??null,executionVersion:s?.executionVersion??null,
-      regionVersion:s?.regionVersion??null,regionLaunchVersion:s?.regionLaunchVersion??null,liveEligible:false,
+    const s=this.forwardState;
+    return {version:FORWARD_VERSION,engineVersion:ADAPTIVE_ENGINE_VERSION,policyVersion:s?.policyVersion??null,
+      strategyRemoved:true,liveEligible:false,
       startedAt:s?.startedAt??null,initialEquity:s?.initialEquity??null,balance:s?.balance??null,
-      lastCycleAt:Math.max(s?.lastCycleAt??0, this.thesis?.updatedAt??0)||null,
-      resolved:s?.resolved??0,openCount:s?.positions.length??0,targetPositionCount:null,positionLimit:null,
+      lastCycleAt:s?.lastCycleAt||null,
+      resolved:s?.resolved??0,openCount:s?.positions.length??0,
       ledgerRepair:this.ledgerRepair?{version:this.ledgerRepair.version,runs:this.ledgerRepair.runs.map(r=>({at:r.at,rows:r.rows.length,
         ids:r.rows.map(x=>x.id),balanceBefore:r.balanceBefore,balanceAfter:r.balanceAfter,resolvedAfter:r.resolvedAfter}))}:null,
       runlogWipe:this.runlogWipe?{version:this.runlogWipe.version,at:this.runlogWipe.at,phase:this.runlogWipe.phase,doneAt:this.runlogWipe.doneAt,
         passes:this.runlogWipe.passes,adjust:this.runlogWipe.adjust,balanceAtWipe:this.runlogWipe.balanceAtWipe,openAtWipe:this.runlogWipe.openAtWipe,
-        cleared:this.runlogWipe.cleared,d1:this.runlogWipe.d1,lastError:this.runlogWipe.lastError}:{pending:true,error:this.runlogWipeError},
+        cleared:this.runlogWipe.cleared,d1:this.runlogWipe.d1,lastError:this.runlogWipe.lastError}:{pending:false,error:this.runlogWipeError},
       executionBboCapacity:FORWARD_EXECUTION_BBO_CAP,minuteConfirmationCapacity:FORWARD_MINUTE_CONFIRMATION_CAP,
-      executionVolumeFloorUsd:FORWARD_EXECUTION_VOLUME_FLOOR_USD,learningEligibleMarkets:executionEligibleCount(this.contractCatalog),
-      participationCandidateCount:opportunities.length,participationEligibleCount:eligible.length,
-      premiumOpportunityCount:eligible.filter(row=>row.premium).length,
-      marketIntelligenceTracked:states.length,marketIntelligenceCounts:counts,marketNarrative:s?.extremumRegime?.narrative??null,
-      marketIntelligenceCoverage:s?.extremumRegime?.coverage??{intradayMarkets:0,dailyMarkets:0,quoteMarkets:0,multiVenueMarkets:0},
-      correlationClusters:s?.extremumRegime?.clusters?.length??0,evidenceCount:s?.extremumRegime?.evidence?.length??0,
-      legacyResearchSampleCount:s?.relationEngine?.samples.length??0,entryDiagnostics:s?.entryDiagnostics??null,
-      entryValidationDiagnostics:(()=>{
-        const records=Object.values(s?.entryValidations??{}).sort((x,y)=>y.startedAt-x.startedAt).slice(0,6).map(v=>({
-          id:v.id,candidateId:v.candidateId,symbol:v.symbol,side:v.side,startedAt:v.startedAt,deadlineAt:v.deadlineAt,expiresAt:v.expiresAt,
-          status:v.status,phase:v.phase??null,stableThesis:!!v.stableThesis,reason:v.reason??null,samples:v.samples,
-          supportSamples:v.supportSamples,oppositionSamples:v.oppositionSamples,bestAdvanceRate:v.bestAdvanceRate,maxAdverseRate:v.maxAdverseRate,
-        }));
-        return{waiting:records.filter(v=>v.status==="WAITING").length,cancelled:records.filter(v=>v.status==="CANCELLED").length,records};
-      })(),
-      candidateDiagnostics:blocked,storage:{persistedAt:Math.max(s?.storage.persistedAt??0, this.thesisAckAt),layout:s?.storage.layout??null,error:this.forwardError}};
+      storage:{persistedAt:s?.storage.persistedAt??0,layout:s?.storage.layout??null,error:this.forwardError}};
   }
 
   protected liveMirrorView() {
@@ -1788,16 +1308,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if(!this.forwardState){this.forwardState=await readForwardStore(this.ctx.storage,now);await this.repairLedgerOnce(this.ctx.storage);}
     if(!this.forwardState)throw new Error("PAPER权威账户缺失");
     await this.ensureReviewLog();
-    if(!this.counterfactualResearchLoaded){
-      try{this.counterfactualResearch=await readCounterfactualResearch(this.ctx.storage,now);}
-      catch{this.counterfactualResearch=initialCounterfactualResearch(now);}
-      this.counterfactualResearchLoaded=true;
-    }
-    if(!this.shadowResearchLoaded){
-      try{this.shadowResearch=await readShadowResearch(this.ctx.storage,now);}
-      catch{this.shadowResearch=initialShadowResearch(now);}
-      this.shadowResearchLoaded=true;
-    }
     if(!this.reviewJournalLoaded||this.reviewJournal.accountStartedAt!==this.forwardState.startedAt){
       try{this.reviewJournal=normalizeReviewJournal(await this.ctx.storage.get(REVIEW_JOURNAL_KEY),this.forwardState.startedAt,now);}
       catch{this.reviewJournal=initialReviewJournal(this.forwardState.startedAt,now);this.reviewDiagnosticError="REVIEW_JOURNAL_RESTORE_UNAVAILABLE";}
@@ -1810,193 +1320,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return false;
   }
 
-  private async advanceCounterfactualResearchNow(now:number,observeCandidates:boolean){
-    if(!this.forwardState)return;
-    if(!this.counterfactualResearchLoaded){
-      try{this.counterfactualResearch=await readCounterfactualResearch(this.ctx.storage,now);}
-      catch{this.counterfactualResearch=initialCounterfactualResearch(now);}
-      this.counterfactualResearchLoaded=true;
-    }
-    const next=advanceCounterfactualResearch({state:this.counterfactualResearch,forward:sourceDecisionState(this.forwardState),now,
-      paths:this.strategyCandles,quotes:this.forwardQuotes(now),observeCandidates});
-    this.counterfactualResearch=next.state;
-    if(!next.changed)return;
-    const entries=counterfactualResearchWrites(next.state,next.postChanged,next.rejectedChanged),writes=Object.keys(entries).length;
-    if(!writes)return;
-    const reservation=this.reserveNonAlarmWrites(writes,512,"research-counterfactual");
-    if(!reservation)return;
-    try{await this.ctx.storage.put(entries);reservation.finish(true);}
-    catch{reservation.finish(false);}
-  }
 
-  private async advanceShadowResearchNow(now:number){
-    if(!this.forwardState)return;
-    if(!this.shadowResearchLoaded){
-      try{this.shadowResearch=await readShadowResearch(this.ctx.storage,now);}
-      catch{this.shadowResearch=initialShadowResearch(now);}
-      this.shadowResearchLoaded=true;
-    }
-    const next=advanceShadowResearch({state:this.shadowResearch,forward:sourceDecisionState(this.forwardState),now,
-      paths:this.strategyCandles,quotes:this.forwardQuotes(now)});
-    this.shadowResearch=next.state;
-    if(!next.changed)return;
-    const entries=shadowResearchWrites(next.state,next.marketChanged,next.tradesChanged),writes=Object.keys(entries).length;
-    if(!writes)return;
-    const reservation=this.reserveNonAlarmWrites(writes,512,"research-shadow");
-    if(!reservation)return;
-    try{await this.ctx.storage.put(entries);reservation.finish(true);}
-    catch{reservation.finish(false);}
-  }
 
-  private async persistReviewJournal(now:number){
-    if(now-this.reviewJournalLastWrite<300_000||this.reviewJournal.updatedAt<=this.reviewJournal.persistedAt)return;
-    this.reviewJournalLastWrite=now;
-    const reservation=this.reserveNonAlarmWrites(1,512,"review-journal");if(!reservation){this.reviewDiagnosticError="REVIEW_WRITE_BUDGET_DEFERRED";return;}
-    const saved={...this.reviewJournal,persistedAt:now};
-    try{await this.ctx.storage.put(REVIEW_JOURNAL_KEY,saved);this.reviewJournal.persistedAt=now;reservation.finish(true);this.reviewDiagnosticError=null;}
-    catch{reservation.finish(false);this.reviewDiagnosticError="REVIEW_WRITE_FAILED";}
-  }
 
-  /**
-   * Log-only cleanup of path rows whose signal never reached a saved account (see pruneGhostPaths). Runs only after a
-   * successful forward tick, and only when every owner id set is fully loaded for this account: the account itself,
-   * the cold not-opened rows (review log restored and complete), the closed-order journal and the path book.
-   * Anything missing or inconsistent means nothing is removed. Never throws.
-   */
-  /** Log only. Re-indexes the radar snapshot the worker already fetched; no request of its own. */
-  private noteRadarForLog(rows:RadarRow[],at:number){
-    this.radarIndex=new Map(rows.map(row=>[row.symbol,row]));
-    const fallback:Record<string,{px:number;at:number}>={};
-    for(const row of rows)if(row.last>0)fallback[row.symbol]={px:row.last,at};
-    this.radarFallback=fallback;
-    // Open-interest baseline: a snapshot every 15 minutes, each in its own small key, so a restart keeps the baseline.
-    if(this.oiRestore==="none"){
-      this.oiRestore="loading";
-      void this.ctx.storage.list<OiSnapshot>({prefix:OI_SNAPSHOT_PREFIX,limit:32}).then(stored=>{
-        const merged=mergeOiRing(this.oiRing,[...stored.values()],Date.now());
-        this.oiRing=merged.ring;this.oiAnchorCache=null;
-        if(merged.drop.length)void this.ctx.storage.delete(merged.drop).catch(()=>{});
-      }).catch(()=>{/* 只是记录用的基准，读不到就从现在开始攒 */}).finally(()=>{this.oiRestore="done";});
-    }
-    const step=noteOiSnapshot(this.oiRing,rows,at);
-    if(step.put){
-      this.oiRing=step.ring;this.oiAnchorCache=null;
-      void this.ctx.storage.put(oiSnapshotKey(step.put.at),step.put).catch(()=>{});
-      if(step.drop.length)void this.ctx.storage.delete(step.drop).catch(()=>{});
-    }
-  }
-  private currentOiAnchor(now:number){
-    const cached=this.oiAnchorCache;
-    if(cached&&now-cached.at<60_000)return cached.anchor;
-    const anchor=oiAnchor(this.oiRing,now);
-    this.oiAnchorCache={at:now,anchor};
-    return anchor;
-  }
-  /** Log only (stage timeline): BTC/ETH reference prices from the external hub or the fresh radar snapshot. */
-  private referenceMids(now:number){
-    const pick=(symbol:"BTC_USDT"|"ETH_USDT")=>{
-      try{const q=this.marketHub.quote(symbol,now);if(q&&q.mid>0)return q.mid;}catch{/* fall through */}
-      const row=this.radarFallback[symbol];
-      return row&&now-row.at<=120_000?row.px:null;
-    };
-    return {BTC_USDT:pick("BTC_USDT"),ETH_USDT:pick("ETH_USDT")};
-  }
-  /** Entry features for a record the tick it first appears. Pure reads of data already in memory. */
-  private noteBtcMid(now:number){
-    try{
-      const px=this.referenceMids(now).BTC_USDT,last=this.btcMidRing.at(-1);
-      if(px!=null&&px>0&&(!last||now-last.at>=60_000)){
-        this.btcMidRing.push({at:now,px});
-        const cut=now-5*3_600_000-15*60_000;
-        while(this.btcMidRing.length&&(this.btcMidRing[0]!.at<cut||this.btcMidRing.length>360))this.btcMidRing.shift();
-      }
-    }catch{/* log only */}
-  }
-  /** BTC 1h % for the TREND/SHOCK entry gate: the same inputs and function as the logged btc_1h_pct. Null when not current. */
-  private gateBtc1h(now:number):number|null{
-    try{
-      this.noteBtcMid(now);
-      return btcChange({now,btcBars5m:this.strategyCandles.BTC_USDT??null,btcMids:this.btcMidRing,btcHourly:this.regimeHourly.BTC_USDT??null},1);
-    }catch{return null;}
-  }
-  private pathCapture(now:number,state:ForwardState){
-    this.noteBtcMid(now);
-    const moves=Object.entries(state.extremumRegime?.symbols??{}).map(([symbol,row])=>({symbol,move:row.actualMove}));
-    let anchor:ReturnType<typeof oiAnchor>=null;try{anchor=this.currentOiAnchor(now);}catch{anchor=null;}
-    return {fallback:this.radarFallback,features:(t:import("../lib/forward-relations.ts").Trade)=>entryFeatures({t,now,
-      bars5m:this.strategyCandles[t.symbol]??null,radar:this.radarIndex,radarAt:this.gateRadarAt||null,
-      oiAnchor:anchor,btcHourly:this.regimeHourly.BTC_USDT??null,ethHourly:this.regimeHourly.ETH_USDT??null,
-      btcBars5m:this.strategyCandles.BTC_USDT??null,btcMids:this.btcMidRing,moves})};
-  }
 
-  private pruneGhostTradePaths(){
-    try{
-      const state=this.forwardState;
-      if(!state||!this.authorityReady||this.forwardError)return;
-      if(!state.storage?.persistedAt||state.storage.error)return;
-      if(this.reviewLogReadyFor!==state.startedAt||!this.reviewLogComplete)return;
-      if(!this.tradePathsLoaded||this.tradePaths.accountStartedAt!==state.startedAt)return;
-      if(!this.orderJournalLoaded||!this.orderJournalComplete||this.orderJournal.accountStartedAt!==state.startedAt)return;
-      const unopened=state.unopenedTrades??[];
-      const journal=this.orderJournal.rows.map(row=>({id:row.id,openedAt:row.opened_at}));
-      const result=pruneGhostPaths(this.tradePaths,{startedAt:state.startedAt,complete:true,sets:[
-        {capped:false,rows:[...state.positions,...unopened.filter(t=>t.status==="OPEN")]},
-        {capped:true,rows:unopened.filter(t=>t.status!=="OPEN")},
-        {capped:true,rows:[...state.history,...journal]}]});
-      this.ghostPathsRemaining=result.remaining;this.ghostPathError=null;
-      if(result.removed){this.ghostPathsRemoved+=result.removed;this.tradePathsPending=true;}
-      // Paths that no kept record owns (e.g. the path of an incomplete not-opened row removed below) leave the log too.
-      const owners=new Set<string>([...state.positions,...state.history,...unopened].map(t=>t.id));
-      for(const row of this.orderJournal.rows)owners.add(row.id);
-      for(const id of this.reviewLogCursor.coldIds)owners.add(id);
-      const orphan=pruneOrphanPaths(this.tradePaths,{startedAt:state.startedAt,complete:this.reviewLogCursor.startedAt===state.startedAt,ids:owners});
-      this.orphanPathsRemaining=orphan.remaining;
-      if(orphan.removed){this.orphanPathsRemoved+=orphan.removed;this.tradePathsPending=true;}
-    }catch(error){this.ghostPathError=`GHOST_PATH_PRUNE:${safeError(error)}`;}
-  }
 
-  /**
-   * Log-only cleanup: closed not-opened rows that are not complete records (lib/log-complete.ts) leave the run log,
-   * from memory and from the cold archive, a small batch per tick. Runs after a successful forward save, only when
-   * the cold log was fully restored for this account. Never touches OPEN rows, positions, history or the balance,
-   * never throws, never blocks the tick (a failed or deferred write just retries next tick).
-   */
-  private async pruneIncompleteUnopened(){
-    try{
-      const state=this.forwardState;
-      if(!state||!this.authorityReady||this.forwardError)return;
-      if(!state.storage?.persistedAt||state.storage.error)return;
-      if(this.reviewLogReadyFor!==state.startedAt||!this.reviewLogComplete)return;
-      // The price path is part of a complete record, so the path book must be loaded for this account (and not
-      // empty) before anything is judged; otherwise every row would look incomplete.
-      if(!this.tradePathsLoaded||this.tradePaths.accountStartedAt!==state.startedAt||!this.tradePaths.trades.length)return;
-      const paths=new Map(this.tradePaths.trades.map(row=>[row.id,row]));
-      const plan=prepareIncompletePrune(state,this.reviewLogCursor,
-        t=>isCompleteTradeRecord(t)&&pathComplete(paths.get(t.id),t.status==="CLOSED"),undefined,
-        id=>pathComplete(paths.get(id),true));
-      if(!plan){return;}
-      this.incompleteRowsRemaining=plan.ids.size+plan.remaining;
-      if(!plan.ids.size)return;
-      if(plan.writes){
-        const reservation=this.reserveNonAlarmWrites(plan.writes,256,"incomplete-prune");
-        if(!reservation)return;
-        try{
-          await this.ctx.storage.transaction(async transaction=>{
-            if(Object.keys(plan.entries).length)await transaction.put(plan.entries);
-            if(plan.deletes.length)await transaction.delete(plan.deletes);
-          });
-          reservation.finish(true);
-        }finally{reservation.finish(false);}
-      }
-      // Storage is now the truth: never list a deleted row again, even if the cursor or the account object moved on
-      // while awaiting (a listed-but-missing row would mark the cold log incomplete after the next restart).
-      if(this.reviewLogCursor.startedAt===state.startedAt)
-        this.reviewLogCursor={...this.reviewLogCursor,coldIds:this.reviewLogCursor.coldIds.filter(id=>!plan.ids.has(id))};
-      const current=this.forwardState;
-      if(current&&current.startedAt===state.startedAt)current.unopenedTrades=(current.unopenedTrades??[]).filter(t=>!plan.ids.has(t.id));
-      this.incompleteRowsRemoved+=plan.ids.size;this.incompleteRowsRemaining=plan.remaining;this.incompleteRowError=null;
-    }catch(error){this.incompleteRowError=`INCOMPLETE_ROW_PRUNE:${safeError(error)}`;}
-  }
 
   private async persistTradePaths(){
     if(!this.tradePathsLoaded||!this.tradePathsPending)return;
@@ -2022,117 +1350,31 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }catch{reservation.finish(false);}
   }
 
-  // ------------------------------------------------------------------ living research layer (lib/living)
-  /** One batched read of the own keys; a failed read starts compute-only (fallback) instead of acting on empty memory. */
-  private async ensureLiving(now:number){
-    if(this.living||now-this.livingLoadFailedAt<60_000)return;
-    try{
-      const keys=LivingEngine.loadKeys(),values=await this.ctx.storage.get<unknown>(keys);
-      const idx=values.get(`${LIVING_LOG_PAGE_PREFIX}index`) as {seq?:number}|undefined;
-      const page=Number.isFinite(idx?.seq)?await this.ctx.storage.get<unknown>(`${LIVING_LOG_PAGE_PREFIX}${idx!.seq}`):undefined;
-      const engine=new LivingEngine(now);engine.restore(values,now,page);
-      // warm-up of the OI baseline from the worker's existing 15-minute Gate OI snapshots (no request)
-      try{engine.seedOi(this.oiRing);}catch{/* 只是暖机 */}
-      this.living=engine;
-    }catch(error){
-      this.livingLoadFailedAt=now;this.runtime.strategyLogError=`living-load: ${safeError(error)}`;
-    }
-  }
-  private livingOnHub(at:number){
-    const engine=this.living;if(!engine||engine.config.mode==="off")return;
-    try{
-      const listed=(s:string)=>this.contractCatalog.has(s);
-      const symbols=engine.basket&&engine.basket.day===new Date(at).toISOString().slice(0,10)&&engine.basket.members.length>=10
-        ?engine.followSymbols(this.forwardState as unknown as LivingForwardView??{positions:[],history:[],opportunities:[]})
-        :[...this.marketHub.listedSymbols()].filter(listed);
-      // prices and capital flow both come from the payloads this refresh already received (no request of its own)
-      engine.onHub(this.marketHub.peekMids(symbols,at),at,listed,this.marketHub.peekFlow(symbols,at));
-    }catch(error){this.runtime.strategyLogError=`living-hub: ${safeError(error)}`;}
-  }
-  private livingPlan(now:number,state:ForwardState,quotes:Record<string,{bestBid:number;bestAsk:number;observedAt:number;entryReady?:boolean}>):LivingDirective|undefined{
-    const engine=this.living;if(!engine||engine.config.mode==="off")return undefined;
-    try{
-      const contracts=this.regimeContracts(this.livingContractSymbols()),funding:Record<string,number>={};
-      for(const [symbol,meta] of Object.entries(this.runtime.contractMeta))if(Number.isFinite(meta?.fundingRate))funding[symbol]=meta.fundingRate;
-      let htf:LivingHtfInput|undefined;try{htf=this.livingHtfInput(now,state);}catch{htf=undefined;}
-      let dyn:ReturnType<DynamicResearch["planInput"]>|undefined;try{dyn=this.dynamic.planInput(now,this.dynamicPositions(state));}catch{dyn=undefined;}
-      return engine.plan({now,forward:state as unknown as LivingForwardView,quotes,contracts,funding,candles:this.strategyCandles,...(htf?{htf}:{}),...(dyn?{dyn}:{})});
-    }catch(error){this.runtime.strategyLogError=`living-plan: ${safeError(error)}`;return undefined;}
-  }
-  /**
-   * htf-donch20 inputs, all already in memory (no request): closed daily candles the turn-daily rotation keeps for the
-   * strategy path symbols (liquid universe + positions), BTC's daily rows (htfDaily when BTC is outside that set), and the hub's
-   * 24h volume. Coins the external venues do not cover are listed, not passed: their rows could only come from Gate.
-   */
-  private livingHtfInput(now:number,state:ForwardState):LivingHtfInput{
-    const universe:string[]=[],notExternal:string[]=[],daily:Record<string,LivingDailyBar[]>={};
-    for(const symbol of this.strategyPathSymbols()){
-      if(!this.marketHub.supports(symbol)){notExternal.push(symbol);continue;}
-      universe.push(symbol);const rows=this.turnDailyCandles[symbol];if(rows?.length)daily[symbol]=rows;
-    }
-    const btc=[this.turnDailyCandles.BTC_USDT,this.htfDaily.BTC_USDT].filter((r):r is NonNullable<typeof r>=>!!r?.length)
-      .sort((a,b)=>(b.at(-1)?.time??0)-(a.at(-1)?.time??0))[0];
-    if(btc)daily.BTC_USDT=btc;
-    const volume:Record<string,number|null>={};
-    for(const m of this.marketHub.peekMids(universe,now))volume[m.symbol]=Number.isFinite(m.volume24hUsd)&&m.volume24hUsd>0?m.volume24hUsd:null;
-    void state;
-    return {daily,volume,universe,notExternal};
-  }
-  /** Own keys only, under the shared optional write guard and the layer's own daily budget. */
-  private async persistLiving(now:number,force=false){
-    const engine=this.living;if(!engine||(engine.config.mode==="off"&&!force))return;
-    const entries=engine.writes(now,force),keys=Object.keys(entries);if(!keys.length)return;
-    const expired=engine.expiredLogKeys();
-    const reservation=this.reserveNonAlarmWrites(keys.length+expired.length,512,"living-log");if(!reservation)return;
-    try{await this.ctx.storage.put(entries);if(expired.length)await this.ctx.storage.delete(expired);
-      reservation.finish(true);engine.committed(keys,now);engine.logPages=engine.logPages.filter(p=>!expired.includes(`${LIVING_LOG_PAGE_PREFIX}${p}`));}
-    catch{reservation.finish(false);}
-  }
-  private async livingExport(now:number){
-    const engine=this.living;if(!engine)return {version:"living-v2",loaded:false};
-    const pages=engine.logPages.filter(p=>p!==engine.logSeq).slice(-10),older:{seq:number;rows:LivingLogRow[]}[]=[];
-    if(pages.length){try{const got=await this.ctx.storage.get<{seq:number;rows:LivingLogRow[]}>(pages.map(p=>`${LIVING_LOG_PAGE_PREFIX}${p}`));
-      for(const v of got.values())if(v&&Array.isArray(v.rows))older.push(v);}catch{/* 旧页读不到就只导出内存里的 */}}
-    return {...engine.exportSection(now,older),olderPagesExported:older.length,olderPagesKept:engine.logPages.length};
-  }
 
   private async advanceForwardNow(now: number, allowDataCycle = true) {
+    void allowDataCycle;
     if (this.forwardBusy) return;
     this.forwardBusy = true;
     try {
       await this.ensureAdaptiveAccount(now);
-      await this.adoptEmptyStrategy(now);
-      await this.runLogWipeOnce(now);
+      await this.loadRunlogWipeRecord();
       const state=this.forwardState!;
-      const dataCycleDue=allowDataCycle&&(!state.lastCycleAt
-        ||Math.floor((now-90_000)/BAR_MS)>Math.floor((state.lastCycleAt-90_000)/BAR_MS));
-      await this.ensureLiving(now);
-      this.living?.tickLog(now,state as unknown as LivingForwardView);
-      const urgent=this.forwardUrgentSymbols(now).length>0||state.positions.length>0||(this.living?.wantsUrgent(now)??false);
-      const quoteCadence=urgent?LOOP_MS:5_000;
-      if(!dataCycleDue&&now-state.lastQuoteCycleAt<quoteCadence){
-        this.forwardLastAttemptAt=state.lastQuoteCycleAt;
+      // Open positions are watched every loop; an empty account only needs the slow clock (no strategy runs either way).
+      const quoteCadence=state.positions.length>0?LOOP_MS:5_000;
+      if(now-state.lastQuoteCycleAt<quoteCadence){
         await this.persistTradePaths();
         return;
       }
-      this.forwardLastAttemptAt=now;
-      const previous = state,reviewEvents:ReviewEvent[]=[],executionQuotes=this.forwardQuotes(now);
-      const livingDirective=this.livingPlan(now,previous,executionQuotes);
-      const next = advanceForward({ state: previous, now, paths: this.strategyCandles,minutePaths:this.forwardMinutePaths(),
-        daily:this.turnDailyCandles,quotes:executionQuotes,analysisQuotes:this.forwardAnalysisQuotes(now),contracts:this.regimeContracts(this.livingContractSymbols()),
-        entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue,
-        research:{rolling:this.shadowResearch.market[0]?.rolling??null},reviewTrace:event=>{if(reviewEvents.length<128)reviewEvents.push(event);},
-        referenceMids:(()=>{try{return this.referenceMids(now);}catch{return undefined;}})(),
-        btc1hPct:this.gateBtc1h(now),...(livingDirective?{living:livingDirective}:{}) });
-      try{this.living?.afterForward(next.living,next.state as unknown as LivingForwardView,now);}catch{/* 研究层记录失败不能挡住这一轮 */}
+      const previous = state,executionQuotes=this.forwardQuotes(now);
+      const next = advanceForward({ state: previous, now, quotes:executionQuotes,contracts:this.regimeContracts(),minutePaths:this.forwardMinutePaths() });
       try{captureTradeReviews(previous,next.state,now,FORWARD_BUILD_SHA,STRATEGY_FINGERPRINT,executionQuotes);}
       catch{this.reviewDiagnosticError="TRADE_REVIEW_CAPTURE_FAILED";}
       if(this.tradePathsLoaded){
-        let capture;try{capture=this.pathCapture(now,next.state);}catch{capture=undefined;}
-        this.tradePathsPending=observeTradePaths(this.tradePaths,next.state,executionQuotes,this.forwardAnalysisQuotes(now),now,this.strategyCandles,capture)||this.tradePathsPending;
+        this.tradePathsPending=observeTradePaths(this.tradePaths,next.state,executionQuotes,{},now,{},undefined)||this.tradePathsPending;
       }
       this.orderJournalPending=observeOrderJournal(this.orderJournal,next.state.history,next.state.startedAt)||this.orderJournalPending;
-      if (next.changed || !previous.storage.persistedAt) {
+      // Write only on a real change (open/close/stop move/funds reset) plus one slow heartbeat per 5 minutes so equity peak and daily rows survive a restart.
+      if (next.changed || !previous.storage.persistedAt || now-previous.storage.persistedAt>=BAR_MS) {
         next.state.storage = { persistedAt: now, error: null };
         // Review logs first, in their own keys and their own try/catch. Only what is proven durable leaves the hot JSON.
         await this.persistReviewLog(next.state,now);
@@ -2174,15 +1416,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }
       this.forwardState = next.state;
       this.forwardError = null;
-      try{
-        const known=new Set(this.reviewJournal.candidates.map(r=>r.id));
-        const discovered:ReviewEvent[]=next.state.opportunities.filter(o=>!known.has(o.id)).map(o=>({at:now,id:o.id,symbol:o.symbol,
-          stage:"CANDIDATE_OBSERVED",side:o.side,reason:o.eligible?"STRATEGY_ELIGIBLE":"STRATEGY_NOT_ELIGIBLE",price:o.price,plan:o.tradePlan,expiresAt:o.expiresAt}));
-        appendReviewEvents(this.reviewJournal,[...discovered,...reviewEvents].map(e=>({...e,
-          buildSha:FORWARD_BUILD_SHA,strategyFingerprint:STRATEGY_FINGERPRINT})),now);
-      }catch{this.reviewDiagnosticError="CANDIDATE_REVIEW_CAPTURE_FAILED";}
-      await this.pruneIncompleteUnopened();
-      this.pruneGhostTradePaths();
       if(this.tradePathsPending)await this.persistTradePaths();
       if(this.orderJournalPending){
         const reservation=this.reserveCriticalWrites(1,"order-journal");
@@ -2190,436 +1423,26 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         catch{reservation.finish(false);}
       }
       try{await this.noteEquityMinute(now);}catch{/* 权益分钟线写失败不能挡住这一轮 */}
-      try{await this.persistLiving(now);}catch{/* 研究层自己的键写失败不能挡住这一轮 */}
     } catch (error) { this.forwardError = safeError(error); }
     finally { this.forwardBusy = false; }
   }
 
-  private async refreshRegimeHourly(now: number) {
-    const target = Math.floor(now / 3_600_000) * 3_600 - 3_600;
-    const storageRetry = REGIME_EXECUTION_UNIVERSE.find((item) => {
-      const failure = this.runtime.regimeHourlyFailures[item];
-      return failure?.stage === "STORAGE" && failure.retryAt <= now
-        && (this.regimeHourly[item]?.length ?? 0) >= REGIME_HOURLY_REQUIRED_CANDLES;
-    });
-    if (storageRetry) {
-      try {
-        await this.ctx.storage.put(regimeHourlyStorageKey(storageRetry), this.regimeHourly[storageRetry]);
-        delete this.runtime.regimeHourlyFailures[storageRetry];
-      } catch (error) {
-        const prior = this.runtime.regimeHourlyFailures[storageRetry];
-        this.runtime.regimeHourlyFailures[storageRetry] = { count: (prior?.count ?? 0) + 1,
-          lastFailureAt: now, retryAt: now + REGIME_HOURLY_RETRY_MS,
-          stage: "STORAGE", lastError: `保存720小时路径失败：${safeError(error)}` };
-      }
-      this.evaluateRegimeNow(now);
-      return 0;
-    }
-    const symbol = REGIME_EXECUTION_UNIVERSE.find((item) => {
-      if (!this.contractCatalog.has(item)) return false;
-      const rows = this.regimeHourly[item] ?? [];
-      const failure = this.runtime.regimeHourlyFailures[item];
-      const fetchReady = failure?.stage !== "FETCH" || failure.retryAt <= now;
-      return fetchReady && regimeHourlyNeedsRefresh(rows, target);
-    });
-    if (!symbol) { this.evaluateRegimeNow(now); return 0; }
-    const prior = this.regimeHourly[symbol] ?? [];
-    try {
-      const fetchLimit = regimeHourlyFetchLimit(prior.length);
-      const incoming = await fetchStructureCandles(symbol, "1h", fetchLimit);
-      const rows = mergeRegimeHourlyPath(prior, incoming);
-      this.regimeHourly[symbol] = rows;
-      if (rows.length < REGIME_HOURLY_REQUIRED_CANDLES) {
-        const failure = this.runtime.regimeHourlyFailures[symbol];
-        this.runtime.regimeHourlyFailures[symbol] = { count: (failure?.count ?? 0) + 1,
-          lastFailureAt: now, retryAt: now + REGIME_HOURLY_RETRY_MS, stage: "FETCH",
-          lastError: `720小时连续路径不足：仅收到${rows.length}/${REGIME_HOURLY_REQUIRED_CANDLES}根完整K线` };
-        this.evaluateRegimeNow(now);
-        return 1;
-      }
-      try {
-        await this.ctx.storage.put(regimeHourlyStorageKey(symbol), rows);
-        delete this.runtime.regimeHourlyFailures[symbol];
-      } catch (error) {
-        const failure = this.runtime.regimeHourlyFailures[symbol];
-        this.runtime.regimeHourlyFailures[symbol] = { count: (failure?.count ?? 0) + 1,
-          lastFailureAt: now, retryAt: now + REGIME_HOURLY_RETRY_MS,
-          stage: "STORAGE", lastError: `保存720小时路径失败：${safeError(error)}` };
-      }
-    } catch (error) {
-      const failure = this.runtime.regimeHourlyFailures[symbol];
-      const retryAt = error instanceof GatePublicError && error.retryAt
-        ? Math.max(now + 2_000, error.retryAt) : now + REGIME_HOURLY_RETRY_MS;
-      this.runtime.regimeHourlyFailures[symbol] = { count: (failure?.count ?? 0) + 1,
-        lastFailureAt: now, retryAt, stage: "FETCH", lastError: `补齐720小时路径失败：${safeError(error)}` };
-    }
-    this.evaluateRegimeNow(now);
-    return 1;
+  /** Read-only: the durable record of a past run-log wipe still sets the export/status "since". Nothing is wiped here any more. */
+  private async loadRunlogWipeRecord(){
+    if(this.runlogWipeChecked)return;
+    try{this.runlogWipe=normalizeWipeRecord(await this.ctx.storage.get(RUNLOG_WIPE_KEY));this.runlogWipeChecked=true;}
+    catch(error){this.runlogWipeError=safeError(error);}
   }
 
-  private async refreshTurnDaily(now:number) {
-    const path=this.strategyPathSymbols();if(!path.length)return 0;
-    // htf-donch20 needs BTC's daily candles for its regime even when BTC is outside the strategy path: one extra external
-    // (never Gate) symbol, kept apart (htfDaily) so the legacy daily input of advanceForward is unchanged.
-    const htfExtra=this.living&&!path.includes("BTC_USDT")&&this.marketHub.supports("BTC_USDT")?["BTC_USDT"]:[];
-    const universe=[...path,...htfExtra],store=(symbol:string)=>htfExtra.includes(symbol)?this.htfDaily:this.turnDailyCandles;
-    const target=Math.floor(now/86_400_000)*86_400-86_400;
-    let selected:string|null=null;
-    for(let offset=0;offset<universe.length;offset++){
-      const index=(this.turnDailyCursor+offset)%universe.length,symbol=universe[index];
-      if(!this.turnDailyLoaded.has(symbol)){
-        const saved=await this.ctx.storage.get<Awaited<ReturnType<typeof fetchStructureCandles>>>(turnDailyStorageKey(symbol));
-        if(saved?.length)store(symbol)[symbol]=mergeTurnDailyPath([],saved);
-        this.turnDailyLoaded.add(symbol);
-      }
-      const rows=store(symbol)[symbol]??[],retryAt=this.turnDailyFailures.get(symbol)?.retryAt??0;
-      if((rows.length<TURN_DAILY_REQUIRED_CANDLES||(rows.at(-1)?.time??0)<target)&&retryAt<=now){
-        selected=symbol;this.turnDailyCursor=(index+1)%universe.length;break;
-      }
-    }
-    if(!selected)return 0;
-    try{
-      const book=store(selected),prior=book[selected]??[];
-      const external=await this.marketHub.candles(selected,"1d",120);
-      let rows:Awaited<ReturnType<typeof fetchStructureCandles>>;
-      if(external)rows=mergeTurnDailyPath(prior,external.rows);
-      else if(this.marketHub.supports(selected)||htfExtra.includes(selected))throw new Error(`${selected} external 1d temporarily unavailable`);
-      else rows=mergeTurnDailyPath(prior,await fetchStructureCandles(selected,"1d",prior.length>=TURN_DAILY_REQUIRED_CANDLES?4:120));
-      book[selected]=rows;
-      if(rows.length<TURN_DAILY_REQUIRED_CANDLES)throw new Error(`日线历史不足：${rows.length}/${TURN_DAILY_REQUIRED_CANDLES}`);
-      const reservation=this.reserveNonAlarmWrites(1,64,"turn-daily");
-      if(reservation){
-        try{await this.ctx.storage.put(turnDailyStorageKey(selected),rows);reservation.finish(true);}
-        finally{reservation.finish(false);}
-      }
-      this.turnDailyFailures.delete(selected);
-    }catch(error){
-      this.turnDailyFailures.set(selected,{retryAt:now+60_000,lastError:safeError(error)});
-    }
-    return 1;
-  }
 
-  private async maybeWriteStrategyRuntimeLog(now: number) {
-    if (now - this.runtime.lastStrategyLogAt < STRATEGY_LOG_MS || this.runtime.d1Writes + 2 > 4_800) return;
-    this.runtime.lastStrategyLogAt = now;
-    const summary = canonicalPaperSummary({ current: this.runtime.strategyArena, previous: this.runtime.previousStrategyArena,
-      regime: this.runtime.regimePortfolio }, this.runtime.canonicalPaper);
-    const counts = marketRegimeSummary(this.runtime.marketRegimes).counts;
-    const mechanismMetrics = REGIME_STRATEGIES.map((item) => ({ kind: "FROZEN_REGIME_STRATEGY",
-      engineId: item.system, id: item.id, tactic: item.tactic, authority: "CURRENT_REGIME_DIRECT",
-      paperAuthority: "FROZEN_44_MONTH_RESEARCH", shadowEvents: 0 }));
-    const metrics = [...this.runtime.regimePortfolio.routeChecks.slice(0, 60), ...mechanismMetrics];
-    try {
-      await this.env.DB.batch([
-        this.env.DB.prepare(`INSERT OR REPLACE INTO strategy_runtime_log
-          (id,observed_at,version,scanned_markets,stable_markets,realtime_markets,regime_counts_json,strategy_metrics_json,
-           shadow_open,shadow_resolved,active_strategies,portfolio_open,portfolio_equity,portfolio_resolved,portfolio_net_pnl,
-           strategy_candle_error,authority_state,live_requested,live_operational)
-          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
-          `strategy-runtime:${Math.floor(now / STRATEGY_LOG_MS)}`, now, this.runtime.version, this.runtime.radar.scanned,
-          Object.keys(this.runtime.stableCandidates).length, this.runtime.symbols.length, JSON.stringify(counts), JSON.stringify(metrics),
-          0, 0, summary.activeCount,
-          canonicalPaperOpen({ current: this.runtime.strategyArena, previous: this.runtime.previousStrategyArena,
-            regime: this.runtime.regimePortfolio }, this.runtime.canonicalPaper).length,
-          summary.portfolioEquity, summary.portfolioResolved, summary.portfolioEquity - summary.initialEquity,
-          this.runtime.strategyCandleError, this.runtime.state, Number(this.runtime.live.requestedEnabled), Number(this.runtime.live.operational)),
-        this.env.DB.prepare("DELETE FROM strategy_runtime_log WHERE observed_at<?").bind(now - STRATEGY_LOG_RETENTION_MS),
-      ]);
-      this.runtime.d1Writes += 2;
-      this.runtime.strategyLogError = null;
-    } catch (error) {
-      this.runtime.strategyLogError = safeError(error);
-    }
-  }
 
-  private observeArena(symbol: string, midpoint: number, analyzed: ReturnType<typeof analyzeSnapshot>, now: number,
-    spreadRate: number, bestBid: number, bestAsk: number, bidDepthUsd: number, askDepthUsd: number) {
-    this.runtime.strategyArena = advanceStrategyArena({ state: this.runtime.strategyArena,
-      quotes: { [symbol]: { midpoint, bestBid, bestAsk } }, now });
-    this.runtime.previousStrategyArena = advancePreviousStrategyArena({ state: this.runtime.previousStrategyArena,
-      quotes: { [symbol]: { midpoint, bestBid, bestAsk } }, now });
-    // V4/V5 are retired: existing positions keep their original protection,
-    // but no legacy candidate can create a new order after this cutover.
-    if (this.runtime.regimePortfolio.version === REGIME_PORTFOLIO_VERSION) return;
-    const memory = this.memory[symbol];
-    const contract = this.contractCatalog.get(symbol);
-    if (!memory || !contract) return;
-    const candle = residentCandleCandidate({ symbol, candles: memory.recentCompletedMinuteCandles,
-      volume24hUsd: contract.volume24hUsd, fundingRate: contract.fundingRate, now });
-    const stable = this.runtime.stableCandidates[symbol];
-    const candidates = stable && now - stable.observedAt <= STRATEGY_CANDLE_STALE_MS ? [stable] : candle ? [candle.candidate] : [];
-    const marketContext = broadMarketContext(this.runtime.stableCandidates, now);
-    const rankedRoutes = [...new Map([...Object.values(this.runtime.stableCandidates), ...candidates]
-      .map((row) => [row.symbol, row])).values()]
-      .filter((row) => approvedRouteScore(row) >= 0 && now - row.observedAt <= STRATEGY_CANDLE_STALE_MS)
-      .sort((left, right) => approvedRouteScore(right) - approvedRouteScore(left)
-        || right.observedAt - left.observedAt || left.symbol.localeCompare(right.symbol));
-    for (const candidate of candidates) {
-      this.runtime.strategyArena = observeStrategyArena({ state: this.runtime.strategyArena, observation: {
-        candidate, midpoint, bestBid, bestAsk, alignedFlow: 0, minuteNoiseRate: memory.minuteNoiseRate,
-        spreadRate, range15m: analyzed.range15m, confirmationBySide: analyzed.confirmationBySide,
-        fakeoutBySide: analyzed.fakeoutBySide, routes: analyzed.routes, bidDepthUsd, askDepthUsd,
-        candleStructure: this.runtime.stableStructures[symbol] ?? candle?.structure ?? null,
-        quantoMultiplier: this.runtime.contractMeta[symbol]?.quantoMultiplier,
-        maintenanceRate: this.runtime.contractMeta[symbol]?.maintenanceRate, completedMinuteAt: memory.timeframeUpdatedAt.m1,
-        leverageMax: this.runtime.contractMeta[symbol]?.leverageMax, now, dataFresh: true,
-        globalBreadth: marketContext.breadth, globalMedianMove: marketContext.medianMove, globalMarkets: marketContext.markets,
-        marketBreadth4h: marketContext.breadth4h, marketMedianMove4h: marketContext.medianMove4h,
-        marketBreadth24h: marketContext.breadth24h, marketMedianMove24h: marketContext.medianMove24h,
-        btcMove24h: marketContext.btcMove24h, regimeMarkets: marketContext.regimeMarkets,
-        contractReady: this.runtime.contractMeta[symbol] != null,
-        globalOpportunityRank: Math.max(1, rankedRoutes.findIndex((row) => row.symbol === candidate.symbol) + 1),
-        globalOpportunityCount: rankedRoutes.length,
-        managementCapacity: Object.keys(this.runtime.strategyArena.portfolioOpen)
-          .every((openSymbol) => this.runtime.symbols.includes(openSymbol) && this.runtime.evidence[openSymbol]?.fresh !== false),
-      } });
-    }
-    const previousStable = this.runtime.previousStableCandidates[symbol];
-    const previousCandidates = previousStable && now - previousStable.observedAt <= STRATEGY_CANDLE_STALE_MS
-      ? [previousStable] : [];
-    const previousMarketContext = broadMarketContext(this.runtime.previousStableCandidates, now);
-    const previousRankedRoutes = Object.values(this.runtime.previousStableCandidates)
-      .filter((row) => previousApprovedRouteScore(row) >= 0 && now - row.observedAt <= STRATEGY_CANDLE_STALE_MS)
-      .sort((left, right) => previousApprovedRouteScore(right) - previousApprovedRouteScore(left)
-        || right.observedAt - left.observedAt || left.symbol.localeCompare(right.symbol));
-    for (const candidate of previousCandidates) {
-      this.runtime.previousStrategyArena = observePreviousStrategyArena({ state: this.runtime.previousStrategyArena, observation: {
-        candidate, midpoint, bestBid, bestAsk, alignedFlow: 0, minuteNoiseRate: memory.minuteNoiseRate,
-        spreadRate, range15m: analyzed.range15m, confirmationBySide: analyzed.confirmationBySide,
-        fakeoutBySide: analyzed.fakeoutBySide, routes: analyzed.routes, bidDepthUsd, askDepthUsd,
-        candleStructure: this.runtime.previousStableStructures[symbol] ?? null,
-        quantoMultiplier: this.runtime.contractMeta[symbol]?.quantoMultiplier,
-        maintenanceRate: this.runtime.contractMeta[symbol]?.maintenanceRate, completedMinuteAt: memory.timeframeUpdatedAt.m1,
-        leverageMax: this.runtime.contractMeta[symbol]?.leverageMax, now, dataFresh: true,
-        globalBreadth: previousMarketContext.breadth, globalMedianMove: previousMarketContext.medianMove,
-        globalMarkets: previousMarketContext.markets, contractReady: this.runtime.contractMeta[symbol] != null,
-        globalOpportunityRank: Math.max(1, previousRankedRoutes.findIndex((row) => row.symbol === candidate.symbol) + 1),
-        globalOpportunityCount: previousRankedRoutes.length,
-        managementCapacity: Object.keys(this.runtime.previousStrategyArena.portfolioOpen)
-          .every((openSymbol) => this.runtime.symbols.includes(openSymbol) && this.runtime.evidence[openSymbol]?.fresh !== false),
-      } });
-    }
-    if (this.runtime.strategyArena.cutoverPending) {
-      const positions = Object.values(this.runtime.strategyArena.portfolioOpen);
-      if (positions.every((position) => {
-        const evidence = this.runtime.evidence[position.symbol];
-        return evidence?.fresh && now - evidence.observedAt <= STALE_AFTER_MS && evidence.bestBid != null && evidence.bestAsk != null;
-        })) this.runtime.strategyArena = resetStrategyArenaAccount({ state: this.runtime.strategyArena,
-        quotes: Object.fromEntries(positions.map((position) => [position.symbol, {
-          midpoint: this.runtime.evidence[position.symbol]!.midpoint, bestBid: this.runtime.evidence[position.symbol]!.bestBid,
-          bestAsk: this.runtime.evidence[position.symbol]!.bestAsk, observedAt: this.runtime.evidence[position.symbol]!.observedAt, fresh: true,
-        }])), now, reason: "全境·复利引擎切换：以新鲜可成交价格结算并归档上一模拟周期" });
-    }
-    if (this.runtime.previousStrategyArena.cutoverPending) {
-      const positions = Object.values(this.runtime.previousStrategyArena.portfolioOpen);
-      if (positions.every((position) => {
-        const evidence = this.runtime.evidence[position.symbol];
-        return evidence?.fresh && now - evidence.observedAt <= STALE_AFTER_MS && evidence.bestBid != null && evidence.bestAsk != null;
-      })) this.runtime.previousStrategyArena = resetPreviousStrategyArenaAccount({ state: this.runtime.previousStrategyArena,
-        quotes: Object.fromEntries(positions.map((position) => [position.symbol, {
-          midpoint: this.runtime.evidence[position.symbol]!.midpoint, bestBid: this.runtime.evidence[position.symbol]!.bestBid,
-          bestAsk: this.runtime.evidence[position.symbol]!.bestAsk, observedAt: this.runtime.evidence[position.symbol]!.observedAt, fresh: true,
-        }])), now, reason: "上一版独立引擎迁移：以新鲜可成交价格结算并归档旧周期" });
-    }
-  }
 
-  private priorityMinuteSymbols(now: number) {
-    const completedMinute = Math.floor(now / 60_000) * 60_000;
-    return this.runtime.symbols.filter((symbol) => (this.memory[symbol]?.timeframeUpdatedAt.m1 ?? 0) < completedMinute);
-  }
 
-  private criticalEvidenceFresh(symbol: string, now: number) {
-    const memory = this.memory[symbol] ?? emptySymbolMemory();
-    return now - memory.timeframeUpdatedAt.m1 <= 3 * 60_000;
-  }
 
-  private async updateAncillary(now: number) {
-    const scheduled = ancillarySchedule(this.runtime.ancillaryCursor++, this.runtime.symbols, this.priorityMinuteSymbols(now));
-    if (!scheduled) return 0;
-    const symbol = scheduled.symbol;
-    let featureTask: () => Promise<{ kind: string; symbol: string; value: unknown; timeframe?: "1m" | "15m" | "1h" }>;
-    if (scheduled.feature === "trades") featureTask = async () => ({ kind: "trades", symbol, value: await fetchRecentTrades(symbol) });
-    else if (scheduled.feature === "liquidations") featureTask = async () => ({ kind: "liquidations", symbol, value: await fetchLiquidations(symbol) });
-    else {
-      const timeframe = scheduled.feature;
-      featureTask = async () => ({ kind: "structure", symbol, timeframe, value: await fetchStructureCandles(symbol, timeframe) });
-    }
-    const tasks: Array<() => Promise<{ kind: string; symbol: string; value: unknown; timeframe?: "1m" | "15m" | "1h" }>> = [
-      async () => ({ kind: "stats", symbol, value: await fetchContractStats(symbol) }),
-      featureTask,
-    ];
-    const results = await batches(tasks);
-    for (const result of results) {
-      if (result.status !== "fulfilled") continue;
-      const memory = this.memory[result.value.symbol] ??= emptySymbolMemory();
-      if (result.value.kind === "stats") {
-        const stat = result.value.value as Awaited<ReturnType<typeof fetchContractStats>>;
-        const statTime = Number(stat?.time ?? 0);
-        if (stat && statTime > memory.lastOiStatTime) {
-          updateOpenInterestCohorts(memory, Number(stat.open_interest ?? 0));
-          memory.lastOiStatTime = statTime;
-          memory.oiUpdatedAt = now;
-        }
-      } else if (result.value.kind === "trades") {
-        const rows = result.value.value as Awaited<ReturnType<typeof fetchRecentTrades>>;
-        const fresh = rows.filter((trade) => Number(trade.id ?? 0) > memory.lastTradeId);
-        const signed = fresh.reduce((sum, trade) => sum + Number(trade.size ?? 0), 0);
-        const gross = fresh.reduce((sum, trade) => sum + Math.abs(Number(trade.size ?? 0)), 0);
-        memory.flow.takerDelta = gross > 0 ? Math.max(-1, Math.min(1, signed / gross)) : memory.flow.takerDelta * 0.7;
-        memory.lastTradeId = Math.max(memory.lastTradeId, ...rows.map((trade) => Number(trade.id ?? 0)));
-        memory.tradesUpdatedAt = now;
-      } else if (result.value.kind === "liquidations") {
-        const rows = result.value.value as Awaited<ReturnType<typeof fetchLiquidations>>;
-        const fresh = rows.filter((row) => Number(row.time ?? 0) > memory.lastLiquidationTime);
-        const gross = fresh.reduce((sum, row) => sum + Math.abs(Number(row.order_size ?? 0)), 0);
-        memory.actualLiquidationNotional = memory.actualLiquidationNotional * 0.75 + fresh.reduce((sum, row) => sum + Math.abs(Number(row.order_size ?? 0)) * Number(row.fill_price ?? row.order_price ?? memory.lastMid) * Math.max(memory.quantoMultiplier, 1e-12), 0);
-        memory.flow.actualLiquidations = Math.max(-1, Math.min(1, fresh.reduce((sum, row) => sum + Number(row.order_size ?? 0), 0) / Math.max(1, gross)));
-        memory.lastLiquidationTime = Math.max(memory.lastLiquidationTime, ...rows.map((row) => Number(row.time ?? 0)));
-        const incoming = fresh.map((row) => {
-          const signed = Number(row.order_size ?? 0);
-          const price = Number(row.fill_price ?? row.order_price ?? memory.lastMid);
-          const observedAt = Number(row.time ?? 0) < 1e12 ? Number(row.time ?? 0) * 1_000 : Number(row.time ?? 0);
-          return { side: signed > 0 ? "LONG" as const : "SHORT" as const, price, notional: Math.abs(signed) * price * Math.max(memory.quantoMultiplier, 1e-12), observedAt };
-        }).filter((row) => row.price > 0 && now - row.observedAt <= 120_000);
-        const retained = [...memory.recentLiquidations.filter((row) => now - row.observedAt <= 120_000), ...incoming];
-        memory.recentLiquidations = [...new Map(retained.map((row) => [`${row.side}:${row.price}:${row.observedAt}`, row])).values()].slice(-100);
-        memory.liquidationsUpdatedAt = now;
-      } else {
-        const rows = result.value.value as Awaited<ReturnType<typeof fetchStructureCandles>>;
-        const timeframe = result.value.timeframe!;
-        (this.structureCandles[result.value.symbol] ??= {})[timeframe] = rows;
-        const key = timeframe === "1m" ? "m1" : timeframe === "15m" ? "m15" : "h1";
-        memory.structureByTimeframe[key] = deriveStructureZones(rows, timeframe, memory.lastMid);
-        if (timeframe === "15m") memory.range15m = deriveRangeStructure(rows);
-        if (timeframe === "1h") {
-          const h4 = aggregateFourHourCandles(rows);
-          this.structureCandles[result.value.symbol]!["4h"] = h4;
-          memory.structureByTimeframe.h4 = deriveStructureZones(h4, "4h", memory.lastMid);
-          if (h4.length >= 20) {
-            memory.timeframeBias.h4 = structureDirection(memory.structureByTimeframe.h4);
-            memory.timeframeUpdatedAt.h4 = (h4.at(-1)!.time + 14_400) * 1_000;
-          }
-        }
-        memory.structureZones = [...memory.structureByTimeframe.m1, ...memory.structureByTimeframe.m15,
-          ...memory.structureByTimeframe.h1, ...memory.structureByTimeframe.h4];
-        if (rows.length >= 20) {
-          memory.timeframeBias[key] = structureDirection(memory.structureByTimeframe[key]);
-          const seconds = timeframe === "1m" ? 60 : timeframe === "15m" ? 900 : 3_600;
-          memory.timeframeUpdatedAt[key] = (rows.at(-1)!.time + seconds) * 1_000;
-          if (timeframe === "1m") {
-            memory.lastCompletedMinuteClose = rows.at(-1)!.close;
-            memory.lastCompletedMinuteCandle = rows.at(-1)!;
-            memory.recentCompletedMinuteCandles = rows.slice(-90).map(({ time, open, high, low, close }) => ({
-              time, open, high, low, close,
-            }));
-            memory.minuteNoiseRate = deriveMinuteNoiseRate(rows);
-          }
-        }
-      }
-    }
-    return tasks.length;
-  }
 
-  private queueTransition(position: PaperPosition | null, priorPosition: PaperPosition | null) {
-    const changed = position != null && !(priorPosition?.id === position.id && priorPosition.status === position.status && priorPosition.currentStop === position.currentStop);
-    if (!changed) return;
-    if (priorPosition?.status === "OPEN" && position.status === "CLOSED") {
-      this.runtime.equity = Math.max(0.01, this.runtime.equity + (position.realizedPnl ?? 0));
-      this.runtime.paperCycle = recordCycleTrade(this.runtime.paperCycle, position, this.runtime.equity);
-    }
-    this.runtime.equityVersion += 1;
-    this.runtime.outbox = enqueuePositionTransition(this.runtime.outbox, priorPosition, position, this.runtime.equity, this.runtime.equityVersion);
-  }
 
-  private async writePosition(item: PositionOutboxItem) {
-    const { position } = item;
-    const statements = [
-      this.env.DB.prepare(`INSERT INTO paper_positions
-        (id,symbol,market_state,side,status,entry_at,entry_price,initial_stop,current_stop,current_target,target_identity,planned_risk,notional,exit_at,exit_price,exit_reason,realized_pnl,fees_and_slippage,mirror_version)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,current_stop=excluded.current_stop,current_target=excluded.current_target,target_identity=excluded.target_identity,exit_at=excluded.exit_at,exit_price=excluded.exit_price,exit_reason=excluded.exit_reason,realized_pnl=excluded.realized_pnl,fees_and_slippage=excluded.fees_and_slippage,mirror_version=excluded.mirror_version WHERE excluded.mirror_version > paper_positions.mirror_version`).bind(
-        position.id, position.symbol, position.scenario, position.side, position.status, position.entryAt, position.entryPrice,
-        position.initialStop, position.currentStop, position.currentTarget, position.targetIdentity ?? "legacy:none", position.plannedRisk, position.notional,
-        position.exitAt ?? null, position.exitPrice ?? null, position.exitReason ?? null, position.realizedPnl ?? null, position.feesAndSlippage ?? null, item.equityVersion,
-      ),
-      this.env.DB.prepare("UPDATE system_settings SET paper_equity=?,equity_version=?,updated_at=? WHERE id=1 AND equity_version<?")
-        .bind(item.equity, item.equityVersion, Date.now(), item.equityVersion),
-    ];
-    if (position.status === "CLOSED") statements.push(this.env.DB.prepare(`INSERT OR IGNORE INTO paper_events
-      (id,symbol,event_type,observed_at,payload_json) VALUES (?,?,?,?,?)`).bind(
-      `diagnostic:${position.id}`, position.symbol, "ORDER_CLOSE_DIAGNOSTIC", position.exitAt ?? position.entryAt,
-      JSON.stringify(diagnoseClosedPosition(position)),
-    ));
-    const billedWrites = statements.length;
-    if (this.runtime.d1Writes + billedWrites > 4_800) throw new Error("daily D1 write budget reached");
-    await this.env.DB.batch(statements);
-    this.runtime.d1Writes += billedWrites;
-  }
 
-  private async drainOutbox(now: number) {
-    if (now < this.runtime.d1RetryAt) return;
-    if (this.runtime.d1Writes >= 4_800) {
-      this.runtime.d1RetryAt = Date.parse(`${day(now + 86_400_000)}T00:00:02Z`);
-      this.runtime.d1MirrorError = "D1 daily mirror redline reached; authority continues in Durable Object";
-      return;
-    }
-    const before = this.runtime.outbox;
-    this.runtime.outbox = await drainPositionOutbox(before, (item) => this.writePosition(item));
-    if (this.runtime.outbox.length) {
-      this.runtime.d1FailureCount = Math.min(5, this.runtime.d1FailureCount + 1);
-      this.runtime.d1RetryAt = now + [2_000, 10_000, 30_000, 120_000, 300_000][this.runtime.d1FailureCount - 1];
-      this.runtime.d1MirrorError = `D1 mirror pending ${this.runtime.outbox.length} transition(s)`;
-    } else {
-      this.runtime.d1FailureCount = 0;
-      this.runtime.d1RetryAt = 0;
-      this.runtime.d1MirrorError = null;
-    }
-    if (!this.runtime.outbox.length && this.runtime.bankruptcyOutbox.length) {
-      while (this.runtime.bankruptcyOutbox.length) {
-        const item = this.runtime.bankruptcyOutbox[0];
-        if (this.runtime.d1Writes + 2 > 4_800) break;
-        try {
-          // The checkpoint keeps only a bounded diagnostic tail. Once every
-          // position transition has reached D1, rebuild the permanent report
-          // from the complete cycle so high-frequency cycles are never cut at
-          // MAX_CYCLE_TRADES in Account Logs.
-          const diagnostics = await this.env.DB.prepare(`SELECT payload_json AS payload
-            FROM paper_events WHERE event_type='ORDER_CLOSE_DIAGNOSTIC'
-              AND observed_at>=? AND observed_at<=? ORDER BY observed_at,id`)
-            .bind(item.report.startedAt, item.report.endedAt).all<{ payload: string }>();
-          const completeTrades = [...new Map((diagnostics.results ?? []).flatMap((row) => {
-            try {
-              const trade = JSON.parse(row.payload) as ReturnType<typeof diagnoseClosedPosition>;
-              return trade?.id ? [[trade.id, trade] as const] : [];
-            } catch { return []; }
-          })).values()];
-          const report = completeTrades.length > item.report.trades.length
-            ? buildBankruptcyReport({
-              number: item.report.cycleNumber,
-              startedAt: item.report.startedAt,
-              startingEquity: item.report.startingEquity,
-              peakEquity: item.report.endingEquity / Math.max(1 - item.report.maxDrawdownRate, 1e-9),
-              trades: completeTrades,
-            }, item.report.endedAt, item.report.endingEquity)
-            : item.report;
-          await this.env.DB.batch([
-            this.env.DB.prepare(`INSERT OR IGNORE INTO paper_events
-              (id,symbol,event_type,observed_at,payload_json) VALUES (?,?,?,?,?)`).bind(
-              report.id, "ACCOUNT", "PAPER_BANKRUPTCY", report.endedAt, JSON.stringify(report),
-            ),
-            this.env.DB.prepare("UPDATE system_settings SET paper_equity=?,equity_version=?,updated_at=? WHERE id=1 AND equity_version<?")
-              .bind(item.equity, item.equityVersion, Date.now(), item.equityVersion),
-          ]);
-          this.runtime.d1Writes += 2;
-          this.runtime.bankruptcyOutbox.shift();
-        } catch {
-          this.runtime.d1FailureCount = Math.min(5, this.runtime.d1FailureCount + 1);
-          this.runtime.d1RetryAt = now + [2_000, 10_000, 30_000, 120_000, 300_000][this.runtime.d1FailureCount - 1];
-          this.runtime.d1MirrorError = `D1 bankruptcy log pending ${this.runtime.bankruptcyOutbox.length} record(s)`;
-          break;
-        }
-      }
-    }
-  }
+
 
   protected turnoverStartsAt() { return this.forwardState!.startedAt; }
   protected async turnoverRows(rows:GateConfirmedFill[]) { return rows; }
@@ -2787,114 +1610,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return { ok: true, credential: await credentialMetadata(this.env.DB) };
   }
 
-  /** One pass of the attached thesis loop. Old books stay empty. */
-  private async advanceThesis(now: number) {
-    if (!this.thesisLoaded) {
-      try {
-        const saved = await this.ctx.storage.get<ThesisAttached>(THESIS_STORAGE_KEY);
-        if (saved?.version === 'thesis-v1') {
-          this.thesis = saved;
-          this.thesisPersistedAt = saved.updatedAt;
-          this.thesisAckAt = saved.updatedAt;
-          this.thesisView = saved.view ?? null;
-        }
-      } catch { /* a missing blob just starts a new book */ }
-      this.thesisLoaded = true;
-    }
-    if (this.thesis && this.thesisView && now - this.thesis.updatedAt < 5_000) return;
-    const initial = this.forwardState?.initialEquity ?? 1000;
-    try {
-      const next = await runThesisCycle(this.thesis, this.thesisMarkets(now), now, initial);
-      this.thesis = next.state;
-      this.thesisView = next.view;
-    } catch (error) {
-      const failed = this.thesis ?? emptyThesis(initial, now);
-      this.thesis = { ...failed, updatedAt: now, lastError: safeError(error) };
-      this.thesisView = this.thesisView
-        ? { ...this.thesisView, updatedAt: now, note: `策略这一拍失败：${safeError(error)}` }
-        : null;
-    }
-    if (now - this.thesisPersistedAt < 60_000 || !this.thesis) {
-      if (this.thesis && this.thesisPersistedAt > 0) this.thesisAckAt = this.thesis.updatedAt;
-      return;
-    }
-    const reservation = this.reserveNonAlarmWrites(1, 256, "thesis");
-    if (!reservation) return;
-    try {
-      await this.ctx.storage.put(THESIS_STORAGE_KEY, this.thesis);
-      this.thesisPersistedAt = now;
-      this.thesisAckAt = now;
-      reservation.finish(true);
-    } catch {
-      reservation.finish(false);
-    }
-  }
 
-  private thesisMarkets(now: number): ThesisMarket[] {
-    const quotes = this.regimeQuotes(now);
-    const btc = this.regimeHourly.BTC_USDT ?? [];
-    const btcLast = btc.at(-1);
-    const btcPrev = btc.length > 24 ? btc[btc.length - 25] : btc[0];
-    const btcPrice = quotes.BTC_USDT?.midpoint ?? btcLast?.close ?? 0;
-    const btcChange24h = btcLast && btcPrev && btcPrev.close > 0 ? btcLast.close / btcPrev.close - 1 : 0;
-    const ranked = Object.keys(this.regimeHourly)
-      .filter((symbol) => (this.regimeHourly[symbol]?.length ?? 0) >= 50 && quotes[symbol]?.fresh)
-      .sort((left, right) => (quotes[right]?.observedAt ?? 0) - (quotes[left]?.observedAt ?? 0) || left.localeCompare(right));
-    if (this.regimeHourly.BTC_USDT && quotes.BTC_USDT?.fresh && !ranked.includes('BTC_USDT')) ranked.unshift('BTC_USDT');
-    return ranked.slice(0, 8).flatMap((symbol) => {
-      const rows = this.regimeHourly[symbol] ?? [];
-      const quote = quotes[symbol];
-      const last = rows.at(-1);
-      const price = quote?.midpoint ?? last?.close ?? 0;
-      if (!(price > 0) || !last) return [];
-      return [{
-        symbol,
-        candles: rows.slice(-80).map((row) => ({
-          ts: row.time > 1e12 ? row.time : row.time * 1000,
-          open: row.open, high: row.high, low: row.low, close: row.close, volume: row.volume,
-        })),
-        price,
-        bid: quote?.bestBid ?? price,
-        ask: quote?.bestAsk ?? price,
-        fundingRate: this.runtime.contractMeta[symbol]?.fundingRate ?? 0,
-        volume24h: this.contractCatalog.get(symbol)?.volume24hUsd ?? 0,
-        btcPrice,
-        btcChange24h,
-      }];
-    });
-  }
 
-  /** Clear the paper book once. No old strategy is installed. */
-  private async adoptEmptyStrategy(now:number){
-    if(this.newDeskSettled||!this.forwardState)return;
-    const epochKey=`${FORWARD_STORAGE}strategy-slot-epoch`;
-    const saved=await this.ctx.storage.get<string>(epochKey);
-    if(saved===STRATEGY_EPOCH||this.forwardState.inverseTrial?.strategySlot==='empty'){this.newDeskSettled=true;return;}
-    const live=this.runtime.live;
-    if(live.requestedEnabled||live.operational
-      ||Object.values(live.positions).some(position=>position?.status==="OPEN")
-      ||Object.values(live.entries).some(entry=>entry&&!["FILLED","CANCELLED"].includes(entry.status)))return;
-    const previous=this.forwardState;
-    const next=emptyStrategyAccount(previous,now);
-    next.storage={persistedAt:now,error:null,layout:FORWARD_PAGED_STATE_VERSION,sampleIntegrity:"raw-sha256"};
-    const prepared=await prepareForwardWrite(previous.storage.persistedAt?previous:null,next,now,{compact:true});
-    const protection=await this.ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
-    const checkpoint=prepareForwardProtectionWrite(next).entries[FORWARD_PROTECTION_STORAGE] as Record<string,unknown>|undefined;
-    if(checkpoint)prepared.entries[FORWARD_PROTECTION_STORAGE]=protection?.writeBudget!==undefined?{...checkpoint,writeBudget:protection.writeBudget}:checkpoint;
-    prepared.entries[epochKey]=STRATEGY_EPOCH;
-    prepared.writes+=(checkpoint?1:0)+1;
-    const reservation=this.reserveCriticalWrites(prepared.writes,writeKeyBreakdown(Object.keys(prepared.entries)));
-    try{
-      await this.ctx.storage.transaction(async transaction=>{await transaction.put(prepared.entries);});
-      reservation.finish(true);
-    }finally{reservation.finish(false);}
-    next.storage.layout=FORWARD_PAGED_STATE_VERSION;next.storage.sampleIntegrity="raw-sha256";
-    this.forwardCompression=prepared.compression;this.forwardState=next;this.forwardError=null;
-    this.forwardProtectionBudget=readProtectionWriteBudget(protection?.writeBudget);
-    this.mirrorClosures.clear();
-    this.reviewJournal=initialReviewJournal(next.startedAt,now);this.reviewJournalLoaded=true;this.reviewDiagnosticError=null;
-    this.newDeskSettled=true;
-  }
 
   /** True when another batch of pre-cutover archive rows may remain. */
   private async sweepRetiredPaperArchives(sweepKey:string){
@@ -4554,33 +3271,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return forwardUrgentQuoteSymbols(this.forwardState,now,this.runtime.liquidUniverse??[]);
   }
 
-  private forwardAnalysisQuotes(now=Date.now()){
-    if(!this.forwardState)return{};
-    const recentClosed=(this.forwardState?.history??[]).filter(t=>t.closedAt!=null&&now-t.closedAt<=180*60_000).map(t=>t.symbol);
-    const symbols=[...new Set([...this.runtime.liquidUniverse,...Object.keys(this.runtime.evidence??{}),...recentClosed])],
-      out:Record<string,{bestBid:number;bestAsk:number;observedAt:number;fresh:boolean;entryReady?:boolean;sourceCount?:number;disagreementRate?:number;
-        sourceBreadth?:number;directionalAgreement?:number;medianShortMove?:number;spreadRate?:number;bookImbalance?:number;
-        bidLiquidityChange?:number;askLiquidityChange?:number;liquiditySourceCount?:number}>={};
-    for(const symbol of symbols){
-      const external=this.marketHub.quote(symbol,now),row=this.runtime.evidence[symbol];
-      if(external){
-        const half=Math.max(1e-7,Math.min(.02,(external.spreadRate??0)/2));
-        out[symbol]={bestBid:external.mid*(1-half),bestAsk:external.mid*(1+half),observedAt:external.observedAt,fresh:true,entryReady:false,
-          sourceCount:external.sourceCount,disagreementRate:external.disagreementRate,sourceBreadth:external.sourceBreadth,
-          directionalAgreement:external.directionalAgreement,medianShortMove:external.medianShortMove,spreadRate:external.spreadRate,
-          bookImbalance:external.bookImbalance,bidLiquidityChange:external.bidLiquidityChange,askLiquidityChange:external.askLiquidityChange,
-          liquiditySourceCount:external.liquiditySourceCount};
-        continue;
-      }
-      if(row?.fresh&&row.bestBid!=null&&row.bestAsk!=null&&now-row.observedAt<=STALE_AFTER_MS){
-        const mid=(row.bestBid+row.bestAsk)/2;
-        out[symbol]={bestBid:row.bestBid,bestAsk:row.bestAsk,observedAt:row.observedAt,fresh:true,entryReady:false,sourceCount:1,
-          disagreementRate:0,sourceBreadth:0,directionalAgreement:.5,medianShortMove:0,
-          spreadRate:mid>0?(row.bestAsk-row.bestBid)/mid:0,bookImbalance:0,bidLiquidityChange:0,askLiquidityChange:0,liquiditySourceCount:0};
-      }
-    }
-    return out;
-  }
 
   private forwardQuotes(now=Date.now()){
     if(!this.forwardState||!this.runtime.evidence)return this.regimeQuotes(now);
@@ -4602,33 +3292,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private launchExternalMarketRefresh(now=Date.now()){
+    // Only needed to protect held positions (1m wick bars); an empty account makes no external request at all.
+    if(!this.forwardState?.positions.length)return;
     const task=this.marketHub.launchRefresh(now);if(!task)return;
     this.ctx.waitUntil(task.then(()=>{
       const at=Date.now(),status=this.marketHub.status(at);
       if(status.healthySources>0)this.runtime.lastSuccessAt=at;
-      for(const symbol of this.forwardUrgentSymbols(at)){
-        const q=this.marketHub.quote(symbol,at);if(q)this.recordForwardMinuteQuote(symbol,q.mid,q.observedAt);
-      }
-      this.livingOnHub(at);
     }).catch(error=>{this.runtime.strategyLogError=`external-market: ${safeError(error)}`;}));
   }
 
-  private recordForwardMinuteQuote(symbol:string,mid:number,observedAt:number){
-    if(!this.forwardUrgentSymbols(observedAt).includes(symbol)||!Number.isFinite(mid)||mid<=0)return;
-    this.forwardMinuteQuoteBars??={};
-    const minute=Math.floor(observedAt/60_000)*60_000;
-    let row=this.forwardMinuteQuoteBars[symbol];
-    if(!row||row.minute!==minute){
-      if(row){
-        const covered=row.lastAt-row.firstAt;
-        const fullMinute=row.samples>=12&&covered>=45_000&&row.firstAt<=row.minute+10_000&&row.lastAt>=row.minute+50_000;
-        if(fullMinute)row.completed=[...row.completed,{time:row.minute/1000,open:row.open,high:row.high,low:row.low,close:row.close,volume:0}].slice(-90);
-      }
-      row={minute,open:mid,high:mid,low:mid,close:mid,samples:1,firstAt:observedAt,lastAt:observedAt,completed:row?.completed??[]};
-      this.forwardMinuteQuoteBars[symbol]=row;return;
-    }
-    row.high=Math.max(row.high,mid);row.low=Math.min(row.low,mid);row.close=mid;row.samples++;row.lastAt=observedAt;
-  }
 
   private forwardMinutePaths(){
     const officialCache=this.forwardMinuteCandles??{};
@@ -4643,17 +3315,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private async refreshForwardUrgentMinutes(now=Date.now()){
     this.forwardMinuteCandles??={};this.forwardMinuteQuoteBars??={};this.forwardMinuteRetryAt??=new Map();
     const targetCompletedAt=Math.floor(now/60_000)*60_000;
-    const fixed=this.forwardState?forwardUrgentMinuteSymbols(this.forwardState,this.runtime.liquidUniverse??[]):[],
-      freshImpulse=(this.runtime.liquidUniverse??[]).flatMap(symbol=>{
-        const q=this.marketHub.quote(symbol,now);
-        return q&&Math.abs(q.medianShortMove)>=.0012&&q.directionalAgreement>=.67
-          ?[{symbol,score:Math.abs(q.medianShortMove)*q.directionalAgreement}]:[];
-      }).sort((a,b)=>b.score-a.score).map(x=>x.symbol),
-      // Reserve a few of the existing 11 minute-confirmation seats for brand-new
-      // impulses. This does not increase requests/capacity; it prevents ten open
-      // positions from monopolising all 1m discovery data.
-      urgent=[...new Set([...freshImpulse.slice(0,3),...fixed])]
-        .slice(0,FORWARD_MINUTE_CONFIRMATION_CAP);
+    const urgent=this.forwardState?forwardUrgentMinuteSymbols(this.forwardState):[];
     const due=urgent.filter(symbol=>{
       if((this.forwardMinuteRetryAt.get(symbol)??0)>now)return false;
       const last=Math.max(this.forwardMinuteCandles[symbol]?.at(-1)?.time??0,this.gateStream.path(symbol,"1m").at(-1)?.time??0);
@@ -4693,11 +3355,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.runtime.contractMeta[symbol]?.quantoMultiplier??1,Math.max(now,Date.now()));
     // REST fallback only where it matters: critical symbols keep the old every-loop behaviour; research/scanning symbols
     // back off while their websocket book stays silent and share a global REST budget (no new requests anywhere).
-    const fastLiving=this.living?.restCritical(now)??{all:false,symbols:[] as string[]};
     // open/pending exposure only; research-only scanning symbols (opportunities, extremum watch list) are not critical
     const restCritical=new Set([...this.currentAuthorityProtectionSymbols(),
       ...(this.forwardState?forwardRestCriticalSymbols(this.forwardState,now,this.runtime.liquidUniverse??[]):[])]);
-    const critical=(symbol:string)=>fastLiving.all||restCritical.has(symbol)||fastLiving.symbols.includes(symbol);
+    const critical=(symbol:string)=>restCritical.has(symbol);
     this.gateRestThrottle.forget(this.runtime.symbols);
     const due=cycleSymbols.filter(symbol=>{
       if(streamBook(symbol)){this.gateRestThrottle.wsSeen(symbol);return true;}
@@ -4739,7 +3400,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         warmup:this.sessionWarmup[symbol]??0,fresh:true,ancillaryFresh:true,optionalFresh:true,entryReady:ready,
         recoveryFreshCount:recovery.recoveryFreshCount,suspensionReason:ready?null:"等待第二份新鲜盘口确认",
         topLong:null,topShort:null,absorption:0,range15m:null};
-      this.recordForwardMinuteQuote(symbol,mid,at);successes++;
+      successes++;
     }
     if(successes>0)this.runtime.lastSuccessAt=Date.now();
     return{successes,requests:due.length,criticalChanged:false};
@@ -4813,37 +3474,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     } finally {reservation.finish(false);curve?.reservation.finish(false);}
   }
 
-  private async refreshAdaptiveCandles(now=Date.now()){
-    const symbols=this.strategyPathSymbols();if(!symbols.length)return 0;
-    const targetCompletedAt=latestCompletedStrategyCandleAt(now);
-    const due=symbols.filter(symbol=>{
-      const last=this.strategyCandles[symbol]?.at(-1);
-      return !last||(last.time+300)*1000<targetCompletedAt;
-    }).slice(0,5);
-    const results=await Promise.allSettled(due.map(async symbol=>{
-      const coverage=this.marketHub.coverage(symbol,Date.now());
-      if(coverage.sourceCount>=2&&coverage.disagreementRate>.015)
-        throw new Error(`${symbol} external venue disagreement ${(coverage.disagreementRate*100).toFixed(2)}%`);
-      const external=await this.marketHub.candles(symbol,"5m",120);
-      if(external)return{symbol,rows:external.rows,replace:true,source:external.source};
-      if(this.marketHub.supports(symbol))throw new Error(`${symbol} external 5m temporarily unavailable`);
-      // True Gate-only contracts retain a low-frequency fallback. A temporary
-      // Bybit/OKX/KuCoin outage never redirects common-market analysis onto Gate.
-      const rows=await fetchStructureCandles(symbol,"5m",(this.strategyCandles[symbol]?.length??0)>=120?6:120);
-      return{symbol,rows,replace:false,source:"GATE" as const};
-    }));
-    results.forEach((result,index)=>{
-      const symbol=due[index]!;
-      if(result.status!=="fulfilled"){
-        const prior=this.runtime.strategyCandleFailures[symbol];
-        this.runtime.strategyCandleFailures[symbol]={count:(prior?.count??0)+1,lastFailureAt:now,retryAt:now+5000,
-          lastError:`5m多源刷新失败：${safeError(result.reason)}`};return;
-      }
-      const rows=result.value.replace?result.value.rows:mergeStrategyCandlePath(this.strategyCandles[symbol]??[],result.value.rows);
-      if(rows.length>=30){this.strategyCandles[symbol]=rows.slice(-120);delete this.runtime.strategyCandleFailures[symbol];}
-    });
-    return due.length;
-  }
 
   private publishCriticalHealth(observedAt:number,books:{successes:number;requests:number}) {
     this.runtime.lastAlarmAt=observedAt;
@@ -4871,90 +3501,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.ctx.waitUntil(tracked);
     }catch{/* 归档只是记录，失败不能碰交易 */}
   }
-  private launchLivingLogWork(now:number){
-    try{
-      const engine=this.living,st=this.livingLogStatus;
-      if(this.livingLogWork||!engine||!engine.loaded)return;
-      const every=st.failures>0?Math.min(30*60_000,LIVING_LOG_EVERY_MS*2**Math.min(4,st.failures)):LIVING_LOG_EVERY_MS;
-      if(st.lastRunAt!=null&&now-st.lastRunAt<every)return;
-      const db=(this.env as {DB?:unknown}).DB?(this.env.DB as unknown as D1Like):null;
-      st.lastRunAt=now;
-      if(!db){st.error="D1 binding missing";return;}
-      const buckets=engine.runlog.bucketsDue(now),cases=engine.runlog.casesDue(now,engine.tape);
-      const task=writeLivingLog(db,st,now,buckets,cases).then(done=>{
-        engine.runlog.bucketsSaved(done.buckets);engine.runlog.casesSaved(done.cases);st.lastOkAt=Date.now();st.error=null;st.failures=0;
-      }).catch(error=>{st.error=safeError(error);st.failures++;});
-      this.livingLogWork=task;
-      const tracked=task.finally(()=>{if(this.livingLogWork===task)this.livingLogWork=null;});
-      this.ctx.waitUntil(tracked);
-    }catch{/* 只是记录，失败不能碰交易 */}
-  }
   /** compact public summary of the research layer (no positions, no keys): boot, backfill progress, external requests, trades, predictor */
   /** In-memory alarm-loop timing (diagnosis of quote gaps): alarm runs >10s and gaps >10s between two alarm starts, last 8 each. */
   private alarmStats={lastStartAt:0,lastMs:0,slow:[] as {at:number;ms:number}[],gaps:[] as {at:number;ms:number}[]};
-  private dynamicHealth(now:number){
-    try{const d=this.dynamic,v=d.view(now),b=v.backfill;
-      return {version:v.version,booted:v.booted,bootError:v.bootError,lastError:v.lastError,lastStepAt:v.lastStepAt,maxStepMs:v.maxStepMs,
-        store:{error:v.store.error,rowsToday:v.store.rowsToday,deferred:v.store.deferred,failures:v.store.failures},
-        backfill:{done:b.done,total:b.total,pct:b.pct,working:b.working,reqToday:b.reqToday,errTotal:b.errTotal,blocked:b.blocked,venues:"bybit/okx/kucoin (never Gate)",
-          pages:b.pages,reqLastHour:b.reqLastHour,lastProgressAt:b.lastProgressAt,nextRunAt:b.nextRunAt,stepRunning:!!this.dynamicWork,lastStepMs:d.lastStepMs},
-        shadowTrades:v.shadowTrades,tradesLoaded:v.tradesLoaded,replayUnits:v.replay.unitsDone,allowed:v.allowed.length,
-        predictor:{ready:v.predictor.ready,playbooks:v.predictor.playbooks,scored:v.predictor.track.n,ms:v.predictor.ms,waiting:v.predictor.waiting.code},
-        snapshot:{restored:v.snapshot.restored,usingSaved:v.snapshot.usingSaved,stale:v.snapshot.stale,ageMin:v.snapshot.ageMin,bytes:v.snapshot.bytes,peakLite:v.snapshot.peakLite}};
-    }catch(error){return {error:safeError(error)};}
-  }
-  private livingLogView(now:number){
-    const st=this.livingLogStatus,engine=this.living;
-    return {...st,budgetPerDay:LIVING_LOG_DAILY_ROWS,healthy:st.error==null&&st.lastOkAt!=null&&now-st.lastOkAt<=10*60_000,
-      activeCases:engine?.runlog.activeCount()??0,casesToday:engine?.runlog.daily.n??0,casesDroppedToday:engine?.runlog.daily.dropped??0,
-      bucketMinutes:engine?.runlog.bucket?.minutes??null,env:(()=>{try{return engine?.envSummary()??null;}catch{return null;}})()};
-  }
   private archiveView(now:number){
     return {...this.runLogArchiver.status,healthy:this.runLogArchiver.healthy(now),segmentSize:ARCHIVE_SEGMENT_SIZE};
-  }  /** open paper trades of dynamic-v1 pool playbooks (their exits come from the research runtime) */
-  private dynamicPositions(state:ForwardState):DynPosition[]{
-    const out:DynPosition[]=[];
-    for(const p of state.positions){const n=(p.entryContext as {living?:{dp?:number;pb?:string;inv?:number;tg?:number;mb?:number}}|undefined)?.living;
-      if(!n?.dp||!n.pb||(p as {inverseCopy?:boolean}).inverseCopy)continue;
-      const g=(p as {livingGuard?:{stop?:number}}).livingGuard?.stop;
-      out.push({id:p.id,symbol:p.symbol,side:p.side,entryPrice:p.entryPrice,stopPrice:p.stopPrice,openedAt:p.openedAt,guard:typeof g==="number"?g:null,pb:n.pb,inv:typeof n.inv==="number"?n.inv:p.stopPrice,
-        target:typeof n.tg==="number"?n.tg:null,maxBars:typeof n.mb==="number"?n.mb:null});}
-    return out;
   }
-  /**
-   * dynamic-v1 step: off the trading clock. Loads shadow trades, ingests the worker's 5m bars, evaluates new bars, replays,
-   * re-analyzes (hourly / after new trades) and, paced at ≤4 a minute, refreshes the newest bars (or, with DYN_HISTORY "full", deep history pages) from Bybit/OKX/KuCoin. Never Gate.
-   */
-  private backfillWork:Promise<unknown>|null=null;
-  private launchDynamicWork(now:number){
-    try{
-      const db=(this.env as {DB?:unknown}).DB?(this.env.DB as unknown as D1Like):null;
-      const universe=this.strategyPathSymbols().filter(s=>this.marketHub.supports(s));
-      if(this.dynamicWork){
-        if(!this.backfillWork&&this.dynamic.booted){
-          const t=this.dynamic.backfillTick(now,{universe,db,fetch:venueFetch}).catch(()=>false);
-          this.backfillWork=t;this.ctx.waitUntil(t.finally(()=>{if(this.backfillWork===t)this.backfillWork=null;}));}
-        return;
-      }
-      if(now-this.dynamic.lastStepAt<this.dynamic.stepGapMs())return;
-      const daily:Record<string,(typeof this.turnDailyCandles)[string]|undefined>={};
-      for(const s of [...universe,"BTC_USDT"])daily[s]=this.turnDailyCandles[s]??this.htfDaily[s];// external daily rows already in memory (no request)
-      // burst-leader shadow trades (followed by the engine on its own 1m tape) become pool trades of the research layer
-      if(this.living&&this.dynamic.booted&&this.dynamic.tradesLoaded){const xs=this.living.takeBurstShadow();if(xs.length)this.dynamic.addExternal(xs,now);}
-      const task=this.dynamic.step(now,{universe,db,fetch:venueFetch,feed:this.strategyCandles,daily}).then(()=>{
-        const engine=this.living;if(!engine)return;
-        for(const e of this.dynamic.events)if(e.at>this.dynamicEventAt){try{engine.runlog.event(e.at,`DYN_${e.k}`,e.text);}catch{/* 只是记录 */}}
-        this.dynamicEventAt=Math.max(this.dynamicEventAt,...this.dynamic.events.map(e=>e.at));
-        // dynamic-v1.4 pool log: allocator changes, predictor snapshots, scoring, backfill progress (by sequence, never twice)
-        for(const r of this.dynamic.poolRecs)if(r.seq>this.dynamicPoolSeq){try{engine.runlog.pool(r.rec.at,r.rec);}catch{/* 只是记录 */}}
-        this.dynamicPoolSeq=Math.max(this.dynamicPoolSeq,this.dynamic.poolSeq);
-      }).catch(()=>undefined);
-      this.dynamicWork=task;
-      const tracked=task.finally(()=>{if(this.dynamicWork===task)this.dynamicWork=null;});
-      this.ctx.waitUntil(tracked);
-    }catch{/* 研究层只是研究，失败不能碰交易 */}
-  }
-
   /** Rows archived since the archive-export cursor. One count per cursor move (or every 6 h); in between, new rows
    *  are added from the archive's own running total, so an open panel never turns into repeated D1 scans. */
   private async archivePendingSinceCursor(now:number){
@@ -5014,55 +3566,22 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return json({...file,archive:{...file.archive,file_name:name,cursor_advanced:advanced,remaining_after:mode==="since"&&advanced?Math.max(0,total-rows.length):null}});
   }
 
+  /** Background, non-overlapping, never delays the 2s protection loop. Only core upkeep: Gate settlement, contract catalog, 1m wick bars for held coins. */
   private launchOptionalWork(now:number,universeDue:boolean) {
+    void now;
     if(this.optionalWork)return;
     const task=(async()=>{
       let subrequests=0;
       this.launchLiveSettlementBackground();
-      const hub=this.marketHub.status(Date.now());
-      if(hub.healthySources===0){
-        const refresh=this.marketHub.launchRefresh(Date.now());
-        if(refresh)await refresh.catch(()=>undefined);
-      }
       if(universeDue){
         subrequests+=2;
         try{this.refreshUniverse(Date.now(),await fetchActiveContracts());}
         catch(error){this.runtime.lastError=`universe: ${safeError(error)}`;}
       }
-      const radarDue=radarAttemptDue(this.runtime.radar,Date.now());
-      if(radarDue){
-        // Gate bulk discovery is optional and explicitly yields to private LIVE
-        // work. Bybit/OKX/KuCoin remain the normal scan surface.
-        if(!this.liveSyncWork&&Date.now()-this.gateRadarAt>=GATE_RADAR_MS){
-          try{
-            const previous=new Map(this.gateRadarCache.map(row=>[row.symbol,row.last])),next=await fetchGateRadarTickers(),
-              moves=new Map<string,number>();
-            for(const row of next){const prior=previous.get(row.symbol);if(prior&&prior>0)moves.set(row.symbol,row.last/prior-1);}
-            this.gateRadarCache=next;this.gateRadarShortMoves=moves;this.gateRadarAt=Date.now();subrequests++;
-            // living layer reads Gate OI / funding / basis from this same payload (no extra Gate request)
-            try{this.living?.onRadar(next,this.gateRadarAt);}catch{/* 研究层读不到不影响主流程 */}
-            try{this.noteRadarForLog(next,this.gateRadarAt);}catch{/* 只是记录用的索引 */}
-          }catch{/* stale Gate-only discovery must never block external analysis */}
-        }
-        try{this.refreshRadar(Date.now());}
-        catch(error){this.runtime.radar=failedRadarRuntime(this.runtime.radar,Date.now(),error);}
-      }
-      subrequests+=await this.refreshAdaptiveCandles(Date.now());
-      subrequests+=await this.refreshResearchContext(Date.now());
-      // L0 macro cycle needs real daily history. Warm one market per optional
-      // pass from independent public venues so Gate outages cannot blind or
-      // stall the ultra-long-horizon narrative.
-      subrequests+=await this.refreshTurnDaily(Date.now());
       subrequests+=await this.refreshForwardUrgentMinutes(Date.now());
-      await this.advanceForwardNow(Date.now(),true);
-      // Research-only counterfactuals run after the authoritative PAPER commit.
-      // They never feed back into entry, exit, risk or LIVE execution.
-      await this.advanceCounterfactualResearchNow(Date.now(),true);
-      await this.advanceShadowResearchNow(Date.now());
-      await this.persistReviewJournal(Date.now());
       this.runtime.subrequestCount+=subrequests;
       this.runtime.maxSubrequestsInAlarm=Math.max(this.runtime.maxSubrequestsInAlarm,subrequests);
-    })().catch(error=>{this.runtime.strategyLogError=`adaptive: ${safeError(error)}`;});
+    })().catch(error=>{this.runtime.strategyLogError=`core-upkeep: ${safeError(error)}`;});
     this.optionalWork=task;
     const tracked=task.finally(()=>{if(this.optionalWork===task)this.optionalWork=null;});
     this.ctx.waitUntil(tracked);
@@ -5141,8 +3660,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.launchOptionalWork(now, universeDue);
       this.launchTurnoverWork(Date.now());
       this.launchArchiveWork(Date.now());
-      this.launchLivingLogWork(Date.now());
-      this.launchDynamicWork(Date.now());
     } catch (error) {
       this.runtime.state = "RECONNECTING";
       this.runtime.lastError = safeError(error);
@@ -5201,25 +3718,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const actual=Object.values(this.runtime.live.positions).find(p=>p?.id===id)??binding.actual;
       return json({...binding,currentSource:this.currentMirrorSource(id),actual});
     }
-    if (path === "/living-status" && request.method === "GET") {
-      await this.ensureLiving(Date.now());
-      if(!this.living)return json({error:"研究层还没恢复"},503);
-      const now=Date.now();let dynamic:unknown=null;try{dynamic=this.dynamic.view(now);}catch(error){dynamic={error:safeError(error)};}
-      return json({...this.living.status(now,this.forwardState as unknown as LivingForwardView??undefined),dynamic});
-    }
-    if (path === "/living-mode" && request.method === "POST") {
-      await this.ensureLiving(Date.now());
-      if(!this.living)return json({error:"研究层还没恢复"},503);
-      let body:{mode?:unknown;items?:Record<string,unknown>};try{body=await request.json() as typeof body;}catch{return json({error:"invalid json"},400);}
-      const mode=typeof body.mode==="string"&&LIVING_MODES.includes(body.mode as LivingMode)?body.mode as LivingMode:undefined;
-      if(body.mode!=null&&!mode)return json({error:"mode 只能是 off / compute-only / paper-enabled"},400);
-      const items:Record<string,boolean>={};
-      for(const [k,v] of Object.entries(body.items??{})){if(!(LIVING_ITEMS as readonly string[]).includes(k)||typeof v!=="boolean")return json({error:`未知开关 ${k}`},400);
-        if(k==="dynAllocator")return json({error:"开关 10 已固定开启，不能关闭"},400);items[k]=v;}
-      const now=Date.now();this.living.setConfig({mode,items:items as never},now);
-      await this.persistLiving(now,true);
-      return json(this.living.status(now,this.forwardState as unknown as LivingForwardView??undefined));
-    }
     if (path === "/forward-log-status" && request.method === "GET") {
       if(!this.forwardState||!this.authorityReady)return json({error:"权威账户尚未恢复"},503);
       const now=Date.now();
@@ -5247,7 +3745,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         const exportedAt=Date.now(),hub=this.marketHub.status(exportedAt),gate=this.gateStream.status(exportedAt);
         await this.ensureTradePaths();
         await this.ensureOrderJournal();
-        await this.ensureLiving(exportedAt);
         const state=this.forwardState;
         const since=this.logSince();
         const book=accountLogBook(state,this.forwardQuotes(exportedAt),exportedAt,this.orderJournal,since);
@@ -5261,7 +3758,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           stageTimeline:[],liveFills:normalizeLiveFills(this.runtime.live.fills),equityMinutes:minutes,tallySince:book.tallySince,accountResets:book.accountResets,pendingResetAt:book.pendingResetAt});
         const ids=new Set(file.positions.map(row=>row.id));
         const columnsOf=(id:string,row:{side:'LONG'|'SHORT';gate_signal_side?:unknown;gate_btc_1h_pct?:unknown})=>{try{return pathColumns(pathById.get(id),shadowSignalOf(row));}catch{return null;}};
-        const engine=this.living,livingEpoch=engine?.config.epochStartedAt??null;
+        const livingEpoch:number|null=null;
         const hotPositions=withLivingEpoch(withResearchColumns(file.positions,columnsOf),livingEpoch) as Record<string,unknown>[];
         let positions=hotPositions;
         const paths:unknown[]=pathsReady?exportTradePaths(this.tradePaths,id=>ids.has(id)):[];
@@ -5281,13 +3778,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           cases=await readLivingLog(db,"case",from,exportedAt,2000) as LivingFinalCase[];
           d1Counts=await countLivingLog(db);
         }catch(error){d1Error=safeError(error);}}
-        if(engine){try{buckets=[...buckets,...engine.runlog.closed,...engine.runlog.bucketsDue(exportedAt).slice(-1)];
-          cases=[...cases,...engine.runlog.activeView(exportedAt,engine.tape)];}catch(error){d1Error=d1Error??safeError(error);}}
-        let status:Record<string,unknown>|null=null;
-        try{if(engine){const st=engine.status(exportedAt,state as unknown as LivingForwardView);
-          status={mode:st.mode,configured:st.configured,acting:st.acting,fallback:st.fallback,loadedAt:st.loadedAt,market:st.market,fast:st.fast,
-            watches:st.watches,positions:st.positions,items:st.items,writesToday:st.writesToday,lastError:st.lastError,basket:st.basket,lastFeedAt:st.lastFeedAt};}}catch{status=null;}
-        try{const v=this.dynamic.view(exportedAt);status={...(status??{}),dynamic:{...v,events:this.dynamic.events.slice(-120)}};}catch{/* 研究层视图失败不挡导出 */}
+        // The strategy engine is gone: buckets/cases are only what earlier runs already wrote to D1 (read-only history).
+        const status:Record<string,unknown>|null=null;
         const lastReset=book.accountResets.at(-1)?.at??null;
         const out=buildLivingRunLog({exportedAt,liveEnabled:this.runtime.live.requestedEnabled,buildSha:FORWARD_BUILD_SHA,hours,since:since?.at??null,status,buckets,cases,
           account:{equity:file.invariants.equity,initial:file.invariants.initial,invariants:file.invariants,book_audit:file.book_audit,equity_curve:file.equity_curve,
@@ -5297,7 +3789,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             equity_gaps:(()=>{try{return equityGaps(file.equity_minutes);}catch{return [];}})(),equity_filled_min:file.equity_minutes.filter(row=>row.filled).length},
           positions,fills:file.fills,
           paths,
-          archive:{d1Error,d1Counts,livingRunLog:this.livingLogView(exportedAt),runLogArchive:this.archiveView(exportedAt),path_check:pathsReady}});
+          archive:{d1Error,d1Counts,livingRunLog:null,runLogArchive:this.archiveView(exportedAt),path_check:pathsReady}});
         const openedAt=out.positions.map(row=>Number(row.opened_at)).filter(n=>Number.isFinite(n));
         const body={...out,orders_from:openedAt.length?Math.min(...openedAt):null,orders_to:openedAt.length?Math.max(...openedAt):null,orders_archive_error:archiveError};
         const markRows=body.positions.length+body.cases.length;
@@ -5323,7 +3815,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           return [...src.positions,...src.history].map(t=>({id:t.id,status:t.status==="CLOSED"?"CLOSED" as const:"OPEN" as const,
             price:quotes[t.symbol]?(quotes[t.symbol]!.bestBid+quotes[t.symbol]!.bestAsk)/2:t.lastPrice??null,quoteAt:quotes[t.symbol]?.observedAt??t.lastQuoteAt??null,
             exitPrice:t.exitPrice??null,closedAt:t.closedAt??null}));})(),
-        counterfactual:counterfactualResearchView(this.counterfactualResearch),shadow:shadowResearchView(this.shadowResearch),
         journal:structuredClone(this.reviewJournal),
         marketData:{sources:this.marketHub.status(exportedAt),transport:this.gateStream.status(exportedAt),feedQuality:this.runtime.feedQuality,
           symbols:this.runtime.symbols.map(symbol=>({symbol,quoteAt:this.runtime.evidence[symbol]?.observedAt??null,
@@ -5382,10 +3873,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       await this.ensureAlarm();
       const stale = !this.authorityReady || this.runtime.lastSuccessAt == null || Date.now() - this.runtime.lastSuccessAt > SYSTEM_HEALTH_STALE_AFTER_MS;
       const effectiveState = !this.authorityReady ? "RECOVERY_REQUIRED" : stale ? "RECONNECTING" : this.runtime.state;
-      const strategies = REGIME_STRATEGIES;
-      const canonical = canonicalPaperSummary({ current: this.runtime.strategyArena, previous: this.runtime.previousStrategyArena,
-        regime: this.runtime.regimePortfolio }, this.runtime.canonicalPaper);
-      const regimes = marketRegimeSummary(this.runtime.marketRegimes);
       return json({
         version: this.runtime.version,
         buildSha: FORWARD_BUILD_SHA,
@@ -5401,8 +3888,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           previous:this.runtime.resourceRollovers?.at(-1)??null,writesByKind:writeKindsView(this.runtime.writeKinds,Date.now()),forwardCompression:this.forwardCompression,
           reviewLog:{readyFor:this.reviewLogReadyFor,coldUnopened:this.reviewLogCursor.coldIds.length,error:this.reviewLogError,complete:this.reviewLogComplete},
           runLogArchive:this.archiveView(Date.now()),
-          livingRunLog:this.livingLogView(Date.now()),
-          dynamicResearch:this.dynamicHealth(Date.now()),
           alarmLoop:{lastMs:this.alarmStats.lastMs,slow:this.alarmStats.slow,gaps:this.alarmStats.gaps},
           ghostPaths:{removed:this.ghostPathsRemoved,remaining:this.ghostPathsRemaining,error:this.ghostPathError},
           incompleteLog:{rowsRemoved:this.incompleteRowsRemoved,rowsRemaining:this.incompleteRowsRemaining,error:this.incompleteRowError,
@@ -5429,99 +3914,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           openPositionExitRequested:Object.values(this.runtime.live.positions).filter(p=>p?.status==="OPEN"&&p.exitRequestedAt).length,
           recentAudit:this.runtime.live.auditEvents.slice(-16).map(e=>({at:e.observedAt,stage:e.stage,level:e.level,gateLabel:e.gateLabel})),
         },
-        strategyArena: {
-          version: canonical.version,
-          playbookCount: canonical.playbookCount,
-          catalogSize: strategies.length,
-          shadowCount: 0,
-          activeCount: 0,
-          reverseActiveCount: 0,
-          sleepingCount: 0,
-          portfolioEquity: canonical.portfolioEquity,
-          portfolioOpen: canonical.portfolioOpen.length,
-          observationShadow: 0,
-          routeCheckCount: this.runtime.regimePortfolio.routeChecks.length,
-          formingRouteCount: this.runtime.regimePortfolio.routeChecks.filter((row) => row.status === "FORMING").length,
-          blockedRouteCount: this.runtime.regimePortfolio.routeChecks.filter((row) => row.status === "BLOCKED").length,
-          openRouteCount: this.runtime.regimePortfolio.routeChecks.filter((row) => row.status === "OPEN").length,
-          effectiveShadowOpen: 0,
-          cutoverPending: this.runtime.strategyArena.cutoverPending || this.runtime.previousStrategyArena.cutoverPending,
-          engines: canonical.engines.map((engine) => ({ id: engine.id, name: engine.name,
-            portfolioEquity: engine.portfolioEquity, portfolioOpen: engine.portfolioOpen.length })),
-          rules: {
-            singleTradeRiskMin: 0.015,
-            singleTradeRiskMax: 0.015,
-            minimumPortfolioRiskUsdt: 0,
-            targetPortfolioRiskUsdt: 15,
-            minimumNotionalMultiple: 0.05,
-            empiricalCostFloorRate: ARENA_FRICTION_RATE,
-            portfolioRiskCap: PORTFOLIO_RISK_CAP,
-            correlatedRiskCap: CORRELATED_DIRECTION_RISK_CAP,
-            marginCap: null,
-            maxNotionalMultiple: 0.5,
-            authorityWindowPriority: "CURRENT_REGIME_DIRECT",
-            paperEvaluation: true,
-            exactShadowClone: false,
-            normalShadowAlwaysOn: false,
-            outcomeBasedPromotion: false,
-            shadowExecution: false,
-            independentDirections: true,
-            extremeSequenceAuthority: false,
-            strategyName: "五行情独立账户组合",
-            generatedRouteAuthority: false,
-            legacyStrategyAuthority: false,
-            paperCycleResetOnCutover: false,
-            allRegimeVersion: ALL_REGIME_ENGINE_VERSION,
-            sameBranchSymbolCooldownMs: 24 * 60 * 60_000,
-            maxPortfolioPositions: MAX_PORTFOLIO_POSITIONS,
-            profitArmIsExit: true,
-            dailyObjectiveRate: 0.10,
-            dailyObjectiveIsQuota: false,
-            dualIndependentEngines: false,
-            independentSystemCount: REGIME_SYSTEMS.length,
-            engineInitialEquity: 1_000,
-            canonicalReferenceEquity: CANONICAL_PAPER_REFERENCE_EQUITY,
-            canonicalCopySizing: "SOURCE_EQUITY_FRACTION",
-            canonicalEntryScaleFrozen: true,
-            canonicalAdmissionGate: false,
-            canonicalCapitalAgnostic: false,
-            sameSymbolCrossEngineAllowed: true,
-            liveSource: "CANONICAL_PAPER_NORMALIZED_NET",
-          },
-        },
-        radar: {
-          scanned: this.runtime.radar.scanned,
-          lastScanAt: this.runtime.radar.lastScanAt,
-          lastAttemptAt: this.runtime.radar.lastAttemptAt,
-          consecutiveFailures: this.runtime.radar.consecutiveFailures,
-          retryAt: this.runtime.radar.retryAt,
-          entryFresh: radarCandidateExecutionAllowed(this.runtime.radar.lastScanAt, Date.now()),
-        },
-        strategyData: {
-          liquidMarkets: REGIME_UNIVERSE.length,
-          stableMarkets: this.runtime.regimePortfolio.warmMarkets,
-          hourlyRequiredCandles: REGIME_HOURLY_REQUIRED_CANDLES,
-          hourlyPathFailures: Object.keys(this.runtime.regimeHourlyFailures).length,
-          hourlyPathError: Object.values(this.runtime.regimeHourlyFailures)
-            .sort((left, right) => right.lastFailureAt - left.lastFailureAt)[0]?.lastError ?? null,
-          routedMarkets: new Set(this.runtime.regimePortfolio.routeChecks.map((row) => row.symbol)).size,
-          marketBreadth: this.runtime.regimePortfolio.currentContext?.breadth24 ?? 0,
-          marketMedianMove: this.runtime.regimePortfolio.currentContext?.median24 ?? 0,
-          marketContextMarkets: this.runtime.regimePortfolio.currentContext?.markets ?? 0,
-          polarityReady: this.runtime.regimePortfolio.warmMarkets >= 8,
-          lastCompletedCandleAt: this.runtime.regimePortfolio.lastEvaluatedHour ?? 0,
-          lastRuntimeLogAt: this.runtime.lastStrategyLogAt,
-          degradedMarkets: Object.values(this.runtime.strategyCandleFailures).filter((failure) => failure.count > 0).length,
-          blockingMarkets: Object.entries(this.runtime.strategyCandleFailures).filter(([symbol, failure]) => failure.count >= 2
-            && Date.now() - (this.runtime.stableStructures[symbol]?.observedAt ?? 0) > STRATEGY_CANDLE_STALE_MS).length,
-          candleError: this.runtime.strategyCandleError,
-          logError: this.runtime.strategyLogError,
-        },
         feedQuality: this.runtime.feedQuality,
         multiSourceMarket: this.marketHub.status(),
         marketDataTransport: this.gateStream.status(),
         gateRestThrottle: this.gateRestThrottle.status(),
-        marketRegimes: { tracked: regimes.tracked, warmed: regimes.warmed, counts: regimes.counts },
         limits: {
           markets: this.runtime.symbols.length,
           scannedMarkets: this.runtime.radar.scanned,
@@ -5542,34 +3938,17 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (path === "/status" || path === "/owner-runtime") {
       await this.ensureAlarm();
       if(path==="/owner-runtime")this.launchTurnoverWork(Date.now());
-      const { outbox, live, paperCycle, bankruptcyOutbox, strategyArena, previousStrategyArena, regimePortfolio, canonicalPaper, marketRegimes,
-        stableCandidates: _stableCandidates, previousStableCandidates: _previousStableCandidates, stableStructures,
+      const { outbox, live, paperCycle, bankruptcyOutbox, strategyArena: _sa, previousStrategyArena: _psa, regimePortfolio: _rp, canonicalPaper: _cp, marketRegimes: _mr,
+        stableCandidates: _stableCandidates, previousStableCandidates: _previousStableCandidates, stableStructures: _ss,
         previousStableStructures: _previousStableStructures, liquidUniverse: _liquidUniverse,
-        strategyCandleFailures, ...publicRuntime } = this.runtime;
+        strategyCandleFailures: _scf, radar: _radar, regimeHourlyFailures: _rhf, ...publicRuntime } = this.runtime;
+      void _sa; void _psa; void _rp; void _cp; void _mr; void _ss; void _scf; void _radar; void _rhf;
       void _stableCandidates; void _previousStableCandidates; void _previousStableStructures; void _liquidUniverse;
       const stale = !this.authorityReady || this.runtime.lastSuccessAt == null || Date.now() - this.runtime.lastSuccessAt > SYSTEM_HEALTH_STALE_AFTER_MS;
       const effectiveState = !this.authorityReady ? "RECOVERY_REQUIRED" : stale ? "RECONNECTING" : this.runtime.state;
       return json({ ...publicRuntime, ...this.authorityView, paperCycle: paperCycleSummary(paperCycle, this.authorityView.equity),
         buildSha: FORWARD_BUILD_SHA,
         forward: pageForwardView(this.forwardView()), legacyRetired: true,
-        strategyArena: canonicalPaperSummary({ current: strategyArena, previous: previousStrategyArena, regime: regimePortfolio }, canonicalPaper),
-        marketRegimes: marketRegimeSummary(marketRegimes),
-        strategyData: { liquidMarkets: REGIME_UNIVERSE.length, stableMarkets: regimePortfolio.warmMarkets,
-          hourlyRequiredCandles: REGIME_HOURLY_REQUIRED_CANDLES,
-          hourlyPathFailures: Object.keys(publicRuntime.regimeHourlyFailures).length,
-          hourlyPathError: Object.values(publicRuntime.regimeHourlyFailures)
-            .sort((left, right) => right.lastFailureAt - left.lastFailureAt)[0]?.lastError ?? null,
-          routedMarkets: new Set(regimePortfolio.routeChecks.map((row) => row.symbol)).size,
-          marketBreadth: regimePortfolio.currentContext?.breadth24 ?? 0,
-          marketMedianMove: regimePortfolio.currentContext?.median24 ?? 0,
-          marketContextMarkets: regimePortfolio.currentContext?.markets ?? 0,
-          polarityReady: regimePortfolio.warmMarkets >= 8,
-          lastCompletedCandleAt: regimePortfolio.lastEvaluatedHour ?? 0,
-          lastRuntimeLogAt: publicRuntime.lastStrategyLogAt,
-          degradedMarkets: Object.values(strategyCandleFailures).filter((failure) => failure.count > 0).length,
-          blockingMarkets: Object.entries(strategyCandleFailures).filter(([symbol, failure]) => failure.count >= 2
-            && Date.now() - (stableStructures[symbol]?.observedAt ?? 0) > STRATEGY_CANDLE_STALE_MS).length,
-          candleError: publicRuntime.strategyCandleError, logError: publicRuntime.strategyLogError },
         liveMirror: this.liveMirrorView(),
         liveTurnover:this.turnoverStatus(),
         liveDiagnostics:{
@@ -5687,14 +4066,6 @@ const worker = {
     if (url.pathname === "/api/forward/archive-export" && request.method === "GET") {
       const owner=await ownerAuthenticated(request, env);
       return env.MARKET_STREAM.getByName("primary").fetch(`https://market-stream/forward-archive-export${url.search}`,{headers:{"x-archive-owner":owner?"1":"0"}});
-    }
-    if (url.pathname === "/api/living/status" && request.method === "GET") {
-      if(!await ownerAuthenticated(request,env))return json({error:"请先登录"},401);
-      return env.MARKET_STREAM.getByName("primary").fetch("https://market-stream/living-status");
-    }
-    if (url.pathname === "/api/living/mode" && request.method === "POST") {
-      if(!await ownerAuthenticated(request,env))return json({error:"请先登录"},401);
-      return env.MARKET_STREAM.getByName("primary").fetch("https://market-stream/living-mode",{method:"POST",headers:{"content-type":"application/json"},body:await request.text()});
     }
     if (url.pathname === "/api/forward/log-status" && request.method === "GET") return env.MARKET_STREAM.getByName("primary").fetch("https://market-stream/forward-log-status");
     if (url.pathname === "/api/forward/export" && request.method === "GET") return env.MARKET_STREAM.getByName("primary").fetch(`https://market-stream/forward-export${url.search}`);

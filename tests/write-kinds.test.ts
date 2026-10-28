@@ -56,7 +56,7 @@ test("the UTC day rolls the book and keeps yesterday; the view sorts and reports
 test("the worker only measures: every reservation is tagged and counting happens after commit",()=>{
   const src=readFileSync(new URL("../worker/index-clean.ts",import.meta.url),"utf8")+readFileSync(new URL("../worker/member-executor.ts",import.meta.url),"utf8");
   const calls=src.match(/this\.reserve(?:NonAlarm|Critical)Writes\([^;]*?\)(?=[;:)])/g)??[];
-  assert.ok(calls.length>=30,`found ${calls.length}`);
+  assert.ok(calls.length>=15,`found ${calls.length}`);
   for(const call of calls)assert.match(call,/,\s*("[a-z-]+"|writeKeyBreakdown\(|\{)/,call);
   assert.equal((src.match(/this\.noteWriteKind\(tag,writes\)/g)??[]).length,2);
   assert.match(src,/if\(committed\)\{this\.runtime\.nonAlarmWrites\+=writes;this\.noteWriteKind\(tag,writes\);\}/);
