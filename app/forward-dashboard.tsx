@@ -107,18 +107,22 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   const fontVars:Record<string,string>={};for(let px=10;px<=64;px++)fontVars[`--fr-fs${px}`]=`${(px*fontScale/100).toFixed(2)}px`;
   const exportSnapshot=async()=>{if(exporting)return;setExporting(true);setExportStatus(null);try{
     const response=await fetch(`/api/forward/export?kind=log&t=${Date.now()}`,{cache:"no-store",credentials:"same-origin"});
-    if(!response.ok)throw new Error("log");
-    const log=await response.json() as {version?:string;exportedAt?:number;positions?:{opened_at?:number}[];cases?:unknown[];timeline?:unknown[];orders_from?:number|null;orders_to?:number|null;orders_archive_error?:string|null};
+    if(!response.ok)throw new Error(`HTTP ${response.status}`);
+    // The server streams the file; keep it as a Blob (no parse + re-stringify, which tripled memory on phones). Counts come in a header.
+    let meta:{at?:number;positions?:number;cases?:number;timeline?:number;from?:number|null;to?:number|null;archiveError?:boolean}={};
+    try{meta=JSON.parse(response.headers.get("x-export-meta")??"{}");}catch{meta={};}
+    const blob=await response.blob();
+    const log={exportedAt:meta.at,positions:{length:meta.positions??0},cases:{length:meta.cases??0},timeline:{length:meta.timeline??0},orders_from:meta.from??null,orders_to:meta.to??null,orders_archive_error:meta.archiveError?"1":null};
     const at=log.exportedAt??Date.now();
     const stamp=new Date(at+8*60*60*1000).toISOString().replace(/[-:]/g,"").slice(0,15);
-    const blob=new Blob([JSON.stringify(log)],{type:"application/json"}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`living-run-log-${stamp}.json`;
+    const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`living-run-log-${stamp}.json`;
     document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
-    const n=log.positions?.length??0,cases=log.cases?.length??0,rows=log.timeline?.length??0;
+    const n=log.positions.length,cases=log.cases.length,rows=log.timeline.length;
     const bj=(ms:number)=>{const d=new Date(ms+8*60*60*1000);return `${d.getUTCMonth()+1}月${d.getUTCDate()}日 ${String(d.getUTCHours()).padStart(2,"0")}:${String(d.getUTCMinutes()).padStart(2,"0")}`;};
     const span=log.orders_from!=null&&log.orders_to!=null?`，从 ${bj(log.orders_from)} 到 ${bj(log.orders_to)}（北京）`:"";
     const warn=log.orders_archive_error?"长期库这次没读到，这份只有手里还在的单。":"";
     setExportStatus(`已开始下载 ${a.download}。里面 ${n} 笔单${span}。${warn}${cases} 个研究案例、${rows} 段时间线（每段 10 分钟）。`);setExportCount(c=>c+1);
-  }catch{setExportStatus("导出失败，请重试。");}finally{setExporting(false);}};
+  }catch(error){setExportStatus(`导出失败，请重试。（${error instanceof Error?error.message:"网络中断"}）`);}finally{setExporting(false);}};
 
   const desk=data?.forwardDesk??null,positions=data?.positions??[],history=[...(data?.history??[])].sort((a,b)=>(b.closedAt??0)-(a.closedAt??0));
   const paperView=paperAccountView(desk,positions,liveEnabled),usingDesk=paperView.usingDesk&&!!desk;

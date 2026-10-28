@@ -1,3 +1,4 @@
+import {jsonStreamResponse} from "../lib/json-stream.ts";
 import {reconcileSourceReduction,sourceReductionTarget,type SourceReduction} from "../lib/live-reduction.ts";
 import {reconcileSourceClose,sourceExitFillPrice,SOURCE_EXIT_EXECUTION_POLICY,type SourceExit} from '../lib/live-exit.ts';
 import {FIXED_ALLOCATION_EQUITY,FIXED_ALLOCATION_POLICY,fixedLiveBasis,type FixedLiveBasis} from '../lib/fixed-allocation.ts';
@@ -5299,8 +5300,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           archive:{d1Error,d1Counts,livingRunLog:this.livingLogView(exportedAt),runLogArchive:this.archiveView(exportedAt),path_check:pathsReady}});
         const openedAt=out.positions.map(row=>Number(row.opened_at)).filter(n=>Number.isFinite(n));
         const body={...out,orders_from:openedAt.length?Math.min(...openedAt):null,orders_to:openedAt.length?Math.max(...openedAt):null,orders_archive_error:archiveError};
-        await this.noteRunLogExport(exportedAt,body.positions.length+body.cases.length);
-        return json(body);
+        const markRows=body.positions.length+body.cases.length;
+        // Stream the body (a single JSON.stringify is ~40 MB of two-byte text and pushes this isolate over its memory limit).
+        // The export mark moves only after the whole body went out, so a failed download no longer pushes the deadline.
+        return jsonStreamResponse(body,{
+          headers:{"X-Export-Meta":JSON.stringify({at:exportedAt,positions:body.positions.length,cases:body.cases.length,timeline:out.timeline.length,
+            from:body.orders_from,to:body.orders_to,archiveError:archiveError!=null})},
+          onDone:()=>this.noteRunLogExport(exportedAt,markRows)});
       }
       if(url.searchParams.get("page")==="archive"){
         const startedAt=Number(url.searchParams.get("accountStartedAt")),asOf=Number(url.searchParams.get("asOf"));
