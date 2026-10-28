@@ -17,7 +17,7 @@ import {emptySymbolMemory,type SymbolMemory} from "../lib/liquidity-runtime.ts";
 import { arenaProtectionStop, arenaTradePlan, liveMirrorExitRequired } from "../lib/arena-live.ts";
 import {type PositionOutboxItem} from "../lib/paper-outbox.ts";
 import {paperCycleSummary,startPaperCycle,PAPER_INITIAL_EQUITY,type BankruptcyReport,type PaperCycle} from "../lib/paper-cycle.ts";
-import { runtimeReady, protectedQuoteDelay, PROTECTED_QUOTE_GRACE_MS, type RuntimeHealthShape } from "../lib/runtime-health.ts";
+import { runtimeReady, emptyAccountStandby, marketDataStale, protectedQuoteDelay, PROTECTED_QUOTE_GRACE_MS, type RuntimeHealthShape } from "../lib/runtime-health.ts";
 import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, gateMarkedEquity, gatePositionValuation, isGateReadTimeoutError, isGateTransportTimeoutError, LiveEntrySizingError, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, liveStopShouldChase, loadGateLiveClient, type GateLiveOrder, type GateLiveOrderSnapshot, type GateLiveSnapshot, type LiveEntrySizingCode } from "../lib/gate-live.ts";
 import { LIVE_SESSION_VERSION, establishLiveScale, reconcileLiveScale, startLiveSession, sourceAfterEnable, sameLiveSession, fenceLiveSourcePolicy, type LiveSession } from "../lib/live-session.ts";
 import {liveProtectionPrice,isInverseLiveReceipt,INVERSE_LIVE_EXIT_POLICY} from '../lib/live-source-policy.ts';
@@ -253,7 +253,7 @@ type RuntimeState = {
   version: string;
   authoritySchemaVersion: number;
   mode: "PAPER";
-  state: "STARTING" | "WARMING" | "LIVE" | "DEGRADED" | "RECONNECTING" | "RECOVERY_REQUIRED";
+  state: "STARTING" | "WARMING" | "LIVE" | "DEGRADED" | "RECONNECTING" | "RECOVERY_REQUIRED" | "IDLE";
   symbols: string[];
   lastAlarmAt: number | null;
   lastSuccessAt: number | null;
@@ -983,9 +983,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     await this.ensureAlarm();
     this.launchTurnoverWork(now);
     const live=this.runtime.live;
-    const stale=!this.authorityReady||this.runtime.lastSuccessAt==null||now-this.runtime.lastSuccessAt>SYSTEM_HEALTH_STALE_AFTER_MS;
-    const state=!this.authorityReady?"RECOVERY_REQUIRED":stale?"RECONNECTING":this.runtime.state;
-    const body=JSON.stringify({version:"owner-home-v1",buildSha:FORWARD_BUILD_SHA,generatedAt:now,state,stale,authorityReady:this.authorityReady,
+    const stale=this.marketStale(now);
+    const state=this.effectiveHealthState(stale);
+    const body=JSON.stringify({version:"owner-home-v1",buildSha:FORWARD_BUILD_SHA,generatedAt:now,state,stale,standby:this.standbyView(),authorityReady:this.authorityReady,
       lastError:this.runtime.lastError,lastSuccessAt:this.runtime.lastSuccessAt,
       realtimeReadiness:this.realtimeReadiness(),
       forward:pageForwardView(this.forwardView(now)),
@@ -1642,6 +1642,24 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     try{await this.ctx.storage.delete(keys);reservation.finish(true);}finally{reservation.finish(false);}
     return true;
   }
+
+  /** Empty-account standby: nothing held (paper or live mirror) and nothing pending, so there is no price to keep fresh.
+   * Pure in-memory read; no Gate call, no write. Any paper position, live position or unfinished live entry ends it,
+   * and the ordinary market-freshness check applies again from that very tick. */
+  private idleStandby():boolean{
+    return emptyAccountStandby({authorityReady:this.authorityReady,forwardLoaded:!!this.forwardState,forwardError:this.forwardError,
+      paperPositions:this.forwardState?.positions.length??0,livePositions:this.activeLivePositions().length,
+      liveEntries:this.activeLiveEntries().length});
+  }
+  /** Market-data staleness. In empty-account standby a quiet feed is not a fault. */
+  private marketStale(now:number):boolean{
+    return marketDataStale({authorityReady:this.authorityReady,standby:this.idleStandby(),lastSuccessAt:this.runtime.lastSuccessAt,now,
+      staleAfterMs:SYSTEM_HEALTH_STALE_AFTER_MS});
+  }
+  private effectiveHealthState(stale:boolean):RuntimeState["state"]{
+    return !this.authorityReady?"RECOVERY_REQUIRED":this.idleStandby()?"IDLE":stale?"RECONNECTING":this.runtime.state;
+  }
+  private standbyView(){return this.idleStandby()?{idle:true,label:"空仓待命",note:"当前无持仓、无实盘持仓/委托，不需要刷新行情；有持仓后自动恢复行情新鲜度检查。"}:null;}
 
   private stripResetBlockedNote:string|null=null;
   /** Why the one-time paper reset must wait: any live switch/position/entry. Pure in-memory read; no Gate call. */
@@ -3503,8 +3521,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const hub=this.marketHub.status(observedAt);
     if(books.successes>0||hub.healthySources>0)this.runtime.lastSuccessAt=observedAt;
     const readiness=this.realtimeReadiness(observedAt);
-    const authorityStale=this.runtime.lastSuccessAt==null||observedAt-this.runtime.lastSuccessAt>SYSTEM_HEALTH_STALE_AFTER_MS;
-    this.runtime.state=!this.authorityReady?"RECOVERY_REQUIRED":authorityStale?"RECONNECTING"
+    const idle=this.idleStandby();
+    const authorityStale=!idle&&(this.runtime.lastSuccessAt==null||observedAt-this.runtime.lastSuccessAt>SYSTEM_HEALTH_STALE_AFTER_MS);
+    this.runtime.state=!this.authorityReady?"RECOVERY_REQUIRED":idle?"IDLE":authorityStale?"RECONNECTING"
       :!readiness.protectedMarketsReady?"DEGRADED":hub.healthySources>0||readiness.actionableMarkets>0?"LIVE":"WARMING";
     const feedError=authorityStale?"Bybit/OKX/KuCoin分析源与Gate执行源同时不可用"
       :!readiness.protectedMarketsReady?`持仓报价延迟：${readiness.missingProtectedMarkets.join("、")} 的Gate报价已断 ${Math.round(readiness.protectedMissingMs/1000)} 秒（超过 ${PROTECTED_QUOTE_GRACE_MS/1000} 秒才提示）`:null;
@@ -3894,8 +3913,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
     if (path === "/health-status") {
       await this.ensureAlarm();
-      const stale = !this.authorityReady || this.runtime.lastSuccessAt == null || Date.now() - this.runtime.lastSuccessAt > SYSTEM_HEALTH_STALE_AFTER_MS;
-      const effectiveState = !this.authorityReady ? "RECOVERY_REQUIRED" : stale ? "RECONNECTING" : this.runtime.state;
+      const stale = this.marketStale(Date.now());
+      const effectiveState = this.effectiveHealthState(stale);
       return json({
         version: this.runtime.version,
         buildSha: FORWARD_BUILD_SHA,
@@ -3920,6 +3939,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         mode: this.runtime.mode,
         state: effectiveState,
         stale,
+        standby: this.standbyView(),
         lastError: this.runtime.lastError,
         lastSuccessAt: this.runtime.lastSuccessAt,
         lastHeartbeatAt: this.runtime.lastHeartbeatAt,
@@ -3967,8 +3987,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         strategyCandleFailures: _scf, radar: _radar, regimeHourlyFailures: _rhf, ...publicRuntime } = this.runtime;
       void _sa; void _psa; void _rp; void _cp; void _mr; void _ss; void _scf; void _radar; void _rhf;
       void _stableCandidates; void _previousStableCandidates; void _previousStableStructures; void _liquidUniverse;
-      const stale = !this.authorityReady || this.runtime.lastSuccessAt == null || Date.now() - this.runtime.lastSuccessAt > SYSTEM_HEALTH_STALE_AFTER_MS;
-      const effectiveState = !this.authorityReady ? "RECOVERY_REQUIRED" : stale ? "RECONNECTING" : this.runtime.state;
+      const stale = this.marketStale(Date.now());
+      const effectiveState = this.effectiveHealthState(stale);
       return json({ ...publicRuntime, ...this.authorityView, paperCycle: paperCycleSummary(paperCycle, this.authorityView.equity),
         buildSha: FORWARD_BUILD_SHA,
         forward: pageForwardView(this.forwardView()), legacyRetired: true,
@@ -3984,7 +4004,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           turnover:turnoverView(this.turnoverState,this.turnoverError,Date.now(),live.activation?.enabledAt??null)} } : {}), liveMode: { requestedEnabled: live.requestedEnabled, operational: live.operational }, outboxLength: outbox.length + bankruptcyOutbox.length,
         oldestOutboxAgeMs: outbox.length ? Math.max(0, Date.now() - (outbox[0].position.exitAt ?? outbox[0].position.entryAt)) : 0,
         authorityReady: this.authorityReady, realtimeReadiness: this.realtimeReadiness(), multiSourceMarket:this.marketHub.status(),
-        generatedAt: Date.now(), state: effectiveState, stale,
+        generatedAt: Date.now(), state: effectiveState, stale, standby: this.standbyView(),
         analysisP99Ms: percentile99(this.runtime.analysisMs), limits: { loopMs: LOOP_MS, markets: this.runtime.symbols.length, scannedMarkets: this.runtime.radar.scanned, scanUniverse: SCAN_UNIVERSE_SIZE, radarMs: RADAR_MS, warmupSnapshots: WARMUP_SNAPSHOTS,
           maxAncillaryConcurrency: MAX_ANCILLARY_CONCURRENCY, maxSubrequestsPerAlarm: 32, plannedAlarmRequestsPerDay: 43_200,
           plannedAlarmWritesPerDay: 43_200, watchdogWriteReservePerDay: WATCHDOG_WRITE_RESERVE,

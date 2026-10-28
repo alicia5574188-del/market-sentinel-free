@@ -1,6 +1,8 @@
 export type RuntimeHealthShape = {
   state?: string;
   stale?: boolean;
+  /** Present (idle=true) while the account is empty: nothing held, so no price needs refreshing. */
+  standby?: { idle?: boolean; label?: string } | null;
   authorityReady?: boolean;
   lastError?: unknown;
   lastSuccessAt?: number | null;
@@ -23,7 +25,7 @@ export function protectedQuoteDelay(prevSince: number | null, missing: number, n
   return { since, delayed: now - since >= graceMs };
 }
 
-const OPERATIONAL_STATES = new Set(["LIVE", "DEGRADED", "WARMING"]);
+const OPERATIONAL_STATES = new Set(["LIVE", "DEGRADED", "WARMING", "IDLE"]);
 // Diagnostic only: tolerate three nominal five-minute cycles, including
 // scheduling delay. Never turn this read-only status into trading authority.
 const FORWARD_CYCLE_STALL_MS = 15 * 60_000;
@@ -54,8 +56,10 @@ function forwardRuntimeIssue(runtime: RuntimeHealthShape | null, now?: number) {
 }
 
 export function runtimeBackendOperational(runtime: RuntimeHealthShape | null) {
+  // IDLE only counts while the payload itself says the account is empty (standby.idle); a stray IDLE never passes alone.
   return Boolean(runtime && runtime.stale === false && runtime.authorityReady === true
-    && OPERATIONAL_STATES.has(runtime.state ?? ""));
+    && OPERATIONAL_STATES.has(runtime.state ?? "")
+    && (runtime.state !== "IDLE" || runtime.standby?.idle === true));
 }
 
 export function runtimeAuthorityOperational(runtime: RuntimeHealthShape | null, transportFresh = true) {
@@ -72,6 +76,10 @@ export function runtimeStatusLabel(runtime: RuntimeHealthShape | null, transport
   if (!runtime) return "正在连接";
   if (!transportFresh) return "页面数据延迟";
   if (runtime.stale || runtime.state === "RECONNECTING") return "行情重连中";
+  if (runtime.state === "IDLE" && runtime.standby?.idle === true && runtime.authorityReady) {
+    const idleIssue = forwardRuntimeIssue(runtime, now);
+    return idleIssue ? idleIssue.label : "空仓待命";
+  }
   if (!runtime.authorityReady || runtime.state === "RECOVERY_REQUIRED") return "需要恢复";
   if (runtime.state === "WARMING") return "后台运行中 · 数据预热";
   const forwardIssue = forwardRuntimeIssue(runtime, now);
@@ -99,4 +107,20 @@ export function runtimeNotice(runtime: RuntimeHealthShape | null, now?: number) 
     return `系统正在自动恢复：${error}`;
   }
   return `部分市场数据稍后重试；后台与可用市场继续运行：${error}`;
+}
+
+/** Empty-account standby. True only when nothing is held or pending anywhere (paper positions, live positions, live
+ * entries) and the paper account is loaded and healthy. Pure; the caller supplies in-memory counts, so it can never
+ * cause a Gate request or a write. */
+export function emptyAccountStandby(input: { authorityReady: boolean; forwardLoaded: boolean; forwardError: unknown;
+  paperPositions: number; livePositions: number; liveEntries: number }) {
+  if (!input.authorityReady || !input.forwardLoaded || input.forwardError) return false;
+  return input.paperPositions === 0 && input.livePositions === 0 && input.liveEntries === 0;
+}
+
+/** Market-data staleness. A quiet feed is only a fault while something needs a price; in empty-account standby it is not. */
+export function marketDataStale(input: { authorityReady: boolean; standby: boolean; lastSuccessAt: number | null; now: number; staleAfterMs: number }) {
+  if (!input.authorityReady) return true;
+  if (input.standby) return false;
+  return input.lastSuccessAt == null || input.now - input.lastSuccessAt > input.staleAfterMs;
 }
