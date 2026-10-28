@@ -50,7 +50,7 @@ import {STAGE_CHANGE_CAP} from '../lib/stage-chronicle.ts';
 import {PATH_CAP,pathFlushDue,adoptLegacyPaths,bookFromStoredPaths,commitPathWrite,emptyTradePathBook,exportTradePaths,observeTradePaths,peekPathWrite,pendingPathWrites,pathColumns,TRADE_PATH_INDEX_KEY,TRADE_PATH_KEY,TRADE_PATH_PAGE_PREFIX,type TradePathBook,type TradePathIndex,type TradePathPage} from '../lib/trade-path.ts';
 import {emptyOrderJournal,observeOrderJournal,ORDER_JOURNAL_CAP,ORDER_JOURNAL_KEY,restoreOrderJournal,type OrderJournal} from '../lib/order-journal.ts';
 import { cancelFundsReset, requestFundsReset } from "../lib/account-reset.ts";
-import {ADAPTIVE_ENGINE_VERSION,pageStartedAt,FORWARD_EXECUTION_BBO_CAP,FORWARD_MINUTE_CONFIRMATION_CAP,advanceForward,forwardSummary,forwardEquity,freshQuote,forwardUrgentMinuteSymbols,forwardUrgentQuoteSymbols,forwardRestCriticalSymbols,BAR_MS,FORWARD_VERSION,type ForwardState} from "../lib/forward-relations.ts";
+import {ADAPTIVE_ENGINE_VERSION,pageStartedAt,FORWARD_EXECUTION_BBO_CAP,FORWARD_MINUTE_CONFIRMATION_CAP,advanceForward,applyStripCoreReset,stripCoreResetDone,forwardSummary,forwardEquity,freshQuote,forwardUrgentMinuteSymbols,forwardUrgentQuoteSymbols,forwardRestCriticalSymbols,BAR_MS,FORWARD_VERSION,type ForwardState} from "../lib/forward-relations.ts";
 import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite,
   FORWARD_STORAGE, FORWARD_PROTECTION_STORAGE, FORWARD_PAGED_STATE_VERSION } from "../lib/forward-store.ts";
 import { nextProtectionWriteBudget, readProtectionWriteBudget, protectionWriteBudgetView,
@@ -1366,15 +1366,28 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         return;
       }
       const previous = state,executionQuotes=this.forwardQuotes(now);
-      const next = advanceForward({ state: previous, now, quotes:executionQuotes,contracts:this.regimeContracts(),minutePaths:this.forwardMinutePaths() });
-      try{captureTradeReviews(previous,next.state,now,FORWARD_BUILD_SHA,STRATEGY_FINGERPRINT,executionQuotes);}
+      // One-time, owner-authorised paper reset after the strategy system was removed. Paper state only: it never calls Gate and
+      // never touches the live channel. If anything live is on or open it waits (nothing is closed or ordered) until the operator
+      // has switched live off and Gate is flat; the marker lives in the same persisted write as the reset, so it runs exactly once.
+      let engineIn=previous,oneTimeReset=false;
+      if(!stripCoreResetDone(previous)){
+        const blocker=this.liveMirrorBlocker();
+        if(blocker){
+          if(this.stripResetBlockedNote!==blocker){this.stripResetBlockedNote=blocker;console.warn(`one-time paper reset waiting: ${blocker}`);}
+        }else{
+          const reset=applyStripCoreReset(previous,executionQuotes,now);
+          if(reset.done){engineIn=reset.state;oneTimeReset=true;this.stripResetBlockedNote=null;}
+        }
+      }
+      const next = advanceForward({ state: engineIn, now, quotes:executionQuotes,contracts:this.regimeContracts(),minutePaths:this.forwardMinutePaths() });
+      try{captureTradeReviews(engineIn,next.state,now,FORWARD_BUILD_SHA,STRATEGY_FINGERPRINT,executionQuotes);}
       catch{this.reviewDiagnosticError="TRADE_REVIEW_CAPTURE_FAILED";}
       if(this.tradePathsLoaded){
         this.tradePathsPending=observeTradePaths(this.tradePaths,next.state,executionQuotes,{},now,{},undefined)||this.tradePathsPending;
       }
       this.orderJournalPending=observeOrderJournal(this.orderJournal,next.state.history,next.state.startedAt)||this.orderJournalPending;
       // Write only on a real change (open/close/stop move/funds reset) plus one slow heartbeat per 5 minutes so equity peak and daily rows survive a restart.
-      if (next.changed || !previous.storage.persistedAt || now-previous.storage.persistedAt>=BAR_MS) {
+      if (oneTimeReset || next.changed || !previous.storage.persistedAt || now-previous.storage.persistedAt>=BAR_MS) {
         next.state.storage = { persistedAt: now, error: null };
         // Review logs first, in their own keys and their own try/catch. Only what is proven durable leaves the hot JSON.
         await this.persistReviewLog(next.state,now);
@@ -1628,6 +1641,16 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const reservation=this.reserveNonAlarmWrites(keys.length,256,"paper-archive-sweep");if(!reservation)return true;
     try{await this.ctx.storage.delete(keys);reservation.finish(true);}finally{reservation.finish(false);}
     return true;
+  }
+
+  private stripResetBlockedNote:string|null=null;
+  /** Why the one-time paper reset must wait: any live switch/position/entry. Pure in-memory read; no Gate call. */
+  private liveMirrorBlocker():string|null{
+    const live=this.runtime.live;
+    if(live.requestedEnabled||live.operational)return"实盘开关未关闭";
+    if(this.activeLivePositions().length)return"实盘镜像仍有持仓";
+    if(this.activeLiveEntries().length)return"实盘镜像仍有未完成委托";
+    return null;
   }
 
   private async resetPaperAccount() {

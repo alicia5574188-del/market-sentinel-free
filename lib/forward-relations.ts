@@ -205,7 +205,14 @@ export type EntryValidation={id:string;candidateId:string;symbol:string;side:"LO
   status:"WAITING"|"CANCELLED";reason:string|null};
 /** Funds-only reset. Requested while positions are open it waits (pendingFundsReset) and runs at the first
  * moment the account has no open position; nothing is force-closed and entries/exits are unchanged. */
-export type AccountReset={at:number;requestedAt:number;epoch:number;equityBefore:number;balanceBefore:number;balanceAfter:number};
+export type AccountReset={at:number;requestedAt:number;epoch:number;equityBefore:number;balanceBefore:number;balanceAfter:number;
+  /** Set only on the one-time strategy-removal reset: its idempotence marker and the exportable pre-reset snapshot. */
+  kind?:string;snapshot?:StripResetSnapshot};
+export type StripResetSnapshot={reason:string;at:number;balanceBeforeClose:number;balanceAfterClose:number;realizedFromClose:number;
+  fees:number;grossPnl:number;resolved:number;wins:number;turnover:number;maxDrawdown:number;initialEquity:number;
+  positions:{id:string;symbol:string;side:"LONG"|"SHORT";openedAt:number;entryPrice:number;exitPrice:number|null;quantity:number;notional:number;
+    margin:number;leverage:number;stopPrice:number;lastPrice:number;inverseCopy:boolean;netPnlOnClose:number|null}[];
+  daily:Daily[];historyCount:number;unopenedCount:number};
 export type PendingFundsReset={requestedAt:number};
 export type ForwardState={
   inverseTrial?:InverseTrial;
@@ -535,6 +542,7 @@ function closeTrade(s:ForwardState,t:Trade,price:number,now:number,reason:string
   if(reason!=="ACCOUNT_RESET")t.exitRegime={stage:s.environmentContext.environment,phase:s.environmentContext.phase};
   t.exitAudit={trigger:reason,at:now,...(evidence?{evidence}:{})};t.lastQuoteAt=now;t.lastPrice=price;
   try{
+    if(reason==="ACCOUNT_RESET")throw new Error("an administrative reset close is not a trade outcome");
     const notional=Math.max(t.notional,1e-9);
     s.signalTally=noteSignalOutcome(s.signalTally,{id:t.id,symbol:t.symbol,
       netPct:Number.isFinite(net)?net/notional*100:null,
@@ -686,6 +694,36 @@ export function applyFundsReset(s:ForwardState,now:number){
   s.accountResets=[...prior,marker].slice(-ACCOUNT_RESET_LIMIT);s.pendingFundsReset=null;
   event(s,now,"START","ACCOUNT",`资金重置：${marker.balanceBefore.toFixed(2)}U → ${marker.balanceAfter}U；运行日志、价格路径、阶段时间线和导出进度都保留。`);
   return marker;
+}
+/** One-time, owner-authorised reset when the strategy system is removed (2026-10-28). Idempotent: the marker lives inside the
+ * same persisted state as the reset itself, so a DO restart can neither lose nor repeat it. Paper state only; no Gate call. */
+export const STRIP_CORE_RESET_KIND="STRIP_CORE_ONE_TIME_V1";
+export function stripCoreResetDone(s:Pick<ForwardState,"accountResets">){return !!s.accountResets?.some(r=>r.kind===STRIP_CORE_RESET_KIND);}
+export function applyStripCoreReset(input:ForwardState,quotes:Record<string,Quote>,now:number){
+  if(stripCoreResetDone(input))return{state:input,done:false,snapshot:null as StripResetSnapshot|null};
+  const s=normalizeForward(structuredClone(input),now),r4=(v:number)=>Number(v.toFixed(4));
+  const before=s.positions.map(t=>({...t}));
+  const balanceBeforeClose=r4(s.balance),statsBefore={fees:s.fees,grossPnl:s.grossPnl,resolved:s.resolved,wins:s.wins,turnover:s.turnover,maxDrawdown:s.maxDrawdown};
+  const dailyBefore=structuredClone(s.daily).slice(-200);
+  // Every old paper position is booked closed into the history (exit reason ACCOUNT_RESET) at the last fresh quote, else its last price.
+  for(const t of s.positions){
+    const q=quotes[t.symbol],px=freshQuote(q,now)?(t.side==="LONG"?q!.bestBid:q!.bestAsk):t.lastPrice;
+    closeTrade(s,t,px,now,"ACCOUNT_RESET");
+  }
+  const closedById=new Map(s.positions.map(t=>[t.id,t]));
+  s.positions=[];
+  s.pendingFundsReset=null;
+  const balanceAfterClose=r4(s.balance);
+  event(s,now,"START","ACCOUNT",`一次性重置（策略系统已移除，用户授权）：清除 ${before.length} 笔旧纸面持仓，余额 ${balanceBeforeClose.toFixed(2)}U→平仓后 ${balanceAfterClose.toFixed(2)}U→重置为 ${s.initialEquity}U；订单历史、资金曲线、运行日志全部保留，重置前快照见导出的 accountResets。`);
+  const marker=applyFundsReset(s,now);
+  const snapshot:StripResetSnapshot={reason:"strategy system removed; owner-authorised one-time paper reset",at:now,balanceBeforeClose,balanceAfterClose,
+    realizedFromClose:r4(balanceAfterClose-balanceBeforeClose),...statsBefore,initialEquity:s.initialEquity,
+    positions:before.map(t=>({id:t.id,symbol:t.symbol,side:t.side,openedAt:t.openedAt,entryPrice:t.entryPrice,exitPrice:closedById.get(t.id)?.exitPrice??null,
+      quantity:t.quantity,notional:t.notional,margin:t.margin,leverage:t.leverage,stopPrice:t.stopPrice,lastPrice:t.lastPrice,inverseCopy:!!t.inverseCopy,
+      netPnlOnClose:closedById.get(t.id)?.netPnl??null})),
+    daily:dailyBefore,historyCount:s.history.length,unopenedCount:s.unopenedTrades?.length??0};
+  marker.kind=STRIP_CORE_RESET_KIND;marker.snapshot=snapshot;
+  return{state:s,done:true,snapshot};
 }
 /** Where the page's account starts: the last funds reset, else the log epoch. */
 export function pageStartedAt(s:Pick<ForwardState,"startedAt"|"accountResets">){return s.accountResets?.at(-1)?.at??s.startedAt;}
