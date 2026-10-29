@@ -179,6 +179,36 @@ export function sweepReclaim(bars: readonly Bar[], zone: Zone, side: Side, cfg: 
   return { ok: true, reason: "扫荡后收回成立", sweepIdx: idx, extreme, depth, reclaim: rc, reclaimVolX: rv, sweepVolX: sv, strength };
 }
 
+/**
+ * 次级触发「回踩确认」：最近 retestBars 根 15m 内价格回踩进区（多：最低价 ≤ 区上沿），期间没有收盘跌破区下沿
+ * （刺破下沿不超过 sweepMaxPct），且最后一根是同向确认K线：实体同向、收盘强度达标、收盘回到区中线之上并高于前一根收盘。
+ * 确认只认第一根（更早已确认 = 已错过）。空头镜像。
+ */
+export function retestConfirm(bars: readonly Bar[], zone: Zone, side: Side, cfg: NtsConfig): Sweep {
+  const n = bars.length; if (n < 25) return { ok: false, reason: "15m K线不足" };
+  const d = dirOf(side), rc = bars[n - 1]!, far = side === "LONG" ? zone.lo : zone.hi, near = side === "LONG" ? zone.hi : zone.lo;
+  const from = Math.max(1, n - 1 - cfg.trigger.retestBars);
+  let idx = -1, extreme = near;
+  for (let k = from; k < n; k++) {
+    const b = bars[k]!, touch = side === "LONG" ? b.low <= near : b.high >= near;
+    if (touch && (idx < 0 || (side === "LONG" ? b.low < extreme : b.high > extreme))) { idx = k; extreme = side === "LONG" ? b.low : b.high; }
+  }
+  if (idx < 0) return { ok: false, reason: `最近${cfg.trigger.retestBars + 1}根15m没有回踩进区` };
+  for (let k = from; k < n; k++) if (d * (bars[k]!.close - far) < 0) return { ok: false, reason: "回踩期间收盘已跌破区域（破位）" };
+  const depth = Math.max(0, -d * (extreme - far) / far);
+  if (depth > cfg.trigger.sweepMaxPct) return { ok: false, reason: `回踩刺破 ${(depth * 100).toFixed(2)}% 超过 ${(cfg.trigger.sweepMaxPct * 100).toFixed(2)}%`, depth };
+  const range = Math.max(1e-12, rc.high - rc.low), strength = side === "LONG" ? (rc.close - rc.low) / range : (rc.high - rc.close) / range;
+  const confirm = (b: Bar, prev: Bar) => {
+    const st = side === "LONG" ? (b.close - b.low) / Math.max(1e-12, b.high - b.low) : (b.high - b.close) / Math.max(1e-12, b.high - b.low);
+    return d * (b.close - b.open) > 0 && st >= cfg.trigger.retestStrength && d * (b.close - zone.mid) > 0 && d * (b.close - prev.close) > 0;
+  };
+  if (!confirm(rc, bars[n - 2]!)) return { ok: false, reason: `回踩后尚无确认K线（收盘强度 ${strength.toFixed(2)}）`, depth, strength };
+  for (let k = idx + 1; k < n - 1; k++) if (confirm(bars[k]!, bars[k - 1]!)) return { ok: false, reason: "确认发生在更早的K线（已错过）", depth };
+  const rv = volumeMultiple(bars, 20, n - 1), sv = volumeMultiple(bars, 20, idx);
+  if (sv != null && sv > cfg.trigger.volMaxMult) return { ok: false, reason: `回踩那根量能 ${sv.toFixed(2)}× 超过 ${cfg.trigger.volMaxMult}×（放量砸盘不接）`, depth, strength, sweepVolX: sv };
+  return { ok: true, reason: "回踩确认成立", sweepIdx: idx, extreme, depth, reclaim: rc, reclaimVolX: rv, sweepVolX: sv, strength };
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 // 4. 计划：止损、目标、R:R、仓位
 // ---------------------------------------------------------------------------------------------------------------------
@@ -208,6 +238,12 @@ export type Plan = {
   symbol: string; side: Side; entry: number; stop: number; target: number; rr: number; stopPct: number; targetPct: number; roomPct: number;
   zone: { lo: number; hi: number; score: number; tfs: Tf[]; touches: number };
   oppZone: { lo: number; hi: number; score: number } | null;
+  /** SWEEP = 扫荡后收回（主触发）；RETEST = 回踩确认（次级触发） */
+  trigger: "SWEEP" | "RETEST";
+  /** OPP_ZONE = 到对向区；ATR = 无对向区时按 ATR 倍数 */
+  targetMode: "OPP_ZONE" | "ATR";
+  /** 中性带内按触发方向开仓时为 true（仓位已乘 neutralSizeMult） */
+  neutral: boolean;
   sweep: { extreme: number; depthPct: number; barTime: number; volX: number | null; sweepVolX: number | null; strength: number };
   scale: number; expectedMovePct: number;
   marginFirstPct: number; marginAddPct: number; worstLossPct: number;
@@ -223,44 +259,57 @@ export function evaluateEntry(snap: Snap, bars: Bars, bias: BiasResult, ctx: Ent
   const no = (reason: string, vetoes: Veto[] = [], side: Side | null = bias.side): EntryDecision => ({ action: "NO_TRADE", side, reason, vetoes: vetoes.slice(0, cfg.log.maxVetoes), bias });
   if (!ctx.dataOk) return no(`数据不足：${ctx.dataNote}`);
   if (ctx.inEvent) return no(`事件窗口：${ctx.inEvent}`);
-  const side = bias.side; if (!side) return no(bias.note);
+  const neutral = !bias.side;
+  if (bias.core === 0 && bias.comps.trend == null) return no(bias.note);
+  if (neutral && !(cfg.neutralSizeMult > 0)) return no(bias.note);
   const b15 = bars["15m"]; if (!b15 || b15.length < 25) return no("15m K线不足");
   const mid = (snap.bid + snap.ask) / 2, spread = (snap.ask - snap.bid) / mid;
   if (!(spread <= 0.0006)) return no(`点差 ${(spread * 1e4).toFixed(1)}bp 过大`);
-  const d = dirOf(side), px = side === "LONG" ? snap.ask : snap.bid;
-  const cands = side === "LONG" ? supportsBelow(ctx.zones, mid) : resistancesAbove(ctx.zones, mid);
-  if (!cands.length) return no(`没有${side === "LONG" ? "支撑" : "压力"}区可供触发`);
   const scale = volScale(ctx.atr1hPct, cfg), vetoes: Veto[] = [];
   const stopPct = cfg.firstStopPct * scale;
-  for (const z of cands.slice(0, 4)) {
-    const tag = `${side === "LONG" ? "支撑" : "压力"}区 ${r(z.lo, 1)}~${r(z.hi, 1)}(分${z.score})`;
-    const sw = sweepReclaim(b15, z, side, cfg);
-    if (!sw.ok) { vetoes.push({ cand: tag, reason: sw.reason }); continue; }
-    const rcClose = sw.reclaim!.close;
-    if (d * (px - rcClose) / rcClose > cfg.trigger.maxChasePct) { vetoes.push({ cand: tag, reason: "已离收回价太远（追价）" }); continue; }
-    const stop = px * (1 - d * stopPct);
-    if (d * (sw.extreme! - stop) < 0) { vetoes.push({ cand: tag, reason: "扫荡极值比止损还远，结构止损不成立" }); continue; }
-    const opp = side === "LONG" ? ctx.zones.filter(o => o.lo >= px * 1.002).sort((a, b) => a.mid - b.mid)[0]
-      : ctx.zones.filter(o => o.hi <= px * 0.998).sort((a, b) => b.mid - a.mid)[0];
-    if (!opp) { vetoes.push({ cand: tag, reason: "前方没有可用的对向区域，R:R 无法评估" }); continue; }
-    const distOpp = Math.abs((side === "LONG" ? opp.lo : opp.hi) / px - 1), room = Math.min(distOpp, cfg.maxTargetPct), rr = room / stopPct;
-    if (rr < cfg.trigger.rrMin) { vetoes.push({ cand: tag, reason: `R:R ${rr.toFixed(2)} < ${cfg.trigger.rrMin}（空间 ${(room * 100).toFixed(2)}% / 止损 ${(stopPct * 100).toFixed(2)}%）` }); continue; }
-    const em = (ctx.atr1hPct ?? 0) * Math.sqrt(cfg.trigger.expectedMoveHours);
-    if (em < cfg.trigger.costMult * cfg.roundTripCostPct) { vetoes.push({ cand: tag, reason: `预期波动 ${(em * 100).toFixed(2)}% 不足成本 ${(cfg.trigger.costMult * cfg.roundTripCostPct * 100).toFixed(2)}%` }); continue; }
-    const sz = sizingPct(cfg, scale, ctx.sizeMult);
-    // 补仓候选区：同向、更强、在首仓外侧 distMin~distMax
-    const addZ = cands.filter(o => o !== z && o.score >= z.score && o.touches >= cfg.add.minTouches && d * (o.mid - px) < 0).find(o => {
-      const dist = Math.abs(o.mid / px - 1); return dist >= cfg.add.distMinPct * scale && dist <= cfg.add.distMaxPct * scale; }) ?? null;
-    const target = px * (1 + d * Math.min(cfg.firstTargetPct, room));
-    const geo = geometry(side, px, addZ ? (side === "LONG" ? addZ.hi : addZ.lo) : px * (1 - d * 0.005 * scale), cfg, scale, sz.first, sz.add);
-    const plan: Plan = { symbol: snap.symbol, side, entry: px, stop, target, rr: r(rr, 2)!, stopPct, targetPct: Math.abs(target / px - 1), roomPct: room,
-      zone: { lo: z.lo, hi: z.hi, score: z.score, tfs: z.tfs, touches: z.touches }, oppZone: { lo: opp.lo, hi: opp.hi, score: opp.score },
-      sweep: { extreme: sw.extreme!, depthPct: sw.depth!, barTime: sw.reclaim!.time, volX: r(sw.reclaimVolX, 2), sweepVolX: r(sw.sweepVolX, 2), strength: r(sw.strength, 2)! },
-      scale: r(scale, 3)!, expectedMovePct: em, marginFirstPct: sz.first, marginAddPct: sz.add, worstLossPct: sz.worst,
-      addZone: addZ ? { lo: addZ.lo, hi: addZ.hi, score: addZ.score } : null, geo };
-    return { action: "ENTER", side, plan, vetoes: vetoes.slice(0, cfg.log.maxVetoes), bias };
+  // 偏向明确：只做偏向方向。中性带：两个方向都看（偏向分更靠近的一侧优先），仓位打折。
+  const sides: Side[] = bias.side ? [bias.side] : bias.core >= 0 ? ["LONG", "SHORT"] : ["SHORT", "LONG"];
+  for (const side of sides) {
+    const d = dirOf(side), px = side === "LONG" ? snap.ask : snap.bid;
+    // 出场的"状态失效"（日线收盘在 EMA50 另一侧）此刻已成立 → 开了下一分钟就会被市价平掉，只白付手续费，不开。
+    if (bars["1d"] && stateInvalidated(side, bars["1d"])) { vetoes.push({ cand: side === "LONG" ? "多" : "空", reason: "日线收盘在 EMA50 另一侧，开仓即状态失效" }); continue; }
+    const cands = side === "LONG" ? supportsBelow(ctx.zones, mid) : resistancesAbove(ctx.zones, mid);
+    if (!cands.length) { vetoes.push({ cand: side === "LONG" ? "多" : "空", reason: `没有${side === "LONG" ? "支撑" : "压力"}区可供触发` }); continue; }
+    for (const z of cands.slice(0, 4)) {
+      const tag = `${side === "LONG" ? "支撑" : "压力"}区 ${r(z.lo, 1)}~${r(z.hi, 1)}(分${z.score})`;
+      let sw = sweepReclaim(b15, z, side, cfg), trig: Plan["trigger"] = "SWEEP";
+      if (!sw.ok && cfg.trigger.retest) { const rt = retestConfirm(b15, z, side, cfg); if (rt.ok) { sw = rt; trig = "RETEST"; } else sw = { ...sw, reason: `${sw.reason}；回踩：${rt.reason}` }; }
+      if (!sw.ok) { vetoes.push({ cand: tag, reason: sw.reason }); continue; }
+      const rcClose = sw.reclaim!.close;
+      if (d * (px - rcClose) / rcClose > cfg.trigger.maxChasePct) { vetoes.push({ cand: tag, reason: "已离收回价太远（追价）" }); continue; }
+      const stop = px * (1 - d * stopPct);
+      if (d * (sw.extreme! - stop) < 0) { vetoes.push({ cand: tag, reason: "扫荡极值比止损还远，结构止损不成立" }); continue; }
+      const opp = side === "LONG" ? ctx.zones.filter(o => o.lo >= px * 1.002).sort((a, b) => a.mid - b.mid)[0]
+        : ctx.zones.filter(o => o.hi <= px * 0.998).sort((a, b) => b.mid - a.mid)[0];
+      let room: number, targetMode: Plan["targetMode"];
+      if (opp) { room = Math.min(Math.abs((side === "LONG" ? opp.lo : opp.hi) / px - 1), cfg.maxTargetPct); targetMode = "OPP_ZONE"; }
+      else if (ctx.atr1hPct != null && ctx.atr1hPct > 0 && cfg.trigger.noOppAtrMult > 0) { room = Math.min(ctx.atr1hPct * cfg.trigger.noOppAtrMult, cfg.maxTargetPct); targetMode = "ATR"; }
+      else { vetoes.push({ cand: tag, reason: "前方没有对向区域且 ATR 缺失，R:R 无法评估" }); continue; }
+      const rr = room / stopPct;
+      if (rr < cfg.trigger.rrMin) { vetoes.push({ cand: tag, reason: `R:R ${rr.toFixed(2)} < ${cfg.trigger.rrMin}（空间 ${(room * 100).toFixed(2)}% / 止损 ${(stopPct * 100).toFixed(2)}%，${targetMode === "ATR" ? "ATR目标" : "对向区"}）` }); continue; }
+      const em = (ctx.atr1hPct ?? 0) * Math.sqrt(cfg.trigger.expectedMoveHours);
+      if (em < cfg.trigger.costMult * cfg.roundTripCostPct) { vetoes.push({ cand: tag, reason: `预期波动 ${(em * 100).toFixed(2)}% 不足成本 ${(cfg.trigger.costMult * cfg.roundTripCostPct * 100).toFixed(2)}%` }); continue; }
+      const sz = sizingPct(cfg, scale, ctx.sizeMult * (neutral ? cfg.neutralSizeMult : 1));
+      // 补仓候选区：同向、更强、在首仓外侧 distMin~distMax
+      const addZ = cands.filter(o => o !== z && o.score >= z.score && o.touches >= cfg.add.minTouches && d * (o.mid - px) < 0).find(o => {
+        const dist = Math.abs(o.mid / px - 1); return dist >= cfg.add.distMinPct * scale && dist <= cfg.add.distMaxPct * scale; }) ?? null;
+      const target = px * (1 + d * Math.min(cfg.firstTargetPct, room));
+      const geo = geometry(side, px, addZ ? (side === "LONG" ? addZ.hi : addZ.lo) : px * (1 - d * 0.005 * scale), cfg, scale, sz.first, sz.add);
+      const plan: Plan = { symbol: snap.symbol, side, entry: px, stop, target, rr: r(rr, 2)!, stopPct, targetPct: Math.abs(target / px - 1), roomPct: room,
+        trigger: trig, targetMode, neutral,
+        zone: { lo: z.lo, hi: z.hi, score: z.score, tfs: z.tfs, touches: z.touches }, oppZone: opp ? { lo: opp.lo, hi: opp.hi, score: opp.score } : null,
+        sweep: { extreme: sw.extreme!, depthPct: sw.depth!, barTime: sw.reclaim!.time, volX: r(sw.reclaimVolX, 2), sweepVolX: r(sw.sweepVolX, 2), strength: r(sw.strength, 2)! },
+        scale: r(scale, 3)!, expectedMovePct: em, marginFirstPct: sz.first, marginAddPct: sz.add, worstLossPct: sz.worst,
+        addZone: addZ ? { lo: addZ.lo, hi: addZ.hi, score: addZ.score } : null, geo };
+      return { action: "ENTER", side, plan, vetoes: vetoes.slice(0, cfg.log.maxVetoes), bias };
+    }
   }
-  return no("没有候选区满足触发条件", vetoes);
+  return no(neutral ? `${bias.note}；中性带两向都没有触发` : "没有候选区满足触发条件", vetoes);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

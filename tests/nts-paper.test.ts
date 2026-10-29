@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { advanceForward, type ForwardState } from "../lib/forward-relations.ts";
+import { advanceForward, crossLiquidation, tradeLiquidationPrice, type ForwardState } from "../lib/forward-relations.ts";
 import { DEFAULT_NTS_CONFIG as C } from "../lib/nts/config.ts";
 import { isNtsTrade } from "../lib/nts/engine.ts";
 import { CONTRACT, openScenario, quote } from "./nts-fixtures.ts";
@@ -78,6 +78,18 @@ test("强平（跳空穿过止损和强平价）：按 LIQUIDATION 记账；账�
   assert.ok(h); assert.ok(after.balance >= 0);
   assert.ok(f.eng.reconcile(after, { BTC_USDT: gap }, gap.observedAt));
   assert.ok(["LIQUIDATION", "HARD_STOP"].includes(f.eng.s.lastExit!.code));
+});
+test("全仓：钱包覆盖名义价值时没有价格强平价；不能回退成 100x 逐仓公式（回归：半仓单跌 0.7% 被按整个钱包记爆仓）", () => {
+  const cl = crossLiquidation("LONG", 76582, 0.0081, 998, 0.003);
+  assert.equal(cl.price, null);
+  const f = openScenario(); f.eng.execute(f.fwd, [f.action], f.c);
+  const t = f.fwd.positions[0]!; t.liquidationPrice = null; t.crossLiquidationLoss = cl.loss; t.stopPrice = t.entryPrice * 0.988; // 回放里那笔：止损 1.12%，逐仓强平 ≈0.7%
+  assert.equal(tradeLiquidationPrice(t), null);
+  const dip = quote(t.entryPrice * 0.991, t.entryPrice * 0.9911, f.now + 120_000);
+  assert.ok(dip.bestBid > t.stopPrice, "下跌在止损之内");
+  const after = advanceForward({ state: f.fwd, now: dip.observedAt, quotes: { BTC_USDT: dip }, contracts: { BTC_USDT: CONTRACT } }).state;
+  assert.ok(!after.history.some(x => x.id === t.id && x.exitReason === "LIQUIDATION"), "不应强平");
+  assert.ok(after.balance > 900);
 });
 test("模拟账户本金保持 1000U，不被新系统重置或改写", () => {
   const f = openScenario(); assert.equal(f.fwd.balance, 1000); assert.equal(f.fwd.initialEquity, 1000);

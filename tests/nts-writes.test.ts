@@ -11,7 +11,7 @@ import { loadKlines } from "./nts-klines.ts";
 const MONTH_QUOTA = 50_000_000, DAILY_GUARD = 100_000;
 const maxIn = (ts: number[], winMs: number) => { let best = 0, j = 0; for (let i = 0; i < ts.length; i++) { while (ts[i]! - ts[j]! > winMs) j++; best = Math.max(best, i - j + 1); } return best; };
 
-test("写入量与请求量：最繁忙的情形（放宽门槛、14 天内约 17 笔）下每小时 DO 写入行数与 Gate 请求频率都远低于预算", { timeout: 300_000 }, async () => {
+test("写入量与请求量：默认参数与最繁忙的放宽情形（约 43 天真实K线）下每小时 DO 写入行数与 Gate 请求频率都远低于预算", { timeout: 600_000 }, async () => {
   const { series, first15, last15 } = loadKlines();
   const startMs = (first15 + 140 * 900) * 1000, endMs = (last15 + 900) * 1000, hours = (endMs - startMs) / 3_600_000;
   const out: Record<string, { rowsPerHour: number; reqPerHour: number; max10s: number; max60s: number; trades: number; bytesPerHour: number }> = {};

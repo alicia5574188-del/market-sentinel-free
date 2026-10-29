@@ -572,6 +572,9 @@ function closeTrade(s:ForwardState,t:Trade,price:number,now:number,reason:string
 /** The trade's isolated liquidation price: fixed at open; older trades get it from their leverage and the contract's rate. */
 export function tradeLiquidationPrice(t:Trade,contract?:Contract){
   if(typeof t.liquidationPrice==="number"&&Number.isFinite(t.liquidationPrice)&&t.liquidationPrice>0)return t.liquidationPrice;
+  // 全仓单（新交易系统，开仓时记了 crossLiquidationLoss）：钱包足够覆盖名义价值时没有价格强平价（null），不能回退成逐仓公式
+  // （100x 逐仓 ≈0.7% 就会“爆仓”并按整个钱包记亏）。
+  if(typeof t.crossLiquidationLoss==="number")return null;
   return isolatedLiquidationPrice({entry:t.entryPrice,leverage:t.leverage,side:t.side,maintenanceRate:t.maintenanceRate??contract?.maintenanceRate});
 }
 /**

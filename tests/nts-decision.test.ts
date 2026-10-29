@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DEFAULT_NTS_CONFIG as C, normalizeNtsConfig } from "../lib/nts/config.ts";
-import { breakerState, buildPacks, buildZones, computeBias, evaluateAdd, evaluateEntry, exitAction, geometry, sizingPct, stateInvalidated, sweepReclaim, volScale, worstCaseLossPct } from "../lib/nts/decision.ts";
+import { breakerState, buildPacks, buildZones, computeBias, evaluateAdd, evaluateEntry, exitAction, geometry, sizingPct, stateInvalidated, sweepReclaim, retestConfirm, volScale, worstCaseLossPct } from "../lib/nts/decision.ts";
 import { biasOf, bars, down, fakePack, packsOf, snap, sweepBars, up, zone, T0 } from "./nts-fixtures.ts";
 
 const trendBars = (f: typeof up) => ({ "1d": f(260, 86400), "4h": f(300, 14400), "1h": f(300, 3600), "15m": f(300, 900) });
@@ -11,7 +11,10 @@ test("bias: 多周期上升 → 偏多；下降 → 偏空；横盘 → 中性�
   const bu = computeBias(snap(), buildPacks(u), u, C), bd = computeBias(snap(), buildPacks(d), d, C), bf = computeBias(snap(), buildPacks(f), f, C);
   assert.equal(bu.side, "LONG"); assert.ok(bu.core >= C.neutralBand);
   assert.equal(bd.side, "SHORT"); assert.ok(bd.core <= -C.neutralBand);
-  assert.equal(bf.side, null); assert.ok(Math.abs(bf.core) < C.neutralBand);
+  // 中性带：|core| < 带宽 → side=null。旧带宽 0.2 下这组横盘数据在带内；默认 0.1 下按 core 的符号归边。
+  const C2 = normalizeNtsConfig({ neutralBand: 0.2 }), bf2 = computeBias(snap(), buildPacks(f), f, C2);
+  assert.equal(bf2.side, null); assert.ok(Math.abs(bf2.core) < 0.2);
+  assert.equal(bf.side, Math.abs(bf.core) < C.neutralBand ? null : bf.core > 0 ? "LONG" : "SHORT");
 });
 test("bias: 缺趋势数据 → 偏向 0、不交易，并写明原因；未接入的数据源被列出", () => {
   const b = computeBias(snap(), {}, {}, C);
@@ -41,7 +44,11 @@ test("RSI/MACD 只做辅助：不改变 core / side / 放行结果，显示分�
 test("RSI/MACD 不能把中性带内的 core 推成可交易，也不能把可交易的 core 否决", () => {
   const f = { ...trendBars(down), "1d": up(260, 86400) }, p = buildPacks(f);
   const push = { ...p, "1h": { ...p["1h"]!, rsi: 10, macd: { ...p["1h"]!.macd, h: 5, hDir: "up" as const, cross: "golden" as const, div: "bull" as const } }, "4h": { ...p["4h"]!, rsi: 10 } };
-  assert.equal(computeBias(snap(), push, f, C).side, null);
+  const C2 = normalizeNtsConfig({ neutralBand: 0.2 });
+  assert.equal(computeBias(snap(), p, f, C2).side, null);
+  assert.equal(computeBias(snap(), push, f, C2).side, null, "RSI/MACD 极端值也推不出中性带");
+  assert.equal(computeBias(snap(), push, f, C).core, computeBias(snap(), p, f, C).core, "core 不含 RSI/MACD");
+  assert.equal(computeBias(snap(), push, f, C).side, computeBias(snap(), p, f, C).side);
   // 同样的入场输入，RSI/MACD 极端值不同 → evaluateEntry 结论相同
   const lvl = 100, b15 = sweepBars(lvl), z = zone(lvl * 0.999, lvl * 1.001), opp = zone(lvl * 1.03, lvl * 1.032);
   const ctx = { zones: [z, opp], atr1hPct: 0.004, sizeMult: 1, inEvent: null, dataOk: true, dataNote: "" };
@@ -84,6 +91,30 @@ test("触发：刺破支撑后收回成立；没收回、刺破过深、量能�
   assert.equal(sweepReclaim(mirror, z, "SHORT", C).ok, true);
 });
 
+test("第二触发（回踩确认）：回踩进区不破位 + 一根同向确认K线 → 成立；确认已过、收盘破位、没有确认、放量砸盘都不触发；空头镜像", () => {
+  const z = zone(99.9, 100.1), base = bars(30, 900, i => 100.4 + 0.04 * Math.sin(i)), t = base.at(-1)!.time;
+  const B = (k: number, o: number, h: number, l: number, c: number, v = 100) => ({ time: t + 900 * k, open: o, high: h, low: l, close: c, volume: v });
+  const touch = B(1, 100.35, 100.4, 100.05, 100.15), conf = B(2, 100.16, 100.5, 100.12, 100.45);
+  const ok = retestConfirm([...base, touch, conf], z, "LONG", C);
+  assert.equal(ok.ok, true, ok.reason); assert.equal(ok.reclaim, conf); assert.equal(ok.depth, 0);
+  assert.match(retestConfirm([...base, touch, conf, B(3, 100.46, 100.7, 100.44, 100.65)], z, "LONG", C).reason, /已错过/);
+  assert.match(retestConfirm([...base, B(1, 100.35, 100.4, 99.8, 99.85), conf], z, "LONG", C).reason, /破位/);
+  assert.match(retestConfirm([...base, touch, B(2, 100.16, 100.2, 100.0, 100.05)], z, "LONG", C).reason, /确认/);
+  assert.match(retestConfirm([...base, B(1, 100.35, 100.4, 100.05, 100.15, 900), conf], z, "LONG", C).reason, /放量砸盘/);
+  assert.match(retestConfirm(base, z, "LONG", C).reason, /没有回踩进区/);
+  assert.equal(retestConfirm([...base, touch, conf], z, "LONG", normalizeNtsConfig({ trigger: { retestStrength: 0.95 } })).ok, false);
+  const m = (b: { time: number; open: number; high: number; low: number; close: number; volume: number }) => ({ ...b, open: 200 - b.open, high: 200 - b.low, low: 200 - b.high, close: 200 - b.close });
+  assert.equal(retestConfirm([...base, touch, conf].map(m), zone(99.9, 100.1), "SHORT", C).ok, true);
+  // 配置可关掉第二触发；布尔值能正确合并
+  assert.equal(normalizeNtsConfig({ trigger: { retest: false } }).trigger.retest, false);
+  assert.equal(normalizeNtsConfig({ trigger: { retest: "no" } } as never).trigger.retest, true);
+});
+test("开仓即失效不开：日线收盘在 EMA50 另一侧时该方向不开仓（否则下一分钟就被状态失效平掉）", () => {
+  const f = entryInputs(), daily = down(260, 86400);
+  assert.equal(stateInvalidated("LONG", daily), true);
+  const dec = evaluateEntry(f.s, { ...f.bars, "1d": daily }, biasOf("LONG"), f.ctx, C);
+  assert.equal(dec.action, "NO_TRADE"); assert.ok(dec.vetoes.some(v => /EMA50/.test(v.reason)));
+});
 const entryInputs = (over: { opp?: ReturnType<typeof zone> | null; atr?: number; sizeMult?: number; spread?: number } = {}) => {
   const lvl = 100, b15 = sweepBars(lvl), close = b15.at(-1)!.close, z = zone(lvl * 0.999, lvl * 1.001, 75);
   const opp = over.opp === undefined ? zone(close * 1.02, close * 1.022, 70) : over.opp;
@@ -102,16 +133,27 @@ test("入场计划：满足条件 → ENTER，止损/目标/保本/R:R/仓位齐
   assert.ok(p.geo.hardStop < p.geo.avg && p.geo.breakeven > p.geo.avg && p.geo.tolerance > p.geo.avg && p.geo.tolerance < p.geo.breakeven);
 });
 test("入场否决：R:R 不足、前方没有对向区、点差过大、数据不足、事件窗口、中性偏向 —— 都有明确原因", () => {
-  const near = entryInputs({ opp: zone(100.4, 100.42) });
+  const c0 = entryInputs().close, near = entryInputs({ opp: zone(c0 * 1.004, c0 * 1.0042) });
   const r1 = evaluateEntry(near.s, near.bars, biasOf("LONG"), near.ctx, C); assert.equal(r1.action, "NO_TRADE");
-  assert.ok(r1.vetoes.some(v => /R:R/.test(v.reason)));
+  assert.ok(r1.vetoes.some(v => /R:R \d/.test(v.reason)), JSON.stringify(r1.vetoes));
+  // 前方没有对向区：用 1H ATR × noOppAtrMult 作目标空间，不再一票否决；ATR 也缺失才否决
   const none = entryInputs({ opp: null }); const r2 = evaluateEntry(none.s, none.bars, biasOf("LONG"), none.ctx, C);
-  assert.ok(r2.vetoes.some(v => /对向区域/.test(v.reason)));
+  assert.equal(r2.action, "ENTER"); if (r2.action === "ENTER") { assert.equal(r2.plan.targetMode, "ATR"); assert.equal(r2.plan.oppZone, null);
+    assert.ok(Math.abs(r2.plan.roomPct - Math.min(0.004 * C.trigger.noOppAtrMult, C.maxTargetPct)) < 1e-12); }
+  const noAtr = evaluateEntry(none.s, none.bars, biasOf("LONG"), { ...none.ctx, atr1hPct: null }, C);
+  assert.equal(noAtr.action, "NO_TRADE"); assert.ok(noAtr.vetoes.some(v => /对向区域/.test(v.reason)));
   const wide = entryInputs({ spread: 0.002 }); assert.match((evaluateEntry(wide.s, wide.bars, biasOf("LONG"), wide.ctx, C) as { reason: string }).reason, /点差/);
   const e = entryInputs();
   assert.match((evaluateEntry(e.s, e.bars, biasOf("LONG"), { ...e.ctx, dataOk: false, dataNote: "1h K线不足" }, C) as { reason: string }).reason, /数据不足/);
   assert.match((evaluateEntry(e.s, e.bars, biasOf("LONG"), { ...e.ctx, inEvent: "FOMC" }, C) as { reason: string }).reason, /事件窗口/);
-  assert.equal(evaluateEntry(e.s, e.bars, biasOf(null, 0.05), e.ctx, C).action, "NO_TRADE");
+  // 中性带：不再一票否决，按触发方向开仓、仓位 × neutralSizeMult；neutralSizeMult=0 恢复旧行为（不做）
+  const full = evaluateEntry(e.s, e.bars, biasOf("LONG"), e.ctx, C), neu = evaluateEntry(e.s, e.bars, biasOf(null, 0.05), e.ctx, C);
+  assert.equal(neu.action, "ENTER"); assert.ok(full.action === "ENTER" && neu.action === "ENTER");
+  if (full.action === "ENTER" && neu.action === "ENTER") { assert.equal(neu.plan.neutral, true); assert.equal(full.plan.neutral, false);
+    assert.ok(Math.abs(neu.plan.marginFirstPct - full.plan.marginFirstPct * C.neutralSizeMult) < 1e-12); }
+  assert.equal(evaluateEntry(e.s, e.bars, biasOf(null, 0.05), e.ctx, normalizeNtsConfig({ neutralSizeMult: 0 })).action, "NO_TRADE");
+  // 偏向明确时只做偏向方向：同一组多头触发K线，偏空时不开多
+  assert.equal(evaluateEntry(e.s, e.bars, biasOf("SHORT"), e.ctx, C).action === "ENTER" && (evaluateEntry(e.s, e.bars, biasOf("SHORT"), e.ctx, C) as { side: string }).side === "LONG", false);
   const lowVol = entryInputs({ atr: 0.0003 }); assert.ok(evaluateEntry(lowVol.s, lowVol.bars, biasOf("LONG"), lowVol.ctx, C).vetoes.some(v => /成本/.test(v.reason)));
 });
 test("入场否决的记录有上限（日志不会无限长）", () => {
@@ -170,7 +212,7 @@ test("日线状态失效：多头日线收盘跌破 EMA50 → 失效", () => {
 });
 
 test("补仓：H1–H5 硬条件全满足且 G≥2 才补；已补过一次不再补；偏向反向/状态失效不补", () => {
-  const entry = 100, level = 99.05, b15 = sweepBars(level), d1 = up(120, 86400, 50, 0.004);
+  const entry = 100, level = 99.15, b15 = sweepBars(level), d1 = up(120, 86400, 50, 0.004);
   const zs = [zone(level * 0.999, level * 1.001, 80, { touches: 3 })];
   const pos = { side: "LONG" as const, entry, added: false, scale: 1, firstZoneScore: 70 };
   const sn = snap({ oiChg: { h1: -0.01, h4: 0 }, funding: 0 });
@@ -184,6 +226,8 @@ test("补仓：H1–H5 硬条件全满足且 G≥2 才补；已补过一次不�
   assert.equal(evaluateAdd(pos, sn, bars_, packsOf(), biasOf("LONG"), [zone(level * 0.999, level * 1.001, 40, { touches: 1 })], null, C).ok, false, "结构位更弱不补");
   const hotAtr = packsOf({ "1h": fakePack({ atrRank: 0.99 }) });
   assert.equal(evaluateAdd(pos, sn, bars_, hotAtr, biasOf("LONG"), zs, null, C).hard.H5.pass, false);
+  const far = sweepBars(99.05), farAdd = evaluateAdd(pos, sn, { ...bars_, "15m": far }, packsOf(), biasOf("LONG"), [zone(99.05 * 0.999, 99.05 * 1.001, 80, { touches: 3 })], null, C);
+  assert.equal(farAdd.hard.H2.pass, false, "距首仓 0.6% 以外不补（补仓距离上限 0.6%）"); assert.equal(C.add.distMaxPct, 0.006);
   const fewG = evaluateAdd(pos, snap({ oiChg: { h1: 0.01, h4: 0 }, funding: 0.003 }), bars_, packsOf({ "1h": fakePack({ ema: { ...fakePack().ema, a50: -0.01 } }) }), biasOf("LONG"), zs, null, C);
   assert.equal(fewG.ok, false); assert.match(fewG.reason, /评分条件仅/);
 });

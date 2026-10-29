@@ -44,13 +44,22 @@ async function replay(label: string, config?: Record<string, unknown>) {
   return { entries, exits, r, recs };
 }
 
-test("BTC/ETH 历史K线回放冒烟（约 14 天，默认参数，不调参、不评价盈亏）：不抛错、始终最多 1 个仓位、单笔亏损有界、日志有界且可导出", { timeout: 300_000 }, async () => {
-  await replay("默认");
+test("BTC/ETH 历史K线回放（约 43 天，默认参数，只看流程与进场频率、不评价盈亏）：不抛错、最多 1 个仓位、单笔亏损有界、日志有界、频率在目标带内", { timeout: 600_000 }, async () => {
+  const { entries, exits, r } = await replay("默认");
+  const days = (r.now() - (loadKlines().first15 + 140 * 900) * 1000) / 86_400_000;
+  // 目标 BTC+ETH 合计约每天 1–2 笔；回放里月度熔断（本月 −5% 停开）会让后段停开，所以下限放在 0.4/天，上限 3/天防止失控。
+  const perDay = entries.length / days;
+  assert.ok(perDay >= 0.4 && perDay <= 3, `默认参数进场频率 ${perDay.toFixed(2)}/天`);
+  for (const e of entries) { const p = (e.d as { plan: Record<string, unknown> }).plan; assert.ok(["SWEEP", "RETEST"].includes(p.trigger as string)); assert.ok(["OPP_ZONE", "ATR"].includes(p.targetMode as string)); }
+  for (const e of exits) {
+    const d = e.d as { code?: string; holdMin?: number; netPnl?: number };
+    assert.notEqual(d.code, "LIQUIDATION", "约 1% 保证金的单不应被强平（全仓强平价回归）");
+    assert.ok(!(d.code === "STATE_INVALID" && (d.holdMin ?? 99) <= 1), "不应开仓后 1 分钟就因状态失效被平（开仓即失效回归）");
+  }
+  assert.ok(r.fwd.balance > 500, `余额 ${r.fwd.balance}（不评价盈亏，只防账户被异常清零）`);
 });
 
-// 默认参数在这 14 天里一单都没触发（见上）。为了在真实K线上走通“进场→追踪→(加仓)→出场→出场后走势”整条管线，
-// 这里放宽触发门槛仅作管线压力测试：不是调参，不代表任何收益，生产默认值不变。
-test("BTC/ETH 历史K线回放（放宽触发门槛的管线压力测试）：整条管线走通且账户对账、日志完整", { timeout: 300_000 }, async () => {
+test("BTC/ETH 历史K线回放（放宽触发门槛的管线压力测试）：整条管线走通且账户对账、日志完整", { timeout: 600_000 }, async () => {
   const { entries, exits, r, recs } = await replay("放宽", { neutralBand: 0.02, trigger: { sweepMaxPct: 0.012, volMinMult: 0, rrMin: 0.8, costMult: 1, maxChasePct: 0.004, closeStrength: 0.3 } });
   assert.ok(entries.length >= 1, "放宽后应至少触发 1 次进场，用于验证管线");
   const first = entries[0]!, tid = (first as { tid?: string }).tid;

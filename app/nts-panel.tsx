@@ -3,7 +3,7 @@ import { useState } from "react";
 
 /** 首页「交易系统运行情况」：只读展示 + 一个自动开仓开关 + 日志下载。数据来自 /api/home 的 nts 字段（纸面账户，不碰实盘）。 */
 type Zone = { lo: number; hi: number; score: number; kind: string; tfs: string[] };
-type Plan = { side: string; entry: number; stop: number; target: number; rr: number; stopPct: number; targetPct: number } | null;
+type Plan = { side: string; entry: number; stop: number; target: number; rr: number; stopPct: number; targetPct: number; trigger?: string; targetMode?: string; neutral?: boolean } | null;
 type Ev = { at: number; action: string; side: string | null; reason: string; core: number | null; score: number | null; plan: Plan; zones: Zone[]; vetoes: number };
 type Per = { trades: number; wins: number; pnl: number; r: number; pct: number | null };
 export type NtsView = {
@@ -52,7 +52,7 @@ export default function NtsPanel({ nts }: { nts: NtsView | null | undefined }) {
     <div className="nts-row"><span>当前市场偏向分（−1…+1）</span><b>{bias}</b></div>
     <div className="nts-zones">{evs.map(([s, e]) => <div key={s}><h3>{name(s)} 关键支撑 / 压力</h3>
       {e.zones.length ? e.zones.slice(0, 4).map((z, i) => <div className="nts-zone" key={i}><span>{z.kind === "support" || z.kind === "SUPPORT" ? "支撑" : z.kind === "resistance" || z.kind === "RESISTANCE" ? "压力" : z.kind}</span><b>{px(z.lo)} – {px(z.hi)}</b><small>分 {z.score} · {z.tfs.join("/")}</small></div>) : <small>暂无</small>}</div>)}</div>
-    <div className="nts-row"><span>当前计划 / 不做原因</span><b>{plan?.plan ? `${sideZh(plan.plan.side)} 入 ${px(plan.plan.entry)} 损 ${px(plan.plan.stop)} 目标 ${px(plan.plan.target)} R:R ${plan.plan.rr}` : (evs.map(([s, e]) => `${name(s)}：${e.reason}`).join("；") || "等待第一次评估")}</b></div>
+    <div className="nts-row"><span>当前计划 / 不做原因</span><b>{plan?.plan ? `${sideZh(plan.plan.side)} 入 ${px(plan.plan.entry)} 损 ${px(plan.plan.stop)} 目标 ${px(plan.plan.target)} R:R ${plan.plan.rr}${plan.plan.trigger === "RETEST" ? "（回踩确认）" : plan.plan.trigger === "SWEEP" ? "（扫荡收回）" : ""}${plan.plan.targetMode === "ATR" ? "·ATR目标" : ""}${plan.plan.neutral ? "·中性带半仓" : ""}` : (evs.map(([s, e]) => `${name(s)}：${e.reason}`).join("；") || "等待第一次评估")}</b></div>
     <div className="nts-row"><span>持仓 / 浮盈亏</span><b>{p ? `${name(p.sym)} ${sideZh(p.side)}${p.added ? "（已加仓）" : ""} 均价 ${px(p.avg)} · ${sgn(p.floatingR)}R（${sgn(p.floatingNet)}U）· 止损 ${px(p.stop)}${p.breakeven ? ` · 保本 ${px(p.breakeven)}` : ""}` : "空仓"}</b></div>
     <div className="nts-row"><span>今日（老挝时间）</span><b>{per(nts.today)}</b></div>
     <div className="nts-row"><span>本月</span><b>{per(nts.month)}</b></div>
