@@ -8,7 +8,8 @@ import {noteWriteKinds,writeKeyBreakdown,writeKindsView,type WriteKindBook,type 
 
 import { DurableObject } from "cloudflare:workers";
 import handler from "vinext/server/app-router-entry";
-import {GatePublicError,fetchActiveContracts,fetchStructureCandles,fetchTickerBbo,fetchUrgentFuturesBook} from "../lib/gate-market.ts";
+import {GatePublicError,fetchActiveContracts,fetchStructureCandles,fetchTicker,fetchTickerBbo,fetchUrgentFuturesBook} from "../lib/gate-market.ts";
+import {NtsHost} from "../lib/nts/host.ts";
 import { MarketDataHub } from "../lib/market-data-hub.ts";
 import { GateRestThrottle } from "../lib/gate-rest-throttle.ts";
 import { GateStreamingFeed } from "../lib/gate-stream.ts";
@@ -32,7 +33,7 @@ import { pageForwardView } from "../lib/page-runtime-view.ts";
 import { repairDoubleCloses, type DoubleCloseRow } from "../lib/double-close-repair.ts";
 const LEDGER_REPAIR_KEY = "ledger-repair:double-close-v1";
 type LedgerRepairRecord = { version: "double-close-v1"; runs: { at: number; rows: DoubleCloseRow[]; balanceBefore: number; balanceAfter: number; resolvedAfter: number }[] };
-import { isAsset, runtimeStatus, paperHistory, accountLogs, strategyRuntimeLogs, ownerAuthenticated, authSession, ownerLogin, ownerLogout, ownerLiveStatus, ownerLiveSource, ownerLiveMode, ownerLiveCredentials, ownerPaperAction } from "./http-handlers.ts";
+import { isAsset, runtimeStatus, paperHistory, accountLogs, strategyRuntimeLogs, ownerAuthenticated, authSession, ownerLogin, ownerLogout, ownerLiveStatus, ownerLiveSource, ownerLiveMode, ownerLiveCredentials, ownerPaperAction, ownerNts } from "./http-handlers.ts";
 
 import { type EventEntryAssessment, type RadarCandidate } from "../lib/market-radar.ts";
 import {initialMarketRegimes,normalizeMarketRegimes,type MarketRegimeCandidate,type MarketRegimeState,type ResidentCandleStructure} from "../lib/market-regime.ts";
@@ -487,6 +488,26 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     readEquityDay:async day=>{const rows=await this.ctx.storage.get<EquityMinute[]>(`log:eqmin:${day}`);return Array.isArray(rows)?rows:null;},
   });
   private archiveWork:Promise<void>|null=null;
+  /** BTC/ETH trading system (paper account only). Everything it does is degraded-not-thrown; see lib/nts/host.ts. */
+  private nts=new NtsHost({
+    storage:this.ctx.storage as never,
+    db:()=>(this.env as {DB?:unknown}).DB?(this.env.DB as unknown as D1Like):null,
+    candles:async(sym,tf,limit)=>await fetchStructureCandles(sym,tf,limit),
+    ticker:async sym=>{
+      const row=await fetchTicker(sym) as {funding_rate?:string;mark_price?:string;index_price?:string;total_size?:string}|null;
+      if(!row)return null;
+      const num=(v:unknown)=>{const n=Number(v);return Number.isFinite(n)&&v!==undefined&&v!==null&&v!==""?n:null;};
+      return{funding:num(row.funding_rate),oi:num(row.total_size),mark:num(row.mark_price),index:num(row.index_price)};
+    },
+    spend:now=>this.gateRestThrottle.spend(now),
+    reserve:(rows,tag)=>this.reserveNonAlarmWrites(rows,256,tag),
+    resetMemory:()=>{
+      const started=this.forwardState?.startedAt??0;
+      this.tradePaths=emptyTradePathBook(started);this.tradePathsLoaded=true;this.tradePathsPending=false;
+      this.reviewLogCursor={...emptyReviewLogCursor(),startedAt:started};this.reviewLogReadyFor=started;this.reviewLogBooted=true;this.reviewLogComplete=true;
+    },
+  });
+  private ntsWork:Promise<void>|null=null;
   private archivePendingCache:{at:number;cursorKey:string;pending:number;records:number}|null=null;
   private authorityReady = true;
   private authorityView = { positions: {} as RuntimeState["positions"], equity: CANONICAL_PAPER_REFERENCE_EQUITY, equityVersion: 0 };
@@ -987,7 +1008,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const state=this.effectiveHealthState(stale);
     const body=JSON.stringify({version:"owner-home-v1",buildSha:FORWARD_BUILD_SHA,generatedAt:now,state,stale,standby:this.standbyView(),authorityReady:this.authorityReady,
       lastError:this.runtime.lastError,lastSuccessAt:this.runtime.lastSuccessAt,
-      realtimeReadiness:this.realtimeReadiness(),
+      realtimeReadiness:this.realtimeReadiness(),nts:this.ntsView(now),
       forward:pageForwardView(this.forwardView(now)),
       liveMirror:this.liveMirrorView(),
       liveMode:{requestedEnabled:live.requestedEnabled,operational:live.operational},
@@ -1369,7 +1390,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // One-time, owner-authorised paper reset after the strategy system was removed. Paper state only: it never calls Gate and
       // never touches the live channel. If anything live is on or open it waits (nothing is closed or ordered) until the operator
       // has switched live off and Gate is flat; the marker lives in the same persisted write as the reset, so it runs exactly once.
-      let engineIn=previous,oneTimeReset=false;
+      let engineIn=previous,oneTimeReset=false,ntsChanged=false;
       if(!stripCoreResetDone(previous)){
         const blocker=this.liveMirrorBlocker();
         if(blocker){
@@ -1379,7 +1400,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           if(reset.done){engineIn=reset.state;oneTimeReset=true;this.stripResetBlockedNote=null;}
         }
       }
+      // Trading system (paper): decide on the untouched state, apply on a copy, so `previous` stays the diff base.
+      let ntsDraft:ForwardState|null=null;
+      if(engineIn===previous&&stripCoreResetDone(previous)){
+        ntsDraft=this.nts.before(now,previous,executionQuotes,this.regimeContracts());
+        if(ntsDraft){engineIn=ntsDraft;ntsChanged=true;}
+      }
       const next = advanceForward({ state: engineIn, now, quotes:executionQuotes,contracts:this.regimeContracts(),minutePaths:this.forwardMinutePaths() });
+      if(this.nts.after(now,next.state,executionQuotes))ntsChanged=true;
+      if(this.nts.mustPersist)ntsChanged=true;
       try{captureTradeReviews(engineIn,next.state,now,FORWARD_BUILD_SHA,STRATEGY_FINGERPRINT,executionQuotes);}
       catch{this.reviewDiagnosticError="TRADE_REVIEW_CAPTURE_FAILED";}
       if(this.tradePathsLoaded){
@@ -1387,7 +1416,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }
       this.orderJournalPending=observeOrderJournal(this.orderJournal,next.state.history,next.state.startedAt)||this.orderJournalPending;
       // Write only on a real change (open/close/stop move/funds reset) plus one slow heartbeat per 5 minutes so equity peak and daily rows survive a restart.
-      if (oneTimeReset || next.changed || !previous.storage.persistedAt || now-previous.storage.persistedAt>=BAR_MS) {
+      if (oneTimeReset || ntsChanged || next.changed || !previous.storage.persistedAt || now-previous.storage.persistedAt>=BAR_MS) {
         next.state.storage = { persistedAt: now, error: null };
         // Review logs first, in their own keys and their own try/catch. Only what is proven durable leaves the hot JSON.
         await this.persistReviewLog(next.state,now);
@@ -1403,15 +1432,19 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           else if(job.op==='put')prepared.entries[`${TRADE_PATH_PAGE_PREFIX}${job.page}`]=job.value;
           else prepared.entries[TRADE_PATH_INDEX_KEY]=job.value;
         }
-        prepared.writes+=closures.length+pathJobs.length;
+        // Trading-system state + pending run-log chunks ride in the same transaction (one atomic write; no extra request).
+        const ntsOut=this.nts.entries(now);
+        Object.assign(prepared.entries,ntsOut.entries);
+        prepared.writes+=closures.length+pathJobs.length+ntsOut.rows;
         const reservation=this.reserveCriticalWrites(prepared.writes,writeKeyBreakdown(Object.keys(prepared.entries)));
         try {await this.ctx.storage.transaction(async transaction => {
           await transaction.put(prepared.entries);
           for(const key of pathDeletes)await transaction.delete(key);
-        });reservation.finish(true);
+        });reservation.finish(true);this.nts.committed(now);
           for(const job of pathJobs)commitPathWrite(this.tradePaths,job);
           this.tradePathsPending=peekPathWrite(this.tradePaths)!=null;
         }
+        catch(error){this.nts.failed(error);throw error;}
         finally {reservation.finish(false);}
         next.state.storage.layout=FORWARD_PAGED_STATE_VERSION;next.state.storage.sampleIntegrity="raw-sha256";
         this.forwardCompression=prepared.compression;
@@ -1436,7 +1469,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         catch{reservation.finish(false);}
       }
       try{await this.noteEquityMinute(now);}catch{/* 权益分钟线写失败不能挡住这一轮 */}
-    } catch (error) { this.forwardError = safeError(error); }
+    } catch (error) { this.nts.failed(error);this.forwardError = safeError(error); }
     finally { this.forwardBusy = false; }
   }
 
@@ -1659,7 +1692,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private effectiveHealthState(stale:boolean):RuntimeState["state"]{
     return !this.authorityReady?"RECOVERY_REQUIRED":this.idleStandby()?"IDLE":stale?"RECONNECTING":this.runtime.state;
   }
-  private standbyView(){return this.idleStandby()?{idle:true,label:"空仓待命",note:"当前无持仓、无实盘持仓/委托，不需要刷新行情；有持仓后自动恢复行情新鲜度检查。"}:null;}
+  private standbyView(){return this.idleStandby()?{idle:true,label:"空仓待命",watching:this.nts.symbols(),note:"当前无持仓、无实盘持仓/委托，不需要刷新行情；有持仓后自动恢复行情新鲜度检查。"}:null;}
 
   private stripResetBlockedNote:string|null=null;
   /** Why the one-time paper reset must wait: any live switch/position/entry. Pure in-memory read; no Gate call. */
@@ -3302,7 +3335,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const urgentSymbols=this.forwardUrgentSymbols();
     // Realtime Gate data is a scarce execution resource, never a scanner.
     // Keep only actual exposure and currently executable candidates resident.
-    const next=[...new Set([...protectedSymbols,...urgentSymbols])].slice(0,FORWARD_EXECUTION_BBO_CAP);
+    // The trading system only ever watches BTC and ETH perpetuals; they are resident while it is on.
+    const next=[...new Set([...protectedSymbols,...this.nts.symbols(),...urgentSymbols])].slice(0,FORWARD_EXECUTION_BBO_CAP);
     if(next.length!==this.runtime.symbols.length||next.some((symbol,index)=>symbol!==this.runtime.symbols[index]))
       this.applyRealtimeSymbols(next);
   }
@@ -3530,6 +3564,24 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.lastError=feedError??this.runtime.d1MirrorError;
   }
 
+  /** Trading-system background work (data reads, log flush, one-time old-log reset). Off the trading clock; never throws. */
+  private launchNtsWork(now:number){
+    try{
+      if(this.ntsWork||!this.forwardState||!this.authorityReady||this.forwardError)return;
+      const task=this.nts.background(now);if(!task)return;
+      const wrapped=task.catch(()=>undefined);this.ntsWork=wrapped;
+      this.ctx.waitUntil(wrapped.finally(()=>{if(this.ntsWork===wrapped)this.ntsWork=null;}));
+    }catch{/* 交易系统的后台任务失败只记录，不能碰交易 */}
+  }
+  private ntsView(now=Date.now()){
+    try{return this.nts.view(now,this.forwardState,this.forwardState?this.forwardQuotes(now):{});}
+    catch(error){return{version:"nts-v1",ready:false,enabled:false,state:"读取失败",error:safeError(error),paperOnly:true,liveTouched:false};}
+  }
+  private ntsHealth(now=Date.now()){
+    try{return this.nts.healthView(now,this.forwardState,this.forwardState?this.forwardQuotes(now):{});}
+    catch(error){return{ready:false,degraded:true,notes:[safeError(error)],liveTouched:false};}
+  }
+
   /** D1 run-log archive pass: off the trading clock, non-overlapping, never awaited by a tick. */
   private launchArchiveWork(now:number){
     try{
@@ -3702,6 +3754,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.launchOptionalWork(now, universeDue);
       this.launchTurnoverWork(Date.now());
       this.launchArchiveWork(Date.now());
+      this.launchNtsWork(Date.now());
     } catch (error) {
       this.runtime.state = "RECONNECTING";
       this.runtime.lastError = safeError(error);
@@ -3722,6 +3775,24 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     // Any write invalidates the owner home snapshot at once (live switch, reset, credentials, living mode…).
     if(request.method!=="GET"&&request.method!=="HEAD")this.ownerHomeCache=null;
     if(path==="/owner-home"&&request.method==="GET")return this.ownerHome();
+    if(path==="/nts-status"&&request.method==="GET")return json(this.ntsView());
+    if(path==="/nts-log"&&request.method==="GET"){
+      if(!await this.nts.boot())return json({error:"交易系统日志尚未就绪"},503);
+      return new Response(this.nts.logStream(),{headers:{"content-type":"application/x-ndjson; charset=utf-8","cache-control":"no-store","content-disposition":`attachment; filename="nts-run-log.ndjson"`}});
+    }
+    if(path==="/nts-log-backup"&&request.method==="GET"){
+      await this.nts.boot();
+      const stream=this.nts.backupStream();
+      if(!stream||!this.nts.reset||this.nts.reset.phase==="backup")return json({error:"旧日志备份还没有生成"},404);
+      return new Response(stream,{headers:{"content-type":"application/x-ndjson; charset=utf-8","cache-control":"no-store","content-disposition":`attachment; filename="old-run-log-backup.ndjson"`}});
+    }
+    if(path==="/nts-toggle"&&request.method==="POST"){
+      const body=await request.json().catch(()=>null) as {enabled?:unknown}|null;
+      if(typeof body?.enabled!=="boolean")return json({error:"需要 enabled: true/false"},400);
+      if(!await this.nts.boot())return json({error:"交易系统尚未就绪"},503);
+      await this.nts.setEnabled(body.enabled);this.ownerHomeCache=null;
+      return json(this.ntsView());
+    }
     // Binding-only projections. No public route reaches these methods. They do
     // not mutate primary state, re-arm alarms, start market work or touch Gate.
     if(path === "/member-feed" && request.method === "GET") {
@@ -3940,6 +4011,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         state: effectiveState,
         stale,
         standby: this.standbyView(),
+        nts: this.ntsHealth(),
         lastError: this.runtime.lastError,
         lastSuccessAt: this.runtime.lastSuccessAt,
         lastHeartbeatAt: this.runtime.lastHeartbeatAt,
@@ -4143,6 +4215,10 @@ const worker = {
     if (url.pathname === "/api/paper/reset" && request.method === "POST") return ownerPaperAction(request, env, "RESET");
     if (url.pathname === "/api/paper/reset/cancel" && request.method === "POST") return ownerPaperAction(request, env, "RESET_CANCEL");
     if (url.pathname === "/api/paper/history/clear" && request.method === "POST") return ownerPaperAction(request, env, "CLEAR_HISTORY");
+    if (url.pathname === "/api/nts/status") return ownerNts(request, env, "status");
+    if (url.pathname === "/api/nts/log") return ownerNts(request, env, "log");
+    if (url.pathname === "/api/nts/log-backup") return ownerNts(request, env, "log-backup");
+    if (url.pathname === "/api/nts/toggle") return ownerNts(request, env, "toggle");
     if (url.pathname.startsWith("/api/")) return json({ error: "not found" }, 404);
     let pageResponse:Response;
     try{pageResponse=await handler.fetch(request, env, ctx);}

@@ -7,6 +7,7 @@ import {type Trade,type forwardSummary} from "../lib/forward-relations.ts";
 import {purgeEquityBrowserCache} from "../lib/equity-browser-purge.ts";
 import type {AuthSession} from "../lib/operator-ui.ts";
 import RunLogStatus from "./run-log-status.tsx";
+import NtsPanel,{type NtsView} from "./nts-panel.tsx";
 import PanelStamp from "./panel-stamp.tsx";
 import {readPanel,writePanel,type PanelEntry} from "../lib/panel-cache.ts";
 import {PANEL_KEYS} from "../lib/system-panels.ts";
@@ -73,10 +74,12 @@ const stanceName=(stance?:string)=>stance==="REVERSE"?"反向":stance==="FLAT"?"
 const sessionName=(session?:string)=>session==="ASIA"?"亚盘":session==="EUROPE"?"欧盘":session==="US"?"美盘":"—";
 const claimName=(kind?:string)=>kind==="CONTINUE"?"延续":kind==="SUSPECT"?"可疑":"不投票";
 
-export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,livePanel,liveSystemPanel,liveEnabled,liveOverview,accountPanel,memberName,cacheScope="owner",cachedAt=null,onTabChange}:{
+export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,livePanel,liveSystemPanel,liveEnabled,liveOverview,accountPanel,ntsView,memberName,cacheScope="owner",cachedAt=null,onTabChange}:{
   data:View|null;healthy:boolean;statusLabel?:string;feedAt:number|null;error:string|null;livePanel:ReactNode;liveSystemPanel?:ReactNode;
   liveEnabled:boolean;liveOverview?:{equity:number|null;available:number|null;positionCount:number;operational:boolean;lastSyncAt:number|null;copied:number|null;eligible:number|null;missing:number|null;accountMark?:import('../lib/live-account-view.ts').LiveAccountMark|null;};
   accountPanel?:ReactNode;
+  /** 首页「交易系统运行情况」数据（/api/home 的 nts）。 */
+  ntsView?:NtsView|null;
   memberName?:string;cacheScope?:string;
   /** Set while the page shows the device snapshot (not yet a fresh read). */
   cachedAt?:number|null;
@@ -149,6 +152,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       {memberName&&<i className="pg-pill is-plain">{memberName}</i>}</span></header>
 
     {tab==="paper"&&<div className="pg-paper">
+      <NtsPanel nts={ntsView}/>
       <section className="fr-equity fr-overview-equity" data-testid="overview-equity-first" aria-label="模拟账户权益">
         <small>模拟账户权益 · USDT</small><strong>{fmt(accountEquity)}</strong>
         <div className={(accountPnl??0)>=0?"fr-positive":"fr-negative"}>{signed(accountPnl)} <span>U · {signed(accountPnl!=null&&accountBase?accountPnl/accountBase*100:null)}%</span></div>

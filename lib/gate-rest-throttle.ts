@@ -14,7 +14,7 @@ type Opts={baseMs:number;capMs:number;ratePerSec:number;burst:number};
 export class GateRestThrottle{
   private st=new Map<string,{n:number;nextAt:number}>();
   private tokens:number;private refillAt=0;
-  private allowed=0;private criticalAllowed=0;private backoffSkips=0;private budgetSkips=0;
+  private allowed=0;private criticalAllowed=0;private spent=0;private backoffSkips=0;private budgetSkips=0;
   private o:Opts;
   constructor(o:Opts=GATE_REST_THROTTLE){this.o=o;this.tokens=o.burst;}
   private refill(now:number){
@@ -34,10 +34,16 @@ export class GateRestThrottle{
     this.st.set(symbol,{n,nextAt:now+Math.min(this.o.capMs,this.o.baseMs*2**(n-1))});
     this.allowed++;return true;
   }
+  /** Candle/ticker reads of the BTC/ETH trading system: one token each from the same 0.4/s bucket, never negative, no per-symbol backoff. */
+  spend(now:number):boolean{
+    this.refill(now);
+    if(this.tokens<1)return false;
+    this.tokens-=1;this.spent++;return true;
+  }
   /** Next allowed time for a backed-off symbol (tests/health). */
   nextAt(symbol:string){return this.st.get(symbol)?.nextAt??null;}
   forget(keep:Iterable<string>){const k=new Set(keep);for(const s of [...this.st.keys()])if(!k.has(s))this.st.delete(s);}
   status(){return{version:"gate-rest-throttle-v1",baseMs:this.o.baseMs,capMs:this.o.capMs,ratePerSec:this.o.ratePerSec,burst:this.o.burst,
     tokens:Math.round(this.tokens*100)/100,backedOff:this.st.size,allowed:this.allowed,criticalAllowed:this.criticalAllowed,
-    backoffSkips:this.backoffSkips,budgetSkips:this.budgetSkips};}
+    backoffSkips:this.backoffSkips,budgetSkips:this.budgetSkips,spent:this.spent};}
 }

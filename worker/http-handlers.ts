@@ -199,3 +199,18 @@ export async function ownerPaperAction(request: Request, env: CloudflareEnv, act
   return response;
 }
 
+
+/** 新交易系统（纸面账户）：状态/日志/备份只读，开关是唯一的写入口。都需要登录；开关还要同源校验。 */
+export async function ownerNts(request: Request, env: CloudflareEnv, route: "status" | "log" | "log-backup" | "toggle") {
+  if (!await ownerAuthenticated(request, env)) return json({ error: "请先登录" }, 401);
+  const stream = env.MARKET_STREAM.getByName("primary");
+  if (route === "toggle") {
+    if (request.method !== "POST") return json({ error: "不支持的 API 操作" }, 405);
+    if (!sameOriginMutation(request)) return json({ error: "请求来源验证失败" }, 403);
+    const body = await request.json<{ enabled?: unknown }>().catch(() => ({} as { enabled?: unknown }));
+    if (typeof body.enabled !== "boolean") return json({ error: "开关参数无效" }, 400);
+    return stream.fetch("https://market-stream/nts-toggle", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: body.enabled }) });
+  }
+  if (request.method !== "GET") return json({ error: "不支持的 API 操作" }, 405);
+  return stream.fetch(`https://market-stream/nts-${route}`);
+}

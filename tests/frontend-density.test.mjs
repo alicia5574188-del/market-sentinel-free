@@ -74,6 +74,7 @@ function render(path,props,extra={},component="default"){
     "./market-intelligence-execution.tsx":{default:()=>null},
     "./living-panel.tsx":{default:()=>jsxRuntime.jsx("div",{"data-testid":"brain-fixture"})},
     "./run-log-status.tsx":{default:()=>jsxRuntime.jsx("div",{"data-testid":"run-log-status-fixture"})},
+    "./nts-panel.tsx":{default:()=>jsxRuntime.jsx("div",{"data-testid":"nts-fixture"})},
     ...extra
   };
   const fixtureModule={exports:{}};
@@ -400,4 +401,18 @@ test("System panels render cached details first instead of a loading state",()=>
   assert.match(members,/alice/);assert.match(members,/1 位/);assert.doesNotMatch(members,/SECRET-INVITE/);
   panelCache.clearPanels();
   assert.match(render("app/run-log-status.tsx",{refreshKey:0,scope}),/正在读取存储进度/,"logout wipes the cache");
+});
+
+test("home 「交易系统运行情况」区块：真实组件渲染所有要求的项目，原有模拟/实盘/系统标签不变",()=>{
+  const nts={ready:true,enabled:true,state:"空仓待命",now:1790761200000,symbols:["BTC_USDT","ETH_USDT"],
+    evals:{BTC_USDT:{at:1790761200000,action:"NO_TRADE",side:null,reason:"core 0.05 在中性带 ±0.2 内",core:0.05,score:0.06,plan:null,vetoes:0,zones:[{lo:79000,hi:79200,score:90,kind:"支撑",tfs:["4h"]},{lo:81000,hi:81200,score:88,kind:"压力",tfs:["1h"]}]},ETH_USDT:{at:1790761200000,action:"NO_TRADE",side:null,reason:"没有候选区满足触发条件",core:null,score:null,plan:null,vetoes:1,zones:[]}},
+    position:null,today:{trades:0,wins:0,pnl:0,r:0,pct:0},month:{trades:2,wins:1,pnl:3.5,r:0.2,pct:0.0035},recent:[{at:1790761200000,sym:"BTC_USDT",kind:"不做",text:"core 0.05 在中性带内"}],
+    lastExit:{sym:"BTC_USDT",side:"LONG",at:1790750000000,reason:"保本出场",netPnl:0.4,r:0.01,holdMin:90},breaker:{state:"OK",allowEntry:true,reason:"月度 +0.35%",monthPct:0.0035,dayR:0},
+    data:{quoteOk:true,health:{BTC_USDT:{ok:true,notes:[]},ETH_USDT:{ok:true,notes:[]}}},log:{appended:3,pending:0,lastFlushAt:1790761000000,error:null},resetState:{phase:"done",doneAt:1790700000000,error:null}};
+  const html=render("app/nts-panel.tsx",{nts});
+  for(const t of ["交易系统运行情况","系统开关","当前市场偏向分","关键支撑","当前计划","持仓","今日","本月","最近一次出场","熔断","数据 / 行情","最近决策","下载运行日志","老挝"])assert.ok(html.includes(t),`缺少 ${t}`);
+  assert.ok(!html.includes("实盘开关"),"面板不含实盘开关");
+  assert.equal(render("app/nts-panel.tsx",{nts:null}),"","无数据时不渲染");
+  const dash=render("app/forward-dashboard.tsx",{...dashboardProps(account()),ntsView:nts});
+  for(const t of ["模拟","实盘","系统"])assert.ok(dash.includes(t),`标签 ${t} 保持`);
 });

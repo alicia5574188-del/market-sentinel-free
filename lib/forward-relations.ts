@@ -161,6 +161,8 @@ export type Trade={
   livingSeenAt?:number;
   /** Isolated-margin liquidation price fixed at open, and the maintenance rate used for it. */
   liquidationPrice?:number|null;maintenanceRate?:number|null;
+  /** Cross-margin positions (new trading system only): the loss booked if the liquidation price is hit (the whole wallet less maintenance). Absent = isolated. */
+  crossLiquidationLoss?:number;
   winnerManagement?:WinnerManagement;realization?:TradeRealization;
   review?:TradeReview;
   id:string;symbol:string;side:"LONG"|"SHORT";rule:Rule;openedAt:number;closedAt:number|null;status:"OPEN"|"CLOSED";
@@ -581,7 +583,7 @@ export function liquidateIfHit(s:ForwardState,t:Trade,q:Quote,now:number,contrac
   if(!liquidationHit(t.side,px,liq))return false;
   // 止损先到：这一分钟是从止损内侧一路打穿止损的（不是跳空），或上一口价已经贴着止损，止损单先成交，照常走止损。
   if(t.stopPrice>0&&executableProtectionFill(t.side,t.stopPrice,px,t.lastPrice,bar)!==px)return false;
-  const leverage=Math.max(t.leverage||1,1),margin=t.notional/leverage,signed=dir(t.side)*(px/t.entryPrice-1);
+  const leverage=Math.max(t.leverage||1,1),margin=typeof t.crossLiquidationLoss=="number"&&t.crossLiquidationLoss>0?t.crossLiquidationLoss:t.notional/leverage,signed=dir(t.side)*(px/t.entryPrice-1);
   t.adverse=Math.max(t.adverse,Math.max(0,-signed));
   closeTrade(s,t,liq!,now,"LIQUIDATION",{authority:"ISOLATED_LIQUIDATION",liquidationPrice:liq!,observedPrice:px,leverage,
     maintenanceRate:maintenanceRateOf(t.maintenanceRate??contract?.maintenanceRate),margin,quoteAt:q.observedAt},{gross:-margin,exitFee:0});
@@ -786,4 +788,79 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
       accounting:"模拟使用新鲜买卖价并计入手续费、滑点和资金费占位。",
       liquidation:"策略系统已移除：不再自动开仓。已有持仓只按各自的止损、强平保护和止盈管理到平仓。"},
     cost:PAPER_COST};
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Paper order helpers for the new trading system (lib/nts). Paper account only: no Gate order, no live channel.
+// The caller passes a CLONE of the state; fees are debited at open exactly like the rest of this account.
+// ---------------------------------------------------------------------------------------------------------------------
+export type PaperOrderFail={ok:false;reason:string};
+export type PaperOpenInput={id:string;symbol:string;side:"LONG"|"SHORT";quote:Quote;contract:Contract|undefined;marginTarget:number;leverage:number;
+  stopPrice:number;targetPrice:number|null;maintenanceRate:number;slippageRate?:number;now:number;reason:string};
+function paperSize(contract:Contract|undefined,marginTarget:number,leverage:number,price:number):{contracts:number;multiplier:number}|PaperOrderFail{
+  if(!contract||!(contract.quantoMultiplier>0))return{ok:false,reason:"合约规格未就绪"};
+  const notionalPerContract=contract.quantoMultiplier*price;
+  const contracts=Math.floor(marginTarget*leverage/notionalPerContract);
+  const min=Math.max(1,Math.ceil(contract.minContracts??1));
+  if(!(contracts>=min))return{ok:false,reason:`保证金 ${marginTarget.toFixed(2)}U 不够最小下单量`};
+  const max=Number(contract.marketOrderSizeMax??contract.orderSizeMax);
+  return{contracts:Number.isFinite(max)&&max>0?Math.min(contracts,Math.floor(max)):contracts,multiplier:contract.quantoMultiplier};
+}
+/** Cross margin: the wallet (after fees) backs the whole position; liquidation when equity falls to the maintenance requirement. */
+export function crossLiquidation(side:"LONG"|"SHORT",entry:number,quantity:number,wallet:number,mmr:number){
+  if(!(quantity>0)||!(entry>0))return{price:null as number|null,loss:0};
+  const price=side==="LONG"?(quantity*entry-wallet)/(quantity*(1-mmr)):(wallet+quantity*entry)/(quantity*(1+mmr));
+  if(!Number.isFinite(price)||price<=0)return{price:null,loss:Math.max(0,wallet)};
+  return{price,loss:Math.max(0,Math.min(wallet,quantity*Math.abs(entry-price)))};
+}
+export function openPaperTrade(s:ForwardState,i:PaperOpenInput):{ok:true;trade:Trade}|PaperOrderFail{
+  if(s.positions.some(t=>t.status==="OPEN"))return{ok:false,reason:"已有持仓（同一时刻只持一笔）"};
+  if(!freshQuote(i.quote,i.now))return{ok:false,reason:"行情不新鲜"};
+  const slip=i.slippageRate??PAPER_COST.slippageRate,d=dir(i.side);
+  const px=i.side==="LONG"?i.quote.bestAsk*(1+slip):i.quote.bestBid*(1-slip);
+  const size=paperSize(i.contract,i.marginTarget,i.leverage,px);if("ok"in size)return size;
+  const quantity=size.contracts*size.multiplier,notional=quantity*px,margin=notional/i.leverage,entryFee=notional*PAPER_COST.feeRate;
+  if(margin+entryFee>s.balance)return{ok:false,reason:"余额不足以开这个仓位"};
+  s.balance-=entryFee;s.fees+=entryFee;
+  const liq=crossLiquidation(i.side,px,quantity,s.balance,i.maintenanceRate);
+  const worst=quantity*Math.abs(px-i.stopPrice)+entryFee*2;
+  const t={id:i.id,symbol:i.symbol,side:i.side,openedAt:i.now,closedAt:null,status:"OPEN",entryPrice:px,exitPrice:null,quantity,contracts:size.contracts,
+    quantoMultiplier:size.multiplier,notional,leverage:i.leverage,margin,plannedRisk:worst,stopPrice:i.stopPrice,
+    armPrice:i.targetPrice??px*(1+d*.01),favorable:0,adverse:0,lastPrice:i.side==="LONG"?i.quote.bestBid:i.quote.bestAsk,lastQuoteAt:i.quote.observedAt,
+    entryFee,exitFee:0,fundingAllowance:0,grossPnl:null,netPnl:null,exitReason:null,relationFailureBars:0,lastRelationBar:i.now,
+    execution:"REAL_QUOTE_PAPER_MODEL",liveEligible:false,liquidationPrice:liq.price,maintenanceRate:i.maintenanceRate,crossLiquidationLoss:liq.loss,
+    rule:{id:"nts-v1",signature:"nts-v1",parentId:null,version:1,createdAt:i.now,expiresAt:i.now+12*3_600_000,status:"EXPERIMENTAL",conditions:[],side:i.side,
+      horizon:720,stopRate:Math.abs(px-i.stopPrice)/px,armRate:.01,givebackRate:.002,exitMode:"HORIZON",samples:0,trainGroups:0,checkGroups:0,estimatedNetRate:0,
+      priorResponse:null,recentResponse:0,standardError:0,reason:i.reason,mode:null,trade_plan:null,intent:null,long_score:null,short_score:null,
+      residual_z:null,score:null,stop_price:i.stopPrice,planned_hold_min:720,volume24h_usd:null,funding_rate:null,trend_score:null,factor_30m_pct:null,
+      mutation:"CREATE",grammar:"nts-v1",liveEligible:false,authority:"ADAPTIVE_TEN",turnTimeframe:"5m"}} as unknown as Trade;
+  s.positions.unshift(t);s.lastEntryAt[i.symbol]=i.now;s.lastSide[i.symbol]=i.side;
+  event(s,i.now,"ENTRY",t.id,`${i.symbol} ${i.side} 新交易系统 ${margin.toFixed(2)}U 保证金 @${px}`);
+  return{ok:true,trade:t};
+}
+export function addToPaperTrade(s:ForwardState,t:Trade,i:{quote:Quote;contract:Contract|undefined;marginTarget:number;stopPrice:number;now:number;slippageRate?:number}):
+  {ok:true;fillPrice:number;addQuantity:number;addFee:number}|PaperOrderFail{
+  if(t.status!=="OPEN")return{ok:false,reason:"持仓已平"};
+  if(!freshQuote(i.quote,i.now))return{ok:false,reason:"行情不新鲜"};
+  const slip=i.slippageRate??PAPER_COST.slippageRate;
+  const px=t.side==="LONG"?i.quote.bestAsk*(1+slip):i.quote.bestBid*(1-slip);
+  const size=paperSize(i.contract,i.marginTarget,t.leverage,px);if("ok"in size)return size;
+  const q2=size.contracts*size.multiplier,n2=q2*px,fee=n2*PAPER_COST.feeRate;
+  if(n2/t.leverage+fee>s.balance)return{ok:false,reason:"余额不足以补仓"};
+  s.balance-=fee;s.fees+=fee;
+  const q=t.quantity+q2,avg=(t.quantity*t.entryPrice+q2*px)/q;
+  t.quantity=q;t.contracts+=size.contracts;t.entryPrice=avg;t.notional=q*avg;t.margin=t.notional/t.leverage;t.entryFee+=fee;
+  t.stopPrice=i.stopPrice;t.plannedRisk=q*Math.abs(avg-i.stopPrice)+t.entryFee*2;
+  const liq=crossLiquidation(t.side,avg,q,s.balance,t.maintenanceRate??.003);
+  t.liquidationPrice=liq.price;t.crossLiquidationLoss=liq.loss;
+  event(s,i.now,"ENTRY",t.id,`${t.symbol} 补仓 ${(n2/t.leverage).toFixed(2)}U 保证金 @${px}，均价 ${avg}`);
+  return{ok:true,fillPrice:px,addQuantity:q2,addFee:fee};
+}
+/** Market close of one paper trade at the executable side of the quote (with slippage). Returns the fill price, or null when it could not. */
+export function closePaperTrade(s:ForwardState,t:Trade,quote:Quote,now:number,reason:string,evidence?:Record<string,string|number|boolean|null>,slippageRate=PAPER_COST.slippageRate){
+  if(t.status!=="OPEN"||!freshQuote(quote,now))return null;
+  const px=t.side==="LONG"?quote.bestBid*(1-slippageRate):quote.bestAsk*(1+slippageRate);
+  closeTrade(s,t,px,now,reason,evidence);
+  s.positions=s.positions.filter(x=>x.status==="OPEN");
+  return px;
 }

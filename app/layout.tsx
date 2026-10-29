@@ -4,6 +4,7 @@ import "./forward-dashboard.css";
 import "./record-controls.css";
 import "./member-access.css";
 import "./live-priority.css";
+import "./nts-panel.css";
 
 export const dynamic = "force-dynamic";
 
