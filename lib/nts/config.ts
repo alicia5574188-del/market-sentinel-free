@@ -35,7 +35,8 @@ export type NtsConfig = {
     stopAtrBuf: number;       // 止损 = 区外 + 该倍数 × ATR(1H)（视频：止损放在区外一点）
     rrMin: number;            // TP1 至少多少 R 才做（视频的目标是最近对向区；太近不值得；2.5 为样本内选定）
     noTargetRR: number;       // 前方没有对向区/流动性时 TP1 取几 R
-    /** false = 不补仓：只用首仓，止损不动，只在 TP1 或硬止损出场（2026-10 改进对比：样本外 PF 1.64 vs 默认 1.17）。默认 true = 视频原版补一次。 */
+    /** false = 不补仓：只用首仓 2%，止损不动，只在 TP1 或硬止损出场。引擎回放（同一 1H/rr2.5 入场）：样本内 PF 1.62 / +393U，样本外 PF 1.52 / +284U，
+     *  默认（补仓后保本走）样本外 PF 1.15 / +95.5U；44 天 Gate 真实K线两者都亏（−81.5U vs −53.4U）。默认 true = 视频原版补一次。 */
     add: boolean;
     addAt: number;            // 补仓位 = 区内该比例处（0.5 = 区的均衡位，视频"区的更深处"）
     doubleWindow: number;     // 双底/双顶在最近多少根 15m 内找
