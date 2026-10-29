@@ -1,0 +1,49 @@
+name: Validate V12 Six-Cell 12m Expanded Audit
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/run-v12-frozen-audit.mjs"
+      - ".github/workflows/validate-v12-12m-expanded-audit.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Fetch 12-month Gate 5m expanded crypto universe
+        env:
+          RESEARCH_INTERVAL: 5m
+          RESEARCH_DATASET: /tmp/gate-history-v12-expanded-12m.json
+          RESEARCH_MONTHS: 202509,202510,202511,202512,202601,202602,202603,202604,202605,202606,202607,202608
+          RESEARCH_SYMBOLS: BTC_USDT,ETH_USDT,SOL_USDT,XRP_USDT,BNB_USDT,DOGE_USDT,ADA_USDT,SUI_USDT,UNI_USDT,LINK_USDT,LTC_USDT,AVAX_USDT,BCH_USDT,DOT_USDT,ZEC_USDT,STORJ_USDT,LSK_USDT
+          RESEARCH_MIN_CONTRACTS: 12
+          RESEARCH_MIN_MONTH_COVERAGE: 0.98
+          RESEARCH_CONCURRENCY: 16
+        run: node scripts/fetch-gate-history.mjs
+      - name: Run exact six-cell V12 base-cost 12-month audit
+        env:
+          RESEARCH_DATASET: /tmp/gate-history-v12-expanded-12m.json
+          RESEARCH_OUTPUT: /tmp/v12-six-cell-12m-expanded.json
+          RESEARCH_MIN_CONTEXT_MARKETS: 12
+          RESEARCH_FRICTION: 0.0014
+          RESEARCH_ENTRY_SLIPPAGE: 0.00025
+        run: node scripts/run-v12-frozen-audit.mjs
+      - name: Print compact result
+        run: |
+          jq '{dataset:{months:(.dataset.months|length),symbols:.dataset.symbols,minContextMarkets:.dataset.minContextMarkets},tradesPerDayFull,tradesPerDayEvaluation,byFamily:(.byFamily|with_entries(.value={discovery:.value.discovery,validation:.value.validation,evaluation:.value.evaluation,full:.value.full})),combined}' /tmp/v12-six-cell-12m-expanded.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v12-six-cell-12m-expanded-audit
+          path: /tmp/v12-six-cell-12m-expanded.json
+          retention-days: 7
