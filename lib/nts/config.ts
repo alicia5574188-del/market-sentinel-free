@@ -33,7 +33,7 @@ export type NtsConfig = {
     maxPriorVisits: number;   // 已结束的回踩次数上限：0 = 只做第一次回踩（视频：新鲜区）
     pivot4h: number;          // 4H 摆动点左右根数（HH/HL、BOS 判定）
     stopAtrBuf: number;       // 止损 = 区外 + 该倍数 × ATR(1H)（视频：止损放在区外一点）
-    rrMin: number;            // TP1 至少多少 R 才做（视频的目标是最近对向区；太近不值得）
+    rrMin: number;            // TP1 至少多少 R 才做（视频的目标是最近对向区；太近不值得；2.5 为样本内选定）
     noTargetRR: number;       // 前方没有对向区/流动性时 TP1 取几 R
     addAt: number;            // 补仓位 = 区内该比例处（0.5 = 区的均衡位，视频"区的更深处"）
     doubleWindow: number;     // 双底/双顶在最近多少根 15m 内找
@@ -68,7 +68,10 @@ export const DEFAULT_NTS_CONFIG: NtsConfig = {
   biasWeights: { trend: 0.55, oi: 0.2, funding: 0.15, basis: 0.1 },
   tfWeights: { "1d": 0.4, "4h": 0.35, "1h": 0.25 },
   aux: { maxBiasAdj: 0.06, maxConfAdj: 0.08, rsiOverbought: 72, rsiOversold: 28 },
-  smc: { obTfs: ["1h", "4h", "1d"], confirmBars: 3, maxPriorVisits: 0, pivot4h: 2, stopAtrBuf: 0.2, rrMin: 1.5, noTargetRR: 2,
+  // obTfs / rrMin 由样本内（2025-11-01→2026-05-01）4 组小网格选出：["1h"] + rrMin 2.5 样本内 PF 1.50；
+  // 样本外（2026-05-01→2026-10-28）未调参复核 PF 1.15、净 +95.5U。视频原版（1h/4h/1d、rrMin 1.5）样本内 PF 0.72、样本外 PF 0.59。
+  // 4H/1D 仍用于趋势结构（HH/HL/BOS）；只用 1H 区开仓 ⇒ 逆势单（只允许在 4H/1D 区）实际关闭。
+  smc: { obTfs: ["1h"], confirmBars: 3, maxPriorVisits: 0, pivot4h: 2, stopAtrBuf: 0.2, rrMin: 2.5, noTargetRR: 2,
     addAt: 0.5, doubleWindow: 24, doubleTolAtr: 0.5 },
   breaker: { dayStopR: 1, tzOffsetHours: 7 },
   eventWindows: [],
