@@ -1,8 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DEFAULT_NTS_CONFIG as C, normalizeNtsConfig } from "../lib/nts/config.ts";
-import { breakerState, buildPacks, buildZones, computeBias, evaluateAdd, evaluateEntry, exitAction, geometry, sizingPct, stateInvalidated, sweepReclaim, retestConfirm, volScale, worstCaseLossPct } from "../lib/nts/decision.ts";
-import { biasOf, bars, down, fakePack, packsOf, snap, sweepBars, up, zone, T0 } from "./nts-fixtures.ts";
+import { breakerState, buildPacks, computeBias } from "../lib/nts/decision.ts";
+import { evaluateSmcEntry, findFvgs, findOrderBlocks, marketStructure, reversalSignal, smcAddCheck, smcExit, worstLoss, type OrderBlock } from "../lib/nts/smc.ts";
+import type { Bar } from "../lib/nts/types.ts";
+import { down, snap, up, smcLongBars, smcLongView, SMC_CTX, T0 } from "./nts-fixtures.ts";
 
 const trendBars = (f: typeof up) => ({ "1d": f(260, 86400), "4h": f(300, 14400), "1h": f(300, 3600), "15m": f(300, 900) });
 
@@ -49,187 +51,115 @@ test("RSI/MACD 不能把中性带内的 core 推成可交易，也不能把可�
   assert.equal(computeBias(snap(), push, f, C2).side, null, "RSI/MACD 极端值也推不出中性带");
   assert.equal(computeBias(snap(), push, f, C).core, computeBias(snap(), p, f, C).core, "core 不含 RSI/MACD");
   assert.equal(computeBias(snap(), push, f, C).side, computeBias(snap(), p, f, C).side);
-  // 同样的入场输入，RSI/MACD 极端值不同 → evaluateEntry 结论相同
-  const lvl = 100, b15 = sweepBars(lvl), z = zone(lvl * 0.999, lvl * 1.001), opp = zone(lvl * 1.03, lvl * 1.032);
-  const ctx = { zones: [z, opp], atr1hPct: 0.004, sizeMult: 1, inEvent: null, dataOk: true, dataNote: "" };
-  const s = snap({ bid: b15.at(-1)!.close - 0.01, ask: b15.at(-1)!.close + 0.01 });
-  const x = evaluateEntry(s, { "15m": b15 }, { ...biasOf("LONG"), score: 0.66, confidence: 0.9 }, ctx, C);
-  const y = evaluateEntry(s, { "15m": b15 }, { ...biasOf("LONG"), score: 0.54, confidence: 0.2 }, ctx, C);
-  assert.equal(x.action, y.action);
+  // 入场决策（evaluateSmcEntry）的输入里根本没有偏向/RSI/MACD：只看订单块、结构、15m 信号
+  assert.equal(evaluateSmcEntry.length, 7);
 });
 
-test("支撑压力区：相近的摆动点按 0.4×ATR 聚成一个区，远处的另成一区；分数低于门槛的被丢弃", () => {
-  // 来回摆动：低点分别在 100.0 / 100.2 / 100.3（应聚成一个区）与 90（另一区），高点在 110
-  const lows = [100.0, 100.2, 100.3, 100.05, 90, 100.1], zig = Array.from({ length: 120 }, (_, i) => {
-    const k = Math.floor(i / 10), phase = i % 10, low = lows[k % lows.length]!;
-    const c = phase === 5 ? low : phase < 5 ? 110 - (110 - low) * (phase / 5) : low + (110 - low) * ((phase - 5) / 5);
-    return { time: T0 + i * 3600, open: c, close: c, high: c + 0.05, low: c - 0.05, volume: 100 };
-  });
-  const cfg = normalizeNtsConfig({ ...C, zone: { ...C.zone, minScore: 0 } });
-  const zs = buildZones({ "1h": zig }, 1.0, T0 + 120 * 3600, cfg);
-  assert.ok(zs.length >= 2 && zs.length <= cfg.zone.maxZones);
-  assert.ok(zs.some(z => z.touches >= 3), "重复触及的低点聚成一个多次触及的区");
-  for (let i = 1; i < zs.length; i++) assert.ok(zs[i - 1]!.score >= zs[i]!.score, "按分数降序");
-  assert.equal(buildZones({ "1h": zig }, 0, T0, cfg).length, 0, "ATR 无效 → 不出区");
-  const strict = normalizeNtsConfig({ ...C, zone: { ...C.zone, minScore: 99 } });
-  assert.equal(buildZones({ "1h": zig }, 1.0, T0 + 120 * 3600, strict).length, 0);
-  const wide = buildZones({ "1h": zig }, 20, T0 + 120 * 3600, cfg), narrow = buildZones({ "1h": zig }, 0.05, T0 + 120 * 3600, cfg);
-  assert.ok(wide.length <= narrow.length, "容差越大，区越少");
-});
+const B = (i: number, o: number, hgh: number, l: number, c: number, step = 3600): Bar => ({ time: T0 + i * step, open: o, high: hgh, low: l, close: c, volume: 1 });
+const lvlBars = (n: number, px: number, step = 3600, from = 0) => Array.from({ length: n }, (_, i) => B(from + i, px, px + 0.05, px - 0.05, px + (i % 2 ? 0.01 : -0.01), step));
 
-test("触发：刺破支撑后收回成立；没收回、刺破过深、量能不足、砸盘放量都不触发；空头镜像", () => {
-  const lvl = 100, z = zone(lvl * 0.999, lvl * 1.001);
-  const ok = sweepReclaim(sweepBars(lvl), z, "LONG", C);
-  assert.equal(ok.ok, true, ok.reason);
-  assert.equal(sweepReclaim(sweepBars(lvl, { reclaim: false }), z, "LONG", C).ok, false);
-  assert.match(sweepReclaim(sweepBars(lvl, { depth: 0.02 }), z, "LONG", C).reason, /破位/);
-  assert.match(sweepReclaim(sweepBars(lvl, { reclaimVol: 40 }), z, "LONG", C).reason, /量能/);
-  assert.match(sweepReclaim(sweepBars(lvl, { sweepVol: 900 }), z, "LONG", C).reason, /放量砸盘/);
-  assert.match(sweepReclaim(sweepBars(lvl, { strength: 0.2 }), z, "LONG", C).reason, /强度/);
-  // 空头：价格取镜像（用 2*lvl - p）
-  const mirror = sweepBars(lvl).map(b => ({ ...b, open: 2 * lvl - b.open, close: 2 * lvl - b.close, high: 2 * lvl - b.low, low: 2 * lvl - b.high }));
-  assert.equal(sweepReclaim(mirror, z, "SHORT", C).ok, true);
+test("订单块：阴线 → 下一根阳线实体吞没 + 收盘越过阴线高点 → 需求区 = 阴线的最高~最低；空头镜像", () => {
+  const b = [B(0, 100.3, 100.35, 99.95, 100.0), B(1, 99.98, 100.9, 99.96, 100.85), B(2, 100.85, 101.2, 100.8, 101.1)];
+  const ob = findOrderBlocks(b, "1h", C);
+  assert.equal(ob.length, 1); assert.equal(ob[0]!.kind, "DEMAND"); assert.deepEqual([ob[0]!.lo, ob[0]!.hi], [99.95, 100.35]);
+  assert.equal(ob[0]!.leftT, b[1]!.time + 3600, "价格完全离开区域的第一根K线被记下");
+  const s = [B(0, 100.0, 100.4, 99.65, 100.3), B(1, 100.32, 100.34, 99.4, 99.45), B(2, 99.45, 99.5, 99.1, 99.2)];
+  const so = findOrderBlocks(s, "1h", C);
+  assert.equal(so.length, 1); assert.equal(so[0]!.kind, "SUPPLY"); assert.deepEqual([so[0]!.lo, so[0]!.hi], [99.65, 100.4]);
 });
-
-test("第二触发（回踩确认）：回踩进区不破位 + 一根同向确认K线 → 成立；确认已过、收盘破位、没有确认、放量砸盘都不触发；空头镜像", () => {
-  const z = zone(99.9, 100.1), base = bars(30, 900, i => 100.4 + 0.04 * Math.sin(i)), t = base.at(-1)!.time;
-  const B = (k: number, o: number, h: number, l: number, c: number, v = 100) => ({ time: t + 900 * k, open: o, high: h, low: l, close: c, volume: v });
-  const touch = B(1, 100.35, 100.4, 100.05, 100.15), conf = B(2, 100.16, 100.5, 100.12, 100.45);
-  const ok = retestConfirm([...base, touch, conf], z, "LONG", C);
-  assert.equal(ok.ok, true, ok.reason); assert.equal(ok.reclaim, conf); assert.equal(ok.depth, 0);
-  assert.match(retestConfirm([...base, touch, conf, B(3, 100.46, 100.7, 100.44, 100.65)], z, "LONG", C).reason, /已错过/);
-  assert.match(retestConfirm([...base, B(1, 100.35, 100.4, 99.8, 99.85), conf], z, "LONG", C).reason, /破位/);
-  assert.match(retestConfirm([...base, touch, B(2, 100.16, 100.2, 100.0, 100.05)], z, "LONG", C).reason, /确认/);
-  assert.match(retestConfirm([...base, B(1, 100.35, 100.4, 100.05, 100.15, 900), conf], z, "LONG", C).reason, /放量砸盘/);
-  assert.match(retestConfirm(base, z, "LONG", C).reason, /没有回踩进区/);
-  assert.equal(retestConfirm([...base, touch, conf], z, "LONG", normalizeNtsConfig({ trigger: { retestStrength: 0.95 } })).ok, false);
-  const m = (b: { time: number; open: number; high: number; low: number; close: number; volume: number }) => ({ ...b, open: 200 - b.open, high: 200 - b.low, low: 200 - b.high, close: 200 - b.close });
-  assert.equal(retestConfirm([...base, touch, conf].map(m), zone(99.9, 100.1), "SHORT", C).ok, true);
-  // 配置可关掉第二触发；布尔值能正确合并
-  assert.equal(normalizeNtsConfig({ trigger: { retest: false } }).trigger.retest, false);
-  assert.equal(normalizeNtsConfig({ trigger: { retest: "no" } } as never).trigger.retest, true);
+test("订单块：只吞没没突破高点（confirmBars 内）不算；实体没吞没不算", () => {
+  const noBreak = [B(0, 100.3, 100.6, 99.95, 100.0), B(1, 99.98, 100.55, 99.96, 100.4), ...[2, 3, 4].map(i => B(i, 100.4, 100.5, 100.3, 100.45))];
+  assert.equal(findOrderBlocks(noBreak, "1h", C).filter(o => o.kind === "DEMAND").length, 0);
+  const noEngulf = [B(0, 100.3, 100.35, 99.95, 100.0), B(1, 100.05, 100.9, 100.0, 100.2), B(2, 100.2, 101, 100.15, 100.9)];
+  assert.ok(!findOrderBlocks(noEngulf, "1h", C).some(o => o.t === noEngulf[0]!.time));
 });
-test("开仓即失效不开：日线收盘在 EMA50 另一侧时该方向不开仓（否则下一分钟就被状态失效平掉）", () => {
-  const f = entryInputs(), daily = down(260, 86400);
-  assert.equal(stateInvalidated("LONG", daily), true);
-  const dec = evaluateEntry(f.s, { ...f.bars, "1d": daily }, biasOf("LONG"), f.ctx, C);
-  assert.equal(dec.action, "NO_TRADE"); assert.ok(dec.vetoes.some(v => /EMA50/.test(v.reason)));
+test("订单块失效：收盘穿过区域另一侧 → 作废，不再返回；回到区内会被计为一次到访", () => {
+  const base = [B(0, 100.3, 100.35, 99.95, 100.0), B(1, 99.98, 100.9, 99.96, 100.85), B(2, 100.85, 101.2, 100.8, 101.1)];
+  const visit = [...base, B(3, 101.1, 101.1, 100.2, 100.5), B(4, 100.5, 101.3, 100.45, 101.2)];
+  const ob = findOrderBlocks(visit, "1h", C)[0]!;
+  assert.ok(ob.priorVisits >= 1, "回到区内算到访");
+  const broken = [...base, B(3, 101.1, 101.1, 99.8, 99.9)];
+  assert.equal(findOrderBlocks(broken, "1h", C).filter(o => o.kind === "DEMAND").length, 0, "收盘跌破下沿 → 失效");
 });
-const entryInputs = (over: { opp?: ReturnType<typeof zone> | null; atr?: number; sizeMult?: number; spread?: number } = {}) => {
-  const lvl = 100, b15 = sweepBars(lvl), close = b15.at(-1)!.close, z = zone(lvl * 0.999, lvl * 1.001, 75);
-  const opp = over.opp === undefined ? zone(close * 1.02, close * 1.022, 70) : over.opp;
-  const sp = over.spread ?? 0.0001;
-  return { s: snap({ bid: close * (1 - sp / 2), ask: close * (1 + sp / 2) }), bars: { "15m": b15 }, z, opp, close,
-    ctx: { zones: opp ? [z, opp] : [z], atr1hPct: over.atr ?? 0.004, sizeMult: over.sizeMult ?? 1, inEvent: null, dataOk: true, dataNote: "" } };
-};
-test("入场计划：满足条件 → ENTER，止损/目标/保本/R:R/仓位齐全，最坏亏损 ≤ 5% 本金", () => {
-  const e = entryInputs(), d = evaluateEntry(e.s, e.bars, biasOf("LONG"), e.ctx, C);
-  assert.equal(d.action, "ENTER", d.action === "NO_TRADE" ? d.reason + JSON.stringify(d.vetoes) : "");
-  if (d.action !== "ENTER") return;
+test("FVG：三根K线中第1根高点 < 第3根低点 → 看涨缺口；被回补后不再列出", () => {
+  const b = [B(0, 100, 100.2, 99.9, 100.1), B(1, 100.1, 101.5, 100.1, 101.4), B(2, 101.4, 101.8, 100.6, 101.7)];
+  const g = findFvgs(b, "1h");
+  assert.equal(g.length, 1); assert.equal(g[0]!.kind, "BULL"); assert.deepEqual([g[0]!.lo, g[0]!.hi], [100.2, 100.6]);
+  assert.equal(findFvgs([...b, B(3, 101.7, 101.7, 100.1, 100.5)], "1h").length, 0);
+});
+test("4H 结构：抬高的高点/低点 + 收盘突破前高 → UP（BOS）；镜像 → DOWN；没有摆动点 → NONE", () => {
+  const zig = (dir: 1 | -1) => { const out: Bar[] = []; let px = 100, i = 0;
+    for (let leg = 0; leg < 8; leg++) { const n = 5, d = (leg % 2 === 0 ? 1.2 : -0.7) * dir;
+      for (let k = 0; k < n; k++) { const o = px, c = px + d / n; const u = c > o; out.push(B(i++, o, Math.max(o, c) + (u ? 0.05 : 0.02), Math.min(o, c) - (u ? 0.02 : 0.05), c, 14400)); px = c; } }
+    return out; };
+  const u = marketStructure(zig(1), C), d = marketStructure(zig(-1), C);
+  assert.equal(u.trend, "UP"); assert.equal(u.highs, "HH"); assert.equal(u.lows, "HL"); assert.ok(u.bosT != null);
+  assert.equal(d.trend, "DOWN"); assert.equal(d.highs, "LH"); assert.equal(d.lows, "LL");
+  assert.equal(marketStructure(lvlBars(3, 100, 14400), C).trend, "NONE");
+});
+test("15m 信号：区内看涨吞没 → ENGULF；区内双底 + 颈线被突破 → DOUBLE；不在区内 / 没反转 → 无", () => {
+  const z: OrderBlock = { tf: "1h", kind: "DEMAND", lo: 99.95, hi: 100.35, t: T0, confirmT: T0, leftT: T0, priorVisits: 0, inside: false, invalid: false, fvg: false };
+  const pre = lvlBars(20, 100.8, 900);
+  const eng = [...pre, B(20, 100.45, 100.5, 100.2, 100.25, 900), B(21, 100.24, 100.62, 100.22, 100.6, 900)];
+  assert.equal(reversalSignal(eng, z, "LONG", 0.08, C)?.kind, "ENGULF");
+  assert.equal(reversalSignal(eng.map(b => ({ ...b, low: b.low + 2, high: b.high + 2, open: b.open + 2, close: b.close + 2 })), z, "LONG", 0.08, C), null, "不在区内");
+  const dbl = [...pre, B(20, 100.6, 100.62, 100.2, 100.3, 900), B(21, 100.3, 100.32, 100.1, 100.15, 900), B(22, 100.15, 100.4, 100.12, 100.38, 900), B(23, 100.38, 100.5, 100.3, 100.45, 900),
+    B(24, 100.45, 100.47, 100.25, 100.3, 900), B(25, 100.3, 100.32, 100.11, 100.2, 900), B(26, 100.2, 100.35, 100.15, 100.3, 900), B(27, 100.3, 100.42, 100.28, 100.4, 900), B(28, 100.4, 100.58, 100.38, 100.56, 900)];
+  const s = reversalSignal(dbl, z, "LONG", 0.08, C);
+  assert.ok(s && ["DOUBLE", "ENGULF"].includes(s.kind), JSON.stringify(s));
+  const none = [...pre, B(20, 100.45, 100.5, 100.2, 100.25, 900), B(21, 100.24, 100.3, 100.21, 100.27, 900)];
+  assert.equal(reversalSignal(none, z, "LONG", 0.08, C), null);
+});
+test("入场计划：顺势 + 1H 需求区回踩 + 15m 吞没 → ENTER；止损在区外 + ATR 缓冲；TP1 = 前方对向订单块/前高；最坏亏损 ≤ 1R", () => {
+  const bars = smcLongBars(), px = bars["15m"].at(-1)!.close;
+  const d = evaluateSmcEntry("BTC_USDT", px * 0.99995, px * 1.00005, bars, smcLongView(bars), SMC_CTX, C);
+  assert.equal(d.action, "ENTER", JSON.stringify(d)); if (d.action !== "ENTER") return;
   const p = d.plan;
-  assert.ok(p.rr >= C.trigger.rrMin); assert.ok(p.stop < p.entry && p.target > p.entry);
-  assert.ok(p.worstLossPct <= C.maxLossPct * 1.0001, `worst ${p.worstLossPct}`);
-  assert.ok(Math.abs(p.marginFirstPct - 0.02) < 1e-9 || p.marginFirstPct < 0.02);
-  assert.ok(p.geo.hardStop < p.geo.avg && p.geo.breakeven > p.geo.avg && p.geo.tolerance > p.geo.avg && p.geo.tolerance < p.geo.breakeven);
+  assert.equal(p.side, "LONG"); assert.equal(p.mode, "TREND"); assert.equal(p.trigger, "ENGULF");
+  assert.ok(p.stop < p.zone.lo && Math.abs(p.stop - (Math.min(p.zone.lo, p.signal.extreme) - C.smc.stopAtrBuf * SMC_CTX.atr1h)) < 1e-9);
+  assert.ok(p.target > p.entry && p.rr >= C.smc.rrMin);
+  assert.ok(p.worstFirstPct <= C.maxLossPct && p.worstLossPct <= C.maxLossPct + 1e-9);
+  assert.ok(p.addAllowed && p.addPrice! > p.zone.lo && p.addPrice! < p.entry, "补仓位在区内更深处");
+  assert.ok(Math.abs(p.marginFirstPct - 0.02) < 1e-12 && Math.abs(p.marginAddPct - 0.03) < 1e-12);
 });
-test("入场否决：R:R 不足、前方没有对向区、点差过大、数据不足、事件窗口、中性偏向 —— 都有明确原因", () => {
-  const c0 = entryInputs().close, near = entryInputs({ opp: zone(c0 * 1.004, c0 * 1.0042) });
-  const r1 = evaluateEntry(near.s, near.bars, biasOf("LONG"), near.ctx, C); assert.equal(r1.action, "NO_TRADE");
-  assert.ok(r1.vetoes.some(v => /R:R \d/.test(v.reason)), JSON.stringify(r1.vetoes));
-  // 前方没有对向区：用 1H ATR × noOppAtrMult 作目标空间，不再一票否决；ATR 也缺失才否决
-  const none = entryInputs({ opp: null }); const r2 = evaluateEntry(none.s, none.bars, biasOf("LONG"), none.ctx, C);
-  assert.equal(r2.action, "ENTER"); if (r2.action === "ENTER") { assert.equal(r2.plan.targetMode, "ATR"); assert.equal(r2.plan.oppZone, null);
-    assert.ok(Math.abs(r2.plan.roomPct - Math.min(0.004 * C.trigger.noOppAtrMult, C.maxTargetPct)) < 1e-12); }
-  const noAtr = evaluateEntry(none.s, none.bars, biasOf("LONG"), { ...none.ctx, atr1hPct: null }, C);
-  assert.equal(noAtr.action, "NO_TRADE"); assert.ok(noAtr.vetoes.some(v => /对向区域/.test(v.reason)));
-  const wide = entryInputs({ spread: 0.002 }); assert.match((evaluateEntry(wide.s, wide.bars, biasOf("LONG"), wide.ctx, C) as { reason: string }).reason, /点差/);
-  const e = entryInputs();
-  assert.match((evaluateEntry(e.s, e.bars, biasOf("LONG"), { ...e.ctx, dataOk: false, dataNote: "1h K线不足" }, C) as { reason: string }).reason, /数据不足/);
-  assert.match((evaluateEntry(e.s, e.bars, biasOf("LONG"), { ...e.ctx, inEvent: "FOMC" }, C) as { reason: string }).reason, /事件窗口/);
-  // 中性带：不再一票否决，按触发方向开仓、仓位 × neutralSizeMult；neutralSizeMult=0 恢复旧行为（不做）
-  const full = evaluateEntry(e.s, e.bars, biasOf("LONG"), e.ctx, C), neu = evaluateEntry(e.s, e.bars, biasOf(null, 0.05), e.ctx, C);
-  assert.equal(neu.action, "ENTER"); assert.ok(full.action === "ENTER" && neu.action === "ENTER");
-  if (full.action === "ENTER" && neu.action === "ENTER") { assert.equal(neu.plan.neutral, true); assert.equal(full.plan.neutral, false);
-    assert.ok(Math.abs(neu.plan.marginFirstPct - full.plan.marginFirstPct * C.neutralSizeMult) < 1e-12); }
-  assert.equal(evaluateEntry(e.s, e.bars, biasOf(null, 0.05), e.ctx, normalizeNtsConfig({ neutralSizeMult: 0 })).action, "NO_TRADE");
-  // 偏向明确时只做偏向方向：同一组多头触发K线，偏空时不开多
-  assert.equal(evaluateEntry(e.s, e.bars, biasOf("SHORT"), e.ctx, C).action === "ENTER" && (evaluateEntry(e.s, e.bars, biasOf("SHORT"), e.ctx, C) as { side: string }).side === "LONG", false);
-  const lowVol = entryInputs({ atr: 0.0003 }); assert.ok(evaluateEntry(lowVol.s, lowVol.bars, biasOf("LONG"), lowVol.ctx, C).vetoes.some(v => /成本/.test(v.reason)));
+test("入场否决：逆势的 1H 区、15m 收盘穿透、没有反转信号、R:R 不足、点差过大、数据不足、事件窗口 —— 都有明确原因", () => {
+  const bars = smcLongBars(), px = bars["15m"].at(-1)!.close, bid = px * 0.99995, ask = px * 1.00005;
+  const why = (d: ReturnType<typeof evaluateSmcEntry>) => d.action === "ENTER" ? "ENTER" : JSON.stringify(d);
+  assert.match(why(evaluateSmcEntry("BTC_USDT", bid, ask, bars, smcLongView(bars, "DOWN"), SMC_CTX, C)), /逆势/);
+  const ct = smcLongBars({ closeThrough: true }), cp = ct["15m"].at(-1)!.close;
+  assert.notEqual(evaluateSmcEntry("BTC_USDT", cp * 0.99995, cp * 1.00005, ct, smcLongView(ct), SMC_CTX, C).action, "ENTER");
+  const ne = smcLongBars({ engulf: false }), np = ne["15m"].at(-1)!.close;
+  assert.match(why(evaluateSmcEntry("BTC_USDT", np * 0.99995, np * 1.00005, ne, smcLongView(ne), SMC_CTX, C)), /反转/);
+  const tight = smcLongView(bars, "UP", [100.9]); tight.obs = tight.obs.filter(o => o.kind === "DEMAND");
+  assert.match(why(evaluateSmcEntry("BTC_USDT", bid, ask, bars, tight, SMC_CTX, C)), /R:R|盈亏比/);
+  assert.match(why(evaluateSmcEntry("BTC_USDT", px * 0.999, px * 1.001, bars, smcLongView(bars), SMC_CTX, C)), /点差/);
+  assert.match(why(evaluateSmcEntry("BTC_USDT", bid, ask, bars, smcLongView(bars), { ...SMC_CTX, dataOk: false, dataNote: "15m 数据不足" }, C)), /数据不足/);
+  assert.match(why(evaluateSmcEntry("BTC_USDT", bid, ask, bars, smcLongView(bars), { ...SMC_CTX, inEvent: "CPI" }, C)), /CPI|事件/);
 });
-test("入场否决的记录有上限（日志不会无限长）", () => {
-  const e = entryInputs({ opp: null }); const many = Array.from({ length: 4 }, (_, i) => zone(99 - i * 0.1, 99.2 - i * 0.1, 60));
-  const r = evaluateEntry(e.s, e.bars, biasOf("LONG"), { ...e.ctx, zones: [e.z, ...many] }, normalizeNtsConfig({ ...C, log: { ...C.log, maxVetoes: 2 } }));
-  assert.ok(r.vetoes.length <= 2);
+test("最坏亏损：首仓 2% × 100x 打到止损（含手续费、滑点）；补仓后合计不超过 1R 才允许补", () => {
+  const w1 = worstLoss(C, [{ margin: 0.02, price: 100 }], 99);
+  assert.ok(Math.abs(w1 - 0.02 * 100 * (0.01 + C.stopSlipPct + 2 * C.feeRate + 2 * C.slippagePct)) < 1e-9, `w1 ${w1}`);
+  const w2 = worstLoss(C, [{ margin: 0.02, price: 100 }, { margin: 0.03, price: 99.5 }], 99);
+  assert.ok(w2 > w1);
 });
-
-test("仓位：先按波动缩放，再按 sizeMult 缩，补仓后最坏亏损始终 ≤ 5% 本金", () => {
-  for (const scale of [1, 1.3, 1.6]) for (const mult of [1, 0.5]) {
-    const z = sizingPct(C, scale, mult);
-    assert.ok(z.worst <= C.maxLossPct * 1.0001, `scale ${scale} mult ${mult} worst ${z.worst}`);
-    assert.ok(z.first <= C.firstMarginPct && z.add <= C.addMarginPct);
-  }
-  const full = sizingPct(C, 1, 1); assert.ok(full.first > 0.015, "标准波动下首仓约 2% 保证金");
-  assert.equal(volScale(null, C), 1); assert.equal(volScale(0.0001, C), 1); assert.equal(volScale(0.1, C), C.vol.maxScale);
-  assert.ok(worstCaseLossPct(C, 1, 0.02, 0.03) > worstCaseLossPct(C, 1, 0.02, 0));
+test("补仓检查：没到补仓位不补；15m 收盘穿透区 → 取消；4H 结构翻转 → 取消；条件都满足 → 补", () => {
+  const o = { side: "LONG" as const, added: false, addPrice: 100.15, zone: { lo: 99.95, hi: 100.35 }, mode: "TREND" as const, target: 102.47, breakeven: 100.8 };
+  const b15 = lvlBars(10, 100.2, 900);
+  assert.match(smcAddCheck(o, 100.3, b15, "UP").reason, /未到补仓位/);
+  assert.equal(smcAddCheck(o, 100.1, b15, "UP").ok, true);
+  assert.match(smcAddCheck(o, 100.1, [...b15, B(10, 100.1, 100.12, 99.7, 99.8, 900)], "UP").reason, /穿透/);
+  assert.match(smcAddCheck(o, 100.1, b15, "DOWN").reason, /4H/);
+  assert.equal(smcAddCheck({ ...o, added: true }, 100.1, b15, "UP").ok, false, "只补一次");
 });
-test("几何：补仓后均价、保本价=均价+0.20%、容差价=均价+0.05%、硬止损=均价−0.75%；空头镜像", () => {
-  const g = geometry("LONG", 100, 99.4, C, 1, 0.02, 0.03);
-  assert.ok(Math.abs(g.avg - (0.02 * 100 + 0.03 * 99.4) / 0.05) < 1e-9);
-  assert.ok(Math.abs(g.breakeven / g.avg - 1.002) < 1e-9 && Math.abs(g.tolerance / g.avg - 1.0005) < 1e-9 && Math.abs(g.hardStop / g.avg - (1 - 0.0075)) < 1e-9);
-  const s = geometry("SHORT", 100, 100.6, C, 1, 0.02, 0.03);
-  assert.ok(Math.abs(s.breakeven / s.avg - 0.998) < 1e-9 && Math.abs(s.hardStop / s.avg - 1.0075) < 1e-9);
-});
-
-const open = (over = {}) => { const g = geometry("LONG", 100, 99.4, C, 1, 0.02, 0.03); return { side: "LONG" as const, entry: 100, avg: g.avg, added: true, openedAt: 0, addedAt: 0, target: 101, geo: g, ...over }; };
-const H = 3_600_000;
-test("出场阶梯：0–6h 只在保本价平；6–12h 降到均价+0.05%；满 12h 市价平；日线失效立刻平", () => {
-  const p = open(), g = p.geo;
-  assert.equal(exitAction(p, g.breakeven - 0.01, 3 * H, false, C).action, "HOLD");
-  assert.equal(exitAction(p, g.tolerance + 0.01, 3 * H, false, C).action, "HOLD", "0–6h 到了容差价也不平");
-  assert.equal(exitAction(p, g.breakeven, 3 * H, false, C).action, "CLOSE");
-  assert.equal(exitAction(p, g.tolerance + 0.001, 7 * H, false, C).action, "CLOSE", "6h 后容差价就平");
-  assert.equal(exitAction(p, g.tolerance - 0.05, 7 * H, false, C).action, "HOLD");
-  assert.equal(exitAction(p, g.avg - 0.5, 12 * H, false, C).code, "TIME_12H");
-  assert.equal(exitAction(p, g.avg + 5, 1 * H, true, C).code, "STATE_INVALID");
-  // 12h 从补仓时刻起算
-  assert.equal(exitAction(open({ addedAt: 2 * H }), 99, 13 * H, false, C).action, "HOLD");
-  assert.equal(exitAction(open({ addedAt: 2 * H }), 99, 14 * H, false, C).code, "TIME_12H");
-});
-test("出场（未补仓）：到目标平；8h 仍无浮盈且在入场价附近时间失效；空头镜像", () => {
-  const p = open({ added: false, addedAt: null, target: 101 });
-  assert.equal(exitAction(p, 101, H, false, C).code, "TARGET");
-  assert.equal(exitAction(p, 100.2, H, false, C).action, "HOLD");
-  assert.equal(exitAction(p, 100.1, 9 * H, false, C).code, "TIME_8H");
-  assert.equal(exitAction(p, 100.4, 9 * H, false, C).action, "HOLD", "已有 +0.4% 浮盈不算失效");
-  const gs = geometry("SHORT", 100, 100.6, C, 1, 0.02, 0.03);
-  assert.equal(exitAction({ ...p, side: "SHORT", geo: gs, target: 99 }, 98.9, H, false, C).code, "TARGET");
-});
-test("日线状态失效：多头日线收盘跌破 EMA50 → 失效", () => {
-  assert.equal(stateInvalidated("LONG", up(120, 86400)), false);
-  const broke = [...up(100, 86400), ...bars(5, 86400, i => 100 * (1 + 0.0012 * 100) * (1 - 0.05 - i * 0.01))];
-  assert.equal(stateInvalidated("LONG", broke), true);
-  assert.equal(stateInvalidated("LONG", up(30, 86400)), false, "数据不足不判失效");
-});
-
-test("补仓：H1–H5 硬条件全满足且 G≥2 才补；已补过一次不再补；偏向反向/状态失效不补", () => {
-  const entry = 100, level = 99.15, b15 = sweepBars(level), d1 = up(120, 86400, 50, 0.004);
-  const zs = [zone(level * 0.999, level * 1.001, 80, { touches: 3 })];
-  const pos = { side: "LONG" as const, entry, added: false, scale: 1, firstZoneScore: 70 };
-  const sn = snap({ oiChg: { h1: -0.01, h4: 0 }, funding: 0 });
-  const bars_ = { "15m": b15, "1d": d1 };
-  const ok = evaluateAdd(pos, sn, bars_, packsOf(), biasOf("LONG"), zs, null, C);
-  assert.equal(ok.ok, true, ok.reason + JSON.stringify(ok.hard));
-  assert.ok(ok.gPassed >= C.add.gMin);
-  assert.equal(evaluateAdd({ ...pos, added: true }, sn, bars_, packsOf(), biasOf("LONG"), zs, null, C).ok, false);
-  assert.equal(evaluateAdd(pos, sn, bars_, packsOf(), biasOf("SHORT"), zs, null, C).hard.H4.pass, false);
-  assert.equal(evaluateAdd(pos, sn, bars_, packsOf(), biasOf("LONG"), zs, "FOMC", C).ok, false);
-  assert.equal(evaluateAdd(pos, sn, bars_, packsOf(), biasOf("LONG"), [zone(level * 0.999, level * 1.001, 40, { touches: 1 })], null, C).ok, false, "结构位更弱不补");
-  const hotAtr = packsOf({ "1h": fakePack({ atrRank: 0.99 }) });
-  assert.equal(evaluateAdd(pos, sn, bars_, hotAtr, biasOf("LONG"), zs, null, C).hard.H5.pass, false);
-  const far = sweepBars(99.05), farAdd = evaluateAdd(pos, sn, { ...bars_, "15m": far }, packsOf(), biasOf("LONG"), [zone(99.05 * 0.999, 99.05 * 1.001, 80, { touches: 3 })], null, C);
-  assert.equal(farAdd.hard.H2.pass, false, "距首仓 0.6% 以外不补（补仓距离上限 0.6%）"); assert.equal(C.add.distMaxPct, 0.006);
-  const fewG = evaluateAdd(pos, snap({ oiChg: { h1: 0.01, h4: 0 }, funding: 0.003 }), bars_, packsOf({ "1h": fakePack({ ema: { ...fakePack().ema, a50: -0.01 } }) }), biasOf("LONG"), zs, null, C);
-  assert.equal(fewG.ok, false); assert.match(fewG.reason, /评分条件仅/);
+test("出场：未补仓到 TP1 平（TARGET）；补仓后回到新均价保本附近就平（BREAKEVEN）；其余持有，止损由账户硬止损负责", () => {
+  const o = { side: "LONG" as const, added: false, addPrice: 100.15, zone: { lo: 99.95, hi: 100.35 }, mode: "TREND" as const, target: 102.47, breakeven: 100.8 };
+  assert.equal(smcExit(o, 102.5).action, "CLOSE"); assert.equal((smcExit(o, 102.5) as { code: string }).code, "TARGET");
+  assert.equal(smcExit(o, 101).action, "HOLD");
+  const a = { ...o, added: true, breakeven: 100.55 };
+  assert.equal((smcExit(a, 100.56) as { code: string }).code, "BREAKEVEN");
+  assert.equal(smcExit(a, 100.4).action, "HOLD");
+  const s = { ...o, side: "SHORT" as const, target: 98, breakeven: 99.5 };
+  assert.equal((smcExit(s, 97.9) as { code: string }).code, "TARGET");
 });
 
 test("月度熔断已移除：本月亏多少都不减仓、不停开；只保留当日 −1R 停当日；旧配置里的月度键被忽略", () => {

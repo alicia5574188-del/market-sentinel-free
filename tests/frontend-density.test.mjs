@@ -410,7 +410,7 @@ test("home 「交易系统运行情况」区块：真实组件渲染所有要求
     lastExit:{sym:"BTC_USDT",side:"LONG",at:1790750000000,reason:"保本出场",netPnl:0.4,r:0.01,holdMin:90},breaker:{state:"OK",allowEntry:true,reason:"月度 +0.35%",monthPct:0.0035,dayR:0},
     data:{quoteOk:true,health:{BTC_USDT:{ok:true,notes:[]},ETH_USDT:{ok:true,notes:[]}}},log:{appended:3,pending:0,lastFlushAt:1790761000000,error:null},resetState:{phase:"done",doneAt:1790700000000,error:null}};
   const html=render("app/nts-panel.tsx",{nts});
-  for(const t of ["交易系统运行情况","系统开关","当前市场偏向分","关键支撑","当前计划","持仓","今日","本月","最近一次出场","当日停开","数据 / 行情","最近决策","下载运行日志","老挝"])assert.ok(html.includes(t),`缺少 ${t}`);
+  for(const t of ["交易系统运行情况","系统开关","市场偏向分","只记录，不参与开仓","订单块","当前计划","持仓","今日","本月","最近一次出场","当日停开","数据 / 行情","最近决策","下载运行日志","老挝"])assert.ok(html.includes(t),`缺少 ${t}`);
   assert.ok(!html.includes("实盘开关"),"面板不含实盘开关");
   assert.equal(render("app/nts-panel.tsx",{nts:null}),"","无数据时不渲染");
   const dash=render("app/forward-dashboard.tsx",{...dashboardProps(account()),ntsView:nts});

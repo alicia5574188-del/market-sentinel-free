@@ -33,15 +33,18 @@ test("行情不新鲜 / 没有合约规格 → 不下单，写一条否决日志
   const g = openScenario(); assert.equal(g.eng.execute(g.fwd, [g.action], { ...g.c, contracts: {} }), false);
   assert.ok(kinds(g.eng).includes("NO_TRADE"));
 });
-test("补仓：+3% 本金保证金，均价、总保证金、强平价更新；只补一次的记录 id 固定", () => {
+test("补仓：+3% 本金保证金，均价、总保证金更新；硬止损仍在订单块外侧（不跟均价移动）；保本价按新均价重算", () => {
   const f = openScenario(); f.eng.execute(f.fwd, [f.action], f.c);
-  const t = f.fwd.positions[0]!, m1 = t.margin, e1 = t.entryPrice, add = { type: "ADD" as const, check: { ok: true, price: e1 * 0.995, zone: null, hard: {}, soft: {}, gPassed: 3, reason: "ok" } as never, barTime: f.barTime + 900 };
+  const t = f.fwd.positions[0]!, m1 = t.margin, e1 = t.entryPrice, add = { type: "ADD" as const, check: { ok: true, price: e1 * 0.995, reason: "到区 50% 位且结构未破" }, barTime: f.barTime + 900 };
   const q2 = quote(e1 * 0.995, e1 * 0.9952, f.now + 3_600_000), c2 = { ...f.c, now: f.now + 3_600_000, quotes: { BTC_USDT: q2 } };
   assert.equal(f.eng.execute(f.fwd, [add], c2), true);
   assert.ok(t.margin > m1 + f.fwd.initialEquity * 0.02 && t.margin < m1 + f.fwd.initialEquity * C.addMarginPct * 1.01);
   assert.ok(t.entryPrice < e1 && t.entryPrice > q2.bestAsk, "均价介于两次成交价之间");
-  assert.ok(f.eng.s.open!.addedAt != null && Math.abs(f.eng.s.open!.geo.hardStop / f.eng.s.open!.avg - (1 - C.hardStopPct * f.eng.s.open!.scale)) < 1e-9);
-  assert.ok(Math.abs(t.stopPrice - f.eng.s.open!.geo.hardStop) / t.stopPrice < 0.0006, "账户里的硬止损在均价 −0.75%（按波动缩放）附近");
+  const o = f.eng.s.open!;
+  assert.ok(o.addedAt != null && o.geo.hardStop === f.dec.plan.stop, "硬止损 = 计划止损（订单块下沿 − ATR 缓冲）");
+  assert.ok(o.geo.hardStop < o.zone!.lo, "止损在区外");
+  assert.ok(Math.abs(o.geo.breakeven - o.avg * (1 + C.breakevenPct)) < 1e-9, "保本价 = 新均价 +0.20%");
+  assert.ok(Math.abs(t.stopPrice - o.geo.hardStop) / t.stopPrice < 0.0006, "账户里的止损价与硬止损一致");
   assert.ok(kinds(f.eng).includes("ADD"));
 });
 test("平仓：余额 = 起始 + 净盈亏（含两边手续费、滑点），历史里有这一笔，EXIT 日志含 R 与 MFE/MAE", () => {

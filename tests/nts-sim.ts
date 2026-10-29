@@ -17,7 +17,9 @@ export function pricePath(b: Bar, f: number) {
   if (f < 0.6) return a + (c - a) * ((f - 0.25) / 0.35);
   return c + (b.close - c) * ((f - 0.6) / 0.4);
 }
-export type SimOpts = { series: Series; startMs: number; endMs: number; stepMs?: number; spreadPct?: number; syntheticTicker?: boolean; persistEveryMs?: number; resetDone?: boolean; budget?: boolean; fresh?: boolean; onStep?: (host: NtsHost, now: number) => void; config?: Record<string, unknown> };
+export type SimOpts = { series: Series; startMs: number; endMs: number; stepMs?: number; spreadPct?: number; syntheticTicker?: boolean; persistEveryMs?: number; resetDone?: boolean; budget?: boolean; fresh?: boolean; onStep?: (host: NtsHost, now: number) => void; trimHistory?: number; config?: Record<string, unknown> };
+/** number of leading elements satisfying a monotone predicate (true…true false…false). */
+function upper<T>(arr: readonly T[], ok: (x: T) => boolean) { let lo = 0, hi = arr.length; while (lo < hi) { const m = (lo + hi) >> 1; if (ok(arr[m]!)) lo = m + 1; else hi = m; } return lo; }
 export async function runSim(o: SimOpts) {
   const step = o.stepMs ?? 60_000, st = memStorage({}), db = sqliteD1();
   for (const s of [...ARCHIVE_SCHEMA, ...LIVING_LOG_SCHEMA]) db.raw.exec(s);
@@ -25,8 +27,9 @@ export async function runSim(o: SimOpts) {
   if (o.resetDone !== false) { const r = newResetRecord(o.startMs - 1e7); r.phase = "done"; r.resetLogged = true; r.hotCleared = true; r.verified = true; st.m.set(NTS_RESET_KEY, r); }
   const t = { now: o.startMs }, stats = { requests: 0, spendDenied: 0, perHour: new Map<number, number>(), maxPerSec: 0, secWindow: [] as number[], times: [] as number[], ntsRows: 0, entriesCalls: 0, steps: 0, openMax: 0, errors: [] as string[], maxMem: 0 };
   const seriesAt = (sym: string, tf: Tf, limit: number) => {
-    const arr = o.series[sym]![tf], nowSec = t.now / 1000, done = arr.filter(b => b.time + TF_SEC[tf] <= nowSec);
-    return done.slice(-limit);
+    const arr = o.series[sym]![tf], nowSec = t.now / 1000;
+    const n = upper(arr, b => b.time + TF_SEC[tf] <= nowSec); // 已收盘的K线数（序列按时间升序，二分）
+    return arr.slice(Math.max(0, n - limit), n);
   };
   const deps: HostDeps = {
     storage: st as never, db: () => db,
@@ -52,13 +55,16 @@ export async function runSim(o: SimOpts) {
       const draft = host.before(t.now, fwd, quotes, contracts);
       const res = advanceForward({ state: draft ?? fwd, now: t.now, quotes, contracts });
       const changedByNts = host.after(t.now, res.state, quotes) || host.mustPersist || draft != null;
-      fwd = res.state; peakOpen = Math.max(peakOpen, fwd.positions.filter(p => p.status === "OPEN").length);
+      fwd = res.state;
+      // 长回放：账户引擎每步都会复制整个成交历史，历史越长越慢（O(n²)）。只保留最近 N 笔在 fwd 里，其余移到 trades（统计用日志里的 EXIT，不受影响）。
+      if (o.trimHistory && fwd.history.length > o.trimHistory * 2) { trades.push(...fwd.history.slice(o.trimHistory)); fwd = { ...fwd, history: fwd.history.slice(0, o.trimHistory) } } // history 新的在前
+      peakOpen = Math.max(peakOpen, fwd.positions.filter(p => p.status === "OPEN").length);
       if (changedByNts || res.changed || t.now - lastPersist >= (o.persistEveryMs ?? 300_000)) {
         const out = host.entries(t.now); stats.ntsRows += out.rows; stats.entriesCalls++;
         if (out.rows) await st.put(out.entries); host.committed(t.now); lastPersist = t.now;
       }
     } catch (e) { stats.errors.push(String(e instanceof Error ? e.stack ?? e.message : e).slice(0, 300)); host.failed(e); }
   }
-  stats.openMax = peakOpen; void trades;
-  return { host, st, fwd, stats, db, now: () => t.now };
+  stats.openMax = peakOpen;
+  return { host, st, fwd, stats, db, now: () => t.now, trimmed: trades };
 }

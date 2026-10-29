@@ -15,7 +15,7 @@ test("写入量与请求量：默认参数与最繁忙的放宽情形（约 43 �
   const { series, first15, last15 } = loadKlines();
   const startMs = (first15 + 140 * 900) * 1000, endMs = (last15 + 900) * 1000, hours = (endMs - startMs) / 3_600_000;
   const out: Record<string, { rowsPerHour: number; reqPerHour: number; max10s: number; max60s: number; trades: number; bytesPerHour: number }> = {};
-  for (const [label, config] of [["默认", undefined], ["放宽(多笔交易)", { neutralBand: 0.02, trigger: { sweepMaxPct: 0.012, volMinMult: 0, rrMin: 0.8, costMult: 1, maxChasePct: 0.004, closeStrength: 0.3 } }]] as const) {
+  for (const [label, config] of [["默认", undefined], ["放宽(多笔交易)", { smc: { rrMin: 1.0, maxPriorVisits: 1 } }]] as const) {
     const r = await runSim({ series, startMs, endMs, stepMs: 60_000, config: config as never });
     assert.deepEqual(r.stats.errors, []);
     // 只统计 NTS 自己的 DO 行：状态键 + 日志块（不含 forward 本身的写入，那部分是原有的）
@@ -37,7 +37,7 @@ test("写入量与请求量：默认参数与最繁忙的放宽情形（约 43 �
 test("写入预算被拒绝时：日志留在内存、有上限、不抛错、预算恢复后补写且不丢不重", { timeout: 120_000 }, async () => {
   const { series, first15 } = loadKlines();
   const startMs = (first15 + 140 * 900) * 1000, endMs = startMs + 72 * 3_600_000;
-  const denied = await runSim({ series, startMs, endMs, stepMs: 60_000, budget: false, config: { neutralBand: 0.02, trigger: { sweepMaxPct: 0.012, volMinMult: 0, rrMin: 0.8, costMult: 1, maxChasePct: 0.004, closeStrength: 0.3 } } });
+  const denied = await runSim({ series, startMs, endMs, stepMs: 60_000, budget: false, config: { smc: { rrMin: 1.0, maxPriorVisits: 1 } } });
   assert.deepEqual(denied.stats.errors, []);
   const h = denied.host.healthView(denied.now(), denied.fwd, {});
   assert.ok(h.logPending <= NtsLog.MAX_HELD, `内存中未落盘块有上限：${h.logPending}`);

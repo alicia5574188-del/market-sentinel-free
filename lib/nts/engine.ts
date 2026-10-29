@@ -2,6 +2,9 @@
  * 新交易系统引擎（纸面账户）。纯逻辑 + 内存状态，不直接碰 Cloudflare、Gate、D1。
  * 宿主（Durable Object）负责：取数（fetchJob）、把引擎给出的动作应用到纸面账户（execute）、持久化 `serialize()` 和日志块。
  *
+ * 决策 = 视频的 SMC 订单块方法（smc.ts）：订单块 + 离开后第一次回踩 + 15m 反转信号；4H 结构定顺势/逆势；止损在区外；TP1 = 最近对向订单块/流动性；
+ * 价格走到区的均衡位且结构仍成立时补一次 +3%，补仓后回到保本价离场。同一时刻全账户只持一笔（BTC/ETH 合计）。
+ *
  * 每个 2 秒 tick：
  *   tick()   → 只读判断，返回要做的动作（开仓/补仓/平仓）。没有新 15m K 线、没有持仓时几乎零开销。
  *   execute()→ 在账户副本上套用动作，记录进场/补仓/出场日志。
@@ -10,8 +13,8 @@
  */
 import { addToPaperTrade, closePaperTrade, openPaperTrade, type Contract, type ForwardState, type Quote, type Trade } from "../forward-relations.ts";
 import { DEFAULT_NTS_CONFIG, NTS_VERSION, normalizeNtsConfig, type NtsConfig } from "./config.ts";
-import { breakerState, buildPacks, buildZones, computeBias, evaluateAdd, evaluateEntry, exitAction, sizingPct, stateInvalidated, volScale,
-  type BiasResult, type BreakerState, type EntryDecision, type Geometry, type Packs, type Plan, type Snap, type Zone, type Bars, type AddCheck } from "./decision.ts";
+import { breakerState, buildPacks, computeBias, type BiasResult, type BreakerState, type Geometry, type Packs, type Snap, type Bars } from "./decision.ts";
+import { evaluateSmcEntry, marketStructure, smcAddCheck, smcExit, smcView, type SmcDecision, type SmcPlan, type SmcView, type Structure } from "./smc.ts";
 import type { NtsLog, NtsRec } from "./log.ts";
 import { dirOf, TF_SEC, type Bar, type Side, type Tf } from "./types.ts";
 import { r } from "./indicators.ts";
@@ -28,11 +31,14 @@ type Brief = { at: number; sym: string; kind: string; text: string };
 export type NtsOpen = {
   tid: string; sym: string; side: Side; openedAt: number; entry1: number; addedAt: number | null; addPrice: number | null; avg: number; geo: Geometry;
   target: number; stop: number; scale: number; zoneScore: number; zoneKey: string; equityAtOpen: number; oneR: number;
+  /** SMC：订单块、顺势/逆势、计划补仓价（null = 本笔不补/已取消）、4H 结构缓存 */
+  zone: { lo: number; hi: number; tf: string; kind: string }; mode: "TREND" | "COUNTER"; plannedAdd: number | null; h4: Structure["trend"]; h4Bar: number;
   mfePct: number; maePct: number; mfeR: number; maeR: number; lastTraceAt: number; lastBarEval: number; stage: string; margin1: number;
 };
 type PostExit = { tid: string; sym: string; side: Side; exitAt: number; exitPx: number; done: number[]; best: number; worst: number };
 type Period = { key: string; startEquity: number; pnl: number; trades: number; wins: number; r: number };
-type LastEval = { at: number; barTime: number; action: string; side: Side | null; reason: string; core: number | null; score: number | null; plan: Plan | null;
+type LastEval = { at: number; barTime: number; action: string; side: Side | null; reason: string; core: number | null; score: number | null; plan: SmcPlan | null;
+  structure?: { h4: string; highs: string; lows: string; d1: string };
   zones: { lo: number; hi: number; score: number; kind: string; tfs: Tf[] }[]; vetoes: number };
 export type ExitSummary = { tid: string; sym: string; side: Side; at: number; reason: string; code: string; netPnl: number; r: number; holdMin: number; mfePct: number; maePct: number };
 export type NtsState = {
@@ -42,8 +48,8 @@ export type NtsState = {
 };
 export type FetchJob = { sym: string; kind: Tf | "ticker" };
 export type Action =
-  | { type: "OPEN"; sym: string; decision: Extract<EntryDecision, { action: "ENTER" }>; barTime: number; snapshot: Record<string, unknown> }
-  | { type: "ADD"; check: AddCheck; barTime: number }
+  | { type: "OPEN"; sym: string; decision: Extract<SmcDecision, { action: "ENTER" }>; barTime: number; snapshot: Record<string, unknown> }
+  | { type: "ADD"; check: { ok: boolean; reason: string; price: number }; barTime: number }
   | { type: "CLOSE"; code: string; reason: string; stage: string };
 type SymData = { bars: Partial<Record<Tf, Bar[]>>; fetchedAt: Partial<Record<Tf, number>>; failedAt: Partial<Record<Tf, number>>; fails: number; tickerAt: number; tickerFailedAt: number };
 
@@ -177,16 +183,18 @@ export class NtsEngine {
         const q = c.quotes[open.sym];
         if (t && q && q.fresh) {
           const px = open.side === "LONG" ? q.bestBid : q.bestAsk;
-          const ex = exitAction({ side: open.side, entry: open.entry1, avg: open.avg, added: open.addedAt != null, openedAt: open.openedAt, addedAt: open.addedAt, target: open.target, geo: open.geo },
-            px, now, this.stateInvalid(open), this.cfg);
+          const so = { side: open.side, added: open.addedAt != null, addPrice: open.plannedAdd, zone: open.zone, mode: open.mode, target: open.target, breakeven: open.geo.breakeven };
+          const ex = smcExit(so, px);
           open.stage = ex.stage;
           if (ex.action === "CLOSE") { actions.push({ type: "CLOSE", code: ex.code, reason: ex.reason, stage: ex.stage }); return actions; }
-          const d = this.data[open.sym], b15 = d?.bars["15m"], bt = b15?.[b15.length - 1]?.time ?? 0;
-          if (!open.addedAt && bt && bt !== open.lastBarEval && this.dataHealth(open.sym, now).ok && now - (bt + 900) * 1000 < 10 * MIN) {
-            const chk = this.checkAdd(open, now);
-            open.lastBarEval = bt;
-            if (chk?.ok) actions.push({ type: "ADD", check: chk, barTime: bt });
-            else if (chk && chk.hard.H3.pass) this.logAddSkip(open, chk, bt, now);
+          // 补仓：每个 tick 看价格是否到了区的均衡位（4H 结构按 4H K线缓存）
+          if (!open.addedAt && open.plannedAdd != null) {
+            const bars = this.bars(open.sym), b15 = bars["15m"] ?? [], b4 = bars["4h"], bt = b15[b15.length - 1]?.time ?? 0, t4 = b4?.[b4.length - 1]?.time ?? 0;
+            if (b4 && t4 !== open.h4Bar) { open.h4 = marketStructure(b4, this.cfg).trend; open.h4Bar = t4; }
+            const entryPx = open.side === "LONG" ? q.bestAsk : q.bestBid;
+            const chk = smcAddCheck(so, entryPx, b15, open.h4);
+            if (chk.ok) actions.push({ type: "ADD", check: { ...chk, price: entryPx }, barTime: bt });
+            else if (chk.reason !== "未到补仓位") { this.logAddSkip(open, chk.reason, bt, now); open.plannedAdd = null; }
           }
         }
         return actions;
@@ -206,7 +214,9 @@ export class NtsEngine {
         if (act) cands.push(act);
       }
       if (cands.length) {
-        cands.sort((a, b) => (b.type === "OPEN" ? b.decision.plan.rr : 0) - (a.type === "OPEN" ? a.decision.plan.rr : 0));
+        // 两个币同时出信号：顺势优先，其次 R:R 高的（同一时刻全账户只持一笔）
+        const key = (a: Action) => a.type === "OPEN" ? (a.decision.plan.mode === "TREND" ? 100 : 0) + a.decision.plan.rr : 0;
+        cands.sort((a, b) => key(b) - key(a));
         actions.push(cands[0]!);
         for (const o of cands.slice(1)) if (o.type === "OPEN") this.logVetoed(o.decision, o.barTime, now, "同时有更优候选，同一时刻只持一笔");
       }
@@ -215,30 +225,29 @@ export class NtsEngine {
   }
 
   private bars(sym: string): Bars { return this.data[sym]?.bars ?? {}; }
-  private stateInvalid(o: NtsOpen) { const d1 = this.bars(o.sym)["1d"]; return !!d1 && stateInvalidated(o.side, d1); }
 
   private decide(sym: string, barTime: number, now: number, q: Quote | undefined, contract: Contract | undefined, health: { ok: boolean; notes: string[] }, bk: BreakerState, balance: number): Action | null {
     const bars = this.bars(sym), dv = this.derivView(sym, now);
     const mid = q ? (q.bestBid + q.bestAsk) / 2 : (bars["15m"]?.[bars["15m"]!.length - 1]?.close ?? 0);
     const snap: Snap = { symbol: sym, now, bid: q?.bestBid ?? mid, ask: q?.bestAsk ?? mid, funding: dv.funding, fundingChg: dv.fundingChg, basis: dv.basis, oiChg: dv.oiChg };
-    const packs = buildPacks(bars), atr1h = packs["1h"]?.atr ?? null, nowSec = Math.floor(now / 1000);
-    const zones = atr1h ? buildZones(bars, atr1h, nowSec, this.cfg) : [];
-    const bias = computeBias(snap, packs, bars, this.cfg);
+    const packs = buildPacks(bars), view = smcView(bars, this.cfg);
+    const bias = computeBias(snap, packs, bars, this.cfg); // 只记录 / 显示
     const reasonData = health.ok ? "" : health.notes.join("；");
     const dataOk = health.ok && !!contract && !!q && q.fresh;
-    const ctx = { zones, atr1hPct: packs["1h"]?.atrPct ?? null, sizeMult: bk.sizeMult, inEvent: this.eventWindow(now), dataOk, dataNote: reasonData || (!contract ? "合约规格未就绪" : "行情不新鲜") };
-    let dec: EntryDecision = evaluateEntry(snap, bars, bias, ctx, this.cfg);
+    const ctx = { atr1h: packs["1h"]?.atr ?? null, atr15: packs["15m"]?.atr ?? null, inEvent: this.eventWindow(now), dataOk, dataNote: reasonData || (!contract ? "合约规格未就绪" : "行情不新鲜") };
+    let dec: SmcDecision = evaluateSmcEntry(sym, snap.bid, snap.ask, bars, view, ctx, this.cfg);
     let blockedPlan = false;
-    if (dec.action === "ENTER" && !bk.allowEntry) blockedPlan = true;
-    if (dec.action === "ENTER" && !bk.allowEntry) dec = { action: "NO_TRADE", side: dec.side, reason: `当日停开：${bk.reason}`, vetoes: dec.vetoes, bias };
-    this.s.lastEval[sym] = { at: now, barTime, action: dec.action, side: dec.side, reason: dec.action === "ENTER" ? `计划 ${dec.side} R:R ${dec.plan.rr}` : dec.reason, core: bias.core, score: bias.score,
+    if (dec.action === "ENTER" && !bk.allowEntry) { blockedPlan = true; dec = { action: "NO_TRADE", side: dec.side, reason: `当日停开：${bk.reason}`, vetoes: dec.vetoes }; }
+    this.s.lastEval[sym] = { at: now, barTime, action: dec.action, side: dec.side,
+      reason: dec.action === "ENTER" ? `计划 ${dec.side} ${dec.plan.zone.tf}订单块 R:R ${dec.plan.rr}` : dec.reason, core: bias.core, score: bias.score,
       plan: dec.action === "ENTER" ? dec.plan : null, vetoes: dec.vetoes.length,
-      zones: zones.map(z => ({ lo: r(z.lo, 2)!, hi: r(z.hi, 2)!, score: z.score, kind: z.mid <= mid ? "支撑" : "压力", tfs: z.tfs })) };
-    const snapshot = this.snapshotFor(sym, snap, packs, bias, zones, dv, bk, balance);
+      structure: { h4: view.h4.trend, highs: view.h4.highs, lows: view.h4.lows, d1: view.d1.trend },
+      zones: nearObs(view, mid, 4).map(z => ({ lo: r(z.lo, 2)!, hi: r(z.hi, 2)!, score: z.priorVisits, kind: `${z.kind === "DEMAND" ? "需求区" : "供给区"}${z.fvg ? "·FVG" : ""}`, tfs: [z.tf] })) };
+    const snapshot = this.snapshotFor(sym, snap, packs, bias, view, dv, bk, balance);
     if (dec.action === "ENTER") return { type: "OPEN", sym, decision: dec, barTime, snapshot };
-    // 否决记录：只有"计划成形后被否决"或"收回K线已出现但量能不合格"才逐根记录（每 symbol 每 4H 至多 4 条）；
-    // 其它（没有刺破 / 刺破未收回 / 收回已错过 / 破位）只按 4H 抽样一条，避免日志与写入膨胀。
-    const quiet = /^最近|已错过|视为破位|尚未收回/;
+    // 否决记录：只有"信号已出现、计划成形后被否决"（R:R 不够 / 区太宽 / 当日停开）才逐根记录（每 symbol 每 4H 至多 4 条）；
+    // 其它（不在区内 / 区内还没有反转信号 / 逆势 1H 区 / 区已作废）只按 4H 抽样一条，避免日志与写入膨胀。
+    const quiet = /^价格不在|还没有 15m 反转|不做逆势|穿透订单块|已在止损外侧/;
     let noteworthy = blockedPlan || dec.vetoes.some(v => !quiet.test(v.reason));
     const slot = Math.floor(now / (this.cfg.log.noTradeSampleMs));
     const sampled = this.s.noTradeSlot[sym] !== slot;
@@ -261,27 +270,23 @@ export class NtsEngine {
     return null;
   }
   /** All indicators for one decision point, computed once, compact. */
-  private snapshotFor(sym: string, snap: Snap, packs: Packs, bias: BiasResult, zones: Zone[], dv: ReturnType<NtsEngine["derivView"]>, bk: BreakerState, balance: number) {
+  private snapshotFor(sym: string, snap: Snap, packs: Packs, bias: BiasResult, view: SmcView, dv: ReturnType<NtsEngine["derivView"]>, bk: BreakerState, balance: number) {
+    const mid = (snap.bid + snap.ask) / 2; void sym;
     return {
-      bias: { core: bias.core, score: bias.score, side: bias.side, conf: bias.confidence, comps: bias.comps, aux: bias.aux, unconnected: bias.unconnected },
-      zones: zones.slice(0, 6).map(z => ({ lo: r(z.lo, 2), hi: r(z.hi, 2), s: z.score, n: z.touches, tf: z.tfs, parts: z.parts })),
+      bias: { core: bias.core, score: bias.score, side: bias.side, conf: bias.confidence, comps: bias.comps, aux: bias.aux, unconnected: bias.unconnected, use: "只记录/显示，不参与订单块放行/否决" },
+      zones: nearObs(view, mid, 6).map(z => ({ tf: z.tf, kind: z.kind, lo: r(z.lo, 2), hi: r(z.hi, 2), t: z.t, visits: z.priorVisits, inside: z.inside, fvg: z.fvg })),
+      structure: { h4: { trend: view.h4.trend, bosT: view.h4.bosT, bosLevel: r(view.h4.bosLevel, 2), highs: view.h4.highs, lows: view.h4.lows },
+        d1: { trend: view.d1.trend, highs: view.d1.highs, lows: view.d1.lows } },
+      fvg: view.fvgs.filter(g => Math.abs((g.lo + g.hi) / 2 / mid - 1) < 0.03).slice(-6).map(g => ({ tf: g.tf, kind: g.kind, lo: r(g.lo, 2), hi: r(g.hi, 2) })),
       ind: { "15m": packs["15m"], "1h": packs["1h"], "4h": packs["4h"], "1d": packs["1d"] },
       deriv: { funding: dv.funding, fundingChg: r(dv.fundingChg, 7), basis: r(dv.basis, 6), oiChg1h: r(dv.oiChg.h1, 5), oiChg4h: r(dv.oiChg.h4, 5), longShortRatio: "未接入" },
       px: { bid: snap.bid, ask: snap.ask }, breaker: { state: bk.state, monthPct: r(bk.monthPct, 4), dayR: r(bk.dayR, 2) }, equity: r(balance, 2),
     };
   }
-  private checkAdd(o: NtsOpen, now: number): AddCheck | null {
-    const sym = o.sym, bars = this.bars(sym), dv = this.derivView(sym, now), packs = buildPacks(bars), atr1h = packs["1h"]?.atr;
-    if (!atr1h) return null;
-    const zones = buildZones(bars, atr1h, Math.floor(now / 1000), this.cfg);
-    const snap: Snap = { symbol: sym, now, bid: o.avg, ask: o.avg, funding: dv.funding, fundingChg: dv.fundingChg, basis: dv.basis, oiChg: dv.oiChg };
-    const bias = computeBias(snap, packs, bars, this.cfg);
-    return evaluateAdd({ side: o.side, entry: o.entry1, added: o.addedAt != null, scale: o.scale, firstZoneScore: o.zoneScore }, snap, bars, packs, bias, zones, this.eventWindow(now), this.cfg);
+  private logAddSkip(o: NtsOpen, reason: string, bt: number, now: number) {
+    this.safeAppend({ id: `addskip:${o.tid}:${bt}`, k: "ADD_SKIP", t: now, sym: o.sym, tid: o.tid, d: { barTime: bt, reason, plannedAdd: o.plannedAdd, zone: o.zone, h4: o.h4 } }, now);
   }
-  private logAddSkip(o: NtsOpen, chk: AddCheck, bt: number, now: number) {
-    this.safeAppend({ id: `addskip:${o.tid}:${bt}`, k: "ADD_SKIP", t: now, sym: o.sym, tid: o.tid, d: { barTime: bt, reason: chk.reason, hard: chk.hard, soft: chk.soft, gPassed: chk.gPassed } }, now);
-  }
-  private logVetoed(dec: Extract<EntryDecision, { action: "ENTER" }>, barTime: number, now: number, why: string) {
+  private logVetoed(dec: Extract<SmcDecision, { action: "ENTER" }>, barTime: number, now: number, why: string) {
     this.safeAppend({ id: `veto:${dec.plan.symbol}:${barTime}`, k: "NO_TRADE", t: now, sym: dec.plan.symbol, d: { barTime, reason: why, kind: "否决", plan: dec.plan } }, now);
   }
   private safeAppend(rec: NtsRec, now: number) { try { this.log.append(rec, now); } catch { /* 日志失败不影响交易 */ } }
@@ -306,37 +311,38 @@ export class NtsEngine {
     if (!q) { this.logVetoed(a.decision, a.barTime, now, "下单时没有行情"); return false; }
     const marginTarget = balance * plan.marginFirstPct;
     const res = openPaperTrade(draft, { id: tid, symbol: a.sym, side: plan.side, quote: q, contract: c.contracts[a.sym], marginTarget, leverage: cfg.leverage,
-      stopPrice: plan.stop, targetPrice: plan.target, maintenanceRate: cfg.maintenanceRate, slippageRate: cfg.slippagePct, now, reason: `NTS ${plan.side} 区 ${r(plan.zone.lo, 1)}~${r(plan.zone.hi, 1)}` });
+      stopPrice: plan.stop, targetPrice: plan.target, maintenanceRate: cfg.maintenanceRate, slippageRate: cfg.slippagePct, now, reason: `NTS ${plan.side} ${plan.zone.tf}订单块 ${r(plan.zone.lo, 1)}~${r(plan.zone.hi, 1)}` });
     if (!res.ok) { this.logVetoed(a.decision, a.barTime, now, `下单失败：${res.reason}`); this.brief(now, a.sym, "放弃", res.reason); return false; }
     const t = res.trade, oneR = cfg.maxLossPct * balance;
-    const geo = { ...plan.geo, entry: t.entryPrice, avg: t.entryPrice, firstStop: plan.stop };
+    const geo = { ...plan.geo, entry: t.entryPrice, avg: t.entryPrice, breakeven: t.entryPrice * (1 + dirOf(plan.side) * cfg.breakevenPct), tolerance: t.entryPrice * (1 + dirOf(plan.side) * cfg.breakevenPct), firstStop: plan.stop, hardStop: plan.stop };
+    const b4 = this.bars(a.sym)["4h"];
     this.s.open = { tid, sym: a.sym, side: plan.side, openedAt: now, entry1: t.entryPrice, addedAt: null, addPrice: null, avg: t.entryPrice, geo, target: plan.target, stop: plan.stop,
-      scale: plan.scale, zoneScore: plan.zone.score, zoneKey: `${r(plan.zone.lo, 2)}`, equityAtOpen: balance, oneR, mfePct: 0, maePct: 0, mfeR: 0, maeR: 0, lastTraceAt: now,
-      lastBarEval: a.barTime, stage: "未补仓", margin1: t.margin };
+      scale: 1, zoneScore: plan.zone.score, zoneKey: `${plan.zone.tf}:${r(plan.zone.lo, 2)}`, equityAtOpen: balance, oneR, mfePct: 0, maePct: 0, mfeR: 0, maeR: 0, lastTraceAt: now,
+      lastBarEval: a.barTime, stage: "未补仓", margin1: t.margin,
+      zone: { lo: plan.zone.lo, hi: plan.zone.hi, tf: plan.zone.tf, kind: plan.zone.kind }, mode: plan.mode, plannedAdd: plan.addPrice,
+      h4: plan.structure.h4, h4Bar: b4?.[b4.length - 1]?.time ?? 0 };
     this.safeAppend({ id: `entry:${tid}`, k: "ENTRY", t: now, sym: a.sym, tid, d: {
       side: plan.side, barTime: a.barTime, plan: { ...plan, geo: undefined }, planGeometry: plan.geo, vetoes: a.decision.vetoes,
       fill: { price: t.entryPrice, contracts: t.contracts, qty: t.quantity, notional: r(t.notional, 2), margin: r(t.margin, 2), fee: r(t.entryFee, 4), liq: t.liquidationPrice, leverage: t.leverage },
-      sizing: { balance: r(balance, 2), firstPct: r(plan.marginFirstPct, 4), addPct: r(plan.marginAddPct, 4), oneR: r(oneR, 2), worstLossPct: r(plan.worstLossPct, 4), scale: plan.scale },
+      sizing: { balance: r(balance, 2), firstPct: r(plan.marginFirstPct, 4), addPct: r(plan.marginAddPct, 4), oneR: r(oneR, 2), worstFirstPct: r(plan.worstFirstPct, 4), worstLossPct: r(plan.worstLossPct, 4), scale: 1 },
       ...a.snapshot, version: NTS_VERSION } }, now);
-    this.brief(now, a.sym, "进场", `${plan.side === "LONG" ? "多" : "空"} @${r(t.entryPrice, 2)} 止损 ${r(plan.stop, 2)} 目标 ${r(plan.target, 2)} R:R ${plan.rr}`);
+    this.brief(now, a.sym, "进场", `${plan.side === "LONG" ? "多" : "空"}${plan.mode === "COUNTER" ? "（逆势）" : ""} ${plan.zone.tf}订单块 @${r(t.entryPrice, 2)} 止损 ${r(plan.stop, 2)} TP1 ${r(plan.target, 2)} R:R ${plan.rr}`);
     return true;
   }
   private doAdd(draft: ForwardState, a: Extract<Action, { type: "ADD" }>, c: { now: number; quotes: Record<string, Quote>; contracts: Record<string, Contract> }) {
     const o = this.s.open!, t = draft.positions.find(x => x.id === o.tid && x.status === "OPEN"), q = c.quotes[o.sym], cfg = this.cfg, now = c.now;
     if (!t || !q) return false;
-    const bk = this.breaker(now, draft.balance), sz = sizingPct(cfg, o.scale, bk.sizeMult);
-    const d = dirOf(o.side), approxAvg = (o.entry1 * o.margin1 + (a.check.price ?? o.entry1) * draft.balance * sz.add) / (o.margin1 + draft.balance * sz.add);
-    const stop = approxAvg * (1 - d * cfg.hardStopPct * o.scale);
-    const res = addToPaperTrade(draft, t, { quote: q, contract: c.contracts[o.sym], marginTarget: draft.balance * sz.add, stopPrice: stop, slippageRate: cfg.slippagePct, now });
-    if (!res.ok) { this.safeAppend({ id: `addskip:${o.tid}:${a.barTime}`, k: "ADD_SKIP", t: now, sym: o.sym, tid: o.tid, d: { barTime: a.barTime, reason: `下单失败：${res.reason}` } }, now); return false; }
-    const avg = t.entryPrice, hardStop = avg * (1 - d * cfg.hardStopPct * o.scale);
-    o.geo = { entry: o.entry1, add: res.fillPrice, avg, breakeven: avg * (1 + d * cfg.breakevenPct), tolerance: avg * (1 + d * cfg.tolerancePct), hardStop, firstStop: o.stop };
-    o.avg = avg; o.addedAt = now; o.addPrice = res.fillPrice; o.stop = t.stopPrice; o.stage = "0-6h";
+    // 补仓 +3% 本金保证金；硬止损不动，仍在订单块外（开仓时已校验补仓后最坏亏损 ≤ 1R）
+    const res = addToPaperTrade(draft, t, { quote: q, contract: c.contracts[o.sym], marginTarget: o.equityAtOpen * cfg.addMarginPct, stopPrice: o.stop, slippageRate: cfg.slippagePct, now });
+    if (!res.ok) { this.safeAppend({ id: `addskip:${o.tid}:${a.barTime}`, k: "ADD_SKIP", t: now, sym: o.sym, tid: o.tid, d: { barTime: a.barTime, reason: `下单失败：${res.reason}` } }, now); o.plannedAdd = null; return false; }
+    const d = dirOf(o.side), avg = t.entryPrice;
+    o.geo = { entry: o.entry1, add: res.fillPrice, avg, breakeven: avg * (1 + d * cfg.breakevenPct), tolerance: avg * (1 + d * cfg.breakevenPct), hardStop: o.stop, firstStop: o.stop };
+    o.avg = avg; o.addedAt = now; o.addPrice = res.fillPrice; o.stage = "已补仓";
     this.safeAppend({ id: `add:${o.tid}`, k: "ADD", t: now, sym: o.sym, tid: o.tid, d: {
-      barTime: a.barTime, price: res.fillPrice, qty: r(res.addQuantity, 6), fee: r(res.addFee, 4), avg, geo: o.geo, hard: a.check.hard, soft: a.check.soft, gPassed: a.check.gPassed,
-      zone: a.check.zone ? { lo: r(a.check.zone.lo, 2), hi: r(a.check.zone.hi, 2), score: a.check.zone.score, touches: a.check.zone.touches } : null,
+      barTime: a.barTime, price: res.fillPrice, qty: r(res.addQuantity, 6), fee: r(res.addFee, 4), avg, geo: o.geo, reason: a.check.reason, planned: o.plannedAdd,
+      zone: { tf: o.zone.tf, kind: o.zone.kind, lo: r(o.zone.lo, 2), hi: r(o.zone.hi, 2) }, h4: o.h4,
       liq: t.liquidationPrice, margin: r(t.margin, 2), version: NTS_VERSION } }, now);
-    this.brief(now, o.sym, "补仓", `@${r(res.fillPrice, 2)} 均价 ${r(avg, 2)} 保本价 ${r(o.geo.breakeven, 2)}`);
+    this.brief(now, o.sym, "补仓", `@${r(res.fillPrice, 2)} 均价 ${r(avg, 2)} 保本价 ${r(o.geo.breakeven, 2)} 止损 ${r(o.stop, 2)}`);
     return true;
   }
   private doClose(draft: ForwardState, a: Extract<Action, { type: "CLOSE" }>, c: { now: number; quotes: Record<string, Quote>; contracts: Record<string, Contract> }) {
@@ -397,7 +403,7 @@ export class NtsEngine {
     if (c.now - o.lastTraceAt >= this.cfg.log.traceEveryMs) {
       o.lastTraceAt = c.now;
       const slot = Math.floor(c.now / this.cfg.log.traceEveryMs);
-      const stopDist = d * (f.px - (o.addedAt ? o.geo.hardStop : o.stop)) / f.px, beDist = d * (o.geo.breakeven - f.px) / f.px;
+      const stopDist = d * (f.px - o.stop) / f.px, beDist = d * (o.geo.breakeven - f.px) / f.px;
       this.safeAppend({ id: `tr:${o.tid}:${slot}`, k: "TRACE", t: c.now, sym: o.sym, tid: o.tid, d: {
         px: f.px, pct: r(f.pct, 5), r: r(f.r, 3), mfePct: r(o.mfePct, 5), maePct: r(o.maePct, 5), mfeR: r(o.mfeR, 3), maeR: r(o.maeR, 3),
         toStopPct: r(stopDist, 5), toBePct: o.addedAt ? r(beDist, 5) : null, toTargetPct: o.addedAt ? null : r(d * (o.target - f.px) / f.px, 5), stage: o.stage, ageMin: Math.round((c.now - o.openedAt) / MIN) } }, c.now);
@@ -437,8 +443,8 @@ export class NtsEngine {
     return {
       version: NTS_VERSION, enabled: extra.enabled, state, now, paperOnly: true, liveTouched: false,
       symbols: this.symbols, evals: this.s.lastEval,
-      position: o ? { tid: o.tid, sym: o.sym, side: o.side, openedAt: o.openedAt, entry: o.entry1, avg: o.avg, added: o.addedAt != null, stage: o.stage, target: o.target, stop: o.addedAt ? o.geo.hardStop : o.stop,
-        breakeven: o.addedAt ? o.geo.breakeven : null, tolerance: o.addedAt ? o.geo.tolerance : null, floatingR: fl ? r(fl.r, 2) : null, floatingPct: fl ? r(fl.pct, 4) : null, floatingNet: fl ? r(fl.net, 2) : null,
+      position: o ? { tid: o.tid, sym: o.sym, side: o.side, openedAt: o.openedAt, entry: o.entry1, avg: o.avg, added: o.addedAt != null, stage: o.stage, target: o.target, stop: o.stop,
+        breakeven: o.addedAt ? o.geo.breakeven : null, tolerance: null, plannedAdd: o.plannedAdd, zone: o.zone, mode: o.mode, floatingR: fl ? r(fl.r, 2) : null, floatingPct: fl ? r(fl.pct, 4) : null, floatingNet: fl ? r(fl.net, 2) : null,
         mfeR: r(o.mfeR, 2), maeR: r(o.maeR, 2), oneR: r(o.oneR, 2) } : null,
       today: per(this.s.day), month: per(this.s.month), recent: this.s.recent, lastExit: this.s.lastExit,
       breaker: bk, data: { health, quoteOk, rest: { perHour: this.restWindow.length, total: this.restRequests, fails: this.restFails, lastError: this.lastFetchError, lastAt: this.lastFetchAt || null,
@@ -447,4 +453,9 @@ export class NtsEngine {
     };
   }
 }
-export { DEFAULT_NTS_CONFIG, volScale };
+/** 现价附近（±6%）仍有效、已离开过的订单块，按距离排序。 */
+function nearObs(view: SmcView, px: number, n: number) {
+  return view.obs.filter(z => z.leftT != null && Math.abs((z.lo + z.hi) / 2 / px - 1) < 0.06)
+    .sort((a, b) => Math.abs((a.lo + a.hi) / 2 - px) - Math.abs((b.lo + b.hi) / 2 - px)).slice(0, n);
+}
+export { DEFAULT_NTS_CONFIG };

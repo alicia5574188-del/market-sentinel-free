@@ -58,11 +58,11 @@ test("相对基线(c6b8eb32)：实盘/Gate 下单相关文件零改动，worker 
 
 test("配置往返幂等：写回再读出（开关切换后重启）不会把数组变成对象，也不会放宽硬性上限", async () => {
   const { normalizeNtsConfig, DEFAULT_NTS_CONFIG } = await import("../lib/nts/config.ts");
-  const once = normalizeNtsConfig({ enabled: false, log: { traceEveryMs: 300000 }, trigger: { rrMin: 2 }, leverage: 500, maxLossPct: 0.5, symbols: ["DOGE_USDT"] });
+  const once = normalizeNtsConfig({ enabled: false, log: { traceEveryMs: 300000 }, smc: { rrMin: 2, obTfs: ["4h", "1d"] }, leverage: 500, maxLossPct: 0.5, symbols: ["DOGE_USDT"] });
   const twice = normalizeNtsConfig(JSON.parse(JSON.stringify(once)));
   assert.deepEqual(twice, once);
   assert.ok(Array.isArray(twice.log.postExitMarksMin) && [...twice.log.postExitMarksMin].join() === "30,60,120");
-  assert.equal(once.enabled, false); assert.equal(once.log.traceEveryMs, 300000); assert.equal(once.trigger.rrMin, 2);
+  assert.equal(once.enabled, false); assert.equal(once.log.traceEveryMs, 300000); assert.equal(once.smc.rrMin, 2); assert.deepEqual(once.smc.obTfs, ["4h", "1d"]);
   assert.equal(once.leverage, 100); assert.equal(once.maxLossPct, 0.05); assert.deepEqual(once.symbols, DEFAULT_NTS_CONFIG.symbols);
   assert.deepEqual(normalizeNtsConfig({ log: { postExitMarksMin: [10, "x"] } }).log.postExitMarksMin, [30, 60, 120]);
 });

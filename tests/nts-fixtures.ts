@@ -1,5 +1,6 @@
 import type { Bar } from "../lib/nts/types.ts";
-import type { Packs, Snap, BiasResult, Zone } from "../lib/nts/decision.ts";
+import type { Packs, Snap, BiasResult } from "../lib/nts/decision.ts";
+import { smcView, type SmcView } from "../lib/nts/smc.ts";
 
 export const T0 = 1_760_000_000; // seconds, arbitrary fixed anchor (deterministic fixtures)
 export function bars(n: number, stepSec: number, f: (i: number) => number, vol: (i: number) => number = () => 100, wick = 0.0006): Bar[] {
@@ -14,39 +15,55 @@ export const up = (n: number, step: number, base = 100, slope = 0.0012) => bars(
 export const down = (n: number, step: number, base = 100, slope = 0.0012) => bars(n, step, i => base * (1 - slope * i + 0.002 * Math.sin(i / 3)));
 export const flat = (n: number, step: number, base = 100) => bars(n, step, i => base * (1 + 0.0008 * Math.sin(i / 2)));
 export const snap = (over: Partial<Snap> = {}): Snap => ({ symbol: "BTC_USDT", now: (T0 + 400 * 900) * 1000, bid: 99.99, ask: 100.01, funding: 0, fundingChg: 0, basis: 0, oiChg: { h1: 0, h4: 0 }, ...over });
-export const zone = (lo: number, hi: number, score = 70, over: Partial<Zone> = {}): Zone => ({ lo, hi, mid: (lo + hi) / 2, score, touches: 3, tfs: ["1h", "4h"], reaction: 2, lastTouch: T0, parts: { touch: 0, react: 0, recent: 0, vol: 0, tf: 0, conf: 0 }, ...over });
+const B = (time: number, open: number, high: number, low: number, close: number, volume = 100): Bar => ({ time, open, high, low, close, volume });
+/**
+ * 一个干净的 SMC 多头场景（1H 需求订单块 99.95~100.35）：先阴跌到 100.3 → 阴线 [99.95,100.35] → 下一根阳线实体吞没并收在 100.35 之上 →
+ * 价格离开区域涨到 ~102.6 → 回落；15m 回到区里（最低 100.2）后出现看涨吞没（收 100.6）。
+ */
+export function smcLongBars(opts: { engulf?: boolean; closeThrough?: boolean } = {}) {
+  const h: Bar[] = []; let t = T0, px = 103;
+  for (let i = 0; i < 30; i++) { const o = px, c = px - 0.09; h.push(B(t, o, o + 0.03, c - 0.03, c)); px = c; t += 3600; }
+  h.push(B(t, 100.3, 100.35, 99.95, 100.0)); t += 3600;                 // 阴线 = 订单块
+  h.push(B(t, 99.98, 100.9, 99.96, 100.85)); t += 3600;                 // 吞没阳线，收盘突破阴线高点
+  px = 100.85;
+  for (let i = 0; i < 12; i++) { const o = px, c = px + 0.15; h.push(B(t, o, c + 0.04, o - 0.03, c)); px = c; t += 3600; } // 离开（最低 > 100.35）
+  for (let i = 0; i < 8; i++) { const o = px, c = px - 0.2; h.push(B(t, o, o + 0.02, c - 0.03, c)); px = c; t += 3600; }   // 回落到 ~101.05
+  const m: Bar[] = []; let p = 101.05;
+  for (let i = 0; i < 28; i++) { const o = p, c = p - 0.02; m.push(B(t, o, o + 0.01, c - 0.01, c)); p = c; t += 900; }    // → 100.49
+  m.push(B(t, 100.45, 100.5, 100.2, 100.25)); t += 900;
+  if (opts.closeThrough) m.push(B(t, 100.24, 100.3, 99.8, 99.9));
+  else if (opts.engulf === false) m.push(B(t, 100.24, 100.32, 100.21, 100.27));
+  else m.push(B(t, 100.24, 100.62, 100.22, 100.6));
+  return { "1h": h, "15m": m };
+}
+export function smcLongView(bars: { "1h": Bar[] }, trend: "UP" | "DOWN" | "NONE" = "UP", swingHighs = [102.6]): SmcView {
+  const v = smcView(bars, DEFAULT_NTS_CONFIG);
+  return { ...v, h4: { trend, bosT: null, bosLevel: null, highs: "HH", lows: "HL", swingHighs, swingLows: [] } };
+}
+export const SMC_CTX = { atr1h: 0.3, atr15: 0.08, dataOk: true, dataNote: "", inEvent: null };
+
 export const biasOf = (side: "LONG" | "SHORT" | null, core = side === "LONG" ? 0.6 : side === "SHORT" ? -0.6 : 0): BiasResult => ({
   core, score: core, side, confidence: 0.7, comps: { trend: core, oi: 0, funding: 0, basis: 0, tf: {} },
   aux: { rsi1h: 55, rsi4h: 55, macdH1h: 0, macdH4h: 0, macdDir1h: "flat", macdDir4h: "flat", div1h: null, div4h: null, raw: 0, biasAdj: 0, confAdj: 0, note: "" }, unconnected: [], note: "" });
 
-/** 15m bars hovering near 100 whose last two bars sweep below `level` and reclaim above it. LONG variant; SHORT is mirrored by the caller (price * -). */
-export function sweepBars(level: number, opts: { depth?: number; reclaimVol?: number; sweepVol?: number; reclaim?: boolean; strength?: number } = {}): Bar[] {
-  const depth = opts.depth ?? 0.002, base = bars(30, 900, i => level * (1.004 + 0.0004 * Math.sin(i)), () => 100);
-  const sweepLow = level * (1 - depth), n = base.length;
-  const sw: Bar = { time: base[n - 1]!.time + 900, open: level * 1.001, high: level * 1.0012, low: sweepLow, close: level * 0.9985, volume: opts.sweepVol ?? 150 };
-  const range = level * 0.006, rcLow = sweepLow * 1.0002, rcHigh = rcLow + range, strength = opts.strength ?? 0.85;
-  const rcClose = opts.reclaim === false ? level * 0.9986 : rcLow + range * strength;
-  const rc: Bar = { time: sw.time + 900, open: rcLow + range * 0.1, high: opts.reclaim === false ? level * 0.9988 : rcHigh, low: rcLow, close: rcClose, volume: opts.reclaimVol ?? 160 };
-  return [...base, sw, rc];
-}
 export const fakePack = (over: Record<string, unknown> = {}) => ({ tf: "1h", close: 100, ema: { e20: 101, e50: 100, e200: 98, s20: 0.001, s50: 0.001, s200: 0.0005, a20: 0.01, a50: 0.02, a200: 0.03 }, atr: 0.4, atrPct: 0.004, atrRank: 0.5,
   rsi: 55, rsiDiv: null, macd: { m: 0, s: 0, h: 0.1, hDir: "up", cross: null, div: null }, boll: {}, adx: {}, stoch: {}, vwapDev: 0, volX: 1, obv: "flat", cci: 0, mfi: 50, hhDist: 0, llDist: 0, patterns: [], ...over });
 export const packsOf = (over: Partial<Record<"1d" | "4h" | "1h" | "15m", unknown>> = {}) => ({ "1d": fakePack({ tf: "1d" }), "4h": fakePack({ tf: "4h" }), "1h": fakePack(), "15m": null, ...over }) as unknown as Packs;
 
 import { DEFAULT_NTS_CONFIG } from "../lib/nts/config.ts";
-import { evaluateEntry } from "../lib/nts/decision.ts";
+import { evaluateSmcEntry } from "../lib/nts/smc.ts";
 import { NtsLog } from "../lib/nts/log.ts";
 import { NtsEngine } from "../lib/nts/engine.ts";
 import { initialForward, type Contract, type Quote } from "../lib/forward-relations.ts";
 export const CONTRACT: Contract = { quantoMultiplier: 1, leverageMax: 100, maintenanceRate: 0.003 };
 export const quote = (bid: number, ask: number, now: number): Quote => ({ bestBid: bid, bestAsk: ask, observedAt: now, fresh: true, entryReady: true });
-/** A ready-to-open long on BTC_USDT built from the sweep fixture. */
+/** A ready-to-open long on BTC_USDT built from the SMC order-block fixture. */
 export function openScenario(now = Date.now()) {
-  const lvl = 100, b15 = sweepBars(lvl), close = b15.at(-1)!.close, z = zone(lvl * 0.999, lvl * 1.001, 75), opp = zone(close * 1.02, close * 1.022, 70);
-  const s = snap({ symbol: "BTC_USDT", now, bid: close * 0.99995, ask: close * 1.00005 });
-  const dec = evaluateEntry(s, { "15m": b15 }, biasOf("LONG"), { zones: [z, opp], atr1hPct: 0.004, sizeMult: 1, inEvent: null, dataOk: true, dataNote: "" }, DEFAULT_NTS_CONFIG);
+  const bars = smcLongBars(), close = bars["15m"].at(-1)!.close;
+  const bid = close * 0.99995, ask = close * 1.00005;
+  const dec = evaluateSmcEntry("BTC_USDT", bid, ask, bars, smcLongView(bars), SMC_CTX, DEFAULT_NTS_CONFIG);
   if (dec.action !== "ENTER") throw new Error("fixture does not enter: " + JSON.stringify(dec));
-  const q = quote(s.bid, s.ask, now), barTime = b15.at(-1)!.time;
+  const q = quote(bid, ask, now), barTime = bars["15m"].at(-1)!.time;
   const eng = new NtsEngine(DEFAULT_NTS_CONFIG, new NtsLog(DEFAULT_NTS_CONFIG), null, now), fwd = initialForward(now);
   return { eng, fwd, dec, q, barTime, now, close, action: { type: "OPEN" as const, sym: "BTC_USDT", decision: dec, barTime, snapshot: { fixture: true } }, c: { now, quotes: { BTC_USDT: q }, contracts: { BTC_USDT: CONTRACT } } };
 }
