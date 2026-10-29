@@ -57,7 +57,7 @@ export default function NtsPanel({ nts }: { nts: NtsView | null | undefined }) {
     <div className="nts-row"><span>今日（老挝时间）</span><b>{per(nts.today)}</b></div>
     <div className="nts-row"><span>本月</span><b>{per(nts.month)}</b></div>
     <div className="nts-row"><span>最近一次出场</span><b>{nts.lastExit ? `${clock(nts.lastExit.at)} ${name(nts.lastExit.sym)} ${sideZh(nts.lastExit.side)} ${nts.lastExit.reason} · ${sgn(nts.lastExit.r)}R · ${sgn(nts.lastExit.netPnl)}U · 持 ${nts.lastExit.holdMin} 分` : "还没有"}</b></div>
-    <div className="nts-row"><span>熔断</span><b className={nts.breaker && !nts.breaker.allowEntry ? "bad" : ""}>{nts.breaker ? `${nts.breaker.state === "OK" ? "正常" : nts.breaker.state === "HALF" ? "减半仓" : "暂停开仓"} · ${nts.breaker.reason}` : "—"}</b></div>
+    <div className="nts-row"><span>当日停开</span><b className={nts.breaker && !nts.breaker.allowEntry ? "bad" : ""}>{nts.breaker ? `${nts.breaker.allowEntry ? "正常" : "今日暂停开仓"} · ${nts.breaker.reason}（无月度熔断）` : "—"}</b></div>
     <div className="nts-row"><span>数据 / 行情</span><b>{nts.data ? (Object.values(nts.data.health ?? {}).every(h => h.ok) && nts.data.quoteOk ? "正常" : (nts.notes?.slice(0, 2).join("；") || "预热/异常")) : "—"}{nts.log?.error ? ` · 日志：${nts.log.error}` : ""}</b></div>
     {nts.resetState && nts.resetState.phase !== "done" && <p className="nts-note">旧日志备份/清除：{nts.resetState.phase}{nts.resetState.error ? `（${nts.resetState.error}）` : ""}，完成前暂不开新仓。</p>}
     <div className="nts-recent"><h3>最近决策</h3>{nts.recent?.length ? nts.recent.slice(0, 5).map((r, i) => <div key={i}><small>{clock(r.at)}</small> {name(r.sym)} · {r.text}</div>) : <small>暂无</small>}</div>

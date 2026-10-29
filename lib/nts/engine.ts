@@ -148,7 +148,7 @@ export class NtsEngine {
   }
 
   // ---------------------------------------------------------------------------------------------------------------
-  // 周期统计与熔断
+  // 周期统计与当日停开（月度只统计、不减仓不停开）
   // ---------------------------------------------------------------------------------------------------------------
   private keys(now: number) { const iso = new Date(now + this.cfg.breaker.tzOffsetHours * HOUR).toISOString(); return { day: iso.slice(0, 10), month: iso.slice(0, 7) }; }
   rollPeriods(now: number, balance: number) {
@@ -230,7 +230,7 @@ export class NtsEngine {
     let dec: EntryDecision = evaluateEntry(snap, bars, bias, ctx, this.cfg);
     let blockedPlan = false;
     if (dec.action === "ENTER" && !bk.allowEntry) blockedPlan = true;
-    if (dec.action === "ENTER" && !bk.allowEntry) dec = { action: "NO_TRADE", side: dec.side, reason: `熔断：${bk.reason}`, vetoes: dec.vetoes, bias };
+    if (dec.action === "ENTER" && !bk.allowEntry) dec = { action: "NO_TRADE", side: dec.side, reason: `当日停开：${bk.reason}`, vetoes: dec.vetoes, bias };
     this.s.lastEval[sym] = { at: now, barTime, action: dec.action, side: dec.side, reason: dec.action === "ENTER" ? `计划 ${dec.side} R:R ${dec.plan.rr}` : dec.reason, core: bias.core, score: bias.score,
       plan: dec.action === "ENTER" ? dec.plan : null, vetoes: dec.vetoes.length,
       zones: zones.map(z => ({ lo: r(z.lo, 2)!, hi: r(z.hi, 2)!, score: z.score, kind: z.mid <= mid ? "支撑" : "压力", tfs: z.tfs })) };
@@ -432,7 +432,7 @@ export class NtsEngine {
     const health: Record<string, ReturnType<NtsEngine["dataHealth"]>> = {};
     for (const sym of this.symbols) health[sym] = this.dataHealth(sym, now);
     const allOk = this.symbols.every(s => health[s]!.ok), quoteOk = this.symbols.every(s => quotes[s]?.fresh);
-    const state = !extra.enabled && !o ? "已关闭" : bk && !bk.allowEntry ? "熔断暂停开仓" : !allOk ? "数据预热/异常" : !quoteOk ? "行情不新鲜" : o ? "持仓中" : "空仓待命";
+    const state = !extra.enabled && !o ? "已关闭" : bk && !bk.allowEntry ? "今日停开（当日亏损达 1R）" : !allOk ? "数据预热/异常" : !quoteOk ? "行情不新鲜" : o ? "持仓中" : "空仓待命";
     const per = (x: Period) => ({ trades: x.trades, wins: x.wins, pnl: r(x.pnl, 2), r: r(x.r, 2), startEquity: r(x.startEquity, 2), pct: x.startEquity > 0 ? r(x.pnl / x.startEquity, 4) : null });
     return {
       version: NTS_VERSION, enabled: extra.enabled, state, now, paperOnly: true, liveTouched: false,

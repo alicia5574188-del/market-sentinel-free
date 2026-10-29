@@ -55,8 +55,9 @@ export type NtsConfig = {
     funding: number; oiDropPct: number; atrPctMax: number; volMaxMult: number };
   /** 波动缩放：ATR(1H)% 高于参考值时，止损距离放宽、保证金按比例缩小（1R 不变） */
   vol: { refAtr1hPct: number; maxScale: number };
-  /** 熔断（按月/日，以老挝时间 UTC+7 划分） */
-  breaker: { monthHalvePct: number; monthStopPct: number; dayStopR: number; tzOffsetHours: number };
+  /** 当日停开：当日（老挝时间 UTC+7）已实现亏损达到 dayStopR 个 R 后当日不再开新仓。
+   *  月度熔断（−3% 减半、−5% 停开）已按用户决定（2026-10-29）整体移除：没有任何按月的减仓或停开；旧配置里的月度键会被忽略。 */
+  breaker: { dayStopR: number; tzOffsetHours: number };
   /** 事件窗口（毫秒时间戳区间）。默认空：事件日历没有免费自动源，日志会写「未配置」。 */
   eventWindows: { start: number; end: number; label: string }[];
   /** 日志 */
@@ -102,7 +103,7 @@ export const DEFAULT_NTS_CONFIG: NtsConfig = {
   add: { distMinPct: 0.003, distMaxPct: 0.006, levelTolerancePct: 0.001, minTouches: 2, gMin: 2,
     funding: 0.0002, oiDropPct: 0.003, atrPctMax: 0.9, volMaxMult: 3 },
   vol: { refAtr1hPct: 0.0037, maxScale: 1.6 },
-  breaker: { monthHalvePct: 0.03, monthStopPct: 0.05, dayStopR: 1, tzOffsetHours: 7 },
+  breaker: { dayStopR: 1, tzOffsetHours: 7 },
   eventWindows: [],
   log: { traceEveryMs: 10 * 60_000, flushEveryMs: 10 * 60_000, noTradeSampleMs: 4 * 3_600_000, maxVetoes: 6, maxChunkBytes: 90_000,
     postExitMarksMin: [30, 60, 120], keepChunks: 20_000 },

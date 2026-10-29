@@ -47,9 +47,9 @@ async function replay(label: string, config?: Record<string, unknown>) {
 test("BTC/ETH 历史K线回放（约 43 天，默认参数，只看流程与进场频率、不评价盈亏）：不抛错、最多 1 个仓位、单笔亏损有界、日志有界、频率在目标带内", { timeout: 600_000 }, async () => {
   const { entries, exits, r } = await replay("默认");
   const days = (r.now() - (loadKlines().first15 + 140 * 900) * 1000) / 86_400_000;
-  // 目标 BTC+ETH 合计约每天 1–2 笔；回放里月度熔断（本月 −5% 停开）会让后段停开，所以下限放在 0.4/天，上限 3/天防止失控。
+  // 目标 BTC+ETH 合计约每天 1–2 笔（月度熔断已移除）；下限 0.7/天，上限 3/天防止失控。
   const perDay = entries.length / days;
-  assert.ok(perDay >= 0.4 && perDay <= 3, `默认参数进场频率 ${perDay.toFixed(2)}/天`);
+  assert.ok(perDay >= 0.7 && perDay <= 3, `默认参数进场频率 ${perDay.toFixed(2)}/天`);
   for (const e of entries) { const p = (e.d as { plan: Record<string, unknown> }).plan; assert.ok(["SWEEP", "RETEST"].includes(p.trigger as string)); assert.ok(["OPP_ZONE", "ATR"].includes(p.targetMode as string)); }
   for (const e of exits) {
     const d = e.d as { code?: string; holdMin?: number; netPnl?: number };

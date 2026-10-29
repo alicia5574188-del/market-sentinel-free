@@ -162,7 +162,7 @@ test("入场否决的记录有上限（日志不会无限长）", () => {
   assert.ok(r.vetoes.length <= 2);
 });
 
-test("仓位：先按波动缩放，再按熔断倍数缩，补仓后最坏亏损始终 ≤ 5% 本金", () => {
+test("仓位：先按波动缩放，再按 sizeMult 缩，补仓后最坏亏损始终 ≤ 5% 本金", () => {
   for (const scale of [1, 1.3, 1.6]) for (const mult of [1, 0.5]) {
     const z = sizingPct(C, scale, mult);
     assert.ok(z.worst <= C.maxLossPct * 1.0001, `scale ${scale} mult ${mult} worst ${z.worst}`);
@@ -232,11 +232,13 @@ test("补仓：H1–H5 硬条件全满足且 G≥2 才补；已补过一次不�
   assert.equal(fewG.ok, false); assert.match(fewG.reason, /评分条件仅/);
 });
 
-test("熔断：本月 −3% 仓位减半，−5% 停止新开仓；当日 −1R 停当日；恢复后正常", () => {
+test("月度熔断已移除：本月亏多少都不减仓、不停开；只保留当日 −1R 停当日；旧配置里的月度键被忽略", () => {
   const k = (monthPnl: number, dayPnl = 0) => breakerState({ monthPnl, monthStartEquity: 1000, dayPnl, oneR: 50 }, C);
   assert.equal(k(0).state, "OK"); assert.equal(k(-29).state, "OK");
-  assert.deepEqual([k(-30).state, k(-30).sizeMult, k(-30).allowEntry], ["HALF", 0.5, true]);
-  assert.deepEqual([k(-50).state, k(-50).allowEntry], ["STOP_MONTH", false]);
+  for (const m of [-30, -50, -200, -900]) assert.deepEqual([k(m).state, k(m).sizeMult, k(m).allowEntry], ["OK", 1, true], `本月 ${m}U`);
+  const old = normalizeNtsConfig({ breaker: { monthHalvePct: 0.03, monthStopPct: 0.05, dayStopR: 1 } } as never);
+  assert.deepEqual(Object.keys(old.breaker).sort(), ["dayStopR", "tzOffsetHours"]);
+  assert.equal(breakerState({ monthPnl: -100, monthStartEquity: 1000, dayPnl: 0, oneR: 50 }, old).allowEntry, true);
   assert.deepEqual([k(0, -50).state, k(0, -50).allowEntry], ["STOP_DAY", false]);
   assert.equal(k(20).state, "OK");
 });

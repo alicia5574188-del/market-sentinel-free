@@ -1,6 +1,6 @@
 /**
  * 决策函数（纯函数，不读时钟、不碰网络、不碰存储）。同样的输入永远得到同样的输出。
- * 流程：偏向分 → 支撑压力区 → 触发（扫荡后收回）→ 计划（止损/目标/R:R/仓位）→ 补仓 → 出场阶梯 → 熔断。
+ * 流程：偏向分 → 支撑压力区 → 触发（扫荡后收回）→ 计划（止损/目标/R:R/仓位）→ 补仓 → 出场阶梯 → 当日停开（无月度熔断）。
  * RSI / MACD 只进入「显示分」和「置信度」，所有放行/否决条件只读 core 偏向分和价格结构。
  */
 import type { NtsConfig } from "./config.ts";
@@ -220,7 +220,7 @@ export function worstCaseLossPct(cfg: NtsConfig, scale: number, marginFirstPct: 
   const notional = (marginFirstPct + marginAddPct) * cfg.leverage;
   return notional * (cfg.hardStopPct * scale + cfg.stopSlipPct + 2 * cfg.feeRate + 2 * cfg.slippagePct + 0.0001);
 }
-/** 保证金占本金比例：先按 1/scale 缩，再按熔断倍数缩，再保证补仓后最坏亏损 ≤ 1R。 */
+/** 保证金占本金比例：先按 1/scale 缩，再乘 sizeMult（中性带半仓等），再保证补仓后最坏亏损 ≤ 1R。 */
 export function sizingPct(cfg: NtsConfig, scale: number, sizeMult: number) {
   let first = (cfg.firstMarginPct / scale) * sizeMult, add = (cfg.addMarginPct / scale) * sizeMult;
   const worst = worstCaseLossPct(cfg, scale, first, add);
@@ -390,15 +390,13 @@ export function stateInvalidated(side: Side, daily: readonly Bar[]) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// 7. 熔断
+// 7. 当日停开（月度熔断已移除）
 // ---------------------------------------------------------------------------------------------------------------------
-export type BreakerState = { state: "OK" | "HALF" | "STOP_MONTH" | "STOP_DAY"; sizeMult: number; allowEntry: boolean; reason: string; monthPct: number; dayR: number };
+export type BreakerState = { state: "OK" | "STOP_DAY"; sizeMult: number; allowEntry: boolean; reason: string; monthPct: number; dayR: number };
 /** monthPnl / dayPnl are realised net PnL of this system in account currency; startEquity is the month's opening equity. */
 export function breakerState(i: { monthPnl: number; monthStartEquity: number; dayPnl: number; oneR: number }, cfg: NtsConfig): BreakerState {
   const monthPct = i.monthStartEquity > 0 ? i.monthPnl / i.monthStartEquity : 0, dayR = i.oneR > 0 ? i.dayPnl / i.oneR : 0;
-  if (monthPct <= -cfg.breaker.monthStopPct) return { state: "STOP_MONTH", sizeMult: 0, allowEntry: false, reason: `本月 ${(monthPct * 100).toFixed(2)}% ≤ −${cfg.breaker.monthStopPct * 100}%，本月停止新开仓`, monthPct, dayR };
   if (dayR <= -cfg.breaker.dayStopR) return { state: "STOP_DAY", sizeMult: 0, allowEntry: false, reason: `今日 ${dayR.toFixed(2)}R ≤ −${cfg.breaker.dayStopR}R，今日停止新开仓`, monthPct, dayR };
-  if (monthPct <= -cfg.breaker.monthHalvePct) return { state: "HALF", sizeMult: 0.5, allowEntry: true, reason: `本月 ${(monthPct * 100).toFixed(2)}% ≤ −${cfg.breaker.monthHalvePct * 100}%，仓位减半`, monthPct, dayR };
   return { state: "OK", sizeMult: 1, allowEntry: true, reason: "正常", monthPct, dayR };
 }
 export const tfSeconds = (tf: Tf) => TF_SEC[tf];
