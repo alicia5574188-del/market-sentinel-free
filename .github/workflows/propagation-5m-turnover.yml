@@ -1,0 +1,50 @@
+name: 5m Propagation Turnover Research
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/research-5m-propagation-turnover.mjs'
+      - '.github/workflows/propagation-5m-turnover.yml'
+      - 'scripts/fetch-gate-history.mjs'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - name: Syntax check
+        run: node --check scripts/research-5m-propagation-turnover.mjs
+      - name: Fetch 12-month Gate 5m futures prices
+        env:
+          RESEARCH_INTERVAL: 5m
+          RESEARCH_DATASET: /tmp/gate-5m-12m.json
+          RESEARCH_MONTHS: 202509,202510,202511,202512,202601,202602,202603,202604,202605,202606,202607,202608
+          RESEARCH_SYMBOLS: BTC_USDT,ETH_USDT,SOL_USDT,XRP_USDT,BNB_USDT,DOGE_USDT,ADA_USDT,LINK_USDT,LTC_USDT,AVAX_USDT,BCH_USDT,SUI_USDT,UNI_USDT,FIL_USDT,AAVE_USDT,ARB_USDT,APT_USDT,PEPE_USDT,WLD_USDT
+          RESEARCH_MIN_CONTRACTS: 19
+          RESEARCH_MIN_MONTH_COVERAGE: '0.98'
+          RESEARCH_CONCURRENCY: '16'
+        run: node scripts/fetch-gate-history.mjs
+      - name: Run 5m propagation turnover frontier
+        env:
+          RESEARCH_DATASET: /tmp/gate-5m-12m.json
+          RESEARCH_OUTPUT: /tmp/propagation-5m-turnover.json
+        run: node scripts/research-5m-propagation-turnover.mjs
+      - name: Print result
+        run: >-
+          jq '{research,objective,protocol,diagnostics,byLeader,
+          selected,evaluation,viable:(.viable[:8]),edge:(.edge[:8]),topNear:(.topNear[:8])}'
+          /tmp/propagation-5m-turnover.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: propagation-5m-turnover
+          path: /tmp/propagation-5m-turnover.json
+          retention-days: 7
