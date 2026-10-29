@@ -214,7 +214,8 @@ export function evaluateSmcEntry(symbol: string, bid: number, ask: number, bars:
     const worstFirst = worstLoss(cfg, [{ margin: m1, price: px }], stop);
     if (worstFirst > cfg.maxLossPct) { vetoes.push({ cand: tag, reason: `区太宽：止损 ${((risk / px) * 100).toFixed(2)}%，首仓最坏亏损 ${(worstFirst * 100).toFixed(2)}% > 1R ${(cfg.maxLossPct * 100).toFixed(0)}%` }); continue; }
     const zMid = z.lo + (z.hi - z.lo) * cfg.smc.addAt;
-    let addPrice: number | null = d * (px - zMid) > 0 ? zMid : null, addNote = addPrice ? `区 ${cfg.smc.addAt * 100}% 位 ${r(zMid, 2)}` : "入场已在区的均衡位以内，不补";
+    let addPrice: number | null = cfg.smc.add === false ? null : d * (px - zMid) > 0 ? zMid : null,
+      addNote = cfg.smc.add === false ? "配置不补仓（smc.add=false）：只拿首仓到 TP1 或止损" : addPrice ? `区 ${cfg.smc.addAt * 100}% 位 ${r(zMid, 2)}` : "入场已在区的均衡位以内，不补";
     let worstAll = worstFirst;
     if (addPrice != null) {
       worstAll = worstLoss(cfg, [{ margin: m1, price: px }, { margin: m2, price: addPrice }], stop);

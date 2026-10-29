@@ -35,6 +35,8 @@ export type NtsConfig = {
     stopAtrBuf: number;       // 止损 = 区外 + 该倍数 × ATR(1H)（视频：止损放在区外一点）
     rrMin: number;            // TP1 至少多少 R 才做（视频的目标是最近对向区；太近不值得；2.5 为样本内选定）
     noTargetRR: number;       // 前方没有对向区/流动性时 TP1 取几 R
+    /** false = 不补仓：只用首仓，止损不动，只在 TP1 或硬止损出场（2026-10 改进对比：样本外 PF 1.64 vs 默认 1.17）。默认 true = 视频原版补一次。 */
+    add: boolean;
     addAt: number;            // 补仓位 = 区内该比例处（0.5 = 区的均衡位，视频"区的更深处"）
     doubleWindow: number;     // 双底/双顶在最近多少根 15m 内找
     doubleTolAtr: number;     // 两个底/顶的高度差 ≤ 该倍数 × ATR(15m)
@@ -72,7 +74,7 @@ export const DEFAULT_NTS_CONFIG: NtsConfig = {
   // 样本外（2026-05-01→2026-10-28）未调参复核 PF 1.15、净 +95.5U。视频原版（1h/4h/1d、rrMin 1.5）样本内 PF 0.72、样本外 PF 0.59。
   // 4H/1D 仍用于趋势结构（HH/HL/BOS）；只用 1H 区开仓 ⇒ 逆势单（只允许在 4H/1D 区）实际关闭。
   smc: { obTfs: ["1h"], confirmBars: 3, maxPriorVisits: 0, pivot4h: 2, stopAtrBuf: 0.2, rrMin: 2.5, noTargetRR: 2,
-    addAt: 0.5, doubleWindow: 24, doubleTolAtr: 0.5 },
+    add: true, addAt: 0.5, doubleWindow: 24, doubleTolAtr: 0.5 },
   breaker: { dayStopR: 1, tzOffsetHours: 7 },
   eventWindows: [],
   log: { traceEveryMs: 10 * 60_000, flushEveryMs: 10 * 60_000, noTradeSampleMs: 4 * 3_600_000, maxVetoes: 6, maxChunkBytes: 90_000,

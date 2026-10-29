@@ -122,6 +122,22 @@ test("入场计划：顺势 + 1H 需求区回踩 + 15m 吞没 → ENTER；止损
   assert.ok(p.addAllowed && p.addPrice! > p.zone.lo && p.addPrice! < p.entry, "补仓位在区内更深处");
   assert.ok(Math.abs(p.marginFirstPct - 0.02) < 1e-12 && Math.abs(p.marginAddPct - 0.03) < 1e-12);
 });
+test("可选不补仓（smc.add=false）：同一入场仍放行，但不设补仓位、只算首仓风险；出场只看 TP1，止损交给账户硬止损", () => {
+  const bars = smcLongBars(), px = bars["15m"].at(-1)!.close, C2 = normalizeNtsConfig({ smc: { add: false } });
+  assert.equal(C.smc.add, true, "默认仍是视频原版：补一次");
+  assert.equal(C2.smc.add, false);
+  const d = evaluateSmcEntry("BTC_USDT", px * 0.99995, px * 1.00005, bars, smcLongView(bars), SMC_CTX, C2);
+  assert.equal(d.action, "ENTER", JSON.stringify(d)); if (d.action !== "ENTER") return;
+  const p = d.plan;
+  assert.equal(p.addPrice, null); assert.equal(p.addAllowed, false); assert.equal(p.marginAddPct, 0);
+  assert.ok(Math.abs(p.worstLossPct - p.worstFirstPct) < 1e-12 && p.worstFirstPct <= C2.maxLossPct, "风险只来自首仓 2%");
+  assert.ok(Math.abs(p.geo.avg - p.entry) < 1e-12);
+  const o = { side: p.side, added: false, addPrice: p.addPrice, zone: p.zone, mode: p.mode, target: p.target, breakeven: p.geo.breakeven };
+  assert.equal(smcAddCheck(o, p.zone.lo + 1e-6, bars["15m"], "UP").ok, false, "到了区的均衡位也不补");
+  assert.equal(smcExit(o, (p.entry + p.target) / 2).action, "HOLD", "没有保本出场");
+  assert.equal((smcExit(o, p.target) as { code: string }).code, "TARGET");
+});
+
 test("入场否决：逆势的 1H 区、15m 收盘穿透、没有反转信号、R:R 不足、点差过大、数据不足、事件窗口 —— 都有明确原因", () => {
   const bars = smcLongBars(), px = bars["15m"].at(-1)!.close, bid = px * 0.99995, ask = px * 1.00005;
   const why = (d: ReturnType<typeof evaluateSmcEntry>) => d.action === "ENTER" ? "ENTER" : JSON.stringify(d);
