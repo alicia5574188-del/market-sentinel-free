@@ -15,6 +15,7 @@ import { addToPaperTrade, closePaperTrade, openPaperTrade, type Contract, type F
 import { DEFAULT_NTS_CONFIG, NTS_VERSION, normalizeNtsConfig, type NtsConfig } from "./config.ts";
 import { breakerState, buildPacks, computeBias, type BiasResult, type BreakerState, type Geometry, type Packs, type Snap, type Bars } from "./decision.ts";
 import { evaluateSmcEntry, marketStructure, smcAddCheck, smcExit, smcView, type SmcDecision, type SmcPlan, type SmcView, type Structure } from "./smc.ts";
+import { dailyExit, evaluateDailyEntry, isDailyDecisionBar, type DailyPlan } from "./daily.ts";
 import type { NtsLog, NtsRec } from "./log.ts";
 import { dirOf, TF_SEC, type Bar, type Side, type Tf } from "./types.ts";
 import { r } from "./indicators.ts";
@@ -34,6 +35,8 @@ export type NtsOpen = {
   /** SMC：订单块、顺势/逆势、计划补仓价（null = 本笔不补/已取消）、4H 结构缓存 */
   zone: { lo: number; hi: number; tf: string; kind: string }; mode: "TREND" | "COUNTER"; plannedAdd: number | null; h4: Structure["trend"]; h4Bar: number;
   mfePct: number; maePct: number; mfeR: number; maeR: number; lastTraceAt: number; lastBarEval: number; stage: string; margin1: number;
+  /** 每日短线（strategy="DAILY"）的持仓：最有利价、追踪距离、到期时间、当前追踪止损 */
+  daily?: { best: number; trailDist: number; exitAt: number; trail: number | null; ret24: number };
 };
 type PostExit = { tid: string; sym: string; side: Side; exitAt: number; exitPx: number; done: number[]; best: number; worst: number };
 type Period = { key: string; startEquity: number; pnl: number; trades: number; wins: number; r: number };
@@ -50,7 +53,8 @@ export type FetchJob = { sym: string; kind: Tf | "ticker" };
 export type Action =
   | { type: "OPEN"; sym: string; decision: Extract<SmcDecision, { action: "ENTER" }>; barTime: number; snapshot: Record<string, unknown> }
   | { type: "ADD"; check: { ok: boolean; reason: string; price: number }; barTime: number }
-  | { type: "CLOSE"; code: string; reason: string; stage: string };
+  | { type: "CLOSE"; code: string; reason: string; stage: string }
+  | { type: "OPEN_DAILY"; sym: string; plan: DailyPlan; barTime: number; snapshot: Record<string, unknown> };
 type SymData = { bars: Partial<Record<Tf, Bar[]>>; fetchedAt: Partial<Record<Tf, number>>; failedAt: Partial<Record<Tf, number>>; fails: number; tickerAt: number; tickerFailedAt: number };
 
 const emptyPeriod = (key: string, eq: number): Period => ({ key, startEquity: eq, pnl: 0, trades: 0, wins: 0, r: 0 });
@@ -183,6 +187,12 @@ export class NtsEngine {
         const q = c.quotes[open.sym];
         if (t && q && q.fresh) {
           const px = open.side === "LONG" ? q.bestBid : q.bestAsk;
+          if (open.daily) {
+            const ex = dailyExit({ side: open.side, best: open.daily.best, stop: open.stop, trailDist: open.daily.trailDist, exitAt: open.daily.exitAt }, px, now);
+            open.daily.best = ex.best; open.daily.trail = ex.trail; open.stage = ex.trail != null && ex.trail !== open.stop ? `追踪止损 ${r(ex.trail, 2)}` : "初始止损";
+            if (ex.action === "CLOSE") actions.push({ type: "CLOSE", code: ex.code, reason: ex.reason, stage: open.stage });
+            return actions;
+          }
           const so = { side: open.side, added: open.addedAt != null, addPrice: open.plannedAdd, zone: open.zone, mode: open.mode, target: open.target, breakeven: open.geo.breakeven };
           const ex = smcExit(so, px);
           open.stage = ex.stage;
@@ -209,7 +219,9 @@ export class NtsEngine {
         if (now - (bar.time + 900) * 1000 > 10 * MIN) { this.s.decided[sym] = bar.time; continue; } // 启动太晚/断线：这根错过了，不追
         const q = c.quotes[sym], health = this.dataHealth(sym, now);
         if (health.ok && !(q && q.fresh)) continue; // 等行情，最多等到上面的 10 分钟窗口
+        if (this.cfg.strategy === "DAILY" && !isDailyDecisionBar(bar.time, this.cfg.daily)) { this.s.decided[sym] = bar.time; continue; }
         this.s.decided[sym] = bar.time;
+        if (this.cfg.strategy === "DAILY") { const act = this.decideDaily(sym, bar.time, now, q, c.contracts[sym], health, bk, forward.balance); if (act) cands.push(act); continue; }
         const act = this.decide(sym, bar.time, now, q, c.contracts[sym], health, bk, forward.balance);
         if (act) cands.push(act);
       }
@@ -218,7 +230,10 @@ export class NtsEngine {
         const key = (a: Action) => a.type === "OPEN" ? (a.decision.plan.mode === "TREND" ? 100 : 0) + a.decision.plan.rr : 0;
         cands.sort((a, b) => key(b) - key(a));
         actions.push(cands[0]!);
-        for (const o of cands.slice(1)) if (o.type === "OPEN") this.logVetoed(o.decision, o.barTime, now, "同时有更优候选，同一时刻只持一笔");
+        for (const o of cands.slice(1)) {
+          if (o.type === "OPEN") this.logVetoed(o.decision, o.barTime, now, "同时有更优候选，同一时刻只持一笔");
+          else if (o.type === "OPEN_DAILY") this.logDailyVetoed(o.plan, o.barTime, now, "BTC/ETH 同时出信号，按顺序只做第一个（同一时刻全账户只持一笔）");
+        }
       }
     } catch (error) { this.lastDecisionError = error instanceof Error ? error.message.slice(0, 160) : String(error).slice(0, 160); }
     return actions;
@@ -265,6 +280,27 @@ export class NtsEngine {
     }
     return null;
   }
+  /** 每日短线：每天一根决策 15m（UTC 00:00 收盘），按 24h 收益方向进场。决策依据整条写进日志；RSI/MACD/偏向分只记录。 */
+  private decideDaily(sym: string, barTime: number, now: number, q: Quote | undefined, contract: Contract | undefined, health: { ok: boolean; notes: string[] }, bk: BreakerState, balance: number): Action | null {
+    const bars = this.bars(sym), dv = this.derivView(sym, now), b15 = bars["15m"] ?? [];
+    const mid = q ? (q.bestBid + q.bestAsk) / 2 : (b15[b15.length - 1]?.close ?? 0);
+    const snap: Snap = { symbol: sym, now, bid: q?.bestBid ?? mid, ask: q?.bestAsk ?? mid, funding: dv.funding, fundingChg: dv.fundingChg, basis: dv.basis, oiChg: dv.oiChg };
+    const packs = buildPacks(bars), view = smcView(bars, this.cfg), bias = computeBias(snap, packs, bars, this.cfg);
+    let dec = evaluateDailyEntry(sym, snap.bid, snap.ask, b15, barTime, this.cfg.daily, this.cfg.firstMarginPct, now);
+    const dataOk = health.ok && !!contract && !!q && q.fresh;
+    if (dec.action === "ENTER" && !dataOk) dec = { action: "NO_TRADE", side: dec.side, reason: `数据未就绪：${health.notes.join("；") || (!contract ? "合约规格未就绪" : "行情不新鲜")}` };
+    if (dec.action === "ENTER" && !bk.allowEntry) dec = { action: "NO_TRADE", side: dec.side, reason: `当日停开：${bk.reason}` };
+    this.s.lastEval[sym] = { at: now, barTime, action: dec.action, side: dec.side, reason: dec.action === "ENTER" ? `每日短线 ${dec.plan.basis}` : dec.reason,
+      core: bias.core, score: bias.score, plan: null, vetoes: 0, structure: { h4: view.h4.trend, highs: view.h4.highs, lows: view.h4.lows, d1: view.d1.trend }, zones: [] };
+    const snapshot = this.snapshotFor(sym, snap, packs, bias, view, dv, bk, balance);
+    if (dec.action === "ENTER") return { type: "OPEN_DAILY", sym, plan: dec.plan, barTime, snapshot };
+    this.safeAppend({ id: `nt:${sym}:${barTime}`, k: "NO_TRADE", t: now, sym, d: { barTime, strategy: "DAILY", reason: dec.reason, side: dec.side, kind: "每日决策", ...snapshot } }, now);
+    this.brief(now, sym, "不做", dec.reason);
+    return null;
+  }
+  private logDailyVetoed(plan: DailyPlan, barTime: number, now: number, why: string) {
+    this.safeAppend({ id: `veto:${plan.symbol}:${barTime}`, k: "NO_TRADE", t: now, sym: plan.symbol, d: { barTime, strategy: "DAILY", reason: why, kind: "否决", plan } }, now);
+  }
   private eventWindow(now: number) {
     for (const w of this.cfg.eventWindows) if (now >= w.start && now <= w.end) return w.label;
     return null;
@@ -299,6 +335,7 @@ export class NtsEngine {
     for (const a of actions) {
       try {
         if (a.type === "OPEN") changed = this.doOpen(draft, a, c) || changed;
+        else if (a.type === "OPEN_DAILY") changed = this.doOpenDaily(draft, a, c) || changed;
         else if (a.type === "ADD") changed = this.doAdd(draft, a, c) || changed;
         else changed = this.doClose(draft, a, c) || changed;
       } catch (error) { this.lastDecisionError = error instanceof Error ? error.message.slice(0, 160) : String(error).slice(0, 160); }
@@ -327,6 +364,26 @@ export class NtsEngine {
       sizing: { balance: r(balance, 2), firstPct: r(plan.marginFirstPct, 4), addPct: r(plan.marginAddPct, 4), oneR: r(oneR, 2), worstFirstPct: r(plan.worstFirstPct, 4), worstLossPct: r(plan.worstLossPct, 4), scale: 1 },
       ...a.snapshot, version: NTS_VERSION } }, now);
     this.brief(now, a.sym, "进场", `${plan.side === "LONG" ? "多" : "空"}${plan.mode === "COUNTER" ? "（逆势）" : ""} ${plan.zone.tf}订单块 @${r(t.entryPrice, 2)} 止损 ${r(plan.stop, 2)} TP1 ${r(plan.target, 2)} R:R ${plan.rr}`);
+    return true;
+  }
+  private doOpenDaily(draft: ForwardState, a: Extract<Action, { type: "OPEN_DAILY" }>, c: { now: number; quotes: Record<string, Quote>; contracts: Record<string, Contract> }) {
+    const { plan } = a, now = c.now, q = c.quotes[a.sym], balance = draft.balance, cfg = this.cfg, tid = ntsTradeId(a.sym, a.barTime);
+    if (!q) { this.logDailyVetoed(plan, a.barTime, now, "下单时没有行情"); return false; }
+    const res = openPaperTrade(draft, { id: tid, symbol: a.sym, side: plan.side, quote: q, contract: c.contracts[a.sym], marginTarget: balance * cfg.firstMarginPct, leverage: cfg.leverage,
+      stopPrice: plan.stop, targetPrice: null, maintenanceRate: cfg.maintenanceRate, slippageRate: cfg.slippagePct, now, reason: `NTS 每日短线 ${plan.side} 24h ${(plan.ret24 * 100).toFixed(2)}%` });
+    if (!res.ok) { this.logDailyVetoed(plan, a.barTime, now, `下单失败：${res.reason}`); this.brief(now, a.sym, "放弃", res.reason); return false; }
+    const t = res.trade, oneR = cfg.maxLossPct * balance, d = dirOf(plan.side);
+    const geo = { entry: t.entryPrice, add: t.entryPrice, avg: t.entryPrice, breakeven: t.entryPrice * (1 + d * cfg.breakevenPct), tolerance: t.entryPrice * (1 + d * cfg.breakevenPct), firstStop: plan.stop, hardStop: plan.stop };
+    this.s.open = { tid, sym: a.sym, side: plan.side, openedAt: now, entry1: t.entryPrice, addedAt: null, addPrice: null, avg: t.entryPrice, geo, target: 0, stop: plan.stop,
+      scale: 1, zoneScore: 0, zoneKey: "daily", equityAtOpen: balance, oneR, mfePct: 0, maePct: 0, mfeR: 0, maeR: 0, lastTraceAt: now, lastBarEval: a.barTime, stage: "初始止损", margin1: t.margin,
+      zone: { lo: Math.min(plan.stop, t.entryPrice), hi: Math.max(plan.stop, t.entryPrice), tf: "15m", kind: "DAILY" }, mode: "TREND", plannedAdd: null, h4: "NONE", h4Bar: 0,
+      daily: { best: t.entryPrice, trailDist: plan.trailDist, exitAt: plan.exitAt, trail: null, ret24: plan.ret24 } };
+    this.safeAppend({ id: `entry:${tid}`, k: "ENTRY", t: now, sym: a.sym, tid, d: {
+      strategy: "DAILY", side: plan.side, barTime: a.barTime, plan, basis: plan.basis,
+      fill: { price: t.entryPrice, contracts: t.contracts, qty: t.quantity, notional: r(t.notional, 2), margin: r(t.margin, 2), fee: r(t.entryFee, 4), liq: t.liquidationPrice, leverage: t.leverage },
+      sizing: { balance: r(balance, 2), firstPct: r(cfg.firstMarginPct, 4), addPct: 0, oneR: r(oneR, 2), stopPct: plan.stopPct, scale: 1 },
+      ...a.snapshot, version: NTS_VERSION } }, now);
+    this.brief(now, a.sym, "进场", `每日短线 ${plan.side === "LONG" ? "多" : "空"} @${r(t.entryPrice, 2)} 止损 ${r(plan.stop, 2)}（24h ${(plan.ret24 * 100).toFixed(2)}%，到期 ${new Date(plan.exitAt + 7 * HOUR).toISOString().slice(11, 16)} 老挝）`);
     return true;
   }
   private doAdd(draft: ForwardState, a: Extract<Action, { type: "ADD" }>, c: { now: number; quotes: Record<string, Quote>; contracts: Record<string, Contract> }) {
@@ -441,11 +498,11 @@ export class NtsEngine {
     const state = !extra.enabled && !o ? "已关闭" : bk && !bk.allowEntry ? "今日停开（当日亏损达 1R）" : !allOk ? "数据预热/异常" : !quoteOk ? "行情不新鲜" : o ? "持仓中" : "空仓待命";
     const per = (x: Period) => ({ trades: x.trades, wins: x.wins, pnl: r(x.pnl, 2), r: r(x.r, 2), startEquity: r(x.startEquity, 2), pct: x.startEquity > 0 ? r(x.pnl / x.startEquity, 4) : null });
     return {
-      version: NTS_VERSION, enabled: extra.enabled, state, now, paperOnly: true, liveTouched: false,
+      version: NTS_VERSION, strategy: this.cfg.strategy, enabled: extra.enabled, state, now, paperOnly: true, liveTouched: false,
       symbols: this.symbols, evals: this.s.lastEval,
       position: o ? { tid: o.tid, sym: o.sym, side: o.side, openedAt: o.openedAt, entry: o.entry1, avg: o.avg, added: o.addedAt != null, stage: o.stage, target: o.target, stop: o.stop,
         breakeven: o.addedAt ? o.geo.breakeven : null, tolerance: null, plannedAdd: o.plannedAdd, zone: o.zone, mode: o.mode, floatingR: fl ? r(fl.r, 2) : null, floatingPct: fl ? r(fl.pct, 4) : null, floatingNet: fl ? r(fl.net, 2) : null,
-        mfeR: r(o.mfeR, 2), maeR: r(o.maeR, 2), oneR: r(o.oneR, 2) } : null,
+        mfeR: r(o.mfeR, 2), maeR: r(o.maeR, 2), oneR: r(o.oneR, 2), daily: o.daily ? { trail: o.daily.trail, exitAt: o.daily.exitAt, ret24: o.daily.ret24 } : null } : null,
       today: per(this.s.day), month: per(this.s.month), recent: this.s.recent, lastExit: this.s.lastExit,
       breaker: bk, data: { health, quoteOk, rest: { perHour: this.restWindow.length, total: this.restRequests, fails: this.restFails, lastError: this.lastFetchError, lastAt: this.lastFetchAt || null,
         capPerSec: this.cfg.data.restPerSec } },

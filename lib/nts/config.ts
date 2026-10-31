@@ -5,6 +5,10 @@
 export const NTS_VERSION = "nts-smc-v1" as const;
 
 export type NtsConfig = {
+  /** 决策系统："SMC" = 订单块（默认）；"DAILY" = 每日短线日动量（lib/nts/daily.ts，未通过样本外，只在用户明确要求时打开）。 */
+  strategy: "SMC" | "DAILY";
+  /** 每日短线参数（strategy="DAILY" 时生效）。样本内选定：只做空、24h 回看、k=1、追踪止损、UTC 00:00（老挝 07:00）决策、最长持有 24h。 */
+  daily: { sides: "SHORT" | "BOTH"; lookbackBars: number; k: number; trail: boolean; decideUtcHour: number; holdMs: number };
   /** 总开关：新交易系统自动开仓（模拟盘）。默认开；用户可以关。关了不开新仓，已有仓位照常管理到平仓。 */
   enabled: boolean;
   symbols: readonly string[];
@@ -56,6 +60,8 @@ export type NtsConfig = {
 };
 
 export const DEFAULT_NTS_CONFIG: NtsConfig = {
+  strategy: "SMC",
+  daily: { sides: "SHORT", lookbackBars: 96, k: 1, trail: true, decideUtcHour: 0, holdMs: 24 * 3_600_000 - 120_000 },
   enabled: true,
   symbols: ["BTC_USDT", "ETH_USDT"],
   leverage: 100,
@@ -108,6 +114,13 @@ export function normalizeNtsConfig(raw: unknown): NtsConfig {
     }
   }
   const c = base as unknown as NtsConfig;
+  c.strategy = src.strategy === "DAILY" ? "DAILY" : "SMC";
+  const ds = (src.daily && typeof src.daily === "object" ? (src.daily as Record<string, unknown>).sides : undefined);
+  c.daily.sides = ds === "BOTH" ? "BOTH" : ds === "SHORT" ? "SHORT" : DEFAULT_NTS_CONFIG.daily.sides;
+  c.daily.lookbackBars = Math.max(4, Math.min(250, Math.round(c.daily.lookbackBars)));
+  c.daily.k = Math.max(0.1, Math.min(5, c.daily.k));
+  c.daily.decideUtcHour = ((Math.round(c.daily.decideUtcHour) % 24) + 24) % 24;
+  c.daily.holdMs = Math.max(15 * 60_000, Math.min(48 * 3_600_000, c.daily.holdMs));
   // hard safety rails that no override may break
   c.leverage = Math.max(1, Math.min(100, c.leverage));
   c.firstMarginPct = Math.max(0, Math.min(0.05, c.firstMarginPct));
