@@ -124,3 +124,13 @@ test("legacy and member projections retain their transport and authority contrac
   assert.equal(runtimeStatusLabel(absent, false), "页面数据延迟", "transport status keeps its priority");
   assert.equal(runtimeStatusLabel(absent, true, true), "页面连接中断");
 });
+
+test("removed forward strategy: frozen lastCycleAt is not a stall", () => {
+  const T = 1_800_000_000_000;
+  const rt = { state: "IDLE", stale: false, standby: { idle: true }, authorityReady: true, lastError: null, lastSuccessAt: T,
+    realtimeReadiness: { protectedMarketsReady: true },
+    forward: { mode: "PAPER", strategyRemoved: true, lastCycleAt: T - 3 * 86_400_000, storage: { persistedAt: T - 60_000, error: null } } };
+  assert.equal(runtimeReady(rt), true);
+  assert.equal(runtimeStatusLabel(rt), "空仓待命");
+  assert.notEqual(runtimeStatusLabel({ ...rt, forward: { ...rt.forward, storage: { persistedAt: T, error: "x" } } }), "空仓待命");
+});

@@ -6,7 +6,7 @@ export type RuntimeHealthShape = {
   authorityReady?: boolean;
   lastError?: unknown;
   lastSuccessAt?: number | null;
-  forward?: { mode?: string; lastCycleAt?: number | null;
+  forward?: { mode?: string; lastCycleAt?: number | null; strategyRemoved?: boolean;
     storage?: { persistedAt?: number; error?: unknown } } | null;
   symbols?: string[];
   evidence?: Record<string, { fresh?: boolean; ancillaryFresh?: boolean; entryReady?: boolean }>;
@@ -39,6 +39,9 @@ function forwardRuntimeIssue(runtime: RuntimeHealthShape | null, now?: number) {
     label: "后台运行中 · 策略状态未恢复", notice: "当前前向策略状态尚未恢复；行情服务正常不代表策略已就绪。" };
   if (forward.storage?.error) return {
     label: "后台运行中 · 策略存储异常", notice: `前向策略存储异常，不能确认最新策略状态已保存：${String(forward.storage.error)}` };
+  // The old forward strategy is removed (no cycles run any more; NTS is the trading system). Its frozen lastCycleAt
+  // must not read as a stall once something else (NTS book reads) keeps lastSuccessAt moving.
+  if (forward.strategyRemoved === true) return null;
   const cycle = forward.lastCycleAt;
   if (typeof cycle !== "number" || !Number.isFinite(cycle) || cycle <= 0) return {
     label: "后台运行中 · 策略周期未启动", notice: "前向策略尚无已完成周期；这不是没有交易机会，也不表示行情断网。" };
