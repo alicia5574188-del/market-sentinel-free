@@ -258,9 +258,11 @@ export class NtsHost {
     }
     return out;
   }
-  logStream(): ReadableStream<Uint8Array> {
+  /** `account`：账户部分（每分钟权益、回撤、对账、重置、实盘成交），排在日志记录之后。 */
+  logStream(account?: () => Promise<Record<string, unknown>[]>): ReadableStream<Uint8Array> {
     return logExportStream(this.deps.storage, () => this.flushLog(this.now()), { kind: "nts-run-log", version: "nts-v1", at: this.now(), enabled: this.cfg.enabled,
-      note: "每行一条 JSON；ENTRY=进场决策全文，TRACE=进场后走势，EXIT/POST_EXIT=出场与出场后走势，NO_TRADE=抽样的不做原因" }, 8, () => this.log.peek());
+      note: "每行一条 JSON；ENTRY=进场决策全文，TRACE=进场后走势，EXIT/POST_EXIT=出场与出场后走势，NO_TRADE=抽样的不做原因；" +
+        "末尾 ACCOUNT=账户对账/回撤/重置记录/实盘成交，EQUITY_MINUTES=每分钟权益（按天分行）" }, 8, () => this.log.peek(), account);
   }
   backupStream(): ReadableStream<Uint8Array> | null {
     const db = this.deps.db();

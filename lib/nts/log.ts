@@ -85,7 +85,9 @@ export class NtsLog {
 }
 
 /** NDJSON stream of every record. `flush` runs first so unwritten records are included. Never builds one big string. */
-export function logExportStream(storage: LogStorage, flush: () => Promise<void>, header: Record<string, unknown>, page = 8, pending: () => Record<string, NtsChunk> = () => ({})): ReadableStream<Uint8Array> {
+/** `extra`：日志记录之后、结尾行之前追加的整行（例如账户部分：每分钟权益、回撤、对账、重置、实盘成交）。失败只写一行 error，不影响日志本身。 */
+export function logExportStream(storage: LogStorage, flush: () => Promise<void>, header: Record<string, unknown>, page = 8, pending: () => Record<string, NtsChunk> = () => ({}),
+  extra?: () => Promise<Record<string, unknown>[]>): ReadableStream<Uint8Array> {
   const enc = new TextEncoder();
   let cursor: string | undefined, started = false, done = false, count = 0, pend: Map<string, NtsChunk> | null = null;
   return new ReadableStream<Uint8Array>({
@@ -99,7 +101,12 @@ export function logExportStream(storage: LogStorage, flush: () => Promise<void>,
           // 磁盘已读完：把还没落盘的块补在最后（写入预算不足时也不丢），然后结束
           done = true; let out = "";
           for (const [k, c] of waiting) { pend!.delete(k); for (const r of c.recs ?? []) { out += JSON.stringify(r) + "\n"; count++; } }
-          ctl.enqueue(enc.encode(out + JSON.stringify({ end: true, records: count }) + "\n")); return;
+          let extraRows = 0;
+          if (extra) {
+            try { for (const row of await extra()) { out += JSON.stringify(row) + "\n"; extraRows++; } }
+            catch (error) { out += JSON.stringify({ k: "ACCOUNT_ERROR", d: { error: (error instanceof Error ? error.message : String(error)).slice(0, 200) } }) + "\n"; extraRows++; }
+          }
+          ctl.enqueue(enc.encode(out + JSON.stringify({ end: true, records: count, ...(extra ? { accountRows: extraRows } : {}) }) + "\n")); return;
         }
         let out = "";
         for (const [key, chunk] of got) {

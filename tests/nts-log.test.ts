@@ -58,3 +58,20 @@ test("导出是逐页拉取，不会一次把全部读进内存（分页大小�
   await readAll(logExportStream(st, async () => {}, {}, 5));
   assert.ok(calls.every(c => c === 5) && calls.length >= 6, JSON.stringify(calls));
 });
+test("复盘下载合并账户部分：ACCOUNT / EQUITY_MINUTES 行排在日志之后、结尾行之前；账户部分出错只多一行 ACCOUNT_ERROR，日志照常导出", async () => {
+  const st = memStorage(), log = new NtsLog(C); log.append(rec("a"), T); await flush(log, st);
+  const ok = await readAll(logExportStream(st, async () => {}, { t: 1 }, 8, () => ({}), async () => [{ k: "ACCOUNT", d: { equity: 1000, liveFills: [] } }, { k: "EQUITY_MINUTES", day: "2026-10-31", n: 1, rows: [{ ts: T, equity: 1000 }] }]));
+  assert.deepEqual(ok.map(l => l.meta ? "meta" : l.end ? "end" : l.id ?? l.k), ["meta", "a", "ACCOUNT", "EQUITY_MINUTES", "end"]);
+  assert.equal(ok.at(-1)!.accountRows, 2); assert.equal(ok.at(-1)!.records, 1);
+  const bad = await readAll(logExportStream(st, async () => {}, { t: 1 }, 8, () => ({}), async () => { throw new Error("boom"); }));
+  assert.deepEqual(bad.map(l => l.meta ? "meta" : l.end ? "end" : l.id ?? l.k), ["meta", "a", "ACCOUNT_ERROR", "end"]);
+});
+test("worker：/nts-log 下载带账户部分（每分钟权益、回撤、对账、重置、实盘成交）；旧价格路径不再记录", async () => {
+  const { readFileSync } = await import("node:fs");
+  const w = readFileSync(new URL("../worker/index-clean.ts", import.meta.url), "utf8");
+  assert.match(w, /this\.nts\.logStream\(\(\)=>this\.ntsAccountRows\(\)\)/);
+  const fn = w.slice(w.indexOf("private async ntsAccountRows()"), w.indexOf("private ntsHealth("));
+  for (const k of ["equity_minutes_n", "drawdown:", "invariants:", "book_audit:", "account_resets:", "liveFills:", "EQUITY_MINUTES"]) assert.ok(fn.includes(k), k);
+  assert.doesNotMatch(fn, /storage\.put|storage\.delete|transaction/);
+  assert.match(w, /const TRADE_PATHS_RECORDING:boolean=false;/);
+});

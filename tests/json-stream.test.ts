@@ -47,14 +47,17 @@ test("a cancelled or failing stream does not move the export mark",async()=>{
   assert.equal(done,0);
 });
 
-test("the export route streams, and the page keeps the file as a Blob and shows the failure reason",async()=>{
+test("the old run-log export is retired: kind=log answers 410 and points to the merged NTS download; the 系统 page has no old export button",async()=>{
   const {readFileSync}=await import("node:fs");
   const worker=readFileSync(new URL("../worker/index-clean.ts",import.meta.url),"utf8");
   const route=worker.slice(worker.indexOf('if (path === "/forward-export"'),worker.indexOf('if(url.searchParams.get("page")==="archive")'));
-  assert.match(route,/jsonStreamResponse\(body,/);
-  assert.doesNotMatch(route,/return json\(body\)/);
+  assert.match(route,/kind"\)==="log"\)return json\(\{error:"旧运行日志导出已停用[^}]*use:"\/api\/nts\/log"\},410\)/);
+  assert.doesNotMatch(route,/buildLivingRunLog/);
   const page=readFileSync(new URL("../app/forward-dashboard.tsx",import.meta.url),"utf8");
-  assert.match(page,/await response\.blob\(\)/);
-  assert.doesNotMatch(page,/new Blob\(\[JSON\.stringify\(log\)\]/);
-  assert.match(page,/导出失败，请重试。（/);
+  assert.doesNotMatch(page,/kind=log/);
+  assert.doesNotMatch(page,/导出运行日志/);
+  assert.doesNotMatch(page,/RunLogStatus/);
+  const panel=readFileSync(new URL("../app/nts-panel.tsx",import.meta.url),"utf8");
+  assert.match(panel,/\/api\/nts\/log"/);
+  assert.match(panel,/\/api\/nts\/log-backup"/);
 });

@@ -75,12 +75,11 @@ test("hot account bytes are reported, never treated as an eviction deadline",()=
   assert.equal(runLogCapacity({now:NOW,lastExport:null,counts:[],hot:null}).hot,null);
 });
 
-test("the export mark is one tiny key written only on a served export, and the status route only reads",async()=>{
+test("the old run-log export is retired, so nothing writes the export mark any more, and the status route only reads",async()=>{
   const {readFileSync}=await import("node:fs");
   const worker=readFileSync(new URL("../worker/index-clean.ts",import.meta.url),"utf8");
-  assert.match(worker,/return jsonStreamResponse\(body,\{[\s\S]*?onDone:\(\)=>this\.noteRunLogExport\(exportedAt,markRows\)\}\);/);
-  assert.doesNotMatch(worker,/await this\.noteRunLogExport\(exportedAt,[^\n]*\);\n\s*return json\(body\);/);
-  assert.match(worker,/this\.reserveNonAlarmWrites\(1,512,"runlog-export"\);if\(!reservation\)return;\n\s*try\{await this\.ctx\.storage\.put\(RUN_LOG_EXPORT_KEY,\{at,rows\}/);
+  assert.doesNotMatch(worker,/noteRunLogExport/);
+  assert.doesNotMatch(worker,/storage\.put\(RUN_LOG_EXPORT_KEY/);
   const status=worker.slice(worker.indexOf("private async runLogStatus"),worker.indexOf("private async ensureOrderJournal"));
   assert.doesNotMatch(status,/storage\.put|storage\.delete|fetch\(|reserveNonAlarmWrites/);
 });

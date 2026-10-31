@@ -1,4 +1,3 @@
-import {jsonStreamResponse} from "../lib/json-stream.ts";
 import {reconcileSourceReduction,sourceReductionTarget,type SourceReduction} from "../lib/live-reduction.ts";
 import {reconcileSourceClose,sourceExitFillPrice,SOURCE_EXIT_EXECUTION_POLICY,type SourceExit} from '../lib/live-exit.ts';
 import {FIXED_ALLOCATION_EQUITY,FIXED_ALLOCATION_POLICY,fixedLiveBasis,type FixedLiveBasis} from '../lib/fixed-allocation.ts';
@@ -31,6 +30,8 @@ import { memberExecutionClass } from "./member-executor.ts";
 import { memberRoutes } from "./member-routes.ts";
 import { pageForwardView } from "../lib/page-runtime-view.ts";
 import { repairDoubleCloses, type DoubleCloseRow } from "../lib/double-close-repair.ts";
+/** 旧「运行日志」导出已并入首页「下载运行日志（复盘）」；它专用的订单价格路径不再记录。 */
+const TRADE_PATHS_RECORDING:boolean=false;
 const LEDGER_REPAIR_KEY = "ledger-repair:double-close-v1";
 type LedgerRepairRecord = { version: "double-close-v1"; runs: { at: number; rows: DoubleCloseRow[]; balanceBefore: number; balanceAfter: number; resolvedAfter: number }[] };
 import { isAsset, runtimeStatus, paperHistory, accountLogs, strategyRuntimeLogs, ownerAuthenticated, authSession, ownerLogin, ownerLogout, ownerLiveStatus, ownerLiveSource, ownerLiveMode, ownerLiveCredentials, ownerPaperAction, ownerNts } from "./http-handlers.ts";
@@ -41,14 +42,14 @@ import {initialStrategyArena,normalizeStrategyArena,type StrategyArenaState} fro
 import {CANONICAL_PAPER_REFERENCE_EQUITY,initialCanonicalPaperState,normalizeCanonicalPaperState,reconcileCanonicalPaper,type CanonicalPaperState} from "../lib/dual-paper.ts";
 import {initialRegimePortfolio,normalizeRegimePortfolio,REGIME_HOURLY_REQUIRED_CANDLES,type RegimePortfolioState} from "../lib/regime-portfolio.ts";
 import type { PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
-import {buildRunLogExport,accountLogBook,shadowSignalOf,withResearchColumns} from '../lib/run-log.ts';
+import {buildRunLogExport,accountLogBook} from '../lib/run-log.ts';
 import {RUN_LOG_EXPORT_KEY,runLogCapacity,type RunLogExportMark} from '../lib/run-log-capacity.ts';
 import {RUNLOG_WIPE_KEY,normalizeWipeRecord,logSinceOf,type RunLogWipeRecord} from '../lib/runlog-wipe.ts';
 import {RunLogArchiver} from '../lib/run-log-archiver.ts';
-import {ARCHIVE_SEGMENT_SIZE,archiveFileName,buildArchiveFile,countArchive,mergeContinuousOrders,readEquityFor,readMeta,readSegment,readStagesFor,segmentCount,writeMeta,
+import {ARCHIVE_SEGMENT_SIZE,archiveFileName,buildArchiveFile,countArchive,readEquityFor,readMeta,readSegment,readStagesFor,segmentCount,writeMeta,
   type ArchiveCursor,type ArchiveMode,type ArchiveStats,type D1Like} from '../lib/run-log-archive.ts';
 import {STAGE_CHANGE_CAP} from '../lib/stage-chronicle.ts';
-import {PATH_CAP,pathFlushDue,adoptLegacyPaths,bookFromStoredPaths,commitPathWrite,emptyTradePathBook,exportTradePaths,observeTradePaths,peekPathWrite,pendingPathWrites,pathColumns,TRADE_PATH_INDEX_KEY,TRADE_PATH_KEY,TRADE_PATH_PAGE_PREFIX,type TradePathBook,type TradePathIndex,type TradePathPage} from '../lib/trade-path.ts';
+import {PATH_CAP,pathFlushDue,adoptLegacyPaths,bookFromStoredPaths,commitPathWrite,emptyTradePathBook,observeTradePaths,peekPathWrite,pendingPathWrites,TRADE_PATH_INDEX_KEY,TRADE_PATH_KEY,TRADE_PATH_PAGE_PREFIX,type TradePathBook,type TradePathIndex,type TradePathPage} from '../lib/trade-path.ts';
 import {emptyOrderJournal,observeOrderJournal,ORDER_JOURNAL_CAP,ORDER_JOURNAL_KEY,restoreOrderJournal,type OrderJournal} from '../lib/order-journal.ts';
 import { cancelFundsReset, requestFundsReset } from "../lib/account-reset.ts";
 import {ADAPTIVE_ENGINE_VERSION,pageStartedAt,FORWARD_EXECUTION_BBO_CAP,FORWARD_MINUTE_CONFIRMATION_CAP,advanceForward,applyStripCoreReset,stripCoreResetDone,forwardSummary,forwardEquity,freshQuote,forwardUrgentMinuteSymbols,forwardUrgentQuoteSymbols,forwardRestCriticalSymbols,BAR_MS,FORWARD_VERSION,type ForwardState} from "../lib/forward-relations.ts";
@@ -78,10 +79,6 @@ import {emptyReviewLogCursor,prepareReviewLogWrite,readReviewLog,restoreReviewLo
 const MAKER_EXIT_REASONS=new Set(["SHADOW_SOURCE_EXIT"]);
 import { makerFirstEntry, makerEntryTag, MakerStateUnknownError, LIVE_MAKER_ENTRY_POLICY, LIVE_MAKER_ENTRY_ENABLED, type MakerResult } from "../lib/live-maker-entry.ts";
 import {buildReviewSnapshot, readReviewArchivePage} from "../lib/research-snapshot.ts";
-import {withLivingEpoch} from "../lib/living/run-log-fields.ts";
-import {readLivingLog,countLivingLog} from "../lib/living/runlog-d1.ts";
-import {buildLivingRunLog} from "../lib/living/runlog-export.ts";
-import type {Bucket as LivingBucket,FinalCase as LivingFinalCase} from "../lib/living/runlog.ts";
 import {liveExitPriceLimit} from '../lib/live-entry-price.ts';
 import {observeLiveAccount,type LiveAccountMark} from '../lib/live-account-view.ts';
 import {REVIEW_JOURNAL_KEY,captureTradeReviews,initialReviewJournal,normalizeReviewJournal} from "../lib/review-trace.ts";
@@ -1247,6 +1244,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private async ensureTradePaths(){
+    if(!TRADE_PATHS_RECORDING)return;// 不再加载旧价格路径（省内存）；已存的键原样留着
     const started=this.forwardState?.startedAt??0;
     if(this.tradePathsLoaded&&this.tradePaths.accountStartedAt===started)return;
     try{
@@ -1298,12 +1296,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   /** Last successful run-log export: one tiny key, written only when an export is served. Display only. */
-  private async noteRunLogExport(at:number,rows:number){
-    const reservation=this.reserveNonAlarmWrites(1,512,"runlog-export");if(!reservation)return;
-    try{await this.ctx.storage.put(RUN_LOG_EXPORT_KEY,{at,rows} satisfies RunLogExportMark);reservation.finish(true);}
-    catch{reservation.finish(false);}
-  }
-  /** Run-log progress and the latest export time that keeps records continuous. Reads only; no writes, no Gate. */
+  /** Run-log progress. Reads only; no writes, no Gate. */
   private async runLogStatus(now:number){
     let mark:RunLogExportMark|null=null;
     try{const saved=await this.ctx.storage.get<RunLogExportMark>(RUN_LOG_EXPORT_KEY);mark=saved&&typeof saved.at==="number"?saved:null;}catch{mark=null;}
@@ -1350,7 +1343,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
 
   private async persistTradePaths(){
-    if(!this.tradePathsLoaded||!this.tradePathsPending)return;
+    if(!TRADE_PATHS_RECORDING||!this.tradePathsLoaded||!this.tradePathsPending)return;
     if(!pathFlushDue(this.tradePaths,Date.now()))return;// batched: changed pages wait in memory until the next flush round
     const jobs=pendingPathWrites(this.tradePaths,8);
     if(!jobs.length){this.tradePathsPending=false;return;}
@@ -1413,7 +1406,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(this.nts.mustPersist)ntsChanged=true;
       try{captureTradeReviews(engineIn,next.state,now,FORWARD_BUILD_SHA,STRATEGY_FINGERPRINT,executionQuotes);}
       catch{this.reviewDiagnosticError="TRADE_REVIEW_CAPTURE_FAILED";}
-      if(this.tradePathsLoaded){
+      // 订单价格路径（trade-path）只给已移除的旧「运行日志」导出用：不再记录、不再写盘（2026-10-31）。
+      if(TRADE_PATHS_RECORDING&&this.tradePathsLoaded){
         this.tradePathsPending=observeTradePaths(this.tradePaths,next.state,executionQuotes,{},now,{},undefined)||this.tradePathsPending;
       }
       this.orderJournalPending=observeOrderJournal(this.orderJournal,next.state.history,next.state.startedAt)||this.orderJournalPending;
@@ -1427,7 +1421,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           ...Object.values(this.runtime.live.positions).flatMap(p=>p?.mirrorSourceId?[p.mirrorSourceId]:[])]);
         const closures=next.state.history.filter(t=>bound.has(t.id)&&!this.mirrorClosures.has(t.id));
         for(const t of closures)prepared.entries[`${LIVE_PARITY_PREFIX}source-close:${t.id}`]=structuredClone(t);
-        const pathJobs=this.tradePathsLoaded&&pathFlushDue(this.tradePaths,now)?pendingPathWrites(this.tradePaths,8):[];
+        const pathJobs=TRADE_PATHS_RECORDING&&this.tradePathsLoaded&&pathFlushDue(this.tradePaths,now)?pendingPathWrites(this.tradePaths,8):[];
         const pathDeletes:string[]=[];
         for(const job of pathJobs){
           if(job.op==='delete')pathDeletes.push(`${TRADE_PATH_PAGE_PREFIX}${job.page}`);
@@ -3579,6 +3573,31 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     try{return this.nts.view(now,this.forwardState,this.forwardState?this.forwardQuotes(now):{});}
     catch(error){return{version:"nts-v1",ready:false,enabled:false,state:"读取失败",error:safeError(error),paperOnly:true,liveTouched:false};}
   }
+  /** 复盘下载的账户部分（原「运行日志」里的账户内容）：对账、回撤、重置记录、实盘成交、每分钟权益。只读，不写任何东西。 */
+  private async ntsAccountRows():Promise<Record<string,unknown>[]>{
+    if(!this.forwardState||!this.authorityReady)return [{k:"ACCOUNT",d:{error:"权威账户尚未恢复，账户部分暂不可导出"}}];
+    const exportedAt=Date.now(),hub=this.marketHub.status(exportedAt),gate=this.gateStream.status(exportedAt);
+    await this.ensureOrderJournal();
+    const state=this.forwardState,since=this.logSince();
+    const book=accountLogBook(state,this.forwardQuotes(exportedAt),exportedAt,this.orderJournal,since);
+    const minutes=(await this.readEquityMinutes(exportedAt)).filter(row=>row.ts>=Math.max(state.startedAt,since?.at??0));
+    const file=buildRunLogExport({events:[],funnel:book.funnel,health:hub,gate,exportedAt,liveEnabled:this.runtime.live.requestedEnabled,
+      positions:book.positions,fills:book.fills,curve:book.curve,equity:book.equity,initial:book.initial,closedNet:book.closedNet,
+      priorAdjustment:book.priorAdjustment,unreconstructed:book.unreconstructed,unreconstructedN:book.unreconstructedN,places:book.places,notOpened:[],
+      stageTimeline:[],liveFills:normalizeLiveFills(this.runtime.live.fills),equityMinutes:minutes,tallySince:book.tallySince,accountResets:book.accountResets,pendingResetAt:book.pendingResetAt});
+    const lastReset=book.accountResets.at(-1)?.at??null;
+    const rows:Record<string,unknown>[]=[{k:"ACCOUNT",t:exportedAt,d:{paperOnly:true,liveEnabled:this.runtime.live.requestedEnabled,equity:file.invariants.equity,initial:file.invariants.initial,
+      invariants:file.invariants,book_audit:file.book_audit,drawdown:summarizeEquity(lastReset==null?minutes:minutes.filter(row=>row.ts>=lastReset)),
+      drawdown_since:file.drawdown_since,curve_since:file.curve_since,equity_curve:file.equity_curve,account_resets:file.account_resets,account_epoch:file.account_epoch,
+      account_reset_pending:file.account_reset_pending,liveFills:file.liveFills,
+      equity_gaps:(()=>{try{return equityGaps(file.equity_minutes);}catch{return [];}})(),equity_filled_min:file.equity_minutes.filter(row=>row.filled).length,
+      equity_minutes_n:file.equity_minutes.length}}];
+    // 每分钟权益按 UTC+7 自然日分行，单行不会太大
+    const byDay=new Map<string,unknown[]>();
+    for(const row of file.equity_minutes as {ts:number}[]){const day=new Date(row.ts+7*3_600_000).toISOString().slice(0,10);let list=byDay.get(day);if(!list){list=[];byDay.set(day,list);}list.push(row);}
+    for(const [day,list] of byDay)rows.push({k:"EQUITY_MINUTES",day,n:list.length,rows:list});
+    return rows;
+  }
   private ntsHealth(now=Date.now()){
     try{return this.nts.healthView(now,this.forwardState,this.forwardState?this.forwardQuotes(now):{});}
     catch(error){return{ready:false,degraded:true,notes:[safeError(error)],liveTouched:false};}
@@ -3780,7 +3799,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if(path==="/nts-status"&&request.method==="GET")return json(this.ntsView());
     if(path==="/nts-log"&&request.method==="GET"){
       if(!await this.nts.boot())return json({error:"交易系统日志尚未就绪"},503);
-      return new Response(this.nts.logStream(),{headers:{"content-type":"application/x-ndjson; charset=utf-8","cache-control":"no-store","content-disposition":`attachment; filename="nts-run-log.ndjson"`}});
+      return new Response(this.nts.logStream(()=>this.ntsAccountRows()),{headers:{"content-type":"application/x-ndjson; charset=utf-8","cache-control":"no-store","content-disposition":`attachment; filename="nts-run-log.ndjson"`}});
     }
     if(path==="/nts-log-backup"&&request.method==="GET"){
       await this.nts.boot();
@@ -3856,65 +3875,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
     if (path === "/forward-export" && request.method === "GET") {
       if(!this.forwardState||!this.authorityReady)return json({error:"权威账户尚未恢复，不能导出空账户"},503);
-      if(url.searchParams.get("kind")==="log"){
-        const exportedAt=Date.now(),hub=this.marketHub.status(exportedAt),gate=this.gateStream.status(exportedAt);
-        await this.ensureTradePaths();
-        await this.ensureOrderJournal();
-        const state=this.forwardState;
-        const since=this.logSince();
-        const book=accountLogBook(state,this.forwardQuotes(exportedAt),exportedAt,this.orderJournal,since);
-        const pathsReady=this.tradePathsLoaded&&this.tradePaths.accountStartedAt===state.startedAt;
-        const pathById=new Map(this.tradePaths.trades.map(row=>[row.id,row]));
-        const minutes=(await this.readEquityMinutes(exportedAt)).filter(row=>row.ts>=Math.max(state.startedAt,since?.at??0));
-        // Account part: every paper trade of the account (open + closed), no legacy not-opened rows.
-        const file=buildRunLogExport({events:[],funnel:book.funnel,health:hub,gate,exportedAt,liveEnabled:this.runtime.live.requestedEnabled,
-          positions:book.positions,fills:book.fills,curve:book.curve,equity:book.equity,initial:book.initial,closedNet:book.closedNet,
-          priorAdjustment:book.priorAdjustment,unreconstructed:book.unreconstructed,unreconstructedN:book.unreconstructedN,places:book.places,notOpened:[],
-          stageTimeline:[],liveFills:normalizeLiveFills(this.runtime.live.fills),equityMinutes:minutes,tallySince:book.tallySince,accountResets:book.accountResets,pendingResetAt:book.pendingResetAt});
-        const ids=new Set(file.positions.map(row=>row.id));
-        const columnsOf=(id:string,row:{side:'LONG'|'SHORT';gate_signal_side?:unknown;gate_btc_1h_pct?:unknown})=>{try{return pathColumns(pathById.get(id),shadowSignalOf(row));}catch{return null;}};
-        const livingEpoch:number|null=null;
-        const hotPositions=withLivingEpoch(withResearchColumns(file.positions,columnsOf),livingEpoch) as Record<string,unknown>[];
-        let positions=hotPositions;
-        const paths:unknown[]=pathsReady?exportTradePaths(this.tradePaths,id=>ids.has(id)):[];
-        let archiveError:string|null=null;
-        try{
-          const saved=await this.archivedOrders();
-          positions=withLivingEpoch(mergeContinuousOrders(hotPositions,saved.rows) as {opened_at:number;rule_epoch?:string}[],livingEpoch) as Record<string,unknown>[];
-          const have=new Set(paths.map(p=>(p as {id?:string}).id));
-          for(const path of saved.paths)if(path.id&&!have.has(path.id))paths.push(path);
-        }catch(error){archiveError=safeError(error);positions=hotPositions;}
-        const hoursRaw=Number(url.searchParams.get("hours")),hours=Number.isFinite(hoursRaw)&&hoursRaw>0?Math.min(720,Math.max(1,Math.round(hoursRaw))):72;
-        const from=exportedAt-hours*3_600_000;
-        let buckets:LivingBucket[]=[],cases:LivingFinalCase[]=[],d1Error:string|null=null,d1Counts:unknown=null;
-        const db=(this.env as {DB?:unknown}).DB?(this.env.DB as unknown as D1Like):null;
-        if(db){try{
-          buckets=await readLivingLog(db,"bucket",from-600_000,exportedAt,hours*6*3+50) as LivingBucket[];
-          cases=await readLivingLog(db,"case",from,exportedAt,2000) as LivingFinalCase[];
-          d1Counts=await countLivingLog(db);
-        }catch(error){d1Error=safeError(error);}}
-        // The strategy engine is gone: buckets/cases are only what earlier runs already wrote to D1 (read-only history).
-        const status:Record<string,unknown>|null=null;
-        const lastReset=book.accountResets.at(-1)?.at??null;
-        const out=buildLivingRunLog({exportedAt,liveEnabled:this.runtime.live.requestedEnabled,buildSha:FORWARD_BUILD_SHA,hours,since:since?.at??null,status,buckets,cases,
-          account:{equity:file.invariants.equity,initial:file.invariants.initial,invariants:file.invariants,book_audit:file.book_audit,equity_curve:file.equity_curve,
-            equity_minutes:file.equity_minutes,drawdown:summarizeEquity(lastReset==null?minutes:minutes.filter(row=>row.ts>=lastReset)),
-            curve_since:file.curve_since,drawdown_since:file.drawdown_since,account_resets:file.account_resets,account_epoch:file.account_epoch,
-            account_reset_pending:file.account_reset_pending,liveFills:file.liveFills,
-            equity_gaps:(()=>{try{return equityGaps(file.equity_minutes);}catch{return [];}})(),equity_filled_min:file.equity_minutes.filter(row=>row.filled).length},
-          positions,fills:file.fills,
-          paths,
-          archive:{d1Error,d1Counts,livingRunLog:null,runLogArchive:this.archiveView(exportedAt),path_check:pathsReady}});
-        const openedAt=out.positions.map(row=>Number(row.opened_at)).filter(n=>Number.isFinite(n));
-        const body={...out,orders_from:openedAt.length?Math.min(...openedAt):null,orders_to:openedAt.length?Math.max(...openedAt):null,orders_archive_error:archiveError};
-        const markRows=body.positions.length+body.cases.length;
-        // Stream the body (a single JSON.stringify is ~40 MB of two-byte text and pushes this isolate over its memory limit).
-        // The export mark moves only after the whole body went out, so a failed download no longer pushes the deadline.
-        return jsonStreamResponse(body,{
-          headers:{"X-Export-Meta":JSON.stringify({at:exportedAt,positions:body.positions.length,cases:body.cases.length,timeline:out.timeline.length,
-            from:body.orders_from,to:body.orders_to,archiveError:archiveError!=null})},
-          onDone:()=>this.noteRunLogExport(exportedAt,markRows)});
-      }
+      // 旧「运行日志」导出已并入首页「下载运行日志（复盘）」（/api/nts/log：交易系统日志 + 账户对账/回撤/每分钟权益/重置/实盘成交）。
+      if(url.searchParams.get("kind")==="log")return json({error:"旧运行日志导出已停用，请用首页「下载运行日志（复盘）」",use:"/api/nts/log"},410);
       if(url.searchParams.get("page")==="archive"){
         const startedAt=Number(url.searchParams.get("accountStartedAt")),asOf=Number(url.searchParams.get("asOf"));
         if(startedAt!==this.forwardState.startedAt)return json({error:"REVIEW_ACCOUNT_CHANGED"},409);

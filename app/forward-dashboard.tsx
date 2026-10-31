@@ -6,7 +6,6 @@ import {BEIJING_TIME_ZONE} from "../lib/beijing-time.ts";
 import {type Trade,type forwardSummary} from "../lib/forward-relations.ts";
 import {purgeEquityBrowserCache} from "../lib/equity-browser-purge.ts";
 import type {AuthSession} from "../lib/operator-ui.ts";
-import RunLogStatus from "./run-log-status.tsx";
 import NtsPanel,{type NtsView} from "./nts-panel.tsx";
 import PanelStamp from "./panel-stamp.tsx";
 import {readPanel,writePanel,type PanelEntry} from "../lib/panel-cache.ts";
@@ -92,7 +91,6 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   useEffect(()=>{purgeEquityBrowserCache();},[]);
   const [tab,setTab]=useState<Tab>(initialTab),[now,setNow]=useState(0),[liveMounted,setLiveMounted]=useState(false);
   const [fontScale,setFontScale]=useState(()=>{if(typeof window==="undefined")return 92;try{const saved=Number(localStorage.getItem("sentinel-ui-font-scale-v1"));return saved>=70&&saved<=110?saved:92;}catch{return 92;}});
-  const [exporting,setExporting]=useState(false),[exportStatus,setExportStatus]=useState<string|null>(null),[exportCount,setExportCount]=useState(0);
   const [historyShown,setHistoryShown]=useState(10);
   const scroll=useRef<Record<Tab,number>>({home:0,paper:0,live:0,settings:0});
   // Page clock: held times are shown in minutes, so a 15s tick is enough; second-level labels run their own timer.
@@ -104,24 +102,6 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   useLayoutEffect(()=>{selectRef.current=select;});
   const openOrders=useCallback(()=>selectRef.current("paper"),[]);
   const fontVars:Record<string,string>={};for(let px=10;px<=64;px++)fontVars[`--fr-fs${px}`]=`${(px*fontScale/100).toFixed(2)}px`;
-  const exportSnapshot=async()=>{if(exporting)return;setExporting(true);setExportStatus(null);try{
-    const response=await fetch(`/api/forward/export?kind=log&t=${Date.now()}`,{cache:"no-store",credentials:"same-origin"});
-    if(!response.ok)throw new Error(`HTTP ${response.status}`);
-    // The server streams the file; keep it as a Blob (no parse + re-stringify, which tripled memory on phones). Counts come in a header.
-    let meta:{at?:number;positions?:number;cases?:number;timeline?:number;from?:number|null;to?:number|null;archiveError?:boolean}={};
-    try{meta=JSON.parse(response.headers.get("x-export-meta")??"{}");}catch{meta={};}
-    const blob=await response.blob();
-    const log={exportedAt:meta.at,positions:{length:meta.positions??0},cases:{length:meta.cases??0},timeline:{length:meta.timeline??0},orders_from:meta.from??null,orders_to:meta.to??null,orders_archive_error:meta.archiveError?"1":null};
-    const at=log.exportedAt??Date.now();
-    const stamp=new Date(at+8*60*60*1000).toISOString().replace(/[-:]/g,"").slice(0,15);
-    const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`living-run-log-${stamp}.json`;
-    document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
-    const n=log.positions.length,cases=log.cases.length,rows=log.timeline.length;
-    const bj=(ms:number)=>{const d=new Date(ms+8*60*60*1000);return `${d.getUTCMonth()+1}月${d.getUTCDate()}日 ${String(d.getUTCHours()).padStart(2,"0")}:${String(d.getUTCMinutes()).padStart(2,"0")}`;};
-    const span=log.orders_from!=null&&log.orders_to!=null?`，从 ${bj(log.orders_from)} 到 ${bj(log.orders_to)}（北京）`:"";
-    const warn=log.orders_archive_error?"长期库这次没读到，这份只有手里还在的单。":"";
-    setExportStatus(`已开始下载 ${a.download}。里面 ${n} 笔单${span}。${warn}${cases} 个研究案例、${rows} 段时间线（每段 10 分钟）。`);setExportCount(c=>c+1);
-  }catch(error){setExportStatus(`导出失败，请重试。（${error instanceof Error?error.message:"网络中断"}）`);}finally{setExporting(false);}};
 
   const positions=data?.positions??[],history=[...(data?.history??[])].sort((a,b)=>(b.closedAt??0)-(a.closedAt??0));
   const paperView=paperAccountView(positions);
@@ -187,10 +167,6 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
         </dl>
         {card.cached&&systemSnap&&<PanelStamp at={systemSnap.at} refreshing={true} failed={false}/>}
       </section>
-      <section className="fr-section"><div className="fr-section-head"><h2>运行日志</h2></div>
-        <p className="fr-note">订单、净值曲线和执行记录都在这一个文件里，复盘就用它。</p>
-        <RunLogStatus refreshKey={exportCount} scope={cacheScope}/>
-        <button className="fr-button" onClick={exportSnapshot} disabled={exporting}>{exporting?"正在导出…":"导出运行日志 ↗"}</button>{exportStatus&&<p className="fr-note">{exportStatus}</p>}</section>
       {liveSystemPanel}
       {accountPanel}
       <section className="fr-section fr-font-control"><div className="fr-section-head"><h2>界面字号</h2><b>{fontScale}%</b></div>
