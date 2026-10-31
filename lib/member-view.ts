@@ -47,7 +47,7 @@ export function runtimeRefreshMs(role:string|undefined,runtime:RuntimeLike,tab?:
   if(role==="member")return liveBusy(runtime)?RUNTIME_ACTIVE_MS:MEMBER_IDLE_MS;
   if(tab==="live"||liveBusy(runtime))return RUNTIME_ACTIVE_MS;
   const paperOpen=(runtime.forward?.positions??[]).some(p=>p?.status==="OPEN");
-  return paperOpen&&(tab==="paper"||tab==="execution")?RUNTIME_ACTIVE_MS:OWNER_IDLE_MS;
+  return paperOpen&&(tab==="home"||tab==="paper"||tab==="execution")?RUNTIME_ACTIVE_MS:OWNER_IDLE_MS;
 }
 
 type LiveIdsLike={positions?:Record<string,{id?:string}|null|undefined>;entries?:Record<string,{planId?:string}|null|undefined>;history?:{id:string}[]};

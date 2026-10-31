@@ -23,7 +23,7 @@ import {OrderCard,exitShort,exitPlain,priceText,livingPlaybookLabel,type OrderFa
 import {isLivingTrade,livingBoard,livingDetail,livingWhy} from "../lib/living-trade-view.ts";
 
 type View=ReturnType<typeof forwardSummary>;
-type Tab="paper"|"live"|"settings";
+type Tab="home"|"paper"|"live"|"settings";
 const fmt=(v:number|null|undefined,d=2)=>typeof v==="number"&&Number.isFinite(v)?v.toLocaleString("en-US",{minimumFractionDigits:d,maximumFractionDigits:d}):"—";
 const signed=(v:number|null|undefined,d=2)=>typeof v==="number"&&Number.isFinite(v)?`${v>=0?"+":""}${fmt(v,d)}`:"—";
 const time=(v?:number|null)=>v?new Date(v).toLocaleString("zh-CN",{timeZone:BEIJING_TIME_ZONE,month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}):"—";
@@ -74,7 +74,7 @@ const stanceName=(stance?:string)=>stance==="REVERSE"?"反向":stance==="FLAT"?"
 const sessionName=(session?:string)=>session==="ASIA"?"亚盘":session==="EUROPE"?"欧盘":session==="US"?"美盘":"—";
 const claimName=(kind?:string)=>kind==="CONTINUE"?"延续":kind==="SUSPECT"?"可疑":"不投票";
 
-export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,livePanel,liveSystemPanel,liveEnabled,liveOverview,accountPanel,ntsView,memberName,cacheScope="owner",cachedAt=null,onTabChange}:{
+export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,livePanel,liveSystemPanel,liveEnabled,liveOverview,accountPanel,ntsView,memberName,cacheScope="owner",cachedAt=null,onTabChange,initialTab="home"}:{
   data:View|null;healthy:boolean;statusLabel?:string;feedAt:number|null;error:string|null;livePanel:ReactNode;liveSystemPanel?:ReactNode;
   liveEnabled:boolean;liveOverview?:{equity:number|null;available:number|null;positionCount:number;operational:boolean;lastSyncAt:number|null;copied:number|null;eligible:number|null;missing:number|null;accountMark?:import('../lib/live-account-view.ts').LiveAccountMark|null;};
   accountPanel?:ReactNode;
@@ -85,14 +85,16 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   cachedAt?:number|null;
   /** Tells the page which tab is shown (it sets the home refresh cadence). */
   onTabChange?:(tab:Tab)=>void;
+  /** First tab shown; the app always opens on 首页 (tests render other tabs directly). */
+  initialTab?:Tab;
 }){
   // The equity chart is gone; free the space its old browser copies still take on the phone.
   useEffect(()=>{purgeEquityBrowserCache();},[]);
-  const [tab,setTab]=useState<Tab>("paper"),[now,setNow]=useState(0),[liveMounted,setLiveMounted]=useState(false);
+  const [tab,setTab]=useState<Tab>(initialTab),[now,setNow]=useState(0),[liveMounted,setLiveMounted]=useState(false);
   const [fontScale,setFontScale]=useState(()=>{if(typeof window==="undefined")return 92;try{const saved=Number(localStorage.getItem("sentinel-ui-font-scale-v1"));return saved>=70&&saved<=110?saved:92;}catch{return 92;}});
   const [exporting,setExporting]=useState(false),[exportStatus,setExportStatus]=useState<string|null>(null),[exportCount,setExportCount]=useState(0);
   const [historyShown,setHistoryShown]=useState(10);
-  const scroll=useRef<Record<Tab,number>>({paper:0,live:0,settings:0});
+  const scroll=useRef<Record<Tab,number>>({home:0,paper:0,live:0,settings:0});
   // Page clock: held times are shown in minutes, so a 15s tick is enough; second-level labels run their own timer.
   useEffect(()=>{const first=setTimeout(()=>setNow(Date.now()),0),id=setInterval(()=>setNow(Date.now()),PAGE_CLOCK_MS);return()=>{clearTimeout(first);clearInterval(id);};},[]);
   useLayoutEffect(()=>{window.scrollTo({top:tab==="live"?0:scroll.current[tab]??0,behavior:"auto"});},[tab]);
@@ -144,15 +146,18 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   },[cacheScope,!!data,healthy,systemStatus,liveText,engine,storageOk,feedMinute,cachedAt]);
   const card:SystemSnap&{cached:boolean}=data||!systemSnap?{healthy,status:systemStatus,feedAt,live:liveText,engine,storageOk,cached:false}
     :{...systemSnap.value,cached:true};
-  const nav:[Tab,string,string][]=[["paper","⇄","模拟"],["live","◈","实盘"],["settings","⊙","系统"]];
+  const nav:[Tab,string,string][]=[["home","⌂","首页"],["paper","⇄","模拟"],["live","◈","实盘"],["settings","⊙","系统"]];
   return <main className="fr-app" style={fontVars as CSSProperties} data-ui-version="market-intelligence-v1">
     <header className="fr-compact-header pg-head"><b>哨兵 · 交易核心</b><span>
       <i className={`pg-pill ${healthy?"is-ok":"is-warn"}`} role="status">{systemStatus}</i>
       <i className={`pg-pill ${liveEnabled?liveOverview?.operational?"is-ok":"is-warn":"is-off"}`}>实盘{liveText}</i>
       {memberName&&<i className="pg-pill is-plain">{memberName}</i>}</span></header>
 
+    {tab==="home"&&<div className="pg-home" data-testid="home">
+      {ntsView?<NtsPanel nts={ntsView}/>:<section className="pg-card nts-panel"><h2>交易系统运行情况</h2><p className="fr-note">{data||cachedAt?"交易系统状态读取中…":"正在连接交易系统…"}</p></section>}
+    </div>}
+
     {tab==="paper"&&<div className="pg-paper">
-      <NtsPanel nts={ntsView}/>
       <section className="fr-equity fr-overview-equity" data-testid="overview-equity-first" aria-label="模拟账户权益">
         <small>模拟账户权益 · USDT</small><strong>{fmt(accountEquity)}</strong>
         <div className={(accountPnl??0)>=0?"fr-positive":"fr-negative"}>{signed(accountPnl)} <span>U · {signed(accountPnl!=null&&accountBase?accountPnl/accountBase*100:null)}%</span></div>

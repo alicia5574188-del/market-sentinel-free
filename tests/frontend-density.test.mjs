@@ -88,7 +88,7 @@ function render(path,props,extra={},component="default"){
 const account=()=>({startedAt:1790670000000,updatedAt:1790761200000,initialEquity:1000,equity:922.82,
   netPnl:-77.18,maxDrawdown:.141,floating:3.2,turnover:800,fees:4,resolved:5,
   positions:[],opportunities:[],history:[],events:[],storage:{error:null},engineVersion:"market-intelligence-v1"});
-const dashboardProps=data=>({data,healthy:true,statusLabel:"后台运行中",feedAt:1790761200000,error:null,liveEnabled:false,livePanel:null});
+const dashboardProps=data=>({data,healthy:true,statusLabel:"后台运行中",feedAt:1790761200000,error:null,liveEnabled:false,livePanel:null,initialTab:"paper"});
 
 test("overview renders account equity before any statistics or research",()=>{
   const data=account();Object.defineProperty(data,"latestReason",{get(){throw new Error("overview must not read narrative prose");}});
@@ -418,5 +418,13 @@ test("home 「交易系统运行情况」区块：真实组件渲染所有要求
   assert.ok(!/ROE|收益率\s*\d/.test(held),"不显示 ROE");
   assert.equal(render("app/nts-panel.tsx",{nts:null}),"","无数据时不渲染");
   const dash=render("app/forward-dashboard.tsx",{...dashboardProps(account()),ntsView:nts});
-  for(const t of ["模拟","实盘","系统"])assert.ok(dash.includes(t),`标签 ${t} 保持`);
+  for(const t of ["首页","模拟","实盘","系统"])assert.ok(dash.includes(t),`标签 ${t} 保持`);
+});
+
+test("app opens on 首页 with the 交易系统运行情况 panel; 4 tabs 首页/模拟/实盘/系统",()=>{
+  const html=render("app/forward-dashboard.tsx",{...dashboardProps(account()),initialTab:undefined,ntsView:null});
+  const labels=[...html.matchAll(/<nav class="fr-nav[^"]*">(.*?)<\/nav>/g)].flatMap(m=>[...m[1].matchAll(/<b>([^<]+)<\/b>/g)].map(x=>x[1]));
+  assert.deepEqual(labels,["首页","模拟","实盘","系统"]);
+  assert.match(html,/data-testid="home"/);assert.match(html,/交易系统运行情况/);
+  assert.doesNotMatch(html,/模拟账户权益/,"首页不放模拟账户内容");
 });

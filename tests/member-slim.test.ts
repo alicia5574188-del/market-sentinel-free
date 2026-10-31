@@ -72,9 +72,9 @@ test("member render shows only 执行 and 系统 with the member's own live acco
   assert.match(system,/data-testid="member-account"/);assert.match(system,/Gate API/);assert.match(system,/模拟 → 实盘跟单/);assert.match(system,/退出登录/);
   assert.match(system,/alice/);
 });
-test("owner render has only the core tabs: 模拟, 实盘, 系统 - no strategy, brain or execution-research panel",async()=>{
+test("owner render has only the core tabs: 首页, 模拟, 实盘, 系统 - no strategy, brain or execution-research panel",async()=>{
   const {owner}=await surfaces();
-  assert.deepEqual(navLabels(owner),["模拟","实盘","系统"]);
+  assert.deepEqual(navLabels(owner),["首页","模拟","实盘","系统"]);
   for(const gone of ["owner-living-research","execution-status","market-command-summary","大脑","研究层"])assert.doesNotMatch(owner,new RegExp(gone),gone);
   assert.doesNotMatch(owner,/member-dashboard/);
 });
