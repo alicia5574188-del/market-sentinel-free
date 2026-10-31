@@ -110,9 +110,10 @@ test("15m 信号：区内看涨吞没 → ENGULF；区内双底 + 颈线被突�
   const none = [...pre, B(20, 100.45, 100.5, 100.2, 100.25, 900), B(21, 100.24, 100.3, 100.21, 100.27, 900)];
   assert.equal(reversalSignal(none, z, "LONG", 0.08, C), null);
 });
-test("入场计划：顺势 + 1H 需求区回踩 + 15m 吞没 → ENTER；止损在区外 + ATR 缓冲；TP1 = 前方对向订单块/前高；最坏亏损 ≤ 1R", () => {
-  const bars = smcLongBars(), px = bars["15m"].at(-1)!.close;
-  const d = evaluateSmcEntry("BTC_USDT", px * 0.99995, px * 1.00005, bars, smcLongView(bars), SMC_CTX, C);
+test("入场计划（显式打开补仓 addPolicyV=2 + smc.add=true）：顺势 + 1H 需求区回踩 + 15m 吞没 → ENTER；止损在区外 + ATR 缓冲；TP1 = 前方对向订单块/前高；最坏亏损 ≤ 1R", () => {
+  const bars = smcLongBars(), px = bars["15m"].at(-1)!.close, CA = normalizeNtsConfig({ addPolicyV: 2, smc: { add: true } });
+  assert.equal(CA.smc.add, true);
+  const d = evaluateSmcEntry("BTC_USDT", px * 0.99995, px * 1.00005, bars, smcLongView(bars), SMC_CTX, CA);
   assert.equal(d.action, "ENTER", JSON.stringify(d)); if (d.action !== "ENTER") return;
   const p = d.plan;
   assert.equal(p.side, "LONG"); assert.equal(p.mode, "TREND"); assert.equal(p.trigger, "ENGULF");
@@ -122,9 +123,12 @@ test("入场计划：顺势 + 1H 需求区回踩 + 15m 吞没 → ENTER；止损
   assert.ok(p.addAllowed && p.addPrice! > p.zone.lo && p.addPrice! < p.entry, "补仓位在区内更深处");
   assert.ok(Math.abs(p.marginFirstPct - 0.02) < 1e-12 && Math.abs(p.marginAddPct - 0.03) < 1e-12);
 });
-test("可选不补仓（smc.add=false）：同一入场仍放行，但不设补仓位、只算首仓风险；出场只看 TP1，止损交给账户硬止损", () => {
-  const bars = smcLongBars(), px = bars["15m"].at(-1)!.close, C2 = normalizeNtsConfig({ smc: { add: false } });
-  assert.equal(C.smc.add, true, "默认仍是视频原版：补一次");
+test("默认不补仓（smc.add=false）：同一入场仍放行，但不设补仓位、只算首仓风险；出场只看 TP1，止损交给账户硬止损", () => {
+  const bars = smcLongBars(), px = bars["15m"].at(-1)!.close, C2 = C;
+  assert.equal(C.smc.add, false, "默认不补仓（用户 2026-10-31 上线决定）");
+  assert.equal(normalizeNtsConfig(undefined).smc.add, false, "没有存储配置 → 不补仓");
+  assert.equal(normalizeNtsConfig({ enabled: true, smc: { add: true } }).smc.add, false, "旧存储配置里的 add=true（无 addPolicyV）被忽略");
+  assert.equal(normalizeNtsConfig({ enabled: true, smc: { rrMin: 2.5 } }).smc.add, false, "旧存储配置缺 add 键 → 不补仓");
   assert.equal(C2.smc.add, false);
   const d = evaluateSmcEntry("BTC_USDT", px * 0.99995, px * 1.00005, bars, smcLongView(bars), SMC_CTX, C2);
   assert.equal(d.action, "ENTER", JSON.stringify(d)); if (d.action !== "ENTER") return;

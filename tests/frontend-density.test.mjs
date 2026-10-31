@@ -412,6 +412,10 @@ test("home 「交易系统运行情况」区块：真实组件渲染所有要求
   const html=render("app/nts-panel.tsx",{nts});
   for(const t of ["交易系统运行情况","系统开关","市场偏向分","只记录，不参与开仓","订单块","当前计划","持仓","今日","本月","最近一次出场","当日停开","数据 / 行情","最近决策","下载运行日志","老挝"])assert.ok(html.includes(t),`缺少 ${t}`);
   assert.ok(!html.includes("实盘开关"),"面板不含实盘开关");
+  for(const t of ["订单块系统","不补仓","等待订单块回踩","市场结构与订单块","胜率","运行中"])assert.ok(html.includes(t),`缺少 ${t}`);
+  const held=render("app/nts-panel.tsx",{nts:{...nts,state:"持仓中",prices:{BTC_USDT:80500,ETH_USDT:3000},position:{sym:"BTC_USDT",side:"LONG",openedAt:1790760000000,avg:80000,price:80400,added:false,stage:"未补仓",target:82000,stop:79200,breakeven:null,floatingR:0.3,floatingPct:0.01,floatingNet:8.04,mfeR:0.4,maeR:-0.1}}});
+  for(const t of ["做多","80000.0","79200.0","82000.0","+0.50%","距 1.49%","距 1.99%","+8.04 U","价格波动"])assert.ok(held.includes(t),`持仓卡缺少 ${t}`);
+  assert.ok(!/ROE|收益率\s*\d/.test(held),"不显示 ROE");
   assert.equal(render("app/nts-panel.tsx",{nts:null}),"","无数据时不渲染");
   const dash=render("app/forward-dashboard.tsx",{...dashboardProps(account()),ntsView:nts});
   for(const t of ["模拟","实盘","系统"])assert.ok(dash.includes(t),`标签 ${t} 保持`);

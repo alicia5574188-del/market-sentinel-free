@@ -500,7 +500,8 @@ export class NtsEngine {
     return {
       version: NTS_VERSION, strategy: this.cfg.strategy, enabled: extra.enabled, state, now, paperOnly: true, liveTouched: false,
       symbols: this.symbols, evals: this.s.lastEval,
-      position: o ? { tid: o.tid, sym: o.sym, side: o.side, openedAt: o.openedAt, entry: o.entry1, avg: o.avg, added: o.addedAt != null, stage: o.stage, target: o.target, stop: o.stop,
+      prices: Object.fromEntries(this.symbols.map(sym => { const x = quotes[sym]; return [sym, x && x.fresh ? r((x.bestBid + x.bestAsk) / 2, 4) : null]; })),
+      position: o ? { tid: o.tid, sym: o.sym, side: o.side, openedAt: o.openedAt, entry: o.entry1, price: q && q.fresh ? (o.side === "LONG" ? q.bestBid : q.bestAsk) : null, avg: o.avg, added: o.addedAt != null, stage: o.stage, target: o.target, stop: o.stop,
         breakeven: o.addedAt ? o.geo.breakeven : null, tolerance: null, plannedAdd: o.plannedAdd, zone: o.zone, mode: o.mode, floatingR: fl ? r(fl.r, 2) : null, floatingPct: fl ? r(fl.pct, 4) : null, floatingNet: fl ? r(fl.net, 2) : null,
         mfeR: r(o.mfeR, 2), maeR: r(o.maeR, 2), oneR: r(o.oneR, 2), daily: o.daily ? { trail: o.daily.trail, exitAt: o.daily.exitAt, ret24: o.daily.ret24 } : null } : null,
       today: per(this.s.day), month: per(this.s.month), recent: this.s.recent, lastExit: this.s.lastExit,

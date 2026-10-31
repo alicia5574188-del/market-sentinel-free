@@ -1,6 +1,6 @@
 /**
  * 新交易系统（NTS）的全部参数。只有这一个文件；改参数只改这里。
- * 决策引擎 = 视频的 SMC 订单块方法（smc.ts）。仓位 2% / +3% / 100x 是用户给定的固定规则；smc 段每个参数都写了来源。
+ * 决策引擎 = 视频的 SMC 订单块方法（smc.ts）。仓位首仓 2% / 100x 全仓、默认不补仓（2026-10-31 用户决定；smc.add=true 才补 +3%）；smc 段每个参数都写了来源。
  */
 export const NTS_VERSION = "nts-smc-v1" as const;
 
@@ -15,7 +15,9 @@ export type NtsConfig = {
   leverage: number;
   /** 本金口径：开仓时的账户余额（复利）。 */
   firstMarginPct: number;       // 首仓保证金 / 本金
-  addMarginPct: number;         // 补仓保证金 / 本金（读法 A）
+  addMarginPct: number;         // 补仓保证金 / 本金（读法 A）；只在 smc.add=true 时用
+  /** 配置版本标记：2 = smc.add 由本配置显式决定。缺省/旧值 → smc.add 按默认 false。 */
+  addPolicyV: number;
   maxLossPct: number;           // 1R：整笔最坏亏损 / 本金
   /** 止损 / 保本 */
   stopSlipPct: number;          // 止损滑点假设（只用于最坏亏损估算）
@@ -40,7 +42,8 @@ export type NtsConfig = {
     rrMin: number;            // TP1 至少多少 R 才做（视频的目标是最近对向区；太近不值得；2.5 为样本内选定）
     noTargetRR: number;       // 前方没有对向区/流动性时 TP1 取几 R
     /** false = 不补仓：只用首仓 2%，止损不动，只在 TP1 或硬止损出场。引擎回放（同一 1H/rr2.5 入场）：样本内 PF 1.62 / +393U，样本外 PF 1.52 / +284U，
-     *  默认（补仓后保本走）样本外 PF 1.15 / +95.5U；44 天 Gate 真实K线两者都亏（−81.5U vs −53.4U）。默认 true = 视频原版补一次。 */
+     *  补仓后保本走 样本外 PF 1.15 / +95.5U；44 天 Gate 真实K线两者都亏（−81.5U vs −53.4U）。
+     *  默认 false（用户 2026-10-31 上线决定）。旧存储配置里的 add 一律忽略，只有带 addPolicyV=2 的配置才能把它重新打开。 */
     add: boolean;
     addAt: number;            // 补仓位 = 区内该比例处（0.5 = 区的均衡位，视频"区的更深处"）
     doubleWindow: number;     // 双底/双顶在最近多少根 15m 内找
@@ -67,6 +70,7 @@ export const DEFAULT_NTS_CONFIG: NtsConfig = {
   leverage: 100,
   firstMarginPct: 0.02,
   addMarginPct: 0.03,
+  addPolicyV: 2,
   maxLossPct: 0.05,
   stopSlipPct: 0.0005,
   breakevenPct: 0.002,
@@ -81,7 +85,7 @@ export const DEFAULT_NTS_CONFIG: NtsConfig = {
   // 样本外（2026-05-01→2026-10-28）未调参复核 PF 1.15、净 +95.5U。视频原版（1h/4h/1d、rrMin 1.5）样本内 PF 0.72、样本外 PF 0.59。
   // 4H/1D 仍用于趋势结构（HH/HL/BOS）；只用 1H 区开仓 ⇒ 逆势单（只允许在 4H/1D 区）实际关闭。
   smc: { obTfs: ["1h"], confirmBars: 3, maxPriorVisits: 0, pivot4h: 2, stopAtrBuf: 0.2, rrMin: 2.5, noTargetRR: 2,
-    add: true, addAt: 0.5, doubleWindow: 24, doubleTolAtr: 0.5 },
+    add: false, addAt: 0.5, doubleWindow: 24, doubleTolAtr: 0.5 },
   breaker: { dayStopR: 1, tzOffsetHours: 7 },
   eventWindows: [],
   log: { traceEveryMs: 10 * 60_000, flushEveryMs: 10 * 60_000, noTradeSampleMs: 4 * 3_600_000, maxVetoes: 6, maxChunkBytes: 90_000,
@@ -114,6 +118,9 @@ export function normalizeNtsConfig(raw: unknown): NtsConfig {
     }
   }
   const c = base as unknown as NtsConfig;
+  // 旧存储配置（没有 addPolicyV=2）里保存的 smc.add=true 不再生效：默认不补仓
+  if (src.addPolicyV !== 2) c.smc.add = DEFAULT_NTS_CONFIG.smc.add;
+  c.addPolicyV = 2;
   c.strategy = src.strategy === "DAILY" ? "DAILY" : "SMC";
   const ds = (src.daily && typeof src.daily === "object" ? (src.daily as Record<string, unknown>).sides : undefined);
   c.daily.sides = ds === "BOTH" ? "BOTH" : ds === "SHORT" ? "SHORT" : DEFAULT_NTS_CONFIG.daily.sides;
