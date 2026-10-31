@@ -4,7 +4,7 @@
 
 type SourceTrade={id:string;symbol?:string;side?:string;status?:string;entryPrice?:number;lastPrice?:number;exitPrice?:number|null;
   netPnl?:number|null;notional?:number;openedAt?:number;closedAt?:number|null};
-type ForwardLike={startedAt?:number;mode?:string;version?:string;engineVersion?:string;updatedAt?:number;lastCycleAt?:number|null;
+type ForwardLike={startedAt?:number;mode?:string;version?:string;engineVersion?:string;updatedAt?:number;lastCycleAt?:number|null;strategyRemoved?:boolean;
   storage?:{error?:string|null;persistedAt?:number|null}|null;positions?:SourceTrade[];history?:SourceTrade[]};
 type StateLike={positions?:SourceTrade[];history?:SourceTrade[]};
 
@@ -19,7 +19,7 @@ export function memberForwardView(view:ForwardLike|null|undefined,state:StateLik
   const positions=pick(view.positions),history=pick(view.history),seen=new Set([...positions,...history].map(t=>t.id));
   // A page-level PAPER reset filters the summary history; the raw state still knows those sources.
   for(const t of [...pick(state?.positions),...pick(state?.history)])if(!seen.has(t.id)){seen.add(t.id);(t.status==="OPEN"?positions:history).push(t);}
-  return {startedAt:view.startedAt,mode:view.mode,version:view.version,engineVersion:view.engineVersion,updatedAt:view.updatedAt,lastCycleAt:view.lastCycleAt??null,
+  return {startedAt:view.startedAt,mode:view.mode,version:view.version,engineVersion:view.engineVersion,updatedAt:view.updatedAt,lastCycleAt:view.lastCycleAt??null,...(view.strategyRemoved===true?{strategyRemoved:true as const}:{}),
     storage:{error:view.storage?.error??null,persistedAt:view.storage?.persistedAt??null},
     positions:positions.map(sourceFields),history:history.map(sourceFields),memberProjection:true as const};
 }

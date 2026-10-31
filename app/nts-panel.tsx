@@ -8,6 +8,7 @@ type Plan = { side: string; entry: number; stop: number; target: number; rr: num
 type Ev = { at: number; action: string; side: string | null; reason: string; core: number | null; score: number | null; plan: Plan; zones: Zone[]; vetoes: number; structure?: { h4: string; highs: string; lows: string; d1: string } };
 type Per = { trades: number; wins: number; pnl: number; r: number; pct: number | null };
 export type NtsView = {
+  version?: string;
   ready?: boolean; enabled?: boolean; strategy?: string; state?: string; error?: string | null; now?: number; notes?: string[];
   symbols?: string[]; evals?: Record<string, Ev>; prices?: Record<string, number | null>;
   position?: { sym: string; side: string; openedAt: number; entry?: number; avg: number; price?: number | null; added: boolean; stage: string; target: number; stop: number; breakeven: number | null; floatingR: number | null; floatingPct: number | null; floatingNet: number | null; mfeR: number; maeR: number; daily?: { trail: number | null; exitAt: number; ret24: number } | null } | null;

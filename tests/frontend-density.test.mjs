@@ -428,3 +428,12 @@ test("app opens on 首页 with the 交易系统运行情况 panel; 4 tabs 首页
   assert.match(html,/data-testid="home"/);assert.match(html,/交易系统运行情况/);
   assert.doesNotMatch(html,/模拟账户权益/,"首页不放模拟账户内容");
 });
+
+test("系统状态: shows the trading system (订单块系统) as engine, not the removed market-intelligence-v1",()=>{
+  const data=account();
+  const html=render("app/forward-dashboard.tsx",{...dashboardProps(data),initialTab:"settings",ntsView:{version:"nts-smc-v1",strategy:"SMC",ready:true}});
+  const card=html.slice(html.indexOf('data-testid="system-status"'),html.indexOf("</section>",html.indexOf('data-testid="system-status"')));
+  assert.match(card,/引擎版本<\/dt><dd>订单块系统 · nts-smc-v1<\/dd>/);
+  assert.doesNotMatch(card,/market-intelligence-v1/);
+  assert.match(card,/>正常</,"后台运行中 shows as 正常");
+});

@@ -1023,9 +1023,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const persistedAt = this.forwardState?.storage.persistedAt ?? 0;
     return this.forwardState ? { ...forwardSummary(this.forwardState, this.regimeQuotes(now), now),
       liveMirror: this.liveMirrorView(),
+      // The old forward strategy is removed (NTS trades this paper account); its frozen lastCycleAt is not a stall.
+      strategyRemoved: true,
       lastCycleAt: cycleAt,
       storage: { ...this.forwardState.storage, persistedAt, error: this.forwardError } }
-      : { version: FORWARD_VERSION, mode: "RECOVERY_REQUIRED", liveEligible: false, lastCycleAt: cycleAt, storage: { persistedAt, error: this.forwardError } };
+      : { version: FORWARD_VERSION, mode: "RECOVERY_REQUIRED", liveEligible: false, strategyRemoved: true, lastCycleAt: cycleAt, storage: { persistedAt, error: this.forwardError } };
   }
 
   private forwardHealth() {

@@ -137,7 +137,8 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   const liveText=liveEnabled?liveOverview?.operational?"运行中":"核对中":"关闭";
   // System card: the last good values are kept on the device so a fresh app open shows them before the first runtime read.
   const [systemSnap]=useState<PanelEntry<SystemSnap>|null>(()=>readPanel<SystemSnap>(cacheScope,PANEL_KEYS.systemStatus));
-  const engine=data?.engineVersion??data?.version??null,storageOk=data?!data.storage?.error:null,feedMinute=feedAt==null?null:Math.floor(feedAt/60_000);
+  // The old forward engine (market-intelligence-v1) is removed; the trading system shown is NTS.
+  const engine=ntsView?`${ntsView.strategy==="DAILY"?"每日短线":"订单块系统"}${ntsView.version&&ntsView.version!=="nts-v1"?` · ${ntsView.version}`:""}`:null,storageOk=data?!data.storage?.error:null,feedMinute=feedAt==null?null:Math.floor(feedAt/60_000);
   useEffect(()=>{
     if(!data||cachedAt)return;
     writePanel<SystemSnap>(cacheScope,PANEL_KEYS.systemStatus,{healthy,status:systemStatus,feedAt,live:liveText,engine,storageOk},v=>v);
