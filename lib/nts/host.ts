@@ -246,7 +246,17 @@ export class NtsHost {
   healthView(now: number, forward: ForwardState | null, quotes: Record<string, Quote>) {
     const notes = this.ready ? this.notes(now, forward, quotes) : [this.bootError ?? "启动中"];
     return { enabled: this.enabled, ready: this.ready, degraded: notes.length > 0, notes: notes.slice(0, 6), logPending: this.log?.pending ?? 0, logAppended: this.log?.appended ?? 0, logLost: this.log?.lostChunks ?? 0,
-      restPerHour: this.engine?.restWindow.length ?? 0, reset: this.resetView(), liveTouched: false };
+      restPerHour: this.engine?.restWindow.length ?? 0, reset: this.resetView(), liveTouched: false, data: this.ready ? this.dataView(now) : null };
+  }
+  /** 公开健康页用：每个币种的K线根数、衍生品快照年龄、最近一次决策时间（很小，不含价格细节）。 */
+  dataView(now: number) {
+    const out: Record<string, unknown> = {};
+    for (const sym of this.cfg.symbols) {
+      const h = this.engine.dataHealth(sym, now), dv = this.engine.s.deriv[sym], last = dv?.[dv.length - 1], ev = this.engine.s.lastEval[sym];
+      out[sym] = { ok: h.ok, bars: Object.fromEntries(Object.entries(h.bars).map(([tf, b]) => [tf, b.n])), derivAgeMin: last ? Math.round((now - last.t) / 60_000) : null,
+        lastEvalAt: ev?.at ?? null, lastEvalBar: ev?.barTime ?? null, lastAction: ev?.action ?? null };
+    }
+    return out;
   }
   logStream(): ReadableStream<Uint8Array> {
     return logExportStream(this.deps.storage, () => this.flushLog(this.now()), { kind: "nts-run-log", version: "nts-v1", at: this.now(), enabled: this.cfg.enabled,

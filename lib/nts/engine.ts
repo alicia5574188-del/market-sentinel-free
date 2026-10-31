@@ -61,6 +61,9 @@ const emptyPeriod = (key: string, eq: number): Period => ({ key, startEquity: eq
 export const freshNtsState = (now: number): NtsState => ({ v: 1, version: NTS_VERSION, open: null, day: emptyPeriod("", 0), month: emptyPeriod("", 0), recent: [], lastExit: null, post: [],
   decided: {}, noTradeSlot: {}, handled: [], deriv: {}, lastEval: {}, startedAt: now });
 
+/** 重启后等数据补齐的最长时间（从 15m 收盘算起）；超过就按数据不足决策并记录。 */
+export const WARMUP_WAIT_MS = 8 * 60_000;
+
 export class NtsEngine {
   cfg: NtsConfig;
   s: NtsState;
@@ -100,7 +103,8 @@ export class NtsEngine {
         const nextClose = last ? (last.time + 2 * TF_SEC[tf]) * 1000 + 4_000 : 0;
         const due = !last || now >= nextClose;
         const retryOk = now - (d.failedAt[tf] ?? 0) >= this.backoff(d) && now - (d.fetchedAt[tf] ?? 0) >= 20_000;
-        if (due && retryOk) { const pri = (!last ? 0 : 1) + (tf === "15m" ? 0 : 0.5); if (!best || pri < best.pri) best = { job: { sym, kind: tf }, pri }; }
+        // 冷启动先补大周期和衍生品，15m 最后（15m 一到就会触发决策）
+        if (due && retryOk) { const pri = !last ? (tf === "15m" ? 0.6 : 0.5) : (tf === "15m" ? 1 : 1.5); if (!best || pri < best.pri) best = { job: { sym, kind: tf }, pri }; }
       }
       if (now - d.tickerAt >= this.cfg.data.derivEveryMs && now - d.tickerFailedAt >= this.backoff(d)) {
         const pri = d.tickerAt ? 2 : 0.2; if (!best || pri < best.pri) best = { job: { sym, kind: "ticker" }, pri };
@@ -170,6 +174,13 @@ export class NtsEngine {
     this.rollPeriods(now, balance);
     return breakerState({ monthPnl: this.s.month.pnl, monthStartEquity: this.s.month.startEquity, dayPnl: this.s.day.pnl, oneR: this.cfg.maxLossPct * Math.max(1, this.s.month.startEquity) }, this.cfg);
   }
+  /** 最近决策：每根收盘 15m 都更新。同一币种、同一类原因（去掉数字后相同）连续出现时只刷新时间和文字，不刷屏。只在内存/状态里，不额外写盘。 */
+  private briefNoTrade(now: number, sym: string, text: string) {
+    const cls = (t: string) => t.replace(/[-+]?\d+(?:\.\d+)?/g, "#").slice(0, 60);
+    const i = this.s.recent.findIndex(x => x.sym === sym);
+    if (i >= 0 && this.s.recent[i]!.kind === "不做" && cls(this.s.recent[i]!.text) === cls(text)) this.s.recent.splice(i, 1);
+    this.brief(now, sym, "不做", text);
+  }
   private brief(now: number, sym: string, kind: string, text: string) { this.s.recent.unshift({ at: now, sym, kind, text: text.slice(0, 200) }); if (this.s.recent.length > 14) this.s.recent.length = 14; }
 
   // ---------------------------------------------------------------------------------------------------------------
@@ -218,6 +229,8 @@ export class NtsEngine {
         if (!bar || this.s.decided[sym] === bar.time) continue;
         if (now - (bar.time + 900) * 1000 > 10 * MIN) { this.s.decided[sym] = bar.time; continue; } // 启动太晚/断线：这根错过了，不追
         const q = c.quotes[sym], health = this.dataHealth(sym, now);
+        // 重启后K线/衍生品还在补拉（约 1 分钟）：先等，不拿半截数据做决定；等到收盘后 8 分钟还不齐才按"数据不足"记一条
+        if (!health.ok && now - (bar.time + 900) * 1000 < WARMUP_WAIT_MS) continue;
         if (health.ok && !(q && q.fresh)) continue; // 等行情，最多等到上面的 10 分钟窗口
         if (this.cfg.strategy === "DAILY" && !isDailyDecisionBar(bar.time, this.cfg.daily)) { this.s.decided[sym] = bar.time; continue; }
         this.s.decided[sym] = bar.time;
@@ -265,7 +278,7 @@ export class NtsEngine {
     const quiet = /^价格不在|还没有 15m 反转|不做逆势|穿透订单块|已在止损外侧/;
     let noteworthy = blockedPlan || dec.vetoes.some(v => !quiet.test(v.reason));
     const slot = Math.floor(now / (this.cfg.log.noTradeSampleMs));
-    const sampled = this.s.noTradeSlot[sym] !== slot;
+    const sampled = this.s.noTradeSlot[sym] !== slot; // 日志：4H 心跳一条；"最近决策"面板每根都刷新（只在内存/状态里）
     if (noteworthy) {
       const vs = this.vetoSlot[sym];
       if (!vs || vs.slot !== slot) this.vetoSlot[sym] = { slot, n: 1 };
@@ -276,8 +289,8 @@ export class NtsEngine {
       if (sampled) this.s.noTradeSlot[sym] = slot;
       this.safeAppend({ id: noteworthy ? `veto:${sym}:${barTime}` : `nt:${sym}:${slot}`, k: "NO_TRADE", t: now, sym,
         d: { barTime, reason: dec.reason, side: dec.side, vetoes: dec.vetoes, kind: noteworthy ? "否决" : "抽样", ...snapshot } }, now);
-      this.brief(now, sym, "不做", dec.reason);
     }
+    this.briefNoTrade(now, sym, dec.reason);
     return null;
   }
   /** 每日短线：每天一根决策 15m（UTC 00:00 收盘），按 24h 收益方向进场。决策依据整条写进日志；RSI/MACD/偏向分只记录。 */
