@@ -3335,7 +3335,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     // Realtime Gate data is a scarce execution resource, never a scanner.
     // Keep only actual exposure and currently executable candidates resident.
     // The trading system (FVG) keeps only held coins and coins with a live setup (armed limit / case-b candidate / sweep waiting
-    // for displacement) resident, capped at fvg.maxResident (12) inside FORWARD_EXECUTION_BBO_CAP. The rest of its universe is candles only.
+    // for displacement) resident, held, armed (case a) and near-entry case-b coins uncapped, the other candidates capped at fvg.maxResident (12), all inside FORWARD_EXECUTION_BBO_CAP. The rest of its universe is candles only.
     const next=[...new Set([...protectedSymbols,...this.nts.symbols(),...urgentSymbols])].slice(0,FORWARD_EXECUTION_BBO_CAP);
     if(next.length!==this.runtime.symbols.length||next.some((symbol,index)=>symbol!==this.runtime.symbols[index]))
       this.applyRealtimeSymbols(next);

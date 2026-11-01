@@ -89,7 +89,7 @@ export class NtsHost {
   }
 
   get enabled() { return this.ready && this.cfg.enabled; }
-  /** 需要常驻行情的合约：FVG = 持仓币 + 挂单/情形 b 候选/等位移的币（≤ fvg.maxResident）；旧系统 = BTC/ETH。 */
+  /** 需要常驻行情的合约：FVG = 持仓币 + 情形 a 挂单币 + 情形 b 接近入场区的币（这三类不限个数）+ 其余候选/等位移的币（≤ fvg.maxResident）；旧系统 = BTC/ETH。 */
   symbols(): string[] {
     if (!this.ready) return [];
     try { return this.enabled ? this.engine.residentSymbols() : this.engine.isFvg ? [...new Set(this.engine.desk.st.opens.map(o => o.sym))] : []; } catch { return []; }
@@ -291,7 +291,8 @@ export class NtsHost {
       const coins = this.engine.desk.allSymbols(), plan = this.engine.desk.fetchPlan();
       const per: Record<string, unknown> = {};
       for (const sym of coins) { const h = this.engine.dataHealth(sym, now); per[sym] = { ok: h.ok, bars: Object.fromEntries(Object.entries(h.bars).map(([tf, b]) => [tf, b.n])), stage: this.engine.desk.rt[sym]?.stage ?? null }; }
-      return { engine: "FVG", universe: coins.length, ready: coins.filter(sym => (per[sym] as { ok: boolean }).ok).length, hot: plan.hot, estReqPerHour: plan.estPerHour, coins: per };
+      return { engine: "FVG", universe: coins.length, ready: coins.filter(sym => (per[sym] as { ok: boolean }).ok).length, hot: plan.hot, resident: this.engine.residentSymbols().length,
+        armed: coins.filter(sym => this.engine.desk.rt[sym]?.stage === "等回踩15m缺口").length, estReqPerHour: plan.estPerHour, coins: per };
     }
     for (const sym of this.cfg.symbols) {
       const h = this.engine.dataHealth(sym, now), dv = this.engine.s.deriv[sym], last = dv?.[dv.length - 1], ev = this.engine.s.lastEval[sym];

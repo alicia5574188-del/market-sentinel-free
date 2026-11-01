@@ -14,16 +14,15 @@ export type NtsConfig = {
   /** FVG 扫流动性系统（视频规则 + 多币池/调度）。每个参数的来源见 fvg.ts 顶部与一页说明。 */
   fvg: {
     universeMax: number;      // 币池上限：按 Gate 24h 成交额排名取前 N（已有的合约目录，不新增请求）
-    maxResident: number;      // 最多几个币常驻实时行情（有持仓/挂单/等再入场的币优先）
+    maxResident: number;      // 其余候选最多几个币常驻实时行情（持仓、挂单、情形 b 接近入场区的币另算、不限）
     zoneLookback4h: number;   // 历史 4H 缺口扫描根数（100 根 ≈ 16.7 天）
     swingL: number; swingR: number; swingLookback: number; // 15m 分形左右根数、往回找多远
-    bodyMin: number;          // 位移 K 实体/振幅下限
-    dispAtr: number; atrLen: number; dispMaxBars: number; // 位移合计 ≥ dispAtr × ATR(15m, atrLen)，最多看几根
+    atrLen: number; dispMaxBars: number; // ATR(15m, atrLen) 只记录；位移看扫后 2–3 根
     expiryBars: number;       // 挂单有效根数（15m）
     rr: number;               // 止盈 R 倍数
     scanBars: number;         // 15m 形态往回扫多少根（含历史形态，用于情形 b）
     reentryTolPct: number;    // 情形 b：价格回到原 15m 缺口 ± 该比例内
-    nearPct: number;          // 离 4H 缺口 ≤ 该比例 = 热币：每根 15m 都刷新
+    nearPct: number;          // 离 4H 缺口 ≤ 该比例 = 热币：每根 15m 都刷新；情形 b 现价离原 15m 缺口 ≤ 该比例 = 必须常驻实时行情
     cold15mEveryMs: number;   // 冷币 15m 刷新间隔
     min4h: number; min15m: number; // 至少多少根才判断
   };
@@ -85,8 +84,8 @@ export type NtsConfig = {
 export const DEFAULT_NTS_CONFIG: NtsConfig = {
   strategy: "FVG",
   strategyV: NTS_STRATEGY_V,
-  fvg: { universeMax: 30, maxResident: 12, zoneLookback4h: 100, swingL: 2, swingR: 2, swingLookback: 96, bodyMin: 0.6,
-    dispAtr: 1, atrLen: 14, dispMaxBars: 3, expiryBars: 16, rr: 3, scanBars: 200, reentryTolPct: 0.001, nearPct: 0.01,
+  fvg: { universeMax: 30, maxResident: 12, zoneLookback4h: 100, swingL: 2, swingR: 2, swingLookback: 96,
+    atrLen: 14, dispMaxBars: 3, expiryBars: 16, rr: 3, scanBars: 200, reentryTolPct: 0.001, nearPct: 0.01,
     cold15mEveryMs: 60 * 60_000, min4h: 30, min15m: 60 },
   daily: { sides: "SHORT", lookbackBars: 96, k: 1, trail: true, decideUtcHour: 0, holdMs: 24 * 3_600_000 - 120_000 },
   enabled: true,

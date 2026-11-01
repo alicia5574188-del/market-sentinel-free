@@ -230,7 +230,7 @@ export class FvgDesk {
     const sd = sideCn(st.side);
     switch (st.status) {
       case "SWEPT": return `${sd} 15m 扫了 ${r(st.swingPx, 6)}（影线 ${r(st.sweepPx, 6)}），等位移`;
-      case "NO_DISP": return `${sd} 扫了 ${r(st.swingPx, 6)} 但没有合格位移（2–3 根实体 ≥0.6、合计 ≥1ATR、留 15m 缺口）`;
+      case "NO_DISP": return `${sd} 扫了 ${r(st.swingPx, 6)} 但扫后 2–3 根没有朝交易方向走出新的 15m 缺口（没有位移）`;
       case "ARMED": return `${sd} 情形a 挂限价 ${r(st.entry, 6)}（15m 缺口 ${r(st.fvg!.lo, 6)}~${r(st.fvg!.hi, 6)}），止损 ${r(st.stop, 6)}，3R ${r(st.tpOrig, 6)}，${lao(st.expiresT!)} 前有效`;
       case "TOUCHED": return `${sd} 回踩到了 ${r(st.entry, 6)} 但没成交（当时没盯盘/没有实时行情）${c === "b" ? "，等回到缺口再进（情形b）" : ""}`;
       case "EXPIRED": return `${sd} ${this.cfg.fvg.expiryBars} 根没回踩，撤单${c === "b" ? "；之后回到缺口可再进（情形b）" : ""}`;
@@ -243,6 +243,7 @@ export class FvgDesk {
   // ----------------------------------------------------------------------------------------------------------------
   tick(c: { now: number; forward: ForwardState; quotes: Record<string, Quote>; enabled: boolean }): FvgAction[] {
     const out: FvgAction[] = [], { now, forward } = c, f = this.cfg.fvg;
+    this.lastNow = now;
     for (const o of this.st.opens) {
       const t = forward.positions.find(x => x.id === o.tid && x.status === "OPEN"), q = c.quotes[o.sym];
       if (!t || !q || !q.fresh) continue;
@@ -354,13 +355,23 @@ export class FvgDesk {
   // ----------------------------------------------------------------------------------------------------------------
   // 面板 / 健康
   // ----------------------------------------------------------------------------------------------------------------
-  /** 需要常驻实时行情的币：有持仓的币全部常驻（不受 maxResident 限制，否则没法管止盈）；其余按 挂单（情形 a）> 情形 b 候选 > 正在等位移 取前 maxResident 个。 */
-  residentSymbols(): string[] {
+  /** 情形 b 候选里，现价离原 15m 缺口 ≤ nearPct 的（快回到入场价了，必须有实时行情才能成交）。 */
+  lastNow = 0;
+  bNear(sym: string, now: number) {
+    const rt = this.rt[sym]; if (!rt || rt.px == null) return false;
+    const px = rt.px, tol = this.cfg.fvg.nearPct;
+    return rt.setups.some(st => st.fvg != null && this.bEligible(sym, st, now) && px >= st.fvg.lo * (1 - tol) && px <= st.fvg.hi * (1 + tol));
+  }
+  /** 需要常驻实时行情的币（Gate 实时盘口订阅，不是新的请求类型）：
+   *  必须常驻（不受 maxResident 限制）：有持仓的币、有情形 a 挂单的币、情形 b 候选且价格已接近原入场区的币——否则回踩时没有报价，碰到也成交不了；
+   *  其余（远离入场区的情形 b 候选 > 正在等位移）再取前 maxResident 个。总数仍受 worker 的 30 个实时盘口上限约束。 */
+  residentSymbols(now = this.lastNow || Date.now()): string[] {
     const pri = (sym: string) => { const rt = this.rt[sym]; if (this.st.opens.some(o => o.sym === sym)) return 0; if (!rt) return 9;
-      if (rt.stage === "等回踩15m缺口") return rt.caseTag === "a" ? 1 : 2; if (rt.setups.some(s => s.status === "SWEPT")) return 3; return 9; };
+      if (rt.setups.some(st => this.aEligible(sym, st, now))) return 1; if (this.bNear(sym, now)) return 2;
+      if (rt.stage === "等回踩15m缺口") return 3; if (rt.setups.some(s => s.status === "SWEPT")) return 4; return 9; };
     const ranked = this.allSymbols().map((s, i) => ({ s, p: pri(s), i })).filter(x => x.p < 9).sort((a, b) => a.p - b.p || a.i - b.i);
-    const held = ranked.filter(x => x.p === 0).map(x => x.s);
-    return [...held, ...ranked.filter(x => x.p > 0).slice(0, this.cfg.fvg.maxResident).map(x => x.s)];
+    const must = ranked.filter(x => x.p <= 2).map(x => x.s);
+    return [...must, ...ranked.filter(x => x.p > 2).slice(0, this.cfg.fvg.maxResident).map(x => x.s)];
   }
   dataHealth(sym: string, now: number) {
     const d = this.h.data[sym], rt = this.rt[sym], notes: string[] = [], bars: Record<string, { n: number; ageMin: number | null }> = {};

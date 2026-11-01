@@ -4,7 +4,7 @@
  *  1. 4H 公平价值缺口（FVG）：三根 4H K 线 c1/c2/c3，多头 c1.high < c3.low，区间 [c1.high, c3.low]；空头镜像 c1.low > c3.high，区间 [c3.high, c1.low]。
  *     4H 收盘越过远端（多头 close < 区间下沿、空头 close > 区间上沿）= 作废。影线穿过不算作废。历史缺口（最近 zoneLookback4h 根 4H）也算。
  *  2. 价格在 4H 多头缺口里时，15m 扫流动性：某根 15m 的最低价 < 之前一个已确认的 15m 分形低点（左右各 2 根），但实体（开/收较低者）收在该低点之上。
- *  3. 位移：扫完后 2–3 根 15m 都是同向实体 K（实体/振幅 ≥ 0.6），合计走了 ≥ 1.0×ATR(15m,14)，并且留下一个新的 15m 多头 FVG。
+ *  3. 位移：扫完后 2–3 根 15m 朝交易方向收盘（多 = 收阳，空 = 收阴），并且留下一个新的同向 15m FVG；没有实体比例和 ATR 门槛（ATR 只记录）。
  *  4. 入场：在新 15m FVG 上沿挂限价；价格直接跳空穿过就按市价成交。约 16 根 15m 没成交或先跌破扫的低点 → 撤单。
  *  5. 止损 = 扫流动性那根影线的最低点再低 1 个价格最小变动单位（Gate order_price_round）；止盈 = 实际成交价 + 3R。空头全部镜像。
  *     不限止损宽度、不限订单数量（视频没有这些限制）。
@@ -14,7 +14,7 @@ import { atrSeries } from "./indicators.ts";
 
 export const H4 = 14_400, M15 = 900;
 export type FvgParams = {
-  zoneLookback4h: number; swingL: number; swingR: number; swingLookback: number; bodyMin: number; dispAtr: number; atrLen: number;
+  zoneLookback4h: number; swingL: number; swingR: number; swingLookback: number; atrLen: number;
   dispMaxBars: number; expiryBars: number; rr: number; scanBars: number; reentryTolPct: number;
 };
 /** 合约价格最小变动单位未知时的兜底：取价格数量级的 1e-4（Gate 主流合约的 tick 大多在这个量级或更细）。 */
@@ -86,15 +86,16 @@ export function detectSweep(b: readonly Bar[], s: number, side: Side, p: Pick<Fv
   return best;
 }
 
-/** 扫完后的位移：返回 {m, fvg, move} 或 "WAIT"（K 线还没走完）或 null（不成立）。
- *  2 根：两根都是同向实体 K、合计 ≥ dispAtr×ATR、留下新 FVG；不够就看第 3 根（3 根都要是实体 K）。 */
-export function detectDisplacement(b: readonly Bar[], s: number, side: Side, atr: number, p: Pick<FvgParams, "bodyMin" | "dispAtr" | "dispMaxBars">):
+/** 扫完后的位移（按视频）：扫流动性那根之后 2–3 根 15m K 线朝交易方向走（每根收盘朝交易方向：多 = 收阳，空 = 收阴），
+ *  并且留下一个同方向的新 15m FVG。没有实体比例门槛，也没有 ATR 门槛（ATR 只记进日志）。
+ *  返回 {m, fvg, move} 或 "WAIT"（K 线还没走完）或 null（不成立）。 */
+export function detectDisplacement(b: readonly Bar[], s: number, side: Side, p: Pick<FvgParams, "dispMaxBars">):
   { m: number; fvg: { lo: number; hi: number }; move: number } | "WAIT" | null {
   const dir = side === "LONG" ? 1 : -1;
-  const strong = (k: number) => { const x = b[k]!, range = x.high - x.low; return range > 0 && dir * (x.close - x.open) > 0 && Math.abs(x.close - x.open) / range >= p.bodyMin; };
+  const strong = (k: number) => { const x = b[k]!; return dir * (x.close - x.open) > 0; };
   const check = (m: number) => {
     const move = dir * (b[s + m]!.close - b[s + 1]!.open);
-    if (!(Number.isFinite(atr) && atr > 0 && move >= p.dispAtr * atr)) return null;
+    if (!(move > 0)) return null;
     for (let j = s + 1; j + 1 <= s + m; j++) {
       const a = b[j - 1]!, c = b[j + 1]!;
       const gap = dir > 0 ? (a.high < c.low ? { lo: a.high, hi: c.low } : null) : (a.low > c.high ? { lo: c.high, hi: a.low } : null);
@@ -128,7 +129,7 @@ export function scanSetups(b: readonly Bar[], zones: readonly Zone4h[], p: FvgPa
       const st: Setup = { id: `${side === "LONG" ? "L" : "S"}${bar.time}`, side, sweepT: bar.time, sweepPx: side === "LONG" ? bar.low : bar.high,
         swingPx: sw.px, swingT: b[sw.idx]!.time, zoneKeys: zs.map(z => z.key), status: "SWEPT", dispBars: null, dispMove: null, atr: Number.isFinite(atr[s]!) ? atr[s]! : null,
         fvg: null, entry: null, stop: null, tpOrig: null, armedT: null, expiresT: null, touchedT: null, brokeT: null, tpHitT: null, lastT: b[b.length - 1]!.time };
-      const d = detectDisplacement(b, s, side, atr[s]!, p);
+      const d = detectDisplacement(b, s, side, p);
       if (d === "WAIT") { out.push(st); continue; }
       if (!d) { st.status = "NO_DISP"; out.push(st); continue; }
       const A = s + d.m, dir = side === "LONG" ? 1 : -1;

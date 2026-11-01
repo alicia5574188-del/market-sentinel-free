@@ -68,14 +68,17 @@ test("分形与扫流动性：左右各 2 根严格更低；影线扫过、实�
   assert.equal(detectSweep(early, 84, "LONG", P)?.px ?? null, null);
 });
 
-test("位移：2–3 根实体 ≥0.6、合计 ≥1×ATR、留下新 15m FVG；不够就不成立；K线没走完 = WAIT", () => {
+test("位移（按视频）：扫后 2–3 根朝交易方向收盘、留下新 15m FVG 就成立；没有实体比例和 ATR 门槛；K线没走完 = WAIT", () => {
   const b = m15Bars();
-  const d = detectDisplacement(b, 84, "LONG", 0.25, P);
+  const d = detectDisplacement(b, 84, "LONG", P);
   assert.ok(d && d !== "WAIT"); assert.equal(d.m, 2); assert.deepEqual(d.fvg, { lo: 101.05, hi: 101.23 });
-  assert.equal(detectDisplacement(b, 84, "LONG", 1.0, P), null, "合计不到 1×ATR 且第 3 根不是阳线");
-  const weak = b.slice(); weak[85] = bar(b[85]!.time, 100.95, 101.4, 100.6, 101.1); // 实体/振幅 < 0.6
-  assert.equal(detectDisplacement(weak, 84, "LONG", 0.25, P), null);
-  assert.equal(detectDisplacement(b.slice(0, 86), 84, "LONG", 0.25, P), "WAIT");
+  const weak = b.slice(); weak[85] = bar(b[85]!.time, 100.95, 101.4, 100.6, 101.0); // 实体/振幅只有 0.06、幅度远小于 1×ATR：以前不算，现在算
+  const dw = detectDisplacement(weak, 84, "LONG", P); assert.ok(dw && dw !== "WAIT", "小实体也算位移"); assert.deepEqual(dw.fvg, { lo: 101.05, hi: 101.23 });
+  const down = b.slice(); down[85] = bar(b[85]!.time, 101.1, 101.4, 100.9, 101.0); // 第 1 根收阴 → 不是朝多头方向走
+  assert.equal(detectDisplacement(down, 84, "LONG", P), null);
+  const nogap = b.slice(); nogap[86] = bar(b[86]!.time, b[86]!.open, b[86]!.high, 101.0, b[86]!.close); nogap[87] = bar(b[87]!.time, b[87]!.open, b[87]!.high, 101.0, b[87]!.open - 0.01); // 没留缺口、第 3 根收阴
+  assert.equal(detectDisplacement(nogap, 84, "LONG", P), null, "没留下同向 15m 缺口就不成立");
+  assert.equal(detectDisplacement(b.slice(0, 86), 84, "LONG", P), "WAIT");
 });
 
 test("扫描：在 4H 缺口里的扫流动性 + 位移 → ARMED，入场 = 15m 缺口上沿，止损 = 扫点影线外 1 tick，原 TP = 3R", () => {
@@ -316,4 +319,22 @@ test("整条链路冒烟（真实 NtsHost + 账户引擎，BTC/ETH K线夹具，
   for (const e of recs.filter(x => x.k === "ENTRY")) assert.ok(e.d.case === "a" || e.d.case === "b");
   const kinds: Record<string, number> = {}; for (const l of recs) kinds[l.k] = (kinds[l.k] ?? 0) + 1;
   console.log(`[fvg-smoke] ${hours}h 请求=${r.stats.requests} 日志=${JSON.stringify(kinds)}（仅冒烟，不代表收益）`);
+});
+
+test("实时行情：情形 a 挂单币、情形 b 已接近入场区的币一律常驻（不受 maxResident 限制）；其余候选最多 maxResident 个", () => {
+  const { e, now } = engine(m15Bars());
+  step(e, initialForward(now), now, 101.5, 101.52);
+  const fakes = Array.from({ length: 20 }, (_, i) => `F${i}_USDT`);
+  e.setUniverse([...fakes, "BTC_USDT", "ETH_USDT"], now);
+  const desk = e.desk as never as { ensure(s: string): { stage: string; setups: unknown[]; px: number | null }; rt: Record<string, { px: number | null; setups: { status: string }[] }> };
+  for (const s of fakes) { const rt = desk.ensure(s); rt.stage = "等回踩15m缺口"; rt.setups = []; }
+  const all = e.desk.allSymbols(); assert.ok(all.includes("BTC_USDT") && all.includes("F19_USDT"));
+  // 情形 a：挂单中
+  let res = e.residentSymbols(); assert.ok(res.includes("BTC_USDT"), "挂单币常驻"); assert.equal(res.length, 1 + DEFAULT_NTS_CONFIG.fvg.maxResident);
+  // 情形 b：形态过期没成交，现价回到原 15m 缺口附近（≤1%）
+  const st = desk.rt.BTC_USDT!.setups.find(x => x.status === "ARMED")!; st.status = "EXPIRED"; desk.rt.BTC_USDT!.px = 101.3;
+  assert.ok(e.desk.bEligible("BTC_USDT", st as never, now)); assert.ok(e.desk.bNear("BTC_USDT", now));
+  res = e.residentSymbols(); assert.ok(res.includes("BTC_USDT"), "情形 b 接近入场区 → 常驻"); assert.equal(res[0], "BTC_USDT");
+  // 离得远就不是“必须常驻”，只按普通候选排
+  desk.rt.BTC_USDT!.px = 120; assert.equal(e.desk.bNear("BTC_USDT", now), false);
 });
