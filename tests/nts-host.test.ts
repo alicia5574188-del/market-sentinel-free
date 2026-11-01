@@ -71,7 +71,9 @@ test("决策函数抛异常 → 不抛进交易周期，返回 null 并记 lastD
   assert.ok(s.host.notes(NOW, null, quotes()).some(n => n.includes("决策异常")));
 });
 test("开关关闭：不再开新仓、不再订阅行情；已有持仓仍照常管理（tick 照跑）", async () => {
-  const s = setup({ reset: "done" }); await s.host.boot(NOW); assert.deepEqual(s.host.symbols().sort(), ["BTC_USDT", "ETH_USDT"]);
+  const s = setup({ reset: "done" }); await s.host.boot(NOW);
+  assert.deepEqual([...s.host.engine.symbols].sort(), ["BTC_USDT", "ETH_USDT"], "FVG 币池（没有币池来源时 = BTC/ETH）");
+  assert.deepEqual(s.host.symbols(), [], "FVG：没有挂单/持仓/候选时不占常驻行情");
   await s.host.setEnabled(false); assert.deepEqual(s.host.symbols(), []); assert.equal(s.host.entriesAllowed, false);
   let seen: { enabled: boolean } | null = null; const orig = s.host.engine.tick.bind(s.host.engine); s.host.engine.tick = (c => { seen = c; return orig(c); }) as never;
   s.host.before(NOW, initialForward(NOW), quotes(), contracts); assert.equal(seen!.enabled, false, "仍然调用 tick 以管理持仓，但不允许开仓");
@@ -83,7 +85,8 @@ test("取数失败/没有令牌：只退避，不抛；有令牌才发请求", a
   s.t.spend = false; await s.host.background(NOW + 1000); assert.equal(s.calls.candles + s.calls.ticker, 0);
   s.t.spend = true; s.t.candleFail = true; await s.host.background(NOW + 2000);
   assert.ok(s.host.engine.restFails >= 1); assert.match(s.host.engine.lastFetchError ?? "", /503/);
-  assert.ok(s.host.notes(NOW + 3000, null, quotes()).length > 0);
+  assert.deepEqual(s.host.notes(NOW + 3000, null, quotes()), [], "预热期（前 15 分钟）取数失败只退避，不报警");
+  assert.ok(s.host.notes(NOW + 16 * 60_000, null, quotes()).some(n => /取数|数据就绪/.test(n)), "预热后仍取不到数才报警");
 });
 test("日志写失败：只记 logError，缓冲保留，下次重试成功；预算不足则本轮跳过", async () => {
   const s = setup({ reset: "done" }); await s.host.boot(NOW); assert.ok(s.host.log.pending > 0);

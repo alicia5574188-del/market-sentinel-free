@@ -53,11 +53,13 @@ test("每日出场：按最有利价追踪；回撤触及追踪价平仓；到�
   const x = dailyExit(o, 100.5, 10_000); assert.equal(x.action, "CLOSE"); if (x.action === "CLOSE") assert.equal(x.code, "TIME");
   const l = dailyExit({ side: "LONG", best: 105, stop: 98, trailDist: 2, exitAt: 1e12 }, 102.9, 0); assert.equal(l.action, "CLOSE");
 });
-test("配置：默认仍是 SMC；strategy/daily 可设置并夹在安全范围", () => {
-  assert.equal(DEFAULT_NTS_CONFIG.strategy, "SMC");
-  assert.equal(normalizeNtsConfig({}).strategy, "SMC");
-  assert.equal(normalizeNtsConfig({ strategy: "nonsense" }).strategy, "SMC");
-  const c = normalizeNtsConfig({ strategy: "DAILY", daily: { sides: "BOTH", lookbackBars: 9999, k: 99, decideUtcHour: 25, holdMs: 1 } });
+test("配置：默认是 FVG；旧存储配置（无 strategyV=3）一律切到 FVG；strategy/daily 可设置并夹在安全范围", () => {
+  assert.equal(DEFAULT_NTS_CONFIG.strategy, "FVG");
+  assert.equal(normalizeNtsConfig({}).strategy, "FVG");
+  assert.equal(normalizeNtsConfig({ strategy: "SMC" }).strategy, "FVG", "旧配置里的 SMC 被切换");
+  assert.equal(normalizeNtsConfig({ strategy: "nonsense", strategyV: 3 } as never).strategy, "FVG");
+  assert.equal(normalizeNtsConfig({ strategy: "SMC", strategyV: 3 } as never).strategy, "SMC");
+  const c = normalizeNtsConfig({ strategy: "DAILY", strategyV: 3, daily: { sides: "BOTH", lookbackBars: 9999, k: 99, decideUtcHour: 25, holdMs: 1 } });
   assert.equal(c.strategy, "DAILY"); assert.equal(c.daily.sides, "BOTH");
   assert.ok(c.daily.lookbackBars <= 250 && c.daily.k <= 5 && c.daily.decideUtcHour === 1 && c.daily.holdMs >= 15 * 60_000);
 });

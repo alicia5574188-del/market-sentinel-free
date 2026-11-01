@@ -27,6 +27,10 @@ export type HostDeps = {
   reserve: (rows: number, tag: string) => { finish: (ok: boolean) => void } | null;
   /** 清掉 DO 内存里的旧日志状态（旅程记录/游标）。 */
   resetMemory: () => void;
+  /** FVG 币池来源：已有的 Gate 合约目录（每 10 分钟刷新，按 24h 成交额排序）。只读内存，不发请求。 */
+  universe?: () => string[];
+  /** 合约价格最小变动单位（已有合约目录里的 Gate order_price_round，不新增请求）。 */
+  ticks?: () => Record<string, number>;
   now?: () => number;
 };
 
@@ -55,6 +59,7 @@ export class NtsHost {
   private hotClearApplied = false;
   hotClearDone = false;
   private resetMemoryDone = false;
+  private universeAt = 0;
 
   private deps: HostDeps;
   constructor(deps: HostDeps) { this.deps = deps; }
@@ -72,14 +77,29 @@ export class NtsHost {
       this.hotClearDone = this.reset?.hotCleared === true;
       this.ready = true; this.bootAt = now; this.bootError = null; this.lastStateWriteAt = now;
       // 第一次启动：写入一条系统记录（id 固定，重启不会重复）
-      this.log.append({ id: "sys:boot:" + this.engine.s.startedAt, k: "SYSTEM", t: now, d: { text: "交易系统已启动（纸面账户）", version: NTS_VERSION, enabled: this.cfg.enabled, liveTouched: false } }, now);
+      this.log.append({ id: "sys:boot:" + this.engine.s.startedAt, k: "SYSTEM", t: now, d: { text: "交易系统已启动（纸面账户）", version: NTS_VERSION, strategy: this.cfg.strategy, enabled: this.cfg.enabled, liveTouched: false } }, now);
+      if (st && st.version !== NTS_VERSION) {
+        // 换系统：记一条固定 id 的系统记录（复盘时能看到从哪一刻起换成 FVG），旧持仓按原规则管到平仓。
+        this.log.append({ id: `sys:engine:${NTS_VERSION}`, k: "SYSTEM", t: now, d: { text: `交易系统切换：${st.version ?? "?"} → ${NTS_VERSION}（${this.cfg.strategy}）`, from: st.version ?? null, to: NTS_VERSION, strategy: this.cfg.strategy,
+          legacyOpen: this.engine.s.open ? { tid: this.engine.s.open.tid, sym: this.engine.s.open.sym } : null } }, now);
+        this.engine.s.version = NTS_VERSION; // 随下一次（≤1 小时）状态写入保存，不额外写
+      }
     } catch (e) { this.bootError = "NTS_BOOT:" + safe(e); this.bootRetryAt = now + 30_000; }
     return this.ready;
   }
 
   get enabled() { return this.ready && this.cfg.enabled; }
-  /** 需要常驻行情的合约。 */
-  symbols(): string[] { return this.enabled ? [...this.cfg.symbols] : []; }
+  /** 需要常驻行情的合约：FVG = 持仓币 + 挂单/情形 b 候选/等位移的币（≤ fvg.maxResident）；旧系统 = BTC/ETH。 */
+  symbols(): string[] {
+    if (!this.ready) return [];
+    try { return this.enabled ? this.engine.residentSymbols() : this.engine.isFvg ? [...new Set(this.engine.desk.st.opens.map(o => o.sym))] : []; } catch { return []; }
+  }
+  /** 刷新币池（内存，每分钟一次）。 */
+  syncUniverse(now: number) {
+    if (!this.ready || !this.deps.universe || now - this.universeAt < 60_000) return;
+    this.universeAt = now;
+    try { const list = this.deps.universe(); if (list.length) this.engine.setUniverse(list, now, this.deps.ticks?.()); } catch (e) { this.engine.lastDecisionError = "NTS_UNIVERSE:" + safe(e); }
+  }
   /** 日志重置没完成之前不开新仓（避免新单的路径数据被清除动作误删）。 */
   get resetDone() { return this.reset?.phase === "done"; }
   get entriesAllowed() { return this.enabled && this.resetDone; }
@@ -101,7 +121,7 @@ export class NtsHost {
     let draft: ForwardState | null = null;
     try {
       const actions: Action[] = this.engine.tick({ now, forward: previous, quotes, contracts, enabled: this.entriesAllowed });
-      if (this.hotClearRequested && !this.hotClearDone && previous.positions.length === 0 && this.engine.s.open == null) {
+      if (this.hotClearRequested && !this.hotClearDone && previous.positions.length === 0 && !this.engine.hasOpen) {
         draft = structuredClone(previous);
         clearLogOnlyForward(draft, now);
         this.deps.resetMemory();
@@ -157,6 +177,7 @@ export class NtsHost {
   background(now: number): Promise<void> | null {
     if (!this.ready) { if (now >= this.bootRetryAt) return this.boot(now).then(() => undefined); return null; }
     const tasks: Promise<void>[] = [];
+    this.syncUniverse(now);
     if (this.enabled && !this.fetching) {
       const job = this.engine.nextJob(now, true);
       if (job) {
@@ -233,7 +254,8 @@ export class NtsHost {
     if (this.reset && this.reset.phase !== "done") out.push(this.reset.lastError ? `旧日志清除未完成，暂不开新仓：${this.reset.lastError}` : "旧日志备份/清除进行中，暂不开新仓");
     if (!this.reset) out.push("旧日志备份/清除尚未开始，暂不开新仓");
     if (this.engine?.lastDecisionError) out.push(`决策异常：${this.engine.lastDecisionError}`);
-    if (this.cfg.enabled) {
+    if (this.engine?.isFvg && (this.cfg.enabled || this.engine.hasOpen)) out.push(...this.fvgNotes(now, quotes));
+    else if (this.cfg.enabled) {
       for (const sym of this.cfg.symbols) {
         const h = this.engine.dataHealth(sym, now);
         if (!h.ok) out.push(`${sym} 数据：${h.notes.join("、")}`);
@@ -241,6 +263,20 @@ export class NtsHost {
       }
     }
     void forward;
+    return out;
+  }
+  /** FVG 健康：只在真有问题时提示（币池里没有一个币数据就绪、持仓币/挂单币数据过期、持仓币行情断、取数长时间无成功）。冷币偶尔慢一点不算故障。 */
+  private fvgNotes(now: number, quotes: Record<string, Quote>): string[] {
+    const out: string[] = [], e = this.engine, warm = now - this.bootAt > 15 * 60_000;
+    const coins = e.desk.allSymbols();
+    if (warm && coins.length && !coins.some(sym => e.dataHealth(sym, now).ok)) out.push(`FVG 币池 ${coins.length} 个币暂无一个数据就绪`);
+    const held = new Set(e.desk.st.opens.map(o => o.sym)), armed = coins.filter(sym => e.desk.rt[sym]?.stage === "等回踩15m缺口");
+    for (const sym of new Set([...held, ...armed])) {
+      const h = e.dataHealth(sym, now);
+      if (warm && !h.ok) out.push(`${sym} 数据：${h.notes.join("、")}`);
+    }
+    for (const sym of held) if (!quotes[sym]?.fresh) out.push(`${sym} 持仓行情不新鲜`);
+    if (warm && e.restRequests > 0 && now - e.lastFetchAt > 30 * 60_000) out.push(`K线取数 ${Math.round((now - e.lastFetchAt) / 60_000)} 分钟没有成功${e.lastFetchError ? "：" + e.lastFetchError : ""}`);
     return out;
   }
   healthView(now: number, forward: ForwardState | null, quotes: Record<string, Quote>) {
@@ -251,6 +287,12 @@ export class NtsHost {
   /** 公开健康页用：每个币种的K线根数、衍生品快照年龄、最近一次决策时间（很小，不含价格细节）。 */
   dataView(now: number) {
     const out: Record<string, unknown> = {};
+    if (this.engine.isFvg) {
+      const coins = this.engine.desk.allSymbols(), plan = this.engine.desk.fetchPlan();
+      const per: Record<string, unknown> = {};
+      for (const sym of coins) { const h = this.engine.dataHealth(sym, now); per[sym] = { ok: h.ok, bars: Object.fromEntries(Object.entries(h.bars).map(([tf, b]) => [tf, b.n])), stage: this.engine.desk.rt[sym]?.stage ?? null }; }
+      return { engine: "FVG", universe: coins.length, ready: coins.filter(sym => (per[sym] as { ok: boolean }).ok).length, hot: plan.hot, estReqPerHour: plan.estPerHour, coins: per };
+    }
     for (const sym of this.cfg.symbols) {
       const h = this.engine.dataHealth(sym, now), dv = this.engine.s.deriv[sym], last = dv?.[dv.length - 1], ev = this.engine.s.lastEval[sym];
       out[sym] = { ok: h.ok, bars: Object.fromEntries(Object.entries(h.bars).map(([tf, b]) => [tf, b.n])), derivAgeMin: last ? Math.round((now - last.t) / 60_000) : null,
@@ -260,8 +302,8 @@ export class NtsHost {
   }
   /** `account`：账户部分（每分钟权益、回撤、对账、重置、实盘成交），排在日志记录之后。 */
   logStream(account?: () => Promise<Record<string, unknown>[]>): ReadableStream<Uint8Array> {
-    return logExportStream(this.deps.storage, () => this.flushLog(this.now()), { kind: "nts-run-log", version: "nts-v1", at: this.now(), enabled: this.cfg.enabled,
-      note: "每行一条 JSON；ENTRY=进场决策全文，TRACE=进场后走势，EXIT/POST_EXIT=出场与出场后走势，NO_TRADE=抽样的不做原因；" +
+    return logExportStream(this.deps.storage, () => this.flushLog(this.now()), { kind: "nts-run-log", version: NTS_VERSION, strategy: this.cfg.strategy, at: this.now(), enabled: this.cfg.enabled,
+      note: "每行一条 JSON；SETUP=FVG 系统的 4H 缺口/15m 扫流动性/位移/挂单/撤单/情形a·b，ENTRY=进场决策全文，TRACE=进场后走势，EXIT/POST_EXIT=出场与出场后走势，NO_TRADE=抽样的不做原因；" +
         "末尾 ACCOUNT=账户对账/回撤/重置记录/实盘成交，EQUITY_MINUTES=每分钟权益（按天分行）" }, 8, () => this.log.peek(), account);
   }
   backupStream(): ReadableStream<Uint8Array> | null {

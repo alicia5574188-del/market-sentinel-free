@@ -45,7 +45,7 @@ async function replay(label: string, config?: Record<string, unknown>) {
 }
 
 test("BTC/ETH 历史K线回放（约 43 天，默认参数，只看流程与进场频率、不评价盈亏）：不抛错、最多 1 个仓位、单笔亏损有界、日志有界、频率在目标带内", { timeout: 600_000 }, async () => {
-  const { entries, exits, r } = await replay("默认");
+  const { entries, exits, r } = await replay("默认", { strategy: "SMC", strategyV: 3 });
   const days = (r.now() - (loadKlines().first15 + 140 * 900) * 1000) / 86_400_000;
   // SMC 订单块系统只在“首次回到未被测试过的订单块 + 15m 反转”时进场，天然比旧系统稀疏：
   // 下限 0.2/天（43 天里至少 ~9 笔，证明不是“一笔都不进”），上限 3/天防止失控。
@@ -66,7 +66,7 @@ test("BTC/ETH 历史K线回放（约 43 天，默认参数，只看流程与进�
 });
 
 test("BTC/ETH 历史K线回放（放宽触发门槛的管线压力测试）：整条管线走通且账户对账、日志完整", { timeout: 600_000 }, async () => {
-  const { entries, exits, r, recs } = await replay("放宽", { smc: { rrMin: 1.0, maxPriorVisits: 1 } });
+  const { entries, exits, r, recs } = await replay("放宽", { strategy: "SMC", strategyV: 3, smc: { rrMin: 1.0, maxPriorVisits: 1 } });
   assert.ok(entries.length >= 1, "放宽后应至少触发 1 次进场，用于验证管线");
   const first = entries[0]!, tid = (first as { tid?: string }).tid;
   assert.ok(recs.some(l => l.k === "TRACE" && l.tid === tid), "进场后有走势追踪记录");

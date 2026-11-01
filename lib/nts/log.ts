@@ -9,7 +9,7 @@
 import type { NtsConfig } from "./config.ts";
 
 export const NTS_LOG_PREFIX = "nts:log:v1:";
-export type NtsRecKind = "ENTRY" | "NO_TRADE" | "ADD" | "ADD_SKIP" | "TRACE" | "EXIT" | "POST_EXIT" | "SYSTEM" | "DATA";
+export type NtsRecKind = "ENTRY" | "NO_TRADE" | "ADD" | "ADD_SKIP" | "TRACE" | "EXIT" | "POST_EXIT" | "SYSTEM" | "DATA" | "SETUP";
 export type NtsRec = { id: string; k: NtsRecKind; t: number; sym?: string; tid?: string; d: Record<string, unknown> };
 export type NtsChunk = { v: 1; recs: NtsRec[] };
 

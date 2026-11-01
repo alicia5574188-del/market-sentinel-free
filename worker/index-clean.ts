@@ -497,6 +497,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       return{funding:num(row.funding_rate),oi:num(row.total_size),mark:num(row.mark_price),index:num(row.index_price)};
     },
     spend:now=>this.gateRestThrottle.spend(now),
+    // FVG coin universe: the existing Gate contract catalog (refreshed every 10 min, ranked by 24h volume). In-memory, no request.
+    universe:()=>[...this.contractCatalog.keys()],
+    ticks:()=>Object.fromEntries([...this.contractCatalog].map(([symbol,row])=>[symbol,row.tickSize])),
     reserve:(rows,tag)=>this.reserveNonAlarmWrites(rows,256,tag),
     resetMemory:()=>{
       const started=this.forwardState?.startedAt??0;
@@ -1398,7 +1401,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // Trading system (paper): decide on the untouched state, apply on a copy, so `previous` stays the diff base.
       let ntsDraft:ForwardState|null=null;
       if(engineIn===previous&&stripCoreResetDone(previous)){
-        ntsDraft=this.nts.before(now,previous,executionQuotes,this.regimeContracts());
+        ntsDraft=this.nts.before(now,previous,executionQuotes,this.regimeContracts(this.nts.symbols()));
         if(ntsDraft){engineIn=ntsDraft;ntsChanged=true;}
       }
       const next = advanceForward({ state: engineIn, now, quotes:executionQuotes,contracts:this.regimeContracts(),minutePaths:this.forwardMinutePaths() });
@@ -3331,7 +3334,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const urgentSymbols=this.forwardUrgentSymbols();
     // Realtime Gate data is a scarce execution resource, never a scanner.
     // Keep only actual exposure and currently executable candidates resident.
-    // The trading system only ever watches BTC and ETH perpetuals; they are resident while it is on.
+    // The trading system (FVG) keeps only held coins and coins with a live setup (armed limit / case-b candidate / sweep waiting
+    // for displacement) resident, capped at fvg.maxResident (12) inside FORWARD_EXECUTION_BBO_CAP. The rest of its universe is candles only.
     const next=[...new Set([...protectedSymbols,...this.nts.symbols(),...urgentSymbols])].slice(0,FORWARD_EXECUTION_BBO_CAP);
     if(next.length!==this.runtime.symbols.length||next.some((symbol,index)=>symbol!==this.runtime.symbols[index]))
       this.applyRealtimeSymbols(next);

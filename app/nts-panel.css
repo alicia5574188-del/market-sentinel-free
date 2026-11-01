@@ -65,3 +65,7 @@
 .nts-tag.up,.nts-kind.up{color:#9fe3c4}.nts-tag.down{color:#ffbcb9}
 .nts-links{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px}
 .nts-links a{color:#96c7ff;min-height:32px;display:inline-flex;align-items:center}
+.nts-stagebar{display:flex;flex-wrap:wrap;gap:6px}
+.nts-tag.info{background:#1f3350;color:#a9cdfb}.nts-tag.warm{background:#30291a;color:#e7c26b}
+.nts-pos-top .nts-tag{font-size:12px}
+.nts-more{justify-self:start;min-height:36px;border:1px solid #4a6280;background:#1b293a;color:#96c7ff;border-radius:10px;padding:4px 12px;font-size:13px}

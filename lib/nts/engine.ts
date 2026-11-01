@@ -2,8 +2,11 @@
  * 新交易系统引擎（纸面账户）。纯逻辑 + 内存状态，不直接碰 Cloudflare、Gate、D1。
  * 宿主（Durable Object）负责：取数（fetchJob）、把引擎给出的动作应用到纸面账户（execute）、持久化 `serialize()` 和日志块。
  *
- * 决策 = 视频的 SMC 订单块方法（smc.ts）：订单块 + 离开后第一次回踩 + 15m 反转信号；4H 结构定顺势/逆势；止损在区外；TP1 = 最近对向订单块/流动性；
- * 价格走到区的均衡位且结构仍成立时补一次 +3%，补仓后回到保本价离场。同一时刻全账户只持一笔（BTC/ETH 合计）。
+ * 决策（默认 strategy="FVG"，2026-11-01 起）= 视频的「FVG 扫流动性系统」（fvg.ts 纯规则 + fvg-desk.ts 多币池/调度/开平仓）：
+ *   4H FVG 区内，15m 扫掉前一个 2 根分形低/高点（实体收回），随后 2–3 根强位移（实体/振幅 ≥0.6、合计 ≥1×ATR14）留下 15m FVG →
+ *   在 15m FVG 上沿（空单下沿）挂限价，16 根内有效，先破扫点撤单；止损 = 扫点外 1 tick；止盈 = 实际成交价起 3R。
+ *   严格按视频：不限订单数（同一个币可多笔，同一形态只开一次）、不限止损宽度、没有当日停开；模拟盘可用保证金不够时记“跳过”，不缩仓。
+ * 旧 SMC 订单块（smc.ts）只用来把切换前已开的那一笔按原规则（smcExit）管到平仓，不再开新单。
  *
  * 每个 2 秒 tick：
  *   tick()   → 只读判断，返回要做的动作（开仓/补仓/平仓）。没有新 15m K 线、没有持仓时几乎零开销。
@@ -19,6 +22,7 @@ import { dailyExit, evaluateDailyEntry, isDailyDecisionBar, type DailyPlan } fro
 import type { NtsLog, NtsRec } from "./log.ts";
 import { dirOf, TF_SEC, type Bar, type Side, type Tf } from "./types.ts";
 import { r } from "./indicators.ts";
+import { FvgDesk, normalizeFvgState, type FvgAction, type FvgOpen, type FvgState } from "./fvg-desk.ts";
 
 const HOUR = 3_600_000, MIN = 60_000, ALL_TF: Tf[] = ["15m", "1h", "4h", "1d"];
 export type NtsSymbol = "BTC_USDT" | "ETH_USDT";
@@ -48,18 +52,21 @@ export type NtsState = {
   v: 1; version: string; open: NtsOpen | null; day: Period; month: Period; recent: Brief[]; lastExit: ExitSummary | null; post: PostExit[];
   decided: Record<string, number>; noTradeSlot: Record<string, number>; handled: string[];
   deriv: Record<string, DerivSample[]>; lastEval: Record<string, LastEval>; startedAt: number;
+  /** FVG 系统：持仓（可多笔）、已成交形态、已用过的 4H 缺口、当前币池。 */
+  fvg?: FvgState;
 };
 export type FetchJob = { sym: string; kind: Tf | "ticker" };
 export type Action =
   | { type: "OPEN"; sym: string; decision: Extract<SmcDecision, { action: "ENTER" }>; barTime: number; snapshot: Record<string, unknown> }
   | { type: "ADD"; check: { ok: boolean; reason: string; price: number }; barTime: number }
   | { type: "CLOSE"; code: string; reason: string; stage: string }
-  | { type: "OPEN_DAILY"; sym: string; plan: DailyPlan; barTime: number; snapshot: Record<string, unknown> };
+  | { type: "OPEN_DAILY"; sym: string; plan: DailyPlan; barTime: number; snapshot: Record<string, unknown> }
+  | { type: "FVG"; a: FvgAction };
 type SymData = { bars: Partial<Record<Tf, Bar[]>>; fetchedAt: Partial<Record<Tf, number>>; failedAt: Partial<Record<Tf, number>>; fails: number; tickerAt: number; tickerFailedAt: number };
 
 const emptyPeriod = (key: string, eq: number): Period => ({ key, startEquity: eq, pnl: 0, trades: 0, wins: 0, r: 0 });
 export const freshNtsState = (now: number): NtsState => ({ v: 1, version: NTS_VERSION, open: null, day: emptyPeriod("", 0), month: emptyPeriod("", 0), recent: [], lastExit: null, post: [],
-  decided: {}, noTradeSlot: {}, handled: [], deriv: {}, lastEval: {}, startedAt: now });
+  decided: {}, noTradeSlot: {}, handled: [], deriv: {}, lastEval: {}, startedAt: now, fvg: normalizeFvgState(null) });
 
 /** 重启后等数据补齐的最长时间（从 15m 收盘算起）；超过就按数据不足决策并记录。 */
 export const WARMUP_WAIT_MS = 8 * 60_000;
@@ -73,16 +80,33 @@ export class NtsEngine {
   restWindow: number[] = [];
   lastDecisionError: string | null = null;
   log: NtsLog;
+  desk: FvgDesk;
   constructor(cfg: Partial<NtsConfig> | NtsConfig | null | undefined, log: NtsLog, saved?: NtsState | null, now = Date.now()) {
     this.log = log;
     this.cfg = normalizeNtsConfig(cfg as never);
     this.s = saved && saved.v === 1 ? { ...freshNtsState(now), ...saved } : freshNtsState(now);
     this.tokens = 1; this.tokenAt = now;
     for (const sym of this.cfg.symbols) this.data[sym] = { bars: {}, fetchedAt: {}, failedAt: {}, fails: 0, tickerAt: 0, tickerFailedAt: 0 };
+    this.s.fvg = normalizeFvgState(this.s.fvg);
+    const getCfg = () => this.cfg;
+    this.desk = new FvgDesk({ get cfg() { return getCfg(); }, data: this.data as never, state: () => (this.s.fvg ??= normalizeFvgState(null)),
+      append: (rec, t) => this.safeAppend(rec, t), brief: (t, sym, kind, text) => this.brief(t, sym, kind, text), version: NTS_VERSION });
   }
   setConfig(cfg: Partial<NtsConfig> | NtsConfig) { this.cfg = normalizeNtsConfig(cfg as never); }
   serialize(): NtsState { return this.s; }
-  get symbols() { return this.cfg.symbols as readonly string[]; }
+  get isFvg() { return this.cfg.strategy === "FVG"; }
+  /** 决策盯的币：FVG = 动态币池（+持仓币）；旧系统 = BTC/ETH。 */
+  get symbols() { return this.isFvg ? this.desk.allSymbols() as readonly string[] : this.cfg.symbols as readonly string[]; }
+  private get fvgOpens(): FvgOpen[] { return (this.s.fvg ??= normalizeFvgState(null)).opens; }
+  /** 需要常驻实时行情的币（≤ fvg.maxResident + 旧持仓）。旧系统 = BTC/ETH。 */
+  residentSymbols(): string[] {
+    if (!this.isFvg) return [...this.cfg.symbols];
+    return [...new Set([...(this.s.open ? [this.s.open.sym] : []), ...this.desk.residentSymbols()])];
+  }
+  /** 宿主传入按 24h 成交额排序的合约（已有目录）。 */
+  setUniverse(ranked: readonly string[], now: number, ticks?: Record<string, number>) { try { if (this.isFvg) this.desk.setTicks(ticks); return this.isFvg ? this.desk.setUniverse(ranked, now) : false; } catch (e) { this.lastDecisionError = String(e).slice(0, 160); return false; } }
+  /** NTS 是否还有任何持仓（旧单或 FVG 单）。 */
+  get hasOpen() { return this.s.open != null || this.fvgOpens.length > 0; }
 
   // ---------------------------------------------------------------------------------------------------------------
   // 取数：自己的令牌桶（≤ restPerSec），一次最多给宿主一个任务。
@@ -95,6 +119,12 @@ export class NtsEngine {
   nextJob(now: number, wantData: boolean): FetchJob | null {
     if (!wantData) return null;
     this.refill(now); if (this.tokens < 1) return null;
+    if (this.isFvg) {
+      const job = this.desk.pickJob(now, d => this.backoff(d as SymData));
+      if (!job) return null;
+      this.tokens -= 1; this.restRequests++; this.restWindow.push(now); this.restWindow = this.restWindow.filter(t => now - t < HOUR);
+      return job;
+    }
     let best: { job: FetchJob; pri: number } | null = null;
     for (const sym of this.symbols) {
       const d = this.data[sym]!;
@@ -137,6 +167,7 @@ export class NtsEngine {
   // 数据体检
   // ---------------------------------------------------------------------------------------------------------------
   dataHealth(sym: string, now: number) {
+    if (this.isFvg) return this.desk.dataHealth(sym, now);
     const d = this.data[sym], notes: string[] = [];
     if (!d) return { ok: false, notes: ["未订阅"], bars: {} as Record<string, { n: number; ageMin: number | null }> };
     const bars: Record<string, { n: number; ageMin: number | null }> = {};
@@ -181,7 +212,9 @@ export class NtsEngine {
     if (i >= 0 && this.s.recent[i]!.kind === "不做" && cls(this.s.recent[i]!.text) === cls(text)) this.s.recent.splice(i, 1);
     this.brief(now, sym, "不做", text);
   }
-  private brief(now: number, sym: string, kind: string, text: string) { this.s.recent.unshift({ at: now, sym, kind, text: text.slice(0, 200) }); if (this.s.recent.length > 14) this.s.recent.length = 14; }
+  private brief(now: number, sym: string, kind: string, text: string) {
+    if (this.isFvg && this.s.recent.some(x => x.sym === sym && x.text === text.slice(0, 200))) return; // FVG：重启重扫同一形态不重复
+    this.s.recent.unshift({ at: now, sym, kind, text: text.slice(0, 200) }); if (this.s.recent.length > 14) this.s.recent.length = 14; }
 
   // ---------------------------------------------------------------------------------------------------------------
   // tick：只读判断
@@ -193,7 +226,24 @@ export class NtsEngine {
       this.sampleOpen(c);
       this.samplePost(c);
       const open = this.s.open;
-      if (open) {
+      if (this.isFvg) {
+        this.sampleFvg(c);
+        if (open) this.manageOpen(open, c, actions); // 切换前的旧 SMC 单：按原规则管到平仓
+        for (const a of this.desk.tick({ now, forward, quotes: c.quotes, enabled: c.enabled })) actions.push({ type: "FVG", a });
+        return actions;
+      }
+      if (open) { this.manageOpen(open, c, actions); return actions; }
+      if (!c.enabled) return actions;
+      const bk = this.breaker(now, forward.balance);
+      if (forward.positions.some(t => t.status === "OPEN")) return actions;
+      this.decideAll(c, bk, actions);
+    } catch (error) { this.lastDecisionError = error instanceof Error ? error.message.slice(0, 160) : String(error).slice(0, 160); }
+    return actions;
+  }
+  private manageOpen(open: NtsOpen, c: { now: number; forward: ForwardState; quotes: Record<string, Quote> }, actions: Action[]) {
+    const { now, forward } = c;
+    {
+      {
         const t = forward.positions.find(x => x.id === open.tid && x.status === "OPEN");
         const q = c.quotes[open.sym];
         if (t && q && q.fresh) {
@@ -202,12 +252,12 @@ export class NtsEngine {
             const ex = dailyExit({ side: open.side, best: open.daily.best, stop: open.stop, trailDist: open.daily.trailDist, exitAt: open.daily.exitAt }, px, now);
             open.daily.best = ex.best; open.daily.trail = ex.trail; open.stage = ex.trail != null && ex.trail !== open.stop ? `追踪止损 ${r(ex.trail, 2)}` : "初始止损";
             if (ex.action === "CLOSE") actions.push({ type: "CLOSE", code: ex.code, reason: ex.reason, stage: open.stage });
-            return actions;
+            return;
           }
           const so = { side: open.side, added: open.addedAt != null, addPrice: open.plannedAdd, zone: open.zone, mode: open.mode, target: open.target, breakeven: open.geo.breakeven };
           const ex = smcExit(so, px);
           open.stage = ex.stage;
-          if (ex.action === "CLOSE") { actions.push({ type: "CLOSE", code: ex.code, reason: ex.reason, stage: ex.stage }); return actions; }
+          if (ex.action === "CLOSE") { actions.push({ type: "CLOSE", code: ex.code, reason: ex.reason, stage: ex.stage }); return; }
           // 补仓：每个 tick 看价格是否到了区的均衡位（4H 结构按 4H K线缓存）
           if (!open.addedAt && open.plannedAdd != null) {
             const bars = this.bars(open.sym), b15 = bars["15m"] ?? [], b4 = bars["4h"], bt = b15[b15.length - 1]?.time ?? 0, t4 = b4?.[b4.length - 1]?.time ?? 0;
@@ -218,11 +268,13 @@ export class NtsEngine {
             else if (chk.reason !== "未到补仓位") { this.logAddSkip(open, chk.reason, bt, now); open.plannedAdd = null; }
           }
         }
-        return actions;
       }
-      if (!c.enabled) return actions;
-      const bk = this.breaker(now, forward.balance);
-      if (forward.positions.some(t => t.status === "OPEN")) return actions;
+    }
+    void now;
+  }
+  private decideAll(c: { now: number; forward: ForwardState; quotes: Record<string, Quote>; contracts: Record<string, Contract> }, bk: BreakerState, actions: Action[]) {
+    const { now, forward } = c;
+    {
       const cands: Action[] = [];
       for (const sym of this.symbols) {
         const d = this.data[sym], b15 = d?.bars["15m"], bar = b15?.[b15.length - 1];
@@ -248,8 +300,7 @@ export class NtsEngine {
           else if (o.type === "OPEN_DAILY") this.logDailyVetoed(o.plan, o.barTime, now, "BTC/ETH 同时出信号，按顺序只做第一个（同一时刻全账户只持一笔）");
         }
       }
-    } catch (error) { this.lastDecisionError = error instanceof Error ? error.message.slice(0, 160) : String(error).slice(0, 160); }
-    return actions;
+    }
   }
 
   private bars(sym: string): Bars { return this.data[sym]?.bars ?? {}; }
@@ -347,7 +398,11 @@ export class NtsEngine {
     let changed = false;
     for (const a of actions) {
       try {
-        if (a.type === "OPEN") changed = this.doOpen(draft, a, c) || changed;
+        if (a.type === "FVG") {
+          if (a.a.type === "OPEN_FVG") changed = this.desk.open(draft, a.a, c) || changed;
+          else if (this.desk.close(draft, a.a, c)) { changed = true; this.reconcileFvg(draft, c.now, { tid: a.a.tid, code: a.a.code, reason: a.a.reason }); }
+        }
+        else if (a.type === "OPEN") changed = this.doOpen(draft, a, c) || changed;
         else if (a.type === "OPEN_DAILY") changed = this.doOpenDaily(draft, a, c) || changed;
         else if (a.type === "ADD") changed = this.doAdd(draft, a, c) || changed;
         else changed = this.doClose(draft, a, c) || changed;
@@ -429,6 +484,41 @@ export class NtsEngine {
   // reconcile：账户已把 NTS 单平掉（止损/强平/我们自己平的），补记出场并更新统计
   // ---------------------------------------------------------------------------------------------------------------
   reconcile(forward: ForwardState, quotes: Record<string, Quote>, now: number, own?: { code: string; reason: string }): boolean {
+    const f = this.reconcileFvg(forward, now);
+    return this.reconcileLegacy(forward, quotes, now, own) || f;
+  }
+  /** FVG 持仓：账户已平（止损/强平/我们自己的 3R 止盈）→ 补记出场、更新统计。 */
+  reconcileFvg(forward: ForwardState, now: number, own?: { tid: string; code: string; reason: string }): boolean {
+    const opens = this.fvgOpens; if (!opens.length) return false;
+    let changed = false;
+    for (const o of [...opens]) {
+      if (forward.positions.some(x => x.id === o.tid && x.status === "OPEN")) continue;
+      const mine = own && own.tid === o.tid ? own : undefined;
+      const t = forward.history.find(x => x.id === o.tid) as Trade | undefined;
+      if (!t && !mine && now - o.openedAt < 60_000) continue;
+      const exitAt = t?.closedAt ?? now, exitPx = t?.exitPrice ?? o.fill;
+      const net = t?.netPnl ?? 0, rr = o.oneR > 0 ? net / o.oneR : 0;
+      const raw = t?.exitReason ?? "";
+      const code = mine?.code ?? (raw.includes("NTS_TARGET") ? "TARGET" : raw.includes("STOP") ? "HARD_STOP" : raw.toUpperCase().includes("LIQ") ? "LIQUIDATION" : raw || "UNKNOWN");
+      const reason = mine?.reason ?? (code === "TARGET" ? `到 ${this.cfg.fvg.rr}R 止盈` : code === "HARD_STOP" ? "触及止损（扫点外）" : code === "LIQUIDATION" ? "触发强平" : `账户引擎平仓：${raw || "未知"}`);
+      if (!this.s.handled.includes(o.tid)) {
+        this.s.handled.push(o.tid); if (this.s.handled.length > 40) this.s.handled.shift();
+        if (t) for (const p of [this.s.day, this.s.month]) { p.pnl += net; p.trades++; if (net > 0) p.wins++; p.r += rr; }
+        const sum: ExitSummary = { tid: o.tid, sym: o.sym, side: o.side, at: exitAt, reason, code, netPnl: r(net, 4)!, r: r(rr, 2)!, holdMin: Math.round((exitAt - o.openedAt) / MIN), mfePct: r(o.mfePct, 4)!, maePct: r(o.maePct, 4)! };
+        this.s.lastExit = sum;
+        this.safeAppend({ id: `exit:${o.tid}`, k: "EXIT", t: now, sym: o.sym, tid: o.tid, d: {
+          ...sum, strategy: "FVG", case: o.case, setup: o.setupId, fillMode: o.fillMode, exitPx, entry: o.fill, stop: o.stop, tp: o.tp, zones: o.zoneKeys, fvg15: o.fvg,
+          gross: t?.grossPnl ?? null, fees: r((t?.entryFee ?? 0) + (t?.exitFee ?? 0), 4), mfeR: r(o.mfeR, 2), maeR: r(o.maeR, 2), oneR: r(o.oneR, 2), balanceAfter: r(forward.balance, 2), version: NTS_VERSION } }, now);
+        this.brief(now, o.sym, "出场", `情形${o.case} ${reason}，净 ${net >= 0 ? "+" : ""}${net.toFixed(2)}U（${rr.toFixed(2)}R）`);
+        this.s.post.push({ tid: o.tid, sym: o.sym, side: o.side, exitAt, exitPx, done: [], best: 0, worst: 0 });
+        if (this.s.post.length > 6) this.s.post.shift();
+      }
+      opens.splice(opens.indexOf(o), 1);
+      changed = true;
+    }
+    return changed;
+  }
+  private reconcileLegacy(forward: ForwardState, quotes: Record<string, Quote>, now: number, own?: { code: string; reason: string }): boolean {
     const o = this.s.open; if (!o) return false;
     if (forward.positions.some(x => x.id === o.tid && x.status === "OPEN")) return false;
     const t = forward.history.find(x => x.id === o.tid) as Trade | undefined;
@@ -479,6 +569,28 @@ export class NtsEngine {
         toStopPct: r(stopDist, 5), toBePct: o.addedAt ? r(beDist, 5) : null, toTargetPct: o.addedAt ? null : r(d * (o.target - f.px) / f.px, 5), stage: o.stage, ageMin: Math.round((c.now - o.openedAt) / MIN) } }, c.now);
     }
   }
+  /** FVG 持仓：最有利/最不利、每 traceEveryMs 一条 TRACE（与旧单同一频率）。 */
+  private sampleFvg(c: { now: number; forward: ForwardState; quotes: Record<string, Quote> }) {
+    for (const o of this.fvgOpens) {
+      const t = c.forward.positions.find(x => x.id === o.tid && x.status === "OPEN"), q = c.quotes[o.sym];
+      if (!t || !q || !q.fresh) continue;
+      const f = this.floatingFvg(o, q, t), d = dirOf(o.side);
+      if (f.pct > o.mfePct) o.mfePct = f.pct; if (f.pct < o.maePct) o.maePct = f.pct;
+      if (f.r > o.mfeR) o.mfeR = f.r; if (f.r < o.maeR) o.maeR = f.r;
+      if (c.now - o.lastTraceAt >= this.cfg.log.traceEveryMs) {
+        o.lastTraceAt = c.now;
+        const slot = Math.floor(c.now / this.cfg.log.traceEveryMs);
+        this.safeAppend({ id: `tr:${o.tid}:${slot}`, k: "TRACE", t: c.now, sym: o.sym, tid: o.tid, d: {
+          px: f.px, pct: r(f.pct, 5), r: r(f.r, 3), mfePct: r(o.mfePct, 5), maePct: r(o.maePct, 5), mfeR: r(o.mfeR, 3), maeR: r(o.maeR, 3), case: o.case,
+          toStopPct: r(d * (f.px - o.stop) / f.px, 5), toTargetPct: r(d * (o.tp - f.px) / f.px, 5), ageMin: Math.round((c.now - o.openedAt) / MIN) } }, c.now);
+      }
+    }
+  }
+  private floatingFvg(o: FvgOpen, q: Quote, t: Trade) {
+    const px = o.side === "LONG" ? q.bestBid : q.bestAsk, d = dirOf(o.side);
+    const gross = d * (px - t.entryPrice) * t.quantity, net = gross - t.entryFee - px * t.quantity * 0.0007;
+    return { px, pct: d * (px / o.fill - 1), r: o.oneR > 0 ? net / o.oneR : 0, net };
+  }
   private samplePost(c: { now: number; quotes: Record<string, Quote> }) {
     if (!this.s.post.length) return;
     const keep: PostExit[] = [];
@@ -501,30 +613,50 @@ export class NtsEngine {
   // ---------------------------------------------------------------------------------------------------------------
   // 面板数据
   // ---------------------------------------------------------------------------------------------------------------
+  fvgStatus(now: number, forward: ForwardState | null, quotes: Record<string, Quote>) {
+    const f = this.cfg.fvg, coins = this.desk.coinView(now);
+    const positions = this.fvgOpens.map(o => {
+      const t = forward?.positions.find(x => x.id === o.tid && x.status === "OPEN"), q = quotes[o.sym], fl = t && q && q.fresh ? this.floatingFvg(o, q, t) : null;
+      return { tid: o.tid, sym: o.sym, side: o.side, case: o.case, openedAt: o.openedAt, entry: o.fill, plannedEntry: o.plannedEntry, fillMode: o.fillMode, stop: o.stop, tp: o.tp,
+        price: fl?.px ?? null, floatingR: fl ? r(fl.r, 2) : null, floatingNet: fl ? r(fl.net, 2) : null, oneR: r(o.oneR, 2), margin: t ? r(t.margin, 2) : null, liq: t?.liquidationPrice ?? null };
+    });
+    const ready = coins.filter(c => this.desk.dataHealth(c.sym, now).ok).length;
+    const count = (st: string) => coins.filter(c => c.stage === st).length;
+    return { name: "FVG扫流动性系统", universe: this.desk.universeList, universeAt: this.desk.universeAt || null, ready, coins, positions,
+      stages: { 等价格进入4H缺口: count("等价格进入4H缺口"), 等15m扫流动性: count("等15m扫流动性"), 等回踩15m缺口: count("等回踩15m缺口"), 持仓中: count("持仓中"), 数据预热: count("数据预热") },
+      resident: this.residentSymbols(), plan: this.desk.fetchPlan(),
+      rules: { universeMax: f.universeMax, rr: f.rr, expiryBars: f.expiryBars, stop: "扫点外 1 tick", firstMarginPct: this.cfg.firstMarginPct, leverage: this.cfg.leverage, reentryTolPct: f.reentryTolPct },
+      legacyOpen: this.s.open ? { tid: this.s.open.tid, sym: this.s.open.sym, side: this.s.open.side, stage: this.s.open.stage, note: "切换前的旧 SMC 单，按原规则管到平仓" } : null };
+  }
   status(now: number, forward: ForwardState | null, quotes: Record<string, Quote>, extra: { enabled: boolean; logError: string | null; lastFlushAt: number }) {
     const bk = forward ? this.breaker(now, forward.balance) : null;
     const o = this.s.open, t = o && forward ? forward.positions.find(x => x.id === o.tid && x.status === "OPEN") : undefined, q = o ? quotes[o.sym] : undefined;
     const fl = o && t && q && q.fresh ? this.floating(o, q, t) : null;
     const health: Record<string, ReturnType<NtsEngine["dataHealth"]>> = {};
     for (const sym of this.symbols) health[sym] = this.dataHealth(sym, now);
-    const allOk = this.symbols.every(s => health[s]!.ok), quoteOk = this.symbols.every(s => quotes[s]?.fresh);
-    const state = !extra.enabled && !o ? "已关闭" : bk && !bk.allowEntry ? "今日停开（当日亏损达 1R）" : !allOk ? "数据预热/异常" : !quoteOk ? "行情不新鲜" : o ? "持仓中" : "空仓待命";
+    const fvg = this.isFvg ? this.fvgStatus(now, forward, quotes) : null;
+    const allOk = this.isFvg ? (fvg!.ready > 0) : this.symbols.every(s => health[s]!.ok);
+    const quoteOk = this.isFvg ? this.fvgOpens.every(x => quotes[x.sym]?.fresh) : this.symbols.every(s => quotes[s]?.fresh);
+    const held = !!o || this.fvgOpens.length > 0;
+    const state = !extra.enabled && !held ? "已关闭" : !this.isFvg && bk && !bk.allowEntry ? "今日停开（当日亏损达 1R）" : !allOk ? "数据预热/异常" : !quoteOk ? "行情不新鲜"
+      : held ? (this.isFvg ? `持仓中（${this.fvgOpens.length + (o ? 1 : 0)} 笔）` : "持仓中") : "空仓待命";
     const per = (x: Period) => ({ trades: x.trades, wins: x.wins, pnl: r(x.pnl, 2), r: r(x.r, 2), startEquity: r(x.startEquity, 2), pct: x.startEquity > 0 ? r(x.pnl / x.startEquity, 4) : null });
     return {
-      version: NTS_VERSION, strategy: this.cfg.strategy, enabled: extra.enabled, state, now, paperOnly: true, liveTouched: false,
-      symbols: this.symbols, evals: this.s.lastEval,
+      version: NTS_VERSION, strategy: this.cfg.strategy, engineName: this.isFvg ? "FVG扫流动性系统" : this.cfg.strategy === "DAILY" ? "每日短线" : "SMC订单块", enabled: extra.enabled, state, now, paperOnly: true, liveTouched: false,
+      symbols: this.symbols, evals: this.isFvg ? {} : this.s.lastEval, fvg,
       prices: Object.fromEntries(this.symbols.map(sym => { const x = quotes[sym]; return [sym, x && x.fresh ? r((x.bestBid + x.bestAsk) / 2, 4) : null]; })),
       position: o ? { tid: o.tid, sym: o.sym, side: o.side, openedAt: o.openedAt, entry: o.entry1, price: q && q.fresh ? (o.side === "LONG" ? q.bestBid : q.bestAsk) : null, avg: o.avg, added: o.addedAt != null, stage: o.stage, target: o.target, stop: o.stop,
         breakeven: o.addedAt ? o.geo.breakeven : null, tolerance: null, plannedAdd: o.plannedAdd, zone: o.zone, mode: o.mode, floatingR: fl ? r(fl.r, 2) : null, floatingPct: fl ? r(fl.pct, 4) : null, floatingNet: fl ? r(fl.net, 2) : null,
         mfeR: r(o.mfeR, 2), maeR: r(o.maeR, 2), oneR: r(o.oneR, 2), daily: o.daily ? { trail: o.daily.trail, exitAt: o.daily.exitAt, ret24: o.daily.ret24 } : null } : null,
       today: per(this.s.day), month: per(this.s.month), recent: this.s.recent, lastExit: this.s.lastExit,
-      breaker: bk, data: { health, quoteOk, rest: { perHour: this.restWindow.length, total: this.restRequests, fails: this.restFails, lastError: this.lastFetchError, lastAt: this.lastFetchAt || null,
+      breaker: this.isFvg ? null : bk, data: { health, quoteOk, rest: { perHour: this.restWindow.length, total: this.restRequests, fails: this.restFails, lastError: this.lastFetchError, lastAt: this.lastFetchAt || null,
         capPerSec: this.cfg.data.restPerSec } },
       log: { appended: this.log.appended, pending: this.log.pending, lastFlushAt: extra.lastFlushAt || null, error: extra.logError }, decisionError: this.lastDecisionError,
     };
   }
 }
 /** 现价附近（±6%）仍有效、已离开过的订单块，按距离排序。 */
+export type FvgStatus = ReturnType<NtsEngine["fvgStatus"]>;
 function nearObs(view: SmcView, px: number, n: number) {
   return view.obs.filter(z => z.leftT != null && Math.abs((z.lo + z.hi) / 2 / px - 1) < 0.06)
     .sort((a, b) => Math.abs((a.lo + a.hi) / 2 - px) - Math.abs((b.lo + b.hi) / 2 - px)).slice(0, n);

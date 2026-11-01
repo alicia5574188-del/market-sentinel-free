@@ -6,7 +6,7 @@ import { DEFAULT_NTS_CONFIG } from "../lib/nts/config.ts";
 import { initialForward } from "../lib/forward-relations.ts";
 import { flat, T0, CONTRACT, quote } from "./nts-fixtures.ts";
 
-const cfg = { ...DEFAULT_NTS_CONFIG, symbols: ["BTC_USDT"] };
+const cfg = { ...DEFAULT_NTS_CONFIG, strategy: "SMC" as const, symbols: ["BTC_USDT"] }; // 这些是旧 SMC 引擎的冷启动测试
 const b15 = flat(300, 900);
 const closeMs = (b15[b15.length - 1]!.time + 900) * 1000;
 const tick = (e: NtsEngine, now: number) => e.tick({ now, forward: initialForward(now) as never, quotes: { BTC_USDT: quote(99.99, 100.01, now) }, contracts: { BTC_USDT: CONTRACT }, enabled: true });

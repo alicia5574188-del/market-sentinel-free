@@ -799,7 +799,9 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
 // ---------------------------------------------------------------------------------------------------------------------
 export type PaperOrderFail={ok:false;reason:string};
 export type PaperOpenInput={id:string;symbol:string;side:"LONG"|"SHORT";quote:Quote;contract:Contract|undefined;marginTarget:number;leverage:number;
-  stopPrice:number;targetPrice:number|null;maintenanceRate:number;slippageRate?:number;now:number;reason:string};
+  stopPrice:number;targetPrice:number|null;maintenanceRate:number;slippageRate?:number;now:number;reason:string;
+  /** FVG 系统：不限笔数（同一个币也可以有多笔，各自对应不同形态），只要求模拟盘可用保证金够。不传 = 旧规则（全账户同一时刻只持一笔）。 */
+  multi?:boolean};
 function paperSize(contract:Contract|undefined,marginTarget:number,leverage:number,price:number):{contracts:number;multiplier:number}|PaperOrderFail{
   if(!contract||!(contract.quantoMultiplier>0))return{ok:false,reason:"合约规格未就绪"};
   const notionalPerContract=contract.quantoMultiplier*price;
@@ -817,13 +819,16 @@ export function crossLiquidation(side:"LONG"|"SHORT",entry:number,quantity:numbe
   return{price,loss:Math.max(0,Math.min(wallet,quantity*Math.abs(entry-price)))};
 }
 export function openPaperTrade(s:ForwardState,i:PaperOpenInput):{ok:true;trade:Trade}|PaperOrderFail{
-  if(s.positions.some(t=>t.status==="OPEN"))return{ok:false,reason:"已有持仓（同一时刻只持一笔）"};
+  const openNow=s.positions.filter(t=>t.status==="OPEN");
+  if(i.multi){if(openNow.some(t=>t.id===i.id))return{ok:false,reason:"同一形态已有持仓"};}
+  else if(openNow.length)return{ok:false,reason:"已有持仓（同一时刻只持一笔）"};
   if(!freshQuote(i.quote,i.now))return{ok:false,reason:"行情不新鲜"};
   const slip=i.slippageRate??PAPER_COST.slippageRate,d=dir(i.side);
   const px=i.side==="LONG"?i.quote.bestAsk*(1+slip):i.quote.bestBid*(1-slip);
   const size=paperSize(i.contract,i.marginTarget,i.leverage,px);if("ok"in size)return size;
   const quantity=size.contracts*size.multiplier,notional=quantity*px,margin=notional/i.leverage,entryFee=notional*PAPER_COST.feeRate;
-  if(margin+entryFee>s.balance)return{ok:false,reason:"余额不足以开这个仓位"};
+  const used=i.multi?openNow.reduce((n,t)=>n+(Number(t.margin)||0),0):0;
+  if(margin+entryFee>s.balance-used)return{ok:false,reason:i.multi?`模拟盘可用保证金不足：需要 ${(margin+entryFee).toFixed(2)}U，可用 ${Math.max(0,s.balance-used).toFixed(2)}U（已占用 ${used.toFixed(2)}U）`:"余额不足以开这个仓位"};
   s.balance-=entryFee;s.fees+=entryFee;
   const liq=crossLiquidation(i.side,px,quantity,s.balance,i.maintenanceRate);
   const worst=quantity*Math.abs(px-i.stopPrice)+entryFee*2;

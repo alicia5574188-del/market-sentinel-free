@@ -1,12 +1,32 @@
 /**
  * 新交易系统（NTS）的全部参数。只有这一个文件；改参数只改这里。
- * 决策引擎 = 视频的 SMC 订单块方法（smc.ts）。仓位首仓 2% / 100x 全仓、默认不补仓（2026-10-31 用户决定；smc.add=true 才补 +3%）；smc 段每个参数都写了来源。
+ * 决策引擎（2026-11-01 用户决定）= 视频的「FVG 扫流动性系统」（fvg.ts / fvg-desk.ts）：4H 缺口 + 15m 扫流动性 + 位移留下 15m 缺口 + 回踩限价，止损扫点外 1 tick，3R 止盈；不限止损宽度、不限订单数。
+ * 旧 SMC 订单块（smc.ts）只用于把切换前已开的那一笔按原规则管到平仓，之后不再开新单。仓位首仓 2% / 100x 全仓、不补仓。
  */
-export const NTS_VERSION = "nts-smc-v1" as const;
+export const NTS_VERSION = "nts-fvg-v1" as const;
+/** 配置版本：3 = 策略由本配置显式决定。旧存储配置（没有 strategyV=3）一律切到 FVG。 */
+export const NTS_STRATEGY_V = 3;
 
 export type NtsConfig = {
-  /** 决策系统："SMC" = 订单块（默认）；"DAILY" = 每日短线日动量（lib/nts/daily.ts，未通过样本外，只在用户明确要求时打开）。 */
-  strategy: "SMC" | "DAILY";
+  /** 决策系统："FVG" = FVG 扫流动性（默认）；"SMC" = 旧订单块；"DAILY" = 每日短线日动量（未通过样本外，只在用户明确要求时打开）。 */
+  strategy: "FVG" | "SMC" | "DAILY";
+  strategyV: number;
+  /** FVG 扫流动性系统（视频规则 + 多币池/调度）。每个参数的来源见 fvg.ts 顶部与一页说明。 */
+  fvg: {
+    universeMax: number;      // 币池上限：按 Gate 24h 成交额排名取前 N（已有的合约目录，不新增请求）
+    maxResident: number;      // 最多几个币常驻实时行情（有持仓/挂单/等再入场的币优先）
+    zoneLookback4h: number;   // 历史 4H 缺口扫描根数（100 根 ≈ 16.7 天）
+    swingL: number; swingR: number; swingLookback: number; // 15m 分形左右根数、往回找多远
+    bodyMin: number;          // 位移 K 实体/振幅下限
+    dispAtr: number; atrLen: number; dispMaxBars: number; // 位移合计 ≥ dispAtr × ATR(15m, atrLen)，最多看几根
+    expiryBars: number;       // 挂单有效根数（15m）
+    rr: number;               // 止盈 R 倍数
+    scanBars: number;         // 15m 形态往回扫多少根（含历史形态，用于情形 b）
+    reentryTolPct: number;    // 情形 b：价格回到原 15m 缺口 ± 该比例内
+    nearPct: number;          // 离 4H 缺口 ≤ 该比例 = 热币：每根 15m 都刷新
+    cold15mEveryMs: number;   // 冷币 15m 刷新间隔
+    min4h: number; min15m: number; // 至少多少根才判断
+  };
   /** 每日短线参数（strategy="DAILY" 时生效）。样本内选定：只做空、24h 回看、k=1、追踪止损、UTC 00:00（老挝 07:00）决策、最长持有 24h。 */
   daily: { sides: "SHORT" | "BOTH"; lookbackBars: number; k: number; trail: boolean; decideUtcHour: number; holdMs: number };
   /** 总开关：新交易系统自动开仓（模拟盘）。默认开；用户可以关。关了不开新仓，已有仓位照常管理到平仓。 */
@@ -63,7 +83,11 @@ export type NtsConfig = {
 };
 
 export const DEFAULT_NTS_CONFIG: NtsConfig = {
-  strategy: "SMC",
+  strategy: "FVG",
+  strategyV: NTS_STRATEGY_V,
+  fvg: { universeMax: 30, maxResident: 12, zoneLookback4h: 100, swingL: 2, swingR: 2, swingLookback: 96, bodyMin: 0.6,
+    dispAtr: 1, atrLen: 14, dispMaxBars: 3, expiryBars: 16, rr: 3, scanBars: 200, reentryTolPct: 0.001, nearPct: 0.01,
+    cold15mEveryMs: 60 * 60_000, min4h: 30, min15m: 60 },
   daily: { sides: "SHORT", lookbackBars: 96, k: 1, trail: true, decideUtcHour: 0, holdMs: 24 * 3_600_000 - 120_000 },
   enabled: true,
   symbols: ["BTC_USDT", "ETH_USDT"],
@@ -121,7 +145,15 @@ export function normalizeNtsConfig(raw: unknown): NtsConfig {
   // 旧存储配置（没有 addPolicyV=2）里保存的 smc.add=true 不再生效：默认不补仓
   if (src.addPolicyV !== 2) c.smc.add = DEFAULT_NTS_CONFIG.smc.add;
   c.addPolicyV = 2;
-  c.strategy = src.strategy === "DAILY" ? "DAILY" : "SMC";
+  // 旧存储配置（strategyV 不是 3）里的 "SMC"/"DAILY" 不再生效：切到 FVG（2026-11-01 用户决定只做这一套）
+  c.strategy = src.strategyV !== NTS_STRATEGY_V ? "FVG" : src.strategy === "DAILY" ? "DAILY" : src.strategy === "SMC" ? "SMC" : "FVG";
+  c.strategyV = NTS_STRATEGY_V;
+  const f = c.fvg, clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+  f.universeMax = Math.round(clamp(f.universeMax, 2, 40)); f.maxResident = Math.round(clamp(f.maxResident, 4, 20));
+  f.zoneLookback4h = Math.round(clamp(f.zoneLookback4h, 10, 290)); f.scanBars = Math.round(clamp(f.scanBars, 20, 290));
+  f.swingL = Math.round(clamp(f.swingL, 1, 5)); f.swingR = Math.round(clamp(f.swingR, 1, 5)); f.swingLookback = Math.round(clamp(f.swingLookback, 10, 200));
+  f.dispMaxBars = Math.round(clamp(f.dispMaxBars, 2, 3)); f.expiryBars = Math.round(clamp(f.expiryBars, 1, 96)); f.rr = clamp(f.rr, 1, 10);
+  f.cold15mEveryMs = clamp(f.cold15mEveryMs, 15 * 60_000, 4 * 3_600_000);
   const ds = (src.daily && typeof src.daily === "object" ? (src.daily as Record<string, unknown>).sides : undefined);
   c.daily.sides = ds === "BOTH" ? "BOTH" : ds === "SHORT" ? "SHORT" : DEFAULT_NTS_CONFIG.daily.sides;
   c.daily.lookbackBars = Math.max(4, Math.min(250, Math.round(c.daily.lookbackBars)));

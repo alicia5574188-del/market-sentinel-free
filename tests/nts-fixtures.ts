@@ -64,7 +64,8 @@ export function openScenario(now = Date.now()) {
   const dec = evaluateSmcEntry("BTC_USDT", bid, ask, bars, smcLongView(bars), SMC_CTX, DEFAULT_NTS_CONFIG);
   if (dec.action !== "ENTER") throw new Error("fixture does not enter: " + JSON.stringify(dec));
   const q = quote(bid, ask, now), barTime = bars["15m"].at(-1)!.time;
-  const eng = new NtsEngine(DEFAULT_NTS_CONFIG, new NtsLog(DEFAULT_NTS_CONFIG), null, now), fwd = initialForward(now);
+  const SMC = { ...DEFAULT_NTS_CONFIG, strategy: "SMC" as const };
+  const eng = new NtsEngine(SMC, new NtsLog(SMC), null, now), fwd = initialForward(now);
   return { eng, fwd, dec, q, barTime, now, close, action: { type: "OPEN" as const, sym: "BTC_USDT", decision: dec, barTime, snapshot: { fixture: true } }, c: { now, quotes: { BTC_USDT: q }, contracts: { BTC_USDT: CONTRACT } } };
 }
 
