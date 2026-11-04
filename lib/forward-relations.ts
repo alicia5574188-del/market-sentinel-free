@@ -163,6 +163,8 @@ export type Trade={
   liquidationPrice?:number|null;maintenanceRate?:number|null;
   /** Cross-margin positions (new trading system only): the loss booked if the liquidation price is hit (the whole wallet less maintenance). Absent = isolated. */
   crossLiquidationLoss?:number;
+  /** 保证金模型：FVG 新单 "fvg-isolated-v1"（逐仓，按止损选杠杆、强平价在止损外留缓冲）；旧单/全仓单没有此字段。 */
+  marginModel?:string;
   winnerManagement?:WinnerManagement;realization?:TradeRealization;
   review?:TradeReview;
   id:string;symbol:string;side:"LONG"|"SHORT";rule:Rule;openedAt:number;closedAt:number|null;status:"OPEN"|"CLOSED";
@@ -801,7 +803,9 @@ export type PaperOrderFail={ok:false;reason:string};
 export type PaperOpenInput={id:string;symbol:string;side:"LONG"|"SHORT";quote:Quote;contract:Contract|undefined;marginTarget:number;leverage:number;
   stopPrice:number;targetPrice:number|null;maintenanceRate:number;slippageRate?:number;now:number;reason:string;
   /** FVG 系统：不限笔数（同一个币也可以有多笔，各自对应不同形态），只要求模拟盘可用保证金够。不传 = 旧规则（全账户同一时刻只持一笔）。 */
-  multi?:boolean};
+  multi?:boolean;
+  /** 逐仓（FVG fvg-isolated-v1）：强平价按逐仓公式固定在开仓时，不记 crossLiquidationLoss；爆仓亏这笔逐仓保证金。 */
+  isolated?:boolean};
 function paperSize(contract:Contract|undefined,marginTarget:number,leverage:number,price:number):{contracts:number;multiplier:number}|PaperOrderFail{
   if(!contract||!(contract.quantoMultiplier>0))return{ok:false,reason:"合约规格未就绪"};
   const notionalPerContract=contract.quantoMultiplier*price;
@@ -830,13 +834,15 @@ export function openPaperTrade(s:ForwardState,i:PaperOpenInput):{ok:true;trade:T
   const used=i.multi?openNow.reduce((n,t)=>n+(Number(t.margin)||0),0):0;
   if(margin+entryFee>s.balance-used)return{ok:false,reason:i.multi?`模拟盘可用保证金不足：需要 ${(margin+entryFee).toFixed(2)}U，可用 ${Math.max(0,s.balance-used).toFixed(2)}U（已占用 ${used.toFixed(2)}U）`:"余额不足以开这个仓位"};
   s.balance-=entryFee;s.fees+=entryFee;
-  const liq=crossLiquidation(i.side,px,quantity,s.balance,i.maintenanceRate);
+  const liq=i.isolated?{price:isolatedLiquidationPrice({entry:px,leverage:i.leverage,side:i.side,maintenanceRate:i.maintenanceRate}),loss:undefined}
+    :crossLiquidation(i.side,px,quantity,s.balance,i.maintenanceRate);
   const worst=quantity*Math.abs(px-i.stopPrice)+entryFee*2;
   const t={id:i.id,symbol:i.symbol,side:i.side,openedAt:i.now,closedAt:null,status:"OPEN",entryPrice:px,exitPrice:null,quantity,contracts:size.contracts,
     quantoMultiplier:size.multiplier,notional,leverage:i.leverage,margin,plannedRisk:worst,stopPrice:i.stopPrice,
     armPrice:i.targetPrice??px*(1+d*.01),favorable:0,adverse:0,lastPrice:i.side==="LONG"?i.quote.bestBid:i.quote.bestAsk,lastQuoteAt:i.quote.observedAt,
     entryFee,exitFee:0,fundingAllowance:0,grossPnl:null,netPnl:null,exitReason:null,relationFailureBars:0,lastRelationBar:i.now,
-    execution:"REAL_QUOTE_PAPER_MODEL",liveEligible:false,liquidationPrice:liq.price,maintenanceRate:i.maintenanceRate,crossLiquidationLoss:liq.loss,
+    execution:"REAL_QUOTE_PAPER_MODEL",liveEligible:false,liquidationPrice:liq.price,maintenanceRate:i.maintenanceRate,
+    ...(i.isolated?{marginModel:"fvg-isolated-v1"}:{crossLiquidationLoss:liq.loss}),
     rule:{id:"nts-v1",signature:"nts-v1",parentId:null,version:1,createdAt:i.now,expiresAt:i.now+12*3_600_000,status:"EXPERIMENTAL",conditions:[],side:i.side,
       horizon:720,stopRate:Math.abs(px-i.stopPrice)/px,armRate:.01,givebackRate:.002,exitMode:"HORIZON",samples:0,trainGroups:0,checkGroups:0,estimatedNetRate:0,
       priorResponse:null,recentResponse:0,standardError:0,reason:i.reason,mode:null,trade_plan:null,intent:null,long_score:null,short_score:null,

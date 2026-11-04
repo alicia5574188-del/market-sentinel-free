@@ -87,6 +87,10 @@ export const fvgParams = (cfg: NtsConfig): FvgParams => ({ ...cfg.fvg });
 const sideCn = (s: Side) => (s === "LONG" ? "多" : "空");
 const lao = (sec: number) => new Date(sec * 1000 + 7 * HOUR).toISOString().slice(5, 16).replace("T", " ");
 
+/** 逐仓强平距离 ≥ 这个倍数 ×（止损距离 + 止损滑点 + 双边手续费）。1.5 = 止损外再留 50% 的空间。 */
+export const FVG_LIQ_BUFFER = 1.5;
+/** Gate 逐仓强平价离入场价的比例（多空对称近似：(1/L − mmr)/(1 − mmr)），与 paper-leverage.isolatedLiquidationPrice 一致。 */
+export function isolatedLiqDistance(lev: number, mmr: number) { return lev <= 1 ? 1 : (1 / lev - mmr) / (1 - mmr); }
 export class FvgDesk {
   rt: Record<string, CoinRt> = {};
   private universe: string[] = [];
@@ -329,7 +333,7 @@ export class FvgDesk {
     });
     if (!cands.length) return out;
     cands.sort((a, b) => (a.case === b.case ? 0 : a.case === "a" ? -1 : 1) || a.rank - b.rank || (b.setup.sweepT - a.setup.sweepT));
-    // 不限笔数、同一个币也可以多笔；只去重：同一个形态（币 + 形态 id）只开一次
+    // 不限笔数（不同币）；同一个币同时只持有一笔（open() 里检查）；同一个形态（币 + 形态 id）只开一次
     const seen = new Set<string>();
     for (const cd of cands) {
       const key = `${cd.sym}:${cd.setup.id}`, rt = this.rt[cd.sym]!;
@@ -360,6 +364,8 @@ export class FvgDesk {
       this.h.brief(now, a.sym, "放弃", reason);
       return false;
     };
+    // 同一个币同时只持有一笔：已有持仓（含本轮刚开的）就跳过新形态，记 NO_TRADE「同币已有持仓」
+    if (draft.positions.some(x => x.symbol === a.sym && x.status === "OPEN")) return skip("同币已有持仓");
     if (!q || st.entry == null || st.stop == null || !st.fvg) return skip("下单时没有行情/形态不完整");
     const contract = c.contracts[a.sym]; if (!contract) return skip("合约规格未就绪");
     const limit = a.mode === "LIMIT";
@@ -367,8 +373,15 @@ export class FvgDesk {
     const slip = limit ? 0 : cfg.slippagePct;
     const estFill = limit ? st.entry : long ? q.bestAsk * (1 + slip) : q.bestBid * (1 - slip);
     if (long ? estFill <= st.stop : estFill >= st.stop) return skip("成交价已在止损外");
-    const lev = Math.max(1, Math.min(cfg.leverage, contract.leverageMax > 0 ? contract.leverageMax : cfg.leverage));
-    const balance = draft.balance, margin = balance * cfg.firstMarginPct, notional = margin * lev;
+    const levCap = Math.max(1, Math.min(cfg.leverage, contract.leverageMax > 0 ? contract.leverageMax : cfg.leverage));
+    // 名义不变：= 余额 × 2% × min(100, 合约上限)（跟原来一样）。逐仓杠杆按止损选：强平距离 ≥ FVG_LIQ_BUFFER × (止损距离 + 止损滑点 + 双边手续费)，
+    // 取满足的最大整数杠杆；保证金 = 名义 / 杠杆。维持保证金率用已拉取的合约 maintenance_rate（没有新增 Gate 请求，未用风险限额阶梯）。
+    const mmr = contract.maintenanceRate > 0 ? contract.maintenanceRate : cfg.maintenanceRate;
+    const balance = draft.balance, notional = balance * cfg.firstMarginPct * levCap;
+    const stopPct0 = Math.abs(estFill - st.stop) / estFill, need = FVG_LIQ_BUFFER * (stopPct0 + cfg.stopSlipPct + 2 * cfg.feeRate);
+    let lev = Math.floor(levCap);
+    while (lev > 1 && isolatedLiqDistance(lev, mmr) < need) lev--;
+    const margin = notional / lev;
     // 不限止损宽度（视频没有这条），最坏亏损只记录
     const stopPct = Math.abs(estFill - st.stop) / estFill, worst = notional * (stopPct + cfg.stopSlipPct + 2 * cfg.feeRate);
     const tid = `nts-${a.sym}-${st.id}${a.case === "b" ? "b" : ""}`;
@@ -376,9 +389,9 @@ export class FvgDesk {
     // 新单：2R 止盈 + 1R 保本（exitRule 2R_BE1R）；R = |成交价 − 止损|，只看价格
     const tp0 = estFill + dir * f.tpR * Math.abs(estFill - st.stop);
     const res = openPaperTrade(draft, { id: tid, symbol: a.sym, side: st.side, quote, contract, marginTarget: margin, leverage: lev, stopPrice: st.stop, targetPrice: tp0,
-      maintenanceRate: contract.maintenanceRate > 0 ? contract.maintenanceRate : cfg.maintenanceRate, slippageRate: slip, now,
+      maintenanceRate: mmr, slippageRate: slip, now, isolated: true,
       reason: `NTS FVG ${st.side} 情形${a.case} 15m缺口 ${r(st.fvg.lo, 6)}~${r(st.fvg.hi, 6)}`, multi: true });
-    if (!res.ok) return skip(res.reason.startsWith("模拟盘可用保证金不足") ? `跳过：${res.reason}（不缩小仓位）` : `下单失败：${res.reason}`);
+    if (!res.ok) return skip(res.reason.startsWith("模拟盘可用保证金不足") ? `跳过：可用保证金不足（${res.reason.replace("模拟盘可用保证金不足：", "")}，逐仓 ${lev}×，名义 ${r(notional, 2)}U，不缩小仓位）` : `下单失败：${res.reason}`);
     const t = res.trade, fill = t.entryPrice, risk = Math.abs(fill - st.stop), tp = fill + dir * f.tpR * risk, tp3 = fill + dir * 3 * risk;
     (t as { armPrice: number }).armPrice = tp;
     const oneR = t.quantity * Math.abs(fill - st.stop) + t.entryFee * 2;
@@ -393,7 +406,7 @@ export class FvgDesk {
     this.h.append({ id: `entry:${tid}`, k: "ENTRY", t: now, sym: a.sym, tid, d: {
       strategy: "FVG", case: a.case, fillMode: a.mode, why: a.why, side: st.side, setup: st.id,
       zone4h: z, sweep: { t: st.sweepT, px: st.sweepPx, swing: st.swingPx }, displacement: { bars: st.dispBars, move: st.dispMove, atr: st.atr }, fvg15: st.fvg,
-      plan: { entry: st.entry, stop: st.stop, tp3R_orig: st.tpOrig }, fill: { price: fill, contracts: t.contracts, qty: t.quantity, notional: r(t.notional, 2), margin: r(t.margin, 2), fee: r(t.entryFee, 4), liq: t.liquidationPrice, leverage: lev },
+      plan: { entry: st.entry, stop: st.stop, tp3R_orig: st.tpOrig }, fill: { price: fill, contracts: t.contracts, qty: t.quantity, notional: r(t.notional, 2), margin: r(t.margin, 2), fee: r(t.entryFee, 4), liq: t.liquidationPrice, leverage: lev, marginMode: "ISOLATED", marginModel: "fvg-isolated-v1", levCap, liqBuffer: FVG_LIQ_BUFFER, liqDistPct: r(isolatedLiqDistance(lev, mmr), 5), needPct: r(need, 5), mmr },
       stop: st.stop, tp, rr: f.tpR, exitRule: "2R_BE1R", exitPlan: { tpR: f.tpR, tp, beAtR: f.beAtR, beTrigger: fill + dir * f.beAtR * risk, beTicks: f.beTicks, note: "R = |成交价 − 止损|（价格）；到 +1R 止损移到入场价往盈利方向 1 tick" },
       shadow3R: { tp3, stop0: st.stop, note: "老规则（3R 止盈/原止损）只记录不执行" }, stopPct: r(Math.abs(fill - st.stop) / fill, 5), oneR: r(oneR, 2), sizing: { balance: r(balance, 2), firstPct: cfg.firstMarginPct, worstEst: r(worst, 2), worstPct: r(worst / balance, 4), stopWidthLimit: null },
       tick: { size: this.ticks[a.sym] ?? null, source: this.ticks[a.sym] ? "gate.order_price_round" : "fallback(价格数量级×1e-4)" },

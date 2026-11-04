@@ -1145,15 +1145,48 @@ test(`FVG 源单实盘跟随：开仓一次、+1R 保本替换止损、${code} �
   assert.equal(live(h).positions.BTC_USDT.status,"CLOSED");
   assert.equal(gate.placed.length,1,"平仓后不重复开仓");
 }));
-test("FVG 同币多笔源单：不再让整个实盘复制报错停摆，只跟随最早一笔，其他币照常",()=>clock(async()=>{
+test("FVG 不同币各一笔：全部复制；同币只跟随逻辑已移除（模拟端保证同币只持一笔）",()=>clock(async()=>{
   const {h,gate}=await harness();fvgHarnessMeta(h);h.forwardState.positions=[];
   live(h).requestedEnabled=true;live(h).activation=startLiveSession(T-1_000,h.forwardState);
-  h.forwardState.positions=[fvgTrade("nts-BTC_USDT-s2","BTC_USDT","LONG",T-300),fvgTrade("nts-BTC_USDT-s1","BTC_USDT","LONG",T-600),fvgTrade("nts-ETH_USDT-s1","ETH_USDT","SHORT",T-400)];
+  h.forwardState.positions=[fvgTrade("nts-BTC_USDT-s1","BTC_USDT","LONG",T-600),fvgTrade("nts-ETH_USDT-s1","ETH_USDT","SHORT",T-400)];
   const sel=forwardMirrorSources(h.forwardState,1000);
   assert.equal(sel.BTC_USDT.id,"nts-BTC_USDT-s1");assert.equal(sel.ETH_USDT.id,"nts-ETH_USDT-s1");
   await h.syncLive(T);await h.syncLive(T);
-  assert.equal(gate.placed.length,2,JSON.stringify(live(h).entrySkips));assert.equal(live(h).positions.BTC_USDT.id,"nts-BTC_USDT-s1");assert.equal(live(h).positions.ETH_USDT.id,"nts-ETH_USDT-s1");
+  assert.equal(gate.placed.length,2,JSON.stringify(live(h).entrySkips));
   await h.syncLive(T);assert.equal(gate.placed.length,2,"重复同步不重复下单");
+}));
+async function parityCase(paperEquity:number,liveEquity:number,available=liveEquity){
+  const {h,gate}=await harness();fvgHarnessMeta(h);h.forwardState.positions=[];
+  live(h).requestedEnabled=true;live(h).activation=startLiveSession(T-1_000,h.forwardState);
+  h.forwardState.balance=paperEquity;gate.account={...gate.account,total:liveEquity,available};
+  const src=fvgTrade("nts-BTC_USDT-p1","BTC_USDT","LONG",T-300);src.notional=paperEquity*2;src.margin=src.notional/100;src.contracts=src.notional/(.001*100);src.quantity=src.notional/100;
+  h.forwardState.positions=[src];
+  await h.syncLive(T);await h.syncLive(T);
+  return {h,gate,src};
+}
+test("FVG 名义一致：本金相同 → 实盘名义 = 模拟名义（杠杆按止损降，名义不变）",()=>clock(async()=>{
+  const {h,gate,src}=await parityCase(100,100);
+  assert.equal(gate.placed.length,1,JSON.stringify(live(h).entrySkips));
+  const notional=gate.placed[0].contracts*.001*100;
+  assert.ok(Math.abs(notional/src.notional-1)<=.003,`${notional} vs ${src.notional}`);// 模拟权益按估算平仓费标记，比例差 ~0.1%
+  const co=(live(h).positions.BTC_USDT as {parity:{copyOutcome:{copied:boolean;notionalVsSource:number}}}).parity.copyOutcome;assert.ok(co.copied&&Math.abs(co.notionalVsSource-1)<=.003);
+  assert.ok(gate.leverages.every(l=>l<100),"逐仓杠杆按止损下调");
+}));
+test("FVG 按比例：实盘本金是模拟一半 → 实盘名义是一半；两倍 → 两倍",()=>clock(async()=>{
+  for(const k of [.5,2]){
+    const {h,gate,src}=await parityCase(100,100*k);
+    assert.equal(gate.placed.length,1,JSON.stringify(live(h).entrySkips));
+    const notional=gate.placed[0].contracts*.001*100;
+    assert.ok(Math.abs(notional/(src.notional*k)-1)<=.003,`k=${k}: ${notional}`);
+  }
+}));
+test("FVG 低杠杆保证金不够：不缩单、不加杠杆，MARGIN 失败写明原因并记审计",()=>clock(async()=>{
+  const {h,gate}=await parityCase(100,100,1);
+  assert.equal(gate.placed.length,0);
+  const skip=(live(h).entrySkips as Record<string,{code:string;reason:string}>).BTC_USDT;
+  assert.equal(skip.code,"MARGIN");assert.match(skip.reason,/不缩单/);
+  const audits=(live(h).auditEvents as {level:string;reason:string}[]).filter(a=>a.level==="SKIPPED"&&/FVG 复制未完成\[MARGIN\]/.test(a.reason));
+  assert.equal(audits.length,1,"同一笔同一原因只记一次");
 }));
 test("开启实盘前已存在的 FVG 源单（含 a16800ab 前的 3R 老单）不补开",()=>clock(async()=>{
   const {h,gate}=await harness();fvgHarnessMeta(h);
@@ -1161,4 +1194,16 @@ test("开启实盘前已存在的 FVG 源单（含 a16800ab 前的 3R 老单）�
   live(h).requestedEnabled=true;live(h).activation=startLiveSession(T-1_000,h.forwardState);
   await h.syncLive(T);await h.syncLive(T);
   assert.equal(gate.placed.length,0);
+}));
+test("FVG 逐仓新单（fvg-isolated-v1）：实盘用同一杠杆、按比例名义复制，不再另行降杠杆",()=>clock(async()=>{
+  const {h,gate}=await harness();fvgHarnessMeta(h);h.forwardState.positions=[];
+  live(h).requestedEnabled=true;live(h).activation=startLiveSession(T-1_000,h.forwardState);
+  h.forwardState.balance=100;gate.account={...gate.account,total:50,available:50};
+  const src=fvgTrade("nts-BTC_USDT-iso1","BTC_USDT","LONG",T-300);src.leverage=30;src.margin=src.notional/30;
+  (src as {marginModel?:string}).marginModel="fvg-isolated-v1";h.forwardState.positions=[src];
+  await h.syncLive(T);await h.syncLive(T);
+  assert.equal(gate.placed.length,1,JSON.stringify(live(h).entrySkips));
+  assert.equal(gate.placed[0].leverage,30,"与模拟同杠杆");
+  assert.ok(Math.abs(gate.placed[0].contracts*.001*100/(src.notional*.5)-1)<=.003);
+  const co=(live(h).positions.BTC_USDT as {parity:{copyOutcome:{paperIsolated:boolean}}}).parity.copyOutcome;assert.equal(co.paperIsolated,true);
 }));

@@ -558,3 +558,15 @@ test(`会员实盘跟随 FVG 源单：开仓一次、保本改止损、平仓一
   assert.equal(aa.gate.closeTags.length,1);assert.equal(aa.gate.closeTags[0],liveExitTag(id));
   assert.equal(aa.engine.runtime.live.positions.BTC_USDT.status,"CLOSED");assert.equal(aa.gate.placed.length,1);
 }));
+
+test("会员 FVG 名义按本金比例复制：会员权益 50、模拟权益 100 → 实盘名义 ≈ 模拟名义的一半",()=>clock(async()=>{
+  const h=await harness();h.source.balance=100;const a=await h.issue(),aa=await h.member(a.id);
+  aa.gate.account={...aa.gate.account,total:50,available:50};
+  await h.internal(a.id,"/live-mode",{enabled:true});
+  now+=10000;const src=fvgSource("nts-BTC_USDT-R1789611900000",now-5000);h.source.positions=[src];
+  await aa.engine.alarm();now+=10000;await aa.engine.alarm();
+  assert.equal(aa.gate.placed.length,1,JSON.stringify(aa.engine.runtime.live.entrySkips));
+  const k=aa.gate.placed[0].contracts*.001*100/src.notional;
+  assert.ok(Math.abs(k-.5)<=.005,`ratio ${k}`);
+  assert.equal(aa.engine.runtime.live.positions.BTC_USDT.parity.copyOutcome.copied,true);
+}));

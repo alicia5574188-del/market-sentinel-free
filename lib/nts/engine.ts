@@ -742,12 +742,16 @@ export class NtsEngine {
       const x = this.extremes(o);
       return { tid: o.tid, sym: o.sym, side: o.side, case: o.case, openedAt: o.openedAt, entry: o.fill, plannedEntry: o.plannedEntry, fillMode: o.fillMode, stop: o.stop, tp: o.tp,
         price: fl?.px ?? null, floatingR: fl ? r(fl.r, 2) : null, floatingNet: fl ? r(fl.net, 2) : null, oneR: r(o.oneR, 2), margin: t ? r(t.margin, 2) : null, liq: t?.liquidationPrice ?? null,
+        leverage: t?.leverage ?? null, marginMode: t?.marginModel === "fvg-isolated-v1" ? "逐仓" : "全仓(旧单)", notional: t ? r(t.notional, 2) : null,
         exitRule: exitRuleOf(o), tpR: o.tpR ?? f.rr, stop0: stop0Of(o), be: o.be ?? null, floatingRp: fl ? r(priceR(o, fl.px), 2) : null,
         mfeR: r(o.mfeR, 2), maeR: r(o.maeR, 2), mfeRp: r(x.mfeRp, 2), maeRp: r(x.maeRp, 2) };
     });
     const ready = coins.filter(c => this.desk.dataHealth(c.sym, now).ok).length;
     const count = (st: string) => coins.filter(c => c.stage === st).length;
-    return { name: "FVG扫流动性系统", universe: this.desk.universeList, universeAt: this.desk.universeAt || null, ready, coins, positions,
+    // 账户保证金：已用 = 所有持仓的保证金（逐仓单按逐仓保证金），可用 = 余额 − 已用（与开仓检查同一口径）
+    const open = forward?.positions.filter(x => x.status === "OPEN") ?? [], used = open.reduce((n, x) => n + (Number(x.margin) || 0), 0);
+    const account = forward ? { balance: r(forward.balance, 2), marginUsed: r(used, 2), available: r(Math.max(0, forward.balance - used), 2) } : null;
+    return { name: "FVG扫流动性系统", universe: this.desk.universeList, universeAt: this.desk.universeAt || null, ready, coins, positions, account,
       stages: { 等价格进入4H缺口: count("等价格进入4H缺口"), 等15m扫流动性: count("等15m扫流动性"), 等回踩15m缺口: count("等回踩15m缺口"), 持仓中: count("持仓中"), 数据预热: count("数据预热") },
       resident: this.residentSymbols(), plan: this.desk.fetchPlan(),
       rules: { universeMax: f.universeMax, rr: f.rr, tpR: f.tpR, beAtR: f.beAtR, exitRule: "2R_BE1R", expiryBars: f.expiryBars, stop: "扫点外 1 tick", firstMarginPct: this.cfg.firstMarginPct, leverage: this.cfg.leverage, reentryTolPct: f.reentryTolPct },

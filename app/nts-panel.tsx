@@ -10,9 +10,9 @@ type Per = { trades: number; wins: number; pnl: number; r: number; pct: number |
 type FvgZone = { key: string; side: string; lo: number; hi: number; formedAt: number; used: boolean; case: "a" | "b" | null };
 type FvgCoin = { sym: string; rank: number; stage: string; case: "a" | "b" | null; hot: boolean; px: number | null; dist: number | null; zones: FvgZone[];
   setup: { id: string; side: string; status: string; entry: number | null; stop: number | null; tp: number | null; fvg: { lo: number; hi: number } | null; expiresT: number | null } | null; last: string };
-type FvgPos = { tid: string; sym: string; side: string; case: "a" | "b"; openedAt: number; entry: number; plannedEntry: number; fillMode: string; stop: number; tp: number; price: number | null; floatingR: number | null; floatingNet: number | null; oneR: number; margin: number | null;
+type FvgPos = { tid: string; sym: string; side: string; case: "a" | "b"; openedAt: number; entry: number; plannedEntry: number; fillMode: string; stop: number; tp: number; price: number | null; floatingR: number | null; floatingNet: number | null; oneR: number; margin: number | null; liq?: number | null; leverage?: number | null; marginMode?: string; notional?: number | null;
   exitRule?: "3R" | "2R_BE1R"; tpR?: number; stop0?: number; be?: { at: number; px: number; stop: number; mfeRp: number } | null; floatingRp?: number | null; mfeR?: number | null; maeR?: number | null; mfeRp?: number | null; maeRp?: number | null };
-export type FvgView = { name: string; universe: string[]; ready: number; coins: FvgCoin[]; positions: FvgPos[]; stages: Record<string, number>; resident: string[];
+export type FvgView = { name: string; universe: string[]; ready: number; coins: FvgCoin[]; positions: FvgPos[]; account?: { balance: number; marginUsed: number; available: number } | null; stages: Record<string, number>; resident: string[];
   plan: { universe: number; hot: number; cold: number; estPerHour: number };
   rules: { universeMax: number; rr: number; tpR?: number; beAtR?: number; exitRule?: string; expiryBars: number; stop: string; firstMarginPct: number; leverage: number; reentryTolPct: number };
   legacyOpen: { sym: string; side: string; stage: string; note: string } | null };
@@ -62,7 +62,8 @@ function FvgBody({ nts, f }: { nts: NtsView; f: FvgView }) {
   const shown = all ? coins : coins.slice(0, 6);
   const ru = f.rules;
   return <>
-    <h3 className="nts-h3">持仓（{f.positions.length} 笔 · 不限笔数）</h3>
+    <h3 className="nts-h3">持仓（{f.positions.length} 笔 · 不限笔数 · 同币一笔）</h3>
+    {f.account && <p className="nts-note" data-testid="fvg-margin">逐仓保证金 · 余额 {f.account.balance.toFixed(2)}U · 已用 {f.account.marginUsed.toFixed(2)}U · 可用 {f.account.available.toFixed(2)}U</p>}
     {f.positions.length ? f.positions.map(p => {
       const d = p.side === "LONG" ? 1 : -1, move = p.price ? d * (p.price / p.entry - 1) : null;
       return <div key={p.tid} className={`nts-pos ${p.side === "LONG" ? "long" : "short"}`} data-testid="fvg-pos">
@@ -74,6 +75,7 @@ function FvgBody({ nts, f }: { nts: NtsView; f: FvgView }) {
           <div><dt>止损（扫点外）</dt><dd>{dp(p.stop)} <em>距 {pct(p.price ? Math.abs(p.stop / p.price - 1) : null)}</em></dd></div>
           <div><dt>止盈 {p.tpR ?? ru.rr}R{p.exitRule === "2R_BE1R" ? (p.be ? " · 已保本" : ` · +${ru.beAtR ?? 1}R 保本`) : " · 旧单原计划"}</dt><dd>{dp(p.tp)} <em>距 {pct(p.price ? Math.abs(p.tp / p.price - 1) : null)}</em></dd></div>
         </dl>
+        <p className="nts-note">{p.marginMode ?? "全仓(旧单)"} {p.leverage ?? "—"}× · 保证金 {p.margin == null ? "—" : `${p.margin.toFixed(2)}U`}{p.notional == null ? "" : ` · 名义 ${p.notional.toFixed(2)}U`} · 强平 {dp(p.liq)}</p>
         <p className="nts-note">开仓 {clock(p.openedAt)} · 1R ≈ {p.oneR.toFixed(2)}U · 浮动 价格R {p.floatingRp == null ? "—" : sgn(p.floatingRp)} / 扣费R {p.floatingR == null ? "—" : sgn(p.floatingR)} · 最有利 价格R {p.mfeRp == null ? "—" : sgn(p.mfeRp)} / 扣费R {p.mfeR == null ? "—" : sgn(p.mfeR)}{p.be ? ` · ${clock(p.be.at)} 止损移到保本 ${dp(p.be.stop)}` : ""}</p>
       </div>;
     }) : <div className="nts-empty"><b>空仓 · 等形态</b><p><span>开仓条件</span>价格在 4H 缺口里 → 15m 扫掉前低/前高 → 2–3 根强位移留下 15m 缺口 → 回踩缺口限价成交</p></div>}

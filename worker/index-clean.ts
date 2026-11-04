@@ -67,7 +67,7 @@ import { resourceDay, rollResourceDay, RESOURCE_DAY_POLICY, type ResourceCounter
 import {isTransientLiveReadErrorText,liveReadTimeoutDecision} from "../lib/live-read-resilience.ts";
 import { LIVE_TURNOVER_PREFIX, LIVE_TURNOVER_VERSION, initialTurnover, validateTurnover, nextFillWindow,
   prepareTurnoverPage, turnoverView, type TurnoverState, type GateConfirmedFill } from "../lib/live-turnover.ts";
-import { LIVE_PARITY_VERSION, LIVE_PARITY_PREFIX, buildProportionalMirror, forwardMirrorSources, mirrorPositionRisk,
+import { LIVE_PARITY_VERSION, LIVE_PARITY_PREFIX, buildProportionalMirror, isNtsSource, forwardMirrorSources, mirrorPositionRisk,
   sourceLifecycle, mirrorSourceFresh, mirrorCoverage, liveEntryDriftGuard,
   type MirrorSourceTrade, type MirrorReceipt, type MirrorBinding } from "../lib/live-parity.ts";
 import { rememberLiveFill, normalizeLiveFills, applyConfirmedFillCosts, type LiveFillNote } from "../lib/live-fill-note.ts";
@@ -2584,7 +2584,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         entry.submissionResolved=true;
         entry.missingSince = null;
         this.recordLiveAudit({ observedAt: now, symbol, planId: entry.planId, stage: "ENTRY_FILLED", level: "INFO",
-          reason: `Gate 已确认实盘持仓，成交名义价值 ${notional.toFixed(4)} USDT，杠杆 ${leverage}×${entry.parity?.submitDelayMs!=null?`，源单到提交 ${entry.parity.submitDelayMs}ms`:""}` });
+          reason: `Gate 已确认实盘持仓，成交名义价值 ${notional.toFixed(4)} USDT，杠杆 ${leverage}×${entry.parity?.submitDelayMs!=null?`，源单到提交 ${entry.parity.submitDelayMs}ms`:""}${entry.parity?.sourceNotional?`，实盘/模拟名义 ${(notional/entry.parity.sourceNotional).toFixed(6)}（复制比例 ${entry.parity.ratio.toFixed(6)}）`:""}` });
       } else if (position.side !== side) {
         throw new Error(`${symbol} 实盘方向与系统记录冲突`);
       }
@@ -2888,10 +2888,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           if(!prior){this.runtime.live.fixedBasis=basis;
             try{await this.saveCheckpoint(Date.now(),true);}catch(error){delete this.runtime.live.fixedBasis;throw error;}}
         }
-        mirrorRatio=inverse?this.runtime.live.fixedBasis!.liveEquity/FIXED_ALLOCATION_EQUITY:scaled?.scaleRatio??equity/paperMark.equity;
+        // FVG（nts-v1）：每笔都按“此刻实盘权益 / 此刻模拟权益”（两边都含浮动盈亏）复制名义；本金相同则名义相同。
+        const ntsCopy=isNtsSource(trade.forwardSource);
+        mirrorRatio=inverse?this.runtime.live.fixedBasis!.liveEquity/FIXED_ALLOCATION_EQUITY
+          :ntsCopy?equity/paperMark.equity:scaled?.scaleRatio??equity/paperMark.equity;
         const expectedLiveEquity=paperMark.equity*mirrorRatio;
         const liveEquityDrift=expectedLiveEquity>0?equity/expectedLiveEquity:0;
-        if(!inverse&&liveEquityDrift<.85)throw new LiveEntrySizingError("ECONOMICS",symbol,
+        if(!inverse&&!ntsCopy&&liveEquityDrift<.85)throw new LiveEntrySizingError("ECONOMICS",symbol,
           `实盘权益已低于固定模拟比例预期的${(liveEquityDrift*100).toFixed(1)}%，暂停新增复制并保留已有保护`);
         const quote=this.runtime.evidence[symbol];
         const executablePrice=plan.side==='LONG'?quote?.bestAsk??0:quote?.bestBid??0;
@@ -2909,7 +2912,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           binding.receipt.fixedAllocationPolicy=FIXED_ALLOCATION_POLICY;binding.receipt.fixedLiveEquity=this.runtime.live.fixedBasis!.liveEquity;}
       } catch (error) {
         if (!(error instanceof LiveEntrySizingError)) throw error;
+        const priorSkip=this.runtime.live.entrySkips[symbol];
         this.runtime.live.entrySkips[symbol] = { planId: plan.id, symbol, code: error.code, reason: error.message, observedAt: now,sizing:error.sizing };
+        // FVG 复制失败：每个账户、每笔源单、每种原因记一次审计（不刷屏），写明原因。
+        if(isNtsSource(trade.forwardSource)&&(priorSkip?.planId!==plan.id||priorSkip.code!==error.code))
+          this.recordLiveAudit({observedAt:now,symbol,planId:plan.id,stage:"ENTRY_SUBMIT",level:"SKIPPED",reason:`FVG 复制未完成[${error.code}]：${error.message}`});
         continue;
       }
       delete this.runtime.live.entrySkips[symbol];

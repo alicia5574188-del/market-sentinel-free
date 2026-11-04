@@ -213,16 +213,19 @@ function fillWith(e: NtsEngine, fwd: ForwardState, now: number) {
   const changed = e.execute(draft, acts, { now: now + 2000, quotes, contracts });
   return { acts, draft, changed };
 }
-test("不限笔数：账户已有 6 笔（含同一个币的别的单）时，新的不同形态照样开", () => {
+test("不限笔数：账户已有 6 笔其他币时，新形态照样开；同币已有持仓则跳过", () => {
   const { e, log, now } = engine(m15Bars());
   const fwd = initialForward(now);
-  for (let i = 0; i < 5; i++) fwd.positions.push(fakeOpen(`x${i}`, "ETH_USDT", 1));
-  fwd.positions.push(fakeOpen("btc-other", "BTC_USDT", 1));
+  for (let i = 0; i < 6; i++) fwd.positions.push(fakeOpen(`x${i}`, "ETH_USDT", 1));
   const { acts, draft, changed } = fillWith(e, fwd, now);
   assert.equal(acts.length, 1); assert.equal(changed, true);
   assert.equal(draft.positions.filter(x => x.status === "OPEN").length, 7, "第 7 笔照开");
-  assert.equal(draft.positions.filter(x => x.status === "OPEN" && x.symbol === "BTC_USDT").length, 2, "同一个币第二笔照开");
   assert.ok(!recs(log).some(x => x.k === "NO_TRADE"));
+  const b = engine(m15Bars()), fb = initialForward(b.now);
+  fb.positions.push(fakeOpen("btc-other", "BTC_USDT", 1));
+  const r2 = fillWith(b.e, fb, b.now);
+  assert.equal(r2.draft.positions.filter(x => x.status === "OPEN" && x.symbol === "BTC_USDT").length, 1, "同一个币不开第二笔");
+  assert.ok(recs(b.log).some(x => x.k === "NO_TRADE" && x.d.reason === "同币已有持仓"));
 });
 
 test("保证金不够：记 NO_TRADE“跳过”，不缩小仓位、不开", () => {
@@ -230,7 +233,7 @@ test("保证金不够：记 NO_TRADE“跳过”，不缩小仓位、不开", ()
   const fwd = initialForward(now); fwd.positions.push(fakeOpen("big", "ETH_USDT", fwd.balance - 1));
   const { draft } = fillWith(e, fwd, now);
   assert.equal(draft.positions.filter(x => x.status === "OPEN").length, 1, "没开新仓");
-  const sk = recs(log).find(x => x.k === "NO_TRADE")!; assert.ok(sk); assert.match(String(sk.d.reason), /跳过：模拟盘可用保证金不足.*不缩小仓位/);
+  const sk = recs(log).find(x => x.k === "NO_TRADE")!; assert.ok(sk); assert.match(String(sk.d.reason), /跳过：可用保证金不足.*不缩小仓位/);
   assert.equal(e.desk.st.opens.length, 0);
 });
 
@@ -427,4 +430,32 @@ test("MFE/MAE 只增不减：重启（从存档恢复）后不回退，期间的
   step(e2, fwd, now2, 101.3, 101.31);
   assert.ok(o2.mfePct >= 101.72 / ENTRY - 1 - 1e-12, "重启期间的 15m 高点算进 MFE"); assert.ok(o2.maePct <= 100.95 / ENTRY - 1 + 1e-12, "低点算进 MAE");
   const m = o2.mfePct; step(e2, fwd, now2 + 2000, 101.25, 101.26); assert.equal(o2.mfePct, m, "价格回落不减");
+});
+
+test("同币只持一笔：该币已有 FVG 持仓时新形态不开，记 NO_TRADE「同币已有持仓」", () => {
+  const a = engine(m15Bars());
+  let r = step(a.e, initialForward(a.now), a.now, 101.5, 101.52);
+  r = step(a.e, r.fwd, a.now + 2000, 101.22, 101.23);
+  const held = r.fwd.positions.find(x => x.status === "OPEN")!; assert.ok(held);
+  const b = engine(m15Bars());
+  const fwd = { ...initialForward(b.now), positions: [{ ...held, id: "nts-BTC_USDT-earlier" }] };
+  let s = step(b.e, fwd, b.now, 101.5, 101.52);
+  s = step(b.e, s.fwd, b.now + 2000, 101.22, 101.23);
+  assert.equal(s.fwd.positions.filter(x => x.status === "OPEN" && x.symbol === "BTC_USDT").length, 1, "仍只有原来那一笔");
+  assert.ok(recs(b.log).some(x => x.k === "NO_TRADE" && x.d.reason === "同币已有持仓"));
+});
+
+test("逐仓模型：新单标 fvg-isolated-v1，名义 = 余额×2%×100，杠杆按止损选（强平距离 ≥ 1.5×(止损+滑点+手续费)），强平价在止损外", () => {
+  const { e, log, now } = engine(m15Bars());
+  let r = step(e, initialForward(now), now, 101.5, 101.52);
+  r = step(e, r.fwd, now + 2000, 101.22, 101.23);
+  const t = r.fwd.positions.find(x => x.status === "OPEN")! as typeof r.fwd.positions[0] & { marginModel?: string };
+  assert.equal(t.marginModel, "fvg-isolated-v1"); assert.equal(t.crossLiquidationLoss, undefined);
+  const stopD = Math.abs(t.entryPrice - t.stopPrice) / t.entryPrice;
+  assert.ok(t.leverage >= 1 && t.leverage < 100, `lev ${t.leverage}`);
+  assert.ok(Math.abs(t.notional - 1000 * 0.02 * 100) / 2000 < 0.05, `notional ${t.notional}`);
+  assert.ok(Math.abs(t.margin - t.notional / t.leverage) < 1e-9);
+  const liqD = Math.abs(t.liquidationPrice! - t.entryPrice) / t.entryPrice;
+  assert.ok(liqD >= 1.5 * stopD, `liq ${liqD} stop ${stopD}`);
+  const en = recs(log).find(x => x.k === "ENTRY")!; assert.equal((en.d.fill as { marginMode: string }).marginMode, "ISOLATED");
 });
