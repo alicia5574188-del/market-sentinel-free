@@ -1207,3 +1207,12 @@ test("FVG 逐仓新单（fvg-isolated-v1）：实盘用同一杠杆、按比例�
   assert.ok(Math.abs(gate.placed[0].contracts*.001*100/(src.notional*.5)-1)<=.003);
   const co=(live(h).positions.BTC_USDT as {parity:{copyOutcome:{paperIsolated:boolean}}}).parity.copyOutcome;assert.equal(co.paperIsolated,true);
 }));
+
+test("FVG 跟单不套 4 倍总名义上限（其它策略保留）；可用保证金检查仍在",()=>{
+  const f=fvgTrade("nts-BTC_USDT-cap");f.leverage=10;f.margin=f.notional/10;(f as {marginModel?:string}).marginModel="fvg-isolated-v1";
+  const i={...request(f),openNotional:1e6,available:1e6,equity:1e6/4,sourceEquity:1e6/4,mirrorRatio:1};
+  assert.doesNotThrow(()=>buildProportionalMirror(i),"FVG 不因 4 倍名义上限被拒");
+  const legacy={...request(trade()),openNotional:1e6,available:1e6,equity:1e6/4,sourceEquity:1e6/4,mirrorRatio:1};
+  assert.throws(()=>buildProportionalMirror(legacy),(e:unknown)=>e instanceof LiveEntrySizingError&&e.code==="RISK_CAP");
+  assert.throws(()=>buildProportionalMirror({...i,available:0}),(e:unknown)=>e instanceof LiveEntrySizingError&&e.code==="MARGIN");
+});

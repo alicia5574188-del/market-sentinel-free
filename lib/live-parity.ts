@@ -261,7 +261,8 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
     fail("RISK_CAP","按实际权益与未平仓/未决暴露计算已超过原账户风险预算；不缩单、不改杠杆，等待风险释放");
   if(!input.sourceRiskAuthority){
     if (input.openMargin+margin>mirrorEquity*.75+1e-8)fail("MARGIN","累计保证金超出模拟同口径75%预算");
-    if (input.openNotional+notional>mirrorEquity*4+1e-8)fail("RISK_CAP","按实际成交价计算已超过原账户风险预算");
+    // FVG（nts）不套 4 倍总名义上限（用户 2026-11-04 批准）：只靠真实可用保证金和强平检查。
+    if (!nts&&input.openNotional+notional>mirrorEquity*4+1e-8)fail("RISK_CAP","按实际成交价计算已超过原账户风险预算");
   } else if (!nts&&!minimumUplift&&plannedRisk>sourceScaledRisk*1.25+mirrorEquity*.001) {
     fail("ECONOMICS","实盘成交价偏离使单笔风险明显高于模拟比例，等待下一笔新源单而不追价");
   }
