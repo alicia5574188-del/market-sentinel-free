@@ -41,8 +41,12 @@ export type FvgOpen = {
   /** 影子 3R：老规则（3R 止盈 / 原止损）先到哪个。 */
   shadow?: Shadow3R;
 };
-export type ExitRule = "3R" | "2R_BE1R";
-export type Shadow3R = { tp3: number; stop0: number; res: "TP3" | "STOP" | "AMBIG" | null; at: number | null; px: number | null; src: string | null; barT: number };
+export type ExitRule = "3R" | "2R_BE1R" | "2R_BE1R_CAP5";
+/** 新规则（2R 止盈 + 1R 保本，含宽止损止盈封顶 5% 的版本）。 */
+export const isBeRule = (r: ExitRule) => r === "2R_BE1R" || r === "2R_BE1R_CAP5";
+/** 成本过滤：(止损滑点 + 双边手续费) ÷ 止损距离 > 30% 跳过；止损距离 > 2.5% 时止盈 = min(2R, 入场 ±5%)。 */
+export const FVG_MAX_COST_RATIO = 0.30, FVG_TP_CAP_STOP_PCT = 0.025, FVG_TP_CAP_PCT = 0.05;
+export type Shadow3R = { kind?: "3R" | "2R_UNCAPPED"; tp3: number; stop0: number; res: "TP3" | "STOP" | "AMBIG" | null; at: number | null; px: number | null; src: string | null; barT: number };
 export const exitRuleOf = (o: { exitRule?: ExitRule }): ExitRule => o.exitRule ?? "3R";
 export const stop0Of = (o: { stop0?: number; stop: number }) => (typeof o.stop0 === "number" && o.stop0 > 0 ? o.stop0 : o.stop);
 /** 价格 R（不含手续费）：有利方向价格移动 ÷ |成交价 − 原止损|。 */
@@ -299,7 +303,7 @@ export class FvgDesk {
       const px = o.side === "LONG" ? q.bestBid : q.bestAsk, rule = exitRuleOf(o);
       if (o.side === "LONG" ? px >= o.tp : px <= o.tp) { out.push({ type: "CLOSE_FVG", tid: o.tid, code: "TARGET", reason: `到 ${o.tpR ?? f.rr}R 止盈 ${r(o.tp, 6)}` }); continue; }
       // 2R_BE1R：价格（出场方向报价）先到 +beAtR 倍价格 R → 止损移到保本（入场价往盈利方向 beTicks 个 tick）。旧 3R 单不动。
-      if (rule === "2R_BE1R" && !o.be && priceR(o, px) >= f.beAtR) {
+      if (isBeRule(rule) && !o.be && priceR(o, px) >= f.beAtR) {
         const tick = this.ticks[o.sym] ?? fallbackTick(o.fill), d = o.side === "LONG" ? 1 : -1; // tick 与止损同源：Gate order_price_round，没有就按价格数量级×1e-4
         let be = r(o.fill + d * f.beTicks * tick, 12) ?? o.fill;
         if (o.side === "LONG" ? be >= px : be <= px) be = o.fill; // 极端：1 tick 已越过现价，就用入场价
@@ -387,19 +391,34 @@ export class FvgDesk {
     const stopPct = Math.abs(estFill - st.stop) / estFill, worst = notional * (stopPct + cfg.stopSlipPct + 2 * cfg.feeRate);
     const tid = `nts-${a.sym}-${st.id}${a.case === "b" ? "b" : ""}`;
     if (this.st.filled.includes(`${a.sym}:${st.id}`) || draft.positions.some(x => x.id === tid && x.status === "OPEN")) return false; // 同一形态不重复开
-    // 新单：2R 止盈 + 1R 保本（exitRule 2R_BE1R）；R = |成交价 − 止损|，只看价格
-    const tp0 = estFill + dir * f.tpR * Math.abs(estFill - st.stop);
+    // 成本过滤（2026-11-05 用户批准）：成本占 1R 超过 30% 不开，只记录
+    const costRatio = (cfg.stopSlipPct + 2 * cfg.feeRate) / stopPct0;
+    const capped = stopPct0 > FVG_TP_CAP_STOP_PCT;
+    const tpOf = (px: number) => { const tp2 = px + dir * f.tpR * Math.abs(px - st.stop!); const cap = px * (1 + dir * FVG_TP_CAP_PCT);
+      return { tp2, tp: capped ? (long ? Math.min(tp2, cap) : Math.max(tp2, cap)) : tp2 }; };
+    if (costRatio > (f.maxCostRatio ?? FVG_MAX_COST_RATIO)) {
+      const w = tpOf(estFill);
+      rt.skipped.add(st.id);
+      const reason = "跳过：成本占1R超过30%";
+      this.h.append({ id: `skip:${a.sym}:${st.id}:${a.case}`, k: "NO_TRADE", t: now, sym: a.sym, d: { case: a.case, setup: st.id, reason, mode: a.mode, filter: "COST_RATIO",
+        stopPct: r(stopPct0, 5), costPct: r(cfg.stopSlipPct + 2 * cfg.feeRate, 5), costRatio: r(costRatio, 4), maxCostRatio: f.maxCostRatio ?? FVG_MAX_COST_RATIO,
+        side: st.side, entry: st.entry, estFill: r(estFill, 8), stop: st.stop, tp: r(w.tp, 8), tp2R: r(w.tp2, 8), tpCapped: capped && w.tp !== w.tp2, fvg15: st.fvg, zoneKeys: st.zoneKeys } }, now);
+      this.h.brief(now, a.sym, "放弃", `${reason}（止损 ${r(stopPct0 * 100, 3)}%，成本 ${r(100 * (cfg.stopSlipPct + 2 * cfg.feeRate), 2)}% = ${r(costRatio * 100, 1)}% 的 1R）`);
+      return false;
+    }
+    // 新单：2R 止盈 + 1R 保本（exitRule 2R_BE1R）；止损 > 2.5% 时止盈 = min(2R, ±5%)（2R_BE1R_CAP5）
+    const tp0 = tpOf(estFill).tp;
     const res = openPaperTrade(draft, { id: tid, symbol: a.sym, side: st.side, quote, contract, marginTarget: margin, leverage: lev, stopPrice: st.stop, targetPrice: tp0,
       maintenanceRate: mmr, slippageRate: slip, now, isolated: true,
       reason: `NTS FVG ${st.side} 情形${a.case} 15m缺口 ${r(st.fvg.lo, 6)}~${r(st.fvg.hi, 6)}`, multi: true });
     if (!res.ok) return skip(res.reason.startsWith("模拟盘可用保证金不足") ? `跳过：可用保证金不足（${res.reason.replace("模拟盘可用保证金不足：", "")}，逐仓 ${lev}×，名义 ${r(notional, 2)}U，不缩小仓位）` : `下单失败：${res.reason}`);
-    const t = res.trade, fill = t.entryPrice, risk = Math.abs(fill - st.stop), tp = fill + dir * f.tpR * risk, tp3 = fill + dir * 3 * risk;
+    const t = res.trade, fill = t.entryPrice, risk = Math.abs(fill - st.stop), { tp, tp2: tp2Raw } = tpOf(fill), tpCapped = capped && tp !== tp2Raw, rule: ExitRule = capped ? "2R_BE1R_CAP5" : "2R_BE1R", tp3 = fill + dir * 3 * risk;
     (t as { armPrice: number }).armPrice = tp;
     const oneR = t.quantity * Math.abs(fill - st.stop) + t.entryFee * 2;
     this.st.opens.push({ tid, sym: a.sym, side: st.side, openedAt: now, fill, stop: st.stop, tp, oneR, equityAtOpen: balance, setupId: st.id, case: a.case, zoneKeys: st.zoneKeys,
       sweepPx: st.sweepPx, fvg: st.fvg, plannedEntry: st.entry, fillMode: a.mode, mfePct: 0, maePct: 0, mfeR: 0, maeR: 0, lastTraceAt: now,
-      exitRule: "2R_BE1R", stop0: st.stop, tpR: f.tpR, be: null, hiPx: fill, loPx: fill, barT: 0, segHi: null, segLo: null,
-      shadow: { tp3, stop0: st.stop, res: null, at: null, px: null, src: null, barT: 0 } });
+      exitRule: rule, stop0: st.stop, tpR: f.tpR, be: null, hiPx: fill, loPx: fill, barT: 0, segHi: null, segLo: null,
+      shadow: { kind: tpCapped ? "2R_UNCAPPED" : "3R", tp3: tpCapped ? tp2Raw : tp3, stop0: st.stop, res: null, at: null, px: null, src: null, barT: 0 } });
     this.st.filled.push(`${a.sym}:${st.id}`); if (this.st.filled.length > 300) this.st.filled.splice(0, this.st.filled.length - 300);
     for (const k of st.zoneKeys) this.st.usedZones.push(`${a.sym}:${k}`); if (this.st.usedZones.length > 300) this.st.usedZones.splice(0, this.st.usedZones.length - 300);
     const d = this.h.data[a.sym], b4 = d?.bars["4h"] ?? [], b15 = d?.bars["15m"] ?? [], packs = buildPacks({ "15m": b15, "4h": b4 });
@@ -408,11 +427,11 @@ export class FvgDesk {
       strategy: "FVG", case: a.case, fillMode: a.mode, why: a.why, side: st.side, setup: st.id,
       zone4h: z, sweep: { t: st.sweepT, px: st.sweepPx, swing: st.swingPx }, displacement: { bars: st.dispBars, move: st.dispMove, atr: st.atr }, fvg15: st.fvg,
       plan: { entry: st.entry, stop: st.stop, tp3R_orig: st.tpOrig }, fill: { price: fill, contracts: t.contracts, qty: t.quantity, notional: r(t.notional, 2), margin: r(t.margin, 2), fee: r(t.entryFee, 4), liq: t.liquidationPrice, leverage: lev, marginMode: "ISOLATED", marginModel: "fvg-isolated-v1", levCap, targetNotional: r(notional, 2), marginPctOfBalance: r(t.margin / balance, 4), sizingRule: "fixed-notional-v1", liqBuffer: FVG_LIQ_BUFFER, liqDistPct: r(isolatedLiqDistance(lev, mmr), 5), needPct: r(need, 5), mmr },
-      stop: st.stop, tp, rr: f.tpR, exitRule: "2R_BE1R", exitPlan: { tpR: f.tpR, tp, beAtR: f.beAtR, beTrigger: fill + dir * f.beAtR * risk, beTicks: f.beTicks, note: "R = |成交价 − 止损|（价格）；到 +1R 止损移到入场价往盈利方向 1 tick" },
-      shadow3R: { tp3, stop0: st.stop, note: "老规则（3R 止盈/原止损）只记录不执行" }, stopPct: r(Math.abs(fill - st.stop) / fill, 5), oneR: r(oneR, 2), sizing: { balance: r(balance, 2), firstPct: cfg.firstMarginPct, worstEst: r(worst, 2), worstPct: r(worst / balance, 4), stopWidthLimit: null },
+      stop: st.stop, tp, rr: f.tpR, exitRule: rule, tpCapped, tp2R_uncapped: tp2Raw, tpCapPct: capped ? FVG_TP_CAP_PCT : null, costRatio: r(costRatio, 4), exitPlan: { tpR: f.tpR, tp, beAtR: f.beAtR, beTrigger: fill + dir * f.beAtR * risk, beTicks: f.beTicks, note: "R = |成交价 − 止损|（价格）；到 +1R 止损移到入场价往盈利方向 1 tick" },
+      shadow3R: tpCapped ? { kind: "2R_UNCAPPED", tp3: tp2Raw, stop0: st.stop, note: "封顶前的 2R 止盈 / 原止损：只记录不执行" } : { tp3, stop0: st.stop, note: "老规则（3R 止盈/原止损）只记录不执行" }, stopPct: r(Math.abs(fill - st.stop) / fill, 5), oneR: r(oneR, 2), sizing: { balance: r(balance, 2), firstPct: cfg.firstMarginPct, worstEst: r(worst, 2), worstPct: r(worst / balance, 4), stopWidthLimit: null },
       tick: { size: this.ticks[a.sym] ?? null, source: this.ticks[a.sym] ? "gate.order_price_round" : "fallback(价格数量级×1e-4)" },
       quote: { bid: q.bestBid, ask: q.bestAsk }, ind: { "15m": packs["15m"], "4h": packs["4h"], use: "RSI/MACD 只记录，不参与决策" }, version: this.h.version } }, now);
-    this.h.brief(now, a.sym, "进场", `${sideCn(st.side)} 情形${a.case}${a.mode === "LIMIT" ? " 限价" : a.mode === "GAP" ? " 跳空市价" : " 回到缺口市价"} @${r(fill, 6)} 止损 ${r(st.stop, 6)} 止盈 ${r(tp, 6)}（${f.tpR}R，+${f.beAtR}R 保本）名义 ${r(t.notional, 2)}U 逐仓 ${lev}× 保证金 ${r(t.margin, 2)}U（余额 ${r(100 * t.margin / balance, 1)}%）`);
+    this.h.brief(now, a.sym, "进场", `${sideCn(st.side)} 情形${a.case}${a.mode === "LIMIT" ? " 限价" : a.mode === "GAP" ? " 跳空市价" : " 回到缺口市价"} @${r(fill, 6)} 止损 ${r(st.stop, 6)} 止盈 ${r(tp, 6)}（${tpCapped ? `封顶 5%，原 2R ${r(tp2Raw, 6)}` : `${f.tpR}R`}，+${f.beAtR}R 保本）名义 ${r(t.notional, 2)}U 逐仓 ${lev}× 保证金 ${r(t.margin, 2)}U（余额 ${r(100 * t.margin / balance, 1)}%）`);
     rt.stage = "持仓中"; rt.caseTag = a.case;
     return true;
   }

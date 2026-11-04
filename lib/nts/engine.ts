@@ -22,7 +22,7 @@ import { dailyExit, evaluateDailyEntry, isDailyDecisionBar, type DailyPlan } fro
 import type { NtsLog, NtsRec } from "./log.ts";
 import { dirOf, TF_SEC, type Bar, type Side, type Tf } from "./types.ts";
 import { r } from "./indicators.ts";
-import { exitRuleOf, FvgDesk, normalizeFvgState, priceR, stepShadow, stop0Of, type ExitRule, type FvgAction, type FvgOpen, type FvgState, type Shadow3R } from "./fvg-desk.ts";
+import { exitRuleOf, isBeRule, FvgDesk, normalizeFvgState, priceR, stepShadow, stop0Of, type ExitRule, type FvgAction, type FvgOpen, type FvgState, type Shadow3R } from "./fvg-desk.ts";
 
 const HOUR = 3_600_000, MIN = 60_000, ALL_TF: Tf[] = ["15m", "1h", "4h", "1d"];
 export type NtsSymbol = "BTC_USDT" | "ETH_USDT";
@@ -531,7 +531,7 @@ export class NtsEngine {
           beMove: o.be ?? null, shadow3R, version: NTS_VERSION } }, now);
         this.brief(now, o.sym, "出场", `情形${o.case} ${reason}，净 ${net >= 0 ? "+" : ""}${net.toFixed(2)}U（价格 ${rPrice != null && rPrice >= 0 ? "+" : ""}${rPrice?.toFixed(2)}R / 扣费 ${rr.toFixed(2)}R）`);
         this.s.post.push({ tid: o.tid, sym: o.sym, side: o.side, exitAt, exitPx, done: [], best: 0, worst: 0, best120: 0, worst120: 0, barT: 0,
-          exitRule: rule, fill: o.fill, stop0: stop0Of(o), qty: t?.quantity, entryFee: t?.entryFee, oneR: o.oneR, shadow: rule === "2R_BE1R" && sh && sh.res == null ? sh : null,
+          exitRule: rule, fill: o.fill, stop0: stop0Of(o), qty: t?.quantity, entryFee: t?.entryFee, oneR: o.oneR, shadow: isBeRule(rule) && sh && sh.res == null ? sh : null,
           actual: { code, rPrice, rFee: feeR } });
         if (this.s.post.length > 60) this.s.post.splice(0, this.s.post.length - 60);
         this.extremesDirty = true;
@@ -624,7 +624,7 @@ export class NtsEngine {
       if (!t) continue;
       const d = dirOf(o.side), before = [o.hiPx, o.loPx, o.mfePct, o.maePct, o.mfeR, o.maeR, o.shadow?.res ?? null].join("|");
       o.hiPx = Math.max(o.hiPx ?? o.fill, o.fill); o.loPx = Math.min(o.loPx ?? o.fill, o.fill); o.barT ??= 0;
-      const sh = exitRuleOf(o) === "2R_BE1R" ? o.shadow : undefined;
+      const sh = isBeRule(exitRuleOf(o)) ? o.shadow : undefined;
       for (const b of this.data[o.sym]?.bars["15m"] ?? []) {
         const st = b.time * 1000;
         if (st < o.openedAt || st + 15 * MIN > c.now || st <= o.barT) continue;
@@ -661,7 +661,7 @@ export class NtsEngine {
   }
   private logShadow(tid: string, sym: string, sh: Shadow3R, o: { side: Side; fill: number; oneR: number }, qty: number | null, entryFee: number | null, actual: PostExit["actual"] | null, now: number) {
     this.safeAppend({ id: `shadow:${tid}`, k: "SHADOW_3R", t: now, sym, tid, d: { ...this.shadowView(sh, o, qty, entryFee), actual,
-      note: sh.res === "AMBIG" ? "同一根 15m 里 3R 和原止损都碰到，先后分不清" : "老规则（3R 止盈 / 原止损）先到哪个；只记录，不影响交易" } }, now);
+      kind: sh.kind ?? "3R", note: sh.res === "AMBIG" ? "同一根 15m 里影子止盈和原止损都碰到，先后分不清" : sh.kind === "2R_UNCAPPED" ? "封顶前的 2R 止盈 / 原止损先到哪个；只记录，不影响交易" : "老规则（3R 止盈 / 原止损）先到哪个；只记录，不影响交易" } }, now);
     this.extremesDirty = true;
   }
   private floatingFvg(o: FvgOpen, q: Quote, t: Trade) {

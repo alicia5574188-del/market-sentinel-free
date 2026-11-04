@@ -119,6 +119,8 @@ test("情形 b 条件：回到原 15m 缺口附近、扫点没破、原 TP 没�
 function engine(b15: Bar[], b4 = h4Bars(), cfg: Record<string, unknown> = {}) {
   const now = (b15.at(-1)!.time + M15) * 1000 + 30_000;
   const c = normalizeNtsConfig({ ...DEFAULT_NTS_CONFIG, enabled: true, ...cfg } as never), log = new NtsLog(c);
+  // 夹具止损约 0.53%（成本占 1R ≈ 36%）：老测试关掉成本过滤；成本过滤自己的测试传 costFilter
+  if (cfg.costFilter == null) c.fvg.maxCostRatio = 100; else c.fvg.maxCostRatio = cfg.costFilter as number;
   const e = new NtsEngine(c, log, null, now);
   e.ingestCandles("BTC_USDT", "4h", b4, now); e.ingestCandles("BTC_USDT", "15m", b15, now);
   e.ingestCandles("ETH_USDT", "4h", h4Bars().map(b => bar(b.time, 3000, 3001, 2999, 3000)), now); e.ingestCandles("ETH_USDT", "15m", b15.map(b => bar(b.time, 3000, 3001, 2999, 3000)), now);
@@ -242,7 +244,11 @@ test("不限止损宽度：止损距离 6% 也照开（最坏亏损只记录）"
   const r0 = step(e, initialForward(now), now, 101.5, 101.52);
   const st = e.desk.rt.BTC_USDT!.setups.find(x => x.status === "ARMED")!; st.stop = 95; st.tpOrig = ENTRY + 3 * (ENTRY - 95);
   step(e, r0.fwd, now + 2000, 101.22, 101.23);
-  const o = e.desk.st.opens[0]!; assert.ok(o, "开了"); assert.equal(o.stop, 95); assert.ok(Math.abs(o.tp - (o.fill + 2 * (o.fill - 95))) < 1e-9);
+  const o = e.desk.st.opens[0]!; assert.ok(o, "开了"); assert.equal(o.stop, 95);
+  // 止损 > 2.5%：止盈封顶 = min(2R, 入场 +5%)；影子记封顶前的 2R
+  assert.ok(Math.abs(o.tp - o.fill * 1.05) < 1e-9, `tp ${o.tp}`); assert.equal(o.exitRule, "2R_BE1R_CAP5");
+  assert.equal(o.shadow!.kind, "2R_UNCAPPED"); assert.ok(Math.abs(o.shadow!.tp3 - (o.fill + 2 * (o.fill - 95))) < 1e-9);
+  const en0 = recs(log).find(x => x.k === "ENTRY")!; assert.equal(en0.d.tpCapped, true); assert.ok(Math.abs(Number(en0.d.tp2R_uncapped) - (o.fill + 2 * (o.fill - 95))) < 1e-9);
   const en = recs(log).find(x => x.k === "ENTRY")!; assert.ok((en.d.sizing as { worstPct: number }).worstPct > 0.05); assert.equal((en.d.sizing as { stopWidthLimit: unknown }).stopWidthLimit, null);
   assert.ok(!recs(log).some(x => x.k === "NO_TRADE"));
 });
@@ -480,4 +486,22 @@ test("固定名义：10× 上限的币名义仍 = 余额×2%×100，杠杆 ≤10
   assert.ok(Math.abs(t.margin - t.notional / t.leverage) < 1e-9);
   const f = recs(log).find(x => x.k === "ENTRY")!.d.fill as Record<string, unknown>;
   assert.equal(f.sizingRule, "fixed-notional-v1"); assert.ok(Math.abs(Number(f.targetNotional) - 2000) < 1e-6); assert.ok(Number(f.marginPctOfBalance) > 0.1);
+});
+
+test("成本过滤：止损 0.53% → 成本占 1R ≈36% > 30%，不开，记 NO_TRADE「跳过：成本占1R超过30%」带止损%/成本比/计划价", () => {
+  const { e, log, now } = engine(m15Bars(), h4Bars(), { costFilter: 0.30 });
+  let r = step(e, initialForward(now), now, 101.5, 101.52);
+  r = step(e, r.fwd, now + 2000, 101.22, 101.23);
+  assert.equal(r.fwd.positions.filter(x => x.status === "OPEN").length, 0, "不开");
+  const nt = recs(log).find(x => x.k === "NO_TRADE" && x.d.reason === "跳过：成本占1R超过30%")!; assert.ok(nt);
+  assert.ok(Number(nt.d.costRatio) > 0.3 && Number(nt.d.costRatio) < 0.4); assert.ok(Number(nt.d.stopPct) > 0.005);
+  for (const k of ["entry", "stop", "tp", "tp2R", "side"]) assert.ok(nt.d[k] != null, k);
+});
+
+test("成本过滤：同一形态止损够宽（≥0.64%）时成本 ≤30%，照开，标 2R_BE1R（止损 ≤2.5% 不封顶）", () => {
+  const { e, now } = engine(m15Bars(), h4Bars(), { costFilter: 0.30 });
+  const r0 = step(e, initialForward(now), now, 101.5, 101.52);
+  const st = e.desk.rt.BTC_USDT!.setups.find(x => x.status === "ARMED")!; st.stop = 100.3;
+  step(e, r0.fwd, now + 2000, 101.22, 101.23);
+  const o = e.desk.st.opens[0]!; assert.ok(o); assert.equal(o.exitRule, "2R_BE1R"); assert.ok(Math.abs(o.tp - (o.fill + 2 * (o.fill - 100.3))) < 1e-9);
 });

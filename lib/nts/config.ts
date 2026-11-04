@@ -23,6 +23,8 @@ export type NtsConfig = {
     /** 出场规则（2026-11-04 起的新单 exitRule="2R_BE1R"）：止盈 = 成交价起 tpR 倍价格 R；价格先到 +beAtR 倍 R 时止损移到保本
      *  （入场价往盈利方向 beTicks 个 tick）。R = |成交价 − 原止损|（只看价格）。之前开的单保持各自原来的 3R 计划不动。 */
     tpR: number; beAtR: number; beTicks: number;
+    /** 成本过滤：(止损滑点 + 双边手续费) ÷ 止损距离 超过它就不开（2026-11-05 起 0.30）。 */
+    maxCostRatio: number;
     scanBars: number;         // 15m 形态往回扫多少根（含历史形态，用于情形 b）
     reentryTolPct: number;    // 情形 b：价格回到原 15m 缺口 ± 该比例内
     nearPct: number;          // 离 4H 缺口 ≤ 该比例 = 热币：每根 15m 都刷新；情形 b 现价离原 15m 缺口 ≤ 该比例 = 必须常驻实时行情
@@ -88,7 +90,7 @@ export const DEFAULT_NTS_CONFIG: NtsConfig = {
   strategy: "FVG",
   strategyV: NTS_STRATEGY_V,
   fvg: { universeMax: 30, maxResident: 12, zoneLookback4h: 100, swingL: 2, swingR: 2, swingLookback: 96,
-    atrLen: 14, dispMaxBars: 3, expiryBars: 16, rr: 3, tpR: 2, beAtR: 1, beTicks: 1, scanBars: 200, reentryTolPct: 0.001, nearPct: 0.01,
+    atrLen: 14, dispMaxBars: 3, expiryBars: 16, rr: 3, tpR: 2, beAtR: 1, beTicks: 1, maxCostRatio: 0.30, scanBars: 200, reentryTolPct: 0.001, nearPct: 0.01,
     cold15mEveryMs: 60 * 60_000, min4h: 30, min15m: 60 },
   daily: { sides: "SHORT", lookbackBars: 96, k: 1, trail: true, decideUtcHour: 0, holdMs: 24 * 3_600_000 - 120_000 },
   enabled: true,
@@ -156,6 +158,7 @@ export function normalizeNtsConfig(raw: unknown): NtsConfig {
   f.swingL = Math.round(clamp(f.swingL, 1, 5)); f.swingR = Math.round(clamp(f.swingR, 1, 5)); f.swingLookback = Math.round(clamp(f.swingLookback, 10, 200));
   f.dispMaxBars = Math.round(clamp(f.dispMaxBars, 2, 3)); f.expiryBars = Math.round(clamp(f.expiryBars, 1, 96)); f.rr = clamp(f.rr, 1, 10);
   f.tpR = clamp(f.tpR, 0.5, 10); f.beAtR = clamp(f.beAtR, 0.1, f.tpR); f.beTicks = Math.round(clamp(f.beTicks, 0, 10));
+  f.maxCostRatio = Number.isFinite(f.maxCostRatio) ? clamp(f.maxCostRatio, 0.01, 100) : 0.30;
   f.cold15mEveryMs = clamp(f.cold15mEveryMs, 15 * 60_000, 4 * 3_600_000);
   const ds = (src.daily && typeof src.daily === "object" ? (src.daily as Record<string, unknown>).sides : undefined);
   c.daily.sides = ds === "BOTH" ? "BOTH" : ds === "SHORT" ? "SHORT" : DEFAULT_NTS_CONFIG.daily.sides;

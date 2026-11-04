@@ -11,7 +11,7 @@ type FvgZone = { key: string; side: string; lo: number; hi: number; formedAt: nu
 type FvgCoin = { sym: string; rank: number; stage: string; case: "a" | "b" | null; hot: boolean; px: number | null; dist: number | null; zones: FvgZone[];
   setup: { id: string; side: string; status: string; entry: number | null; stop: number | null; tp: number | null; fvg: { lo: number; hi: number } | null; expiresT: number | null } | null; last: string };
 type FvgPos = { tid: string; sym: string; side: string; case: "a" | "b"; openedAt: number; entry: number; plannedEntry: number; fillMode: string; stop: number; tp: number; price: number | null; floatingR: number | null; floatingNet: number | null; oneR: number; margin: number | null; liq?: number | null; leverage?: number | null; marginMode?: string; notional?: number | null;
-  exitRule?: "3R" | "2R_BE1R"; tpR?: number; stop0?: number; be?: { at: number; px: number; stop: number; mfeRp: number } | null; floatingRp?: number | null; mfeR?: number | null; maeR?: number | null; mfeRp?: number | null; maeRp?: number | null };
+  exitRule?: "3R" | "2R_BE1R" | "2R_BE1R_CAP5"; tpR?: number; stop0?: number; be?: { at: number; px: number; stop: number; mfeRp: number } | null; floatingRp?: number | null; mfeR?: number | null; maeR?: number | null; mfeRp?: number | null; maeRp?: number | null };
 export type FvgView = { name: string; universe: string[]; ready: number; coins: FvgCoin[]; positions: FvgPos[]; account?: { balance: number; marginUsed: number; available: number } | null; stages: Record<string, number>; resident: string[];
   plan: { universe: number; hot: number; cold: number; estPerHour: number };
   rules: { universeMax: number; rr: number; tpR?: number; beAtR?: number; exitRule?: string; expiryBars: number; stop: string; firstMarginPct: number; leverage: number; reentryTolPct: number };
@@ -73,7 +73,7 @@ function FvgBody({ nts, f }: { nts: NtsView; f: FvgView }) {
           <div><dt>进场（{p.fillMode === "LIMIT" ? "限价" : p.fillMode === "GAP" ? "跳空市价" : "回到缺口市价"}）</dt><dd>{dp(p.entry)}</dd></div>
           <div><dt>现价</dt><dd>{dp(p.price)} <em className={tone(move)}>{move == null ? "" : `${move > 0 ? "+" : ""}${(move * 100).toFixed(2)}%`}</em></dd></div>
           <div><dt>止损（扫点外）</dt><dd>{dp(p.stop)} <em>距 {pct(p.price ? Math.abs(p.stop / p.price - 1) : null)}</em></dd></div>
-          <div><dt>止盈 {p.tpR ?? ru.rr}R{p.exitRule === "2R_BE1R" ? (p.be ? " · 已保本" : ` · +${ru.beAtR ?? 1}R 保本`) : " · 旧单原计划"}</dt><dd>{dp(p.tp)} <em>距 {pct(p.price ? Math.abs(p.tp / p.price - 1) : null)}</em></dd></div>
+          <div><dt>止盈 {p.exitRule === "2R_BE1R_CAP5" ? "≤5%封顶" : `${p.tpR ?? ru.rr}R`}{p.exitRule === "2R_BE1R" || p.exitRule === "2R_BE1R_CAP5" ? (p.be ? " · 已保本" : ` · +${ru.beAtR ?? 1}R 保本`) : " · 旧单原计划"}</dt><dd>{dp(p.tp)} <em>距 {pct(p.price ? Math.abs(p.tp / p.price - 1) : null)}</em></dd></div>
         </dl>
         <p className="nts-note">{p.marginMode ?? "全仓(旧单)"} {p.leverage ?? "—"}× · 保证金 {p.margin == null ? "—" : `${p.margin.toFixed(2)}U`}{p.notional == null ? "" : ` · 名义 ${p.notional.toFixed(2)}U`} · 强平 {dp(p.liq)}</p>
         <p className="nts-note">开仓 {clock(p.openedAt)} · 1R ≈ {p.oneR.toFixed(2)}U · 浮动 价格R {p.floatingRp == null ? "—" : sgn(p.floatingRp)} / 扣费R {p.floatingR == null ? "—" : sgn(p.floatingR)} · 最有利 价格R {p.mfeRp == null ? "—" : sgn(p.mfeRp)} / 扣费R {p.mfeR == null ? "—" : sgn(p.mfeR)}{p.be ? ` · ${clock(p.be.at)} 止损移到保本 ${dp(p.be.stop)}` : ""}</p>
