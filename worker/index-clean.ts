@@ -3839,7 +3839,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
     if(path === "/member-closed" && request.method === "GET") {
       const id=url.searchParams.get("id")??"",openedAt=Number(url.searchParams.get("openedAt"));
-      if(!/^ft-[a-zA-Z0-9_-]{1,100}$/.test(id)||!Number.isSafeInteger(openedAt)||openedAt<=0)return json({error:"invalid source"},400);
+      if(!/^(?:ft|nts)-[a-zA-Z0-9_-]{1,100}$/.test(id)||!Number.isSafeInteger(openedAt)||openedAt<=0)return json({error:"invalid source"},400);
       const current=sourceLifecycle(this.forwardState,id);if(current.status!=="UNKNOWN")return json({trade:current.status==="CLOSED"?current.trade:null,nextCursor:null});
       const prefix=`${FORWARD_STORAGE}archive:`,cursor=url.searchParams.get("cursor");
       if(cursor&&(!cursor.startsWith(prefix)||cursor.length>150))return json({error:"invalid cursor"},400);

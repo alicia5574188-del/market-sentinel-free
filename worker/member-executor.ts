@@ -384,7 +384,7 @@ export function memberExecutionClass(Base:typeof MarketStream) {
         }
         if(path==="/source") {
           const source=url.searchParams.get("id")??"";
-          if(!/^ft-[a-zA-Z0-9_-]{1,100}$/.test(source))return json({error:"源单ID无效"},400);
+          if(!/^(?:ft|nts)-[a-zA-Z0-9_-]{1,100}$/.test(source))return json({error:"源单ID无效"},400);
           const binding=await this.ctx.storage.get<MirrorBinding>(`${LIVE_PARITY_PREFIX}binding:${source}`);
           return binding?json(binding):json({error:"本账户没有这笔复制映射"},404);
         }

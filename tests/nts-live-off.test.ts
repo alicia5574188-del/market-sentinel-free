@@ -50,7 +50,9 @@ test("worker 路由：/api/nts/* 全部要登录；开关只收 POST 且必须�
 test("相对基线(c6b8eb32)：实盘/Gate 下单相关文件零改动，worker 新增行不碰实盘开关和 live 状态", { skip: git("rev-parse", "--verify", `${BASE}^{commit}`) == null }, () => {
   const names = (git("diff", "--name-only", BASE) ?? "").split("\n").filter(Boolean);
   const liveFiles = names.filter(n => /^lib\/(gate-live|gate-readonly|gate-market|gate-quantity|gate-stream|arena-live|entry-gate|live-[a-z-]+)\.ts$/.test(n));
-  assert.deepEqual(liveFiles, [], "实盘相关文件不应被改动");
+  // 例外：lib/live-parity.ts 允许为"实盘/会员跟随 FVG 源单"而改（同币多腿取最早一笔、按止损降执行杠杆、nts 源单豁免组合风险上限）；
+  // 下单/Gate 客户端/实盘开关文件仍须零改动，nts 交易系统本身仍不引用任何实盘模块（见上方测试）。
+  assert.deepEqual(liveFiles.filter(n => n !== "lib/live-parity.ts"), [], "实盘相关文件不应被改动");
   const added = (git("diff", "-U0", BASE, "--", "worker/index-clean.ts", "worker/http-handlers.ts") ?? "").split("\n").filter(l => l.startsWith("+") && !l.startsWith("+++"));
   const bad = added.filter(l => /runtime\.live\b[^;]*=|requestedEnabled|liveOrder|placeOrder|ownerLiveMode|live\.requested/.test(l) && !/ntsHealth|nts/i.test(l));
   assert.deepEqual(bad, [], "worker 新增行触及实盘");

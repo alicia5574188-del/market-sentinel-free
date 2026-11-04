@@ -79,11 +79,21 @@ export function copyableLiveSource(t: {unopened?:boolean;inverseCopy?:unknown;st
   return live === "SHOCK" || live === "TREND" || route === "SHOCK" || route === "TREND";
 }
 
+/** 新交易系统（lib/nts，FVG 等）开出的纸面单：rule.grammar = nts-v1。 */
+export const isNtsSource=(t:{rule?:{grammar?:string}}|null|undefined)=>t?.rule?.grammar==="nts-v1";
 export function forwardMirrorSources(state: ForwardState, sourceEquity: number): Record<string, MirrorSourceTrade> {
   if (!state || !Array.isArray(state.positions) || !Array.isArray(state.history) || !positive(sourceEquity))
     throw new Error("当前模拟账户不可用，实盘复制等待恢复，不回退到旧策略");
   const out: Record<string, MirrorSourceTrade> = {};
+  // FVG（新交易系统 nts-v1）允许同币多笔纸面单，但实盘按币单腿持仓、不做净额：同币只跟随最早开的一笔，
+  // 其余几笔不复制（不合并、不报错），避免一个币有两笔就让整个实盘复制停摆。旧策略仍保持“多腿即报错”。
+  const ntsLeg=isNtsSource;
+  const ntsPrimary=new Map<string,Trade>();
+  for(const t of state.positions)if(ntsLeg(t)&&copyableLiveSource(t)){
+    const cur=ntsPrimary.get(t.symbol);if(!cur||t.openedAt<cur.openedAt||(t.openedAt===cur.openedAt&&t.id<cur.id))ntsPrimary.set(t.symbol,t);
+  }
   for (const t of state.positions) {
+    if(ntsLeg(t)&&ntsPrimary.get(t.symbol)!==t)continue;
     // 同步爆发和趋势进实盘，名义按实盘权益/模拟权益缩放。过渡、轮动和没开的单不进。
     // 已经存在的反向单仍可跟随，避免把已绑定的实盘仓丢掉；当前账户不再新开反向单。
     if(!copyableLiveSource(t))continue;
@@ -196,7 +206,8 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
     || ![input.available,input.openRisk,input.sameDirectionRisk,input.openMargin,input.openNotional,input.maintenanceRate].every(v=>Number.isFinite(v)&&v>=0))
     fail("ECONOMICS","实时账户/合约规格不完整");
   if (Math.abs(input.quantoMultiplier-t.quantoMultiplier)>t.quantoMultiplier*1e-9)fail("ECONOMICS","合约乘数与源单不一致");
-  const leverage=t.inverseCopy?inverseLiveLeverage(t.leverage):t.leverage;
+  const nts=isNtsSource(t);
+  let leverage=t.inverseCopy?inverseLiveLeverage(t.leverage):t.leverage;
   if(leverage<1||leverage>input.leverageMax)fail("MARGIN","交易所不支持请求的实盘杠杆，不静默改变仓位或保证金");
   const direction=t.side==="LONG"?1:-1;
   const protection=liveProtectionPrice(t);
@@ -226,6 +237,13 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
       fail("MIN_CONTRACT",`按比例低于真实最小数量；最低一张需要${diagnostic.minimumNotional.toFixed(4)}U名义价值、计划风险${(minimumRisk/input.equity*100).toFixed(2)}%，超出小账户最小张风险边界`,diagnostic);
     contracts=sized.minimum;quantityText=sized.quantum;minimumUplift=true;minimumUpliftRiskRate=minimumRisk/input.equity;
   }
+  // 新交易系统（FVG）纸面按全仓计强平；实盘逐仓 100x 时止损超过约 0.3% 就会先强平。名义价值不变，
+  // 只把实盘杠杆降到“止损前还有保证金余量”的最大整数（多占保证金，不缩仓位、不改止损）。
+  if(nts&&protection!=null){
+    const need=Math.abs(input.entryPrice-protection)/input.entryPrice+input.maintenanceRate+cost;
+    const room=Math.floor((1/need)*(1-1e-9));
+    if(room>=1&&room<leverage)leverage=room;
+  }
   const notional=contracts*one,margin=notional/leverage,plannedRisk=notional*stopAndCost;
   // Gate is the execution authority for actual fees and available margin. Do not
   // double-reserve PAPER's model fee and turn a valid source order into a skip.
@@ -235,8 +253,10 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
   // unresolved reservations must still consume actual-equity risk capacity.
   // Do not use the frozen mirror equity here: fees, partial fills and delayed
   // source exits can make the actual account diverge from its PAPER source.
-  if (input.openRisk+plannedRisk>input.equity*PORTFOLIO_RISK_CAP+1e-8
-    || input.sameDirectionRisk+plannedRisk>input.equity*CORRELATED_DIRECTION_RISK_CAP+1e-8)
+  // 新交易系统（FVG）明确不限笔数、不限止损宽度：实盘按源单比例照跟，不套旧策略的组合/同向风险预算；
+  // 保证金不够时由上面的 MARGIN 检查逐账户跳过（不缩单）。
+  if (!nts&&(input.openRisk+plannedRisk>input.equity*PORTFOLIO_RISK_CAP+1e-8
+    || input.sameDirectionRisk+plannedRisk>input.equity*CORRELATED_DIRECTION_RISK_CAP+1e-8))
     fail("RISK_CAP","按实际权益与未平仓/未决暴露计算已超过原账户风险预算；不缩单、不改杠杆，等待风险释放");
   if(!input.sourceRiskAuthority){
     if (input.openMargin+margin>mirrorEquity*.75+1e-8)fail("MARGIN","累计保证金超出模拟同口径75%预算");
@@ -260,6 +280,7 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
     entryDriftPolicy:LIVE_ENTRY_DRIFT_POLICY,sourceQuoteAt:t.lastQuoteAt,copyQuoteAt:input.quoteObservedAt,
     copyQuotePrice:input.entryPrice,copyDelayMs:Math.max(0,input.now-t.openedAt),
     allowedAdverseEntryDriftRate:drift.allowed,adverseEntryDriftRate:drift.adverse};
+  if(nts&&leverage!==t.leverage)receipt.executionLeverage=leverage;
   if(t.inverseCopy)Object.assign(receipt,{sourceRole:'INVERSE_PAPER',nativeProtectionPolicy:INVERSE_LIVE_EXIT_POLICY,
     executionLeverage:leverage,leveragePolicy:INVERSE_LIVE_LEVERAGE_POLICY,
     exitPolicy:INVERSE_LIVE_EXIT_POLICY,nativeProtectionPrice:null,shadowSourceId:t.inverseCopy.sourceId,

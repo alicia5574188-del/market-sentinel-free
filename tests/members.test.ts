@@ -533,3 +533,28 @@ test("member runtime carries only health and the PAPER sources of the member's o
   assert.deepEqual(Object.keys(value.forward.positions[0]).sort(),["closedAt","entryPrice","exitPrice","id","lastPrice","netPnl","notional","openedAt","side","status","symbol"]);
   assert.deepEqual(value.evidence,{});assert.ok(value.live);assert.equal(value.member.id,a.id);
 }));
+
+// ---- 会员实盘跟随 FVG（新交易系统 nts-v1）源单：开仓 → +1R 保本替换止损 → 平仓；平仓源单已不在共享快照时走 /source-close 归档查询 ----
+function fvgSource(id:string,openedAt:number){
+  const t={...trade(id),openedAt,lastQuoteAt:openedAt};t.leverage=20;t.margin=t.notional/20;t.stopPrice=99;t.armPrice=102;
+  t.rule={...t.rule,id:"nts-v1",signature:"nts-v1",grammar:"nts-v1",horizon:720,reason:"NTS FVG fixture"};return t;
+}
+for(const archived of [false,true])
+test(`会员实盘跟随 FVG 源单：开仓一次、保本改止损、平仓一次${archived?"（平仓源单只在归档里）":""}`,()=>clock(async()=>{
+  const h=await harness(),a=await h.issue(),aa=await h.member(a.id);await h.internal(a.id,"/live-mode",{enabled:true});
+  now+=10000;const id="nts-BTC_USDT-L1789611900000";h.source.positions=[fvgSource(id,now-5000)];
+  await aa.engine.alarm();now+=10000;await aa.engine.alarm();
+  assert.equal(aa.gate.placed.length,1);assert.equal(aa.engine.runtime.live.positions.BTC_USDT.id,id);
+  const firstStop=aa.gate.stops.map((s:any)=>s.id_string).join();h.source.positions[0].stopPrice=100.01;now+=10000;await aa.engine.alarm();now+=10000;await aa.engine.alarm();
+  assert.equal(aa.engine.runtime.live.positions.BTC_USDT.currentStop,100.01,"会员实盘止损改到保本价");
+  assert.notEqual(aa.gate.stops.map((s:any)=>s.id_string).join(),firstStop,"旧止损单被新止损单替换");
+  assert.equal(aa.gate.stops.filter((s:any)=>s.contract==="BTC_USDT").length,1);
+  now+=10000;const closed={...h.source.positions[0],status:"CLOSED" as const,closedAt:now,exitReason:"NTS_TP",exitPrice:102};
+  h.source.positions=[];
+  if(archived){h.source.history=[];const base=h.env.MARKET_STREAM;h.env.MARKET_STREAM={getByName(n:string){const s=base.getByName(n);return{async fetch(input:any,init?:any){
+    const r=input instanceof Request?input:new Request(input,init);if(new URL(r.url).pathname==="/member-closed")return Response.json({trade:new URL(r.url).searchParams.get("id")===id?closed:null,nextCursor:null});return s.fetch(r);}};}};}
+  else h.source.history=[closed];
+  await aa.engine.alarm();now+=10000;await aa.engine.alarm();
+  assert.equal(aa.gate.closeTags.length,1);assert.equal(aa.gate.closeTags[0],liveExitTag(id));
+  assert.equal(aa.engine.runtime.live.positions.BTC_USDT.status,"CLOSED");assert.equal(aa.gate.placed.length,1);
+}));

@@ -1099,3 +1099,66 @@ test("real Worker follows one committed source reduction while OFF, persists it,
   source.status="CLOSED";source.closedAt=T;source.exitReason="WINNER_STRUCTURE_EXIT";h.forwardState.history=[source];h.forwardState.positions=[];
   await h.syncLive(T);await h.syncLive(T);assert.equal(gate.closeTags.length,1);assert.equal(gate.reductions.length,1);
 }));
+
+// ---- FVG（新交易系统 nts-v1）源单的实盘跟随：开仓 → +1R 保本改止损 → 2R 止盈 / 止损 / 保本止损 ----
+function fvgTrade(id:string,symbol="BTC_USDT",side:"LONG"|"SHORT"="LONG",openedAt=T-500):Trade{
+  // 形状与 lib/forward-relations.ts openPaperTrade(multi) 产出的一致：无 entryContext，grammar nts-v1，armPrice=2R 止盈
+  const t=trade(id,symbol,side),long=side==="LONG";
+  t.openedAt=openedAt;t.lastQuoteAt=openedAt;t.leverage=100;t.margin=t.notional/100;t.stopPrice=long?99:101;t.armPrice=long?102:98;
+  t.rule={...t.rule,id:"nts-v1",signature:"nts-v1",grammar:"nts-v1",horizon:720,stopRate:.01,reason:"NTS FVG fixture"};
+  return t;
+}
+function fvgHarnessMeta(h:Harness){
+  h.runtime.contractMeta={BTC_USDT:{quantoMultiplier:.001,leverageMax:100,maintenanceRate:.005,fundingRate:0,enableDecimal:false,orderSizeMin:"1",orderSizeMax:"10000000"},
+    ETH_USDT:{quantoMultiplier:.001,leverageMax:100,maintenanceRate:.005,fundingRate:0,enableDecimal:false,orderSizeMin:"1",orderSizeMax:"10000000"}};
+  h.runtime.symbols=["BTC_USDT","ETH_USDT"];h.runtime.tickSize={BTC_USDT:.01,ETH_USDT:.01};
+  h.runtime.evidence={BTC_USDT:{midpoint:100,bestBid:100,bestAsk:100,observedAt:T,fresh:true,entryReady:true},
+    ETH_USDT:{midpoint:100,bestBid:100,bestAsk:100,observedAt:T,fresh:true,entryReady:true}};
+}
+function closeSource(h:Harness,id:string,reason:string,px:number){
+  const s=h.forwardState.positions.find(t=>t.id===id)!;s.status="CLOSED";s.closedAt=T;s.exitReason=reason;s.exitPrice=px;
+  h.forwardState.positions=h.forwardState.positions.filter(t=>t.id!==id);h.forwardState.history=[s,...h.forwardState.history];
+}
+for(const [code,px] of [["NTS_TP",102],["STRUCTURE_STOP",99],["NTS_BE_STOP",100.01]] as const)
+test(`FVG 源单实盘跟随：开仓一次、+1R 保本替换止损、${code} 平仓一次`,()=>clock(async()=>{
+  const {h,gate}=await harness();fvgHarnessMeta(h);h.forwardState.positions=[];
+  live(h).requestedEnabled=true;live(h).activation=startLiveSession(T-1_000,h.forwardState);
+  h.forwardState.positions=[fvgTrade("nts-BTC_USDT-s1")];
+  await h.syncLive(T);await h.syncLive(T);
+  assert.equal(gate.placed.length,1,"FVG 新单只下一次实盘入场 "+JSON.stringify(live(h).entrySkips)+String(live(h).lastError)+String(h.forwardError));
+  assert.equal(live(h).positions.BTC_USDT.id,"nts-BTC_USDT-s1");
+  const lev=gate.leverages.at(-1)!;
+  assert.ok(lev>=1&&lev<100,"止损 1% 时逐仓 100x 会先强平：实盘杠杆降到止损前仍有余量的整数，名义不变 "+lev);
+  assert.ok(1/lev>.01+.005,"止损+维持保证金在杠杆余量之内");
+  assert.ok(Math.abs(gate.placed[0]!.notional-200*live(h).activation!.scaleRatio!)<=.1,"名义按实盘/模拟权益比例（按张取整），不因降杠杆缩单");
+  const firstStop=gate.stopCreates.at(-1)!;
+  assert.equal(Number((firstStop.body.trigger as Record<string,unknown>).price),99,"初始止损=源单止损");
+  if(code!=="STRUCTURE_STOP"){
+    h.forwardState.positions[0]!.stopPrice=100.01; // 保本：入场 +1 tick
+    await h.syncLive(T);await h.syncLive(T);
+    assert.ok(gate.stopCreates.some(s=>Number((s.body.trigger as Record<string,unknown>).price)===100.01),"保本后实盘止损改到 100.01");
+    assert.equal(gate.stops.filter(s=>s.contract==="BTC_USDT").length,1,"旧止损撤掉，只剩一张保护单");
+  }
+  closeSource(h,"nts-BTC_USDT-s1",code,px);
+  await h.syncLive(T);await h.syncLive(T);
+  assert.equal(gate.closeTags.length,1,"源单平仓只跟随一次");
+  assert.equal(live(h).positions.BTC_USDT.status,"CLOSED");
+  assert.equal(gate.placed.length,1,"平仓后不重复开仓");
+}));
+test("FVG 同币多笔源单：不再让整个实盘复制报错停摆，只跟随最早一笔，其他币照常",()=>clock(async()=>{
+  const {h,gate}=await harness();fvgHarnessMeta(h);h.forwardState.positions=[];
+  live(h).requestedEnabled=true;live(h).activation=startLiveSession(T-1_000,h.forwardState);
+  h.forwardState.positions=[fvgTrade("nts-BTC_USDT-s2","BTC_USDT","LONG",T-300),fvgTrade("nts-BTC_USDT-s1","BTC_USDT","LONG",T-600),fvgTrade("nts-ETH_USDT-s1","ETH_USDT","SHORT",T-400)];
+  const sel=forwardMirrorSources(h.forwardState,1000);
+  assert.equal(sel.BTC_USDT.id,"nts-BTC_USDT-s1");assert.equal(sel.ETH_USDT.id,"nts-ETH_USDT-s1");
+  await h.syncLive(T);await h.syncLive(T);
+  assert.equal(gate.placed.length,2,JSON.stringify(live(h).entrySkips));assert.equal(live(h).positions.BTC_USDT.id,"nts-BTC_USDT-s1");assert.equal(live(h).positions.ETH_USDT.id,"nts-ETH_USDT-s1");
+  await h.syncLive(T);assert.equal(gate.placed.length,2,"重复同步不重复下单");
+}));
+test("开启实盘前已存在的 FVG 源单（含 a16800ab 前的 3R 老单）不补开",()=>clock(async()=>{
+  const {h,gate}=await harness();fvgHarnessMeta(h);
+  const old=fvgTrade("nts-BTC_USDT-old","BTC_USDT","LONG",T-5_000);old.armPrice=103;h.forwardState.positions=[old];
+  live(h).requestedEnabled=true;live(h).activation=startLiveSession(T-1_000,h.forwardState);
+  await h.syncLive(T);await h.syncLive(T);
+  assert.equal(gate.placed.length,0);
+}));
