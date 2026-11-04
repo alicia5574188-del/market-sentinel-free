@@ -310,7 +310,7 @@ export class NtsHost {
   /** `account`：账户部分（每分钟权益、回撤、对账、重置、实盘成交），排在日志记录之后。 */
   logStream(account?: () => Promise<Record<string, unknown>[]>): ReadableStream<Uint8Array> {
     return logExportStream(this.deps.storage, () => this.flushLog(this.now()), { kind: "nts-run-log", version: NTS_VERSION, strategy: this.cfg.strategy, at: this.now(), enabled: this.cfg.enabled,
-      note: "每行一条 JSON；SETUP=FVG 系统的 4H 缺口/15m 扫流动性/位移/挂单/撤单/情形a·b，ENTRY=进场决策全文，TRACE=进场后走势，BE_MOVE=+1R 止损移到保本，EXIT/POST_EXIT=出场与出场后走势（每笔都记 +30/+60/+120 分钟），SHADOW_3R=老 3R 规则的影子结果，NO_TRADE=抽样的不做原因；" +
+      note: "每行一条 JSON；SETUP=FVG 系统的 4H 缺口/15m 扫流动性/位移/挂单/撤单/情形a·b，ENTRY=进场决策全文，TRACE=进场后走势，BE_MOVE=+1R 止损移到保本，EXIT/POST_EXIT=出场与出场后走势（每笔都记 +30/+60/+120 分钟），SHADOW_3R=老 3R 规则的影子结果，SHADOW_SKIP=成本过滤跳过的单如果开了的结果，TP_CAP_MIGRATED=老单止盈封顶迁移，NO_TRADE=抽样的不做原因；" +
         "末尾 ACCOUNT=账户对账/回撤/重置记录/实盘成交，EQUITY_MINUTES=每分钟权益（按天分行）" }, 8, () => this.log.peek(), account);
   }
   backupStream(): ReadableStream<Uint8Array> | null {

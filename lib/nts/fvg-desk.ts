@@ -40,7 +40,26 @@ export type FvgOpen = {
   segHi?: number | null; segLo?: number | null;
   /** 影子 3R：老规则（3R 止盈 / 原止损）先到哪个。 */
   shadow?: Shadow3R;
+  /** 宽止损止盈封顶迁移（2026-11-05 用户批准，一次性）：老单止损 > 2.5% 时 tp = min(原 tp, 入场 ±5%)。 */
+  tpCapMig?: { at: number; oldTp: number; newTp: number } | null;
 };
+/** 被成本过滤跳过的形态：按"如果开了会怎样"（2R/封顶止盈 + 1R 保本 + 原止损）跟踪结果，只记录。 */
+export type SkipShadow = { id: string; sym: string; side: Side; at: number; entry: number; stop: number; tp: number; beTrig: number; beStop: number; be: boolean;
+  costRatio: number; stopPct: number; tpCapped: boolean; barT: number; res: "TP2R" | "STOP" | "BE" | "AMBIG" | "UNRESOLVED_48H" | null; resAt: number | null; px: number | null; src: string | null };
+/** 推进一个跳过影子：hi/lo 一段价格区间。返回 true = 有结论。 */
+export function stepSkipShadow(k: SkipShadow, hi: number, lo: number, at: number, src: string): boolean {
+  if (k.res) return false;
+  const long = k.side === "LONG", hitTp = long ? hi >= k.tp : lo <= k.tp;
+  const sl = k.be ? k.beStop : k.stop, hitSl = long ? lo <= sl : hi >= sl, hitBe = long ? hi >= k.beTrig : lo <= k.beTrig;
+  let res: SkipShadow["res"] = null;
+  if (hitTp && hitSl) res = "AMBIG";
+  else if (hitTp) res = "TP2R";
+  else if (hitSl) res = k.be ? "BE" : hitBe ? "AMBIG" : "STOP";
+  else if (!k.be && hitBe) { k.be = true; return false; }
+  if (!res) return false;
+  k.res = res; k.resAt = at; k.src = src; k.px = res === "TP2R" ? k.tp : res === "STOP" ? k.stop : res === "BE" ? k.beStop : null;
+  return true;
+}
 export type ExitRule = "3R" | "2R_BE1R" | "2R_BE1R_CAP5";
 /** 新规则（2R 止盈 + 1R 保本，含宽止损止盈封顶 5% 的版本）。 */
 export const isBeRule = (r: ExitRule) => r === "2R_BE1R" || r === "2R_BE1R_CAP5";
@@ -61,12 +80,12 @@ export function stepShadow(sh: Shadow3R, side: Side, hi: number, lo: number, at:
   sh.res = hitTp && hitSl ? "AMBIG" : hitTp ? "TP3" : "STOP"; sh.at = at; sh.px = hitTp && !hitSl ? sh.tp3 : hitSl && !hitTp ? sh.stop0 : null; sh.src = src;
   return true;
 }
-export type FvgState = { opens: FvgOpen[]; filled: string[]; usedZones: string[]; universe: string[] };
+export type FvgState = { opens: FvgOpen[]; filled: string[]; usedZones: string[]; universe: string[]; skips?: SkipShadow[] };
 export const freshFvgState = (): FvgState => ({ opens: [], filled: [], usedZones: [], universe: [] });
 export function normalizeFvgState(x: unknown): FvgState {
   const v = (x && typeof x === "object" ? x : {}) as Partial<FvgState>;
   return { opens: Array.isArray(v.opens) ? v.opens : [], filled: Array.isArray(v.filled) ? v.filled.slice(-300) : [],
-    usedZones: Array.isArray(v.usedZones) ? v.usedZones.slice(-300) : [], universe: Array.isArray(v.universe) ? v.universe.slice(0, 40) : [] };
+    usedZones: Array.isArray(v.usedZones) ? v.usedZones.slice(-300) : [], universe: Array.isArray(v.universe) ? v.universe.slice(0, 40) : [], skips: Array.isArray(v.skips) ? v.skips.slice(-100) : [] };
 }
 export type FvgAction =
   | { type: "OPEN_FVG"; sym: string; setup: Setup; case: FvgCase; mode: "LIMIT" | "GAP" | "MARKET_B"; why: string }
@@ -297,6 +316,8 @@ export class FvgDesk {
   tick(c: { now: number; forward: ForwardState; quotes: Record<string, Quote>; enabled: boolean }): FvgAction[] {
     const out: FvgAction[] = [], { now, forward } = c, f = this.cfg.fvg;
     this.lastNow = now;
+    this.migrateTpCap(forward, now);
+    this.stepSkips(now, c.quotes);
     for (const o of this.st.opens) {
       const t = forward.positions.find(x => x.id === o.tid && x.status === "OPEN"), q = c.quotes[o.sym];
       if (!t || !q || !q.fresh) continue;
@@ -403,6 +424,14 @@ export class FvgDesk {
       this.h.append({ id: `skip:${a.sym}:${st.id}:${a.case}`, k: "NO_TRADE", t: now, sym: a.sym, d: { case: a.case, setup: st.id, reason, mode: a.mode, filter: "COST_RATIO",
         stopPct: r(stopPct0, 5), costPct: r(cfg.stopSlipPct + 2 * cfg.feeRate, 5), costRatio: r(costRatio, 4), maxCostRatio: f.maxCostRatio ?? FVG_MAX_COST_RATIO,
         side: st.side, entry: st.entry, estFill: r(estFill, 8), stop: st.stop, tp: r(w.tp, 8), tp2R: r(w.tp2, 8), tpCapped: capped && w.tp !== w.tp2, fvg15: st.fvg, zoneKeys: st.zoneKeys } }, now);
+      const sk = (this.st.skips ??= []), sid = `${a.sym}:${st.id}:${a.case}`;
+      if (!sk.some(x => x.id === sid)) {
+        const risk0 = Math.abs(estFill - st.stop), tk = this.ticks[a.sym] ?? fallbackTick(estFill);
+        sk.push({ id: sid, sym: a.sym, side: st.side, at: now, entry: estFill, stop: st.stop, tp: w.tp, beTrig: estFill + dir * f.beAtR * risk0, beStop: estFill + dir * f.beTicks * tk, be: false,
+          costRatio: r(costRatio, 4) ?? costRatio, stopPct: r(stopPct0, 5) ?? stopPct0, tpCapped: capped && w.tp !== w.tp2, barT: 0, res: null, resAt: null, px: null, src: null });
+        if (sk.length > 100) sk.splice(0, sk.length - 100);
+        this.dirty = true;
+      }
       this.h.brief(now, a.sym, "放弃", `${reason}（止损 ${r(stopPct0 * 100, 3)}%，成本 ${r(100 * (cfg.stopSlipPct + 2 * cfg.feeRate), 2)}% = ${r(costRatio * 100, 1)}% 的 1R）`);
       return false;
     }
@@ -434,6 +463,48 @@ export class FvgDesk {
     this.h.brief(now, a.sym, "进场", `${sideCn(st.side)} 情形${a.case}${a.mode === "LIMIT" ? " 限价" : a.mode === "GAP" ? " 跳空市价" : " 回到缺口市价"} @${r(fill, 6)} 止损 ${r(st.stop, 6)} 止盈 ${r(tp, 6)}（${tpCapped ? `封顶 5%，原 2R ${r(tp2Raw, 6)}` : `${f.tpR}R`}，+${f.beAtR}R 保本）名义 ${r(t.notional, 2)}U 逐仓 ${lev}× 保证金 ${r(t.margin, 2)}U（余额 ${r(100 * t.margin / balance, 1)}%）`);
     rt.stage = "持仓中"; rt.caseTag = a.case;
     return true;
+  }
+  /** 有状态变化但不是账户事务（迁移、跳过影子）：引擎在下一次已有写入里顺带落盘。 */
+  dirty = false;
+  /** 一次性、幂等：开着的 FVG 单止损距离 > 2.5% 且还没封顶 → tp = min(原 tp, 入场 ±5%)，记 TP_CAP_MIGRATED。只改 FVG 内部 tp（出场判断用它），不动止损和账户持仓字段。 */
+  migrateTpCap(forward: ForwardState, now: number) {
+    for (const o of this.st.opens) {
+      if (o.tpCapMig || exitRuleOf(o) === "2R_BE1R_CAP5" || !(o.fill > 0)) continue;
+      if (!forward.positions.some(x => x.id === o.tid && x.status === "OPEN")) continue;
+      const stopPct = Math.abs(o.fill - stop0Of(o)) / o.fill;
+      if (!(stopPct > FVG_TP_CAP_STOP_PCT)) continue;
+      const long = o.side === "LONG", cap = o.fill * (1 + (long ? 1 : -1) * FVG_TP_CAP_PCT), newTp = long ? Math.min(o.tp, cap) : Math.max(o.tp, cap), oldTp = o.tp;
+      o.tpCapMig = { at: now, oldTp, newTp }; o.tp = newTp; this.dirty = true;
+      this.h.append({ id: `tpcap:${o.tid}`, k: "TP_CAP_MIGRATED", t: now, sym: o.sym, tid: o.tid, d: { strategy: "FVG", side: o.side, entry: o.fill, stop: o.stop, stop0: stop0Of(o), stopPct: r(stopPct, 5),
+        exitRule: exitRuleOf(o), oldTp, newTp, changed: newTp !== oldTp, capPct: FVG_TP_CAP_PCT, rule: "止损 > 2.5% → 止盈 = min(原止盈, 入场 ±5%)", note: "2026-11-05 用户批准；一次性迁移，止损和其它字段不动；价格已过新止盈则下一轮按正常止盈出场", version: this.h.version } }, now);
+      if (newTp !== oldTp) this.h.brief(now, o.sym, "改止盈", `老单止损 ${r(stopPct * 100, 2)}% > 2.5%：止盈 ${r(oldTp, 6)} → ${r(newTp, 6)}（入场 ${sideCn(o.side)} ${r(o.fill, 6)} ±5% 封顶）`);
+    }
+  }
+  /** 跳过影子推进：只用已有的 15m K 线和实时报价（不新增请求）；48 小时没结论记 UNRESOLVED_48H。 */
+  stepSkips(now: number, quotes: Record<string, Quote>) {
+    const sk = this.st.skips; if (!sk?.length) return;
+    for (const k of sk) {
+      if (k.res) continue;
+      for (const b of this.h.data[k.sym]?.bars["15m"] ?? []) {
+        const st = b.time * 1000;
+        if (st + 15 * MIN > now || st <= k.barT) continue;
+        if (st < k.at) continue; // 跳过那根 15m 里分不清跳过前后，只用跳过之后开始的 K 线
+        k.barT = st; this.dirty = true;
+        if (stepSkipShadow(k, b.high, b.low, st, "15m")) break;
+      }
+      const q = quotes[k.sym];
+      if (!k.res && q && q.fresh) { const px = k.side === "LONG" ? q.bestBid : q.bestAsk; stepSkipShadow(k, px, px, now, "quote"); }
+      if (!k.res && now - k.at >= 48 * HOUR) { k.res = "UNRESOLVED_48H"; k.resAt = now; k.src = null; }
+      if (k.res) { this.dirty = true; this.logSkip(k, now); }
+    }
+    const keep = sk.filter(k => !k.res || now - (k.resAt ?? now) < 72 * HOUR);
+    if (keep.length !== sk.length) { this.st.skips = keep; this.dirty = true; }
+  }
+  private logSkip(k: SkipShadow, now: number) {
+    const d = k.side === "LONG" ? 1 : -1, risk = Math.abs(k.entry - k.stop), rPrice = k.px != null && risk > 0 ? r(d * (k.px - k.entry) / risk, 3) : null;
+    this.h.append({ id: `shadowskip:${k.id}`, k: "SHADOW_SKIP", t: now, sym: k.sym, d: { strategy: "FVG", filter: "COST_RATIO", setup: k.id, side: k.side, skippedAt: k.at, entry: k.entry, stop: k.stop, tp: k.tp,
+      tpCapped: k.tpCapped, beTrig: k.beTrig, beStop: k.beStop, beReached: k.be, costRatio: k.costRatio, stopPct: k.stopPct, res: k.res, resAt: k.resAt, px: k.px, src: k.src, rPrice,
+      holdMin: k.resAt ? Math.round((k.resAt - k.at) / MIN) : null, note: "被成本过滤跳过的单，如果开了（2R/封顶止盈 + 1R 保本 + 原止损）会怎样；AMBIG = 同一根 15m 里两边都碰到；只记录，不影响交易", version: this.h.version } }, now);
   }
   /** 保本移动：改账户持仓的止损价（账户引擎每 2 秒按 stopPrice 管止损），记 BE_MOVE。 */
   moveStop(draft: ForwardState, a: Extract<FvgAction, { type: "MOVE_STOP_FVG" }>, c: { now: number }) {

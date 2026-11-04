@@ -240,6 +240,7 @@ export class NtsEngine {
         this.sampleFvg(c);
         if (open) this.manageOpen(open, c, actions); // 切换前的旧 SMC 单：按原规则管到平仓
         for (const a of this.desk.tick({ now, forward, quotes: c.quotes, enabled: c.enabled })) actions.push({ type: "FVG", a });
+        if (this.desk.dirty) { this.desk.dirty = false; this.extremesDirty = true; }
         return actions;
       }
       if (open) { this.manageOpen(open, c, actions); return actions; }
@@ -599,6 +600,7 @@ export class NtsEngine {
       if (now - p.exitAt <= last + 5 * MIN && p.done.length < this.cfg.log.postExitMarksMin.length) hot.push(p.sym);
       else if (p.shadow && !p.shadow.res) cold.push(p.sym);
     }
+    for (const k of this.s.fvg?.skips ?? []) if (!k.res) cold.push(k.sym); // 跳过影子：已有 15m 取数（冷币节奏），不新增请求类型
     this.desk.setWatch(hot, cold);
   }
   /** FVG 持仓的价格极值 → 价格 R（不含手续费）。 */

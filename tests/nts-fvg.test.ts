@@ -505,3 +505,47 @@ test("成本过滤：同一形态止损够宽（≥0.64%）时成本 ≤30%，�
   step(e, r0.fwd, now + 2000, 101.22, 101.23);
   const o = e.desk.st.opens[0]!; assert.ok(o); assert.equal(o.exitRule, "2R_BE1R"); assert.ok(Math.abs(o.tp - (o.fill + 2 * (o.fill - 100.3))) < 1e-9);
 });
+
+test("跳过影子：成本过滤跳过的单按 2R+1R保本+原止损跟踪，到 2R 记 SHADOW_SKIP=TP2R；只记一次", () => {
+  const { e, log, now } = engine(m15Bars(), h4Bars(), { costFilter: 0.30 });
+  let r = step(e, initialForward(now), now, 101.5, 101.52);
+  r = step(e, r.fwd, now + 2000, 101.22, 101.23);
+  const k = e.desk.st.skips![0]!; assert.ok(k); assert.equal(k.res, null); assert.ok(Math.abs(k.tp - (k.entry + 2 * (k.entry - k.stop))) < 1e-9);
+  assert.ok(e.extremesDirty || e.desk.dirty, "要落盘");
+  r = step(e, r.fwd, now + 4000, k.tp + 0.01, k.tp + 0.02);
+  r = step(e, r.fwd, now + 6000, k.tp + 0.01, k.tp + 0.02);
+  const s = recs(log).filter(x => x.k === "SHADOW_SKIP"); assert.equal(s.length, 1); assert.equal(s[0]!.d.res, "TP2R"); assert.equal(s[0]!.d.rPrice, 2);
+  assert.equal(r.fwd.positions.filter(x => x.status === "OPEN").length, 0, "只记录不开");
+});
+test("跳过影子：先到 +1R 再回入场 → BE；直接破止损 → STOP；48 小时没结论 → UNRESOLVED_48H", () => {
+  for (const [path, want] of [[[1.1, 0], "BE"], [[-1.05], "STOP"], [[0.5], "UNRESOLVED_48H"]] as const) {
+    const { e, log, now } = engine(m15Bars(), h4Bars(), { costFilter: 0.30 });
+    let r = step(e, initialForward(now), now, 101.5, 101.52);
+    r = step(e, r.fwd, now + 2000, 101.22, 101.23);
+    const k = e.desk.st.skips![0]!, R = k.entry - k.stop;
+    let t = now + 4000;
+    for (const m of path) { const px = k.entry + m * R; r = step(e, r.fwd, t, px, px + 0.001); t += 2000; }
+    if (want === "UNRESOLVED_48H") r = step(e, r.fwd, now + 48 * 3_600_000 + 5000, k.entry + 0.5 * R, k.entry + 0.5 * R + 0.001);
+    const s = recs(log).filter(x => x.k === "SHADOW_SKIP"); assert.equal(s.length, 1, want); assert.equal(s[0]!.d.res, want);
+  }
+});
+test("止盈封顶迁移：老 3R 单止损 > 2.5% → tp = min(原 tp, 入场+5%)，记 TP_CAP_MIGRATED（幂等），止损不动；价格过新止盈按正常止盈平", () => {
+  const { e, log, now, fwd, o } = opened();
+  delete o.exitRule; delete o.tpR; delete o.be; delete o.shadow; delete o.stop0;
+  o.stop = o.fill * 0.9; o.tp = o.fill + 3 * (o.fill - o.stop);
+  const oldTp = o.tp, stopPx = fwd.positions.find(x => x.id === o.tid)!.stopPrice;
+  let r = step(e, fwd, now + 4000, ENTRY + 0.1, ENTRY + 0.11);
+  r = step(e, r.fwd, now + 6000, ENTRY + 0.1, ENTRY + 0.11);
+  const m = recs(log).filter(x => x.k === "TP_CAP_MIGRATED"); assert.equal(m.length, 1);
+  assert.equal(m[0]!.d.oldTp, oldTp); assert.ok(Math.abs(o.tp - o.fill * 1.05) < 1e-9); assert.equal(m[0]!.d.newTp, o.tp);
+  assert.ok(Math.abs(o.stop - o.fill * 0.9) < 1e-12); assert.equal(r.fwd.positions.find(x => x.id === o.tid)!.stopPrice, stopPx);
+  assert.equal(r.fwd.positions.filter(x => x.status === "OPEN").length, 1);
+  r = step(e, r.fwd, now + 8000, o.tp + 0.01, o.tp + 0.02);
+  assert.equal(r.fwd.positions.filter(x => x.status === "OPEN").length, 0, "到新止盈平");
+  assert.ok(recs(log).some(x => x.k === "EXIT"), "正常出场记录");
+});
+test("止盈封顶迁移：止损 ≤ 2.5% 的单不动、不记", () => {
+  const { e, log, now, fwd, o } = opened();
+  const tp = o.tp; step(e, fwd, now + 4000, ENTRY + 0.1, ENTRY + 0.11);
+  assert.equal(o.tp, tp); assert.equal(recs(log).filter(x => x.k === "TP_CAP_MIGRATED").length, 0);
+});
