@@ -459,3 +459,25 @@ test("逐仓模型：新单标 fvg-isolated-v1，名义 = 余额×2%×100，杠�
   assert.ok(liqD >= 1.5 * stopD, `liq ${liqD} stop ${stopD}`);
   const en = recs(log).find(x => x.k === "ENTRY")!; assert.equal((en.d.fill as { marginMode: string }).marginMode, "ISOLATED");
 });
+
+test("固定名义：10× 上限的币名义仍 = 余额×2%×100，杠杆 ≤10，保证金 = 名义/杠杆", () => {
+  const low = { ...CONTRACT, leverageMax: 10 }, cs = { BTC_USDT: low, ETH_USDT: CONTRACT };
+  const run = (balance: number) => {
+    const { e, log, now } = engine(m15Bars());
+    let fwd: ForwardState = { ...initialForward(now), balance };
+    for (const [t, bid, ask] of [[now, 101.5, 101.52], [now + 2000, 101.22, 101.23]] as const) {
+      const quotes = { BTC_USDT: quote(bid, ask, t) }, draft = structuredClone(fwd);
+      const acts = e.tick({ now: t, forward: fwd, quotes, contracts: cs, enabled: true });
+      const ch = e.execute(draft, acts, { now: t, quotes, contracts: cs });
+      fwd = advanceForward({ state: ch ? draft : fwd, now: t, quotes, contracts: cs }).state; e.reconcile(fwd, quotes, t);
+    }
+    return { fwd, log };
+  };
+  const { fwd, log } = run(1000);
+  const t = fwd.positions.find(x => x.status === "OPEN")!; assert.ok(t);
+  assert.ok(t.leverage <= 10, `lev ${t.leverage}`);
+  assert.ok(Math.abs(t.notional - 2000) / 2000 < 0.05, `notional ${t.notional}`);
+  assert.ok(Math.abs(t.margin - t.notional / t.leverage) < 1e-9);
+  const f = recs(log).find(x => x.k === "ENTRY")!.d.fill as Record<string, unknown>;
+  assert.equal(f.sizingRule, "fixed-notional-v1"); assert.ok(Math.abs(Number(f.targetNotional) - 2000) < 1e-6); assert.ok(Number(f.marginPctOfBalance) > 0.1);
+});

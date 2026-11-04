@@ -374,10 +374,11 @@ export class FvgDesk {
     const estFill = limit ? st.entry : long ? q.bestAsk * (1 + slip) : q.bestBid * (1 - slip);
     if (long ? estFill <= st.stop : estFill >= st.stop) return skip("成交价已在止损外");
     const levCap = Math.max(1, Math.min(cfg.leverage, contract.leverageMax > 0 ? contract.leverageMax : cfg.leverage));
-    // 名义不变：= 余额 × 2% × min(100, 合约上限)（跟原来一样）。逐仓杠杆按止损选：强平距离 ≥ FVG_LIQ_BUFFER × (止损距离 + 止损滑点 + 双边手续费)，
+    // 名义固定：= 余额 × 2% × 100（cfg.leverage），与合约杠杆上限无关；杠杆不够的币靠提高保证金补足名义（用户要求每单名义相同）。
+    // levCap 只用来封顶杠杆。逐仓杠杆按止损选：强平距离 ≥ FVG_LIQ_BUFFER × (止损距离 + 止损滑点 + 双边手续费)，
     // 取满足的最大整数杠杆；保证金 = 名义 / 杠杆。维持保证金率用已拉取的合约 maintenance_rate（没有新增 Gate 请求，未用风险限额阶梯）。
     const mmr = contract.maintenanceRate > 0 ? contract.maintenanceRate : cfg.maintenanceRate;
-    const balance = draft.balance, notional = balance * cfg.firstMarginPct * levCap;
+    const balance = draft.balance, notional = balance * cfg.firstMarginPct * cfg.leverage;
     const stopPct0 = Math.abs(estFill - st.stop) / estFill, need = FVG_LIQ_BUFFER * (stopPct0 + cfg.stopSlipPct + 2 * cfg.feeRate);
     let lev = Math.floor(levCap);
     while (lev > 1 && isolatedLiqDistance(lev, mmr) < need) lev--;
@@ -406,12 +407,12 @@ export class FvgDesk {
     this.h.append({ id: `entry:${tid}`, k: "ENTRY", t: now, sym: a.sym, tid, d: {
       strategy: "FVG", case: a.case, fillMode: a.mode, why: a.why, side: st.side, setup: st.id,
       zone4h: z, sweep: { t: st.sweepT, px: st.sweepPx, swing: st.swingPx }, displacement: { bars: st.dispBars, move: st.dispMove, atr: st.atr }, fvg15: st.fvg,
-      plan: { entry: st.entry, stop: st.stop, tp3R_orig: st.tpOrig }, fill: { price: fill, contracts: t.contracts, qty: t.quantity, notional: r(t.notional, 2), margin: r(t.margin, 2), fee: r(t.entryFee, 4), liq: t.liquidationPrice, leverage: lev, marginMode: "ISOLATED", marginModel: "fvg-isolated-v1", levCap, liqBuffer: FVG_LIQ_BUFFER, liqDistPct: r(isolatedLiqDistance(lev, mmr), 5), needPct: r(need, 5), mmr },
+      plan: { entry: st.entry, stop: st.stop, tp3R_orig: st.tpOrig }, fill: { price: fill, contracts: t.contracts, qty: t.quantity, notional: r(t.notional, 2), margin: r(t.margin, 2), fee: r(t.entryFee, 4), liq: t.liquidationPrice, leverage: lev, marginMode: "ISOLATED", marginModel: "fvg-isolated-v1", levCap, targetNotional: r(notional, 2), marginPctOfBalance: r(t.margin / balance, 4), sizingRule: "fixed-notional-v1", liqBuffer: FVG_LIQ_BUFFER, liqDistPct: r(isolatedLiqDistance(lev, mmr), 5), needPct: r(need, 5), mmr },
       stop: st.stop, tp, rr: f.tpR, exitRule: "2R_BE1R", exitPlan: { tpR: f.tpR, tp, beAtR: f.beAtR, beTrigger: fill + dir * f.beAtR * risk, beTicks: f.beTicks, note: "R = |成交价 − 止损|（价格）；到 +1R 止损移到入场价往盈利方向 1 tick" },
       shadow3R: { tp3, stop0: st.stop, note: "老规则（3R 止盈/原止损）只记录不执行" }, stopPct: r(Math.abs(fill - st.stop) / fill, 5), oneR: r(oneR, 2), sizing: { balance: r(balance, 2), firstPct: cfg.firstMarginPct, worstEst: r(worst, 2), worstPct: r(worst / balance, 4), stopWidthLimit: null },
       tick: { size: this.ticks[a.sym] ?? null, source: this.ticks[a.sym] ? "gate.order_price_round" : "fallback(价格数量级×1e-4)" },
       quote: { bid: q.bestBid, ask: q.bestAsk }, ind: { "15m": packs["15m"], "4h": packs["4h"], use: "RSI/MACD 只记录，不参与决策" }, version: this.h.version } }, now);
-    this.h.brief(now, a.sym, "进场", `${sideCn(st.side)} 情形${a.case}${a.mode === "LIMIT" ? " 限价" : a.mode === "GAP" ? " 跳空市价" : " 回到缺口市价"} @${r(fill, 6)} 止损 ${r(st.stop, 6)} 止盈 ${r(tp, 6)}（${f.tpR}R，+${f.beAtR}R 保本）`);
+    this.h.brief(now, a.sym, "进场", `${sideCn(st.side)} 情形${a.case}${a.mode === "LIMIT" ? " 限价" : a.mode === "GAP" ? " 跳空市价" : " 回到缺口市价"} @${r(fill, 6)} 止损 ${r(st.stop, 6)} 止盈 ${r(tp, 6)}（${f.tpR}R，+${f.beAtR}R 保本）名义 ${r(t.notional, 2)}U 逐仓 ${lev}× 保证金 ${r(t.margin, 2)}U（余额 ${r(100 * t.margin / balance, 1)}%）`);
     rt.stage = "持仓中"; rt.caseTag = a.case;
     return true;
   }
