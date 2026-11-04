@@ -4,7 +4,7 @@
  *
  * 决策（默认 strategy="FVG"，2026-11-01 起）= 视频的「FVG 扫流动性系统」（fvg.ts 纯规则 + fvg-desk.ts 多币池/调度/开平仓）：
  *   4H FVG 区内，15m 扫掉前一个 2 根分形低/高点（实体收回），随后 2–3 根朝交易方向收盘并留下同向 15m FVG（无实体/ATR 门槛，ATR 只记录） →
- *   在 15m FVG 上沿（空单下沿）挂限价，16 根内有效，先破扫点撤单；止损 = 扫点外 1 tick；止盈 = 实际成交价起 3R。
+ *   在 15m FVG 上沿（空单下沿）挂限价，16 根内有效，先破扫点撤单；止损 = 扫点外 1 tick；止盈 = 实际成交价起 2R，价格到 +1R 止损移到保本（入场价 +1 tick）；上线前开的单仍按 3R；每笔另记老 3R 规则的影子结果。
  *   严格按视频：不限订单数（同一个币可多笔，同一形态只开一次）、不限止损宽度、没有当日停开；模拟盘可用保证金不够时记“跳过”，不缩仓。
  * 旧 SMC 订单块（smc.ts）只用来把切换前已开的那一笔按原规则（smcExit）管到平仓，不再开新单。
  *
@@ -22,7 +22,7 @@ import { dailyExit, evaluateDailyEntry, isDailyDecisionBar, type DailyPlan } fro
 import type { NtsLog, NtsRec } from "./log.ts";
 import { dirOf, TF_SEC, type Bar, type Side, type Tf } from "./types.ts";
 import { r } from "./indicators.ts";
-import { FvgDesk, normalizeFvgState, type FvgAction, type FvgOpen, type FvgState } from "./fvg-desk.ts";
+import { exitRuleOf, FvgDesk, normalizeFvgState, priceR, stepShadow, stop0Of, type ExitRule, type FvgAction, type FvgOpen, type FvgState, type Shadow3R } from "./fvg-desk.ts";
 
 const HOUR = 3_600_000, MIN = 60_000, ALL_TF: Tf[] = ["15m", "1h", "4h", "1d"];
 export type NtsSymbol = "BTC_USDT" | "ETH_USDT";
@@ -42,12 +42,19 @@ export type NtsOpen = {
   /** 每日短线（strategy="DAILY"）的持仓：最有利价、追踪距离、到期时间、当前追踪止损 */
   daily?: { best: number; trailDist: number; exitAt: number; trail: number | null; ret24: number };
 };
-type PostExit = { tid: string; sym: string; side: Side; exitAt: number; exitPx: number; done: number[]; best: number; worst: number };
+type PostExit = { tid: string; sym: string; side: Side; exitAt: number; exitPx: number; done: number[]; best: number; worst: number;
+  /** 出场后 120 分钟内最有利/最不利（实时报价 + 出场后开始的 15m 高低点）；barT = 已处理到的 15m 起点（ms）。 */
+  best120?: number; worst120?: number; barT?: number;
+  /** FVG：影子 3R 还没结论时继续按出场后的路径判断（最多 48 小时）；actual = 实际结果，用于对比。 */
+  exitRule?: ExitRule; fill?: number; stop0?: number; qty?: number; entryFee?: number; oneR?: number; shadow?: Shadow3R | null;
+  actual?: { code: string; rPrice: number | null; rFee: number | null } };
 type Period = { key: string; startEquity: number; pnl: number; trades: number; wins: number; r: number };
 type LastEval = { at: number; barTime: number; action: string; side: Side | null; reason: string; core: number | null; score: number | null; plan: SmcPlan | null;
   structure?: { h4: string; highs: string; lows: string; d1: string };
   zones: { lo: number; hi: number; score: number; kind: string; tfs: Tf[] }[]; vetoes: number };
-export type ExitSummary = { tid: string; sym: string; side: Side; at: number; reason: string; code: string; netPnl: number; r: number; holdMin: number; mfePct: number; maePct: number };
+export type ExitSummary = { tid: string; sym: string; side: Side; at: number; reason: string; code: string; netPnl: number; r: number; holdMin: number; mfePct: number; maePct: number;
+  /** FVG：r/mfeR/maeR = 扣手续费的 R（净盈亏 ÷ 1R 风险金额）；*_price = 只看价格的 R（价格移动 ÷ |成交价 − 原止损|）。 */
+  rPrice?: number | null; mfeR?: number; maeR?: number; mfeR_price?: number | null; maeR_price?: number | null; exitRule?: ExitRule };
 export type NtsState = {
   v: 1; version: string; open: NtsOpen | null; day: Period; month: Period; recent: Brief[]; lastExit: ExitSummary | null; post: PostExit[];
   decided: Record<string, number>; noTradeSlot: Record<string, number>; handled: string[];
@@ -79,6 +86,8 @@ export class NtsEngine {
   restRequests = 0; restFails = 0; lastFetchError: string | null = null; lastFetchAt = 0;
   restWindow: number[] = [];
   lastDecisionError: string | null = null;
+  /** FVG 持仓的 MFE/MAE（价格极值）或出场后跟踪有变化但还没落盘：宿主在下一次已有的写入里顺带写状态（不单独触发写入）。 */
+  extremesDirty = false;
   log: NtsLog;
   desk: FvgDesk;
   constructor(cfg: Partial<NtsConfig> | NtsConfig | null | undefined, log: NtsLog, saved?: NtsState | null, now = Date.now()) {
@@ -227,6 +236,7 @@ export class NtsEngine {
       this.samplePost(c);
       const open = this.s.open;
       if (this.isFvg) {
+        this.syncWatch(now);
         this.sampleFvg(c);
         if (open) this.manageOpen(open, c, actions); // 切换前的旧 SMC 单：按原规则管到平仓
         for (const a of this.desk.tick({ now, forward, quotes: c.quotes, enabled: c.enabled })) actions.push({ type: "FVG", a });
@@ -400,6 +410,7 @@ export class NtsEngine {
       try {
         if (a.type === "FVG") {
           if (a.a.type === "OPEN_FVG") changed = this.desk.open(draft, a.a, c) || changed;
+          else if (a.a.type === "MOVE_STOP_FVG") changed = this.desk.moveStop(draft, a.a, c) || changed;
           else if (this.desk.close(draft, a.a, c)) { changed = true; this.reconcileFvg(draft, c.now, { tid: a.a.tid, code: a.a.code, reason: a.a.reason }); }
         }
         else if (a.type === "OPEN") changed = this.doOpen(draft, a, c) || changed;
@@ -487,7 +498,7 @@ export class NtsEngine {
     const f = this.reconcileFvg(forward, now);
     return this.reconcileLegacy(forward, quotes, now, own) || f;
   }
-  /** FVG 持仓：账户已平（止损/强平/我们自己的 3R 止盈）→ 补记出场、更新统计。 */
+  /** FVG 持仓：账户已平（止损/保本止损/强平/我们自己的止盈）→ 补记出场、更新统计。 */
   reconcileFvg(forward: ForwardState, now: number, own?: { tid: string; code: string; reason: string }): boolean {
     const opens = this.fvgOpens; if (!opens.length) return false;
     let changed = false;
@@ -499,19 +510,31 @@ export class NtsEngine {
       const exitAt = t?.closedAt ?? now, exitPx = t?.exitPrice ?? o.fill;
       const net = t?.netPnl ?? 0, rr = o.oneR > 0 ? net / o.oneR : 0;
       const raw = t?.exitReason ?? "";
-      const code = mine?.code ?? (raw.includes("NTS_TARGET") ? "TARGET" : raw.includes("STOP") ? "HARD_STOP" : raw.toUpperCase().includes("LIQ") ? "LIQUIDATION" : raw || "UNKNOWN");
-      const reason = mine?.reason ?? (code === "TARGET" ? `到 ${this.cfg.fvg.rr}R 止盈` : code === "HARD_STOP" ? "触及止损（扫点外）" : code === "LIQUIDATION" ? "触发强平" : `账户引擎平仓：${raw || "未知"}`);
+      const stopCode = o.be ? "BE_STOP" : "HARD_STOP";
+      const code = mine?.code ?? (raw.includes("NTS_TARGET") ? "TARGET" : raw.includes("STOP") ? stopCode : raw.toUpperCase().includes("LIQ") ? "LIQUIDATION" : raw || "UNKNOWN");
+      const reason = mine?.reason ?? (code === "TARGET" ? `到 ${o.tpR ?? this.cfg.fvg.rr}R 止盈` : code === "BE_STOP" ? "保本止损（+1R 后止损已移到入场价）" : code === "HARD_STOP" ? "触及止损（扫点外）" : code === "LIQUIDATION" ? "触发强平" : `账户引擎平仓：${raw || "未知"}`);
+      const rule = exitRuleOf(o), x = this.extremes(o), rPrice = r(priceR(o, exitPx), 3), feeR = r(rr, 3);
       if (!this.s.handled.includes(o.tid)) {
         this.s.handled.push(o.tid); if (this.s.handled.length > 40) this.s.handled.shift();
         if (t) for (const p of [this.s.day, this.s.month]) { p.pnl += net; p.trades++; if (net > 0) p.wins++; p.r += rr; }
-        const sum: ExitSummary = { tid: o.tid, sym: o.sym, side: o.side, at: exitAt, reason, code, netPnl: r(net, 4)!, r: r(rr, 2)!, holdMin: Math.round((exitAt - o.openedAt) / MIN), mfePct: r(o.mfePct, 4)!, maePct: r(o.maePct, 4)! };
+        const sum: ExitSummary = { tid: o.tid, sym: o.sym, side: o.side, at: exitAt, reason, code, netPnl: r(net, 4)!, r: r(rr, 2)!, holdMin: Math.round((exitAt - o.openedAt) / MIN), mfePct: r(o.mfePct, 4)!, maePct: r(o.maePct, 4)!,
+          rPrice, mfeR: r(o.mfeR, 2)!, maeR: r(o.maeR, 2)!, mfeR_price: r(x.mfeRp, 2), maeR_price: r(x.maeRp, 2), exitRule: rule };
         this.s.lastExit = sum;
+        const sh = o.shadow ? { ...o.shadow } : null;
+        const shadow3R = rule === "3R" ? { res: "SAME_AS_ACTUAL", note: "本单就是老 3R 规则，实际结果即 3R 结果" }
+          : sh ? { ...this.shadowView(sh, o, t?.quantity ?? null, t?.entryFee ?? null), pending: sh.res == null, note: sh.res == null ? "出场时 3R/原止损都还没到：出场后继续按路径判断（最多 48 小时），结论记 SHADOW_3R" : "按持仓期间路径判断" } : null;
         this.safeAppend({ id: `exit:${o.tid}`, k: "EXIT", t: now, sym: o.sym, tid: o.tid, d: {
-          ...sum, strategy: "FVG", case: o.case, setup: o.setupId, fillMode: o.fillMode, exitPx, entry: o.fill, stop: o.stop, tp: o.tp, zones: o.zoneKeys, fvg15: o.fvg,
-          gross: t?.grossPnl ?? null, fees: r((t?.entryFee ?? 0) + (t?.exitFee ?? 0), 4), mfeR: r(o.mfeR, 2), maeR: r(o.maeR, 2), oneR: r(o.oneR, 2), balanceAfter: r(forward.balance, 2), version: NTS_VERSION } }, now);
-        this.brief(now, o.sym, "出场", `情形${o.case} ${reason}，净 ${net >= 0 ? "+" : ""}${net.toFixed(2)}U（${rr.toFixed(2)}R）`);
-        this.s.post.push({ tid: o.tid, sym: o.sym, side: o.side, exitAt, exitPx, done: [], best: 0, worst: 0 });
-        if (this.s.post.length > 6) this.s.post.shift();
+          ...sum, strategy: "FVG", case: o.case, setup: o.setupId, fillMode: o.fillMode, exitPx, entry: o.fill, stop: o.stop, stop0: stop0Of(o), tp: o.tp, tpR: o.tpR ?? this.cfg.fvg.rr, zones: o.zoneKeys, fvg15: o.fvg,
+          gross: t?.grossPnl ?? null, fees: r((t?.entryFee ?? 0) + (t?.exitFee ?? 0), 4), mfeR: r(o.mfeR, 2), maeR: r(o.maeR, 2), oneR: r(o.oneR, 2), balanceAfter: r(forward.balance, 2),
+          r_fee: feeR, r_price: rPrice, mfeR_fee: r(o.mfeR, 3), maeR_fee: r(o.maeR, 3), mfeR_price: r(x.mfeRp, 3), maeR_price: r(x.maeRp, 3), mfePx: x.favPx, maePx: x.advPx,
+          rNote: "r/r_fee/mfeR/maeR = 扣手续费的 R（净盈亏 ÷ 1R 风险金额，含开平手续费）；*_price = 只看价格的 R（价格移动 ÷ |成交价 − 原止损|）",
+          beMove: o.be ?? null, shadow3R, version: NTS_VERSION } }, now);
+        this.brief(now, o.sym, "出场", `情形${o.case} ${reason}，净 ${net >= 0 ? "+" : ""}${net.toFixed(2)}U（价格 ${rPrice != null && rPrice >= 0 ? "+" : ""}${rPrice?.toFixed(2)}R / 扣费 ${rr.toFixed(2)}R）`);
+        this.s.post.push({ tid: o.tid, sym: o.sym, side: o.side, exitAt, exitPx, done: [], best: 0, worst: 0, best120: 0, worst120: 0, barT: 0,
+          exitRule: rule, fill: o.fill, stop0: stop0Of(o), qty: t?.quantity, entryFee: t?.entryFee, oneR: o.oneR, shadow: rule === "2R_BE1R" && sh && sh.res == null ? sh : null,
+          actual: { code, rPrice, rFee: feeR } });
+        if (this.s.post.length > 60) this.s.post.splice(0, this.s.post.length - 60);
+        this.extremesDirty = true;
       }
       opens.splice(opens.indexOf(o), 1);
       changed = true;
@@ -537,8 +560,8 @@ export class NtsEngine {
         mfeR: r(o.mfeR, 2), maeR: r(o.maeR, 2), oneR: r(o.oneR, 2), balanceAfter: r(forward.balance, 2),
         version: NTS_VERSION } }, now);
       this.brief(now, o.sym, "出场", `${reason}，净 ${net >= 0 ? "+" : ""}${net.toFixed(2)}U（${rr.toFixed(2)}R）`);
-      this.s.post.push({ tid: o.tid, sym: o.sym, side: o.side, exitAt, exitPx, done: [], best: 0, worst: 0 });
-      if (this.s.post.length > 6) this.s.post.shift();
+      this.s.post.push({ tid: o.tid, sym: o.sym, side: o.side, exitAt, exitPx, done: [], best: 0, worst: 0, best120: 0, worst120: 0, barT: 0 });
+      if (this.s.post.length > 60) this.s.post.splice(0, this.s.post.length - 60);
     }
     void d; void quotes;
     this.s.open = null;
@@ -569,45 +592,144 @@ export class NtsEngine {
         toStopPct: r(stopDist, 5), toBePct: o.addedAt ? r(beDist, 5) : null, toTargetPct: o.addedAt ? null : r(d * (o.target - f.px) / f.px, 5), stage: o.stage, ageMin: Math.round((c.now - o.openedAt) / MIN) } }, c.now);
     }
   }
-  /** FVG 持仓：最有利/最不利、每 traceEveryMs 一条 TRACE（与旧单同一频率）。 */
+  /** 出场后还在跟踪的币：hot = 出场后 125 分钟内（常驻实时行情 + 每根 15m 刷新）；cold = 影子 3R 还没结论（冷币节奏取 15m）。 */
+  private syncWatch(now: number) {
+    const hot: string[] = [], cold: string[] = [], last = Math.max(...this.cfg.log.postExitMarksMin, 0) * MIN;
+    for (const p of this.s.post) {
+      if (now - p.exitAt <= last + 5 * MIN && p.done.length < this.cfg.log.postExitMarksMin.length) hot.push(p.sym);
+      else if (p.shadow && !p.shadow.res) cold.push(p.sym);
+    }
+    this.desk.setWatch(hot, cold);
+  }
+  /** FVG 持仓的价格极值 → 价格 R（不含手续费）。 */
+  private extremes(o: FvgOpen) {
+    const long = o.side === "LONG", hi = Math.max(o.hiPx ?? o.fill, o.fill), lo = Math.min(o.loPx ?? o.fill, o.fill);
+    const favPx = long ? hi : lo, advPx = long ? lo : hi;
+    // 旧单没有价格极值时，用已记录的 mfePct/maePct 还原
+    const fromPct = (pct: number) => o.fill * (1 + (long ? 1 : -1) * pct);
+    const fav = long ? Math.max(favPx, fromPct(o.mfePct)) : Math.min(favPx, fromPct(o.mfePct)), adv = long ? Math.min(advPx, fromPct(o.maePct)) : Math.max(advPx, fromPct(o.maePct));
+    return { favPx: fav, advPx: adv, mfeRp: Math.max(0, priceR(o, fav)), maeRp: Math.min(0, priceR(o, adv)) };
+  }
+  /** 影子 3R 结果的 R：价格 R（3 / −1）和估算的扣费 R（按实际数量、开仓手续费、平仓费率 0.07%）。 */
+  private shadowView(sh: Shadow3R, o: { side: Side; fill: number; oneR: number }, qty: number | null, entryFee: number | null) {
+    const px = sh.res === "TP3" ? sh.tp3 : sh.res === "STOP" ? sh.stop0 : null, d = dirOf(o.side);
+    const rPrice = sh.res === "TP3" ? 3 : sh.res === "STOP" ? -1 : null;
+    const rFee = px != null && qty != null && entryFee != null && o.oneR > 0 ? r((d * (px - o.fill) * qty - entryFee - px * qty * 0.0007) / o.oneR, 3) : null;
+    return { res: sh.res, at: sh.at, px: sh.px, src: sh.src, tp3: sh.tp3, stop0: sh.stop0, rPrice, rFeeEst: rFee };
+  }
+  /** FVG 持仓：最有利/最不利（实时报价 + 开仓后已收盘 15m 的高低点，只增不减，重启后也不会回退）、影子 3R、每 traceEveryMs 一条 TRACE。 */
   private sampleFvg(c: { now: number; forward: ForwardState; quotes: Record<string, Quote> }) {
     for (const o of this.fvgOpens) {
       const t = c.forward.positions.find(x => x.id === o.tid && x.status === "OPEN"), q = c.quotes[o.sym];
-      if (!t || !q || !q.fresh) continue;
-      const f = this.floatingFvg(o, q, t), d = dirOf(o.side);
-      if (f.pct > o.mfePct) o.mfePct = f.pct; if (f.pct < o.maePct) o.maePct = f.pct;
-      if (f.r > o.mfeR) o.mfeR = f.r; if (f.r < o.maeR) o.maeR = f.r;
+      if (!t) continue;
+      const d = dirOf(o.side), before = [o.hiPx, o.loPx, o.mfePct, o.maePct, o.mfeR, o.maeR, o.shadow?.res ?? null].join("|");
+      o.hiPx = Math.max(o.hiPx ?? o.fill, o.fill); o.loPx = Math.min(o.loPx ?? o.fill, o.fill); o.barT ??= 0;
+      const sh = exitRuleOf(o) === "2R_BE1R" ? o.shadow : undefined;
+      for (const b of this.data[o.sym]?.bars["15m"] ?? []) {
+        const st = b.time * 1000;
+        if (st < o.openedAt || st + 15 * MIN > c.now || st <= o.barT) continue;
+        if (b.high > o.hiPx) o.hiPx = b.high; if (b.low < o.loPx) o.loPx = b.low;
+        o.barT = st;
+        if (sh && st > sh.barT) { sh.barT = st; if (stepShadow(sh, o.side, b.high, b.low, st, "15m")) this.logShadow(o.tid, o.sym, sh, o, t.quantity, t.entryFee, null, c.now); }
+      }
+      const fresh = !!(q && q.fresh), px = fresh ? (o.side === "LONG" ? q!.bestBid : q!.bestAsk) : null;
+      if (px != null) {
+        if (px > o.hiPx) o.hiPx = px; if (px < o.loPx) o.loPx = px;
+        o.segHi = Math.max(o.segHi ?? px, px); o.segLo = Math.min(o.segLo ?? px, px);
+        if (sh && stepShadow(sh, o.side, px, px, c.now, "quote")) this.logShadow(o.tid, o.sym, sh, o, t.quantity, t.entryFee, null, c.now);
+      }
+      // 极值 → 百分比 / 扣费 R（只增不减）
+      const netR = (p: number) => o.oneR > 0 ? (d * (p - t.entryPrice) * t.quantity - t.entryFee - p * t.quantity * 0.0007) / o.oneR : 0;
+      const favPx = o.side === "LONG" ? o.hiPx : o.loPx, advPx = o.side === "LONG" ? o.loPx : o.hiPx;
+      o.mfePct = Math.max(o.mfePct, d * (favPx / o.fill - 1)); o.maePct = Math.min(o.maePct, d * (advPx / o.fill - 1));
+      o.mfeR = Math.max(o.mfeR, netR(favPx)); o.maeR = Math.min(o.maeR, netR(advPx));
+      if ([o.hiPx, o.loPx, o.mfePct, o.maePct, o.mfeR, o.maeR, o.shadow?.res ?? null].join("|") !== before) this.extremesDirty = true;
+      if (!fresh || !q) continue;
+      const f = this.floatingFvg(o, q, t);
       if (c.now - o.lastTraceAt >= this.cfg.log.traceEveryMs) {
         o.lastTraceAt = c.now;
-        const slot = Math.floor(c.now / this.cfg.log.traceEveryMs);
+        const slot = Math.floor(c.now / this.cfg.log.traceEveryMs), x = this.extremes(o);
         this.safeAppend({ id: `tr:${o.tid}:${slot}`, k: "TRACE", t: c.now, sym: o.sym, tid: o.tid, d: {
           px: f.px, pct: r(f.pct, 5), r: r(f.r, 3), mfePct: r(o.mfePct, 5), maePct: r(o.maePct, 5), mfeR: r(o.mfeR, 3), maeR: r(o.maeR, 3), case: o.case,
-          toStopPct: r(d * (f.px - o.stop) / f.px, 5), toTargetPct: r(d * (o.tp - f.px) / f.px, 5), ageMin: Math.round((c.now - o.openedAt) / MIN) } }, c.now);
+          toStopPct: r(d * (f.px - o.stop) / f.px, 5), toTargetPct: r(d * (o.tp - f.px) / f.px, 5), ageMin: Math.round((c.now - o.openedAt) / MIN),
+          exitRule: exitRuleOf(o), stop: o.stop, be: o.be ? true : false, rPrice: r(priceR(o, f.px), 3), mfeR_price: r(x.mfeRp, 3), maeR_price: r(x.maeRp, 3),
+          segHi: o.segHi ?? null, segLo: o.segLo ?? null, hiPx: o.hiPx, loPx: o.loPx, shadow3R: sh ? sh.res : undefined,
+          rNote: "r/mfeR/maeR 扣费；*_price 只看价格；segHi/segLo = 上一条 TRACE 以来实时报价高低" } }, c.now);
+        o.segHi = null; o.segLo = null;
       }
     }
+  }
+  private logShadow(tid: string, sym: string, sh: Shadow3R, o: { side: Side; fill: number; oneR: number }, qty: number | null, entryFee: number | null, actual: PostExit["actual"] | null, now: number) {
+    this.safeAppend({ id: `shadow:${tid}`, k: "SHADOW_3R", t: now, sym, tid, d: { ...this.shadowView(sh, o, qty, entryFee), actual,
+      note: sh.res === "AMBIG" ? "同一根 15m 里 3R 和原止损都碰到，先后分不清" : "老规则（3R 止盈 / 原止损）先到哪个；只记录，不影响交易" } }, now);
+    this.extremesDirty = true;
   }
   private floatingFvg(o: FvgOpen, q: Quote, t: Trade) {
     const px = o.side === "LONG" ? q.bestBid : q.bestAsk, d = dirOf(o.side);
     const gross = d * (px - t.entryPrice) * t.quantity, net = gross - t.entryFee - px * t.quantity * 0.0007;
     return { px, pct: d * (px / o.fill - 1), r: o.oneR > 0 ? net / o.oneR : 0, net };
   }
+  /** 出场后 +30/+60/+120 分钟的价格、120 分钟内最有利/最不利（每笔出场都记，止盈出场也记）。
+   *  只用已有数据：实时报价（出场后 125 分钟内该币常驻）+ 已取的 15m K 线（报价缺失时用包含该时刻那根 15m 的收盘价，标 src=15m）。 */
   private samplePost(c: { now: number; quotes: Record<string, Quote> }) {
     if (!this.s.post.length) return;
-    const keep: PostExit[] = [];
+    const marks = this.cfg.log.postExitMarksMin, win = Math.max(...marks, 0) * MIN, keep: PostExit[] = [];
     for (const p of this.s.post) {
-      const q = c.quotes[p.sym]; const d = dirOf(p.side);
-      if (q && q.fresh) {
-        const mid = (q.bestBid + q.bestAsk) / 2, mv = d * (mid / p.exitPx - 1);
-        if (mv > p.best) p.best = mv; if (mv < p.worst) p.worst = mv;
-        for (const m of this.cfg.log.postExitMarksMin) {
-          if (p.done.includes(m) || c.now - p.exitAt < m * MIN) continue;
-          p.done.push(m);
-          this.safeAppend({ id: `post:${p.tid}:${m}`, k: "POST_EXIT", t: c.now, sym: p.sym, tid: p.tid, d: { afterMin: m, px: mid, movePct: r(mv, 5), bestPct: r(p.best, 5), worstPct: r(p.worst, 5), exitPx: p.exitPx } }, c.now);
+      const q = c.quotes[p.sym], d = dirOf(p.side), bars = this.data[p.sym]?.bars["15m"] ?? [];
+      p.best120 ??= 0; p.worst120 ??= 0; p.barT ??= 0;
+      const mv = (px: number) => d * (px / p.exitPx - 1);
+      const before = [p.best, p.worst, p.best120, p.worst120, p.done.length, p.shadow?.res ?? null].join("|");
+      const mid = q && q.fresh ? (q.bestBid + q.bestAsk) / 2 : null;
+      if (mid != null) {
+        const m = mv(mid); if (m > p.best) p.best = m; if (m < p.worst) p.worst = m;
+        if (c.now - p.exitAt <= win) { if (m > p.best120) p.best120 = m; if (m < p.worst120) p.worst120 = m; }
+        if (p.shadow && !p.shadow.res) { const ex = p.side === "LONG" ? q!.bestBid : q!.bestAsk; if (stepShadow(p.shadow, p.side, ex, ex, c.now, "quote_after_exit")) this.postShadowDone(p, c.now); }
+      }
+      for (const b of bars) {
+        const st = b.time * 1000;
+        if (st + 15 * MIN > c.now) continue;
+        if (st >= p.exitAt && st > p.barT && st + 15 * MIN <= p.exitAt + win) {
+          const fav = mv(d > 0 ? b.high : b.low), adv = mv(d > 0 ? b.low : b.high);
+          if (fav > p.best120) p.best120 = fav; if (adv < p.worst120) p.worst120 = adv; if (fav > p.best) p.best = fav; if (adv < p.worst) p.worst = adv;
+          p.barT = st;
+        }
+        if (p.shadow && !p.shadow.res && st > p.shadow.barT) {
+          p.shadow.barT = st;
+          if (stepShadow(p.shadow, p.side, b.high, b.low, st, "15m")) this.postShadowDone(p, c.now);
         }
       }
-      if (p.done.length < this.cfg.log.postExitMarksMin.length && c.now - p.exitAt < 6 * HOUR) keep.push(p);
+      for (const m of marks) {
+        const at = p.exitAt + m * MIN;
+        if (p.done.includes(m) || c.now < at) continue;
+        let px: number | null = null, src = "";
+        if (mid != null && c.now - at <= 2 * MIN) { px = mid; src = "quote"; }
+        else {
+          const b = bars.find(x => x.time * 1000 <= at && at < x.time * 1000 + 15 * MIN && x.time * 1000 + 15 * MIN <= c.now);
+          if (b) { px = b.close; src = "15m_close(含该时刻那根 15m 的收盘价，近似)"; }
+          else if (c.now - at < 3 * HOUR) continue; // 等 K 线
+          else src = "无数据";
+        }
+        p.done.push(m);
+        this.safeAppend({ id: `post:${p.tid}:${m}`, k: "POST_EXIT", t: c.now, sym: p.sym, tid: p.tid, d: { afterMin: m, px, src, movePct: px == null ? null : r(mv(px), 5),
+          bestPct: r(p.best, 5), worstPct: r(p.worst, 5), best120Pct: r(p.best120, 5), worst120Pct: r(p.worst120, 5), exitPx: p.exitPx, exitAt: p.exitAt, exitRule: p.exitRule ?? null,
+          best120R_price: p.fill && p.stop0 && p.fill !== p.stop0 ? r(p.best120 * p.exitPx / Math.abs(p.fill - p.stop0), 3) : null, actual: p.actual ?? null,
+          note: "movePct/bestPct > 0 = 出场后价格继续朝原持仓有利方向走（相对出场价）；best120 = 出场后 120 分钟内最有利" } }, c.now);
+      }
+      if ([p.best, p.worst, p.best120, p.worst120, p.done.length, p.shadow?.res ?? null].join("|") !== before) this.extremesDirty = true;
+      const marksOpen = p.done.length < marks.length && c.now - p.exitAt < 6 * HOUR;
+      let shadowOpen = !!(p.shadow && !p.shadow.res);
+      if (shadowOpen && c.now - p.exitAt >= 48 * HOUR) {
+        this.safeAppend({ id: `shadow:${p.tid}`, k: "SHADOW_3R", t: c.now, sym: p.sym, tid: p.tid, d: { res: "UNRESOLVED_48H", tp3: p.shadow!.tp3, stop0: p.shadow!.stop0, actual: p.actual ?? null,
+          note: "出场后 48 小时内 3R 和原止损都没碰到" } }, c.now);
+        shadowOpen = false; this.extremesDirty = true;
+      }
+      if (marksOpen || shadowOpen) keep.push(p);
     }
     this.s.post = keep;
+  }
+  private postShadowDone(p: PostExit, now: number) {
+    if (!p.shadow || p.fill == null) return;
+    this.logShadow(p.tid, p.sym, p.shadow, { side: p.side, fill: p.fill, oneR: p.oneR ?? 0 }, p.qty ?? null, p.entryFee ?? null, p.actual ?? null, now);
   }
 
   // ---------------------------------------------------------------------------------------------------------------
@@ -617,15 +739,18 @@ export class NtsEngine {
     const f = this.cfg.fvg, coins = this.desk.coinView(now);
     const positions = this.fvgOpens.map(o => {
       const t = forward?.positions.find(x => x.id === o.tid && x.status === "OPEN"), q = quotes[o.sym], fl = t && q && q.fresh ? this.floatingFvg(o, q, t) : null;
+      const x = this.extremes(o);
       return { tid: o.tid, sym: o.sym, side: o.side, case: o.case, openedAt: o.openedAt, entry: o.fill, plannedEntry: o.plannedEntry, fillMode: o.fillMode, stop: o.stop, tp: o.tp,
-        price: fl?.px ?? null, floatingR: fl ? r(fl.r, 2) : null, floatingNet: fl ? r(fl.net, 2) : null, oneR: r(o.oneR, 2), margin: t ? r(t.margin, 2) : null, liq: t?.liquidationPrice ?? null };
+        price: fl?.px ?? null, floatingR: fl ? r(fl.r, 2) : null, floatingNet: fl ? r(fl.net, 2) : null, oneR: r(o.oneR, 2), margin: t ? r(t.margin, 2) : null, liq: t?.liquidationPrice ?? null,
+        exitRule: exitRuleOf(o), tpR: o.tpR ?? f.rr, stop0: stop0Of(o), be: o.be ?? null, floatingRp: fl ? r(priceR(o, fl.px), 2) : null,
+        mfeR: r(o.mfeR, 2), maeR: r(o.maeR, 2), mfeRp: r(x.mfeRp, 2), maeRp: r(x.maeRp, 2) };
     });
     const ready = coins.filter(c => this.desk.dataHealth(c.sym, now).ok).length;
     const count = (st: string) => coins.filter(c => c.stage === st).length;
     return { name: "FVG扫流动性系统", universe: this.desk.universeList, universeAt: this.desk.universeAt || null, ready, coins, positions,
       stages: { 等价格进入4H缺口: count("等价格进入4H缺口"), 等15m扫流动性: count("等15m扫流动性"), 等回踩15m缺口: count("等回踩15m缺口"), 持仓中: count("持仓中"), 数据预热: count("数据预热") },
       resident: this.residentSymbols(), plan: this.desk.fetchPlan(),
-      rules: { universeMax: f.universeMax, rr: f.rr, expiryBars: f.expiryBars, stop: "扫点外 1 tick", firstMarginPct: this.cfg.firstMarginPct, leverage: this.cfg.leverage, reentryTolPct: f.reentryTolPct },
+      rules: { universeMax: f.universeMax, rr: f.rr, tpR: f.tpR, beAtR: f.beAtR, exitRule: "2R_BE1R", expiryBars: f.expiryBars, stop: "扫点外 1 tick", firstMarginPct: this.cfg.firstMarginPct, leverage: this.cfg.leverage, reentryTolPct: f.reentryTolPct },
       legacyOpen: this.s.open ? { tid: this.s.open.tid, sym: this.s.open.sym, side: this.s.open.side, stage: this.s.open.stage, note: "切换前的旧 SMC 单，按原规则管到平仓" } : null };
   }
   status(now: number, forward: ForwardState | null, quotes: Record<string, Quote>, extra: { enabled: boolean; logError: string | null; lastFlushAt: number }) {

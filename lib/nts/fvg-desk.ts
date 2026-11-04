@@ -6,12 +6,15 @@
  * 调度（与 0.4/s 全局 Gate 令牌桶共用，引擎自己再限 restPerSec）：
  *   4H：每根 4H 收盘后每币 1 次；15m：热币（在/近 4H 缺口 ≤ nearPct、有形态、有持仓）每根 15m 收盘 1 次，冷币每 cold15mEveryMs 1 次。
  * 形态 → 情形：a = 新形态（扫完+位移+15m 缺口，16 根内回踩限价成交）；b = 老形态没成交（过期/错过），价格回到原 15m 缺口附近、
- *   扫点没破、原 3R 止盈没到过、按现价剩余空间仍 ≥ 3R → 市价进。
+ *   扫点没破、原 3R 止盈没到过、按现价剩余空间仍 ≥ 3R → 市价进（进场条件不变）。
+ * 出场（2026-11-04 起的新单，exitRule="2R_BE1R"）：止盈 = 成交价起 2R；价格先到 +1R 时止损移到保本（入场价往盈利方向 1 tick），记 BE_MOVE。
+ *   R 只看价格 = |成交价 − 原止损|。之前开的单 exitRule 缺省 = "3R"：保持原来的 3R 止盈 + 原止损，不动。
+ *   每笔新单同时按路径记「影子 3R」：如果还是老规则（3R 止盈 / 原止损），先到哪个（复盘对比用，不影响交易）。
  */
 import type { Contract, ForwardState, Quote } from "../forward-relations.ts";
 import { closePaperTrade, openPaperTrade } from "../forward-relations.ts";
 import type { NtsConfig } from "./config.ts";
-import { activeZonesAt, find4hZones, reentryCheck, scanSetups, zoneDistance, type FvgParams, type Setup, type Zone4h } from "./fvg.ts";
+import { activeZonesAt, fallbackTick, find4hZones, reentryCheck, scanSetups, zoneDistance, type FvgParams, type Setup, type Zone4h } from "./fvg.ts";
 import { buildPacks } from "./decision.ts";
 import { r } from "./indicators.ts";
 import type { NtsRec } from "./log.ts";
@@ -25,7 +28,35 @@ export type FvgOpen = {
   tid: string; sym: string; side: Side; openedAt: number; fill: number; stop: number; tp: number; oneR: number; equityAtOpen: number;
   setupId: string; case: FvgCase; zoneKeys: string[]; sweepPx: number; fvg: { lo: number; hi: number }; plannedEntry: number; fillMode: "LIMIT" | "GAP" | "MARKET_B";
   mfePct: number; maePct: number; mfeR: number; maeR: number; lastTraceAt: number;
+  /** 出场规则版本：缺省 = "3R"（2026-11-04 之前开的单，原计划不动）；"2R_BE1R" = 2R 止盈 + 1R 保本。 */
+  exitRule?: ExitRule;
+  /** 原止损（价格 R 的分母；保本移动后 stop 会变，stop0 不变）。旧单缺省 = stop。 */
+  stop0?: number; tpR?: number;
+  /** 保本移动：时间、触发价、移到哪、当时 MFE（价格 R）。 */
+  be?: { at: number; px: number; stop: number; mfeRp: number } | null;
+  /** 价格极值（持仓以来最有利/最不利价，含 15m 高低点）；用来算价格 R，并保证重启后 MFE/MAE 不回退。 */
+  hiPx?: number; loPx?: number; barT?: number;
+  /** 两次 TRACE 之间行情的最高/最低（只看实时报价）。 */
+  segHi?: number | null; segLo?: number | null;
+  /** 影子 3R：老规则（3R 止盈 / 原止损）先到哪个。 */
+  shadow?: Shadow3R;
 };
+export type ExitRule = "3R" | "2R_BE1R";
+export type Shadow3R = { tp3: number; stop0: number; res: "TP3" | "STOP" | "AMBIG" | null; at: number | null; px: number | null; src: string | null; barT: number };
+export const exitRuleOf = (o: { exitRule?: ExitRule }): ExitRule => o.exitRule ?? "3R";
+export const stop0Of = (o: { stop0?: number; stop: number }) => (typeof o.stop0 === "number" && o.stop0 > 0 ? o.stop0 : o.stop);
+/** 价格 R（不含手续费）：有利方向价格移动 ÷ |成交价 − 原止损|。 */
+export const priceR = (o: { side: Side; fill: number; stop0?: number; stop: number }, px: number) => {
+  const risk = Math.abs(o.fill - stop0Of(o)); return risk > 0 ? (o.side === "LONG" ? 1 : -1) * (px - o.fill) / risk : 0;
+};
+/** 影子 3R 在一段价格区间（hi/lo）上推进：两边都碰到 = AMBIG（同一根 15m 里分不清先后）。返回 true = 本次有结论。 */
+export function stepShadow(sh: Shadow3R, side: Side, hi: number, lo: number, at: number, src: string): boolean {
+  if (sh.res) return false;
+  const long = side === "LONG", hitTp = long ? hi >= sh.tp3 : lo <= sh.tp3, hitSl = long ? lo <= sh.stop0 : hi >= sh.stop0;
+  if (!hitTp && !hitSl) return false;
+  sh.res = hitTp && hitSl ? "AMBIG" : hitTp ? "TP3" : "STOP"; sh.at = at; sh.px = hitTp && !hitSl ? sh.tp3 : hitSl && !hitTp ? sh.stop0 : null; sh.src = src;
+  return true;
+}
 export type FvgState = { opens: FvgOpen[]; filled: string[]; usedZones: string[]; universe: string[] };
 export const freshFvgState = (): FvgState => ({ opens: [], filled: [], usedZones: [], universe: [] });
 export function normalizeFvgState(x: unknown): FvgState {
@@ -35,7 +66,8 @@ export function normalizeFvgState(x: unknown): FvgState {
 }
 export type FvgAction =
   | { type: "OPEN_FVG"; sym: string; setup: Setup; case: FvgCase; mode: "LIMIT" | "GAP" | "MARKET_B"; why: string }
-  | { type: "CLOSE_FVG"; tid: string; code: string; reason: string };
+  | { type: "CLOSE_FVG"; tid: string; code: string; reason: string }
+  | { type: "MOVE_STOP_FVG"; tid: string; stop: number; px: number; reason: string };
 type SymBars = { bars: Partial<Record<Tf, Bar[]>>; fetchedAt: Partial<Record<Tf, number>>; failedAt: Partial<Record<Tf, number>>; fails: number };
 type CoinRt = {
   zones: Zone4h[]; z4T: number; setups: Setup[]; b15T: number; zonesSig: string; init: boolean;
@@ -61,6 +93,8 @@ export class FvgDesk {
   universeAt = 0;
   /** 掉出币池、但还有挂单/情形 b 候选的币：继续盯到形态结束。 */
   private sticky = new Set<string>();
+  /** 出场后跟踪的币（只取数/报价，不参与开仓）：hot = 出场 125 分钟内（常驻实时行情 + 每根 15m 刷新）；cold = 影子 3R 还没结论（按冷币节奏取 15m）。 */
+  private watchHot = new Set<string>(); private watchCold = new Set<string>();
   /** 合约价格最小变动单位（Gate order_price_round，来自已有合约目录，不新增请求）。止损 = 扫点外 1 tick。 */
   private ticks: Record<string, number> = {};
   private h: DeskHost;
@@ -68,7 +102,7 @@ export class FvgDesk {
     this.h = h;
     const st = h.state();
     this.universe = st.universe.length ? st.universe.slice(0, h.cfg.fvg.universeMax) : [...h.cfg.symbols];
-    for (const s of this.allSymbols()) this.ensure(s);
+    for (const s of this.tradeSymbols()) this.ensure(s);
   }
   /** 持久化状态总是从引擎当前状态读（事务失败回滚时引擎会换掉整个状态对象）。 */
   get st(): FvgState { return this.h.state(); }
@@ -79,7 +113,17 @@ export class FvgDesk {
       px: null, dist: Infinity, hot: false, stage: "数据预热", caseTag: null, last: "等数据", lastAt: 0 });
   }
   /** 币池 + 有持仓的币（币池外的持仓币也要继续取数/管理）。 */
-  allSymbols(): string[] { return [...new Set([...this.universe, ...this.st.opens.map(o => o.sym), ...this.sticky])]; }
+  tradeSymbols(): string[] { return [...new Set([...this.universe, ...this.st.opens.map(o => o.sym), ...this.sticky])]; }
+  /** 要取数的币 = 交易币 + 出场后跟踪的币。 */
+  allSymbols(): string[] { return [...new Set([...this.tradeSymbols(), ...this.watchHot, ...this.watchCold])]; }
+  /** 引擎每 tick 传入出场后还在跟踪的币（不新增请求类型：同样的 15m K 线 + 已有实时盘口）。 */
+  setWatch(hot: readonly string[], cold: readonly string[]) {
+    const same = (a: Set<string>, b: readonly string[]) => a.size === new Set(b).size && b.every(x => a.has(x));
+    if (same(this.watchHot, hot) && same(this.watchCold, cold)) return;
+    this.watchHot = new Set(hot); this.watchCold = new Set(cold.filter(x => !this.watchHot.has(x)));
+    for (const s of this.allSymbols()) this.h.data[s] ??= { bars: {}, fetchedAt: {}, failedAt: {}, fails: 0, tickerAt: 0, tickerFailedAt: 0 } as SymBars;
+    this.prune();
+  }
   get universeList() { return this.universe; }
 
   /** 宿主传入按 24h 成交额排好序的合约（已有目录，不新增请求）。BTC/ETH 固定在内。 */
@@ -111,8 +155,9 @@ export class FvgDesk {
     return true;
   }
   private prune() {
-    const keep = new Set(this.allSymbols());
-    for (const s of Object.keys(this.rt)) if (!keep.has(s)) { delete this.rt[s]; if (!this.h.cfg.symbols.includes(s)) delete this.h.data[s]; }
+    const keep = new Set(this.tradeSymbols()), keepData = new Set(this.allSymbols());
+    for (const s of Object.keys(this.rt)) if (!keep.has(s)) delete this.rt[s];
+    for (const s of Object.keys(this.h.data)) if (!keepData.has(s) && !keep.has(s) && !this.h.cfg.symbols.includes(s)) delete this.h.data[s];
   }
 
   // ----------------------------------------------------------------------------------------------------------------
@@ -130,7 +175,7 @@ export class FvgDesk {
       if ((!l4 || now >= (l4.time + 2 * TF_SEC["4h"]) * 1000 + 4_000) && ok("4h")) consider("4h", l4 ? 1.5 : 0.5);
       if (!l4) return; // 先有 4H 才知道冷热
       const b15 = d.bars["15m"], l15 = b15?.[b15.length - 1];
-      const hot = !!rt?.hot || this.st.opens.some(o => o.sym === sym);
+      const hot = !!rt?.hot || this.st.opens.some(o => o.sym === sym) || this.watchHot.has(sym);
       const closed = !l15 || now >= (l15.time + 2 * TF_SEC["15m"]) * 1000 + 4_000;
       const due = !l15 || (closed && (hot || now - (d.fetchedAt["15m"] ?? 0) >= this.cfg.fvg.cold15mEveryMs));
       if (due && ok("15m")) consider("15m", !l15 ? (hot ? 0.6 : 0.7) : hot ? 1 : 2);
@@ -247,16 +292,23 @@ export class FvgDesk {
     for (const o of this.st.opens) {
       const t = forward.positions.find(x => x.id === o.tid && x.status === "OPEN"), q = c.quotes[o.sym];
       if (!t || !q || !q.fresh) continue;
-      const px = o.side === "LONG" ? q.bestBid : q.bestAsk;
-      if (o.side === "LONG" ? px >= o.tp : px <= o.tp) out.push({ type: "CLOSE_FVG", tid: o.tid, code: "TARGET", reason: `到 ${f.rr}R 止盈 ${r(o.tp, 6)}` });
+      const px = o.side === "LONG" ? q.bestBid : q.bestAsk, rule = exitRuleOf(o);
+      if (o.side === "LONG" ? px >= o.tp : px <= o.tp) { out.push({ type: "CLOSE_FVG", tid: o.tid, code: "TARGET", reason: `到 ${o.tpR ?? f.rr}R 止盈 ${r(o.tp, 6)}` }); continue; }
+      // 2R_BE1R：价格（出场方向报价）先到 +beAtR 倍价格 R → 止损移到保本（入场价往盈利方向 beTicks 个 tick）。旧 3R 单不动。
+      if (rule === "2R_BE1R" && !o.be && priceR(o, px) >= f.beAtR) {
+        const tick = this.ticks[o.sym] ?? fallbackTick(o.fill), d = o.side === "LONG" ? 1 : -1; // tick 与止损同源：Gate order_price_round，没有就按价格数量级×1e-4
+        let be = r(o.fill + d * f.beTicks * tick, 12) ?? o.fill;
+        if (o.side === "LONG" ? be >= px : be <= px) be = o.fill; // 极端：1 tick 已越过现价，就用入场价
+        out.push({ type: "MOVE_STOP_FVG", tid: o.tid, stop: be, px, reason: `价格到 +${f.beAtR}R，止损移到保本 ${r(be, 8)}（入场价${tick && be !== o.fill ? ` ${o.side === "LONG" ? "+" : "−"}${f.beTicks} tick` : ""}）` });
+      }
     }
-    for (const sym of this.allSymbols()) this.refresh(sym, now, c.quotes[sym]);
+    for (const sym of this.tradeSymbols()) this.refresh(sym, now, c.quotes[sym]);
     let pruned = false;
     for (const sym of [...this.sticky]) if (this.rt[sym]?.stage !== "等回踩15m缺口" && !this.st.opens.some(o => o.sym === sym)) { this.sticky.delete(sym); pruned = true; }
     if (pruned) this.prune();
     if (!c.enabled) return out;
     const cands: (FvgAction & { type: "OPEN_FVG"; rank: number })[] = [];
-    this.allSymbols().forEach((sym, rank) => {
+    this.tradeSymbols().forEach((sym, rank) => {
       const rt = this.rt[sym], q = c.quotes[sym];
       if (!rt || !rt.init || !q || !q.fresh) return;
       const bid = q.bestBid, ask = q.bestAsk;
@@ -321,16 +373,19 @@ export class FvgDesk {
     const stopPct = Math.abs(estFill - st.stop) / estFill, worst = notional * (stopPct + cfg.stopSlipPct + 2 * cfg.feeRate);
     const tid = `nts-${a.sym}-${st.id}${a.case === "b" ? "b" : ""}`;
     if (this.st.filled.includes(`${a.sym}:${st.id}`) || draft.positions.some(x => x.id === tid && x.status === "OPEN")) return false; // 同一形态不重复开
-    const tp0 = estFill + dir * f.rr * Math.abs(estFill - st.stop);
+    // 新单：2R 止盈 + 1R 保本（exitRule 2R_BE1R）；R = |成交价 − 止损|，只看价格
+    const tp0 = estFill + dir * f.tpR * Math.abs(estFill - st.stop);
     const res = openPaperTrade(draft, { id: tid, symbol: a.sym, side: st.side, quote, contract, marginTarget: margin, leverage: lev, stopPrice: st.stop, targetPrice: tp0,
       maintenanceRate: contract.maintenanceRate > 0 ? contract.maintenanceRate : cfg.maintenanceRate, slippageRate: slip, now,
       reason: `NTS FVG ${st.side} 情形${a.case} 15m缺口 ${r(st.fvg.lo, 6)}~${r(st.fvg.hi, 6)}`, multi: true });
     if (!res.ok) return skip(res.reason.startsWith("模拟盘可用保证金不足") ? `跳过：${res.reason}（不缩小仓位）` : `下单失败：${res.reason}`);
-    const t = res.trade, fill = t.entryPrice, tp = fill + dir * f.rr * Math.abs(fill - st.stop);
+    const t = res.trade, fill = t.entryPrice, risk = Math.abs(fill - st.stop), tp = fill + dir * f.tpR * risk, tp3 = fill + dir * 3 * risk;
     (t as { armPrice: number }).armPrice = tp;
     const oneR = t.quantity * Math.abs(fill - st.stop) + t.entryFee * 2;
     this.st.opens.push({ tid, sym: a.sym, side: st.side, openedAt: now, fill, stop: st.stop, tp, oneR, equityAtOpen: balance, setupId: st.id, case: a.case, zoneKeys: st.zoneKeys,
-      sweepPx: st.sweepPx, fvg: st.fvg, plannedEntry: st.entry, fillMode: a.mode, mfePct: 0, maePct: 0, mfeR: 0, maeR: 0, lastTraceAt: now });
+      sweepPx: st.sweepPx, fvg: st.fvg, plannedEntry: st.entry, fillMode: a.mode, mfePct: 0, maePct: 0, mfeR: 0, maeR: 0, lastTraceAt: now,
+      exitRule: "2R_BE1R", stop0: st.stop, tpR: f.tpR, be: null, hiPx: fill, loPx: fill, barT: 0, segHi: null, segLo: null,
+      shadow: { tp3, stop0: st.stop, res: null, at: null, px: null, src: null, barT: 0 } });
     this.st.filled.push(`${a.sym}:${st.id}`); if (this.st.filled.length > 300) this.st.filled.splice(0, this.st.filled.length - 300);
     for (const k of st.zoneKeys) this.st.usedZones.push(`${a.sym}:${k}`); if (this.st.usedZones.length > 300) this.st.usedZones.splice(0, this.st.usedZones.length - 300);
     const d = this.h.data[a.sym], b4 = d?.bars["4h"] ?? [], b15 = d?.bars["15m"] ?? [], packs = buildPacks({ "15m": b15, "4h": b4 });
@@ -339,11 +394,25 @@ export class FvgDesk {
       strategy: "FVG", case: a.case, fillMode: a.mode, why: a.why, side: st.side, setup: st.id,
       zone4h: z, sweep: { t: st.sweepT, px: st.sweepPx, swing: st.swingPx }, displacement: { bars: st.dispBars, move: st.dispMove, atr: st.atr }, fvg15: st.fvg,
       plan: { entry: st.entry, stop: st.stop, tp3R_orig: st.tpOrig }, fill: { price: fill, contracts: t.contracts, qty: t.quantity, notional: r(t.notional, 2), margin: r(t.margin, 2), fee: r(t.entryFee, 4), liq: t.liquidationPrice, leverage: lev },
-      stop: st.stop, tp, rr: f.rr, stopPct: r(Math.abs(fill - st.stop) / fill, 5), oneR: r(oneR, 2), sizing: { balance: r(balance, 2), firstPct: cfg.firstMarginPct, worstEst: r(worst, 2), worstPct: r(worst / balance, 4), stopWidthLimit: null },
+      stop: st.stop, tp, rr: f.tpR, exitRule: "2R_BE1R", exitPlan: { tpR: f.tpR, tp, beAtR: f.beAtR, beTrigger: fill + dir * f.beAtR * risk, beTicks: f.beTicks, note: "R = |成交价 − 止损|（价格）；到 +1R 止损移到入场价往盈利方向 1 tick" },
+      shadow3R: { tp3, stop0: st.stop, note: "老规则（3R 止盈/原止损）只记录不执行" }, stopPct: r(Math.abs(fill - st.stop) / fill, 5), oneR: r(oneR, 2), sizing: { balance: r(balance, 2), firstPct: cfg.firstMarginPct, worstEst: r(worst, 2), worstPct: r(worst / balance, 4), stopWidthLimit: null },
       tick: { size: this.ticks[a.sym] ?? null, source: this.ticks[a.sym] ? "gate.order_price_round" : "fallback(价格数量级×1e-4)" },
       quote: { bid: q.bestBid, ask: q.bestAsk }, ind: { "15m": packs["15m"], "4h": packs["4h"], use: "RSI/MACD 只记录，不参与决策" }, version: this.h.version } }, now);
-    this.h.brief(now, a.sym, "进场", `${sideCn(st.side)} 情形${a.case}${a.mode === "LIMIT" ? " 限价" : a.mode === "GAP" ? " 跳空市价" : " 回到缺口市价"} @${r(fill, 6)} 止损 ${r(st.stop, 6)} 止盈 ${r(tp, 6)}（${f.rr}R）`);
+    this.h.brief(now, a.sym, "进场", `${sideCn(st.side)} 情形${a.case}${a.mode === "LIMIT" ? " 限价" : a.mode === "GAP" ? " 跳空市价" : " 回到缺口市价"} @${r(fill, 6)} 止损 ${r(st.stop, 6)} 止盈 ${r(tp, 6)}（${f.tpR}R，+${f.beAtR}R 保本）`);
     rt.stage = "持仓中"; rt.caseTag = a.case;
+    return true;
+  }
+  /** 保本移动：改账户持仓的止损价（账户引擎每 2 秒按 stopPrice 管止损），记 BE_MOVE。 */
+  moveStop(draft: ForwardState, a: Extract<FvgAction, { type: "MOVE_STOP_FVG" }>, c: { now: number }) {
+    const o = this.st.opens.find(x => x.tid === a.tid), t = o ? draft.positions.find(x => x.id === o.tid && x.status === "OPEN") : undefined;
+    if (!o || !t || o.be) return false;
+    const before = t.stopPrice, mfeRp = r(Math.max(priceR(o, a.px), priceR(o, o.side === "LONG" ? (o.hiPx ?? o.fill) : (o.loPx ?? o.fill))), 3) ?? 0;
+    o.stop0 ??= o.stop; t.stopPrice = a.stop; o.stop = a.stop;
+    o.be = { at: c.now, px: a.px, stop: a.stop, mfeRp };
+    const mfePct = r(Math.max(o.mfePct, (o.side === "LONG" ? 1 : -1) * (a.px / o.fill - 1)), 5);
+    this.h.append({ id: `be:${o.tid}`, k: "BE_MOVE", t: c.now, sym: o.sym, tid: o.tid, d: { strategy: "FVG", exitRule: exitRuleOf(o), side: o.side, entry: o.fill, stop0: stop0Of(o), oldStop: before, newStop: a.stop,
+      px: a.px, mfePct, mfeR_price: mfeRp, mfeR_fee: r(o.mfeR, 3), tp: o.tp, ageMin: Math.round((c.now - o.openedAt) / MIN), text: a.reason, version: this.h.version } }, c.now);
+    this.h.brief(c.now, o.sym, "保本", a.reason);
     return true;
   }
   close(draft: ForwardState, a: Extract<FvgAction, { type: "CLOSE_FVG" }>, c: { now: number; quotes: Record<string, Quote> }) {
@@ -369,8 +438,9 @@ export class FvgDesk {
     const pri = (sym: string) => { const rt = this.rt[sym]; if (this.st.opens.some(o => o.sym === sym)) return 0; if (!rt) return 9;
       if (rt.setups.some(st => this.aEligible(sym, st, now))) return 1; if (this.bNear(sym, now)) return 2;
       if (rt.stage === "等回踩15m缺口") return 3; if (rt.setups.some(s => s.status === "SWEPT")) return 4; return 9; };
-    const ranked = this.allSymbols().map((s, i) => ({ s, p: pri(s), i })).filter(x => x.p < 9).sort((a, b) => a.p - b.p || a.i - b.i);
-    const must = ranked.filter(x => x.p <= 2).map(x => x.s);
+    const ranked = this.tradeSymbols().map((s, i) => ({ s, p: pri(s), i })).filter(x => x.p < 9).sort((a, b) => a.p - b.p || a.i - b.i);
+    // 出场后 125 分钟内的币也必须常驻（出场后 +30/+60/+120 分钟的价格要用实时报价记）
+    const must = [...new Set([...ranked.filter(x => x.p <= 2).map(x => x.s), ...this.watchHot])];
     return [...must, ...ranked.filter(x => x.p > 2).slice(0, this.cfg.fvg.maxResident).map(x => x.s)];
   }
   dataHealth(sym: string, now: number) {
@@ -386,7 +456,7 @@ export class FvgDesk {
     return { ok: notes.length === 0, notes, bars };
   }
   coinView(now: number) {
-    return this.allSymbols().map((sym, rank) => {
+    return this.tradeSymbols().map((sym, rank) => {
       const rt = this.rt[sym], nowSec = now / 1000;
       if (!rt) return { sym, rank, stage: "数据预热" as FvgStage, case: null, zones: [], dist: null, px: null, last: "等数据", setup: null, hot: false };
       const act = activeZonesAt(rt.zones, nowSec);
@@ -400,8 +470,8 @@ export class FvgDesk {
     });
   }
   fetchPlan() {
-    const all = this.allSymbols(), hot = all.filter(s => this.rt[s]?.hot || this.st.opens.some(o => o.sym === s)).length, cold = all.length - hot;
+    const all = this.allSymbols(), hot = all.filter(s => this.rt[s]?.hot || this.st.opens.some(o => o.sym === s) || this.watchHot.has(s)).length, cold = all.length - hot;
     const perHour = all.length * (1 / 4) + hot * 4 + cold * (HOUR / this.cfg.fvg.cold15mEveryMs);
-    return { universe: all.length, hot, cold, estPerHour: r(perHour, 1) };
+    return { universe: this.tradeSymbols().length, hot, cold, watch: this.watchHot.size + this.watchCold.size, estPerHour: r(perHour, 1) };
   }
 }

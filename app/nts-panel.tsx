@@ -10,10 +10,11 @@ type Per = { trades: number; wins: number; pnl: number; r: number; pct: number |
 type FvgZone = { key: string; side: string; lo: number; hi: number; formedAt: number; used: boolean; case: "a" | "b" | null };
 type FvgCoin = { sym: string; rank: number; stage: string; case: "a" | "b" | null; hot: boolean; px: number | null; dist: number | null; zones: FvgZone[];
   setup: { id: string; side: string; status: string; entry: number | null; stop: number | null; tp: number | null; fvg: { lo: number; hi: number } | null; expiresT: number | null } | null; last: string };
-type FvgPos = { tid: string; sym: string; side: string; case: "a" | "b"; openedAt: number; entry: number; plannedEntry: number; fillMode: string; stop: number; tp: number; price: number | null; floatingR: number | null; floatingNet: number | null; oneR: number; margin: number | null };
+type FvgPos = { tid: string; sym: string; side: string; case: "a" | "b"; openedAt: number; entry: number; plannedEntry: number; fillMode: string; stop: number; tp: number; price: number | null; floatingR: number | null; floatingNet: number | null; oneR: number; margin: number | null;
+  exitRule?: "3R" | "2R_BE1R"; tpR?: number; stop0?: number; be?: { at: number; px: number; stop: number; mfeRp: number } | null; floatingRp?: number | null; mfeR?: number | null; maeR?: number | null; mfeRp?: number | null; maeRp?: number | null };
 export type FvgView = { name: string; universe: string[]; ready: number; coins: FvgCoin[]; positions: FvgPos[]; stages: Record<string, number>; resident: string[];
   plan: { universe: number; hot: number; cold: number; estPerHour: number };
-  rules: { universeMax: number; rr: number; expiryBars: number; stop: string; firstMarginPct: number; leverage: number; reentryTolPct: number };
+  rules: { universeMax: number; rr: number; tpR?: number; beAtR?: number; exitRule?: string; expiryBars: number; stop: string; firstMarginPct: number; leverage: number; reentryTolPct: number };
   legacyOpen: { sym: string; side: string; stage: string; note: string } | null };
 export type NtsView = {
   version?: string; engineName?: string; fvg?: FvgView | null;
@@ -21,7 +22,7 @@ export type NtsView = {
   symbols?: string[]; evals?: Record<string, Ev>; prices?: Record<string, number | null>;
   position?: { sym: string; side: string; openedAt: number; entry?: number; avg: number; price?: number | null; added: boolean; stage: string; target: number; stop: number; breakeven: number | null; floatingR: number | null; floatingPct: number | null; floatingNet: number | null; mfeR: number; maeR: number; daily?: { trail: number | null; exitAt: number; ret24: number } | null } | null;
   today?: Per; month?: Per; recent?: { at: number; sym: string; kind: string; text: string }[];
-  lastExit?: { sym: string; side: string; at: number; reason: string; netPnl: number; r: number; holdMin: number } | null;
+  lastExit?: { sym: string; side: string; at: number; reason: string; netPnl: number; r: number; holdMin: number; rPrice?: number | null; mfeR?: number; mfeR_price?: number | null; exitRule?: string } | null;
   breaker?: { state: string; allowEntry: boolean; reason: string; monthPct: number; dayR: number } | null;
   data?: { quoteOk?: boolean; health?: Record<string, { ok: boolean; notes: string[] }> };
   log?: { appended: number; pending: number; lastFlushAt: number | null; error: string | null };
@@ -71,9 +72,9 @@ function FvgBody({ nts, f }: { nts: NtsView; f: FvgView }) {
           <div><dt>进场（{p.fillMode === "LIMIT" ? "限价" : p.fillMode === "GAP" ? "跳空市价" : "回到缺口市价"}）</dt><dd>{dp(p.entry)}</dd></div>
           <div><dt>现价</dt><dd>{dp(p.price)} <em className={tone(move)}>{move == null ? "" : `${move > 0 ? "+" : ""}${(move * 100).toFixed(2)}%`}</em></dd></div>
           <div><dt>止损（扫点外）</dt><dd>{dp(p.stop)} <em>距 {pct(p.price ? Math.abs(p.stop / p.price - 1) : null)}</em></dd></div>
-          <div><dt>止盈 {ru.rr}R</dt><dd>{dp(p.tp)} <em>距 {pct(p.price ? Math.abs(p.tp / p.price - 1) : null)}</em></dd></div>
+          <div><dt>止盈 {p.tpR ?? ru.rr}R{p.exitRule === "2R_BE1R" ? (p.be ? " · 已保本" : ` · +${ru.beAtR ?? 1}R 保本`) : " · 旧单原计划"}</dt><dd>{dp(p.tp)} <em>距 {pct(p.price ? Math.abs(p.tp / p.price - 1) : null)}</em></dd></div>
         </dl>
-        <p className="nts-note">开仓 {clock(p.openedAt)} · 1R ≈ {p.oneR.toFixed(2)}U · 浮动 {p.floatingR == null ? "—" : sgn(p.floatingR) + "R"}</p>
+        <p className="nts-note">开仓 {clock(p.openedAt)} · 1R ≈ {p.oneR.toFixed(2)}U · 浮动 价格R {p.floatingRp == null ? "—" : sgn(p.floatingRp)} / 扣费R {p.floatingR == null ? "—" : sgn(p.floatingR)} · 最有利 价格R {p.mfeRp == null ? "—" : sgn(p.mfeRp)} / 扣费R {p.mfeR == null ? "—" : sgn(p.mfeR)}{p.be ? ` · ${clock(p.be.at)} 止损移到保本 ${dp(p.be.stop)}` : ""}</p>
       </div>;
     }) : <div className="nts-empty"><b>空仓 · 等形态</b><p><span>开仓条件</span>价格在 4H 缺口里 → 15m 扫掉前低/前高 → 2–3 根强位移留下 15m 缺口 → 回踩缺口限价成交</p></div>}
     {f.legacyOpen && <p className="nts-note warn">旧订单块单 {name(f.legacyOpen.sym)} {sideZh(f.legacyOpen.side)}：{f.legacyOpen.note}（{f.legacyOpen.stage}）</p>}
@@ -91,7 +92,7 @@ function FvgBody({ nts, f }: { nts: NtsView; f: FvgView }) {
       <p className="nts-note"><b>最近：</b>{c.last}</p>
     </article>)}</div>
     {coins.length > 6 && <button type="button" className="nts-more" onClick={() => setAll(!all)}>{all ? "收起" : `显示全部 ${coins.length} 个币`}</button>}
-    <p className="nts-note">止损 = {ru.stop}（不限止损宽度） · 止盈 = 成交价起 {ru.rr}R · 挂单 {ru.expiryBars} 根 15m 内有效 · RSI/MACD 只记录，不参与开仓。情形a = 新形态回踩成交；情形b = 老形态没成交、价格回到原入场点且剩余空间仍 ≥ {ru.rr}R。</p>
+    <p className="nts-note">止损 = {ru.stop}（不限止损宽度） · 止盈 = 成交价起 {ru.tpR ?? 2}R，价格到 +{ru.beAtR ?? 1}R 止损移到保本（入场价往盈利方向 1 tick；之前开的单仍按原 {ru.rr}R 计划）· 价格R = 价格移动 ÷ |成交价−止损|，扣费R = 净盈亏 ÷ 1R 金额 · 挂单 {ru.expiryBars} 根 15m 内有效 · RSI/MACD 只记录，不参与开仓。情形a = 新形态回踩成交；情形b = 老形态没成交、价格回到原入场点且剩余空间仍 ≥ {ru.rr}R。</p>
     <dl className="nts-rows">
       <div><dt>仓位与风控</dt><dd>每笔首仓 {(ru.firstMarginPct * 100).toFixed(0)}% · {ru.leverage}x 全仓 · 不补仓 · 不限笔数（同一形态只开一次）· 保证金不够记“跳过”</dd></div>
       <div><dt>取数</dt><dd>就绪 {f.ready}/{f.plan.universe} · 热币 {f.plan.hot} · 约 {Math.round(f.plan.estPerHour)} 次/小时</dd></div>
@@ -180,7 +181,7 @@ export default function NtsPanel({ nts }: { nts: NtsView | null | undefined }) {
     <div className="nts-stats"><Stat label="今日（老挝时间）" x={nts.today} /><Stat label="本月" x={nts.month} /></div>
 
     <dl className="nts-rows">
-      <div><dt>最近一次出场</dt><dd>{nts.lastExit ? <>{clock(nts.lastExit.at)} {name(nts.lastExit.sym)} {sideZh(nts.lastExit.side)} {nts.lastExit.reason} · <span className={tone(nts.lastExit.netPnl)}>{sgn(nts.lastExit.netPnl)}U</span> · 持 {nts.lastExit.holdMin} 分</> : "还没有"}</dd></div>
+      <div><dt>最近一次出场</dt><dd>{nts.lastExit ? <>{clock(nts.lastExit.at)} {name(nts.lastExit.sym)} {sideZh(nts.lastExit.side)} {nts.lastExit.reason} · <span className={tone(nts.lastExit.netPnl)}>{sgn(nts.lastExit.netPnl)}U</span> · 持 {nts.lastExit.holdMin} 分{nts.lastExit.rPrice != null ? ` · 价格R ${sgn(nts.lastExit.rPrice)} / 扣费R ${sgn(nts.lastExit.r)}` : ""}{nts.lastExit.mfeR_price != null ? ` · 最有利 价格R ${sgn(nts.lastExit.mfeR_price)} / 扣费R ${sgn(nts.lastExit.mfeR ?? null)}` : ""}</> : "还没有"}</dd></div>
       {!f && <div><dt>当日停开</dt><dd className={nts.breaker && !nts.breaker.allowEntry ? "warn" : ""}>{nts.breaker ? `${nts.breaker.allowEntry ? "正常" : "今日暂停开仓"} · ${nts.breaker.reason}` : "—"}</dd></div>}
       <div><dt>数据 / 行情</dt><dd className={dataOk === false ? "warn" : ""}>{dataOk == null ? "—" : dataOk ? "正常" : (nts.notes?.slice(0, 2).join("；") || "预热/异常")}{nts.log?.error ? ` · 日志：${nts.log.error}` : ""}</dd></div>
       <div><dt>更新</dt><dd>{clock(nts.now)}</dd></div>

@@ -135,7 +135,7 @@ function step(e: NtsEngine, fwd: ForwardState, now: number, bid: number, ask: nu
   return { acts, fwd: next, changed };
 }
 
-test("情形 a：回踩到 15m 缺口上沿 → 限价成交（不加滑点），止损在扫点外，TP = 成交价起 3R；日志有 SETUP/ENTRY", () => {
+test("情形 a：回踩到 15m 缺口上沿 → 限价成交（不加滑点），止损在扫点外，TP = 成交价起 2R；日志有 SETUP/ENTRY", () => {
   const { e, log, now } = engine(m15Bars());
   let fwd = initialForward(now);
   let r = step(e, fwd, now, 101.5, 101.52); assert.equal(r.acts.length, 0); fwd = r.fwd;
@@ -144,13 +144,13 @@ test("情形 a：回踩到 15m 缺口上沿 → 限价成交（不加滑点）�
   r = step(e, fwd, now + 2000, 101.22, 101.23); fwd = r.fwd;
   const t = fwd.positions.find(x => x.status === "OPEN")!; assert.ok(t, "成交");
   assert.equal(t.entryPrice, ENTRY, "限价成交价 = 入场价"); assert.ok(Math.abs(t.stopPrice - STOP) < 1e-9);
-  const o = e.desk.st.opens[0]!; assert.equal(o.case, "a"); assert.equal(o.fillMode, "LIMIT"); assert.ok(Math.abs(o.tp - (ENTRY + 3 * (ENTRY - STOP))) < 1e-9);
+  const o = e.desk.st.opens[0]!; assert.equal(o.case, "a"); assert.equal(o.fillMode, "LIMIT"); assert.ok(Math.abs(o.tp - (ENTRY + 2 * (ENTRY - STOP))) < 1e-9);
   const L = recs(log); assert.ok(L.some(x => x.k === "SETUP" && x.d.ev === "ZONE_4H")); assert.ok(L.some(x => x.k === "SETUP" && /ARMED|挂单/.test(JSON.stringify(x.d))));
   const en = L.find(x => x.k === "ENTRY")!; for (const f of ["case", "zone4h", "sweep", "displacement", "fvg15", "plan", "fill", "sizing", "ind"]) assert.ok(f in en.d, f);
   assert.equal(e.status(now, fwd, { BTC_USDT: quote(101.22, 101.23, now) }, { enabled: true, logError: null, lastFlushAt: 0 }).fvg!.positions.length, 1);
   // 同一形态只开一次：价格再回到入场价也不重复开
   r = step(e, fwd, now + 4000, 101.2, 101.21); assert.equal(r.fwd.positions.filter(x => x.status === "OPEN").length, 1);
-  // 3R 止盈：tick 平仓并记 EXIT
+  // 2R 止盈：tick 平仓并记 EXIT
   r = step(e, r.fwd, now + 6000, o.tp + 0.01, o.tp + 0.02); fwd = r.fwd;
   assert.equal(fwd.positions.filter(x => x.status === "OPEN").length, 0); assert.equal(e.desk.st.opens.length, 0);
   const ex = recs(log).find(x => x.k === "EXIT")!; assert.equal(ex.d.code ?? ex.d.exitCode ?? "TARGET", "TARGET"); assert.equal(ex.d.case, "a");
@@ -161,7 +161,7 @@ test("情形 a：跳空穿过入场价 → 按市价（含滑点）成交；止�
   const { e, log, now } = engine(m15Bars(0)); // 位移那根刚收盘，还没在入场价上方报过价
   let r = step(e, initialForward(now), now, 101.1, 101.12);
   const o = e.desk.st.opens[0]!; assert.equal(o.fillMode, "GAP"); assert.ok(o.fill > 101.12, "市价含滑点");
-  assert.ok(Math.abs(o.tp - (o.fill + 3 * (o.fill - STOP))) < 1e-9, "TP 按实际成交价算 3R");
+  assert.ok(Math.abs(o.tp - (o.fill + 2 * (o.fill - STOP))) < 1e-9, "TP 按实际成交价算 2R");
   r = step(e, r.fwd, now + 2000, 100.5, 100.52);
   assert.equal(r.fwd.positions.filter(x => x.status === "OPEN").length, 0);
   const ex = recs(log).find(x => x.k === "EXIT"); assert.ok(ex); assert.match(JSON.stringify(ex!.d), /HARD_STOP|LIQUIDATION/);
@@ -181,7 +181,7 @@ test("过期：16 根没成交 → 不再按情形 a 挂单；价格回到原缺
   r = step(e, r.fwd, now + 1000, 101.32, 101.33); assert.equal(r.fwd.positions.length, 0, "剩余空间不足 3R 不进");
   r = step(e, r.fwd, now + 2000, 101.19, 101.2);
   const o = e.desk.st.opens[0]!; assert.equal(o.case, "b"); assert.equal(o.fillMode, "MARKET_B");
-  assert.ok(Math.abs(o.tp - (o.fill + 3 * (o.fill - o.stop))) < 1e-9);
+  assert.ok(Math.abs(o.tp - (o.fill + 2 * (o.fill - o.stop))) < 1e-9);
   const en = recs(log).find(x => x.k === "ENTRY")!; assert.equal(en.d.case, "b");
 });
 
@@ -239,7 +239,7 @@ test("不限止损宽度：止损距离 6% 也照开（最坏亏损只记录）"
   const r0 = step(e, initialForward(now), now, 101.5, 101.52);
   const st = e.desk.rt.BTC_USDT!.setups.find(x => x.status === "ARMED")!; st.stop = 95; st.tpOrig = ENTRY + 3 * (ENTRY - 95);
   step(e, r0.fwd, now + 2000, 101.22, 101.23);
-  const o = e.desk.st.opens[0]!; assert.ok(o, "开了"); assert.equal(o.stop, 95); assert.ok(Math.abs(o.tp - (o.fill + 3 * (o.fill - 95))) < 1e-9);
+  const o = e.desk.st.opens[0]!; assert.ok(o, "开了"); assert.equal(o.stop, 95); assert.ok(Math.abs(o.tp - (o.fill + 2 * (o.fill - 95))) < 1e-9);
   const en = recs(log).find(x => x.k === "ENTRY")!; assert.ok((en.d.sizing as { worstPct: number }).worstPct > 0.05); assert.equal((en.d.sizing as { stopWidthLimit: unknown }).stopWidthLimit, null);
   assert.ok(!recs(log).some(x => x.k === "NO_TRADE"));
 });
@@ -337,4 +337,94 @@ test("实时行情：情形 a 挂单币、情形 b 已接近入场区的币一�
   res = e.residentSymbols(); assert.ok(res.includes("BTC_USDT"), "情形 b 接近入场区 → 常驻"); assert.equal(res[0], "BTC_USDT");
   // 离得远就不是“必须常驻”，只按普通候选排
   desk.rt.BTC_USDT!.px = 120; assert.equal(e.desk.bNear("BTC_USDT", now), false);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 出场规则 2R 止盈 + 1R 保本（新单），旧单 3R 不动；MFE/MAE 只增不减；每笔出场都跟踪出场后走势；老 3R 影子记录
+// ---------------------------------------------------------------------------------------------------------------------
+function opened() {
+  const { e, log, now } = engine(m15Bars());
+  let r = step(e, initialForward(now), now, 101.5, 101.52);
+  r = step(e, r.fwd, now + 2000, 101.22, 101.23);
+  const o = e.desk.st.opens[0]!; assert.ok(o, "成交");
+  return { e, log, now, fwd: r.fwd, o };
+}
+const R0 = ENTRY - STOP; // 0.54
+
+test("2R+1R保本：新单标 2R_BE1R，TP = 成交价起 2R；到 +1R 止损移到入场价 +1 tick 并记 BE_MOVE；回到保本价平仓记 BE_STOP，EXIT 带价格R/扣费R和影子 3R", () => {
+  const { e, log, now, fwd, o } = opened();
+  assert.equal(o.exitRule, "2R_BE1R"); assert.ok(Math.abs(o.tp - (ENTRY + 2 * R0)) < 1e-9); assert.ok(Math.abs(o.shadow!.tp3 - (ENTRY + 3 * R0)) < 1e-9);
+  const en = recs(log).find(x => x.k === "ENTRY")!; assert.equal(en.d.exitRule, "2R_BE1R"); assert.ok(en.d.shadow3R);
+  let r = step(e, fwd, now + 4000, ENTRY + 0.9 * R0, ENTRY + 0.9 * R0 + 0.01); assert.ok(!r.acts.some(a => JSON.stringify(a).includes("MOVE_STOP_FVG")), "不到 1R 不动");
+  r = step(e, r.fwd, now + 6000, ENTRY + 1.02 * R0, ENTRY + 1.02 * R0 + 0.01);
+  assert.ok(r.acts.some(a => JSON.stringify(a).includes("MOVE_STOP_FVG")));
+  const t = r.fwd.positions.find(x => x.id === o.tid && x.status === "OPEN")!; assert.ok(Math.abs(t.stopPrice - (ENTRY + 0.01)) < 1e-9, "止损 = 入场价 + 1 tick");
+  assert.ok(o.be && Math.abs(o.stop - (ENTRY + 0.01)) < 1e-9); assert.ok(Math.abs(o.stop0! - STOP) < 1e-9, "原止损保留");
+  const be = recs(log).filter(x => x.k === "BE_MOVE"); assert.equal(be.length, 1); assert.ok((be[0]!.d.mfeR_price as number) >= 1);
+  r = step(e, r.fwd, now + 8000, ENTRY + 1.5 * R0, ENTRY + 1.5 * R0 + 0.01); assert.equal(recs(log).filter(x => x.k === "BE_MOVE").length, 1, "只移一次");
+  r = step(e, r.fwd, now + 10_000, ENTRY, ENTRY + 0.01);
+  assert.equal(r.fwd.positions.filter(x => x.status === "OPEN").length, 0);
+  const ex = recs(log).find(x => x.k === "EXIT")!;
+  assert.equal(ex.d.code, "BE_STOP"); assert.equal(ex.d.exitRule, "2R_BE1R");
+  assert.equal(typeof ex.d.r_price, "number"); assert.equal(typeof ex.d.r_fee, "number"); assert.ok((ex.d.r_price as number) > -0.05);
+  assert.ok((ex.d.mfeR_price as number) >= 1.5 - 1e-9, "MFE 价格R");
+  assert.equal((ex.d.shadow3R as { pending: boolean }).pending, true);
+  const p = e.serialize().post.find(x => x.tid === o.tid)!; assert.ok(p, "出场后跟踪"); assert.equal(p.exitRule, "2R_BE1R"); assert.ok(p.shadow);
+  // 出场后 30 分钟：记 POST_EXIT（实时报价）
+  const exitAt = p.exitAt;
+  r = step(e, r.fwd, exitAt + 30 * 60_000 + 1000, ENTRY + 0.2, ENTRY + 0.21);
+  const pe = recs(log).find(x => x.k === "POST_EXIT" && x.d.afterMin === 30)!; assert.ok(pe); assert.equal(pe.d.src, "quote");
+  // 后来到了老 3R → SHADOW_3R = TP3，带实际结果
+  r = step(e, r.fwd, exitAt + 31 * 60_000, ENTRY + 3 * R0 + 0.01, ENTRY + 3 * R0 + 0.02);
+  const sh = recs(log).find(x => x.k === "SHADOW_3R")!; assert.ok(sh); assert.equal(sh.d.res, "TP3"); assert.equal((sh.d.actual as { code: string }).code, "BE_STOP"); assert.equal(sh.d.rPrice, 3);
+});
+
+test("2R 止盈出场也记出场后走势（+30/+60/+120 分钟），K 线兜底；影子 3R 出场后继续判断", () => {
+  const { e, log, fwd, o } = opened();
+  const r = step(e, fwd, o.openedAt + 60_000, o.tp + 0.01, o.tp + 0.02);
+  assert.equal(r.fwd.positions.filter(x => x.status === "OPEN").length, 0);
+  const ex = recs(log).find(x => x.k === "EXIT")!; assert.equal(ex.d.code ?? "TARGET", "TARGET"); assert.ok(Math.abs((ex.d.r_price as number) - 2) < 0.05, "价格R ≈ 2");
+  const p = e.serialize().post.find(x => x.tid === o.tid)!; assert.ok(p, "止盈出场也跟踪");
+  e.tick({ now: o.openedAt + 62_000, forward: r.fwd, quotes: {}, contracts, enabled: true });
+  assert.ok(e.residentSymbols().includes("BTC_USDT"), "出场后 120 分钟内常驻行情");
+  // 没有报价，只有 15m K 线：用包含该时刻那根 15m 的收盘价
+  const base = Math.floor(p.exitAt / 1000 / M15) * M15, more: Bar[] = [];
+  for (let k = 1; k <= 10; k++) more.push(bar(base + k * M15, 102.3, k === 3 ? 102.9 : 102.4, 102.2, 102.35));
+  const later = (base + 11 * M15) * 1000 + 1000;
+  e.ingestCandles("BTC_USDT", "15m", [...m15Bars(), ...more], later);
+  e.tick({ now: later, forward: r.fwd, quotes: {}, contracts, enabled: true });
+  const pes = recs(log).filter(x => x.k === "POST_EXIT"); assert.ok(pes.some(x => x.d.afterMin === 30 && /15m/.test(String(x.d.src))));
+  assert.ok(pes.some(x => x.d.afterMin === 60 && x.d.px === 102.35));
+  assert.ok((pes.at(-1)!.d.best120Pct as number) > 0);
+  const sh = recs(log).find(x => x.k === "SHADOW_3R")!; assert.ok(sh, "出场后到 3R 价（102.85）记影子结果"); assert.equal(sh.d.res, "TP3"); assert.equal(sh.d.src, "15m");
+});
+
+test("旧单（无 exitRule）按原 3R 计划：不移保本、2R 不平；面板标 3R", () => {
+  const { e, log, now, fwd, o } = opened();
+  delete o.exitRule; delete o.tpR; delete o.be; delete o.shadow; delete o.stop0; o.tp = o.fill + 3 * (o.fill - o.stop);
+  let r = step(e, fwd, now + 4000, ENTRY + 1.5 * R0, ENTRY + 1.5 * R0 + 0.01);
+  assert.ok(!r.acts.some(a => JSON.stringify(a).includes("MOVE_STOP_FVG"))); assert.ok(Math.abs(r.fwd.positions.find(x => x.id === o.tid)!.stopPrice - STOP) < 1e-9);
+  r = step(e, r.fwd, now + 6000, ENTRY + 2.2 * R0, ENTRY + 2.2 * R0 + 0.01);
+  assert.equal(r.fwd.positions.filter(x => x.status === "OPEN").length, 1, "2R 不平");
+  const pos = e.fvgStatus(now + 6000, r.fwd, { BTC_USDT: quote(ENTRY + 2.2 * R0, ENTRY + 2.2 * R0 + 0.01, now + 6000) }).positions[0]!;
+  assert.equal(pos.exitRule, "3R"); assert.equal(pos.tpR, 3);
+  r = step(e, r.fwd, now + 8000, o.tp + 0.01, o.tp + 0.02);
+  const ex = recs(log).find(x => x.k === "EXIT")!; assert.equal(ex.d.exitRule, "3R"); assert.equal((ex.d.shadow3R as { res: string }).res, "SAME_AS_ACTUAL");
+  assert.equal(recs(log).filter(x => x.k === "BE_MOVE").length, 0);
+});
+
+test("MFE/MAE 只增不减：重启（从存档恢复）后不回退，期间的 15m 高低点也算进去", () => {
+  const { e, log, now, fwd, o } = opened();
+  step(e, fwd, now + 4000, 101.6, 101.61);
+  const mfe0 = o.mfePct; assert.ok(mfe0 > 0.003);
+  assert.equal(e.extremesDirty, true, "极值变化标记待写");
+  const saved = structuredClone(e.serialize());
+  const c = normalizeNtsConfig({ ...DEFAULT_NTS_CONFIG, enabled: true } as never);
+  const now2 = (END + 2 * M15) * 1000 + 5000, e2 = new NtsEngine(c, log, saved, now2);
+  const b15 = [...m15Bars(), bar(END, 101.4, 101.45, 101.2, 101.3), bar(END + M15, 101.4, 101.72, 100.95, 101.3)];
+  e2.ingestCandles("BTC_USDT", "4h", h4Bars(), now2); e2.ingestCandles("BTC_USDT", "15m", b15, now2);
+  const o2 = e2.desk.st.opens[0]!; assert.equal(o2.mfePct, mfe0, "恢复后不回退");
+  step(e2, fwd, now2, 101.3, 101.31);
+  assert.ok(o2.mfePct >= 101.72 / ENTRY - 1 - 1e-12, "重启期间的 15m 高点算进 MFE"); assert.ok(o2.maePct <= 100.95 / ENTRY - 1 + 1e-12, "低点算进 MAE");
+  const m = o2.mfePct; step(e2, fwd, now2 + 2000, 101.25, 101.26); assert.equal(o2.mfePct, m, "价格回落不减");
 });

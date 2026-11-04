@@ -53,6 +53,8 @@ export class NtsHost {
   private resetBusy = false;
   private resetNextAt = 0;
   private stateDirty = false;
+  /** 本轮事务里带了引擎状态（提交成功才算已落盘）。 */
+  private stateTaken = false;
   private snapshot: NtsState | null = null;
   private takenKeys: string[] = [];
   private hotClearRequested = false;
@@ -148,7 +150,10 @@ export class NtsHost {
     this.takenKeys = [];
     if (!this.ready) return { entries: {}, rows: 0 };
     const entries: Record<string, unknown> = {};
-    if (this.stateDirty || now - this.lastStateWriteAt >= HOUR) entries[NTS_STATE_KEY] = structuredClone(this.engine.serialize());
+    // 状态：有动作时立刻写；MFE/MAE 极值、出场后跟踪、影子 3R 有变化时，搭已有的写入顺带写（距上次 ≥ 2 分钟），重启后不会退回到旧快照；否则每小时一次。
+    const extremes = this.engine.extremesDirty && now - this.lastStateWriteAt >= 2 * 60_000;
+    this.stateTaken = false;
+    if (this.stateDirty || extremes || now - this.lastStateWriteAt >= HOUR) { entries[NTS_STATE_KEY] = structuredClone(this.engine.serialize()); this.stateTaken = true; }
     try {
       const chunks = this.log.take();
       for (const [k, v] of Object.entries(chunks)) { entries[k] = v; this.takenKeys.push(k); }
@@ -156,18 +161,19 @@ export class NtsHost {
     return { entries, rows: Object.keys(entries).length };
   }
   committed(now: number) {
-    this.stateDirty = false; this.lastStateWriteAt = now;
+    if (this.stateTaken) { this.lastStateWriteAt = now; this.engine.extremesDirty = false; }
+    this.stateDirty = false; this.stateTaken = false;
     this.takenKeys = []; this.lastFlushAt = now; this.logError = null;
     if (this.hotClearApplied) { this.hotClearDone = true; this.hotClearApplied = false; this.hotClearRequested = false; }
     this.snapshot = null;
   }
   /** 事务失败：日志块放回缓冲；引擎状态回到本轮之前（账户也没改，二者一致）。 */
   failed(error: unknown) {
-    if (!this.snapshot && !this.takenKeys.length && !this.stateDirty && !this.hotClearApplied) return; // nothing of ours was in flight
+    if (!this.snapshot && !this.takenKeys.length && !this.stateDirty && !this.stateTaken && !this.hotClearApplied) return; // nothing of ours was in flight
     try { this.log.restore(this.takenKeys); } catch { /* ignore */ }
     this.takenKeys = [];
     if (this.snapshot) { this.engine.s = this.snapshot; this.snapshot = null; }
-    this.stateDirty = false; this.hotClearApplied = false;
+    this.stateDirty = false; this.stateTaken = false; this.hotClearApplied = false;
     this.logError = "NTS_COMMIT:" + safe(error);
   }
 
@@ -268,7 +274,7 @@ export class NtsHost {
   /** FVG 健康：只在真有问题时提示（币池里没有一个币数据就绪、持仓币/挂单币数据过期、持仓币行情断、取数长时间无成功）。冷币偶尔慢一点不算故障。 */
   private fvgNotes(now: number, quotes: Record<string, Quote>): string[] {
     const out: string[] = [], e = this.engine, warm = now - this.bootAt > 15 * 60_000;
-    const coins = e.desk.allSymbols();
+    const coins = e.desk.tradeSymbols();
     if (warm && coins.length && !coins.some(sym => e.dataHealth(sym, now).ok)) out.push(`FVG 币池 ${coins.length} 个币暂无一个数据就绪`);
     const held = new Set(e.desk.st.opens.map(o => o.sym)), armed = coins.filter(sym => e.desk.rt[sym]?.stage === "等回踩15m缺口");
     for (const sym of new Set([...held, ...armed])) {
@@ -288,7 +294,7 @@ export class NtsHost {
   dataView(now: number) {
     const out: Record<string, unknown> = {};
     if (this.engine.isFvg) {
-      const coins = this.engine.desk.allSymbols(), plan = this.engine.desk.fetchPlan();
+      const coins = this.engine.desk.tradeSymbols(), plan = this.engine.desk.fetchPlan();
       const per: Record<string, unknown> = {};
       for (const sym of coins) { const h = this.engine.dataHealth(sym, now); per[sym] = { ok: h.ok, bars: Object.fromEntries(Object.entries(h.bars).map(([tf, b]) => [tf, b.n])), stage: this.engine.desk.rt[sym]?.stage ?? null }; }
       return { engine: "FVG", universe: coins.length, ready: coins.filter(sym => (per[sym] as { ok: boolean }).ok).length, hot: plan.hot, resident: this.engine.residentSymbols().length,
@@ -304,7 +310,7 @@ export class NtsHost {
   /** `account`：账户部分（每分钟权益、回撤、对账、重置、实盘成交），排在日志记录之后。 */
   logStream(account?: () => Promise<Record<string, unknown>[]>): ReadableStream<Uint8Array> {
     return logExportStream(this.deps.storage, () => this.flushLog(this.now()), { kind: "nts-run-log", version: NTS_VERSION, strategy: this.cfg.strategy, at: this.now(), enabled: this.cfg.enabled,
-      note: "每行一条 JSON；SETUP=FVG 系统的 4H 缺口/15m 扫流动性/位移/挂单/撤单/情形a·b，ENTRY=进场决策全文，TRACE=进场后走势，EXIT/POST_EXIT=出场与出场后走势，NO_TRADE=抽样的不做原因；" +
+      note: "每行一条 JSON；SETUP=FVG 系统的 4H 缺口/15m 扫流动性/位移/挂单/撤单/情形a·b，ENTRY=进场决策全文，TRACE=进场后走势，BE_MOVE=+1R 止损移到保本，EXIT/POST_EXIT=出场与出场后走势（每笔都记 +30/+60/+120 分钟），SHADOW_3R=老 3R 规则的影子结果，NO_TRADE=抽样的不做原因；" +
         "末尾 ACCOUNT=账户对账/回撤/重置记录/实盘成交，EQUITY_MINUTES=每分钟权益（按天分行）" }, 8, () => this.log.peek(), account);
   }
   backupStream(): ReadableStream<Uint8Array> | null {

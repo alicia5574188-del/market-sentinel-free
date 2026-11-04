@@ -124,3 +124,17 @@ test("一次性重置经宿主走完：D1 缺失时永不开仓；D1 在时备�
   await again.flushLog(s.t.now + 2e6);
   assert.equal((await readAll(again.logStream())).filter(l => (l.d as { text?: string } | undefined)?.text === "日志已重置").length, 1);
 });
+test("MFE/MAE 等极值变了：搭下一次已有写入顺带写状态（距上次 ≥ 2 分钟），提交成功才清标记；不额外触发写入", async () => {
+  const s = setup({ reset: "done" }); await s.host.boot(NOW);
+  s.host.committed(NOW); // 上次状态写入 = NOW
+  s.host.engine.extremesDirty = true;
+  assert.equal(s.host.mustPersist, false, "极值变化本身不触发写入");
+  assert.ok(!(NTS_STATE_KEY in s.host.entries(NOW + 60_000).entries), "不到 2 分钟不带"); s.host.committed(NOW + 60_000);
+  assert.equal(s.host.engine.extremesDirty, true, "没写状态就不清标记");
+  const e = s.host.entries(NOW + 130_000); assert.ok(NTS_STATE_KEY in e.entries, "≥ 2 分钟：顺带写状态");
+  s.host.failed(new Error("x")); assert.equal(s.host.engine.extremesDirty, true, "提交失败不清");
+  assert.ok(NTS_STATE_KEY in s.host.entries(NOW + 140_000).entries); s.host.committed(NOW + 140_000);
+  assert.equal(s.host.engine.extremesDirty, false);
+  assert.ok(!(NTS_STATE_KEY in s.host.entries(NOW + 400_000).entries), "干净时不写");
+  assert.ok(NTS_STATE_KEY in s.host.entries(NOW + 140_000 + 3_600_000).entries, "每小时兜底照写");
+});
