@@ -41,6 +41,11 @@ const livingViewModule={exports:{}};
 runInNewContext(`(function(require,module,exports){${ts.transpileModule(read("lib/living-trade-view.ts"),{fileName:"lib/living-trade-view.ts",compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText}\n})`,{Math,Number})(name=>{
   throw new Error(`living trade view imported ${name}`);
 },livingViewModule,livingViewModule.exports);
+// FVG breakeven-stop display text (pure, no imports).
+const beDisplayModule={exports:{}};
+runInNewContext(`(function(require,module,exports){${ts.transpileModule(read("lib/nts/be-display.ts"),{fileName:"lib/nts/be-display.ts",compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText}\n})`,{Math,Number})(name=>{
+  throw new Error(`be display imported ${name}`);
+},beDisplayModule,beDisplayModule.exports);
 // The real freshness stamp (pure presentation).
 const panelStampModule={exports:{}};
 const panelStampSource=ts.transpileModule(read("app/panel-stamp.tsx"),{fileName:"app/panel-stamp.tsx",compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;
@@ -68,6 +73,7 @@ function render(path,props,extra={},component="default"){
     "./record-controls.tsx":{ArchivePagination:()=>null},
     "./order-card.tsx":orderCardModule.exports,
     "../lib/living-trade-view.ts":livingViewModule.exports,
+    "../lib/nts/be-display.ts":beDisplayModule.exports,
     "./panel-stamp.tsx":panelStampModule.exports,
     "../lib/panel-cache.ts":panelCache,
     "../lib/system-panels.ts":systemPanels,
