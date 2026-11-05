@@ -511,7 +511,7 @@ export class FvgDesk {
     const o = this.st.opens.find(x => x.tid === a.tid), t = o ? draft.positions.find(x => x.id === o.tid && x.status === "OPEN") : undefined;
     if (!o || !t || o.be) return false;
     const before = t.stopPrice, mfeRp = r(Math.max(priceR(o, a.px), priceR(o, o.side === "LONG" ? (o.hiPx ?? o.fill) : (o.loPx ?? o.fill))), 3) ?? 0;
-    o.stop0 ??= o.stop; t.stopPrice = a.stop; o.stop = a.stop;
+    o.stop0 ??= o.stop; t.breakeven = { origStop: stop0Of(o), stop: a.stop, at: c.now }; t.stopPrice = a.stop; o.stop = a.stop;
     o.be = { at: c.now, px: a.px, stop: a.stop, mfeRp };
     const mfePct = r(Math.max(o.mfePct, (o.side === "LONG" ? 1 : -1) * (a.px / o.fill - 1)), 5);
     this.h.append({ id: `be:${o.tid}`, k: "BE_MOVE", t: c.now, sym: o.sym, tid: o.tid, d: { strategy: "FVG", exitRule: exitRuleOf(o), side: o.side, entry: o.fill, stop0: stop0Of(o), oldStop: before, newStop: a.stop,

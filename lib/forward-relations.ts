@@ -165,6 +165,8 @@ export type Trade={
   crossLiquidationLoss?:number;
   /** 保证金模型：FVG 新单 "fvg-isolated-v1"（逐仓，按止损选杠杆、强平价在止损外留缓冲）；旧单/全仓单没有此字段。 */
   marginModel?:string;
+  /** 只用于显示：FVG +1R 后止损移到保本价时记下原止损（origStop）和保本价（stop）。不参与任何交易判断。 */
+  breakeven?:{origStop:number;stop:number;at:number};
   winnerManagement?:WinnerManagement;realization?:TradeRealization;
   review?:TradeReview;
   id:string;symbol:string;side:"LONG"|"SHORT";rule:Rule;openedAt:number;closedAt:number|null;status:"OPEN"|"CLOSED";

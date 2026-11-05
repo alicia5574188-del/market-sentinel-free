@@ -19,6 +19,7 @@ import "./paid-fee.css";
 import "./pages.css";
 import {tradePaidNetPnl,pairedPaidView,type PaidPair} from "../lib/paid-fee-view.ts";
 import {OrderCard,exitShort,exitPlain,priceText,livingPlaybookLabel,type OrderFact} from "./order-card.tsx";
+import {beExitPlain,beExitShort,beStopFact} from "../lib/nts/be-display.ts";
 import {isLivingTrade,livingBoard,livingDetail,livingWhy} from "../lib/living-trade-view.ts";
 
 type View=ReturnType<typeof forwardSummary>;
@@ -213,6 +214,7 @@ function s1LegacyExit(t:Trade){
 function closeReason(t:Trade){
   if(t.status==="OPEN"||!t.exitReason)return null;
   if(t.exitReason==="PEAK_GIVEBACK")return `${peakGivebackName(t)}，平仓留住利润。`;
+  const be=beExitPlain(t);if(be)return be;
   return exitPlain(t.exitReason,exitLabel(t));
 }
 const labelled=(line:string)=>{const i=line.indexOf("：");return i>0&&i<8?<p key={line}><b>{line.slice(0,i)}</b>：{line.slice(i+1)}</p>:<p key={line}>{line}</p>;};
@@ -222,7 +224,7 @@ export function TradeCard({trade:t,now,paid}:{trade:Trade;now:number;paid?:PaidP
   const px=pair?pair.inverse.price:open?t.lastPrice:t.exitPrice??t.lastPrice;
   const pnl=pair?pair.inverse.netPnl:open?openTradeNetPnl(t,px??t.lastPrice):t.netPnl,rate=pnl!==null&&initialTradeNotional(t)>0?pnl/initialTradeNotional(t):null,ctx=t.entryContext;
   const board=ctx?.stageNote?.liveStage??ctx?.environment,living=!t.inverseCopy&&isLivingTrade(t);
-  const state=t.inverseCopy?(open?"持仓中":"已跟随出场"):open?"持仓中":t.exitReason==="PEAK_GIVEBACK"?"浮盈回吐":exitShort(t.exitReason,exitLabel(t));
+  const state=t.inverseCopy?(open?"持仓中":"已跟随出场"):open?"持仓中":t.exitReason==="PEAK_GIVEBACK"?"浮盈回吐":beExitShort(t)??exitShort(t.exitReason,exitLabel(t));
   const fees=pair?pair.inverse.fees:(t.entryFee??0)+(open?0:t.exitFee??0);
   const facts:OrderFact[]=[
     {label:"开仓价",value:priceText(t.entryPrice)},{label:open?"现价":"平仓价",value:priceText(px)},
@@ -230,7 +232,7 @@ export function TradeCard({trade:t,now,paid}:{trade:Trade;now:number;paid?:PaidP
     {label:"最高浮盈",value:`${fmt(t.favorable*100,2)}%`,tone:t.favorable>0?1:null},{label:"最大浮亏",value:`${fmt(t.adverse*100,2)}%`,tone:t.adverse>0?-1:null},
     {label:"锁住的利润",value:`${fmt((t.profitFloorRate??0)*100,2)}%`},{label:open?"已扣手续费":"手续费",value:`${fmt(fees,pair?4:2)} U`},
     {label:"名义金额",value:`${fmt(t.notional)} U`},{label:"保证金",value:`${fmt(t.margin)} U`},
-    {label:t.inverseCopy?"出场参考":"止损位",value:priceText(t.inverseCopy?.sourceStopPrice??t.stopPrice)},
+    (!t.inverseCopy&&beStopFact(t))||{label:t.inverseCopy?"出场参考":"止损位",value:priceText(t.inverseCopy?.sourceStopPrice??t.stopPrice)},
     ...(typeof t.liquidationPrice==="number"&&!t.inverseCopy?[{label:"强平价（逐仓）",value:priceText(t.liquidationPrice),tone:t.exitReason==="LIQUIDATION"?-1:null}]:[]),
     living&&ctx?.living?{label:"开仓时市场意图",value:livingBoard(ctx.living)}:{label:"开仓盘面",value:t.inverseCopy?"跟随提案":board?stageName(board):"没记下"},
   ];

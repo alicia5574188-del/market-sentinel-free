@@ -407,6 +407,12 @@ export class NtsEngine {
   // ---------------------------------------------------------------------------------------------------------------
   execute(draft: ForwardState, actions: Action[], c: { now: number; quotes: Record<string, Quote>; contracts: Record<string, Contract> }): boolean {
     let changed = false;
+    // 只补显示字段：已经移过保本、但持仓上还没有 breakeven 的（本功能上线前移的），写上原止损（一次）
+    for (const o of this.s.fvg?.opens ?? []) {
+      if (!o.be) continue;
+      const t = draft.positions.find(x => x.id === o.tid && x.status === "OPEN");
+      if (t && !t.breakeven) { t.breakeven = { origStop: stop0Of(o), stop: o.be.stop, at: o.be.at }; changed = true; }
+    }
     for (const a of actions) {
       try {
         if (a.type === "FVG") {
